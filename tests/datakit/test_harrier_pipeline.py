@@ -18,6 +18,7 @@ from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import ArtifactRecord, write_artifact, write_record
 from zephyr.execution import ZephyrContext
 from zephyr.runners import InlineRunner
+from zephyr.stage_io import ZephyrWorkerError
 
 from experiments.datakit.embeddings.harrier import tei, tei_client
 from experiments.datakit.embeddings.harrier.merge import (
@@ -25,7 +26,6 @@ from experiments.datakit.embeddings.harrier.merge import (
     EmbeddingSourcePair,
     discover_source_pairs,
     merge_embedding_source,
-    verify_merged_output,
 )
 from experiments.datakit.embeddings.harrier.pipeline import (
     DEFAULT_BATCH_SIZE,
@@ -83,7 +83,7 @@ def test_select_document_separates_fuzzy_duplicates_from_retained_documents():
     )
 
 
-def test_merge_embedding_source_preserves_repeated_ids_and_prefers_old_overlap(tmp_path):
+def test_merge_embedding_source_reuses_one_embedding_per_id_in_normalized_order(tmp_path):
     deduplicated_dir = tmp_path / "deduplicated"
     fuzzy_duplicate_dir = tmp_path / "fuzzy-duplicates"
     normalized_dir = tmp_path / "normalized"
@@ -92,15 +92,15 @@ def test_merge_embedding_source_preserves_repeated_ids_and_prefers_old_overlap(t
     _write_embedding_shard(
         deduplicated_dir / "part-00000-of-00002.parquet",
         ["a", "c", "c"],
-        [1, 3, 4],
+        [1, 3, 3],
     )
     _write_embedding_shard(
         fuzzy_duplicate_dir / "part-00000-of-00002.parquet",
         ["b", "c", "c"],
-        [2, 30, 31],
+        [2, 3, 3],
     )
     _write_embedding_shard(deduplicated_dir / "part-00001-of-00002.parquet", ["d"], [5])
-    _write_embedding_shard(fuzzy_duplicate_dir / "part-00001-of-00002.parquet", ["e", "f"], [6, 7])
+    _write_embedding_shard(fuzzy_duplicate_dir / "part-00001-of-00002.parquet", ["e", "e", "f"], [6, 6, 7])
     normalized_dir.mkdir()
     pq.write_table(
         pa.table({"id": ["a", "b", "c", "c", "c"]}),
@@ -108,7 +108,7 @@ def test_merge_embedding_source_preserves_repeated_ids_and_prefers_old_overlap(t
         row_group_size=2,
     )
     pq.write_table(
-        pa.table({"id": ["d", "e", "f"]}),
+        pa.table({"id": ["d", "e", "e", "e", "f"]}),
         normalized_dir / "part-00001-of-00002.parquet",
         row_group_size=2,
     )
@@ -142,15 +142,80 @@ def test_merge_embedding_source_preserves_repeated_ids_and_prefers_old_overlap(t
         table.column("id").to_pylist() for table in normalized_tables
     ]
     assert [[embedding[0].as_py() for embedding in table.column("embedding")] for table in tables] == [
-        [1, 2, 3, 4, 30],
-        [5, 6, 7],
+        [1, 2, 3, 3, 3],
+        [5, 6, 6, 6, 7],
     ]
     assert artifact.source_key == "normalized/source/outputs/main"
     assert artifact.counters["merge/deduplicated_docs"] == 4
-    assert artifact.counters["merge/fuzzy_duplicate_docs"] == 5
-    assert artifact.counters["merge/overlapping_docs"] == 1
-    assert artifact.counters["merge/verified_shards"] == 2
-    assert artifact.counters["merge/verified_rows"] == 8
+    assert artifact.counters["merge/fuzzy_duplicate_docs"] == 6
+    assert artifact.counters["merge/deduplicated_duplicate_docs"] == 1
+    assert artifact.counters["merge/fuzzy_duplicate_duplicate_docs"] == 2
+    assert artifact.counters["merge/overlapping_ids"] == 1
+
+
+def test_merge_embedding_source_rejects_normalized_id_without_embedding(tmp_path):
+    deduplicated_dir = tmp_path / "deduplicated"
+    fuzzy_duplicate_dir = tmp_path / "fuzzy-duplicates"
+    normalized_dir = tmp_path / "normalized"
+    output_dir = tmp_path / "merged"
+
+    _write_embedding_shard(deduplicated_dir / "part-00000.parquet", ["a"], [1])
+    _write_embedding_shard(fuzzy_duplicate_dir / "part-00000.parquet", [], [])
+    normalized_dir.mkdir()
+    pq.write_table(pa.table({"id": ["a", "b"]}), normalized_dir / "part-00000.parquet")
+
+    context = ZephyrContext(
+        resources=MERGE_WORKER_RESOURCES,
+        max_workers=1,
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name="merge-harrier-test",
+        stage_runner_factory=InlineRunner,
+    )
+    with context, pytest.raises(ZephyrWorkerError, match="Normalized ID 'b' has no Harrier embedding"):
+        merge_embedding_source(
+            output_path=str(output_dir),
+            source_key="normalized/source/outputs/main",
+            normalized_path=str(normalized_dir),
+            deduplicated_path=str(deduplicated_dir),
+            fuzzy_duplicate_path=str(fuzzy_duplicate_dir),
+            zephyr_context=context,
+        )
+
+
+@pytest.mark.parametrize(
+    ("normalized_ids", "case"),
+    [
+        pytest.param(["b"], "before", id="before-normalized-range"),
+        pytest.param(["a"], "after", id="after-normalized-range"),
+    ],
+)
+def test_merge_embedding_source_rejects_extra_embedding_id(tmp_path, normalized_ids, case):
+    deduplicated_dir = tmp_path / "deduplicated"
+    fuzzy_duplicate_dir = tmp_path / "fuzzy-duplicates"
+    normalized_dir = tmp_path / "normalized"
+    output_dir = tmp_path / "merged"
+
+    _write_embedding_shard(deduplicated_dir / "part-00000.parquet", ["a", "b"], [1, 2])
+    _write_embedding_shard(fuzzy_duplicate_dir / "part-00000.parquet", [], [])
+    normalized_dir.mkdir()
+    pq.write_table(pa.table({"id": normalized_ids}), normalized_dir / "part-00000.parquet")
+
+    context = ZephyrContext(
+        resources=MERGE_WORKER_RESOURCES,
+        max_workers=1,
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"merge-harrier-extra-{case}-test",
+        stage_runner_factory=InlineRunner,
+    )
+    with context, pytest.raises(ZephyrWorkerError, match="Harrier inputs have extra ID"):
+        merge_embedding_source(
+            output_path=str(output_dir),
+            source_key="normalized/source/outputs/main",
+            normalized_path=str(normalized_dir),
+            deduplicated_path=str(deduplicated_dir),
+            fuzzy_duplicate_path=str(fuzzy_duplicate_dir),
+            zephyr_context=context,
+        )
 
 
 def test_merge_embedding_sources_share_one_zephyr_pool(tmp_path, monkeypatch):
@@ -179,7 +244,7 @@ def test_merge_embedding_sources_share_one_zephyr_pool(tmp_path, monkeypatch):
     monkeypatch.setattr(ZephyrContext, "_start_pool", track_start_pool)
     with context:
         for source_name in ("first", "second"):
-            artifact = merge_embedding_source(
+            merge_embedding_source(
                 output_path=str(tmp_path / source_name),
                 source_key=f"normalized/{source_name}/outputs/main",
                 normalized_path=str(normalized_dir),
@@ -187,7 +252,9 @@ def test_merge_embedding_sources_share_one_zephyr_pool(tmp_path, monkeypatch):
                 fuzzy_duplicate_path=str(fuzzy_duplicate_dir),
                 zephyr_context=context,
             )
-            assert artifact.counters["merge/verified_shards"] == 1
+            assert pq.read_table(tmp_path / source_name / "part-00000.parquet", columns=["id"]).column(
+                "id"
+            ).to_pylist() == ["a", "b"]
 
     assert started_contexts == [context]
 
@@ -248,28 +315,6 @@ def test_discover_source_pairs_accepts_fuzzy_artifact_without_result(tmp_path):
             fuzzy_duplicate_path=str(fuzzy_duplicate_path),
         )
     ]
-
-
-def test_verify_merged_output_rejects_per_shard_row_count_mismatch(tmp_path):
-    normalized_dir = tmp_path / "normalized"
-    output_dir = tmp_path / "output"
-    normalized_dir.mkdir()
-    _write_embedding_shard(output_dir / "part-00000.parquet", ["a"], [1])
-    pq.write_table(pa.table({"id": ["a", "b"]}), normalized_dir / "part-00000.parquet")
-
-    with pytest.raises(ValueError, match="row count does not match"):
-        verify_merged_output(str(output_dir), str(normalized_dir))
-
-
-def test_verify_merged_output_rejects_id_order_mismatch(tmp_path):
-    normalized_dir = tmp_path / "normalized"
-    output_dir = tmp_path / "output"
-    normalized_dir.mkdir()
-    _write_embedding_shard(output_dir / "part-00000.parquet", ["a", "c"], [1, 2])
-    pq.write_table(pa.table({"id": ["a", "b"]}), normalized_dir / "part-00000.parquet")
-
-    with pytest.raises(ValueError, match="ID order does not match"):
-        verify_merged_output(str(output_dir), str(normalized_dir))
 
 
 @pytest.mark.parametrize(

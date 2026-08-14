@@ -1368,3 +1368,13 @@ author: Rafal Wojdyla
 - RNO service recovery: TEI service `219` failed because port `12438` was already in use. Reconstructed its exact saved batch request and replayed only that service. The job returned to the running state and entered its first build attempt with the same H100, CPU, memory, disk, image, bundle, and callable files.
 - Issue update: None. This service recovery did not stop source output and is not a major run checkpoint.
 - Next action: Continue both roots through completion. Verify all 292 source artifacts and all 166,775 shard names before the production merge.
+
+### 2026-08-14 02:01 UTC - Merge uses one embedding per ID
+
+- Merge rule: The normalized ID stream controls output order and row multiplicity. The merge selects the first deduplicated embedding for an ID, or the first fuzzy-duplicate embedding when the deduplicated input does not contain that ID. This uses the agreed invariant that equal IDs have equal embeddings.
+- Input I/O: Normalized Parquet reads request only the `id` column. The embedding streams remain sorted and are reduced to one row per ID with Arrow run-end encoding, including duplicate runs that cross Parquet row-group boundaries.
+- Lookup: Each normalized row group uses run-end indices to select embeddings in Arrow. The job fails when a normalized ID has no embedding or when either embedding input has an extra ID.
+- Counters: The job records dropped duplicate rows separately for the deduplicated and fuzzy-duplicate inputs. It records cross-input overlap as IDs, not rows.
+- Verification decision: Removed the automatic post-write `verify_merged_output` reread and its helper subtree. Production output verification will run as a separate operation after the merge.
+- Checks: All 15 tests in `tests/datakit/test_harrier_pipeline.py` passed. Changed-file formatting, lint, and type checks passed. An independent review found the hot-path and dead-verifier issues that this revision removes.
+- Production state: No production merge was launched.

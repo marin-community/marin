@@ -6,12 +6,10 @@
 import argparse
 import os
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 
 import pyarrow as pa
 import pyarrow.compute as pc
-import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import datakit_source_key
@@ -44,7 +42,7 @@ from experiments.datakit.reference_pipeline import select_sources
 DEDUPLICATED_PREFIX = "datakit/embed/harrier"
 FUZZY_DUPLICATE_PREFIX = "datakit/embed/harrier-fuzzy-duplicates"
 MERGED_PREFIX = "datakit/embed/harrier-all"
-MERGE_VERSION = 1
+MERGE_VERSION = 2
 WORKERS_PER_SOURCE = 32
 MAX_CONCURRENT = 8
 MAX_POOL_WORKERS = WORKERS_PER_SOURCE * MAX_CONCURRENT
@@ -245,43 +243,59 @@ def _validated_tables(path: str, counter_name: str) -> Iterator[pa.Table]:
             yield table
 
 
-def _prefix_equal(table: pa.Table, document_id: str) -> int:
-    mask = pc.equal(table.column("id"), pa.scalar(document_id))
-    return int(pc.sum(pc.cast(mask, pa.int64())).as_py() or 0)
-
-
-def _consume_prefix(table: pa.Table, length: int, tables: Iterator[pa.Table]) -> tuple[pa.Table, pa.Table | None]:
-    prefix = table.slice(0, length)
-    remainder = table.slice(length)
-    return prefix, remainder if len(remainder) else next(tables, None)
-
-
-def _table_groups(tables: Iterator[pa.Table]) -> Iterator[tuple[str, list[pa.Table]]]:
-    table = next(tables, None)
-    while table is not None:
-        document_id = table.column("id")[0].as_py()
-        pieces = []
-        while table is not None and table.column("id")[0].as_py() == document_id:
-            length = _prefix_equal(table, document_id)
-            piece, table = _consume_prefix(table, length, tables)
-            pieces.append(piece)
-        yield document_id, pieces
-
-
-def _row_count(tables: list[pa.Table]) -> int:
-    return sum(len(table) for table in tables)
-
-
-def _batches_from_prefix(tables: list[pa.Table], length: int) -> Iterator[pa.RecordBatch]:
-    remaining = length
+def _embeddings_by_id(tables: Iterator[pa.Table], duplicate_counter_name: str) -> Iterator[tuple[str, pa.Array]]:
+    previous = None
     for table in tables:
-        if remaining == 0:
-            return
-        piece = table.slice(0, min(remaining, len(table)))
-        remaining -= len(piece)
-        yield from piece.to_batches(max_chunksize=DEFAULT_BATCH_SIZE)
-    if remaining:
-        raise ValueError(f"Harrier input group is {remaining} rows shorter than expected")
+        ids = table.column("id").combine_chunks()
+        encoded_ids = pc.run_end_encode(ids)
+        run_ends = encoded_ids.run_ends.to_pylist()
+        first_indices = pa.array([0, *run_ends[:-1]], type=pa.int64())
+        embeddings = table.column("embedding").combine_chunks().take(first_indices)
+        run_start = 0
+        for index, (document_id_scalar, run_end) in enumerate(zip(encoded_ids.values, run_ends, strict=True)):
+            document_id = document_id_scalar.as_py()
+            duplicate_count = run_end - run_start - 1
+            run_start = run_end
+            if previous is not None and document_id == previous[0]:
+                counters.pipeline.update_counter(duplicate_counter_name, duplicate_count + 1)
+                continue
+            if previous is not None:
+                yield previous
+            if duplicate_count:
+                counters.pipeline.update_counter(duplicate_counter_name, duplicate_count)
+            previous = document_id, embeddings.slice(index, 1)
+
+    if previous is not None:
+        yield previous
+
+
+def _selected_embeddings(
+    deduplicated_tables: Iterator[pa.Table],
+    fuzzy_duplicate_tables: Iterator[pa.Table],
+) -> Iterator[tuple[str, pa.Array]]:
+    deduplicated_embeddings = _embeddings_by_id(deduplicated_tables, "merge/deduplicated_duplicate_docs")
+    fuzzy_duplicate_embeddings = _embeddings_by_id(fuzzy_duplicate_tables, "merge/fuzzy_duplicate_duplicate_docs")
+    deduplicated = next(deduplicated_embeddings, None)
+    fuzzy_duplicate = next(fuzzy_duplicate_embeddings, None)
+
+    while deduplicated is not None and fuzzy_duplicate is not None:
+        if deduplicated[0] <= fuzzy_duplicate[0]:
+            selected = deduplicated
+            deduplicated = next(deduplicated_embeddings, None)
+            if selected[0] == fuzzy_duplicate[0]:
+                counters.pipeline.update_counter("merge/overlapping_ids", 1)
+                fuzzy_duplicate = next(fuzzy_duplicate_embeddings, None)
+        else:
+            selected = fuzzy_duplicate
+            fuzzy_duplicate = next(fuzzy_duplicate_embeddings, None)
+        yield selected
+
+    if deduplicated is not None:
+        yield deduplicated
+        yield from deduplicated_embeddings
+    elif fuzzy_duplicate is not None:
+        yield fuzzy_duplicate
+        yield from fuzzy_duplicate_embeddings
 
 
 def _merge_in_normalized_order(
@@ -289,57 +303,40 @@ def _merge_in_normalized_order(
     fuzzy_duplicate_tables: Iterator[pa.Table],
     normalized_tables: Iterator[pa.Table],
 ) -> Iterator[pa.RecordBatch]:
-    deduplicated_groups = _table_groups(deduplicated_tables)
-    fuzzy_duplicate_groups = _table_groups(fuzzy_duplicate_tables)
-    deduplicated = next(deduplicated_groups, None)
-    fuzzy_duplicates = next(fuzzy_duplicate_groups, None)
+    embeddings = _selected_embeddings(deduplicated_tables, fuzzy_duplicate_tables)
+    embedding = next(embeddings, None)
+    previous = None
 
-    for normalized_id, normalized_pieces in _table_groups(normalized_tables):
-        if deduplicated is not None and deduplicated[0] < normalized_id:
-            raise ValueError(f"Deduplicated Harrier input has extra ID {deduplicated[0]!r}")
-        if fuzzy_duplicates is not None and fuzzy_duplicates[0] < normalized_id:
-            raise ValueError(f"Fuzzy-duplicate Harrier input has extra ID {fuzzy_duplicates[0]!r}")
+    for normalized_table in normalized_tables:
+        normalized_ids = normalized_table.column("id").combine_chunks()
+        encoded_ids = pc.run_end_encode(normalized_ids)
+        lookup_embeddings = []
+        for normalized_id_scalar in encoded_ids.values:
+            normalized_id = normalized_id_scalar.as_py()
+            if previous is not None and normalized_id == previous[0]:
+                lookup_embeddings.append(previous[1])
+                continue
+            if embedding is not None and embedding[0] < normalized_id:
+                raise ValueError(f"Harrier inputs have extra ID {embedding[0]!r}")
+            if embedding is None or embedding[0] > normalized_id:
+                raise ValueError(f"Normalized ID {normalized_id!r} has no Harrier embedding")
+            previous = embedding
+            lookup_embeddings.append(embedding[1])
+            embedding = next(embeddings, None)
 
-        deduplicated_pieces = []
-        if deduplicated is not None and deduplicated[0] == normalized_id:
-            deduplicated_pieces = deduplicated[1]
-            deduplicated = next(deduplicated_groups, None)
+        unique_embeddings = pa.concat_arrays(lookup_embeddings)
+        run_indices = pa.RunEndEncodedArray.from_arrays(
+            encoded_ids.run_ends,
+            pa.array(range(len(encoded_ids.values)), type=pa.int32()),
+        )
+        output_table = pa.Table.from_arrays(
+            [normalized_ids, pc.take(unique_embeddings, pc.run_end_decode(run_indices))],
+            schema=EMBEDDING_SCHEMA,
+        )
+        yield from output_table.to_batches(max_chunksize=DEFAULT_BATCH_SIZE)
 
-        fuzzy_duplicate_pieces = []
-        if fuzzy_duplicates is not None and fuzzy_duplicates[0] == normalized_id:
-            fuzzy_duplicate_pieces = fuzzy_duplicates[1]
-            fuzzy_duplicates = next(fuzzy_duplicate_groups, None)
-
-        normalized_count = _row_count(normalized_pieces)
-        deduplicated_count = _row_count(deduplicated_pieces)
-        fuzzy_duplicate_count = _row_count(fuzzy_duplicate_pieces)
-        if deduplicated_count > normalized_count:
-            raise ValueError(
-                f"Deduplicated Harrier input has too many rows for ID {normalized_id!r}: "
-                f"{deduplicated_count} > {normalized_count}"
-            )
-        if deduplicated_count + fuzzy_duplicate_count < normalized_count:
-            raise ValueError(
-                f"Harrier inputs have too few rows for ID {normalized_id!r}: "
-                f"{deduplicated_count} + {fuzzy_duplicate_count} < {normalized_count}"
-            )
-
-        yield from _batches_from_prefix(deduplicated_pieces, deduplicated_count)
-        fuzzy_rows_needed = normalized_count - deduplicated_count
-        yield from _batches_from_prefix(fuzzy_duplicate_pieces, fuzzy_rows_needed)
-        overlap_count = fuzzy_duplicate_count - fuzzy_rows_needed
-        if overlap_count:
-            counters.pipeline.update_counter("merge/overlapping_docs", overlap_count)
-
-    if deduplicated is not None:
-        raise ValueError(f"Deduplicated Harrier input has extra ID {deduplicated[0]!r}")
-    if fuzzy_duplicates is not None:
-        raise ValueError(f"Fuzzy-duplicate Harrier input has extra ID {fuzzy_duplicates[0]!r}")
-
-
-def _id_batches(path: str, counter_name: str | None = None) -> Iterator[pa.RecordBatch]:
-    for table in _id_tables(path, counter_name):
-        yield from table.to_batches(max_chunksize=DEFAULT_BATCH_SIZE)
+    if embedding is not None:
+        raise ValueError(f"Harrier inputs have extra ID {embedding[0]!r}")
 
 
 def _id_tables(path: str, counter_name: str | None = None) -> Iterator[pa.Table]:
@@ -352,77 +349,6 @@ def _id_tables(path: str, counter_name: str | None = None) -> Iterator[pa.Table]
             counters.pipeline.update_counter(counter_name, len(table))
         if len(table):
             yield table
-
-
-def _verify_normalized_order(
-    batches: Iterator[pa.RecordBatch],
-    normalized_path: str,
-    counter_name: str | None,
-) -> Iterator[pa.RecordBatch]:
-    normalized_batches = _id_batches(normalized_path, counter_name)
-    normalized = next(normalized_batches, None)
-    normalized_offset = 0
-
-    for batch in batches:
-        merged_ids = batch.column("id")
-        merged_offset = 0
-        while merged_offset < len(merged_ids):
-            if normalized is None:
-                raise ValueError(f"Merged Harrier shard has extra IDs compared with {normalized_path}")
-            compare_length = min(len(merged_ids) - merged_offset, len(normalized) - normalized_offset)
-            normalized_ids = normalized.column("id")
-            if not merged_ids.slice(merged_offset, compare_length).equals(
-                normalized_ids.slice(normalized_offset, compare_length)
-            ):
-                raise ValueError(f"Merged Harrier ID order does not match {normalized_path}")
-            merged_offset += compare_length
-            normalized_offset += compare_length
-            if normalized_offset == len(normalized):
-                normalized = next(normalized_batches, None)
-                normalized_offset = 0
-        yield batch
-
-    if normalized is not None:
-        raise ValueError(f"Merged Harrier shard has missing IDs compared with {normalized_path}")
-
-
-def _parquet_metadata(path: str) -> tuple[int, pa.Schema]:
-    with StoragePath(path).open("rb") as file:
-        parquet = pq.ParquetFile(file)
-        return parquet.metadata.num_rows, parquet.schema_arrow
-
-
-def _verify_output_shard(paths: tuple[str, str, str]) -> int:
-    basename, output_shard, normalized_shard = paths
-    output_rows, output_schema = _parquet_metadata(output_shard)
-    normalized_rows, _ = _parquet_metadata(normalized_shard)
-    if not output_schema.equals(EMBEDDING_SCHEMA, check_metadata=False):
-        raise ValueError(f"Unexpected Harrier embedding schema in {output_shard}: {output_schema}")
-    if output_rows != normalized_rows:
-        raise ValueError(
-            f"Merged Harrier row count does not match normalized data for {basename}: "
-            f"{output_rows} != {normalized_rows}"
-        )
-    for _ in _verify_normalized_order(_id_batches(output_shard), normalized_shard, None):
-        pass
-    return output_rows
-
-
-def verify_merged_output(output_path: str, normalized_path: str) -> tuple[int, int]:
-    """Verify output shard names, schemas, row counts, and normalized ID order."""
-    output_shards = _parquet_paths_by_basename(output_path)
-    normalized_shards = _parquet_paths_by_basename(normalized_path)
-    if output_shards.keys() != normalized_shards.keys():
-        missing = sorted(normalized_shards.keys() - output_shards.keys())
-        extra = sorted(output_shards.keys() - normalized_shards.keys())
-        raise ValueError(f"Merged Harrier output shards do not match normalized data: missing={missing}, extra={extra}")
-
-    shard_paths = [
-        (basename, output_shards[basename], normalized_shards[basename]) for basename in sorted(normalized_shards)
-    ]
-    with ThreadPoolExecutor(max_workers=min(WORKERS_PER_SOURCE, len(shard_paths))) as executor:
-        total_rows = sum(executor.map(_verify_output_shard, shard_paths))
-    return len(output_shards), total_rows
 
 
 def _merge_embedding_shard(pairs: Iterator[EmbeddingShardPair], shard: ShardInfo) -> Iterator[pa.RecordBatch]:
@@ -453,7 +379,7 @@ def merge_embedding_source(
     fuzzy_duplicate_path: str,
     zephyr_context: ZephyrContext,
 ) -> EmbeddingAttrData:
-    """Stream one source and verify that its output follows normalized row order."""
+    """Merge one source in normalized order, preferring deduplicated embeddings on ID overlap."""
     shard_pairs = _embedding_shard_pairs(normalized_path, deduplicated_path, fuzzy_duplicate_path)
     output_basenames = tuple(pair.basename for pair in shard_pairs)
 
@@ -466,10 +392,6 @@ def merge_embedding_source(
         .write_parquet(_output_path, schema=EMBEDDING_SCHEMA, skip_existing=True)
     )
     outcome = zephyr_context.execute(dataset, verbose=True)
-    verified_shards, verified_rows = verify_merged_output(output_path, normalized_path)
-    outcome_counters = dict(outcome.counters)
-    outcome_counters["merge/verified_shards"] = verified_shards
-    outcome_counters["merge/verified_rows"] = verified_rows
     return EmbeddingAttrData(
         output_dir=output_path,
         source_key=source_key,
@@ -479,7 +401,7 @@ def merge_embedding_source(
         quantization_scale=QUANT_SCALE,
         quantization_range=QUANT_RANGE,
         batch_size=DEFAULT_BATCH_SIZE,
-        counters=outcome_counters,
+        counters=dict(outcome.counters),
     )
 
 
