@@ -8,6 +8,7 @@ import dataclasses
 import functools
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -71,6 +72,7 @@ _MOK_LIKE_PEER_WAIT_PHASES = ("forward_pre", "forward_post", "backward_pre", "ba
 _MOK_LIKE_STAGING_COPY_PHASES = ("forward", "backward")
 _BF16_BYTES = 2
 _FLOAT32_BYTES = 4
+_EP64_FIRST_STEP_HEARTBEAT_INTERVAL = 30.0
 
 HERO_EP_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "false",
@@ -921,6 +923,32 @@ def _drop_metrics(
     }
 
 
+@contextlib.contextmanager
+def _ep64_first_step_heartbeat(runtime: MokLikeRuntimeHandle | None):
+    if runtime is None:
+        yield
+        return
+
+    stop = threading.Event()
+
+    def log_call_counts() -> None:
+        while not stop.wait(_EP64_FIRST_STEP_HEARTBEAT_INTERVAL):
+            forward_calls, backward_calls = runtime.call_counts()
+            logger.info(
+                "MoK EP64 first-step heartbeat: forward handlers=%d, backward handlers=%d",
+                forward_calls,
+                backward_calls,
+            )
+
+    heartbeat = threading.Thread(target=log_call_counts, name="mok-ep64-first-step-heartbeat", daemon=True)
+    heartbeat.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        heartbeat.join(timeout=1.0)
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -1162,6 +1190,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if mok_like_runtime is not None:
             mok_like_runtime.reset_call_counts()
             mok_like_runtime.reset_debug_counters()
+        first_ep64_step = mok_like_runtime is not None and mok_like_runtime.expert_parallel_size == 64
 
         # Main optimization loop.
         try:
@@ -1174,20 +1203,33 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 compute_watch = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
-                train_step_result = train_step(state, batch, compute_watch=compute_watch)
-                state, metrics, watch_stats = train_step_result
-                step = int(state.step) - 1
+                with _ep64_first_step_heartbeat(mok_like_runtime if first_ep64_step else None):
+                    if first_ep64_step:
+                        logger.info("Lowering the first MoK EP64 train step")
+                        lowered_train_step = train_step.lower(state, batch, compute_watch=compute_watch)
+                        logger.info("Compiling the first MoK EP64 train step")
+                        compiled_train_step = lowered_train_step.compile()
+                        logger.info("The first MoK EP64 train step compiled; dispatching it")
+                        train_step_result = compiled_train_step(state, batch)
+                        logger.info("The first MoK EP64 train step was dispatched; waiting for its loss")
+                    else:
+                        train_step_result = train_step(state, batch, compute_watch=compute_watch)
+                    state, metrics, watch_stats = train_step_result
+                    step = int(state.step) - 1
 
-                trim_telemetry = _maybe_trim_default_memory_pools(
-                    config,
-                    mok_like_runtime,
-                    completed_update=step + 1,
-                    train_step_result=train_step_result,
-                )
-                if trim_telemetry is not None:
-                    trim_audit.record(trim_telemetry)
+                    trim_telemetry = _maybe_trim_default_memory_pools(
+                        config,
+                        mok_like_runtime,
+                        completed_update=step + 1,
+                        train_step_result=train_step_result,
+                    )
+                    if trim_telemetry is not None:
+                        trim_audit.record(trim_telemetry)
 
-                jax.block_until_ready(metrics["train/loss"])
+                    jax.block_until_ready(metrics["train/loss"])
+                    if first_ep64_step:
+                        logger.info("The first MoK EP64 loss is ready")
+                        first_ep64_step = False
 
                 if not jnp.isfinite(metrics["train/loss"]):
                     raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {int(state.step)}.")
