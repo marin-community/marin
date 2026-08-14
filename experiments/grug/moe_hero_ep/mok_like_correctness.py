@@ -25,6 +25,7 @@ from levanter.kernels.mixture_of_kittens import (
     MokLikeBuildConfig,
     MokLikeConfig,
     MokLikeForwardXStorage,
+    MokLikeWorkspaceTransport,
     initialize_mok_like_runtime,
     mok_like_mlp,
     mok_like_reference,
@@ -147,6 +148,13 @@ def _error_metrics(
 
 
 @click.command()
+@click.option(
+    "--workspace-transport",
+    type=click.Choice([value.value for value in MokLikeWorkspaceTransport]),
+    default=MokLikeWorkspaceTransport.IN_PROCESS_PEER.value,
+    show_default=True,
+    help="peer-workspace transport; fabric_symmetric runs one rank per process over imported arenas",
+)
 @click.option("--num-tokens", type=click.IntRange(min=256), default=512, show_default=True)
 @click.option("--hidden-dim", type=click.IntRange(min=256), default=512, show_default=True)
 @click.option("--intermediate-dim", type=click.IntRange(min=256), default=512, show_default=True)
@@ -226,6 +234,7 @@ def _error_metrics(
     help="Scale the independent output cotangent used by gradient parity checks.",
 )
 def main(
+    workspace_transport: str,
     num_tokens: int,
     hidden_dim: int,
     intermediate_dim: int,
@@ -278,23 +287,42 @@ def main(
 
     devices = jax.devices()
     process_count = jax.process_count()
-    if jax.local_device_count() != WORLD_SIZE or len(devices) != process_count * WORLD_SIZE:
-        raise RuntimeError(f"The correctness gate requires four visible GPUs per process, got {devices}")
+    transport = MokLikeWorkspaceTransport(workspace_transport)
     if any(device.platform != "gpu" for device in devices):
         raise RuntimeError(f"The correctness gate requires CUDA GPUs, got {devices}")
-    if process_count != 1 and failure_gate is None:
-        raise click.BadParameter("multi-process execution is supported only for --failure-gate")
-    mesh = Mesh(
-        np.asarray(devices).reshape(process_count, 1, WORLD_SIZE, 1),
-        ("replica_dcn", "data", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 4,
-    )
+
+    if transport.crosses_processes:
+        # One rank per process, the layout the fabric transport requires. The expert axis spans
+        # processes rather than one process's local devices, and there is no data replication:
+        # this gate exists to exercise the kernel over imported peer arenas, nothing else.
+        if process_count != WORLD_SIZE or jax.local_device_count() != 1:
+            raise RuntimeError(
+                f"{transport.value} needs {WORLD_SIZE} processes with one GPU each, got "
+                f"{process_count} processes and {jax.local_device_count()} local devices"
+            )
+        replicas = 1
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, 1, WORLD_SIZE, 1),
+            ("replica_dcn", "data", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+    else:
+        if jax.local_device_count() != WORLD_SIZE or len(devices) != process_count * WORLD_SIZE:
+            raise RuntimeError(f"The correctness gate requires four visible GPUs per process, got {devices}")
+        if process_count != 1 and failure_gate is None:
+            raise click.BadParameter("multi-process execution is supported only for --failure-gate")
+        replicas = process_count
+        mesh = Mesh(
+            np.asarray(devices).reshape(process_count, 1, WORLD_SIZE, 1),
+            ("replica_dcn", "data", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
     batch_sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert")))
     expert_sharding = NamedSharding(mesh, P("expert"))
     shared_sharding = NamedSharding(mesh, P(("data", "expert"), "model"))
     router_sharding = NamedSharding(mesh, P(None, None))
     arrays = _canonical_inputs(
-        num_tokens=process_count * num_tokens,
+        num_tokens=replicas * num_tokens,
         hidden_dim=hidden_dim,
         intermediate_dim=intermediate_dim,
     )
@@ -324,7 +352,7 @@ def main(
     )
     output_gradient = jax.device_put(
         jnp.asarray(
-            np.random.default_rng(4321).normal(size=(process_count * WORLD_SIZE * num_tokens, hidden_dim)),
+            np.random.default_rng(4321).normal(size=(replicas * WORLD_SIZE * num_tokens, hidden_dim)),
             dtype=jnp.bfloat16,
         ),
         batch_sharding,
@@ -373,6 +401,7 @@ def main(
         top_k=TOP_K,
         workspace_slots=config.workspace_slots,
         mesh=mesh,
+        workspace_transport=transport,
     ) as runtime:
 
         def fused_loss(*arguments: jax.Array) -> jax.Array:
