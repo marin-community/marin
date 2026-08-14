@@ -249,16 +249,20 @@ _SNOWBALL_STEP105149_CKPT: str = (
     "moe_67b_a2b_d2560_ep1_rep8_bs1024_seq65536_sw2k_v4_2048_muon_cooldown_step102k-3dac46/"
     "checkpoints/step-105149/"
 )
+_SECOND_COOLDOWN_THINKING_STEP630_CKPT: str = (
+    "s3://marin-us-east-02a/marin/grug/" "snowball_step105149_sft_s2_thinking/2026.08.13.1/checkpoints/step-630/"
+)
 
 _JOB1_RUN_ID: str = "grug_67b_a2b_sft_s1_wildchat"
 _JOB2_RUN_ID: str = "grug_67b_a2b_sft_s2_thinking"
 _SMOKE_RUN_ID: str = "grug_67b_a2b_sft_smoke"
 _NEMOTRON_TERMINAL_RUN_ID: str = "snowball_step105149_sft_nemotron_terminal_steps1888_ben_recipe"
 _NEMOTRON_TERMINAL_STEPS: int = 1_888
-_AGENTIC_RUN_ID: str = "snowball_step105149_sft_grug_a2b_agentic_eot_5ep"
+_OPENCODE_RUN_ID: str = "snowball_step105149_sft_grug_a2b_opencode_eot_5ep"
 _SECOND_COOLDOWN_CHAT_RUN_ID: str = "snowball_step105149_sft_s1_chat"
 _SECOND_COOLDOWN_THINKING_RUN_ID: str = "snowball_step105149_sft_s2_thinking"
-_SECOND_COOLDOWN_AGENTIC_RUN_ID: str = "snowball_step105149_sft_s3_agentic_eot_5ep"
+_SECOND_COOLDOWN_OPENCODE_RUN_ID: str = "snowball_step105149_sft_s3_opencode_eot_5ep"
+_SECOND_COOLDOWN_NEMOTRON_TERMINAL_RUN_ID: str = "snowball_step105149_sft_s3_nemotron_terminal_steps1888"
 _AGENTIC_TRAIN_RESOURCES: str = "agentic_train_resources"
 _AGENTIC_EPOCHS: int = 5
 
@@ -286,6 +290,7 @@ def _grug_source(
     stage: str,
     seq: int,
     save_interval_minutes: int = 30,
+    checkpoint_timeout: timedelta = timedelta(minutes=30),
     checkpoint_keep: list[dict] | None = None,
     wandb_mode: str | None = None,
     accelerator_tag: str = "cw-h100",
@@ -303,6 +308,7 @@ def _grug_source(
         ema_beta=None,
         log_every=1,
         save_interval_minutes=save_interval_minutes,
+        checkpoint_timeout=checkpoint_timeout,
         checkpoint_keep=checkpoint_keep if checkpoint_keep is not None else [{"every": 1000}],
         wandb_tags=["moe", "june_tpu", "67b_a2b", "sft", stage, f"seq{seq}", accelerator_tag],
         wandb_group="grug-67b-a2b-sft",
@@ -424,21 +430,24 @@ def build_smoke(version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
 def build_nemotron_terminal(
     version: str | None = None,
     *,
+    init_from: str = _SNOWBALL_STEP105149_CKPT,
+    run_id: str = _NEMOTRON_TERMINAL_RUN_ID,
     resources: ResourceConfig | None = None,
     accelerator_tag: str = "cw-h100",
 ) -> ArtifactStep[LevanterCheckpoint]:
     """SFT Snowball's latest 100k-lineage checkpoint for a controlled NemotronTerminal budget."""
-    step_name = f"grug/{_NEMOTRON_TERMINAL_RUN_ID}"
+    step_name = f"grug/{run_id}"
     version = resolve_version(step_name, version)
     spec = _spec(
         name=user_namespaced_name(step_name, version),
         version=version,
         dataset=_NEMOTRON_TERMINAL_DATASET,
         model_source=_grug_source(
-            _SNOWBALL_STEP105149_CKPT,
+            init_from,
             stage="nemotron_terminal",
             seq=_SEQ,
             save_interval_minutes=60,
+            checkpoint_timeout=timedelta(hours=2),
             wandb_mode="disabled",
             accelerator_tag=accelerator_tag,
         ),
@@ -484,11 +493,11 @@ def build_agentic(
     version: str | None = None,
     *,
     init_from: str | ArtifactStep[LevanterCheckpoint] = _SNOWBALL_STEP105149_CKPT,
-    run_id: str = _AGENTIC_RUN_ID,
+    run_id: str = _OPENCODE_RUN_ID,
     resources: ResourceConfig | None = None,
     accelerator_tag: str = "cw-h100",
 ) -> ArtifactStep[LevanterCheckpoint]:
-    """Run five token epochs over the rendered agent traces."""
+    """Run five token epochs over the rendered OpenCode traces."""
     dataset = grug_a2b_agentic_sft_eot_dataset()
     step_name = f"grug/{run_id}"
     version = resolve_version(step_name, version)
@@ -509,7 +518,7 @@ def build_agentic(
             mp="params=float32,compute=bfloat16,output=bfloat16",
             tracker=WandbConfig(
                 project=_WANDB_PROJECT,
-                tags=["moe", "june_tpu", "67b_a2b", "sft", "agentic", "5epochs", "seq32768", accelerator_tag],
+                tags=["moe", "june_tpu", "67b_a2b", "sft", "opencode", "5epochs", "seq32768", accelerator_tag],
                 group="grug-67b-a2b-sft",
                 mode="disabled",
                 name=name.split("/")[-1],
@@ -534,6 +543,7 @@ def build_agentic(
                     tracemalloc_frames=None,
                     top_allocations=0,
                 ),
+                timeout=timedelta(hours=2),
             ),
             save_interval_minutes=60,
             checkpoint_keep=[{"every": 1000}],
@@ -578,7 +588,8 @@ def build_agentic(
             "2stage",
             "second-cooldown-chat",
             "second-cooldown-thinking",
-            "second-cooldown-3stage",
+            "second-cooldown-opencode-3stage",
+            "second-cooldown-nemotron-terminal",
             "nemotron-terminal",
             "nemotron-terminal-gb200",
             "agentic",
@@ -599,10 +610,15 @@ def main(stage: str) -> ArtifactStep[LevanterCheckpoint]:
         return build_second_cooldown_chat()
     if stage == "second-cooldown-thinking":
         return build_second_cooldown_thinking(build_second_cooldown_chat())
-    if stage == "second-cooldown-3stage":
+    if stage == "second-cooldown-opencode-3stage":
         chat = build_second_cooldown_chat()
         thinking = build_second_cooldown_thinking(chat)
-        return build_agentic(init_from=thinking, run_id=_SECOND_COOLDOWN_AGENTIC_RUN_ID)
+        return build_agentic(init_from=thinking, run_id=_SECOND_COOLDOWN_OPENCODE_RUN_ID)
+    if stage == "second-cooldown-nemotron-terminal":
+        return build_nemotron_terminal(
+            init_from=_SECOND_COOLDOWN_THINKING_STEP630_CKPT,
+            run_id=_SECOND_COOLDOWN_NEMOTRON_TERMINAL_RUN_ID,
+        )
     if stage == "nemotron-terminal":
         return build_nemotron_terminal()
     if stage == "nemotron-terminal-gb200":

@@ -81,6 +81,7 @@ class GrugMoeSFTConfig:
     checkpointer: CheckpointerConfig | None = None
     checkpoint_keep: list[dict] | None = None
     save_interval_minutes: int = 30
+    checkpoint_timeout: timedelta = timedelta(minutes=30)
     per_device_parallelism: int = -1
 
 
@@ -137,6 +138,7 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=config.save_interval_minutes),
             keep=config.checkpoint_keep,
+            timeout=config.checkpoint_timeout,
         ),
         # First launch: output dir empty -> weights-only init from initialize_from. Once this
         # run saves its own checkpoints, every restart auto-resumes from those (full SFT state).
@@ -194,6 +196,7 @@ class GrugModel:
     log_every: int = 1
     seed: int = 0
     save_interval_minutes: int = 30
+    checkpoint_timeout: timedelta = timedelta(minutes=30)
     checkpoint_keep: list[dict] | None = None
     wandb_tags: Sequence[str] = ()
     wandb_group: str | None = None
@@ -250,6 +253,7 @@ class GrugModel:
             expert_parallel=self.expert_parallel,
             per_device_parallelism=self.per_device_parallelism,
             save_interval_minutes=self.save_interval_minutes,
+            checkpoint_timeout=self.checkpoint_timeout,
             checkpoint_keep=self.checkpoint_keep,
             grug_trainer=GrugTrainerConfig(
                 z_loss_weight=self.z_loss_weight,

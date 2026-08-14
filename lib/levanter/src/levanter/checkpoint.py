@@ -447,6 +447,7 @@ class Checkpointer:
         keep_last_temporary_checkpoints: int = 1,
         debug: CheckpointDebugConfig | None = None,
         write_config: TensorStoreWriteConfig | None = None,
+        timeout: datetime.timedelta = datetime.timedelta(minutes=30),
     ):
         """
         Class for managing checkpoints. Saves checkpoints according to two policies: time and step.
@@ -471,6 +472,7 @@ class Checkpointer:
                 checkpoint commits successfully. Set to 0 to delete temporary checkpoints after they commit. Permanent
                 checkpoints still clean up temporary checkpoints because they supersede them for recovery.
             write_config: how a save divides work across the processes holding the state
+            timeout: maximum time for every process to finish a distributed checkpoint commit
         """
         if keep_last_temporary_checkpoints < 0:
             raise ValueError("keep_last_temporary_checkpoints must be non-negative")
@@ -502,7 +504,7 @@ class Checkpointer:
                 raise ValueError("Step policies must be sorted by 'until' value")
 
         # The default of 5 minutes is too short even for modestly sized models for some reason
-        self._manager = GlobalAsyncCheckpointManager(timeout_secs=60 * 30)
+        self._manager = GlobalAsyncCheckpointManager(timeout_secs=int(timeout.total_seconds()))
 
         if jax.process_index() == 0:
             self._async_checkpoint_remover_queue: queue.Queue[str] = queue.Queue(maxsize=-1)
@@ -1167,6 +1169,8 @@ class CheckpointerConfig:
     """Checkpoint-path diagnostics. Disabled by default."""
     write: TensorStoreWriteConfig = field(default_factory=TensorStoreWriteConfig)
     """How a save divides work across the processes holding the state."""
+    timeout: timedelta = timedelta(minutes=30)
+    """Maximum time for every process to finish a distributed checkpoint commit."""
 
     def expanded_path(self, run_id) -> str:
         if self.append_run_id_to_base_path:
@@ -1191,6 +1195,7 @@ class CheckpointerConfig:
             keep_last_temporary_checkpoints=self.keep_last_temporary_checkpoints,
             debug=self.debug,
             write_config=self.write,
+            timeout=self.timeout,
         )
 
     def __post_init__(self):
