@@ -72,13 +72,18 @@ Two adapters build cache behavior on this primitive:
 
 - `finestore.cache.PersistentKvCache` stores serialized autotuning and compiled-kernel
   results by key. The process memory tier serves repeated reads. Remote writes queue in
-  the background, and each burst shares a bounded multi-object transaction.
+  the background, and each burst shares a bounded multi-object transaction. Normal
+  interpreter shutdown gives queued writes up to 10 seconds to finish. A stalled write
+  is then abandoned so cache storage cannot hold process shutdown. `cache.close()` waits
+  for queued writes when a caller wants deterministic resource cleanup.
 - `finestore.fileset.FineStoreDirectory` materializes a committed named-object set
   into a local directory and publishes newly created files in bounded transactions.
   Iris uses it for XLA's per-fusion autotune directory, replacing the ZIP mirror.
 
-Both adapters are caches: failures may be treated as misses by their callers. The
-core `DataStore` and `ReadView` APIs propagate storage and commit errors.
+Both adapters are caches: failures may be treated as misses by their callers. Cache
+cleanup does not acknowledge persistence or return a commit token. Use
+`DataStore.transaction()` when a write must become visible before the caller continues.
+The core `DataStore` and `ReadView` APIs propagate storage and commit errors.
 
 ## Compaction
 
@@ -101,7 +106,7 @@ archive retention or reader leases; it is outside the current API.
 
 ```text
 {root}/
-    _archive.json                         immutable format marker
+    _archive.json                         format marker changed only by migrations
     HEAD                                  conditional commit pointer
     manifests/{commit_id}.json            immutable complete snapshots
     schemas/{content_hash}.json            immutable table contracts
@@ -126,16 +131,31 @@ an equivalent compare-and-swap primitive.
 
 - A process that stops before advancing `HEAD` leaves the previous commit intact.
 - A process that stops after advancing `HEAD` completed the transaction.
+- A cache writer may stop at either point. The named value is absent or fully committed;
+  a partial transaction is never visible.
 - A compare-and-swap loss reloads `HEAD` and rebases disjoint additions. A compaction
   rebases only while all of its exact inputs remain active.
 - Opening a sealed archive for writing publishes a commit that clears its seal.
   `store.seal()` flushes, compacts, and records seal metadata in a final manifest.
 
-Format v2 does not read format-v1 listing-based archives. Quiesce and seal a v1
-archive, then call `finestore.migrate.migrate_v1(root)` before moving its consumers.
-The migrator publishes existing Parquet shards through an initial manifest and keeps
-the legacy objects; it does not copy payload data. Producers and consumers then use
-one visibility protocol instead of carrying both models in every reader.
+Format migrations live in `finestore.migrations` as a linear revision chain. Each
+`mNNNN_<name>.py` revision declares its source and target format versions and must be
+safe to retry. `_archive.json` is the applied-version ledger, so a separate migration
+table would duplicate the archive's visibility state.
+
+Each revision also declares whether it is safe to run while opening an archive for
+writing. `DataStore.open()` applies a complete chain only when every required revision
+opts in. `ReadView()` never mutates storage; an older archive raises
+`FormatVersionError` with instructions to call `finestore.migrations.migrate(root)`.
+An archive from a newer FineStore build instructs either caller to upgrade the package.
+
+The application that owns an archive runs migrations after quiescing its writers. For
+evaluation archives, the fleet operator runs
+`experiments.evaluation.migrations.cli upgrade-format` before deploying format-v2
+readers. The v1-to-v2 revision is write-open-safe when the archive is sealed. A writable
+open then publishes existing Parquet shards through an initial manifest and keeps the
+legacy objects without copying payload data. An unsealed archive still requires the
+owner to quiesce and seal its writers first.
 
 ## Package boundary
 

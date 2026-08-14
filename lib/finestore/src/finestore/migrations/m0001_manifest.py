@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""One-shot migration from FineStore's listing-based v1 layout to format v2."""
+"""Upgrade listing-based v1 archives to transactional v2 manifests."""
 
 from __future__ import annotations
 
@@ -14,9 +14,8 @@ from pydantic import AliasChoices, BaseModel, Field
 from rigging.filesystem import StoragePath
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 
-from finestore.commit import read_snapshot, write_schema
+from finestore.commit import write_schema
 from finestore.layout import (
-    FORMAT_VERSION,
     ArchiveMetadata,
     CommitToken,
     FineStoreLayout,
@@ -29,12 +28,15 @@ from finestore.layout import (
     TableMetadata,
 )
 
-_LEGACY_FORMAT_VERSION = 1
+MIGRATION_ID = "0001_manifest"
+FROM_VERSION = 1
+TO_VERSION = 2
+WRITE_OPEN_SAFE = True
+
 _LEGACY_SCHEMA_FILE = "_schema.json"
 _LEGACY_SEALED_FILE = "SEALED"
 _WRITER_SEGMENT = re.compile(r"^w=(.+)$")
 _GENERATION_SEGMENT = re.compile(r"^g=(\d+)$")
-
 
 class _LegacyArchiveMetadata(BaseModel):
     format_version: int
@@ -117,11 +119,33 @@ def _legacy_shards(root: StoragePath, table: str) -> tuple[Shard, ...]:
     return tuple(sorted(shards, key=lambda shard: shard.path))
 
 
-def migrate_v1(root: str) -> CommitToken:
-    """Upgrade one sealed, quiescent v1 archive without copying its Parquet payloads.
+def _v2_token(layout: FineStoreLayout) -> CommitToken | None:
+    versioned = conditional_object(layout.head_path).read()
+    if versioned is None:
+        return None
+    head = HeadMetadata.model_validate_json(versioned.data)
+    if head.format_version != TO_VERSION:
+        raise ValueError(f"HEAD at {layout.root!r} is format v{head.format_version}; expected v{TO_VERSION}")
+    manifest = Manifest.model_validate_json(StoragePath(head.manifest_path).read_bytes())
+    if manifest.format_version != TO_VERSION:
+        raise ValueError(
+            f"manifest {head.manifest_path!r} is format v{manifest.format_version}; expected v{TO_VERSION}"
+        )
+    if (manifest.commit_id, manifest.sequence) != (head.commit_id, head.sequence):
+        raise ValueError(f"HEAD at {layout.root!r} does not match manifest {head.manifest_path!r}")
+    return CommitToken(
+        commit_id=head.commit_id,
+        sequence=head.sequence,
+        version=versioned.version,
+        manifest_path=head.manifest_path,
+    )
 
-    Returns the initial v2 commit token, or the current token when the archive was already
-    migrated. The operation is safe to retry after an interrupted attempt.
+
+def migrate(root: str) -> CommitToken:
+    """Publish a sealed, quiescent v1 archive through a v2 manifest and HEAD.
+
+    Existing Parquet payloads remain in place. The format marker advances only after
+    the new HEAD is durable, so the migration is safe to retry after interruption.
     """
     root_path = StoragePath(root)
     layout = FineStoreLayout(str(root_path))
@@ -130,13 +154,16 @@ def migrate_v1(root: str) -> CommitToken:
     if archive is None:
         raise FileNotFoundError(layout.archive_path)
     archive_metadata = _LegacyArchiveMetadata.model_validate_json(archive.data)
-    if archive_metadata.format_version == FORMAT_VERSION:
-        token = read_snapshot(layout).token
+    if archive_metadata.format_version == TO_VERSION:
+        token = _v2_token(layout)
         if token is None:
-            raise ValueError(f"format-v2 archive at {root!r} has no committed HEAD")
+            raise ValueError(f"format-v{TO_VERSION} archive at {root!r} has no committed HEAD")
         return token
-    if archive_metadata.format_version != _LEGACY_FORMAT_VERSION:
-        raise ValueError(f"cannot migrate FineStore format v{archive_metadata.format_version}")
+    if archive_metadata.format_version != FROM_VERSION:
+        raise ValueError(
+            f"migration {MIGRATION_ID} requires FineStore format v{FROM_VERSION}; "
+            f"found v{archive_metadata.format_version}"
+        )
 
     seal_path = root_path / _LEGACY_SEALED_FILE
     if not seal_path.exists():
@@ -151,28 +178,32 @@ def migrate_v1(root: str) -> CommitToken:
             metadata_path = write_schema(layout, TableMetadata.model_validate(legacy_metadata.model_dump()))
             tables[name] = ManifestTable(metadata_path=metadata_path, shards=_legacy_shards(root_path, name))
         commit_id = uuid.uuid4().hex
-        manifest = Manifest(commit_id=commit_id, sequence=1, tables=tables, sealed=seal)
+        manifest = Manifest(format_version=TO_VERSION, commit_id=commit_id, sequence=1, tables=tables, sealed=seal)
         manifest_path = layout.manifest_path(commit_id)
         StoragePath(manifest_path).write_text(manifest.model_dump_json(indent=2))
-        head = HeadMetadata(commit_id=commit_id, sequence=1, manifest_path=manifest_path)
+        head = HeadMetadata(
+            format_version=TO_VERSION, commit_id=commit_id, sequence=1, manifest_path=manifest_path
+        )
         try:
             head_object.write(head.model_dump_json().encode(), expected_version=None)
         except ConditionalWriteError:
             pass
 
-    token = read_snapshot(layout).token
+    token = _v2_token(layout)
     if token is None:
-        raise ValueError(f"format-v2 archive at {root!r} has no committed HEAD")
+        raise ValueError(f"format-v{TO_VERSION} archive at {root!r} has no committed HEAD")
 
     try:
-        archive_object.write(ArchiveMetadata().model_dump_json().encode(), expected_version=archive.version)
+        archive_object.write(
+            ArchiveMetadata(format_version=TO_VERSION).model_dump_json().encode(), expected_version=archive.version
+        )
     except ConditionalWriteError as exc:
         current = archive_object.read()
         if (
             current is not None
-            and _LegacyArchiveMetadata.model_validate_json(current.data).format_version == FORMAT_VERSION
+            and _LegacyArchiveMetadata.model_validate_json(current.data).format_version == TO_VERSION
         ):
-            token = read_snapshot(layout).token
+            token = _v2_token(layout)
             assert token is not None
             return token
         raise RuntimeError(f"archive at {root!r} changed during format migration") from exc

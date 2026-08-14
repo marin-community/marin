@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 import click
-from finestore.migrate import migrate_v1
+from finestore.migrations import migrate
 from finestore.reader import ReadView
 from marin.evaluation.archive import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION
 from marin.evaluation.lm_eval_samples import (
@@ -73,7 +73,11 @@ def upgrade_format(results_paths: tuple[str, ...], prefixes: tuple[str, ...], wo
 
 
 def _upgrade_one(results_path: str) -> SweepOutcome:
-    token = migrate_v1(results_path)
+    result = migrate(results_path)
+    if not result.applied:
+        return SweepOutcome("already_current", "current")
+    token = result.token
+    assert token is not None
     return SweepOutcome("upgraded", f"commit {token.sequence}:{token.commit_id}")
 
 

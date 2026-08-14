@@ -31,8 +31,23 @@ BLOBS_TABLE = "blobs"
 BLOB_NAME_COLUMN = "name"
 
 
+class FormatVersionError(ValueError):
+    """An archive requires migration or a newer FineStore build."""
+
+    def __init__(self, root: str, *, found: int) -> None:
+        self.root = root
+        self.found = found
+        if found < FORMAT_VERSION:
+            action = "migrate it explicitly with finestore.migrations.migrate(root) before opening it"
+        else:
+            action = "upgrade marin-finestore before opening it"
+        super().__init__(
+            f"archive at {root!r} is FineStore format v{found}; this build supports v{FORMAT_VERSION}; {action}"
+        )
+
+
 class ArchiveMetadata(BaseModel):
-    """The immutable archive-wide format marker."""
+    """The archive-wide format marker advanced by format migrations."""
 
     format_version: int = FORMAT_VERSION
 

@@ -15,9 +15,10 @@ from finestore.layout import (
     FORMAT_VERSION,
     ArchiveMetadata,
     FineStoreLayout,
+    FormatVersionError,
     OnConflict,
 )
-from finestore.migrate import migrate_v1
+from finestore.migrations import migrate
 from finestore.reader import ReadView
 from finestore.store import DataStore, DataTable, PrimaryKeyConflict, TransactionTooLarge
 from rigging.filesystem import StoragePath
@@ -415,8 +416,28 @@ def test_reader_refuses_a_future_format(tmp_path):
     StoragePath(FineStoreLayout(root).archive_path).write_text(
         ArchiveMetadata(format_version=FORMAT_VERSION + 1).model_dump_json()
     )
-    with pytest.raises(ValueError, match="format"):
+    with pytest.raises(FormatVersionError, match="upgrade marin-finestore"):
         ReadView(root).scan("samples")
+    with pytest.raises(FormatVersionError, match="upgrade marin-finestore"):
+        DataStore.open(root)
+
+
+def test_read_view_refuses_an_older_format_with_migration_instructions(tmp_path):
+    root = tmp_path / "run"
+    root.mkdir()
+    (root / "_archive.json").write_text('{"format_version": 1}')
+
+    with pytest.raises(FormatVersionError, match="migrate it explicitly"):
+        ReadView(str(root))
+
+
+def test_write_open_requires_legacy_archive_to_be_sealed(tmp_path):
+    root = tmp_path / "run"
+    root.mkdir()
+    (root / "_archive.json").write_text('{"format_version": 1}')
+
+    with pytest.raises(ValueError, match="not sealed"):
+        DataStore.open(str(root))
 
 
 def test_seal_marker(tmp_path):
@@ -654,7 +675,7 @@ def test_compaction_losing_an_input_race_is_a_benign_noop(tmp_path):
     assert len(ReadView(root).list_shards("samples")) == 2
 
 
-def test_migrate_v1_publishes_existing_shards_through_head(tmp_path):
+def test_manifest_migration_publishes_existing_shards_through_head(tmp_path):
     root = tmp_path / "run"
     shard = root / "samples" / "w=legacy" / "g=0" / "0000000000000000-old.parquet"
     shard.parent.mkdir(parents=True)
@@ -668,7 +689,10 @@ def test_migrate_v1_publishes_existing_shards_through_head(tmp_path):
         shard,
     )
 
-    token = migrate_v1(root.as_uri())
+    result = migrate(root.as_uri())
+    token = result.token
+    assert result.applied == ("0001_manifest",)
+    assert token is not None
     view = ReadView(str(root))
     assert view.token == token
     assert view.is_sealed()
@@ -677,13 +701,31 @@ def test_migrate_v1_publishes_existing_shards_through_head(tmp_path):
     assert view.list_shards("samples")[0].max_seq == 7
     assert shard.exists()
     assert (root / "samples" / "_schema.json").exists()
-    assert migrate_v1(root.as_uri()) == token
+    repeated = migrate(root.as_uri())
+    assert repeated.applied == ()
+    assert repeated.token == token
 
 
-def test_migrate_v1_requires_a_sealed_archive(tmp_path):
+def test_write_open_migrates_a_sealed_legacy_archive(tmp_path):
+    root = tmp_path / "run"
+    root.mkdir()
+    (root / "_archive.json").write_text('{"format_version": 1}')
+    (root / "SEALED").write_text('{"writer": "legacy", "superseded": {}}')
+
+    with DataStore.open(str(root), writer_id="new") as store:
+        view = store.read_view()
+        assert view.token is not None
+        assert view.token.sequence == 2
+        assert not view.is_sealed()
+
+    archive = ArchiveMetadata.model_validate_json((root / "_archive.json").read_bytes())
+    assert archive.format_version == FORMAT_VERSION
+
+
+def test_manifest_migration_requires_a_sealed_archive(tmp_path):
     root = tmp_path / "run"
     root.mkdir()
     (root / "_archive.json").write_text('{"format_version": 1}')
 
     with pytest.raises(ValueError, match="not sealed"):
-        migrate_v1(str(root))
+        migrate(str(root))

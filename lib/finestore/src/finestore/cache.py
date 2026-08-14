@@ -5,11 +5,10 @@
 
 from __future__ import annotations
 
+import atexit
 import logging
 import threading
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
-from concurrent.futures import wait as wait_for_futures
 
 from rigging.filesystem import StoragePath, marin_temp_bucket
 
@@ -17,6 +16,7 @@ from finestore.reader import ReadView
 from finestore.store import DataStore
 
 _CACHE_TTL_DAYS = 30
+_EXIT_FLUSH_TIMEOUT = 10.0
 _MAX_TRANSACTION_BYTES = 100 * 1024 * 1024
 _MAX_TRANSACTION_OBJECTS = 65_536
 
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class PersistentKvCache:
-    """An in-process memory tier over a FineStore named-object table."""
+    """An in-process memory tier over best-effort FineStore named-object writes."""
 
     def __init__(self, resolve_root: Callable[[], str] | None = None) -> None:
         self._resolve_root = resolve_root
@@ -34,10 +34,9 @@ class PersistentKvCache:
         self._lock = threading.Lock()
         self._memory: dict[str, bytes] = {}
         self._remote_pending: dict[str, bytes] = {}
-        self._remote_write_scheduled = False
-        self._background_lock = threading.Lock()
-        self._background_executor: ThreadPoolExecutor | None = None
-        self._pending_writes: set[Future] = set()
+        self._background_thread: threading.Thread | None = None
+        self._exit_registered = False
+        self._closed = False
 
     @classmethod
     def at(cls, root: str) -> PersistentKvCache:
@@ -72,31 +71,57 @@ class PersistentKvCache:
         return value
 
     def store(self, key: str, value: bytes) -> None:
-        """Publish ``value`` under ``key``; remote commits run in the background."""
+        """Remember ``value`` under ``key`` and queue its remote cache commit."""
         with self._lock:
+            if self._closed:
+                raise RuntimeError("cache is closed")
             self._memory[key] = value
         if self._resolve_root is None:
             return
         if StoragePath(self._storage_root()).is_remote:
             self._queue_remote_write(key, value)
         else:
+            if not self._ensure_exit_cleanup():
+                return
             try:
                 self._write(key, value)
             except OSError as exc:
                 logger.warning("FineStore cache is unwritable, not storing %s: %s", key, exc)
 
     def close(self) -> None:
-        """Close the lazy writer after its explicit commits have completed."""
-        self._flush_background_writes()
-        with self._background_lock:
-            executor = self._background_executor
-            self._background_executor = None
-        if executor is not None:
-            executor.shutdown(wait=True)
+        """Drain queued cache writes and close the lazy writer."""
+        self._close(timeout=None)
+        with self._lock:
+            registered = self._exit_registered
+            self._exit_registered = False
+        if registered:
+            atexit.unregister(self._close_at_exit)
+
+    def _close_at_exit(self) -> None:
+        if not self._close(timeout=_EXIT_FLUSH_TIMEOUT):
+            logger.warning(
+                "FineStore cache write did not finish within %.1f seconds; abandoning it at process exit",
+                _EXIT_FLUSH_TIMEOUT,
+            )
+
+    def _close(self, *, timeout: float | None) -> bool:
+        with self._lock:
+            if self._closed:
+                return True
+            self._closed = True
+            thread = self._background_thread
+        if thread is not None:
+            thread.join(timeout=timeout)
+            if thread.is_alive():
+                return False
         with self._root_lock:
             if self._store is not None:
-                self._store.close()
+                try:
+                    self._store.close()
+                except Exception as exc:
+                    logger.warning("FineStore cache writer failed while closing: %s", exc)
                 self._store = None
+        return True
 
     def _storage_root(self) -> str:
         with self._root_lock:
@@ -124,62 +149,61 @@ class PersistentKvCache:
 
     def _queue_remote_write(self, key: str, value: bytes) -> None:
         with self._lock:
+            if self._closed:
+                return
             self._remote_pending[key] = value
-            if self._remote_write_scheduled:
-                return
-            self._remote_write_scheduled = True
-        self._submit_background_write(self._drain_remote_writes)
+            if self._background_thread is None:
+                self._start_background_thread_locked()
 
-    def _submit_background_write(self, write: Callable[[], None]) -> None:
-        with self._background_lock:
-            if self._background_executor is None:
-                self._background_executor = ThreadPoolExecutor(1, thread_name_prefix="finestore-cache-write")
-            future = self._background_executor.submit(write)
-            self._pending_writes.add(future)
-        future.add_done_callback(self._forget_pending_write)
+    def _ensure_exit_cleanup(self) -> bool:
+        with self._lock:
+            if self._closed:
+                return False
+            self._register_exit_cleanup_locked()
+            return True
 
-    def _forget_pending_write(self, future: Future) -> None:
-        with self._background_lock:
-            self._pending_writes.discard(future)
-        error = future.exception()
-        if error is not None:
-            logger.warning("FineStore cache write failed: %s", error)
+    def _register_exit_cleanup_locked(self) -> None:
+        if not self._exit_registered:
+            atexit.register(self._close_at_exit)
+            self._exit_registered = True
 
-    def _flush_background_writes(self) -> None:
-        while True:
-            with self._background_lock:
-                pending = list(self._pending_writes)
-            if not pending:
-                return
-            wait_for_futures(pending)
+    def _start_background_thread_locked(self) -> None:
+        self._register_exit_cleanup_locked()
+        # Cache commits may be abandoned. The exit handler gives this daemon a bounded
+        # drain window without making interpreter shutdown wait indefinitely on storage.
+        thread = threading.Thread(target=self._drain_remote_writes, name="finestore-cache-write", daemon=True)
+        self._background_thread = thread
+        thread.start()
 
     def _drain_remote_writes(self) -> None:
         """Publish every queued burst as a bounded multi-object transaction."""
-        while True:
+        try:
+            while pending := self._take_remote_batch():
+                try:
+                    with self._writer().transaction() as transaction:
+                        for key, value in pending.items():
+                            transaction.write_object(key, value)
+                except Exception as exc:
+                    logger.warning("FineStore cache write failed: %s", exc)
+        finally:
             with self._lock:
-                selected = []
-                selected_bytes = 0
-                for key, value in self._remote_pending.items():
-                    if selected and (
-                        len(selected) >= _MAX_TRANSACTION_OBJECTS or selected_bytes + len(value) > _MAX_TRANSACTION_BYTES
-                    ):
-                        break
-                    selected.append(key)
-                    selected_bytes += len(value)
-                if not selected:
-                    self._remote_write_scheduled = False
-                    return
-                pending = {key: self._remote_pending.pop(key) for key in selected}
-            try:
-                with self._writer().transaction() as transaction:
-                    for key, value in pending.items():
-                        transaction.write_object(key, value)
-            except Exception:
-                with self._lock:
-                    self._remote_write_scheduled = False
-                    retry = bool(self._remote_pending)
-                    if retry:
-                        self._remote_write_scheduled = True
-                if retry:
-                    self._submit_background_write(self._drain_remote_writes)
-                raise
+                if self._background_thread is threading.current_thread():
+                    self._background_thread = None
+                    if self._remote_pending and not self._closed:
+                        self._start_background_thread_locked()
+
+    def _take_remote_batch(self) -> dict[str, bytes]:
+        with self._lock:
+            selected = []
+            selected_bytes = 0
+            for key, value in self._remote_pending.items():
+                if selected and (
+                    len(selected) >= _MAX_TRANSACTION_OBJECTS or selected_bytes + len(value) > _MAX_TRANSACTION_BYTES
+                ):
+                    break
+                selected.append(key)
+                selected_bytes += len(value)
+            if not selected:
+                self._background_thread = None
+                return {}
+            return {key: self._remote_pending.pop(key) for key in selected}

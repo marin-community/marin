@@ -18,6 +18,7 @@ from finestore.layout import (
     ArchiveMetadata,
     CommitToken,
     FineStoreLayout,
+    FormatVersionError,
     HeadMetadata,
     Manifest,
     ManifestTable,
@@ -79,7 +80,7 @@ def _empty_manifest() -> Manifest:
 
 
 def initialize_archive(layout: FineStoreLayout) -> ArchiveMetadata:
-    """Create the immutable archive marker, or validate the marker already present."""
+    """Create the archive marker, or validate the marker already present."""
     marker = conditional_object(layout.archive_path)
     existing = marker.read()
     expected = ArchiveMetadata()
@@ -92,9 +93,7 @@ def initialize_archive(layout: FineStoreLayout) -> ArchiveMetadata:
             assert existing is not None
     found = ArchiveMetadata.model_validate_json(existing.data)
     if found.format_version != FORMAT_VERSION:
-        raise ValueError(
-            f"archive at {layout.root} is FineStore format v{found.format_version}; expected v{FORMAT_VERSION}"
-        )
+        raise FormatVersionError(layout.root, found=found.format_version)
     return found
 
 
@@ -106,9 +105,7 @@ def validate_archive(layout: FineStoreLayout) -> ArchiveMetadata | None:
         return None
     found = ArchiveMetadata.model_validate_json(data)
     if found.format_version != FORMAT_VERSION:
-        raise ValueError(
-            f"archive at {layout.root} is FineStore format v{found.format_version}; expected v{FORMAT_VERSION}"
-        )
+        raise FormatVersionError(layout.root, found=found.format_version)
     return found
 
 

@@ -31,6 +31,7 @@ from finestore.layout import (
     TableMetadata,
     build_uri,
 )
+from finestore.migrations import migrate_for_write
 from finestore.reader import ReadView
 from finestore.shard_writer import write_table
 
@@ -144,6 +145,7 @@ class DataStore:
 
     @classmethod
     def open(cls, root: str, **kwargs) -> DataStore:
+        migrate_for_write(root)
         return cls(root, **kwargs)
 
     def table(
