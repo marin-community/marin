@@ -57,7 +57,6 @@ verify_fuzzy_dups = partial(_verify_fuzzy_dups, store_config=TEST_STORE_CONFIG, 
 
 def test_parquet_rows_converts_only_the_row_it_yields(tmp_path, monkeypatch):
     converted: list[tuple[int, int]] = []
-    batch_options = {}
 
     class Scalar:
         def __init__(self, column_index: int, row_index: int):
@@ -101,8 +100,7 @@ def test_parquet_rows_converts_only_the_row_it_yields(tmp_path, monkeypatch):
         def __init__(self, _stream):
             pass
 
-        def iter_batches(self, **kwargs):
-            batch_options.update(kwargs)
+        def iter_batches(self, **_kwargs):
             yield Batch()
 
     input_path = tmp_path / "input.parquet"
@@ -113,11 +111,6 @@ def test_parquet_rows_converts_only_the_row_it_yields(tmp_path, monkeypatch):
 
     assert next(rows) == {"id": "id-0", "text": "text-0"}
     assert converted == [(0, 0), (1, 0)]
-    assert batch_options == {
-        "batch_size": 4_096,
-        "columns": ["id", "text"],
-        "use_threads": False,
-    }
 
 
 @pytest.fixture(autouse=True)

@@ -66,7 +66,7 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     FuzzyVerificationStoreConfig,
     verify_fuzzy_dups_step,
 )
-from rigging.filesystem import marin_prefix, marin_temp_bucket, prefix_join
+from rigging.filesystem import StoragePath, marin_prefix, marin_temp_bucket, prefix_join
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
 
@@ -112,6 +112,12 @@ class BenchmarkSource:
     normalized_artifact_path: str
     minhash_artifact_path: str
     documents: int
+
+
+@dataclass(frozen=True)
+class CandidateLineage:
+    candidates: FuzzyDupsAttrData
+    minhash_by_source: dict[str, tuple[str, MinHashAttrData]]
 
 
 def build_fuzzy_validation_step(
@@ -168,12 +174,14 @@ def build_repacked_fuzzy_validation_step(
     max_output_shards: int = DEFAULT_MAX_OUTPUT_SHARDS,
     actor_environment: EnvironmentConfig | None = None,
     repack_max_workers: int = DEFAULT_REPACK_MAX_WORKERS,
-    repack_worker_resources: ResourceConfig = DEFAULT_REPACK_WORKER,
+    repack_worker_resources: ResourceConfig | None = None,
 ) -> StepSpec:
     """Build a validation graph that reuses one prior candidate source."""
     normalized_step = sources.get(source_name)
     if normalized_step is None:
         raise KeyError(f"The source registry has no source named {source_name!r}")
+    if repack_worker_resources is None:
+        repack_worker_resources = DEFAULT_REPACK_WORKER
 
     candidate_step = StepSpec(
         name="fuzzy-validation/legacy-candidates",
@@ -255,7 +263,7 @@ def build_pinned_fuzzy_validation_step(
     candidate_step = StepSpec(
         name=f"fuzzy-validation/select-candidates/{BENCHMARK_SOURCE_NAME}",
         deps=[candidate_input_step],
-        fn=lambda _output_path: _select_candidate_source(
+        fn=lambda _output_path: _select_candidate_sources(
             read_artifact(candidate_input_step.output_path, FuzzyDupsAttrData),
             tuple(source_keys),
         ),
@@ -281,7 +289,7 @@ def build_pinned_fuzzy_validation_step(
     return replace(target, output_path_prefix=validation_output_path_prefix)
 
 
-def _select_candidate_source(candidates: FuzzyDupsAttrData, source_keys: tuple[str, ...]) -> FuzzyDupsAttrData:
+def _select_candidate_sources(candidates: FuzzyDupsAttrData, source_keys: tuple[str, ...]) -> FuzzyDupsAttrData:
     """Return a metadata view containing selected candidate sources."""
     missing = sorted(set(source_keys) - candidates.sources.keys())
     if missing:
@@ -294,33 +302,41 @@ def _document_count(normalized: NormalizedData) -> int:
     return int(normalized.counters.get("zephyr/records_in") or normalized.counters.get("zephyr/item_count", 0))
 
 
-def _benchmark_sources(candidate_artifact_path: str) -> list[BenchmarkSource]:
-    """Load immutable normalized and MinHash paths from a candidate artifact."""
+def _normalized_artifact_path(source_key: str) -> str:
+    source_path = StoragePath(datakit_source_path(source_key))
+    if source_path.segments[-2:] != ("outputs", "main"):
+        raise ValueError(f"Normalized source path does not end in 'outputs/main': {source_path}")
+    return str(source_path.parent.parent)
+
+
+def _candidate_lineage(candidate_artifact_path: str) -> CandidateLineage:
     candidates = read_artifact(candidate_artifact_path, FuzzyDupsAttrData)
     record = read_record(candidate_artifact_path)
     if record is None or not record.dep_paths:
         raise ValueError(f"Candidate artifact has no MinHash dependency paths: {candidate_artifact_path}")
 
-    minhash_by_source: dict[str, str] = {}
+    minhash_by_source: dict[str, tuple[str, MinHashAttrData]] = {}
     for path in record.dep_paths:
         minhash = read_artifact(path, MinHashAttrData)
         if minhash.source_key in minhash_by_source:
             raise ValueError(f"Candidate artifact has two MinHash inputs for source_key={minhash.source_key!r}")
-        minhash_by_source[minhash.source_key] = path
+        minhash_by_source[minhash.source_key] = (path, minhash)
 
     candidate_source_keys = set(candidates.sources)
     if set(minhash_by_source) != candidate_source_keys:
         missing = sorted(candidate_source_keys - minhash_by_source.keys())
         extra = sorted(minhash_by_source.keys() - candidate_source_keys)
         raise ValueError(f"Candidate and MinHash source keys disagree. Missing={missing}, extra={extra}")
+    return CandidateLineage(candidates=candidates, minhash_by_source=minhash_by_source)
+
+
+def _benchmark_sources(candidate_artifact_path: str) -> list[BenchmarkSource]:
+    """Load immutable normalized and MinHash paths from a candidate artifact."""
+    lineage = _candidate_lineage(candidate_artifact_path)
 
     result = []
-    suffix = "/outputs/main"
-    for source_key in sorted(candidate_source_keys):
-        source_path = datakit_source_path(source_key)
-        if not source_path.endswith(suffix):
-            raise ValueError(f"Normalized source path does not end in {suffix!r}: {source_path}")
-        normalized_artifact_path = source_path.removesuffix(suffix)
+    for source_key in sorted(lineage.candidates.sources):
+        normalized_artifact_path = _normalized_artifact_path(source_key)
         documents = _document_count(read_artifact(normalized_artifact_path, NormalizedData))
         if documents == 0:
             continue
@@ -328,7 +344,7 @@ def _benchmark_sources(candidate_artifact_path: str) -> list[BenchmarkSource]:
             BenchmarkSource(
                 source_key=source_key,
                 normalized_artifact_path=normalized_artifact_path,
-                minhash_artifact_path=minhash_by_source[source_key],
+                minhash_artifact_path=lineage.minhash_by_source[source_key][0],
                 documents=documents,
             )
         )
@@ -359,23 +375,8 @@ def _legacy_candidate_input_steps(
     focus_minhash_step: StepSpec,
 ) -> tuple[dict[str, StepSpec], dict[str, StepSpec]]:
     """Load the input graph that produced a prior fuzzy candidate artifact."""
-    candidates = read_artifact(candidate_artifact_path, FuzzyDupsAttrData)
-    record = read_record(candidate_artifact_path)
-    if record is None or not record.dep_paths:
-        raise ValueError(f"Candidate artifact has no MinHash dependency paths: {candidate_artifact_path}")
-
-    minhash_by_source: dict[str, tuple[str, MinHashAttrData]] = {}
-    for path in record.dep_paths:
-        minhash = read_artifact(path, MinHashAttrData)
-        if minhash.source_key in minhash_by_source:
-            raise ValueError(f"Candidate artifact has two MinHash inputs for source_key={minhash.source_key!r}")
-        minhash_by_source[minhash.source_key] = (path, minhash)
-
-    candidate_source_keys = set(candidates.sources)
-    if set(minhash_by_source) != candidate_source_keys:
-        missing = sorted(candidate_source_keys - minhash_by_source.keys())
-        extra = sorted(minhash_by_source.keys() - candidate_source_keys)
-        raise ValueError(f"Candidate and MinHash source keys disagree. Missing={missing}, extra={extra}")
+    lineage = _candidate_lineage(candidate_artifact_path)
+    candidate_source_keys = set(lineage.candidates.sources)
     if legacy_focus_source_key not in candidate_source_keys:
         raise KeyError(f"Candidate artifact has no Focus source_key={legacy_focus_source_key!r}")
 
@@ -387,18 +388,14 @@ def _legacy_candidate_input_steps(
             minhash_steps[FOCUS_SOURCE_NAME] = focus_minhash_step
             continue
 
-        source_path = datakit_source_path(source_key)
-        suffix = "/outputs/main"
-        if not source_path.endswith(suffix):
-            raise ValueError(f"Normalized source path does not end in {suffix!r}: {source_path}")
         source_name = f"legacy-source-{index:03d}"
         normalized_steps[source_name] = StepSpec(
             name=f"fuzzy-validation/pinned-normalized/{index:03d}",
-            override_output_path=source_path.removesuffix(suffix),
+            override_output_path=_normalized_artifact_path(source_key),
         )
         minhash_steps[source_name] = StepSpec(
             name=f"fuzzy-validation/pinned-minhash/{index:03d}",
-            override_output_path=minhash_by_source[source_key][0],
+            override_output_path=lineage.minhash_by_source[source_key][0],
         )
 
     return normalized_steps, minhash_steps
@@ -482,8 +479,7 @@ def main(argv: list[str] | None = None) -> None:
         assert target_documents is not None
         benchmark_sources: list[BenchmarkSource]
         if args.benchmark_100m:
-            source_path = datakit_source_path(BENCHMARK_100M_SOURCE_KEY)
-            source_artifact_path = source_path.removesuffix("/outputs/main")
+            source_artifact_path = _normalized_artifact_path(BENCHMARK_100M_SOURCE_KEY)
             normalized = read_artifact(source_artifact_path, NormalizedData)
             documents = _document_count(normalized)
             if documents != BENCHMARK_100M_DOCUMENTS:
