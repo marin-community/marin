@@ -23,6 +23,7 @@ from experiments.datakit import reference_pipeline
 from experiments.datakit.reference_pipeline import (
     SMOKE_SCALE,
     PoolConfig,
+    decontamination_steps,
     reference_datakit_steps,
     zephyr_datakit_steps,
 )
@@ -144,6 +145,22 @@ def test_decon_drop_set_build_version_changes_identity(monkeypatch):
     monkeypatch.setattr(decon, "DROP_SET_BUILD_VERSION", decon.DROP_SET_BUILD_VERSION + 1)
     changed = _steps_by_name(_build())["datakit/decon_drop/_combined"].hash_id
     assert changed != base
+
+
+def test_decontamination_mark_subset_preserves_full_graph_identity():
+    sources = _sources()
+    full = decontamination_steps(sources, scale=SMOKE_SCALE)
+    subset = decontamination_steps(sources, scale=SMOKE_SCALE, mark_source_names=["a"])
+
+    assert list(subset.marks) == ["a"]
+    assert subset.bloom.hash_id == full.bloom.hash_id
+    assert subset.drop_sets.hash_id == full.drop_sets.hash_id
+    assert subset.marks["a"].hash_id == full.marks["a"].hash_id
+
+
+def test_decontamination_steps_reject_unknown_mark_source():
+    with pytest.raises(ValueError, match=r"unknown mark sources: \['missing'\]"):
+        decontamination_steps(_sources(), scale=SMOKE_SCALE, mark_source_names=["missing"])
 
 
 def test_centroid_seed_rekeys_training():
