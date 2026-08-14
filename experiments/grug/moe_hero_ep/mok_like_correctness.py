@@ -155,6 +155,11 @@ def _error_metrics(
     show_default=True,
     help="peer-workspace transport; fabric_symmetric runs one rank per process over imported arenas",
 )
+@click.option(
+    "--forward-only",
+    is_flag=True,
+    help="run only the forward comparison; the rest of the matrix cannot run cross-process yet",
+)
 @click.option("--num-tokens", type=click.IntRange(min=256), default=512, show_default=True)
 @click.option("--hidden-dim", type=click.IntRange(min=256), default=512, show_default=True)
 @click.option("--intermediate-dim", type=click.IntRange(min=256), default=512, show_default=True)
@@ -234,6 +239,7 @@ def _error_metrics(
     help="Scale the independent output cotangent used by gradient parity checks.",
 )
 def main(
+    forward_only: bool,
     workspace_transport: str,
     num_tokens: int,
     hidden_dim: int,
@@ -450,10 +456,10 @@ def main(
                 collective_id=0,
             )
 
-        def reference_output(*arguments: jax.Array) -> jax.Array:
+        def reference_output(routing: jax.Array, *arguments: jax.Array) -> jax.Array:
             return mok_like_reference(
                 arguments[0],
-                selected_experts,
+                routing,
                 *arguments[1:],
                 mesh=mesh,
                 config=config,
@@ -727,9 +733,22 @@ def main(
         actual_output, fused_dropped_assignments = jax.jit(fused_output_and_drops)(
             selected_experts, *differentiable
         )
-        expected_output = jax.jit(reference_output)(*differentiable)
+        expected_output = jax.jit(reference_output)(selected_experts, *differentiable)
         actual_output.block_until_ready()
         expected_output.block_until_ready()
+        if forward_only:
+            # The forward comparison alone answers whether the kernel executes and agrees with the
+            # reference. The rest of the matrix closes over sharded arrays, which is legal only
+            # when one process owns every device, so it cannot run under the fabric transport yet.
+            difference = float(
+                jnp.max(jnp.abs(actual_output.astype(jnp.float32) - expected_output.astype(jnp.float32)))
+            )
+            dropped = int(jnp.sum(fused_dropped_assignments))
+            print(f"FORWARD max_abs_difference={difference:.6f} dropped_assignments={dropped}", flush=True)
+            if difference > BF16_ATOL:
+                raise RuntimeError(f"forward output differs from the reference by {difference}")
+            print("FORWARD PASS", flush=True)
+            return
         if offload:
             differentiated_fused_loss = jax.checkpoint(
                 fused_loss,
