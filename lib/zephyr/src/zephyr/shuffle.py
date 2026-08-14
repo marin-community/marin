@@ -6,9 +6,9 @@
 Each source-shard's scatter output is a set of zstd-compressed Parquet files,
 one combined file per flush (``c{chunk:04d}.parquet``) containing all target
 shards' data sorted by ``(_SHARD_COL, _SORT_KEY_COL)``.  A msgpack sidecar
-(``metadata.msgpack``) records ``files -> [path, ...]``, a global
-``avg_item_bytes`` estimate, and exact per-target-shard payload bytes
-(``shard_bytes``) used by reducers to size the external-sort decision.
+(``metadata.msgpack``) records ``files -> [path, ...]``, each file's serialized
+schema, a global ``avg_item_bytes`` estimate, and exact per-target-shard payload
+bytes (``shard_bytes``) used by reducers to size the external-sort decision.
 
 On the read side, each reducer scans only its target shard via
 ``pl.scan_parquet(path).filter(pl.col(_SHARD_COL) == target).drop(_SHARD_COL)``.
@@ -35,8 +35,6 @@ import io
 import logging
 import math
 import os
-import random
-import time
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
@@ -47,6 +45,7 @@ import cloudpickle
 import humanfriendly
 import msgspec
 import polars as pl
+import pyarrow as pa
 from iris.env_resources import TaskResources
 from rigging.filesystem import StoragePath, open_url, url_to_fs
 from rigging.filesystem.s3_compat import needs_virtual_host_addressing
@@ -92,9 +91,9 @@ class ListShard:
 
 _SCATTER_METADATA_FILENAME = "metadata.msgpack"
 
-# Number of parallel small-file reads (sidecars, parquet schema footers) each
-# reducer issues while building its ScatterReader. These reads are GCS
-# GET-bound, so a modest pool keeps latency low without thrashing.
+# Number of parallel sidecar reads each reducer issues while building its
+# ScatterReader. These reads are GCS GET-bound, so a modest pool keeps latency
+# low without thrashing.
 _SIDECAR_READ_CONCURRENCY = 32
 # Fraction of available memory available for merging.
 _SCATTER_READ_MEMORY_FRACTION = 0.4
@@ -137,10 +136,6 @@ _SCATTER_FLUSH_THRESHOLD = 0.20
 _ESTIMATED_SIZE_CORRECTION_FACTOR = 0.60
 # Threshold for triggering a gc.collect() after a flush.
 _GC_FLUSH_SIZE_THRESHOLD_BYTES = 8 * 1024 * 1024
-
-_PARQUET_SCHEMA_READ_ATTEMPTS = 5
-_PARQUET_SCHEMA_RETRY_BASE_SECONDS = 0.5
-_TRANSIENT_PARQUET_SCHEMA_ERROR = "parquet: File out of specification: Unexpected struct field type"
 
 
 def _task_memory_bytes() -> int:
@@ -276,8 +271,17 @@ class _SidecarSlice:
 
     path: str
     chunk_paths: list[str]  # GCS parquet paths, one per flush event
+    chunk_schemas: list[pl.Schema]
     avg_item_bytes: float
     target_bytes: int
+
+
+def _serialize_schema(schema: pl.Schema) -> bytes:
+    return schema.to_arrow().serialize().to_pybytes()
+
+
+def _deserialize_schema(payload: bytes) -> pl.Schema:
+    return pl.Schema(pa.ipc.read_schema(pa.BufferReader(payload)))
 
 
 def _read_sidecar_slice(path: str, target_shard: int) -> _SidecarSlice | None:
@@ -295,9 +299,13 @@ def _read_sidecar_slice(path: str, target_shard: int) -> _SidecarSlice | None:
     files = meta.get("files", [])
     if not files:
         return None
+    schemas = meta["chunk_schemas"]
+    if len(files) != len(schemas):
+        raise ValueError(f"scatter sidecar {meta_path} has {len(files)} chunk files but {len(schemas)} chunk schemas")
     return _SidecarSlice(
         path=path,
         chunk_paths=[str(f) for f in files],
+        chunk_schemas=[_deserialize_schema(schema) for schema in schemas],
         avg_item_bytes=float(meta.get("avg_item_bytes", 0)),
         target_bytes=int(meta.get("shard_bytes", {}).get(str(target_shard), 0)),
     )
@@ -317,29 +325,7 @@ def _read_sidecar_slices_parallel(scatter_paths: list[str], target_shard: int) -
     return [s for s in ordered if s is not None]
 
 
-def _collect_frame_schema(frame: pl.LazyFrame) -> pl.Schema:
-    for attempt in range(_PARQUET_SCHEMA_READ_ATTEMPTS):
-        try:
-            return frame.collect_schema()
-        except pl.exceptions.ComputeError as error:
-            final_attempt = attempt + 1 == _PARQUET_SCHEMA_READ_ATTEMPTS
-            if _TRANSIENT_PARQUET_SCHEMA_ERROR not in str(error) or final_attempt:
-                raise
-
-            delay = _PARQUET_SCHEMA_RETRY_BASE_SECONDS * (2**attempt) * random.uniform(0.5, 1.5)
-            logger.warning(
-                "Transient Parquet schema read failed on attempt %d/%d. Retrying in %.1f seconds: %s",
-                attempt + 1,
-                _PARQUET_SCHEMA_READ_ATTEMPTS,
-                delay,
-                error,
-            )
-            time.sleep(delay)
-
-    raise AssertionError("Parquet schema retry loop did not return or raise")
-
-
-def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
+def _unify_frame_schemas(frames: list[pl.LazyFrame], schemas: list[pl.Schema]) -> list[pl.LazyFrame]:
     """Cast frames to a common supertype schema so pl.merge_sorted doesn't fail.
 
     Different source shards may write the same column with different dtypes when
@@ -347,25 +333,25 @@ def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
     Null on an all-None batch from one shard and Int64 from another.  This also
     handles arbitrary user-column dtype drift when DataFrames are written directly.
 
-    collect_schema() reads only parquet file-footer metadata (no row data), so the
-    limit(0) concat derives the supertype schema without any further I/O and casting
-    is applied as a lazy expression.
+    Schemas travel in mapper-written sidecars, so reducers do not open every
+    Parquet footer before reading their target rows. Casting is applied as a
+    lazy expression.
     """
+    if len(frames) != len(schemas):
+        raise ValueError(f"received {len(frames)} scatter frames but {len(schemas)} schemas")
     if len(frames) <= 1:
         return frames
-    with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
-        schemas = list(pool.map(_collect_frame_schema, frames))
     if all(s == schemas[0] for s in schemas[1:]):
         return frames
-    unified = pl.concat([f.limit(0) for f in frames], how="diagonal_relaxed").collect_schema()
+    unified = pl.Schema(pa.unify_schemas([schema.to_arrow() for schema in schemas], promote_options="permissive"))
     return [f.cast(dict(unified)) for f in frames]
 
 
-def _scan_scatter_parquet(path: str) -> pl.LazyFrame:
+def _scan_scatter_parquet(path: str, schema: pl.Schema) -> pl.LazyFrame:
     """Scan a scatter chunk with the addressing required by CoreWeave object storage."""
     endpoint = os.environ.get("AWS_ENDPOINT_URL_S3") or os.environ.get("AWS_ENDPOINT_URL")
     if not path.startswith("s3://") or not endpoint or not needs_virtual_host_addressing(endpoint):
-        return pl.scan_parquet(path)
+        return pl.scan_parquet(path, schema=dict(schema))
 
     bucket = urlparse(path).netloc
     parsed_endpoint = urlparse(endpoint)
@@ -379,6 +365,7 @@ def _scan_scatter_parquet(path: str) -> pl.LazyFrame:
     # so the bucket must be part of the endpoint host.
     return pl.scan_parquet(
         path,
+        schema=dict(schema),
         storage_options={
             "aws_endpoint_url": endpoint,
             "aws_virtual_hosted_style_request": "true",
@@ -405,11 +392,13 @@ class ScatterReader:
     def __init__(
         self,
         files: list[tuple[str, list[str]]],
+        chunk_schemas: dict[str, pl.Schema],
         target_shard: int,
         avg_item_bytes: float,
         shard_payload_bytes: float = 0.0,
     ) -> None:
         self._files = files
+        self._chunk_schemas = chunk_schemas
         self._target_shard = target_shard
         self.avg_item_bytes = avg_item_bytes
         self.shard_payload_bytes = shard_payload_bytes
@@ -427,6 +416,7 @@ class ScatterReader:
         weighted_bytes = 0.0
         total_chunks = 0
         shard_payload_bytes = 0.0
+        chunk_schemas: dict[str, pl.Schema] = {}
 
         with log_time(
             f"Building ScatterReader for target shard {target_shard} "
@@ -434,6 +424,8 @@ class ScatterReader:
         ):
             for slice_ in _read_sidecar_slices_parallel(scatter_paths, target_shard):
                 files.append((slice_.path, slice_.chunk_paths))
+                for path, schema in zip(slice_.chunk_paths, slice_.chunk_schemas, strict=True):
+                    chunk_schemas[path] = schema
                 weighted_bytes += slice_.avg_item_bytes * len(slice_.chunk_paths)
                 total_chunks += len(slice_.chunk_paths)
                 shard_payload_bytes += slice_.target_bytes
@@ -451,18 +443,26 @@ class ScatterReader:
         )
         return cls(
             files=files,
+            chunk_schemas=chunk_schemas,
             target_shard=target_shard,
             avg_item_bytes=avg_item_bytes,
             shard_payload_bytes=shard_payload_bytes,
         )
 
     def get_frames(self) -> list[pl.LazyFrame]:
+        chunk_paths = [path for _, source_chunk_paths in self._files for path in source_chunk_paths]
         frames = [
-            _scan_scatter_parquet(path).filter(pl.col(_SHARD_COL) == self._target_shard).drop(_SHARD_COL)
-            for _, chunk_paths in self._files
+            _scan_scatter_parquet(path, self._chunk_schemas[path])
+            .filter(pl.col(_SHARD_COL) == self._target_shard)
+            .drop(_SHARD_COL)
             for path in chunk_paths
         ]
-        return _unify_frame_schemas(frames)
+        schemas = []
+        for path in chunk_paths:
+            schema = self._chunk_schemas[path].copy()
+            schema.pop(_SHARD_COL)
+            schemas.append(schema)
+        return _unify_frame_schemas(frames, schemas)
 
     @property
     def total_chunks(self) -> int:
@@ -594,6 +594,7 @@ class ScatterWriter:
         # RecordBatch/DataFrame-native pipeline can feed frames directly.
         self._frames: list[pl.DataFrame] = []
         self._chunk_paths: list[str] = []
+        self._chunk_schemas: list[pl.Schema] = []
         # Payload bytes written per target shard, recorded in the sidecar so
         # reducers know their shard's exact data size for the external-sort
         # decision without opening any chunk files.
@@ -656,6 +657,7 @@ class ScatterWriter:
             f.write(buf.getvalue())
 
         self._chunk_paths.append(chunk_path)
+        self._chunk_schemas.append(buffer_sorted.schema)
         self._n_chunks_written += 1
 
         if self._progress_log_limiter.should_run():
@@ -719,6 +721,7 @@ class ScatterWriter:
 
         sidecar: dict = {
             "files": list(self._chunk_paths),
+            "chunk_schemas": [_serialize_schema(schema) for schema in self._chunk_schemas],
             "avg_item_bytes": round(self._avg_item_bytes, 1),
             "shard_bytes": {str(k): v for k, v in self._shard_bytes.items()},
         }
