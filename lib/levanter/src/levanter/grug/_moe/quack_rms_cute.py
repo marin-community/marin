@@ -243,6 +243,55 @@ def _build_gate_silu_reverse_launcher(
     return launcher
 
 
+@cute_launcher_factory
+def _build_gate_silu_dact_launcher(
+    *,
+    a_dtype: type[cutlass.Numeric],
+    tile_mn: tuple[int, int],
+    cluster_mnk: tuple[int, int, int],
+    max_active_clusters: int,
+    max_swizzle: int,
+):
+    @cute.jit
+    def launcher(
+        stream,
+        mNormalizedAndGateAccumulator,
+        mOutputCotangent,
+        mGate,
+        mWUp,
+        mGatePreactivation,
+        mGatePreactivationCotangent,
+        mGateHidden,
+    ):
+        _GateAccumulatorInplace(a_dtype)(
+            mNormalizedAndGateAccumulator,
+            mOutputCotangent,
+            mGate,
+            mNormalizedAndGateAccumulator,
+            stream,
+        )
+        dact_gemm = GemmDActSm100(
+            _ACCUMULATOR_DTYPE,
+            a_dtype,
+            tile_mn,
+            cluster_mnk,
+            gather_A=False,
+            use_clc_persistence=False,
+        )
+        dact_gemm(
+            mNormalizedAndGateAccumulator,
+            mWUp,
+            mGatePreactivationCotangent,
+            mGatePreactivation,
+            GemmActMixin.EpilogueArguments(mGateHidden, dact_fn_map["silu"]),
+            make_scheduler_args(max_active_clusters, max_swizzle, None),
+            None,
+            stream,
+        )
+
+    return launcher
+
+
 class _GemmRmsBackwardPartialsMixin(GemmActMixin):
     """CuTe epilogue that emits only RMS row and norm-gain partials."""
 
@@ -682,6 +731,50 @@ def _quack_cute_gate_accumulator_inplace(
         use_static_tensors=False,
     )
     return call(normalized[None, :, :], output_cotangent[None, :, :], gate[None, :, :])[0]
+
+
+def _quack_coda_gate_silu_dact_components(
+    normalized: jax.Array,
+    output_cotangent: jax.Array,
+    gate: jax.Array,
+    w_up: jax.Array,
+    gate_preactivation: jax.Array,
+    *,
+    tile_mn: tuple[int, int] = _DEFAULT_TILE_MN,
+    cluster_mnk: tuple[int, int, int] = _DEFAULT_CLUSTER_MNK,
+    max_swizzle: int = _DEFAULT_MAX_SWIZZLE,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Run the fused elementwise and dSiLU stages without the weight reverse."""
+    rows, hidden_dim = normalized.shape
+    rank = w_up.shape[0]
+    launcher = _build_gate_silu_dact_launcher(
+        a_dtype=_cute_dtype(normalized.dtype),
+        tile_mn=tile_mn,
+        cluster_mnk=cluster_mnk,
+        max_active_clusters=_max_active_clusters(cluster_mnk),
+        max_swizzle=max_swizzle,
+    )
+    matrix_spec = cjax.TensorSpec(mode=_MATRIX_MODE, divisibility=_MATRIX_DIVISIBILITY, static=False)
+    call = cutlass_call(
+        launcher,
+        input_output_aliases={0: 0},
+        output_shape_dtype=(
+            jax.ShapeDtypeStruct((1, rows, hidden_dim), normalized.dtype),
+            jax.ShapeDtypeStruct((1, rows, rank), normalized.dtype),
+            jax.ShapeDtypeStruct((1, rows, rank), normalized.dtype),
+        ),
+        input_spec=(matrix_spec,) * 5,
+        output_spec=(matrix_spec,) * 3,
+        use_static_tensors=False,
+    )
+    gate_accumulator, gate_preactivation_cotangent, gate_hidden = call(
+        normalized[None, :, :],
+        output_cotangent[None, :, :],
+        gate[None, :, :],
+        w_up[None, :, :],
+        gate_preactivation[None, :, :],
+    )
+    return gate_accumulator[0], gate_preactivation_cotangent[0], gate_hidden[0]
 
 
 def _quack_coda_gate_silu_reverse_components(
