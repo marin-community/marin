@@ -81,9 +81,9 @@ base_select = "upstream_main"
 e2e = "tests/cluster/vllm/test_snowball_backend_parity.py"
 blocker_assignee = "yonromai"
 nuances = [
-    "The pin is a prebuilt wheel, not a SHA: the fork's release pipeline compiles the `main` branch into an immutable wheel under a release tag, and gpu-release.toml records the tag, source commit, and per-arch url+sha256. A refresh rebuilds and re-promotes the wheel, then re-pins with `uv run config/update-external.py --promote-gpu-release <manifest>`, which reads the promoted marin-vllm-gpu-manifest.json rather than a branch tip.",
-    "Independent of the TPU vllm pin: this GPU pin tracks upstream head on the fork's `main`, which the release candidate build triggers on; [vllm] tracks the tpu-inference-blessed base on the separate `tpu` branch. The two pins refresh on their own (no shared group).",
-    "Crossing a CUDA/torch or vLLM stable-ABI boundary is a real migration, not a version bump: the wheel verifier and the fork release gate both name the extension (vllm._C_stable_libtorch on CUDA 13), so audit those when the base moves across one.",
+    "The pin is a prebuilt wheel. The fork's release pipeline compiles `main` into an immutable wheel under a release tag; gpu-release.toml records the tag, source commit, and per-arch url+sha256. A refresh rebuilds and re-promotes the wheel, then re-pins with `uv run config/update-external.py --promote-gpu-release <manifest>`, which reads the promoted marin-vllm-gpu-manifest.json.",
+    "This GPU pin refreshes on its own (no shared group). It tracks upstream head on `main`, which the release candidate build triggers on. The [vllm] pin tracks the tpu-inference-blessed base on the separate `tpu` branch.",
+    "A base that crosses a CUDA/torch or vLLM stable-ABI boundary is a migration. The wheel verifier and the fork release gate both name the extension (vllm._C_stable_libtorch on CUDA 13); audit them when the base moves across such a boundary.",
 ]
 
 [evalchemy]

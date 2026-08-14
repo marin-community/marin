@@ -61,12 +61,12 @@ Each descriptor names one Marin e2e that runs before the PR opens:
 
 When an e2e fails, the refresh reruns the same workload against Marin's current
 pins on the old fork stack. It fixes only failures that pass on the old stack and
-regress on the refreshed one; a workload already broken on the old stack is
-recorded as a baseline failure, not repaired inside the refresh.
+regress on the refreshed one. A workload already broken on the old stack is
+recorded as a baseline failure and left for its own fix.
 
 ## The vLLM GPU release pipeline
 
-The GPU pin is a prebuilt wheel rather than a SHA. The `marin-community/vllm`
+The GPU pin resolves to a prebuilt wheel. The `marin-community/vllm`
 fork builds an immutable cu130 wheel per architecture (x86_64 sm9.0, aarch64
 sm10.0) through its own candidate and release workflows, validates the exact wheel
 bytes on real GPUs, and publishes a GitHub release carrying

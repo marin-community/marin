@@ -57,10 +57,10 @@ Marin PR before marking it ready or merging it.
 The vllm fork carries two pins on different upstream bases, so they cannot share one
 branch. It splits them across two stable branches: the GPU wheel builds from `main`
 (the release candidate triggers on `push: main`), and the TPU source pin lives on
-`tpu`. Each promotes on its own — `main-next` to `main` for the GPU pin, `tpu-next` to
-`tpu` for the TPU pin — and a partial failure leaves the other pin correct because
-Marin resolves an exact wheel or SHA either way. Single-pin forks track `main`
-directly, so for them `<branch>` is `main`.
+`tpu`. Each promotes on its own: `main-next` to `main` for the GPU pin, `tpu-next` to
+`tpu` for the TPU pin. A partial failure leaves the other pin correct because Marin
+resolves an exact wheel or SHA either way. Single-pin forks track `main` directly, so
+for them `<branch>` is `main`.
 
 ## Partial failure
 
