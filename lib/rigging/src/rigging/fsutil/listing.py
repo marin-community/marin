@@ -12,8 +12,9 @@ an ordinary object-store listing routed through
 import dataclasses
 import glob
 from collections import deque
+from collections.abc import Iterable, Iterator
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from rigging.filesystem.buckets import filesystem_for
@@ -34,7 +35,12 @@ MAX_PREVIEW_BYTES = 10 * 1024 * 1024
 
 # Bucket listings are network-bound, so a modest pool hides request latency without
 # creating enough concurrent requests to overwhelm an object-store endpoint.
-_DU_WORKERS = 32
+DEFAULT_LISTING_WORKERS = 32
+
+# Discover enough S3 directory levels to create parallel listing shards, then
+# switch to flat pagination. Deeper delimiter traversal can turn one wide key
+# namespace into millions of synthetic directory requests.
+_S3_SPLIT_DEPTH = 2
 
 
 @dataclasses.dataclass(frozen=True)
@@ -103,7 +109,7 @@ def list_entries(url: str) -> list[Entry]:
             name = StoragePath(qualified_url).relative_to(base)
             entries.append(_entry(parsed, item, name=name, url=qualified_url))
     else:
-        entries = [_entry(parsed, item) for item in fs.ls(path, detail=True) if _is_child(path, item["name"])]
+        entries = [_entry(parsed, item) for item in fs.ls(path, detail=True) if is_child(path, item["name"])]
     entries.sort(key=lambda e: (not e.is_dir, e.name.lower()))
     return entries
 
@@ -119,7 +125,7 @@ def _qualified_url(parsed: StoragePath, path: str) -> str:
     return f"{parsed.scheme}://{path}"
 
 
-def _is_child(listed: str, name: str) -> bool:
+def is_child(listed: str, name: str) -> bool:
     """Whether *name* is a child of the listed path rather than the path itself.
 
     Object stores commonly report a zero-byte marker object for the prefix being
@@ -136,12 +142,12 @@ def _entry(parsed: StoragePath, item: dict, *, name: str | None = None, url: str
         url=url or str(parsed / name),
         name=name,
         size=None if is_dir else item.get("size", 0),
-        mtime=_mtime(item),
+        mtime=entry_mtime(item),
         is_dir=is_dir,
     )
 
 
-def _mtime(item: dict) -> datetime | None:
+def entry_mtime(item: dict) -> datetime | None:
     """The entry's modification time under whichever key the backend uses.
 
     gcsfs reports ``updated``/``mtime``, s3fs ``LastModified``; directories carry none.
@@ -149,7 +155,7 @@ def _mtime(item: dict) -> datetime | None:
     for key in ("LastModified", "mtime", "updated"):
         value = item.get(key)
         if isinstance(value, datetime):
-            return value
+            return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
     return None
 
 
@@ -187,7 +193,7 @@ def total_size(url: str) -> tuple[int, int]:
     """Return ``(bytes, object_count)`` under *url*."""
     fs, path = filesystem_for(url)
     root_entries = fs.ls(path, detail=True)
-    if len(root_entries) == 1 and not _is_child(path, root_entries[0]["name"]):
+    if len(root_entries) == 1 and not is_child(path, root_entries[0]["name"]):
         entry = root_entries[0]
         if entry["type"] != _DIRECTORY_TYPE:
             return entry.get("size", 0) or 0, 1
@@ -199,21 +205,96 @@ def total_size(url: str) -> tuple[int, int]:
     if not queued:
         return total, count
 
-    with ThreadPoolExecutor(max_workers=_DU_WORKERS) as executor:
+    for directory, entries in _directory_listing_pages(fs, queued, DEFAULT_LISTING_WORKERS):
+        stats = _listing_stats(directory, entries)
+        total += stats.size
+        count += stats.count
+    return total, count
+
+
+def metadata_listing_pages(
+    url: str, *, workers: int = DEFAULT_LISTING_WORKERS
+) -> Iterator[tuple[str, list[dict[str, Any]]]]:
+    """Yield independent metadata pages covering every object below *url*."""
+    fs, path = filesystem_for(url)
+    protocol = getattr(fs, "protocol", ())
+    protocols = (protocol,) if isinstance(protocol, str) else protocol
+    if "s3" in protocols:
+        yield from _recursive_s3_listings(fs, path, workers)
+        return
+
+    root_entries = fs.ls(path, detail=True)
+    yield path, root_entries
+
+    yield from _directory_listing_pages(fs, _listing_stats(path, root_entries).directories, workers)
+
+
+def _directory_listing_pages(fs, directories: Iterable[str], workers: int) -> Iterator[tuple[str, list[dict[str, Any]]]]:
+    queued = deque(directories)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         pending = {}
         while queued or pending:
-            while queued and len(pending) < _DU_WORKERS:
+            while queued and len(pending) < workers:
                 directory = queued.popleft()
                 pending[executor.submit(fs.ls, directory, detail=True)] = directory
 
             completed, _ = wait(pending, return_when=FIRST_COMPLETED)
             for future in completed:
                 directory = pending.pop(future)
-                stats = _listing_stats(directory, future.result())
-                total += stats.size
-                count += stats.count
-                queued.extend(stats.directories)
-    return total, count
+                entries = future.result()
+                queued.extend(_listing_stats(directory, entries).directories)
+                yield directory, entries
+
+
+def _recursive_s3_listings(fs, path: str, workers: int) -> Iterator[tuple[str, list[dict[str, Any]]]]:
+    """Fan out two S3 prefix levels, then stream each leaf as a flat listing."""
+    queued = deque([(path, None, 0)])
+    scheduled_prefixes = {path}
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        pending = {}
+        while queued or pending:
+            while queued and len(pending) < workers:
+                listed, continuation_token, depth = queued.popleft()
+                delimiter = "/" if depth < _S3_SPLIT_DEPTH else ""
+                future = executor.submit(_s3_listing_page, fs, listed, continuation_token, delimiter)
+                pending[future] = (listed, depth)
+
+            completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in completed:
+                listed, depth = pending.pop(future)
+                entries, continuation_token = future.result()
+                if continuation_token is not None:
+                    queued.appendleft((listed, continuation_token, depth))
+                for directory in _listing_stats(listed, entries).directories:
+                    if directory not in scheduled_prefixes:
+                        scheduled_prefixes.add(directory)
+                        queued.append((directory, None, depth + 1))
+                yield listed, entries
+
+
+def _s3_listing_page(
+    fs, path: str, continuation_token: str | None, delimiter: str
+) -> tuple[list[dict[str, Any]], str | None]:
+    bucket, key, _ = fs.split_path(path)
+    prefix = key if not key or key.endswith("/") else f"{key}/"
+    kwargs = {"Bucket": bucket, "Prefix": prefix, "Delimiter": delimiter}
+    if continuation_token is not None:
+        kwargs["ContinuationToken"] = continuation_token
+    response = fs.call_s3("list_objects_v2", **kwargs)
+    entries = [
+        {"name": f"{bucket}/{item['Prefix']}", "size": 0, "type": _DIRECTORY_TYPE}
+        for item in response.get("CommonPrefixes", [])
+    ]
+    entries.extend(
+        {
+            "name": f"{bucket}/{item['Key']}",
+            "size": int(item.get("Size") or 0),
+            "type": "file",
+            "LastModified": item.get("LastModified"),
+        }
+        for item in response.get("Contents", [])
+    )
+    return entries, response.get("NextContinuationToken")
 
 
 def _listing_stats(listed: str, entries: list[dict[str, Any]]) -> _ListingStats:
@@ -222,7 +303,7 @@ def _listing_stats(listed: str, entries: list[dict[str, Any]]) -> _ListingStats:
     directories = []
     for entry in entries:
         name = entry["name"]
-        if not _is_child(listed, name):
+        if not is_child(listed, name):
             continue
         if entry["type"] == _DIRECTORY_TYPE:
             directories.append(name)

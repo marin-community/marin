@@ -11,7 +11,10 @@ name two different backends. Bare ``fsutil`` opens the interactive browser.
 import logging
 import shutil
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import UTC, datetime
+from pathlib import Path
 
 import click
 from fsspec import AbstractFileSystem
@@ -34,6 +37,7 @@ from rigging.fsutil.listing import (
 from rigging.fsutil.parquet import PREVIEW_ROWS, MissingParquetReader, is_parquet, parquet_lines
 from rigging.fsutil.render import aligned_lines, file_lines, format_size, format_time, table_lines
 from rigging.fsutil.tui import run as run_browser
+from rigging.fsutil.usage import DEFAULT_USAGE_WORKERS, ScanProgress, parse_byte_size, render_usage_report, scan_usage
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +135,50 @@ def du(url: str) -> None:
     """Total the bytes and objects under a prefix."""
     size, count = total_size(url)
     click.echo(f"{format_size(size)}  ({size} bytes, {count} objects)  {url}")
+
+
+@cli.command()
+@click.argument("url")
+@click.option(
+    "--min-prefix-size",
+    default="1TiB",
+    show_default=True,
+    help="Smallest prefix group; accepts values such as 1TB or 512GiB.",
+)
+@click.option("--workers", default=DEFAULT_USAGE_WORKERS, show_default=True, type=click.IntRange(min=1, max=128))
+@click.option("-o", "--output", type=click.Path(dir_okay=False, path_type=Path), help="Write Markdown here.")
+def usage(url: str, min_prefix_size: str, workers: int, output: Path | None) -> None:
+    """Scan URL metadata and rank old, large prefixes for cleanup."""
+    try:
+        min_size_bytes = parse_byte_size(min_prefix_size)
+    except ValueError as error:
+        raise click.BadParameter(str(error), param_hint="--min-prefix-size") from error
+
+    click.echo(f"Scanning object metadata under {url} ...", err=True)
+    last_update = time.monotonic()
+
+    def show_progress(progress: ScanProgress) -> None:
+        nonlocal last_update
+        now = time.monotonic()
+        if now - last_update < 10:
+            return
+        click.echo(
+            f"  {progress.prefixes_scanned:,}/{progress.prefixes_discovered:,} prefixes, "
+            f"{progress.stats.object_count:,} objects, {format_size(progress.stats.size_bytes)}",
+            err=True,
+        )
+        last_update = now
+
+    try:
+        scan = scan_usage(url, workers=workers, progress=show_progress)
+    except MissingCredentials as error:
+        raise click.ClickException(str(error)) from error
+    report = render_usage_report(scan, min_size_bytes=min_size_bytes, generated_at=datetime.now(UTC))
+    if output is None:
+        click.echo(report)
+        return
+    output.write_text(report)
+    click.echo(f"Wrote {output} ({scan.root.total.object_count:,} objects)", err=True)
 
 
 @cli.command()
