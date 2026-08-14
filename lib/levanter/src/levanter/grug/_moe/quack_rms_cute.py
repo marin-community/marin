@@ -45,6 +45,8 @@ _DEFAULT_TILE_MN = (256, 128)
 _DEFAULT_CLUSTER_MNK = (2, 1, 1)
 _DEFAULT_BACKWARD_TILE_MN = (256, 128)
 _DEFAULT_BACKWARD_CLUSTER_MNK = (2, 1, 1)
+_DEFAULT_BACKWARD_PRODUCER_TILE_MN = (128, 128)
+_DEFAULT_BACKWARD_PRODUCER_CLUSTER_MNK = (1, 1, 1)
 _DEFAULT_MAX_SWIZZLE = 8
 _FALLBACK_MAX_ACTIVE_CLUSTERS = 148
 _MATRIX_MODE = (1, 2, 0)
@@ -1058,8 +1060,8 @@ def quack_coda_rms_backward_producer(
     norm_weight: jax.Array,
     inverse_rms: jax.Array,
     *,
-    tile_mn: tuple[int, int] = _DEFAULT_BACKWARD_TILE_MN,
-    cluster_mnk: tuple[int, int, int] = _DEFAULT_BACKWARD_CLUSTER_MNK,
+    tile_mn: tuple[int, int] = _DEFAULT_BACKWARD_PRODUCER_TILE_MN,
+    cluster_mnk: tuple[int, int, int] = _DEFAULT_BACKWARD_PRODUCER_CLUSTER_MNK,
     max_swizzle: int = _DEFAULT_MAX_SWIZZLE,
 ) -> tuple[jax.Array, jax.Array]:
     """Produce only RMS row-dot and norm-gain partials.
@@ -1101,6 +1103,8 @@ def quack_coda_rms_backward_producer(
     if inverse_rms.dtype != jnp.float32:
         raise ValueError(f"inverse_rms must be float32, got {inverse_rms.dtype}")
 
+    # RowVecReduce is CTA-local. Keep the producer on a one-CTA M tile so its norm-gain
+    # partial includes every row; the two-CTA consumer has no cross-row reduction.
     tile_m, tile_n = tile_mn
     row_tiles = (rows + tile_m - 1) // tile_m
     hidden_tiles = (hidden_dim + tile_n - 1) // tile_n

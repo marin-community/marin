@@ -79,8 +79,8 @@ def test_backward_producer_row_partials_have_one_column_per_tile():
 
     row_dot_partial, norm_weight_partial = quack_rms_cute.quack_coda_rms_backward_producer(*_producer_inputs())
 
-    tile_m = quack_rms_cute._DEFAULT_BACKWARD_TILE_MN[0]
-    tile_n = quack_rms_cute._DEFAULT_BACKWARD_TILE_MN[1]
+    tile_m = quack_rms_cute._DEFAULT_BACKWARD_PRODUCER_TILE_MN[0]
+    tile_n = quack_rms_cute._DEFAULT_BACKWARD_PRODUCER_TILE_MN[1]
     assert row_dot_partial.shape == (_ROWS, (_HIDDEN_DIM + tile_n - 1) // tile_n)
     assert norm_weight_partial.shape == ((_ROWS + tile_m - 1) // tile_m, _HIDDEN_DIM)
     assert row_dot_partial.dtype == jnp.float32
