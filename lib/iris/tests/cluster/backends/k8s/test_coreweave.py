@@ -370,12 +370,22 @@ def test_start_controller_mounts_task_cache_in_node_agent_when_reclaim_enabled()
 
     node_agent = k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent")
     agent_spec = node_agent["spec"]["template"]["spec"]
+    assert node_agent["spec"]["template"]["metadata"]["annotations"] == {
+        "iris.marin.community/cache-max-age-ms": "86400000"
+    }
     assert {"name": "task-cache", "mountPath": "/mnt/local/iris-cache"} in agent_spec["containers"][0]["volumeMounts"]
     assert {
         "name": "task-cache",
         "hostPath": {"path": "/mnt/local/iris-cache", "type": "DirectoryOrCreate"},
     } in agent_spec["volumes"]
     provider.shutdown()
+
+
+def test_node_agent_role_can_taint_nodes_for_cache_reclamation():
+    role = cluster_role_manifest("iris-controller-iris")
+
+    node_rule = next(rule for rule in role["rules"] if rule["resources"] == ["nodes"])
+    assert node_rule["verbs"] == ["get", "list", "watch", "patch"]
 
 
 def test_start_controller_leaves_node_agent_absent_without_external_finelog():

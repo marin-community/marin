@@ -21,7 +21,7 @@ from contextlib import AbstractContextManager
 from rigging.filesystem.cluster_config import StoreType, store_config
 from rigging.filesystem.s3_compat import configure_fsspec_s3, fsspec_s3_conf, s3_credentials
 from rigging.secrets import ENV_SCHEME, as_secret_spec, resolve_secret_spec
-from rigging.timing import Deadline
+from rigging.timing import Deadline, Duration
 
 from iris.cluster.config import (
     ControllerVmConfig,
@@ -314,7 +314,13 @@ def _build_controller_deployment(
     }
 
 
-def _build_node_agent_daemonset(*, namespace: str, image: str, cache_dir: str | None = None) -> dict:
+def _build_node_agent_daemonset(
+    *,
+    namespace: str,
+    image: str,
+    cache_dir: str | None = None,
+    cache_max_age: Duration | None = None,
+) -> dict:
     """Run the Iris physical-node collector once on every Kubernetes node."""
     volume_mounts = [{"name": "config", "mountPath": "/etc/iris", "readOnly": True}]
     volumes = [{"name": "config", "configMap": {"name": "iris-cluster-config"}}]
@@ -332,7 +338,14 @@ def _build_node_agent_daemonset(*, namespace: str, image: str, cache_dir: str | 
                 "rollingUpdate": {"maxUnavailable": _NODE_AGENT_MAX_UNAVAILABLE},
             },
             "template": {
-                "metadata": {"labels": {"app": _NODE_AGENT_NAME}},
+                "metadata": {
+                    "labels": {"app": _NODE_AGENT_NAME},
+                    "annotations": {
+                        "iris.marin.community/cache-max-age-ms": (
+                            str(cache_max_age.to_ms()) if cache_max_age is not None else "disabled"
+                        )
+                    },
+                },
                 "spec": {
                     "serviceAccountName": "iris-controller",
                     "priorityClassName": IRIS_PRIORITY_CLASS_SYSTEM,
@@ -531,6 +544,7 @@ class K8sControllerProvider:
                     namespace=self._namespace,
                     image=config.controller.image,
                     cache_dir=cache_dir,
+                    cache_max_age=config.kubernetes_provider.cache_max_age,
                 )
             )
             logger.info("DaemonSet %s applied", _NODE_AGENT_NAME)

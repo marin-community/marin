@@ -582,6 +582,25 @@ class InMemoryK8sService:
         if self._mode == ServiceMode.LOCAL and resource is K8sResource.PODS:
             self._run_pod_locally(name, manifest)
 
+    def add_node_taint(self, node_name: str, *, key: str, value: str, effect: str) -> None:
+        self._check_failure("add_node_taint")
+        node = self.get_json(K8sResource.NODES, node_name)
+        if node is None:
+            raise KubectlError(f"node/{node_name} not found")
+        spec = node.setdefault("spec", {})
+        taints = [taint for taint in spec.get("taints", []) if taint.get("key") != key]
+        taints.append({"key": key, "value": value, "effect": effect})
+        spec["taints"] = taints
+
+    def remove_node_taint(self, node_name: str, *, key: str, value: str, effect: str) -> None:
+        self._check_failure("remove_node_taint")
+        node = self.get_json(K8sResource.NODES, node_name)
+        if node is None:
+            raise KubectlError(f"node/{node_name} not found")
+        spec = node.setdefault("spec", {})
+        taints = [taint for taint in spec.get("taints", []) if taint.get("key") != key]
+        spec["taints"] = taints
+
     def get_json(self, resource: K8sResource, name: str) -> dict | None:
         self._check_failure("get_json")
         return self._resources.get((resource.plural, name))

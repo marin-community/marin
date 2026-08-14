@@ -349,9 +349,10 @@ Keep `cache_dir` on `/mnt/local`, the node's NVMe storage. The shared Hugging
 Face path is `HF_HUB_CACHE`; Iris deliberately leaves `HF_HOME` private because
 it may contain the submitter's token. The CoreWeave configs set
 `cache_max_age` to seven days. Every five minutes, the node-agent checks nodes
-without a pending or running Iris task and removes top-level entries whose
-files have not been modified within that age. Durable outputs belong in object
-storage.
+without a pending or running Iris task, applies a temporary `NoSchedule` taint,
+checks again, and removes top-level entries whose files have not been modified
+within that age. The taint blocks task admission for the duration of the sweep.
+Durable outputs belong in object storage.
 
 `/cache` is unclaimed node-local scratch: a task that needs a real directory on
 the node instead of a bucket picks its own subdirectory there. The node-agent
