@@ -641,7 +641,7 @@ def quack_gate_accumulator_inplace(
     )
 
 
-def quack_coda_gate_silu_reverse(
+def _quack_coda_gate_silu_reverse_components(
     normalized: jax.Array,
     output_cotangent: jax.Array,
     gate: jax.Array,
@@ -651,8 +651,7 @@ def quack_coda_gate_silu_reverse(
     tile_mn: tuple[int, int] = _DEFAULT_TILE_MN,
     cluster_mnk: tuple[int, int, int] = _DEFAULT_CLUSTER_MNK,
     max_swizzle: int = _DEFAULT_MAX_SWIZZLE,
-) -> tuple[jax.Array, jax.Array]:
-    """Return gate-preactivation and up-weight cotangents without exposing gate dY."""
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
     if normalized.ndim != 2 or normalized.shape != output_cotangent.shape or normalized.shape != gate.shape:
         raise ValueError("gate reverse full-width inputs must be matching rank-2 arrays")
     rows, hidden_dim = normalized.shape
@@ -696,14 +695,39 @@ def quack_coda_gate_silu_reverse(
         output_spec=(matrix_spec,) * 4,
         use_static_tensors=False,
     )
-    _, gate_preactivation_cotangent, _, w_up_cotangent = call(
+    gate_accumulator, gate_preactivation_cotangent, gate_hidden, w_up_cotangent = call(
         normalized[None, :, :],
         output_cotangent[None, :, :],
         gate[None, :, :],
         w_up[None, :, :],
         gate_preactivation[None, :, :],
     )
-    return gate_preactivation_cotangent[0], w_up_cotangent[0]
+    return gate_accumulator[0], gate_preactivation_cotangent[0], gate_hidden[0], w_up_cotangent[0]
+
+
+def quack_coda_gate_silu_reverse(
+    normalized: jax.Array,
+    output_cotangent: jax.Array,
+    gate: jax.Array,
+    w_up: jax.Array,
+    gate_preactivation: jax.Array,
+    *,
+    tile_mn: tuple[int, int] = _DEFAULT_TILE_MN,
+    cluster_mnk: tuple[int, int, int] = _DEFAULT_CLUSTER_MNK,
+    max_swizzle: int = _DEFAULT_MAX_SWIZZLE,
+) -> tuple[jax.Array, jax.Array]:
+    """Return gate-preactivation and up-weight cotangents without exposing gate dY."""
+    _, gate_preactivation_cotangent, _, w_up_cotangent = _quack_coda_gate_silu_reverse_components(
+        normalized,
+        output_cotangent,
+        gate,
+        w_up,
+        gate_preactivation,
+        tile_mn=tile_mn,
+        cluster_mnk=cluster_mnk,
+        max_swizzle=max_swizzle,
+    )
+    return gate_preactivation_cotangent, w_up_cotangent
 
 
 @functools.lru_cache(maxsize=None)
