@@ -7,6 +7,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 from levanter.grug._moe.rms_gated_norm import (
+    exact_gate_silu_reverse_reference,
     exact_rms_backward_partials_reference,
     exact_rms_backward_recompute_consumer_reference,
     exact_rms_gated_norm_selective_reverse_reference,
@@ -122,6 +123,30 @@ def test_silu_backward_gemm_matches_reference():
         preactivation_cotangent, expected_cotangent, tolerance=_BF16_TOLERANCE, label="preactivation cotangent"
     )
     _assert_close(postactivation, expected_postactivation, tolerance=_BF16_TOLERANCE, label="postactivation")
+
+
+def test_gate_silu_reverse_matches_reference():
+    _require_gpu()
+
+    keys = jax.random.split(jax.random.key(30), 5)
+    normalized = jax.random.normal(keys[0], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16)
+    output_cotangent = jax.random.normal(keys[1], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16)
+    gate = jax.nn.sigmoid(jax.random.normal(keys[2], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16))
+    w_up = (0.1 * jax.random.normal(keys[3], (_RANK, _HIDDEN_DIM), dtype=jnp.float32)).astype(jnp.bfloat16)
+    gate_preactivation = jax.random.normal(keys[4], (_ROWS, _RANK), dtype=jnp.bfloat16)
+    gate_hidden = jax.nn.silu(gate_preactivation)
+
+    actual = quack_rms_cute.quack_coda_gate_silu_reverse(normalized, output_cotangent, gate, w_up, gate_preactivation)
+    expected = exact_gate_silu_reverse_reference(
+        output_cotangent,
+        normalized,
+        gate,
+        gate_hidden,
+        w_up,
+        gate_preactivation,
+    )
+    for label, actual_value, expected_value in zip(("gate preactivation", "w_up"), actual, expected, strict=True):
+        _assert_close(actual_value, expected_value, tolerance=_BF16_TOLERANCE, label=label)
 
 
 def test_rms_gated_norm_reverse_matches_reference():
