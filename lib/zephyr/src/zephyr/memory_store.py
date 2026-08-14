@@ -83,6 +83,15 @@ def _source_partition(hash_key: Callable[[K], int], key: K, num_source_partition
     return key_hash % num_source_partitions
 
 
+def _global_store_shard_index(actor_index: int, local_shard_index: int, worker_count: int) -> int:
+    return local_shard_index * worker_count + actor_index
+
+
+def _store_shard_owner(global_shard_index: int, worker_count: int) -> tuple[int, int]:
+    local_shard_index, actor_index = divmod(global_shard_index, worker_count)
+    return actor_index, local_shard_index
+
+
 @dataclass(frozen=True)
 class MemoryStorePlan:
     source_items: tuple[SourceItem, ...]
@@ -253,7 +262,11 @@ class _MemoryStoreShardService:
 
     def _load_values(self, registration: MemoryTableRegistration) -> tuple[dict[Hashable, Any], tuple[int, ...]]:
         plan = registration.plan
-        store_shard_index = self._actor_index * registration.shards_per_worker + self._local_shard_index
+        store_shard_index = _global_store_shard_index(
+            self._actor_index,
+            self._local_shard_index,
+            registration.worker_count,
+        )
         store_shard_count = registration.worker_count * registration.shards_per_worker
         partitions = tuple(
             partition
@@ -856,7 +869,7 @@ class MemoryStore(Generic[K, V]):
         if stats is None:
             raise MemoryStoreDestroyed(f"memory table {self.name!r} has been destroyed")
         for stat in stats:
-            shard_index = stat.actor_index * self.shards_per_worker + stat.store_shard_index
+            shard_index = _global_store_shard_index(stat.actor_index, stat.store_shard_index, len(self.actors))
             self.shard_actors[shard_index].refresh(stat.endpoint_name, stat.endpoint_address)
 
     def _ready_result(
@@ -906,7 +919,7 @@ class MemoryStore(Generic[K, V]):
 
         results: list[V | None] = [None] * len(keys)
         for shard, shard_requests in requests.items():
-            actor_index, _ = divmod(shard, self.shards_per_worker)
+            actor_index, _ = _store_shard_owner(shard, len(self.actors))
             result = self._ready_result(
                 actor_index,
                 calls[shard],
@@ -959,7 +972,7 @@ class MemoryStore(Generic[K, V]):
 
         results: list[R | None] = [None] * len(requests)
         for shard, items in routed.items():
-            actor_index, local_shard_index = divmod(shard, self.shards_per_worker)
+            actor_index, local_shard_index = _store_shard_owner(shard, len(self.actors))
             result = self._ready_result(
                 actor_index,
                 calls[shard],

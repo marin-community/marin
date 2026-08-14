@@ -46,6 +46,7 @@ from zephyr.memory_store import (
     MemoryStoreShardHandle,
     MemoryStoreShardStats,
     MemoryTableRegistration,
+    _global_store_shard_index,
     actor_result_with_recovery,
     memory_store_plan,
     start_actor_calls,
@@ -471,7 +472,17 @@ class ZephyrContext:
                         f"memory-store worker {actor_index} reported shards {actual}, expected {expected}"
                     )
             actors = tuple(handles)
-            shard_actors = tuple(MemoryStoreShardHandle(stat.endpoint_name, stat.endpoint_address) for stat in stats)
+            stats_by_global_shard = sorted(
+                stats,
+                key=lambda stat: _global_store_shard_index(
+                    stat.actor_index,
+                    stat.store_shard_index,
+                    pool.worker_count,
+                ),
+            )
+            shard_actors = tuple(
+                MemoryStoreShardHandle(stat.endpoint_name, stat.endpoint_address) for stat in stats_by_global_shard
+            )
             if any(not stat.endpoint_name or not stat.endpoint_address for stat in stats):
                 raise RuntimeError("memory-store subprocess did not report its actor endpoint")
             total_items = sum(stat.num_items for stat in stats)
