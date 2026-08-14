@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tempfile
 
-from levanter.kernels.mixture_of_kittens.build import _materialize_cuda_toolchain
+from levanter.kernels.mixture_of_kittens.build import _cuda_include_dirs, _materialize_cuda_toolchain
 
 _SOURCE = pathlib.Path(__file__).with_name("tma_fabric_probe.cu")
 _ARCH = "sm_100a"
@@ -32,6 +32,8 @@ def main() -> int:
             f"-gencode=arch=compute_{_ARCH.removeprefix('sm_')},code={_ARCH}",
             "-lcuda",
         ]
+        for include_dir in _cuda_include_dirs():
+            compile_command.extend(("-I", str(include_dir)))
         print(" ".join(compile_command), flush=True)
         compiled = subprocess.run(compile_command, check=False, capture_output=True, text=True)
         if compiled.returncode != 0:
