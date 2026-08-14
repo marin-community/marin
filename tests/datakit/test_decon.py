@@ -18,6 +18,7 @@ from marin.datakit.decon import (
     EvalBloom,
     NGramConfig,
     _bloom_hash,
+    _document_overlap_matches_by_minimum,
     _extract_ngrams,
     _load_drop_set,
     _paragraph_overlap_and_matches,
@@ -494,6 +495,115 @@ def test_decon_short_record_fallback_spans_tiny_paragraphs(tmp_path: Path):
 
     assert rows["doc"]["contaminated"] is True
     assert rows["doc"]["max_overlap"] == 1.0
+
+
+@pytest.mark.parametrize("short_match", ["September 29, 2011", "2, 3 and 4"])
+def test_decon_does_not_mark_long_document_from_one_short_match(tmp_path: Path, short_match: str):
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "short_eval", "text": short_match}],
+        input_records=[
+            {
+                "id": "doc",
+                "text": (
+                    "This document has unrelated material before the short value.\n\n"
+                    f"{short_match}\n\n"
+                    "It also has unrelated material after the short value."
+                ),
+                "partition_id": 0,
+            }
+        ],
+        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5),
+    )
+
+    assert rows["doc"]["contaminated"] is False
+    assert rows["doc"]["max_overlap"] == 1.0
+    assert rows["doc"]["matched_hashes"] == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Distinctive alpha phrase",
+        "one two three four five six seven eight nine ten eleven twelve thirteen",
+    ],
+)
+def test_decon_keeps_one_feature_match_for_complete_document(tmp_path: Path, text: str):
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "short_eval", "text": text}],
+        input_records=[{"id": "doc", "text": text, "partition_id": 0}],
+        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5),
+    )
+
+    assert rows["doc"]["contaminated"] is True
+    assert rows["doc"]["matched_hashes"] == [_bloom_hash(text)]
+
+
+def test_decon_uses_configured_minimum_distinct_features(tmp_path: Path):
+    text = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
+    eval_records = [{"id": "eval", "text": text}]
+    input_records = [{"id": "doc", "text": text, "partition_id": 0}]
+
+    two = _run_decon_one_shot(
+        tmp_path / "two",
+        eval_records=eval_records,
+        input_records=input_records,
+        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5, min_matched_features=2),
+    )
+    three = _run_decon_one_shot(
+        tmp_path / "three",
+        eval_records=eval_records,
+        input_records=input_records,
+        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5, min_matched_features=3),
+    )
+
+    assert two["doc"]["contaminated"] is True
+    assert three["doc"]["contaminated"] is False
+
+
+def test_ngram_config_rejects_zero_minimum_matched_features():
+    with pytest.raises(ValueError, match="min_matched_features must be at least 1"):
+        NGramConfig(min_matched_features=0)
+
+
+def test_document_overlap_scores_multiple_evidence_minimums_in_one_pass():
+    text = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
+    ngram = NGramConfig(ngram_length=13, overlap_threshold=0.5)
+    bloom = dupekit.Bloom(1_000, 1e-9)
+    for feature in _extract_ngrams(text, 13, 0):
+        bloom.add(_bloom_hash(feature))
+
+    score, matches = _document_overlap_matches_by_minimum(text, bloom, ngram, (1, 2, 3))
+
+    assert score == 1.0
+    assert len(matches[1]) == 2
+    assert len(matches[2]) == 2
+    assert matches[3] == []
+
+
+def test_decon_attributes_only_report_hashes_that_triggered_mark(tmp_path: Path):
+    strong_match = "alpha beta gamma delta epsilon zeta"
+    weak_match = "September 29, 2011"
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[
+            {"id": "strong_eval", "text": strong_match},
+            {"id": "weak_eval", "text": weak_match},
+        ],
+        input_records=[
+            {
+                "id": "doc",
+                "text": f"{strong_match}\n\n{weak_match}",
+                "partition_id": 0,
+            }
+        ],
+        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+    )
+
+    expected = {_bloom_hash(ngram) for ngram in _extract_ngrams(strong_match, 3, 0)}
+    assert rows["doc"]["contaminated"] is True
+    assert set(rows["doc"]["matched_hashes"]) == expected
 
 
 def test_double_newline_delimiter_spans_single_line_breaks(tmp_path: Path):
