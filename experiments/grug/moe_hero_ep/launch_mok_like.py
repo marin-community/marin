@@ -72,7 +72,14 @@ RAGGED_EP_XLA_FLAGS = (
 # Sharded autotuning splits the search across processes and exchanges results through the
 # coordination service. Under the fabric transport every rank is its own process and all four
 # park in backend_compile_and_load at zero CPU, so the step never compiles.
-CROSS_PROCESS_XLA_FLAGS = ("--xla_gpu_shard_autotuning=false",)
+# The per-fusion autotune cache lives on a node-local mount that the runtime picks by node, so
+# the four processes sharing a node also share its temp directory and race each other's entries;
+# a rack run lost ranks to a vanished temp file. Naming the flag here also stops the runtime from
+# setting it, since it defers to an explicit value.
+CROSS_PROCESS_XLA_FLAGS = (
+    "--xla_gpu_shard_autotuning=false",
+    "--xla_gpu_per_fusion_autotune_cache_dir=",
+)
 MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 MOK_LIKE_BUILD_PACKAGES = (
     "nvidia-cuda-cccl==13.0.85",
