@@ -20,7 +20,8 @@ import jax.numpy as jnp
 import numpy as np
 from iris.runtime.jax_init import initialize_jax
 from jax import random
-from jax.sharding import AxisType, Mesh
+from jax.sharding import AxisType, Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
 from levanter.kernels.mixture_of_kittens import (
     MokLikeBuildConfig,
     MokLikeConfig,
@@ -79,9 +80,15 @@ def main(hidden_dim: int, intermediate_dim: int, num_tokens: int, scan_layers: i
 
         block = to_bf16(MoEMLP.init(cfg, key=random.PRNGKey(0)))
         shared = to_bf16(DenseMLP.init(hidden_dim, intermediate_dim, cfg.initializer_std, key=random.PRNGKey(1)))
-        tokens = jnp.asarray(
-            np.random.default_rng(7).normal(size=(WORLD_SIZE, num_tokens, hidden_dim)),
-            dtype=jnp.bfloat16,
+        # The block reshards its output onto the batch spec, so a scan carry only type-checks if
+        # the input already carries the same sharding.
+        batch_sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None, None))
+        tokens = jax.device_put(
+            jnp.asarray(
+                np.random.default_rng(7).normal(size=(WORLD_SIZE, num_tokens, hidden_dim)),
+                dtype=jnp.bfloat16,
+            ),
+            batch_sharding,
         )
 
         with initialize_mok_like_runtime(
