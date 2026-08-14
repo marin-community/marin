@@ -63,6 +63,7 @@ def main(hidden_dim: int, intermediate_dim: int, num_tokens: int, backward: bool
         num_shared_experts=1,
         num_layers=1,
         vocab_size=1024,
+        remat_mode="save_moe",
         mok_like=mok_like,
     )
 
