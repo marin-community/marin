@@ -892,6 +892,8 @@ def _quack_coda_gate_silu_reverse_components(
     )
     tensor_spec = cjax.TensorSpec
     matrix_spec = tensor_spec(mode=_MATRIX_MODE, divisibility=_MATRIX_DIVISIBILITY, static=False)
+    # These row-local partials vary across the manual batch mesh. Preserve that provenance so
+    # the caller can legally reduce the replicated norm-weight cotangent exactly once.
     output_shape_dtype = (
         jax.ShapeDtypeStruct((1, rows, hidden_dim), normalized.dtype),
         jax.ShapeDtypeStruct((1, rows, rank), normalized.dtype),
@@ -1117,8 +1119,16 @@ def quack_coda_rms_backward_producer(
     vector_spec = tensor_spec(divisibility=_VECTOR_DIVISIBILITY, static=False)
     partial_spec = tensor_spec(divisibility=(1, 1, 1), static=False)
     output_shape_dtype = (
-        jax.ShapeDtypeStruct((1, rows, hidden_tiles), jnp.float32),
-        jax.ShapeDtypeStruct((1, row_tiles, hidden_dim), jnp.float32),
+        jax.ShapeDtypeStruct(
+            (1, rows, hidden_tiles),
+            jnp.float32,
+            manual_axis_type=jax.typeof(x).manual_axis_type,
+        ),
+        jax.ShapeDtypeStruct(
+            (1, row_tiles, hidden_dim),
+            jnp.float32,
+            manual_axis_type=jax.typeof(x).manual_axis_type,
+        ),
     )
     call = cutlass_call(
         launcher,
