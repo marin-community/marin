@@ -970,6 +970,10 @@ def _export_outputs(
     pulumi.export("tokenAudience", runtime_policy.audience)
     pulumi.export("profileNames", sorted(profile.name for profile in config.profiles))
     pulumi.export(
+        "githubFederationProfiles",
+        {federation.name: federation.profile for federation in config.github_federations},
+    )
+    pulumi.export(
         "workloadClients",
         pulumi.Output.all(*runtime_policy.workload_clients) if runtime_policy.workload_clients else [],
     )

@@ -86,6 +86,15 @@ identity of the existing `marin-grafana` Cloud Run service account to select
 only the `ops` profile. Pulumi resolves that account's email and immutable
 numeric subject; it does not create or copy a Loom token.
 
+The `fork-ferry` mapping accepts OIDC tokens only from the `marin` repository's
+`ops-fork-ferry.yaml` workflow on `main`. It authorizes the dedicated
+`fork-ferry` automation profile, whose pinned `marinmirror-token` Secret Manager
+reference supplies `GH_TOKEN`. The profile is environment-cleared, and the Loom
+stack grants its VM service account access to that secret without placing the
+token in Pulumi state. The GitHub Pulumi stack reads the mapping's profile from
+this stack's `githubFederationProfiles` output and publishes it as the workflow's
+`LOOM_FORK_FERRY_PROFILE` repository variable.
+
 Organization prompt policy lives beside the runtime profiles in
 `profiles/<name>/AGENTS.md`. A profile's `instructionsFile` is resolved below
 `infra/loom`, read by Pulumi, and reconciled into Loom's visible profile
