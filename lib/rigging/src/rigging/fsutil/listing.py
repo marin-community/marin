@@ -133,21 +133,19 @@ def list_entries(url: str, *, recursive: bool = False) -> list[Entry]:
     parsed = StoragePath(url)
     fs, path = filesystem_for(url)
     if recursive and not glob.has_magic(path):
-        base = StoragePath(url)
         entries = []
         for item in fs.find(path, detail=True, withdirs=True).values():
             if not is_child(path, item["name"]):
                 continue
             qualified_url = _qualified_url(parsed, item["name"])
-            name = StoragePath(qualified_url).relative_to(base)
+            name = _relative_name(item["name"], path)
             entries.append(_entry(parsed, item, name=name, url=qualified_url))
     elif glob.has_magic(path):
         root = _glob_root(path)
-        base = StoragePath(_qualified_url(parsed, root))
         entries = []
         for item in fs.glob(path, detail=True).values():
             qualified_url = _qualified_url(parsed, item["name"])
-            name = StoragePath(qualified_url).relative_to(base)
+            name = _relative_name(item["name"], root)
             entries.append(_entry(parsed, item, name=name, url=qualified_url))
     else:
         entries = [_entry(parsed, item) for item in fs.ls(path, detail=True) if is_child(path, item["name"])]
@@ -164,6 +162,17 @@ def _qualified_url(parsed: StoragePath, path: str) -> str:
     if parsed.scheme is None or "://" in path:
         return path
     return f"{parsed.scheme}://{path}"
+
+
+def _relative_name(name: str, root: str) -> str:
+    rooted = root.startswith("/")
+    root = root.rstrip("/")
+    if name == root:
+        return ""
+    prefix = f"{root}/" if root else "/" if rooted else ""
+    if not name.startswith(prefix):
+        raise ValueError(f"{name} is not under {root}")
+    return name[len(prefix) :]
 
 
 def is_child(listed: str, name: str) -> bool:

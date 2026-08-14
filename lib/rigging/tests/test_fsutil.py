@@ -6,6 +6,7 @@
 
 import bz2
 import gzip
+import io
 import json
 import lzma
 import os
@@ -14,6 +15,7 @@ from datetime import UTC, datetime
 
 import pytest
 import rigging.fsutil.cli as cli_module
+import rigging.fsutil.transfer as transfer_module
 from click.testing import CliRunner
 from rigging.fsutil import listing
 from rigging.fsutil.cli import cli
@@ -109,6 +111,77 @@ def test_cp_no_clobber_preserves_existing_destination(tree, tmp_path):
     assert (destination / "b.txt").read_text() == "keep"
 
 
+@pytest.mark.parametrize(("command", "destination"), [(["cp", "-r"], "copy"), (["rsync"], "sync")])
+def test_recursive_transfers_accept_relative_local_directories(tmp_path, monkeypatch, command, destination):
+    source = tmp_path / "source"
+    (source / "nested").mkdir(parents=True)
+    (source / "nested" / "value.txt").write_text("value")
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(cli, [*command, "source", destination])
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / destination / "nested" / "value.txt").read_text() == "value"
+
+
+def test_cp_recursive_preserves_repeated_object_key_separators(monkeypatch):
+    class ObjectFileSystem:
+        protocol = "s3"
+
+        def __init__(self):
+            self.files = {
+                "bucket/source/a/b": b"single",
+                "bucket/source/a//b": b"double",
+            }
+
+        def exists(self, path):
+            prefix = f"{path.rstrip('/')}/"
+            return path in self.files or any(name.startswith(prefix) for name in self.files)
+
+        def isdir(self, path):
+            prefix = f"{path.rstrip('/')}/"
+            return path not in self.files and any(name.startswith(prefix) for name in self.files)
+
+        def find(self, path, *, detail, withdirs):
+            assert detail is True
+            assert withdirs is True
+            prefix = f"{path.rstrip('/')}/"
+            return {
+                name: {"name": name, "size": len(data), "type": "file"}
+                for name, data in self.files.items()
+                if name.startswith(prefix)
+            }
+
+        def makedirs(self, _path, *, exist_ok):
+            assert exist_ok is True
+
+        def open(self, path, mode):
+            if mode == "rb":
+                return io.BytesIO(self.files[path])
+
+            filesystem = self
+
+            class WriteBuffer(io.BytesIO):
+                def close(self):
+                    filesystem.files[path] = self.getvalue()
+                    super().close()
+
+            return WriteBuffer()
+
+    filesystem = ObjectFileSystem()
+    monkeypatch.setattr(
+        transfer_module,
+        "filesystem_for",
+        lambda url: (filesystem, url.split("://", 1)[1]),
+    )
+
+    result = CliRunner().invoke(cli, ["cp", "-r", "s3://bucket/source", "s3://bucket/destination"])
+
+    assert result.exit_code == 0, result.output
+    assert filesystem.files["bucket/destination/a/b"] == b"single"
+    assert filesystem.files["bucket/destination/a//b"] == b"double"
+
+
 def test_mv_file_to_directory_removes_source(tree, tmp_path):
     destination = tmp_path / "archive"
     destination.mkdir()
@@ -118,6 +191,47 @@ def test_mv_file_to_directory_removes_source(tree, tmp_path):
     assert result.exit_code == 0, result.output
     assert not (tree / "b.txt").exists()
     assert (destination / "b.txt").read_text() == "hello"
+
+
+def test_mv_recursive_preserves_empty_local_directories(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    (source / "empty" / "nested").mkdir(parents=True)
+    (source / "value.txt").write_text("value")
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(cli, ["mv", "-r", "source", "moved"])
+
+    assert result.exit_code == 0, result.output
+    assert not source.exists()
+    assert (tmp_path / "moved" / "empty" / "nested").is_dir()
+    assert (tmp_path / "moved" / "value.txt").read_text() == "value"
+
+
+def test_mv_rejects_gcs_aliases_for_the_same_object(monkeypatch):
+    removed = []
+
+    class AliasFileSystem:
+        protocol = ("gs", "gcs")
+
+        def exists(self, _path):
+            return True
+
+        def isdir(self, _path):
+            return False
+
+        def rm(self, path, *, recursive):
+            removed.append((path, recursive))
+
+    monkeypatch.setattr(
+        transfer_module,
+        "filesystem_for",
+        lambda _url: (AliasFileSystem(), "bucket/key"),
+    )
+
+    result = CliRunner().invoke(cli, ["mv", "gs://bucket/key", "gcs://bucket/key"])
+
+    assert result.exit_code != 0
+    assert removed == []
 
 
 def test_rsync_copies_changed_files_and_deletes_only_when_requested(tmp_path):
@@ -202,7 +316,7 @@ def test_rsync_rejects_overlapping_directories(tmp_path):
     assert not (source / "nested").exists()
 
 
-def test_hash_reports_md5_and_crc32c_in_base64(tmp_path):
+def test_hash_reports_md5_in_base64(tmp_path):
     path = tmp_path / "digits.txt"
     path.write_bytes(b"123456789")
 
@@ -210,8 +324,8 @@ def test_hash_reports_md5_and_crc32c_in_base64(tmp_path):
 
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
-    assert lines[0].split() == ["url", "md5", "crc32c"]
-    assert lines[2].split() == [str(path), "JfnnlDI7RTiF9RgfG2JNCw==", "4waSgw=="]
+    assert lines[0].split() == ["url", "md5"]
+    assert lines[2].split() == [str(path), "JfnnlDI7RTiF9RgfG2JNCw=="]
 
 
 def test_rm_requires_recursive_for_directories(tree):
@@ -369,8 +483,10 @@ def test_ls_long_renders_local_directory(tree):
     assert any(line.endswith("sub/") for line in lines)
 
 
-def test_ls_recursive_renders_paths_relative_to_the_listed_directory(tree):
-    result = CliRunner().invoke(cli, ["ls", "-R", str(tree)])
+def test_ls_recursive_renders_paths_relative_to_a_relative_directory(tree, monkeypatch):
+    monkeypatch.chdir(tree.parent)
+
+    result = CliRunner().invoke(cli, ["ls", "-R", tree.name])
 
     assert result.exit_code == 0, result.output
     assert result.output.splitlines() == ["sub/", "b.txt", "sub/c.txt"]

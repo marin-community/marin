@@ -24,7 +24,7 @@ from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.s3_compat import s3_credentials, s3_endpoint
 from rigging.filesystem.storage_path import StoragePath
-from rigging.fsutil.hashing import HashAlgorithm, file_hashes, format_digest
+from rigging.fsutil.hashing import file_md5, format_digest
 from rigging.fsutil.listing import (
     ROOT,
     Entry,
@@ -39,7 +39,7 @@ from rigging.fsutil.render import aligned_lines, file_lines, format_size, format
 from rigging.fsutil.transfer import (
     TransferError,
     copy_plan,
-    execute_copies,
+    execute_copy_plan,
     execute_sync,
     remove_sources,
     sync_plan,
@@ -291,7 +291,7 @@ def cp(urls: tuple[str, ...], recursive: bool, no_clobber: bool) -> None:
     source_urls, destination_url = _transfer_arguments(urls)
     try:
         plan = copy_plan(source_urls, destination_url, recursive=recursive, no_clobber=no_clobber)
-        execute_copies(plan.copies)
+        execute_copy_plan(plan)
     except TransferError as error:
         raise click.ClickException(str(error)) from error
     for action in plan.copies:
@@ -308,7 +308,7 @@ def mv(urls: tuple[str, ...], recursive: bool) -> None:
     source_urls, destination_url = _transfer_arguments(urls)
     try:
         plan = copy_plan(source_urls, destination_url, recursive=recursive, no_clobber=False)
-        execute_copies(plan.copies)
+        execute_copy_plan(plan)
         remove_sources(plan.sources)
     except TransferError as error:
         raise click.ClickException(str(error)) from error
@@ -343,31 +343,12 @@ def rsync(source: str, destination: str, delete: bool, dry_run: bool, checksum: 
 @click.command("hash")
 @click.argument("urls", nargs=-1, required=True)
 @click.option("--hex", "hexadecimal", is_flag=True, help="Print hexadecimal digests instead of base64.")
-@click.option("--skip-md5", is_flag=True, help="Do not calculate MD5.")
-@click.option("--skip-crc32c", is_flag=True, help="Do not calculate CRC32C.")
-def hash_command(urls: tuple[str, ...], hexadecimal: bool, skip_md5: bool, skip_crc32c: bool) -> None:
-    """Calculate MD5 and CRC32C content hashes for complete files or objects."""
-    if skip_md5 and skip_crc32c:
-        raise click.UsageError("at least one hash must be enabled")
-    algorithms = frozenset(
-        algorithm
-        for algorithm, skipped in (
-            (HashAlgorithm.MD5, skip_md5),
-            (HashAlgorithm.CRC32C, skip_crc32c),
-        )
-        if not skipped
-    )
+def hash_command(urls: tuple[str, ...], hexadecimal: bool) -> None:
+    """Calculate MD5 content hashes for complete files or objects."""
     rows = []
     for url in urls:
-        digests = file_hashes(url, algorithms)
-        rows.append(
-            [
-                url,
-                format_digest(digests.md5, hexadecimal=hexadecimal),
-                format_digest(digests.crc32c, hexadecimal=hexadecimal),
-            ]
-        )
-    for line in table_lines(["url", "md5", "crc32c"], rows):
+        rows.append([url, format_digest(file_md5(url), hexadecimal=hexadecimal)])
+    for line in table_lines(["url", "md5"], rows):
         click.echo(line)
 
 

@@ -62,7 +62,7 @@ that touch its buckets; the rest keep working.
 | `cp SRC ... DST [-r] [-n]` | Copy one or more sources between any backends. `-r` includes directories; `-n` preserves existing destination files |
 | `mv SRC ... DST [-r]` | Move or rename one or more sources. Sources are removed after every copy succeeds |
 | `rsync SRC DST [--delete] [--dry-run] [--checksum]` | Synchronize the files beneath two directories or prefixes |
-| `hash URL ... [--hex]` | Stream complete files and print MD5 and CRC32C digests in base64 or hexadecimal |
+| `hash URL ... [--hex]` | Stream complete files and print MD5 digests in base64 or hexadecimal |
 | `rm URL [-r]` | Remove an object. `-r` or `-R` recursively removes a prefix; remote prefixes show object-count progress |
 | `browse [URL]` | The interactive browser |
 
@@ -71,7 +71,8 @@ ends in `/`, receives multiple sources, or receives a glob expression. A single 
 copied to any other destination uses that destination as the exact output name. `-r` is required
 for a directory. Transfers stream through the machine running `fsutil`, including copies
 between two object stores. Quoted glob sources are expanded by the source filesystem. `mv`
-finishes all copies before removing any source.
+finishes all copies before removing any source. Local-to-local `cp -r` and `mv -r` preserve
+empty directories.
 
 `rsync` compares size and modification time first. For equal-sized local files with different
 times it compares MD5; object stores use provider MD5 metadata when both sides supply it. When
@@ -81,9 +82,8 @@ Extra destination files remain by default. `--delete` removes them after all cop
 `--dry-run` prints the same copy and delete plan without changing the destination. Source and
 destination directories may not overlap.
 
-`hash` reads each complete object. Its columns are `url`, `md5`, and `crc32c`; digests use
-base64 by default. `--hex` selects hexadecimal output. `--skip-md5` and `--skip-crc32c`
-avoid calculating an unneeded digest.
+`hash` reads each complete object. Its columns are `url` and `md5`; digests use base64
+by default. `--hex` selects hexadecimal output.
 
 `du` scans prefixes with up to 128 concurrent metadata-bearing listings. S3 prefixes
 that exceed one listing page are split at the next `/` through three directory levels,
