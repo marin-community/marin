@@ -18,10 +18,12 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from haliax.nn import ArrayStacked
 from iris.runtime.jax_init import initialize_jax
 from jax import random
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
+from levanter.grug.grug_moe import MOE_REMAT_SAVE_NAMES
 from levanter.kernels.mixture_of_kittens import (
     MokLikeBuildConfig,
     MokLikeConfig,
@@ -39,9 +41,17 @@ WORLD_SIZE = 4
 @click.option("--hidden-dim", type=int, default=512, show_default=True)
 @click.option("--intermediate-dim", type=int, default=512, show_default=True)
 @click.option("--num-tokens", type=int, default=512, show_default=True, help="tokens per rank")
-@click.option("--scan-layers", type=int, default=1, show_default=True, help="run the block under lax.scan this many times")
+@click.option(
+    "--scan-layers", type=int, default=1, show_default=True, help="run the block under lax.scan this many times"
+)
 @click.option("--backward", is_flag=True, help="also take a gradient through the block")
-def main(hidden_dim: int, intermediate_dim: int, num_tokens: int, scan_layers: int, backward: bool) -> None:
+@click.option(
+    "--remat",
+    is_flag=True,
+    help="scan over stacked per-layer parameters with eqx.filter_checkpoint applied per iteration, "
+    "matching Transformer._scan_layers; implies a backward pass, which is what makes remat replay",
+)
+def main(hidden_dim: int, intermediate_dim: int, num_tokens: int, scan_layers: int, backward: bool, remat: bool) -> None:
     initialize_jax()
     devices = jax.devices()
     if jax.process_count() != WORLD_SIZE or jax.local_device_count() != 1:
@@ -74,9 +84,7 @@ def main(hidden_dim: int, intermediate_dim: int, num_tokens: int, scan_layers: i
         # The trainer holds parameters in float32 and casts to bfloat16 through its mixed-precision
         # policy before the block runs; the kernel requires bfloat16, so apply the same cast here.
         def to_bf16(tree):
-            return jax.tree.map(
-                lambda leaf: leaf.astype(jnp.bfloat16) if eqx.is_inexact_array(leaf) else leaf, tree
-            )
+            return jax.tree.map(lambda leaf: leaf.astype(jnp.bfloat16) if eqx.is_inexact_array(leaf) else leaf, tree)
 
         block = to_bf16(MoEMLP.init(cfg, key=random.PRNGKey(0)))
         shared = to_bf16(DenseMLP.init(hidden_dim, intermediate_dim, cfg.initializer_std, key=random.PRNGKey(1)))
@@ -110,6 +118,56 @@ def main(hidden_dim: int, intermediate_dim: int, num_tokens: int, scan_layers: i
             def forward(module: MoEMLP, shared_expert: DenseMLP, x: jax.Array) -> jax.Array:
                 output, _ = module(x, shared_expert=shared_expert, mok_like_runtime=runtime)
                 return output
+
+            if remat:
+                # `Transformer._scan_layers` applies `eqx.filter_checkpoint` per scan iteration with
+                # the stacked per-layer parameters riding in as `xs`. A rematerialized forward is
+                # replayed on the backward pass, so the FFI runs a second time and takes a second
+                # set of workspace reservations; whether the ranks agree on their order is exactly
+                # what none of the earlier probes exercised. This is the last structural difference
+                # between them and the training path, so it needs the backward pass to mean anything.
+                stacked = to_bf16(
+                    ArrayStacked.init(scan_layers, MoEMLP)(
+                        cfg, key=jnp.stack([random.PRNGKey(seed) for seed in range(scan_layers)])
+                    )
+                )
+                remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+
+                def remat_scanned(layers: MoEMLP, shared_expert: DenseMLP, x: jax.Array) -> jax.Array:
+                    def body(carry: jax.Array, layer: MoEMLP) -> tuple[jax.Array, None]:
+                        output, _ = eqx.filter_checkpoint(layer, policy=remat_policy)(
+                            carry, shared_expert=shared_expert, mok_like_runtime=runtime
+                        )
+                        return output.astype(carry.dtype), None
+
+                    final, _ = jax.lax.scan(body, x, xs=layers)
+                    return final
+
+                def remat_loss(layers: MoEMLP, shared_expert: DenseMLP, x: jax.Array) -> jax.Array:
+                    return jnp.sum(remat_scanned(layers, shared_expert, x).astype(jnp.float32))
+
+                activation_grad = jax.jit(jax.grad(remat_loss, argnums=2))(stacked.stacked, shared, tokens)
+                activation_grad.block_until_ready()
+                activation_finite = bool(jnp.all(jnp.isfinite(activation_grad.astype(jnp.float32))))
+                print(f"REMAT activation-grad layers={scan_layers} finite={activation_finite}", flush=True)
+                if not activation_finite:
+                    raise RuntimeError("remat scan produced a non-finite activation gradient")
+
+                # The trainer differentiates the parameters, which is what puts the stacked `xs`
+                # leaves on the backward path rather than only the carry.
+                parameter_grads = jax.jit(eqx.filter_grad(remat_loss))(stacked.stacked, shared, tokens)
+                parameter_leaves = [leaf for leaf in jax.tree.leaves(parameter_grads) if eqx.is_inexact_array(leaf)]
+                jax.block_until_ready(parameter_leaves)
+                parameter_finite = all(
+                    bool(jnp.all(jnp.isfinite(leaf.astype(jnp.float32)))) for leaf in parameter_leaves
+                )
+                print(
+                    f"REMAT parameter-grad leaves={len(parameter_leaves)} finite={parameter_finite}",
+                    flush=True,
+                )
+                if not parameter_finite:
+                    raise RuntimeError("remat scan produced a non-finite parameter gradient")
+                print("REMAT PASS", flush=True)
 
             if scan_layers > 1:
                 # The transformer runs its layers under lax.scan, so the FFI is compiled once and
