@@ -1342,3 +1342,20 @@ author: Rafal Wojdyla
 - Storage result: The new RNO output proves that multipart writes to the East bucket work after the storage suspension.
 - Shared records: Echo entry 2640 records the recovery proof. The major issue update is https://github.com/marin-community/marin/issues/8162#issuecomment-5287731523.
 - Next action: Continue both roots through completion. Verify all 292 source artifacts and all 166,775 shard names before the production merge.
+
+### 2026-08-14 00:23 UTC - Five East TEI services recovered
+
+- Failure: East TEI services `006`, `175`, `184`, `185`, and `186` failed because their fixed ports were already in use. The affected ports were `12524`, `12862`, `12880`, `12882`, and `12884`.
+- Recovery: Replayed only the five terminal services from their saved controller requests. The model, resources, batch priority, bundle, ports, and TTL policy were unchanged.
+- Result: All five service jobs returned to the running job state and entered their first build attempt. The active embedding source continued to write output.
+- Issue update: None. This was a limited service recovery and did not stop source progress.
+
+### 2026-08-14 01:04 UTC - Shared-pool merge smoke passed
+
+- Change: Commit `2d629dc6b` makes every source pipeline borrow one top-level Zephyr context. The selected sources share one bounded worker pool and one coordinator. Temporary Zephyr data uses the output region.
+- Test scope: `/rav/harrier-merge-shared-smoke-20260814` used the production inputs for `nsf_awards` and `agenttrove`. It wrote only to `s3://marin-us-east-02a/tmp/ttl=2d/harrier-merge-shared-smoke-20260814/`.
+- Pool proof: The root created one Zephyr coordinator and one group of eight workers. Both source jobs ran against this pool. `nsf_awards` finished while `agenttrove` continued, and the same coordinator and worker group stayed active.
+- Verification: `nsf_awards` passed the read-back check for all 3 shards and 381,789 normalized rows. `agenttrove` passed it for all 43 shards and 781,076 normalized rows. Each check compared shard names, schema, row counts, and the exact ID order with normalized data.
+- Result: Both source jobs and the root succeeded. The root then closed the shared context and stopped its coordinator and worker group. No production merge was launched.
+- Issue update: None. This smoke result does not change backfill progress.
+- Next action: Continue both backfill roots through completion. Run the full partition verification before a production merge.
