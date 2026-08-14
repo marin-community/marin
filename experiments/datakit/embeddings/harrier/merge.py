@@ -569,8 +569,9 @@ def main() -> None:
     if args.pool_workers is not None and args.pool_workers < 1:
         parser.error("--pool-workers must be at least 1")
 
-    source_names = list(select_sources())
-    if args.sources is not None:
+    if args.sources is None:
+        source_names = list(select_sources())
+    else:
         source_names = [source.strip() for source in args.sources.split(",") if source.strip()]
         if not source_names:
             parser.error("--sources must contain at least one source")
