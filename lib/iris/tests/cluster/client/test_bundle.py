@@ -80,6 +80,22 @@ def test_collect_respects_extra_exclude(workspace):
     assert "pyproject.toml" in rel
 
 
+def test_extra_exclude_is_matched_literally_not_verbose(workspace):
+    # DEFAULT_EXCLUDE is verbose; the merge must not extend re.VERBOSE onto the
+    # caller's pattern, or literal whitespace in it would be dropped and match
+    # the wrong path.
+    (workspace / "my dir").mkdir()
+    (workspace / "my dir" / "keep.txt").write_text("hi")
+    (workspace / "mydir").mkdir()
+    (workspace / "mydir" / "drop.txt").write_text("hi")
+
+    with _mock_git_none():
+        files = collect_workspace_files(workspace, exclude=re.compile(r"^mydir/"))
+    rel = {str(f.relative_to(workspace)) for f in files}
+    assert "mydir/drop.txt" not in rel
+    assert "my dir/keep.txt" in rel
+
+
 def test_zip_rejects_oversized_bundles(workspace):
     large_file = workspace / "large_file.bin"
     large_file.write_bytes(os.urandom(MAX_BUNDLE_SIZE_BYTES + 1024 * 1024))

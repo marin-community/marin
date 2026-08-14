@@ -16,13 +16,12 @@ from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAt
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.embeddings.harrier.pipeline import (
-    DEFAULT_BATCH_SIZE,
-    EMBEDDING_ATTR_DATA_VERSION,
     HARRIER_MAX_TOKENS,
     HARRIER_REPO,
     HARRIER_REVISION,
     EmbeddingAttrData,
     embed_source,
+    harrier_hash_attrs,
     stage_harrier,
 )
 from experiments.datakit.embeddings.harrier.tei import tei_service_pool
@@ -58,13 +57,7 @@ def build_steps(endpoint_name: str, partition_index: int = 0, partition_count: i
         StepSpec(
             name=f"datakit/embed/harrier/{source_name}",
             deps=[normalized],
-            hash_attrs={
-                "dedup": DEDUP_ID,
-                "model": HARRIER_REPO,
-                "revision": HARRIER_REVISION,
-                "batch_size": DEFAULT_BATCH_SIZE,
-                "v": EMBEDDING_ATTR_DATA_VERSION,
-            },
+            hash_attrs=harrier_hash_attrs(DEDUP_ID),
             fn=remote(
                 lambda output_path, normalized_path=normalized.output_path: _embed_source(
                     output_path, normalized_path, endpoint_name
