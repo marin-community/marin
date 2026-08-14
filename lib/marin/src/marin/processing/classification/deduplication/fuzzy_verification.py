@@ -6,6 +6,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
+import dupekit
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -24,7 +25,7 @@ class FuzzyVerificationParams(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    rule_version: str = "whitespace_3gram_subset_v3"
+    rule_version: str = "whitespace_3gram_subset_v4"
     ngram_size: int = Field(default=3, ge=1)
     minimum_member_containment: float = Field(default=1.0, ge=0, le=1)
     maximum_member_unique_ngrams: int = Field(default=0, ge=0)
@@ -44,7 +45,7 @@ class PreparedVerificationText:
     text: str
     chars: int
     tokens: int
-    ngrams: frozenset[tuple[str, ...]]
+    ngrams: dupekit.TokenNgrams
     under_tokenized: bool
     saturated: bool
 
@@ -73,24 +74,16 @@ class VerificationResult:
 
 def prepare_verification_text(text: str, params: FuzzyVerificationParams) -> PreparedVerificationText:
     """Prepare one text for direct verification."""
-    tokens = text.casefold().split()
-    if not tokens:
-        ngrams: frozenset[tuple[str, ...]] = frozenset()
-    elif len(tokens) < params.ngram_size:
-        ngrams = frozenset((tuple(tokens),))
-    else:
-        ngrams = frozenset(
-            tuple(tokens[index : index + params.ngram_size]) for index in range(len(tokens) - params.ngram_size + 1)
-        )
-    positions = max(len(tokens) - params.ngram_size + 1, 1)
+    ngrams = dupekit.TokenNgrams(text, params.ngram_size)
+    positions = max(ngrams.token_count - params.ngram_size + 1, 1)
     chars = len(text)
     return PreparedVerificationText(
         text=text,
         chars=chars,
         saturated=len(ngrams) / positions < params.minimum_distinct_ngram_ratio,
-        tokens=len(tokens),
+        tokens=ngrams.token_count,
         ngrams=ngrams,
-        under_tokenized=chars / max(len(tokens), 1) > params.maximum_chars_per_token,
+        under_tokenized=chars / max(ngrams.token_count, 1) > params.maximum_chars_per_token,
     )
 
 
@@ -146,7 +139,7 @@ def verify_prepared_candidate(
     params: FuzzyVerificationParams,
 ) -> VerificationResult:
     """Verify one prepared member against one prepared representative."""
-    shared = len(member.ngrams & representative.ngrams)
+    shared = member.ngrams.intersection_size(representative.ngrams)
     union = len(member.ngrams) + len(representative.ngrams) - shared
     member_containment = shared / len(member.ngrams) if member.ngrams else 1.0
     jaccard = shared / union if union else 1.0

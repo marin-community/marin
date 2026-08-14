@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from typing import Any, Protocol
 
 from fray.actor import ActorGroup, ActorHandle, HostedActor
-from fray.types import ActorConfig, JobRequest, JobStatus, ResourceConfig
+from fray.types import ActorConfig, EnvironmentConfig, JobRequest, JobStatus, ResourceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,7 @@ class Client(Protocol):
         *args: Any,
         name: str,
         resources: ResourceConfig = ResourceConfig(),
+        environment: EnvironmentConfig | None = None,
         actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> ActorHandle:
@@ -77,6 +78,7 @@ class Client(Protocol):
         name: str,
         count: int,
         resources: ResourceConfig = ResourceConfig(),
+        environment: EnvironmentConfig | None = None,
         actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> ActorGroup:

@@ -6,6 +6,7 @@
 import logging
 import os
 import threading
+import time
 from collections import defaultdict
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -18,7 +19,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 import zstandard as zstd
-from fray.types import ResourceConfig
+from fray.types import EnvironmentConfig, ResourceConfig
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem import StoragePath, prefix_join
 from zephyr import counters
@@ -77,6 +78,11 @@ class _SharedArrowMemoryPool:
 
 
 _SHARED_ARROW_MEMORY_POOL = _SharedArrowMemoryPool()
+
+
+@dataclass
+class _TextAttachmentControl:
+    enabled: bool = True
 
 
 class RepresentativeKind(StrEnum):
@@ -167,6 +173,7 @@ class FuzzyVerificationStoreConfig:
     recovery_timeout: float
     ready_timeout: float
     lookup_batch_size: int
+    shards_per_worker: int
     load_concurrency: int = 1
 
     def __post_init__(self) -> None:
@@ -176,6 +183,8 @@ class FuzzyVerificationStoreConfig:
             raise ValueError("ready_timeout must be positive")
         if self.lookup_batch_size < 1:
             raise ValueError("lookup_batch_size must be at least 1")
+        if self.shards_per_worker < 1:
+            raise ValueError("shards_per_worker must be at least 1")
         if self.load_concurrency < 1:
             raise ValueError("load_concurrency must be at least 1")
 
@@ -390,9 +399,13 @@ def _attach_document_text(
     records: Iterator[dict[str, Any]],
     document_store: MemoryStore[tuple[int, str], pa.Buffer],
     lookup_batch_size: int,
+    control: _TextAttachmentControl | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Fetch bounded text batches while preserving reducer record order."""
     for record_batch in batched(records, lookup_batch_size):
+        if control is not None and not control.enabled:
+            yield from record_batch
+            continue
         compressed_texts = document_store.get_many([(record["file_idx"], record["id"]) for record in record_batch])
         for record, compressed_text in zip(record_batch, compressed_texts, strict=True):
             text = _decompress_document_text(compressed_text)
@@ -533,6 +546,80 @@ def _local_verification_gate(
     )
 
 
+@dataclass(frozen=True)
+class _StoredComparisonRequest:
+    representative_texts: tuple[str, ...]
+    verification_params: FuzzyVerificationParams
+    local_params: LocalRepresentativeParams
+    return_text: bool = False
+
+
+@dataclass(frozen=True)
+class _StoredComparisonResult:
+    text: str | None
+    comparisons: tuple[VerificationResult, ...]
+    local_decisions: tuple[_LocalVerificationDecision, ...]
+
+
+@dataclass
+class _FrozenRecordGroup:
+    member_id: str
+    records: list[dict[str, Any]]
+    nominee_indices: list[int]
+    shared_counts: dict[int, int]
+    results: list[_StoredComparisonResult | None]
+
+
+def _compare_document_text(
+    text: str,
+    request: _StoredComparisonRequest,
+    representative_cache: dict[tuple[str, ...], list[PreparedVerificationText]] | None = None,
+) -> _StoredComparisonResult:
+    if not request.representative_texts:
+        return _StoredComparisonResult(text=text, comparisons=(), local_decisions=())
+
+    prepared_member = prepare_verification_text(text, request.verification_params)
+    prepared_representatives = (
+        None if representative_cache is None else representative_cache.get(request.representative_texts)
+    )
+    if prepared_representatives is None:
+        prepared_representatives = [
+            prepare_verification_text(representative_text, request.verification_params)
+            for representative_text in request.representative_texts
+        ]
+        if representative_cache is not None:
+            representative_cache[request.representative_texts] = prepared_representatives
+    primary_result = verify_prepared_candidate(
+        prepared_member,
+        prepared_representatives[0],
+        request.verification_params,
+    )
+    comparisons = [primary_result]
+    local_decisions: list[_LocalVerificationDecision] = []
+    if not primary_result.accepted:
+        for prepared_representative in prepared_representatives[1:]:
+            result = verify_prepared_candidate(prepared_member, prepared_representative, request.verification_params)
+            comparisons.append(result)
+            decision = _local_verification_gate(prepared_member, prepared_representative, result, request.local_params)
+            local_decisions.append(decision)
+    return _StoredComparisonResult(
+        text=text if request.return_text else None,
+        comparisons=tuple(comparisons),
+        local_decisions=tuple(local_decisions),
+    )
+
+
+def _compare_stored_documents(
+    inputs: list[tuple[pa.Buffer, _StoredComparisonRequest]],
+) -> list[_StoredComparisonResult]:
+    """Decompress and compare a worker-local document batch."""
+    representative_cache: dict[tuple[str, ...], list[PreparedVerificationText]] = {}
+    return [
+        _compare_document_text(_decompress_document_text(value), request, representative_cache)
+        for value, request in inputs
+    ]
+
+
 def _choose_longest_representative(
     records_with_text: Iterator[dict[str, Any]],
 ) -> tuple[dict[str, Any], Iterator[dict[str, Any]]]:
@@ -592,10 +679,12 @@ def _make_cluster_verifier(
             yield {"kind": "sentinel", "file_idx": first["file_idx"], "id": ""}
             return
 
+        attachment_control = _TextAttachmentControl()
         records_with_text = _attach_document_text(
             chain((first,), records),
             document_store,
             lookup_batch_size,
+            attachment_control,
         )
         representative, records_with_text = _choose_longest_representative(records_with_text)
         # The cluster canonical is now provenance only. It still names the
@@ -622,17 +711,17 @@ def _make_cluster_verifier(
         accepted = 0
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/clusters", 1)
 
-        def add_local_representative(member: dict[str, Any], prepared: PreparedVerificationText) -> None:
+        def add_local_representative(member: dict[str, Any], prepared: PreparedVerificationText) -> bool:
             nonlocal local_representative_chars
             if len(retained) >= local_params.maximum_representatives_per_cluster:
                 counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/representative_skipped/cluster_limit", 1)
-                return
+                return False
             if prepared.chars > local_params.maximum_local_representative_chars:
                 counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/representative_skipped/document_chars", 1)
-                return
+                return False
             if local_representative_chars + prepared.chars > local_params.maximum_local_representative_chars_per_cluster:
                 counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/representative_skipped/cluster_chars", 1)
-                return
+                return False
 
             representative_index = len(retained)
             local = _RetainedRepresentative(
@@ -648,8 +737,11 @@ def _make_cluster_verifier(
             local_representative_chars += prepared.chars
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/local_representatives_added", 1)
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/local_representative_chars", prepared.chars)
+            return True
 
-        for member_id, same_id_records in groupby(records_with_text, key=lambda record: record["id"]):
+        record_groups = groupby(records_with_text, key=lambda record: record["id"])
+        frozen_record_groups: Iterator[tuple[str, Iterator[dict[str, Any]]]] | None = None
+        for member_id, same_id_records in record_groups:
             record_group = _split_record_group(same_id_records)
             member = record_group.first
             representative_id_group = member_id == primary.id
@@ -727,7 +819,11 @@ def _make_cluster_verifier(
             )
             if matched_representative is None:
                 _record_document_decision(member, "retained_no_match")
-                add_local_representative(member, prepared_member)
+                added = add_local_representative(member, prepared_member)
+                if added and len(retained) == local_params.maximum_representatives_per_cluster:
+                    attachment_control.enabled = False
+                    frozen_record_groups = record_groups
+                    break
                 continue
 
             assert matched_result is not None
@@ -751,6 +847,184 @@ def _make_cluster_verifier(
                 **_result_fields(matched_result),
                 "dup_local_line_count_ratio": matched_local_line_count_ratio,
             }
+
+        if frozen_record_groups is not None:
+            materialized_groups = ((member_id, list(group)) for member_id, group in frozen_record_groups)
+            for group_batch in batched(materialized_groups, lookup_batch_size):
+                frozen_groups: list[_FrozenRecordGroup] = []
+                remote_requests: list[tuple[tuple[int, str], _StoredComparisonRequest]] = []
+                remote_slots: list[tuple[_FrozenRecordGroup, int]] = []
+                representative_cache: dict[tuple[str, ...], list[PreparedVerificationText]] = {}
+
+                for member_id, group_records in group_batch:
+                    member = group_records[0]
+                    nominee_indices: list[int] = []
+                    shared_counts: dict[int, int] = {}
+                    if member_id != primary.id:
+                        member_buckets = frozenset(member["buckets"])
+                        mutable_shared_counts: dict[int, int] = defaultdict(int)
+                        for bucket in member_buckets:
+                            for representative_index in bucket_representatives.get(bucket, ()):
+                                mutable_shared_counts[representative_index] += 1
+                        shared_counts = dict(mutable_shared_counts)
+                        nominees = sorted(shared_counts, key=lambda index: (-shared_counts[index], index))
+                        local_comparison_limit = local_params.maximum_comparisons_per_document - 1
+                        nominee_indices = nominees[:local_comparison_limit]
+
+                    frozen_group = _FrozenRecordGroup(
+                        member_id=member_id,
+                        records=group_records,
+                        nominee_indices=nominee_indices,
+                        shared_counts=shared_counts,
+                        results=[None] * len(group_records),
+                    )
+                    frozen_groups.append(frozen_group)
+
+                    for record_index, record in enumerate(group_records):
+                        is_comparison = record_index == 0 and member_id != primary.id
+                        representative_texts = ()
+                        if is_comparison:
+                            representative_texts = (
+                                primary.prepared.text,
+                                *(retained[index].prepared.text for index in nominee_indices),
+                            )
+                        request = _StoredComparisonRequest(
+                            representative_texts=representative_texts,
+                            verification_params=verification_params,
+                            local_params=local_params,
+                            return_text=not is_comparison or len(group_records) > 1,
+                        )
+                        if "text" in record:
+                            frozen_group.results[record_index] = _compare_document_text(
+                                record["text"],
+                                request,
+                                representative_cache,
+                            )
+                            continue
+                        remote_requests.append(((record["file_idx"], record["id"]), request))
+                        remote_slots.append((frozen_group, record_index))
+
+                remote_results = document_store.compute_many(remote_requests, _compare_stored_documents)
+                for (frozen_group, record_index), result in zip(remote_slots, remote_results, strict=True):
+                    frozen_group.results[record_index] = result
+                    if result.comparisons:
+                        text_chars = result.comparisons[0].member_chars
+                    else:
+                        assert result.text is not None
+                        text_chars = len(result.text)
+                    counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_text_chars", text_chars)
+
+                for frozen_group in frozen_groups:
+                    member = frozen_group.records[0]
+                    resolved_results = frozen_group.results
+                    assert all(result is not None for result in resolved_results)
+                    results = [result for result in resolved_results if result is not None]
+                    cluster_size += len(frozen_group.records)
+                    canonicals_seen += sum(record["is_cluster_canonical"] for record in frozen_group.records)
+                    if canonicals_seen > 1:
+                        raise ValueError(f"Cluster {group_key[1]!r} has more than one canonical member")
+
+                    if frozen_group.member_id == primary.id:
+                        for record, result in zip(frozen_group.records, results, strict=True):
+                            if result.text != primary.prepared.text:
+                                raise ValueError(
+                                    f"Cluster {group_key[1]!r} has different text "
+                                    f"for content ID {frozen_group.member_id!r}"
+                                )
+                            _record_document_decision(record, "delegated_global_exact")
+                        continue
+
+                    member_result = results[0]
+                    if len(frozen_group.records) > 1:
+                        expected_text = member_result.text
+                        assert expected_text is not None
+                        for exact_record, exact_result in zip(frozen_group.records[1:], results[1:], strict=True):
+                            if exact_result.text != expected_text:
+                                raise ValueError(
+                                    f"Cluster {group_key[1]!r} has different text "
+                                    f"for content ID {frozen_group.member_id!r}"
+                                )
+                            _record_document_decision(exact_record, "delegated_global_exact")
+
+                    comparison_results = member_result.comparisons
+                    assert comparison_results
+                    primary_result = comparison_results[0]
+                    comparison_count = 1
+                    matched_representative: _RetainedRepresentative | None = None
+                    matched_result: VerificationResult | None = None
+                    matched_local_line_count_ratio: float | None = None
+                    member_buckets = frozenset(member["buckets"])
+                    shared_buckets = len(member_buckets & primary.buckets)
+                    primary_decision = (
+                        primary_result.rejection.value if primary_result.rejection is not None else "accepted"
+                    )
+                    _record_comparison(primary_result, primary.kind, primary_decision)
+                    if primary_result.accepted:
+                        matched_representative = primary
+                        matched_result = primary_result
+                    else:
+                        nominees = sorted(
+                            frozen_group.shared_counts,
+                            key=lambda index: (-frozen_group.shared_counts[index], index),
+                        )
+                        local_comparison_limit = local_params.maximum_comparisons_per_document - 1
+                        if len(nominees) > local_comparison_limit:
+                            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/comparison_limit_reached", 1)
+                        counters.pipeline.update_counter(
+                            f"{_COUNTER_PREFIX}/local_representative_nominees",
+                            len(nominees),
+                        )
+                        for representative_index, local_result, local_decision in zip(
+                            frozen_group.nominee_indices,
+                            comparison_results[1:],
+                            member_result.local_decisions,
+                            strict=True,
+                        ):
+                            local = retained[representative_index]
+                            comparison_count += 1
+                            _record_comparison(
+                                local_result,
+                                local.kind,
+                                local_decision.reason,
+                                local_decision.line_count_ratio,
+                            )
+                            if local_decision.accepted:
+                                matched_representative = local
+                                matched_result = local_result
+                                matched_local_line_count_ratio = local_decision.line_count_ratio
+                                shared_buckets = frozen_group.shared_counts[representative_index]
+                                break
+
+                    counters.pipeline.update_counter(
+                        f"{_COUNTER_PREFIX}/comparisons_per_document/{comparison_count}",
+                        1,
+                    )
+                    if matched_representative is None:
+                        _record_document_decision(member, "retained_no_match")
+                        counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/representative_skipped/cluster_limit", 1)
+                        continue
+
+                    assert matched_result is not None
+                    _record_document_decision(member, "accepted")
+                    counters.pipeline.update_counter(
+                        f"{_COUNTER_PREFIX}/accepted_representative/{matched_representative.kind.value}",
+                        1,
+                    )
+                    accepted += 1
+                    yield {
+                        "kind": "verified",
+                        "file_idx": member["file_idx"],
+                        "id": member["id"],
+                        "dup_doc": True,
+                        "dup_cluster_id": member["dup_cluster_id"],
+                        "dup_representative_id": matched_representative.id,
+                        "dup_representative_source_key": matched_representative.source_key,
+                        "dup_representative_kind": matched_representative.kind.value,
+                        "dup_shared_lsh_buckets": shared_buckets,
+                        "dup_comparisons": comparison_count,
+                        **_result_fields(matched_result),
+                        "dup_local_line_count_ratio": matched_local_line_count_ratio,
+                    }
 
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/cluster_size/{_size_bin(cluster_size)}", 1)
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/representatives_per_cluster/{_size_bin(len(retained))}", 1)
@@ -884,6 +1158,7 @@ def verify_fuzzy_dups(
     coordinator_resources: ResourceConfig | None = None,
     map_task_resources: ResourceConfig | None = None,
     reduce_task_resources: ResourceConfig | None = None,
+    actor_environment: EnvironmentConfig | None = None,
     shard_basenames: frozenset[str] | None = None,
 ) -> VerifiedFuzzyDupsAttrData:
     """Verify existing candidate clusters and write sparse duplicate markers.
@@ -892,6 +1167,7 @@ def verify_fuzzy_dups(
     shards. Every cluster it covers must be complete inside that subset, since
     a cluster missing members verifies against the wrong representative.
     """
+    verification_started = time.monotonic()
     if not normalized_sources:
         raise ValueError("verify_fuzzy_dups requires at least one normalized source")
     layout = _verification_shards(
@@ -916,12 +1192,15 @@ def verify_fuzzy_dups(
         "name": "verify-fuzzy-dups",
         "resources": resources,
         "max_workers": max_workers,
+        "actor_environment": actor_environment,
     }
     if coordinator_resources is not None:
         ctx_kwargs["coordinator_resources"] = coordinator_resources
     # The document store lives in the workers' own memory, so the context must
     # own an entered pool before the table loads.
+    pool_started = time.monotonic()
     ctx = ZephyrContext(**ctx_kwargs).start()
+    pool_start_elapsed = time.monotonic() - pool_started
     shard_groups = [[shard] for shard in shards]
     document_partitions = {shard.file_idx: position for position, shard in enumerate(shards)}
 
@@ -932,6 +1211,7 @@ def verify_fuzzy_dups(
             name="fuzzy-verification-documents",
             hash_key=partial(_document_partition, document_partitions),
             recovery_timeout=store_config.recovery_timeout,
+            shards_per_worker=store_config.shards_per_worker,
             ready_timeout=store_config.ready_timeout,
             load_concurrency=store_config.load_concurrency,
         )
@@ -954,25 +1234,54 @@ def verify_fuzzy_dups(
                 reducer=_write_verified_shard,
             )
         )
+        pipeline_started = time.monotonic()
         outcome = ctx.execute(
             pipeline,
             verbose=True,
             map_task_resources=map_task_resources,
             reduce_task_resources=reduce_task_resources,
         )
+        pipeline_elapsed = time.monotonic() - pipeline_started
         store_stats = document_store.stats()
     finally:
+        shutdown_started = time.monotonic()
         ctx.shutdown()
+        shutdown_elapsed = time.monotonic() - shutdown_started
 
     write_copartitioned_source_manifest(output_path=output_path, attr_dirs=layout.attr_dirs)
+    total_elapsed = time.monotonic() - verification_started
 
     verified = sum(result["verified_duplicates"] for result in outcome.results)
     output_counters = dict(outcome.counters)
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/actors"] = len(store_stats)
+    store_workers = len({stat.actor_index for stat in store_stats})
+    store_load_cpu_time = sum(stat.load_cpu_time for stat in store_stats)
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/workers"] = store_workers
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/shards"] = len(store_stats)
     output_counters[f"{_COUNTER_PREFIX}/memory_store/items"] = sum(stat.num_items for stat in store_stats)
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/load_cpu_time"] = sum(stat.load_cpu_time for stat in store_stats)
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/max_actor_load_elapsed"] = max(
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/load_cpu_time"] = store_load_cpu_time
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/load_elapsed"] = document_store.load_elapsed
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/load_average_cpu_cores"] = (
+        store_load_cpu_time / document_store.load_elapsed
+    )
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/resident_bytes"] = sum(stat.resident_bytes for stat in store_stats)
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/peak_resident_bytes_upper_bound"] = sum(
+        stat.peak_resident_bytes for stat in store_stats
+    )
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/max_shard_load_elapsed"] = max(
         stat.load_elapsed for stat in store_stats
+    )
+    output_counters[f"{_COUNTER_PREFIX}/timing/pool_start_elapsed"] = pool_start_elapsed
+    output_counters[f"{_COUNTER_PREFIX}/timing/pipeline_elapsed"] = pipeline_elapsed
+    output_counters[f"{_COUNTER_PREFIX}/timing/pool_shutdown_elapsed"] = shutdown_elapsed
+    output_counters[f"{_COUNTER_PREFIX}/timing/total_elapsed"] = total_elapsed
+    logger.info(
+        "Fuzzy verification wall times: pool startup %.2f seconds, memory-store load %.2f seconds, "
+        "pipeline %.2f seconds, pool shutdown %.2f seconds, total %.2f seconds",
+        pool_start_elapsed,
+        document_store.load_elapsed,
+        pipeline_elapsed,
+        shutdown_elapsed,
+        total_elapsed,
     )
     logger.info(
         "Verified %d fuzzy duplicates from %d candidate members across %d shards",
@@ -1008,6 +1317,7 @@ def verify_fuzzy_dups_step(
     coordinator_resources: ResourceConfig | None = None,
     map_task_resources: ResourceConfig | None = None,
     reduce_task_resources: ResourceConfig | None = None,
+    actor_environment: EnvironmentConfig | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a step that verifies one existing fuzzy-candidate artifact."""
@@ -1037,6 +1347,7 @@ def verify_fuzzy_dups_step(
             coordinator_resources=coordinator_resources,
             map_task_resources=map_task_resources,
             reduce_task_resources=reduce_task_resources,
+            actor_environment=actor_environment,
         ),
         hash_attrs={
             "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,

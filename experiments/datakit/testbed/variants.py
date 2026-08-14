@@ -78,6 +78,7 @@ _FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
     recovery_timeout=1_800,
     ready_timeout=1_800,
     lookup_batch_size=128,
+    shards_per_worker=1,
 )
 _CONSOLIDATE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 
