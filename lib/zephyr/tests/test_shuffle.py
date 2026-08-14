@@ -7,10 +7,13 @@ Covers the scatter write/read roundtrip, per-shard stats, and external sort —
 without spinning up a full coordinator.
 """
 
+import io
 import itertools
 import os
+import threading
 from collections import OrderedDict
 from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
 import cloudpickle
@@ -30,6 +33,7 @@ from zephyr.shuffle import (
     ScatterWriter,
     _dataframe_to_items,
     _items_to_dataframe,
+    _unify_frame_schemas,
     _write_scatter,
 )
 from zephyr.worker_context import _worker_ctx_var
@@ -138,6 +142,63 @@ def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
             },
         )
     ]
+
+
+@pytest.fixture
+def transient_parquet_url() -> Iterator[str]:
+    buffer = io.BytesIO()
+    pl.DataFrame({"value": [1]}).write_parquet(buffer)
+    parquet_data = buffer.getvalue()
+
+    class TransientParquetHandler(BaseHTTPRequestHandler):
+        get_count = 0
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            pass
+
+        def do_HEAD(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(parquet_data)))
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+
+        def do_GET(self) -> None:
+            type(self).get_count += 1
+            range_header = self.headers.get("Range")
+            if range_header is None:
+                start, end = 0, len(parquet_data) - 1
+                self.send_response(200)
+            else:
+                start_text, end_text = range_header.removeprefix("bytes=").split("-", 1)
+                start = int(start_text)
+                end = int(end_text) if end_text else len(parquet_data) - 1
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {start}-{end}/{len(parquet_data)}")
+
+            payload = parquet_data[start : end + 1]
+            if type(self).get_count == 1:
+                payload = bytes(len(payload))
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), TransientParquetHandler) as server:
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            yield f"http://127.0.0.1:{server.server_port}/file.parquet"
+        finally:
+            server.shutdown()
+            thread.join()
+
+
+def test_unify_frame_schemas_retries_transient_compute_error(transient_parquet_url: str):
+    transient = pl.scan_parquet(transient_parquet_url)
+    stable = pl.DataFrame({"value": [1]}).lazy()
+
+    unified = _unify_frame_schemas([(transient_parquet_url, transient), ("memory", stable)])
+
+    assert [frame.collect().to_dicts() for frame in unified] == [[{"value": 1}], [{"value": 1}]]
 
 
 def test_scatter_roundtrip_sorted_chunks(tmp_path):
