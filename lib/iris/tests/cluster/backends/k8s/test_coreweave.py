@@ -362,7 +362,6 @@ def test_start_controller_creates_controller_resources():
 def test_start_controller_mounts_task_cache_in_node_agent_when_reclaim_enabled():
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
-    cluster_config.endpoints["/system/log-server"] = EndpointSpec(uri="http://finelog:10001")
     cluster_config.kubernetes_provider.cache_dir = "/mnt/local/iris-cache"
     cluster_config.kubernetes_provider.cache_max_age = Duration.from_hours(24)
     _seed_prerequisites(k8s, cluster_config)

@@ -7,12 +7,9 @@ from __future__ import annotations
 
 import logging
 import math
-import os
-import shutil
 import threading
 import time
 import urllib.request
-import uuid
 from collections import defaultdict
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -24,12 +21,13 @@ from finelog.client import LogClient
 from finelog.client.log_client import Table
 from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
 from rigging import telemetry
-from rigging.timing import Duration
 
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH, resolve_endpoint_uri
 from iris.cluster.node_agent import SERVICE_NAME
+from iris.cluster.node_agent.cache_reclaim import run_cache_reclaimer
 from iris.cluster.node_agent.metrics import DeviceMetric, NodeMetrics, NodeTarget, publish_node_telemetry
+from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
 from iris.cluster.platforms.k8s.types import (
     IRIS_ATTEMPT_ID_LABEL,
@@ -47,7 +45,6 @@ from iris.rpc import job_pb2
 logger = logging.getLogger(__name__)
 
 DEFAULT_COLLECTION_INTERVAL = 30.0
-CACHE_RECLAIM_INTERVAL = Duration.from_minutes(5)
 K8S_API_TIMEOUT = 2.0
 NODE_EXPORTER_ADDRESS = "127.0.0.1"
 _K8S_GPU_MODEL_LABELS = ("nvidia.com/gpu.product", "gpu.nvidia.com/model")
@@ -92,9 +89,6 @@ _MAX_SCRAPE_BYTES = 16 << 20
 _MAX_DCGM_SAMPLES = 32_768
 _MAX_DCGM_DEVICES = 256
 _MAX_DCGM_EXPORTERS = 512
-_TERMINAL_POD_PHASES = {"Failed", "Succeeded"}
-_CACHE_RECLAIM_PREFIX = ".iris-reclaim-"
-
 # One injectable seam so tests exercise the parsing/aggregation without a network.
 Fetch = Callable[[str], str | None]
 
@@ -306,96 +300,6 @@ class TaskStatsCollector:
             del self._previous_cpu[pod_name]
         for pod_name in self._memory_peak.keys() - live_pods:
             del self._memory_peak[pod_name]
-
-
-def _entry_last_modified(entry: Path) -> float:
-    latest = entry.lstat().st_mtime
-    if entry.is_symlink() or not entry.is_dir():
-        return latest
-
-    errors: list[OSError] = []
-    for root, directories, files in os.walk(entry, followlinks=False, onerror=errors.append):
-        for name in directories + files:
-            try:
-                latest = max(latest, (Path(root) / name).lstat().st_mtime)
-            except FileNotFoundError:
-                continue
-    if errors:
-        raise errors[0]
-    return latest
-
-
-def _remove_cache_entry(entry: Path) -> None:
-    if entry.name.startswith(_CACHE_RECLAIM_PREFIX):
-        tombstone = entry
-    else:
-        # A task scheduled after the idle-node check can refill the original path
-        # without racing the slower recursive deletion.
-        tombstone = entry.with_name(f"{_CACHE_RECLAIM_PREFIX}{uuid.uuid4().hex}")
-        entry.rename(tombstone)
-    if tombstone.is_symlink() or not tombstone.is_dir():
-        tombstone.unlink()
-    else:
-        shutil.rmtree(tombstone)
-
-
-def reclaim_cache(
-    cache_dir: Path,
-    *,
-    max_age: Duration,
-    kubectl: K8sService,
-    node_name: str,
-    now: float | None = None,
-) -> int:
-    """Remove stale top-level cache entries while this node has no Iris tasks."""
-    labels = {IRIS_MANAGED_LABEL: "true", IRIS_RUNTIME_LABEL: IRIS_KUBERNETES_RUNTIME}
-    try:
-        pods = kubectl.list_json(
-            K8sResource.PODS,
-            labels=labels,
-            field_selector=f"spec.nodeName={node_name}",
-        )
-    except KubectlError as error:
-        logger.warning("cache reclamation could not inspect tasks on node %s: %s", node_name, error)
-        return 0
-    if any(pod.get("status", {}).get("phase", "") not in _TERMINAL_POD_PHASES for pod in pods):
-        return 0
-    if not cache_dir.exists():
-        return 0
-
-    cutoff = (time.time() if now is None else now) - max_age.to_seconds()
-    reclaimed = 0
-    for namespace in cache_dir.iterdir():
-        if namespace.is_symlink() or not namespace.is_dir():
-            continue
-        for entry in namespace.iterdir():
-            try:
-                if not entry.name.startswith(_CACHE_RECLAIM_PREFIX) and _entry_last_modified(entry) > cutoff:
-                    continue
-                _remove_cache_entry(entry)
-                reclaimed += 1
-            except FileNotFoundError:
-                continue
-            except OSError as error:
-                logger.warning("could not reclaim cache entry %s: %s", entry, error)
-    if reclaimed:
-        logger.info("reclaimed %d stale cache entries from %s", reclaimed, cache_dir)
-    return reclaimed
-
-
-def _reclaim_cache_until_stopped(
-    cache_dir: Path,
-    max_age: Duration,
-    kubectl: K8sService,
-    node_name: str,
-    stop: threading.Event,
-) -> None:
-    while not stop.is_set():
-        try:
-            reclaim_cache(cache_dir, max_age=max_age, kubectl=kubectl, node_name=node_name)
-        except OSError:
-            logger.exception("cache reclamation failed for %s", cache_dir)
-        stop.wait(CACHE_RECLAIM_INTERVAL.to_seconds())
 
 
 def _is_physical_iface(device: str) -> bool:
@@ -862,42 +766,55 @@ def collect_once(
     telemetry.record_runtime_health()
 
 
-def run(config_path: Path, node_name: str, namespace: str, stop: threading.Event) -> None:
-    """Collect telemetry until the process receives a shutdown signal."""
-    config = load_config(config_path)
+def _collect_telemetry(config: IrisClusterConfig, k8s: CloudK8sService, node_name: str, stop: threading.Event) -> None:
     log_service_endpoint = _log_service_endpoint(config)
     endpoint = log_service_endpoint + TELEMETRY_ENDPOINT_PATH
-    k8s = CloudK8sService(namespace=namespace, timeout=K8S_API_TIMEOUT)
     target = _node_target(k8s, node_name)
     log_client = LogClient.connect(log_service_endpoint)
-    task_stats_collector = TaskStatsCollector(
-        k8s,
-        node_name,
-        log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat),
-    )
-    telemetry.configure(
-        endpoint=endpoint,
-        service=SERVICE_NAME,
-        attributes={"node_name": target.name, "node_uid": target.node_uid, "role": str(telemetry.TelemetryRole.WORKER)},
-    )
-    scraper = NodeStatsScraper(k8s)
+    try:
+        task_stats_collector = TaskStatsCollector(
+            k8s,
+            node_name,
+            log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat),
+        )
+        telemetry.configure(
+            endpoint=endpoint,
+            service=SERVICE_NAME,
+            attributes={
+                "node_name": target.name,
+                "node_uid": target.node_uid,
+                "role": str(telemetry.TelemetryRole.WORKER),
+            },
+        )
+        scraper = NodeStatsScraper(k8s)
+        while not stop.is_set():
+            collect_once(scraper, target, task_stats_collector)
+            stop.wait(DEFAULT_COLLECTION_INTERVAL)
+    finally:
+        log_client.close()
+        telemetry.shutdown(5.0)
+
+
+def run(config_path: Path, node_name: str, namespace: str, stop: threading.Event) -> None:
+    """Run configured node maintenance and telemetry until shutdown."""
+    config = load_config(config_path)
+    k8s = CloudK8sService(namespace=namespace, timeout=K8S_API_TIMEOUT)
     cache_reclaimer: threading.Thread | None = None
     if config.kubernetes_provider.cache_max_age is not None:
-        cache_dir = Path(config.kubernetes_provider.cache_dir or "/cache")
+        cache_dir = Path(config.kubernetes_provider.cache_dir or DEFAULT_TASK_CACHE_DIR)
         cache_reclaimer = threading.Thread(
-            target=_reclaim_cache_until_stopped,
+            target=run_cache_reclaimer,
             args=(cache_dir, config.kubernetes_provider.cache_max_age, k8s, node_name, stop),
             name="cache-reclaimer",
             daemon=True,
         )
         cache_reclaimer.start()
     try:
-        while not stop.is_set():
-            collect_once(scraper, target, task_stats_collector)
-            stop.wait(DEFAULT_COLLECTION_INTERVAL)
+        if config.finelog.config or LOG_SERVER_ENDPOINT_NAME in config.endpoints:
+            _collect_telemetry(config, k8s, node_name, stop)
+        else:
+            stop.wait()
     finally:
         stop.set()
         if cache_reclaimer is not None:
             cache_reclaimer.join(timeout=10.0)
-        log_client.close()
-        telemetry.shutdown(5.0)

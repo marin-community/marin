@@ -45,7 +45,11 @@ from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
+from iris.cluster.platforms.k8s.constants import (
+    COREWEAVE_INTERRUPTABLE_TOLERATION,
+    DEFAULT_TASK_CACHE_DIR,
+    NVIDIA_GPU_TOLERATION,
+)
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_LEAFGROUP,
     COSCHEDULE_NVLINK_DOMAIN,
@@ -482,7 +486,7 @@ class PodConfig:
     # sidecar instead runs the iris controller image (iris + finelog installed),
     # which can launch `python -m iris.cluster.backends.k8s.logship` directly.
     logship_image: str = ""
-    cache_dir: str = "/cache"
+    cache_dir: str = DEFAULT_TASK_CACHE_DIR
     service_account: str = ""
     host_network: bool = False
     controller_address: str | None = None
