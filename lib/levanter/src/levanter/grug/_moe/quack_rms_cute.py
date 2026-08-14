@@ -255,19 +255,20 @@ def _build_gate_silu_dact_launcher(
     @cute.jit
     def launcher(
         stream,
-        mNormalizedAndGateAccumulator,
+        mNormalized,
         mOutputCotangent,
         mGate,
         mWUp,
         mGatePreactivation,
+        mGateAccumulator,
         mGatePreactivationCotangent,
         mGateHidden,
     ):
         _GateAccumulatorInplace(a_dtype)(
-            mNormalizedAndGateAccumulator,
+            mNormalized,
             mOutputCotangent,
             mGate,
-            mNormalizedAndGateAccumulator,
+            mGateAccumulator,
             stream,
         )
         dact_gemm = GemmDActSm100(
@@ -279,7 +280,7 @@ def _build_gate_silu_dact_launcher(
             use_clc_persistence=False,
         )
         dact_gemm(
-            mNormalizedAndGateAccumulator,
+            mGateAccumulator,
             mWUp,
             mGatePreactivationCotangent,
             mGatePreactivation,
@@ -757,7 +758,6 @@ def _quack_coda_gate_silu_dact_components(
     matrix_spec = cjax.TensorSpec(mode=_MATRIX_MODE, divisibility=_MATRIX_DIVISIBILITY, static=False)
     call = cutlass_call(
         launcher,
-        input_output_aliases={0: 0},
         output_shape_dtype=(
             jax.ShapeDtypeStruct((1, rows, hidden_dim), normalized.dtype),
             jax.ShapeDtypeStruct((1, rows, rank), normalized.dtype),
