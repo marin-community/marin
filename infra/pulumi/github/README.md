@@ -38,6 +38,11 @@ Keep service-account JSON and SSH credentials until their workflows use OIDC. Gi
 environments, repository settings, and other non-secret resources can be added here as normally
 managed Pulumi resources.
 
+The `LOOM_FORK_FERRY_PROFILE` repository variable is derived from the production Loom
+stack's `githubFederationProfiles` output. Deploy the Loom stack first when changing the
+mapping or profile name; the stack reference then keeps the workflow variable aligned with
+the profile authorized by Loom.
+
 ## Dependency updater app
 
 The external-runtime and native-package dependency workflows share a private, repository-scoped

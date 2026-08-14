@@ -195,10 +195,8 @@ class StepRunner:
     ) -> None:
         """Eagerly run steps, launching each as soon as its deps are satisfied.
 
-        Steps are pulled from the iterable one at a time, so unbounded
-        generators are supported: the runner never consumes more than it
-        needs to make progress. For each pulled step, its unseen transitive
-        deps are scheduled in post-order before the step itself (deduped by
+        For each step pulled from the iterable, its unseen transitive deps are
+        scheduled in post-order before the step itself (deduped by
         ``output_path`` across the whole run). Already-succeeded deps
         (``STATUS_SUCCESS`` on disk) resolve via the cache check.
         Concurrency is bounded by the thread pool (``max_concurrent``
