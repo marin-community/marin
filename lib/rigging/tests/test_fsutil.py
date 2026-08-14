@@ -21,11 +21,11 @@ from rigging.fsutil.render import file_lines
 from rigging.fsutil.usage import (
     PrefixGroup,
     UsageStats,
-    adaptive_prefix_groups,
     parse_byte_size,
     ranked_groups,
     render_usage_report,
     scan_usage,
+    threshold_prefix_groups,
 )
 
 
@@ -242,8 +242,14 @@ def test_ls_glob_renders_matches_with_listing_metadata(monkeypatch):
 
 def test_du_scans_directories_in_parallel_using_listing_metadata(monkeypatch):
     class ParallelListingFileSystem:
+        protocol = "gcs"
+
         def __init__(self):
             self.child_listings_started = threading.Barrier(2)
+
+        def info(self, path):
+            assert path == "bucket/root"
+            return {"name": path, "size": 0, "type": "directory"}
 
         def ls(self, path, *, detail):
             assert detail is True
@@ -269,10 +275,10 @@ def test_du_scans_directories_in_parallel_using_listing_metadata(monkeypatch):
 
     monkeypatch.setattr(listing, "filesystem_for", lambda _url: (ParallelListingFileSystem(), "bucket/root"))
 
-    assert listing.total_size("s3://bucket/root") == (36, 4)
+    assert listing.total_size("gs://bucket/root") == (36, 4)
 
 
-def test_usage_scan_builds_thresholded_non_overlapping_prefix_groups(monkeypatch):
+def test_usage_scan_descends_to_exact_prefixes_below_threshold_and_orders_by_size(monkeypatch):
     old = datetime(2020, 1, 1, tzinfo=UTC)
     recent = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -306,19 +312,21 @@ def test_usage_scan_builds_thresholded_non_overlapping_prefix_groups(monkeypatch
     monkeypatch.setattr(listing, "filesystem_for", lambda _url: (UsageFileSystem(), "bucket"))
 
     scan = scan_usage("s3://bucket", workers=4)
-    groups = adaptive_prefix_groups(scan, min_size_bytes=100)
+    groups = threshold_prefix_groups(scan, threshold_bytes=100)
 
     assert scan.root.total == UsageStats(size_bytes=270, object_count=6, last_modified=recent)
-    assert {group.label: group.stats.size_bytes for group in groups} == {
-        "[root objects]": 10,
-        "scratch/": 50,
-        "users/iris/a/ … b/": 110,
-        "users/iris/c/ … d/": 100,
-    }
+    assert [(group.label, group.stats.size_bytes) for group in groups] == [
+        ("users/iris/c/", 70),
+        ("users/iris/a/", 60),
+        ("scratch/", 50),
+        ("users/iris/b/", 50),
+        ("users/iris/d/", 30),
+        ("[root objects]", 10),
+    ]
     assert sum(group.stats.size_bytes for group in groups) == scan.root.total.size_bytes
 
-    report = render_usage_report(scan, min_size_bytes=100, generated_at=datetime(2026, 8, 14, tzinfo=UTC))
-    assert "s3://bucket/users/iris/a/ … b/" in report
+    report = render_usage_report(scan, threshold_bytes=100, generated_at=datetime(2026, 8, 14, tzinfo=UTC))
+    assert "s3://bucket/users/iris/c/" in report
 
 
 def test_usage_scan_streams_and_merges_s3_listing_pages(monkeypatch):
@@ -333,6 +341,10 @@ def test_usage_scan_streams_and_merges_s3_listing_pages(monkeypatch):
         def split_path(self, path):
             bucket, _, key = path.partition("/")
             return bucket, key, None
+
+        def info(self, path):
+            assert path == "bucket"
+            return {"name": path, "size": 0, "type": "directory"}
 
         def call_s3(self, method, **kwargs):
             assert method == "list_objects_v2"
@@ -375,7 +387,10 @@ def test_usage_scan_streams_and_merges_s3_listing_pages(monkeypatch):
         "users/": 30,
     }
     assert set(fs.requested_prefixes) == {"", "scratch//", "users/", "users/iris/"}
-    assert progress[-1].prefixes_scanned == progress[-1].prefixes_discovered == 4
+    assert progress[-1].phase == listing.ListingPhase.SCANNING
+    assert progress[-1].listing_pages == 5
+    assert progress[-1].prefixes_completed == progress[-1].prefixes_discovered == 1
+    assert listing.total_size("s3://bucket") == (100, 5)
 
 
 def test_usage_ranking_combines_reclaimable_size_with_inactivity():

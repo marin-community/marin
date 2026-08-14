@@ -15,6 +15,7 @@ from collections import deque
 from collections.abc import Iterable, Iterator
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 from rigging.filesystem.buckets import filesystem_for
@@ -60,6 +61,25 @@ class Entry:
     size: int | None
     mtime: datetime | None
     is_dir: bool
+
+
+class ListingPhase(StrEnum):
+    """Stage of a recursive metadata listing."""
+
+    DISCOVERING = "discovering"
+    SCANNING = "scanning"
+
+
+@dataclasses.dataclass(frozen=True)
+class ListingPage:
+    """One metadata page and aggregate progress for its listing."""
+
+    path: str
+    entries: list[dict[str, Any]]
+    phase: ListingPhase
+    pages_completed: int
+    prefixes_completed: int
+    prefixes_discovered: int
 
 
 @dataclasses.dataclass(frozen=True)
@@ -192,41 +212,58 @@ def _read_preview(fs, path: str, *, compression: str | None, full_size: int | No
 def total_size(url: str) -> tuple[int, int]:
     """Return ``(bytes, object_count)`` under *url*."""
     fs, path = filesystem_for(url)
-    root_entries = fs.ls(path, detail=True)
-    if len(root_entries) == 1 and not is_child(path, root_entries[0]["name"]):
-        entry = root_entries[0]
-        if entry["type"] != _DIRECTORY_TYPE:
-            return entry.get("size", 0) or 0, 1
+    info = fs.info(path)
+    if info["type"] != _DIRECTORY_TYPE:
+        return info.get("size", 0) or 0, 1
 
-    root_stats = _listing_stats(path, root_entries)
-    total = root_stats.size
-    count = root_stats.count
-    queued = deque(root_stats.directories)
-    if not queued:
-        return total, count
-
-    for directory, entries in _directory_listing_pages(fs, queued, DEFAULT_LISTING_WORKERS):
-        stats = _listing_stats(directory, entries)
+    total = 0
+    count = 0
+    for page in _metadata_listing_pages(fs, path, DEFAULT_LISTING_WORKERS):
+        stats = _listing_stats(page.path, page.entries)
         total += stats.size
         count += stats.count
     return total, count
 
 
-def metadata_listing_pages(
-    url: str, *, workers: int = DEFAULT_LISTING_WORKERS
-) -> Iterator[tuple[str, list[dict[str, Any]]]]:
+def metadata_listing_pages(url: str, *, workers: int = DEFAULT_LISTING_WORKERS) -> Iterator[ListingPage]:
     """Yield independent metadata pages covering every object below *url*."""
     fs, path = filesystem_for(url)
+    yield from _metadata_listing_pages(fs, path, workers)
+
+
+def _metadata_listing_pages(fs, path: str, workers: int) -> Iterator[ListingPage]:
     protocol = getattr(fs, "protocol", ())
     protocols = (protocol,) if isinstance(protocol, str) else protocol
     if "s3" in protocols:
-        yield from _recursive_s3_listings(fs, path, workers)
+        yield from _s3_listing_pages(fs, path, workers)
         return
 
     root_entries = fs.ls(path, detail=True)
-    yield path, root_entries
+    directories = _listing_stats(path, root_entries).directories
+    prefixes_discovered = len(directories) + 1
+    yield ListingPage(
+        path=path,
+        entries=root_entries,
+        phase=ListingPhase.SCANNING,
+        pages_completed=1,
+        prefixes_completed=1,
+        prefixes_discovered=prefixes_discovered,
+    )
 
-    yield from _directory_listing_pages(fs, _listing_stats(path, root_entries).directories, workers)
+    pages_completed = 1
+    prefixes_completed = 1
+    for directory, entries in _directory_listing_pages(fs, directories, workers):
+        pages_completed += 1
+        prefixes_completed += 1
+        prefixes_discovered += len(_listing_stats(directory, entries).directories)
+        yield ListingPage(
+            path=directory,
+            entries=entries,
+            phase=ListingPhase.SCANNING,
+            pages_completed=pages_completed,
+            prefixes_completed=prefixes_completed,
+            prefixes_discovered=prefixes_discovered,
+        )
 
 
 def _directory_listing_pages(fs, directories: Iterable[str], workers: int) -> Iterator[tuple[str, list[dict[str, Any]]]]:
@@ -246,30 +283,67 @@ def _directory_listing_pages(fs, directories: Iterable[str], workers: int) -> It
                 yield directory, entries
 
 
-def _recursive_s3_listings(fs, path: str, workers: int) -> Iterator[tuple[str, list[dict[str, Any]]]]:
-    """Fan out two S3 prefix levels, then stream each leaf as a flat listing."""
+def _s3_listing_pages(fs, path: str, workers: int) -> Iterator[ListingPage]:
+    leaf_prefixes: set[str] = set()
     queued = deque([(path, None, 0)])
     scheduled_prefixes = {path}
+    pages_completed = 0
     with ThreadPoolExecutor(max_workers=workers) as executor:
         pending = {}
         while queued or pending:
             while queued and len(pending) < workers:
                 listed, continuation_token, depth = queued.popleft()
-                delimiter = "/" if depth < _S3_SPLIT_DEPTH else ""
-                future = executor.submit(_s3_listing_page, fs, listed, continuation_token, delimiter)
+                future = executor.submit(_s3_listing_page, fs, listed, continuation_token, "/")
                 pending[future] = (listed, depth)
 
             completed, _ = wait(pending, return_when=FIRST_COMPLETED)
             for future in completed:
                 listed, depth = pending.pop(future)
                 entries, continuation_token = future.result()
+                pages_completed += 1
                 if continuation_token is not None:
                     queued.appendleft((listed, continuation_token, depth))
                 for directory in _listing_stats(listed, entries).directories:
-                    if directory not in scheduled_prefixes:
+                    if depth + 1 < _S3_SPLIT_DEPTH and directory not in scheduled_prefixes:
                         scheduled_prefixes.add(directory)
                         queued.append((directory, None, depth + 1))
-                yield listed, entries
+                    elif depth + 1 == _S3_SPLIT_DEPTH:
+                        leaf_prefixes.add(directory)
+                yield ListingPage(
+                    path=listed,
+                    entries=entries,
+                    phase=ListingPhase.DISCOVERING,
+                    pages_completed=pages_completed,
+                    prefixes_completed=0,
+                    prefixes_discovered=len(leaf_prefixes),
+                )
+
+        queued_pages = deque((prefix_path, None) for prefix_path in sorted(leaf_prefixes))
+        prefixes_completed = 0
+        pending = {}
+        while queued_pages or pending:
+            while queued_pages and len(pending) < workers:
+                listed, continuation_token = queued_pages.popleft()
+                future = executor.submit(_s3_listing_page, fs, listed, continuation_token, "")
+                pending[future] = listed
+
+            completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in completed:
+                listed = pending.pop(future)
+                entries, continuation_token = future.result()
+                pages_completed += 1
+                if continuation_token is not None:
+                    queued_pages.appendleft((listed, continuation_token))
+                else:
+                    prefixes_completed += 1
+                yield ListingPage(
+                    path=listed,
+                    entries=entries,
+                    phase=ListingPhase.SCANNING,
+                    pages_completed=pages_completed,
+                    prefixes_completed=prefixes_completed,
+                    prefixes_discovered=len(leaf_prefixes),
+                )
 
 
 def _s3_listing_page(

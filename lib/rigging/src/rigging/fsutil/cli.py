@@ -28,6 +28,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.fsutil.listing import (
     ROOT,
     Entry,
+    ListingPhase,
     Preview,
     list_entries,
     read_decompressed_preview,
@@ -47,6 +48,9 @@ _COPY_CHUNK = 8 * 1024 * 1024
 _RM_WORKERS = 8
 _S3_DELETE_BATCH = 1000
 _GCS_DELETE_BATCH = 20
+_PROGRESS_WIDTH = 24
+_INTERACTIVE_PROGRESS_INTERVAL = 0.2
+_LOG_PROGRESS_INTERVAL = 10.0
 
 
 @click.group(invoke_without_command=True)
@@ -140,45 +144,112 @@ def du(url: str) -> None:
 @cli.command()
 @click.argument("url")
 @click.option(
-    "--min-prefix-size",
+    "--prefix-threshold",
     default="1TiB",
     show_default=True,
-    help="Smallest prefix group; accepts values such as 1TB or 512GiB.",
+    help="Descend into prefixes at or above this size; accepts values such as 1TB or 512GiB.",
+)
+@click.option(
+    "--prefix-depth",
+    default=3,
+    show_default=True,
+    type=click.IntRange(min=1, max=20),
+    help="Maximum path components retained for grouping.",
 )
 @click.option("--workers", default=DEFAULT_USAGE_WORKERS, show_default=True, type=click.IntRange(min=1, max=128))
 @click.option("-o", "--output", type=click.Path(dir_okay=False, path_type=Path), help="Write Markdown here.")
-def usage(url: str, min_prefix_size: str, workers: int, output: Path | None) -> None:
+def usage(url: str, prefix_threshold: str, prefix_depth: int, workers: int, output: Path | None) -> None:
     """Scan URL metadata and rank old, large prefixes for cleanup."""
     try:
-        min_size_bytes = parse_byte_size(min_prefix_size)
+        threshold_bytes = parse_byte_size(prefix_threshold)
     except ValueError as error:
-        raise click.BadParameter(str(error), param_hint="--min-prefix-size") from error
+        raise click.BadParameter(str(error), param_hint="--prefix-threshold") from error
 
     click.echo(f"Scanning object metadata under {url} ...", err=True)
     last_update = time.monotonic()
+    rendered_width = 0
+    latest_progress: ScanProgress | None = None
+    interactive = click.get_text_stream("stderr").isatty()
 
     def show_progress(progress: ScanProgress) -> None:
-        nonlocal last_update
+        nonlocal last_update, latest_progress, rendered_width
+        latest_progress = progress
         now = time.monotonic()
-        if now - last_update < 10:
-            return
-        click.echo(
-            f"  {progress.prefixes_scanned:,}/{progress.prefixes_discovered:,} prefixes, "
-            f"{progress.stats.object_count:,} objects, {format_size(progress.stats.size_bytes)}",
-            err=True,
+        interval = _INTERACTIVE_PROGRESS_INTERVAL if interactive else _LOG_PROGRESS_INTERVAL
+        complete = progress.phase == ListingPhase.SCANNING and (
+            progress.prefixes_completed == progress.prefixes_discovered
         )
+        if not complete and now - last_update < interval:
+            return
+        line = _scan_progress_line(progress)
+        if interactive:
+            rendered_width = max(rendered_width, len(line))
+            click.echo(f"\r{line.ljust(rendered_width)}", nl=False, err=True)
+        else:
+            click.echo(line, err=True)
         last_update = now
 
     try:
-        scan = scan_usage(url, workers=workers, progress=show_progress)
+        scan = scan_usage(url, workers=workers, prefix_depth=prefix_depth, progress=show_progress)
     except MissingCredentials as error:
         raise click.ClickException(str(error)) from error
-    report = render_usage_report(scan, min_size_bytes=min_size_bytes, generated_at=datetime.now(UTC))
+    if latest_progress is not None:
+        line = _finished_scan_line(latest_progress)
+        if interactive:
+            click.echo(f"\r{line.ljust(max(rendered_width, len(line)))}", err=True)
+        else:
+            click.echo(line, err=True)
+    report = render_usage_report(scan, threshold_bytes=threshold_bytes, generated_at=datetime.now(UTC))
     if output is None:
         click.echo(report)
         return
     output.write_text(report)
     click.echo(f"Wrote {output} ({scan.root.total.object_count:,} objects)", err=True)
+
+
+def _scan_progress_line(progress: ScanProgress) -> str:
+    rate = progress.stats.object_count / progress.elapsed_seconds if progress.elapsed_seconds else 0.0
+    details = (
+        f"{progress.listing_pages:,} pages | {progress.stats.object_count:,} objects | "
+        f"{format_size(progress.stats.size_bytes)} | {rate:,.0f} obj/s"
+    )
+    if progress.phase == ListingPhase.DISCOVERING:
+        spinner = "|/-\\"[progress.listing_pages % 4]
+        return f"{spinner} Discovering scan prefixes | {details}"
+
+    total = progress.prefixes_discovered
+    completed = progress.prefixes_completed
+    ratio = completed / total if total else 1.0
+    filled = min(_PROGRESS_WIDTH, int(ratio * _PROGRESS_WIDTH))
+    bar = "=" * filled + "-" * (_PROGRESS_WIDTH - filled)
+    eta = _estimated_eta(progress)
+    eta_text = "calculating" if eta is None else f"~{_format_duration(eta)}"
+    return f"[{bar}] {completed:,}/{total:,} prefixes | {details} | ETA {eta_text}"
+
+
+def _estimated_eta(progress: ScanProgress) -> float | None:
+    if progress.phase != ListingPhase.SCANNING or progress.prefixes_completed <= 0:
+        return None
+    remaining = progress.prefixes_discovered - progress.prefixes_completed
+    return max(0.0, progress.phase_elapsed_seconds / progress.prefixes_completed * remaining)
+
+
+def _finished_scan_line(progress: ScanProgress) -> str:
+    return (
+        f"Scan complete | {progress.listing_pages:,} pages | {progress.stats.object_count:,} objects | "
+        f"{format_size(progress.stats.size_bytes)} | {_format_duration(progress.elapsed_seconds)}"
+    )
+
+
+def _format_duration(seconds: float) -> str:
+    rounded = max(0, round(seconds))
+    hours, remainder = divmod(rounded, 3600)
+    minutes, remaining_seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {remaining_seconds}s"
+    return f"{remaining_seconds}s"
 
 
 @cli.command()

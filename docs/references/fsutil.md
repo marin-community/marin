@@ -63,16 +63,22 @@ that touch its buckets; the rest keep working.
 uses S3's 1,000-key bulk delete and GCS's 20-key batch delete, with up to eight batches
 in flight.
 
-`usage` uses the same parallel, bucket-routed scanner as `du`, then writes a Markdown
-report. Prefixes are split as deeply as possible while keeping each displayed group at
-least 1 TiB by default. Smaller siblings are shown as a lexical range, while every
-top-level prefix remains visible even when it is smaller. `--min-prefix-size` changes
-the floor and accepts values such as `1TB`, `1TiB`, or `512GiB`.
+`usage` uses the same parallel metadata-page scanner as `du` and writes a Markdown
+report. Starting at the bucket root, it descends into every prefix at or above the
+1 TiB threshold and shows the resulting exact prefixes in descending size order.
+`--prefix-threshold` changes that threshold and accepts values such as `1TB`, `1TiB`,
+or `512GiB`. `--prefix-depth` controls how many path components the in-memory scan
+retains, with a default of three.
 
-Deletion candidates are ranked by stale TiB-years: group size in TiB multiplied by the
-years since the newest object write in that group. This favors prefixes that are both
-large and inactive. A ranged row such as `users/iris/a/ … d/` is a display rollup.
-Select concrete prefixes from the range before using `rm`.
+An interactive terminal shows separate prefix-discovery and scanning phases. During
+the scan, the progress bar includes completed prefixes, listing pages, objects, bytes,
+object rate, and an approximate ETA based on completed scan prefixes. Captured logs get
+the same counters every ten seconds without terminal control characters.
+
+Deletion candidates are ranked by stale TiB-years: prefix size in TiB multiplied by the
+years since its newest object write. This favors prefixes that are both large and
+inactive. `[objects]` labels cover objects written directly under the preceding prefix,
+and `[root objects]` covers the bucket root. All other rows are concrete prefixes.
 
 `cat`, `head`, and the browser decompress `.gz`, `.bz2`, `.xz`, and `.lzma` files by
 suffix. A `data.json.gz` preview uses the JSON table view. `cat --raw` writes the compressed

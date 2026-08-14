@@ -9,7 +9,13 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from rigging.fsutil.listing import DEFAULT_LISTING_WORKERS, entry_mtime, is_child, metadata_listing_pages
+from rigging.fsutil.listing import (
+    DEFAULT_LISTING_WORKERS,
+    ListingPhase,
+    entry_mtime,
+    is_child,
+    metadata_listing_pages,
+)
 from rigging.fsutil.render import format_size
 
 TIB = 1024**4
@@ -53,22 +59,27 @@ class UsageScan:
 
     url: str
     root: PrefixUsage
-    prefixes_scanned: int
+    prefix_depth: int
+    listing_pages: int
     elapsed_seconds: float
 
 
 @dataclasses.dataclass(frozen=True)
 class ScanProgress:
-    """Monotonic progress observed while directory listings complete."""
+    """Monotonic progress observed while metadata pages complete."""
 
-    prefixes_scanned: int
+    phase: ListingPhase
+    listing_pages: int
+    prefixes_completed: int
     prefixes_discovered: int
     stats: UsageStats
+    elapsed_seconds: float
+    phase_elapsed_seconds: float
 
 
 @dataclasses.dataclass(frozen=True)
 class PrefixGroup:
-    """One non-overlapping row in an adaptive prefix breakdown."""
+    """One non-overlapping row in a threshold prefix breakdown."""
 
     label: str
     stats: UsageStats
@@ -79,13 +90,6 @@ class _MutablePrefix:
     prefix: str
     direct: UsageStats = UsageStats()
     children: dict[str, "_MutablePrefix"] = dataclasses.field(default_factory=dict)
-
-
-@dataclasses.dataclass(frozen=True)
-class _Component:
-    label: str
-    stats: UsageStats
-    child: PrefixUsage | None
 
 
 def scan_usage(
@@ -106,35 +110,45 @@ def scan_usage(
     root = _MutablePrefix(prefix="")
     root_path: str | None = None
     observed = UsageStats()
-    discovered: set[str] = set()
-    scanned: set[str] = set()
+    listing_pages = 0
+    last_phase: ListingPhase | None = None
+    phase_started = started
+    last_page_at = started
 
-    for path, entries in metadata_listing_pages(url, workers=workers):
-        root_path = root_path or path.rstrip("/")
-        scanned.add(path.rstrip("/"))
-        for entry in entries:
+    for page in metadata_listing_pages(url, workers=workers):
+        now = time.monotonic()
+        if page.phase != last_phase:
+            last_phase = page.phase
+            phase_started = last_page_at
+        root_path = root_path or page.path.removesuffix("/")
+        listing_pages = page.pages_completed
+        for entry in page.entries:
             if entry.get("type") == "directory":
-                if is_child(path, entry["name"]):
-                    discovered.add(entry["name"].rstrip("/"))
                 continue
             stats = _object_usage(entry)
-            if stats is None or not is_child(path, entry["name"]):
+            if stats is None or not is_child(page.path, entry["name"]):
                 continue
             _add_object(root, root_path, entry["name"], stats, prefix_depth)
             observed += stats
         if progress is not None:
             progress(
                 ScanProgress(
-                    prefixes_scanned=len(scanned),
-                    prefixes_discovered=len(discovered) + 1,
+                    phase=page.phase,
+                    listing_pages=page.pages_completed,
+                    prefixes_completed=page.prefixes_completed,
+                    prefixes_discovered=page.prefixes_discovered,
                     stats=observed,
+                    elapsed_seconds=now - started,
+                    phase_elapsed_seconds=now - phase_started,
                 )
             )
+        last_page_at = now
 
     return UsageScan(
         url=url,
         root=_freeze(root),
-        prefixes_scanned=len(scanned),
+        prefix_depth=prefix_depth,
+        listing_pages=listing_pages,
         elapsed_seconds=time.monotonic() - started,
     )
 
@@ -150,7 +164,7 @@ def _object_usage(entry: dict) -> UsageStats | None:
 
 
 def _add_object(root: _MutablePrefix, root_path: str, name: str, stats: UsageStats, prefix_depth: int) -> None:
-    relative = name.removeprefix(root_path.rstrip("/") + "/")
+    relative = name.removeprefix(root_path.removesuffix("/") + "/")
     directories = relative.split("/")[:-1]
     node = root
     for segment in directories[:prefix_depth]:
@@ -167,91 +181,31 @@ def _freeze(node: _MutablePrefix) -> PrefixUsage:
     return PrefixUsage(prefix=node.prefix, direct=node.direct, total=total, children=children)
 
 
-def adaptive_prefix_groups(scan: UsageScan, min_size_bytes: int) -> list[PrefixGroup]:
-    """Partition a scan into readable, non-overlapping prefix groups.
-
-    Every group is at least *min_size_bytes* unless an entire top-level prefix
-    is smaller. Adjacent small siblings are collapsed into lexical ranges.
-    """
-    if min_size_bytes <= 0:
-        raise ValueError("min_size_bytes must be positive")
+def threshold_prefix_groups(scan: UsageScan, threshold_bytes: int) -> list[PrefixGroup]:
+    """Return exact prefixes found by descending while groups exceed a threshold."""
+    if threshold_bytes <= 0:
+        raise ValueError("threshold_bytes must be positive")
 
     groups = []
     if scan.root.direct.object_count:
         groups.append(PrefixGroup(label="[root objects]", stats=scan.root.direct))
     for child in scan.root.children:
-        groups.extend(_partition(child, min_size_bytes))
+        groups.extend(_threshold_groups(child, threshold_bytes))
     if not groups and scan.root.total.object_count:
         groups.append(PrefixGroup(label="[objects]", stats=scan.root.total))
-    return groups
+    return sorted(groups, key=lambda group: (-group.stats.size_bytes, group.label.casefold()))
 
 
-def _partition(node: PrefixUsage, min_size_bytes: int) -> list[PrefixGroup]:
-    if node.total.size_bytes < min_size_bytes or not node.children:
-        return [PrefixGroup(label=node.prefix, stats=node.total)]
-    if not node.direct.object_count and len(node.children) == 1:
-        return _partition(node.children[0], min_size_bytes)
-
-    components = []
-    if node.direct.object_count:
-        components.append(_Component(label="[objects]", stats=node.direct, child=None))
-    components.extend(
-        _Component(label=_segment(child.prefix), stats=child.total, child=child) for child in node.children
-    )
-    chunks = _size_chunks(components, min_size_bytes)
-    if len(chunks) == 1 and len(chunks[0]) == len(components):
+def _threshold_groups(node: PrefixUsage, threshold_bytes: int) -> list[PrefixGroup]:
+    if node.total.size_bytes < threshold_bytes or not node.children:
         return [PrefixGroup(label=node.prefix, stats=node.total)]
 
     groups = []
-    for chunk in chunks:
-        if len(chunk) == 1 and chunk[0].child is not None:
-            groups.extend(_partition(chunk[0].child, min_size_bytes))
-            continue
-        stats = UsageStats()
-        for component in chunk:
-            stats += component.stats
-        first = chunk[0].label
-        last = chunk[-1].label
-        suffix = first if first == last else f"{first} … {last}"
-        groups.append(PrefixGroup(label=f"{node.prefix}{suffix}", stats=stats))
+    if node.direct.object_count:
+        groups.append(PrefixGroup(label=f"{node.prefix}[objects]", stats=node.direct))
+    for child in node.children:
+        groups.extend(_threshold_groups(child, threshold_bytes))
     return groups
-
-
-def _size_chunks(components: list[_Component], min_size_bytes: int) -> list[list[_Component]]:
-    chunks: list[list[_Component]] = []
-    pending: list[_Component] = []
-    pending_bytes = 0
-    for component in components:
-        if component.stats.size_bytes >= min_size_bytes:
-            if pending:
-                chunks.append(pending)
-                pending = []
-                pending_bytes = 0
-            chunks.append([component])
-            continue
-        pending.append(component)
-        pending_bytes += component.stats.size_bytes
-        if pending_bytes >= min_size_bytes:
-            chunks.append(pending)
-            pending = []
-            pending_bytes = 0
-    if pending:
-        chunks.append(pending)
-
-    index = 0
-    while len(chunks) > 1 and index < len(chunks):
-        chunk_size = sum(component.stats.size_bytes for component in chunks[index])
-        if chunk_size >= min_size_bytes:
-            index += 1
-            continue
-        if index == 0:
-            chunks[1] = chunks[0] + chunks[1]
-            chunks.pop(0)
-        else:
-            chunks[index - 1].extend(chunks[index])
-            chunks.pop(index)
-            index -= 1
-    return chunks
 
 
 def stale_tib_years(stats: UsageStats, now: datetime) -> float | None:
@@ -272,10 +226,10 @@ def ranked_groups(groups: list[PrefixGroup], now: datetime) -> list[PrefixGroup]
     )
 
 
-def render_usage_report(scan: UsageScan, *, min_size_bytes: int, generated_at: datetime) -> str:
+def render_usage_report(scan: UsageScan, *, threshold_bytes: int, generated_at: datetime) -> str:
     """Render a self-contained Markdown usage and deletion-candidate report."""
     now = generated_at.replace(tzinfo=UTC) if generated_at.tzinfo is None else generated_at.astimezone(UTC)
-    groups = adaptive_prefix_groups(scan, min_size_bytes)
+    groups = threshold_prefix_groups(scan, threshold_bytes)
     ranked = ranked_groups(groups, now)
     total = scan.root.total
     lines = [
@@ -284,14 +238,13 @@ def render_usage_report(scan: UsageScan, *, min_size_bytes: int, generated_at: d
         f"- Target: `{_markdown_code(scan.url)}`",
         f"- Generated: {now.isoformat(timespec='seconds')}",
         f"- Total: {format_size(total.size_bytes)} across {total.object_count:,} objects",
-        f"- Scan: {scan.prefixes_scanned:,} prefixes in {scan.elapsed_seconds:.1f}s (metadata only)",
-        f"- Grouping floor: {format_size(min_size_bytes)}; smaller siblings are combined, "
-        "while small top-level prefixes remain visible",
+        f"- Scan: {scan.listing_pages:,} listing pages in {scan.elapsed_seconds:.1f}s (metadata only)",
+        f"- Prefix threshold: {format_size(threshold_bytes)}; prefixes at or above it are expanded "
+        f"through {scan.prefix_depth} path components",
         "",
         "## Ranked deletion candidates",
         "",
-        "Score is stale TiB-years: TiB reclaimed x years since the newest write in the group. "
-        "Range labels combine adjacent siblings and cannot be passed directly as deletion prefixes.",
+        "Score is stale TiB-years: TiB reclaimed x years since the newest write in the prefix.",
         "",
         "| Rank | Score | Size | Share | Objects | Last written | Age | Prefix |",
         "| ---: | ---: | ---: | ---: | ---: | --- | ---: | --- |",
@@ -314,7 +267,7 @@ def render_usage_report(scan: UsageScan, *, min_size_bytes: int, generated_at: d
             "| --- | ---: | ---: | ---: | --- |",
         ]
     )
-    for group in sorted(groups, key=lambda item: item.label.casefold()):
+    for group in groups:
         share = group.stats.size_bytes / total.size_bytes if total.size_bytes else 0.0
         lines.append(
             f"| `{_markdown_code(_display_path(scan.url, group.label))}` | {format_size(group.stats.size_bytes)} | "
@@ -342,10 +295,6 @@ def parse_byte_size(value: str) -> int:
     if result <= 0:
         raise ValueError("byte size must be positive")
     return result
-
-
-def _segment(prefix: str) -> str:
-    return prefix.rstrip("/").rsplit("/", 1)[-1] + "/"
 
 
 def _display_path(url: str, label: str) -> str:
