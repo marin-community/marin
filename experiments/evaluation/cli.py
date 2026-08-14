@@ -86,7 +86,8 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
             f"region_or_cluster={batch.accelerator.target_cluster or batch.accelerator.region}  "
             f"tasks={tasks}  "
             f"{agent_context}"
-            f"records={batch.records_prefix}"
+            f"records={batch.records_prefix}  "
+            f"results={evaluation.identity.output_dir}"
         )
 
 
@@ -137,6 +138,11 @@ def cli() -> None:
     help="Human version label for this launch, e.g. '2026.07.20' or 'rl-fix-sweep'.",
 )
 @click.option("--description", default=None, help="Free-text note on why this launch was run.")
+@click.option(
+    "--resume-results-path",
+    default=None,
+    help="Existing object-store results path for a single Harbor evaluation.",
+)
 @click.option("--no-wait", is_flag=True, help="Submit and return without waiting for results.")
 @click.option("--dry-run", is_flag=True, help="Print the resolved plan without submitting.")
 @click.option(
@@ -167,6 +173,7 @@ def launch(
     seed: int | None,
     version: str | None,
     description: str | None,
+    resume_results_path: str | None,
     no_wait: bool,
     dry_run: bool,
     records_prefix: str | None,
@@ -210,11 +217,15 @@ def launch(
         priority_band=(job_pb2.PRIORITY_BAND_INHERIT if priority is None else priority_band_value(priority)),
         version=version,
         description=description,
+        resume_results_path=resume_results_path,
     )
     try:
         batch = prepare_evaluation_batch(spec)
     except ValueError as exc:
-        param_hint = "--evalchemy-config/--harbor-config" if evalchemy_config or harbor_config else "--evals"
+        if resume_results_path is not None:
+            param_hint = "--resume-results-path"
+        else:
+            param_hint = "--evalchemy-config/--harbor-config" if evalchemy_config or harbor_config else "--evals"
         raise click.BadParameter(str(exc), param_hint=param_hint) from exc
     if dry_run:
         _print_plan(spec, batch)

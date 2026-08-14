@@ -24,6 +24,7 @@ from marin.evaluation.harbor.runner import (
     HarborExecutor,
     _read_trial,
     _read_trials,
+    validate_harbor_resume_root,
 )
 from marin.evaluation.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind, RunStatus
 from marin.evaluation.runner import EvaluationError
@@ -555,6 +556,31 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
         assert captured["env"]["HF_TOKEN"] == "hf-key"
     assert "OPENAI_API_KEY" not in captured["env"]
     assert outcome.canonical_metrics[executor.config.record_dataset]["reward"] == 1.0
+    assert json.loads((tmp_path / "harbor_resume_identity.json").read_text()) == {
+        "schema_version": 1,
+        "dataset": executor.config.record_dataset,
+    }
+
+
+def test_validate_harbor_resume_root_rejects_different_dataset(tmp_path):
+    output_dir = tmp_path / "results"
+    output_dir.mkdir()
+    (output_dir / "harbor_resume_identity.json").write_text(
+        json.dumps({"schema_version": 1, "dataset": "other-dataset"})
+    )
+
+    with pytest.raises(ValueError, match="requires dataset 'aime'"):
+        validate_harbor_resume_root(str(output_dir), _validated_config(dataset_selector="aime"))
+
+
+def test_validate_harbor_resume_root_rejects_job_name_prefix_collision(tmp_path):
+    output_dir = tmp_path / "results"
+    job_dir = output_dir / "harbor_jobs" / "harbor_aime_extended_0123456789ab"
+    job_dir.mkdir(parents=True)
+    (job_dir / "config.json").write_text("{}")
+
+    with pytest.raises(ValueError, match="requires dataset 'aime'"):
+        validate_harbor_resume_root(str(output_dir), _validated_config(dataset_selector="aime"))
 
 
 def _harbor_executor(dataset: str, *, n_benchmark: int = 1, trials_per_task: int = 1) -> HarborExecutor:
