@@ -1054,12 +1054,18 @@ def _select_pipeline_sources(args: argparse.Namespace) -> dict[str, StepSpec]:
 
 def _apply_pool_overrides(scale: PipelineScale, args: argparse.Namespace) -> PipelineScale:
     """Override the scale's worker fleet from ``--pool-*`` flags."""
+    worker_device = (
+        ResourceConfig.with_gpu(args.pool_gpu).device if args.pool_gpu is not None else scale.pool.worker.device
+    )
     worker = replace(
         scale.pool.worker,
+        device=worker_device,
         **{k: v for k, v in (("cpu", args.pool_cpu), ("ram", args.pool_ram), ("disk", args.pool_disk)) if v is not None},
     )
+    task_device = worker_device if args.pool_gpu is not None else scale.pool.task.device
     task = replace(
         scale.pool.task,
+        device=task_device,
         **{
             k: v
             for k, v in (
@@ -1142,6 +1148,7 @@ def main() -> None:
     parser.add_argument("--pool-cpu", type=float, default=None, help="per-worker CPUs (override scale)")
     parser.add_argument("--pool-ram", default=None, help="per-worker RAM, e.g. 16g (override scale)")
     parser.add_argument("--pool-disk", default=None, help="per-worker disk, e.g. 16g (override scale)")
+    parser.add_argument("--pool-gpu", default=None, help="one GPU of this type for each shared-pool worker")
     parser.add_argument("--pool-task-cpu", type=float, default=None, help="CPUs for each shared-pool task")
     parser.add_argument("--pool-task-ram", default=None, help="RAM for each shared-pool task, e.g. 32g")
     parser.add_argument("--pool-task-disk", default=None, help="disk for each shared-pool task, e.g. 16g")
