@@ -35,6 +35,8 @@ import io
 import logging
 import math
 import os
+import random
+import time
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
@@ -135,6 +137,10 @@ _SCATTER_FLUSH_THRESHOLD = 0.20
 _ESTIMATED_SIZE_CORRECTION_FACTOR = 0.60
 # Threshold for triggering a gc.collect() after a flush.
 _GC_FLUSH_SIZE_THRESHOLD_BYTES = 8 * 1024 * 1024
+
+_PARQUET_SCHEMA_READ_ATTEMPTS = 5
+_PARQUET_SCHEMA_RETRY_BASE_SECONDS = 0.5
+_TRANSIENT_PARQUET_SCHEMA_ERROR = "parquet: File out of specification: Unexpected struct field type"
 
 
 def _task_memory_bytes() -> int:
@@ -311,6 +317,28 @@ def _read_sidecar_slices_parallel(scatter_paths: list[str], target_shard: int) -
     return [s for s in ordered if s is not None]
 
 
+def _collect_frame_schema(frame: pl.LazyFrame) -> pl.Schema:
+    for attempt in range(_PARQUET_SCHEMA_READ_ATTEMPTS):
+        try:
+            return frame.collect_schema()
+        except pl.exceptions.ComputeError as error:
+            final_attempt = attempt + 1 == _PARQUET_SCHEMA_READ_ATTEMPTS
+            if _TRANSIENT_PARQUET_SCHEMA_ERROR not in str(error) or final_attempt:
+                raise
+
+            delay = _PARQUET_SCHEMA_RETRY_BASE_SECONDS * (2**attempt) * random.uniform(0.5, 1.5)
+            logger.warning(
+                "Transient Parquet schema read failed on attempt %d/%d. Retrying in %.1f seconds: %s",
+                attempt + 1,
+                _PARQUET_SCHEMA_READ_ATTEMPTS,
+                delay,
+                error,
+            )
+            time.sleep(delay)
+
+    raise AssertionError("Parquet schema retry loop did not return or raise")
+
+
 def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
     """Cast frames to a common supertype schema so pl.merge_sorted doesn't fail.
 
@@ -326,7 +354,7 @@ def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
     if len(frames) <= 1:
         return frames
     with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
-        schemas = list(pool.map(pl.LazyFrame.collect_schema, frames))
+        schemas = list(pool.map(_collect_frame_schema, frames))
     if all(s == schemas[0] for s in schemas[1:]):
         return frames
     unified = pl.concat([f.limit(0) for f in frames], how="diagonal_relaxed").collect_schema()
