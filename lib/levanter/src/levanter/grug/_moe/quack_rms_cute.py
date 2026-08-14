@@ -543,7 +543,7 @@ def _gate_silu_reverse_kernel(
     output_cotangent_ref,
     gate_ref,
     w_up_ref,
-    gate_preactivation_ref,
+    silu_derivative_ref,
     gate_hidden_ref,
     w_up_zero_ref,
     direct_cotangent_ref,
@@ -560,7 +560,7 @@ def _gate_silu_reverse_kernel(
     span_m = pl.ds(start_m, block_m)
     rank = w_up_ref.shape[0]
     span_r = pl.ds(0, rank)
-    gate_preactivation = plgpu.load(gate_preactivation_ref.at[span_m, span_r])
+    silu_derivative = plgpu.load(silu_derivative_ref.at[span_m, span_r])
     gate_hidden = plgpu.load(gate_hidden_ref.at[span_m, span_r])
     hidden_tiles = pl.cdiv(normalized_ref.shape[1], block_d)
     gate_hidden_cotangent = jnp.zeros((block_m, rank), dtype=jnp.float32)
@@ -581,12 +581,9 @@ def _gate_silu_reverse_kernel(
         return accumulator + pl.dot(gate_accumulator, w_up.T)
 
     gate_hidden_cotangent = jax.lax.fori_loop(0, hidden_tiles, hidden_body, gate_hidden_cotangent)
-    gate_preactivation_fp32 = gate_preactivation.astype(jnp.float32)
-    sigmoid = jax.nn.sigmoid(gate_preactivation_fp32)
-    silu_derivative = sigmoid * (1 + gate_preactivation_fp32 * (1 - sigmoid))
     plgpu.store(
         gate_preactivation_cotangent_ref.at[span_m, span_r],
-        (gate_hidden_cotangent * silu_derivative).astype(gate_preactivation_cotangent_ref.dtype),
+        gate_hidden_cotangent.astype(jnp.bfloat16) * silu_derivative,
     )
 
 
@@ -917,7 +914,7 @@ def quack_coda_gate_silu_reverse(
     output_cotangent: jax.Array,
     gate: jax.Array,
     w_up: jax.Array,
-    gate_preactivation: jax.Array,
+    silu_derivative: jax.Array,
     gate_hidden: jax.Array,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Return direct, gate-preactivation, and up-weight cotangents without exposing gate dY."""
@@ -927,11 +924,11 @@ def quack_coda_gate_silu_reverse(
     rank = w_up.shape[0]
     if output_cotangent.shape != normalized.shape or gate.shape != normalized.shape:
         raise ValueError("full-width gate reverse inputs must have matching shapes")
-    if w_up.shape != (rank, hidden_dim) or gate_preactivation.shape != (rows, rank):
+    if w_up.shape != (rank, hidden_dim) or silu_derivative.shape != (rows, rank):
         raise ValueError("gate-SiLU reverse inputs have inconsistent dimensions")
-    if gate_hidden.shape != gate_preactivation.shape:
-        raise ValueError("gate hidden and preactivation must have matching shapes")
-    dtypes = {value.dtype for value in (normalized, output_cotangent, gate, w_up, gate_preactivation, gate_hidden)}
+    if gate_hidden.shape != silu_derivative.shape:
+        raise ValueError("gate hidden and SiLU derivative must have matching shapes")
+    dtypes = {value.dtype for value in (normalized, output_cotangent, gate, w_up, silu_derivative, gate_hidden)}
     if dtypes != {jnp.dtype(jnp.bfloat16)}:
         raise ValueError(f"gate-SiLU reverse requires matching BF16 inputs, got {sorted(map(str, dtypes))}")
     divisors = (_RMS_REVERSE_BLOCK_M, _RMS_REVERSE_BLOCK_D, _GATE_REVERSE_BLOCK_N)
@@ -948,7 +945,7 @@ def quack_coda_gate_silu_reverse(
         output_cotangent,
         gate,
         w_up,
-        gate_preactivation,
+        silu_derivative,
         gate_hidden,
         jnp.zeros(w_up.shape, dtype=jnp.float32),
     )

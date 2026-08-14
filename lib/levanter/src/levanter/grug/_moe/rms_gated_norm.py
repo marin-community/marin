@@ -346,12 +346,17 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
         x_flat.dtype
     )
     gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", residuals.gate_hidden, residuals.w_up))
+    _, silu_derivative = jax.jvp(
+        jax.nn.silu,
+        (residuals.gate_preactivation,),
+        (jnp.ones_like(residuals.gate_preactivation),),
+    )
     direct_cotangent, gate_preactivation_cotangent, w_up_cotangent = gate_silu_reverse(
         normalized,
         output_cotangent,
         gate,
         residuals.w_up,
-        residuals.gate_preactivation,
+        silu_derivative,
         residuals.gate_hidden,
     )
     normalized_for_w_down = (

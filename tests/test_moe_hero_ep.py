@@ -754,12 +754,11 @@ def test_fused_reverse_matches_stock_autodiff(monkeypatch, dtype, tolerance):
     batch-axis reductions are exercised on CPU.
     """
 
-    def gate_silu_reverse(normalized, output_cotangent, gate, w_up, gate_preactivation, gate_hidden):
+    def gate_silu_reverse(normalized, output_cotangent, gate, w_up, silu_derivative, gate_hidden):
         gate_accumulator = output_cotangent * normalized * (gate * (1 - gate))
         gate_hidden_cotangent = jnp.einsum("td,rd->tr", gate_accumulator, w_up)
-        _, silu_pullback = jax.vjp(jax.nn.silu, gate_preactivation)
         w_up_cotangent = jnp.einsum("tr,td->rd", gate_hidden, gate_accumulator)
-        return output_cotangent * gate, silu_pullback(gate_hidden_cotangent)[0], w_up_cotangent
+        return output_cotangent * gate, gate_hidden_cotangent * silu_derivative, w_up_cotangent
 
     monkeypatch.setattr(
         rgn,

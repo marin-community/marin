@@ -135,10 +135,11 @@ def test_gate_silu_reverse_matches_reference():
     w_up = (0.1 * jax.random.normal(keys[3], (_RANK, _HIDDEN_DIM), dtype=jnp.float32)).astype(jnp.bfloat16)
     gate_preactivation = jax.random.normal(keys[4], (_ROWS, _RANK), dtype=jnp.bfloat16)
     gate_hidden = jax.nn.silu(gate_preactivation)
+    _, silu_derivative = jax.jvp(jax.nn.silu, (gate_preactivation,), (jnp.ones_like(gate_preactivation),))
     gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, w_up))
 
     actual = quack_rms_cute.quack_coda_gate_silu_reverse(
-        normalized, output_cotangent, gate, w_up, gate_preactivation, gate_hidden
+        normalized, output_cotangent, gate, w_up, silu_derivative, gate_hidden
     )
     expected = exact_gate_silu_reverse_reference(
         output_cotangent,
