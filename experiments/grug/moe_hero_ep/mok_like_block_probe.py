@@ -28,6 +28,7 @@ from levanter.kernels.mixture_of_kittens import (
     initialize_mok_like_runtime,
 )
 
+from experiments.grug.moe_hero_ep.launch_mok_like import MOK_LIKE_BUILD_ROOT, MOK_LIKE_SOURCE_ROOT
 from experiments.grug.moe_hero_ep.model import DenseMLP, GrugModelConfig, MoEMLP
 
 WORLD_SIZE = 4
@@ -76,7 +77,13 @@ def main(hidden_dim: int, intermediate_dim: int, num_tokens: int, backward: bool
         )
 
         with initialize_mok_like_runtime(
-            build_config=MokLikeBuildConfig(num_devices=WORLD_SIZE),
+            build_config=MokLikeBuildConfig(
+                source_root=MOK_LIKE_SOURCE_ROOT,
+                cache_root=MOK_LIKE_BUILD_ROOT,
+                cuda_arch="sm_100a",
+                clone_if_missing=True,
+                num_devices=WORLD_SIZE,
+            ),
             num_tokens=num_tokens,
             hidden_dim=hidden_dim,
             top_k=cfg.num_experts_per_token,
