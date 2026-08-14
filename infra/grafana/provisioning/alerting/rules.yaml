@@ -386,8 +386,8 @@ groups:
               conditions:
                 - evaluator: { type: gt, params: [0] }
 
-  # The daily cost job stores the latest CoreWeave byte gauge in Finelog.
-  # The freshness limit prevents an alert from an expired gauge.
+  # The daily cost job stores CoreWeave usage and zone-quota gauges in Finelog.
+  # The freshness limit prevents an alert from expired gauges.
   - orgId: 1
     name: coreweave-storage
     folder: Alerts
@@ -403,7 +403,7 @@ groups:
           severity: warning
           notification: slack
         annotations:
-          summary: "{{ $labels.bucket }}: CoreWeave storage exceeds 80 TiB"
+          summary: "{{ $labels.region }}: CoreWeave storage exceeds 80% of quota"
           runbook_url: https://github.com/marin-community/marin/blob/main/scripts/cost_manager/README.md
         data:
           - refId: A
@@ -422,24 +422,39 @@ groups:
                 params:
                   - key: sql
                     value: >-
-                      WITH latest AS (
-                        SELECT detail AS bucket, region, usage_amount AS value, collected_ts,
+                      WITH ranked AS (
+                        SELECT category, detail, region, usage_amount, collected_ts,
                                ROW_NUMBER() OVER (
                                  PARTITION BY provider, category, region, detail
                                  ORDER BY usage_date DESC, seq DESC
                                ) AS row_num
                         FROM "cost.events"
                         WHERE provider = 'coreweave'
-                          AND category = 'storage'
+                          AND category IN ('storage', 'storage_quota')
                           AND usage_unit = 'bytes'
                           AND usage_amount IS NOT NULL
+                      ), latest AS (
+                        SELECT category, detail, region, usage_amount
+                        FROM ranked
+                        WHERE row_num = 1
+                          AND collected_ts >= CURRENT_TIMESTAMP - INTERVAL '36 hours'
+                      ), usage AS (
+                        SELECT region, SUM(usage_amount) AS usage_bytes
+                        FROM latest
+                        WHERE category = 'storage'
+                        GROUP BY region
+                      ), quota AS (
+                        SELECT region, MAX(usage_amount) AS quota_bytes
+                        FROM latest
+                        WHERE category = 'storage_quota'
+                          AND detail = 'STANDARD'
+                        GROUP BY region
                       )
-                      SELECT bucket, region, value
-                      FROM latest
-                      WHERE row_num = 1
-                        AND collected_ts >= CURRENT_TIMESTAMP - INTERVAL '36 hours'
+                      SELECT usage.region,
+                             usage.usage_bytes / NULLIF(quota.quota_bytes, 0) AS value
+                      FROM usage
+                      JOIN quota ON quota.region = usage.region
               columns:
-                - { selector: bucket, text: bucket, type: string }
                 - { selector: region, text: region, type: string }
                 - { selector: value, text: value, type: number }
           - refId: C
@@ -450,7 +465,7 @@ groups:
               type: threshold
               expression: A
               conditions:
-                - evaluator: { type: gt, params: [87960930222080] }
+                - evaluator: { type: gt, params: [0.8] }
 
   # The canary writes one probe_up row per check and target. Read the newest row
   # from the last two cadences. NoData covers a stopped probe daemon or a broken

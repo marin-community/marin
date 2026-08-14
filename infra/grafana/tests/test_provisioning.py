@@ -29,7 +29,7 @@ DASHBOARDS = ROOT / "dashboards"
 
 EXPRESSION_UID = "__expr__"
 VALID_SEVERITIES = {"critical", "warning"}
-STORAGE_ALERT_BYTES = 80 * 1024**4
+STORAGE_ALERT_FRACTION = 0.8
 
 
 def _stitched_dashboards() -> dict[str, dict]:
@@ -93,7 +93,7 @@ def test_alert_rules_have_resolvable_datasources_and_refids():
 
 def test_alert_rules_define_nodata_and_error_behavior():
     # Most alert endpoints return explicit zeros when healthy. The storage rule
-    # stays normal until the optional CoreWeave provider writes its first row.
+    # stays normal until the optional CoreWeave provider writes usage and quota rows.
     for rule in _rules():
         expected_no_data = "OK" if rule["uid"] == "coreweave-storage-capacity" else "Alerting"
         assert rule["noDataState"] == expected_no_data, rule["uid"]
@@ -143,9 +143,8 @@ class _FakeFinelog:
         if '"cost.events"' in sql:
             return pa.table(
                 {
-                    "bucket": ["marin-us-east-02a"],
-                    "region": ["US-EAST-02"],
-                    "value": [81 * 1024**4],
+                    "region": ["US-EAST-02A"],
+                    "value": [0.81],
                 }
             )
         return pa.table({})
@@ -219,7 +218,7 @@ def test_warning_alerts_remain_visible_without_notifications():
     ]
 
 
-def test_coreweave_storage_alert_reads_latest_finelog_gauge_and_notifies_slack():
+def test_coreweave_storage_alert_compares_latest_finelog_usage_to_zone_quota_and_notifies_slack():
     (rule,) = [rule for rule in _rules() if rule["uid"] == "coreweave-storage-capacity"]
     source, threshold = rule["data"]
     sql = next(param["value"] for param in source["model"]["url_options"]["params"] if param["key"] == "sql")
@@ -229,11 +228,18 @@ def test_coreweave_storage_alert_reads_latest_finelog_gauge_and_notifies_slack()
     assert rule["labels"] == {"severity": "warning", "notification": "slack"}
     assert source["datasourceUid"] == "finelog-marin"
     assert 'FROM "cost.events"' in sql
+    assert "category IN ('storage', 'storage_quota')" in sql
     assert "PARTITION BY provider, category, region, detail" in sql
     assert "ORDER BY usage_date DESC, seq DESC" in sql
     assert "collected_ts >= CURRENT_TIMESTAMP - INTERVAL '36 hours'" in sql
-    assert {column["selector"] for column in source["model"]["columns"]} == {"bucket", "region", "value"}
-    assert threshold["model"]["conditions"][0]["evaluator"] == {"type": "gt", "params": [STORAGE_ALERT_BYTES]}
+    assert "SUM(usage_amount) AS usage_bytes" in sql
+    assert "MAX(usage_amount) AS quota_bytes" in sql
+    assert "usage.usage_bytes / NULLIF(quota.quota_bytes, 0) AS value" in sql
+    assert {column["selector"] for column in source["model"]["columns"]} == {"region", "value"}
+    assert threshold["model"]["conditions"][0]["evaluator"] == {
+        "type": "gt",
+        "params": [STORAGE_ALERT_FRACTION],
+    }
 
     (policy,) = _load(ALERTING / "policies.yaml")["policies"]
     routes = policy["routes"]

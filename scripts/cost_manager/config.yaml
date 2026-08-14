@@ -86,9 +86,16 @@ providers:
     step_seconds: 3600
     rate_card:
       - category: storage
-        query: "sum by (bucket_name, region) (billing:object_storage_used_bytes:total)"
+        query: 'sum by (bucket_name, zone) (billing:object_storage_used_bytes:total{storage_class="STANDARD"})'
         detail_label: bucket_name
-        region_label: region
+        region_label: zone
         usage_unit: bytes
         unit_divisor: 1073741824  # bytes per GiB
         unit_rate: 0.0000821917808219178  # $0.06 / 730 hours
+      # The alert compares total STANDARD usage in each zone to this live quota.
+      - category: storage_quota
+        query: 'max by (quota_zone, storage_class) (cwobject_quota_info{active="true", measurement_type="MEASUREMENT_TYPE_USAGE_BYTES", storage_class="STANDARD"})'
+        detail_label: storage_class
+        region_label: quota_zone
+        usage_unit: bytes
+        unit_rate: 0.0

@@ -74,6 +74,7 @@ def fetch(config: Mapping[str, Any], window: DateWindow) -> list[CostEvent]:
     window_days = set(window.days())
     events: list[CostEvent] = []
     for entry in rate_card:
+        category = str(entry["category"])
         series = _query_range(session, base_url, entry["query"], window, step_seconds)
         daily_usage = _daily_usage(
             series,
@@ -82,6 +83,8 @@ def fetch(config: Mapping[str, Any], window: DateWindow) -> list[CostEvent]:
             region_label=entry.get("region_label"),
             step_hours=step_hours,
         )
+        if not daily_usage:
+            raise CostFetchError(f"coreweave: {category} returned no usage series for {window.start}..{window.end}")
         unit_rate = float(entry["unit_rate"])
         unit_divisor = float(entry.get("unit_divisor", 1.0))
         if unit_divisor <= 0:
@@ -93,7 +96,7 @@ def fetch(config: Mapping[str, Any], window: DateWindow) -> list[CostEvent]:
                 cost_event(
                     provider=PROVIDER,
                     day=day,
-                    category=str(entry["category"]),
+                    category=category,
                     detail=detail,
                     cost=usage.unit_hours / unit_divisor * unit_rate,
                     amount_kind=AmountKind.ESTIMATED,

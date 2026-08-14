@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -16,6 +17,7 @@ from scripts.cost_manager.backends import coreweave
 from scripts.cost_manager.cost_event import CostEvent, CostFetchError, DateWindow
 
 GIB = 1024**3
+TIB = 1024**4
 HOT_STORAGE_GIB_HOUR_RATE = 0.06 / 730
 
 
@@ -42,9 +44,11 @@ def test_provider_enabled_env_controls_activation(monkeypatch: pytest.MonkeyPatc
 
 
 @contextmanager
-def _prometheus_server(payload: dict) -> Iterator[str]:
+def _prometheus_server(payload_by_query: Mapping[str, dict]) -> Iterator[str]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
+            query = parse_qs(urlsplit(self.path).query)["query"][0]
+            payload = payload_by_query[query]
             body = json.dumps(payload).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -71,14 +75,14 @@ def _timestamp(day: dt.date, hour: int) -> float:
     return dt.datetime.combine(day, dt.time(hour), tzinfo=dt.UTC).timestamp()
 
 
-def test_coreweave_storage_fetch_keeps_daily_bucket_bytes_and_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_coreweave_storage_fetch_keeps_daily_bucket_bytes_quota_and_cost(monkeypatch: pytest.MonkeyPatch) -> None:
     day = dt.date(2026, 8, 12)
-    payload = {
+    storage_payload = {
         "status": "success",
         "data": {
             "result": [
                 {
-                    "metric": {"bucket_name": "marin-us-east-02a", "region": "US-EAST-02"},
+                    "metric": {"bucket_name": "marin-us-east-02a", "zone": "US-EAST-02A"},
                     "values": [
                         [_timestamp(day, 1), str(2 * GIB)],
                         [_timestamp(day, 0), str(GIB)],
@@ -87,8 +91,19 @@ def test_coreweave_storage_fetch_keeps_daily_bucket_bytes_and_cost(monkeypatch: 
             ]
         },
     }
+    quota_payload = {
+        "status": "success",
+        "data": {
+            "result": [
+                {
+                    "metric": {"quota_zone": "US-EAST-02A", "storage_class": "STANDARD"},
+                    "values": [[_timestamp(day, 1), str(900 * TIB)]],
+                }
+            ]
+        },
+    }
     monkeypatch.setenv("COREWEAVE_API_TOKEN", "test-token")
-    with _prometheus_server(payload) as server_url:
+    with _prometheus_server({"storage query": storage_payload, "quota query": quota_payload}) as server_url:
         events = coreweave.fetch(
             {
                 "prometheus_url": server_url,
@@ -98,32 +113,73 @@ def test_coreweave_storage_fetch_keeps_daily_bucket_bytes_and_cost(monkeypatch: 
                         "category": "storage",
                         "query": "storage query",
                         "detail_label": "bucket_name",
-                        "region_label": "region",
+                        "region_label": "zone",
                         "usage_unit": "bytes",
                         "unit_divisor": GIB,
                         "unit_rate": HOT_STORAGE_GIB_HOUR_RATE,
-                    }
+                    },
+                    {
+                        "category": "storage_quota",
+                        "query": "quota query",
+                        "detail_label": "storage_class",
+                        "region_label": "quota_zone",
+                        "usage_unit": "bytes",
+                        "unit_rate": 0,
+                    },
                 ],
             },
             DateWindow(day, day),
         )
 
-    assert len(events) == 1
-    event = events[0]
-    assert (event.detail, event.region) == ("marin-us-east-02a", "US-EAST-02")
-    assert (event.usage_amount, event.usage_unit) == (2 * GIB, "bytes")
-    assert event.cost == pytest.approx(3 * HOT_STORAGE_GIB_HOUR_RATE)
+    assert len(events) == 2
+    events_by_category = {event.category: event for event in events}
+    storage = events_by_category["storage"]
+    assert (storage.detail, storage.region) == ("marin-us-east-02a", "US-EAST-02A")
+    assert (storage.usage_amount, storage.usage_unit) == (2 * GIB, "bytes")
+    assert storage.cost == pytest.approx(3 * HOT_STORAGE_GIB_HOUR_RATE)
+
+    quota = events_by_category["storage_quota"]
+    assert (quota.detail, quota.region) == ("STANDARD", "US-EAST-02A")
+    assert (quota.usage_amount, quota.usage_unit) == (900 * TIB, "bytes")
+    assert quota.cost == 0
 
 
-def test_coreweave_storage_fetch_fails_when_the_metric_has_no_series(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_coreweave_storage_fetch_fails_when_a_required_metric_has_no_series(monkeypatch: pytest.MonkeyPatch) -> None:
     day = dt.date(2026, 8, 12)
+    storage_payload = {
+        "status": "success",
+        "data": {
+            "result": [
+                {
+                    "metric": {"bucket_name": "marin-us-east-02a", "zone": "US-EAST-02A"},
+                    "values": [[_timestamp(day, 1), str(2 * GIB)]],
+                }
+            ]
+        },
+    }
+    empty_payload = {"status": "success", "data": {"result": []}}
     monkeypatch.setenv("COREWEAVE_API_TOKEN", "test-token")
-    with _prometheus_server({"status": "success", "data": {"result": []}}) as server_url:
-        with pytest.raises(CostFetchError, match="no usage series"):
+    with _prometheus_server({"storage query": storage_payload, "quota query": empty_payload}) as server_url:
+        with pytest.raises(CostFetchError, match=r"storage_quota.*no usage series"):
             coreweave.fetch(
                 {
                     "prometheus_url": server_url,
-                    "rate_card": [{"category": "storage", "query": "storage query", "unit_rate": 1}],
+                    "rate_card": [
+                        {
+                            "category": "storage",
+                            "query": "storage query",
+                            "detail_label": "bucket_name",
+                            "region_label": "zone",
+                            "unit_rate": 1,
+                        },
+                        {
+                            "category": "storage_quota",
+                            "query": "quota query",
+                            "detail_label": "storage_class",
+                            "region_label": "quota_zone",
+                            "unit_rate": 0,
+                        },
+                    ],
                 },
                 DateWindow(day, day),
             )

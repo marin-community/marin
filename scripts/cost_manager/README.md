@@ -126,17 +126,21 @@ Grafana provisions the `Storage` dashboard from
 byte value for each CoreWeave bucket.
 
 Grafana also provisions the `CoreWeaveStorageCapacity` alert. The rule reads
-the newest Finelog gauge for each bucket and sends a Slack warning above 80 TiB.
-The value must stay above the limit for five minutes. A 36-hour freshness limit
-prevents an alert from an expired value. The alert stays normal until the first
-CoreWeave row exists.
+the newest Finelog gauges for bucket usage and the `STANDARD` zone quota. The
+rule sums all bucket usage in each availability zone. It sends a Slack warning
+when the total stays above 80 percent of the reported quota for five minutes.
+A 36-hour freshness limit prevents an alert from expired data. The alert stays
+normal until the first CoreWeave usage and quota rows exist.
 
 The collector uses the public hot-storage rate of $0.06/GiB-month. Divide this
 rate by 730 hours for the `unit_rate` value in `config.yaml`. Replace the value
 when the contracted rate is available.
 
-The 80 TiB ceiling is 80 percent of CoreWeave's default 100 TiB capacity quota
-for each availability zone.
+CoreWeave supplies the quota through `cwobject_quota_info`. The value can include
+a quota increase that CoreWeave assigns to one availability zone. The collector
+fails if this quota series is missing. It does not use a fixed limit as a
+fallback. See the [CoreWeave quota guide](https://docs.coreweave.com/products/storage/object-storage/manage-quotas)
+for the source metrics and storage classes.
 
 `COREWEAVE_API_TOKEN` controls provider activation. If it is unset, the runner
 skips CoreWeave and completes the other providers. Use a token with the
