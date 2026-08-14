@@ -228,7 +228,7 @@ class ScoringEngine:
         self.config = config
         self.gen_state: GenState = GenState(cache=cache, decode_state=decode_state)
 
-        self._anchor_last_log_probs: jnp.ndarray | None = None  # [vocab] on device
+        self._anchor_last_log_probs: NamedArray | None = None  # [vocab] on device
         self._vocab_axis = model.Vocab
 
         # Precomputed mask of non-anchor slots, used at the top of every score() to

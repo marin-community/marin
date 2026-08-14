@@ -43,8 +43,6 @@ from thalas.execution.types import ExecutorStep, InputName, this_output_path
 from marin.evaluation.model_loading import load_eval_model
 from marin.processing.tokenize.data_configs import with_pack
 from marin.training.run_environment import extras_for_resources
-from marin.utils import fsspec_exists
-
 logger = logging.getLogger(__name__)
 
 
@@ -147,7 +145,8 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
 
             output_file = os.path.join(config.output_path, name, "outputs.jsonl.gz")
             success_file = output_file + ".SUCCESS"
-            if fsspec_exists(success_file):
+            success_fs, success_path = fsspec.core.url_to_fs(success_file)
+            if success_fs.exists(success_path):
                 if jax.process_index() == 0:
                     logger.info(f"Skipping {name}: already completed")
                 continue
