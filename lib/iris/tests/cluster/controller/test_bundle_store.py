@@ -11,6 +11,8 @@ import pytest
 from fsspec.implementations.local import LocalFileSystem
 from iris.cluster.bundle import BundleStore
 
+_THREAD_TIMEOUT = 5
+
 
 @pytest.fixture
 def store(tmp_path):
@@ -122,7 +124,7 @@ def test_blocked_write_does_not_delay_unrelated_content(tmp_path, monkeypatch):
     def blocking_open(filesystem, path, mode="rb", *args, **kwargs):
         if "w" in mode and path.endswith(blocked_id):
             blocked_opened.set()
-            assert release_blocked.wait(timeout=5)
+            assert release_blocked.wait(timeout=_THREAD_TIMEOUT)
         elif "w" in mode:
             ready_opened.set()
         return original_open(filesystem, path, mode, *args, **kwargs)
@@ -130,14 +132,14 @@ def test_blocked_write_does_not_delay_unrelated_content(tmp_path, monkeypatch):
     monkeypatch.setattr(LocalFileSystem, "open", blocking_open)
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         blocked = pool.submit(store.write, blocked_data)
-        assert blocked_opened.wait(timeout=5)
+        assert blocked_opened.wait(timeout=_THREAD_TIMEOUT)
         ready = pool.submit(store.write, ready_data)
         try:
-            assert ready_opened.wait(timeout=5)
-            assert ready.result(timeout=5) == hashlib.sha256(ready_data).hexdigest()
+            assert ready_opened.wait(timeout=_THREAD_TIMEOUT)
+            assert ready.result(timeout=_THREAD_TIMEOUT) == hashlib.sha256(ready_data).hexdigest()
         finally:
             release_blocked.set()
-        assert blocked.result(timeout=5) == blocked_id
+        assert blocked.result(timeout=_THREAD_TIMEOUT) == blocked_id
 
 
 def test_concurrent_writes_of_same_content_persist_once(tmp_path, monkeypatch):
@@ -155,16 +157,16 @@ def test_concurrent_writes_of_same_content_persist_once(tmp_path, monkeypatch):
             write_count += 1
             if write_count == 1:
                 first_opened.set()
-                assert release_first.wait(timeout=5)
+                assert release_first.wait(timeout=_THREAD_TIMEOUT)
         return original_open(filesystem, path, mode, *args, **kwargs)
 
     monkeypatch.setattr(LocalFileSystem, "open", blocking_open)
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(store.write, data)
-        assert first_opened.wait(timeout=5)
+        assert first_opened.wait(timeout=_THREAD_TIMEOUT)
         second = pool.submit(store.write, data)
         release_first.set()
-        assert first.result(timeout=5) == content_hash
-        assert second.result(timeout=5) == content_hash
+        assert first.result(timeout=_THREAD_TIMEOUT) == content_hash
+        assert second.result(timeout=_THREAD_TIMEOUT) == content_hash
 
     assert write_count == 1

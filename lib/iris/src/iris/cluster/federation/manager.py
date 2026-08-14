@@ -5,9 +5,9 @@
 
 The controller composes one manager. It owns the peer registry, the submit-time
 :class:`~iris.cluster.federation.router.PeerRouter`, a capability heartbeat loop,
-and independent delivery and delta-sync loops per peer. Delivery also runs a
-bounded set of handoffs to the same peer concurrently. A slow LaunchJob request
-therefore does not delay unrelated handoffs or status updates.
+and independent delivery and delta-sync loops per peer. Background delivery also
+runs a bounded set of handoffs to the same peer concurrently. A slow LaunchJob
+request therefore does not delay unrelated background handoffs or status updates.
 Every durable mutation goes through an injected
 :class:`~iris.cluster.federation.store.FederationStore`, so the manager stays a
 self-contained module.
@@ -216,7 +216,7 @@ class FederationManager:
         In one local transaction the store persists the ``jobs``/``job_config``/
         ``federated_jobs`` handle (no task rows, no cluster) queued on the parent. The
         control tick's federation pass later picks a peer that has room and promotes
-        the handle to ``PENDING_HANDOFF``, and the sync loop delivers it. ``pinned_peer_id``
+        the handle to ``PENDING_HANDOFF``, and the delivery loop sends it. ``pinned_peer_id``
         is "" for an unpinned candidate, or the peer a ``cluster=<peer>`` pin named (the
         tick then only ever assigns it there). An idempotent resubmit is a no-op.
 
@@ -290,8 +290,8 @@ class FederationManager:
         Bumps ``cancel_intent_version`` (so a cancelled pending handoff is never
         delivered and a retried cancel is a no-op) and routes the idempotent
         ``TerminateJob(local_job_id)`` (the peer runs the same id). A transient
-        failure is not fatal — the sync loop re-drives the cancel until the peer acks
-        or sync observes the job terminal/pruned.
+        failure is not fatal — the delivery loop re-drives the cancel until the peer
+        acks or sync observes the job terminal/pruned.
         """
         if self._store is None:
             raise RuntimeError("federation cancel requires a store")
@@ -304,7 +304,7 @@ class FederationManager:
 
         A peer ``NOT_FOUND`` means the job is already gone (terminal-and-pruned),
         which satisfies the cancel — terminalize the local mirror so the re-drive
-        stops. Any other RPC error is left for the next sync to retry.
+        stops. Any other RPC error is left for the next delivery pass to retry.
         """
         assert self._store is not None
         peer = self._peers.get(target.peer_id)
@@ -420,9 +420,8 @@ class FederationManager:
         """Deliver one handle to its peer, terminalizing a rejection the peer will repeat.
 
         A rejection marks the handle ``HANDOFF_REJECTED`` so the re-drive stops; the
-        user learns the peer's verdict from the failed job. Never raises on a peer's
-        answer: the re-drive loop calls this on the sync thread, which dies on an
-        uncaught exception.
+        user learns the peer's verdict from the failed job. Retryable RPC failures
+        leave the handle pending for the next delivery pass.
         """
         assert self._store is not None
         peer = self._peers.get(spec.peer_id)
