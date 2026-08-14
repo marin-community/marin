@@ -1539,6 +1539,63 @@ def test_all_source_drop_sets_filters_diffuse_global_boilerplate(tmp_path: Path)
     assert rows["leak"]["contaminated"] is True
 
 
+def test_all_source_drop_sets_parallel_sample_respects_document_limits(tmp_path: Path):
+    common = "four score and seven years ago our fathers brought forth a new nation"
+    late_leak = "the platypus juggled seventeen luminous kumquats beside a silent observatory"
+    filler = "ordinary source material with no shared evaluation sequence"
+    eval_dir = tmp_path / "eval"
+    _write_eval_jsonl(
+        eval_dir / "eval.jsonl.gz",
+        [{"id": "common", "text": common}, {"id": "late", "text": late_leak}],
+    )
+    ngram = NGramConfig(ngram_length=4, overlap_threshold=0.5)
+    bloom_dir = tmp_path / "bloom"
+    build_eval_bloom(
+        eval_data_sources=str(eval_dir),
+        output_path=str(bloom_dir),
+        ngram=ngram,
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+
+    source_dir = tmp_path / "source"
+    texts = [common, common, common, filler, filler, filler, late_leak, late_leak]
+    for file_index in range(4):
+        rows = [
+            {"id": f"doc_{row_index}", "text": texts[row_index], "partition_id": file_index}
+            for row_index in range(file_index * 2, file_index * 2 + 2)
+        ]
+        _write_input_parquet(source_dir / f"part-{file_index:05d}-of-00004.parquet", rows)
+
+    out = tmp_path / "drops"
+    result = build_all_source_drop_sets(
+        sources=[("source", str(source_dir))],
+        prebuilt_bloom_dir=str(bloom_dir),
+        output_path=str(out),
+        ngram=ngram,
+        sample_docs=3,
+        common_frac=0.5,
+        common_min_abs=2,
+        global_sample_docs=6,
+        global_common_min_abs=2,
+        global_common_min_sources=1,
+    )
+    assert result.counters["decon_drop/sample_shards"] == 3
+    assert result.counters["decon_drop/global_documents_sampled"] == 6
+
+    marked = tmp_path / "marked"
+    decon_to_parquet(
+        normalized_data=_as_source(source_dir),
+        prebuilt_bloom_dir=str(bloom_dir),
+        output_path=str(marked),
+        ngram=ngram,
+        drop_set_dirs=[str(out / "source"), result.global_output_dir],
+    )
+    rows = _read_attributes(marked)
+    assert rows["doc_0"]["contaminated"] is False
+    assert rows["doc_6"]["contaminated"] is True
+
+
 def test_decon_flagged_sample_sidecar(fox_corpus):
     """flagged_sample_size writes an `outputs/flagged_sample` sidecar of contaminated
     docs + text, so reports read O(sample) instead of rescanning the corpus."""
