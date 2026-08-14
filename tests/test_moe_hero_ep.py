@@ -213,6 +213,92 @@ def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "platform"
 
 
+def test_run_grug_local_shuts_down_jax_distributed(tmp_path):
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=1"
+    script = """
+        import sys
+        from pathlib import Path
+
+        import jax
+        import jax.numpy as jnp
+        from fray.cluster import ResourceConfig
+        from iris.cluster.platforms.types import find_free_port
+        from levanter.data.dataset import ListAsyncDataset
+        from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
+        from levanter.data.text.examples import GrugLmExample
+        from levanter.distributed import DistributedConfig
+        from levanter.tracker import NoopConfig
+        from levanter.trainer import TrainerConfig
+
+        from experiments.grug.moe_hero_ep import model, train
+
+        coordinator_port = find_free_port()
+        jax.distributed.initialize(
+            coordinator_address=f"127.0.0.1:{coordinator_port}",
+            num_processes=1,
+            process_id=0,
+            local_device_ids=0,
+        )
+
+        seq_len = 4
+        data = LmDataConfig(
+            components={
+                "direct": DirectDatasetComponent(
+                    datasets={"train": ListAsyncDataset([GrugLmExample.causal(jnp.arange(seq_len))])}
+                )
+            },
+            vocab_size=128,
+            tokenizer="passthrough",
+        )
+        trainer = TrainerConfig(
+            id="test-distributed-shutdown",
+            num_train_steps=1,
+            train_batch_size=1,
+            tracker=NoopConfig(),
+            require_accelerator=False,
+            use_explicit_mesh_axes=True,
+            distributed=DistributedConfig(initialize_jax_distributed=False),
+            log_dir=Path(sys.argv[1]) / "logs",
+            load_checkpoint=False,
+        )
+        config = train.GrugRunConfig(
+            model=model.GrugModelConfig(
+                vocab_size=128,
+                hidden_dim=32,
+                intermediate_dim=64,
+                shared_expert_intermediate_dim=64,
+                num_layers=1,
+                num_heads=2,
+                num_kv_heads=2,
+                max_seq_len=seq_len,
+                num_experts=4,
+                num_experts_per_token=2,
+            ),
+            data=data,
+            resources=ResourceConfig.with_cpu(),
+            trainer=train.GrugTrainerConfig(trainer=trainer),
+            eval=None,
+            stop_after_steps=0,
+        )
+
+        train._run_grug_local(config)
+
+        assert not jax.distributed.is_initialized()
+    """
+
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script), str(tmp_path)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize(
     ("watch_mode", "watch_interval", "expected_overlap_limit"),
     [
