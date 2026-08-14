@@ -67,7 +67,7 @@ def main(hidden_dim: int, intermediate_dim: int, num_tokens: int, backward: bool
         mok_like=mok_like,
     )
 
-    with jax.sharding.use_mesh(mesh):
+    with jax.sharding.set_mesh(mesh):
         block = MoEMLP.init(cfg, key=random.PRNGKey(0))
         shared = DenseMLP.init(hidden_dim, intermediate_dim, cfg.initializer_std, key=random.PRNGKey(1))
         tokens = jnp.asarray(
