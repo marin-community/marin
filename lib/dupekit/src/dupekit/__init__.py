@@ -23,6 +23,7 @@ try:
         Document,
         HashAlgorithm,
         TokenNgrams,
+        TokenNgramSignature,
         Transformation,
     )
 except ImportError as import_error:

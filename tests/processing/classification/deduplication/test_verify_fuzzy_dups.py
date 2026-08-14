@@ -1281,9 +1281,9 @@ def test_candidate_text_load_streams_unordered_source_shard(tmp_path, monkeypatc
         normalized_rows,
     )
 
-    key, text = next(_candidate_documents([shard]))
+    key, stored = next(_candidate_documents([shard], ngram_size=3))
     assert key == (7, "bbb")
-    assert _decompress_document_text(text) == "beta"
+    assert _decompress_document_text(stored.compressed_text) == "beta"
 
 
 def test_candidate_text_load_releases_arrow_pages_after_each_shard(tmp_path, monkeypatch):
@@ -1329,7 +1329,7 @@ def test_candidate_text_load_releases_arrow_pages_after_each_shard(tmp_path, mon
     monkeypatch.setattr(pa, "system_memory_pool", lambda: memory_pool)
     monkeypatch.setattr(pa, "set_memory_pool", selected_pools.append)
 
-    assert len(list(_candidate_documents([shard]))) == 1
+    assert len(list(_candidate_documents([shard], ngram_size=3))) == 1
     assert memory_pool.release_count == 2
     assert selected_pools == [memory_pool, previous_pool]
 

@@ -46,6 +46,7 @@ class PreparedVerificationText:
     chars: int
     tokens: int
     ngrams: dupekit.TokenNgrams
+    signature: dupekit.TokenNgramSignature
     under_tokenized: bool
     saturated: bool
 
@@ -83,6 +84,7 @@ def prepare_verification_text(text: str, params: FuzzyVerificationParams) -> Pre
         saturated=len(ngrams) / positions < params.minimum_distinct_ngram_ratio,
         tokens=ngrams.token_count,
         ngrams=ngrams,
+        signature=ngrams.signature(),
         under_tokenized=chars / max(ngrams.token_count, 1) > params.maximum_chars_per_token,
     )
 
