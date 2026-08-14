@@ -1373,6 +1373,12 @@ class RuntimeManager {
       return;
     }
     state->completion_mask |= rank_bit;
+    // In-process, one manager owns every rank and each rank reports separately, so the slot may
+    // only be recycled once all of them have. Under the fabric transport this process owns exactly
+    // one rank and the peers are unreachable from here -- but waiting for them is also unnecessary.
+    // `Complete` arrives via cudaLaunchHostFunc on the invocation's stream, behind the
+    // WaitCompletionKernel that spins until every peer has stamped this generation. Reaching this
+    // point therefore already proves, on device, that no peer is still reading the slot.
     if (state->completion_mask != (arena_mode_ ? rank_bit : kAllRanksMask)) {
       return;
     }
