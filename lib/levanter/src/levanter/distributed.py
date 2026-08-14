@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import atexit
 import itertools
 import logging
 import os
@@ -225,9 +226,7 @@ class DistributedConfig:
             logger.info("Detected Iris job context; initializing jax.distributed via iris.runtime.jax_init.")
             configure_megascale_from_iris()
             initialize_iris_jax()
-            return
-
-        if self._is_distributed():
+        elif self._is_distributed():
             device_ids = self.local_device_ids
             coordinator_address = self.coordinator_address
 
@@ -262,3 +261,7 @@ class DistributedConfig:
                 "Not initializing jax.distributed because no distributed config "
                 "was provided, and no cluster was detected."
             )
+            return
+
+        # Tracker exit hooks register later and therefore run before this shutdown barrier.
+        atexit.register(jax.distributed.shutdown)
