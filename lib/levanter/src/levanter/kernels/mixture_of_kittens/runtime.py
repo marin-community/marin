@@ -16,6 +16,7 @@ import numpy as np
 
 from levanter.kernels.mixture_of_kittens.availability import require_mok_like_available
 from levanter.kernels.mixture_of_kittens.build import build_native_library
+from levanter.kernels.mixture_of_kittens.config import EXPERT_AXIS as _EXPERT_AXIS
 from levanter.kernels.mixture_of_kittens.config import _DEVICES_PER_NODE, MokLikeWorkspaceTransport
 from levanter.kernels.mixture_of_kittens.ffi import FAILURE_FENCE_TARGET, backward_target, forward_target
 from levanter.kernels.mixture_of_kittens.source import MokLikeBuildConfig, mok_source_root
@@ -499,6 +500,23 @@ def _validate_topology(
         validate_mok_like_mesh_topology(mesh)
 
 
+def _expert_axis_index(mesh: jax.sharding.Mesh) -> int:
+    """This process's coordinate along the mesh's expert axis.
+
+    The fabric transport places one rank per process, so the process owns exactly one device and
+    that device has a single position on the expert axis.
+    """
+    if _EXPERT_AXIS not in mesh.axis_names:
+        raise RuntimeError(f"mesh has no {_EXPERT_AXIS!r} axis; got {mesh.axis_names}")
+    local_device = jax.local_devices()[0]
+    positions = np.argwhere(np.asarray(mesh.devices, dtype=object) == local_device)
+    if positions.shape[0] != 1:
+        raise RuntimeError(
+            f"expected exactly one mesh position for {local_device}, found {positions.shape[0]}"
+        )
+    return int(positions[0][mesh.axis_names.index(_EXPERT_AXIS)])
+
+
 def _initialize_fabric_arena(
     library: ctypes.CDLL,
     *,
@@ -529,7 +547,18 @@ def _initialize_fabric_arena(
             f"group spanning the whole job: num_devices={num_devices} but process_count={process_count}"
         )
 
-    rank = jax.process_index()
+    # A rank here must mean the same thing it means to the kernel: a position on the mesh's expert
+    # axis, which is what the dispatch schedule's peer_rank indexes. The arena table and the handle
+    # gather are both ordered by process index, so the two have to agree. They are not guaranteed
+    # to -- the mesh is built over jax.devices() in its own order -- and a silent disagreement
+    # hands the kernel a peer pointer belonging to a different rank than the schedule intends.
+    rank = _expert_axis_index(mesh)
+    if rank != jax.process_index():
+        raise RuntimeError(
+            f"fabric transport requires this process's expert-axis position ({rank}) to match its "
+            f"process index ({jax.process_index()}); the handle gather is ordered by process index, "
+            f"so a mismatch binds each rank's peers to the wrong arenas"
+        )
     # The CUDA runtime enumerates every GPU on the node regardless of this process's JAX slice,
     # so the arena has to be told which ordinal it owns rather than inferring it from a count.
     local_device = jax.local_devices()[0]

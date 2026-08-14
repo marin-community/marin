@@ -18,6 +18,7 @@ _TILE_ROWS = 256
 _MAX_WORKSPACE_SLOTS = 2
 # GPUs per GB200 node. An expert group at or below this size can be owned by a
 # single JAX process; above it the group necessarily spans processes and hosts.
+EXPERT_AXIS = "expert"
 _DEVICES_PER_NODE = 4
 
 

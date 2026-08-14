@@ -13,6 +13,9 @@ from jax.sharding import PartitionSpec as P
 from levanter.grug._moe.common import _CHECKPOINT_MOE_OUTPUT, MoeImplementation
 from levanter.grug.grug_moe import moe_mlp
 from levanter.grug.sharding import _batch_spec_from_x, _reshard_for_shard_map
+from levanter.kernels.mixture_of_kittens.config import (
+    EXPERT_AXIS as _EXPERT_AXIS,
+)
 from levanter.kernels.mixture_of_kittens.config import _DEVICES_PER_NODE, MokLikeConfig, MokLikeWorkspaceTransport
 from levanter.kernels.mixture_of_kittens.source import SUPPORTED_NUM_DEVICES
 from levanter.kernels.mixture_of_kittens.ffi import (
@@ -25,7 +28,6 @@ from levanter.kernels.mixture_of_kittens.runtime import MokLikeRuntimeHandle, va
 from levanter.kernels.mixture_of_kittens.schedule import build_schedule, schedule_capacity
 from levanter.utils.activation import ActivationFunctionEnum
 
-_EXPERT_AXIS = "expert"
 _NUM_DEVICES = 4
 MOK_CONTEXT_CHECKPOINT_NAME = "mixture_of_kittens_context"
 
