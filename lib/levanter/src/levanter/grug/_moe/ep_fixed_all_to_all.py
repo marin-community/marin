@@ -137,31 +137,38 @@ def _moe_mlp_ep_fixed_a2a_local(
         send_x = send_x.reshape(local_experts, expert_shards, capacity, hidden_dim)
 
     moe_dim = moe_w2_local.shape[1]
+    # Two capacity-chunks per local expert deepen the dispatch/GEMM/combine pipeline:
+    # six half-size independent chains instead of three, giving the latency-hiding
+    # scheduler finer grains to overlap collectives with expert GEMMs.
+    chunk_bounds = (0, capacity // 2, capacity)
     output_parts = []
     for local_expert_index in range(local_experts):
-        with jax.named_scope("dispatch"):
-            received = jax.lax.all_to_all(
-                send_x[local_expert_index],
-                "expert",
-                split_axis=0,
-                concat_axis=0,
-                tiled=True,
-            )
-            received = tree_checkpoint_name(received, _CHECKPOINT_DISPATCH_INPUT)
-        with jax.named_scope("moe_up_down"):
-            expert_input = received.reshape(bucket_size, hidden_dim)
-            hidden = expert_input @ moe_w13_local[local_expert_index]
-            gate, up = jnp.split(hidden, [moe_dim], axis=-1)
-            expert_output = (activation_fn(gate) * up) @ moe_w2_local[local_expert_index]
-        with jax.named_scope("combine"):
-            returned = jax.lax.all_to_all(
-                expert_output.reshape(expert_shards, capacity, hidden_dim),
-                "expert",
-                split_axis=0,
-                concat_axis=0,
-                tiled=True,
-            )
-            output_parts.append(returned)
+        chunk_outputs = []
+        for lo, hi in zip(chunk_bounds[:-1], chunk_bounds[1:]):
+            with jax.named_scope("dispatch"):
+                received = jax.lax.all_to_all(
+                    send_x[local_expert_index, :, lo:hi],
+                    "expert",
+                    split_axis=0,
+                    concat_axis=0,
+                    tiled=True,
+                )
+                received = tree_checkpoint_name(received, _CHECKPOINT_DISPATCH_INPUT)
+            with jax.named_scope("moe_up_down"):
+                expert_input = received.reshape(expert_shards * (hi - lo), hidden_dim)
+                hidden = expert_input @ moe_w13_local[local_expert_index]
+                gate, up = jnp.split(hidden, [moe_dim], axis=-1)
+                expert_output = (activation_fn(gate) * up) @ moe_w2_local[local_expert_index]
+            with jax.named_scope("combine"):
+                returned = jax.lax.all_to_all(
+                    expert_output.reshape(expert_shards, hi - lo, hidden_dim),
+                    "expert",
+                    split_axis=0,
+                    concat_axis=0,
+                    tiled=True,
+                )
+                chunk_outputs.append(returned)
+        output_parts.append(jnp.concatenate(chunk_outputs, axis=1))
 
     with jax.named_scope("combine"):
         send_output = jnp.stack(output_parts, axis=0)
