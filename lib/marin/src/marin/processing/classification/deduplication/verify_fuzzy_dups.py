@@ -567,7 +567,7 @@ class _StoredComparisonResult:
 
 
 @dataclass
-class _FrozenRecordGroup:
+class _DeferredRecordGroup:
     member_id: str
     records: list[dict[str, Any]]
     nominee_indices: list[int]
@@ -856,9 +856,9 @@ def _make_cluster_verifier(
         if frozen_record_groups is not None:
             materialized_groups = ((member_id, list(group)) for member_id, group in frozen_record_groups)
             for group_batch in batched(materialized_groups, lookup_batch_size):
-                frozen_groups: list[_FrozenRecordGroup] = []
+                frozen_groups: list[_DeferredRecordGroup] = []
                 remote_requests: list[tuple[tuple[int, str], _StoredComparisonRequest]] = []
-                remote_slots: list[tuple[_FrozenRecordGroup, int]] = []
+                remote_slots: list[tuple[_DeferredRecordGroup, int]] = []
                 representative_cache: dict[tuple[str, ...], list[PreparedVerificationText]] = {}
 
                 for member_id, group_records in group_batch:
@@ -876,7 +876,7 @@ def _make_cluster_verifier(
                         local_comparison_limit = local_params.maximum_comparisons_per_document - 1
                         nominee_indices = nominees[:local_comparison_limit]
 
-                    frozen_group = _FrozenRecordGroup(
+                    frozen_group = _DeferredRecordGroup(
                         member_id=member_id,
                         records=group_records,
                         nominee_indices=nominee_indices,
