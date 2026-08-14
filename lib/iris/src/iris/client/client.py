@@ -18,6 +18,7 @@ Example:
 """
 
 import logging
+import re
 from collections.abc import Generator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
@@ -535,6 +536,7 @@ class IrisClient:
         timeout_ms: int = 30000,
         credentials: ClientCredentials | None = None,
         extra_bundle_includes: Sequence[str] = (),
+        bundle_exclude: re.Pattern[str] | None = None,
     ) -> "IrisClient":
         """Create an IrisClient for an external client (CLI, laptop, notebook).
 
@@ -556,6 +558,10 @@ class IrisClient:
             extra_bundle_includes: Glob patterns (relative to ``workspace``) for
                 gitignored files the caller needs in the task bundle — e.g. a package's
                 built frontend ``dist``. Bundled in addition to the git-tracked files.
+            bundle_exclude: Regex matched against each candidate bundle path
+                (POSIX, relative to ``workspace``); matching paths are dropped from
+                the bundle. Trims otherwise-tracked files that a job does not need,
+                such as ``docs/`` against the bundle size cap.
 
         Returns:
             IrisClient wrapping RemoteClusterClient
@@ -568,6 +574,7 @@ class IrisClient:
             credentials=credentials,
             use_controller_proxy=True,
             extra_bundle_includes=extra_bundle_includes,
+            bundle_exclude=bundle_exclude,
         )
 
     @classmethod
@@ -608,6 +615,7 @@ class IrisClient:
         use_controller_proxy: bool,
         credentials: ClientCredentials | None = None,
         extra_bundle_includes: Sequence[str] = (),
+        bundle_exclude: re.Pattern[str] | None = None,
     ) -> "IrisClient":
         interceptors = credentials.interceptors() if credentials is not None else []
 
@@ -619,6 +627,7 @@ class IrisClient:
             interceptors=interceptors,
             use_controller_proxy=use_controller_proxy,
             extra_bundle_includes=extra_bundle_includes,
+            bundle_exclude=bundle_exclude,
         )
         return cls(cluster)
 

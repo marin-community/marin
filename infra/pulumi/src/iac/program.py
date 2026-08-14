@@ -8,26 +8,41 @@ typed `provisioning:` section, and declares that cluster's resources. One stack 
 `pulumi up` provisions all of a stack's declared resources together. The provider decides
 which resources: CoreWeave declares the controller RBAC, reserved NodePools, Kueue objects,
 the Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs; GCP declares
-the reserved federation-egress static IPs, the Artifact Registry pull-through mirrors, and every
-IAM grant on the project (`iac.gcp.iam.GcpIam`, replacing `infra/permissions`). Components not
-yet implemented (object storage, the CKS cluster object itself, GCLB+IAP) are tracked in
-README.md's "Future work".
+the reserved federation-egress static IPs, Artifact Registry pull-through mirrors, the shared
+GCLB/IAP ingress, and every IAM grant on the project (`iac.gcp.iam.GcpIam`, replacing
+`infra/permissions`). Components not yet implemented are tracked in README.md's "Future work".
 """
 
 import os
+import re
+from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import pulumi
 import pulumi_gcp as gcp
 import pulumi_kubernetes as k8s
+from finelog.deploy.config import GcpDeployment
+from iris.cluster.endpoints import gcp_instance_internal_ip
+from iris.cluster.platforms.types import Labels
+from iris.cluster.platforms.vm_lifecycle import DEFAULT_CONTROLLER_PORT, controller_vm_name
+from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT
 from rigging.secrets import resolve_secret_spec
 
-from iac.config import CLOUDFLARE_TOKEN_SECRET, Provider, load_iris_config, load_provisioning
+from iac.config import (
+    CLOUDFLARE_TOKEN_SECRET,
+    GcpGclbSpec,
+    Provider,
+    load_iac_finelog_config,
+    load_iris_config,
+    load_provisioning,
+)
 from iac.coreweave.cluster import CoreweaveCluster, CoreweaveClusterArgs
 from iac.coreweave.dns import FederationDns, FederationDnsArgs
 from iac.coreweave.kueue import KueueAddon, KueueAddonArgs
 from iac.coreweave.rbac import GrafanaObserverRbac, GrafanaObserverRbacArgs, IrisRbac, IrisRbacArgs
 from iac.coreweave.traefik import TraefikAddon, TraefikAddonArgs
 from iac.gcp.addresses import GcpStaticAddresses, GcpStaticAddressesArgs
+from iac.gcp.gclb import ControllerIngress, FinelogIngress, GcpGclbIap, GcpGclbIapArgs
 from iac.gcp.iam import GcpIam, GcpIamArgs
 from iac.gcp.iam_config import load_iam_config
 from iac.gcp.registries import GcpArtifactRegistries, GcpArtifactRegistriesArgs
@@ -35,6 +50,17 @@ from iac.imports import NO_IMPORTS, ImportRegistrar
 from iac.nodepools import derive_nodepools
 
 DEFAULT_NAMESPACE = "iris"
+IAP_AUDIENCE_PATTERN = re.compile(
+    r"^/projects/(?P<project_number>[0-9]+)/global/backendServices/(?P<backend_id>[0-9]+)$"
+)
+
+
+@dataclass(frozen=True)
+class _IapBackendIdentity:
+    domain: str
+    project_number: str
+    backend_service_id: str
+    programmatic_clients: tuple[str, ...]
 
 
 def _warn_if_no_persistent_signing_key(cluster: str, iris_config) -> None:
@@ -157,7 +183,7 @@ def _build_coreweave(cluster: str, *, imports: ImportRegistrar) -> None:
             cluster=cluster,
             namespace=namespace,
             service_name=controller_coreweave.service_name,
-            port=controller_coreweave.port or 10000,
+            port=controller_coreweave.port or DEFAULT_CONTROLLER_PORT,
             spec=coreweave_provisioning.ingress,
             namespace_dependency=rbac.namespace,
         ),
@@ -175,6 +201,119 @@ def _build_coreweave(cluster: str, *, imports: ImportRegistrar) -> None:
                 api_token=pulumi.Output.secret(cloudflare_api_token),
             ),
         )
+
+
+def _iap_backend_identity(cluster: str, iris_config) -> _IapBackendIdentity:
+    auth = iris_config.auth
+    iap = auth.iap if auth is not None else None
+    if iap is None or not iap.url or not iap.signed_header_audience:
+        raise ValueError(f"cluster {cluster!r} needs auth.iap.url and auth.iap.signed_header_audience for GCLB")
+    parsed_url = urlparse(iap.url)
+    if parsed_url.scheme != "https" or not parsed_url.hostname or parsed_url.path not in ("", "/"):
+        raise ValueError(f"cluster {cluster!r} auth.iap.url must be an HTTPS origin")
+    audience = IAP_AUDIENCE_PATTERN.fullmatch(iap.signed_header_audience)
+    if audience is None:
+        raise ValueError(f"cluster {cluster!r} has an invalid auth.iap.signed_header_audience")
+    desktop_client = iap.oauth_client_id or MARIN_DESKTOP_OAUTH_CLIENT.client_id
+    programmatic_clients = tuple(dict.fromkeys((desktop_client, *iap.programmatic_audiences)))
+    return _IapBackendIdentity(
+        domain=parsed_url.hostname,
+        project_number=audience["project_number"],
+        backend_service_id=audience["backend_id"],
+        programmatic_clients=programmatic_clients,
+    )
+
+
+def _build_gclb(
+    project: str,
+    spec: GcpGclbSpec,
+    *,
+    gcp_provider: pulumi.ProviderResource,
+    imports: ImportRegistrar,
+) -> None:
+    controllers: list[ControllerIngress] = []
+    project_numbers: set[str] = set()
+    for controller_spec in spec.controllers:
+        iris_config = load_iris_config(controller_spec.cluster)
+        controller_config = iris_config.controller.gcp
+        platform_config = iris_config.platform.gcp
+        if controller_config is None or platform_config is None:
+            raise ValueError(f"cluster {controller_spec.cluster!r} is not configured for GCP")
+        if platform_config.project_id != project:
+            raise ValueError(
+                f"cluster {controller_spec.cluster!r} belongs to {platform_config.project_id!r}, not {project!r}"
+            )
+        iap_identity = _iap_backend_identity(controller_spec.cluster, iris_config)
+        project_numbers.add(iap_identity.project_number)
+        label_prefix = iris_config.platform.label_prefix or "iris"
+        instance = controller_vm_name(label_prefix)
+        controllers.append(
+            ControllerIngress(
+                cluster=controller_spec.cluster,
+                domain=iap_identity.domain,
+                zone=controller_config.zone,
+                instance=instance,
+                ip_address=gcp_instance_internal_ip(
+                    instance,
+                    project=project,
+                    zone=controller_config.zone,
+                ),
+                backend_service_id=iap_identity.backend_service_id,
+                network_tag=Labels(label_prefix).iris_controller,
+                programmatic_clients=iap_identity.programmatic_clients,
+                port=controller_config.port or DEFAULT_CONTROLLER_PORT,
+                token_proxy=controller_spec.token_proxy,
+                deny_public=controller_spec.deny_public,
+            )
+        )
+
+    if len(project_numbers) != 1:
+        raise ValueError("all GCLB controller audiences must use one GCP project number")
+    (project_number,) = project_numbers
+
+    finelogs: list[FinelogIngress] = []
+    for finelog_spec in spec.finelogs:
+        finelog_config = load_iac_finelog_config(finelog_spec.cluster)
+        deployment = finelog_config.deployment.gcp
+        if not isinstance(deployment, GcpDeployment):
+            raise ValueError(f"finelog {finelog_spec.cluster!r} is not configured for GCP")
+        if deployment.project != project:
+            raise ValueError(f"finelog {finelog_spec.cluster!r} belongs to {deployment.project!r}, not {project!r}")
+        network_tag = f"{finelog_config.name}-lb"
+        if network_tag not in deployment.network_tags:
+            raise ValueError(f"finelog {finelog_spec.cluster!r} must declare network tag {network_tag!r}")
+        finelogs.append(
+            FinelogIngress(
+                cluster=finelog_spec.cluster,
+                domain=finelog_spec.domain,
+                zone=deployment.zone,
+                instance=finelog_config.name,
+                ip_address=gcp_instance_internal_ip(
+                    finelog_config.name,
+                    project=project,
+                    zone=deployment.zone,
+                ),
+                port=finelog_config.port,
+                network_tag=network_tag,
+                sender_source_ranges=tuple(finelog_spec.sender_source_ranges),
+            )
+        )
+
+    gclb = GcpGclbIap(
+        "gclb",
+        GcpGclbIapArgs(
+            project=project,
+            project_number=project_number,
+            frontend_name=spec.frontend_name,
+            controllers=tuple(controllers),
+            finelogs=tuple(finelogs),
+            network=spec.network,
+            subnetwork=spec.subnetwork,
+        ),
+        gcp_provider=gcp_provider,
+        imports=imports,
+    )
+    pulumi.export("gclb_ip_address", gclb.ip_address)
 
 
 def _build_gcp(cluster: str, *, imports: ImportRegistrar) -> None:
@@ -202,6 +341,13 @@ def _build_gcp(cluster: str, *, imports: ImportRegistrar) -> None:
         gcp_provider=gcp_provider,
         imports=imports,
     )
+    if gcp_provisioning.gclb is not None:
+        _build_gclb(
+            gcp_provisioning.project,
+            gcp_provisioning.gclb,
+            gcp_provider=gcp_provider,
+            imports=imports,
+        )
     GcpIam(
         "iam",
         GcpIamArgs(

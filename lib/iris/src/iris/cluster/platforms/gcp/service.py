@@ -135,6 +135,7 @@ class VmCreateRequest:
     zone: str
     machine_type: str
     labels: dict[str, str] = field(default_factory=dict)
+    network_tags: tuple[str, ...] = ()
     metadata: dict[str, str] = field(default_factory=dict)
     startup_script: str | None = None
     service_account: str | None = None

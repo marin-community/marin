@@ -12,6 +12,7 @@ deployment:
     machine_type: n2-highmem-4
     boot_disk_size_gb: 200
     service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
+    network_tags: [finelog-marin-lb]
 # marin is the federation hub. cidr admits marin's own network and loopback; jwt
 # admits each per-cluster finelog forwarding rows here, by its Ed25519 public key.
 auth:

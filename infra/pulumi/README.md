@@ -3,9 +3,10 @@
 Infrastructure-as-code for the static substrate of Marin clusters, per the design in
 [`.agents/projects/iac/`](../../.agents/projects/iac/). Pulumi (Python). **CoreWeave first.**
 
-This is the **minimal cut**: it provisions RBAC, reserved NodePools, Kueue objects, the
-Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs for a CoreWeave
-cluster. It is the sole owner of these resources — Iris no longer provisions any of them
+It provisions RBAC, reserved NodePools, Kueue objects, the
+Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs for CoreWeave,
+plus shared GCLB/IAP ingress, firewall rules, static addresses, registries, and IAM for GCP.
+It is the sole owner of these resources — Iris no longer provisions any of them
 (`verify_prerequisites()` in
 [`k8s/controller.py`](../../lib/iris/src/iris/cluster/platforms/k8s/controller.py) only checks
 presence and fails with a `pulumi up` remediation if something is missing). The CKS cluster
@@ -15,9 +16,10 @@ The cluster project retains the `marin-iac` Pulumi name so this directory's move
 
 Stacks: one per cluster, each a `Pulumi.<cluster>.yaml` pointer to the cluster name. CoreWeave —
 `cw-us-west-04a`, `cw-us-east-02a`, `cw-rno2a`, `cw-us-east-08a` (GB200), all adopted into
-`gs://marin-iac-state/`. GCP — `marin`, which declares the reserved
-federation-egress static IPs (`GcpStaticAddresses`) and every non-authoritative GCP IAM grant
-on `hai-gcp-models` (`GcpIam`, driven by `src/iac/gcp/iam_data.yaml`; see "User grants" below).
+`gs://marin-iac-state/`. GCP — `marin`, which declares the reserved federation-egress static
+IPs (`GcpStaticAddresses`), shared GCE load-balancer ingress (`GcpGclbIap`), and every
+non-authoritative GCP IAM grant on `hai-gcp-models` (`GcpIam`, driven by
+`src/iac/gcp/iam_data.yaml`; see "User grants" below).
 
 Beyond cluster prerequisites, the `iac` package also carries the reusable *service* components
 other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run` (IAP-gated Cloud Run,
@@ -100,6 +102,10 @@ Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.ya
   cluster-inventory resources. Retain both identities during a token rotation.
 - Kueue's controller-manager memory request and limit default to `2Gi`.
   `manager_memory_limit` accepts larger per-cluster values and rejects values below `2Gi`.
+- The GCP GCLB route set from `provisioning.gcp.gclb`. Controller runtime details come from
+  each referenced Iris config, finelog VM details come from `lib/finelog/config`, and current
+  internal VM addresses are read from GCE during preview. See
+  [`lib/iris/docs/iap-gclb.md`](../../lib/iris/docs/iap-gclb.md).
 
 ## Operations
 
@@ -210,10 +216,12 @@ uv run --package marin-iac --extra deploy python infra/pulumi/import_resources.p
 
 Before changing state, `apply` regenerates the current candidates and rejects a stale or edited
 manifest. It then runs `pulumi import --preview-only`, prints the same digest for confirmation,
-and imports with Pulumi's default deletion protection. Finally it runs a normal preview. Stop on
-any unexpected replace or delete, especially for a NodePool. When the follow-up preview is
-correct, run a normal `pulumi up`; that creates entries omitted from the import and reconciles
-temporary import protection with each resource's declared protection setting.
+and imports with Pulumi's default deletion protection. Finally it runs a normal preview. Lock
+changes on newly imported resources are stack metadata: the normal update removes temporary
+protection from leaf resources and retains it where the program declares `protect=True`. Stop on
+any unexpected provider update, replacement, or deletion, especially for a NodePool. When the
+follow-up preview is correct, run a normal `pulumi up`; that creates entries omitted from the
+import and reconciles the protection settings.
 
 For a new stack, initialize it before generating the transaction:
 
@@ -264,6 +272,8 @@ project's paths and calls `./.github/actions/pulumi-preview` with its own `stack
 
 - **Signing keys** (`iris-<cluster>-signing-key`, `finelog-<cluster>-signing-key`) stay manual,
   minted with `iris cluster init-keys` — the key material must never pass through Pulumi state.
+- **IAP Web OAuth client creation and secrets** stay in the Cloud Console. Pulumi preserves
+  the existing client fields while managing IAP enablement, programmatic clients, and access.
 
 ## Future work
 
@@ -287,4 +297,5 @@ project's paths and calls `./.github/actions/pulumi-preview` with its own `stack
   `install_cw_network.py` directly for this.
 
 Everything else in the original design (RBAC, NodePools, Kueue, Traefik/cert-manager, the
-federation ingress and DNS, the GCP static IPs, and Artifact Registry mirrors) is landed.
+federation ingress and DNS, the GCP static IPs, GCLB/IAP ingress, firewall rules, and Artifact
+Registry mirrors) is landed.
