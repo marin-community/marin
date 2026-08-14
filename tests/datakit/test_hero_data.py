@@ -29,9 +29,7 @@ def _marin_prefix(monkeypatch):
 
 
 def _relative_paths() -> dict[str, str]:
-    return {
-        key: path.removeprefix(f"{COREWEAVE_DATAKIT_PREFIX}/") for key, path in hero_data.all_paths().items()
-    }
+    return {key: path.removeprefix(f"{COREWEAVE_DATAKIT_PREFIX}/") for key, path in hero_data.all_paths().items()}
 
 
 def test_paths_match_the_checked_in_manifest():
