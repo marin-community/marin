@@ -33,6 +33,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
 )
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    DEFAULT_PIPELINE_SHARDS_PER_WORKER,
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
     VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
     FuzzyVerificationStoreConfig,
@@ -46,7 +47,6 @@ from rigging.timing import log_time
 
 logger = logging.getLogger(__name__)
 
-FUZZY_VERIFICATION_MAX_OUTPUT_SHARDS = 128
 FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
     recovery_timeout=1_800,
     ready_timeout=1_800,
@@ -115,6 +115,7 @@ def build_steps(base: str) -> list[StepSpec]:
             "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
             "verification": verification_params.model_dump(mode="json"),
             "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
+            "pipeline_shards_per_worker": DEFAULT_PIPELINE_SHARDS_PER_WORKER,
         },
         fn=lambda output_path: verify_fuzzy_dups(
             normalized_sources={"source": read_artifact(normalized.output_path, NormalizedData)},
@@ -124,7 +125,6 @@ def build_steps(base: str) -> list[StepSpec]:
             verification_params=verification_params,
             local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
             store_config=FUZZY_VERIFICATION_STORE_CONFIG,
-            max_output_shards=FUZZY_VERIFICATION_MAX_OUTPUT_SHARDS,
             worker_resources=ResourceConfig(cpu=2, ram="16g", disk="30g"),
         ),
         override_output_path=prefix_join(base, "verify_fuzzy_dups"),

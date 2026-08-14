@@ -52,7 +52,7 @@ TEST_STORE_CONFIG = FuzzyVerificationStoreConfig(
     lookup_batch_size=2,
     shards_per_worker=1,
 )
-verify_fuzzy_dups = partial(_verify_fuzzy_dups, store_config=TEST_STORE_CONFIG, max_output_shards=1)
+verify_fuzzy_dups = partial(_verify_fuzzy_dups, store_config=TEST_STORE_CONFIG)
 
 
 def test_parquet_rows_converts_only_the_row_it_yields(tmp_path, monkeypatch):
@@ -366,6 +366,8 @@ def test_representative_selection_is_stable_across_input_order(tmp_path, monkeyp
         output_path=str(tmp_path / "verified-first"),
         verification_params=FuzzyVerificationParams(),
         local_representative_params=TEST_LOCAL_PARAMS,
+        max_workers=1,
+        pipeline_shards_per_worker=1,
     )
     second = verify_fuzzy_dups(
         normalized_sources={"a-source-b": source_b, "z-source-a": source_a},
@@ -377,8 +379,13 @@ def test_representative_selection_is_stable_across_input_order(tmp_path, monkeyp
         output_path=str(tmp_path / "verified-second"),
         verification_params=FuzzyVerificationParams(),
         local_representative_params=TEST_LOCAL_PARAMS,
+        max_workers=1,
+        pipeline_shards_per_worker=2,
     )
 
+    assert first.counters["dedup/fuzzy/verification/pipeline/source_shards"] == 2
+    assert first.counters["dedup/fuzzy/verification/pipeline/shards"] == 1
+    assert second.counters["dedup/fuzzy/verification/pipeline/shards"] == 2
     assert _output_rows(first, source_a_key) == _output_rows(second, source_a_key) == []
     assert _output_rows(first, source_b_key) == _output_rows(second, source_b_key)
     assert _output_rows(first, source_b_key)[0]["dup_representative_source_key"] == source_a_key

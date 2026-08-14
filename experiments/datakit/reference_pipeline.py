@@ -319,7 +319,6 @@ class PipelineScale:
 
 
 DEFAULT_SCALE = PipelineScale()
-FUZZY_VERIFICATION_MAX_OUTPUT_SHARDS = 4_096
 """Production full-fleet sizing (every ``all_sources()`` entry, K=5000)."""
 
 SMOKE_SCALE = PipelineScale(
@@ -816,7 +815,6 @@ def reference_datakit_steps(
         verification_params=verification_params,
         local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
         store_config=verification_store_config,
-        max_output_shards=FUZZY_VERIFICATION_MAX_OUTPUT_SHARDS,
         max_workers=scale.pool.n_workers,
         worker_resources=scale.pool.worker,
     )

@@ -40,6 +40,7 @@ from marin.processing.classification.deduplication.fuzzy_dups import (
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, compute_minhash_attrs
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    DEFAULT_PIPELINE_SHARDS_PER_WORKER,
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
     VERIFICATION_WORKER_SCRATCH,
     VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
@@ -72,7 +73,6 @@ MAX_STEP_CONCURRENCY = 20
 _SAMPLE_STEP_PREFIX = "data/datakit/normalized/"
 _EXACT_DUPS_MAX_PARALLELISM = 128
 _FUZZY_DUPS_MAX_PARALLELISM = 128
-_FUZZY_VERIFICATION_MAX_OUTPUT_SHARDS = 128
 _EXACT_DUPS_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 _MINHASH_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 _FUZZY_DUPS_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
@@ -155,6 +155,7 @@ def _fuzzy_verification_step(
             "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
             "verification": params.model_dump(mode="json"),
             "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
+            "pipeline_shards_per_worker": DEFAULT_PIPELINE_SHARDS_PER_WORKER,
         },
         fn=lambda output_path: verify_fuzzy_dups(
             normalized_sources={
@@ -168,7 +169,6 @@ def _fuzzy_verification_step(
             verification_params=params,
             local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
             store_config=_FUZZY_VERIFICATION_STORE_CONFIG,
-            max_output_shards=_FUZZY_VERIFICATION_MAX_OUTPUT_SHARDS,
             worker_resources=_FUZZY_VERIFICATION_WORKER_RESOURCES,
         ),
     )
