@@ -310,8 +310,13 @@ def _build_controller_deployment(
     }
 
 
-def _build_node_agent_daemonset(*, namespace: str, image: str) -> dict:
+def _build_node_agent_daemonset(*, namespace: str, image: str, cache_dir: str | None = None) -> dict:
     """Run the Iris physical-node collector once on every Kubernetes node."""
+    volume_mounts = [{"name": "config", "mountPath": "/etc/iris", "readOnly": True}]
+    volumes = [{"name": "config", "configMap": {"name": "iris-cluster-config"}}]
+    if cache_dir is not None:
+        volume_mounts.append({"name": "task-cache", "mountPath": cache_dir})
+        volumes.append({"name": "task-cache", "hostPath": {"path": cache_dir, "type": "DirectoryOrCreate"}})
     return {
         "apiVersion": "apps/v1",
         "kind": "DaemonSet",
@@ -357,10 +362,10 @@ def _build_node_agent_daemonset(*, namespace: str, image: str) -> dict:
                                 "requests": {"cpu": "50m", "memory": "64Mi"},
                                 "limits": {"cpu": "1", "memory": "512Mi"},
                             },
-                            "volumeMounts": [{"name": "config", "mountPath": "/etc/iris", "readOnly": True}],
+                            "volumeMounts": volume_mounts,
                         }
                     ],
-                    "volumes": [{"name": "config", "configMap": {"name": "iris-cluster-config"}}],
+                    "volumes": volumes,
                 },
             },
         },
@@ -508,8 +513,17 @@ class K8sControllerProvider:
         self.ensure_kueue_queues(config)
         self.ensure_priority_classes()
         if config.finelog.config or LOG_SERVER_ENDPOINT_NAME in config.endpoints:
+            cache_dir = (
+                config.kubernetes_provider.cache_dir or "/cache"
+                if config.kubernetes_provider.cache_max_age is not None
+                else None
+            )
             self._kubectl.apply_json(
-                _build_node_agent_daemonset(namespace=self._namespace, image=config.controller.image)
+                _build_node_agent_daemonset(
+                    namespace=self._namespace,
+                    image=config.controller.image,
+                    cache_dir=cache_dir,
+                )
             )
             logger.info("DaemonSet %s applied", _NODE_AGENT_NAME)
         else:

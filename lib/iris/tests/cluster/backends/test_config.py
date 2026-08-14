@@ -2189,6 +2189,11 @@ def test_make_task_backend_requires_kueue_for_k8s_backend():
         make_task_backend(config, unreachable_grace=Duration.from_seconds(1))
 
 
+def test_kubernetes_provider_rejects_nonpositive_cache_max_age():
+    with pytest.raises(ValueError, match="cache_max_age must be positive"):
+        KubernetesProviderConfig(cache_max_age=Duration.from_seconds(0))
+
+
 def test_k8s_backend_uses_canonical_default_task_image():
     config = IrisClusterConfig(
         defaults=DefaultsConfig(worker=WorkerConfig(default_task_image="registry.example/iris-task:abc1234")),

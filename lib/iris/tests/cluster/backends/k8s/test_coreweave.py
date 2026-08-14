@@ -63,6 +63,7 @@ from iris.cluster.platforms.types import (
     Labels,
 )
 from iris.cluster.types import AcceleratorType
+from rigging.timing import Duration
 
 
 class _ControllerDeploymentK8sService(InMemoryK8sService):
@@ -355,6 +356,26 @@ def test_start_controller_creates_controller_resources():
     assert pvc["spec"]["accessModes"] == ["ReadWriteOnce"]
     assert pvc["spec"]["resources"]["requests"]["storage"] == _CONTROLLER_STATE_PVC_SIZE
 
+    provider.shutdown()
+
+
+def test_start_controller_mounts_task_cache_in_node_agent_when_reclaim_enabled():
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
+    cluster_config.endpoints["/system/log-server"] = EndpointSpec(uri="http://finelog:10001")
+    cluster_config.kubernetes_provider.cache_dir = "/mnt/local/iris-cache"
+    cluster_config.kubernetes_provider.cache_max_age = Duration.from_hours(24)
+    _seed_prerequisites(k8s, cluster_config)
+
+    provider.start_controller(cluster_config)
+
+    node_agent = k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent")
+    agent_spec = node_agent["spec"]["template"]["spec"]
+    assert {"name": "task-cache", "mountPath": "/mnt/local/iris-cache"} in agent_spec["containers"][0]["volumeMounts"]
+    assert {
+        "name": "task-cache",
+        "hostPath": {"path": "/mnt/local/iris-cache", "type": "DirectoryOrCreate"},
+    } in agent_spec["volumes"]
     provider.shutdown()
 
 

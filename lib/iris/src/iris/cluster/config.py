@@ -629,10 +629,18 @@ class KubernetesProviderConfig(_Config):
     service_account: str = ""
     host_network: bool = False
     cache_dir: str = ""  # hostPath base for cache mounts (default: "/cache")
+    cache_max_age: DurationField | None = None  # enables idle-node cache reclamation
     controller_address: str = ""  # injected into task pods
     kueue: KueueConfig = Field(default_factory=KueueConfig)
     preempt_namespaces: list[str] = Field(default_factory=list)
     priority_classes: dict[str, str] = Field(default_factory=dict)  # band -> PriorityClass
+
+    @field_validator("cache_max_age")
+    @classmethod
+    def _positive_cache_max_age(cls, value: Duration | None) -> Duration | None:
+        if value is not None and value.to_ms() <= 0:
+            raise ValueError("cache_max_age must be positive")
+        return value
 
 
 # ---------------------------------------------------------------------------

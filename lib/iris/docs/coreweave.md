@@ -275,6 +275,7 @@ their Kubernetes service account inside the cluster.
 | `kubernetes_provider.service_account` | Optional service account assigned to task Pods. |
 | `kubernetes_provider.host_network` | Enables host networking and RDMA requests for GPU Pods. |
 | `kubernetes_provider.cache_dir` | Node-local cache root. CoreWeave configs use `/mnt/local/iris-cache`. |
+| `kubernetes_provider.cache_max_age` | Maximum time since the last write before an idle node reclaims a top-level cache entry. Omit it to disable reclamation. |
 | `kubernetes_provider.controller_address` | In-cluster controller address injected into task Pods. |
 | `kubernetes_provider.kueue.cluster_queue` | Pulumi-owned ClusterQueue to which Iris binds its LocalQueue. This is required. |
 | `kubernetes_provider.kueue.topologies` | Optional `group_by` to CoreWeave node-label mappings. |
@@ -346,18 +347,20 @@ Task working directories and caches are node-local:
 
 Keep `cache_dir` on `/mnt/local`, the node's NVMe storage. The shared Hugging
 Face path is `HF_HUB_CACHE`; Iris deliberately leaves `HF_HOME` private because
-it may contain the submitter's token. HostPath caches are not durable and are
-not automatically pruned, so they can grow until the node is replaced or an
-operator cleans them. Durable outputs belong in object storage.
+it may contain the submitter's token. The CoreWeave configs set
+`cache_max_age` to seven days. Every five minutes, the node-agent checks nodes
+without a pending or running Iris task and removes top-level entries whose
+files have not been modified within that age. Durable outputs belong in object
+storage.
 
 `/cache` is unclaimed node-local scratch: a task that needs a real directory on
-the node rather than a bucket picks its own subdirectory there. Nothing prunes
-it, so treat anything written there as recoverable. `iris.runtime.jax_init` uses
-`/cache/xla` for XLA's per-fusion autotune results on GPU tasks, because XLA
-opens that directory from C++ and cannot read an object-store URL. JAX's own
-compilation cache is the opposite case and stays on object storage under the
-Marin prefix: JAX writes it only from process 0, so a node-local copy would
-leave every other node permanently cold.
+the node instead of a bucket picks its own subdirectory there. The node-agent
+reclaims those subdirectories under the same policy, so treat anything written
+there as recoverable. `iris.runtime.jax_init` uses `/cache/xla` for XLA's
+per-fusion autotune results on GPU tasks, because XLA opens that directory from
+C++ and cannot read an object-store URL. JAX's own compilation cache stays on
+object storage under the Marin prefix: JAX writes it only from process 0, so a
+node-local copy would leave every other node permanently cold.
 
 `storage.local_state_dir` controls controller SQLite storage. When it is empty,
 Iris creates a controller state PVC. `storage.remote_state_dir` stores durable
