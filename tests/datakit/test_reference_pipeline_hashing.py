@@ -97,7 +97,8 @@ def test_store_hash_tracks_content_not_resources():
     resourced = _build(scale=pool).output_buckets.hash_id
     packed_pool = dataclasses.replace(
         SMOKE_SCALE.pool,
-        task=ResourceConfig(cpu=1, ram="1g", disk="1g"),
+        worker=ResourceConfig.with_gpu("GB200", cpu=36, ram="298g", disk="1t"),
+        task=ResourceConfig.with_gpu("GB200", cpu=1, ram="1g", disk="1g"),
     )
     packed = _build(scale=dataclasses.replace(SMOKE_SCALE, pool=packed_pool)).output_buckets.hash_id
     execution = dataclasses.replace(SMOKE_SCALE.store, max_parallel_bucket_writes=1)
