@@ -211,18 +211,10 @@ def test_fused_reverse_matches_stock_autodiff_end_to_end(cpu_mesh, monkeypatch, 
     """
     del cpu_mesh
 
-    def gate_silu_reverse(normalized, output_cotangent, gate, w_up, silu_derivative):
-        gate_accumulator = output_cotangent * normalized * (gate * (1 - gate))
-        gate_hidden_cotangent = jnp.einsum("td,rd->tr", gate_accumulator, w_up)
-        return output_cotangent * gate, gate_accumulator, gate_hidden_cotangent * silu_derivative
-
     monkeypatch.setattr(
         rgn,
-        "_backward_kernels",
-        lambda: (
-            gate_silu_reverse,
-            rgn.exact_rms_backward_fused_reference,
-        ),
+        "_backward_kernel",
+        lambda: rgn.exact_rms_backward_fused_reference,
     )
     inputs = _norm_inputs(dtype)
     # The fused path reshards its input to the batch spec, so feed both paths an already-sharded

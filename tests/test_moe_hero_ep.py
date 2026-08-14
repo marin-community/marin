@@ -754,18 +754,10 @@ def test_fused_reverse_matches_stock_autodiff(monkeypatch, dtype, tolerance):
     batch-axis reductions are exercised on CPU.
     """
 
-    def gate_silu_reverse(normalized, output_cotangent, gate, w_up, silu_derivative):
-        gate_accumulator = output_cotangent * normalized * (gate * (1 - gate))
-        gate_hidden_cotangent = jnp.einsum("td,rd->tr", gate_accumulator, w_up)
-        return output_cotangent * gate, gate_accumulator, gate_hidden_cotangent * silu_derivative
-
     monkeypatch.setattr(
         rgn,
-        "_backward_kernels",
-        lambda: (
-            gate_silu_reverse,
-            rgn.exact_rms_backward_fused_reference,
-        ),
+        "_backward_kernel",
+        lambda: rgn.exact_rms_backward_fused_reference,
     )
     with set_mesh(_rms_gated_norm_mesh()):
         inputs = _rms_gated_norm_inputs(dtype)

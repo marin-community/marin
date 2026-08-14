@@ -320,18 +320,15 @@ def _exact_forward(x, norm_weight, w_down, w_up, eps):
     return output.reshape(x.shape), residuals
 
 
-def _backward_kernels():
-    """Return the CuTe reverse regions.
+def _backward_kernel():
+    """Return the fused RMS reverse region.
 
     Imported lazily so the default XLA path never pulls in the optional SM100 dependency, and
-    indirected through one function so CPU tests can substitute the pure-JAX references.
+    indirected through one function so CPU tests can substitute its pure-JAX reference.
     """
-    from levanter.grug._moe.quack_rms_cute import (  # noqa: PLC0415
-        quack_coda_gate_silu_reverse,
-        quack_coda_rms_backward_fused,
-    )
+    from levanter.grug._moe.quack_rms_cute import quack_coda_rms_backward_fused  # noqa: PLC0415
 
-    return quack_coda_gate_silu_reverse, quack_coda_rms_backward_fused
+    return quack_coda_rms_backward_fused
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(4, 5))
@@ -355,7 +352,7 @@ def _fused_fwd(x, norm_weight, w_down, w_up, eps, batch_axes):
 
 
 def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
-    gate_silu_reverse, rms_backward_fused = _backward_kernels()
+    rms_backward_fused = _backward_kernel()
 
     del eps
     x = residuals.x
@@ -370,18 +367,14 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
         (residuals.gate_preactivation,),
         (jnp.ones_like(residuals.gate_preactivation),),
     )
-    direct_cotangent, gate_accumulator, gate_preactivation_cotangent = gate_silu_reverse(
-        normalized,
-        output_cotangent,
-        gate,
-        residuals.w_up,
-        silu_derivative,
-    )
+    direct_cotangent = (output_cotangent * gate).astype(x_flat.dtype)
+    gate_cotangent = (output_cotangent * normalized).astype(x_flat.dtype)
+    sigmoid_cotangent = (gate * (jnp.array(1, gate.dtype) - gate)).astype(x_flat.dtype)
+    gate_accumulator = (gate_cotangent * sigmoid_cotangent).astype(x_flat.dtype)
     w_up_cotangent = jnp.einsum("tr,td->rd", residuals.gate_hidden, gate_accumulator)
-    normalized_for_w_down = (
-        x_flat.astype(jnp.float32) * residuals.inverse_rms[:, None] * residuals.norm_weight
-    ).astype(x_flat.dtype)
-    w_down_cotangent = jnp.einsum("td,tr->dr", normalized_for_w_down, gate_preactivation_cotangent)
+    gate_hidden_cotangent = jnp.einsum("td,rd->tr", gate_accumulator, residuals.w_up)
+    gate_preactivation_cotangent = (gate_hidden_cotangent * silu_derivative).astype(x_flat.dtype)
+    w_down_cotangent = jnp.einsum("td,tr->dr", normalized, gate_preactivation_cotangent)
     x_cotangent, norm_weight_cotangent = rms_backward_fused(
         gate_preactivation_cotangent,
         residuals.w_down,
