@@ -364,6 +364,7 @@ def main(
         workspace_slots=workspace_slots,
         forward_x_storage=forward_x_storage,
         backward_peer_storage=backward_peer_storage,
+        workspace_transport=transport,
     )
     capacity = schedule_capacity(num_tokens, TOP_K, NUM_LOCAL_EXPERTS, config)
     required_capacity = _required_schedule_capacity(process_routes)
