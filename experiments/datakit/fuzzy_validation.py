@@ -63,8 +63,10 @@ from marin.processing.classification.deduplication.fuzzy_verification import Fuz
 from marin.processing.classification.deduplication.repack_fuzzy_dups import repack_fuzzy_dups_source
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     DEFAULT_PIPELINE_SHARDS_PER_WORKER,
+    REFERENCE_LARGE_CLUSTER_PARAMS,
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
     FuzzyVerificationStoreConfig,
+    LargeClusterParams,
     verify_fuzzy_dups_step,
 )
 from rigging.filesystem import StoragePath, marin_prefix, marin_temp_bucket, prefix_join
@@ -129,6 +131,7 @@ def build_fuzzy_validation_step(
     task_resources: ResourceConfig | None = None,
     actor_environment: EnvironmentConfig | None = None,
     pipeline_shards_per_worker: int = DEFAULT_PIPELINE_SHARDS_PER_WORKER,
+    large_cluster_params: LargeClusterParams = REFERENCE_LARGE_CLUSTER_PARAMS,
 ) -> StepSpec:
     """Build the fuzzy-validation terminal and its Datakit dependencies."""
     if store_config is None:
@@ -146,6 +149,7 @@ def build_fuzzy_validation_step(
         candidates_step=datakit.fuzzy_dedup,
         verification_params=FuzzyVerificationParams(),
         local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+        large_cluster_params=large_cluster_params,
         store_config=store_config,
         pipeline_shards_per_worker=pipeline_shards_per_worker,
         max_workers=scale.pool.n_workers,
@@ -175,6 +179,7 @@ def build_repacked_fuzzy_validation_step(
     pipeline_shards_per_worker: int = DEFAULT_PIPELINE_SHARDS_PER_WORKER,
     repack_max_workers: int = DEFAULT_REPACK_MAX_WORKERS,
     repack_worker_resources: ResourceConfig | None = None,
+    large_cluster_params: LargeClusterParams = REFERENCE_LARGE_CLUSTER_PARAMS,
 ) -> StepSpec:
     """Build a validation graph that reuses one prior candidate source."""
     normalized_step = sources.get(source_name)
@@ -214,6 +219,7 @@ def build_repacked_fuzzy_validation_step(
         candidates_step=repack_step,
         verification_params=FuzzyVerificationParams(),
         local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+        large_cluster_params=large_cluster_params,
         store_config=store_config,
         pipeline_shards_per_worker=pipeline_shards_per_worker,
         max_workers=validation_scale.pool.n_workers,
@@ -237,6 +243,7 @@ def build_pinned_fuzzy_validation_step(
     task_resources: ResourceConfig,
     actor_environment: EnvironmentConfig | None = None,
     pipeline_shards_per_worker: int = DEFAULT_PIPELINE_SHARDS_PER_WORKER,
+    large_cluster_params: LargeClusterParams = REFERENCE_LARGE_CLUSTER_PARAMS,
 ) -> StepSpec:
     """Build validation for sources already present in a candidate artifact."""
     if not benchmark_sources:
@@ -278,6 +285,7 @@ def build_pinned_fuzzy_validation_step(
         candidates_step=candidate_step,
         verification_params=FuzzyVerificationParams(),
         local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+        large_cluster_params=large_cluster_params,
         store_config=store_config,
         pipeline_shards_per_worker=pipeline_shards_per_worker,
         max_workers=validation_scale.pool.n_workers,
@@ -419,6 +427,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--store-shards-per-worker", type=int, default=DEFAULT_STORE_SHARDS_PER_WORKER)
     parser.add_argument("--load-concurrency", type=int, default=DEFAULT_LOAD_CONCURRENCY)
     parser.add_argument("--pipeline-shards-per-worker", type=int, default=DEFAULT_PIPELINE_SHARDS_PER_WORKER)
+    parser.add_argument("--maximum-cluster-members", type=int, default=REFERENCE_LARGE_CLUSTER_PARAMS.maximum_members)
+    parser.add_argument(
+        "--target-cluster-members",
+        type=int,
+        default=REFERENCE_LARGE_CLUSTER_PARAMS.target_members_per_partition,
+    )
+    parser.add_argument(
+        "--minimum-local-cluster-members",
+        type=int,
+        default=REFERENCE_LARGE_CLUSTER_PARAMS.minimum_local_members,
+    )
     parser.add_argument("--max-concurrent", type=int, default=8)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--reuse-legacy-focus-candidates", action="store_true")
@@ -469,6 +488,11 @@ def main(argv: list[str] | None = None) -> None:
         shards_per_worker=args.store_shards_per_worker,
         load_concurrency=args.load_concurrency,
     )
+    large_cluster_params = LargeClusterParams(
+        maximum_members=args.maximum_cluster_members,
+        target_members_per_partition=args.target_cluster_members,
+        minimum_local_members=args.minimum_local_cluster_members,
+    )
     actor_environment = None
     if args.native_wheel_version:
         actor_environment = create_environment(
@@ -518,6 +542,7 @@ def main(argv: list[str] | None = None) -> None:
             task_resources=task_resources,
             actor_environment=actor_environment,
             pipeline_shards_per_worker=args.pipeline_shards_per_worker,
+            large_cluster_params=large_cluster_params,
         )
         logger.info(
             "Benchmark selected %d source(s) and %d documents for target %d",
@@ -569,6 +594,7 @@ def main(argv: list[str] | None = None) -> None:
             actor_environment=actor_environment,
             pipeline_shards_per_worker=args.pipeline_shards_per_worker,
             repack_worker_resources=replace(DEFAULT_REPACK_WORKER, image=args.task_image),
+            large_cluster_params=large_cluster_params,
         )
         logger.info("Repack output prefix: %s", repack_output_path_prefix)
         logger.info("Validation output prefix: %s", validation_output_path_prefix)
@@ -581,6 +607,7 @@ def main(argv: list[str] | None = None) -> None:
             task_resources=task_resources,
             actor_environment=actor_environment,
             pipeline_shards_per_worker=args.pipeline_shards_per_worker,
+            large_cluster_params=large_cluster_params,
         )
     logger.info("Fuzzy-validation target: %s", target.output_path)
     StepRunner().run([target], dry_run=args.dry_run, max_concurrent=args.max_concurrent)
