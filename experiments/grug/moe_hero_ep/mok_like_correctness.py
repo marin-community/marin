@@ -156,6 +156,11 @@ def _error_metrics(
     help="peer-workspace transport; fabric_symmetric runs one rank per process over imported arenas",
 )
 @click.option(
+    "--forward-backward",
+    is_flag=True,
+    help="also run one backward pass, which the forward gate leaves entirely untested",
+)
+@click.option(
     "--forward-repeats",
     type=click.IntRange(min=1),
     default=1,
@@ -246,6 +251,7 @@ def _error_metrics(
     help="Scale the independent output cotangent used by gradient parity checks.",
 )
 def main(
+    forward_backward: bool,
     forward_repeats: int,
     forward_only: bool,
     workspace_transport: str,
@@ -774,6 +780,35 @@ def main(
             if difference > BF16_ATOL:
                 raise RuntimeError(f"forward output differs from the reference by {difference}")
             print("FORWARD PASS", flush=True)
+
+            if forward_backward:
+                # The backward handler carries its own peer tables (d_y, d_x_routed, the router
+                # gradients and the backward readiness flags). The arena binds them, but no
+                # cross-process run has ever executed them -- the training path does, and faults.
+                def gated_loss(routing: jax.Array, gradient: jax.Array, *values: jax.Array) -> jax.Array:
+                    output, _ = mok_like_mlp(
+                        values[0],
+                        routing,
+                        *values[1:],
+                        mesh=mesh,
+                        runtime=runtime,
+                        config=config,
+                        collective_id=0,
+                    )
+                    return jnp.sum(output.astype(jnp.float32) * gradient.astype(jnp.float32))
+
+                loss_value, gradients = jax.jit(
+                    jax.value_and_grad(gated_loss, argnums=tuple(range(2, 10)))
+                )(selected_experts, output_gradient, *differentiable)
+                jax.block_until_ready(gradients)
+                finite = all(bool(jnp.all(jnp.isfinite(gradient))) for gradient in gradients)
+                print(
+                    f"BACKWARD loss={float(loss_value):.4f} gradients={len(gradients)} finite={finite}",
+                    flush=True,
+                )
+                if not finite:
+                    raise RuntimeError("backward produced a non-finite gradient")
+                print("BACKWARD PASS", flush=True)
             return
         if offload:
             differentiated_fused_loss = jax.checkpoint(
