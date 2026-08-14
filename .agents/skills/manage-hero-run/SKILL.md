@@ -174,7 +174,7 @@ Many failures can be recoverable just by relaunching using the same id. These in
 
 - Ordinary runs should use rolling temporary checkpoint behavior for preemption recovery and keep only the final checkpoint permanently.
 - Hero runs must explicitly choose retention and rollback depth before launch. Keep one temporary
-  resume checkpoint by default. A count above two requires DRI approval in the run record.
+  resume checkpoint by default and never keep more than five. Record the rationale for a rollback depth above two.
 - Resume checkpoints belong in a lifecycle-managed region-local temp prefix. Canonical exports and
   named milestones belong in the caller's durable `users/<username>/...` prefix.
 - Never rely on permanent retention alone to protect an explicit rollback source; treat launch lineage as state.

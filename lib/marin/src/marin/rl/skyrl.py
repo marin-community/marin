@@ -82,8 +82,8 @@ class SkyRLRetentionPolicy:
     temporary_storage_ttl_days: int = 14
 
     def __post_init__(self) -> None:
-        if not 1 <= self.resume_checkpoint_count <= 2:
-            raise ValueError("SkyRL resume_checkpoint_count must be one or two")
+        if not 1 <= self.resume_checkpoint_count <= 5:
+            raise ValueError("SkyRL resume_checkpoint_count must be between one and five")
         if self.temporary_storage_ttl_days <= 0:
             raise ValueError("SkyRL temporary_storage_ttl_days must be positive")
 

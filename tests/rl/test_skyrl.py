@@ -110,6 +110,14 @@ def _execution(cluster: str = "cw-us-east-08a") -> IrisSkyRLExecution:
     )
 
 
+def test_skyrl_retention_allows_explicit_rollback_depth_up_to_five() -> None:
+    policy = SkyRLRetentionPolicy(resume_checkpoint_count=5)
+
+    assert policy.resume_checkpoint_count == 5
+    with pytest.raises(ValueError, match="between one and five"):
+        SkyRLRetentionPolicy(resume_checkpoint_count=6)
+
+
 def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement() -> None:
     spec = _spec()
     base = skyrl_step(spec, _execution())
