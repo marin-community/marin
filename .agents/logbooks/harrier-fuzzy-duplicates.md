@@ -1410,3 +1410,15 @@ author: Rafal Wojdyla
 - Service recovery check: None of the earlier RNO setup failures repeated as a terminal job failure.
 - Issue update: None. Wait for full completion and verification before the next major issue update.
 - Next action: Continue both roots through completion. Then verify all 292 source artifacts and all 166,775 shard names.
+
+### 2026-08-14 03:24 UTC - RNO replacement partition completed and verified
+
+- Failure: RNO root `v7` failed after its assigned sources finished. An S3 `GetObject` response ended early while StepRunner released the lock for `nemotron_sft/sft_math`. The source status was already `SUCCESS`, and no lock holder remained.
+- Recovery: Started root `v8` with the same batch resources, target cluster, source partition, and 512-service request. It created all 512 service jobs and skipped the completed `nemotron_sft/sft_math` artifact and all other completed source artifacts.
+- Service event: TEI service `040` hit the known fixed-port collision on port `12080`. The saved request was replayed, but the root completed its cache scan and closed the pool before the replay became necessary.
+- Root result: `/rav/harrier-fuzzy-dups-rno-p3of4-20260813-batch-max-v8` succeeded.
+- Partition verification: All 73 sources assigned to partition `3/4` have one successful artifact. Their normalized inputs contain 18,274 Parquet shard names, and the fuzzy-duplicate embedding outputs contain the same 18,274 names. There are no missing or extra shards.
+- Aggregate progress: A direct S3 count found 166,093 of 166,775 output shards, or 99.59 percent. There are 682 shards left.
+- East progress: `nemotron_cc_code_v1/all` reached 1,600 of 2,098 shards with 32 live workers and zero dead workers. East is now the only active partition.
+- Issue update: None. Wait for the full 292-source and 166,775-shard verification before the final major update.
+- Next action: Continue the East root through its final 43 source artifacts, then run the full output verification.
