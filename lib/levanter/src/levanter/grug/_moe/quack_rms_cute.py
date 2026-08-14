@@ -56,6 +56,8 @@ _SM100_MULTIPROCESSORS = 148
 _GATE_REVERSE_BLOCK_N = 32
 _RMS_REVERSE_BLOCK_M = 64
 _RMS_REVERSE_BLOCK_D = 64
+_RMS_FUSED_BLOCK_M = 128
+_RMS_FUSED_BLOCK_D = 128
 
 
 class _GateAccumulatorInplace:
@@ -770,8 +772,8 @@ def _rms_backward_fused_kernel(
 
 @functools.lru_cache(maxsize=None)
 def _rms_backward_fused_call(rows: int, hidden_dim: int, rank: int, dtype):
-    block_m = _RMS_REVERSE_BLOCK_M
-    block_d = _RMS_REVERSE_BLOCK_D
+    block_m = _RMS_FUSED_BLOCK_M
+    block_d = _RMS_FUSED_BLOCK_D
     return pl.pallas_call(
         functools.partial(_rms_backward_fused_kernel, block_m=block_m, block_d=block_d),
         out_shape=(
@@ -782,7 +784,7 @@ def _rms_backward_fused_call(rows: int, hidden_dim: int, rank: int, dtype):
         out_specs=(pl.no_block_spec,) * 2,
         input_output_aliases={2: 0, 6: 1},
         grid=(pl.cdiv(rows, block_m),),
-        compiler_params=plgpu.CompilerParams(num_warps=8, num_stages=2),
+        compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=2),
         cost_estimate=pl.CostEstimate(
             flops=2 * rows * hidden_dim * rank + 18 * rows * hidden_dim,
             transcendentals=0,
@@ -826,7 +828,7 @@ def quack_coda_rms_backward_fused(
         raise ValueError("RMS backward fused kernel requires BF16 matrix inputs")
     if inverse_rms.dtype != jnp.float32:
         raise ValueError("inverse_rms must be float32")
-    if rows % _RMS_REVERSE_BLOCK_M or hidden_dim % _RMS_REVERSE_BLOCK_D:
+    if rows % _RMS_FUSED_BLOCK_M or hidden_dim % _RMS_FUSED_BLOCK_D:
         raise ValueError("RMS backward dimensions must align with its tiles")
     return _rms_backward_fused_call(rows, hidden_dim, rank, x.dtype)(
         gate_preactivation_cotangent,
