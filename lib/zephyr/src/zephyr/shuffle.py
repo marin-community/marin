@@ -107,6 +107,10 @@ _PROGRESS_LOG_INTERVAL_SECONDS = 60.0
 _POLARS_STREAMING_CHUNK_SIZE = 10000
 # Maximum run files that Polars merges at one time during an external sort.
 _EXTERNAL_SORT_MAX_MERGE_FAN_IN = 32
+# Bound Parquet footer size when a shuffle has thousands of target shards. One
+# row group per target gives ideal predicate pruning, but makes every reducer
+# read multi-megabyte footers from every mapper chunk before it can read data.
+_SCATTER_MAX_ROW_GROUPS_PER_CHUNK = 512
 
 # Helper column names injected by _items_to_dataframe and stripped before
 # writing to disk.  Both are internal implementation details; user schemas must
@@ -526,8 +530,9 @@ class ScatterWriter:
     keeps the interface ready for DataFrame/RecordBatch-native pipelines.
 
     Each flush writes a single ``c{chunk:04d}.parquet`` file sorted by
-    ``[_SHARD_COL, _SORT_KEY_COL]`` with row groups sized so Polars predicate
-    pushdown skips non-target row groups on the read side.
+    ``[_SHARD_COL, _SORT_KEY_COL]`` with bounded, target-local row groups so
+    Polars predicate pushdown skips most unrelated data without creating
+    unbounded Parquet footers.
 
     Flushing is estimated-size-based: when the sum of ``DataFrame.estimated_size()``
     across buffered frames exceeds ``_SCATTER_FLUSH_THRESHOLD * _ESTIMATED_SIZE_CORRECTION_FACTOR``
@@ -608,10 +613,12 @@ class ScatterWriter:
         for shard_val, nbytes in shard_sizes.iter_rows():
             self._shard_bytes[shard_val] += int(nbytes)
 
-        # Size row groups so each target shard fits in roughly one row group,
-        # enabling Polars predicate pushdown to skip non-matching groups.
+        # Keep target shards local to as few row groups as practical so Polars
+        # predicate pushdown can skip unrelated data. Cap the group count because
+        # every reducer must read every chunk footer before applying that filter.
         num_targets = buffer_sorted[_SHARD_COL].n_unique()
-        row_group_size = max(1, len(buffer_sorted) // num_targets)
+        num_row_groups = min(num_targets, _SCATTER_MAX_ROW_GROUPS_PER_CHUNK)
+        row_group_size = max(1, math.ceil(len(buffer_sorted) / num_row_groups))
         chunk_path = f"{self._data_path}c{self._n_chunks_written:04d}.parquet"
         # Ideally we'd call write_parquet directly with the GCS path, but it occationally fails with a generic error.
         buf = io.BytesIO()
