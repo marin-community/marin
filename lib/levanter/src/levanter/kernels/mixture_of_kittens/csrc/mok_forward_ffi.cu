@@ -503,8 +503,34 @@ class RuntimeManager {
 
     for (int slot = 0; slot < workspace_slots_; ++slot) {
       ValidateRuntimePointers(*runtimes_[0][slot]);
+      ProbePeerArenas(arenas_[slot], slot);
     }
     initialized_ = true;
+  }
+
+  // Touch every imported peer arena before the kernel does.
+  //
+  // An import can succeed and still yield a mapping this device cannot reach, and the first
+  // evidence would otherwise be CUDA_ERROR_ILLEGAL_ADDRESS inside the megakernel -- which
+  // destroys the context and names neither the peer nor the region. A byte written and read back
+  // at each peer's base, and again at its last byte, localizes that to a rank while the failure
+  // is still attributable.
+  void ProbePeerArenas(const mok_fabric::SymmetricWorkspace& workspace, int slot) {
+    const size_t bytes = workspace.bytes();
+    for (int peer = 0; peer < workspace.num_ranks(); ++peer) {
+      const auto base = static_cast<uintptr_t>(workspace.peer_base(peer));
+      for (const size_t offset : {static_cast<size_t>(0), bytes - sizeof(uint32_t)}) {
+        void* target = reinterpret_cast<void*>(base + offset);
+        const cudaError_t status = cudaMemset(target, 0, sizeof(uint32_t));
+        if (status != cudaSuccess) {
+          throw std::runtime_error(
+              "Mixture-of-Kittens peer arena for rank " + std::to_string(peer) + " slot " +
+              std::to_string(slot) + " is not reachable at offset " + std::to_string(offset) +
+              " of " + std::to_string(bytes) + " bytes: " + cudaGetErrorString(status));
+        }
+      }
+    }
+    ThrowOnCuda(cudaDeviceSynchronize(), "cudaDeviceSynchronize(peer arena probe)");
   }
 
   // Fail on the host for any pointer the kernel will dereference on device.
