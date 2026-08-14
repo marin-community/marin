@@ -156,6 +156,13 @@ def _error_metrics(
     help="peer-workspace transport; fabric_symmetric runs one rank per process over imported arenas",
 )
 @click.option(
+    "--forward-repeats",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="sequential forward invocations, standing in for a scanned model's per-layer calls",
+)
+@click.option(
     "--forward-only",
     is_flag=True,
     help="run only the forward comparison; the rest of the matrix cannot run cross-process yet",
@@ -239,6 +246,7 @@ def _error_metrics(
     help="Scale the independent output cotangent used by gradient parity checks.",
 )
 def main(
+    forward_repeats: int,
     forward_only: bool,
     workspace_transport: str,
     num_tokens: int,
@@ -737,6 +745,24 @@ def main(
         actual_output.block_until_ready()
         expected_output.block_until_ready()
         if forward_only:
+            # A scanned transformer issues one invocation per layer against the same run and
+            # collective id, so slot acquisition, generation stamping and release all have to
+            # survive repetition. A single call never exercises that.
+            for repeat in range(1, forward_repeats):
+                repeated_output, repeated_drops = jax.jit(fused_output_and_drops)(
+                    selected_experts, *differentiable
+                )
+                repeated_output.block_until_ready()
+                repeat_difference = float(
+                    jnp.max(jnp.abs(repeated_output.astype(jnp.float32) - expected_output.astype(jnp.float32)))
+                )
+                print(
+                    f"FORWARD repeat={repeat} max_abs_difference={repeat_difference:.6f} "
+                    f"dropped_assignments={int(jnp.sum(repeated_drops))}",
+                    flush=True,
+                )
+                if repeat_difference > BF16_ATOL:
+                    raise RuntimeError(f"repeat {repeat} differs from the reference by {repeat_difference}")
             # The forward comparison alone answers whether the kernel executes and agrees with the
             # reference. The rest of the matrix closes over sharded arrays, which is legal only
             # when one process owns every device, so it cannot run under the fabric transport yet.
