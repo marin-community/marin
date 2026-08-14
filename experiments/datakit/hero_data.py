@@ -9,7 +9,7 @@ produced it. This module holds that knowledge in one place: callers name a
 source and a stage, and get a :class:`StepSpec` pointing at the data, including
 the Harrier embeddings.
 
-Every accessor returns a step that points at data which already exists and
+Each stage accessor returns a step that points at data which already exists and
 refuses to execute. Pass one to :func:`marin.execution.artifact.read_artifact`,
 or use it as a dependency of a step you do intend to run::
 
@@ -19,6 +19,9 @@ or use it as a dependency of a step you do intend to run::
 
     step = hero_data.tokenized("stack-v3", hero_data.NEMOTRON_TOKENIZER)
     data = read_artifact(step.output_path, TokenizedAttrData)
+
+:func:`harrier_all` returns a path string. It reads the fixed source-to-path
+map in ``hero_data_emb_paths.json`` and adds the active Marin prefix.
 
 :func:`normalized` and :func:`minhash` follow current code, so they track main
 as the registry moves. :func:`tokenized` pins the artifact version instead,
@@ -43,6 +46,7 @@ from levanter.tokenizers import TokenizerBackend
 from marin.datakit.sources import all_sources
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.attributes import tokenize_attributes_step
+from rigging.filesystem import marin_prefix, prefix_join
 
 from experiments.datakit.embeddings.harrier.pipeline import harrier_hash_attrs
 from experiments.datakit.reference_pipeline import select_sources, zephyr_datakit_steps
@@ -50,6 +54,8 @@ from experiments.datakit.reference_pipeline import select_sources, zephyr_dataki
 _MARIN_PREFIX_ENV = "MARIN_PREFIX"
 
 MANIFEST_PATH = pathlib.Path(__file__).with_name("hero_data_paths.json")
+HARRIER_ALL_PATHS_PATH = pathlib.Path(__file__).with_name("hero_data_emb_paths.json")
+HARRIER_ALL_PATHS: dict[str, str] = json.loads(HARRIER_ALL_PATHS_PATH.read_text())
 
 # The manifest records the paths as they resolve under the prefix that holds the
 # hero data. It is not region-independent: ``materialize_ghalogs_step`` hashes the
@@ -168,6 +174,11 @@ def harrier(source: str) -> StepSpec:
         hash_attrs=harrier_hash_attrs(FUZZY_DUPS_ID),
         fn=_refuse_to_run,
     )
+
+
+def harrier_all(source: str) -> str:
+    """Return the fixed version-3 merged Harrier path for ``source``."""
+    return prefix_join(marin_prefix(), HARRIER_ALL_PATHS[source])
 
 
 def all_paths() -> dict[str, str]:
