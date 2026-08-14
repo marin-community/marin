@@ -350,8 +350,8 @@ Once the e2e passes on `<branch>-next`, create the rollback tag for the current 
 tip and the date tag for the validated staged tip per `docs/promotion-protocol.md`.
 Push and verify those tags, then leave the protected stable `<branch>` unchanged. The
 draft Marin PR must identify each `<branch>-next` to `<branch>` hard swap that an admin
-must complete before merge. On a multi-pin fork keep `main` blank
-(`docs/fork-main-readme.md`); never advance `main` to a pin tip.
+must complete before merge. On the vllm fork the GPU and TPU pins promote onto their own
+stable branches (`main` and `tpu`) independently.
 
 Keep the Marin PR draft until every required admin promotion is complete. After an
 `isolated_project` promotion, restore its uv source from `main-next` to `main`, relock,
@@ -379,8 +379,7 @@ dropped-patch reasons.
   `upstream_base`); `external_dependencies.py` is regenerated.
 - `<branch>-next` points at the validated tip, the current stable tip has a rollback
   tag, and the validated tip has a date tag. The stable branch is unchanged, and the
-  PR names the admin hard swap still required; a multi-pin fork's `main` is still
-  blank.
+  PR names the admin hard swap still required.
 - A draft PR that temporarily follows `main-next` stays draft. After the admin
   promotion, its source follows `main` again and its lock still records the validated
   SHA before the PR is marked ready or merged.

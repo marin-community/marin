@@ -5,9 +5,9 @@ upstream base fixed. Do not use it for automated release/LKG refreshes.
 
 Because the base does not move, the new commit sits on top of the pin's current tip
 and history stays linear — so unlike a rebase refresh, a fork PR that fast-forwards
-the pin's stable branch is fine here. Work on the descriptor's `branch` for the pin,
-not `main`: a multi-pin fork (vllm) blanks `main`, so its TPU pin lives on `tpu`; a
-single-pin fork (tpu-inference) uses `main`.
+the pin's stable branch is fine here. Work on the descriptor's `branch` for the pin: on
+the vllm fork the GPU pin builds from `main` and the TPU pin lives on `tpu`; a single-pin
+fork (tpu-inference) uses `main`.
 
 1. Branch from the pin's stable `branch`, add the overlay commit(s), and open a fork
    PR against that branch.

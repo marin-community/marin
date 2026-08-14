@@ -52,13 +52,15 @@ from `main-next` to `main`, rerun `uv run config/update-external.py <fork>`, and
 the lock still records the validated SHA. Commit and push that follow-up to the draft
 Marin PR before marking it ready or merging it.
 
-## Blank `main` on multi-pin forks
+## The two-branch vllm fork
 
-A fork with more than one pin (vllm: `gpu` and `tpu`) cannot host both on `main` —
-they sit on different upstream bases. Keep `main` blank: it carries only the README in
-`fork-main-readme.md`, pointing readers at the pin branches. Never advance `main` to a
-pin tip. Single-pin forks track `main` directly, so for them `<branch>` is `main` and
-this section does not apply.
+The vllm fork carries two pins on different upstream bases, so they cannot share one
+branch. It splits them across two stable branches: the GPU wheel builds from `main`
+(the release candidate triggers on `push: main`), and the TPU source pin lives on
+`tpu`. Each promotes on its own — `main-next` to `main` for the GPU pin, `tpu-next` to
+`tpu` for the TPU pin — and a partial failure leaves the other pin correct because
+Marin resolves an exact wheel or SHA either way. Single-pin forks track `main`
+directly, so for them `<branch>` is `main`.
 
 ## Partial failure
 

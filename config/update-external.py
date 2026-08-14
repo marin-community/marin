@@ -161,6 +161,15 @@ def locked_dependency(project: ExternalProject) -> LockedDependency:
     )
 
 
+def gpu_release_url_prefix(release_tag: str) -> str:
+    """Return the release-asset URL prefix a promoted GPU wheel is served under.
+
+    Shared by the writer and the validator so a rendered wheel URL and the URL the
+    loader accepts stay byte-identical.
+    """
+    return f"https://github.com/{GPU_RELEASE_REPOSITORY}/releases/download/{release_tag}/"
+
+
 def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
     """Load and validate the promoted vLLM GPU release."""
     config = tomllib.loads(path.read_text())
@@ -186,7 +195,7 @@ def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
     architectures = tuple(wheel.architecture for wheel in release.wheels)
     if not architectures or len(set(architectures)) != len(architectures):
         raise ValueError(f"{path}: expected one or more unique wheel architectures, found {architectures!r}")
-    release_url_prefix = f"https://github.com/{GPU_RELEASE_REPOSITORY}/releases/download/{release.release_tag}/"
+    release_url_prefix = gpu_release_url_prefix(release.release_tag)
     wheel_filename_prefix = f"vllm-{quote(release.version, safe='')}-"
     wheel_urls = tuple(wheel.url for wheel in release.wheels)
     if len(set(wheel_urls)) != len(wheel_urls):
@@ -204,13 +213,11 @@ def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
 
 
 def render_gpu_release_toml(manifest: dict) -> str:
-    """Render gpu-release.toml from a promoted vLLM GPU release manifest.
+    """Return gpu-release.toml text for a promoted GPU release manifest, or raise if unpromoted.
 
-    The fork's release pipeline publishes ``marin-vllm-gpu-manifest.json`` beside the
-    immutable wheels (its ``infra/release/gpu_release.py``). Lifting the pin fields from
-    that manifest keeps a refresh from hand-copying a wheel URL or digest. Each URL is
-    rebuilt from the wheel filename with ``+`` percent-encoded, the form
-    ``load_vllm_gpu_release`` validates; the manifest carries the raw filename spelling.
+    ``manifest`` is a parsed ``marin-vllm-gpu-manifest.json``. Each wheel URL is rebuilt from
+    its filename with ``+`` percent-encoded because the manifest stores the raw ``+`` filename
+    while ``load_vllm_gpu_release`` accepts only the ``%2B`` form.
     """
     release = manifest["release"]
     if release.get("status") != "released":
@@ -229,7 +236,7 @@ def render_gpu_release_toml(manifest: dict) -> str:
     ]
     for platform in manifest["platforms"]:
         filename = platform["wheel"]["filename"]
-        url = f"https://github.com/{repository}/releases/download/{release_tag}/{quote(filename, safe='')}"
+        url = gpu_release_url_prefix(release_tag) + quote(filename, safe="")
         sm_targets = ", ".join(f'"{target}"' for target in platform["sm_targets"])
         lines += [
             "",
@@ -500,7 +507,10 @@ def project_by_name(name: str) -> ExternalProject:
 
 
 def regenerate_generated_pins(dependencies: tuple[LockedDependency, ...], *, check: bool) -> bool:
-    """Render external_dependencies.py from the locks, TPU fork pins, and promoted GPU release."""
+    """Render external_dependencies.py from the locks, TPU fork pins, and promoted GPU release.
+
+    Returns whether the generated file already matched (the drift signal `--check` reports on).
+    """
     vllm_gpu_release = load_vllm_gpu_release(VLLM_GPU_RELEASE_CONFIG)
     vllm_source = tpu_fork_source(TPU_FORKS_CONFIG, "vllm")
     tpu_inference_source = tpu_fork_source(TPU_FORKS_CONFIG, "tpu-inference")

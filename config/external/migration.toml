@@ -30,11 +30,11 @@
 #                    uv.lock, follows the fork's main branch), "descriptor:<path>#<section>" (a SHA in a
 #                    vllm/*.toml section), or "release:<path>" (a prebuilt-wheel release: a release tag +
 #                    source commit + per-arch wheels, for a pin too expensive to build at job time).
-#   branch           The fork branch this pin tracks. A single-pin fork tracks "main". A fork with more
-#                    than one pin (vllm: a GPU wheel and a TPU source pin) cannot share one main, so it
-#                    blanks main (a README pointing at the pin branches) and gives each pin its own
-#                    branch. The refresh stages on "<branch>-next"; an admin promotes it onto
-#                    "<branch>" after reviewing the draft Marin PR.
+#   branch           The fork branch this pin tracks. A single-pin fork tracks "main". The vllm fork
+#                    carries two pins on different upstream bases, so it splits them across two stable
+#                    branches: the GPU wheel builds from "main" and the TPU source pin lives on "tpu".
+#                    The refresh stages on "<branch>-next"; an admin promotes it onto "<branch>" after
+#                    reviewing the draft Marin PR.
 #   base_select      Which upstream base to rebase onto: "upstream_main" (upstream default branch),
 #                    "latest_release" (newest stable GitHub release), or "derived" (a SHA read from
 #                    another fork, with `derived_from`).
