@@ -241,11 +241,20 @@ def _active_params(cfg: GrugModelConfig) -> int:
     return cfg.num_layers * (attn + router + routed + latent_proj + shared)
 
 
+# The MARIN_PREFIX-rooted store copy (marin/datakit/store_8ac06c74) lost cluster=0 and
+# most of cluster=1 in the 2026-08-13 storage-limit purge. The same data in the legacy
+# store format survives at the bucket root; point components there until the rooted copy
+# is recomputed (#marin-eng thread 2026-08-14, confirmed working by Will and Rafal).
+_LEGACY_STORE_ROOT = "s3://marin-us-east-02a/"
+
+
 def _root_component(component: DatasetComponent | ConcatDatasetComponent) -> DatasetComponent | ConcatDatasetComponent:
     """Root a datakit component's relative cache_dir against MARIN_PREFIX (recursing into concat
     children); absolute paths -- e.g. the paloma/uncheatable caches -- pass through unchanged."""
     if isinstance(component, ConcatDatasetComponent):
         return dataclasses.replace(component, children={n: _root_component(c) for n, c in component.children.items()})
+    if component.cache_dir.startswith("datakit/store_8ac06c74"):
+        return dataclasses.replace(component, cache_dir=_LEGACY_STORE_ROOT + component.cache_dir)
     return dataclasses.replace(component, cache_dir=datakit_source_path(component.cache_dir))
 
 
