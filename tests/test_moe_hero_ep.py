@@ -243,13 +243,14 @@ def test_run_grug_local_shuts_down_jax_distributed(tmp_path):
         )
 
         seq_len = 4
+        vocab_size = 128
         data = LmDataConfig(
             components={
                 "direct": DirectDatasetComponent(
                     datasets={"train": ListAsyncDataset([GrugLmExample.causal(jnp.arange(seq_len))])}
                 )
             },
-            vocab_size=128,
+            vocab_size=vocab_size,
             tokenizer="passthrough",
         )
         trainer = TrainerConfig(
@@ -265,7 +266,7 @@ def test_run_grug_local_shuts_down_jax_distributed(tmp_path):
         )
         config = train.GrugRunConfig(
             model=model.GrugModelConfig(
-                vocab_size=128,
+                vocab_size=vocab_size,
                 hidden_dim=32,
                 intermediate_dim=64,
                 shared_expert_intermediate_dim=64,
