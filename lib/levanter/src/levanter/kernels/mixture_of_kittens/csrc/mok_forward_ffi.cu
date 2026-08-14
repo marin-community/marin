@@ -1303,6 +1303,17 @@ class RuntimeManager {
     return *runtimes_[index][slot];
   }
 
+  bool TraceInvocations() const { return trace_invocations_; }
+
+  // The shape the arenas were sized for, which the per-invocation shapes must fit inside.
+  void ConfiguredShape(int& num_tokens, int& hidden_dim, int& top_k, int& workspace_slots) {
+    std::lock_guard<std::mutex> lock(mu_);
+    num_tokens = num_tokens_;
+    hidden_dim = hidden_dim_;
+    top_k = top_k_;
+    workspace_slots = workspace_slots_;
+  }
+
  private:
   struct CompletionCallback {
     RuntimeManager* manager;
@@ -2012,6 +2023,36 @@ ffi::Error ForwardBf16(
       return ffi::Error::InvalidArgument("unsupported Mixture-of-Kittens forward x storage mode");
     }
     const auto x_storage = static_cast<ForwardXStorage>(forward_x_storage);
+
+    if (RuntimeManager::Instance().TraceInvocations()) {
+      // The megakernel indexes the arenas from these shapes. Only x is checked against the arena
+      // capacity, so printing the rest next to the configured shape shows which one runs off the
+      // end when the kernel faults on an address the host never validated.
+      int arena_tokens = 0;
+      int arena_hidden = 0;
+      int arena_top_k = 0;
+      int arena_slots = 0;
+      RuntimeManager::Instance().ConfiguredShape(arena_tokens, arena_hidden, arena_top_k, arena_slots);
+      std::fprintf(
+          stderr,
+          "[mok-trace] forward shapes local_tokens=%d hidden=%d intermediate=%d local_experts=%d "
+          "top_k=%d schedule_capacity=%d macrobatch=%d minibatch=%d storage=%d | arena tokens=%d "
+          "hidden=%d top_k=%d slots=%d\n",
+          local_tokens,
+          hidden_dim,
+          intermediate_dim,
+          local_experts,
+          top_k,
+          schedule_capacity,
+          macrobatch_size,
+          minibatch_size,
+          forward_x_storage,
+          arena_tokens,
+          arena_hidden,
+          arena_top_k,
+          arena_slots);
+      std::fflush(stderr);
+    }
 
     const size_t x_bytes = static_cast<size_t>(local_tokens) * hidden_dim * sizeof(uint16_t);
     lease = RuntimeManager::Instance().Acquire(
