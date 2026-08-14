@@ -7,19 +7,24 @@ from iris.cluster.node_agent.cache_reclaim import reclaim_cache
 from rigging.timing import Duration, Timestamp
 
 
-def test_reclaim_cache_removes_stale_entries_and_preserves_fresh_entries(tmp_path):
+def test_reclaim_cache_uses_file_writes_and_accesses_for_freshness(tmp_path):
     cache_dir = tmp_path / "iris-cache"
     cache_namespace = cache_dir / "cache"
     stale = cache_namespace / "old-model"
-    fresh = cache_namespace / "current-model"
+    recently_written = cache_namespace / "new-model"
+    recently_accessed = cache_namespace / "used-model"
     stale.mkdir(parents=True)
-    fresh.mkdir()
+    recently_written.mkdir()
+    recently_accessed.mkdir()
     (stale / "weights").write_bytes(b"stale")
-    (fresh / "weights").write_bytes(b"fresh")
+    (recently_written / "weights").write_bytes(b"written")
+    (recently_accessed / "weights").write_bytes(b"accessed")
     os.utime(stale / "weights", (100.0, 100.0))
-    os.utime(stale, (100.0, 100.0))
-    os.utime(fresh, (100.0, 100.0))
-    os.utime(fresh / "weights", (950.0, 950.0))
+    os.utime(stale, (950.0, 100.0))
+    os.utime(recently_written, (100.0, 100.0))
+    os.utime(recently_written / "weights", (100.0, 950.0))
+    os.utime(recently_accessed, (100.0, 100.0))
+    os.utime(recently_accessed / "weights", (950.0, 100.0))
 
     reclaimed = reclaim_cache(
         cache_dir,
@@ -30,4 +35,5 @@ def test_reclaim_cache_removes_stale_entries_and_preserves_fresh_entries(tmp_pat
     assert reclaimed == 1
     assert cache_namespace.is_dir()
     assert not stale.exists()
-    assert (fresh / "weights").read_bytes() == b"fresh"
+    assert (recently_written / "weights").read_bytes() == b"written"
+    assert (recently_accessed / "weights").read_bytes() == b"accessed"

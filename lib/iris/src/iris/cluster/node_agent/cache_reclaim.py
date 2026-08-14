@@ -24,16 +24,25 @@ def _record_failure(failure_kind: str) -> None:
     _RECLAIM_FAILURES.add(1, attributes={"failure_kind": failure_kind})
 
 
-def _entry_last_modified(entry: Path) -> Timestamp:
-    latest = Timestamp.from_seconds(entry.lstat().st_mtime)
+def _entry_last_used(entry: Path) -> Timestamp:
+    entry_stat = entry.lstat()
+    latest = Timestamp.from_seconds(entry_stat.st_mtime)
     if entry.is_symlink() or not entry.is_dir():
-        return latest
+        return Timestamp.from_seconds(max(entry_stat.st_mtime, entry_stat.st_atime))
 
     errors: list[OSError] = []
     for root, directories, files in os.walk(entry, followlinks=False, onerror=errors.append):
-        for name in directories + files:
+        # Walking a directory can update its atime, so only file atimes are a
+        # useful signal that a task recently read the entry.
+        for name in directories:
             try:
                 latest = max(latest, Timestamp.from_seconds((Path(root) / name).lstat().st_mtime))
+            except FileNotFoundError:
+                continue
+        for name in files:
+            try:
+                file_stat = (Path(root) / name).lstat()
+                latest = max(latest, Timestamp.from_seconds(max(file_stat.st_mtime, file_stat.st_atime)))
             except FileNotFoundError:
                 continue
     if errors:
@@ -72,7 +81,7 @@ def reclaim_cache(
             continue
         for entry in namespace.iterdir():
             try:
-                if not entry.name.startswith(_CACHE_RECLAIM_PREFIX) and _entry_last_modified(entry) > cutoff:
+                if not entry.name.startswith(_CACHE_RECLAIM_PREFIX) and _entry_last_used(entry) > cutoff:
                     continue
                 _remove_cache_entry(entry)
                 reclaimed += 1
