@@ -200,29 +200,36 @@ def _has_alpha(ngram: str) -> bool:
     return any(c.isalpha() for c in ngram)
 
 
-def _extract_ngrams(text: str, n: int, stride: int) -> Iterator[str]:
-    tokens = text.split()
+def _extract_token_ngrams(tokens: list[str], n: int, stride: int) -> Iterator[str]:
+    token_has_alpha = bytearray(_has_alpha(token) for token in tokens)
     for i in range(0, len(tokens) - n + 1, stride + 1):
-        ngram = " ".join(tokens[i : i + n])
-        if _has_alpha(ngram):
-            yield ngram
+        if any(token_has_alpha[i : i + n]):
+            yield " ".join(tokens[i : i + n])
 
 
-def _short_exact_feature(text: str, n: int) -> str | None:
-    """Return one normalized feature for guarded short exact matching."""
-    tokens = text.split()
-    if MIN_SHORT_EXACT_TOKENS <= len(tokens) < n and _has_alpha(text):
+def _extract_ngrams(text: str, n: int, stride: int) -> Iterator[str]:
+    yield from _extract_token_ngrams(text.split(), n, stride)
+
+
+def _short_exact_feature_from_tokens(tokens: list[str], n: int) -> str | None:
+    if MIN_SHORT_EXACT_TOKENS <= len(tokens) < n and any(_has_alpha(token) for token in tokens):
         return " ".join(tokens)
     return None
 
 
+def _short_exact_feature(text: str, n: int) -> str | None:
+    """Return one normalized feature for guarded short exact matching."""
+    return _short_exact_feature_from_tokens(text.split(), n)
+
+
 def _extract_paragraph_features(text: str, n: int, stride: int) -> Iterator[str]:
     """Yield n-grams, or one guarded exact feature for a short paragraph."""
-    short_exact = _short_exact_feature(text, n)
+    tokens = text.split()
+    short_exact = _short_exact_feature_from_tokens(tokens, n)
     if short_exact is not None:
         yield short_exact
         return
-    yield from _extract_ngrams(text, n, stride)
+    yield from _extract_token_ngrams(tokens, n, stride)
 
 
 def _extract_features(text: str, ngram: NGramConfig | None) -> Iterator[str]:
@@ -272,21 +279,34 @@ def _paragraph_overlap_and_matches(
     tokens use one exact feature. Shorter and non-alphabetic paragraphs return
     ``(0.0, [])``.
     """
+    score, matched, _has_features = _paragraph_overlap_matches_and_presence(paragraph, bf, ngram, drop_hashes)
+    return score, matched
+
+
+def _paragraph_overlap_matches_and_presence(
+    paragraph: str, bf: dupekit.Bloom, ngram: NGramConfig | None, drop_hashes: frozenset[int] = frozenset()
+) -> tuple[float, list[int], bool]:
+    """Return overlap details and whether the paragraph has matchable features."""
     if ngram is None:
         h = _bloom_hash(paragraph)
         if h in drop_hashes:
-            return 0.0, []
-        return (1.0, [h]) if h in bf else (0.0, [])
-    ngrams = list(_extract_paragraph_features(paragraph, ngram.ngram_length, ngram.stride))
-    if not ngrams:
-        return 0.0, []
-    hashes = [_bloom_hash(ng) for ng in ngrams]
-    if drop_hashes:
-        hashes = [h for h in hashes if h not in drop_hashes]
-        if not hashes:
-            return 0.0, []
-    matched = [h for h in hashes if h in bf]
-    return len(matched) / len(hashes), matched
+            return 0.0, [], True
+        return (1.0, [h], True) if h in bf else (0.0, [], True)
+
+    has_features = False
+    feature_count = 0
+    matched: list[int] = []
+    for feature in _extract_paragraph_features(paragraph, ngram.ngram_length, ngram.stride):
+        has_features = True
+        hash_value = _bloom_hash(feature)
+        if hash_value in drop_hashes:
+            continue
+        feature_count += 1
+        if hash_value in bf:
+            matched.append(hash_value)
+    if feature_count == 0:
+        return 0.0, [], has_features
+    return len(matched) / feature_count, matched, has_features
 
 
 def _is_hidden_dir(root: str, resolved: str) -> bool:
@@ -579,13 +599,11 @@ def _make_marker(
                     for para in text.split(delimiter):
                         if not para:
                             continue
-                        if (
-                            ngram is not None
-                            and next(_extract_paragraph_features(para, ngram.ngram_length, ngram.stride), None)
-                            is not None
-                        ):
+                        score, hits, para_has_features = _paragraph_overlap_matches_and_presence(
+                            para, bf, ngram, drop_hashes
+                        )
+                        if ngram is not None and para_has_features:
                             has_paragraph_features = True
-                        score, hits = _paragraph_overlap_and_matches(para, bf, ngram, drop_hashes)
                         if score > max_score:
                             max_score = score
                         matched.update(hits)
