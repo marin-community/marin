@@ -345,9 +345,11 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
     normalized = (x_flat.astype(jnp.float32) * residuals.inverse_rms[:, None] * residuals.norm_weight).astype(
         x_flat.dtype
     )
+    gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", residuals.gate_hidden, residuals.w_up))
     direct_cotangent, gate_preactivation_cotangent, w_up_cotangent = gate_silu_reverse(
         normalized,
         output_cotangent,
+        gate,
         residuals.w_up,
         residuals.gate_preactivation,
         residuals.gate_hidden,
