@@ -47,6 +47,33 @@ config:
       mcpAccess:
         mode: all
         groups: []
+    fork-ferry:
+      agent: codex
+      description: Refresh Marin forks and validate their pinned revisions
+      model: gpt-5.6-sol
+      effort: xhigh
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 3600
+      maxConcurrent: 3
+      turnBudget: 100
+      prelude: weaver
+      instructionsFile: profiles/fork-ferry/AGENTS.md
+      restricted: false
+      githubRepositories:
+        - marin-community/evalchemy
+        - marin-community/harbor
+        - marin-community/marin
+        - marin-community/tpu-inference
+        - marin-community/vllm
+      allowedTools: []
+      mcpAccess:
+        mode: all
+        groups: []
     ops:
       agent: codex
       description: Coordinate Grafana alerts and delegate incident triage for Marin
@@ -87,5 +114,12 @@ config:
       serviceTag: grafana
       serviceAccountId: marin-grafana
       createServiceAccount: false
+  marin-loom:githubFederations:
+    - name: fork-ferry
+      repositoryId: "775839592"
+      workflowRef: marin-community/marin/.github/workflows/ops-fork-ferry.yaml@refs/heads/main
+      profile: fork-ferry
+      serviceTag: fork-ferry
+      ref: refs/heads/main
 secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
 encryptedkey: CiQAKk3j6Qz1jQpqEr5LUAHWIXJ1B28qzqFuiJjtH5MdH2gce7ASSQCdtF6iKzVxOIFfT2S6vbjMsFHA0EBoefdLu86Qy6HXIN3WI1ybrmlHggGITXPSMgzZ7SWRrVR2iNAzI2PoriKx7a5plvnC6r8=

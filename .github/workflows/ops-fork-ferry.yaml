@@ -79,8 +79,9 @@ jobs:
             -d "$(jq -n \
               --arg profile "$LOOM_PROFILE" \
               --arg key "fork-ferry-${UNIT}-${GITHUB_RUN_ID}" \
+              --arg unit "$UNIT" \
               --arg repo "$GITHUB_REPOSITORY" \
               --arg title "Fork ferry: ${UNIT}" \
               --arg goal "$goal" \
-              '{profile: $profile, idempotency_key: $key, source: "fork-ferry", channel: "operator",
+              '{profile: $profile, idempotency_key: $key, source: "actions", channel: $unit,
                 session: {repo: $repo, title: $title, goal: $goal}}')"
