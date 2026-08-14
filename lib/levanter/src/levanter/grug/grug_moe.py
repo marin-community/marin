@@ -80,6 +80,7 @@ class MoEExpertMlp(eqx.Module):
         intermediate_dim: int,
         initializer_std: float,
         key: jax.Array,
+        gate_up_initializer_std: float | None = None,
         implementation: MoeImplementation | str | None = None,
         activation: MoeActivation = ActivationFunctionEnum.silu,
         capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
@@ -88,8 +89,11 @@ class MoEExpertMlp(eqx.Module):
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
         k_gate, k_up, k_down = jax.random.split(key, 3)
-        w_gate = _init_weight(k_gate, (num_experts, hidden_dim, intermediate_dim), initializer_std)
-        w_up = _init_weight(k_up, (num_experts, hidden_dim, intermediate_dim), initializer_std)
+        # `w_gate`/`w_up` contract over `hidden_dim`, so their fan-in moves when the experts run
+        # in a latent space; `w_down` contracts over `intermediate_dim` and is unaffected.
+        gate_up_std = initializer_std if gate_up_initializer_std is None else gate_up_initializer_std
+        w_gate = _init_weight(k_gate, (num_experts, hidden_dim, intermediate_dim), gate_up_std)
+        w_up = _init_weight(k_up, (num_experts, hidden_dim, intermediate_dim), gate_up_std)
         w_down = _reshard_for_init(
             _init_weight(k_down, (num_experts, intermediate_dim, hidden_dim), initializer_std),
             pspecs.w_down,

@@ -17,11 +17,15 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 import requests
+import zstandard
 
 from rigging.telemetry import serialization
 from rigging.timing import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
+
+_FINELOG_ZSTD_LEVEL = 1
+_ZSTD_ENCODING = "zstd"
 
 DEFAULT_MAX_QUEUE_RECORDS = 10_000
 DEFAULT_MAX_QUEUE_BYTES = 16 << 20
@@ -159,17 +163,72 @@ class _Transport(Protocol):
 class _RequestsTransport:
     def __init__(self) -> None:
         self._session = requests.Session()
+        self._compressor = zstandard.ZstdCompressor(level=_FINELOG_ZSTD_LEVEL)
+        self._server_request_encodings: frozenset[str] | None = None
 
     def post(self, endpoint: str, body: bytes, batch_id: str, timeout: tuple[float, float]) -> requests.Response:
+        content_encoding = (
+            _ZSTD_ENCODING
+            if self._server_request_encodings is None or _ZSTD_ENCODING in self._server_request_encodings
+            else None
+        )
+        response = self._post(endpoint, body, batch_id, timeout, content_encoding)
+        advertised = self._observe_request_encodings(response)
+        encoding_rejected = (
+            content_encoding is not None
+            and response.status_code in {400, 415}
+            and (advertised is None or content_encoding not in advertised)
+        )
+        if not encoding_rejected:
+            return response
+
+        self._server_request_encodings = advertised or frozenset()
+        response = self._post(endpoint, body, batch_id, timeout, None)
+        self._observe_request_encodings(response)
+        return response
+
+    def _observe_request_encodings(self, response: _Response) -> frozenset[str] | None:
+        """Cache advertised encodings; ``None`` preserves and an empty set clears."""
+        advertised = _accepted_request_encodings(response)
+        if advertised is not None:
+            self._server_request_encodings = advertised
+        return advertised
+
+    def _post(
+        self,
+        endpoint: str,
+        body: bytes,
+        batch_id: str,
+        timeout: tuple[float, float],
+        content_encoding: str | None,
+    ) -> requests.Response:
+        headers = {
+            "Content-Type": "application/json",
+            "Idempotency-Key": batch_id,
+        }
+        if content_encoding is not None:
+            headers["Content-Encoding"] = content_encoding
+            body = self._compressor.compress(body)
         return self._session.post(
             endpoint,
             data=body,
-            headers={"Content-Type": "application/json", "Idempotency-Key": batch_id},
+            headers=headers,
             timeout=timeout,
         )
 
     def close(self) -> None:
         self._session.close()
+
+
+def _accepted_request_encodings(response: _Response) -> frozenset[str] | None:
+    header = response.headers.get("Accept-Encoding")
+    if header is None:
+        return None
+    return frozenset(
+        encoding.partition(";")[0].strip().lower()
+        for encoding in header.split(",")
+        if encoding.partition(";")[0].strip()
+    )
 
 
 @dataclass(frozen=True)

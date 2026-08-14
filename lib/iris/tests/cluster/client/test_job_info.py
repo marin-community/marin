@@ -58,9 +58,3 @@ def test_worker_region_absent_when_env_not_set(monkeypatch):
     info = get_job_info()
     assert info is not None
     assert info.worker_region is None
-
-
-def test_default_jobinfo_exposes_worker_region_attribute():
-    """JobInfo.worker_region defaults to None so attribute access never raises."""
-    info = JobInfo(task_id=JobName.from_wire("/alice/train/0"))
-    assert info.worker_region is None

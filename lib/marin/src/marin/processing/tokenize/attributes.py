@@ -5,14 +5,16 @@
 
 Reads one or more :class:`~marin.datakit.normalize.NormalizedData` sources, runs
 the shared tokenization core, and writes co-partitioned attribute parquet shards
-with columns ``id`` and ``input_ids`` (one row per input document).
+with columns ``id``, ``chunk_index`` and ``input_ids``.
 
 Each output shard mirrors the basename of its source shard, which ensures the
 datakit invariants hold by construction:
 
 * Same shard count as source (co-partitioned).
 * Sorted by ``id`` within each shard (sources are already sorted; the
-  tokenize pipeline preserves order).
+  tokenize pipeline preserves order). A document above the token limit of one
+  Parquet row occupies several adjacent rows that share its ``id``, in
+  ``chunk_index`` order, so the sort by ``id`` holds.
 
 Downstream:
 
@@ -40,20 +42,34 @@ from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
-from marin.processing.tokenize._core import resolve_window_and_batch, tokenize_batches_with_id, tokenize_pipeline
+from marin.processing.tokenize._core import (
+    CHUNK_INDEX_FIELD,
+    resolve_window_and_batch,
+    tokenize_batches_with_id,
+    tokenize_pipeline,
+)
 
 logger = logging.getLogger(__name__)
-TOKENIZED_ATTR_DATA_VERSION = 3
+TOKENIZED_ATTR_DATA_VERSION = 4
 
 
 class TokenizedAttrData(BaseModel):
     """Per-split datakit attribute datasets produced by :func:`tokenize_attributes`.
 
     Each split's attribute parquet shards live under ``output_dirs[split]/`` with
-    columns ``id: string`` and ``input_ids: list<int>``. Shards mirror their source
+    columns ``id: string``, ``chunk_index: int32`` and ``input_ids: list<int>``.
+    Shards mirror their source
     :class:`~marin.datakit.normalize.NormalizedData` partitions 1:1 (same basename,
-    same row order, same id range), so the dataset is sorted by ``id`` per partition
-    and co-partitioned with the source — both datakit invariants.
+    same source order, same id range), so the dataset is sorted by ``id`` per
+    partition and co-partitioned with the source — both datakit invariants.
+
+    ``id`` is the source document id, and is the join key against the other datakit
+    attribute datasets. A document with more tokens than one Parquet row can hold
+    occupies several adjacent rows that share that id, in zero-based
+    ``chunk_index`` order. An unsplit document is a single row with
+    ``chunk_index == 0``. A consumer that needs one row per document must group by
+    ``id``. A consumer that walks this dataset positionally against a
+    one-row-per-document dataset must not: the row counts differ.
 
     Persisted as the step's ``.artifact``. Load via
     ``Artifact.from_path(step, TokenizedAttrData)``.
@@ -114,6 +130,7 @@ class TokenizeAttributesConfig:
 _ATTRIBUTE_SCHEMA = pa.schema(
     [
         pa.field("id", pa.string()),
+        pa.field(CHUNK_INDEX_FIELD, pa.int32()),
         pa.field("input_ids", pa.list_(pa.int32())),
     ]
 )
@@ -211,7 +228,7 @@ def _process_split(
 def _attribute_schema(data_format: LmDatasetFormatBase) -> pa.Schema | None:
     """Return the parquet schema for attribute output, or ``None`` to let zephyr infer.
 
-    For text formats we pin ``id: string`` and ``input_ids: list<int32>`` to keep
+    For text formats we pin ``id: string``, ``chunk_index: int32`` and ``input_ids: list<int32>`` to keep
     files compact and stable across workers. For chat or other multi-output formats,
     we let zephyr infer from the first record so additional columns like
     ``assistant_masks`` flow through unchanged.
@@ -225,7 +242,7 @@ def tokenize_attributes(config: TokenizeAttributesConfig) -> TokenizedAttrData:
     """Tokenize :class:`NormalizedData` source(s) into datakit attribute parquet.
 
     Each split's source shards become co-partitioned attribute parquet files
-    sharing basenames with the source. Output records carry ``{id, input_ids}``
+    sharing basenames with the source. Output rows carry ``{id, chunk_index, input_ids}``
     (plus any extra fields produced by the format processor for non-text formats).
 
     Args:

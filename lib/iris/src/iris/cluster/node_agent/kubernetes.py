@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
 
+from finelog.client import LogClient
+from finelog.client.log_client import Table
 from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
 from rigging import telemetry
 
@@ -25,7 +27,18 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_
 from iris.cluster.node_agent import SERVICE_NAME
 from iris.cluster.node_agent.metrics import DeviceMetric, NodeMetrics, NodeTarget, publish_node_telemetry
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
-from iris.cluster.platforms.k8s.types import K8sResource
+from iris.cluster.platforms.k8s.types import (
+    IRIS_ATTEMPT_ID_LABEL,
+    IRIS_KUBERNETES_RUNTIME,
+    IRIS_MANAGED_LABEL,
+    IRIS_RUNTIME_LABEL,
+    IRIS_TASK_CONTAINER_NAME,
+    IRIS_TASK_ID_ANNOTATION,
+    K8sResource,
+    KubectlError,
+)
+from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
+from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +187,120 @@ def parse_prometheus(text: str) -> Iterator[Sample]:
         yield Sample(name, labels, value)
 
 
+@dataclass
+class ContainerResourceSample:
+    """Kubelet resource counters for one container."""
+
+    cpu_seconds: float | None = None
+    memory_bytes: int | None = None
+
+
+def parse_kubelet_resource_metrics(text: str) -> dict[tuple[str, str], ContainerResourceSample]:
+    """Parse kubelet ``metrics/resource`` text by ``(pod, container)``."""
+    resources: dict[tuple[str, str], ContainerResourceSample] = {}
+    for name, labels, value in parse_prometheus(text):
+        pod = labels.get("pod", "")
+        container = labels.get("container", "")
+        if not pod or not container:
+            continue
+        key = (pod, container)
+        sample = resources.setdefault(key, ContainerResourceSample())
+        if name == "container_cpu_usage_seconds_total":
+            sample.cpu_seconds = value
+        elif name == "container_memory_working_set_bytes":
+            sample.memory_bytes = int(value)
+    return resources
+
+
+class TaskStatsCollector:
+    """Write same-node Iris pod CPU and memory samples to ``iris.task``."""
+
+    def __init__(
+        self,
+        kubectl: K8sService,
+        node_name: str,
+        table: Table,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._kubectl = kubectl
+        self._node_name = node_name
+        self._table = table
+        self._clock = clock
+        self._previous_cpu: dict[str, tuple[float, float]] = {}
+        self._memory_peak: dict[str, int] = {}
+
+    def collect_once(self) -> None:
+        """Collect one task-resource sample for each running pod on this node."""
+        labels = {IRIS_MANAGED_LABEL: "true", IRIS_RUNTIME_LABEL: IRIS_KUBERNETES_RUNTIME}
+        try:
+            pods = self._kubectl.list_json(
+                K8sResource.PODS,
+                labels=labels,
+                field_selector=f"spec.nodeName={self._node_name}",
+            )
+            resources = parse_kubelet_resource_metrics(self._kubectl.node_resource_metrics(self._node_name))
+        except KubectlError as error:
+            logger.warning("task-resource collection failed for node %s: %s", self._node_name, error)
+            return
+
+        sampled_at = self._clock()
+        live_pods = {
+            pod.get("metadata", {}).get("name", "") for pod in pods if pod.get("status", {}).get("phase") == "Running"
+        }
+        rows: list[IrisTaskStat] = []
+        for pod in pods:
+            if pod.get("status", {}).get("phase") != "Running":
+                continue
+            metadata = pod.get("metadata", {})
+            pod_name = metadata.get("name", "")
+            task_id = metadata.get("annotations", {}).get(IRIS_TASK_ID_ANNOTATION, "")
+            attempt = metadata.get("labels", {}).get(IRIS_ATTEMPT_ID_LABEL, "")
+            sample = resources.get((pod_name, IRIS_TASK_CONTAINER_NAME))
+            if not pod_name or not task_id or not attempt or sample is None:
+                continue
+
+            cpu_millicores = self._cpu_millicores(pod_name, sample.cpu_seconds, sampled_at)
+            memory_bytes = sample.memory_bytes or 0
+            memory_peak = max(memory_bytes, self._memory_peak.get(pod_name, 0))
+            self._memory_peak[pod_name] = memory_peak
+            rows.append(
+                build_task_stat(
+                    task_id=task_id,
+                    attempt_id=int(attempt),
+                    worker_id=pod_name,
+                    usage=job_pb2.ResourceUsage(
+                        cpu_millicores=cpu_millicores,
+                        memory_mb=memory_bytes // _MIB,
+                        memory_peak_mb=memory_peak // _MIB,
+                    ),
+                )
+            )
+
+        self._prune(live_pods)
+        if rows:
+            self._table.write(rows)
+
+    def _cpu_millicores(self, pod_name: str, cpu_seconds: float | None, sampled_at: float) -> int:
+        if cpu_seconds is None:
+            return 0
+        previous = self._previous_cpu.get(pod_name)
+        self._previous_cpu[pod_name] = (cpu_seconds, sampled_at)
+        if previous is None:
+            return 0
+        cpu_delta = cpu_seconds - previous[0]
+        time_delta = sampled_at - previous[1]
+        if cpu_delta < 0 or time_delta <= 0:
+            return 0
+        return max(0, round(cpu_delta / time_delta * 1000))
+
+    def _prune(self, live_pods: set[str]) -> None:
+        for pod_name in self._previous_cpu.keys() - live_pods:
+            del self._previous_cpu[pod_name]
+        for pod_name in self._memory_peak.keys() - live_pods:
+            del self._memory_peak[pod_name]
+
+
 def _is_physical_iface(device: str) -> bool:
     return bool(device) and not device.startswith(_VIRTUAL_IFACE_PREFIXES)
 
@@ -239,8 +366,13 @@ _DCGM_METRICS = {
     ),
     "DCGM_FI_DEV_ROW_REMAP_FAILURE": _DcgmMetricSpec("gpu_row_remap_failures", "{failure}"),
     "DCGM_FI_PROF_GR_ENGINE_ACTIVE": _DcgmMetricSpec("gpu_graphics_engine_active_ratio", "1"),
+    "DCGM_FI_PROF_SM_ACTIVE": _DcgmMetricSpec("gpu_sm_active_ratio", "1"),
     "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE": _DcgmMetricSpec("gpu_tensor_active_ratio", "1"),
     "DCGM_FI_PROF_DRAM_ACTIVE": _DcgmMetricSpec("gpu_dram_active_ratio", "1"),
+    "DCGM_FI_PROF_NVLINK_RX_BYTES": _DcgmMetricSpec("gpu_nvlink_receive_bytes_per_second", "By/s"),
+    "DCGM_FI_PROF_NVLINK_TX_BYTES": _DcgmMetricSpec("gpu_nvlink_transmit_bytes_per_second", "By/s"),
+    "DCGM_FI_PROF_PCIE_RX_BYTES": _DcgmMetricSpec("gpu_pcie_receive_bytes_per_second", "By/s"),
+    "DCGM_FI_PROF_PCIE_TX_BYTES": _DcgmMetricSpec("gpu_pcie_transmit_bytes_per_second", "By/s"),
     "DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL": _DcgmMetricSpec(
         "gpu_nvlink_errors",
         "{error}",
@@ -586,7 +718,7 @@ class NodeStatsScraper:
         return {k: body for k, body in zip(keys, bodies, strict=True) if body is not None}
 
 
-def _telemetry_endpoint(cluster_config: IrisClusterConfig) -> str:
+def _log_service_endpoint(cluster_config: IrisClusterConfig) -> str:
     spec = cluster_config.endpoints.get(LOG_SERVER_ENDPOINT_NAME)
     if cluster_config.finelog.config:
         if spec is not None:
@@ -596,7 +728,7 @@ def _telemetry_endpoint(cluster_config: IrisClusterConfig) -> str:
         uri, metadata = spec.uri, dict(spec.metadata)
     else:
         raise ValueError("node telemetry requires an external /system/log-server endpoint")
-    return resolve_endpoint_uri(uri, metadata).rstrip("/") + TELEMETRY_ENDPOINT_PATH
+    return resolve_endpoint_uri(uri, metadata).rstrip("/")
 
 
 def _node_target(k8s: CloudK8sService, node_name: str) -> NodeTarget:
@@ -620,19 +752,32 @@ def _node_target(k8s: CloudK8sService, node_name: str) -> NodeTarget:
     )
 
 
-def collect_once(scraper: NodeStatsScraper, target: NodeTarget) -> None:
-    """Publish one same-node exporter collection pass."""
+def collect_once(
+    scraper: NodeStatsScraper,
+    target: NodeTarget,
+    task_stats_collector: TaskStatsCollector | None = None,
+) -> None:
+    """Publish one same-node exporter and task-resource collection pass."""
     metrics = scraper.scrape([target])[target.name]
     publish_node_telemetry(target, metrics, time.time())
+    if task_stats_collector is not None:
+        task_stats_collector.collect_once()
     telemetry.record_runtime_health()
 
 
 def run(config_path: Path, node_name: str, namespace: str, stop: threading.Event) -> None:
     """Collect telemetry until the process receives a shutdown signal."""
     config = load_config(config_path)
-    endpoint = _telemetry_endpoint(config)
+    log_service_endpoint = _log_service_endpoint(config)
+    endpoint = log_service_endpoint + TELEMETRY_ENDPOINT_PATH
     k8s = CloudK8sService(namespace=namespace, timeout=K8S_API_TIMEOUT)
     target = _node_target(k8s, node_name)
+    log_client = LogClient.connect(log_service_endpoint)
+    task_stats_collector = TaskStatsCollector(
+        k8s,
+        node_name,
+        log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat),
+    )
     telemetry.configure(
         endpoint=endpoint,
         service=SERVICE_NAME,
@@ -641,7 +786,8 @@ def run(config_path: Path, node_name: str, namespace: str, stop: threading.Event
     scraper = NodeStatsScraper(k8s)
     try:
         while not stop.is_set():
-            collect_once(scraper, target)
+            collect_once(scraper, target, task_stats_collector)
             stop.wait(DEFAULT_COLLECTION_INTERVAL)
     finally:
+        log_client.close()
         telemetry.shutdown(5.0)

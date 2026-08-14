@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The parent builds the Evalchemy child's config; the child turns each task into an ``eval.eval`` argv.
+"""The parent builds the Evalchemy child's config; the child turns each task into an ``evalchemy`` argv.
 
 These are the pure pieces of the serve->eval handoff that do not need a cluster: the JSON payload
 the parent hands the eval child (one upload dir per task-config, kept distinct so shot variants of a
@@ -13,6 +13,7 @@ serving, the eval itself) is exercised by the cluster smoke.
 import json
 import os
 
+import pytest
 from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
@@ -73,6 +74,32 @@ def test_client_config_json_carries_endpoint_and_per_task_dirs():
     ]
 
 
+def test_file_config_fields_reach_the_evalchemy_command():
+    config = _payload(
+        _config(
+            tasks=(EvalTaskConfig("ifeval", 0, generation=True),),
+            batch_size=1,
+            seed=1234,
+            extra_model_args={"timeout": 900},
+            max_length=32768,
+        )
+    )
+
+    command = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", 32768)
+
+    assert command[command.index("--batch_size") + 1] == "1"
+    assert command[command.index("--seed") + 1] == "1234"
+    model_args = dict(pair.split("=", 1) for pair in command[command.index("--model_args") + 1].split(","))
+    assert model_args["timeout"] == "900"
+    assert model_args["max_length"] == "32768"
+
+
+def test_parent_rejects_endpoint_model_arg_overrides():
+    # Endpoint identity is Marin-owned; a config must not reroute the isolated child to another model.
+    with pytest.raises(ValueError):
+        _payload(_config(extra_model_args={"model": "other"}))
+
+
 def test_task_dirs_distinguish_shot_variants_of_one_task():
     # One task at two shot counts: the bare name repeats, so the distinct aliases -> distinct dirs are
     # the only thing keeping the two results from overwriting each other.
@@ -92,7 +119,7 @@ def test_build_command_completion_route_with_fewshot_and_limit():
     config = _payload(_config(max_eval_instances=7))
     cmd = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", None)
 
-    assert cmd[:5] == ["/opt/py", "-m", "eval.eval", "--model", "local-completions"]
+    assert cmd[:3] == ["/opt/evalchemy", "--model", "local-completions"]
     assert "--apply_chat_template" not in cmd
     assert cmd[cmd.index("--tasks") + 1] == "gsm8k"
     assert cmd[cmd.index("--output_path") + 1] == "/tmp/out"
@@ -106,6 +133,14 @@ def test_build_command_completion_route_with_fewshot_and_limit():
     assert model_args["base_url"] == "http://10.0.0.1:30000/v1/completions"
     assert model_args["model"] == "Qwen/Qwen3-0.6B"
     assert model_args["tokenizer"] == "Qwen/Qwen3-0.6B"
+
+
+def test_build_command_uses_evaluator_default_when_fewshot_is_unset():
+    config = _payload(_config(tasks=(EvalTaskConfig("ifeval", None, generation=True),)))
+
+    command = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", None)
+
+    assert "--num_fewshot" not in command
 
 
 def test_extra_gen_kwargs_ride_on_gen_kwargs():
@@ -229,7 +264,7 @@ def _write_results(local_out: str, results: dict) -> None:
 
 
 def test_scored_results_rejects_empty_results_dict(tmp_path):
-    # eval.eval exits 0 and still writes results_*.json with an empty "results" dict when every
+    # Evalchemy exits 0 and still writes results_*.json with an empty "results" dict when every
     # endpoint request fails; the client must treat that as an unscored task.
     empty = tmp_path / "empty"
     empty.mkdir()

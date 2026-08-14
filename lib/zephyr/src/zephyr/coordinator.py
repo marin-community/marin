@@ -10,23 +10,27 @@ import sys
 import threading
 import time
 from collections import Counter, defaultdict, deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
 import cloudpickle
-from fray.actor import ActorHandle, current_actor
+from fray.actor import ActorGroup, ActorHandle, current_actor
+from fray.current_client import current_client
+from fray.local_backend import LocalClient
+from fray.types import ActorConfig, ResourceConfig
 from rigging import telemetry
 from rigging.filesystem import StoragePath
-from rigging.timing import ExponentialBackoff, RateLimiter, log_time
+from rigging.timing import Duration, ExponentialBackoff, RateLimiter, log_time
 
 from zephyr.memory_store import MemoryTableRegistration
-from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Scatter, Shard, SourceItem, StageType
+from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Scatter, SourceItem, StageType
 from zephyr.shuffle import ListShard, MemChunk
 from zephyr.stage_io import (
     ShardTask,
+    StageRunner,
     TaskResult,
     ZephyrTaskResources,
     ZephyrWorkerError,
@@ -43,6 +47,7 @@ MAX_SHARD_FAILURES = 3
 MAX_SHARD_INFRA_FAILURES = 20
 MAX_STATUS_TEXT_LENGTH = 1000
 MAX_CONCURRENT_PIPELINES = 16
+MAX_CONCURRENT_RESULT_READS = 16
 ZEPHYR_PROGRESS_TIME_METRIC = "progress_time_seconds"
 
 _SNAPSHOT_ATTRIBUTES = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
@@ -328,7 +333,7 @@ class ZephyrCoordinator:
         # out-of-order heartbeats.
         self._worker_counters: dict[str, CounterSnapshot] = {}
         self._worker_handles: dict[str, ActorHandle] = {}
-        self._worker_group: Any = None  # ActorGroup, set via set_worker_group()
+        self._worker_group: ActorGroup | None = None  # owned, created by start_workers()
         self._memory_tables: dict[str, MemoryTableRegistration] = {}
         self._coordinator_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
@@ -338,12 +343,17 @@ class ZephyrCoordinator:
         # frequently than the UI needs to refresh.
         self._task_stats_limiter = RateLimiter(interval_seconds=10.0)
 
+        # Capture the actor context while its ContextVar is still set. Methods called
+        # later run on other threads, where current_actor() is unset.
         actor_ctx = current_actor()
         self._name = f"{actor_ctx.group_name}"
         self._host_shutdown_event = actor_ctx.shutdown_event
+        self._self_handle = actor_ctx.handle
 
         self._stats_writer = StatsWriter.connect()
-        self._result_executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="zephyr-result")
+        self._result_executor = ThreadPoolExecutor(
+            max_workers=MAX_CONCURRENT_RESULT_READS, thread_name_prefix="zephyr-result"
+        )
 
         logger.info("Coordinator initialized")
 
@@ -352,9 +362,47 @@ class ZephyrCoordinator:
         )
         self._coordinator_thread.start()
 
-    def set_worker_group(self, worker_group: Any) -> None:
-        """Set the worker ActorGroup so the coordinator can detect permanent worker death."""
-        self._worker_group = worker_group
+    def start_workers(
+        self,
+        worker_class: type,
+        worker_count: int,
+        stage_runner_factory: Callable[[], StageRunner],
+        task_resources: ZephyrTaskResources,
+        worker_resources: ResourceConfig,
+        actor_config: ActorConfig,
+    ) -> None:
+        """Create the worker group from inside this coordinator's job.
+
+        Iris derives a submitted job's id from the enclosing job context, so a group
+        created here is a *child* of the coordinator job and Iris cascading termination
+        takes the workers down with it. Creating the group on the driver instead leaves
+        the two as siblings: a dead coordinator strands its workers, and a reconstructed
+        one comes back with no executions for them to poll.
+
+        ``worker_class`` is passed in rather than imported because ``worker`` imports
+        this module.
+        """
+        assert self._worker_group is None, "worker group already started"
+        self._worker_group = current_client().create_actor_group(
+            worker_class,
+            self._self_handle,
+            stage_runner_factory,
+            task_resources,
+            name=f"{self._name}-workers",
+            count=worker_count,
+            resources=worker_resources,
+            actor_config=actor_config,
+        )
+
+    def worker_handles(self, count: int, timeout: float) -> tuple[ActorHandle, ...]:
+        """Wait for ``count`` workers to come up and return their handles."""
+        assert self._worker_group is not None, "worker group not started"
+        return tuple(self._worker_group.wait_ready(count=count, timeout=timeout))
+
+    def worker_job_id(self) -> str:
+        """Wire form of the worker job id, for callers that address worker tasks."""
+        assert self._worker_group is not None, "worker group not started"
+        return str(self._worker_group._job_id)
 
     def register_worker(self, worker_id: str, worker_handle: ActorHandle) -> tuple[MemoryTableRegistration, ...]:
         """Called by workers when they come online to register with coordinator.
@@ -1274,13 +1322,13 @@ class ZephyrCoordinator:
         self,
         run: _PipelineExecution,
         stage: PhysicalStage,
-        shards: list[Shard],
+        shards: list[ListShard],
         *,
         stage_label: str,
         stage_index_for_state: int,
-        aux_per_shard: list[dict[int, Shard]] | None = None,
+        aux_per_shard: list[dict[int, ListShard]] | None = None,
         is_last_stage: bool = False,
-    ) -> list[Shard]:
+    ) -> list[ListShard]:
         """Submit a worker stage, wait for completion, return regrouped output shards.
 
         ``stage_index_for_state`` is the index reported in coordinator state for
@@ -1316,11 +1364,11 @@ class ZephyrCoordinator:
         self,
         run: _PipelineExecution,
         operations: list[PhysicalOp],
-        shard_refs: list[Shard],
+        shard_refs: list[ListShard],
         parent_stage_idx: int,
-    ) -> list[dict[int, Shard]] | None:
+    ) -> list[dict[int, ListShard]] | None:
         """Execute right sub-plans for join operations, returning aux refs per shard."""
-        all_right_shard_refs: dict[int, list[Shard]] = {}
+        all_right_shard_refs: dict[int, list[ListShard]] = {}
 
         for i, op in enumerate(operations):
             if not isinstance(op, Join) or op.right_plan is None:
@@ -1390,9 +1438,36 @@ class ZephyrCoordinator:
 
         logger.info("Coordinator shutdown complete")
 
-    def stop_workers(self) -> None:
-        """Tell workers to exit while the coordinator actor stays reachable."""
+    def stop_workers(self, drain_timeout: float = 5.0) -> None:
+        """Retire the worker group while this coordinator stays reachable.
+
+        Workers see the shutdown flag on their next ``pull_task`` and exit on their own.
+        Terminating the group is the backstop for the ones that do not.
+        """
         self._shutdown_event.set()
+        if self._worker_group is None:
+            return
+
+        group, self._worker_group = self._worker_group, None
+        try:
+            if isinstance(current_client(), LocalClient):
+                # In-process actors: no job to terminate, so stop each one directly.
+                for worker in group.wait_ready():
+                    worker.shutdown.remote().result(timeout=10.0)
+                group.shutdown()
+                return
+
+            drained = ExponentialBackoff(initial=0.1, maximum=1.0).wait_until(
+                group.is_done, timeout=Duration.from_seconds(drain_timeout)
+            )
+            if drained:
+                return
+            logger.warning("Workers did not exit within %.1fs, terminating the group", drain_timeout)
+        except Exception:
+            logger.warning("Worker teardown failed, terminating the group", exc_info=True)
+
+        with suppress(Exception):
+            group.shutdown()
 
     def check_heartbeats(self, timeout: float = 120.0) -> None:
         """Marks stale workers as FAILED, re-queues their in-flight tasks."""
@@ -1412,7 +1487,7 @@ def _regroup_scatter_refs(
     result_refs: dict[int, TaskResult],
     input_shard_count: int,
     output_shard_count: int | None,
-) -> list[Shard]:
+) -> list[ListShard]:
     """Fan a scatter stage's outputs out to its reducers without loading data.
 
     Scatter routes records into exactly ``output_shard_count`` buckets via
@@ -1433,7 +1508,7 @@ def _regroup_scatter_refs(
     return [ListShard(refs=[shared_refs]) for _ in range(num_output)]
 
 
-def _regroup_map_refs(result_refs: dict[int, TaskResult], input_shard_count: int) -> list[Shard]:
+def _regroup_map_refs(result_refs: dict[int, TaskResult], input_shard_count: int) -> list[ListShard]:
     """Map a non-scatter stage's outputs 1:1 from input shard index to output.
 
     Each worker's ListShard keeps its own index. Resharding to a different
@@ -1491,23 +1566,18 @@ def _try_read_coordinator_result(result_path: str) -> Any:
         return None
 
 
-def _reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:
-    """Reshard shard refs by output shard index without loading data.
-
-    Only supported on ListShards (non-scatter data).
-    """
+def _reshard_refs(shards: list[ListShard], num_shards: int) -> list[ListShard]:
+    """Reshard ListShard refs by output shard index without loading data."""
     output_by_shard: dict[int, list[Iterable]] = defaultdict(list)
     output_idx = 0
     for shard in shards:
-        if not isinstance(shard, ListShard):
-            raise ValueError("Reshard is only supported on ListShard (non-scatter data)")
         for chunk in shard.refs:
             output_by_shard[output_idx].append(chunk)
             output_idx = (output_idx + 1) % num_shards
     return [ListShard(refs=output_by_shard.get(idx, [])) for idx in range(num_shards)]
 
 
-def _build_source_shards(source_items: list[SourceItem]) -> list[Shard]:
+def _build_source_shards(source_items: list[SourceItem]) -> list[ListShard]:
     """Build shard data from source items.
 
     Each source item becomes a single-element chunk in its assigned shard.
@@ -1517,7 +1587,7 @@ def _build_source_shards(source_items: list[SourceItem]) -> list[Shard]:
         items_by_shard[item.shard_idx].append(item.data)
 
     num_shards = max(items_by_shard.keys()) + 1 if items_by_shard else 0
-    shards: list[Shard] = []
+    shards: list[ListShard] = []
     for i in range(num_shards):
         shards.append(ListShard(refs=[MemChunk(items=items_by_shard.get(i, []))]))
 
@@ -1525,10 +1595,10 @@ def _build_source_shards(source_items: list[SourceItem]) -> list[Shard]:
 
 
 def _compute_tasks_from_shards(
-    shard_refs: list[Shard],
+    shard_refs: list[ListShard],
     stage: PhysicalStage,
     stage_name: str,
-    aux_per_shard: list[dict[int, Shard]] | None,
+    aux_per_shard: list[dict[int, ListShard]] | None,
     cost: ZephyrTaskResources,
 ) -> list[ShardTask]:
     """Convert shard references into ShardTasks for the coordinator."""

@@ -51,7 +51,8 @@ fork-strategy = "fewest"
 # marin-dupekit-native nightly (floor in lib/dupekit/pyproject.toml); the
 # omegaconf dev pin in override-dependencies
 # below; and the prerelease-only transitive deps in constraint-dependencies
-# (tfp-nightly / opentelemetry-semantic-conventions publish no stable release).
+# (tfp-nightly and the OpenTelemetry instrumentation packages publish no stable
+# release).
 prerelease = "explicit"
 constraint-dependencies = [
     # Enable pre-releases for transitive deps that publish no stable release at
@@ -59,6 +60,8 @@ constraint-dependencies = [
     # specifier, so the resolved version still follows whatever requires them;
     # the pre-release component here only flips uv's per-package opt-in.
     "tfp-nightly>=0.1.dev0",
+    "opentelemetry-instrumentation>=0.41b0",
+    "opentelemetry-instrumentation-grpc>=0.41b0",
     "opentelemetry-semantic-conventions>=0.1b0",
 ]
 override-dependencies = [
@@ -95,8 +98,8 @@ override-dependencies = [
 ]
 conflicts = [
     # GPU extras still carry CUDA/Linux-only solver constraints. Keep them out
-    # of non-GPU cross-package splits while allowing TPU and vLLM stacks to
-    # resolve together.
+    # of non-GPU cross-package splits while allowing the TPU stack to resolve
+    # together.
     [
         { package = "marin-levanter", extra = "gpu" },
         { package = "marin-core", extra = "cpu" },
@@ -104,10 +107,6 @@ conflicts = [
     [
         { package = "marin-levanter", extra = "gpu" },
         { package = "marin-core", extra = "tpu" },
-    ],
-    [
-        { package = "marin-levanter", extra = "gpu" },
-        { package = "marin-core", extra = "vllm" },
     ],
     [
         { package = "marin-core", extra = "gpu" },
@@ -135,6 +134,7 @@ members = [
     "lib/marin",
     "lib/rigging",
     "lib/zephyr",
+    "lib/finestore",
     "infra/pulumi",
 ]
 # Native maturin packages are excluded from uv workspace discovery because each
@@ -145,16 +145,6 @@ members = [
 #   - lib/dupekit/rust  -> marin-dupekit-native  (module `dupekit_native`)
 #   - lib/iris/rust     -> marin-iris-native     (module `iris_native`)
 exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/external/*"]
-
-[tool.uv.extra-build-variables]
-vllm = { VLLM_TARGET_DEVICE = "tpu" }
-
-[tool.uv.extra-build-dependencies]
-vllm = [
-    "torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'aarch64'",
-    "torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-win_amd64.whl ; python_version == '3.12' and sys_platform == 'win32' and platform_machine == 'AMD64'",
-]
 
 [tool.uv.sources]
 marin-iris = { workspace = true }
@@ -167,18 +157,10 @@ marin-levanter = { workspace = true }
 marin-core = { workspace = true }
 marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
+marin-finestore = { workspace = true }
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
-# Changes to TPU-vLLM fork SHAs must follow one of these protocols: if this is a
-# release/LKG refresh, then follow .agents/skills/refresh-tpu-vllm-forks/SKILL.md;
-# if this is a fixed-base overlay PR, then follow
-# .agents/skills/refresh-tpu-vllm-forks/docs/overlay-only-pr.md. PR-head SHAs are
-# temporary and must be replaced by the landed fork main SHA.
-# https://github.com/marin-community/vllm/compare/a30addc7548a9a8b9b3323a7bc3eb7d7c4895d1c...afb26719464d5957e695bde478ae93a160b11d14
-vllm = { git = "https://github.com/marin-community/vllm.git", rev = "afb26719464d5957e695bde478ae93a160b11d14" }
-# https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...e8809d492d5d6c7008369919a00384eb1c4de969
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "e8809d492d5d6c7008369919a00384eb1c4de969" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
@@ -277,6 +259,8 @@ project-includes = [
     "lib/ducky/src/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
+    "lib/finestore/src/**/*.py",
+    "infra/evaldash/src/**/*.py",
     "scripts/ci",
     "scripts/cost_manager",
 ]
@@ -290,12 +274,10 @@ search-path = [
     "lib/haliax/src",
     "lib/rigging/src",
     "lib/zephyr/src",
+    "lib/finestore/src",
     "lib/fray/src",
     "lib/iris/src",
     "lib/ducky/src",
-    # benchmark_controller.py imports controller test fixtures from lib/iris/tests
-    # (`from tests.cluster.controller... import`), run with lib/iris on sys.path.
-    "lib/iris",
 ]
 disable-search-path-heuristics = true
 
@@ -318,6 +300,13 @@ tensor-shapes = true
 # and compute deps a local venv commonly skips (torch, sympy). List both `pkg` and
 # `pkg.*`.
 ignore-missing-imports = [
+    # The evaldash server's own deps: its image installs them, no lint profile does.
+    "anthropic",
+    "anthropic.*",
+    "google.cloud.compute_v1",
+    "google.cloud.compute_v1.*",
+    "google.cloud.sql.connector",
+    "google.cloud.sql.connector.*",
     # Optional extra marin-rigging[secrets]; only rigging.secrets imports it, lazily.
     "google.cloud.secretmanager",
     "google.cloud.secretmanager.*",
@@ -334,14 +323,10 @@ ignore-missing-imports = [
     "librosa.*",
     "lm_eval",
     "lm_eval.*",
-    "math_verify",
-    "math_verify.*",
     "memray",
     "memray.*",
     "prompt_toolkit",
     "prompt_toolkit.*",
-    "pylatexenc",
-    "pylatexenc.*",
     "quack",
     "quack.*",
     "resiliparse",
@@ -358,8 +343,6 @@ ignore-missing-imports = [
     "trackio.*",
     "triton",
     "triton.*",
-    "verifiers",
-    "verifiers.*",
     "vllm",
     "vllm.*",
     "xprof",
@@ -442,6 +425,7 @@ packages = ["experiments"]
 packages = ["experiments"]
 
 [tool.pytest.ini_options]
+# pytest-timeout uses SIGALRM on POSIX; the timeout guard hard-kills the process if a test suppresses that failure.
 timeout = 60
 filterwarnings = ["ignore::DeprecationWarning"]
 log_format = "%(asctime)s %(levelname)s %(message)s"
@@ -467,4 +451,4 @@ pythonpath = ["."]
 # All but manual are run from dedicated CI workflows. Tests that need a TPU carry
 # @skip_if_no_tpu (tests/test_utils.py) and skip themselves when none is present;
 # the Iris markers also apply when lib/iris test paths are passed from the root.
-addopts = "--session-timeout=600 -n auto --dist=worksteal -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' --import-mode=importlib"
+addopts = "-p marin.pytest_timeout_guard --session-timeout=600 -n auto --dist=worksteal -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' --import-mode=importlib"

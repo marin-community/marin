@@ -253,6 +253,7 @@ class GcpVmConfig(_Config):
     machine_type: str = ""  # default: "n2-standard-4"
     boot_disk_size_gb: int = 0  # default: 50
     service_account: str = ""
+    network_tags: tuple[str, ...] = ()
 
 
 class ManualVmConfig(_Config):
@@ -618,7 +619,6 @@ class KueueTopology(_Config):
 
 class KueueConfig(_Config):
     cluster_queue: str = ""  # setting this ENABLES Kueue gang admission
-    priority_classes: dict[str, str] = Field(default_factory=dict)  # band -> class
     topologies: dict[str, KueueTopology] = Field(default_factory=dict)  # group_by -> topo
 
 
@@ -1199,13 +1199,27 @@ def slice_template_region(template: SliceConfig) -> str | None:
     return None
 
 
+def slice_template_zone(template: SliceConfig) -> str | None:
+    """Zone a slice template occupies: the GCP zone, or the CoreWeave region.
+
+    CoreWeave exposes no sub-region placement, so its region doubles as the zone.
+    Returns None when the platform carries no location (manual/local), or when the
+    location field is unset.
+    """
+    if template.gcp is not None and template.gcp.zone:
+        return template.gcp.zone
+    if template.coreweave is not None and template.coreweave.region:
+        return template.coreweave.region
+    return None
+
+
 def _scale_group_region_attributes(scale_groups: Mapping[str, ScaleGroupConfig]) -> dict[str, set[str]]:
     """Collect the ``region`` a backend's scale groups occupy, from their slice templates.
 
-    Mirrors :meth:`ScaleGroup.region` so a backend advertises the same region a
-    worker self-reports, letting ``--region`` route across a federation instead of
-    only within one cluster (#7286). Scale groups in different regions union into
-    one set.
+    Shares :func:`slice_template_region` with ``ScalingGroup.region`` so a backend
+    advertises the same region a worker self-reports, letting ``--region`` route
+    across a federation instead of only within one cluster (#7286). Scale groups in
+    different regions union into one set.
     """
     derived: dict[str, set[str]] = {}
     for sg in scale_groups.values():

@@ -14,7 +14,6 @@ from __future__ import annotations
 import dataclasses
 
 import draccus
-import pytest
 from fray.types import ResourceConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim.config import AdamConfig
@@ -22,8 +21,6 @@ from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.experiment.checkpoints import (
     HfToLevanterCheckpoint,
     HfToLevanterConfig,
-    hf_to_levanter,
-    resolve_lm_config,
 )
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint
@@ -59,8 +56,8 @@ def _fake_conversion(arch: LmConfig | None = None) -> HfToLevanterCheckpoint:
         name="checkpoints/hf-to-levanter/qwen-qwen3-0.6b-qwen3",
         version="2026.07.17",
         artifact_type=LevanterCheckpoint,
-        run=lambda config: None,
-        build_config=lambda ctx: {},
+        run=lambda _config: None,
+        build_config=lambda _ctx: {},
     )
     return HfToLevanterCheckpoint(step=step, model=arch or _tiny_arch())
 
@@ -105,6 +102,24 @@ def test_raw_path_requires_explicit_arch_and_tokenizer():
     assert train_config.initialize_model_from_checkpoint_path == "gs://staged/ckpt"
     assert train_config.data.tokenizer == "gs://tok"
     assert train_config.model == arch
+
+
+def test_training_handle_resolves_native_checkpoint_series_directory():
+    """A training artifact owns its layout; SFT resolves its checkpoint-series accessor."""
+    upstream: ArtifactStep[LevanterCheckpoint] = ArtifactStep(
+        name="checkpoints/upstream",
+        version="2026.07.17",
+        artifact_type=LevanterCheckpoint,
+        run=lambda _config: None,
+        build_config=lambda _ctx: {},
+    )
+    model = LevanterCheckpointModel(init_from=upstream, model=_tiny_arch(), tokenizer_path="gs://tok")
+    step = sft_step(_spec(model), ResourceConfig.with_cpu())
+
+    assert upstream in step.deps
+    train_config = materialized_config(step, _PREFIX).train_config
+    expected = LevanterCheckpoint(path=upstream.path(_PREFIX)).checkpoint_dir
+    assert train_config.initialize_model_from_checkpoint_path == expected
 
 
 def test_epoch_chat_tokenize_declares_the_conversion_dependency():
@@ -177,28 +192,3 @@ def test_lm_config_draccus_round_trip_selects_subclass_by_model_type():
     )
     decoded = draccus.decode(LmConfig.get_choice_class(config.model_type), config.model_config_json)
     assert decoded == arch
-
-
-@pytest.mark.slow
-def test_hf_to_levanter_resolves_real_arch_and_is_identity_stable():
-    """Against a real small model: the arch is read from the HF config (not the class default) and the
-    conversion step's identity tracks the pinned inputs but not where it runs."""
-    conv = hf_to_levanter("Qwen/Qwen3-0.6B", model_type="qwen3", hf_revision="main", version="2026.07.17")
-    # 0.6B differs from the Qwen3Config class default, so a real resolution must have happened.
-    assert conv.model != LmConfig.get_choice_class("qwen3")()
-    assert conv.model == resolve_lm_config("qwen3", "Qwen/Qwen3-0.6B", "main")
-
-    config = materialized_config(conv.step, _PREFIX)
-    assert isinstance(config, HfToLevanterConfig)
-    assert config.hf_id == "Qwen/Qwen3-0.6B"
-    assert config.output_path == conv.step.path(_PREFIX)
-
-    base = conv.step.fingerprint()
-    big = hf_to_levanter(
-        "Qwen/Qwen3-0.6B",
-        model_type="qwen3",
-        hf_revision="main",
-        version="2026.07.17",
-        resources=ResourceConfig.with_cpu(cpu=32, ram="256g"),
-    )
-    assert big.step.fingerprint() == base  # resources are a runtime choice

@@ -1,7 +1,7 @@
 {
   "uid": "marin-jobs",
   "title": "Jobs",
-  "description": "Fleet job state at a glance. The CoreWeave jobs come from the iris.task_state finelog namespace on the marin hub (per active root job: waiting/running task counts and the oldest PENDING / stuck-in-BUILDING wait ages), grouped by origin cluster. GCE clusters (marin, marin-dev) do not emit iris.task_state — their controller DB is queried directly for job-state counts. Until the finelog CoreWeave stamping fix deploys, CoreWeave rows arrive without an origin cluster and show as 'unknown'; unifying GCE into the per-job table needs the follow-up in the unified-grafana-job-dash-design artifact.",
+  "description": "What is running, what is queued, and why it is stuck. The CoreWeave panels read the iris.task_state rollups the cluster-view controllers emit every 30s; the GCE controllers emit none and are queried live instead.",
   "tags": [
     "marin",
     "generated"
@@ -14,11 +14,125 @@
     "from": "now-6h",
     "to": "now"
   },
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "label": "Cluster",
+        "type": "custom",
+        "description": "The clusters the bridge serves (infra/grafana/src/config.py). A custom list rather than a query so a cluster that has gone silent -- exactly when you want to select it -- is still in the dropdown.",
+        "query": "cw-rno2a,cw-us-east-02a,cw-us-east-08a,marin,marin-dev",
+        "options": [
+          {
+            "selected": false,
+            "text": "cw-rno2a",
+            "value": "cw-rno2a"
+          },
+          {
+            "selected": false,
+            "text": "cw-us-east-02a",
+            "value": "cw-us-east-02a"
+          },
+          {
+            "selected": false,
+            "text": "cw-us-east-08a",
+            "value": "cw-us-east-08a"
+          },
+          {
+            "selected": false,
+            "text": "marin",
+            "value": "marin"
+          },
+          {
+            "selected": false,
+            "text": "marin-dev",
+            "value": "marin-dev"
+          }
+        ],
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "includeAll": true,
+        "multi": true,
+        "hide": 0,
+        "refresh": 0
+      },
+      {
+        "name": "job",
+        "label": "Job",
+        "type": "query",
+        "description": "Root jobs with task-state rows inside the dashboard window.",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "finelog-marin"
+        },
+        "definition": "SELECT DISTINCT root_job_id AS value FROM \"iris.task_state\" WHERE root_job_id <> '' AND COALESCE(NULLIF(\"cluster\", ''), ",
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable-job",
+          "infinityQuery": {
+            "refId": "variable-job",
+            "type": "json",
+            "source": "url",
+            "format": "table",
+            "parser": "backend",
+            "url": "/query",
+            "url_options": {
+              "method": "GET",
+              "params": [
+                {
+                  "key": "sql",
+                  "value": "SELECT DISTINCT root_job_id AS value FROM \"iris.task_state\" WHERE root_job_id <> '' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} ORDER BY 1"
+                },
+                {
+                  "key": "from",
+                  "value": "${__from}"
+                },
+                {
+                  "key": "to",
+                  "value": "${__to}"
+                }
+              ]
+            },
+            "columns": [
+              {
+                "selector": "value",
+                "text": "value",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "sort": 1,
+        "regex": "",
+        "hide": 0
+      }
+    ]
+  },
   "links": [
     {
       "asDropdown": false,
       "icon": "dashboard",
-      "includeVars": false,
+      "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
       "title": "Home",
@@ -28,12 +142,82 @@
     {
       "asDropdown": false,
       "icon": "dashboard",
-      "includeVars": false,
+      "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Iris resources",
+      "title": "Accelerators",
       "type": "link",
-      "url": "/d/marin-iris"
+      "url": "/d/marin-accel"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Node details",
+      "type": "link",
+      "url": "/d/marin-nodes"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Node pools",
+      "type": "link",
+      "url": "/d/marin-node-pools"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Runs",
+      "type": "link",
+      "url": "/d/marin-runs"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Clusters",
+      "type": "link",
+      "url": "/d/marin-clusters"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Pipelines",
+      "type": "link",
+      "url": "/d/marin-pipelines"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Inference",
+      "type": "link",
+      "url": "/d/marin-inference"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Infra",
+      "type": "link",
+      "url": "/d/infra"
     }
   ],
   "panels": [
@@ -41,7 +225,7 @@
       "id": 1,
       "gridPos": {
         "h": 4,
-        "w": 12,
+        "w": 6,
         "x": 0,
         "y": 0
       },
@@ -51,28 +235,875 @@
       "id": 2,
       "gridPos": {
         "h": 4,
-        "w": 12,
-        "x": 12,
+        "w": 6,
+        "x": 6,
         "y": 0
       },
       "panelRef": "fleet_jobs_stuck"
     },
     {
       "id": 3,
-      "type": "table",
-      "title": "Active jobs (CoreWeave fleet)",
-      "description": "One row per active root job across the CoreWeave clusters, latest iris.task_state snapshot within the last 2 minutes, worst-first by wait age. A finished job stops emitting and ages out of the 2-minute window rather than lingering as active. cluster='unknown' means the origin stamp is missing (pre-stamping-fix); after the fix each row carries its cw-* cluster.",
+      "type": "stat",
+      "title": "Provisioning failures",
+      "description": "Slice provisioning attempts that ended in stockout or error over the dashboard window. A wall of these is capacity, not code.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
-        "h": 11,
-        "w": 24,
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT COUNT(*) AS value FROM \"iris.provisioning\" WHERE outcome IN ('stockout', 'error') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Warning events",
+      "description": "Warning task events across the selected clusters over the dashboard window, summed with their repeat counts.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT SUM(count) AS value FROM \"iris.task_event\" WHERE type = 'Warning' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Fleet task states",
+      "description": "Every CoreWeave task in the selected clusters, stacked by state. The shape tells you which stage is the bottleneck: a thick pending band is scheduling, a thick building band is image pulls and setup.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
         "x": 0,
         "y": 4
       },
-      "timeFrom": "2m",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 22,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pending"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#a6c8ff"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "assigned"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#78a9ff"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "building"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#4589ff"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "running"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#0f62fe"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH per_cluster AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cl, MAX(pending) AS pending, MAX(assigned) AS assigned, MAX(building) AS building, MAX(running) AS running FROM \"iris.task_state\" WHERE root_job_id = '' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2) SELECT t, SUM(pending) AS pending, SUM(assigned) AS assigned, SUM(building) AS building, SUM(running) AS running FROM per_cluster GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "pending",
+              "text": "pending",
+              "type": "number"
+            },
+            {
+              "selector": "assigned",
+              "text": "assigned",
+              "type": "number"
+            },
+            {
+              "selector": "building",
+              "text": "building",
+              "type": "number"
+            },
+            {
+              "selector": "running",
+              "text": "running",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "panelRef": "queue_depth_by_cluster"
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Oldest waiting task by cluster",
+      "description": "How long the longest-waiting pending or building task has been waiting. This is the queue-pain number the stuck-job alert watches.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cw-rno2a"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cw-us-east-02a"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cw-us-east-08a"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "marin"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d55181"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "marin-dev"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#008300"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, MAX(GREATEST(oldest_pending_age_ms, oldest_building_age_ms)) AS value FROM \"iris.task_state\" WHERE root_job_id = '' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "panelRef": "warning_events_by_reason"
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Provisioning attempts by outcome",
+      "description": "Every slice the autoscaler tried to create, by outcome. A stockout wall is the cloud saying no; errors are ours.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 22,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ready"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "preempted"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "stockout"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "error"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, outcome AS series, COUNT(*) AS value FROM \"iris.provisioning\" WHERE COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Provisioning latency by accelerator",
+      "description": "Create-to-ready time for slices that came up, by accelerator variant. Climbing latency precedes stockouts.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 21
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, CASE WHEN accelerator_variant = '' THEN resource_type ELSE accelerator_variant END AS series, AVG(provision_latency_ms) AS value FROM \"iris.provisioning\" WHERE outcome = 'ready' AND provision_latency_ms > 0 AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Waiting tasks by job",
+      "description": "Tasks not yet running, per selected root job. With every job selected this is the fleet's backlog by job; narrow the job selector and it becomes one job's own queue over time.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, root_job_id AS series, MAX(pending + assigned + building) AS value FROM \"iris.task_state\" WHERE root_job_id IN (${job:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "table",
+      "title": "Active jobs",
+      "description": "One row per active root job on the selected CoreWeave clusters, newest snapshot within a two-minute window, worst wait first. A finished job stops emitting and ages out rather than lingering here.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 37
+      },
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -84,7 +1115,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "oldest building"
+              "options": "oldest pending"
             },
             "properties": [
               {
@@ -122,7 +1153,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "oldest pending"
+              "options": "oldest building"
             },
             "properties": [
               {
@@ -182,7 +1213,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH recent AS (SELECT COALESCE(NULLIF(cluster,''),'unknown') AS cluster, root_job_id, pending, assigned, building, running, oldest_pending_age_ms, oldest_building_age_ms, ROW_NUMBER() OVER (PARTITION BY COALESCE(cluster,''), root_job_id ORDER BY ts DESC) AS rn FROM \"iris.task_state\" WHERE root_job_id <> '' AND ts >= {{from}} AND ts < {{to}}) SELECT cluster, root_job_id AS job, pending, assigned, building, running, oldest_pending_age_ms, oldest_building_age_ms FROM recent WHERE rn = 1 ORDER BY GREATEST(oldest_building_age_ms, oldest_pending_age_ms) DESC"
+                "value": "WITH recent AS ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cluster, root_job_id, pending, assigned, building, running, oldest_pending_age_ms, oldest_building_age_ms, ROW_NUMBER() OVER (PARTITION BY \"cluster\", root_job_id ORDER BY ts DESC) AS rn FROM \"iris.task_state\" WHERE root_job_id IN (${job:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}}) SELECT \"cluster\", root_job_id AS job, pending, assigned, building, running, oldest_pending_age_ms, oldest_building_age_ms FROM recent WHERE rn = 1 ORDER BY GREATEST(oldest_building_age_ms, oldest_pending_age_ms) DESC"
               },
               {
                 "key": "from",
@@ -237,41 +1268,43 @@
             }
           ]
         }
-      ]
+      ],
+      "timeFrom": "2m"
     },
     {
-      "id": 4,
-      "type": "timeseries",
-      "title": "CoreWeave queue depth",
-      "description": "Pending task count per cluster over the dashboard window, from the iris.task_state rollup rows (root_job_id=''). A rising line is queue backlog; a line going flat-then-absent is a controller that stopped emitting.",
+      "id": 13,
+      "type": "table",
+      "title": "Recent warning events",
+      "description": "The raw event stream behind the chart above, newest first. Use it after the chart has told you which reason to look at.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
-        "h": 8,
+        "h": 9,
         "w": 24,
         "x": 0,
-        "y": 15
+        "y": 47
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
-          "min": 0,
           "custom": {
-            "drawStyle": "line",
-            "showPoints": "never",
-            "fillOpacity": 10
+            "align": "auto",
+            "filterable": true
           }
         },
         "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
       },
       "targets": [
         {
           "refId": "A",
           "type": "json",
           "source": "url",
-          "format": "timeseries",
+          "format": "table",
           "parser": "backend",
           "url": "/query",
           "url_options": {
@@ -279,7 +1312,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(NULLIF(cluster,''),'unknown') AS series, MAX(pending) AS value FROM \"iris.task_state\" WHERE root_job_id = '' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+                "value": "SELECT ts, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cluster, task_id, attempt_id, reason, source, message, count FROM \"iris.task_event\" WHERE type = 'Warning' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} ORDER BY ts DESC LIMIT 200"
               },
               {
                 "key": "from",
@@ -293,18 +1326,43 @@
           },
           "columns": [
             {
-              "selector": "t",
+              "selector": "ts",
               "text": "time",
               "type": "timestamp_epoch"
             },
             {
-              "selector": "series",
+              "selector": "cluster",
               "text": "cluster",
               "type": "string"
             },
             {
-              "selector": "value",
-              "text": "pending",
+              "selector": "task_id",
+              "text": "task",
+              "type": "string"
+            },
+            {
+              "selector": "attempt_id",
+              "text": "attempt",
+              "type": "number"
+            },
+            {
+              "selector": "reason",
+              "text": "reason",
+              "type": "string"
+            },
+            {
+              "selector": "source",
+              "text": "source",
+              "type": "string"
+            },
+            {
+              "selector": "message",
+              "text": "message",
+              "type": "string"
+            },
+            {
+              "selector": "count",
+              "text": "count",
               "type": "number"
             }
           ]
@@ -312,23 +1370,23 @@
       ]
     },
     {
-      "id": 10,
+      "id": 14,
       "type": "row",
-      "title": "GCE job state (marin, marin-dev)",
+      "title": "GCE controllers (marin, marin-dev)",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 23
+        "y": 56
       },
       "panels": []
     },
     {
-      "id": 11,
+      "id": 15,
       "type": "table",
       "title": "marin jobs by state",
-      "description": "Root-job counts by state from the marin controller: in-flight now, plus terminal states over the trailing 24h. GCE controllers are queried directly (they emit no iris.task_state).",
+      "description": "Root-job counts from the marin controller: in flight now, plus terminal states over the trailing 24h. GCE controllers emit no iris.task_state, so they are queried live.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "iris-marin"
@@ -337,7 +1395,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 24
+        "y": 57
       },
       "fieldConfig": {
         "defaults": {
@@ -385,10 +1443,10 @@
       ]
     },
     {
-      "id": 12,
+      "id": 16,
       "type": "table",
       "title": "marin-dev jobs by state",
-      "description": "Root-job counts by state from the marin-dev controller: in-flight now, plus terminal states over the trailing 24h.",
+      "description": "The same counts from the marin-dev controller.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "iris-marin-dev"
@@ -397,7 +1455,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 24
+        "y": 57
       },
       "fieldConfig": {
         "defaults": {
@@ -439,6 +1497,364 @@
               "selector": "count",
               "text": "count",
               "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "type": "row",
+      "title": "GCE task and worker resources",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 65
+      },
+      "panels": [
+        {
+          "id": 31,
+          "type": "timeseries",
+          "title": "Top tasks by memory",
+          "description": "Twenty highest-memory task attempts on the GCE clusters. iris.task carries no accelerator columns, so this is host memory.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "decmbytes",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "min": 0
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "type": "json",
+              "source": "url",
+              "format": "timeseries",
+              "parser": "backend",
+              "url": "/query",
+              "url_options": {
+                "method": "GET",
+                "params": [
+                  {
+                    "key": "sql",
+                    "value": "WITH top AS ( SELECT task_id FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY task_id ORDER BY AVG(memory_mb) DESC LIMIT 20) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, task_id AS series, AVG(memory_mb) AS value FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} AND task_id IN (SELECT task_id FROM top) GROUP BY 1, 2 ORDER BY 1"
+                  },
+                  {
+                    "key": "from",
+                    "value": "${__from}"
+                  },
+                  {
+                    "key": "to",
+                    "value": "${__to}"
+                  }
+                ]
+              },
+              "columns": [
+                {
+                  "selector": "t",
+                  "text": "time",
+                  "type": "timestamp_epoch"
+                },
+                {
+                  "selector": "series",
+                  "text": "series",
+                  "type": "string"
+                },
+                {
+                  "selector": "value",
+                  "text": "value",
+                  "type": "number"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": 32,
+          "type": "timeseries",
+          "title": "Top tasks by CPU",
+          "description": "Twenty highest-CPU task attempts on the GCE clusters.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "min": 0
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "type": "json",
+              "source": "url",
+              "format": "timeseries",
+              "parser": "backend",
+              "url": "/query",
+              "url_options": {
+                "method": "GET",
+                "params": [
+                  {
+                    "key": "sql",
+                    "value": "WITH top AS ( SELECT task_id FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY task_id ORDER BY AVG(cpu_millicores) DESC LIMIT 20) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, task_id AS series, AVG(cpu_millicores) AS value FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} AND task_id IN (SELECT task_id FROM top) GROUP BY 1, 2 ORDER BY 1"
+                  },
+                  {
+                    "key": "from",
+                    "value": "${__from}"
+                  },
+                  {
+                    "key": "to",
+                    "value": "${__to}"
+                  }
+                ]
+              },
+              "columns": [
+                {
+                  "selector": "t",
+                  "text": "time",
+                  "type": "timestamp_epoch"
+                },
+                {
+                  "selector": "series",
+                  "text": "series",
+                  "type": "string"
+                },
+                {
+                  "selector": "value",
+                  "text": "value",
+                  "type": "number"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": 33,
+          "type": "timeseries",
+          "title": "Top workers by host CPU",
+          "description": "Twenty busiest GCE workers by host CPU.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "min": 0
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "type": "json",
+              "source": "url",
+              "format": "timeseries",
+              "parser": "backend",
+              "url": "/query",
+              "url_options": {
+                "method": "GET",
+                "params": [
+                  {
+                    "key": "sql",
+                    "value": "WITH top AS ( SELECT worker_id FROM \"iris.worker\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY worker_id ORDER BY AVG(cpu_pct) DESC LIMIT 20) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, worker_id AS series, AVG(cpu_pct) AS value FROM \"iris.worker\" WHERE ts >= {{from}} AND ts < {{to}} AND worker_id IN (SELECT worker_id FROM top) GROUP BY 1, 2 ORDER BY 1"
+                  },
+                  {
+                    "key": "from",
+                    "value": "${__from}"
+                  },
+                  {
+                    "key": "to",
+                    "value": "${__to}"
+                  }
+                ]
+              },
+              "columns": [
+                {
+                  "selector": "t",
+                  "text": "time",
+                  "type": "timestamp_epoch"
+                },
+                {
+                  "selector": "series",
+                  "text": "series",
+                  "type": "string"
+                },
+                {
+                  "selector": "value",
+                  "text": "value",
+                  "type": "number"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": 34,
+          "type": "timeseries",
+          "title": "Top workers by host memory",
+          "description": "Twenty highest-memory GCE workers.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "min": 0
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "list",
+              "placement": "bottom",
+              "calcs": []
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "type": "json",
+              "source": "url",
+              "format": "timeseries",
+              "parser": "backend",
+              "url": "/query",
+              "url_options": {
+                "method": "GET",
+                "params": [
+                  {
+                    "key": "sql",
+                    "value": "WITH top AS ( SELECT worker_id FROM \"iris.worker\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY worker_id ORDER BY AVG(mem_bytes) DESC LIMIT 20) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, worker_id AS series, AVG(mem_bytes) AS value FROM \"iris.worker\" WHERE ts >= {{from}} AND ts < {{to}} AND worker_id IN (SELECT worker_id FROM top) GROUP BY 1, 2 ORDER BY 1"
+                  },
+                  {
+                    "key": "from",
+                    "value": "${__from}"
+                  },
+                  {
+                    "key": "to",
+                    "value": "${__to}"
+                  }
+                ]
+              },
+              "columns": [
+                {
+                  "selector": "t",
+                  "text": "time",
+                  "type": "timestamp_epoch"
+                },
+                {
+                  "selector": "series",
+                  "text": "series",
+                  "type": "string"
+                },
+                {
+                  "selector": "value",
+                  "text": "value",
+                  "type": "number"
+                }
+              ]
             }
           ]
         }

@@ -31,6 +31,9 @@ class FakeResult:
     def all(self):
         return self._rows
 
+    def scalars(self):
+        return (row[0] for row in self._rows)
+
 
 class FakeConn:
     def __init__(self, rows, sink, responses):
@@ -40,6 +43,10 @@ class FakeConn:
 
     def execute(self, statement, *args):
         self._sink.append(statement)
+        if getattr(statement, "is_insert", False) and statement.table.name == "search_executions":
+            return FakeResult([make_row(id=991)])
+        if getattr(statement, "is_insert", False) and statement.table.name == "search_execution_results":
+            return FakeResult([])
         if self._responses:
             return FakeResult(self._responses.pop(0))
         return FakeResult(self._rows)
@@ -138,6 +145,47 @@ def test_iap_caller_strips_provider_prefix():
     assert echo.iap_caller("") == "unknown"
 
 
+def test_search_remains_available_during_history_schema_rollout():
+    class SchemaSkewEngine:
+        def begin(self):
+            raise sqlalchemy.exc.ProgrammingError(
+                "INSERT INTO search_executions",
+                {},
+                Exception({"C": echo.POSTGRES_UNDEFINED_TABLE}),
+            )
+
+    record = echo.search_history.SearchExecutionRecord(
+        query="deploy iris",
+        mode="federated",
+        domains=("file",),
+        filters={},
+        requested_limit=10,
+        returned_count=0,
+        duration_ms=1.0,
+    )
+
+    assert echo.record_live_search(SchemaSkewEngine(), record) is None
+
+
+def test_search_history_propagates_non_schema_database_errors():
+    class BrokenEngine:
+        def begin(self):
+            raise sqlalchemy.exc.OperationalError("INSERT INTO search_executions", {}, Exception("connection lost"))
+
+    record = echo.search_history.SearchExecutionRecord(
+        query="deploy iris",
+        mode="federated",
+        domains=("file",),
+        filters={},
+        requested_limit=10,
+        returned_count=0,
+        duration_ms=1.0,
+    )
+
+    with pytest.raises(sqlalchemy.exc.OperationalError):
+        echo.record_live_search(BrokenEngine(), record)
+
+
 def test_work_log_list_omits_body(client_with):
     row = make_row(id=1, at=datetime(2026, 7, 23, tzinfo=UTC), author="a", project="p", title="t", body="secret body")
     harness = client_with([row])
@@ -166,6 +214,210 @@ def test_add_work_log_attributes_to_iap_caller_not_client(client_with):
     assert resp.json()["author"] == "bob@openathena.ai"
 
 
+def test_add_search_feedback_persists_authenticated_replayable_judgments(client_with):
+    row = make_row(
+        id=17,
+        created_at=datetime(2026, 8, 11, tzinfo=UTC),
+        author="agent@openathena.ai",
+        query="how do I deploy Iris?",
+        note="Wiki result was unrelated.",
+    )
+    harness = client_with([row])
+    response = harness.client.post(
+        "/api/feedback",
+        json={
+            "query": "  how do I deploy Iris?  ",
+            "grades": [
+                {"result_id": "wiki:123", "grade": 0},
+                {"result_id": "file:lib/iris/OPS.md", "grade": 10},
+            ],
+            "note": "  Wiki result was unrelated.  ",
+        },
+        headers={"X-Goog-Authenticated-User-Email": "accounts.google.com:agent@openathena.ai"},
+    )
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "id": 17,
+        "created_at": "2026-08-11T00:00:00Z",
+        "author": "agent@openathena.ai",
+        "query": "how do I deploy Iris?",
+        "grades": [
+            {"result_id": "wiki:123", "grade": 0},
+            {"result_id": "file:lib/iris/OPS.md", "grade": 10},
+        ],
+        "note": "Wiki result was unrelated.",
+        "execution_id": None,
+    }
+    feedback_params = harness.engine.executions[-2].compile().params
+    assert feedback_params["author"] == "agent@openathena.ai"
+    assert feedback_params["query"] == "how do I deploy Iris?"
+    assert feedback_params["note"] == "Wiki result was unrelated."
+    grade_params = harness.engine.executions[-1].compile().params
+    assert grade_params == {
+        "feedback_id_m0": 17,
+        "result_id_m0": "wiki:123",
+        "grade_m0": 0,
+        "feedback_id_m1": 17,
+        "result_id_m1": "file:lib/iris/OPS.md",
+        "grade_m1": 10,
+    }
+
+
+def test_search_feedback_links_matching_execution(client_with):
+    execution = make_row(author="agent@openathena.ai", query="how do I deploy Iris?")
+    feedback = make_row(
+        id=17,
+        created_at=datetime(2026, 8, 11, tzinfo=UTC),
+        author="agent@openathena.ai",
+        query="how do I deploy Iris?",
+        note="The file answered it.",
+        execution_id=991,
+    )
+    harness = client_with([feedback], responses=[[execution], [["file:lib/iris/OPS.md"]]])
+
+    response = harness.client.post(
+        "/api/feedback",
+        json={
+            "query": "how do I deploy Iris?",
+            "execution_id": 991,
+            "grades": [{"result_id": "file:lib/iris/OPS.md", "grade": 10}],
+            "note": "The file answered it.",
+        },
+        headers={"X-Goog-Authenticated-User-Email": "accounts.google.com:agent@openathena.ai"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["execution_id"] == 991
+    feedback_insert = next(
+        statement
+        for statement in harness.engine.executions
+        if getattr(statement, "is_insert", False) and statement.table.name == "search_feedback"
+    )
+    assert feedback_insert.compile().params["execution_id"] == 991
+
+
+def test_search_feedback_rejects_grade_absent_from_linked_execution(client_with):
+    execution = make_row(author="agent@openathena.ai", query="how do I deploy Iris?")
+    harness = client_with([], responses=[[execution], [["file:lib/iris/OPS.md"]]])
+
+    response = harness.client.post(
+        "/api/feedback",
+        json={
+            "query": "how do I deploy Iris?",
+            "execution_id": 991,
+            "grades": [{"result_id": "wiki:123", "grade": 0}],
+            "note": "This was not in the recorded result set.",
+        },
+        headers={"X-Goog-Authenticated-User-Email": "accounts.google.com:agent@openathena.ai"},
+    )
+
+    assert response.status_code == 422
+    assert not any(
+        getattr(statement, "is_insert", False) and statement.table.name == "search_feedback"
+        for statement in harness.engine.executions
+    )
+
+
+def test_search_execution_export_preserves_result_rank(client_with):
+    execution = make_row(
+        id=41,
+        created_at=datetime(2026, 8, 12, tzinfo=UTC),
+        author="agent@openathena.ai",
+        query="how do I deploy Iris?",
+        normalized_query="how do i deploy iris?",
+        mode="federated",
+        domains=["wiki", "file"],
+        filters={},
+        requested_limit=10,
+        returned_count=2,
+        duration_ms=125.0,
+        repository_commit="abcdef1234567890",
+        service_revision="echo-api-00024-vtc",
+    )
+    result_rows = [
+        make_row(
+            execution_id=41,
+            rank=1,
+            result_id="file:lib/iris/OPS.md",
+            domain="file",
+            title="Iris Operations",
+            url="https://example.com/OPS.md",
+            snippet="Run iris cluster restart.",
+            score=0.9,
+            distance=0.1,
+            lexical_score=1.2,
+        ),
+        make_row(
+            execution_id=41,
+            rank=2,
+            result_id="wiki:12",
+            domain="wiki",
+            title="Iris deployment",
+            url="https://echo.oa.dev/wiki/12",
+            snippet="Deployment notes.",
+            score=0.8,
+            distance=0.2,
+            lexical_score=None,
+        ),
+    ]
+    harness = client_with([], responses=[[execution], result_rows])
+
+    entries = echo.search_executions(harness.engine, after_id=40, mode="federated", limit=10)
+
+    assert [entry.id for entry in entries] == [41]
+    assert [(result.rank, result.result_id) for result in entries[0].results] == [
+        (1, "file:lib/iris/OPS.md"),
+        (2, "wiki:12"),
+    ]
+
+
+def test_search_feedback_rejects_out_of_range_grade(client_with):
+    harness = client_with([])
+    response = harness.client.post(
+        "/api/feedback",
+        json={
+            "query": "scheduler",
+            "grades": [{"result_id": "wiki:123", "grade": 11}],
+            "note": "The result looked relevant.",
+        },
+    )
+
+    assert response.status_code == 422
+    assert harness.engine.executions == []
+
+
+def test_search_feedback_requires_overall_explanation(client_with):
+    harness = client_with([])
+    response = harness.client.post(
+        "/api/feedback",
+        json={"query": "scheduler", "grades": [{"result_id": "wiki:123", "grade": 5}]},
+    )
+
+    assert response.status_code == 422
+    assert harness.engine.executions == []
+
+
+def test_search_feedback_accepts_explanation_for_empty_result_set(client_with):
+    row = make_row(
+        id=18,
+        created_at=datetime(2026, 8, 11, tzinfo=UTC),
+        author="agent@openathena.ai",
+        query="missing scheduler detail",
+        note="No relevant results.",
+    )
+    harness = client_with([row])
+    response = harness.client.post(
+        "/api/feedback",
+        json={"query": "missing scheduler detail", "note": "No relevant results."},
+        headers={"X-Goog-Authenticated-User-Email": "accounts.google.com:agent@openathena.ai"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["grades"] == []
+    assert response.json()["note"] == "No relevant results."
+
+
 def test_missing_chunk_is_404(client_with):
     harness = client_with([])
     assert harness.client.get("/api/chunks/999").status_code == 404
@@ -189,6 +441,7 @@ def test_activity_search_uses_query_encoder(client_with):
     response = harness.client.get("/api/search", params={"q": "grafana"})
     assert response.status_code == 200
     assert response.json()[0]["title"] == "Grafana dashboards"
+    assert response.headers[echo.SEARCH_EXECUTION_HEADER] == "991"
     assert harness.model.queries == ["grafana"]
     assert harness.model.passages == []
 
@@ -308,6 +561,7 @@ def test_federated_file_result_names_exact_indexed_head(client_with):
     )
 
     assert response.status_code == 200
+    assert response.headers[echo.SEARCH_EXECUTION_HEADER] == "991"
     assert response.json() == [
         {
             "id": "file:lib/iris/src/iris/scheduler.py",
@@ -344,6 +598,25 @@ def test_federated_file_result_names_exact_indexed_head(client_with):
             ],
         }
     ]
+    execution_insert = next(
+        statement
+        for statement in harness.engine.executions
+        if getattr(statement, "is_insert", False) and statement.table.name == "search_executions"
+    )
+    execution_params = execution_insert.compile().params
+    assert execution_params["query"] == "FAILED_PRECONDITION"
+    assert execution_params["normalized_query"] == "failed_precondition"
+    assert execution_params["mode"] == "federated"
+    assert execution_params["domains"] == ["file"]
+    assert execution_params["returned_count"] == 1
+    assert execution_params["repository_commit"] == "abcdef1234567890"
+    result_insert = next(
+        statement
+        for statement in harness.engine.executions
+        if getattr(statement, "is_insert", False) and statement.table.name == "search_execution_results"
+    )
+    assert result_insert.compile().params["result_id_m0"] == "file:lib/iris/src/iris/scheduler.py"
+    assert result_insert.compile().params["rank_m0"] == 1
 
 
 def test_file_summary_skips_license_boilerplate_for_filename_match():

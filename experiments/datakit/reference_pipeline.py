@@ -21,7 +21,8 @@ Per source::
 Then:
     global_exact_dedup([<normalized source>])
     fuzzy_dups([<minhash per source>])
-    build_clustered_store(tokenize, decontam, cluster_assign, quality, exact_dedup, dedup)
+    verify_fuzzy_dups([<normalized source>], [<minhash per source>], fuzzy_dups)
+    build_clustered_store(tokenize, decontam, cluster_assign, quality, exact_dedup, verified_dedup)
     one ``datakit/report/<stage>`` step per stage -- a single self-contained
     HTML page built from that stage's counters + site/sample outputs
     (:mod:`experiments.datakit.reports`)
@@ -108,6 +109,14 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
     compute_minhash_attrs,
 )
+from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
+from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+    VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+    FuzzyVerificationStoreConfig,
+    VerifiedFuzzyDupsAttrData,
+    verify_fuzzy_dups,
+)
 from marin.processing.tokenize.attributes import (
     TokenizedAttrData,
     tokenize_attributes_step,
@@ -134,8 +143,16 @@ from experiments.datakit.decontam.config import (
     SOURCE_DF_COMMON_MIN_ABS,
     SOURCE_DF_SAMPLE_DOCS,
 )
-from experiments.datakit.decontam.prepare_eval_corpus import DECON_EXCLUDED_EVAL_TASKS
+from experiments.datakit.decontam.prepare_eval_corpus import (
+    AA_BENCHMARK_NAMES,
+    AA_MANIFEST_RELATIVE,
+    DECON_EXCLUDED_EVAL_TASKS,
+    EVAL_CORPUS_VERSION,
+    EVALS_RELATIVE,
+    LMH_MANIFEST_RELATIVE,
+)
 from experiments.datakit.embeddings.luxical.pipeline import (
+    EMBED_DOC_SAMPLE_CHARS,
     EMBEDDING_ATTR_DATA_VERSION,
     LUXICAL_REPO,
     LUXICAL_REVISION,
@@ -156,8 +173,8 @@ from experiments.datakit.reports.quality import quality_report
 from experiments.datakit.reports.store import store_report
 from experiments.datakit.reports.tokenize import tokenize_report
 from experiments.datakit.store.datakit_store import (
-    DEFAULT_SUBSHARDS,
-    DEFAULT_TARGET_TOKENS_PER_SUBSHARD,
+    DEFAULT_PARALLEL_BUCKET_WRITES,
+    DEFAULT_PARTITION_PROCESSES,
     ClusteredStoreData,
     build_clustered_store,
 )
@@ -177,9 +194,10 @@ TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 TOKENIZER_BACKEND = TokenizerBackend.HF
 SPLIT = "train"
 
-# Decontam. The combined eval corpus written by decontam/prepare_eval_corpus.py,
-# staged per-region (``aa/<eval>/<split>.parquet`` + ``lmh/<task>/eval.parquet``).
-EVAL_ROOT = f"{marin_prefix()}/datakit/decontam/evals"
+# Decontam. Mandatory AA and best-effort lm-eval artifacts use one versioned root.
+EVAL_ROOT = f"{marin_prefix()}/{EVALS_RELATIVE}"
+AA_MANIFEST_PATH = f"{EVAL_ROOT}/{AA_MANIFEST_RELATIVE}"
+LMH_MANIFEST_PATH = f"{EVAL_ROOT}/{LMH_MANIFEST_RELATIVE}"
 # Bloom capacity -- unique ngram hashes the filter must hold: ~21.78M unique
 # hashes across the AA + LMH corpus, with 2.3x headroom. At FPR=1e-9 this is a
 # ~270 MB filter.
@@ -261,23 +279,28 @@ class MinhashConfig:
 
 @dataclass(frozen=True)
 class StoreConfig:
-    """Shuffle and output-sharding knobs for the final clustered store."""
+    """Execution shape for the final map-only clustered store.
 
-    shards_per_task: int = 1
-    reduce_shards: int = 2048
-    target_tokens_per_subshard: int = DEFAULT_TARGET_TOKENS_PER_SUBSHARD
-    max_subshards: int = 128
-    default_subshards: int = DEFAULT_SUBSHARDS
+    Production uses 192 task-local partitions, which is about 104B tokens per
+    task for a 20T-token corpus. The dedicated worker shape keeps the store's
+    large RAM and local-disk request out of the shared upstream worker pool.
+    """
+
+    task_count: int | None = 192
+    partition_processes: int = 32
+    max_parallel_bucket_writes: int = DEFAULT_PARALLEL_BUCKET_WRITES
+    worker: ResourceConfig = field(
+        default_factory=lambda: ResourceConfig(cpu=96, ram="700g", disk="900g", preemptible=False)
+    )
 
 
 @dataclass(frozen=True)
 class PipelineScale:
-    """Non-resource sizing for :func:`reference_datakit_steps`.
+    """Sizing for :func:`reference_datakit_steps`.
 
-    Worker CPU/RAM lives in one :class:`PoolConfig` (:attr:`pool`); the rest is
-    content-shaping (cluster K, batch sizes, dedup fan-out, store subsharding).
-    ``DEFAULT_SCALE`` is production K=5000; ``SMOKE_SCALE`` is K=64 for a quick
-    end-to-end run.
+    Most worker CPU/RAM lives in :class:`PoolConfig`; the final store has a
+    dedicated large worker in :class:`StoreConfig`. ``DEFAULT_SCALE`` is the
+    production K=5000 shape; ``SMOKE_SCALE`` is K=64 for a quick end-to-end run.
     """
 
     cluster: ClusterConfig = field(default_factory=ClusterConfig)
@@ -302,7 +325,11 @@ DEFAULT_SCALE = PipelineScale()
 SMOKE_SCALE = PipelineScale(
     cluster=ClusterConfig(k_train=64, k_views=(8, 16), cluster_view=8),
     pool=PoolConfig(n_workers=16, worker=ResourceConfig(cpu=2, ram="8g", disk="8g")),
-    store=StoreConfig(reduce_shards=64, default_subshards=1),
+    store=StoreConfig(
+        task_count=None,
+        partition_processes=DEFAULT_PARTITION_PROCESSES,
+        worker=ResourceConfig(cpu=2, ram="8g", disk="8g"),
+    ),
     n_per_source_for_sample=20_000,
     dedup_max_parallelism=64,
     train_centroids_resources=ResourceConfig.with_cpu(cpu=4, ram="8g"),
@@ -343,6 +370,9 @@ def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale)
             "luxical_weights": LUXICAL_WEIGHTS_FILE,
             "luxical_revision": LUXICAL_REVISION,
             "batch_size": scale.embed_batch_size,
+            # Truncation changes the vector for any document above the cap, so it is
+            # part of the embed step identity per the contract above.
+            "doc_sample_chars": EMBED_DOC_SAMPLE_CHARS,
             "v": EMBEDDING_ATTR_DATA_VERSION,
         },
         fn=remote(
@@ -351,6 +381,7 @@ def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale)
                 normalized=read_artifact(np, NormalizedData),
                 revision=LUXICAL_REVISION,
                 batch_size=scale.embed_batch_size,
+                doc_sample_chars=EMBED_DOC_SAMPLE_CHARS,
                 worker_resources=scale.pool.worker,
                 max_workers=scale.pool.n_workers,
             ),
@@ -659,6 +690,11 @@ def reference_datakit_steps(
         estimated_doc_count=ESTIMATED_DOC_COUNT,
         false_positive_rate=FALSE_POSITIVE_RATE,
         exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
+        required_eval_manifest_path=AA_MANIFEST_PATH,
+        required_eval_corpus_version=EVAL_CORPUS_VERSION,
+        required_eval_names=AA_BENCHMARK_NAMES,
+        best_effort_eval_manifest_path=LMH_MANIFEST_PATH,
+        best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
     )
     # Count eval-ngram document frequency across normalized sources before
     # marking. Each decon consumes its source-local set and the global set.
@@ -765,6 +801,36 @@ def reference_datakit_steps(
 
     dedup = zephyr_steps.fuzzy_dedup
 
+    verification_params = FuzzyVerificationParams()
+    verification_store_config = FuzzyVerificationStoreConfig(
+        recovery_timeout=1_800,
+        ready_timeout=1_800,
+        lookup_batch_size=128,
+    )
+    verified_dedup = StepSpec(
+        name="datakit/verify_fuzzy_dups",
+        deps=[*sources.values(), *(stages["minhash"] for stages in per_source.values()), dedup],
+        hash_attrs={
+            "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+            "verification": verification_params.model_dump(mode="json"),
+            "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
+        },
+        fn=lambda op: verify_fuzzy_dups(
+            normalized_sources={name: read_artifact(step.output_path, NormalizedData) for name, step in sources.items()},
+            minhash_sources={
+                name: read_artifact(stages["minhash"].output_path, MinHashAttrData)
+                for name, stages in per_source.items()
+            },
+            candidates=read_artifact(dedup.output_path, FuzzyDupsAttrData),
+            output_path=op,
+            verification_params=verification_params,
+            local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+            store_config=verification_store_config,
+            max_workers=scale.pool.n_workers,
+            worker_resources=scale.pool.worker,
+        ),
+    )
+
     # ---- Final store: attribute join + per-bucket Levanter cache ---------------
     def _store_fn(output_path: str) -> ClusteredStoreData:
         return build_clustered_store(
@@ -775,40 +841,32 @@ def reference_datakit_steps(
             },
             quality={n: read_artifact(s["quality"].output_path, QualityScores) for n, s in per_source.items()},
             exact_dedup=read_artifact(exact_dedup.output_path, GlobalExactDedupData),
-            dedup=read_artifact(dedup.output_path, FuzzyDupsAttrData),
+            dedup=read_artifact(verified_dedup.output_path, VerifiedFuzzyDupsAttrData),
             output_path=output_path,
             cluster_view=cluster.cluster_view,
             split=SPLIT,
-            worker_resources=scale.pool.worker,
+            worker_resources=scale.store.worker,
             max_workers=scale.pool.n_workers,
-            shards_per_task=scale.store.shards_per_task,
-            reduce_shards=scale.store.reduce_shards,
-            target_tokens_per_subshard=scale.store.target_tokens_per_subshard,
-            max_subshards=scale.store.max_subshards,
-            default_subshards=scale.store.default_subshards,
-            zephyr_context=zephyr_context,
+            task_count=scale.store.task_count,
+            partition_processes=scale.store.partition_processes,
+            max_parallel_bucket_writes=scale.store.max_parallel_bucket_writes,
         )
 
     store_deps: list[StepSpec] = []
     for s in per_source.values():
         store_deps += [s["tokenize"], s["decontam"], s["assign"], s["quality"]]
-    store_deps += [exact_dedup, dedup]
+    store_deps += [exact_dedup, verified_dedup]
 
-    # Hash output-shaping values read directly by the store. ``shards_per_task``
-    # and ``reduce_shards`` only schedule the shuffle, so they intentionally do
-    # not re-key identical final caches. Tokenizer and quality bucket edges are
-    # already captured through dependencies. If the reference pipeline gains a
-    # bucket-token hint, its stable identity must be included here too.
+    # Task partitioning determines the number and contents of leaf caches.
+    # Tokenizer and quality bucket edges are already captured by dependencies.
     store = StepSpec(
         name="datakit/store",
         deps=store_deps,
         hash_attrs={
             "cluster_view": cluster.cluster_view,
             "split": SPLIT,
-            "target_tokens_per_subshard": scale.store.target_tokens_per_subshard,
-            "max_subshards": scale.store.max_subshards,
-            "default_subshards": scale.store.default_subshards,
-            "v": 2,
+            "task_count": scale.store.task_count,
+            "v": 3,
         },
         fn=_store_fn,
     )
@@ -861,9 +919,13 @@ def reference_datakit_steps(
         ),
         StepSpec(
             name="datakit/report/dedup",
-            deps=[dedup],
-            hash_attrs={"v": 1},
-            fn=lambda op: dedup_report(op, read_artifact(dedup.output_path, FuzzyDupsAttrData)),
+            deps=[dedup, verified_dedup],
+            hash_attrs={"v": 2},
+            fn=lambda op: dedup_report(
+                op,
+                read_artifact(dedup.output_path, FuzzyDupsAttrData),
+                read_artifact(verified_dedup.output_path, VerifiedFuzzyDupsAttrData),
+            ),
         ),
         StepSpec(
             name="datakit/report/store",
@@ -878,7 +940,7 @@ def reference_datakit_steps(
         all_steps.append(domain_centroids)
     for s in per_source.values():
         all_steps += list(s.values())
-    all_steps += [dedup, store, *reports]
+    all_steps += [dedup, verified_dedup, store, *reports]
     return DatakitSteps(sources=sources, output_buckets=store, all_steps=all_steps)
 
 

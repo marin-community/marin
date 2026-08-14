@@ -47,3 +47,4 @@ def test_resource_flavor_and_cluster_queue_use_one_all_node_tas_flavor():
     assert flavor["metadata"]["name"] == "cw-tas"
     assert flavor["spec"]["nodeLabels"] == {"iris.kueue": "true"}
     assert [entry["name"] for entry in queue["spec"]["resourceGroups"][0]["flavors"]] == ["cw-tas"]
+    assert queue["spec"]["preemption"] == {"withinClusterQueue": "LowerPriority"}

@@ -7,11 +7,13 @@ The single source of truth for echo's schema. Migrations (migrations/) create an
 these tables; the sync job (sync/main.py) uses them for DML. `chunks` mirrors the
 marinmirror corpus schema for the github+discord sources; `repository_file_chunks`
 indexes GitHub branch heads; `wiki_entries` holds durable agent-authored notes;
-`work_log` is the agents' shared logbook; the state tables hold sync watermarks.
+`work_log` is the agents' shared logbook; search executions retain ranked result
+snapshots; search feedback records relevance judgments; the state tables hold sync
+watermarks.
 """
 
 from pgvector.sqlalchemy import Vector
-from search_config import TEXT_SEARCH_CONFIG
+from search_config import SEARCH_FEEDBACK_MAX_GRADE, SEARCH_FEEDBACK_MIN_GRADE, TEXT_SEARCH_CONFIG
 from sqlalchemy import (
     ARRAY,
     BigInteger,
@@ -20,10 +22,13 @@ from sqlalchemy import (
     Column,
     Computed,
     DateTime,
+    Float,
+    ForeignKey,
     Identity,
     Index,
     Integer,
     MetaData,
+    SmallInteger,
     Table,
     Text,
     UniqueConstraint,
@@ -170,6 +175,83 @@ work_log = Table(
     Column("body", Text),
     Index("idx_work_log_project_at", "project", text("at DESC")),
     Index("idx_work_log_at", text("at DESC")),
+)
+
+search_executions = Table(
+    "search_executions",
+    metadata,
+    Column("id", BigInteger, Identity(always=True), primary_key=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("author", Text),
+    Column("query", Text, nullable=False),
+    Column("normalized_query", Text, nullable=False),
+    Column("mode", Text, nullable=False),
+    Column("domains", ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")),
+    Column("filters", postgresql.JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+    Column("requested_limit", Integer, nullable=False),
+    Column("returned_count", Integer, nullable=False),
+    Column("duration_ms", Float, nullable=False),
+    Column("repository_commit", Text),
+    Column("service_revision", Text),
+    CheckConstraint("mode IN ('federated', 'activity', 'grep')", name="search_executions_mode"),
+    CheckConstraint("requested_limit > 0", name="search_executions_requested_limit_positive"),
+    CheckConstraint("returned_count >= 0", name="search_executions_returned_count_nonnegative"),
+    CheckConstraint("duration_ms >= 0", name="search_executions_duration_nonnegative"),
+    Index("idx_search_executions_created_at", text("created_at DESC")),
+    Index("idx_search_executions_normalized_query", "normalized_query"),
+    Index("idx_search_executions_mode_created_at", "mode", text("created_at DESC")),
+)
+
+search_execution_results = Table(
+    "search_execution_results",
+    metadata,
+    Column(
+        "execution_id",
+        BigInteger,
+        ForeignKey("search_executions.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("rank", SmallInteger, primary_key=True),
+    Column("result_id", Text, nullable=False),
+    Column("domain", Text, nullable=False),
+    Column("title", Text),
+    Column("url", Text, nullable=False),
+    Column("snippet", Text, nullable=False),
+    Column("score", Float, nullable=False),
+    Column("distance", Float),
+    Column("lexical_score", Float),
+    CheckConstraint("rank > 0", name="search_execution_results_rank_positive"),
+    CheckConstraint(
+        "domain IN ('wiki', 'file', 'discord', 'pr', 'issue')",
+        name="search_execution_results_domain",
+    ),
+    Index("idx_search_execution_results_result_id", "result_id"),
+)
+
+search_feedback = Table(
+    "search_feedback",
+    metadata,
+    Column("id", BigInteger, Identity(always=True), primary_key=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("author", Text, nullable=False),
+    Column("query", Text, nullable=False),
+    Column("note", Text, nullable=False),
+    Column("execution_id", BigInteger, ForeignKey("search_executions.id", ondelete="SET NULL")),
+    Index("idx_search_feedback_created_at", text("created_at DESC")),
+    Index("idx_search_feedback_execution_id", "execution_id"),
+)
+
+search_feedback_grades = Table(
+    "search_feedback_grades",
+    metadata,
+    Column("feedback_id", BigInteger, ForeignKey("search_feedback.id", ondelete="CASCADE"), primary_key=True),
+    Column("result_id", Text, primary_key=True),
+    Column("grade", SmallInteger, nullable=False),
+    CheckConstraint(
+        f"grade BETWEEN {SEARCH_FEEDBACK_MIN_GRADE} AND {SEARCH_FEEDBACK_MAX_GRADE}",
+        name="search_feedback_grades_range",
+    ),
+    Index("idx_search_feedback_grades_result_id", "result_id"),
 )
 
 wiki_entries = Table(

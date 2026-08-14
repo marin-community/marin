@@ -134,6 +134,32 @@ def test_array_stacked_rejects_named_array_module_leaves():
         ArrayStacked.init(Layers.size, Module)(weight=weight)
 
 
+def test_array_stacked_init_keeps_non_array_module_leaves_unbatched():
+    """A plain Python value on a non-static field stays that value, usable in layer control flow."""
+
+    class Module(eqx.Module):
+        weight: jax.Array
+        repeats: int
+
+        @staticmethod
+        def init(weight):
+            return Module(weight=weight, repeats=3)
+
+        def __call__(self, carry: jax.Array) -> jax.Array:
+            for _ in range(self.repeats):
+                carry = carry + self.weight
+            return carry
+
+    num_layers = 2
+    width = 4
+    weights = jax.random.normal(jax.random.PRNGKey(0), (num_layers, width))
+    stacked = ArrayStacked.init(num_layers, Module)(weight=weights)
+
+    assert stacked.stacked.repeats == 3
+    assert stacked.stacked.weight.shape == (num_layers, width)
+    assert jnp.allclose(stacked.fold(jnp.zeros((width,))), 3 * weights.sum(axis=0))
+
+
 def test_array_stacked_vmap_via_out_axes_none_matches_vmap_semantics():
     class Module(eqx.Module):
         weight: jax.Array

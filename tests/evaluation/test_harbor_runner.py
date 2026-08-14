@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+from finestore.reader import CompositeReader
 from fsspec.implementations.memory import MemoryFileSystem
 from marin.evaluation.harbor import driver_config, runner
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
@@ -18,8 +19,7 @@ from marin.evaluation.harbor.runner import (
     HarborExecutor,
     HarborTrial,
     _read_trials,
-    _sample_for,
-    _write_samples,
+    _write_archive,
 )
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError
@@ -67,6 +67,12 @@ def _validated_config(
         agent=agent,
         environment="daytona",
     )
+
+
+def _write_job_record(job_dir: Path, n_total_trials: int) -> None:
+    """Harbor's own job-level bookkeeping: the count the coverage denominator comes from."""
+    job_dir.mkdir(parents=True, exist_ok=True)
+    job_dir.joinpath("result.json").write_text(json.dumps({"n_total_trials": n_total_trials}))
 
 
 def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_path, monkeypatch):
@@ -132,24 +138,38 @@ def test_materialize_harbor_dataset_rebases_local_path_onto_worker_workspace(tmp
     )
 
 
-def test_write_samples_uses_a_path_safe_name_for_hf_dataset(tmp_path):
-    trial = HarborTrial(task_id="task-one", reward=0.0, status="completed", trajectory_uri=None, error=None)
+def test_write_archive_writes_agentic_samples(tmp_path):
+    trial = HarborTrial(
+        task_id="task-one",
+        trial_id="trial-1",
+        reward=0.0,
+        scored=True,
+        status="completed",
+        trajectory_path=None,
+        error=None,
+    )
 
-    path = _write_samples([trial], "hf://DCAgent2/terminal_bench_2", str(tmp_path))
+    root = _write_archive([trial], "hf://DCAgent2/terminal_bench_2", str(tmp_path))
 
-    assert path == str(tmp_path / "samples_harbor.parquet")
-    assert Path(path).exists()
+    assert root == str(tmp_path)
+    rows = CompositeReader(str(tmp_path)).scan("samples").to_pylist()
+    assert len(rows) == 1
+    assert rows[0]["doc_id"] == "task-one"
+    assert rows[0]["trial_id"] == "trial-1"
+    assert rows[0]["kind"] == "agentic"
 
 
-def test_read_trials_references_trajectory_in_place(tmp_path):
-    """A trial's trajectory is referenced at its durable job-tree path, not copied elsewhere."""
+def test_read_trials_and_archive_captures_trajectory(tmp_path):
+    """A trial's trajectory is archived once, referenced by a finestore:// URI, and its steps flattened."""
     job_dir = tmp_path / "harbor_jobs" / "job"
     with_trajectory = job_dir / "trial-one"
     (with_trajectory / "agent").mkdir(parents=True)
     (with_trajectory / "result.json").write_text(
         json.dumps({"task_name": "task-one", "verifier_result": {"rewards": {"reward": 1.0}}})
     )
-    (with_trajectory / "agent" / "trajectory.json").write_text('{"steps": []}')
+    (with_trajectory / "agent" / "trajectory.json").write_text(
+        json.dumps({"steps": [{"step_id": 1, "source": "agent", "message": "hi"}]})
+    )
     without_trajectory = job_dir / "trial-two"
     without_trajectory.mkdir(parents=True)
     (without_trajectory / "result.json").write_text(json.dumps({"task_name": "task-two"}))
@@ -157,18 +177,27 @@ def test_read_trials_references_trajectory_in_place(tmp_path):
     trials = _read_trials(StoragePath(str(job_dir)))
 
     by_task = {trial.task_id: trial for trial in trials}
-    assert by_task["task-one"].trajectory_uri == str(with_trajectory / "agent" / "trajectory.json")
-    assert by_task["task-two"].trajectory_uri is None
-    # The sample carries the in-place URI; no separate trajectories/ copy is written.
-    sample = _sample_for(by_task["task-one"], "aime")
-    assert sample.trajectory_uri == str(with_trajectory / "agent" / "trajectory.json")
+    assert by_task["task-one"].trajectory_path == str(with_trajectory / "agent" / "trajectory.json")
+    assert by_task["task-one"].trial_id == "trial-one"
+    assert by_task["task-two"].trajectory_path is None
+
+    archive_root = str(tmp_path / "archive")
+    _write_archive(trials, "aime", archive_root)
+    reader = CompositeReader(archive_root)
+    samples = {row["doc_id"]: row for row in reader.scan("samples").to_pylist()}
+    # The archived sample references its trajectory by a finestore:// URI, not the job-tree path.
+    assert samples["task-one"]["trajectory_uri"].startswith("finestore://blobs/")
+    assert reader.resolve(samples["task-one"]["trajectory_uri"]) is not None
+    steps = reader.scan("steps").to_pylist()
+    assert len(steps) == 1 and steps[0]["step_id"] == 1
 
 
 def _memory_remote(protocol: str, monkeypatch) -> None:
     """Route ``protocol://`` reads and writes to a fresh in-memory filesystem.
 
-    Patches both the ``StoragePath`` factory (glob/read/write verbs) and the ``url_to_fs`` bound in
-    the runner (the sample-parquet writer), so the whole executor path stays off real object storage.
+    Patches rigging's factory (``url_to_fs``/``open_url``), which every read and write resolves through
+    at call time -- ``StoragePath`` verbs, ``atomic_rename``, and the finestore archive writer -- so the
+    whole executor path stays off real object storage.
     """
 
     class RemoteMemoryFileSystem(MemoryFileSystem):
@@ -197,7 +226,6 @@ def _memory_remote(protocol: str, monkeypatch) -> None:
 
     monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", remote_url_to_fs)
     monkeypatch.setattr("rigging.filesystem.factory.open_url", remote_open_url)
-    monkeypatch.setattr(runner, "url_to_fs", remote_url_to_fs)
 
 
 @pytest.mark.parametrize("protocol", ["gs", "s3"])
@@ -243,7 +271,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
     # The resumed driver produced no trials, so total==1 means the durable trial was read back.
     assert outcome.metrics[executor.config.record_dataset]["total"] == 1.0
     assert outcome.metrics[executor.config.record_dataset]["accuracy"] == 1.0
-    assert StoragePath(f"{output_dir}/samples_harbor.parquet").exists()
+    assert StoragePath(f"{output_dir}/SEALED").exists()
     assert StoragePath(f"{output_dir}/harbor_result.json").exists()
 
 
@@ -272,6 +300,7 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
         nonlocal driver_starts
         driver_starts += 1
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        _write_job_record(job_dir, 3)
         completed_result = job_dir / "trial-one" / "result.json"
         completed_result.parent.mkdir(parents=True, exist_ok=True)
         if not completed_result.exists():
@@ -318,6 +347,7 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
         "mean_reward": 2 / 3,
         "solved": 2.0,
         "total": 3.0,
+        "attempted": 3.0,
     }
 
 
@@ -434,10 +464,12 @@ def _harbor_executor(dataset: str) -> HarborExecutor:
     )
 
 
-def test_harbor_executor_fails_when_trial_contains_exception_info(tmp_path, monkeypatch):
+def test_harbor_executor_fails_when_too_few_trials_were_graded(tmp_path, monkeypatch):
     def run_driver(_config, overlay, driver_env, _backend_state) -> None:
         assert isinstance(driver_env, dict)
-        trial_dir = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        _write_job_record(job_dir, 1)
+        trial_dir = job_dir / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)
         (trial_dir / "result.json").write_text(
             json.dumps(
@@ -458,15 +490,120 @@ def test_harbor_executor_fails_when_trial_contains_exception_info(tmp_path, monk
     with pytest.raises(EvaluationError) as exc_info:
         executor(_inference_session(), str(tmp_path), {})
 
-    assert exc_info.value.status is RunStatus.FAILED
+    # A trial that errored is an ungraded item, not a wrong answer: the only trial here is ungraded,
+    # so the run graded 0% of what it attempted and is rejected as an infrastructure failure.
+    assert exc_info.value.status is RunStatus.INFRA_FAILED
+    assert exc_info.value.coverage["failed-" + tmp_path.name].errors == {"AgentError": 1}
     result = json.loads((tmp_path / "harbor_result.json").read_text())
     assert result["failed_trials"] == 1
+    assert result["errors"] == {"AgentError": 1}
+
+
+def test_harbor_executor_admits_a_batch_that_clears_the_completion_gate(tmp_path, monkeypatch):
+    """One timed-out trial in twenty does not discard the other nineteen. The run keeps its aggregate
+    and its error distribution, and the aggregate is over the trials a verifier actually graded."""
+
+    def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        _write_job_record(job_dir, 20)
+        for index in range(20):
+            trial_dir = job_dir / f"trial-{index}"
+            trial_dir.mkdir(parents=True, exist_ok=True)
+            if index == 0:
+                trial_dir.joinpath("result.json").write_text(
+                    json.dumps(
+                        {
+                            "task_name": f"task-{index}",
+                            "verifier_result": None,
+                            "exception_info": {"exception_type": "AgentTimeoutError"},
+                        }
+                    )
+                )
+                continue
+            trial_dir.joinpath("result.json").write_text(
+                json.dumps(
+                    {
+                        "task_name": f"task-{index}",
+                        "verifier_result": {"rewards": {"reward": 1.0 if index % 2 else 0.0}},
+                    }
+                )
+            )
+
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
+    executor = _harbor_executor(f"gated-{tmp_path.name}")
+
+    outcome = executor(_inference_session(), str(tmp_path), {})
+
+    dataset = executor.config.record_dataset
+    metrics = outcome.metrics[dataset]
+    assert metrics["total"] == 19.0
+    assert metrics["attempted"] == 20.0
+    # 10 of the 19 graded trials solved: dividing by 20 instead would publish the worst case as the
+    # estimate, scoring the timed-out trial as a wrong answer.
+    assert metrics["accuracy"] == pytest.approx(10 / 19)
+    coverage = outcome.coverage[dataset]
+    assert (coverage.n_attempted, coverage.n_scored) == (20, 19)
+    assert coverage.errors == {"AgentTimeoutError": 1}
+
+
+def test_an_unreadable_job_record_reports_unknown_coverage_rather_than_complete(tmp_path, monkeypatch):
+    """Without Harbor's job record there is no denominator. Falling back to the number of results
+    found would certify exactly the interrupted runs as complete, so coverage stays unreported and
+    the completion gate -- which has no rate to test -- does not reject the batch either."""
+
+    def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        for index in range(4):
+            trial_dir = job_dir / f"trial-{index}"
+            trial_dir.mkdir(parents=True, exist_ok=True)
+            trial_dir.joinpath("result.json").write_text(
+                json.dumps({"task_name": f"task-{index}", "verifier_result": {"rewards": {"reward": 1.0}}})
+            )
+
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
+    executor = _harbor_executor(f"unknown-{tmp_path.name}")
+
+    outcome = executor(_inference_session(), str(tmp_path), {})
+
+    dataset = executor.config.record_dataset
+    coverage = outcome.coverage[dataset]
+    assert coverage.n_attempted is None
+    assert coverage.n_scored == 4
+    # No attempted count means no "attempted" metric to publish, rather than one equal to the scored
+    # count, which would read as complete.
+    assert "attempted" not in outcome.metrics[dataset]
+
+
+def test_harbor_attempted_trials_come_from_the_job_record_not_the_result_glob(tmp_path, monkeypatch):
+    """A trial that dies before writing a result leaves no file. Counting result files would report
+    perfect coverage for exactly the runs that lost the most trials."""
+
+    def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        _write_job_record(job_dir, 20)
+        for index in range(19):
+            trial_dir = job_dir / f"trial-{index}"
+            trial_dir.mkdir(parents=True, exist_ok=True)
+            trial_dir.joinpath("result.json").write_text(
+                json.dumps({"task_name": f"task-{index}", "verifier_result": {"rewards": {"reward": 1.0}}})
+            )
+
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
+    executor = _harbor_executor(f"missing-{tmp_path.name}")
+
+    outcome = executor(_inference_session(), str(tmp_path), {})
+
+    coverage = outcome.coverage[executor.config.record_dataset]
+    assert (coverage.n_attempted, coverage.n_scored) == (20, 19)
+    assert coverage.errors == {"no_result_written": 1}
 
 
 def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, monkeypatch):
     def run_driver(_config, overlay, driver_env, _backend_state) -> None:
         assert isinstance(driver_env, dict)
-        trial_dir = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        _write_job_record(job_dir, 1)
+        trial_dir = job_dir / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)
         (trial_dir / "result.json").write_text(
             json.dumps(

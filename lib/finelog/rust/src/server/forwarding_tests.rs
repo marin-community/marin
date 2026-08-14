@@ -5,7 +5,6 @@
 //! and the hub it forwards to, both served over loopback sockets.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arrow::array::{RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
@@ -14,7 +13,7 @@ use crate::proto::finelog::logging::{FetchLogsRequest, LogEntry, MatchScope, Pus
 use crate::proto::finelog::stats::ColumnType;
 use crate::server::auth::{AuthIdentity, AuthPolicy};
 use crate::server::test_support::{
-    client, disk_store, serve, serve_rejecting, stats_client, TestTransport, PRIV_A,
+    client, disk_store, serve, serve_rejecting, stats_client, RequestStats, TestTransport, PRIV_A,
     PRIV_UNTRUSTED, PUB_A,
 };
 use crate::store::policy::StoragePolicy;
@@ -27,6 +26,7 @@ use super::*;
 use crate::proto::finelog::logging::LogServiceClient;
 
 const SOURCE_CLUSTER: &str = "cw-test";
+const TELEMETRY_ROW_BYTES: usize = 450;
 
 fn jwt_policy(cluster: &str) -> AuthPolicy {
     AuthPolicy::parse(
@@ -66,7 +66,7 @@ struct Fixture {
     target_store: Option<Arc<Store>>,
     target_addr: SocketAddr,
     target_url: String,
-    target_requests: Arc<AtomicUsize>,
+    target_requests: Arc<RequestStats>,
 }
 
 impl Fixture {
@@ -91,7 +91,7 @@ impl Fixture {
         tag: &str,
         target_store: Option<Arc<Store>>,
         target_addr: SocketAddr,
-        target_requests: Arc<AtomicUsize>,
+        target_requests: Arc<RequestStats>,
     ) -> Self {
         let source = disk_store(&format!("{tag}_source"));
         let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
@@ -143,7 +143,11 @@ impl Fixture {
     }
 
     fn requests(&self) -> usize {
-        self.target_requests.load(Ordering::SeqCst)
+        self.target_requests.total()
+    }
+
+    fn zstd_requests(&self) -> usize {
+        self.target_requests.zstd_requests()
     }
 
     /// Forward until `namespace`'s watermark settles at the source's current tip, then
@@ -182,6 +186,11 @@ async fn push(client: &LogServiceClient<TestTransport>, key: &str, lines: &[&str
 
 /// Register a generic string-keyed table and write `rows` durable rows into it.
 async fn write_id_rows(store: &Store, namespace: &str, rows: usize) {
+    let ids: Vec<String> = (0..rows).map(|row| row.to_string()).collect();
+    write_string_rows(store, namespace, ids).await;
+}
+
+async fn write_string_rows(store: &Store, namespace: &str, ids: Vec<String>) {
     let schema = Schema::new(
         vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false)],
         "id",
@@ -189,18 +198,23 @@ async fn write_id_rows(store: &Store, namespace: &str, rows: usize) {
     store
         .register_table(namespace, schema, StoragePolicy::default())
         .unwrap();
-    let ids: Vec<String> = (0..rows).map(|row| row.to_string()).collect();
-    let batch = RecordBatch::try_new(
-        Arc::new(ArrowSchema::new(vec![Field::new(
-            "id",
-            DataType::Utf8,
-            false,
-        )])),
-        vec![Arc::new(StringArray::from(ids))],
-    )
-    .unwrap();
-    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
-    let (_, last_seq) = store.write_rows(namespace, &ipc, None).unwrap();
+    let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+        "id",
+        DataType::Utf8,
+        false,
+    )]));
+    let mut last_seq = -1;
+    for chunk in ids.chunks(20_000) {
+        let batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema),
+            vec![Arc::new(StringArray::from(
+                chunk.iter().map(String::as_str).collect::<Vec<_>>(),
+            ))],
+        )
+        .unwrap();
+        let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+        (_, last_seq) = store.write_rows(namespace, &ipc, None).unwrap();
+    }
     store
         .await_persisted(namespace, last_seq, Duration::from_secs(5))
         .await
@@ -282,13 +296,13 @@ async fn wait_for_cursor(store: &Store, target: &str, namespace: &str, expected:
 /// Poll `counter` until the hub has served at least `expected` requests. Lets a test
 /// that asserts on the *absence* of an effect first wait for the attempt that would have
 /// produced it.
-async fn wait_for_requests(counter: &AtomicUsize, expected: usize) {
+async fn wait_for_requests(counter: &RequestStats, expected: usize) {
     poll_until(
-        || counter.load(Ordering::SeqCst) >= expected,
+        || counter.total() >= expected,
         || {
             format!(
                 "hub never served {expected} requests (saw {})",
-                counter.load(Ordering::SeqCst)
+                counter.total()
             )
         },
     )
@@ -494,9 +508,9 @@ fn chunk_by_bytes_shrinks_an_estimate_that_encodes_over_budget() {
 }
 
 #[test]
-fn one_telemetry_sized_read_turn_fits_two_write_requests() {
+fn one_telemetry_sized_read_turn_fits_one_parallel_wave() {
     let rows = FORWARD_BATCH_ROWS as usize;
-    let row = "x".repeat(450);
+    let row = "x".repeat(TELEMETRY_ROW_BYTES);
     let batch = RecordBatch::try_new(
         Arc::new(ArrowSchema::new(vec![Field::new(
             "data",
@@ -510,15 +524,15 @@ fn one_telemetry_sized_read_turn_fits_two_write_requests() {
 
     let chunks = chunk_by_bytes(&batch, &seqs, FORWARD_BATCH_BYTES).unwrap();
 
-    assert_eq!(
-        chunks.len(),
-        2,
+    assert!(
+        chunks.len() <= FORWARD_CHUNK_CONCURRENCY,
         "chunks: {:?}",
         chunks
             .iter()
             .map(|(ipc, seq)| (ipc.len(), seq))
             .collect::<Vec<_>>()
     );
+    assert!(chunks.len() > 1, "the fixture must exercise byte chunking");
     assert!(chunks
         .iter()
         .all(|(ipc, _)| ipc.len() <= FORWARD_BATCH_BYTES));
@@ -716,9 +730,7 @@ async fn a_watermark_ahead_of_the_store_reseeds_at_the_tip() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_backlog_beyond_the_lag_cap_is_skipped_rather_than_drained() {
-    // The store keeps every row; the hub copy is best effort. A forwarder too far behind
-    // abandons the oldest part of the backlog and keeps the freshest `max_lag_seqs`.
+async fn a_backlog_beyond_the_warning_threshold_is_drained_without_loss() {
     let fx = Fixture::new("cap").await;
     push(
         &fx.source_client,
@@ -729,7 +741,7 @@ async fn a_backlog_beyond_the_lag_cap_is_skipped_rather_than_drained() {
     fx.forward_from_start(LOG_NAMESPACE_NAME);
 
     let mut forwarder = fx.forwarder(PRIV_A);
-    forwarder.max_lag_seqs = 2;
+    forwarder.lag_warning_seqs = 2;
     forward_until(
         forwarder,
         &fx.source,
@@ -742,10 +754,11 @@ async fn a_backlog_beyond_the_lag_cap_is_skipped_rather_than_drained() {
     assert_eq!(
         fx.hub_log_rows().await,
         vec![
+            ("/user/job/t".to_string(), "one".to_string()),
+            ("/user/job/t".to_string(), "two".to_string()),
             ("/user/job/t".to_string(), "three".to_string()),
             ("/user/job/t".to_string(), "four".to_string()),
-        ],
-        "the two oldest rows are dropped; the freshest two still ship"
+        ]
     );
 }
 
@@ -782,6 +795,7 @@ async fn a_dense_backlog_is_forwarded_in_one_read_batch() {
     write_id_rows(&fx.source, "events", FORWARD_BATCH_ROWS as usize).await;
     fx.forward_from_start("events");
     let requests_before = fx.requests();
+    let zstd_before = fx.zstd_requests();
 
     fx.drain(PRIV_A, "events").await;
 
@@ -789,6 +803,36 @@ async fn a_dense_backlog_is_forwarded_in_one_read_batch() {
         fx.requests() - requests_before,
         2,
         "one compact read turn needs one RegisterTable and one WriteRows request"
+    );
+    assert_eq!(
+        fx.zstd_requests() - zstd_before,
+        1,
+        "the large WriteRows body is zstd encoded while the small registration stays identity"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn telemetry_sized_chunks_are_delivered_concurrently_without_loss() {
+    let fx = Fixture::new("concurrent-chunks").await;
+    write_string_rows(
+        &fx.source,
+        "telemetry",
+        vec!["x".repeat(TELEMETRY_ROW_BYTES); FORWARD_BATCH_ROWS as usize],
+    )
+    .await;
+    fx.forward_from_start("telemetry");
+
+    fx.drain(PRIV_A, "telemetry").await;
+
+    let stats = fx.target_store().list_namespaces_with_stats().unwrap();
+    let telemetry = stats
+        .iter()
+        .find(|(name, _, _, _)| name == "telemetry")
+        .expect("the hub registered the telemetry namespace");
+    assert_eq!(telemetry.2.row_count, FORWARD_BATCH_ROWS);
+    assert!(
+        fx.target_requests.max_in_flight() >= 2,
+        "the two telemetry chunks must overlap at the hub's durable-ack boundary"
     );
 }
 

@@ -43,7 +43,10 @@ function normalize(v: unknown): unknown {
   if (v === null || v === undefined) return null
   if (typeof v === 'bigint') return Number(v)
   if (v instanceof Uint8Array) return `<bytes ${v.byteLength}>`
-  if (v instanceof Date) return v.toISOString()
+  // Instants stay epoch milliseconds so rendering can honour the viewer's
+  // timezone. Formatting one to a UTC string here would freeze that choice
+  // before any component sees the value.
+  if (v instanceof Date) return v.getTime()
   // Nested columns (a native Map<Utf8,Utf8> `labels`, a struct, a list) arrive
   // as arrow MapRow/StructRow/sub-Vector objects. DataTable renders cells as
   // text, so flatten them to compact JSON — coercing any nested bigint the way

@@ -43,19 +43,33 @@
 //! error (surfaced to the client as `invalid_argument`, mirroring DuckDB's
 //! parse-error path).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, BooleanBuilder, Float64Builder, Int64Builder, MapArray,
+    Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Float64Builder, Int64Builder, MapArray,
     StringArray, StringBuilder,
 };
 use arrow::datatypes::DataType;
 use datafusion::error::{DataFusionError, Result as DFResult};
+use datafusion::logical_expr::expr_fn::SimpleScalarUDF;
 use datafusion::logical_expr::{
-    create_udf, ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use regex::Regex;
 use serde_json::Value as JsonValue;
+
+use crate::query::string_values::StringValues;
+
+/// Borrow `arr` as a UTF-8 column, naming `who` in the error when it is not one.
+fn string_values<'a>(arr: &'a ArrayRef, who: &str) -> DFResult<StringValues<'a>> {
+    StringValues::new(arr).ok_or_else(|| {
+        DataFusionError::Execution(format!(
+            "{who} expects a string argument, got {}",
+            arr.data_type()
+        ))
+    })
+}
 
 /// Register the finelog scalar UDFs (`prefix`, `regexp_matches`, `contains`, and
 /// the `json_*` extraction family) on `ctx`.
@@ -75,32 +89,9 @@ pub fn register_scalar_udfs(ctx: &datafusion::prelude::SessionContext) {
     }
 }
 
-/// Cast an already-materialized array to `Utf8` (a cheap clone when it already
-/// is). A non-castable type (e.g. `Map`) is a caller error.
-fn array_as_utf8(arr: &ArrayRef) -> DFResult<ArrayRef> {
-    if arr.data_type() == &DataType::Utf8 {
-        Ok(Arc::clone(arr))
-    } else {
-        arrow::compute::cast(arr, &DataType::Utf8)
-            .map_err(|e| DataFusionError::Execution(format!("expected string argument: {e}")))
-    }
-}
-
-/// Coerce a `ColumnarValue` to a `Utf8` array of length `n` (scalars broadcast).
-fn to_string_array(value: &ColumnarValue, n: usize) -> DFResult<ArrayRef> {
-    array_as_utf8(&value.clone().into_array(n)?)
-}
-
-/// Borrow an `ArrayRef` known to hold `Utf8` as a `StringArray`.
-fn as_str(arr: &ArrayRef) -> &StringArray {
-    arr.as_any()
-        .downcast_ref::<StringArray>()
-        .expect("cast to Utf8 yields StringArray")
-}
-
-/// Resolve a 2-arg UDF call to its row count and both arguments as `Utf8` arrays
-/// of that length (scalars broadcast). Shared prologue for the binary string
-/// kernels below.
+/// Resolve a 2-arg UDF call to its row count and both arguments as arrays of that
+/// length (scalars broadcast). Shared prologue for the binary string kernels
+/// below.
 fn resolve_binary_string_args(
     args: &[ColumnarValue],
     name: &str,
@@ -119,8 +110,8 @@ fn resolve_binary_string_args(
             ColumnarValue::Scalar(_) => None,
         })
         .unwrap_or(1);
-    let lhs = to_string_array(&args[0], n)?;
-    let rhs = to_string_array(&args[1], n)?;
+    let lhs = args[0].clone().into_array(n)?;
+    let rhs = args[1].clone().into_array(n)?;
     Ok((n, lhs, rhs))
 }
 
@@ -130,7 +121,7 @@ fn binary_string_bool(
     op: impl Fn(&str, &str) -> DFResult<bool>,
 ) -> DFResult<ColumnarValue> {
     let (n, lhs, rhs) = resolve_binary_string_args(args, name)?;
-    let (lhs, rhs) = (as_str(&lhs), as_str(&rhs));
+    let (lhs, rhs) = (string_values(&lhs, name)?, string_values(&rhs, name)?);
     let mut out = BooleanArray::builder(n);
     for i in 0..n {
         if lhs.is_null(i) || rhs.is_null(i) {
@@ -142,71 +133,70 @@ fn binary_string_bool(
     Ok(ColumnarValue::Array(Arc::new(out.finish())))
 }
 
-fn prefix_udf() -> ScalarUDF {
-    create_udf(
-        "prefix",
-        vec![DataType::Utf8, DataType::Utf8],
+/// A string-typed UDF over `Utf8`/`Utf8View`, returning `Boolean`.
+///
+/// [`Signature::string`] is what keeps the column in the layout the scan
+/// produced: an exact `Utf8` signature would make the planner insert a whole-
+/// column cast ahead of the predicate.
+fn string_predicate_udf(
+    name: &'static str,
+    op: impl Fn(&str, &str) -> DFResult<bool> + Send + Sync + 'static,
+) -> ScalarUDF {
+    ScalarUDF::from(SimpleScalarUDF::new_with_signature(
+        name,
+        Signature::string(2, Volatility::Immutable),
         DataType::Boolean,
-        Volatility::Immutable,
-        Arc::new(|args: &[ColumnarValue]| {
-            binary_string_bool(args, "prefix", |text, p| Ok(text.starts_with(p)))
-        }),
-    )
+        Arc::new(move |args: &[ColumnarValue]| binary_string_bool(args, name, &op)),
+    ))
+}
+
+fn prefix_udf() -> ScalarUDF {
+    string_predicate_udf("prefix", |text, p| Ok(text.starts_with(p)))
 }
 
 fn regexp_matches_udf() -> ScalarUDF {
-    create_udf(
+    ScalarUDF::from(SimpleScalarUDF::new_with_signature(
         "regexp_matches",
-        vec![DataType::Utf8, DataType::Utf8],
+        Signature::string(2, Volatility::Immutable),
         DataType::Boolean,
-        Volatility::Immutable,
-        Arc::new(|args: &[ColumnarValue]| {
-            binary_string_bool(args, "regexp_matches", |text, pattern| {
-                // DuckDB `regexp_matches` is a partial (unanchored) match.
+        Arc::new(regexp_matches),
+    ))
+}
+
+fn regexp_matches(args: &[ColumnarValue]) -> DFResult<ColumnarValue> {
+    let (n, text, patterns) = resolve_binary_string_args(args, "regexp_matches")?;
+    let (text, patterns) = (
+        string_values(&text, "regexp_matches")?,
+        string_values(&patterns, "regexp_matches")?,
+    );
+    let mut regexes = HashMap::new();
+    let mut out = BooleanArray::builder(n);
+    for i in 0..n {
+        if text.is_null(i) || patterns.is_null(i) {
+            out.append_null();
+            continue;
+        }
+        let pattern = patterns.value(i);
+        let re = match regexes.entry(pattern) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                // Queries normally pass one literal pattern. Cache distinct
+                // values so even a pattern column compiles at most once per batch.
                 let re = Regex::new(pattern).map_err(|e| {
                     DataFusionError::Execution(format!("invalid regex {pattern:?}: {e}"))
                 })?;
-                Ok(re.is_match(text))
-            })
-        }),
-    )
+                entry.insert(re)
+            }
+        };
+        // DuckDB `regexp_matches` is a partial (unanchored) match.
+        out.append_value(re.is_match(text.value(i)));
+    }
+    Ok(ColumnarValue::Array(Arc::new(out.finish())))
 }
 
 fn contains_udf() -> ScalarUDF {
-    create_udf(
-        "contains",
-        vec![DataType::Utf8, DataType::Utf8],
-        DataType::Boolean,
-        Volatility::Immutable,
-        Arc::new(|args: &[ColumnarValue]| {
-            // Literal substring containment — `%`/`_` are NOT wildcards.
-            binary_string_bool(args, "contains", |text, sub| Ok(text.contains(sub)))
-        }),
-    )
-}
-
-/// The raw JSON value at top-level object key `key` in the document `text`, if
-/// `text` parses as a JSON object that contains `key`.
-///
-/// `None` when `text` is not a JSON object (invalid JSON, or a top-level
-/// scalar/array) or the key is absent; a key present with an explicit JSON
-/// `null` value returns `Some(JsonValue::Null)`.
-fn json_object_value(text: &str, key: &str) -> Option<JsonValue> {
-    match serde_json::from_str::<JsonValue>(text).ok()? {
-        JsonValue::Object(mut map) => map.remove(key),
-        _ => None,
-    }
-}
-
-/// Render a resolved JSON value as text for `json_get`: a JSON string unquoted,
-/// other scalars and nested arrays/objects as their compact JSON form, an
-/// explicit JSON `null` as SQL NULL.
-fn json_value_as_text(value: JsonValue) -> Option<String> {
-    match value {
-        JsonValue::Null => None,
-        JsonValue::String(s) => Some(s),
-        other => Some(other.to_string()),
-    }
+    // Literal substring containment — `%`/`_` are NOT wildcards.
+    string_predicate_udf("contains", |text, sub| Ok(text.contains(sub)))
 }
 
 /// Element count of a top-level JSON array (its length) or object (its key
@@ -355,8 +345,9 @@ impl ScalarUDFImpl for JsonUdf {
             return json_length_column(&args[0], n);
         }
         let doc = args[0].clone().into_array(n)?;
-        let key = to_string_array(&args[1], n)?;
-        json_get_column(self.kind, &doc, as_str(&key), n)
+        let key = args[1].clone().into_array(n)?;
+        let key = string_values(&key, self.kind.udf_name())?;
+        json_get_column(self.kind, &doc, &key, n)
     }
 }
 
@@ -366,7 +357,7 @@ impl ScalarUDFImpl for JsonUdf {
 fn json_get_column(
     kind: JsonKind,
     doc: &ArrayRef,
-    key: &StringArray,
+    key: &StringValues<'_>,
     n: usize,
 ) -> DFResult<ColumnarValue> {
     let out = match doc.data_type() {
@@ -375,8 +366,8 @@ fn json_get_column(
                 .as_any()
                 .downcast_ref::<MapArray>()
                 .expect("Map DataType downcasts to MapArray");
-            let keys = as_str(map.keys());
-            let values = as_str(map.values());
+            let keys = map.keys().as_string::<i32>();
+            let values = map.values().as_string::<i32>();
             let offsets = map.value_offsets();
             build_json_output(kind, n, |i| {
                 if map.is_null(i) || key.is_null(i) {
@@ -387,13 +378,27 @@ fn json_get_column(
             })
         }
         _ => {
-            let text = array_as_utf8(doc)?;
-            let text = as_str(&text);
+            let text = string_values(doc, kind.udf_name())?;
+            let mut previous_text: Option<&str> = None;
+            let mut previous_key: Option<&str> = None;
+            let mut previous_value: Option<Option<JsonValue>> = None;
             build_json_output(kind, n, |i| {
                 if text.is_null(i) || key.is_null(i) {
                     Resolved::InputNull
                 } else {
-                    Resolved::from_object_value(json_object_value(text.value(i), key.value(i)))
+                    let row_text = text.value(i);
+                    let row_key = key.value(i);
+                    let value = if previous_text == Some(row_text) && previous_key == Some(row_key)
+                    {
+                        previous_value.clone().expect("matching lookup is cached")
+                    } else {
+                        let value = crate::json::object_value(row_text, row_key);
+                        previous_text = Some(row_text);
+                        previous_key = Some(row_key);
+                        previous_value = Some(value.clone());
+                        value
+                    };
+                    Resolved::from_object_value(value)
                 }
             })
         }
@@ -402,13 +407,17 @@ fn json_get_column(
 }
 
 /// Build the output array for a 2-arg `json_*` kind from a per-row [`Resolved`].
-fn build_json_output(kind: JsonKind, n: usize, resolve: impl Fn(usize) -> Resolved) -> ArrayRef {
+fn build_json_output(
+    kind: JsonKind,
+    n: usize,
+    mut resolve: impl FnMut(usize) -> Resolved,
+) -> ArrayRef {
     match kind {
         JsonKind::Get => {
             let mut b = StringBuilder::new();
             for i in 0..n {
                 match resolve(i) {
-                    Resolved::Value(jv) => b.append_option(json_value_as_text(jv)),
+                    Resolved::Value(jv) => b.append_option(crate::json::value_as_text(jv)),
                     _ => b.append_null(),
                 }
             }
@@ -479,8 +488,7 @@ fn json_length_column(arg: &ColumnarValue, n: usize) -> DFResult<ColumnarValue> 
             }
         }
         _ => {
-            let text = array_as_utf8(&arr)?;
-            let text = as_str(&text);
+            let text = string_values(&arr, "json_length")?;
             for i in 0..n {
                 if text.is_null(i) {
                     b.append_null();
@@ -611,6 +619,16 @@ mod tests {
         assert_eq!(
             eval("regexp_matches", vec![Some("abc")], vec![Some("b")]).await,
             vec![Some(true)]
+        );
+        // Distinct patterns are compiled independently and reused within the batch.
+        assert_eq!(
+            eval(
+                "regexp_matches",
+                vec![Some("abc"), Some("123"), Some("zzz"), Some("anything")],
+                vec![Some("a.c"), Some(r"\d+"), Some("a.c"), None],
+            )
+            .await,
+            vec![Some(true), Some(true), Some(false), None]
         );
     }
 

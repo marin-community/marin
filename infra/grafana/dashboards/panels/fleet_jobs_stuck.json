@@ -1,7 +1,7 @@
 {
   "type": "stat",
   "title": "Stuck jobs",
-  "description": "Active root jobs with a task waiting over 15 minutes — oldest PENDING task un-dispatched, or oldest ASSIGNED/BUILDING task not yet RUNNING — across the CoreWeave fleet, latest iris.task_state snapshot within the last 2 minutes. A non-zero value is the queue-saturation signal; the Jobs dashboard names them.",
+  "description": "Active root jobs with a task waiting over 15 minutes — oldest PENDING task un-dispatched, or oldest ASSIGNED/BUILDING task not yet RUNNING — across the selected clusters, latest iris.task_state snapshot within the last 2 minutes. A non-zero value is the queue-saturation signal; the Jobs dashboard names them.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"
@@ -52,7 +52,7 @@
         "params": [
           {
             "key": "sql",
-            "value": "WITH r AS (SELECT root_job_id, GREATEST(oldest_pending_age_ms, oldest_building_age_ms) AS age, ROW_NUMBER() OVER (PARTITION BY COALESCE(cluster,''), root_job_id ORDER BY ts DESC) AS rn FROM \"iris.task_state\" WHERE root_job_id <> '' AND ts >= {{from}} AND ts < {{to}}) SELECT COUNT(*) AS stuck FROM r WHERE rn = 1 AND age > 900000"
+            "value": "WITH r AS (SELECT root_job_id, GREATEST(oldest_pending_age_ms, oldest_building_age_ms) AS age, ROW_NUMBER() OVER (PARTITION BY \"cluster\", root_job_id ORDER BY ts DESC) AS rn FROM \"iris.task_state\" WHERE root_job_id <> '' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}}) SELECT COUNT(*) AS stuck FROM r WHERE rn = 1 AND age > 900000"
           },
           {
             "key": "from",

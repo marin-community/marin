@@ -1,6 +1,15 @@
 // Shapes returned by the evaldash server (src/server.py). Kept in sync with the
 // dict shapes that RecordStore, cluster.py, and samples.py produce.
 
+export const RUN_STATUS = {
+  SUCCEEDED: 'succeeded',
+  FAILED: 'failed',
+  ARTIFACT_FAILED: 'artifact_failed',
+  INFRA_FAILED: 'infra_failed',
+} as const
+
+export type RunStatus = (typeof RUN_STATUS)[keyof typeof RUN_STATUS]
+
 export interface RunRow {
   run_id: string
   group_id: string | null
@@ -24,39 +33,131 @@ export interface RunRow {
   jobs: Record<string, string>
 }
 
-// A matrix cell is the latest succeeded score (value + paired stderr) for a (model, task),
-// or -- when no run ever succeeded there -- the latest run's failure status. value is null
-// in the failure case; run_id always links to a real run.
-export interface MatrixCell {
-  status: string
-  value: number | null
-  stderr: number | null
-  metric: string | null
+// What a cell's interval covers. `identified` includes the contribution of items the run attempted
+// but never graded; `sampling_only` means the run reports no attempted count, so the interval holds
+// only if it graded everything it started -- which the record does not establish.
+export const INTERVAL_KIND = {
+  IDENTIFIED: 'identified',
+  SAMPLING_ONLY: 'sampling_only',
+} as const
+
+export type IntervalKind = (typeof INTERVAL_KIND)[keyof typeof INTERVAL_KIND]
+
+// Properties of a measurement worth showing beside it. `marin.evaluation.eval_stats.ResultFlag` is
+// the full set; these are the ones the panel annotates a cell with.
+export const RESULT_FLAG = {
+  NO_ANSWERS: 'no_answers',
+} as const
+
+// A flag says what was observed, not what to conclude: unextractable answers score zero like wrong
+// ones do, so the cell is marked and explained rather than withheld or corrected.
+//
+// Only flags nothing else on the page already shows belong here. `attrition` has its own per-cause
+// table and a coverage figure on the cell, and `capped` is a declared setting rather than a finding;
+// repeating either as a warning says the same thing twice and dulls the ones that matter.
+export const FLAG_NOTES: Record<string, string> = {
+  no_answers: 'no graded item yielded an extractable answer — suspect the grader, not only the model',
+  degenerate_stderr: 'the harness recorded a standard error of exactly zero, which no real sample supports',
+}
+
+// One benchmark result: the rate over graded items, the interval around it, how much of the
+// attempted item set was graded, and the run it came from. `low` is the ranking key -- `value` is a
+// complete-case rate and is biased upward when a run lost items.
+export interface PanelCell {
+  value: number
+  low: number
+  high: number
+  interval_kind: IntervalKind
+  metric: string
+  metric_kind: string
+  n_scored: number
+  n_attempted: number | null
+  coverage: number | null
+  errors: Record<string, number>
+  item_cap: number | null
+  flags: string[]
   run_id: string
+  created_at: string
+  version: string | null
+  git_sha: string
+  eval_runtime: string
+}
+
+// Why a (model, benchmark) has no cell: a rejected run (failed status, coverage below the gate, the
+// wrong cohort) or a run that produced no metric at all.
+export interface MissingCell {
+  reason: string
+  run_id: string
+  status: string
   created_at: string
 }
 
-export interface MatrixRow {
-  model: string
-  version: string | null
-  archived: boolean
-  cells: Record<string, MatrixCell>
-}
-
-export interface LeaderboardEntry {
-  model: string
-  version: string | null
-  archived: boolean
-  score: number | null
-  stderr: number | null
+// A cross-benchmark aggregate always travels with the protocol that defines it: which benchmarks,
+// which per-benchmark metric, and what it did about the ones a model never ran.
+export interface PanelAggregate {
+  value: number
+  low: number
+  high: number
+  interval_kind: IntervalKind
   covered: number
   total: number
+  panel: string[]
+  missing_policy: string
+  metrics: string[]
+  /** Distinct harness versions the averaged cells came from; more than one is worth seeing. */
+  runtimes: string[]
 }
 
-export interface Matrix {
-  tasks: string[]
-  rows: MatrixRow[]
-  leaderboard: LeaderboardEntry[]
+export interface PanelRow {
+  model: string
+  archived: boolean
+  cells: Record<string, PanelCell>
+  missing: Record<string, MissingCell>
+  aggregate: PanelAggregate | null
+  covered: number
+}
+
+export interface PanelRequest {
+  min_coverage: number
+  cohort: string
+  cohort_version: string | null
+  completeness: string
+  filters: Record<string, string>
+  model_query: string | null
+  statuses: string[]
+}
+
+export interface Panel {
+  benchmarks: string[]
+  panel: string[]
+  rows: PanelRow[]
+  request: PanelRequest
+}
+
+// One model's gap to a benchmark's leader: the 95% interval for the difference, and whether it
+// clears zero. Overlapping model intervals do not settle an ordering; this does.
+export interface Difference {
+  low: number
+  high: number
+  separated: boolean
+}
+
+export interface ComparisonRow {
+  benchmark: string
+  shared: boolean
+  leader: string
+  cells: Record<string, PanelCell>
+  differences: Record<string, Difference>
+}
+
+// Head-to-head between named models (/api/compare): per-benchmark cells and gaps, plus each model's
+// aggregate over the shared benchmarks (null when it is missing one of them).
+export interface Comparison {
+  models: string[]
+  benchmarks: string[]
+  shared: string[]
+  rows: ComparisonRow[]
+  aggregates: Record<string, PanelAggregate | null>
 }
 
 export interface EvalSuite {
@@ -71,6 +172,9 @@ export interface Meta {
   archived_models: string[]
   users: string[]
   statuses: string[]
+  versions: string[]
+  // Run properties a panel can be filtered on, each with the values actually present.
+  facets: Record<string, string[]>
   current_user: string | null
   store: string
 }
@@ -136,7 +240,7 @@ export interface EvalRecord {
     max_gen_tokens: number | null
     extra: Record<string, string>
   } | null
-  headline: { value: number; metric: string; stderr: number | null } | null
+  headline: PanelCell | null
 }
 
 // --- Live Iris/finelog protobuf JSON (cluster.py) ---
@@ -210,7 +314,7 @@ export interface LogsResponse {
   entries: LogEntry[]
 }
 
-// --- Per-sample browser (samples.py, mirroring marin.evaluation.samples.EvalSample) ---
+// --- Per-sample browser (samples.py, mirroring finestore.eval.EvalSample) ---
 
 export interface SampleTasksResponse {
   available: boolean
@@ -232,7 +336,7 @@ export interface SampleChoice {
   is_greedy: boolean | null
 }
 
-// How one prediction was scored (marin.evaluation.samples.Grading). `method` names the grader
+// How one prediction was scored (finestore.eval.Grading). `method` names the grader
 // (`lm-eval:<metric>`, `harbor:<verifier>`, `judge:<model>`); `detail` is the grader's raw output
 // as a JSON string, the escape hatch for anything the typed fields do not carry.
 export interface SampleGrading {
@@ -247,8 +351,8 @@ export interface SampleGrading {
 // One evaluated question: the prompt, the model's answer, the gold answer, and its scores.
 // `prompt_text` and `prompt_messages` are mutually exclusive; `choices`/`model_choice`/
 // `target_choice` are set for `multiple_choice` samples, `output`/`extracted` for `generation`
-// samples, and `trajectory_uri` for `agentic` samples. The two unbounded payloads (the agentic
-// trajectory, a prediction's raw exchange) are referenced by URI and lazy-loaded on demand.
+// samples, and `trajectory_uri` for `agentic` samples. The one unbounded payload, the agentic
+// trajectory, is referenced by URI and lazy-loaded on demand.
 export interface SampleRow {
   task: string
   doc_id: string
@@ -262,14 +366,13 @@ export interface SampleRow {
   extracted: string | null
   target_text: string | null
   trajectory_uri: string | null
-  exchange_uri: string | null
   grading: SampleGrading | null
   metrics: Record<string, number>
   correct: boolean | null
   doc: string
 }
 
-// One sample-referenced artifact (a trajectory, an exchange) resolved to text by the server's
+// One sample-referenced artifact (a trajectory) resolved to text by the server's
 // artifact endpoint. `available` is false with a `reason` when the object is out of tree,
 // missing, unreadable, or over the size cap — mirroring the logs endpoint's degradation.
 export interface ArtifactResponse {
@@ -342,6 +445,10 @@ export interface SamplesResponse {
   task: string
   primary_metric: string | null
   metric_columns: string[]
+  /** Extraction filters this task was scored under; empty only when its rows carry no filter. */
+  extraction_filters: string[]
+  /** The filter the returned page was drawn from. */
+  extraction_filter: string | null
   total: number
   offset: number
   limit: number
@@ -351,14 +458,9 @@ export interface SamplesResponse {
 
 // --- Score-over-time + groups ---
 
-export interface HistoryPoint {
-  run_id: string
-  created_at: string | null
-  value: number
-  stderr: number | null
-  metric: string
+// A point on a (model, benchmark) score-over-time series: one run's cell plus its terminal status.
+export interface HistoryPoint extends PanelCell {
   status: string
-  git_sha: string
 }
 
 export interface HistoryResponse {
@@ -397,9 +499,9 @@ export interface ModelRun {
   status: string
   created_at: string | null
   version: string | null
-  value: number | null
-  stderr: number | null
-  metric: string | null
+  headline: PanelCell | null
+  /** Why the run produced no headline; null when it did. */
+  gap_reason: string | null
 }
 
 // Everything the model view needs in one call: the cohort list for the version selector, every
@@ -447,9 +549,7 @@ export interface GroupMember {
   eval_name: string
   status: string
   created_at: string
-  value: number | null
-  metric: string | null
-  stderr: number | null
+  headline: PanelCell | null
 }
 
 // A launch: all evals run against one model by one serve group, newest first (/api/groups).
@@ -461,7 +561,7 @@ export interface LaunchGroup {
   user_name: string
   accelerator: string | null
   created_at: string
-  status: 'succeeded' | 'failed' | 'infra_failed' | 'mixed'
+  status: RunStatus | 'mixed'
   n_evals: number
   n_succeeded: number
   evals: GroupMember[]

@@ -45,33 +45,127 @@ _MAX_RECORD_READERS = 16
 class RunStatus(StrEnum):
     """Terminal outcome of an eval run.
 
-    ``INFRA_FAILED`` (endpoint never came up, job submission died) is distinct from ``FAILED`` (the
-    eval itself ran and reported a bad result) so the dashboard can separate flaky infrastructure from
-    genuine model regressions.
+    ``FAILED`` means the evaluator failed, ``ARTIFACT_FAILED`` means it completed but its durable
+    output could not be read or exported, and ``INFRA_FAILED`` means serving or orchestration failed.
     """
 
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    ARTIFACT_FAILED = "artifact_failed"
     INFRA_FAILED = "infra_failed"
 
 
+class ModelResourceConfig(BaseModel):
+    """Normalized placement and inference-worker resources for an evaluated model."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    hbm_gb: int | None
+    gpu: dict[str, int]
+    cpu: float | None
+    memory: str | None
+    disk: str | None
+
+
+class ModelServeConfig(BaseModel):
+    """Normalized model-server configuration preserved in an evaluation record."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    backend: str
+    tensor_parallel_size: int | None
+    data_parallel_size: int | None
+    max_model_len: int | None
+    max_num_batched_tokens: int | None
+    max_num_seqs: int | None
+    hf_overrides: str | None
+    limit_mm_per_prompt: str | None
+    tool_call_parser: str | None
+    reasoning_parser: str | None
+    vllm_extra_args: tuple[str, ...]
+    chat_template: str | None
+    auto_overrides: bool
+
+
+class ModelGenerationConfig(BaseModel):
+    """Normalized generation overrides preserved in an evaluation record."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    max_gen_toks: int | None
+    extra_gen_kwargs: dict[str, str]
+
+
+class ModelAgentConfig(BaseModel):
+    """Normalized agent request arguments preserved in an evaluation record."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    agent_kwargs: dict[str, str]
+
+
+class ModelConfigRef(BaseModel):
+    """The complete normalized model catalog schema used by one launch."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    location: str
+    revision: str | None
+    tokenizer: str | None
+    apply_chat_template: bool
+    resource_hint: ModelResourceConfig
+    serve: ModelServeConfig
+    generation: ModelGenerationConfig
+    agent: ModelAgentConfig
+
+
 class ModelRef(BaseModel):
-    """The evaluated model's identity: registry name, weight location, and serving backend."""
+    """The evaluated model's identity and normalized launch-time model configuration.
+
+    ``config`` is optional in the wire schema. The shared launcher populates it with the complete
+    catalog-schema configuration for both registry and file-backed models.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     name: str
     location: str
     backend: str
+    config: ModelConfigRef | None = None
 
 
 class EvalTaskRef(BaseModel):
-    """One lm-eval task and its shot count."""
+    """One evaluator task and the routing options that affect its result."""
 
     model_config = ConfigDict(frozen=True)
 
     name: str
-    num_fewshot: int
+    num_fewshot: int | None
+    task_alias: str | None = None
+    generation: bool = False
+    unsafe_code: bool = False
+    completion_only: bool = False
+
+
+class EvalchemyRef(BaseModel):
+    """The normalized Evalchemy launch configuration recorded for a run.
+
+    The client clamps ``max_length`` against the served context window. The record's serving section
+    captures that window, so the runtime value is reproducible from both fields.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    apply_chat_template: bool
+    max_gen_toks: int
+    max_eval_instances: int | None
+    num_concurrent: int
+    batch_size: str | None
+    seed: int | None
+    extra_gen_kwargs: dict[str, str] = Field(default_factory=dict)
+    extra_model_args: dict[str, str | int | float | bool] = Field(default_factory=dict)
+    max_length: int | None = None
 
 
 class HarborRef(BaseModel):
@@ -98,8 +192,8 @@ class HarborRef(BaseModel):
 class EvalRef(BaseModel):
     """The eval that was run: its name, mechanism, and mechanism-specific detail.
 
-    ``tasks`` carries the lm-eval task list for the ``evalchemy`` mechanism; ``harbor`` carries the
-    dataset descriptor for the ``harbor`` mechanism. Exactly one is populated per record.
+    ``tasks`` and ``evalchemy`` carry the evaluator task list and normalized launch configuration;
+    ``harbor`` carries the dataset descriptor for the ``harbor`` mechanism.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -107,6 +201,7 @@ class EvalRef(BaseModel):
     name: str
     mechanism: str
     tasks: tuple[EvalTaskRef, ...] = ()
+    evalchemy: EvalchemyRef | None = None
     harbor: HarborRef | None = None
 
 
@@ -169,12 +264,42 @@ class RunTiming(BaseModel):
     finished_at: str | None = None
 
 
+class TaskCoverage(BaseModel):
+    """How much of one task's intended item set a run actually graded, and how those grades came out.
+
+    ``n_attempted`` is the number of items the run set out to grade after any declared cap, and
+    ``n_scored`` how many produced a grade; ``errors`` counts the attempted-but-ungraded items by
+    error type, so a reader can tell a model's score apart from the quality of the infrastructure
+    that produced it.
+
+    ``n_attempted`` is ``None`` when the run graded items but could not establish how many it set out
+    to grade. That is unknown coverage, and readers widen for it; it is never read as complete. A
+    mechanism with no notion of an attempted count at all records nothing here.
+
+    ``n_correct`` is the count of graded items the harness scored as passing, recorded directly so a
+    reader gets the Bernoulli numerator without inverting a rounded rate out of ``metrics``. It is
+    ``None`` for a task whose grade is not pass/fail.
+
+    ``n_unanswered`` counts graded items whose output held no extractable answer. Those score zero
+    like a wrong answer does, so the count is the evidence that separates a model that answers badly
+    from a run whose extraction produced nothing at all.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    n_attempted: int | None = None
+    n_scored: int
+    n_correct: int | None = None
+    n_unanswered: int = 0
+    errors: dict[str, int] = Field(default_factory=dict)
+
+
 class EvalRunRecord(BaseModel):
     """The full account of one eval run, serialized to ``record.json``.
 
     ``metrics`` is ``{task: {metric: value}}`` as produced by
     :meth:`~marin.evaluation.evalchemy.result.EvalchemyResult.task_metrics`; it is empty when the run did
-    not reach the metric-reading stage (an infra failure). The ``evaluation`` field serializes as
+    not reach the metric-reading stage. The ``evaluation`` field serializes as
     ``eval`` (a reserved-looking but unambiguous JSON key); use ``model_dump(mode="json",
     by_alias=True)`` or ``model_dump_json(by_alias=True)`` to produce it.
     """
@@ -203,6 +328,10 @@ class EvalRunRecord(BaseModel):
     error: str | None
     results_path: str
     metrics: dict[str, dict[str, float]]
+    coverage: dict[str, TaskCoverage] = Field(default_factory=dict)
+    """Per-task item coverage, keyed like ``metrics``, for mechanisms that report an attempted-item
+    count. Empty when the mechanism reports none and on every record written before coverage existed;
+    a reader treats an empty entry as unknown coverage, never as complete coverage."""
     jobs: dict[str, str]
     """Pipeline role (``orchestrator``/``inference``/``eval``) to Iris job path, for every job the run
     submitted before finishing; a failure before a role's submission simply omits that role."""

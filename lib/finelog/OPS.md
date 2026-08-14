@@ -61,7 +61,96 @@ timestamp conversion function.
 For a bounded query that is still slow, run `EXPLAIN ANALYZE` and compare
 `row_groups_pruned_statistics`, `bytes_scanned`, `metadata_load_time`, and
 `time_elapsed_opening`. High metadata/opening time with few scanned bytes means
-row-group pruning worked and file metadata is the remaining cost.
+row-group pruning worked and file metadata is the remaining cost. The
+`*_eval_time` metrics are accumulated elapsed time across concurrent per-file
+tasks, not CPU time, so they overlap and do not sum to wall clock — treat a large
+one as a place to look, not as a measured cost.
+
+An unbounded substring query (`col LIKE '%…%'`) prunes only when that column
+carries a trigram index; otherwise it decodes the column for every row in the
+namespace. `ListNamespaces` reports which columns are indexed. How much it prunes
+depends on the pattern's literal runs: `%CUDA_ERROR%` only requires `CUDA` and
+`ERROR`, so any row group holding both survives, where `%CUDA\_ERROR%` — or
+`contains(data, 'CUDA_ERROR')` — gives the index the whole string. Escape the
+underscores when you mean them literally. Adding one is a
+`RegisterTable` away and does not need a reset, but the index backfill runs a
+few segments per namespace per 30 s tick, so a large namespace speeds up over
+tens of minutes rather than at once. Enabling a column supersedes the whole
+`.fidx` policy, so every segment's bundle is rebuilt rather than extended: budget
+one core across the namespace's full segment count.
+
+An unindexed substring predicate spends its cost in the `LIKE` kernel, not in
+IO. `bytes_scanned` stays small while `pushdown_rows_pruned` reaches the
+namespace's row count. Read both.
+
+For repeated equality families, declare the hot string values in
+`ColumnIndex.exact_values`. Finelog stores exact source-row postings in the
+segment's `.fidx` bundle. The planner attaches them for `=` and same-column
+`IN`/`OR` predicates when they retain at most 25% of the segment; denser matches
+keep the contiguous source scan.
+
+Use a named `Schema.projections` entry when the recurring query also benefits
+from a compact physical copy. Each projection declares one predicate and an
+explicit included-column list. Covered segments substitute the narrow Parquet
+file while uncovered segments use postings or source Parquet, so partial
+backfill is useful. `telemetry_v1` has one `training-status` projection for the
+three dashboard metric names.
+
+Change a projection in place; do not version its name. Re-registering a name
+with a different predicate or column list supersedes the registered definition:
+new segments build the new one, existing segments stay queryable under the
+definition they were written with (each `.fidx` section carries its own
+coverage), and the backfill rebuilds them a few per tick and deletes the
+superseded Parquet files. A widened copy under a second name leaves both being
+built for every new segment forever.
+
+For broad low-cardinality summaries, set `ColumnIndex.value_counts`.
+Unfiltered `SELECT col, count(*) FROM table GROUP BY col` and `count(col)` then
+rewrite to a `FinelogIndexAggregate` node that combines exact per-segment
+summaries without opening Parquet. `EXPLAIN` shows the rewrite. It is
+all-or-nothing and limited to one grouping column; filters, joins, multiple
+aggregates, a per-segment column above 4,096 distinct values, or a combined
+result above 16,384 values use DataFusion.
+`telemetry_v1` enables this for `service`, `kind`, and `name`, while its
+training-status metric names also use an exact filtered projection.
+
+`GET /api/segments?namespace=telemetry_v1&physical=true` reports each local
+segment identity and `.fidx` section directory. Use it to distinguish incomplete
+backfill from a planner miss. `GET /api/server` reports corrupt bundle and
+section counters; either condition is a safe scan fallback but should trigger a
+local rebuild investigation. A time bound remains the fastest containment:
+`telemetry_v1` is keyed on `timestamp_ms`, so bounded queries can prune before
+any secondary method runs.
+
+`finelog query` applies a client deadline just past the server's own 10s one.
+Raise both with `--timeout` and `FINELOG_QUERY_TIMEOUT_MS` if a query genuinely
+needs longer.
+
+Row groups are sized to hold a fixed number of *encoded* bytes, so a namespace of
+narrow rows gets far fewer of them than one of wide log lines. Encoded rather
+than in-memory bytes is what matters: a telemetry row compresses to ~8 bytes
+against a log line's hundreds, so an in-memory target under-sizes worst exactly
+where the fix is needed.
+
+Each segment's footer carries the layout revision it was written with. Since the
+terminal level is never re-compacted, a maintenance pass re-encodes segments
+still on an older revision, a couple per namespace per 30 s tick — otherwise a
+namespace's bulk would keep its old row groups until eviction aged it out, which
+for `telemetry_v1`'s 15 GiB is about four days and for `log`'s about eight. The
+rewrite keeps the filename and preserves the rows and their order, so it costs no
+remote bandwidth: the archive keys objects by basename and only uploads segments
+still marked `Local`. A rewritten segment's remote copy keeps the old layout
+while holding the same rows.
+
+Watch it with the `rewrote segment layout` events, which report the before and
+after byte size per segment. Confirm the era split before concluding a layout
+change did or did not land — compare footer bytes for segments modified before
+and after the deploy, since a whole-namespace average is dominated by whatever
+has not been rewritten yet.
+
+`EXPLAIN ANALYZE` reports `row_groups_pruned_statistics` as `<total> total`,
+which is the count for the segments a query touched *after* any injected access
+plan, so it doubles as the check on whether trigram pruning fired.
 
 `query_metadata_cache_mb` in a deployment config overrides DataFusion's
 process-wide Parquet metadata cache limit. Leave it unset to retain DataFusion's
@@ -70,6 +159,12 @@ query warning also includes `metadata_cache_limit_bytes`,
 `metadata_cache_size_bytes`, `metadata_cache_entries`, and
 `metadata_cache_hits`. Compare warm-query latency and those fields before
 retaining or increasing an override.
+
+`query_index_cache_mb` bounds decoded `.fidx` headers and sections. Cache
+entries are keyed by segment identity and section ID, charged by decoded heap,
+and invalidated when backfill publishes a replacement bundle. Size it for the
+active trigram, posting, and value-count working set rather than source Parquet
+bytes.
 
 `StoragePolicy` controls eviction of eligible uploaded segments from Finelog's
 local cache. It is not a row-age retention guarantee and does not delete objects
@@ -185,15 +280,56 @@ kubectl --kubeconfig <kubeconfig> --context <context> -n iris \
   rg 'finelog forwarder'
 ```
 
-Warnings name the affected namespace. `backlog exceeds the lag cap` or `rows
-evicted before they were forwarded` means that namespace skipped source sequence
-positions; the cumulative `skipped_seqs` progress counter alone does not prove
-that `log` rows were dropped.
+Warnings name the affected namespace. `backlog exceeds the warning threshold`
+reports pressure but does not change the forwarding cursor; the sender continues
+draining every locally retained row. `rows evicted before they were forwarded`
+means that local retention has already made source sequence positions unreadable.
+The cumulative `skipped_seqs` progress counter also includes permanently rejected
+malformed batches and does not by itself prove that `log` rows were dropped.
 
 To rotate a key, add the new Secret Manager version, add its public key alongside
 the old one under the same `keys[].cluster` (the hub accepts either), roll the
 hub, re-pin the sender's `signing_key` to the new version, roll the sender, then
 drop the old public key and roll the hub again.
+
+## Checking that a server is ingesting
+
+`/health` answers 200 whenever the process is listening, and it is also the
+Kubernetes liveness, readiness, and startup probe, so it cannot fail on a
+condition a restart will not clear. The body carries the verdict: `ok`, or
+`degraded: <namespace>: registration failed: <reason>`.
+
+`telemetry_v1` must be registered before it accepts a row, and the registration
+is re-driven from the catalog's persisted schema on every boot. When the
+binary's schema and the catalog disagree in a way no merge can reconcile (a
+column type change), every write to that namespace fails until one of them
+changes, across restarts.
+
+```bash
+curl -sf http://<host>:<port>/health          # ok | degraded: ...
+curl -sf http://<host>:<port>/api/server | jq .ingest
+```
+
+`/api/server`'s `ingest` block names each namespace, its state, the error, when
+it first failed, and how many attempts have been made since. The dashboard's
+System page shows the same under **Ingest**. `deploy up`, `deploy restart`, and
+`safe_deploy` gate on the body, so a deploy that wedges ingest fails and rolls
+back.
+
+## Serving a copy of a store
+
+Anything that boots finelog over a copy of a real store directory — the Grafana
+dashboard benchmark, a layout experiment, reproducing a query — should pass
+`--mode shadow`. The server serves reads from `--log-dir` and refuses a
+`gs://`/`s3://` remote or a forwarding target at startup, and its store starts
+no maintenance, so compaction, eviction, layout rewrites, and the boot
+reconcile's redundancy drop (which deletes archived objects) never run against
+the copy or the bucket it came from.
+
+A shadow boot over a copy of a deployment's catalog also re-runs that
+deployment's registrations, so a schema this binary can no longer merge shows
+up in `/health` as `degraded: <namespace>: registration failed: ...` with the
+per-namespace detail under `/api/server`.
 
 ## Diagnosing Kubernetes mirror readiness
 

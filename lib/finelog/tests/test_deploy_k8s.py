@@ -11,6 +11,7 @@ from dataclasses import replace
 import click
 import pytest
 import yaml
+from finelog.deploy import _k8s
 from finelog.deploy._k8s import (
     _K8S_MANIFEST_DIR,
     _MANIFESTS,
@@ -18,8 +19,10 @@ from finelog.deploy._k8s import (
     _env_secret_name,
     _probe_transition_patch,
     _render_manifest,
+    _verify_ingest_ready,
     k8s_down,
 )
+from finelog.deploy.bootstrap import HEALTH_OK
 from finelog.deploy.config import (
     Deployment,
     FinelogConfig,
@@ -250,3 +253,58 @@ def test_teardown_deletes_the_secret_and_retains_only_the_cache_pvc(monkeypatch:
         f"service/{cfg.name}",
         f"secret/{_env_secret_name(cfg)}",
     }
+
+
+def _health_body(monkeypatch: pytest.MonkeyPatch, body: str) -> None:
+    """Answer every kubectl invocation with `body` on stdout."""
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, stdout=body, stderr=""),
+    )
+
+
+def test_rollout_fails_when_the_new_pod_serves_but_cannot_ingest(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `kubectl rollout status` only proves /health answered 200. Reading the body
+    # is what catches a pod that serves and rejects every write.
+    _health_body(monkeypatch, "degraded: telemetry_v1: registration failed: column type mismatch")
+
+    with pytest.raises(click.ClickException, match="serving but not ingesting"):
+        _verify_ingest_ready(_forwarding_cfg())
+
+
+def test_rollout_accepts_a_pod_reporting_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    _health_body(monkeypatch, f"{HEALTH_OK}\n")
+
+    _verify_ingest_ready(_forwarding_cfg())
+
+
+def _health_bodies(monkeypatch: pytest.MonkeyPatch, bodies: list[str]) -> None:
+    """Answer successive kubectl invocations with `bodies`, repeating the last."""
+    monkeypatch.setattr(_k8s.time, "sleep", lambda _: None)
+    remaining = list(bodies)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(
+            argv, 0, stdout=remaining.pop(0) if len(remaining) > 1 else remaining[0], stderr=""
+        ),
+    )
+
+
+def test_rollout_waits_out_a_namespace_that_is_still_registering(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Registration runs after the server starts listening, so a busy catalog is
+    # pending for the first probes of a deploy that goes on to succeed.
+    _health_bodies(
+        monkeypatch,
+        ["degraded: telemetry_v1: registration pending", "degraded: telemetry_v1: registration pending", HEALTH_OK],
+    )
+
+    _verify_ingest_ready(_forwarding_cfg())
+
+
+def test_rollout_fails_when_registration_never_completes(monkeypatch: pytest.MonkeyPatch) -> None:
+    _health_bodies(monkeypatch, ["degraded: telemetry_v1: registration pending"])
+
+    with pytest.raises(click.ClickException, match="registration pending"):
+        _verify_ingest_ready(_forwarding_cfg(), max_attempts=3)

@@ -1,7 +1,7 @@
 {
   "type": "stat",
   "title": "Fleet tasks in flight",
-  "description": "Sum over every cluster's latest iris.task_state rollup row (root_job_id='') within the last 2 minutes: tasks running, building, and pending across the CoreWeave fleet. A cluster whose controller has stopped emitting drops out of this sum.",
+  "description": "Sum over each selected cluster's latest iris.task_state rollup row (root_job_id='') within the last 2 minutes: tasks running, building, and pending. A cluster whose controller has stopped emitting drops out of this sum.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"
@@ -59,7 +59,7 @@
         "params": [
           {
             "key": "sql",
-            "value": "WITH r AS (SELECT COALESCE(cluster,'') AS c, running, building, pending, ROW_NUMBER() OVER (PARTITION BY COALESCE(cluster,'') ORDER BY ts DESC) AS rn FROM \"iris.task_state\" WHERE root_job_id = '' AND ts >= {{from}} AND ts < {{to}}) SELECT SUM(running) AS running, SUM(building) AS building, SUM(pending) AS pending FROM r WHERE rn = 1"
+            "value": "WITH r AS (SELECT running, building, pending, ROW_NUMBER() OVER (PARTITION BY \"cluster\" ORDER BY ts DESC) AS rn FROM \"iris.task_state\" WHERE root_job_id = '' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}}) SELECT SUM(running) AS running, SUM(building) AS building, SUM(pending) AS pending FROM r WHERE rn = 1"
           },
           {
             "key": "from",

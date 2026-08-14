@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The ``fsutil`` command line: list, read, size, and copy across Marin's buckets.
+"""The ``fsutil`` command line: list, read, size, copy, and remove across Marin's buckets.
 
 Every path is a full URL (``gs://``, ``s3://``, or a local path). There is no implicit
 current bucket, so the same command means the same thing from any shell, and a copy can
@@ -11,8 +11,12 @@ name two different backends. Bare ``fsutil`` opens the interactive browser.
 import logging
 import shutil
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import click
+from fsspec import AbstractFileSystem
+from gcsfs import GCSFileSystem
+from s3fs import S3FileSystem
 
 from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
@@ -27,6 +31,7 @@ from rigging.fsutil.listing import (
     read_preview,
     total_size,
 )
+from rigging.fsutil.parquet import PREVIEW_ROWS, MissingParquetReader, is_parquet, parquet_lines
 from rigging.fsutil.render import aligned_lines, file_lines, format_size, format_time, table_lines
 from rigging.fsutil.tui import run as run_browser
 
@@ -35,6 +40,9 @@ logger = logging.getLogger(__name__)
 # Streaming chunk for cross-backend copies, which cannot use a filesystem's own
 # server-side copy.
 _COPY_CHUNK = 8 * 1024 * 1024
+_RM_WORKERS = 8
+_S3_DELETE_BATCH = 1000
+_GCS_DELETE_BATCH = 20
 
 
 @click.group(invoke_without_command=True)
@@ -69,7 +77,7 @@ def buckets() -> None:
 @click.argument("url", default=ROOT)
 @click.option("-l", "--long", is_flag=True, help="Show size and modification time.")
 def list_command(url: str, long: bool) -> None:
-    """List the immediate children of URL. With no URL, list the known buckets."""
+    """List URL's immediate children or glob matches. With no URL, list the known buckets."""
     entries = list_entries(url)
     if not long:
         for entry in entries:
@@ -82,23 +90,28 @@ def list_command(url: str, long: bool) -> None:
 @click.argument("url")
 @click.option("--raw", is_flag=True, help="Write bytes to stdout without formatting.")
 def cat(url: str, raw: bool) -> None:
-    """Print a file, rendering tabular JSON and JSONL as a table."""
+    """Print a file, rendering tabular JSON, JSONL, and parquet as a table."""
     if raw:
         data = _read_raw(url)
         sys.stdout.buffer.write(data)
         return
-    data = _read(url)
-    for line in file_lines(StoragePath(url).name, data):
+    for line in _formatted_lines(url, PREVIEW_ROWS):
         click.echo(line)
 
 
 @cli.command()
 @click.argument("url")
-@click.option("-n", "--lines", default=20, show_default=True, help="Number of lines to print.")
+@click.option(
+    "-n",
+    "--lines",
+    default=PREVIEW_ROWS,
+    show_default=True,
+    help="Number of lines to print, or rows for a parquet file.",
+)
 def head(url: str, lines: int) -> None:
-    """Print the first lines of a file."""
-    data = _read(url)
-    for line in file_lines(StoragePath(url).name, data)[:lines]:
+    """Print the first lines of a file, or the first rows of a parquet file."""
+    rendered = _formatted_lines(url, lines)
+    for line in rendered if is_parquet(StoragePath(url).name) else rendered[:lines]:
         click.echo(line)
 
 
@@ -157,6 +170,83 @@ def cp(src: str, dst: str, recursive: bool) -> None:
 
 
 @cli.command()
+@click.argument("url")
+@click.option("-r", "-R", "--recursive", is_flag=True, help="Remove a prefix and everything under it.")
+def rm(url: str, recursive: bool) -> None:
+    """Remove an object, or recursively remove a prefix."""
+    fs, path = filesystem_for(url)
+    is_dir = fs.isdir(path)
+    if is_dir and not recursive:
+        raise click.ClickException(f"{url} is a directory; pass -r to remove it recursively")
+    if not is_dir:
+        fs.rm(path)
+        click.echo(url)
+        return
+    if StoragePath(url).is_local:
+        if fs.info(path).get("islink"):
+            fs.rm_file(path)
+        else:
+            fs.rm(path, recursive=True)
+        click.echo(url)
+        return
+
+    click.echo(f"Scanning {url} ...", err=True)
+    entries = fs.find(path, detail=True)
+    files = list(entries)
+    total_bytes = sum(entry.get("size", 0) or 0 for entry in entries.values())
+    batches = _delete_batches(fs, files)
+    with ThreadPoolExecutor(max_workers=_RM_WORKERS) as executor:
+        label = f"Removing {len(files)} objects ({format_size(total_bytes)})"
+        with click.progressbar(length=len(files), label=label, show_pos=True) as progress:
+            for start in range(0, len(batches), _RM_WORKERS):
+                removals = {
+                    executor.submit(_remove_batch, fs, batch): len(batch)
+                    for batch in batches[start : start + _RM_WORKERS]
+                }
+                for removal in as_completed(removals):
+                    removal.result()
+                    progress.update(removals[removal])
+    fs.invalidate_cache()
+    click.echo(url)
+
+
+def _delete_batches(fs: AbstractFileSystem, files: list[str]) -> list[list[str]]:
+    if isinstance(fs, S3FileSystem):
+        batch_size = _S3_DELETE_BATCH
+    elif isinstance(fs, GCSFileSystem):
+        batch_size = _GCS_DELETE_BATCH
+    else:
+        batch_size = 1
+    return [files[start : start + batch_size] for start in range(0, len(files), batch_size)]
+
+
+def _remove_batch(fs: AbstractFileSystem, files: list[str]) -> None:
+    if not isinstance(fs, S3FileSystem):
+        fs.rm(files)
+        return
+
+    objects = []
+    buckets = set()
+    for path in files:
+        bucket, key, version = fs.split_path(path)
+        buckets.add(bucket)
+        item = {"Key": key}
+        if version is not None:
+            item["VersionId"] = version
+        objects.append(item)
+    assert len(buckets) == 1
+    response = fs.call_s3(
+        "delete_objects",
+        Bucket=buckets.pop(),
+        Delete={"Objects": objects, "Quiet": True},
+    )
+    errors = response.get("Errors", [])
+    if errors:
+        details = ", ".join(f"{error['Key']}: {error['Code']}" for error in errors)
+        raise RuntimeError(f"S3 bulk delete failed: {details}")
+
+
+@cli.command()
 @click.argument("url", default=ROOT)
 def browse(url: str) -> None:
     """Open the interactive browser, starting at URL (default: the bucket list)."""
@@ -170,6 +260,21 @@ def _print_long_entries(entries: list[Entry]) -> None:
         rows.append([format_size(entry.size), format_time(entry.mtime), name])
     for line in table_lines(["size", "modified", "name"], rows):
         click.echo(line)
+
+
+def _formatted_lines(url: str, rows: int) -> list[str]:
+    """Render *url* for display, reading parquet through its footer and the rest by head.
+
+    A parquet file states its own row count in the returned lines, so it takes *rows*
+    rather than a line budget the caller applies afterwards.
+    """
+    name = StoragePath(url).name
+    if is_parquet(name):
+        try:
+            return parquet_lines(url, rows)
+        except MissingParquetReader as e:
+            raise click.ClickException(str(e)) from e
+    return file_lines(name, _read(url))
 
 
 def _read(url: str) -> bytes:

@@ -55,7 +55,7 @@ Launch (a CPU coordinator job submits the training sub-job)::
 
     uv run iris --cluster=marin job run --job-name sft-coord --region us-east5 \\
       --cpu 1 --memory 2G --extra cpu --priority interactive --no-wait \\
-      -e MARIN_PREFIX gs://marin-us-east5 -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" \\
+      -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" \\
       -- python -m experiments.sft.configs.delphi_1e22 --accelerator v4-64
 
 The CoreWeave H100 path only changes the launch flags: ``--accelerator 8xH100`` and an
@@ -109,6 +109,9 @@ _CHAT_TOKENIZE_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="32g", regions=[AN
 # Bump to rebuild every chat cache; the (tokenizer, template, pack) hash in the name already forks a
 # new cache when any of those change, so this is only for reprocessing the same recipe.
 _CHAT_CACHE_VERSION = "2026.07.17"
+_GPU_HOST_CPU_PER_DEVICE = 8
+_GPU_HOST_RAM_GB_PER_DEVICE = 96
+_GPU_HOST_DISK_GB_PER_DEVICE = 48
 
 
 @dataclass(frozen=True)
@@ -445,13 +448,12 @@ class ConvertedCheckpointModel:
 
 @dataclass(frozen=True)
 class LevanterCheckpointModel:
-    """Init a run's weights from an existing native Levanter checkpoint (fresh optimizer, step 0).
+    """Initialize weights from a native checkpoint with a fresh optimizer at step zero.
 
-    ``init_from`` is a static checkpoint directory, or an :class:`ArtifactStep` producing one (e.g. a
-    prior ``sft_step`` output, for stage chaining — which becomes a dependency). The checkpoint carries
-    no architecture or tokenizer, so both ``model`` (the checkpoint's architecture) and ``tokenizer_path``
-    are required. For a materialized HF->Levanter conversion, which supplies both, use
-    :class:`ConvertedCheckpointModel` instead.
+    ``init_from`` accepts a checkpoint-series directory or a Levanter checkpoint
+    artifact. Native checkpoints do not identify their architecture or tokenizer,
+    so ``model`` and ``tokenizer_path`` are required. Use
+    :class:`ConvertedCheckpointModel` when an HF conversion supplies both.
     """
 
     init_from: str | ArtifactStep
@@ -473,10 +475,9 @@ class LevanterCheckpointModel:
         return (self.init_from,) if isinstance(self.init_from, ArtifactStep) else ()
 
     def _init_path(self, ctx: StepContext) -> str:
-        # A prior sft_step (a TrainerState whose model field serializes to `model/`) and a static native
-        # checkpoint both expose the weights as a `model` subtree; native init reads them with subpath="model".
         if isinstance(self.init_from, ArtifactStep):
-            return ctx.artifact_path(self.init_from)
+            artifact = LevanterCheckpoint(path=ctx.artifact_path(self.init_from))
+            return artifact.checkpoint_dir
         return self.init_from
 
     def build_train_config(
@@ -550,7 +551,15 @@ def resources_from_accelerator(accelerator: str) -> ResourceConfig:
     """
     gpu = _GPU_ACCELERATOR.fullmatch(accelerator)
     if gpu is not None:
-        return ResourceConfig.with_gpu(gpu["variant"], count=int(gpu["count"]), regions=[ANY_REGION])
+        count = int(gpu["count"])
+        return ResourceConfig.with_gpu(
+            gpu["variant"],
+            count=count,
+            cpu=_GPU_HOST_CPU_PER_DEVICE * count,
+            ram=f"{_GPU_HOST_RAM_GB_PER_DEVICE * count}g",
+            disk=f"{_GPU_HOST_DISK_GB_PER_DEVICE * count}g",
+            regions=[ANY_REGION],
+        )
     return ResourceConfig.with_tpu(accelerator)
 
 

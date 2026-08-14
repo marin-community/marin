@@ -11,16 +11,17 @@ These tests cover:
 - Failure injection (one-shot error injection for testing error paths)
 """
 
+import json
 import time
 from collections.abc import Callable
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from iris.cluster.platforms.gcp.cloud import CloudGcpService
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.handles import GcpVmSliceHandle
 from iris.cluster.platforms.gcp.service import (
-    CloudGcpService,
     TpuCreateRequest,
     VmCreateRequest,
     VmInfo,
@@ -549,6 +550,20 @@ def test_vm_create_default_issues_no_operation_poll() -> None:
     assert info.name == _VM_NAME
     assert info.status == "PROVISIONING"
     assert info.internal_ip == ""  # IP not yet assigned; describe loop will supply it
+
+
+def test_vm_create_includes_network_tags_in_insert_request() -> None:
+    svc, recorded = _make_recording_service()
+
+    req = VmCreateRequest(
+        name=_VM_NAME,
+        zone=_VM_ZONE,
+        machine_type="n2-standard-4",
+        network_tags=("iris-marin-controller",),
+    )
+    svc.vm_create(req)
+
+    assert json.loads(recorded[0].read())["tags"] == {"items": ["iris-marin-controller"]}
 
 
 def test_vm_create_wait_true_polls_operation_and_describes() -> None:

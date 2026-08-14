@@ -19,6 +19,7 @@ import pulumi_command as command
 import pulumi_docker_build as docker_build
 import pulumi_gcp as gcp
 import pulumi_github as github
+from iac.gcp.firewall import FirewallPort, GcpFirewallRuleArgs, create_firewall_rule
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DISK_TYPE = "pd-balanced"
@@ -38,6 +39,7 @@ RESOURCE_HASH_LENGTH = 10
 SERVICE_ACCOUNT_MEMBER = "serviceAccount:{}"
 WEB_FIREWALL_TAG = "loom-web"
 SSH_FIREWALL_TAG = "loom-ssh"
+FIREWALL_PRIORITY = 1000
 GIT_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 STARTUP_SCRIPT = (ROOT / "startup-script.sh").read_text()
 DOCKER_DAEMON_CONFIG = (
@@ -161,6 +163,25 @@ def _optional_int(value: object, field: str, profile: str) -> int | None:
     return value
 
 
+def _profile_instructions(value: Mapping[str, object], profile: str) -> str:
+    inline = value.get("instructions")
+    source = value.get("instructionsFile")
+    if inline is not None and source is not None:
+        raise ValueError(f"profile {profile!r} must use only one of instructions or instructionsFile")
+    if source is None:
+        if inline is None:
+            return ""
+        if not isinstance(inline, str):
+            raise ValueError(f"profile {profile!r} instructions must be a string")
+        return inline.strip()
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError(f"profile {profile!r} instructionsFile must be a relative path")
+    path = (ROOT / source).resolve()
+    if not path.is_relative_to(ROOT) or not path.is_file():
+        raise ValueError(f"profile {profile!r} instructionsFile must name a file under {ROOT}")
+    return path.read_text().strip()
+
+
 def _validated_string_tuple(value: object, field: str, pattern: re.Pattern[str]) -> tuple[str, ...]:
     if not isinstance(value, list) or not all(isinstance(item, str) and pattern.fullmatch(item) for item in value):
         raise ValueError(f"{field} must be a list of canonical resource names")
@@ -209,6 +230,7 @@ class ProfileConfig:
     max_concurrent: int
     turn_budget: int | None
     prelude: str
+    instructions: str
     restricted: bool
     allowed_tools: tuple[str, ...]
     mcp_access: McpAccessConfig
@@ -241,6 +263,7 @@ class ProfileConfig:
             max_concurrent=int(value.get("maxConcurrent", 0)),
             turn_budget=_optional_int(value.get("turnBudget"), "turnBudget", name),
             prelude=str(value.get("prelude", "weaver")),
+            instructions=_profile_instructions(value, name),
             restricted=bool(value.get("restricted", False)),
             allowed_tools=_string_tuple(value.get("allowedTools", []), "allowedTools", name),
             mcp_access=McpAccessConfig.parse(value.get("mcpAccess", {}), name),
@@ -264,6 +287,7 @@ class ProfileConfig:
             "max_concurrent": self.max_concurrent,
             "turn_budget": self.turn_budget,
             "prelude": self.prelude,
+            "instructions": self.instructions,
             "restricted": self.restricted,
             "allowed_tools": list(self.allowed_tools),
             "mcp_access": self.mcp_access.manifest(),
@@ -364,6 +388,7 @@ class DeploymentConfig:
     dotenv_secret_version: int
     snapshot_retention_days: int
     prune_deployment: bool = False
+    settings: tuple[tuple[str, str | int | bool], ...] = ()
     profiles: tuple[ProfileConfig, ...] = ()
     workloads: tuple[WorkloadIdentityConfig, ...] = ()
     github_federations: tuple[GitHubFederationConfig, ...] = ()
@@ -390,7 +415,7 @@ class DeploymentConfig:
             _validate_profile_reference(
                 "GitHub federation", federation.name, federation.profile, federation_names, profile_names
             )
-        if self.prune_deployment and not (self.profiles or self.workloads or self.github_federations):
+        if self.prune_deployment and not (self.settings or self.profiles or self.workloads or self.github_federations):
             raise ValueError("pruneDeployment requires a non-empty runtime policy")
 
     @property
@@ -413,6 +438,14 @@ class DeploymentConfig:
         raw_profiles = config.get_object("profiles") or {}
         if not isinstance(raw_profiles, dict):
             raise ValueError("profiles must be an object")
+        raw_settings = config.get_object("settings") or {}
+        if not isinstance(raw_settings, dict):
+            raise ValueError("settings must be an object")
+        settings: list[tuple[str, str | int | bool]] = []
+        for key, value in sorted(raw_settings.items()):
+            if not isinstance(key, str) or not key.strip() or not isinstance(value, (str, int, bool)):
+                raise ValueError("settings must map non-empty string keys to string, integer, or boolean values")
+            settings.append((key, value))
         raw_workloads = config.get_object("workloads") or []
         if not isinstance(raw_workloads, list):
             raise ValueError("workloads must be a list")
@@ -453,6 +486,7 @@ class DeploymentConfig:
             boot_disk_gb=config.require_int("bootDiskGb"),
             dotenv_secret_version=config.require_int("dotenvSecretVersion"),
             prune_deployment=config.get_bool("pruneDeployment") or False,
+            settings=tuple(settings),
             profiles=tuple(profiles),
             workloads=tuple(workloads),
             github_federations=tuple(github_federations),
@@ -511,32 +545,36 @@ class NetworkResources:
 
 
 def _create_network(config: DeploymentConfig, apis: list[gcp.projects.Service]) -> NetworkResources:
-    web_firewall = gcp.compute.Firewall(
+    web_firewall = create_firewall_rule(
         "loom-web",
-        project=config.project,
-        network=config.network,
-        name=f"{config.instance_name}-allow-web",
-        direction="INGRESS",
-        source_ranges=["0.0.0.0/0"],
-        target_tags=[WEB_FIREWALL_TAG],
-        # Preserve provider-normalized ordering from the imported firewall so
-        # equivalent policy does not produce a permanent diff.
-        allows=[
-            {"protocol": "tcp", "ports": ["443"]},
-            {"protocol": "udp", "ports": ["443"]},
-            {"protocol": "tcp", "ports": ["80"]},
-        ],
+        GcpFirewallRuleArgs(
+            project=config.project,
+            network=config.network,
+            name=f"{config.instance_name}-allow-web",
+            priority=FIREWALL_PRIORITY,
+            source_ranges=("0.0.0.0/0",),
+            target_tags=(WEB_FIREWALL_TAG,),
+            # Preserve provider-normalized ordering from the imported firewall so
+            # equivalent policy does not produce a permanent diff.
+            allows=(
+                FirewallPort(protocol="tcp", ports=("443",)),
+                FirewallPort(protocol="udp", ports=("443",)),
+                FirewallPort(protocol="tcp", ports=("80",)),
+            ),
+        ),
         opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
     )
-    ssh_firewall = gcp.compute.Firewall(
+    ssh_firewall = create_firewall_rule(
         "loom-ssh",
-        project=config.project,
-        network=config.network,
-        name=f"{config.instance_name}-allow-ssh",
-        direction="INGRESS",
-        source_ranges=[config.operator_cidr],
-        target_tags=[SSH_FIREWALL_TAG],
-        allows=[{"protocol": "tcp", "ports": ["22"]}],
+        GcpFirewallRuleArgs(
+            project=config.project,
+            network=config.network,
+            name=f"{config.instance_name}-allow-ssh",
+            priority=FIREWALL_PRIORITY,
+            source_ranges=(config.operator_cidr,),
+            target_tags=(SSH_FIREWALL_TAG,),
+            allows=(FirewallPort(protocol="tcp", ports=("22",)),),
+        ),
         opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
     )
     address = gcp.compute.Address(
@@ -726,6 +764,7 @@ def _create_runtime_policy(
     def render(workload_values: list[dict[str, Any]]) -> str:
         return json.dumps(
             {
+                "settings": dict(config.settings),
                 "profiles": profiles,
                 "federations": github_mappings + workload_values,
                 "prune": config.prune_deployment,

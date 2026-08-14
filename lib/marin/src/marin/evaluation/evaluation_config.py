@@ -7,7 +7,7 @@ import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from levanter.eval_harness import TaskConfig
+from levanter.eval_harness_config import TaskConfig
 
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "marin")
 
@@ -17,7 +17,7 @@ class EvalTaskConfig:
     """One lm-eval task and its prompt/scoring behavior."""
 
     name: str
-    num_fewshot: int
+    num_fewshot: int | None
     task_alias: str | None = None
     task_kwargs: dict | None = None
     generation: bool = False

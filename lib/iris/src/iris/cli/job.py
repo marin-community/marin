@@ -12,6 +12,7 @@ import csv
 import difflib
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -26,8 +27,7 @@ from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
 from iris.cli.connect import iris_client_for_ctx, require_controller_url
-from iris.client import IrisClient
-from iris.client.client import Job, JobFailedError
+from iris.client.client import IrisClient, Job, JobFailedError
 from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,
     Constraint,
@@ -636,6 +636,7 @@ def run_iris_job(
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
     target_cluster: str | None = None,
+    bundle_exclude: re.Pattern[str] | None = None,
 ) -> int:
     """Core job submission logic.
 
@@ -656,6 +657,9 @@ def run_iris_job(
             ``--cluster`` option, which only selects which controller the CLI talks to.
         task_image: Optional task container image override. When None, workers use
             their cluster-configured default task image.
+        bundle_exclude: Regex matched against each candidate bundle path (POSIX,
+            relative to the workspace); matching paths are dropped from the bundle
+            so a job can trim otherwise-tracked files it does not need.
 
     Returns:
         Exit code: 0 for success, 1 for failure
@@ -750,6 +754,7 @@ def run_iris_job(
         submit_argv=submit_argv,
         dashboard_url=dashboard_url,
         task_image=task_image,
+        bundle_exclude=bundle_exclude,
     )
 
 
@@ -776,13 +781,16 @@ def _submit_and_wait_job(
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
     task_image: str | None = None,
+    bundle_exclude: re.Pattern[str] | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
     Only KeyboardInterrupt terminates the remote job; connection failures
     are logged and re-raised without killing the job.
     """
-    client = IrisClient.remote(controller_url, workspace=Path.cwd(), credentials=credentials)
+    client = IrisClient.remote(
+        controller_url, workspace=Path.cwd(), credentials=credentials, bundle_exclude=bundle_exclude
+    )
     entrypoint = Entrypoint.from_command(*command)
 
     job = client.submit(
@@ -992,6 +1000,16 @@ Examples:
     default=True,
     help="Terminate the job on Ctrl+C (default: terminate). Tunnel failures never kill the job.",
 )
+@click.option(
+    "--exclude",
+    multiple=True,
+    help=(
+        "Regex matched against each candidate bundle path (POSIX, relative to the "
+        "workspace); matching paths are dropped from the workspace bundle. Repeat to "
+        "add patterns; they are OR'd together. Use to keep tracked-but-unneeded files "
+        "(e.g. --exclude '^docs/') out of the bundle and under its size cap."
+    ),
+)
 @click.argument("cmd", nargs=-1, type=click.UNPROCESSED, required=True)
 @click.pass_context
 def run(
@@ -1021,6 +1039,7 @@ def run(
     task_image: str | None,
     container_profile: str | None,
     terminate_on_exit: bool,
+    exclude: tuple[str, ...],
     cmd: tuple[str, ...],
 ):
     """Submit jobs to Iris clusters."""
@@ -1050,6 +1069,7 @@ def run(
         )
 
     env_vars_dict = load_env_vars(env_vars)
+    bundle_exclude = re.compile("|".join(f"(?:{pattern})" for pattern in exclude)) if exclude else None
 
     try:
         exit_code = run_iris_job(
@@ -1082,6 +1102,7 @@ def run(
             credentials=ctx.obj.get("credentials"),
             submit_argv=submit_argv,
             dashboard_url=dashboard_url or None,
+            bundle_exclude=bundle_exclude,
         )
     except Exception:
         bundle = ctx.obj.get("provider_bundle")

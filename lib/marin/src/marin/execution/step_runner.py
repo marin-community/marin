@@ -38,7 +38,7 @@ from marin.execution.artifact import (
     is_mutable_version,
     write_step_record,
 )
-from marin.execution.remote import RemoteCallable, _sanitize_job_name
+from marin.execution.remote import RemoteCallable, sanitize_job_name
 from marin.execution.step_spec import StepSpec
 
 # Re-export for backward compatibility
@@ -52,7 +52,7 @@ from marin.execution.step_status import (
     step_lock,
     worker_id,
 )
-from marin.training.run_environment import dependency_groups_for_resources, env_vars_for_dependency_groups
+from marin.training.run_environment import dependency_groups_for_resources
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger(__name__)
@@ -496,7 +496,7 @@ def _submit_iris_job(
         result = raw_fn(output_path)
         write_step_record(identity, output_path=output_path, result=result)
 
-    job_name = _sanitize_job_name(f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}")
+    job_name = sanitize_job_name(f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}")
     dependency_groups = dependency_groups_for_resources(resources, pip_dependency_groups)
     request = JobRequest(
         name=job_name,
@@ -504,7 +504,7 @@ def _submit_iris_job(
         resources=resources,
         environment=create_environment(
             extras=dependency_groups,
-            env_vars=env_vars_for_dependency_groups(resources, dependency_groups, env_vars),
+            env_vars=env_vars,
         ),
     )
     handle = current_client().submit(request)

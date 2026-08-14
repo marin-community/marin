@@ -19,7 +19,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 import click
-from iris.client import IrisClient, Job, JobAlreadyExists
+from iris.client.client import IrisClient, Job, JobAlreadyExists
 from iris.cluster.backends.k8s.tasks import _LABEL_TASK_ID, _sanitize_label_value
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import IrisClusterConfig, load_config
