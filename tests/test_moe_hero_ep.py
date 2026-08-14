@@ -213,21 +213,12 @@ def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "platform"
 
 
-@pytest.mark.parametrize(
-    ("watch_mode", "watch_interval", "expected_overlap_limit"),
-    [
-        (train.WatchMode.INLINE, 1, train.INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT),
-        (train.WatchMode.DIAGNOSTIC, 1, train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT),
-        (train.WatchMode.INLINE, 0, train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT),
-    ],
-)
-def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
-    monkeypatch, watch_mode, watch_interval, expected_overlap_limit
-):
+@pytest.mark.parametrize("watch_mode", [train.WatchMode.INLINE, train.WatchMode.DIAGNOSTIC])
+def test_run_grug_applies_collective_overlap_limit(monkeypatch, watch_mode):
     monkeypatch.delenv("XLA_FLAGS", raising=False)
     config = SimpleNamespace(
         trainer=SimpleNamespace(
-            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
+            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
             watch_mode=watch_mode,
         ),
         resources=object(),
@@ -238,7 +229,7 @@ def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
         train.run_grug(config)
 
     flags = os.environ["XLA_FLAGS"].split()
-    assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={expected_overlap_limit}" in flags
+    assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.COLLECTIVE_OVERLAP_LIMIT}" in flags
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():

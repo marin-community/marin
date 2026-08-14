@@ -59,11 +59,11 @@ HERO_EP_RUNTIME_ENV = {
 }
 _XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
-DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 # 4 measured +0.5% median tok/s over 1 on the d1024 EP64 rung (two draws) with the
-# production interval-10 watch; 8 regresses. A FULL inline norm watch once failed at
-# overlap 4 and completed at 1 -- if a full-watch gate is rerun, drop this back to 1.
-INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 4
+# production interval-10 inline watch; 8 regresses. A FULL inline norm watch once
+# failed at overlap 4 and completed at 1 -- a rerun of a full-watch gate needs a
+# lower limit reintroduced for that mode.
+COLLECTIVE_OVERLAP_LIMIT = 4
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
@@ -76,7 +76,7 @@ class WatchMode(StrEnum):
     DIAGNOSTIC = "diagnostic"
 
 
-def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per_task: int = 1) -> None:
+def _apply_hero_ep_runtime_defaults(*, processes_per_task: int = 1) -> None:
     env_defaults = dict(HERO_EP_RUNTIME_ENV)
     if processes_per_task > 1:
         # With one process per GPU, the per-process CUPTI sessions collide with each
@@ -86,9 +86,8 @@ def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per
     for name, value in env_defaults.items():
         os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
-    overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT if inline_watch_enabled else DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     flag_defaults = (
-        f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
+        f"{XLA_COLLECTIVE_OVERLAP_FLAG}={COLLECTIVE_OVERLAP_LIMIT}",
         *_XLA_FLAG_DEFAULTS,
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
     )
@@ -859,10 +858,7 @@ def run_grug(config: GrugRunConfig) -> None:
         raise ValueError("trainer.id must be set before dispatching grug training.")
 
     # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
-    inline_watch_enabled = trainer.watch.is_enabled and config.trainer.watch_mode == WatchMode.INLINE
-    _apply_hero_ep_runtime_defaults(
-        inline_watch_enabled=inline_watch_enabled, processes_per_task=config.processes_per_task
-    )
+    _apply_hero_ep_runtime_defaults(processes_per_task=config.processes_per_task)
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,
