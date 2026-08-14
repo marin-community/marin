@@ -1,7 +1,13 @@
 name: "Ops - Fork Ferry"
 
 # Ask Weaver to refresh each supported fork unit weekly. The refresh-fork skill owns the migration;
-# this workflow only names the forks to update.
+# this workflow only names the forks and launches one Weaver session per unit.
+#
+# The trigger is a Loom run, not a GitHub issue: the job mints a GitHub Actions OIDC token
+# (audience = Loom), exchanges it for a short-lived Loom token at /api/auth/federate, and POSTs
+# /api/runs. Loom trusts this workflow through a `githubFederation` mapping (repository + workflow
+# ref -> a profile), the same federated path the Grafana operator bridge uses from GCE. No stored
+# PAT and no coordination issues.
 
 on:
   schedule:
@@ -17,6 +23,10 @@ concurrency:
   group: fork-ferry
   cancel-in-progress: false
 
+env:
+  # Loom deployment this repo federates to. Override with a repo variable to target a non-prod Loom.
+  LOOM_URL: ${{ vars.LOOM_URL || 'https://loom.oa.dev' }}
+
 jobs:
   ferry:
     runs-on: ubuntu-latest
@@ -31,22 +41,44 @@ jobs:
             forks: evalchemy
           - unit: harbor
             forks: harbor
-    permissions: {}
+    permissions:
+      id-token: write  # mint the OIDC token Loom federates; nothing else is needed
     steps:
-      - name: Request refresh of ${{ matrix.unit }}
+      - name: Launch a Weaver refresh session for ${{ matrix.unit }}
         if: ${{ github.event.inputs.unit == '' || github.event.inputs.unit == matrix.unit }}
         env:
-          # This PAT must belong to a Loom-approved CI account. Loom ignores weaverbot's own comments.
-          GH_TOKEN: ${{ secrets.WEAVERBOT_GH_TOKEN }}
+          # Loom profile bound to this workflow's federation mapping; grants the session fork write.
+          LOOM_PROFILE: ${{ vars.LOOM_FORK_FERRY_PROFILE }}
           FORKS: ${{ matrix.forks }}
           UNIT: ${{ matrix.unit }}
         run: |
-          trigger_actor=$(gh api user --jq .login)
-          if [[ "$trigger_actor" == "weaverbot" ]]; then
-            echo "::error::WEAVERBOT_GH_TOKEN authenticates as weaverbot, whose comments Loom ignores."
+          set -euo pipefail
+          if [[ -z "$LOOM_PROFILE" ]]; then
+            echo "::error::Set the LOOM_FORK_FERRY_PROFILE repo variable to the Loom profile bound to this workflow's federation."
             exit 1
           fi
-          gh issue create --repo "$GITHUB_REPOSITORY" \
-            --title "[fork-ferry] Refresh $UNIT (run $GITHUB_RUN_ID)" \
-            --label agent-generated \
-            --body "@weaverbot Use the refresh-fork skill to update $FORKS."
+
+          # GitHub Actions OIDC token, audience = Loom.
+          oidc=$(curl -sS --fail-with-body \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${LOOM_URL}" | jq -r .value)
+
+          # Exchange it for a short-lived Loom token.
+          loom_token=$(curl -sS --fail-with-body -X POST "${LOOM_URL}/api/auth/federate" \
+            -H 'Content-Type: application/json' \
+            -d "$(jq -n --arg token "$oidc" '{token: $token}')" | jq -r .token)
+
+          # Launch one visible, self-reporting Weaver session for this fork unit. idempotency_key
+          # keeps a rerun of the same weekly job from opening a second session.
+          goal="Use the refresh-fork skill to refresh ${FORKS} toward upstream: stage the fork branch, pin Marin at the staged tip, run the fork's e2e, and on green open the Marin pin PR (or file the descriptor's blocker issue on a real external blocker)."
+          curl -sS --fail-with-body -X POST "${LOOM_URL}/api/runs" \
+            -H "Authorization: Bearer $loom_token" \
+            -H 'Content-Type: application/json' \
+            -d "$(jq -n \
+              --arg profile "$LOOM_PROFILE" \
+              --arg key "fork-ferry-${UNIT}-${GITHUB_RUN_ID}" \
+              --arg repo "$GITHUB_REPOSITORY" \
+              --arg title "Fork ferry: ${UNIT}" \
+              --arg goal "$goal" \
+              '{profile: $profile, idempotency_key: $key, source: "fork-ferry", channel: "operator",
+                session: {repo: $repo, title: $title, goal: $goal}}')"
