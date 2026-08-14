@@ -14,7 +14,7 @@ TIMEOUT_SECONDS="${AR_TIMEOUT:-21600}"
 IRIS=(uv run iris --config lib/iris/config/marin.yaml)
 JOB="/mwittmann/${RUN_ID}-coord"
 
-STALL_LIMIT="${AR_STALL_LIMIT:-1200}"  # kill if no new W&B step for this many seconds
+STALL_LIMIT="${AR_STALL_LIMIT:-1200}"  # warn if no new W&B step for this many seconds
 
 deadline=$((SECONDS + TIMEOUT_SECONDS))
 state=""
@@ -51,10 +51,12 @@ except Exception:
     last_step=$step
     last_progress=$SECONDS
   elif (( last_step >= 0 && step >= 0 && SECONDS - last_progress > STALL_LIMIT )); then
-    echo "STALL: no step past ${last_step} for >${STALL_LIMIT}s; capturing summary and killing ${JOB}" >&2
+    # Warn only -- do NOT kill. A gang preempted and restoring from checkpoint logs no
+    # new steps for 15+ minutes while W&B stays 'running'; the kill variant terminated a
+    # healthy recovering run at step 65 (ar8062-15). A true wedge is bounded by TIMEOUT.
+    echo "STALL-WARN: no step past ${last_step} for $((SECONDS - last_progress))s (not killing)" >&2
     "${IRIS[@]}" job summary "${JOB}/grug-train-${RUN_ID}" >&2 || true
-    "${IRIS[@]}" job kill "$JOB" >&2 || true
-    exit 1
+    last_progress=$SECONDS  # re-arm so the warning repeats once per window, not every poll
   fi
   sleep 120
 done
