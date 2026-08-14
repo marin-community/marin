@@ -327,7 +327,15 @@ def _fused(x, norm_weight, w_down, w_up, eps, batch_axes):
 
 def _fused_fwd(x, norm_weight, w_down, w_up, eps, batch_axes):
     del batch_axes
-    return _exact_forward(x, norm_weight, w_down, w_up, eps)
+    output, residuals = _exact_forward(x, norm_weight, w_down, w_up, eps)
+    return output, RmsGatedNormSelectiveResiduals(
+        x=x,
+        norm_weight=norm_weight,
+        w_down=w_down,
+        w_up=w_up,
+        inverse_rms=residuals.inverse_rms,
+        gate_preactivation=residuals.gate_preactivation,
+    )
 
 
 def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
@@ -336,24 +344,31 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
     del eps
     x = residuals.x
     x_flat = x.reshape((-1, x.shape[-1]))
-    output_cotangent = output_cotangent.reshape(residuals.normalized.shape)
-    up_reverse = exact_gated_norm_up_reverse(output_cotangent, residuals)
-    gate_hidden_cotangent = jnp.einsum("td,rd->tr", up_reverse.gate_accumulator, residuals.w_up)
+    output_cotangent = output_cotangent.reshape(x_flat.shape)
+    normalized = (x_flat.astype(jnp.float32) * residuals.inverse_rms[:, None] * residuals.norm_weight).astype(
+        x_flat.dtype
+    )
+    gate_hidden = jax.nn.silu(residuals.gate_preactivation)
+    gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, residuals.w_up))
+    gate_cotangent = output_cotangent * normalized
+    gate_accumulator = gate_cotangent * (gate * (1 - gate))
+    w_up_cotangent = jnp.einsum("tr,td->rd", gate_hidden, gate_accumulator)
+    gate_hidden_cotangent = jnp.einsum("td,rd->tr", gate_accumulator, residuals.w_up)
     _, silu_pullback = jax.vjp(jax.nn.silu, residuals.gate_preactivation)
     gate_preactivation_cotangent = silu_pullback(gate_hidden_cotangent)[0]
-    w_down_cotangent = jnp.einsum("td,tr->dr", residuals.normalized, gate_preactivation_cotangent)
+    w_down_cotangent = jnp.einsum("td,tr->dr", normalized, gate_preactivation_cotangent)
     row_dot_partial, _ = rms_backward_producer(
         gate_preactivation_cotangent,
         residuals.w_down,
         output_cotangent,
-        residuals.gate,
+        gate,
         x_flat,
         residuals.norm_weight,
         residuals.inverse_rms,
     )
     row_dot = jnp.sum(row_dot_partial, axis=-1)
     low_rank_cotangent = jnp.einsum("tr,dr->td", gate_preactivation_cotangent, residuals.w_down)
-    unweighted_cotangent = low_rank_cotangent + output_cotangent * residuals.gate
+    unweighted_cotangent = low_rank_cotangent + output_cotangent * gate
     normalized_x = x_flat.astype(jnp.float32) * residuals.inverse_rms[:, None]
     norm_weight_cotangent = jnp.sum(unweighted_cotangent.astype(jnp.float32) * normalized_x, axis=0).astype(
         residuals.norm_weight.dtype
@@ -362,7 +377,7 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
         gate_preactivation_cotangent,
         residuals.w_down,
         output_cotangent,
-        residuals.gate,
+        gate,
         row_dot,
         x_flat,
         residuals.norm_weight,
@@ -371,7 +386,7 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
     # ``check_vma=False`` below permits the opaque CuTe dx to cross the custom-VJP boundary
     # without its varying-manual-axis annotation. All parameter gradients stay in JAX, so the
     # shard_map transpose owns their replicated-input reductions.
-    return x_cotangent, norm_weight_cotangent, w_down_cotangent, up_reverse.w_up
+    return x_cotangent, norm_weight_cotangent, w_down_cotangent, w_up_cotangent
 
 
 _fused.defvjp(_fused_fwd, _fused_bwd)
