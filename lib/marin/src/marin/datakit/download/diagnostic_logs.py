@@ -55,7 +55,7 @@ from marin.datakit.ingestion_manifest import (
     write_ingestion_metadata_json,
 )
 from marin.datakit.normalize import normalize_step
-from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
+from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
@@ -1368,7 +1368,7 @@ def download_ghalogs_step(
             "download_url": GHALOGS_DOWNLOAD_URL,
             "archive_bytes": GHALOGS_ARCHIVE_BYTES,
             "archive_relative_path": GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH,
-            "source_path": datakit_source_key(source_path),
+            "source_path": source_path,
             "source_label": source.source_label,
             "source_content_fingerprint": source.fingerprint(),
         },
@@ -1397,7 +1397,7 @@ def materialize_ghalogs_step(
         ),
         hash_attrs={
             "version": "2026.07.31",
-            "source_path": datakit_source_key(source_path),
+            "source_path": source_path,
             "source_label": source.source_label,
             "max_members": max_members,
             "job_log_chunk_bytes": _GHALOGS_JOB_LOG_CHUNK_BYTES,
@@ -1429,7 +1429,7 @@ def materialize_ghalogs_partition_step(
         hash_attrs={
             "version": "v2",
             "source_label": source.source_label,
-            "materialized_input": datakit_source_key(materialized.output_path),
+            "materialized_input": materialized.output_path,
             "partition": partition.value,
             "source_content_fingerprint": source.fingerprint(),
         },

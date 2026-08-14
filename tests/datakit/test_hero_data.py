@@ -23,8 +23,8 @@ MANIFEST = hero_data.MANIFEST_PATH
 
 @pytest.fixture(autouse=True)
 def _marin_prefix(monkeypatch):
-    # Pin the sole CoreWeave Datakit prefix instead of reading ambient worker
-    # metadata. Placement must not change the checked hero artifact identities.
+    # Hero data has one CoreWeave location. Pin it instead of inheriting the test
+    # process's prefix because some step hashes include resolved paths.
     monkeypatch.setenv("MARIN_PREFIX", PREFIX)
 
 
