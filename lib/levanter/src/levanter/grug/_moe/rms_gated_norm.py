@@ -373,7 +373,6 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
     )
     row_dot = jnp.sum(row_dot_partial, axis=-1)
     norm_weight_cotangent = jnp.sum(norm_weight_partial, axis=0).astype(residuals.norm_weight.dtype)
-    norm_weight_cotangent = jax.lax.psum(norm_weight_cotangent, axis_name=batch_axes)
     x_cotangent = rms_backward_consumer(
         gate_preactivation_cotangent,
         residuals.w_down,
