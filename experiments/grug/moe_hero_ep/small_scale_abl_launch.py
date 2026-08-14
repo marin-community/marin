@@ -516,7 +516,9 @@ def build_small_run(
 )
 @click.option(
     "--qb-histogram/--no-qb-histogram",
-    default=False,
+    # The #8062 ladder's EP arms ran the histogram estimator; it measures lower drops
+    # at neutral loss (1.32% -> 1.25% at capacity factor 2.0) and +0.9% median tok/s.
+    default=True,
     show_default=True,
     help="Estimate the QB quantile with the histogram estimator instead of the top-k mean (the hero default).",
 )
