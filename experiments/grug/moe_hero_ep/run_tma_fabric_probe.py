@@ -30,10 +30,8 @@ def main() -> int:
             str(binary),
             "-std=c++17",
             f"-gencode=arch=compute_{_ARCH.removeprefix('sm_')},code={_ARCH}",
-            # The CUDA wheels ship no static runtime, so link the shared one and point the
-            # linker at the wheel's lib directory rather than nvcc's default toolkit layout.
-            "--cudart",
-            "shared",
+            # The wheel ships libcudart_static.a and libcudadevrt.a but no libcudart.so symlink,
+            # so keep nvcc's static default and just point it at the wheel's lib directory.
             "-lcuda",
         ]
         for include_dir in _cuda_include_dirs():
