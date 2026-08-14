@@ -77,6 +77,8 @@ def _jax_dist_init_timeout() -> int:
     if timeout <= 0:
         raise ValueError(f"{JAX_DIST_INIT_TIMEOUT_ENV} must be positive, got {timeout}")
     return timeout
+
+
 # Pin the coordination heartbeat timeout instead of inheriting JAX's default.
 # This bounds how long healthy ranks wait after a peer process disappears before
 # JAX fate sharing tears the distributed world down and Iris can retry the gang.
@@ -188,7 +190,15 @@ def _enable_xla_autotune_cache() -> None:
     if any(flag.partition("=")[0] == _XLA_AUTOTUNE_CACHE_DIR_FLAG for flag in xla_flags.split()):
         return
 
+    # The mount is node-local, so a task running one process per GPU puts several writers in one
+    # directory, where they race each other's temp entries and a reader hits NOT_FOUND on a file a
+    # neighbour already moved. Give each process its own subdirectory: they autotune the same
+    # fusions independently instead of sharing, which costs some compile time and keeps the cache
+    # usable at all.
     autotune_dir = f"{SCRATCH_CACHE_PATH}/{_XLA_AUTOTUNE_CACHE_SUBDIR}"
+    process_index = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV)
+    if process_index is not None:
+        autotune_dir = f"{autotune_dir}/process-{process_index}"
     try:
         os.makedirs(autotune_dir, exist_ok=True)
     except OSError as exc:
