@@ -23,11 +23,13 @@ uv run iris --cluster=marin job run --no-wait \
 - `--no-wait` returns immediately; the command prints the Iris job ID
   (`/<user>/iris-run-job-YYYYMMDD-HHMMSS`). Export it as `JOB_ID` for the
   stop command below.
-- `SMOKE_RUN_ID` is required by the ferry. The driver writes outputs under
-  `marin_temp_bucket(ttl_days=1, prefix=f"datakit-smoke/{SMOKE_RUN_ID}")` and
-  records that absolute prefix in `FERRY_STATUS_PATH` when configured.
-- Leave `MARIN_PREFIX` unset. Iris derives the region-local stable prefix used
-  by the download cache; the per-run outputs use the one-day temp prefix above.
+- `SMOKE_RUN_ID` is required by the ferry. It namespaces outputs under
+  `$MARIN_PREFIX/datakit-smoke/$SMOKE_RUN_ID/`. The output includes
+  `download`, `normalize`, `minhash`, `fuzzy_dups`, `verify_fuzzy_dups`,
+  `consolidate`, and `tokens`.
+- `MARIN_PREFIX` defaults to `marin_temp_bucket(ttl_days=1)`
+  (`gs://marin-<region>/tmp/ttl=1d/...`). Override with `-e MARIN_PREFIX gs://...`
+  for persistence or a specific bucket.
 - Use `--cluster=marin` (prod), not `--config=lib/iris/config/marin-dev.yaml`
   — the dev config needs OS Login impersonation that dev SAs typically lack.
 

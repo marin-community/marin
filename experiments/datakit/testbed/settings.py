@@ -19,8 +19,8 @@ TESTBED_SEQ_LEN: int = 4096
 TESTBED_STAGING_REGION: str = "us-central1"
 """All raw dumps must be reachable without cross-region reads.
 
-Iris supplies a region-local ``MARIN_PREFIX`` when the testbed is launched in
-this region; every source must either be pre-staged there or downloadable into it.
+The ferry's ``MARIN_PREFIX`` pins to ``gs://marin-us-central1/...``; every
+source in the registry must either be pre-staged there or downloadable into it.
 """
 
 RAW_TARGET_TOTAL_TOKENS_B: float = 1000.0

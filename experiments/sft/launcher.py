@@ -55,7 +55,7 @@ Launch (a CPU coordinator job submits the training sub-job)::
 
     uv run iris --cluster=marin job run --job-name sft-coord --region us-east5 \\
       --cpu 1 --memory 2G --extra cpu --priority interactive --no-wait \\
-      -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" \\
+      -e MARIN_PREFIX gs://marin-us-east5 -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" \\
       -- python -m experiments.sft.configs.delphi_1e22 --accelerator v4-64
 
 The CoreWeave H100 path only changes the launch flags: ``--accelerator 8xH100`` and an
