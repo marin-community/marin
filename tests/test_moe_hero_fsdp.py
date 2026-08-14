@@ -210,11 +210,20 @@ def test_fused_reverse_matches_stock_autodiff_end_to_end(cpu_mesh, monkeypatch, 
     ``lib/levanter/tests/grug/test_quack_rms_cute.py`` on a GPU backend.
     """
     del cpu_mesh
+
+    def gate_silu_reverse(normalized, output_cotangent, gate, w_up, gate_preactivation):
+        gate_accumulator = output_cotangent * normalized * (gate * (1 - gate))
+        gate_hidden = jax.nn.silu(gate_preactivation)
+        w_up_cotangent = jnp.einsum("tr,td->rd", gate_hidden, gate_accumulator)
+        gate_hidden_cotangent = jnp.einsum("td,rd->tr", gate_accumulator, w_up)
+        _, silu_pullback = jax.vjp(jax.nn.silu, gate_preactivation)
+        return silu_pullback(gate_hidden_cotangent)[0], w_up_cotangent
+
     monkeypatch.setattr(
         rgn,
         "_backward_kernels",
         lambda: (
-            lambda normalized, output_cotangent, gate: output_cotangent * normalized * (gate * (1 - gate)),
+            gate_silu_reverse,
             rgn.exact_rms_backward_partials_reference,
             rgn.exact_rms_backward_recompute_consumer_reference,
         ),

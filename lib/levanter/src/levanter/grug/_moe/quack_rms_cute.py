@@ -20,6 +20,7 @@ import cutlass.cute as cute
 import cutlass.jax as cjax
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
 from levanter.grug._moe.quack_moe_cute import _cute_dtype
+import quack.copy_utils as copy_utils
 from quack.activation import dact_fn_map
 from quack.cute_dsl_utils import mlir_namedtuple
 from quack.epi_ops import (
@@ -34,6 +35,7 @@ from quack.epi_ops import (
 )
 from quack.gemm_act import GemmActMixin
 from quack.gemm_dact import GemmDActSm100
+from quack.gemm_default_epi import GemmDefaultEpiMixin, GemmDefaultSm100
 from quack.gemm_sm100 import GemmSm100
 from quack.gemm_tvm_ffi_utils import make_scheduler_args
 from quack.rounding import RoundingMode
@@ -54,6 +56,79 @@ _RMS_REVERSE_BLOCK_M = 64
 _RMS_REVERSE_BLOCK_D = 64
 
 
+class _GateAccumulatorInplace:
+    """Compute the Sigmoid-output cotangent into a donated normalized buffer."""
+
+    def __init__(self, dtype: type[cutlass.Numeric]):
+        self.dtype = dtype
+        self.num_threads = 256
+        self.threads_per_row = 16
+        self.vector_size = 128 // dtype.width
+        self.tile_mn = (
+            self.num_threads // self.threads_per_row,
+            self.threads_per_row * self.vector_size,
+        )
+
+    @cute.jit
+    def __call__(
+        self,
+        mNormalized: cute.Tensor,
+        mOutputCotangent: cute.Tensor,
+        mGate: cute.Tensor,
+        mGateAccumulator: cute.Tensor,
+        stream,
+    ):
+        tiled_copy = copy_utils.tiled_copy_2d(
+            self.dtype,
+            self.threads_per_row,
+            self.num_threads,
+            num_copy_elems=self.vector_size,
+        )
+        self.kernel(mNormalized, mOutputCotangent, mGate, mGateAccumulator, tiled_copy).launch(
+            grid=[
+                cute.ceil_div(mNormalized.shape[0], self.tile_mn[0]),
+                cute.ceil_div(mNormalized.shape[1], self.tile_mn[1]),
+                mNormalized.shape[2],
+            ],
+            block=[self.num_threads, 1, 1],
+            stream=stream,
+        )
+
+    @cute.kernel
+    def kernel(
+        self,
+        mNormalized: cute.Tensor,
+        mOutputCotangent: cute.Tensor,
+        mGate: cute.Tensor,
+        mGateAccumulator: cute.Tensor,
+        tiled_copy: cute.TiledCopy,
+    ):
+        thread_idx, _, _ = cute.arch.thread_idx()
+        tile_m, tile_n, batch_idx = cute.arch.block_idx()
+        normalized, output_cotangent, gate, gate_accumulator = (
+            cute.local_tile(tensor[None, None, batch_idx], self.tile_mn, (tile_m, tile_n))
+            for tensor in (mNormalized, mOutputCotangent, mGate, mGateAccumulator)
+        )
+        thread_copy = tiled_copy.get_slice(thread_idx)
+        normalized_gmem = thread_copy.partition_S(normalized)
+        output_cotangent_gmem = thread_copy.partition_S(output_cotangent)
+        gate_gmem = thread_copy.partition_S(gate)
+        gate_accumulator_gmem = thread_copy.partition_D(gate_accumulator)
+        normalized_rmem = cute.make_rmem_tensor_like(normalized_gmem)
+        output_cotangent_rmem = cute.make_rmem_tensor_like(output_cotangent_gmem)
+        gate_rmem = cute.make_rmem_tensor_like(gate_gmem)
+        gate_accumulator_rmem = cute.make_rmem_tensor_like(gate_accumulator_gmem)
+        copy_utils.copy(normalized_gmem, normalized_rmem)
+        copy_utils.copy(output_cotangent_gmem, output_cotangent_rmem)
+        copy_utils.copy(gate_gmem, gate_rmem)
+        one = self.dtype(1)
+        for i in cutlass.range(cute.size(gate_accumulator_rmem), unroll_full=True, vectorize=True):
+            gate_cotangent = (output_cotangent_rmem[i] * normalized_rmem[i]).to(self.dtype)
+            sigmoid_cotangent = (gate_rmem[i] * (one - gate_rmem[i])).to(self.dtype)
+            gate_accumulator_rmem[i] = (gate_cotangent * sigmoid_cotangent).to(self.dtype)
+        copy_utils.copy(gate_accumulator_rmem, gate_accumulator_gmem)
+
+
 def _max_active_clusters(cluster_mnk: tuple[int, int, int]) -> int:
     """Size the SM100 persistent grid without relying on PyTorch's CUDA runtime."""
     if jax.default_backend() == "cpu":
@@ -69,6 +144,88 @@ def _max_active_clusters(cluster_mnk: tuple[int, int, int]) -> int:
         raise ValueError(f"RMS-GatedNorm CuTe kernels require SM100, got {device.device_kind} ({compute_capability})")
     cluster_size = cluster_mnk[0] * cluster_mnk[1]
     return _SM100_MULTIPROCESSORS // cluster_size
+
+
+@cute_launcher_factory
+def _build_gate_silu_reverse_launcher(
+    *,
+    a_dtype: type[cutlass.Numeric],
+    tile_mn: tuple[int, int],
+    cluster_mnk: tuple[int, int, int],
+    max_active_clusters: int,
+    max_swizzle: int,
+):
+    """Build output-gate reverse, SiLU reverse, and up-weight reverse as one call."""
+
+    @cute.jit
+    def launcher(
+        stream,
+        mNormalizedAndGateAccumulator,
+        mOutputCotangent,
+        mGate,
+        mWUp,
+        mGatePreactivation,
+        mGatePreactivationCotangent,
+        mGateHidden,
+        mWUpCotangent,
+    ):
+        _GateAccumulatorInplace(a_dtype)(
+            mNormalizedAndGateAccumulator,
+            mOutputCotangent,
+            mGate,
+            mNormalizedAndGateAccumulator,
+            stream,
+        )
+
+        dact_gemm = GemmDActSm100(
+            _ACCUMULATOR_DTYPE,
+            a_dtype,
+            tile_mn,
+            cluster_mnk,
+            gather_A=False,
+            use_clc_persistence=False,
+        )
+        dact_epilogue = GemmActMixin.EpilogueArguments(mGateHidden, dact_fn_map["silu"])
+        scheduler = make_scheduler_args(max_active_clusters, max_swizzle, None)
+        dact_gemm(
+            mNormalizedAndGateAccumulator,
+            mWUp,
+            mGatePreactivationCotangent,
+            mGatePreactivation,
+            dact_epilogue,
+            scheduler,
+            None,
+            stream,
+        )
+
+        gate_hidden_transposed = cute.make_tensor(
+            mGateHidden.iterator,
+            cute.select(mGateHidden.layout, mode=[1, 0, 2]),
+        )
+        gate_accumulator_transposed = cute.make_tensor(
+            mNormalizedAndGateAccumulator.iterator,
+            cute.select(mNormalizedAndGateAccumulator.layout, mode=[1, 0, 2]),
+        )
+        weight_gemm = GemmDefaultSm100(
+            _ACCUMULATOR_DTYPE,
+            a_dtype,
+            tile_mn,
+            cluster_mnk,
+            gather_A=False,
+            use_clc_persistence=False,
+        )
+        weight_gemm(
+            gate_hidden_transposed,
+            gate_accumulator_transposed,
+            mWUpCotangent,
+            None,
+            GemmDefaultEpiMixin.EpilogueArguments(),
+            scheduler,
+            None,
+            stream,
+        )
+
+    return launcher
 
 
 class _GemmRmsBackwardPartialsMixin(GemmActMixin):
@@ -482,6 +639,71 @@ def quack_gate_accumulator_inplace(
         output_cotangent,
         gate,
     )
+
+
+def quack_coda_gate_silu_reverse(
+    normalized: jax.Array,
+    output_cotangent: jax.Array,
+    gate: jax.Array,
+    w_up: jax.Array,
+    gate_preactivation: jax.Array,
+    *,
+    tile_mn: tuple[int, int] = _DEFAULT_TILE_MN,
+    cluster_mnk: tuple[int, int, int] = _DEFAULT_CLUSTER_MNK,
+    max_swizzle: int = _DEFAULT_MAX_SWIZZLE,
+) -> tuple[jax.Array, jax.Array]:
+    """Return gate-preactivation and up-weight cotangents without exposing gate dY."""
+    if normalized.ndim != 2 or normalized.shape != output_cotangent.shape or normalized.shape != gate.shape:
+        raise ValueError("gate reverse full-width inputs must be matching rank-2 arrays")
+    rows, hidden_dim = normalized.shape
+    if w_up.ndim != 2:
+        raise ValueError("w_up must be rank 2")
+    rank, w_hidden_dim = w_up.shape
+    if w_hidden_dim != hidden_dim or gate_preactivation.shape != (rows, rank):
+        raise ValueError("gate reverse contraction dimensions do not agree")
+    if not (
+        normalized.dtype
+        == output_cotangent.dtype
+        == gate.dtype
+        == w_up.dtype
+        == gate_preactivation.dtype
+        == jnp.bfloat16
+    ):
+        raise ValueError("gate reverse requires matching BF16 inputs")
+    if rows % _RMS_REVERSE_BLOCK_M or hidden_dim % _RMS_REVERSE_BLOCK_D:
+        raise ValueError("gate reverse dimensions must align with the elementwise tiles")
+
+    launcher = _build_gate_silu_reverse_launcher(
+        a_dtype=_cute_dtype(normalized.dtype),
+        tile_mn=tile_mn,
+        cluster_mnk=cluster_mnk,
+        max_active_clusters=_max_active_clusters(cluster_mnk),
+        max_swizzle=max_swizzle,
+    )
+    tensor_spec = cjax.TensorSpec
+    matrix_spec = tensor_spec(mode=_MATRIX_MODE, divisibility=_MATRIX_DIVISIBILITY, static=False)
+    output_shape_dtype = (
+        jax.ShapeDtypeStruct((1, rows, hidden_dim), normalized.dtype),
+        jax.ShapeDtypeStruct((1, rows, rank), normalized.dtype),
+        jax.ShapeDtypeStruct((1, rows, rank), normalized.dtype),
+        jax.ShapeDtypeStruct((1, rank, hidden_dim), normalized.dtype),
+    )
+    call = cutlass_call(
+        launcher,
+        input_output_aliases={0: 0},
+        output_shape_dtype=output_shape_dtype,
+        input_spec=(matrix_spec,) * 5,
+        output_spec=(matrix_spec,) * 4,
+        use_static_tensors=False,
+    )
+    _, gate_preactivation_cotangent, _, w_up_cotangent = call(
+        normalized[None, :, :],
+        output_cotangent[None, :, :],
+        gate[None, :, :],
+        w_up[None, :, :],
+        gate_preactivation[None, :, :],
+    )
+    return gate_preactivation_cotangent[0], w_up_cotangent[0]
 
 
 @functools.lru_cache(maxsize=None)
