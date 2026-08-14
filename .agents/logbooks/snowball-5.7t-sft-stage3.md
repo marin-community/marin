@@ -51,3 +51,5 @@ uv run iris --cluster cw-rno2a job run \
 - Source bundle: Iris workspace bundle from `8274751d29`
 - Initial state: the parent created eight H100×8 workers at interactive priority; all 64 processes joined the JAX rendezvous with zero failures and zero preemptions
 - Babysitter: 15-minute cadence; stop after the first finite training loss for this launch request, then continue campaign monitoring through completion
+
+At 14:40 UTC, the run had banked 44 of 1,888 steps. Step 44 reported finite loss 0.634 at approximately 4.3 seconds per step. The Iris parent and all eight training tasks remained running with zero failures and zero preemptions.
