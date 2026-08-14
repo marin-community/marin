@@ -1422,3 +1422,13 @@ author: Rafal Wojdyla
 - East progress: `nemotron_cc_code_v1/all` reached 1,600 of 2,098 shards with 32 live workers and zero dead workers. East is now the only active partition.
 - Issue update: None. Wait for the full 292-source and 166,775-shard verification before the final major update.
 - Next action: Continue the East root through its final 43 source artifacts, then run the full output verification.
+
+### 2026-08-14 04:13 UTC - Partial production merge started
+
+- Selection: Chose 128 completed sources with the smallest shard counts. An exact preflight check found one successful canonical Harrier artifact and one successful fuzzy-duplicate artifact for each source. Normalized, canonical, and fuzzy-duplicate Parquet shard names match for all 128 sources.
+- Exclusion: The selector and launch command exclude `common-crawl-focus-2026-22`. This source is not part of the job.
+- Scope: The selected sources contain 128 shards in total. The job writes to the production `datakit/embed/harrier-all` prefix.
+- Job: `/rav/harrier-merge-128-complete-no-focus-20260814-batch-v1` targets East-02 at batch priority. It uses eight concurrent source steps and one shared Zephyr pool with 16 CPU workers.
+- Backfill state: The East fuzzy-duplicate root remains active. The durable backfill count reached 166,656 of 166,775 shards before this merge launch.
+- Issue update: None. Report the partial merge after it completes, or include it with the final backfill verification.
+- Next action: Monitor both jobs. Verify the 128 merged artifacts after the merge succeeds. Complete the full 292-source and 166,775-shard backfill verification after the East root succeeds.
