@@ -8,6 +8,7 @@ import bz2
 import gzip
 import json
 import lzma
+import os
 import threading
 from datetime import UTC, datetime
 
@@ -40,9 +41,8 @@ def test_cp_handles_the_awkward_destination_shapes(tree, tmp_path, monkeypatch):
     """A prefix copy mirrors the tree; the shapes around it must not silently misfire.
 
     A directory without -r is an error rather than a partial copy, a missing source is
-    an error rather than "0 objects", a -r whose source is a single object keeps that
-    object's name, and a destination with no directory component is written as a file
-    rather than created as a directory.
+    an error rather than "0 objects", and file destinations are not silently turned
+    into directories.
     """
     run = CliRunner().invoke
 
@@ -58,12 +58,156 @@ def test_cp_handles_the_awkward_destination_shapes(tree, tmp_path, monkeypatch):
 
     result = run(cli, ["cp", "-r", str(tree / "b.txt"), str(tmp_path / "file-out")])
     assert result.exit_code == 0, result.output
-    assert (tmp_path / "file-out" / "b.txt").read_text() == "hello"
+    assert (tmp_path / "file-out").read_text() == "hello"
 
     monkeypatch.chdir(tmp_path)
     result = run(cli, ["cp", str(tree / "b.txt"), "bare.txt"])
     assert result.exit_code == 0, result.output
     assert (tmp_path / "bare.txt").read_text() == "hello"
+
+
+def test_cp_file_to_existing_directory_preserves_source_name(tree, tmp_path):
+    destination = tmp_path / "downloads"
+    destination.mkdir()
+
+    result = CliRunner().invoke(cli, ["cp", str(tree / "b.txt"), str(destination)])
+
+    assert result.exit_code == 0, result.output
+    assert (destination / "b.txt").read_text() == "hello"
+
+
+def test_cp_multiple_files_places_each_beneath_destination(tree, tmp_path):
+    destination = tmp_path / "downloads"
+
+    result = CliRunner().invoke(
+        cli,
+        ["cp", str(tree / "b.txt"), str(tree / "sub" / "c.txt"), str(destination)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (destination / "b.txt").read_text() == "hello"
+    assert (destination / "c.txt").read_text() == "nested"
+
+
+def test_cp_expands_quoted_globs(tree, tmp_path):
+    destination = tmp_path / "downloads"
+
+    result = CliRunner().invoke(cli, ["cp", str(tree / "*.txt"), str(destination)])
+
+    assert result.exit_code == 0, result.output
+    assert (destination / "b.txt").read_text() == "hello"
+
+
+def test_cp_no_clobber_preserves_existing_destination(tree, tmp_path):
+    destination = tmp_path / "downloads"
+    destination.mkdir()
+    (destination / "b.txt").write_text("keep")
+
+    result = CliRunner().invoke(cli, ["cp", "--no-clobber", str(tree / "b.txt"), str(destination)])
+
+    assert result.exit_code == 0, result.output
+    assert (destination / "b.txt").read_text() == "keep"
+
+
+def test_mv_file_to_directory_removes_source(tree, tmp_path):
+    destination = tmp_path / "archive"
+    destination.mkdir()
+
+    result = CliRunner().invoke(cli, ["mv", str(tree / "b.txt"), str(destination)])
+
+    assert result.exit_code == 0, result.output
+    assert not (tree / "b.txt").exists()
+    assert (destination / "b.txt").read_text() == "hello"
+
+
+def test_rsync_copies_changed_files_and_deletes_only_when_requested(tmp_path):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    destination.mkdir()
+    (source / "same.txt").write_text("same")
+    (source / "changed.txt").write_text("new-value")
+    (source / "new.txt").write_text("new")
+    (destination / "same.txt").write_text("same")
+    (destination / "changed.txt").write_text("old")
+    (destination / "extra.txt").write_text("keep unless --delete is passed")
+
+    result = CliRunner().invoke(cli, ["rsync", str(source), str(destination)])
+
+    assert result.exit_code == 0, result.output
+    assert (destination / "changed.txt").read_text() == "new-value"
+    assert (destination / "new.txt").read_text() == "new"
+    assert (destination / "extra.txt").exists()
+
+    dry_run = CliRunner().invoke(cli, ["rsync", "--delete", "--dry-run", str(source), str(destination)])
+
+    assert dry_run.exit_code == 0, dry_run.output
+    assert (destination / "extra.txt").exists()
+    assert "delete" in dry_run.output
+
+    result = CliRunner().invoke(cli, ["rsync", "--delete", str(source), str(destination)])
+
+    assert result.exit_code == 0, result.output
+    assert not (destination / "extra.txt").exists()
+
+
+def test_rsync_checksum_detects_equal_sized_changes(tmp_path):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    destination.mkdir()
+    (source / "value.txt").write_text("new")
+    (destination / "value.txt").write_text("old")
+    timestamp = 1_700_000_000
+    os.utime(source / "value.txt", (timestamp, timestamp))
+    os.utime(destination / "value.txt", (timestamp, timestamp))
+
+    result = CliRunner().invoke(cli, ["rsync", str(source), str(destination)])
+    assert result.exit_code == 0, result.output
+    assert (destination / "value.txt").read_text() == "old"
+
+    result = CliRunner().invoke(cli, ["rsync", "--checksum", str(source), str(destination)])
+    assert result.exit_code == 0, result.output
+    assert (destination / "value.txt").read_text() == "new"
+
+
+def test_rsync_detects_equal_sized_files_with_different_mtimes(tmp_path):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    destination.mkdir()
+    (source / "value.txt").write_text("new")
+    (destination / "value.txt").write_text("old")
+    os.utime(source / "value.txt", (1_700_000_001, 1_700_000_001))
+    os.utime(destination / "value.txt", (1_700_000_000, 1_700_000_000))
+
+    result = CliRunner().invoke(cli, ["rsync", str(source), str(destination)])
+
+    assert result.exit_code == 0, result.output
+    assert (destination / "value.txt").read_text() == "new"
+
+
+def test_rsync_rejects_overlapping_directories(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "value.txt").write_text("value")
+
+    result = CliRunner().invoke(cli, ["rsync", str(source), str(source / "nested")])
+
+    assert result.exit_code != 0
+    assert not (source / "nested").exists()
+
+
+def test_hash_reports_md5_and_crc32c_in_base64(tmp_path):
+    path = tmp_path / "digits.txt"
+    path.write_bytes(b"123456789")
+
+    result = CliRunner().invoke(cli, ["hash", str(path)])
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert lines[0].split() == ["url", "md5", "crc32c"]
+    assert lines[2].split() == [str(path), "JfnnlDI7RTiF9RgfG2JNCw==", "4waSgw=="]
 
 
 def test_rm_requires_recursive_for_directories(tree):
@@ -219,6 +363,13 @@ def test_ls_long_renders_local_directory(tree):
     assert lines[0].split() == ["size", "modified", "name"]
     assert any(line.endswith("b.txt") for line in lines)
     assert any(line.endswith("sub/") for line in lines)
+
+
+def test_ls_recursive_renders_paths_relative_to_the_listed_directory(tree):
+    result = CliRunner().invoke(cli, ["ls", "-R", str(tree)])
+
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines() == ["sub/", "b.txt", "sub/c.txt"]
 
 
 def test_ls_glob_renders_matches_with_listing_metadata(monkeypatch):

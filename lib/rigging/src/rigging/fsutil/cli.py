@@ -9,12 +9,13 @@ name two different backends. Bare ``fsutil`` opens the interactive browser.
 """
 
 import logging
-import shutil
 import sys
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import click
 from fsspec import AbstractFileSystem
@@ -25,6 +26,7 @@ from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.s3_compat import s3_credentials, s3_endpoint
 from rigging.filesystem.storage_path import StoragePath
+from rigging.fsutil.hashing import file_hashes, format_digest
 from rigging.fsutil.listing import (
     ROOT,
     Entry,
@@ -36,6 +38,14 @@ from rigging.fsutil.listing import (
 )
 from rigging.fsutil.parquet import PREVIEW_ROWS, MissingParquetReader, is_parquet, parquet_lines
 from rigging.fsutil.render import aligned_lines, file_lines, format_size, format_time, table_lines
+from rigging.fsutil.transfer import (
+    TransferError,
+    copy_plan,
+    execute_copies,
+    execute_sync,
+    remove_sources,
+    sync_plan,
+)
 from rigging.fsutil.tui import run as run_browser
 from rigging.fsutil.usage import (
     DEFAULT_PREFIX_DEPTH,
@@ -48,9 +58,6 @@ from rigging.fsutil.usage import (
 
 logger = logging.getLogger(__name__)
 
-# Streaming chunk for cross-backend copies, which cannot use a filesystem's own
-# server-side copy.
-_COPY_CHUNK = 8 * 1024 * 1024
 _RM_WORKERS = 8
 _S3_DELETE_BATCH = 1000
 _GCS_DELETE_BATCH = 20
@@ -58,6 +65,19 @@ _INTERACTIVE_PROGRESS_INTERVAL = 0.2
 _LOG_PROGRESS_INTERVAL = 10.0
 _ACTIVITY_BAR_WIDTH = 8
 _MAX_PROGRESS_PATH_LENGTH = 60
+
+_COMMANDS: list[click.Command] = []
+
+
+def fsutil_command(name: str | None = None) -> Callable[[Callable[..., Any]], click.Command]:
+    """Declare a subcommand for registration on the root command group."""
+
+    def register(function: Callable[..., Any]) -> click.Command:
+        command = click.command(name=name)(function)
+        _COMMANDS.append(command)
+        return command
+
+    return register
 
 
 @click.group(invoke_without_command=True)
@@ -73,7 +93,7 @@ def cli(ctx: click.Context, verbose: bool) -> None:
         ctx.invoke(browse)
 
 
-@cli.command()
+@fsutil_command()
 def buckets() -> None:
     """List the declared buckets and whether their backend is reachable."""
     rows = []
@@ -88,20 +108,27 @@ def buckets() -> None:
         click.echo(line)
 
 
-@cli.command("ls")
-@click.argument("url", default=ROOT)
+@fsutil_command("ls")
+@click.argument("urls", nargs=-1)
 @click.option("-l", "--long", is_flag=True, help="Show size and modification time.")
-def list_command(url: str, long: bool) -> None:
-    """List URL's immediate children or glob matches. With no URL, list the known buckets."""
-    entries = list_entries(url)
-    if not long:
-        for entry in entries:
-            click.echo(f"{entry.name}/" if entry.is_dir else entry.name)
-        return
-    _print_long_entries(entries)
+@click.option("-r", "-R", "--recursive", is_flag=True, help="List every descendant.")
+def list_command(urls: tuple[str, ...], long: bool, recursive: bool) -> None:
+    """List paths, immediate children, or glob matches. With no path, list known buckets."""
+    targets = urls or (ROOT,)
+    for index, url in enumerate(targets):
+        if len(targets) > 1:
+            if index:
+                click.echo()
+            click.echo(f"{url}:")
+        entries = list_entries(url, recursive=recursive)
+        if long:
+            _print_long_entries(entries)
+        else:
+            for entry in entries:
+                click.echo(f"{entry.name}/" if entry.is_dir else entry.name)
 
 
-@cli.command()
+@fsutil_command()
 @click.argument("url")
 @click.option("--raw", is_flag=True, help="Write bytes to stdout without formatting.")
 def cat(url: str, raw: bool) -> None:
@@ -114,7 +141,7 @@ def cat(url: str, raw: bool) -> None:
         click.echo(line)
 
 
-@cli.command()
+@fsutil_command()
 @click.argument("url")
 @click.option(
     "-n",
@@ -130,7 +157,7 @@ def head(url: str, lines: int) -> None:
         click.echo(line)
 
 
-@cli.command()
+@fsutil_command()
 @click.argument("url")
 def stat(url: str) -> None:
     """Print an object's metadata as the backend reports it."""
@@ -140,7 +167,7 @@ def stat(url: str) -> None:
         click.echo(line)
 
 
-@cli.command()
+@fsutil_command()
 @click.argument("url")
 def du(url: str) -> None:
     """Total the bytes and objects under a prefix."""
@@ -148,7 +175,7 @@ def du(url: str) -> None:
     click.echo(f"{format_size(size)}  ({size} bytes, {count} objects)  {url}")
 
 
-@cli.command()
+@fsutil_command()
 @click.argument("url")
 @click.option(
     "--prefix-threshold",
@@ -260,7 +287,7 @@ def _format_duration(seconds: float) -> str:
     return f"{remaining_seconds}s"
 
 
-@cli.command()
+@fsutil_command()
 @click.argument("pattern")
 def find(pattern: str) -> None:
     """List paths matching a glob pattern, e.g. 'gs://marin-us-central2/x/**/*.json'."""
@@ -270,33 +297,88 @@ def find(pattern: str) -> None:
         click.echo(f"{scheme}://{match}" if scheme else match)
 
 
-@cli.command()
-@click.argument("src")
-@click.argument("dst")
+@fsutil_command()
+@click.argument("urls", nargs=-1, required=True)
 @click.option("-r", "-R", "--recursive", is_flag=True, help="Copy a prefix and everything under it.")
-def cp(src: str, dst: str, recursive: bool) -> None:
-    """Copy between any two locations, including across backends."""
-    src_fs, src_path = filesystem_for(src)
-    dst_fs, dst_path = filesystem_for(dst)
-
-    if not src_fs.exists(src_path):
-        raise click.ClickException(f"{src} does not exist")
-
-    if not recursive:
-        if src_fs.isdir(src_path):
-            raise click.ClickException(f"{src} is a directory; pass -r to copy it recursively")
-        _copy_file(src_fs, src_path, dst_fs, dst_path)
-        click.echo(f"{src} -> {dst}")
-        return
-
-    copied = 0
-    for match in src_fs.find(src_path):
-        _copy_file(src_fs, match, dst_fs, _destination(match, src_path, dst_path))
-        copied += 1
-    click.echo(f"{src} -> {dst} ({copied} objects)")
+@click.option("-n", "--no-clobber", is_flag=True, help="Skip files that already exist at the destination.")
+def cp(urls: tuple[str, ...], recursive: bool, no_clobber: bool) -> None:
+    """Copy one or more sources to a file, directory, or object prefix."""
+    source_urls, destination_url = _transfer_arguments(urls)
+    try:
+        plan = copy_plan(source_urls, destination_url, recursive=recursive, no_clobber=no_clobber)
+        execute_copies(plan.copies)
+    except TransferError as error:
+        raise click.ClickException(str(error)) from error
+    for action in plan.copies:
+        click.echo(f"{action.source_url} -> {action.destination_url}")
+    for action in plan.skipped:
+        click.echo(f"skip {action.destination_url}")
 
 
-@cli.command()
+@fsutil_command()
+@click.argument("urls", nargs=-1, required=True)
+@click.option("-r", "-R", "--recursive", is_flag=True, help="Move a prefix and everything under it.")
+def mv(urls: tuple[str, ...], recursive: bool) -> None:
+    """Move or rename one or more sources, including across backends."""
+    source_urls, destination_url = _transfer_arguments(urls)
+    try:
+        plan = copy_plan(source_urls, destination_url, recursive=recursive, no_clobber=False)
+        execute_copies(plan.copies)
+        remove_sources(plan.sources)
+    except TransferError as error:
+        raise click.ClickException(str(error)) from error
+    for action in plan.copies:
+        click.echo(f"{action.source_url} -> {action.destination_url}")
+
+
+@fsutil_command()
+@click.argument("source")
+@click.argument("destination")
+@click.option("--delete", is_flag=True, help="Delete destination files absent from the source.")
+@click.option("--dry-run", is_flag=True, help="Print operations without changing the destination.")
+@click.option(
+    "--checksum",
+    is_flag=True,
+    help="Read equal-sized source and destination files and compare MD5 digests.",
+)
+def rsync(source: str, destination: str, delete: bool, dry_run: bool, checksum: bool) -> None:
+    """Synchronize the files beneath two directories or object prefixes."""
+    try:
+        plan = sync_plan(source, destination, delete=delete, checksum=checksum)
+        if not dry_run:
+            execute_sync(plan)
+    except TransferError as error:
+        raise click.ClickException(str(error)) from error
+    for action in plan.copies:
+        click.echo(f"copy {action.source_url} -> {action.destination_url}")
+    for action in plan.deletes:
+        click.echo(f"delete {action.url}")
+
+
+@fsutil_command("hash")
+@click.argument("urls", nargs=-1, required=True)
+@click.option("--hex", "hexadecimal", is_flag=True, help="Print hexadecimal digests instead of base64.")
+@click.option("--skip-md5", is_flag=True, help="Do not calculate MD5.")
+@click.option("--skip-crc32c", is_flag=True, help="Do not calculate CRC32C.")
+def hash_command(urls: tuple[str, ...], hexadecimal: bool, skip_md5: bool, skip_crc32c: bool) -> None:
+    """Calculate MD5 and CRC32C content hashes for complete files or objects."""
+    if skip_md5 and skip_crc32c:
+        raise click.UsageError("at least one hash must be enabled")
+    rows = []
+    for url in urls:
+        digests = file_hashes(url, include_md5=not skip_md5, include_crc32c=not skip_crc32c)
+        rows.append(
+            [
+                url,
+                format_digest(digests.md5, hexadecimal=hexadecimal),
+                format_digest(digests.crc32c, hexadecimal=hexadecimal),
+            ]
+        )
+    for line in table_lines(["url", "md5", "crc32c"], rows):
+        click.echo(line)
+
+
+@fsutil_command()
 @click.argument("url")
 @click.option("-r", "-R", "--recursive", is_flag=True, help="Remove a prefix and everything under it.")
 def rm(url: str, recursive: bool) -> None:
@@ -373,7 +455,7 @@ def _remove_batch(fs: AbstractFileSystem, files: list[str]) -> None:
         raise RuntimeError(f"S3 bulk delete failed: {details}")
 
 
-@cli.command()
+@fsutil_command()
 @click.argument("url", default=ROOT)
 def browse(url: str) -> None:
     """Open the interactive browser, starting at URL (default: the bucket list)."""
@@ -430,23 +512,14 @@ def _report_truncation(preview: Preview) -> None:
     )
 
 
-def _destination(match: str, src_path: str, dst_path: str) -> str:
-    """Where *match* lands under *dst_path*, mirroring its position under *src_path*.
-
-    A recursive copy whose source turns out to be a single object has nothing below the
-    source to mirror, so the object keeps its own name under the destination.
-    """
-    relative = match[len(src_path) :].lstrip("/") or match.rsplit("/", 1)[-1]
-    return f"{dst_path.rstrip('/')}/{relative}"
+def _transfer_arguments(urls: tuple[str, ...]) -> tuple[tuple[str, ...], str]:
+    if len(urls) < 2:
+        raise click.UsageError("requires at least one source and one destination")
+    return urls[:-1], urls[-1]
 
 
-def _copy_file(src_fs, src_path: str, dst_fs, dst_path: str) -> None:
-    """Stream one object between two filesystems, which may be different backends."""
-    parent, separator, _ = dst_path.rpartition("/")
-    if separator:
-        dst_fs.makedirs(parent, exist_ok=True)
-    with src_fs.open(src_path, "rb") as source, dst_fs.open(dst_path, "wb") as target:
-        shutil.copyfileobj(source, target, _COPY_CHUNK)
+for _command in _COMMANDS:
+    cli.add_command(_command)
 
 
 def main() -> None:

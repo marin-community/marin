@@ -116,12 +116,13 @@ def bucket_url(bucket: str) -> str:
     return f"{_SCHEME_FOR_STORE[spec.store]}://{spec.name}"
 
 
-def list_entries(url: str) -> list[Entry]:
+def list_entries(url: str, *, recursive: bool = False) -> list[Entry]:
     """List *url*'s immediate children or the entries matching a glob pattern.
 
     ``url`` may be :data:`ROOT`, in which case the declared buckets are the children.
     Glob matches are named relative to the non-pattern prefix, so matches remain
-    distinguishable when their basenames are the same.
+    distinguishable when their basenames are the same. Recursive listings name every
+    descendant relative to ``url``.
     """
     if url == ROOT:
         return [
@@ -130,7 +131,16 @@ def list_entries(url: str) -> list[Entry]:
 
     parsed = StoragePath(url)
     fs, path = filesystem_for(url)
-    if glob.has_magic(path):
+    if recursive and not glob.has_magic(path):
+        base = StoragePath(url)
+        entries = []
+        for item in fs.find(path, detail=True, withdirs=True).values():
+            if not is_child(path, item["name"]):
+                continue
+            qualified_url = _qualified_url(parsed, item["name"])
+            name = StoragePath(qualified_url).relative_to(base)
+            entries.append(_entry(parsed, item, name=name, url=qualified_url))
+    elif glob.has_magic(path):
         root = _glob_root(path)
         base = StoragePath(_qualified_url(parsed, root))
         entries = []

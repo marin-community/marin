@@ -8,11 +8,15 @@ an interactive browser over all of them.
 uv run fsutil                        # interactive browser, starting at the bucket list
 uv run fsutil buckets                # what is declared, and whether credentials are set
 uv run fsutil ls -l gs://marin-us-central2/scratch
+uv run fsutil ls -R gs://marin-us-central2/scratch/checkpoints
 uv run fsutil ls 's3://marin-us-east-02a/*/config.json'
 uv run fsutil cat s3://marin-us-east-02a/iris/my-job/config.json
 uv run fsutil du s3://marin-us-east-02a/iris/my-job
 uv run fsutil usage s3://marin-us-east-02a -o usage-report.md
 uv run fsutil cp -r s3://marin-us-east-02a/iris/my-job/logs /tmp/logs
+uv run fsutil mv /tmp/run.json gs://marin-us-central2/archive/
+uv run fsutil rsync --dry-run --delete /tmp/checkpoints gs://marin-us-central2/checkpoints
+uv run fsutil hash gs://marin-us-central2/archive/run.json
 uv run fsutil rm -R s3://marin-us-east-02a/tmp/expired-prefix
 ```
 
@@ -48,16 +52,38 @@ that touch its buckets; the rest keep working.
 
 | Command | What it does |
 |---------|--------------|
-| `ls [URL] [-l]` | Immediate children or glob matches; with no URL, the declared buckets. `-l` adds size and modification time |
+| `ls [URL ...] [-lR]` | Immediate children or glob matches; with no URL, the declared buckets. `-l` adds size and modification time; `-R` lists every descendant |
 | `cat URL [--raw]` | Print a file. Tabular JSON, JSONL, and parquet render as a table, and `--raw` writes stored bytes to stdout |
 | `head URL [-n N]` | Print the first N lines, or the first N rows of a parquet file |
 | `stat URL` | The object's metadata as the backend reports it |
 | `du URL` | Total bytes and object count beneath a prefix |
 | `usage URL [-o REPORT.md]` | Metadata-only prefix breakdown ranked by size and time since the newest write |
 | `find PATTERN` | Paths matching a glob, e.g. `gs://marin-us-central2/x/**/*.json` |
-| `cp SRC DST [-r]` | Copy between any two locations, including across backends |
+| `cp SRC ... DST [-r] [-n]` | Copy one or more sources between any backends. `-r` includes directories; `-n` preserves existing destination files |
+| `mv SRC ... DST [-r]` | Move or rename one or more sources. Sources are removed after every copy succeeds |
+| `rsync SRC DST [--delete] [--dry-run] [--checksum]` | Synchronize the files beneath two directories or prefixes |
+| `hash URL ... [--hex]` | Stream complete files and print MD5 and CRC32C digests in base64 or hexadecimal |
 | `rm URL [-r]` | Remove an object. `-r` or `-R` recursively removes a prefix; remote prefixes show object-count progress |
 | `browse [URL]` | The interactive browser |
+
+`cp` and `mv` append each source basename when the destination is an existing directory,
+ends in `/`, or receives multiple sources. A single source copied to any other destination
+uses that destination as the exact output name. `-r` is required for a directory. Transfers
+stream through the machine running `fsutil`, including copies between two object stores.
+Quoted glob sources are expanded by the source filesystem. `mv` finishes all copies before
+removing any source.
+
+`rsync` compares size and modification time first. For equal-sized local files with different
+times it compares MD5; object stores use provider MD5 metadata when both sides supply it. When
+neither side supplies comparable timestamps or digests, equal sizes are treated as unchanged.
+`--checksum` reads both equal-sized files and compares their MD5 digests regardless of metadata.
+Extra destination files remain by default. `--delete` removes them after all copies succeed.
+`--dry-run` prints the same copy and delete plan without changing the destination. Source and
+destination directories may not overlap.
+
+`hash` reads each complete object. Its columns are `url`, `md5`, and `crc32c`; digests use
+base64 by default. `--hex` selects hexadecimal output. `--skip-md5` and `--skip-crc32c`
+avoid calculating an unneeded digest.
 
 `du` scans prefixes with up to 128 concurrent metadata-bearing listings. S3 prefixes
 that exceed one listing page are split at the next `/` through three directory levels,
