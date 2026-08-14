@@ -90,9 +90,9 @@ class ListShard:
 
 _SCATTER_METADATA_FILENAME = "metadata.msgpack"
 
-# Number of parallel sidecar reads each reducer issues when building its
-# ScatterReader. Sidecars are small msgpack files (a few KB) and reads are
-# GCS GET-bound, so a modest pool keeps latency low without thrashing.
+# Number of parallel small-file reads (sidecars, parquet schema footers) each
+# reducer issues while building its ScatterReader. These reads are GCS
+# GET-bound, so a modest pool keeps latency low without thrashing.
 _SIDECAR_READ_CONCURRENCY = 32
 # Fraction of available memory available for merging.
 _SCATTER_READ_MEMORY_FRACTION = 0.4
@@ -319,13 +319,14 @@ def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
     Null on an all-None batch from one shard and Int64 from another.  This also
     handles arbitrary user-column dtype drift when DataFrames are written directly.
 
-    collect_schema() reads only parquet file-footer metadata (no row data).
-    The limit(0) concat derives the supertype schema without any I/O.  Casting
-    is applied as a lazy expression, so no data is scanned here.
+    collect_schema() reads only parquet file-footer metadata (no row data), so the
+    limit(0) concat derives the supertype schema without any further I/O and casting
+    is applied as a lazy expression.
     """
     if len(frames) <= 1:
         return frames
-    schemas = [f.collect_schema() for f in frames]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
+        schemas = list(pool.map(pl.LazyFrame.collect_schema, frames))
     if all(s == schemas[0] for s in schemas[1:]):
         return frames
     unified = pl.concat([f.limit(0) for f in frames], how="diagonal_relaxed").collect_schema()
