@@ -362,7 +362,7 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
         x_flat.astype(jnp.float32) * residuals.inverse_rms[:, None] * residuals.norm_weight
     ).astype(x_flat.dtype)
     w_down_cotangent = jnp.einsum("td,tr->dr", normalized_for_w_down, gate_preactivation_cotangent)
-    row_dot_partial, _ = rms_backward_producer(
+    row_dot_partial, norm_weight_partial = rms_backward_producer(
         gate_preactivation_cotangent,
         residuals.w_down,
         output_cotangent,
@@ -372,12 +372,7 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
         residuals.inverse_rms,
     )
     row_dot = jnp.sum(row_dot_partial, axis=-1)
-    low_rank_cotangent = jnp.einsum("tr,dr->td", gate_preactivation_cotangent, residuals.w_down)
-    unweighted_cotangent = low_rank_cotangent + output_cotangent * gate
-    normalized_x = x_flat.astype(jnp.float32) * residuals.inverse_rms[:, None]
-    norm_weight_cotangent = jnp.sum(unweighted_cotangent.astype(jnp.float32) * normalized_x, axis=0).astype(
-        residuals.norm_weight.dtype
-    )
+    norm_weight_cotangent = jnp.sum(norm_weight_partial, axis=0).astype(residuals.norm_weight.dtype)
     x_cotangent = rms_backward_consumer(
         gate_preactivation_cotangent,
         residuals.w_down,
