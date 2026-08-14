@@ -217,6 +217,7 @@ def build_backend_comparison_run(
     mok_like_num_devices: int = 4,
     mok_like_workspace_transport: str = MokLikeWorkspaceTransport.IN_PROCESS_PEER.value,
     num_experts: int = MOK_LIKE_MATCHED_NUM_EXPERTS,
+    mok_like_remat_mode: str = "offload_moe",
     mok_like_schedule_capacity_factor: float | None = None,
     mok_like_workspace_slots: int | None = None,
     forward_x_storage: MokLikeForwardXStorage | None = None,
@@ -332,6 +333,7 @@ def build_backend_comparison_run(
     common_model = dataclasses.replace(
         model,
         num_experts=num_experts,
+        mok_like_remat_mode=mok_like_remat_mode,
         num_shared_experts=1,
         capacity_factor=MATCHED_CAPACITY_FACTOR,
         # The fused kernel runs the routed and shared experts through one megakernel at a single
@@ -357,7 +359,7 @@ def build_backend_comparison_run(
                 workspace_transport=workspace_transport,
             ),
             expert_chunks=1,
-            remat_mode="offload_moe",
+            remat_mode=mok_like_remat_mode,
         )
         expert_axis_size = GPUS_PER_NODE
         remat_tag = "offload-moe"
@@ -601,6 +603,7 @@ def build_mok_like_run(
     mok_like_preset: MokLikeExperimentPreset = MokLikeExperimentPreset.PROMOTED_DROPLESS_V12,
     mok_like_num_devices: int = 4,
     num_experts: int = MOK_LIKE_MATCHED_NUM_EXPERTS,
+    mok_like_remat_mode: str = "offload_moe",
     mok_like_workspace_transport: str = MokLikeWorkspaceTransport.IN_PROCESS_PEER.value,
     mok_like_schedule_capacity_factor: float | None = None,
     mok_like_workspace_slots: int | None = None,
@@ -622,6 +625,7 @@ def build_mok_like_run(
         mok_like_preset=mok_like_preset,
         mok_like_num_devices=mok_like_num_devices,
         num_experts=num_experts,
+        mok_like_remat_mode=mok_like_remat_mode,
         mok_like_workspace_transport=mok_like_workspace_transport,
         num_nodes=num_nodes,
         num_layers=num_layers,
@@ -701,6 +705,14 @@ def build_mok_like_run(
     show_default=True,
     callback=lambda ctx, param, value: int(value),
     help="Expert-group size. Above four ranks the group spans processes and requires fabric transport.",
+)
+@click.option(
+    "--mok-like-remat-mode",
+    type=click.Choice(["offload_moe", "save_moe"]),
+    default="offload_moe",
+    show_default=True,
+    help="Rematerialization for the mok_like arm. offload_moe adds a host transfer per layer; "
+    "save_moe keeps the saved context on device.",
 )
 @click.option(
     "--num-experts",
@@ -788,6 +800,7 @@ def main(
     mok_like_preset: MokLikeExperimentPreset | None,
     mok_like_num_devices: int,
     num_experts: int,
+    mok_like_remat_mode: str,
     mok_like_workspace_transport: str,
     mok_like_schedule_capacity_factor: float | None,
     mok_like_workspace_slots: int | None,
