@@ -30,10 +30,17 @@ def main() -> int:
             str(binary),
             "-std=c++17",
             f"-gencode=arch=compute_{_ARCH.removeprefix('sm_')},code={_ARCH}",
+            # The CUDA wheels ship no static runtime, so link the shared one and point the
+            # linker at the wheel's lib directory rather than nvcc's default toolkit layout.
+            "--cudart",
+            "shared",
             "-lcuda",
         ]
         for include_dir in _cuda_include_dirs():
             compile_command.extend(("-I", str(include_dir)))
+            library_dir = include_dir.parent / "lib"
+            if library_dir.is_dir():
+                compile_command.extend(("-L", str(library_dir), f"-Wl,-rpath,{library_dir}"))
         print(" ".join(compile_command), flush=True)
         compiled = subprocess.run(compile_command, check=False, capture_output=True, text=True)
         if compiled.returncode != 0:
