@@ -373,6 +373,10 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
     )
     row_dot = jnp.sum(row_dot_partial, axis=-1)
     norm_weight_cotangent = jnp.sum(norm_weight_partial, axis=0).astype(residuals.norm_weight.dtype)
+    # The opaque producer output has no varying-manual-axis provenance. Average its local
+    # partials here so shard_map's transpose sum for the replicated norm weight reconstructs
+    # the global gradient exactly once.
+    norm_weight_cotangent = jax.lax.pmean(norm_weight_cotangent, axis_name=batch_axes)
     x_cotangent = rms_backward_consumer(
         gate_preactivation_cotangent,
         residuals.w_down,
