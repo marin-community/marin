@@ -24,6 +24,7 @@ from fray.iris_backend import (
 from fray.types import (
     ANY_REGION,
     Entrypoint,
+    EnvironmentConfig,
     GpuConfig,
     JobRequest,
     ResourceConfig,
@@ -264,6 +265,25 @@ class TestImagePlumbing:
 
         kwargs = fake_iris.submit.call_args.kwargs
         assert kwargs["task_image"] is None
+
+    def test_create_actor_group_passes_environment_to_iris(self):
+        fake_iris = MagicMock()
+        fake_iris.submit.return_value = MagicMock(job_id="job-123")
+        client = FrayIrisClient.from_iris_client(fake_iris)
+        environment = EnvironmentConfig(
+            workspace="/workspace",
+            pip_packages=["marin-dupekit-native==0.4.1.dev123"],
+            env_vars={"UV_FIND_LINKS": "https://example.test/index.html"},
+        )
+
+        client.create_actor_group(object, name="dummy", count=1, environment=environment)
+
+        submitted = fake_iris.submit.call_args.kwargs["environment"]
+        assert submitted.pip_packages == ["marin-dupekit-native==0.4.1.dev123"]
+        assert submitted.env_vars == {
+            "JAX_PLATFORMS": "cpu",
+            "UV_FIND_LINKS": "https://example.test/index.html",
+        }
 
     def test_submit_job_passes_task_image_to_iris(self):
         """resources.image on a top-level job request reaches iris.submit()."""

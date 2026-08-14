@@ -64,6 +64,7 @@ FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
     recovery_timeout=1_800,
     ready_timeout=1_800,
     lookup_batch_size=64,
+    shards_per_worker=1,
 )
 
 
