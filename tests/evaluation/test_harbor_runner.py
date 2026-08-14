@@ -472,6 +472,22 @@ def test_validate_harbor_resume_root_rejects_different_dataset(tmp_path):
         validate_harbor_resume_root(str(output_dir), _validated_config(dataset_selector="aime"))
 
 
+def test_validate_harbor_resume_root_uses_legacy_run_record(tmp_path):
+    dataset = "hf://open-thoughts/OpenThoughts-TBLite"
+    output_dir = tmp_path / "run" / "results"
+    output_dir.mkdir(parents=True)
+    (output_dir.parent / "record.json").write_text(
+        json.dumps(
+            {
+                "results_path": str(output_dir),
+                "eval": {"mechanism": "harbor", "harbor": {"dataset": dataset}},
+            }
+        )
+    )
+
+    validate_harbor_resume_root(str(output_dir), _validated_config(dataset_selector=dataset))
+
+
 def test_validate_harbor_resume_root_rejects_job_name_prefix_collision(tmp_path):
     output_dir = tmp_path / "results"
     job_dir = output_dir / "harbor_jobs" / "harbor_aime_extended_0123456789ab"
