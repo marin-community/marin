@@ -57,8 +57,8 @@ Not every stage is registered yet. Ask what is missing::
 reports separately on a stage that holds complete data the runner will not
 serve because nothing marked it succeeded -- which is where the rescored quality
 stage sits, since ``score_corpus`` writes its shards without going through
-``StepRunner``. ``scripts/seal_quality.py`` writes that marker for the sources
-whose scores are complete.
+``StepRunner`` -- as does the content-type job. ``scripts/seal_derived_stage.py``
+writes that marker for the sources whose output is complete.
 """
 
 import argparse
@@ -754,7 +754,7 @@ def main(argv: list[str] | None = None) -> None:
         if report.unsealed:
             logger.error(
                 "%d stages need sealing before StepRunner will serve them; "
-                "see experiments/datakit/scripts/seal_quality.py",
+                "see experiments/datakit/scripts/seal_derived_stage.py",
                 len(report.unsealed),
             )
         for problem in report.problems:
