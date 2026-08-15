@@ -92,10 +92,10 @@ def test_alert_rules_have_resolvable_datasources_and_refids():
 
 
 def test_alert_rules_define_nodata_and_error_behavior():
-    # Most alert endpoints return explicit zeros when healthy. The storage rule
-    # stays normal until the optional CoreWeave provider writes usage and quota rows.
+    # Most alert endpoints return explicit zeros when healthy. The storage rules
+    # stay normal until the optional CoreWeave collector writes its first rows.
     for rule in _rules():
-        expected_no_data = "OK" if rule["uid"] == "coreweave-storage-capacity" else "Alerting"
+        expected_no_data = "OK" if rule["uid"].startswith("coreweave-storage-") else "Alerting"
         assert rule["noDataState"] == expected_no_data, rule["uid"]
         assert rule["execErrState"] == "Alerting", rule["uid"]
         assert rule["labels"]["severity"] in VALID_SEVERITIES, rule["uid"]
@@ -140,7 +140,16 @@ class _FakeFinelog:
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
         if '"infra.canary.metrics"' in sql:
             return pa.table({"probe": ["controller-ping"], "target": ["marin"], "value": [1]})
-        if '"cost.events"' in sql:
+        if '"storage.usage"' in sql:
+            if "AS detail" in sql:
+                return pa.table(
+                    {
+                        "region": ["US-EAST-02A"],
+                        "metric": ["quota_bytes"],
+                        "detail": ["STANDARD"],
+                        "value": [0],
+                    }
+                )
             return pa.table(
                 {
                     "region": ["US-EAST-02A"],
@@ -227,13 +236,13 @@ def test_coreweave_storage_alert_compares_latest_finelog_usage_to_zone_quota_and
     assert rule["noDataState"] == "OK"
     assert rule["labels"] == {"severity": "warning", "notification": "slack"}
     assert source["datasourceUid"] == "finelog-marin"
-    assert 'FROM "cost.events"' in sql
-    assert "category IN ('storage', 'storage_quota')" in sql
-    assert "PARTITION BY provider, category, region, detail" in sql
-    assert "ORDER BY usage_date DESC, seq DESC" in sql
-    assert "collected_ts >= CURRENT_TIMESTAMP - INTERVAL '36 hours'" in sql
-    assert "SUM(usage_amount) AS usage_bytes" in sql
-    assert "MAX(usage_amount) AS quota_bytes" in sql
+    assert 'FROM "storage.usage"' in sql
+    assert "metric IN ('used_bytes', 'quota_bytes')" in sql
+    assert "PARTITION BY provider, metric, zone, bucket, storage_class" in sql
+    assert "ORDER BY observed_at DESC, seq DESC" in sql
+    assert "observed_at >= CURRENT_TIMESTAMP - INTERVAL '3 hours'" in sql
+    assert "SUM(value_bytes) AS usage_bytes" in sql
+    assert "MAX(value_bytes) AS quota_bytes" in sql
     assert "usage.usage_bytes / NULLIF(quota.quota_bytes, 0) AS value" in sql
     assert {column["selector"] for column in source["model"]["columns"]} == {"region", "value"}
     assert threshold["model"]["conditions"][0]["evaluator"] == {
@@ -248,6 +257,27 @@ def test_coreweave_storage_alert_compares_latest_finelog_usage_to_zone_quota_and
     assert route["receiver"] == "ops-slack"
     assert "mute_time_intervals" not in route
     assert routes.index(route) < routes.index(muted_warning)
+
+
+def test_coreweave_storage_alert_notifies_slack_when_a_known_series_is_stale():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "coreweave-storage-telemetry-stale"]
+    source, threshold = rule["data"]
+    sql = next(param["value"] for param in source["model"]["url_options"]["params"] if param["key"] == "sql")
+
+    assert rule["for"] == "5m"
+    assert rule["noDataState"] == "OK"
+    assert rule["labels"] == {"severity": "warning", "notification": "slack"}
+    assert 'FROM "storage.usage"' in sql
+    assert "PARTITION BY provider, metric, zone, bucket, storage_class" in sql
+    assert "COALESCE(bucket, storage_class) AS detail" in sql
+    assert "observed_at < CURRENT_TIMESTAMP - INTERVAL '3 hours'" in sql
+    assert {column["selector"] for column in source["model"]["columns"]} == {
+        "region",
+        "metric",
+        "detail",
+        "value",
+    }
+    assert threshold["model"]["conditions"][0]["evaluator"] == {"type": "gt", "params": [0]}
 
 
 def test_every_slack_alert_goes_through_the_bridge_and_none_through_grafana():
@@ -392,17 +422,26 @@ def test_accelerators_dashboard_shows_sm_and_temperature_distributions():
 
 def test_storage_dashboard_shows_latest_coreweave_bucket_bytes():
     dashboard = _stitched_dashboards()["storage.json"]
-    (panel,) = _all_panels(dashboard)
-    (sql,) = _panel_sql(dashboard)
+    panels = {panel["title"]: panel for panel in _all_panels(dashboard)}
+    bucket_panel = panels["CoreWeave object storage by bucket"]
+    quota_panel = panels["CoreWeave zone quota usage"]
+    sql_by_panel = {title: _panel_sql({**dashboard, "panels": [panel]})[0] for title, panel in panels.items()}
 
-    assert panel["type"] == "timeseries"
-    assert panel["fieldConfig"]["defaults"]["unit"] == "bytes"
-    assert panel["datasource"]["uid"] == "finelog-marin"
-    assert 'FROM "cost.events"' in sql
-    assert "provider = 'coreweave'" in sql
-    assert "category = 'storage'" in sql
-    assert "usage_unit = 'bytes'" in sql
-    assert "PARTITION BY usage_date, provider, category, region, detail ORDER BY seq DESC" in sql
+    assert bucket_panel["type"] == "timeseries"
+    assert bucket_panel["fieldConfig"]["defaults"]["unit"] == "bytes"
+    assert bucket_panel["datasource"]["uid"] == "finelog-marin"
+    bucket_sql = sql_by_panel[bucket_panel["title"]]
+    assert 'FROM "storage.usage"' in bucket_sql
+    assert "provider = 'coreweave'" in bucket_sql
+    assert "metric = 'used_bytes'" in bucket_sql
+    assert "PARTITION BY observed_at, provider, metric, zone, bucket, storage_class ORDER BY seq DESC" in bucket_sql
+
+    assert quota_panel["type"] == "timeseries"
+    assert quota_panel["fieldConfig"]["defaults"]["unit"] == "percentunit"
+    quota_sql = sql_by_panel[quota_panel["title"]]
+    assert 'FROM "storage.usage"' in quota_sql
+    assert "metric IN ('used_bytes', 'quota_bytes')" in quota_sql
+    assert "usage_bytes / NULLIF(quota_bytes, 0) AS value" in quota_sql
     for source in ("home.json", "infra.json"):
         (link,) = [link for link in _stitched_dashboards()[source]["links"] if link["url"] == "/d/marin-storage"]
         assert not link["keepTime"]

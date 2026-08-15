@@ -386,8 +386,7 @@ groups:
               conditions:
                 - evaluator: { type: gt, params: [0] }
 
-  # The daily cost job stores CoreWeave usage and zone-quota gauges in Finelog.
-  # The freshness limit prevents an alert from expired gauges.
+  # The hourly collector stores CoreWeave usage and zone quotas in Finelog.
   - orgId: 1
     name: coreweave-storage
     folder: Alerts
@@ -404,7 +403,7 @@ groups:
           notification: slack
         annotations:
           summary: "{{ $labels.region }}: CoreWeave storage exceeds 80% of quota"
-          runbook_url: https://github.com/marin-community/marin/blob/main/scripts/cost_manager/README.md
+          runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md
         data:
           - refId: A
             relativeTimeRange: { from: 129600, to: 0 }
@@ -423,37 +422,36 @@ groups:
                   - key: sql
                     value: >-
                       WITH ranked AS (
-                        SELECT category, detail, region, usage_amount, collected_ts,
+                        SELECT metric, zone, bucket, storage_class, value_bytes, observed_at,
                                ROW_NUMBER() OVER (
-                                 PARTITION BY provider, category, region, detail
-                                 ORDER BY usage_date DESC, seq DESC
+                                 PARTITION BY provider, metric, zone, bucket, storage_class
+                                 ORDER BY observed_at DESC, seq DESC
                                ) AS row_num
-                        FROM "cost.events"
+                        FROM "storage.usage"
                         WHERE provider = 'coreweave'
-                          AND category IN ('storage', 'storage_quota')
-                          AND usage_unit = 'bytes'
-                          AND usage_amount IS NOT NULL
+                          AND metric IN ('used_bytes', 'quota_bytes')
                       ), latest AS (
-                        SELECT category, detail, region, usage_amount
+                        SELECT metric, zone, storage_class, value_bytes
                         FROM ranked
                         WHERE row_num = 1
-                          AND collected_ts >= CURRENT_TIMESTAMP - INTERVAL '36 hours'
+                          AND observed_at >= CURRENT_TIMESTAMP - INTERVAL '3 hours'
                       ), usage AS (
-                        SELECT region, SUM(usage_amount) AS usage_bytes
+                        SELECT zone, storage_class, SUM(value_bytes) AS usage_bytes
                         FROM latest
-                        WHERE category = 'storage'
-                        GROUP BY region
+                        WHERE metric = 'used_bytes'
+                        GROUP BY zone, storage_class
                       ), quota AS (
-                        SELECT region, MAX(usage_amount) AS quota_bytes
+                        SELECT zone, storage_class, MAX(value_bytes) AS quota_bytes
                         FROM latest
-                        WHERE category = 'storage_quota'
-                          AND detail = 'STANDARD'
-                        GROUP BY region
+                        WHERE metric = 'quota_bytes'
+                        GROUP BY zone, storage_class
                       )
-                      SELECT usage.region,
+                      SELECT usage.zone AS region,
                              usage.usage_bytes / NULLIF(quota.quota_bytes, 0) AS value
                       FROM usage
-                      JOIN quota ON quota.region = usage.region
+                      JOIN quota
+                        ON quota.zone = usage.zone
+                       AND quota.storage_class = usage.storage_class
               columns:
                 - { selector: region, text: region, type: string }
                 - { selector: value, text: value, type: number }
@@ -466,6 +464,67 @@ groups:
               expression: A
               conditions:
                 - evaluator: { type: gt, params: [0.8] }
+
+      - uid: coreweave-storage-telemetry-stale
+        title: CoreWeaveStorageTelemetryStale
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: warning
+          notification: slack
+        annotations:
+          summary: "{{ $labels.region }}: CoreWeave {{ $labels.metric }} telemetry is stale for {{ $labels.detail }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 10800, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /query
+              url_options:
+                method: GET
+                params:
+                  - key: sql
+                    value: >-
+                      WITH ranked AS (
+                        SELECT metric, zone, bucket, storage_class, observed_at,
+                               ROW_NUMBER() OVER (
+                                 PARTITION BY provider, metric, zone, bucket, storage_class
+                                 ORDER BY observed_at DESC, seq DESC
+                               ) AS row_num
+                        FROM "storage.usage"
+                        WHERE provider = 'coreweave'
+                          AND metric IN ('used_bytes', 'quota_bytes')
+                      )
+                      SELECT zone AS region,
+                             metric,
+                             COALESCE(bucket, storage_class) AS detail,
+                             1 AS value
+                      FROM ranked
+                      WHERE row_num = 1
+                        AND observed_at < CURRENT_TIMESTAMP - INTERVAL '3 hours'
+              columns:
+                - { selector: region, text: region, type: string }
+                - { selector: metric, text: metric, type: string }
+                - { selector: detail, text: detail, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
 
   # The canary writes one probe_up row per check and target. Read the newest row
   # from the last two cadences. NoData covers a stopped probe daemon or a broken

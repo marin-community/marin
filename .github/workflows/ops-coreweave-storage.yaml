@@ -1,0 +1,90 @@
+name: "Ops - CoreWeave Storage"
+
+# Record current CoreWeave object-storage use and zone quotas in Finelog.
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Print rows and do not write to Finelog'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ops-coreweave-storage
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check CoreWeave token
+        id: coreweave-token
+        env:
+          COREWEAVE_API_TOKEN: ${{ secrets.COREWEAVE_API_TOKEN }}
+        run: |
+          if [[ -z "$COREWEAVE_API_TOKEN" ]]; then
+            echo "::notice::COREWEAVE_API_TOKEN is not set. The storage collector is inactive."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout repository
+        if: steps.coreweave-token.outputs.available == 'true'
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        if: steps.coreweave-token.outputs.available == 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        if: steps.coreweave-token.outputs.available == 'true'
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Sync uv environment
+        if: steps.coreweave-token.outputs.available == 'true'
+        run: uv sync --all-packages --extra=cpu --no-default-groups
+
+      - name: Authenticate to Google Cloud
+        if: steps.coreweave-token.outputs.available == 'true' && !inputs.dry_run
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        if: steps.coreweave-token.outputs.available == 'true' && !inputs.dry_run
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Install SSH key
+        if: steps.coreweave-token.outputs.available == 'true' && !inputs.dry_run
+        env:
+          SSH_KEY: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
+          SSH_KEY_PUB: ${{ secrets.IRIS_CI_GCP_SSH_KEY_PUB }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/google_compute_engine
+          printf '%s\n' "$SSH_KEY_PUB" > ~/.ssh/google_compute_engine.pub
+          chmod 600 ~/.ssh/google_compute_engine
+          chmod 644 ~/.ssh/google_compute_engine.pub
+
+      - name: Record CoreWeave storage telemetry
+        if: steps.coreweave-token.outputs.available == 'true'
+        env:
+          COREWEAVE_API_TOKEN: ${{ secrets.COREWEAVE_API_TOKEN }}
+        run: |
+          uv run python -m scripts.ops.storage.coreweave_usage \
+            ${{ inputs.dry_run && '--dry-run' || '' }}

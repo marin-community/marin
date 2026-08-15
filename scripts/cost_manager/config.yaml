@@ -74,28 +74,23 @@ providers:
     enabled: false
     api_key_env: TOGETHER_API_KEY
 
-  # CoreWeave storage cost. CoreWeave has no dollar API, so this estimates cost
-  # from its usage metric and the public $0.06/GiB-month hot-storage rate.
+  # CoreWeave costs. CoreWeave has NO dollar-denominated API, so this estimates
+  # cost from Prometheus usage metrics times a rate card (rows are tagged
+  # amount_kind=estimated). Disabled until a real rate card is filled in.
   - name: coreweave
-    enabled: true
-    # Activate after this GitHub Actions secret contains a token with the
-    # Observability Viewer role. An unset secret skips this provider.
-    enabled_env: COREWEAVE_API_TOKEN
+    enabled: false
     prometheus_url: https://observe.coreweave.com
     api_token_env: COREWEAVE_API_TOKEN
     step_seconds: 3600
     rate_card:
+      # Estimated $/instance-hour, grouped by instance type. Replace unit_rate
+      # values with the cluster's contracted rates.
+      - category: compute
+        query: "billing:instance:total"
+        detail_label: label_node_kubernetes_io_instance_type
+        unit_rate: 0.0
+      # Estimated $/GiB-hour of object storage.
       - category: storage
-        query: 'sum by (bucket_name, zone) (billing:object_storage_used_bytes:total{storage_class="STANDARD"})'
-        detail_label: bucket_name
-        region_label: zone
-        usage_unit: bytes
-        unit_divisor: 1073741824  # bytes per GiB
-        unit_rate: 0.0000821917808219178  # $0.06 / 730 hours
-      # The alert compares total STANDARD usage in each zone to this live quota.
-      - category: storage_quota
-        query: 'max by (quota_zone, storage_class) (cwobject_quota_info{active="true", measurement_type="MEASUREMENT_TYPE_USAGE_BYTES", storage_class="STANDARD"})'
-        detail_label: storage_class
-        region_label: quota_zone
-        usage_unit: bytes
+        query: "billing:object_storage_used_bytes:total / (1024*1024*1024)"
+        detail_label: region
         unit_rate: 0.0

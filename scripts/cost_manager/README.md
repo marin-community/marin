@@ -22,9 +22,6 @@ CostEvent:
   cost          amount in `currency`
   currency      ISO code, e.g. USD
   amount_kind   "billed" (from a cost API) or "estimated" (usage × rate card)
-  region        provider region, when available
-  usage_amount  provider usage gauge, when available
-  usage_unit    unit for usage_amount, e.g. bytes
   collected_ts  when this row was produced (one value per run)
 ```
 
@@ -37,21 +34,16 @@ newest row per logical key. The canonical query (also what the agent should
 use):
 
 ```sql
-SELECT usage_date, provider, category, region, detail,
-       cost, currency, amount_kind, usage_amount, usage_unit
+SELECT usage_date, provider, category, detail, cost, currency, amount_kind
 FROM (
   SELECT *, ROW_NUMBER() OVER (
-    PARTITION BY usage_date, provider, category, region, detail ORDER BY seq DESC
+    PARTITION BY usage_date, provider, category, detail ORDER BY seq DESC
   ) AS rn
   FROM "cost.events"
 )
 WHERE rn = 1
 ORDER BY usage_date DESC, provider, cost DESC;
 ```
-
-CoreWeave storage rows use `detail` for the bucket and `region` for the provider region.
-The usage amount is the last byte sample for that UTC day. The cost integrates
-all hourly samples for the day.
 
 ## Slack threshold alerts (optional)
 
@@ -91,7 +83,7 @@ Secrets are passed via the environment only — `config.yaml` holds the env-var
 | **openai** | Costs API `GET /v1/organization/costs` | `OPENAI_ADMIN_KEY` | Works. Needs an **org Admin key** with the dashboard "Usage" permission — a project `sk-proj-…` key is rejected. |
 | **anthropic** | Admin Cost Report `GET /v1/organizations/cost_report` | `ANTHROPIC_ADMIN_KEY` | Works. Needs an **Admin key** (`sk-ant-admin01-…`). Amounts arrive in cents → converted to USD. |
 | **gcp** | BigQuery billing export (`bq query`) | none (ADC / runner SA) | Disabled by default. The Cloud Billing API exposes no actual spend; detailed cost lives only in the BigQuery export. Enable once `billing_export_table` points at an export dataset the runner's service account can read. |
-| **coreweave** | Prometheus usage API (`observe.coreweave.com`) × rate card | `COREWEAVE_API_TOKEN` | Configured for object storage and activated when the token is set. Cost uses the public hot-storage rate and has `amount_kind=estimated`. |
+| **coreweave** | Prometheus usage API (`observe.coreweave.com`) × rate card | `COREWEAVE_API_TOKEN` | Disabled by default, **estimate only**. CoreWeave has no dollar API; cost is `usage × rate_card` and tagged `amount_kind=estimated`. Fill in real `unit_rate`s and a token with the Observability Viewer role. |
 | **together** | none yet | `TOGETHER_API_KEY` (when available) | Disabled by default, **scaffold only**. Together has no programmatic cost API: spend lives only in the cookie-authenticated billing dashboard (Usage / draft invoice), and the API key is inference-only. `fetch` raises until Together ships a usage/cost endpoint; enabling it before then fails loudly. |
 
 Adding a provider: drop a `fetch(config, window) -> list[CostEvent]` module in
@@ -119,34 +111,6 @@ A single provider failing (missing key, auth/permission error) does not abort
 the run: the other backends still record, and the process exits non-zero so CI
 surfaces the failure.
 
-## CoreWeave storage dashboard
-
-Grafana provisions the `Storage` dashboard from
-`infra/grafana/dashboards/storage.json`. The dashboard shows the latest daily
-byte value for each CoreWeave bucket.
-
-Grafana also provisions the `CoreWeaveStorageCapacity` alert. The rule reads
-the newest Finelog gauges for bucket usage and the `STANDARD` zone quota. The
-rule sums all bucket usage in each availability zone. It sends a Slack warning
-when the total stays above 80 percent of the reported quota for five minutes.
-A 36-hour freshness limit prevents an alert from expired data. The alert stays
-normal until the first CoreWeave usage and quota rows exist.
-
-The collector uses the public hot-storage rate of $0.06/GiB-month. Divide this
-rate by 730 hours for the `unit_rate` value in `config.yaml`. Replace the value
-when the contracted rate is available.
-
-CoreWeave supplies the quota through `cwobject_quota_info`. The value can include
-a quota increase that CoreWeave assigns to one availability zone. The collector
-fails if this quota series is missing. It does not use a fixed limit as a
-fallback. See the [CoreWeave quota guide](https://docs.coreweave.com/products/storage/object-storage/manage-quotas)
-for the source metrics and storage classes.
-
-`COREWEAVE_API_TOKEN` controls provider activation. If it is unset, the runner
-skips CoreWeave and completes the other providers. Use a token with the
-Observability Viewer role. The Grafana Kubernetes read token does not include
-that role.
-
 ## In CI
 
 `.github/workflows/ops-cost-report.yaml` runs this daily at 15:00 UTC. It
@@ -156,8 +120,8 @@ to the finelog VM (the same mechanism as the storage report), then writes to
 
 - Tunnel (already configured for other ops jobs): `IRIS_CI_GCP_SA_KEY`,
   `GCP_PROJECT_ID`, `IRIS_CI_GCP_SSH_KEY`, `IRIS_CI_GCP_SSH_KEY_PUB`.
-- Provider keys (add these): `OPENAI_ADMIN_KEY`, `ANTHROPIC_ADMIN_KEY`, and
-  `COREWEAVE_API_TOKEN`. CoreWeave stays inactive until its token is set.
+- Provider keys (add these): `OPENAI_ADMIN_KEY`, `ANTHROPIC_ADMIN_KEY`,
+  `COREWEAVE_API_TOKEN`.
 - Optional, for threshold alerts: `SLACK_WEBHOOK_URL` (already configured for
   other ops jobs). Unset → threshold breaches are logged but not posted.
 

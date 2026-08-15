@@ -4,8 +4,8 @@
 # The notification policy tree. severity=critical routes to ops-critical (email,
 # Slack, and Loom). severity=warning remains visible in Grafana but uses the
 # always-active dashboard-only mute timing, so it sends no notification. The
-# notification=slack route sends capacity warnings to Slack. The root receiver
-# sends malformed or unlabeled alerts to Slack.
+# notification=slack route sends selected storage warnings to Slack. The root
+# receiver sends malformed or unlabeled alerts to Slack.
 apiVersion: 1
 
 policies:

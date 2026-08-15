@@ -1,7 +1,7 @@
 {
   "uid": "marin-storage",
   "title": "Storage",
-  "description": "Daily CoreWeave object-storage usage from the cost collector.",
+  "description": "Hourly CoreWeave object-storage usage and live zone quotas.",
   "tags": [
     "marin",
     "storage"
@@ -44,7 +44,7 @@
       "id": 1,
       "type": "timeseries",
       "title": "CoreWeave object storage by bucket",
-      "description": "Last recorded byte value for each UTC day. The collector refreshes the trailing three days on each run.",
+      "description": "Current bytes in each CoreWeave bucket, recorded once each hour.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -96,7 +96,112 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT ts AS t, detail AS series, usage_amount AS value FROM (SELECT ts, usage_date, provider, category, region, detail, usage_amount, usage_unit, ROW_NUMBER() OVER (PARTITION BY usage_date, provider, category, region, detail ORDER BY seq DESC) AS rn FROM \"cost.events\" WHERE provider = 'coreweave' AND category = 'storage' AND usage_unit = 'bytes' AND ts >= {{from}} AND ts < {{to}}) WHERE rn = 1 ORDER BY 1, 2"
+                "value": "SELECT observed_at AS t, zone || ' / ' || bucket AS series, value_bytes AS value FROM (SELECT observed_at, provider, metric, zone, bucket, storage_class, value_bytes, ROW_NUMBER() OVER (PARTITION BY observed_at, provider, metric, zone, bucket, storage_class ORDER BY seq DESC) AS rn FROM \"storage.usage\" WHERE provider = 'coreweave' AND metric = 'used_bytes' AND observed_at >= {{from}} AND observed_at < {{to}}) WHERE rn = 1 ORDER BY 1, 2"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "CoreWeave zone quota usage",
+      "description": "Total bucket bytes divided by the live CoreWeave quota for each zone.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.8
+              },
+              {
+                "color": "red",
+                "value": 0.9
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH snapshots AS (SELECT collected_at, metric, zone, bucket, storage_class, value_bytes, ROW_NUMBER() OVER (PARTITION BY collected_at, provider, metric, zone, bucket, storage_class ORDER BY seq DESC) AS rn FROM \"storage.usage\" WHERE provider = 'coreweave' AND metric IN ('used_bytes', 'quota_bytes') AND collected_at >= {{from}} AND collected_at < {{to}}), totals AS (SELECT collected_at, zone, storage_class, SUM(value_bytes) FILTER (WHERE metric = 'used_bytes') AS usage_bytes, MAX(value_bytes) FILTER (WHERE metric = 'quota_bytes') AS quota_bytes FROM snapshots WHERE rn = 1 GROUP BY collected_at, zone, storage_class) SELECT collected_at AS t, zone AS series, usage_bytes / NULLIF(quota_bytes, 0) AS value FROM totals ORDER BY 1, 2"
               },
               {
                 "key": "from",
