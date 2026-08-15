@@ -20,7 +20,13 @@ from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import datakit_source_key
 
 from experiments.datakit.global_exact_dedup import ExactDupsPerSource, GlobalExactDedupData
-from experiments.datakit.repack_exact_dups import _decide, repack_exact_dups_source
+from experiments.datakit.repack_exact_dups import (
+    MARKS_DROPPED,
+    MARKS_KEPT,
+    REPACK_COUNTER_PREFIX,
+    _decide,
+    repack_exact_dups_source,
+)
 
 CURRENT_SHARDS = 3
 
@@ -124,6 +130,11 @@ def test_repack_keeps_cross_source_marks_and_drops_intra_source_ones(tmp_path, l
     assert len(attr_files) == CURRENT_SHARDS
     marked = {row for path in attr_files for row in pq.read_table(path).column("id").to_pylist()}
     assert marked == {"drop"}
+
+    # The counter a real run is checked against. "keep" contributes its two stale
+    # marks to the dropped side; "drop" contributes the one mark that survives.
+    assert repacked.counters[f"{REPACK_COUNTER_PREFIX}/{MARKS_KEPT}"] == 1
+    assert repacked.counters[f"{REPACK_COUNTER_PREFIX}/{MARKS_DROPPED}"] == 2
 
 
 def test_repack_refuses_a_source_key_that_did_not_change(tmp_path, legacy):
