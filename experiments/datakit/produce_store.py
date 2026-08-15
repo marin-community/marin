@@ -377,7 +377,10 @@ def build_store_step(
 
     def run(output_path: str) -> ClusteredStoreData:
         loaded = _read_inputs(inputs)
-        edges = calibration_bucket_edges(hero_data.quality_calibration(inputs.quality_model))
+        edges = calibration_bucket_edges(
+            hero_data.quality_calibration(inputs.quality_model),
+            expected_sha256=inputs.quality_model.calibration_sha256,
+        )
         logger.info("quality cutpoints from %s: %s", hero_data.quality_calibration(inputs.quality_model), list(edges))
         return build_clustered_store(
             tokenize=loaded.tokenize,
@@ -471,7 +474,10 @@ def preflight(inputs: StoreInputs, *, shards_per_source: int) -> PreflightReport
         loaded = _read_per_source(inputs)
         exact_dups = read_artifact(inputs.exact_dups_pin.output_path, GlobalExactDedupData)
         verified = read_artifact(inputs.verified_fuzzy_dups.output_path, VerifiedFuzzyDupsAttrData)
-        edges = calibration_bucket_edges(hero_data.quality_calibration(inputs.quality_model))
+        edges = calibration_bucket_edges(
+            hero_data.quality_calibration(inputs.quality_model),
+            expected_sha256=inputs.quality_model.calibration_sha256,
+        )
     except (KeyError, ValueError) as failure:
         report.problems.append(str(failure))
         return report

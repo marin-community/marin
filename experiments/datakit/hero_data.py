@@ -183,7 +183,10 @@ class QualityPin:
     about which model produced the scores under it is checked, not asserted."""
 
     calibration_sha256: str
-    """Digest over the calibration file, by the same recipe over one file."""
+    """Plain SHA-256 of the calibration file's bytes, not the folded recipe above.
+    The file sits inside the model directory, so ``model_sha256`` already covers
+    it; this names it on its own, because the cutpoints it carries decide every
+    document's bucket and the store reads them separately from the model."""
 
     tokenizer: TokenizerPin
     """Which tokenization the scorer reads. Folded in structurally: :func:`quality`

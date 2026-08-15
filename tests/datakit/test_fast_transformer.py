@@ -11,6 +11,7 @@
 Both use a deterministic fake scorer / synthetic labels, so no model or I/O is needed.
 """
 
+import hashlib
 import json
 from itertools import pairwise
 from typing import cast
@@ -152,7 +153,8 @@ def test_cutting_raw_scores_at_the_knots_matches_cutting_calibrated_scores(tmp_p
     path = tmp_path / "calib.json"
     path.write_text(json.dumps({"default": knots}))
 
-    edges = calibration_bucket_edges(str(path))
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    edges = calibration_bucket_edges(str(path), expected_sha256=digest)
     assert edges == tuple(knots["xk"][1:-1])
 
     probes = np.linspace(raw.min(), raw.max(), 101)
@@ -164,5 +166,21 @@ def test_a_calibration_with_the_wrong_number_of_knots_is_rejected(tmp_path):
     path = tmp_path / "calib.json"
     path.write_text(json.dumps({"default": {"xk": [0.0, 0.5, 1.0], "yk": [0.0, 0.5, 1.0]}}))
 
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
     with pytest.raises(ValueError, match="interior knots"):
-        calibration_bucket_edges(str(path))
+        calibration_bucket_edges(str(path), expected_sha256=digest)
+
+
+def test_a_calibration_that_is_not_the_pinned_one_is_rejected(tmp_path):
+    """The path is a constant somebody wrote down; the digest is what checks it.
+
+    Scoring already refuses a model directory that digests wrong. Cutpoints decide
+    every document's bucket, so reading them makes the same claim and gets the
+    same check.
+    """
+    levels = np.repeat([1, 2, 3, 4, 5], 4).astype(float)
+    path = tmp_path / "calib.json"
+    path.write_text(json.dumps({"default": calibration_knots(levels / 10.0, levels)}))
+
+    with pytest.raises(ValueError, match="digests to"):
+        calibration_bucket_edges(str(path), expected_sha256="0" * 64)

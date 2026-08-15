@@ -8,6 +8,7 @@ Deliberately import-light (pydantic only): the store step consumes
 transformers stack of the scorer into its workers.
 """
 
+import hashlib
 import json
 
 from marin.datakit.source_key import DatakitArtifactPath
@@ -20,7 +21,7 @@ from rigging.filesystem.storage_path import StoragePath
 BUCKET_EDGES = (0.2, 0.4, 0.6, 0.8)
 
 
-def calibration_bucket_edges(calibration_path: str) -> tuple[float, ...]:
+def calibration_bucket_edges(calibration_path: str, *, expected_sha256: str) -> tuple[float, ...]:
     """Return the cutpoints a calibration puts at :data:`BUCKET_EDGES`, in raw score.
 
     Calibration fits a monotone spline through knots, and the interior knots are
@@ -28,9 +29,22 @@ def calibration_bucket_edges(calibration_path: str) -> tuple[float, ...]:
     raw scores there is the same partition as calibrating first and cutting at
     :data:`BUCKET_EDGES`, with one fewer pass over 18.7 billion documents. The
     outer two knots bound the spline's domain rather than dividing it.
+
+    ``expected_sha256`` is the digest a :class:`~experiments.datakit.hero_data.QualityPin`
+    carries, and these cutpoints decide which bucket every document in the corpus
+    lands in. The path that leads here is a constant somebody wrote down, so it is
+    checked against the pin rather than trusted: scoring already refuses a model
+    directory that digests to the wrong value, and reading the cutpoints is the
+    same claim made on the read side.
     """
-    with StoragePath(calibration_path).open("rb") as handle:
-        knots = json.loads(handle.read())["default"]["xk"]
+    blob = StoragePath(calibration_path).read_bytes()
+    digest = hashlib.sha256(blob).hexdigest()
+    if digest != expected_sha256:
+        raise ValueError(
+            f"{calibration_path} digests to {digest}, but the pin carries {expected_sha256}; "
+            "its cutpoints would bucket the corpus under a calibration nothing verified"
+        )
+    knots = json.loads(blob)["default"]["xk"]
     edges = tuple(float(k) for k in knots[1:-1])
     if len(edges) != len(BUCKET_EDGES):
         raise ValueError(
