@@ -82,8 +82,8 @@ COREWEAVE_API_TOKEN=... \
 
 `.github/workflows/ops-coreweave-storage.yaml` runs the collector each hour.
 The workflow writes to the `marin` Finelog server through the standard GCP SSH
-tunnel. Set the repository secret `COREWEAVE_API_TOKEN` to activate it. The
-workflow writes a notice and stops when this secret is not set.
+tunnel. It needs the repository secret `COREWEAVE_API_TOKEN` and fails without
+it, because a green run that collects nothing hides a frozen dashboard.
 
 The Grafana `Storage` dashboard shows bucket bytes and quota use for each zone.
 The `CoreWeaveStorageCapacity` rule sends a Slack warning after quota use stays
@@ -92,9 +92,13 @@ warning above 720 TiB. The rule reads the quota metric, so it also follows a
 later quota change.
 
 The `CoreWeaveStorageTelemetryStale` rule sends a Slack warning when a known
-storage series is more than three hours old. Both rules stay normal before the
-first collector result. For a stale-data warning, check the hourly workflow and
-the token first. For a quota warning, check the zone values in the Storage
-dashboard and in the [CoreWeave quota page].
+storage series is more than three hours old. For a stale-data warning, check the
+hourly workflow and the token first. For a quota warning, check the zone values
+in the Storage dashboard and in the [CoreWeave quota page].
+
+Both rules read the `storage.usage` namespace, which exists only after the
+collector writes its first rows. Until then the query fails, and because both
+rules set `execErrState: Alerting`, each one pages with `[no value]` labels. Run
+the collector once when you add a rule that reads a new namespace.
 
 [CoreWeave quota page]: https://docs.coreweave.com/products/storage/object-storage/manage-quotas
