@@ -200,47 +200,51 @@ def build_layer_program(
     count_barrier = len(items)
     items.append(WorkItem(name="count_barrier", resources=(), duration=0.0, deps=tuple(count_ids)))
 
-    def rotated_experts(sender: int):
-        """Experts ordered by owner starting after `sender`.
-
-        Every source targeting owner 0 first serializes on owner 0's ingress
-        (a convoy the event sim exposed: ~2x dispatch drain time); rotating
-        the send order per source spreads ingress load, like a rotated
-        all-to-all. The kernel must implement the same ordering.
-        """
-        for step in range(num_devices):
-            owner = (sender + 1 + step) % num_devices
-            for local_g in range(params.local_experts):
-                yield owner * params.local_experts + local_g
-
     # Dispatch tiles, and for each expert the (tile item id, row range) pairs.
+    #
+    # Send order is rotated per source (source d targets owner d+1 first) and
+    # emitted step-major: all sources' step-s sends are adjacent in the item
+    # list. Both matter. Rotation spreads ingress load (every source
+    # targeting owner 0 first serializes its ingress — a convoy the sim
+    # exposed as ~2x dispatch drain). Step-major emission is the sim's proxy
+    # for sources sending simultaneously: device-major emission places the
+    # last device's sends after everyone else's, making its rows arrive last
+    # at every owner, which pushes that destination's GEMM tiles to the end
+    # everywhere and dumps its entire combine ingress into the makespan tail.
+    # The kernel gets both behaviors for free (per-device SMs send
+    # concurrently); the emission order encodes them for the scheduler.
     arrivals: dict[int, list[tuple[int, int, int]]] = defaultdict(list)  # g -> [(item, row_lo, row_hi)]
     dispatch_ids = []
-    for d in range(num_devices):
-        for g in rotated_experts(d):
-            rows = int(rows_kept[d, g])
-            if rows == 0:
-                continue
-            owner = g // params.local_experts
-            row_lo = int(offsets[d, g])
-            for tile_lo in range(0, rows, params.tile_rows):
-                tile_rows = min(params.tile_rows, rows - tile_lo)
-                remote = (f"link_out[{d}]", f"link_in[{owner}]") if owner != d else ()
-                duration = (tile_rows * bytes_per_row / link if remote else 0.0) + params.message_latency
-                item_id = len(items)
-                items.append(
-                    WorkItem(
-                        name=f"dispatch[d{d}->g{g}]",
-                        resources=remote,
-                        duration=duration,
-                        deps=(count_barrier,),
+    for step in range(num_devices):
+        for d in range(num_devices):
+            owner = (d + 1 + step) % num_devices
+            for local_g in range(params.local_experts):
+                g = owner * params.local_experts + local_g
+                rows = int(rows_kept[d, g])
+                if rows == 0:
+                    continue
+                row_lo = int(offsets[d, g])
+                for tile_lo in range(0, rows, params.tile_rows):
+                    tile_rows = min(params.tile_rows, rows - tile_lo)
+                    remote = (f"link_out[{d}]", f"link_in[{owner}]") if owner != d else ()
+                    duration = (tile_rows * bytes_per_row / link if remote else 0.0) + params.message_latency
+                    item_id = len(items)
+                    items.append(
+                        WorkItem(
+                            name=f"dispatch[d{d}->g{g}]",
+                            resources=remote,
+                            duration=duration,
+                            deps=(count_barrier,),
+                        )
                     )
-                )
-                arrivals[g].append((item_id, row_lo + tile_lo, row_lo + tile_lo + tile_rows))
-                dispatch_ids.append(item_id)
+                    arrivals[g].append((item_id, row_lo + tile_lo, row_lo + tile_lo + tile_rows))
+                    dispatch_ids.append(item_id)
 
     # GEMM tiles per expert; each depends on the dispatch tiles overlapping
-    # its row range (pipelined) or on a full dispatch barrier (bulk).
+    # its row range (pipelined) or on a full dispatch barrier (bulk). With
+    # `gemm_interleave`, tiles round-robin across the owner's local experts so
+    # every expert's combine work streams out early instead of bunching behind
+    # the bank's last expert (the dominant exposed tail in expert-major order).
     dispatch_barrier = len(items)
     items.append(WorkItem(name="dispatch_barrier", resources=(), duration=0.0, deps=tuple(dispatch_ids)))
     gemm_cover: dict[int, list[tuple[int, int, int]]] = defaultdict(list)  # g -> [(item, row_lo, row_hi)]
