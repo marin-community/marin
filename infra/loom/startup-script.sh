@@ -16,6 +16,8 @@ COMPOSE_FILE="${RUNTIME_DIR}/docker-compose.yml"
 DOCKER_CONFIG=/etc/docker/daemon.json
 HEALTH_URL="http://127.0.0.1:${LOOM_PORT}/api/health"
 STARTUP_SUCCESS=/run/loom-startup-succeeded
+HOME_FILES_MANIFEST=/run/loom-home-files.json
+HOME_FILE_MATERIALIZER="${RUNTIME_DIR}/materialize-home-files.py"
 
 echo "== loom startup-script: ${LOOM_DOMAIN} =="
 rm -f "$STARTUP_SUCCESS"
@@ -56,6 +58,9 @@ if ! command -v gcloud >/dev/null 2>&1; then
     /etc/apt/sources.list.d/google-cloud-sdk.list
   packages+=(google-cloud-cli)
 fi
+if ! command -v python3 >/dev/null 2>&1; then
+  packages+=(python3)
+fi
 if [ "${#packages[@]}" -gt 0 ]; then
   apt-get update
   apt-get install -y --no-install-recommends "${packages[@]}"
@@ -77,6 +82,8 @@ fi
 install -d -m 0755 "$RUNTIME_DIR"
 meta instance/attributes/loom-compose >"$COMPOSE_FILE"
 meta instance/attributes/loom-caddyfile >"${RUNTIME_DIR}/Caddyfile"
+meta instance/attributes/loom-home-file-materializer >"$HOME_FILE_MATERIALIZER"
+chmod 0700 "$HOME_FILE_MATERIALIZER"
 
 ENV_FILE="${RUNTIME_DIR}/.env"
 umask 077
@@ -109,6 +116,11 @@ chmod 0600 "$ENV_FILE"
 registry="${LOOM_IMAGE%%/*}"
 gcloud auth configure-docker "$registry" --quiet
 docker compose -f "$COMPOSE_FILE" pull
+meta instance/attributes/loom-home-files >"$HOME_FILES_MANIFEST"
+python3 "$HOME_FILE_MATERIALIZER" prepare \
+  --manifest="$HOME_FILES_MANIFEST" \
+  --image="$LOOM_IMAGE"
+rm -f "$HOME_FILES_MANIFEST"
 docker compose -f "$COMPOSE_FILE" up -d
 
 for _ in $(seq 1 60); do

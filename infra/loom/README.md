@@ -61,6 +61,42 @@ startup unit stores Docker state on the persistent root disk, reads one numbered
 `docker compose up -d`, applies the configured Loom deployment policy, and
 checks readiness. It does not clone a repository or build images on the VM.
 
+## Shared session-home files
+
+Machine-wide files required by every trusted interactive session belong in the
+stack's `homeFiles` map. Each entry maps a path relative to `/home/app` to a
+numbered Secret Manager version and a restrictive file mode:
+
+```yaml
+config:
+  marin-loom:homeFiles:
+    .kube/coreweave-iris:
+      secretRef: projects/hai-gcp-models/secrets/loom-coreweave-iris-kubeconfig/versions/1
+      mode: "0600"
+```
+
+The secret reference and target path appear in Pulumi state and VM metadata;
+the payload does not. The startup unit fetches all declared versions before
+changing the shared `loom_loom_home` volume, replaces each file atomically, and
+records the paths it manages. Removing a declaration removes that managed file
+on the next activation without pruning user-created files. Paths must be
+relative, Secret Manager versions must be numeric, and modes must be `0400` or
+`0600`.
+
+This mechanism is intentionally deployment-wide. The Loom control plane and
+ordinary session containers share `/home/app`, so every session using that
+volume can read files permitted to the `app` user. Do not use `homeFiles` for a
+credential that should be limited to one profile or one user. Put user identity
+credentials in Loom Settings → Access and profile-scoped secrets in the profile's
+write-only environment instead.
+
+Migrate a manually installed CoreWeave kubeconfig in a separate deployment
+change: create a dedicated Secret Manager secret, upload the reviewed file as a
+new version, add the pinned reference above, preview, and deploy. Do not remove
+the current file until the deployed version has been exercised from a new
+session. Never add a `homeFiles` declaration before its referenced secret
+version exists.
+
 ## Update secrets
 
 Do not put secret values in Pulumi configuration or state. Upload a reviewed

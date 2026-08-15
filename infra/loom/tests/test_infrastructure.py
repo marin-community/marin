@@ -15,6 +15,7 @@ from infra.loom.infrastructure import (
     ROOT,
     DeploymentConfig,
     GitHubFederationConfig,
+    HomeFileConfig,
     ProfileConfig,
     WorkloadIdentityConfig,
     _deployment_manifest,
@@ -83,6 +84,15 @@ def deployment_config() -> DeploymentConfig:
                     "envClear": True,
                     "instructionsFile": "profiles/ops/AGENTS.md",
                     "env": {"KUBECONFIG": {"secretRef": "projects/example/secrets/ops-kubeconfig/versions/latest"}},
+                },
+            ),
+        ),
+        home_files=(
+            HomeFileConfig.parse(
+                ".kube/coreweave-iris",
+                {
+                    "secretRef": "projects/example/secrets/coreweave-iris-kubeconfig/versions/4",
+                    "mode": "0600",
                 },
             ),
         ),
@@ -183,6 +193,21 @@ def test_profile_manifest_renders_github_repositories_and_secret_references() ->
         ProfileConfig.parse("ops", {"agent": "codex", "env": {"OPS_TOKEN": "plaintext"}})
 
 
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        ("/root/.kube/config", {"secretRef": "projects/example/secrets/kube/versions/1"}),
+        (".kube/../config", {"secretRef": "projects/example/secrets/kube/versions/1"}),
+        (".loom-managed-home-files.json", {"secretRef": "projects/example/secrets/kube/versions/1"}),
+        (".kube/config", {"secretRef": "projects/example/secrets/kube/versions/latest"}),
+        (".kube/config", {"secretRef": "projects/example/secrets/kube/versions/1", "mode": "0644"}),
+    ],
+)
+def test_home_files_reject_unsafe_paths_unpinned_versions_and_open_modes(path: str, value: object) -> None:
+    with pytest.raises(ValueError, match="homeFiles"):
+        HomeFileConfig.parse(path, value)
+
+
 def test_deployment_manifest_preserves_unicode_profile_instructions() -> None:
     profile = ProfileConfig.parse("github", {"agent": "codex", "instructions": "Prefix comments with 🤖"})
     config = replace(deployment_config(), profiles=(profile,), workloads=(), github_federations=())
@@ -252,12 +277,29 @@ def test_deployment_models_durable_resources_without_secret_payloads():
         assert "startup-script" in metadata
         assert "loom-compose" in metadata
         assert "loom-caddyfile" in metadata
+        assert "loom-home-file-materializer" in metadata
+        assert json.loads(metadata["loom-home-files"]) == [
+            {
+                "mode": "0600",
+                "path": ".kube/coreweave-iris",
+                "project": "example",
+                "secret": "coreweave-iris-kubeconfig",
+                "version": "4",
+            }
+        ]
         assert "metadataStartupScript" not in vm.inputs
         assert "metadata_startup_script" not in vm.inputs
         assert field(vm.inputs, "allow_stopping_for_update", "allowStoppingForUpdate") is False
 
         secret_reader = by_name(mocks, "loom-vm-secret-reader")
         assert secret_reader.inputs["role"] == "roles/secretmanager.secretAccessor"
+        runtime_secret_readers = [
+            resource for resource in mocks.resources if resource.name.startswith("loom-runtime-secret-")
+        ]
+        assert {field(resource.inputs, "secret_id", "secretId") for resource in runtime_secret_readers} == {
+            "coreweave-iris-kubeconfig",
+            "ops-kubeconfig",
+        }
         log_writer = by_name(mocks, "loom-vm-log-writer")
         assert log_writer.inputs["role"] == "roles/logging.logWriter"
         assert log_writer.inputs["member"] == "serviceAccount:loom-vm@example.iam.gserviceaccount.com"
