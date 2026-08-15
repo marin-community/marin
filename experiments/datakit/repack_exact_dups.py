@@ -10,12 +10,13 @@ shard names and finds nothing -- and because duplicate attributes are sparse,
 "nothing" reads as "no duplicates" rather than as an error.
 
 Moving them is not the shard-renaming that :mod:`repack_fuzzy_dups` does, because
-exact marks count occurrences and normalize removed some of them. The extraction
-held 12.2% duplicate rows and ``normalize_step`` defaults to ``DedupMode.EXACT``,
-which drops rows that repeat an ``id`` within a shard. Hash partitioning puts
-every occurrence of an ``id`` in one shard, so each ``id`` now appears exactly
-once. Marks written against the copies normalize removed no longer describe
-anything, and carrying them over unchanged deletes the copy that remains.
+exact marks count occurrences and normalize removed most of them.
+``normalize_step`` defaults to ``DedupMode.EXACT``, which drops rows that repeat
+an ``id`` within a shard, and hash partitioning puts every occurrence of an
+``id`` in one shard, so each ``id`` now appears exactly once. On the Focus Crawl
+that removed 14,316,834 of 36,327,068 rows, or 39.4%. Marks written against the
+copies normalize removed no longer describe anything, and carrying them over
+unchanged deletes the copy that remains.
 
 Which marks still apply follows from counting, and the counts settle it exactly.
 Global exact dedup keeps one occurrence of an ``id`` across all sources and marks
@@ -29,6 +30,13 @@ the rest, so for an ``id`` with ``f`` occurrences in this source:
 Reading the extraction's ``id`` column is what makes ``f`` available, so this
 repack reads the old source and :mod:`repack_fuzzy_dups` does not. It is one pass
 over one column.
+
+The Focus Crawl's arithmetic closes on those two counts and says what the run
+must produce. Summing ``f - 1`` over every ``id`` is what normalize already
+reported as ``duplicate_records_out``, 14,316,834, and the source carries
+14,316,837 marks, so exactly three of its documents duplicate something outside
+it. ``marks_kept`` must come out at 3. A rename would have carried all 14,316,837
+across and deleted 65.0% of the 22,010,234 documents the source has left.
 
 The dedup decision itself is not recomputed. Which source holds the canonical
 copy of a cross-source duplicate is a choice the pinned run already made, and any
@@ -48,6 +56,7 @@ from marin.datakit.copartitioned import write_copartitioned_source_manifest
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import datakit_source_key, datakit_source_path
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 from zephyr.writers import write_parquet_file
@@ -57,6 +66,11 @@ from experiments.datakit.global_exact_dedup import ExactDupsPerSource, GlobalExa
 logger = logging.getLogger(__name__)
 
 REPACK_COUNTER_PREFIX = "repack_exact_dups"
+
+# Pipeline-side counter names. Bare, because the artifact re-namespaces every
+# outcome counter under REPACK_COUNTER_PREFIX on the way out.
+MARKS_KEPT = "marks_kept"
+MARKS_DROPPED = "marks_dropped"
 
 _ATTR_SCHEMA = pa.schema(
     [
@@ -112,7 +126,12 @@ def _combine(doc_id: str, tallies: Iterator[_Tally]) -> Iterator[_Tally]:
 
 
 def _decide(doc_id: str, tallies: Iterator[_Tally]) -> Iterator[dict[str, str | bool]]:
-    """Emit a mark for ``doc_id`` only when the surviving copy is still a duplicate."""
+    """Emit a mark for ``doc_id`` only when the surviving copy is still a duplicate.
+
+    Counts what it keeps and what it discards. ``marks_kept`` is the number the
+    source's own arithmetic predicts, so it is how a run says whether it did what
+    the module docstring claims rather than merely finishing.
+    """
     occurrences = marks = 0
     for tally in tallies:
         occurrences += tally["occurrences"]
@@ -121,6 +140,7 @@ def _decide(doc_id: str, tallies: Iterator[_Tally]) -> Iterator[dict[str, str | 
     if occurrences == 0:
         raise ValueError(f"exact-duplicate marks name id={doc_id!r}, which the legacy source does not contain")
     if marks == occurrences:
+        counters.pipeline.update_counter(MARKS_KEPT, 1)
         yield {"id": doc_id, "dup_doc": True}
         return
     if marks != occurrences - 1:
@@ -128,6 +148,8 @@ def _decide(doc_id: str, tallies: Iterator[_Tally]) -> Iterator[dict[str, str | 
             f"id={doc_id!r} has {occurrences} occurrences and {marks} marks; global exact dedup keeps exactly "
             "one occurrence, so a source's marks must equal its occurrences or one fewer"
         )
+    if marks:
+        counters.pipeline.update_counter(MARKS_DROPPED, marks)
 
 
 def repack_exact_dups_source(
