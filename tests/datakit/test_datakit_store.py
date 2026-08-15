@@ -31,7 +31,7 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import (
 from marin.processing.tokenize.attributes import TokenizedAttrData
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
-from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
+from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
 from experiments.datakit.global_exact_dedup import ExactDupsPerSource, GlobalExactDedupData
 from experiments.datakit.store.bucket_writer import BucketSpillRun, write_bucket_cache, write_bucket_cache_from_spills
 from experiments.datakit.store.datakit_store import (
@@ -44,9 +44,21 @@ CLUSTER_VIEW = 2  # cluster column "cluster_2", clusters {0, 1}
 SPLIT = "train"
 EXEMPLAR = {"input_ids": np.array([0], dtype=np.int32)}
 
+
+def _score_in_bucket(bucket: int) -> float:
+    """A score that :data:`BUCKET_EDGES` cuts into ``bucket``.
+
+    The midpoint of the band, so a rounding difference in the cut cannot move a
+    fixture doc between buckets and turn a real regression into a near-miss.
+    """
+    low = BUCKET_EDGES[bucket - 1] if bucket else 0.0
+    high = BUCKET_EDGES[bucket] if bucket < len(BUCKET_EDGES) else 1.0
+    return (low + high) / 2
+
+
 # One doc = (id, cluster, quality_bucket, contaminated, verified duplicate, token value, length).
-# ``quality_bucket`` is the precomputed calibrated bucket the scorer writes as a
-# column (consumed as-is by the store -- no score->bucket mapping).
+# ``quality_bucket`` is the bucket the store must derive by cutting the doc's
+# score at ``BUCKET_EDGES``; the fixture writes the score, not the bucket.
 # ``verified duplicate``: True -> dropped; False or None -> absent from the sparse attrs.
 # Each surviving doc's tokens are a run of its unique ``token`` value so we can
 # recover identity from the cache and confirm dropped docs never appear.
@@ -128,15 +140,15 @@ def _write_shard(dirs: dict[str, str], basename: str, docs: list[_Doc]) -> None:
         f"{dirs['cluster']}/{basename}",
         pa.table({"id": ids, f"cluster_{CLUSTER_VIEW}": pa.array([d[1] for d in docs], type=pa.int32())}),
     )
-    # Quality parquet: flat {id, score, quality_bucket}; the store reads the
-    # precomputed quality_bucket column (score is carried for schema fidelity).
+    # Quality parquet: flat {id, score}; the store cuts the score itself. Each
+    # doc's score is placed in the middle of the band BUCKET_EDGES gives its
+    # intended bucket, so the expectations below read as bucket ids.
     _write_parquet(
         f"{dirs['quality']}/{basename}",
         pa.table(
             {
                 "id": ids,
-                "score": pa.array([float(d[2]) for d in docs], type=pa.float64()),
-                "quality_bucket": pa.array([d[2] for d in docs], type=pa.int32()),
+                "score": pa.array([_score_in_bucket(d[2]) for d in docs], type=pa.float64()),
             }
         ),
     )
@@ -208,16 +220,7 @@ def _build_inputs(tmp_path):
             k_views=[],
         )
     }
-    quality = {
-        "src": QualityScores(
-            main_output_dir=dirs["quality"],
-            samples_output_dir="",
-            model_dir="model",
-            calib_file="calib.json",
-            bucket_edges=[0.2, 0.4, 0.6, 0.8],
-            counters={},
-        )
-    }
+    quality = {"src": dirs["quality"]}
     dedup = VerifiedFuzzyDupsAttrData(
         verification=FuzzyVerificationParams(),
         local_representatives=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
@@ -250,6 +253,7 @@ def test_store_filters_routes_and_roundtrips(tmp_path, monkeypatch):
         decontam=decontam,
         cluster_assign=cluster_assign,
         quality=quality,
+        bucket_edges=BUCKET_EDGES,
         exact_dedup=exact_dedup,
         dedup=dedup,
         output_path=output_path,
@@ -302,6 +306,7 @@ def test_store_batches_input_shards_into_one_leaf_per_bucket(tmp_path, monkeypat
         decontam=decontam,
         cluster_assign=cluster_assign,
         quality=quality,
+        bucket_edges=BUCKET_EDGES,
         exact_dedup=exact_dedup,
         dedup=dedup,
         output_path=output_path,
@@ -374,6 +379,7 @@ def test_store_ignores_orphans_and_resumes_completed_tasks(tmp_path, monkeypatch
         decontam=decontam,
         cluster_assign=cluster_assign,
         quality=quality,
+        bucket_edges=BUCKET_EDGES,
         exact_dedup=exact_dedup,
         dedup=dedup,
         output_path=output_path,
@@ -409,6 +415,7 @@ def test_store_rejects_dedup_source_set_mismatch(tmp_path, monkeypatch, label):
             decontam=decontam,
             cluster_assign=cluster_assign,
             quality=quality,
+            bucket_edges=BUCKET_EDGES,
             exact_dedup=exact_dedup,
             dedup=dedup,
             output_path=str(tmp_path / "store"),
@@ -432,6 +439,7 @@ def test_store_rejects_reordered_tokenize_documents(tmp_path, monkeypatch):
             decontam=decontam,
             cluster_assign=cluster_assign,
             quality=quality,
+            bucket_edges=BUCKET_EDGES,
             exact_dedup=exact_dedup,
             dedup=dedup,
             output_path=str(tmp_path / "store"),

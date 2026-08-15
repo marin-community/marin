@@ -849,13 +849,18 @@ def reference_datakit_steps(
 
     # ---- Final store: attribute join + per-bucket Levanter cache ---------------
     def _store_fn(output_path: str) -> ClusteredStoreData:
+        scores = {n: read_artifact(s["quality"].output_path, QualityScores) for n, s in per_source.items()}
+        edges = {tuple(q.bucket_edges) for q in scores.values()}
+        if len(edges) != 1:
+            raise ValueError(f"sources span multiple quality calibrations: {sorted(edges)}")
         return build_clustered_store(
             tokenize={n: read_artifact(s["tokenize"].output_path, TokenizedAttrData) for n, s in per_source.items()},
             decontam={n: read_artifact(s["decontam"].output_path, DeconAttributes) for n, s in per_source.items()},
             cluster_assign={
                 n: read_artifact(s["assign"].output_path, AssignmentAttrData) for n, s in per_source.items()
             },
-            quality={n: read_artifact(s["quality"].output_path, QualityScores) for n, s in per_source.items()},
+            quality={n: q.main_output_dir for n, q in scores.items()},
+            bucket_edges=next(iter(edges)),
             exact_dedup=read_artifact(exact_dedup.output_path, GlobalExactDedupData),
             dedup=read_artifact(verified_dedup.output_path, VerifiedFuzzyDupsAttrData),
             output_path=output_path,

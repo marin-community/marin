@@ -83,12 +83,13 @@ from iris.cluster.client.job_info import get_job_info
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
 from rigging.filesystem.factory import open_url
-from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from experiments.datakit import hero_data
+from experiments.datakit.cluster.quality.fast_transformer.artifact import calibration_bucket_edges
 from experiments.datakit.cluster.quality.fast_transformer.data import NUM_RESERVED, PAD_ID, UNK_ID
 from experiments.datakit.cluster.quality.fast_transformer.inference import predict
 from experiments.datakit.cluster.quality.fast_transformer.model import COMPUTE_DTYPE, FastTransformer
@@ -1106,9 +1107,7 @@ def verify_source(manifest: str, source: str, calibration: str, verify_threads: 
         "zephyr/records_out"
     )
 
-    with open_url(calibration, "rb") as fh:
-        knots = json.loads(fh.read())["default"]["xk"]
-    edges = np.asarray(knots[1:-1], dtype=np.float64)
+    edges = np.asarray(calibration_bucket_edges(calibration), dtype=np.float64)
     counts = np.bincount(np.digitize(scores, edges), minlength=len(edges) + 1)
 
     result = {

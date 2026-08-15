@@ -28,6 +28,13 @@ because the tokenize hash includes one and it has changed under the runs that
 produced this data: each tokenizer was applied to the whole registry in a single
 fleet run, and each of those runs wrote a different version. The dedup stages
 and domain cluster assignment are pinned to specific runs outright.
+:func:`decontam` is pinned per source, like :func:`harrier`, because its step
+folds in an eval bloom and a drop-set stage that have both moved since the run.
+
+A stage whose producing job has not finished raises :class:`PendingRegistration`
+when something asks for it. :func:`experiments.datakit.produce_store.pending`
+collects those into one list, so the store entry point can say everything it is
+waiting on at once instead of failing on the first one.
 
 All paths resolve against ``MARIN_PREFIX``. CoreWeave Datakit has one storage
 root, ``s3://marin-us-east-02a/marin``; use it regardless of worker placement.
@@ -71,6 +78,39 @@ def harrier_paths_path() -> pathlib.Path:
 def harrier_paths() -> dict[str, str]:
     """Load the complete Harrier path map."""
     return json.loads(harrier_paths_path().read_text())
+
+
+@cache
+def decon_paths_path() -> pathlib.Path:
+    """Return the path to the per-source decontamination path map."""
+    return pathlib.Path(__file__).with_name("hero_data_decon_paths.json")
+
+
+class PendingRegistration(LookupError):
+    """A hero stage the run needs, whose producing job has not been registered yet.
+
+    Raised at the point of use rather than at import, so a caller that does not
+    touch the stage still works, and one that does gets told what to do about it
+    instead of a path that resolves to nothing.
+    """
+
+    def __init__(self, stage: str, remedy: str) -> None:
+        super().__init__(f"{stage} is not registered in hero_data yet: {remedy}")
+        self.stage = stage
+        self.remedy = remedy
+
+
+@cache
+def decon_paths() -> dict[str, str]:
+    """Load the per-source decontamination path map."""
+    path = decon_paths_path()
+    if not path.exists():
+        raise PendingRegistration(
+            "decontamination",
+            f"run experiments/datakit/scripts/register_decontam.py to write {path.name} "
+            "from the completed decontamination run",
+        )
+    return json.loads(path.read_text())
 
 
 # The manifest records paths relative to the sole CoreWeave Datakit root.
@@ -151,6 +191,20 @@ NEMOTRON_88K = QualityPin(
     tokenizer=NEMOTRON_TOKENIZER,
     version=1,
 )
+
+# Where NEMOTRON_88K's deployed bytes sit. Held as a path beside the pin rather
+# than inside it: the digests are what make the claim checkable, and scoring
+# refuses to run against a directory that digests to anything else, so this only
+# has to say where to look.
+QUALITY_MODEL_DIR = "user/muchanem/quality_scores_run/model/nemotron_88k_folded"
+QUALITY_CALIBRATION_FILE = "calib_bme.json"
+
+
+def quality_calibration(quality_model: QualityPin = NEMOTRON_88K) -> str:
+    """Return the calibration file whose knots cut ``quality_model``'s scores."""
+    if quality_model != NEMOTRON_88K:
+        raise KeyError(f"no calibration path recorded for {quality_model.name!r}")
+    return prefix_join(marin_prefix(), QUALITY_MODEL_DIR, QUALITY_CALIBRATION_FILE)
 
 
 def _refuse_to_run(output_path: str) -> NoReturn:
@@ -248,13 +302,32 @@ def exact_dups() -> StepSpec:
 
 
 def fuzzy_dups() -> StepSpec:
-    """Return the pinned fuzzy-duplicate attributes covering every source."""
+    """Return the pinned fuzzy-duplicate *candidate* attributes covering every source."""
     return _frozen_step("hero/fuzzy_dups", f"datakit/{FUZZY_DUPS_ID}")
 
 
 def verified_fuzzy_dups() -> StepSpec:
     """Return the pinned verified fuzzy-duplicate attributes covering every source."""
     return _frozen_step("hero/verified_fuzzy_dups", VERIFIED_FUZZY_DUPS_PATH)
+
+
+def decontam(source: str) -> StepSpec:
+    """Return the decontamination marks for ``source``.
+
+    Recorded rather than recomputed, like :func:`harrier`. The decon step folds
+    the eval bloom and the cross-source drop sets into its identity through its
+    dependencies, and both have moved since the run that produced this data, so
+    rebuilding the step from current code addresses a directory that does not
+    exist. ``scripts/register_decontam.py`` writes the map by reading the run.
+    """
+    paths = decon_paths()
+    if source not in paths:
+        raise PendingRegistration(
+            f"decontamination for {source!r}",
+            f"the map in {decon_paths_path().name} covers {len(paths)} sources but not this one; "
+            "rerun register_decontam.py against a run that includes it",
+        )
+    return _frozen_step(f"hero/decontam/{source}", paths[source])
 
 
 def domain_cluster_assignment() -> StepSpec:
