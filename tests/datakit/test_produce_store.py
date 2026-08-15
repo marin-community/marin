@@ -155,3 +155,17 @@ def test_repointing_the_exact_pin_moves_the_repack_and_the_store(monkeypatch):
 
     assert after_inputs.exact_dups.output_path != inputs.exact_dups.output_path
     assert produce_store.build_store_step(after_inputs, max_workers=4).output_path != before
+
+
+def test_running_the_repack_early_lands_where_the_store_will_look():
+    """``--repack-only`` exists so the store serves it from cache later.
+
+    That only holds if the two build the same identity, which means the sizing
+    flags the early run takes must stay out of the step hash.
+    """
+    early = produce_store.build_focus_exact_repack_step(
+        hero_data.exact_dups(), max_workers=8, worker_resources=produce_store.ResourceConfig(cpu=1, ram="2g")
+    )
+    from_store = produce_store.store_inputs([*SOURCES, hero_data.FOCUS_SOURCE_NAME]).exact_dups
+
+    assert early.output_path == from_store.output_path
