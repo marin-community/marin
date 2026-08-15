@@ -495,3 +495,29 @@ Experiment ID prefix: `MEP`.
   branch (its EP16 4-node proxy passes on newer machinery).
 - Also this session: #8311 retitled/reworded (experimental framing, per
   request).
+
+### 2026-08-15 09:00 - MEP-013: current main still crashes; measurement branch on PR #8081
+- Result chain: (a) rebased marin-ep onto origin/main (2ed6233bf5, 28
+  commits clean; main now defaults 1 process/GPU with attempt-scoped
+  coordinator and PGLE off — the machinery whose absence segfaulted the
+  old-base per-GPU attempt, and whose per-node PGLE failure modes explain
+  the earlier silent wedge); (b) ep-marin on that base STILL dies with
+  the #8313 illegal-address teardown at step 1 — main alone does not
+  contain the ragged fix; (c) MNNVL-off probe on the old base wedged
+  silently (killed).
+- Pivot: measurement branch `marin-ep-8081` = PR #8081 head (bd5a7b84d1,
+  the branch whose exact EP16 runs pass and hit 18-22% MFU) + merge of
+  marin-ep. Merge notes: launch.py switched to the Flavor registry
+  (added `ep-marin`); `_local_permute_from_counts` now returns
+  physical+active group sizes (ours coincide — no pool padding);
+  marin_ep joined _RAGGED_ALL_TO_ALL_IMPLEMENTATIONS so
+  `--ragged-all-to-all-splits-per-peer` threads through
+  `_shard_a2a_params` into our backend for free; 8081-only launchers
+  needed the storage_path import fix from main's rigging refactor.
+  82 tests pass. Pushed as marin-ep-8081.
+- Launched: mep-m8-marin-8081-25 — ep-marin, cf 1.1, split-32, EP64,
+  the launcher's own runtime recipe (per-GPU, LHS off, overlap 1,
+  command buffers off, PGLE off, NCCL_BUFFSIZE=1M).
+- Next action: verdict; on success score steps 5-24 vs the S28/S33
+  baselines (18.08% split-32 ragged, 19.63% cute, 21.66% cudnn-cute at
+  EP16; fixed EP64 ~16.3 s/it from mep-ctl-fixed) and vs drops.
