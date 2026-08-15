@@ -34,6 +34,21 @@ and renders the agent's turns, tool calls, observations, and reward. A sample's 
 payload, the trajectory, lives as an archive blob referenced by URI, so paging the light columns
 never materializes it.
 
+The sample and artifact endpoints accept both FineStore format v2 and format v1 during the writer
+rollout. V2 reads are pinned to `HEAD`. V1 reads use `finestore.migrations.LegacyReadView`, which
+captures the listed shards without modifying the archive and therefore has no commit token. Current
+writers produce v2. Remove the v1 path after every known eval runtime image has moved to v2 and four
+weekly fleet inventories find no sealed v1 archives and no additions to the documented terminal
+unsealed-v1 set. Run the inventory over every record root EvalDash scans:
+
+```bash
+uv run python -m experiments.evaluation.migrations.cli smoke-upgrade-fleet --mode inventory \
+  --records-prefix gs://marin-eval-metadata/evals \
+  --records-prefix s3://marin-us-east-02a/marin/evals \
+  --records-prefix gs://marin-eval-metadata/runs \
+  --records-prefix s3://marin-us-east-02a/marin/eval-metadata/runs
+```
+
 IAP is the only access gate; there is no application auth.
 
 ## API

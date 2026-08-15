@@ -18,6 +18,9 @@ from . import m0001_manifest
 
 logger = logging.getLogger(__name__)
 
+LegacyReadView = m0001_manifest.LegacyReadView
+LEGACY_READ_FORMAT_VERSION = m0001_manifest.FROM_VERSION
+
 
 @dataclass(frozen=True)
 class _MigrationRevision:

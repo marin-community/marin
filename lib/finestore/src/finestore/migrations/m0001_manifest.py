@@ -29,6 +29,7 @@ from finestore.layout import (
     Shard,
     TableMetadata,
 )
+from finestore.reader import _ReadOperations
 
 MIGRATION_ID = "0001_manifest"
 FROM_VERSION = 1
@@ -70,6 +71,97 @@ class LegacyArchive:
     tables: dict[str, LegacyTable]
 
 
+@dataclasses.dataclass(frozen=True)
+class LegacyReadShard:
+    """One v1 shard reference captured by a best-effort listing snapshot."""
+
+    path: str
+    writer: str
+    generation: int
+    commit_sequence: int = 0
+    primary_key_sorted: bool = False
+
+
+@dataclasses.dataclass(frozen=True)
+class _LegacyReadTable:
+    metadata_path: str
+    metadata: TableMetadata
+    shards: tuple[LegacyReadShard, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class _LegacyShardLocation:
+    path: StoragePath
+    writer: str
+    generation: int
+
+
+class LegacyReadView(_ReadOperations):
+    """A read-only, listing-based view of one format-v1 archive.
+
+    Version 1 has no atomic HEAD, so this view pins the shard names observed while it is
+    constructed and has no commit token. It exists for bounded compatibility while old writers
+    remain deployed; new readers that require a durable snapshot use :class:`finestore.reader.ReadView`.
+    """
+
+    def __init__(self, root: str) -> None:
+        self.root = root
+        root_path = StoragePath(root)
+        archive = _LegacyArchiveMetadata.model_validate_json((root_path / "_archive.json").read_bytes())
+        if archive.format_version != FROM_VERSION:
+            raise ValueError(
+                f"FineStore legacy reader requires format v{FROM_VERSION}; found v{archive.format_version} at {root!r}"
+            )
+        seal_path = root_path / LEGACY_SEAL_FILE
+        self._seal = SealMarker.model_validate_json(seal_path.read_bytes()) if seal_path.exists() else None
+        self._tables = {
+            name: _LegacyReadTable(
+                metadata_path=str(root_path / name / _LEGACY_SCHEMA_FILE),
+                metadata=TableMetadata.model_validate(metadata.model_dump()),
+                shards=_legacy_read_shards(root_path, name),
+            )
+            for name, metadata in _legacy_table_metadata(root_path).items()
+        }
+
+    @property
+    def token(self) -> None:
+        """Format v1 has no commit token."""
+        return None
+
+    def primary_key(self, table: str) -> tuple[str, ...]:
+        return self.table_metadata(table).primary_key
+
+    def table_metadata(self, table: str) -> TableMetadata:
+        state = self._tables.get(table)
+        if state is None:
+            raise KeyError(f"table {table!r} is not present in format-v1 archive {self.root!r}")
+        return state.metadata
+
+    def table_metadata_path(self, table: str) -> str | None:
+        state = self._tables.get(table)
+        return None if state is None else state.metadata_path
+
+    def table_names(self) -> tuple[str, ...]:
+        return tuple(sorted(self._tables))
+
+    def schema_version(self, table: str) -> int | None:
+        """Return the table schema version, or ``None`` when the table is unknown or empty."""
+        state = self._tables.get(table)
+        if state is None or not state.shards:
+            return None
+        return state.metadata.schema_version
+
+    def is_sealed(self) -> bool:
+        return self._seal is not None
+
+    def seal_marker(self) -> SealMarker | None:
+        return self._seal
+
+    def list_shards(self, table: str) -> list[LegacyReadShard]:
+        state = self._tables.get(table)
+        return [] if state is None else list(state.shards)
+
+
 def _legacy_table_metadata(root: StoragePath) -> dict[str, _LegacyTableMetadata]:
     tables = {}
     for directory in root.ls():
@@ -101,6 +193,26 @@ def _legacy_shard(path: StoragePath) -> tuple[str, int] | None:
     return writer, generation
 
 
+def _legacy_shard_locations(root: StoragePath, table: str) -> tuple[_LegacyShardLocation, ...]:
+    locations = []
+    for directory, _, names in (root / table).walk():
+        for name in names:
+            path = directory / name
+            parsed = _legacy_shard(path)
+            if parsed is None:
+                continue
+            writer, generation = parsed
+            locations.append(_LegacyShardLocation(path=path, writer=writer, generation=generation))
+    return tuple(sorted(locations, key=lambda location: str(location.path)))
+
+
+def _legacy_read_shards(root: StoragePath, table: str) -> tuple[LegacyReadShard, ...]:
+    return tuple(
+        LegacyReadShard(path=str(location.path), writer=location.writer, generation=location.generation)
+        for location in _legacy_shard_locations(root, table)
+    )
+
+
 def _sequence_bounds(metadata: pq.FileMetaData) -> tuple[int, int]:
     if SEQ_COLUMN not in metadata.schema.names or metadata.num_rows == 0:
         return 0, 0
@@ -117,36 +229,30 @@ def _sequence_bounds(metadata: pq.FileMetaData) -> tuple[int, int]:
 
 def _legacy_shards(root: StoragePath, table: str) -> tuple[Shard, ...]:
     shards = []
-    for directory, _, names in (root / table).walk():
-        for name in names:
-            path = directory / name
-            parsed = _legacy_shard(path)
-            if parsed is None:
-                continue
-            writer, generation = parsed
-            with path.open("rb") as handle:
-                metadata = pq.read_metadata(handle)
-                handle.seek(0)
-                digest = hashlib.sha256()
-                size_bytes = 0
-                while chunk := handle.read(_HASH_CHUNK_BYTES):
-                    digest.update(chunk)
-                    size_bytes += len(chunk)
-            min_seq, max_seq = _sequence_bounds(metadata)
-            shards.append(
-                Shard(
-                    path=str(path),
-                    writer=writer,
-                    generation=generation,
-                    rows=metadata.num_rows,
-                    min_seq=min_seq,
-                    max_seq=max_seq,
-                    size_bytes=size_bytes,
-                    content_sha256=digest.hexdigest(),
-                    commit_sequence=1,
-                )
+    for location in _legacy_shard_locations(root, table):
+        with location.path.open("rb") as handle:
+            metadata = pq.read_metadata(handle)
+            handle.seek(0)
+            digest = hashlib.sha256()
+            size_bytes = 0
+            while chunk := handle.read(_HASH_CHUNK_BYTES):
+                digest.update(chunk)
+                size_bytes += len(chunk)
+        min_seq, max_seq = _sequence_bounds(metadata)
+        shards.append(
+            Shard(
+                path=str(location.path),
+                writer=location.writer,
+                generation=location.generation,
+                rows=metadata.num_rows,
+                min_seq=min_seq,
+                max_seq=max_seq,
+                size_bytes=size_bytes,
+                content_sha256=digest.hexdigest(),
+                commit_sequence=1,
             )
-    return tuple(sorted(shards, key=lambda shard: shard.path))
+        )
+    return tuple(shards)
 
 
 def inspect_legacy_snapshot(root: str) -> LegacyArchive:

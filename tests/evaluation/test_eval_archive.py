@@ -16,6 +16,7 @@ from finestore.admin import set_table_metadata
 from finestore.reader import ReadView
 from fsspec.core import url_to_fs
 from marin.evaluation.archive import (
+    SAMPLES_MERGE_KEY,
     Choice,
     EvalSample,
     EvaluationStore,
@@ -616,6 +617,62 @@ def _write_v1_smoke_archive(source) -> None:
         pa.Table.from_pylist([{"name": "trajectory.json", "data": b"payload", "_seq": 0, "_writer": "legacy"}]),
         source / "blobs" / "w=legacy" / "g=0" / "0000000000000000-blob.parquet",
     )
+
+
+def _write_live_v1_eval_archive(source) -> None:
+    samples_root = source / "samples"
+    blobs_root = source / "blobs"
+    for table_root in (samples_root, blobs_root):
+        (table_root / "w=legacy" / "g=0").mkdir(parents=True)
+    (samples_root / "w=legacy" / "g=1").mkdir(parents=True)
+    (source / "_archive.json").write_text('{"format_version": 1}')
+    (samples_root / "_schema.json").write_text(
+        json.dumps({"primary_key": SAMPLES_MERGE_KEY, "schema_version": 4, "on_conflict": "supersede"})
+    )
+    (blobs_root / "_schema.json").write_text('{"primary_key": ["name"], "schema_version": 1, "on_conflict": "error"}')
+
+    first = sample_to_archive_row(_mcq("1", correct=False), trial_id="")
+    second = sample_to_archive_row(_mcq("2", correct=False), trial_id="")
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {**first, "_seq": 0, "_writer": "legacy"},
+                {**second, "_seq": 1, "_writer": "legacy"},
+            ]
+        ),
+        samples_root / "w=legacy" / "g=0" / "0000000000000000-samples.parquet",
+    )
+    replacement = sample_to_archive_row(_mcq("1", correct=True), trial_id="")
+    pq.write_table(
+        pa.Table.from_pylist([{**replacement, "_seq": 2, "_writer": "legacy"}]),
+        samples_root / "w=legacy" / "g=1" / "0000000000000002-samples.parquet",
+    )
+    pq.write_table(
+        pa.Table.from_pylist(
+            [{"name": "trajectory.json", "data": b'{"steps":[{"step_id":1}]}', "_seq": 0, "_writer": "legacy"}]
+        ),
+        blobs_root / "w=legacy" / "g=0" / "0000000000000000-blob.parquet",
+    )
+
+
+def test_evaldash_reads_an_unsealed_v1_finestore_archive(tmp_path):
+    results = tmp_path / "run" / "results"
+    _write_live_v1_eval_archive(results)
+
+    tasks = list_sample_tasks(str(results))
+    assert tasks.available
+    assert [(task.task, task.files) for task in tasks.tasks] == [("arc", 2)]
+
+    page = fetch_samples(str(results), "arc", offset=0, limit=10, correct="all")
+    assert page.available
+    assert page.counts == page.counts.model_copy(update={"all": 2, "correct": 1, "incorrect": 1, "ungraded": 0})
+    assert {sample.doc_id: sample.correct for sample in page.rows} == {"1": True, "2": False}
+
+    artifact = fetch_artifact(str(results), "finestore://blobs/trajectory.json")
+    assert artifact.available
+    assert json.loads(artifact.text) == {"steps": [{"step_id": 1}]}
+    assert json.loads((results / "_archive.json").read_text()) == {"format_version": 1}
+    assert not (results / "HEAD").exists()
 
 
 def test_format_smoke_migrates_a_clone_and_preserves_source_and_rows(tmp_path):

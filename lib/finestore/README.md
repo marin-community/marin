@@ -157,6 +157,13 @@ opts in. `ReadView()` never mutates storage; an older archive raises
 `FormatVersionError` with instructions to call `finestore.migrations.migrate(root)`.
 An archive from a newer FineStore build instructs either caller to upgrade the package.
 
+`finestore.migrations.LegacyReadView(root)` is the explicit format-v1 compatibility
+reader. It captures one listing of the v1 table shards, applies the same primary-key
+supersession rules as `ReadView`, and reads sealed or unsealed archives without changing
+them. Format v1 has no `HEAD`, so `LegacyReadView.token` is always `None` and a concurrent
+writer can span the listing snapshot. Use it for transitional inspection and dashboards;
+workloads that require an atomic multi-table snapshot must migrate to format v2.
+
 The application that owns an archive runs migrations after quiescing its writers. For
 evaluation archives, the fleet operator runs
 `experiments.evaluation.migrations.cli upgrade-format` before deploying format-v2
