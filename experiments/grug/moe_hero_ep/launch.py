@@ -130,7 +130,15 @@ import fsspec
 wheel_url = {wheel_url!r}
 wheel_dir = Path(os.environ["IRIS_WORKDIR"]) / ".marin-ep-pjrt"
 filesystem, remote_path = fsspec.core.url_to_fs(wheel_url)
-filesystem.get(remote_path, str(wheel_dir / remote_path.rsplit("/", 1)[1]))
+if remote_path.endswith(".whl"):
+    matches = [remote_path]
+else:
+    matches = filesystem.glob(remote_path.rstrip("/") + "/*.whl")
+if not matches:
+    raise FileNotFoundError(f"no .whl under {{wheel_url}}")
+for match in matches:
+    filesystem.get(match, str(wheel_dir / match.rsplit("/", 1)[1]))
+    print("fetched", match)
 PY
 echo 'installing pinned nightly with patched PJRT'
 uv pip install --python "$IRIS_VENV/bin/python" --no-deps --reinstall {stock_wheels} "$wheel_dir"/*.whl
