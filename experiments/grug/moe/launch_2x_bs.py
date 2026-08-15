@@ -153,10 +153,31 @@ class GrugMoeLaunchConfig2xBS:
     left off, instead of jumping to ``resume_step * batch_size`` samples
     (which would skip half the dataset when batch_size doubled). Pass
     ``None`` when this run was trained at a constant BS throughout (i.e.
-    no source-BS handoff to reconcile)."""
+    no source-BS handoff to reconcile).
+
+    Mutually exclusive with ``resume_data_offset``."""
+    resume_data_offset: int | None = None
+    """Exact sample offset the DataLoader should be at when model-step
+    reaches ``resume_step``. Overrides ``source_batch_size`` when set:
+    the launcher constructs a 3-stage BS schedule (base, base+1, cooldown
+    BS) that yields *exactly* ``resume_data_offset`` cumulative samples
+    at ``resume_step``, then continues at ``batch_size`` after.
+
+    Use this when a single integer ``source_batch_size`` can't hit the
+    right target because the source and cooldown have different seq_len
+    (a source ``source_batch_size × resume_step`` product measures samples
+    at cooldown seq_len, which are a different size than source's samples).
+    Compute the target as ``source_tokens_consumed // cooldown_seq_len``:
+    that's the cooldown-sample-index whose underlying token offset matches
+    where the source left off (since Levanter's TokenSeqDataset uses
+    ``offsets = indices × seq_len``).
+
+    Mutually exclusive with ``source_batch_size``. Requires
+    ``resume_step > 0``."""
     resume_step: int = 0
-    """Step number of the source checkpoint being resumed. Used only when
-    ``source_batch_size`` is set (defines the BS-schedule boundary)."""
+    """Step number of the source checkpoint being resumed. Used when
+    ``source_batch_size`` or ``resume_data_offset`` is set (defines the
+    BS-schedule boundary)."""
     per_device_parallelism: int = -1
     """Per-chip micro-batch size. Required when ``source_batch_size`` is
     set, because ``TrainerConfig`` cannot auto-infer it from a non-int
@@ -168,16 +189,48 @@ class GrugMoeLaunchConfig2xBS:
 def run_grug_moe_trial_2x_bs(config: GrugMoeLaunchConfig2xBS) -> None:
     # Build a piecewise BS schedule when resuming from a source run that
     # used a different batch size. This makes the data loader's cumulative
-    # offset at config.resume_step exactly match where the source left off
-    # (= resume_step * source_batch_size samples), instead of jumping ahead
-    # to resume_step * batch_size and skipping the data the source already
-    # trained on. iter_from_step uses the BatchSchedule to compute offsets,
-    # so the schedule has to faithfully describe what the source consumed.
-    if config.source_batch_size is not None and config.source_batch_size != config.batch_size:
-        train_batch_size: int | list[ScheduleStep] = [
+    # offset at config.resume_step exactly match where the source left off,
+    # instead of jumping ahead to resume_step * batch_size and skipping the
+    # data the source already trained on. iter_from_step uses the
+    # BatchSchedule to compute offsets, so the schedule has to faithfully
+    # describe what the source consumed.
+    if config.source_batch_size is not None and config.resume_data_offset is not None:
+        raise ValueError("source_batch_size and resume_data_offset are mutually exclusive")
+
+    train_batch_size: int | list[ScheduleStep]
+    use_piecewise_schedule = False
+
+    if config.resume_data_offset is not None:
+        # Construct a 3-stage schedule that yields exactly
+        # ``resume_data_offset`` cumulative samples at ``resume_step``. Uses
+        # (base, base+1) integer BS pair so the exact target is hit despite
+        # ScheduleStep requiring integer values. See the field docstring.
+        if config.resume_step <= 0:
+            raise ValueError(f"resume_data_offset requires resume_step > 0, got {config.resume_step}")
+        target = config.resume_data_offset
+        base = target // config.resume_step
+        overflow = target - base * config.resume_step
+        stages: list[ScheduleStep] = []
+        if overflow == 0:
+            stages = [
+                ScheduleStep(start=0, value=base),
+                ScheduleStep(start=config.resume_step, value=config.batch_size),
+            ]
+        else:
+            boundary = config.resume_step - overflow
+            stages = [
+                ScheduleStep(start=0, value=base),
+                ScheduleStep(start=boundary, value=base + 1),
+                ScheduleStep(start=config.resume_step, value=config.batch_size),
+            ]
+        train_batch_size = stages
+        use_piecewise_schedule = True
+    elif config.source_batch_size is not None and config.source_batch_size != config.batch_size:
+        train_batch_size = [
             ScheduleStep(start=0, value=config.source_batch_size),
             ScheduleStep(start=config.resume_step, value=config.batch_size),
         ]
+        use_piecewise_schedule = True
     else:
         train_batch_size = config.batch_size
 
@@ -191,9 +244,7 @@ def run_grug_moe_trial_2x_bs(config: GrugMoeLaunchConfig2xBS) -> None:
         # source run's BS (used only for the BatchSchedule's cumulative
         # offset computation at the resume step) and is never actually
         # iterated by this run because state.step loads to the resume step.
-        skip_batch_size_schedule_head_validation=(
-            config.source_batch_size is not None and config.source_batch_size != config.batch_size
-        ),
+        skip_batch_size_schedule_head_validation=use_piecewise_schedule,
         num_train_steps=config.steps,
         profiler=config.profiler,
         mp=jmp.get_policy(config.mp),
