@@ -33,7 +33,7 @@ from haliax.jax_utils import broadcast_one_to_all, is_in_jit, is_jax_array_like
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 from jaxtyping import PyTree
 
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 from levanter._debug_logging import flush_debug_output
 from levanter.tensorstore_serialization import (

@@ -166,14 +166,16 @@ nine `WorkloadPriorityClass` objects at startup.
 | --- | ---: | ---: | ---: |
 | batch | 0 | 1 | 2 |
 | interactive | 10 | 11 | 12 |
-| production | 1000 | 1001 | 1002 |
+| production | 1000 | 1000 | 1000 |
 
-The ordering is CPU < accelerator < co-scheduled group within a band. Kueue can
-therefore reclaim same-band CPU reservations for one accelerator Pod, or both
-lower tiers for a co-scheduled GPU group. A user-selected higher band still
-outranks every tier in the band below it. Pod `priorityClassName` remains the
-ordinary Iris band, so this ordering affects Kueue admission and preemption but
-does not change kube-scheduler priority within an admitted workload.
+Batch and interactive workloads are ordered CPU < accelerator < co-scheduled
+group within their band. Kueue can reclaim same-band CPU reservations for one
+accelerator Pod, or both lower tiers for a co-scheduled GPU group. Production
+workloads share one Kueue priority, so request shape cannot cause one production
+workload to preempt another. A user-selected higher band still outranks every
+tier in the band below it. Pod `priorityClassName` remains the ordinary Iris
+band, so this ordering affects Kueue admission and preemption but does not change
+kube-scheduler priority within an admitted workload.
 
 For example, a `batch` CPU coordinator uses tier `0`, its separately admitted
 accelerator child uses tier `1`, and a co-scheduled CPU/GPU group uses tier `2`.
@@ -185,18 +187,16 @@ Kubernetes priority `-1`, and Iris batch Pods retain Kubernetes priority `0`.
 Kueue Workload priority and Kubernetes Pod priority are separate scheduling
 domains, but neither representation places Iris work below the health checker.
 
-Workloads created before this mapping use the native band value, equal to the
-new CPU tier. During rollout, a new accelerator or co-scheduled Workload can
-therefore preempt older same-band work. Drain older same-band accelerator and
-co-scheduled Workloads before deployment when they must not be interrupted.
-
 ```mermaid
 flowchart TD
-    request[RunTaskRequest] --> gang{Co-scheduled group?}
+    request[RunTaskRequest] --> production{Production band?}
+    production -- Yes --> prod[Use production priority 1000]
+    production -- No --> gang
     gang -- Yes --> native[Use band plus 2<br/>co-scheduled tier]
     gang -- No --> accelerator{Accelerator requested?}
     accelerator -- Yes --> gpu[Use band plus 1<br/>accelerator tier]
     accelerator -- No --> cpu[Use native Iris band<br/>CPU tier]
+    prod --> queue[Kueue LocalQueue and shared ClusterQueue]
     native --> queue[Kueue LocalQueue and shared ClusterQueue]
     gpu --> queue
     cpu --> queue
@@ -275,6 +275,7 @@ their Kubernetes service account inside the cluster.
 | `kubernetes_provider.service_account` | Optional service account assigned to task Pods. |
 | `kubernetes_provider.host_network` | Enables host networking and RDMA requests for GPU Pods. |
 | `kubernetes_provider.cache_dir` | Node-local cache root. CoreWeave configs use `/mnt/local/iris-cache`. |
+| `kubernetes_provider.cache_max_age` | Maximum time since the last file write or recorded access before the node-agent reclaims a top-level cache entry. Omit it to disable reclamation. |
 | `kubernetes_provider.controller_address` | In-cluster controller address injected into task Pods. |
 | `kubernetes_provider.kueue.cluster_queue` | Pulumi-owned ClusterQueue to which Iris binds its LocalQueue. This is required. |
 | `kubernetes_provider.kueue.topologies` | Optional `group_by` to CoreWeave node-label mappings. |
@@ -346,18 +347,23 @@ Task working directories and caches are node-local:
 
 Keep `cache_dir` on `/mnt/local`, the node's NVMe storage. The shared Hugging
 Face path is `HF_HUB_CACHE`; Iris deliberately leaves `HF_HOME` private because
-it may contain the submitter's token. HostPath caches are not durable and are
-not automatically pruned, so they can grow until the node is replaced or an
-operator cleans them. Durable outputs belong in object storage.
+it may contain the submitter's token. The CoreWeave configs set
+`cache_max_age` to seven days. Every five minutes, the node-agent removes
+top-level entries whose files have not been modified or accessed within that age. The
+sweep ignores directory access times because walking a directory updates them. File
+access times are best-effort: `noatime`, `O_NOATIME`, and some memory-mapped reads do
+not refresh them. The node-agent atomically renames an expired entry before recursive
+deletion so another task can refill the original path. Durable outputs belong in
+object storage.
 
 `/cache` is unclaimed node-local scratch: a task that needs a real directory on
-the node rather than a bucket picks its own subdirectory there. Nothing prunes
-it, so treat anything written there as recoverable. `iris.runtime.jax_init` uses
-`/cache/xla` for XLA's per-fusion autotune results on GPU tasks, because XLA
-opens that directory from C++ and cannot read an object-store URL. JAX's own
-compilation cache is the opposite case and stays on object storage under the
-Marin prefix: JAX writes it only from process 0, so a node-local copy would
-leave every other node permanently cold.
+the node instead of a bucket picks its own subdirectory there. The node-agent
+reclaims those subdirectories under the same policy, so treat anything written
+there as recoverable. `iris.runtime.jax_init` uses `/cache/xla` for XLA's
+per-fusion autotune results on GPU tasks, because XLA opens that directory from
+C++ and cannot read an object-store URL. JAX's own compilation cache stays on
+object storage under the Marin prefix: JAX writes it only from process 0, so a
+node-local copy would leave every other node permanently cold.
 
 `storage.local_state_dir` controls controller SQLite storage. When it is empty,
 Iris creates a controller state PVC. `storage.remote_state_dir` stores durable

@@ -147,7 +147,7 @@ except AttributeError:
 `gs://b/x/y` are *different keys*, so a writer and reader that join differently
 silently split the namespace (#6904, #6838). `os.path.join` on a URL,
 `f"{prefix}/{path}"`, and `path.rstrip("/")`-before-join each re-solve the same
-problem locally and drift. Join through `rigging.filesystem.prefix_join` (one
+problem locally and drift. Join through `rigging.filesystem.storage_path.prefix_join` (one
 join) or `StoragePath` (parse once, `/` to join, `relative_to` for containment).
 
 **When allowed:** Purely local filesystem paths that can never carry a URL
@@ -184,7 +184,8 @@ for a polled read that must defeat the listing cache, `block_size`/`cache_type` 
 must reach the file opener rather than the S3 constructor, or a passthrough like
 `revision=`/`recursive=` on `glob`/`find`/`info`; handing a live `fs` to a library that
 needs the handle (pyarrow, a streaming writer); and the guarded
-`rigging.filesystem.url_to_fs`/`open_url`/`filesystem` and `atomic_rename` themselves,
+`rigging.filesystem.factory.url_to_fs`/`open_url`/`filesystem` and
+`rigging.filesystem.atomic.atomic_rename` themselves,
 which are the intended low-level seam.
 
 **Bad example:**

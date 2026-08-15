@@ -46,8 +46,9 @@ import humanfriendly
 import msgspec
 import polars as pl
 from iris.env_resources import TaskResources
-from rigging.filesystem import StoragePath, open_url, url_to_fs
+from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.s3_compat import needs_virtual_host_addressing
+from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import ExponentialBackoff, RateLimiter, log_time, retry_with_backoff
 
 from zephyr.external_sort import external_sort_merge

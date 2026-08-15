@@ -150,6 +150,16 @@
       "asDropdown": false,
       "icon": "dashboard",
       "includeVars": true,
+      "keepTime": false,
+      "targetBlank": false,
+      "title": "Storage",
+      "type": "link",
+      "url": "/d/marin-storage"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
       "title": "Infra",

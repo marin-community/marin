@@ -17,7 +17,7 @@ from collections.abc import Iterator
 from typing import NamedTuple
 
 import polars as pl
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem.factory import open_url, url_to_fs
 
 logger = logging.getLogger(__name__)
 

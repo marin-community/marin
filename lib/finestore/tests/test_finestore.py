@@ -21,7 +21,7 @@ from finestore.layout import (
 from finestore.reader import CompositeReader
 from finestore.store import DataStore, DataTable, PrimaryKeyConflict
 from fsspec.implementations.memory import MemoryFileSystem
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 
 def _rows(reader: CompositeReader, table: str, **kwargs) -> list[dict]:

@@ -10,7 +10,7 @@ Different layers read different slices of it:
   cluster's identity (name, public origins) and how to authenticate to its edge
   (:class:`ClusterAuth`). This is pure mechanism: a typed view over YAML, with no
   IO, no orchestration, and no knowledge of what mints a token.
-- ``data:`` is parsed separately into a :class:`~rigging.filesystem.DataConfig`
+- ``data:`` is parsed separately into a :class:`~rigging.filesystem.cluster_config.DataConfig`
   (storage layout); :func:`load_manifest` attaches it but does not redefine it.
 - Sections owned by callers above rigging — ``provisioning:`` (one-time GCP
   rollouts) and ``policy:`` (per-user budgets/roles) — are intentionally not
@@ -31,7 +31,7 @@ from typing import Any
 import yaml
 
 from rigging.config_discovery import resolve_cluster_config
-from rigging.filesystem import MARIN_CLUSTER_CONFIG_DIRS
+from rigging.filesystem.cluster_config import MARIN_CLUSTER_CONFIG_DIRS
 
 _MARIN_CLUSTER_ENV = "MARIN_CLUSTER"
 _DEFAULT_CLUSTER = "marin"

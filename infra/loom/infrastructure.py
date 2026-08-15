@@ -232,6 +232,7 @@ class ProfileConfig:
     prelude: str
     instructions: str
     restricted: bool
+    github_repositories: tuple[str, ...]
     allowed_tools: tuple[str, ...]
     mcp_access: McpAccessConfig
     env: tuple[ProfileSecretConfig, ...]
@@ -265,6 +266,7 @@ class ProfileConfig:
             prelude=str(value.get("prelude", "weaver")),
             instructions=_profile_instructions(value, name),
             restricted=bool(value.get("restricted", False)),
+            github_repositories=_string_tuple(value.get("githubRepositories", []), "githubRepositories", name),
             allowed_tools=_string_tuple(value.get("allowedTools", []), "allowedTools", name),
             mcp_access=McpAccessConfig.parse(value.get("mcpAccess", {}), name),
             env=env,
@@ -289,6 +291,7 @@ class ProfileConfig:
             "prelude": self.prelude,
             "instructions": self.instructions,
             "restricted": self.restricted,
+            "github_repositories": list(self.github_repositories),
             "allowed_tools": list(self.allowed_tools),
             "mcp_access": self.mcp_access.manifest(),
         }
@@ -732,6 +735,26 @@ def _workload_service_account(
     )
 
 
+def _deployment_manifest(
+    config: DeploymentConfig,
+    profiles: list[dict[str, Any]],
+    workload_values: list[dict[str, Any]],
+) -> str:
+    return json.dumps(
+        {
+            "settings": dict(config.settings),
+            "profiles": profiles,
+            "federations": (
+                [mapping.manifest(config.public_url) for mapping in config.github_federations] + workload_values
+            ),
+            "prune": config.prune_deployment,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _create_runtime_policy(
     config: DeploymentConfig,
     api_options: pulumi.ResourceOptions,
@@ -759,25 +782,13 @@ def _create_runtime_policy(
                 }
             )
         )
-    github_mappings = [mapping.manifest(audience) for mapping in config.github_federations]
-
-    def render(workload_values: list[dict[str, Any]]) -> str:
-        return json.dumps(
-            {
-                "settings": dict(config.settings),
-                "profiles": profiles,
-                "federations": github_mappings + workload_values,
-                "prune": config.prune_deployment,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-
     manifest: pulumi.Input[str]
     if workload_mappings:
-        manifest = pulumi.Output.all(*workload_mappings).apply(lambda values: render(list(values)))
+        manifest = pulumi.Output.all(*workload_mappings).apply(
+            lambda values: _deployment_manifest(config, profiles, list(values))
+        )
     else:
-        manifest = render([])
+        manifest = _deployment_manifest(config, profiles, [])
     return RuntimePolicyResources(audience, manifest, workload_clients, profile_secret_refs)
 
 
@@ -969,6 +980,10 @@ def _export_outputs(
     pulumi.export("dotenvSecretVersion", config.dotenv_secret_version)
     pulumi.export("tokenAudience", runtime_policy.audience)
     pulumi.export("profileNames", sorted(profile.name for profile in config.profiles))
+    pulumi.export(
+        "githubFederationProfiles",
+        {federation.name: federation.profile for federation in config.github_federations},
+    )
     pulumi.export(
         "workloadClients",
         pulumi.Output.all(*runtime_policy.workload_clients) if runtime_policy.workload_clients else [],

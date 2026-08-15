@@ -27,7 +27,7 @@ from enum import StrEnum
 from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, BaseModel, Field
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 # The seal marker object; its presence means every writer has finished and the run is immutable.
 SEALED_MARKER = "SEALED"

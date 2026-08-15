@@ -76,6 +76,8 @@ kubernetes_provider:
   namespace: iris-ci
   host_network: true
   cache_dir: /mnt/local/iris-cache
+  cache_max_age:
+    seconds: 604800
   controller_address: http://iris-ci-controller-svc.iris-ci.svc.cluster.local:10000
   kueue:
     # Pulumi owns the cluster-scoped ClusterQueue and cw-tas ResourceFlavor;
@@ -111,6 +113,10 @@ defaults:
     cache_dir: /mnt/local/iris-cache
     runtime: kubernetes
     default_task_image: ghcr.io/marin-community/iris-task:latest
+
+user_budget_defaults:
+  budget_limit: 400000
+  max_band: interactive
 
 scale_groups:
   cpu-erapids:

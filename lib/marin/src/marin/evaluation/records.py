@@ -18,10 +18,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
 
-import fsspec
-from fsspec.core import url_to_fs
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
-from rigging.filesystem import prefix_join
+from rigging.filesystem.factory import open_url, url_to_fs
+from rigging.filesystem.storage_path import prefix_join
 
 logger = logging.getLogger(__name__)
 
@@ -353,14 +352,14 @@ def record_path(prefix: str, run_id: str) -> str:
 def write_record(record: EvalRunRecord, prefix: str) -> str:
     """Write ``record.json`` under ``{prefix}/{run_id}/`` and return its full path."""
     path = record_path(prefix, record.run_id)
-    with fsspec.open(path, "w") as handle:
+    with open_url(path, "w") as handle:
         handle.write(record.model_dump_json(indent=2, by_alias=True))
     return path
 
 
 def read_record(path: str) -> EvalRunRecord:
     """Read one ``record.json`` back into an :class:`EvalRunRecord`."""
-    with fsspec.open(path, "r") as handle:
+    with open_url(path, "r") as handle:
         return EvalRunRecord.model_validate_json(handle.read())
 
 

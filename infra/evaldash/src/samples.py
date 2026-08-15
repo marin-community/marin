@@ -35,7 +35,7 @@ from finestore.eval import (
 from finestore.reader import CompositeReader
 from fsspec.core import url_to_fs
 from pydantic import BaseModel, ConfigDict
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
 

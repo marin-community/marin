@@ -22,8 +22,9 @@ from collections.abc import Sequence
 import pyarrow as pa
 import pyarrow.dataset as pds
 import pyarrow.parquet as pq
+import rigging.filesystem.factory as factory
 from pyarrow.fs import FSSpecHandler, PyFileSystem
-from rigging.filesystem import StoragePath, factory
+from rigging.filesystem.storage_path import StoragePath
 
 from finestore.layout import (
     BLOB_NAME_COLUMN,

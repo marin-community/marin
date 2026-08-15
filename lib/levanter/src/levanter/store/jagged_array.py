@@ -13,7 +13,9 @@ import jax.numpy as jnp
 import numpy as np
 import tensorstore as ts
 
-from rigging.filesystem import StoragePath, is_cross_region_url, record_transfer, url_to_fs
+from rigging.filesystem.cross_region import is_cross_region_url, record_transfer
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 from levanter.tensorstore_serialization import build_kvstore_spec
 

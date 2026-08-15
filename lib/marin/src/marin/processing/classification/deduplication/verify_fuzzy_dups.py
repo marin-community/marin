@@ -17,7 +17,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
@@ -60,6 +60,11 @@ _LOCAL_LINE_COUNT_REJECTION = "local_line_count_ratio_below_threshold"
 # effectively every cluster while a pathological one stays bounded.
 ANCHOR_SCAN_RECORDS = 64
 ANCHOR_SCAN_CHARS = 2_000_000
+# The reduce spills to /tmp through zephyr's external sort, and the run files live
+# until the merge finishes. One shard was measured holding 8 GiB, and a worker runs
+# several shards at once, so scratch is sized well above worker RAM. On Kubernetes
+# this becomes the pod's ephemeral-storage limit, and exceeding it evicts the pod.
+VERIFICATION_WORKER_SCRATCH = "256g"
 
 
 class RepresentativeKind(StrEnum):
@@ -804,7 +809,7 @@ def verify_fuzzy_dups(
     if not shards:
         raise ValueError("verify_fuzzy_dups found no normalized Parquet shards")
 
-    resources = worker_resources or ResourceConfig(cpu=2, ram="16g", disk="16g")
+    resources = worker_resources or ResourceConfig(cpu=2, ram="16g", disk=VERIFICATION_WORKER_SCRATCH)
     # The document store loads onto the worker pool, which must know its size,
     # so an unset worker count falls back to one worker per shard.
     if max_workers is None:

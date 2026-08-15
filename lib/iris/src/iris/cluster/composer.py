@@ -43,6 +43,7 @@ from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, projects_task_env_secret
 from iris.cluster.platforms.factory import ProviderBundle, create_provider_bundle
+from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.coreweave_topology import KueueTopologyBinding
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.types import local_queue_name
@@ -126,7 +127,7 @@ def make_task_backend(
                 logship_image=config.controller.image,
                 service_account=kp.service_account or "",
                 host_network=kp.host_network,
-                cache_dir=kp.cache_dir or "/cache",
+                cache_dir=kp.cache_dir or DEFAULT_TASK_CACHE_DIR,
                 controller_address=kp.controller_address or None,
                 managed_label=managed_label,
                 task_env=dict(config.defaults.task_env),

@@ -43,7 +43,7 @@ from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
 from marin.processing.tokenize.data_configs import with_pack
 from marin.training.training import LevanterCheckpoint
-from rigging.filesystem import marin_prefix, marin_temp_bucket
+from rigging.filesystem.cluster_config import marin_prefix, marin_temp_bucket
 
 from experiments.datasets.nemotron import nemotron_datasets
 from experiments.datasets.paloma import paloma_datasets

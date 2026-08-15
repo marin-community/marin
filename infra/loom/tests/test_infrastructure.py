@@ -17,6 +17,7 @@ from infra.loom.infrastructure import (
     GitHubFederationConfig,
     ProfileConfig,
     WorkloadIdentityConfig,
+    _deployment_manifest,
     _deployment_profiles,
     _validated_image_reference,
     create_infrastructure,
@@ -157,24 +158,38 @@ def test_release_reference_must_be_the_expected_registry_digest() -> None:
         _validated_image_reference("us-central1-docker.pkg.dev/example/loom/loom:main", "example", "us-central1")
 
 
-def test_profile_manifest_accepts_secret_references_but_rejects_values() -> None:
+def test_profile_manifest_renders_github_repositories_and_secret_references() -> None:
     profiles, references = _deployment_profiles(
         (
             ProfileConfig.parse(
                 "ops",
                 {
                     "agent": "codex",
+                    "githubRepositories": ["marin-community/marin", "marin-community/vllm"],
                     "mcpAccess": {"mode": "all", "groups": []},
                     "env": {"OPS_TOKEN": {"secretRef": "projects/example/secrets/ops-token/versions/7"}},
                 },
             ),
         )
     )
+    assert profiles[0]["profile"]["github_repositories"] == [
+        "marin-community/marin",
+        "marin-community/vllm",
+    ]
     assert profiles[0]["profile"]["mcp_access"] == {"mode": "all", "groups": []}
     assert profiles[0]["env"] == [{"name": "OPS_TOKEN", "secret_ref": "projects/example/secrets/ops-token/versions/7"}]
     assert references == [("example", "ops-token")]
     with pytest.raises(ValueError, match="full secretRef"):
         ProfileConfig.parse("ops", {"agent": "codex", "env": {"OPS_TOKEN": "plaintext"}})
+
+
+def test_deployment_manifest_preserves_unicode_profile_instructions() -> None:
+    profile = ProfileConfig.parse("github", {"agent": "codex", "instructions": "Prefix comments with 🤖"})
+    config = replace(deployment_config(), profiles=(profile,), workloads=(), github_federations=())
+    profiles, _ = _deployment_profiles(config.profiles)
+    manifest = _deployment_manifest(config, profiles, [])
+    assert "🤖" in manifest
+    assert json.loads(manifest)["profiles"][0]["profile"]["instructions"] == "Prefix comments with 🤖"
 
 
 def test_profile_instructions_reject_ambiguous_or_external_sources() -> None:

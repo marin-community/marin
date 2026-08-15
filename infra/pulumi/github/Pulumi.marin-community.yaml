@@ -4,6 +4,7 @@ config:
   marin-github:organization: marin-community
   marin-github:repositories:
     - marin-community/marin
+  marin-github:forkFerryRepository: marin-community/marin
   marin-github:dependencyUpdater:
     repository: marin-community/marin
     appId: 4563866
@@ -304,7 +305,7 @@ config:
       source_kind: current-environment
       source_ref: env:COREWEAVE_API_TOKEN
       disposition: review
-      note: Optional cost-report provider credential; distinct from CoreWeave object-storage keys.
+      note: Used by the hourly CoreWeave storage collector; requires Observability Viewer and differs from storage and Grafana read keys.
     - name: OPENAI_ADMIN_KEY
       scope: repository
       repository: marin-community/marin

@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from finestore.eval import EvalSample, EvaluationStore, Grading, SampleKind
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (

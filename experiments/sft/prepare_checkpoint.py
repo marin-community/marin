@@ -46,7 +46,7 @@ from huggingface_hub import HfFileSystem, list_repo_files, snapshot_download
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from safetensors.numpy import load, save
 from scipy.stats import truncnorm
 from transformers import AutoTokenizer
