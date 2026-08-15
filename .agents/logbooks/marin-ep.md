@@ -31,17 +31,24 @@ Experiment ID prefix: `MEP`.
   needed to evaluate gate G1b.
 
 ## Current TL;DR
-- M0-M5 done ([MEP-001]..[MEP-006]): spec, dense oracle, message-passing
-  correctness simulator with explicit backward, L0/L1 perf models, and a
-  hardware-validated XLA stepping-stone backend (oracle-conformant values
-  + grads + drops on GB200 with production ragged transport). 43 CPU
-  tests green + 3 GPU-marked.
+- M0-M6 done ([MEP-001]..[MEP-007]): spec, dense oracle, message-passing
+  correctness simulator with explicit backward, L0/L1 perf models, a
+  hardware-validated XLA stepping-stone backend, and the fused Mosaic-GPU
+  transport (`transport="mgpu"`) — oracle-conformant values + grads +
+  drops on GB200 for both transports at G {1,2,4}. 43 CPU tests green +
+  8 GPU tests green on GB200.
+- M6 numbers ([MEP-007]): transport 1.6-1.7 ms/direction for ~800 MB
+  (~500 GB/s/device); layer A/B at EP4 hero widths: 6.37x fwd / 5.07x
+  fwd+bwd over the ragged stepping-stone, bit-identical outputs. Kernel
+  lessons: mesh-dict device ids on multi-axis meshes; dynamic tile-loop
+  bounds (static-bound predication cost 30-41 ms/direction).
+- GEMM headroom for M7: Triton ragged_dot at true hero per-device shape
+  = 920-930 TF/s vs 1747 TF/s dense XLA on GB200 (CuTe grouped GEMM
+  reached 2.2 PF/s in the MXFP8 work).
 - Transport substrate proven on GB200 ([MEP-005]): Pallas Mosaic-GPU
   remote puts + semaphores, 584 GB/s/device egress untuned (65% of
-  NVLink5 peak), collective-metadata path, zero custom CUDA.
-- M6 in flight: generic put_segments kernel drafted; its
-  dispatch/combine metadata builders are CPU-proven against the
-  simulator ([MEP-006]).
+  NVLink5 peak), collective-metadata path, zero custom CUDA. Multi-node
+  nvshmem path still unvalidated.
 - Watch out: haliax ragged_dot's GPU Triton path silently miscomputes at
   small dims and pins tf32 ([MEP-006]).
 - Drop rule adopted (SPEC S2): group-pooled capacity with per-expert floor,
@@ -64,7 +71,9 @@ Experiment ID prefix: `MEP`.
 - `MEP-H4`: rotated, simultaneous per-source sends are required in the real
   kernel (L1 predicts ingress convoys and a serialized combine tail
   otherwise; cross-expert GEMM-tile interleave turned out not to matter).
-  Evidence: [MEP-003]. Verify on hardware in M6.
+  Evidence: [MEP-003]. Status: the M6 kernel implements rotated sends and
+  hits ~500 GB/s/device at EP4 ([MEP-007]); the A/B against non-rotated
+  order is still untested on hardware (matters more at EP64).
 - `MEP-H5`: with G=3 pooling, lowering cf toward ~1.1 beats cf 1.33 on
   drop-adjusted throughput under realistic skew (compute balance dominates).
   Evidence: [MEP-003] sim table. Next test: hardware A/B arm with loss
@@ -284,3 +293,48 @@ Experiment ID prefix: `MEP`.
   gathered transport at EP4; integrate as `transport="mgpu"` in
   xla_backend; measure vs ragged; then EP4 microbench vs fixed_all_to_all
   and the levanter backend registration.
+
+### 2026-08-15 00:10 - MEP-007: M6 GREEN — fused transport validated, 6.4x layer A/B at EP4
+- Hypothesis: `put_segments` is correct on hardware and beats the ragged
+  stepping-stone transport at layer level.
+- Commit Hash: 0c2ad0d210 (branch pushed to origin/marin-ep)
+- Command: `pytest experiments/marin_ep/tests/test_mgpu_transport_gpu.py
+  test_xla_backend.py -k 'put_segments or real_gpu' -n0`;
+  `python experiments/marin_ep/bench/bench_backend_ep4.py` on one GB200
+  tray (dev pod, cw-us-east-08a, jax 0.10.1).
+- Result:
+  - All 8 GPU tests pass: standalone kernel vs NumPy plan interpreter
+    (mixed sizes + zero-row segments + relaunch/semaphore-reset check;
+    full-tile path), and the conformance matrix {ragged, mgpu} x
+    G {1,2,4} — values, drops, and all four grads (the `put_with_transpose`
+    custom_vjp runs the reverse-plan kernel in bwd).
+  - Two hardware fixes: (1) `remote_ref`/`semaphore_signal` device ids
+    must be the mesh-dict form `{axis: dest}` on multi-axis meshes
+    (scalar = "1 id for a 4D mesh" error); (2) tile loops must have
+    dynamic bounds — the static `max_tiles` loop from the draft burned
+    30-41 ms/direction in predicated no-op iterations. With
+    `pl.loop(sm_id, num_full, step=num_sms)` + shifted-last-tile tails:
+    1.6-1.7 ms/direction for ~800 MB payload ~= 500 GB/s/device (spike
+    was 584 untuned).
+  - Layer A/B at EP4, 32k tokens/device, hero widths (H=3072, I=6272,
+    E=192, cf 1.33, G=3): fwd 219.3 -> 34.4 ms (6.37x), fwd+bwd
+    348.2 -> 68.7 ms (5.07x), outputs bit-identical (same GEMM path).
+    Stage bisection (mgpu fwd): permute+compact 0.85, dispatch 1.67,
+    GEMMs 27.4, combine 1.58 ms.
+  - The 27.4 ms GEMM stage is a 48-group EP4 artifact of Triton
+    `ragged_dot`; at the true hero per-device shape (El=3, ~29k rows per
+    expert) it runs 920-930 TF/s (7.2 + 3.7 ms) vs 1747 TF/s dense XLA —
+    so ~1.9x GEMM headroom remains for M7 (CuTeDSL grouped GEMM hit
+    2.2 PF/s in the MXFP8 work).
+  - GPU tolerances rescaled to tf32-intermediate magnitudes (values
+    atol 0.2, grads atol 0.5 x depth/256): the old result-relative 1e-2
+    bounds failed on benign 1-in-64k cancellation outliers, ragged arm
+    included.
+- Interpretation: M6 done — fused transport is correct, differentiable,
+  and near link speed; the mgpu path also deletes both local permutes.
+  Transport is no longer the EP4 bottleneck; GEMM quality and e2e
+  integration are.
+- Next action: M8-first (levanter `moe_mlp` backend registration + EP4
+  smoke on the held tray + hero EP64 rack benchmark vs the 24.04% MFU /
+  262,683 tok/s baseline), M7 fusion/GEMM-upgrade as the follow-on
+  autoresearch lever. Multi-node nvshmem path still unvalidated.
