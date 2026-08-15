@@ -150,11 +150,6 @@ def build_hero_run(
     if flavor not in FLAVORS:
         raise ValueError(f"flavor must be one of {sorted(FLAVORS)}, got {flavor!r}")
     moe_implementation = FLAVORS[flavor]
-    # One process per node, like every passing hero run on this base. The
-    # per-GPU topology wiki:101 recommends needs dispatch machinery
-    # (per-GPU process option, attempt-scoped JAX coordinator) that landed
-    # after this branch point and segfaults without it.
-    processes_per_task = HERO_PROCESSES_PER_TASK
     # `schedule_steps` sets the whole learning-rate schedule; `num_steps` sets how far the run goes.
     # Both matter, and they enter in different places. The optimizer heuristic scales learning rate,
     # adam_lr, and epsilon from a token budget (`num_train_steps * batch * seq`), which fixes the
@@ -286,7 +281,7 @@ def build_hero_run(
                 GrugEvalConfig(steps_per_eval=eval_every, eval_ema=False, compute_bpb=True) if eval_every > 0 else None
             ),
             stop_after_steps=num_steps,
-            processes_per_task=processes_per_task,
+            processes_per_task=HERO_PROCESSES_PER_TASK,
         )
 
     return ArtifactStep(
