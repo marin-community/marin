@@ -18,7 +18,7 @@ same documents.
     uv run iris --cluster=marin job run --target-cluster cw-us-east-02a \\
         --cpu 8 --memory 32g --disk 32g --enable-extra-resources \\
         -- python -m experiments.datakit.scripts.read_extreme_scored_documents \\
-           --manifest s3://.../manifest_depth2 --shards-per-source 2
+           --manifest s3://.../manifest_depth2 --sources-per-pattern 2
 """
 
 import argparse
@@ -50,7 +50,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", default=DEFAULT_MANIFEST)
     ap.add_argument("--sources", nargs="*", default=[], help="substrings selecting sources (default: a spread)")
-    ap.add_argument("--shards-per-source", type=int, default=2)
+    ap.add_argument("--sources-per-pattern", type=int, default=2, help="distinct sources to sample per substring")
     ap.add_argument("--per-end", type=int, default=4, help="documents to print from each end")
     args = ap.parse_args()
     configure_logging(logging.INFO)
@@ -63,14 +63,16 @@ def main() -> None:
     picked: list[dict] = []
     for want in wanted:
         hits = [r for r in rows if want in r["source"]]
-        # Spread across distinct leaves rather than taking one leaf's first shards.
+        # One shard from each of several distinct sources, rather than several
+        # shards of whichever source sorts first: reading both ends of a score
+        # range is about breadth across leaves, not depth into one.
         seen: set[str] = set()
         for row in sorted(hits, key=lambda r: -r["embed_rows"]):
             if row["source"] in seen:
                 continue
             seen.add(row["source"])
             picked.append(row)
-            if len(seen) >= args.shards_per_source:
+            if len(seen) >= args.sources_per_pattern:
                 break
 
     report = []
@@ -78,11 +80,10 @@ def main() -> None:
         scores = _read(fs, row["output_path"], ["id", "score"])
         normalized = read_artifact(hero_data.normalized(row["source"]).output_path, NormalizedData).main_output_dir
         basename = row["output_path"].rsplit("/", 1)[-1]
-        try:
-            text = _read(fs, f"{normalized}/{basename}", ["id", "text"])
-        except Exception as exc:
-            logger.warning("no normalized text for %s/%s: %s", normalized, basename, exc)
-            continue
+        # Normalize, tokenize, embed and the scores are co-partitioned under one
+        # basename, so a missing or unreadable text shard is a broken assumption
+        # rather than an absent optional input; let it say so.
+        text = _read(fs, f"{normalized}/{basename}", ["id", "text"])
         joined = scores.join(text, on="id", how="inner")
         ordered = joined.sort("score")
         ends = [("LOW", ordered.head(args.per_end)), ("HIGH", ordered.tail(args.per_end))]

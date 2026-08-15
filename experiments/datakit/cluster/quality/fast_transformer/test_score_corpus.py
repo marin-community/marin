@@ -1,14 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The shard join, and the retry that keeps a transient reset from failing a task.
+"""The shard join, the pairing guards, and the checks that gate a write.
 
 Each source has one complete harrier leaf co-partitioned with its token side. What
 still has to be pinned is that the match is on the *key* rather than on stored
 order -- the row order inside a shard is not guaranteed, and on at least one source
 it is not sorted -- and that every embedded document is scored, since a join that
-quietly matched a subset looks exactly like a smaller corpus.
+quietly matched a subset looks exactly like a smaller corpus. The same theme covers
+the two identity checks: which shards pair with which, and which model's bytes are
+allowed to write under a path that names a scorer.
 """
+
+import shutil
+from dataclasses import replace
 
 import fsspec
 import numpy as np
@@ -24,7 +29,12 @@ from experiments.datakit.cluster.quality.fast_transformer.score_corpus import (
     Block,
     ShardTask,
     join_shard,
+    model_dir_sha256,
+    pair_shards,
     read_embed_side,
+    require_containment,
+    require_paired_shards,
+    require_pinned_model,
     with_retry,
 )
 
@@ -263,9 +273,14 @@ def test_join_holds_cardinality_across_batch_boundaries(tmp_path, fs):
     assert stats.duplicate_embed_ids == 2
 
 
-def test_join_reports_embed_rows_the_token_side_did_not_carry(tmp_path, fs):
-    # `unmatched_embed` is the containment check: every embedded document should
-    # have a chunk-0 token row, so a nonzero value means co-partitioning broke.
+def test_a_shard_the_token_side_does_not_contain_fails_instead_of_publishing(tmp_path, fs):
+    """`unmatched_embed` is the containment check, and it has to be fatal.
+
+    Every embedded document should have a chunk-0 token row, so a nonzero value
+    means co-partitioning broke. Writing the matched subset anyway published a
+    short shard from a worker that exited zero, and the shortfall showed up only
+    if someone later ran `verify` on that source.
+    """
     embed = tmp_path / "e.parquet"
     write_embed(embed, ["a", "b"], [1, 2])
     tokens = tmp_path / "tok.parquet"
@@ -279,3 +294,115 @@ def test_join_reports_embed_rows_the_token_side_did_not_carry(tmp_path, fs):
     assert stats.embed_rows == 2
     assert stats.matched == 1
     assert stats.unmatched_embed == 1
+    with pytest.raises(ValueError, match="absent from the token side"):
+        require_containment(task, stats)
+
+
+# ---------------------------------------------------------------------------
+# pairing the two leaves
+# ---------------------------------------------------------------------------
+
+
+def listing(directory, names):
+    """An `fs.ls(detail=True)` listing, as `manifest` reads one."""
+    return [{"name": f"bucket/{directory}/{name}", "size": 1024} for name in names]
+
+
+def paired(token_names, embed_names, source="src"):
+    return pair_shards(source, "s3://bucket/out", listing("tok", token_names), listing("emb", embed_names))
+
+
+def test_matching_basename_sets_pair_and_build():
+    names = ["part-00000-of-00002.parquet", "part-00001-of-00002.parquet"]
+
+    leaf = paired(names, names)
+
+    assert [row["embed_leaves"] for row in leaf.rows] == [1, 1]
+    assert [row["output_path"] for row in leaf.rows] == [f"s3://bucket/out/{name}" for name in names]
+    assert leaf.embed_only == []
+    require_paired_shards([leaf])
+
+
+def test_an_embed_shard_the_token_side_does_not_name_refuses_the_manifest():
+    """The regression: a *partial* basename overlap used to build a manifest.
+
+    Rows are enumerated from the token side, so an embed-only shard never becomes
+    one. Its documents miss the manifest, the footer totals, scoring and
+    verification together, and every count that remains is self-consistent -- so
+    only the complete basename sets show it. The old guard fired on a wholly
+    disjoint pair alone, and this pair overlaps in half its shards.
+    """
+    leaf = paired(
+        ["part-00000-of-00002.parquet", "part-00001-of-00002.parquet"],
+        ["part-00000-of-00002.parquet", "part-00002-of-00003.parquet"],
+    )
+
+    assert leaf.embed_only == ["part-00002-of-00003.parquet"]
+    assert [row["embed_leaves"] for row in leaf.rows] == [1, 0], "the old guard counted a match and passed"
+    with pytest.raises(ValueError, match="token side does not have"):
+        require_paired_shards([leaf])
+
+
+def test_two_sides_sharing_no_basename_refuse_the_manifest():
+    # A normalize rerun on one side: every document would resolve to no embedding.
+    leaf = paired(["part-00000-of-00001.parquet"], ["part-00007-of-00009.parquet"])
+
+    with pytest.raises(ValueError, match="no shard basename in common"):
+        require_paired_shards([leaf])
+
+
+# ---------------------------------------------------------------------------
+# binding the loaded bytes to the output path
+# ---------------------------------------------------------------------------
+
+
+def write_model_dir(root, contents):
+    for relative, body in contents.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(body)
+    return root
+
+
+def test_the_model_digest_covers_contents_layout_and_nothing_else(tmp_path):
+    """What the digest has to distinguish, since the output path is built from it.
+
+    Different weights under an unchanged filename, and an added artifact, are both
+    different scorers. Where the directory happens to sit is not, or a checkpoint
+    could not be staged anywhere but the path it was digested at.
+    """
+    root = write_model_dir(tmp_path / "model", {"a.eqx": b"weights", "nested/meta.json": b'{"k": 1}'})
+    base = model_dir_sha256(str(root))
+
+    (root / "nested" / "meta.json").write_bytes(b'{"k": 2}')
+    assert model_dir_sha256(str(root)) != base, "changed bytes are a different model"
+
+    (root / "nested" / "meta.json").write_bytes(b'{"k": 1}')
+    (root / "extra.json").write_bytes(b"")
+    assert model_dir_sha256(str(root)) != base, "an added artifact is a different model"
+
+    (root / "extra.json").unlink()
+    shutil.copytree(root, tmp_path / "elsewhere" / "model")
+    assert model_dir_sha256(str(tmp_path / "elsewhere" / "model")) == base
+
+
+def test_scoring_refuses_a_checkpoint_that_is_not_the_pinned_one(tmp_path):
+    """The write side of the collision the output path exists to close.
+
+    `hero_data.quality` folds `model_sha256` into the path, so scores written
+    there claim to be that model's -- but `--model-dir` is a free argument and
+    nothing checked the directory the worker actually loaded.
+    """
+    root = write_model_dir(tmp_path / "model", {"impostor.eqx": b"some other checkpoint"})
+    its_own_pin = replace(hero_data.NEMOTRON_88K, model_sha256=model_dir_sha256(str(root)))
+
+    assert require_pinned_model(its_own_pin, str(root)) == its_own_pin.model_sha256
+    with pytest.raises(ValueError, match=hero_data.NEMOTRON_88K.model_sha256):
+        require_pinned_model(hero_data.NEMOTRON_88K, str(root))
+
+
+def test_an_absent_model_dir_does_not_digest_to_the_empty_hash(tmp_path):
+    # A mistyped path must name itself rather than resolve to a stable digest over
+    # no files, which reads downstream as a plain pin mismatch.
+    with pytest.raises(ValueError, match="cannot digest to nothing"):
+        model_dir_sha256(str(tmp_path / "absent"))

@@ -8,25 +8,31 @@ holds Nemotron ``input_ids`` per document chunk and one complete harrier leaf pe
 source, named by ``hero_data.harrier``, holds the int8[1024] document embedding.
 Both are hash-partitioned from one normalized source and share a shard count and
 basename, so a shard pair joins on ``id`` with no shuffle. That co-partitioning is
-checked rather than assumed: a source whose two sides came from different normalize
-runs has no shard basenames in common, and ``manifest`` refuses to build rather than
-letting its documents fall into an unembedded counter that reads as coverage.
+checked rather than assumed, on the complete basename sets: ``manifest`` refuses to
+build for a source whose two sides came from different normalize runs, whether they
+share no basename at all or the embed side merely carries one the token side does
+not, and ``score`` refuses to publish a shard whose embed rows the token side did
+not contain.
 
 Row order within a shard is *not* guaranteed and on at least one source is not
 sorted, so the join sorts the embed side itself rather than reading the stored order
 as an invariant (see :func:`join_shard`).
 
-Five modes:
+Six modes:
 
 * ``fold`` -- collapse the frozen ``[vocab, 2048]`` donor table and its learned
   ``[2048, 256]`` projection into one ``[vocab, 256]`` table and write a new model
   dir. Gather and matmul commute row-wise so this is exact, not an approximation;
   the mode asserts score parity on real rows before writing. Deployment reads the
   folded dir, so 48 workers do not each redo a 1.1 GB read and a fold.
+* ``digest`` -- print a model directory's digest, which is what a ``QualityPin``
+  records and what ``score`` checks its ``--model-dir`` against.
 * ``manifest`` -- pair each source's Nemotron tokenize leaf with its harrier embed
   leaf and emit one row per (source, shard_index).
 * ``score`` -- one worker, one GPU: take this worker's slice of the manifest and
-  stream join -> score -> write for each shard pair it owns.
+  stream join -> score -> write for each shard pair it owns. The output path
+  carries the scorer's identity, so the worker digests ``--model-dir`` against
+  the pin before it writes anything.
 * ``node`` -- fan out one ``score`` subprocess per visible GPU.
 * ``verify`` -- reconcile one source's written score shards against the manifest's
   per-shard embed row counts, and report the score distribution and bucket shares.
@@ -50,6 +56,7 @@ rather than trusting it.
 
 import argparse
 import dataclasses
+import hashlib
 import json
 import logging
 import os
@@ -58,7 +65,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import cast
@@ -85,7 +92,7 @@ from experiments.datakit.cluster.quality.fast_transformer.data import NUM_RESERV
 from experiments.datakit.cluster.quality.fast_transformer.inference import predict
 from experiments.datakit.cluster.quality.fast_transformer.model import COMPUTE_DTYPE, FastTransformer
 from experiments.datakit.cluster.quality.fast_transformer.scorer import PooledScorer, artifact_names, load_pooled_scorer
-from experiments.datakit.hero_data import NEMOTRON_88K
+from experiments.datakit.hero_data import NEMOTRON_88K, QualityPin
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +150,9 @@ DEFAULT_BLOCK_DOCS = 32_768
 # The fold is exact in principle; assert it on real rows rather than trust it.
 FOLD_PARITY_ROWS = 256
 FOLD_PARITY_TOLERANCE = 1e-5
+# Read size when digesting a model directory. The deployed `.eqx` is 165 MB, so the
+# digest streams each file rather than materializing one to hash it.
+DIGEST_CHUNK_BYTES = 8 << 20
 # Carried across when the donor-table model is folded into a plain embedding model.
 # `config`, `donor_embed` and `donor_proj` are deliberately absent: the folded
 # config has frozen_donor_dim=0 and the folded table replaces the pair.
@@ -278,6 +288,80 @@ def fold_mode(args) -> dict:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class SourceShards:
+    """One source's paired shard rows, and the embed shards nothing paired with."""
+
+    source: str
+    rows: list[dict]
+    embed_only: list[str]
+    """Embed shard basenames the token side does not name. Rows are enumerated
+    from the token side, so these can never appear among them and need a channel
+    of their own to be seen at all."""
+
+
+def pair_shards(source: str, out_dir: str, token_entries: Sequence[dict], embed_entries: Sequence[dict]) -> SourceShards:
+    """Pair one source's token and embed shard listings on their basenames.
+
+    Both arguments are ``fs.ls(detail=True)`` records. The two leaves are
+    hash-partitioned from one normalized source, so shard ``k`` of each holds the
+    same documents and the basename is the join key.
+    """
+    token = sorted((e for e in token_entries if e["name"].endswith(".parquet")), key=lambda e: e["name"])
+    present = {
+        e["name"].rsplit("/", 1)[-1]: (f"s3://{e['name']}", e["size"])
+        for e in embed_entries
+        if e["name"].endswith(".parquet")
+    }
+    rows = []
+    for index, entry in enumerate(token):
+        base = entry["name"].rsplit("/", 1)[-1]
+        found = present.get(base)
+        rows.append(
+            {
+                "source": source,
+                "shard_index": index,
+                "num_shards": len(token),
+                "tokens_path": f"s3://{entry['name']}",
+                "embed_path": found[0] if found else "",
+                "output_path": f"{out_dir}/{base}",
+                "embed_leaves": 1 if found else 0,
+                "tokens_bytes": entry["size"],
+                "embed_bytes": found[1] if found else 0,
+            }
+        )
+    token_names = {entry["name"].rsplit("/", 1)[-1] for entry in token}
+    return SourceShards(source=source, rows=rows, embed_only=sorted(present.keys() - token_names))
+
+
+def require_paired_shards(leaves: Sequence[SourceShards]) -> None:
+    """Refuse a manifest whose two sides did not come from one normalize run.
+
+    A rerun of normalize on one side leaves the two sides partitioned
+    differently, in two ways that are not equally visible. A source that shares
+    *no* basename leaves every token shard unembedded, which lands in a counter.
+    An embed shard the token side does not name never becomes a row at all: its
+    documents are absent from the manifest, from the footer totals, from scoring
+    and from verification alike, and every count that remains is self-consistent,
+    so nothing downstream reads short. Only the complete basename sets show it.
+    """
+    disjoint = sorted(leaf.source for leaf in leaves if leaf.rows and not any(r["embed_leaves"] for r in leaf.rows))
+    if disjoint:
+        raise ValueError(
+            f"{len(disjoint)} source(s) have an embed leaf but no shard basename in common with their "
+            f"token side, so every document would resolve to no embedding: {disjoint}. "
+            f"Hold them explicitly in HOLD_SOURCES or repartition one side."
+        )
+    orphaned = {leaf.source: leaf.embed_only for leaf in leaves if leaf.embed_only}
+    if orphaned:
+        summary = ", ".join(f"{source} ({len(names)}, e.g. {names[0]})" for source, names in sorted(orphaned.items()))
+        raise ValueError(
+            f"{len(orphaned)} source(s) carry embed shards whose basename the token side does not have, so "
+            f"their documents would leave no trace in the manifest, the scored output or verification: "
+            f"{summary}. Repartition one side or hold the source explicitly in HOLD_SOURCES."
+        )
+
+
 def manifest_mode(args) -> dict:
     """Pair every source's Nemotron token shards with its harrier embed shards.
 
@@ -308,58 +392,23 @@ def manifest_mode(args) -> dict:
     if missing_embed:
         raise ValueError(f"no harrier leaf mapped for {len(missing_embed)} source(s): {missing_embed}")
 
-    def leaf_rows(source: str) -> list[dict]:
+    def leaf_shards(source: str) -> SourceShards:
         tok_dir = f"{hero_data.tokenized(source, NEMOTRON_88K.tokenizer).output_path.rstrip('/')}/{SPLIT}"
         out_dir = hero_data.quality(source, NEMOTRON_88K).output_path.rstrip("/")
-        tok = sorted(fs.ls(tok_dir.removeprefix("s3://"), detail=True), key=lambda e: e["name"])
-        tok = [e for e in tok if e["name"].endswith(".parquet")]
         embed_dir = hero_data.harrier(source).rstrip("/")
-        present = {
-            e["name"].rsplit("/", 1)[-1]: (f"s3://{e['name']}", e["size"])
-            for e in fs.ls(embed_dir.removeprefix("s3://"), detail=True)
-            if e["name"].endswith(".parquet")
-        }
-        rows = []
-        for index, entry in enumerate(tok):
-            base = entry["name"].rsplit("/", 1)[-1]
-            found = present.get(base)
-            rows.append(
-                {
-                    "source": source,
-                    "shard_index": index,
-                    "num_shards": len(tok),
-                    "tokens_path": f"s3://{entry['name']}",
-                    "embed_path": found[0] if found else "",
-                    "output_path": f"{out_dir}/{base}",
-                    "embed_leaves": 1 if found else 0,
-                    "tokens_bytes": entry["size"],
-                    "embed_bytes": found[1] if found else 0,
-                }
-            )
-        return rows
+        return pair_shards(
+            source,
+            out_dir,
+            fs.ls(tok_dir.removeprefix("s3://"), detail=True),
+            fs.ls(embed_dir.removeprefix("s3://"), detail=True),
+        )
 
-    rows: list[dict] = []
     with ThreadPoolExecutor(max_workers=args.discovery_threads) as pool:
-        for got in pool.map(leaf_rows, sources):
-            rows.extend(got)
+        leaves = list(pool.map(leaf_shards, sources))
+    rows = [row for leaf in leaves for row in leaf.rows]
     if not rows:
         raise ValueError("no shard tasks discovered; the stage layout likely moved")
-
-    # A source whose token and embed sides were built from different normalize runs
-    # has disjoint shard basenames, so every one of its shards pairs with nothing.
-    # That is a geometry break, not an empty source, and it is invisible to row
-    # counts and artifact metadata -- left alone it lands in `unembedded_shards` and
-    # reads as coverage. Refuse the manifest instead, and name the source.
-    matched_by_source: dict[str, int] = {}
-    for row in rows:
-        matched_by_source[row["source"]] = matched_by_source.get(row["source"], 0) + row["embed_leaves"]
-    unpaired = sorted(s for s, matched in matched_by_source.items() if not matched)
-    if unpaired:
-        raise ValueError(
-            f"{len(unpaired)} source(s) have an embed leaf but no shard basename in common with their "
-            f"token side, so every document would resolve to no embedding: {unpaired}. "
-            f"Hold them explicitly in HOLD_SOURCES or repartition one side."
-        )
+    require_paired_shards(leaves)
 
     # Footer reads, once, here: `embed_rows` is what `verify` compares the written
     # score count against, and computing it at verify time would reread the embed
@@ -679,6 +728,65 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, block_docs: in
 # ---------------------------------------------------------------------------
 
 
+def model_dir_sha256(model_dir: str) -> str:
+    """Digest every byte under ``model_dir``, the recipe :class:`QualityPin` pins.
+
+    Each file is addressed *relative* to ``model_dir`` so the digest survives the
+    directory being copied, and contributes ``rel + b"\\0" +
+    sha256(content).digest()`` in bytewise path order to one outer hash. The paths
+    are inside the hash, so a renamed or added artifact is a different model
+    rather than the same one under a different layout.
+    """
+    root: str | None = None
+    files: dict[bytes, StoragePath] = {}
+    # `walk` yields the root first, in the filesystem's own normalized form, so
+    # relative paths are taken against that rather than against the argument.
+    for directory, _subdirs, names in StoragePath(model_dir.rstrip("/")).walk():
+        if root is None:
+            root = str(directory)
+        relative_dir = str(directory)[len(root) :].strip("/")
+        for name in names:
+            relative = f"{relative_dir}/{name}" if relative_dir else name
+            files[relative.encode()] = directory / name
+    if not files:
+        raise ValueError(f"no files under {model_dir}; a model directory cannot digest to nothing")
+    digest = hashlib.sha256()
+    for relative in sorted(files):
+        content = hashlib.sha256()
+        with files[relative].open("rb") as fh:
+            while chunk := fh.read(DIGEST_CHUNK_BYTES):
+                content.update(chunk)
+        digest.update(relative + b"\0" + content.digest())
+    return digest.hexdigest()
+
+
+def require_pinned_model(quality_model: QualityPin, model_dir: str) -> str:
+    """Return ``model_dir``'s digest, refusing bytes that are not ``quality_model``'s.
+
+    :func:`hero_data.quality` folds ``model_sha256`` into the output path, so the
+    path asserts which model produced the scores under it. Nothing else did:
+    ``--model-dir`` is a free argument, and a run against any other checkpoint
+    published its scores into a directory -- and under a ``model`` column --
+    naming this pin. That is the collision the path is built to prevent, on the
+    write side instead of the read side.
+
+    Read once at process start. The deployed directory is ~167 MB, which is
+    nothing against a worker's shard slice and unaffordable per shard.
+    """
+    digest = model_dir_sha256(model_dir)
+    if digest != quality_model.model_sha256:
+        raise ValueError(
+            f"{model_dir} digests to {digest}, but {quality_model.name} pins {quality_model.model_sha256}; "
+            f"its scores would be written to a path that claims {quality_model.name}"
+        )
+    return digest
+
+
+def digest_mode(args) -> dict:
+    """Report a model directory's digest: the value a :class:`QualityPin` carries."""
+    return {"model_dir": args.model_dir, "model_sha256": model_dir_sha256(args.model_dir)}
+
+
 def load_folded_scorer(model_dir: str) -> PooledScorer:
     """Load the deployable scorer, folding on the fly only if the dir is unfolded."""
     scorer = load_pooled_scorer(model_dir)
@@ -708,12 +816,30 @@ def write_scores(path: str, doc_ids: np.ndarray, scores: np.ndarray, model_tag: 
     return frame.height
 
 
+def require_containment(task: ShardTask, stats: ShardStats) -> None:
+    """Refuse to publish a shard whose embed rows the token side did not carry.
+
+    Every embedded document has a chunk-0 token row, so ``unmatched_embed`` is
+    zero unless co-partitioning failed somewhere. Writing the matched subset
+    anyway publishes a short shard from a worker that exits zero: the shortfall
+    surfaces only if someone later runs ``verify`` on that source, and until then
+    the leaf reads as complete.
+    """
+    if stats.unmatched_embed:
+        raise ValueError(
+            f"{task.source} shard {task.shard_index}: {stats.unmatched_embed} of {stats.embed_rows} embed rows "
+            f"are absent from the token side, so the shard would be written short; containment does not hold here"
+        )
+
+
 def score_mode(args) -> dict:
     """Score this worker's slice of the manifest."""
     configure_coreweave_s3()
     fs = fsspec.filesystem("s3")
+    digest = require_pinned_model(NEMOTRON_88K, args.model_dir)
     scorer = load_folded_scorer(args.model_dir)
     vocab_size = scorer.model.config.vocab_size
+    logger.info("worker %d: %s holds %s (%s)", args.worker, args.model_dir, NEMOTRON_88K.name, digest)
     logger.info("worker %d rss after model load: %.2f GB", args.worker, rss_bytes() / 1e9)
     logger.info(
         "worker %d/%d: model max_tokens=%d devices=%s batch=%d",
@@ -768,7 +894,6 @@ def score_mode(args) -> dict:
 
     done = 0
     docs = 0
-    unmatched_embed = 0
     token_rows = 0
     read_seconds = 0.0
     score_seconds = 0.0
@@ -852,21 +977,14 @@ def score_mode(args) -> dict:
         # document even for the largest shard.
         read_seconds += item.read_seconds
         token_rows += item.token_rows
-        if item.unmatched_embed:
-            unmatched_embed += item.unmatched_embed
-            logger.warning(
-                "%s shard %d: %d embed rows absent from the token side; containment does not hold here",
-                task.source,
-                task.shard_index,
-                item.unmatched_embed,
-            )
+        require_containment(task, item)
         if shard_ids:
             t1 = time.monotonic()
             rows = write_scores(
                 task.output_path,
                 np.concatenate(shard_ids),
                 np.concatenate(shard_scores),
-                args.model_tag,
+                NEMOTRON_88K.name,
                 fs,
             )
             write_seconds += time.monotonic() - t1
@@ -897,7 +1015,6 @@ def score_mode(args) -> dict:
         "worker": args.worker,
         "shards": done,
         "docs": docs,
-        "unmatched_embed": unmatched_embed,
         "token_rows": token_rows,
         "bytes": sum(t.total_bytes for t in mine),
         "seconds": elapsed,
@@ -1082,8 +1199,6 @@ def node_mode(args) -> dict:
             str(args.prefetch),
             "--block-docs",
             str(args.block_docs),
-            "--model-tag",
-            args.model_tag,
             "--source",
             args.source,
         ]
@@ -1107,6 +1222,9 @@ def main() -> None:
     f.add_argument("--out-dir", default=DEFAULT_FOLDED_DIR)
     f.add_argument("--stem", default="nemotron_88k_folded")
 
+    d = sub.add_parser("digest", help="print a model directory's pin digest")
+    d.add_argument("--model-dir", default=DEFAULT_FOLDED_DIR)
+
     m = sub.add_parser("manifest", help="build the minimum shard-task manifest from listings")
     m.add_argument("--manifest", default=DEFAULT_MANIFEST)
     m.add_argument("--footer-threads", type=int, default=256)
@@ -1120,7 +1238,6 @@ def main() -> None:
     s.add_argument("--batch-size", type=int, default=DEFAULT_BATCH)
     s.add_argument("--prefetch", type=int, default=DEFAULT_PREFETCH_BLOCKS, help="blocks queued ahead of the forward")
     s.add_argument("--block-docs", type=int, default=DEFAULT_BLOCK_DOCS)
-    s.add_argument("--model-tag", default=NEMOTRON_88K.name)
     s.add_argument("--source", default="", help="score only this source (default: all)")
     s.add_argument("--limit", type=int, default=0, help="cap shards per worker (smoke runs)")
 
@@ -1134,7 +1251,6 @@ def main() -> None:
     n.add_argument("--batch-size", type=int, default=DEFAULT_BATCH)
     n.add_argument("--prefetch", type=int, default=DEFAULT_PREFETCH_BLOCKS)
     n.add_argument("--block-docs", type=int, default=DEFAULT_BLOCK_DOCS)
-    n.add_argument("--model-tag", default=NEMOTRON_88K.name)
     n.add_argument("--source", default="", help="score only this source (default: all)")
     n.add_argument("--limit", type=int, default=0)
 
@@ -1149,6 +1265,7 @@ def main() -> None:
     configure_coreweave_s3()
     modes = {
         "fold": fold_mode,
+        "digest": digest_mode,
         "manifest": manifest_mode,
         "score": score_mode,
         "node": node_mode,

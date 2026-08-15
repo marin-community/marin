@@ -116,9 +116,11 @@ class QualityPin:
     """Value written into the score rows' ``model`` column."""
 
     model_sha256: str
-    """Digest over the deployed model directory. Sort the relative paths
-    bytewise, then fold ``rel.encode() + b"\\0" + sha256(content).digest()`` per
-    file into one sha256."""
+    """Digest over the deployed model directory, as
+    ``score_corpus.model_dir_sha256`` computes it: every file under the root,
+    addressed relative to it, folded in bytewise path order. Scoring refuses to
+    write from a directory that digests to anything else, so the path's claim
+    about which model produced the scores under it is checked, not asserted."""
 
     calibration_sha256: str
     """Digest over the calibration file, by the same recipe over one file."""
