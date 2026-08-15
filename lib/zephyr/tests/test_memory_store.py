@@ -3,22 +3,27 @@
 
 """Behavior tests for read-only Zephyr memory stores."""
 
+import os
+import sys
 from typing import Any, cast
 from unittest.mock import MagicMock
 
+import aiohttp
 import cloudpickle
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray.actor import ActorHandle, ActorUnavailableError
 from fray.local_backend import LocalClient
+from iris.test_util import SentinelFile
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext, _require_resolvable_worker_handles
+from zephyr.execution import ZephyrContext, _order_memory_store_handles, _require_resolvable_worker_handles
 from zephyr.memory_store import (
     DuplicateMemoryStoreKey,
     MemoryStore,
     MemoryStoreDestroyed,
     MemoryStorePartitionError,
+    MemoryStoreShardStats,
     MemoryStoreUnavailable,
     MemoryTableLookup,
     MemoryTableStatus,
@@ -57,7 +62,7 @@ class _SequencedActorMethod:
 
 class _SequencedActor:
     def __init__(self, futures: list[_TestActorFuture]):
-        self.lookup_memory_table = _SequencedActorMethod(futures)
+        self.lookup = _SequencedActorMethod(futures)
 
 
 def _partition_rows(rows):
@@ -76,6 +81,28 @@ def _parquet_pair(row: dict) -> tuple[tuple[int, str], str]:
     return (row["partition"], row["id"]), row["text"]
 
 
+def _append_payload(inputs: list[tuple[str, str]]) -> list[str]:
+    return [value + payload for value, payload in inputs]
+
+
+def _exit_store_process_once(inputs: list[tuple[str, str]]) -> list[str]:
+    sentinel = SentinelFile(inputs[0][1])
+    if not sentinel.is_set():
+        sentinel.signal()
+        os._exit(17)
+    return [value for value, _ in inputs]
+
+
+@pytest.fixture(autouse=True)
+def _pickle_test_callables_by_value():
+    module = sys.modules[__name__]
+    cloudpickle.register_pickle_by_value(module)
+    try:
+        yield
+    finally:
+        cloudpickle.unregister_pickle_by_value(module)
+
+
 def _load_store(
     context: ZephyrContext,
     dataset: Dataset,
@@ -83,12 +110,16 @@ def _load_store(
     name: str = "documents",
     hash_key=_key_partition,
     recovery_timeout: float = 10,
+    shards_per_worker: int = 1,
+    load_concurrency: int = 1,
 ):
     return context.load_memory_store(
         dataset,
         name=name,
         hash_key=hash_key,
         recovery_timeout=recovery_timeout,
+        shards_per_worker=shards_per_worker,
+        load_concurrency=load_concurrency,
     )
 
 
@@ -97,10 +128,29 @@ def _fake_store(actor: _SequencedActor, recovery_timeout: float = 1) -> MemorySt
         table_id="table",
         name="table",
         actors=(cast(ActorHandle, actor),),
+        shard_actors=(cast(ActorHandle, actor),),
         coordinator=cast(ActorHandle, object()),
         hash_key=lambda _key: 0,
         num_source_partitions=1,
+        shards_per_worker=1,
         recovery_timeout=recovery_timeout,
+        load_elapsed=0,
+    )
+
+
+def _actor_stats(actor_index: int) -> tuple[MemoryStoreShardStats, ...]:
+    return (
+        MemoryStoreShardStats(
+            actor_index=actor_index,
+            store_shard_index=0,
+            process_id=actor_index,
+            source_partitions=(),
+            num_items=0,
+            load_cpu_time=0,
+            load_elapsed=0,
+            resident_bytes=0,
+            peak_resident_bytes=0,
+        ),
     )
 
 
@@ -133,6 +183,103 @@ def test_memory_store_routes_existing_partitions_and_preserves_lookup_order(loca
             (0, (0, 2), 5),
             (1, (1, 3), 2),
         ]
+
+
+def test_memory_store_orders_worker_handles_by_reported_actor_index():
+    handles = (cast(ActorHandle, object()), cast(ActorHandle, object()), cast(ActorHandle, object()))
+
+    ordered = _order_memory_store_handles(handles, [_actor_stats(2), _actor_stats(0), _actor_stats(1)])
+
+    assert ordered == (handles[1], handles[2], handles[0])
+
+
+def test_memory_store_computes_on_owning_workers_and_preserves_order(local_client, tmp_path):
+    partitions = [
+        [((0, "a"), "zero-a"), ((0, "b"), "zero-b")],
+        [((1, "a"), "one-a")],
+        [((2, "a"), "two-a")],
+        [((3, "a"), "three-a")],
+    ]
+    dataset = Dataset.from_list(partitions).flat_map(_partition_rows)
+
+    with memory_store_context(local_client, tmp_path) as context:
+        store = _load_store(context, dataset)
+
+        assert store.compute_many(
+            [((3, "a"), "!"), ((0, "b"), "?"), ((2, "a"), ".")],
+            _append_payload,
+        ) == ["three-a!", "zero-b?", "two-a."]
+        with pytest.raises(KeyError) as exc_info:
+            store.compute_many([((1, "missing"), "!")], _append_payload)
+        assert exc_info.value.args == ((1, "missing"),)
+
+
+def test_memory_store_shards_own_values_in_separate_subprocesses(local_client, tmp_path):
+    dataset = Dataset.from_list(
+        [
+            [((0, "a"), "zero-a")],
+            [((1, "a"), "one-a")],
+        ]
+    ).flat_map(_partition_rows)
+
+    with memory_store_context(local_client, tmp_path, max_workers=1) as context:
+        store = _load_store(context, dataset, shards_per_worker=2)
+        values = store.get_many([(1, "a"), (0, "a")])
+        stats = store.stats()
+
+        assert values == ["one-a", "zero-a"]
+        process_ids = {stat.process_id for stat in stats}
+        assert len(process_ids) == 2
+        assert os.getpid() not in process_ids
+
+
+def test_memory_store_recovers_a_failed_subprocess(local_client, tmp_path):
+    dataset = Dataset.from_list([((0, "a"), "zero-a")])
+    crash_sentinel = str(tmp_path / "store-crashed")
+
+    with memory_store_context(local_client, tmp_path, max_workers=1) as context:
+        store = _load_store(context, dataset)
+
+        assert store.compute_many([((0, "a"), crash_sentinel)], _exit_store_process_once) == ["zero-a"]
+        assert SentinelFile(crash_sentinel).is_set()
+
+
+def test_memory_store_returns_responses_larger_than_pipe_buffer(local_client, tmp_path):
+    values = [bytes([index % 251]) * 4096 + str(index).encode() for index in range(256)]
+    dataset = Dataset.from_list([[((0, str(index)), value) for index, value in enumerate(values)]]).flat_map(
+        _partition_rows
+    )
+
+    with memory_store_context(local_client, tmp_path, max_workers=1) as context:
+        store = _load_store(context, dataset)
+
+        assert store.get_many([(0, str(index)) for index in range(256)]) == values
+
+
+def test_memory_store_rejects_nonpositive_load_concurrency(local_client, tmp_path):
+    dataset = Dataset.from_list([((0, "a"), "value")])
+
+    with memory_store_context(local_client, tmp_path, max_workers=1) as context:
+        with pytest.raises(ValueError, match="load_concurrency must be at least 1"):
+            _load_store(context, dataset, load_concurrency=0)
+
+
+def test_memory_store_retries_truncated_remote_partition_read(local_client, tmp_path):
+    first_attempt = SentinelFile(str(tmp_path / "first-attempt"))
+
+    def truncate_once(item):
+        if not first_attempt.is_set():
+            first_attempt.signal()
+            raise aiohttp.ClientPayloadError("response payload is incomplete")
+        return item
+
+    dataset = Dataset.from_list([((0, "a"), "value")]).map(truncate_once)
+
+    with memory_store_context(local_client, tmp_path, max_workers=1) as context:
+        store = _load_store(context, dataset)
+
+        assert first_attempt.is_set()
+        assert store.get((0, "a")) == "value"
 
 
 def test_memory_store_rejects_hash_that_disagrees_with_existing_partition(local_client, tmp_path):

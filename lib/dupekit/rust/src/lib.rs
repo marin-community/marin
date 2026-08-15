@@ -6,6 +6,7 @@ mod marshaling;
 mod minhash_ops;
 mod ops;
 mod pipeline;
+mod token_ngrams;
 
 use bloom::Bloom;
 use hashing::HashAlgorithm;
@@ -14,6 +15,9 @@ use hashing::HashAlgorithm;
 fn dupekit_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Bloom>()?;
     m.add_class::<HashAlgorithm>()?;
+    m.add_class::<token_ngrams::TokenNgramFingerprintSignature>()?;
+    m.add_class::<token_ngrams::TokenNgramSignature>()?;
+    m.add_class::<token_ngrams::TokenNgrams>()?;
     m.add("DEFAULT_HASH_ALGORITHM", hashing::DEFAULT_HASH_ALGO)?;
 
     // Composable Pipeline

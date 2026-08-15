@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 import traceback
-from collections.abc import Callable, Hashable
+from collections.abc import Callable
 from contextlib import suppress
 
 from fray.actor import ActorFuture, ActorHandle, current_actor
@@ -15,11 +15,10 @@ from rigging.timing import ExponentialBackoff, RateLimiter
 
 from zephyr.coordinator import CoordinatorUnreachable, PullStatus, PullTask
 from zephyr.memory_store import (
-    MemoryStoreActorStats,
     MemoryStoreService,
-    MemoryTableLookup,
+    MemoryStoreShardStats,
     MemoryTableRegistration,
-    MemoryTableStatsResult,
+    MemoryTableStatsBatch,
 )
 from zephyr.stage_io import ShardTask, StageRunner, TaskResult, ZephyrTaskResources, _stage_throughput
 from zephyr.stats import _push_iris_task_status
@@ -255,11 +254,11 @@ class ZephyrWorker:
         if self._host_shutdown_event is not None:
             self._host_shutdown_event.set()
 
-    def load_memory_table(self, registration: MemoryTableRegistration) -> MemoryStoreActorStats:
+    def load_memory_table(self, registration: MemoryTableRegistration) -> tuple[MemoryStoreShardStats, ...]:
         """Validate and load one table from its shard-local source data."""
         return self._memory_store.load(registration)
 
-    def reload_memory_table(self, table_id: str) -> MemoryStoreActorStats | None:
+    def reload_memory_table(self, table_id: str) -> tuple[MemoryStoreShardStats, ...] | None:
         """Reload one active table, or return `None` if it was destroyed."""
         registration = self._coordinator.memory_table_registration.remote(table_id).result()
         if registration is None:
@@ -272,12 +271,8 @@ class ZephyrWorker:
             return None
         return stats
 
-    def lookup_memory_table(self, table_id: str, keys: list[Hashable]) -> MemoryTableLookup:
-        """Return values or structured state that lets the caller trigger reload."""
-        return self._memory_store.lookup(table_id, keys)
-
-    def memory_table_stats(self, table_id: str) -> MemoryTableStatsResult:
-        """Return one worker's table state or load statistics."""
+    def memory_table_stats(self, table_id: str) -> MemoryTableStatsBatch:
+        """Return one worker's subprocess-shard load statistics."""
         return self._memory_store.stats(table_id)
 
     def destroy_memory_table(self, table_id: str) -> None:
@@ -415,5 +410,6 @@ class ZephyrWorker:
         for thread in (self._poll_thread, self._heartbeat_thread):
             if thread is not threading.current_thread():
                 thread.join(timeout=10.0)
+        self._memory_store.close()
         if self._host_shutdown_event is not None:
             self._host_shutdown_event.set()

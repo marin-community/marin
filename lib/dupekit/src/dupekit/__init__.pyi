@@ -107,6 +107,16 @@ class HashAlgorithm(Enum):
 DEFAULT_HASH_ALGORITHM: HashAlgorithm
 
 @final
+class TokenNgrams:
+    """Collision-safe set of token n-grams."""
+
+    def __init__(self, text: str, ngram_size: int) -> None: ...
+    @property
+    def token_count(self) -> int: ...
+    def __len__(self) -> int: ...
+    def intersection_size(self, other: TokenNgrams) -> int: ...
+
+@final
 class Transformation:
     """Transformation steps for the deduplication pipeline.
 

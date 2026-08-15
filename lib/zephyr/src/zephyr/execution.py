@@ -23,7 +23,7 @@ from fray.actor import ActorFuture, ActorGroup, ActorHandle, ActorUnavailableErr
 from fray.client import Client
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
-from fray.types import ActorConfig, ResourceConfig
+from fray.types import ActorConfig, EnvironmentConfig, ResourceConfig
 from iris.client.client import get_iris_ctx
 from rigging.filesystem import StoragePath, TransferBudgetExceeded, marin_temp_bucket
 from rigging.timing import ExponentialBackoff
@@ -43,7 +43,8 @@ from zephyr.coordinator import (
 from zephyr.dataset import Dataset
 from zephyr.memory_store import (
     MemoryStore,
-    MemoryStoreActorStats,
+    MemoryStoreShardHandle,
+    MemoryStoreShardStats,
     MemoryTableRegistration,
     actor_result_with_recovery,
     memory_store_plan,
@@ -219,6 +220,32 @@ def _require_resolvable_worker_handles(client: Client) -> None:
     )
 
 
+def _order_memory_store_handles(
+    handles: tuple[ActorHandle, ...],
+    stats_by_handle: list[tuple[MemoryStoreShardStats, ...]],
+) -> tuple[ActorHandle, ...]:
+    """Order asynchronously discovered worker handles by their actor index."""
+    if len(handles) != len(stats_by_handle):
+        raise RuntimeError(f"memory-store load returned {len(stats_by_handle)} results for {len(handles)} workers")
+
+    handles_by_index: dict[int, ActorHandle] = {}
+    for handle, stats in zip(handles, stats_by_handle, strict=True):
+        actor_indexes = {stat.actor_index for stat in stats}
+        if len(actor_indexes) != 1:
+            raise RuntimeError(f"memory-store worker reported inconsistent actor indexes: {sorted(actor_indexes)}")
+        actor_index = actor_indexes.pop()
+        if actor_index < 0 or actor_index >= len(handles):
+            raise RuntimeError(f"memory-store worker reported out-of-range actor index {actor_index}")
+        if actor_index in handles_by_index:
+            raise RuntimeError(f"multiple memory-store workers reported actor index {actor_index}")
+        handles_by_index[actor_index] = handle
+
+    missing = sorted(set(range(len(handles))) - handles_by_index.keys())
+    if missing:
+        raise RuntimeError(f"memory-store workers did not report actor indexes {missing}")
+    return tuple(handles_by_index[actor_index] for actor_index in range(len(handles)))
+
+
 def _distributed_worker_limit(configured: int | None) -> int:
     requested = configured or MAX_IRIS_WORKER_REPLICAS
     return min(requested, MAX_IRIS_WORKER_REPLICAS)
@@ -243,6 +270,7 @@ class ZephyrContext:
             the existing workers. Local execution is uncapped.
         resources: CPU, memory, and device resources for each worker.
         coordinator_resources: Resources for the coordinator actor.
+        actor_environment: Environment installed for coordinator and worker actors.
         chunk_storage_prefix: Storage prefix for shared data, chunks, and results.
         name: Name prefix for actor groups.
         no_workers_timeout: Maximum wait for a live worker during one stage.
@@ -262,6 +290,7 @@ class ZephyrContext:
     coordinator_resources: ResourceConfig = field(
         default_factory=lambda: ResourceConfig(cpu=0.1, ram="1g", preemptible=False)
     )
+    actor_environment: EnvironmentConfig | None = None
     chunk_storage_prefix: str | None = None
     name: str = ""
     no_workers_timeout: float | None = None
@@ -341,7 +370,9 @@ class ZephyrContext:
         name: str,
         hash_key: Callable[[K], int],
         recovery_timeout: float,
+        shards_per_worker: int,
         ready_timeout: float = 900.0,
+        load_concurrency: int = 1,
     ) -> MemoryStore[K, V]:
         """Load an existing partitioned Dataset into the shared worker pool.
 
@@ -360,10 +391,13 @@ class ZephyrContext:
             hash_key: Stable, picklable key hash used by the existing partitioning.
             recovery_timeout: Overall deadline for a lookup, stats, or destroy
                 operation, including ordinary responses and worker recovery.
+            shards_per_worker: Persistent memory-store subprocesses hosted by
+                each Zephyr worker.
             ready_timeout: Seconds to wait for every worker to validate and load the table.
+            load_concurrency: Maximum source partitions that each store subprocess loads at once.
 
-        Tables share each worker's process memory. Size the worker resource
-        request for the tables and pipeline tasks it will host.
+        Table shards run as worker-supervised subprocesses. Size the worker
+        resource request for the tables and pipeline tasks it will host.
         """
         if not name:
             raise ValueError("memory store name must not be empty")
@@ -371,6 +405,10 @@ class ZephyrContext:
             raise ValueError(f"recovery_timeout must be positive, got {recovery_timeout}")
         if ready_timeout <= 0:
             raise ValueError(f"ready_timeout must be positive, got {ready_timeout}")
+        if shards_per_worker < 1:
+            raise ValueError(f"shards_per_worker must be at least 1, got {shards_per_worker}")
+        if load_concurrency < 1:
+            raise ValueError(f"load_concurrency must be at least 1, got {load_concurrency}")
         with self._state_lock:
             if self._state is not _ContextState.OWNER:
                 raise RuntimeError("load_memory_store requires an entered ZephyrContext that owns its worker pool")
@@ -388,6 +426,8 @@ class ZephyrContext:
             plan=memory_store_plan(dataset),
             hash_key=hash_key,
             worker_count=pool.worker_count,
+            shards_per_worker=shards_per_worker,
+            load_concurrency=load_concurrency,
         )
 
         _require_resolvable_worker_handles(self.client)
@@ -395,7 +435,7 @@ class ZephyrContext:
         deadline = time.monotonic() + ready_timeout
         handles = coordinator.worker_handles.remote(pool.worker_count, ready_timeout).result(timeout=ready_timeout)
 
-        def load_pass() -> list[MemoryStoreActorStats]:
+        def load_pass() -> list[tuple[MemoryStoreShardStats, ...]]:
             calls = {
                 position: lambda handle=handle: handle.load_memory_table.submit(registration)
                 for position, handle in enumerate(handles)
@@ -413,17 +453,45 @@ class ZephyrContext:
             ]
 
         try:
-            load_pass()
+            load_started = time.monotonic()
+            initial_stats = load_pass()
+            handles = _order_memory_store_handles(handles, initial_stats)
             coordinator.register_memory_table.remote(registration).result(timeout=max(0.0, deadline - time.monotonic()))
             stats_by_position = load_pass()
-            actors_by_index: list[ActorHandle | None] = [None] * pool.worker_count
-            for handle, stats in zip(handles, stats_by_position, strict=True):
-                if actors_by_index[stats.actor_index] is not None:
-                    raise RuntimeError(f"two memory-store actors reported index {stats.actor_index}")
-                actors_by_index[stats.actor_index] = handle
-            if any(handle is None for handle in actors_by_index):
-                raise RuntimeError("memory-store actor group did not report every actor index")
-            actors = tuple(handle for handle in actors_by_index if handle is not None)
+            load_elapsed = time.monotonic() - load_started
+            stats = tuple(stat for actor_stats in stats_by_position for stat in actor_stats)
+            expected_shards = pool.worker_count * shards_per_worker
+            if len(stats) != expected_shards:
+                raise RuntimeError(f"memory-store pool reported {len(stats)} shards, expected {expected_shards}")
+            for actor_index, actor_stats in enumerate(stats_by_position):
+                expected = [(actor_index, local_shard_index) for local_shard_index in range(shards_per_worker)]
+                actual = [(stat.actor_index, stat.store_shard_index) for stat in actor_stats]
+                if actual != expected:
+                    raise RuntimeError(
+                        f"memory-store worker {actor_index} reported shards {actual}, expected {expected}"
+                    )
+            actors = tuple(handles)
+            shard_actors = tuple(MemoryStoreShardHandle(stat.endpoint_name, stat.endpoint_address) for stat in stats)
+            if any(not stat.endpoint_name or not stat.endpoint_address for stat in stats):
+                raise RuntimeError("memory-store subprocess did not report its actor endpoint")
+            total_items = sum(stat.num_items for stat in stats)
+            total_cpu = sum(stat.load_cpu_time for stat in stats)
+            max_shard_elapsed = max(stat.load_elapsed for stat in stats)
+            resident_bytes = sum(stat.resident_bytes for stat in stats)
+            logger.info(
+                "Memory table %s loaded %d items across %d workers and %d subprocess shards "
+                "in %.2f CPU-seconds and %.2f seconds wall (slowest shard %.2f seconds, "
+                "%.0f items/second, %.2f GiB resident)",
+                name,
+                total_items,
+                pool.worker_count,
+                expected_shards,
+                total_cpu,
+                load_elapsed,
+                max_shard_elapsed,
+                total_items / load_elapsed,
+                resident_bytes / 2**30,
+            )
         except BaseException:
             try:
                 coordinator.unregister_memory_table.remote(table_id).result(timeout=10.0)
@@ -446,10 +514,13 @@ class ZephyrContext:
             table_id=table_id,
             name=name,
             actors=actors,
+            shard_actors=shard_actors,
             coordinator=coordinator,
             hash_key=hash_key,
             num_source_partitions=registration.plan.num_source_partitions,
+            shards_per_worker=shards_per_worker,
             recovery_timeout=recovery_timeout,
+            load_elapsed=load_elapsed,
         )
 
     def _upload_shared_data(self, execution_id: str) -> None:
@@ -512,6 +583,7 @@ class ZephyrContext:
             name=coordinator_name,
             count=1,
             resources=self.coordinator_resources,
+            environment=self.actor_environment,
             actor_config=ActorConfig(max_concurrency=100),
         )
         coordinator: ActorHandle | None = None
@@ -525,6 +597,7 @@ class ZephyrContext:
                 self.stage_runner_factory,
                 ZephyrTaskResources.from_resource_config(self.resources),
                 self.resources,
+                self.actor_environment,
                 ActorConfig(max_concurrency=100, max_task_retries=10),
             ).result()
             ready_wait = float(os.environ.get("ZEPHYR_WORKERS_READY_WAIT") or 12 * 60 * 60)
