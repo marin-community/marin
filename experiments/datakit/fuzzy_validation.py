@@ -8,18 +8,16 @@ dependencies from the current source registry. ``StepRunner`` receives only the
 fuzzy-validation terminal. Completed dependencies come from the artifact cache.
 The store and report steps are not part of this graph.
 
-Submit the target in the CoreWeave data region::
+Submit the target in the CoreWeave data region. The defaults use 100 workers,
+with two 32-CPU, 432-GB workers per GB200 node::
 
     uv run iris --cluster=marin job run --no-wait \
         --target-cluster cw-us-east-08a --priority production \
         --cpu 2 --memory 8g --enable-extra-resources \
         -e MARIN_PREFIX s3://marin-us-east-02a/marin \
         -- python -m experiments.datakit.fuzzy_validation \
-            --max-workers 64 --worker-cpu 115.2 \
-            --worker-ram 864GB --worker-disk 16g \
-            --task-cpu 1 --task-ram 2GB --task-disk 1g \
+            --implementation fingerprint \
             --coordinator-cpu 2 --coordinator-ram 8GB \
-            --pipeline-shards-per-worker 8 \
             --recovery-timeout 1800 --ready-timeout 28800
 
 Run the cached 99.9M-document loading and verification benchmark with a native
@@ -90,6 +88,15 @@ DEFAULT_LOAD_CONCURRENCY = 1
 DEFAULT_TASK_CPU = 1.0
 DEFAULT_TASK_RAM = "2GB"
 DEFAULT_TASK_DISK = "1g"
+DEFAULT_GB200_STORE_SHARDS_PER_WORKER = 32
+DEFAULT_GB200_PIPELINE_SHARDS_PER_WORKER = 32
+DEFAULT_GB200_VALIDATION_SCALE = replace(
+    DEFAULT_SCALE,
+    pool=PoolConfig(
+        n_workers=100,
+        worker=ResourceConfig(cpu=32, ram="432GB", disk="16g"),
+    ),
+)
 FOCUS_SOURCE_NAME = "common-crawl-focus-2026-22"
 LEGACY_FUZZY_CANDIDATE_ARTIFACT = "s3://marin-us-east-02a/marin/datakit/dedup_709f5997"
 LEGACY_FOCUS_SOURCE_KEY = "data/datakit/normalized/common_crawl_focus_2026_22_ed4b8bc9/outputs/main"
@@ -411,10 +418,10 @@ def _legacy_candidate_input_steps(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--max-workers", type=int, default=DEFAULT_SCALE.pool.n_workers)
-    parser.add_argument("--worker-cpu", type=float, default=DEFAULT_SCALE.pool.worker.cpu)
-    parser.add_argument("--worker-ram", default=DEFAULT_SCALE.pool.worker.ram)
-    parser.add_argument("--worker-disk", default=DEFAULT_SCALE.pool.worker.disk)
+    parser.add_argument("--max-workers", type=int, default=DEFAULT_GB200_VALIDATION_SCALE.pool.n_workers)
+    parser.add_argument("--worker-cpu", type=float, default=DEFAULT_GB200_VALIDATION_SCALE.pool.worker.cpu)
+    parser.add_argument("--worker-ram", default=DEFAULT_GB200_VALIDATION_SCALE.pool.worker.ram)
+    parser.add_argument("--worker-disk", default=DEFAULT_GB200_VALIDATION_SCALE.pool.worker.disk)
     parser.add_argument("--task-cpu", type=float, default=DEFAULT_TASK_CPU)
     parser.add_argument("--task-ram", default=DEFAULT_TASK_RAM)
     parser.add_argument("--task-disk", default=DEFAULT_TASK_DISK)
@@ -423,9 +430,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--recovery-timeout", type=int, default=DEFAULT_RECOVERY_TIMEOUT)
     parser.add_argument("--ready-timeout", type=int, default=DEFAULT_READY_TIMEOUT)
     parser.add_argument("--lookup-batch-size", type=int, default=DEFAULT_LOOKUP_BATCH_SIZE)
-    parser.add_argument("--store-shards-per-worker", type=int, default=DEFAULT_STORE_SHARDS_PER_WORKER)
+    parser.add_argument(
+        "--store-shards-per-worker",
+        type=int,
+        default=DEFAULT_GB200_STORE_SHARDS_PER_WORKER,
+    )
     parser.add_argument("--load-concurrency", type=int, default=DEFAULT_LOAD_CONCURRENCY)
-    parser.add_argument("--pipeline-shards-per-worker", type=int, default=DEFAULT_PIPELINE_SHARDS_PER_WORKER)
+    parser.add_argument(
+        "--pipeline-shards-per-worker",
+        type=int,
+        default=DEFAULT_GB200_PIPELINE_SHARDS_PER_WORKER,
+    )
     parser.add_argument(
         "--implementation",
         type=FuzzyVerificationImplementation,
