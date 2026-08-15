@@ -48,6 +48,7 @@ from rigging.fsutil.tui import run as run_browser
 from rigging.fsutil.usage import (
     DEFAULT_PREFIX_DEPTH,
     DEFAULT_USAGE_WORKERS,
+    MAX_USAGE_WORKERS,
     ScanProgress,
     parse_byte_size,
     render_usage_report,
@@ -179,7 +180,7 @@ def du(url: str) -> None:
     "--workers",
     default=DEFAULT_USAGE_WORKERS,
     show_default=True,
-    type=click.IntRange(min=1, max=DEFAULT_USAGE_WORKERS),
+    type=click.IntRange(min=1, max=MAX_USAGE_WORKERS),
 )
 @click.option("-o", "--output", type=click.Path(dir_okay=False, path_type=Path), help="Write Markdown here.")
 def usage(url: str, prefix_threshold: str, prefix_depth: int, workers: int, output: Path | None) -> None:
@@ -353,10 +354,15 @@ def hash_command(urls: tuple[str, ...], hexadecimal: bool) -> None:
 
 
 @click.command()
-@click.argument("url")
+@click.argument("urls", nargs=-1, required=True)
 @click.option("-r", "-R", "--recursive", is_flag=True, help="Remove a prefix and everything under it.")
-def rm(url: str, recursive: bool) -> None:
-    """Remove an object, or recursively remove a prefix."""
+def rm(urls: tuple[str, ...], recursive: bool) -> None:
+    """Remove objects, or recursively remove prefixes."""
+    for url in urls:
+        _remove(url, recursive)
+
+
+def _remove(url: str, recursive: bool) -> None:
     fs, path = filesystem_for(url)
     is_dir = fs.isdir(path)
     if is_dir and not recursive:

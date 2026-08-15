@@ -17,7 +17,7 @@ uv run fsutil cp -r s3://marin-us-east-02a/iris/my-job/logs /tmp/logs
 uv run fsutil mv /tmp/run.json gs://marin-us-central2/archive/
 uv run fsutil rsync --dry-run --delete /tmp/checkpoints gs://marin-us-central2/checkpoints
 uv run fsutil hash gs://marin-us-central2/archive/run.json
-uv run fsutil rm -R s3://marin-us-east-02a/tmp/expired-prefix
+uv run fsutil rm -R s3://marin-us-east-02a/tmp/expired-prefix s3://marin-us-east-02a/tmp/old-prefix
 ```
 
 Paths are always full URLs — `gs://bucket/key`, `s3://bucket/key`, or a local path.
@@ -57,13 +57,13 @@ that touch its buckets; the rest keep working.
 | `head URL [-n N]` | Print the first N lines, or the first N rows of a parquet file |
 | `stat URL` | The object's metadata as the backend reports it |
 | `du URL` | Total bytes and object count beneath a prefix |
-| `usage URL [-o REPORT.md]` | Metadata-only prefix breakdown ranked by size and time since the newest write |
+| `usage URL [--workers N] [-o REPORT.md]` | Metadata-only prefix breakdown ranked by size and time since the newest write |
 | `find PATTERN` | Paths matching a glob, e.g. `gs://marin-us-central2/x/**/*.json` |
 | `cp SRC ... DST [-r] [-n]` | Copy one or more sources between any backends. `-r` includes directories; `-n` preserves existing destination files |
 | `mv SRC ... DST [-r]` | Move or rename one or more sources. Sources are removed after every copy succeeds |
 | `rsync SRC DST [--delete] [--dry-run] [--checksum]` | Synchronize the files beneath two directories or prefixes |
 | `hash URL ... [--hex]` | Stream complete files and print MD5 digests in base64 or hexadecimal |
-| `rm URL [-r]` | Remove an object. `-r` or `-R` recursively removes a prefix; remote prefixes show object-count progress |
+| `rm URL ... [-r]` | Remove one or more objects. `-r` or `-R` recursively removes every prefix; remote prefixes show object-count progress |
 | `browse [URL]` | The interactive browser |
 
 `cp` and `mv` append each source basename when the destination is an existing directory,
@@ -90,9 +90,10 @@ that exceed one listing page are split at the next `/` through three directory l
 then paginated flat. Recursive `rm` uses S3's 1,000-key bulk delete and GCS's 20-key
 batch delete, with up to eight batches in flight.
 
-`usage` uses the same parallel metadata-page scanner as `du` and writes a Markdown
-report. Starting at the bucket root, it descends into every prefix at or above the
-1 TiB threshold and shows the resulting exact prefixes in descending size order.
+`usage` uses the same parallel metadata-page scanner as `du`, defaults to 128 workers,
+accepts up to 1,024 workers, and writes a Markdown report. Starting at the bucket root,
+it descends into every prefix at or above the 1 TiB threshold and shows the resulting
+exact prefixes in descending size order.
 `--prefix-threshold` changes that threshold and accepts values such as `1TB`, `1TiB`,
 or `512GiB`. `--prefix-depth` controls how many path components the in-memory scan
 retains, with a default of three.

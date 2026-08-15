@@ -4,6 +4,19 @@
 """Classify retryable S3 and object-store transport failures."""
 
 import aiohttp
+import botocore.exceptions
+
+_TRANSIENT_S3_TRANSPORT_ERRORS = (
+    aiohttp.ClientConnectionError,
+    aiohttp.ClientPayloadError,
+    botocore.exceptions.ConnectionClosedError,
+    botocore.exceptions.ConnectTimeoutError,
+    botocore.exceptions.EndpointConnectionError,
+    botocore.exceptions.ProxyConnectionError,
+    botocore.exceptions.ReadTimeoutError,
+    botocore.exceptions.ResponseStreamingError,
+    TimeoutError,
+)
 
 _TRANSIENT_S3_ERROR_CODES = frozenset(
     {
@@ -29,7 +42,7 @@ _TRANSIENT_S3_MESSAGE_FRAGMENTS = (
 
 def is_transient_s3_error(error: BaseException) -> bool:
     """Return whether an S3 operation can be retried after an incomplete response."""
-    if isinstance(error, (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError, TimeoutError)):
+    if isinstance(error, _TRANSIENT_S3_TRANSPORT_ERRORS):
         return True
     response = getattr(error, "response", None)
     if isinstance(response, dict):
