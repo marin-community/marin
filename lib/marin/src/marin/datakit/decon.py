@@ -39,10 +39,11 @@ import json
 import logging
 import os
 import random
-from collections import Counter
+import re
+from collections import Counter, deque
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from itertools import islice
+from itertools import chain, islice
 from typing import Any, Protocol
 
 import dupekit
@@ -92,6 +93,8 @@ DEFAULT_PARAGRAPH_DELIMITER = "\n\n"
 DROP_SET_SAMPLE_SHARD_BYTES = 64 * 1024 * 1024
 DROP_SET_SAMPLE_SHARDS_PER_SOURCE = 512
 DROP_SET_STAGE_PARTITIONS_PER_SOURCE = 128
+LARGE_TEXT_STREAMING_THRESHOLD = 1024 * 1024
+_TOKEN_PATTERN = re.compile(r"\S+")
 
 
 @dataclass(frozen=True)
@@ -227,8 +230,31 @@ def _extract_token_ngrams(tokens: list[str], n: int, stride: int) -> Iterator[st
             yield " ".join(tokens[i : i + n])
 
 
+def _extract_streaming_ngrams(text: str, n: int, stride: int) -> Iterator[str]:
+    """Yield n-grams without retaining every token from a large record."""
+    window: deque[tuple[int, int, bool]] = deque()
+    alpha_tokens = 0
+    step = stride + 1
+    for token_index, match in enumerate(_TOKEN_PATTERN.finditer(text)):
+        if len(window) == n:
+            _, _, had_alpha = window.popleft()
+            alpha_tokens -= had_alpha
+
+        start, end = match.span()
+        has_alpha = any(text[index].isalpha() for index in range(start, end))
+        window.append((start, end, has_alpha))
+        alpha_tokens += has_alpha
+
+        ngram_start = token_index - n + 1
+        if len(window) == n and ngram_start % step == 0 and alpha_tokens:
+            yield " ".join(text[start:end] for start, end, _ in window)
+
+
 def _extract_ngrams(text: str, n: int, stride: int) -> Iterator[str]:
-    yield from _extract_token_ngrams(text.split(), n, stride)
+    if len(text) < LARGE_TEXT_STREAMING_THRESHOLD:
+        yield from _extract_token_ngrams(text.split(), n, stride)
+        return
+    yield from _extract_streaming_ngrams(text, n, stride)
 
 
 def _short_exact_feature_from_tokens(tokens: list[str], n: int) -> str | None:
@@ -239,17 +265,48 @@ def _short_exact_feature_from_tokens(tokens: list[str], n: int) -> str | None:
 
 def _short_exact_feature(text: str, n: int) -> str | None:
     """Return one normalized feature for guarded short exact matching."""
-    return _short_exact_feature_from_tokens(text.split(), n)
+    if len(text) < LARGE_TEXT_STREAMING_THRESHOLD:
+        return _short_exact_feature_from_tokens(text.split(), n)
+
+    matches = list(islice(_TOKEN_PATTERN.finditer(text), n))
+    if not MIN_SHORT_EXACT_TOKENS <= len(matches) < n:
+        return None
+    spans = [match.span() for match in matches]
+    if not any(text[index].isalpha() for start, end in spans for index in range(start, end)):
+        return None
+    return " ".join(text[start:end] for start, end in spans)
 
 
 def _extract_paragraph_features(text: str, n: int, stride: int) -> Iterator[str]:
     """Yield n-grams, or one guarded exact feature for a short paragraph."""
-    tokens = text.split()
-    short_exact = _short_exact_feature_from_tokens(tokens, n)
+    short_exact = _short_exact_feature(text, n)
     if short_exact is not None:
         yield short_exact
         return
-    yield from _extract_token_ngrams(tokens, n, stride)
+    yield from _extract_ngrams(text, n, stride)
+
+
+def _iter_nonempty_segments(text: str, delimiter: str) -> Iterator[str]:
+    """Yield split segments one at a time to bound memory for large records."""
+    if not delimiter:
+        raise ValueError("empty separator")
+    start = 0
+    while True:
+        end = text.find(delimiter, start)
+        if end < 0:
+            if start < len(text):
+                yield text[start:]
+            return
+        if end > start:
+            yield text[start:end]
+        start = end + len(delimiter)
+
+
+def _iter_paragraphs(text: str, delimiter: str) -> Iterator[str]:
+    if len(text) < LARGE_TEXT_STREAMING_THRESHOLD:
+        yield from (paragraph for paragraph in text.split(delimiter) if paragraph)
+        return
+    yield from _iter_nonempty_segments(text, delimiter)
 
 
 def _extract_features(text: str, ngram: NGramConfig | None) -> Iterator[str]:
@@ -261,7 +318,7 @@ def _extract_features(text: str, ngram: NGramConfig | None) -> Iterator[str]:
     are short. A complete short record emits one guarded exact feature.
     """
     delimiter = ngram.paragraph_delimiter if ngram is not None else "\n"
-    paragraphs = [paragraph for paragraph in text.split(delimiter) if paragraph]
+    paragraphs = _iter_paragraphs(text, delimiter)
     if ngram is None:
         for para in paragraphs:
             yield para
@@ -326,13 +383,12 @@ def _paragraph_overlap_matches_and_presence(
     has_ngram_features = False
     feature_count = 0
     matched: list[int] = []
-    tokens = paragraph.split()
-    short_exact = _short_exact_feature_from_tokens(tokens, ngram.ngram_length)
+    short_exact = _short_exact_feature(paragraph, ngram.ngram_length)
     features: Iterator[str]
     if short_exact is not None:
         features = iter((short_exact,))
     else:
-        features = _extract_token_ngrams(tokens, ngram.ngram_length, ngram.stride)
+        features = _extract_ngrams(paragraph, ngram.ngram_length, ngram.stride)
     for feature in features:
         has_features = True
         has_ngram_features = short_exact is None
@@ -371,7 +427,16 @@ def _document_overlap_matches_by_minimum(
         raise ValueError("minimums must contain positive integers")
     threshold = ngram.overlap_threshold if ngram is not None else 0.0
     delimiter = ngram.paragraph_delimiter if ngram is not None else "\n"
-    paragraphs = [paragraph for paragraph in text.split(delimiter) if paragraph]
+    paragraph_iter = iter(_iter_paragraphs(text, delimiter))
+    first_paragraph = next(paragraph_iter, None)
+    second_paragraph = next(paragraph_iter, None)
+    single_paragraph = first_paragraph is not None and second_paragraph is None
+    if first_paragraph is None:
+        paragraphs: Iterator[str] = iter(())
+    elif second_paragraph is None:
+        paragraphs = iter((first_paragraph,))
+    else:
+        paragraphs = chain((first_paragraph, second_paragraph), paragraph_iter)
     max_score = 0.0
     matched = {minimum: set() for minimum in minimums}
     has_paragraph_ngrams = False
@@ -394,7 +459,7 @@ def _document_overlap_matches_by_minimum(
                 hashes.update(hits)
             continue
 
-        complete_single_feature_document = len(paragraphs) == 1 and feature_count == 1 and score == 1.0
+        complete_single_feature_document = single_paragraph and feature_count == 1 and score == 1.0
         distinct_hits = len(set(hits))
         for minimum, hashes in matched.items():
             if score >= threshold and (distinct_hits >= minimum or complete_single_feature_document):

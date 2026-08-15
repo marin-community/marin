@@ -20,6 +20,8 @@ from marin.datakit.decon import (
     _bloom_hash,
     _document_overlap_matches_by_minimum,
     _extract_ngrams,
+    _extract_streaming_ngrams,
+    _extract_token_ngrams,
     _load_drop_set,
     _paragraph_overlap_and_matches,
     _source_sample_shards,
@@ -1424,6 +1426,21 @@ def test_extract_ngrams_drops_letterless_ngrams():
     # A single letter anywhere in the window keeps it (it now has real content).
     mixed = "x 2 3 4 5 6 7 8 9 10 11 12 13"
     assert list(_extract_ngrams(mixed, 13, 0)) == [mixed]
+
+
+@pytest.mark.parametrize(
+    ("text", "ngram_length", "stride"),
+    [
+        ("alpha beta gamma delta epsilon", 3, 0),
+        ("1 2\n3\talpha 5 6", 2, 1),
+        ("1 2 3 4", 2, 0),
+        ("alpha\u2003beta gamma\r\ndelta epsilon", 3, 2),
+    ],
+)
+def test_streaming_ngrams_match_materialized_ngrams(text: str, ngram_length: int, stride: int):
+    assert list(_extract_streaming_ngrams(text, ngram_length, stride)) == list(
+        _extract_token_ngrams(text.split(), ngram_length, stride)
+    )
 
 
 def test_decon_skips_numeric_only_contamination(tmp_path: Path):
