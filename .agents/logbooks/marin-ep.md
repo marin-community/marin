@@ -649,3 +649,22 @@ Experiment ID prefix: `MEP`.
 - Next: cf 1.0 marin arm (MEP-H5 curve, expect ~-4% step at ~1.5-2%
   drops); splits-per-peer retune at 64 ranks; then the deep levers
   (hierarchical fused transport, wgrad kernels, M7).
+
+### 2026-08-15 16:10 - MEP-019: cf 1.0 EP64 arm — drop-adjusted wash vs cf 1.1; keep cf 1.1
+- Run: mep-ep64-cf10-25-20260815 — ep-marin-cudnn-cute at EP64 hero,
+  cf 1.0, split-32, patched wheel, symmetric mode. 25/25 steps, 16/16
+  tasks succeeded, loss 6.01 falling, final-step drop_fraction 3.27%
+  (still declining from the early routing-warmup peak at step 24).
+- Scored: steady 18.0 s/step (14it@5:04 -> 25it@8:22 = 198 s / 11
+  steps) = 233.0k tok/s = ~21.3% MFU. Cumulative rate 17.9 s/it agrees.
+- vs cf 1.1 (MEP-017: 18.5 s, 226.7k, 0.66% drops): cf 1.0 buys -2.7%
+  step time for 5x the drops. Drop-adjusted effective assignments/s:
+  225.4k (cf 1.0) vs 225.2k (cf 1.1) — a wash, exactly the MEP-H5
+  plateau the simulator predicted. Single draws; ±2pp placement band.
+- Decision: keep cf 1.1 as the marin_ep operating point — same
+  effective throughput, 5x fewer drops (loss-side risk strictly lower).
+  cf sweep concluded (1.33 -> 1.1 -> 1.0 measured on hardware).
+- Next: splits-per-peer retune at 64 ranks (s8/s16 arms vs the s32
+  baseline 18.5 s; 63 peers make per-peer slices ~4x smaller than at
+  EP16 where s32 won, so fewer splits should now be optimal); then
+  wgrad kernels / hierarchical fused transport / M7.
