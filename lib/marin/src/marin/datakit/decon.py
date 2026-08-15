@@ -43,7 +43,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from itertools import islice
-from typing import Any
+from typing import Any, Protocol
 
 import dupekit
 import pyarrow as pa
@@ -66,6 +66,11 @@ from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 
+
+class _FeatureMembership(Protocol):
+    def __contains__(self, value: int, /) -> bool: ...
+
+
 # Bump when the ngram feature-extraction policy changes. Both the bloom build and
 # the corpus mark fold this into their step hash_attrs, so a policy change
 # re-addresses cached blooms/marks instead of silently reusing incompatible
@@ -73,13 +78,18 @@ logger = logging.getLogger(__name__)
 # v3 added an exact feature for short alphabetic paragraphs with at least three
 # tokens. This keeps required eval records matchable without restoring the
 # one-token punctuation and label collisions removed in v2.
-FEATURE_FILTER_VERSION = 3
+# v4 limits that exact feature to a complete short record. It does not index a
+# short paragraph from a longer record because common labels can then mark an
+# unrelated complete document. With the default blank-line policy, a record-level
+# n-gram fallback keeps records matchable when all paragraphs are short.
+FEATURE_FILTER_VERSION = 4
 DECON_ATTRIBUTES_VERSION = 5
 BLOOM_BUILD_VERSION = 2
 # v3 increases sampling fan-out so large sources do not hold the pipeline on a
 # small number of long-running shards.
 DROP_SET_BUILD_VERSION = 3
 MIN_SHORT_EXACT_TOKENS = 3
+DEFAULT_PARAGRAPH_DELIMITER = "\n\n"
 DROP_SET_SAMPLE_SHARD_BYTES = 64 * 1024 * 1024
 DROP_SET_SHARDS_PER_SOURCE = 128
 
@@ -108,7 +118,7 @@ class NGramConfig:
     stride: int = 0
     overlap_threshold: float = 0.5
     min_matched_features: int = 2
-    paragraph_delimiter: str = "\n\n"
+    paragraph_delimiter: str = DEFAULT_PARAGRAPH_DELIMITER
 
     def __post_init__(self) -> None:
         if self.min_matched_features < 1:
@@ -243,35 +253,39 @@ def _extract_paragraph_features(text: str, n: int, stride: int) -> Iterator[str]
 
 
 def _extract_features(text: str, ngram: NGramConfig | None) -> Iterator[str]:
-    """Yield matchable features: ngrams within each paragraph, or whole paragraphs.
+    """Yield matchable features from a complete record.
 
-    In n-gram mode, an alphabetic paragraph with 3 to ``ngram_length - 1``
-    tokens contributes one normalized exact feature. Shorter and
-    non-alphabetic paragraphs contribute nothing. This avoids the trivial
-    ``"..."`` and ``"A."`` collisions found in PR #5656 while keeping short
-    required eval records matchable. If every paragraph is shorter than three
-    tokens, a full record with at least three tokens contributes one exact
-    feature.
+    N-gram mode emits n-grams from each paragraph. It does not emit exact
+    features for short paragraphs in a longer record. With the default
+    blank-line policy, the complete record emits n-grams when all paragraphs
+    are short. A complete short record emits one guarded exact feature.
     """
     delimiter = ngram.paragraph_delimiter if ngram is not None else "\n"
-    yielded = False
-    for para in text.split(delimiter):
-        if not para:
-            continue
-        if ngram is None:
+    paragraphs = [paragraph for paragraph in text.split(delimiter) if paragraph]
+    if ngram is None:
+        for para in paragraphs:
             yield para
-            continue
-        for feature in _extract_paragraph_features(para, ngram.ngram_length, ngram.stride):
+        return
+
+    short_exact = _short_exact_feature(text, ngram.ngram_length)
+    if short_exact is not None:
+        yield short_exact
+        return
+
+    yielded = False
+    for para in paragraphs:
+        for feature in _extract_ngrams(para, ngram.ngram_length, ngram.stride):
             yielded = True
             yield feature
-    if ngram is not None and not yielded:
-        short_exact = _short_exact_feature(text, ngram.ngram_length)
-        if short_exact is not None:
-            yield short_exact
+    if not yielded and ngram.paragraph_delimiter == DEFAULT_PARAGRAPH_DELIMITER:
+        yield from _extract_ngrams(text, ngram.ngram_length, ngram.stride)
 
 
 def _paragraph_overlap_and_matches(
-    paragraph: str, bf: dupekit.Bloom, ngram: NGramConfig | None, drop_hashes: frozenset[int] = frozenset()
+    paragraph: str,
+    bf: _FeatureMembership,
+    ngram: NGramConfig | None,
+    drop_hashes: frozenset[int] = frozenset(),
 ) -> tuple[float, list[int]]:
     """Return ``(overlap_score, matched_hashes)`` for a single paragraph.
 
@@ -289,27 +303,39 @@ def _paragraph_overlap_and_matches(
     tokens use one exact feature. Shorter and non-alphabetic paragraphs return
     ``(0.0, [])``.
     """
-    score, matched, _has_features, _feature_count = _paragraph_overlap_matches_and_presence(
+    score, matched, _has_features, _feature_count, _has_ngram_features = _paragraph_overlap_matches_and_presence(
         paragraph, bf, ngram, drop_hashes
     )
     return score, matched
 
 
 def _paragraph_overlap_matches_and_presence(
-    paragraph: str, bf: dupekit.Bloom, ngram: NGramConfig | None, drop_hashes: frozenset[int] = frozenset()
-) -> tuple[float, list[int], bool, int]:
-    """Return overlap details, feature presence, and the usable feature count."""
+    paragraph: str,
+    bf: _FeatureMembership,
+    ngram: NGramConfig | None,
+    drop_hashes: frozenset[int] = frozenset(),
+) -> tuple[float, list[int], bool, int, bool]:
+    """Return overlap details, feature counts, and n-gram presence."""
     if ngram is None:
         h = _bloom_hash(paragraph)
         if h in drop_hashes:
-            return 0.0, [], True, 0
-        return (1.0, [h], True, 1) if h in bf else (0.0, [], True, 1)
+            return 0.0, [], True, 0, False
+        return (1.0, [h], True, 1, False) if h in bf else (0.0, [], True, 1, False)
 
     has_features = False
+    has_ngram_features = False
     feature_count = 0
     matched: list[int] = []
-    for feature in _extract_paragraph_features(paragraph, ngram.ngram_length, ngram.stride):
+    tokens = paragraph.split()
+    short_exact = _short_exact_feature_from_tokens(tokens, ngram.ngram_length)
+    features: Iterator[str]
+    if short_exact is not None:
+        features = iter((short_exact,))
+    else:
+        features = _extract_token_ngrams(tokens, ngram.ngram_length, ngram.stride)
+    for feature in features:
         has_features = True
+        has_ngram_features = short_exact is None
         hash_value = _bloom_hash(feature)
         if hash_value in drop_hashes:
             continue
@@ -317,13 +343,13 @@ def _paragraph_overlap_matches_and_presence(
         if hash_value in bf:
             matched.append(hash_value)
     if feature_count == 0:
-        return 0.0, [], has_features, feature_count
-    return len(matched) / feature_count, matched, has_features, feature_count
+        return 0.0, [], has_features, feature_count, has_ngram_features
+    return len(matched) / feature_count, matched, has_features, feature_count, has_ngram_features
 
 
 def _document_overlap_and_matches(
     text: str,
-    bf: dupekit.Bloom,
+    bf: _FeatureMembership,
     ngram: NGramConfig | None,
     drop_hashes: frozenset[int] = frozenset(),
 ) -> tuple[float, list[int]]:
@@ -335,7 +361,7 @@ def _document_overlap_and_matches(
 
 def _document_overlap_matches_by_minimum(
     text: str,
-    bf: dupekit.Bloom,
+    bf: _FeatureMembership,
     ngram: NGramConfig | None,
     minimums: tuple[int, ...],
     drop_hashes: frozenset[int] = frozenset(),
@@ -348,14 +374,14 @@ def _document_overlap_matches_by_minimum(
     paragraphs = [paragraph for paragraph in text.split(delimiter) if paragraph]
     max_score = 0.0
     matched = {minimum: set() for minimum in minimums}
-    has_paragraph_features = False
+    has_paragraph_ngrams = False
 
     for paragraph in paragraphs:
-        score, hits, paragraph_has_features, feature_count = _paragraph_overlap_matches_and_presence(
+        score, hits, _has_features, feature_count, paragraph_has_ngrams = _paragraph_overlap_matches_and_presence(
             paragraph, bf, ngram, drop_hashes
         )
-        if ngram is not None and paragraph_has_features:
-            has_paragraph_features = True
+        if ngram is not None and paragraph_has_ngrams:
+            has_paragraph_ngrams = True
         max_score = max(max_score, score)
         if not hits:
             continue
@@ -370,16 +396,32 @@ def _document_overlap_matches_by_minimum(
             if score >= threshold and (distinct_hits >= minimum or complete_single_feature_document):
                 hashes.update(hits)
 
-    if ngram is not None and not has_paragraph_features:
-        short_exact = _short_exact_feature(text, ngram.ngram_length)
-        if short_exact is not None:
-            short_hash = _bloom_hash(short_exact)
-            if short_hash not in drop_hashes and short_hash in bf:
-                max_score = 1.0
-                for hashes in matched.values():
-                    hashes.add(short_hash)
+    if ngram is not None and not has_paragraph_ngrams:
+        use_record_fallback = (
+            ngram.paragraph_delimiter == DEFAULT_PARAGRAPH_DELIMITER
+            or _short_exact_feature(text, ngram.ngram_length) is not None
+        )
+        if use_record_fallback:
+            score, hits, _has_features, feature_count, _has_ngrams = _paragraph_overlap_matches_and_presence(
+                text, bf, ngram, drop_hashes
+            )
+            max_score = max(max_score, score)
+            distinct_hits = len(set(hits))
+            complete_single_feature_document = feature_count == 1 and score == 1.0
+            for minimum, hashes in matched.items():
+                if score >= threshold and (distinct_hits >= minimum or complete_single_feature_document):
+                    hashes.update(hits)
 
     return max_score, {minimum: sorted(hashes) for minimum, hashes in matched.items()}
+
+
+def _record_feature_status(text: str, ngram: NGramConfig | None) -> tuple[bool, bool]:
+    """Return feature presence and exact self-match status for one record."""
+    feature_hashes = {_bloom_hash(feature) for feature in _extract_features(text, ngram)}
+    if not feature_hashes:
+        return False, False
+    _score, matched_hashes = _document_overlap_and_matches(text, feature_hashes, ngram)
+    return True, bool(matched_hashes)
 
 
 def _is_hidden_dir(root: str, resolved: str) -> bool:
@@ -1035,13 +1077,18 @@ def _validate_required_eval_manifest(
             texts = parquet.read(columns=[text_field]).column(text_field).to_pylist()
         if actual_records != expected_records:
             raise ValueError(f"{name}: manifest expects {expected_records} records, artifact contains {actual_records}")
-        records_with_features = sum(
-            bool(text) and next(_extract_features(str(text), ngram), None) is not None for text in texts
-        )
+        record_statuses = [_record_feature_status(str(text), ngram) if text else (False, False) for text in texts]
+        records_with_features = sum(has_features for has_features, _self_matches in record_statuses)
         if records_with_features != expected_records:
             raise ValueError(
                 f"{name}: {expected_records - records_with_features} of {expected_records} required eval records "
                 "produce no matchable features"
+            )
+        self_matching_records = sum(self_matches for _has_features, self_matches in record_statuses)
+        if self_matching_records != expected_records:
+            raise ValueError(
+                f"{name}: {expected_records - self_matching_records} of {expected_records} required eval records "
+                "do not match an exact copy under the mark policy"
             )
         paths.append(artifact_path)
     return paths
@@ -1195,7 +1242,7 @@ def build_eval_bloom_step(
     text_field: str = "text",
     ngram_length: int | None = 13,
     overlap_threshold: float = 0.5,
-    paragraph_delimiter: str = "\n\n",
+    paragraph_delimiter: str = DEFAULT_PARAGRAPH_DELIMITER,
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
     exclude_eval_dirs: frozenset[str] = frozenset(),
@@ -1775,7 +1822,7 @@ def all_source_drop_sets_step(
     prebuilt_bloom: StepSpec,
     text_field: str = "text",
     ngram_length: int | None = 13,
-    paragraph_delimiter: str = "\n\n",
+    paragraph_delimiter: str = DEFAULT_PARAGRAPH_DELIMITER,
     sample_docs: int,
     common_frac: float,
     common_min_abs: int,
@@ -1872,7 +1919,7 @@ def decon_step(
     ngram_length: int | None = 13,
     overlap_threshold: float = 0.5,
     min_matched_features: int = 2,
-    paragraph_delimiter: str = "\n\n",
+    paragraph_delimiter: str = DEFAULT_PARAGRAPH_DELIMITER,
     flagged_sample_size: int = 0,
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
