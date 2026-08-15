@@ -1080,14 +1080,18 @@ class TrainerConfig:
         # validate size of per_device_parallelism
         if self.per_device_parallelism != -1:
             if isinstance(self.train_batch_size, Sequence):
+                last_phase_start = max(phase.start for phase in self.train_batch_size)
                 for phase in self.train_batch_size:
                     assert isinstance(phase, ScheduleStep)
                     if phase.value % (self.per_device_parallelism * self.data_axis_size) != 0:
-                        if self.skip_batch_size_schedule_head_validation and phase.start == 0:
-                            # BS-ramp resume: phase 0 describes what the source
-                            # run consumed (for BatchSchedule offset math) and
-                            # is never iterated by this run, so a value that
-                            # doesn't fit per_device_parallelism is OK.
+                        if self.skip_batch_size_schedule_head_validation and phase.start < last_phase_start:
+                            # BS-ramp resume: all pre-final phases describe what
+                            # the source run consumed (for BatchSchedule offset
+                            # math) and are never iterated by this run, so
+                            # values that don't fit per_device_parallelism are
+                            # OK. Only the final phase (which starts at
+                            # resume_step and drives actual iteration) must
+                            # satisfy the divisibility constraint.
                             continue
                         raise ValueError(
                             f"At step {phase.start}, train_batch_size ({phase.value}) must be divisible by "
