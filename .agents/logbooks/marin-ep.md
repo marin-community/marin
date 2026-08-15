@@ -202,3 +202,38 @@ Experiment ID prefix: `MEP`.
   L1 link_efficiency/message_latency; then M6 transport kernel
   (count exchange + dispatch/combine puts) with XLA GEMMs in the middle.
   Also: bench xla_backend vs fixed_all_to_all on GPU (cheap first win).
+
+### 2026-08-14 21:30 - MEP-005: M5 spike GREEN on GB200 (single node)
+- Hypothesis: MEP-H3 hardware validation (remote puts + semaphores work
+  from Pallas Mosaic-GPU on GB200 via the collective-metadata path).
+- Commit Hash: 49a3f2a90c (+ pod-side fixes folded into next commit).
+- Command: dev_gpu 1x GB200 tray on cw-us-east-08a
+  (`scripts/iris/dev_gpu.py ... allocate --gpu-variant gb200 --cpu 32
+  --memory 200GB`), pod `uv sync --all-packages --extra=gpu`, then
+  `uv run python experiments/marin_ep/bench/spike_transport_mgpu.py`
+  (single process, 4 local CudaDevices, jax 0.10.1 GPU).
+- Result:
+  - Litmus (minimal remote-put + remote-semaphore kernel): exact
+    correctness on 4 devices. No nvshmem needed at single-node scope; XLA
+    auto-inserts a MultiGpuBarrierWithNcclKernel (~7 us) around the launch.
+  - Rotated all-to-all put spike, correctness exact vs all_gather:
+    | case | kernel time | egress/device |
+    |---|---|---|
+    | 3x50 MB blocks | 0.252 ms | **584 GB/s** (65% of 900 peak, untuned single-buffered) |
+    | 3x131 KB blocks | 0.023 ms | latency floor ~= kernel launch + 3 put/signal rounds |
+  - Porting gotchas recorded in the spike script: jax 0.10.1 uses
+    `out_shape` (0.11: `out_type`); `pl.run_scoped` needs
+    `collective_axes="wg"` in multithreaded kernels; async copies cap at
+    256 elements/dim (view [rows, H] as [rows, H/256, 256]); SMEM budget
+    ~228 KB/SM. Dev-pod holder released itself after ~7 min
+    ("holder job terminated unexpectedly", exit 0) — reallocate rather
+    than debug; keep GPU sessions short and scripted.
+- Interpretation: the substrate works end-to-end on GB200 with zero custom
+  CUDA. 584 GB/s untuned (no double buffering, 1 warpgroup/SM) already
+  matches the L1 model's 0.8 link efficiency assumption territory; the
+  ~20 us launch overhead argues for one persistent kernel per layer
+  direction rather than per-phase launches. MEP-H3 CONFIRMED at
+  single-node scope; multi-node nvshmem path (1 proc/GPU) still untested.
+- Next action: ragged-transport GPU conformance of xla_backend (values +
+  grads at EP4); then M6: fused dispatch/combine transport kernel
+  (count exchange + puts per SPEC F1-F3/F5) with XLA GEMMs between.

@@ -27,6 +27,7 @@ Run on GB200 (NOT runnable on CPU jaxlib; unvalidated until the M5 session):
 """
 
 import functools
+import inspect
 
 import jax
 import jax.numpy as jnp
@@ -37,7 +38,13 @@ from jax.experimental.mosaic.gpu import profiler
 from jax.experimental.pallas import mosaic_gpu as plgpu
 from jax.sharding import PartitionSpec as P
 
-TILE_ROWS = 128
+# Async copies allow at most 256 elements per dimension, so the payload uses
+# a 256-wide row layout (the fused kernel will view [rows, H] as
+# [rows, H/256, 256]). 256 x 256 bf16 = 131 KB, under the ~228 KB SMEM budget.
+TILE_ROWS = 256
+
+# jax 0.11 renamed plgpu.kernel's `out_shape` to `out_type`.
+_OUT_KWARG = "out_type" if "out_type" in inspect.signature(plgpu.kernel).parameters else "out_shape"
 
 
 def all_to_all_put(x: jax.Array, axis_name: str, *, num_devices: int) -> jax.Array:
@@ -77,6 +84,7 @@ def all_to_all_put(x: jax.Array, axis_name: str, *, num_devices: int) -> jax.Arr
                         scoped,
                         plgpu.SMEM((TILE_ROWS, hidden), x_ref.dtype),
                         plgpu.Barrier(num_arrivals=1),
+                        collective_axes="wg",
                     )
 
         # Rotated order: peer dev_id+1 first (L1 sim: convoy avoidance).
@@ -93,26 +101,22 @@ def all_to_all_put(x: jax.Array, axis_name: str, *, num_devices: int) -> jax.Arr
         pl.semaphore_wait(received_sem, value=(num_devices - 1) * num_sms, decrement=False)
         done_ref[0] = jnp.int32(1)
 
+    out_types = [
+        jax.ShapeDtypeStruct(x.shape, x.dtype),  # receive pool
+        jax.ShapeDtypeStruct((1,), jnp.int32),  # forces the wait into the dataflow
+    ]
     pool, _ = plgpu.kernel(
         kernel_body,
-        out_type=[
-            jax.ShapeDtypeStruct(x.shape, x.dtype),  # receive pool
-            jax.ShapeDtypeStruct((1,), jnp.int32),  # forces the wait into the dataflow
-        ],
         grid=(num_sms,),
         grid_names=("sm",),
         num_threads=1,
         thread_name="wg",
+        **{_OUT_KWARG: out_types},
     )(x)
     return pool
 
 
-def main() -> None:
-    num_devices = jax.device_count()
-    mesh = jax.make_mesh((num_devices,), ("x",), axis_types=(jax.sharding.AxisType.Explicit,))
-    jax.set_mesh(mesh)
-
-    rows_per_block, hidden = 8192, 3072  # ~50 MB bf16 per block, hero routed width
+def _measure_case(num_devices: int, rows_per_block: int, hidden: int) -> None:
     x = jax.random.normal(jax.random.key(0), (num_devices, num_devices * rows_per_block, hidden), jnp.bfloat16).reshape(
         num_devices * num_devices, rows_per_block, hidden
     )
@@ -136,17 +140,33 @@ def main() -> None:
         )
     )(x)
     np.testing.assert_array_equal(np.asarray(pool), np.asarray(reference))
-    print("correctness: pool matches all_gather reference")
 
     _, kernels_ms = profiler.measure(bench, aggregate=False)(x)
     assert kernels_ms is not None
-    time_ms = min(t for _, t in kernels_ms)
+    # One kernel launch per device in this process; take the per-name minimum
+    # (the device that never waited) and sum across distinct kernels, as the
+    # jax collective_matmul example does.
+    per_name: dict[str, float] = {}
+    for name, t in kernels_ms:
+        per_name[name] = min(per_name.get(name, float("inf")), t)
+    for name, t in sorted(per_name.items(), key=lambda kv: -kv[1]):
+        print(f"  kernel {name}: {t:.3f} ms")
+    time_ms = sum(per_name.values())
     egress_bytes = (num_devices - 1) * rows_per_block * hidden * 2
     print(
-        f"devices={num_devices} block={rows_per_block}x{hidden} bf16: "
+        f"devices={num_devices} block={rows_per_block}x{hidden} bf16 (correct): "
         f"{time_ms:.3f} ms, egress {egress_bytes / time_ms * 1e3 / 1e9:.1f} GB/s/device "
         f"(NVLink5 peak 900 GB/s)"
     )
+
+
+def main() -> None:
+    num_devices = jax.device_count()
+    mesh = jax.make_mesh((num_devices,), ("x",), axis_types=(jax.sharding.AxisType.Explicit,))
+    jax.set_mesh(mesh)
+    # Large block: bandwidth. Single-tile block: per-message + flag latency floor.
+    _measure_case(num_devices, rows_per_block=98304, hidden=256)  # ~50 MB per block
+    _measure_case(num_devices, rows_per_block=TILE_ROWS, hidden=256)  # 131 KB per block
 
 
 if __name__ == "__main__":
