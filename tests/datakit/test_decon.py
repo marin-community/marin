@@ -497,6 +497,19 @@ def test_decon_short_record_fallback_spans_tiny_paragraphs(tmp_path: Path):
     assert rows["doc"]["max_overlap"] == 1.0
 
 
+def test_decon_long_record_fallback_spans_short_paragraphs(tmp_path: Path):
+    text = "one two three four\n\nfive six seven eight\n\nnine ten eleven twelve\n\nthirteen fourteen"
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "eval", "text": text}],
+        input_records=[{"id": "doc", "text": text, "partition_id": 0}],
+        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5),
+    )
+
+    assert rows["doc"]["contaminated"] is True
+    assert rows["doc"]["max_overlap"] == 1.0
+
+
 @pytest.mark.parametrize("short_match", ["September 29, 2011", "2, 3 and 4"])
 def test_decon_does_not_mark_long_document_from_one_short_match(tmp_path: Path, short_match: str):
     rows = _run_decon_one_shot(
@@ -538,6 +551,24 @@ def test_decon_keeps_one_feature_match_for_complete_document(tmp_path: Path, tex
 
     assert rows["doc"]["contaminated"] is True
     assert rows["doc"]["matched_hashes"] == [_bloom_hash(text)]
+
+
+def test_decon_does_not_index_short_paragraph_from_long_eval_record(tmp_path: Path):
+    long_match = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
+    short_match = "See comment above."
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "eval", "text": f"{long_match}\n\n{short_match}"}],
+        input_records=[
+            {"id": "long", "text": long_match, "partition_id": 0},
+            {"id": "short", "text": short_match, "partition_id": 0},
+        ],
+        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5),
+    )
+
+    assert rows["long"]["contaminated"] is True
+    assert rows["short"]["contaminated"] is False
+    assert rows["short"]["matched_hashes"] == []
 
 
 def test_decon_uses_configured_minimum_distinct_features(tmp_path: Path):
@@ -1093,6 +1124,41 @@ def test_build_eval_bloom_requires_features_for_every_required_record(tmp_path: 
             eval_data_sources=str(eval_root),
             output_path=str(tmp_path / "bloom"),
             ngram=NGramConfig(ngram_length=13),
+            required_eval_manifest_path=str(manifest_path),
+            required_eval_corpus_version="test-corpus-v1",
+            required_eval_names=("Required Eval",),
+        )
+
+
+def test_build_eval_bloom_requires_each_required_record_to_self_match(tmp_path: Path):
+    eval_root = tmp_path / "evals"
+    artifact_path = eval_root / "aa" / "required_eval" / "test.parquet"
+    text = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
+    _write_input_parquet(artifact_path, [{"id": "eval-1", "text": text}])
+    manifest_path = eval_root / "aa" / "_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "corpus_version": "test-corpus-v1",
+                "required": True,
+                "status": "complete",
+                "benchmarks": [
+                    {
+                        "name": "Required Eval",
+                        "artifact": "required_eval/test.parquet",
+                        "expected_records": 1,
+                    }
+                ],
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="1 of 1 required eval records do not match an exact copy"):
+        build_eval_bloom(
+            eval_data_sources=str(eval_root),
+            output_path=str(tmp_path / "bloom"),
+            ngram=NGramConfig(ngram_length=13, min_matched_features=3),
             required_eval_manifest_path=str(manifest_path),
             required_eval_corpus_version="test-corpus-v1",
             required_eval_names=("Required Eval",),
