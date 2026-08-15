@@ -282,16 +282,32 @@ class MinhashConfig:
 class StoreConfig:
     """Execution shape for the final map-only clustered store.
 
-    Production uses 192 task-local partitions, which is about 104B tokens per
-    task for a 20T-token corpus. The dedicated worker shape keeps the store's
-    large RAM and local-disk request out of the shared upstream worker pool.
+    ``disk`` is the only dimension that binds, and it binds hard: a task spills
+    every surviving token of every shard it owns to ``/tmp``, which on Kubernetes
+    is a disk-backed ``emptyDir`` under the pod's ephemeral-storage limit.
+    Exceeding it is a kubelet eviction, and enough evictions trip
+    ``max_task_failures`` and take the whole gang down rather than one task.
+
+    Measured over the registered corpus from the tokenize footers: 26.1 T tokens,
+    95.1 TiB of int32 spill across 162,535 shards. Split 384 ways that averages
+    254 GiB per task, so 1200 GiB is roughly 4.7x the mean.
+
+    The headroom is for skew, not for the mean. Shards are dealt round robin but
+    sources are wildly uneven -- ``stack-v3`` alone is 13.5 TiB and
+    ``finetranslations`` 10.3 TiB -- so a task drawing from the dense end runs
+    well above average, and the spill estimate excludes the per-run length files.
+
+    Raising ``task_count`` is the other way to cut spill per task, but it is not
+    free: every task writes its own cache per populated bucket before the ledgers
+    merge, so leaf caches grow with it. A 3-source run at 128 tasks wrote 25,432
+    caches for 200 final buckets.
     """
 
-    task_count: int | None = 192
+    task_count: int | None = 384
     partition_processes: int = 32
     max_parallel_bucket_writes: int = DEFAULT_PARALLEL_BUCKET_WRITES
     worker: ResourceConfig = field(
-        default_factory=lambda: ResourceConfig(cpu=96, ram="700g", disk="900g", preemptible=False)
+        default_factory=lambda: ResourceConfig(cpu=96, ram="700g", disk="1200g", preemptible=False)
     )
 
 
