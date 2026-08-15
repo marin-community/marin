@@ -112,6 +112,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+    FuzzyVerificationImplementation,
     FuzzyVerificationStoreConfig,
     VerifiedFuzzyDupsAttrData,
     verify_fuzzy_dups_step,
@@ -815,6 +816,7 @@ def reference_datakit_steps(
         verification_params=verification_params,
         local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
         store_config=verification_store_config,
+        implementation=FuzzyVerificationImplementation.EXACT,
         max_workers=scale.pool.n_workers,
         worker_resources=scale.pool.worker,
     )

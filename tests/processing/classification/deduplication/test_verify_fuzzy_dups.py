@@ -10,6 +10,7 @@ from random import Random
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from dupekit import TokenNgramFingerprintSignature
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.datakit.normalize import NormalizedData
@@ -18,6 +19,7 @@ from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAt
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, MinHashParams
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    FuzzyVerificationImplementation,
     FuzzyVerificationStoreConfig,
     LargeClusterParams,
     LocalRepresentativeParams,
@@ -53,7 +55,11 @@ TEST_STORE_CONFIG = FuzzyVerificationStoreConfig(
     lookup_batch_size=2,
     shards_per_worker=1,
 )
-verify_fuzzy_dups = partial(_verify_fuzzy_dups, store_config=TEST_STORE_CONFIG)
+verify_fuzzy_dups = partial(
+    _verify_fuzzy_dups,
+    store_config=TEST_STORE_CONFIG,
+    implementation=FuzzyVerificationImplementation.EXACT,
+)
 
 
 def test_parquet_rows_converts_only_the_row_it_yields(tmp_path, monkeypatch):
@@ -188,7 +194,8 @@ def _output_rows(verified, source_key: str) -> list[dict]:
     return rows
 
 
-def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, monkeypatch):
+@pytest.mark.parametrize("implementation", list(FuzzyVerificationImplementation))
+def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, monkeypatch, implementation):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     representative = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
     accepted = "alpha beta gamma delta epsilon zeta eta theta"
@@ -224,9 +231,10 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
         normalized_sources={"source": source},
         minhash_sources={"source": _write_minhash(root=tmp_path, name="source", source=source)},
         candidates=candidates,
-        output_path=str(tmp_path / "verified"),
+        output_path=str(tmp_path / f"verified-{implementation}"),
         verification_params=FuzzyVerificationParams(),
         local_representative_params=TEST_LOCAL_PARAMS,
+        implementation=implementation,
     )
 
     assert verified.counters["dedup/fuzzy/verification/memory_store/workers"] == 3
@@ -277,6 +285,69 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
     assert verified.counters["dedup/fuzzy/verification/decision/retained_no_match"] == 1
     assert verified.counters["dedup/fuzzy/verification/comparison/containment_below_threshold"] == 1
     assert verified.sources[source_key].source_tag == "source_000"
+    assert verified.implementation == implementation
+
+
+def test_fingerprint_verifier_pushes_cluster_tail_comparisons_to_store(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    local_text = " ".join(f"local-{index}" for index in range(40))
+    rows = [{"id": "doc-000", "text": LONG_UNRELATED_CANONICAL}]
+    rows.append({"id": "doc-001", "text": local_text})
+    rows.extend(
+        {
+            "id": f"doc-{index:03d}",
+            "text": " ".join(f"unrelated-{index}-{token}" for token in range(40)),
+        }
+        for index in range(2, 66)
+    )
+    rows.append({"id": "doc-066", "text": local_text})
+    source_key, source = _write_source(
+        root=tmp_path,
+        name="source",
+        shards={"part-00000.parquet": rows},
+    )
+    candidates = _write_candidates(
+        root=tmp_path,
+        rows_by_source={
+            source_key: {
+                "part-00000.parquet": [
+                    {
+                        "id": row["id"],
+                        "dup_cluster_id": "cluster-a",
+                        "is_cluster_canonical": row["id"] == "doc-000",
+                    }
+                    for row in rows
+                ]
+            }
+        },
+    )
+    buckets = {row["id"]: [row["id"]] for row in rows}
+    buckets["doc-001"] = buckets["doc-066"] = ["local"]
+    local_params = LocalRepresentativeParams(
+        maximum_comparisons_per_document=2,
+        maximum_representatives_per_cluster=2,
+        maximum_local_representative_chars=10_000,
+        maximum_local_representative_chars_per_cluster=10_000,
+        minimum_local_line_count_ratio=0.8,
+    )
+
+    verified = verify_fuzzy_dups(
+        normalized_sources={"source": source},
+        minhash_sources={"source": _write_minhash(root=tmp_path, name="source", source=source, buckets_by_id=buckets)},
+        candidates=candidates,
+        output_path=str(tmp_path / "verified"),
+        verification_params=FuzzyVerificationParams(),
+        local_representative_params=local_params,
+        implementation=FuzzyVerificationImplementation.FINGERPRINT,
+        max_workers=1,
+        pipeline_shards_per_worker=1,
+    )
+
+    output = _output_rows(verified, source_key)
+    assert [(row["id"], row["dup_representative_id"]) for row in output] == [("doc-066", "doc-001")]
+    signature_bytes = len(TokenNgramFingerprintSignature(local_text, 3).to_bytes())
+    assert verified.counters[f"{_COUNTER_PREFIX}/candidate_signature_bytes"] < len(rows) * signature_bytes
+    assert verified.counters[f"{_COUNTER_PREFIX}/accepted_representative/local_representative"] == 1
 
 
 def test_verifier_splits_large_cluster_by_minhash_bucket(tmp_path, monkeypatch):

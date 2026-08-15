@@ -1,5 +1,6 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 use xxhash_rust::xxh3::Xxh3;
 
 const SIGNATURE_WORDS: usize = 64;
@@ -7,11 +8,19 @@ const SIGNATURE_BITS: usize = SIGNATURE_WORDS * u64::BITS as usize;
 const SIGNATURE_HASHES: usize = 4;
 const SIGNATURE_HASH_BITS: usize = 12;
 const SIGNATURE_BIT_MASK: u64 = SIGNATURE_BITS as u64 - 1;
+const FINGERPRINT_BITS: u32 = 24;
+const FINGERPRINT_BYTES: usize = FINGERPRINT_BITS as usize / u8::BITS as usize;
+const FINGERPRINT_MASK: u32 = (1 << FINGERPRINT_BITS) - 1;
+const FINGERPRINT_CAPACITY: usize = 1_333;
+const FINGERPRINT_DATA_BYTES: usize = FINGERPRINT_CAPACITY * FINGERPRINT_BYTES;
+const FINGERPRINT_SERIALIZED_SIZE: usize = 64 + FINGERPRINT_DATA_BYTES;
 
 #[pyclass(frozen)]
 pub struct TokenNgrams {
     normalized: String,
     token_starts: Vec<u32>,
+    chars: usize,
+    lines: usize,
     ngram_size: usize,
     window_size: usize,
     hashes: Vec<u64>,
@@ -23,6 +32,19 @@ pub struct TokenNgramSignature {
     token_count: usize,
     ngram_size: usize,
     bitmap: [u64; SIGNATURE_WORDS],
+}
+
+#[pyclass(frozen)]
+pub struct TokenNgramFingerprintSignature {
+    chars: usize,
+    lines: usize,
+    token_count: usize,
+    ngram_count: usize,
+    ngram_size: usize,
+    normalized_sequence_hash: u128,
+    theta: u32,
+    fingerprint_count: usize,
+    fingerprints: [u8; FINGERPRINT_DATA_BYTES],
 }
 
 fn normalize_text(text: String) -> Result<(String, Vec<u32>), &'static str> {
@@ -53,12 +75,16 @@ impl TokenNgrams {
     where
         F: Fn(&Self, usize) -> u64,
     {
+        let chars = text.chars().count();
+        let lines = text.bytes().filter(|byte| *byte == b'\n').count() + 1;
         let (normalized, token_starts) = normalize_text(text)?;
 
         if token_starts.is_empty() {
             return Ok(Self {
                 normalized,
                 token_starts,
+                chars,
+                lines,
                 ngram_size,
                 window_size: 0,
                 hashes: Vec::new(),
@@ -71,6 +97,8 @@ impl TokenNgrams {
         let mut ngrams = Self {
             normalized,
             token_starts,
+            chars,
+            lines,
             ngram_size,
             window_size,
             hashes: Vec::with_capacity(window_count),
@@ -181,10 +209,23 @@ impl TokenNgrams {
         }
         signature
     }
+
+    fn fingerprint_signature_value(&self) -> TokenNgramFingerprintSignature {
+        TokenNgramFingerprintSignature::from_hashes(
+            self.chars,
+            self.lines,
+            self.token_starts.len(),
+            self.ngram_size,
+            xxhash_rust::xxh3::xxh3_128(self.normalized.as_bytes()),
+            &self.hashes,
+        )
+    }
 }
 
 impl TokenNgramSignature {
     fn from_text(text: String, ngram_size: usize) -> Result<Self, &'static str> {
+        let chars = text.chars().count();
+        let lines = text.bytes().filter(|byte| *byte == b'\n').count() + 1;
         let (normalized, token_starts) = normalize_text(text)?;
         let token_count = token_starts.len();
         let mut signature = Self {
@@ -201,6 +242,8 @@ impl TokenNgramSignature {
         let ngrams = TokenNgrams {
             normalized,
             token_starts,
+            chars,
+            lines,
             ngram_size,
             window_size,
             hashes: Vec::new(),
@@ -229,6 +272,149 @@ impl TokenNgramSignature {
     }
 }
 
+impl TokenNgramFingerprintSignature {
+    fn from_text(text: String, ngram_size: usize) -> Result<Self, &'static str> {
+        let ngrams = TokenNgrams::from_text(text, ngram_size)?;
+        Ok(ngrams.fingerprint_signature_value())
+    }
+
+    fn from_hashes(
+        chars: usize,
+        lines: usize,
+        token_count: usize,
+        ngram_size: usize,
+        normalized_sequence_hash: u128,
+        hashes: &[u64],
+    ) -> Self {
+        let mut sorted: Vec<u32> = hashes
+            .iter()
+            .map(|hash| *hash as u32 & FINGERPRINT_MASK)
+            .collect();
+        sorted.sort_unstable();
+        sorted.dedup();
+        let theta = sorted
+            .get(FINGERPRINT_CAPACITY)
+            .map_or(u32::MAX, |_| sorted[FINGERPRINT_CAPACITY - 1]);
+        sorted.truncate(FINGERPRINT_CAPACITY);
+        let fingerprint_count = sorted.len();
+        let mut fingerprints = [0; FINGERPRINT_DATA_BYTES];
+        for (index, fingerprint) in sorted.into_iter().enumerate() {
+            let offset = index * FINGERPRINT_BYTES;
+            fingerprints[offset..offset + FINGERPRINT_BYTES]
+                .copy_from_slice(&fingerprint.to_le_bytes()[..FINGERPRINT_BYTES]);
+        }
+        Self {
+            chars,
+            lines,
+            token_count,
+            ngram_count: hashes.len(),
+            ngram_size,
+            normalized_sequence_hash,
+            theta,
+            fingerprint_count,
+            fingerprints,
+        }
+    }
+
+    fn may_be_subset_of_value(&self, other: &Self) -> bool {
+        if self.ngram_size != other.ngram_size
+            || self.chars > other.chars
+            || self.ngram_count > other.ngram_count
+        {
+            return false;
+        }
+
+        let member_end = (0..self.fingerprint_count)
+            .take_while(|index| self.fingerprint_at(*index) <= other.theta)
+            .count();
+        let mut member_index = 0;
+        let mut representative_index = 0;
+        while member_index < member_end && representative_index < other.fingerprint_count {
+            let member_fingerprint = self.fingerprint_at(member_index);
+            let representative_fingerprint = other.fingerprint_at(representative_index);
+            if member_fingerprint == representative_fingerprint {
+                member_index += 1;
+                representative_index += 1;
+            } else if member_fingerprint > representative_fingerprint {
+                representative_index += 1;
+            } else {
+                return false;
+            }
+        }
+        member_index == member_end
+    }
+
+    fn fingerprint_at(&self, index: usize) -> u32 {
+        let offset = index * FINGERPRINT_BYTES;
+        u32::from_le_bytes([
+            self.fingerprints[offset],
+            self.fingerprints[offset + 1],
+            self.fingerprints[offset + 2],
+            0,
+        ])
+    }
+
+    fn serialized_value(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(FINGERPRINT_SERIALIZED_SIZE);
+        for value in [
+            self.chars,
+            self.lines,
+            self.token_count,
+            self.ngram_count,
+            self.ngram_size,
+        ] {
+            bytes.extend_from_slice(&(value as u64).to_le_bytes());
+        }
+        bytes.extend_from_slice(&self.normalized_sequence_hash.to_le_bytes());
+        bytes.extend_from_slice(&self.theta.to_le_bytes());
+        bytes.extend_from_slice(&(self.fingerprint_count as u32).to_le_bytes());
+        bytes.extend_from_slice(&self.fingerprints);
+        debug_assert_eq!(bytes.len(), FINGERPRINT_SERIALIZED_SIZE);
+        bytes
+    }
+
+    fn from_serialized(bytes: &[u8]) -> Result<Self, &'static str> {
+        if bytes.len() != FINGERPRINT_SERIALIZED_SIZE {
+            return Err("invalid fingerprint signature byte length");
+        }
+        let mut offset = 0;
+        let mut read_u64 = || {
+            let value = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+            offset += 8;
+            value
+        };
+        let chars = read_u64() as usize;
+        let lines = read_u64() as usize;
+        let token_count = read_u64() as usize;
+        let ngram_count = read_u64() as usize;
+        let ngram_size = read_u64() as usize;
+        let normalized_sequence_hash =
+            u128::from_le_bytes(bytes[offset..offset + 16].try_into().unwrap());
+        offset += 16;
+        let theta = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+        offset += 4;
+        let fingerprint_count =
+            u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+        offset += 4;
+        if fingerprint_count > FINGERPRINT_CAPACITY {
+            return Err("invalid fingerprint count");
+        }
+        let mut fingerprints = [0; FINGERPRINT_DATA_BYTES];
+        fingerprints.copy_from_slice(&bytes[offset..]);
+        Ok(Self {
+            chars,
+            lines,
+            token_count,
+            ngram_count,
+            ngram_size,
+            normalized_sequence_hash,
+            theta,
+            fingerprint_count,
+            fingerprints,
+        })
+    }
+}
+
 #[pymethods]
 impl TokenNgramSignature {
     #[new]
@@ -247,6 +433,56 @@ impl TokenNgramSignature {
 
     fn may_be_subset_of(&self, other: PyRef<'_, Self>) -> bool {
         self.may_be_subset_of_value(&other)
+    }
+}
+
+#[pymethods]
+impl TokenNgramFingerprintSignature {
+    #[new]
+    fn new(py: Python<'_>, text: String, ngram_size: usize) -> PyResult<Self> {
+        if ngram_size == 0 {
+            return Err(PyValueError::new_err("ngram_size must be positive"));
+        }
+        py.detach(move || Self::from_text(text, ngram_size))
+            .map_err(PyValueError::new_err)
+    }
+
+    #[getter]
+    fn chars(&self) -> usize {
+        self.chars
+    }
+
+    #[getter]
+    fn lines(&self) -> usize {
+        self.lines
+    }
+
+    #[getter]
+    fn token_count(&self) -> usize {
+        self.token_count
+    }
+
+    #[getter]
+    fn ngram_count(&self) -> usize {
+        self.ngram_count
+    }
+
+    #[getter]
+    fn normalized_sequence_hash(&self) -> u128 {
+        self.normalized_sequence_hash
+    }
+
+    fn may_be_subset_of(&self, other: PyRef<'_, Self>) -> bool {
+        self.may_be_subset_of_value(&other)
+    }
+
+    fn to_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.serialized_value())
+    }
+
+    #[staticmethod]
+    fn from_bytes(bytes: &[u8]) -> PyResult<Self> {
+        Self::from_serialized(bytes).map_err(PyValueError::new_err)
     }
 }
 
@@ -281,7 +517,7 @@ impl TokenNgrams {
 
 #[cfg(test)]
 mod tests {
-    use super::{TokenNgramSignature, TokenNgrams};
+    use super::{TokenNgramFingerprintSignature, TokenNgramSignature, TokenNgrams};
 
     fn constant_hash(_: &TokenNgrams, _: usize) -> u64 {
         1
@@ -310,5 +546,24 @@ mod tests {
 
         assert!(member.may_be_subset_of_value(&representative));
         assert!(!representative.may_be_subset_of_value(&member));
+    }
+
+    #[test]
+    fn fingerprint_signature_fits_fixed_budget() {
+        assert!(std::mem::size_of::<TokenNgramFingerprintSignature>() <= 4_096);
+    }
+
+    #[test]
+    fn fingerprint_signature_serialization_round_trips() {
+        let signature =
+            TokenNgramFingerprintSignature::from_text("one\ntwo three".into(), 2).unwrap();
+        let restored =
+            TokenNgramFingerprintSignature::from_serialized(&signature.serialized_value()).unwrap();
+
+        assert_eq!(restored.chars, signature.chars);
+        assert_eq!(restored.lines, signature.lines);
+        assert_eq!(restored.token_count, signature.token_count);
+        assert_eq!(restored.ngram_count, signature.ngram_count);
+        assert_eq!(restored.fingerprints, signature.fingerprints);
     }
 }
