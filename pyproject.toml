@@ -65,6 +65,12 @@ constraint-dependencies = [
     "opentelemetry-semantic-conventions>=0.1b0",
 ]
 override-dependencies = [
+    # NCCL 2.30.7 (from the 2026-08 native-package advance) breaks XLA's
+    # ragged all-to-all symmetric-memory kernel across NVL72 nodes:
+    # CUDA_ERROR_ILLEGAL_ADDRESS in the put kernel, then
+    # ncclCommWindowDeregister failures on every ragged-class EP64 hero run.
+    # 2.28.9 is the version the last passing ragged hero ran (MHEP-001).
+    "nvidia-nccl-cu13==2.28.9; sys_platform == 'linux'",
     "omegaconf>=2.4.0.dev4",
     "aiofiles>=24.1.0",
     "anthropic>=0.71.0",
