@@ -37,10 +37,10 @@ import pyarrow.parquet as pq
 from google.cloud import storage
 from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
-from iris.client import iris_ctx
+from iris.client.client import iris_ctx
 from iris.cluster.client import get_job_info
 from iris.cluster.types import Entrypoint, ResourceSpec
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 from scripts.ops.storage.constants import (
     ADAPTIVE_MAX_DEPTH,

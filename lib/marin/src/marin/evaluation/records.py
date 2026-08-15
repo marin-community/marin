@@ -18,10 +18,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
 
-import fsspec
-from fsspec.core import url_to_fs
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
-from rigging.filesystem import prefix_join
+from rigging.filesystem.factory import open_url, url_to_fs
+from rigging.filesystem.storage_path import prefix_join
 
 logger = logging.getLogger(__name__)
 
@@ -264,6 +263,36 @@ class RunTiming(BaseModel):
     finished_at: str | None = None
 
 
+class TaskCoverage(BaseModel):
+    """How much of one task's intended item set a run actually graded, and how those grades came out.
+
+    ``n_attempted`` is the number of items the run set out to grade after any declared cap, and
+    ``n_scored`` how many produced a grade; ``errors`` counts the attempted-but-ungraded items by
+    error type, so a reader can tell a model's score apart from the quality of the infrastructure
+    that produced it.
+
+    ``n_attempted`` is ``None`` when the run graded items but could not establish how many it set out
+    to grade. That is unknown coverage, and readers widen for it; it is never read as complete. A
+    mechanism with no notion of an attempted count at all records nothing here.
+
+    ``n_correct`` is the count of graded items the harness scored as passing, recorded directly so a
+    reader gets the Bernoulli numerator without inverting a rounded rate out of ``metrics``. It is
+    ``None`` for a task whose grade is not pass/fail.
+
+    ``n_unanswered`` counts graded items whose output held no extractable answer. Those score zero
+    like a wrong answer does, so the count is the evidence that separates a model that answers badly
+    from a run whose extraction produced nothing at all.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    n_attempted: int | None = None
+    n_scored: int
+    n_correct: int | None = None
+    n_unanswered: int = 0
+    errors: dict[str, int] = Field(default_factory=dict)
+
+
 class EvalRunRecord(BaseModel):
     """The full account of one eval run, serialized to ``record.json``.
 
@@ -298,6 +327,10 @@ class EvalRunRecord(BaseModel):
     error: str | None
     results_path: str
     metrics: dict[str, dict[str, float]]
+    coverage: dict[str, TaskCoverage] = Field(default_factory=dict)
+    """Per-task item coverage, keyed like ``metrics``, for mechanisms that report an attempted-item
+    count. Empty when the mechanism reports none and on every record written before coverage existed;
+    a reader treats an empty entry as unknown coverage, never as complete coverage."""
     jobs: dict[str, str]
     """Pipeline role (``orchestrator``/``inference``/``eval``) to Iris job path, for every job the run
     submitted before finishing; a failure before a role's submission simply omits that role."""
@@ -319,14 +352,14 @@ def record_path(prefix: str, run_id: str) -> str:
 def write_record(record: EvalRunRecord, prefix: str) -> str:
     """Write ``record.json`` under ``{prefix}/{run_id}/`` and return its full path."""
     path = record_path(prefix, record.run_id)
-    with fsspec.open(path, "w") as handle:
+    with open_url(path, "w") as handle:
         handle.write(record.model_dump_json(indent=2, by_alias=True))
     return path
 
 
 def read_record(path: str) -> EvalRunRecord:
     """Read one ``record.json`` back into an :class:`EvalRunRecord`."""
-    with fsspec.open(path, "r") as handle:
+    with open_url(path, "r") as handle:
         return EvalRunRecord.model_validate_json(handle.read())
 
 

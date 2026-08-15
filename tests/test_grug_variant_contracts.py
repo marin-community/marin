@@ -335,6 +335,45 @@ def test_grug_moe_data_loaders_build_against_single_expert_mesh():
     assert loader is not None
 
 
+@pytest.mark.asyncio
+async def test_grug_moe_tagged_evaluator_shuffles_by_default():
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    compact_grug_mesh = importlib.import_module("levanter.grug.sharding").compact_grug_mesh
+
+    examples = [
+        GrugLmExample(
+            tokens=jnp.array([i, 0, 0, 0], dtype=jnp.int32),
+            loss_weight=jnp.ones((4,), dtype=jnp.float32),
+            attn_mask=GrugAttentionMask.causal(),
+        )
+        for i in range(16)
+    ]
+    data_config = LmDataConfig(
+        tokenizer="passthrough",
+        vocab_size=256,
+        components={"eval": DirectDatasetComponent(datasets={"validation": ListAsyncDataset(examples)})},
+    )
+    eval_config = train_module.GrugEvalConfig(
+        eval_batch_size=max(1, len(jax.devices())),
+        compute_bpb=False,
+    )
+    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
+
+    evaluator = train_module.build_tagged_evaluator(
+        data_config=data_config,
+        max_seq_len=4,
+        mesh=mesh,
+        eval_cfg=eval_config,
+    )
+    assert evaluator is not None
+
+    loaded = await evaluator.loader.data_store.get_batch(list(range(len(examples))))
+    loaded_ids = [int(example.tokens.array[0].item()) for example, _ in loaded]
+
+    assert loaded_ids != list(range(len(examples)))
+    assert sorted(loaded_ids) == list(range(len(examples)))
+
+
 def test_grug_moe_model_init_against_single_expert_mesh():
     """Regression: MoEMLP.init must build when the compact mesh's expert axis has size 1.
 

@@ -10,14 +10,16 @@ JAX is imported at call time — iris does not depend on jax.
 """
 
 import atexit
+import enum
 import logging
 import os
 import time
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from rigging.cache import sync_kv_cache
-from rigging.filesystem import marin_prefix, prefix_join
+from rigging.cache import fetch_kv_cache, sync_kv_cache
+from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.storage_path import prefix_join
 from rigging.provenance import LAUNCH_PROVENANCE_ENV
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
@@ -50,6 +52,13 @@ _JAX_DIST_INIT_TIMEOUT = 1800
 # This bounds how long healthy ranks wait after a peer process disappears before
 # JAX fate sharing tears the distributed world down and Iris can retry the gang.
 _JAX_DIST_HEARTBEAT_TIMEOUT = 100
+
+
+class _AutotuneCacheRole(enum.StrEnum):
+    UPLOADER = "uploader"
+    FETCHER = "fetcher"
+    NONE = "none"
+
 
 _JAX_ENV_KEYS = (
     "IRIS_TASK_ID",
@@ -166,11 +175,36 @@ def _enable_xla_autotune_cache() -> None:
     os.environ["XLA_FLAGS"] = f"{xla_flags} {_XLA_AUTOTUNE_CACHE_DIR_FLAG}={autotune_dir}".strip()
     logger.info("XLA per-fusion autotune cache: %s", autotune_dir)
 
-    # Mirror the node-local cache to per-build object storage only on a real launch;
-    # off one (local dev, unit tests) the published provenance is absent and the
-    # cache stays node-local. sync_kv_cache namespaces it by the launch tree hash.
+    # One process per task populates its node-local mount before distributed init's
+    # barrier; only global process 0 uploads additions shared by all equivalent ranks.
+    # Off a real launch the published provenance is absent and the cache stays local.
     if os.environ.get(LAUNCH_PROVENANCE_ENV):
-        sync_kv_cache(_XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)
+        role = _autotune_cache_role()
+        if role is _AutotuneCacheRole.UPLOADER:
+            sync_kv_cache(_XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)
+        elif role is _AutotuneCacheRole.FETCHER:
+            fetch_kv_cache(_XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)
+
+
+def _autotune_cache_role() -> _AutotuneCacheRole:
+    """Select one cache fetcher per task and one uploader for the whole job."""
+    job_info = get_job_info()
+    raw_process_index = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV)
+    if raw_process_index is None:
+        if job_info is None or job_info.task_index == 0:
+            return _AutotuneCacheRole.UPLOADER
+        return _AutotuneCacheRole.FETCHER
+
+    process_index = int(raw_process_index)
+    if process_index == 0:
+        return _AutotuneCacheRole.UPLOADER
+
+    process_count = int(os.environ[IRIS_MULTIGPU_PROCESS_COUNT_ENV])
+    num_tasks = job_info.num_tasks if job_info is not None else 1
+    processes_per_task = process_count // num_tasks
+    if process_index % processes_per_task == 0:
+        return _AutotuneCacheRole.FETCHER
+    return _AutotuneCacheRole.NONE
 
 
 # An endpoint name that has not been registered yet surfaces differently across

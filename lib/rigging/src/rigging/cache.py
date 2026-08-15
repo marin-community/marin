@@ -25,14 +25,20 @@ import hashlib
 import logging
 import os
 import pathlib
+import shutil
+import tempfile
 import threading
+import uuid
+import zipfile
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import wait as wait_for_futures
 from typing import Protocol
 
 from rigging.config_discovery import find_project_root
-from rigging.filesystem import StoragePath, atomic_rename, marin_temp_bucket, prefix_join
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import launch_provenance
 
 logger = logging.getLogger(__name__)
@@ -46,6 +52,10 @@ _HASH_COMPONENT_LENGTH_BYTES = 8
 _EXIT_FLUSH_TIMEOUT = 10.0
 # How often a SyncedDirectory mirrors newly written files up while a run is live.
 _SYNC_FLUSH_INTERVAL = 120.0
+# Bound object-store concurrency while migrating legacy one-file-per-key mirrors.
+_SYNC_TRANSFER_BATCH_SIZE = 32
+# Append-only archives live below a reserved directory so legacy raw files remain readable.
+_SYNC_ARCHIVE_SUBDIR = ".rigging-archives-v1"
 
 _background_lock = threading.Lock()
 _background_executor: ThreadPoolExecutor | None = None
@@ -175,7 +185,7 @@ class PersistentKvCache:
     A load answers from memory, else reads the directory and remembers the value. A
     store writes memory inline; it writes an object-store directory in the
     background, a local directory inline. Writes go through
-    :func:`rigging.filesystem.atomic_rename`, so a concurrent reader never sees a
+    :func:`rigging.filesystem.atomic.atomic_rename`, so a concurrent reader never sees a
     partial value, and two processes writing the same key are safe because a
     content-addressed key means identical bytes.
 
@@ -266,20 +276,20 @@ def _write_object(obj: StoragePath, value: bytes) -> None:
 
 
 class SyncedDirectory:
-    """Mirror a whole local directory to and from an object-store directory.
+    """Keep a local directory warm from and persisted to shared object storage.
 
     A consumer that can only open a local path — XLA's per-fusion autotune cache,
     which its C++ opens through ``tsl::Env`` and cannot point at an object store —
-    is the case :class:`PersistentKvCache` does not cover: the contents are a
-    mirrored tree, not keyed values a caller serializes. On construction this stages
-    the object-store directory down into the local one so the consumer starts warm,
-    then mirrors files written since on a daemon thread. Mirroring is best-effort
-    and never blocks shutdown: on a hard exit the last unflushed files are simply
-    rebuilt next run.
+    is the case :class:`PersistentKvCache` does not cover: the consumer owns a
+    directory rather than keyed values it serializes. Construction populates the local
+    directory from shared storage, and files added during the instance's lifetime are
+    available to later instances. Multiple instances may contribute distinct immutable
+    filenames to the same remote directory.
 
-    Every transfer degrades to a warning rather than failing the caller. The remote
-    directory resolves on first use, so this is safe to build before the active
-    cluster config loads.
+    Synchronization is best-effort: transfer failures warn rather than failing the
+    caller, and a hard exit may lose the last unflushed files. The remote directory
+    resolves on first use, so this is safe to build before the active cluster config
+    loads.
     """
 
     def __init__(self, remote: Callable[[], str], local: str, *, flush_interval: float = _SYNC_FLUSH_INTERVAL) -> None:
@@ -289,7 +299,7 @@ class SyncedDirectory:
         self._flush_lock = threading.Lock()
         self._known: set[str] = set()
         os.makedirs(local, exist_ok=True)
-        self._fetch_remote()
+        self._known.update(_fetch_remote(StoragePath(self._remote()), pathlib.Path(self._local)))
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="synced-dir-mirror", daemon=True)
         self._thread.start()
@@ -299,16 +309,24 @@ class SyncedDirectory:
         base = pathlib.Path(self._local)
         with self._flush_lock:
             present = {p.relative_to(base).as_posix() for p in base.rglob("*") if p.is_file()}
+            pending = sorted(present - self._known)
+            if not pending:
+                return
+
             remote_root = StoragePath(self._remote())
-            for relative in sorted(present - self._known):
-                target = remote_root / relative
-                try:
+            try:
+                with tempfile.TemporaryDirectory(prefix="synced-cache-flush-") as staging_dir:
+                    archive = pathlib.Path(staging_dir) / f"{uuid.uuid4().hex}.zip"
+                    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
+                        for relative in pending:
+                            output.write(base / relative, arcname=relative)
+                    target = remote_root / _SYNC_ARCHIVE_SUBDIR / archive.name
                     target.parent.mkdirs()
-                    target.upload_from(str(base / relative))
-                except OSError as exc:
-                    logger.warning("synced cache upload failed for %s: %s", relative, exc)
-                    return
-                self._known.add(relative)
+                    target.upload_from(str(archive))
+            except (OSError, zipfile.BadZipFile) as exc:
+                logger.warning("synced cache archive upload failed: %s", exc)
+                return
+            self._known.update(pending)
 
     def close(self) -> None:
         """Stop the mirror thread and flush a final time."""
@@ -320,21 +338,71 @@ class SyncedDirectory:
         while not self._stop.wait(self._flush_interval):
             self.flush()
 
-    def _fetch_remote(self) -> None:
-        remote_root = StoragePath(self._remote())
-        try:
-            if not remote_root.exists():
-                return
-            for parent, _dirs, files in remote_root.walk():
-                for name in files:
-                    remote_file = parent / name
-                    relative = remote_file.relative_to(remote_root)
-                    local_file = pathlib.Path(self._local) / relative
-                    local_file.parent.mkdir(parents=True, exist_ok=True)
-                    remote_file.download_to(str(local_file))
-                    self._known.add(pathlib.PurePosixPath(relative).as_posix())
-        except OSError as exc:
-            logger.warning("synced cache fetch failed, starting cold: %s", exc)
+
+def _extract_archive(archive: pathlib.Path, destination: pathlib.Path) -> set[str]:
+    """Extract regular files from one cache archive and return their relative paths."""
+    extracted: set[str] = set()
+    with zipfile.ZipFile(archive) as source_archive:
+        for member in source_archive.infolist():
+            relative = pathlib.PurePosixPath(member.filename)
+            if member.is_dir() or relative.is_absolute() or ".." in relative.parts:
+                raise ValueError(f"unsafe synced-cache archive member: {member.filename!r}")
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with source_archive.open(member) as source, atomic_rename(str(target)) as staged:
+                with pathlib.Path(staged).open("wb") as output:
+                    shutil.copyfileobj(source, output)
+            extracted.add(relative.as_posix())
+    return extracted
+
+
+def _fetch_remote(remote_root: StoragePath, local: pathlib.Path) -> set[str]:
+    fetched: set[str] = set()
+    try:
+        if not remote_root.exists():
+            return fetched
+        with tempfile.TemporaryDirectory(prefix="synced-cache-fetch-") as staging_dir:
+            remote_root.download_to(
+                staging_dir,
+                recursive=True,
+                batch_size=_SYNC_TRANSFER_BATCH_SIZE,
+            )
+            staged_root = pathlib.Path(staging_dir) / remote_root.name
+            archive_root = staged_root / _SYNC_ARCHIVE_SUBDIR
+            if archive_root.is_dir():
+                for archive in sorted(archive_root.glob("*.zip")):
+                    try:
+                        fetched.update(_extract_archive(archive, local))
+                    except (OSError, zipfile.BadZipFile, ValueError) as exc:
+                        logger.warning("synced cache archive fetch failed for %s: %s", archive.name, exc)
+
+            for staged_file in sorted(staged_root.rglob("*")):
+                if not staged_file.is_file() or archive_root in staged_file.parents:
+                    continue
+                relative = staged_file.relative_to(staged_root)
+                local_file = local / relative
+                local_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(staged_file, local_file)
+                fetched.add(relative.as_posix())
+    except OSError as exc:
+        logger.warning("synced cache fetch failed, starting cold: %s", exc)
+    return fetched
+
+
+def _kv_cache_remote(prefix: str) -> StoragePath | None:
+    tree_hash = launch_provenance().tree_hash
+    if not tree_hash:
+        return None
+    return StoragePath(prefix_join(marin_temp_bucket(_CACHE_TTL_DAYS, prefix), tree_hash))
+
+
+def fetch_kv_cache(prefix: str, local: str) -> None:
+    """Fetch a per-build object-store cache into ``local`` without uploading changes."""
+    remote = _kv_cache_remote(prefix)
+    if remote is None:
+        return
+    os.makedirs(local, exist_ok=True)
+    _fetch_remote(remote, pathlib.Path(local))
 
 
 def sync_kv_cache(prefix: str, local: str) -> SyncedDirectory | None:
@@ -345,7 +413,7 @@ def sync_kv_cache(prefix: str, local: str) -> SyncedDirectory | None:
     temp prefix. Returns ``None`` — leaving the directory node-local — when there is
     no tree hash to namespace by.
     """
-    tree_hash = launch_provenance().tree_hash
-    if not tree_hash:
+    remote = _kv_cache_remote(prefix)
+    if remote is None:
         return None
-    return SyncedDirectory(lambda: prefix_join(marin_temp_bucket(_CACHE_TTL_DAYS, prefix), tree_hash), local)
+    return SyncedDirectory(lambda: str(remote), local)

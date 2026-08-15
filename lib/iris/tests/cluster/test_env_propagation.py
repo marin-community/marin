@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from unittest.mock import patch
 
 import pytest
-from iris.client import IrisClient, IrisContext, iris_ctx_scope
+from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec

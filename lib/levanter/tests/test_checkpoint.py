@@ -22,8 +22,8 @@ from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax import Axis
 from jax import ShapeDtypeStruct
 from jax import numpy as jnp
-from rigging.filesystem import StoragePath
-from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
+from rigging.filesystem.storage_path import StoragePath
+from levanter.testing.helpers import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
 from levanter.callbacks import StepInfo
 from levanter.checkpoint import (

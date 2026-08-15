@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import logging
 
+import rigging.filesystem.factory as factory
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION, SampleKind
 from finestore.reader import CompositeReader
-from rigging.filesystem import factory, prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.evaluation.migrations.archive_backup import superseded_samples_prefix
 

@@ -19,12 +19,12 @@ from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2
-from rigging.server_auth import VerifiedIdentity, identity_scope
-from tests.cluster.controller.conftest import (
+from iris.testing.controller import (
     MockController,
     make_controller_state,
     make_test_entrypoint,
 )
+from rigging.server_auth import VerifiedIdentity, identity_scope
 
 PRODUCTION = job_pb2.PRIORITY_BAND_PRODUCTION
 INTERACTIVE = job_pb2.PRIORITY_BAND_INTERACTIVE

@@ -19,7 +19,7 @@ have cluster credentials and HF_TOKEN set:
 from __future__ import annotations
 
 import pytest
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec, is_job_finished
 from marin.evaluation.evalchemy.result import EvalchemyResult
 from marin.evaluation.evalchemy.runner import EvalchemyRunConfig

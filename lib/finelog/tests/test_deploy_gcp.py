@@ -63,6 +63,8 @@ def test_health_wait_holds_out_for_an_ingesting_server(monkeypatch: pytest.Monke
     answer("degraded: telemetry_v1: registration pending", HEALTH_OK)
     assert _wait_health_via_ssh(cfg, cfg.port, max_attempts=2) == HEALTH_OK
 
-    # The reason reaches the caller, so a failed deploy names the namespace.
+    # A rejected schema is terminal for the running binary, so the wait ends on
+    # the first such body — the single reply below covers every attempt — and the
+    # reason reaches the caller, so a failed deploy names the namespace.
     answer("degraded: telemetry_v1: registration failed: column type mismatch")
-    assert "telemetry_v1" in _wait_health_via_ssh(cfg, cfg.port, max_attempts=1)
+    assert "telemetry_v1" in _wait_health_via_ssh(cfg, cfg.port, max_attempts=5)

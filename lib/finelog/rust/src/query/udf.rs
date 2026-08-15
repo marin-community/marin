@@ -43,6 +43,7 @@
 //! error (surfaced to the client as `invalid_argument`, mirroring DuckDB's
 //! parse-error path).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -154,12 +155,43 @@ fn prefix_udf() -> ScalarUDF {
 }
 
 fn regexp_matches_udf() -> ScalarUDF {
-    string_predicate_udf("regexp_matches", |text, pattern| {
+    ScalarUDF::from(SimpleScalarUDF::new_with_signature(
+        "regexp_matches",
+        Signature::string(2, Volatility::Immutable),
+        DataType::Boolean,
+        Arc::new(regexp_matches),
+    ))
+}
+
+fn regexp_matches(args: &[ColumnarValue]) -> DFResult<ColumnarValue> {
+    let (n, text, patterns) = resolve_binary_string_args(args, "regexp_matches")?;
+    let (text, patterns) = (
+        string_values(&text, "regexp_matches")?,
+        string_values(&patterns, "regexp_matches")?,
+    );
+    let mut regexes = HashMap::new();
+    let mut out = BooleanArray::builder(n);
+    for i in 0..n {
+        if text.is_null(i) || patterns.is_null(i) {
+            out.append_null();
+            continue;
+        }
+        let pattern = patterns.value(i);
+        let re = match regexes.entry(pattern) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                // Queries normally pass one literal pattern. Cache distinct
+                // values so even a pattern column compiles at most once per batch.
+                let re = Regex::new(pattern).map_err(|e| {
+                    DataFusionError::Execution(format!("invalid regex {pattern:?}: {e}"))
+                })?;
+                entry.insert(re)
+            }
+        };
         // DuckDB `regexp_matches` is a partial (unanchored) match.
-        let re = Regex::new(pattern)
-            .map_err(|e| DataFusionError::Execution(format!("invalid regex {pattern:?}: {e}")))?;
-        Ok(re.is_match(text))
-    })
+        out.append_value(re.is_match(text.value(i)));
+    }
+    Ok(ColumnarValue::Array(Arc::new(out.finish())))
 }
 
 fn contains_udf() -> ScalarUDF {
@@ -587,6 +619,16 @@ mod tests {
         assert_eq!(
             eval("regexp_matches", vec![Some("abc")], vec![Some("b")]).await,
             vec![Some(true)]
+        );
+        // Distinct patterns are compiled independently and reused within the batch.
+        assert_eq!(
+            eval(
+                "regexp_matches",
+                vec![Some("abc"), Some("123"), Some("zzz"), Some("anything")],
+                vec![Some("a.c"), Some(r"\d+"), Some("a.c"), None],
+            )
+            .await,
+            vec![Some(true), Some(true), Some(false), None]
         );
     }
 

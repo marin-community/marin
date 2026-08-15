@@ -45,7 +45,11 @@ from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
+from iris.cluster.platforms.k8s.constants import (
+    COREWEAVE_INTERRUPTABLE_TOLERATION,
+    DEFAULT_TASK_CACHE_DIR,
+    NVIDIA_GPU_TOLERATION,
+)
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_LEAFGROUP,
     COSCHEDULE_NVLINK_DOMAIN,
@@ -59,11 +63,18 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     TopologyMode,
     gpu_gang_rack_slice_size,
 )
+from iris.cluster.platforms.k8s.kueue_manifests import WorkloadPriorityKind, workload_priority_class_name
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
+    IRIS_ATTEMPT_ID_LABEL,
+    IRIS_KUBERNETES_RUNTIME,
+    IRIS_MANAGED_LABEL,
     IRIS_PRIORITY_CLASS_BATCH,
     IRIS_PRIORITY_CLASS_INTERACTIVE,
     IRIS_PRIORITY_CLASS_PRODUCTION,
+    IRIS_RUNTIME_LABEL,
+    IRIS_TASK_CONTAINER_NAME,
+    IRIS_TASK_ID_ANNOTATION,
     K8sResource,
     KubectlError,
     parse_k8s_cpu,
@@ -94,19 +105,19 @@ from iris.cluster.runtime.types import ACCELERATOR_SHM_FALLBACK_BYTES, MountKind
 from iris.cluster.stats.emitter import PeriodicEmitter
 from iris.cluster.stats.tables import (
     IrisProfile,
-    IrisTaskStat,
     ProfileTrigger,
     TaskEventRow,
     TaskEventSeverity,
-    build_task_stat,
     stats_timestamp,
 )
 from iris.cluster.types import JobName, WellKnownAttribute, WorkerId, get_gpu_count
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
-from iris.rpc.proto_display import resolve_container_profile
+from iris.rpc.proto_display import priority_band_name, resolve_container_profile
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
+
+_ARM64_ARCHITECTURES = frozenset({b"aarch64", b"arm64"})
 
 
 class PodManifestError(ValueError):
@@ -122,23 +133,19 @@ class PodManifestError(ValueError):
 
 
 # Label key prefix for iris-managed pod identification.
-_LABEL_MANAGED = "iris.managed"
-_LABEL_RUNTIME = "iris.runtime"
+_LABEL_MANAGED = IRIS_MANAGED_LABEL
+_LABEL_RUNTIME = IRIS_RUNTIME_LABEL
 _LABEL_TASK_ID = "iris.task_id"
-_LABEL_ATTEMPT_ID = "iris.attempt_id"
+_LABEL_ATTEMPT_ID = IRIS_ATTEMPT_ID_LABEL
 # Collision-resistant hash of the full (unsanitized) task_id; 16 hex chars (64 bits).
 _LABEL_TASK_HASH = "iris.task_hash"
 _LABEL_JOB_ID = "iris.job_id"
 
 # Runtime identifier for pods created by K8sTaskProvider.
-_RUNTIME_LABEL_VALUE = "iris-kubernetes"
+_RUNTIME_LABEL_VALUE = IRIS_KUBERNETES_RUNTIME
 
 # Extended resource name for NVIDIA GPUs in pod requests/limits.
 _GPU_RESOURCE = "nvidia.com/gpu"
-
-# Name of the task container in the pod. Exit-code/error extraction matches the
-# task status by this name rather than by position in containerStatuses.
-_TASK_CONTAINER_NAME = "task"
 
 # Native log-shipping sidecar (initContainer + restartPolicy: Always). It reads
 # the task container's CRI log file from the node and pushes to finelog, so the
@@ -252,9 +259,7 @@ _KUEUE_MANAGED_FINALIZER = "kueue.x-k8s.io/managed"
 #                 slices, each hard-bound to its own nvlink.domain, with a soft leafgroup
 #                 preference so the racks cluster on one IB leaf group.
 # A cluster whose Topology uses different levels overrides this via
-# kubernetes_provider.kueue.topologies. Priority classes have NO default: Iris
-# never invents WorkloadPriorityClass names (a missing one is rejected by
-# Kueue), so a band is stamped only when the config maps it explicitly.
+# kubernetes_provider.kueue.topologies.
 _CW_DEFAULT_TOPOLOGIES: dict[str, KueueTopologyBinding] = {
     COSCHEDULE_LEAFGROUP: KueueTopologyBinding(CW_LABEL_LEAFGROUP, TopologyMode.PREFERRED),
     COSCHEDULE_NVLINK_DOMAIN: KueueTopologyBinding(CW_LABEL_NVLINK_DOMAIN, TopologyMode.REQUIRED),
@@ -481,7 +486,7 @@ class PodConfig:
     # sidecar instead runs the iris controller image (iris + finelog installed),
     # which can launch `python -m iris.cluster.backends.k8s.logship` directly.
     logship_image: str = ""
-    cache_dir: str = "/cache"
+    cache_dir: str = DEFAULT_TASK_CACHE_DIR
     service_account: str = ""
     host_network: bool = False
     controller_address: str | None = None
@@ -494,9 +499,6 @@ class PodConfig:
     # this: dispatching one with no LocalQueue configured raises (Kueue or
     # nothing — there is no non-Kueue colocation fallback).
     local_queue: str = ""
-    # PriorityBand -> WorkloadPriorityClass name. A band with no entry is not
-    # stamped (Kueue uses its default priority); Iris never invents class names.
-    kueue_priority_classes: dict[int, str] = field(default_factory=dict)
     # coscheduling group_by -> KueueTopologyBinding. Defaults to CoreWeave
     # conventions; a group_by with no entry carries no topology annotation.
     kueue_topologies: dict[str, KueueTopologyBinding] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
@@ -898,6 +900,7 @@ def _build_pod_manifest(
         "name": pod_name,
         "namespace": namespace,
         "labels": labels,
+        "annotations": {IRIS_TASK_ID_ANNOTATION: run_req.task_id},
     }
 
     # Every pod is admitted through one Kueue TAS flavor: its accounting and
@@ -906,14 +909,12 @@ def _build_pod_manifest(
     # The composer enforces a configured LocalQueue for the K8s backend.
     assert config.local_queue, "K8s backend requires a Kueue LocalQueue (kubernetes_provider.kueue.cluster_queue)"
     labels[_KUEUE_QUEUE_NAME] = config.local_queue
-    # Stamp an explicit WorkloadPriorityClass only when the cluster maps this band.
-    # An unmapped band is not left unranked: Kueue derives the Workload's priority
-    # from the pod's own PriorityClass (spec.priorityClassName), so the
-    # iris-{production,interactive,batch} bands already order the queue. Iris never
-    # invents a WorkloadPriorityClass name (a missing one is rejected).
-    wpc = config.kueue_priority_classes.get(run_req.priority)
-    if wpc:
-        labels[_KUEUE_PRIORITY_CLASS] = wpc
+    effective_band = run_req.priority or job_pb2.PRIORITY_BAND_INTERACTIVE
+    if is_gang:
+        priority_kind = WorkloadPriorityKind.COSCHEDULED
+    else:
+        priority_kind = WorkloadPriorityKind.ACCELERATOR if has_accelerator else WorkloadPriorityKind.CPU
+    labels[_KUEUE_PRIORITY_CLASS] = workload_priority_class_name(priority_band_name(effective_band), priority_kind)
     if is_gang:
         group_by = run_req.coscheduling.group_by
         # group_by must name a topology level this cluster provisioned. An
@@ -932,21 +933,27 @@ def _build_pod_manifest(
         # Per-pod ordinal within the gang (0..total-1). Kueue's TAS assigns each pod a domain
         # rank from it; for the sliced level it makes slice membership rank-contiguous.
         labels[_KUEUE_POD_GROUP_POD_INDEX] = str(task_id.task_index)
-        metadata["annotations"] = {
-            _KUEUE_POD_GROUP_TOTAL: str(run_req.num_tasks),
-            **_topology_request_annotations(
-                topo, group_by=group_by, num_tasks=run_req.num_tasks, gpu_count=gpu_count, task_ref=run_req.task_id
-            ),
-        }
+        metadata["annotations"].update(
+            {
+                _KUEUE_POD_GROUP_TOTAL: str(run_req.num_tasks),
+                **_topology_request_annotations(
+                    topo,
+                    group_by=group_by,
+                    num_tasks=run_req.num_tasks,
+                    gpu_count=gpu_count,
+                    task_ref=run_req.task_id,
+                ),
+            }
+        )
     elif gpu_count > 0:
         # A non-coscheduled GPU pod has no gang to colocate, so ask only for the
         # finest, always-satisfiable level as a soft preference.
-        metadata["annotations"] = {_KUEUE_PREFERRED_TOPOLOGY: _KUEUE_SINGLE_POD_TOPOLOGY}
+        metadata["annotations"][_KUEUE_PREFERRED_TOPOLOGY] = _KUEUE_SINGLE_POD_TOPOLOGY
     else:
         # Accelerator-free Pods remain in TAS without requesting colocation. This
         # records their per-node CPU usage in the same flavor as GPU gangs, so a
         # higher-priority gang can simulate reclaiming it before topology fit.
-        metadata["annotations"] = {_KUEUE_UNCONSTRAINED_TOPOLOGY: "true"}
+        metadata["annotations"][_KUEUE_UNCONSTRAINED_TOPOLOGY] = "true"
 
     # Native log-shipping sidecar: ships the task container's node-side CRI log
     # file to finelog. As an initContainer with restartPolicy: Always it is
@@ -1009,7 +1016,6 @@ def _build_pod_manifest(
     # The INTERACTIVE floor keeps a request built outside that path (an unset field reads
     # as INHERIT) from silently dropping to the cluster default. A band with no configured
     # class name leaves priorityClassName unset.
-    effective_band = run_req.priority or job_pb2.PRIORITY_BAND_INTERACTIVE
     priority_class_name = config.priority_class_names.get(effective_band)
     if priority_class_name:
         spec["priorityClassName"] = priority_class_name
@@ -1033,7 +1039,7 @@ def _task_container_status(pod: dict) -> dict | None:
     if not statuses:
         return None
     for status in statuses:
-        if status.get("name") == _TASK_CONTAINER_NAME:
+        if status.get("name") == IRIS_TASK_CONTAINER_NAME:
             return status
     return statuses[0]
 
@@ -1830,79 +1836,6 @@ class ClusterState:
         )
 
 
-class ResourceCollector:
-    """Periodic emitter that samples running pods' CPU/memory usage.
-
-    The reconcile loop declares the authoritative set of running pods via
-    ``set_pods()`` once per cycle. Each ``poll_interval`` the collector samples
-    those pods via one bulk metrics query and appends an ``IrisTaskStat`` row
-    per pod to the ``iris.task`` table — the same table the worker daemon writes
-    to on the GCE/TPU path, so the dashboard's ``iris.task`` queries cover both
-    runtimes uniformly.
-
-    ``poll_interval`` defaults to the metrics-server scrape resolution (15s);
-    polling faster only re-reads the same sample.
-    """
-
-    def __init__(
-        self,
-        kubectl: K8sService,
-        task_stats_table: Table,
-        *,
-        labels: dict[str, str] | None = None,
-        poll_interval: float = 15.0,
-    ):
-        self._kubectl = kubectl
-        self._table = task_stats_table
-        self._labels = labels
-        # (task_id_wire, attempt_id) -> pod_name. Tuple keys carry the
-        # identity needed to build IrisTaskStat without parsing strings.
-        self._pods: dict[tuple[str, int], str] = {}
-        self._lock = threading.Lock()
-        self._emitter = PeriodicEmitter(self.collect_once, interval=poll_interval, name="resource-collector")
-
-    def set_pods(self, pods: dict[tuple[str, int], str]) -> None:
-        """Declare the authoritative set of pods to collect resources for."""
-        with self._lock:
-            self._pods = dict(pods)
-
-    def collect_once(self) -> None:
-        """Sample every tracked pod once and append a stat row per pod with usage.
-
-        Runs each ``poll_interval`` on the emitter thread; also the unit of
-        collection tests drive directly.
-        """
-        with self._lock:
-            snapshot = list(self._pods.items())
-        if not snapshot:
-            return
-        usage_by_pod = self._kubectl.top_pods(labels=self._labels)
-
-        stats: list[IrisTaskStat] = []
-        for (task_id_wire, attempt_id), pod_name in snapshot:
-            top = usage_by_pod.get(pod_name)
-            if top is None:
-                continue
-            stats.append(
-                build_task_stat(
-                    task_id=task_id_wire,
-                    attempt_id=attempt_id,
-                    # Pod name is the per-attempt platform identity on k8s,
-                    # mirroring worker_id on the GCE/TPU path.
-                    worker_id=pod_name,
-                    usage=job_pb2.ResourceUsage(
-                        cpu_millicores=top.cpu_millicores,
-                        memory_mb=top.memory_bytes // (1024 * 1024),
-                    ),
-                )
-            )
-        if stats:
-            self._table.write(stats)
-
-    def close(self) -> None:
-        self._emitter.close()
-
-
 # Periodic thread-dump cadence, 10 minutes to match the GCE/TPU worker cadence.
 DEFAULT_PROFILE_POLL_INTERVAL = 600.0
 # Cap on concurrent kubectl exec streams a single capture cycle opens, so a large
@@ -2248,22 +2181,13 @@ class K8sTaskProvider:
     # when it has gang work for Kueue. Empty disables the feature; see
     # _evict_preemptible_blockers for the safety guards.
     preempt_namespaces: list[str] = field(default_factory=list)
-    # Pre-resolved iris.task Table handle, built from the controller's log client
-    # and passed in by the composer; when None — e.g. tests without finelog — the
-    # resource collector is disabled. K8s pods ship their own logs via the
-    # log-shipper sidecar, so the backend needs only the tables, not the client.
-    task_stats_table: Table | None = None
-    # Pre-resolved iris.task_event Table handle, passed alongside task_stats_table.
+    # Pre-resolved iris.task_event Table handle.
     # When None (tests without finelog) the scheduling/admission event log is
     # disabled; task state still flows, only the diagnostic timeline is skipped.
     task_event_table: Table | None = None
-    # Pre-resolved iris.profile Table handle, passed alongside task_stats_table.
+    # Pre-resolved iris.profile Table handle.
     # None in test mode.
     profile_table: Table | None = None
-    # Resource-usage poll cadence. Defaults to the metrics-server scrape
-    # resolution (15s) — sampling faster only re-reads the same value. One bulk
-    # metrics list per tick covers every managed pod (see ResourceCollector).
-    resource_poll_interval: float = 15.0
     # Cadence at which PeriodicProfiler dumps each running pod's threads to
     # iris.profile (trigger=periodic), so a silently hung collective is caught in
     # the profile timeline even though nothing polls a k8s pod otherwise.
@@ -2295,7 +2219,6 @@ class K8sTaskProvider:
     # were created under the current name, so their lookups must never consider the
     # pre-uid name — see _pod_name_candidates.
     _dispatched_attempts: set[tuple[str, int]] = field(default_factory=set, init=False, repr=False)
-    _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
     _periodic_profiler: PeriodicProfiler | None = field(default=None, init=False, repr=False)
     _task_event_log: TaskEventLog | None = field(default=None, init=False, repr=False)
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
@@ -2306,18 +2229,6 @@ class K8sTaskProvider:
     _gc_emitter: PeriodicEmitter | None = field(default=None, init=False, repr=False)
     _gc_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _pending_gc_hashes: set[str] = field(default_factory=set, init=False, repr=False)
-
-    def _ensure_resource_collector(self) -> ResourceCollector | None:
-        if self.task_stats_table is None:
-            return None
-        if self._resource_collector is None:
-            self._resource_collector = ResourceCollector(
-                self.kubectl,
-                self.task_stats_table,
-                labels=_MANAGED_POD_LABELS,
-                poll_interval=self.resource_poll_interval,
-            )
-        return self._resource_collector
 
     def _ensure_periodic_profiler(self) -> PeriodicProfiler | None:
         if self.profile_table is None:
@@ -2342,6 +2253,9 @@ class K8sTaskProvider:
 
     def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         self.advertised = advertised
+
+    def runtime_image(self, requested_image: str) -> str:
+        return requested_image or self.pods.default_image
 
     def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
         """Free and total GPUs inferred from the periodic kubectl cluster sync.
@@ -2554,12 +2468,25 @@ class K8sTaskProvider:
         attempt_id = target.attempt_id
         pod_name = self._live_pod_name(target)
         duration = request.duration_seconds or 10
-        profile_type = request.profile_type
         dispatch = _K8sProfileDispatch(self.kubectl, pod_name)
+        profile_type = job_pb2.ProfileType()
+        profile_type.CopyFrom(request.profile_type)
+        # py-spy 0.4.2's native unwinder can segfault on Linux ARM64 before it
+        # writes an output file. Keep native frames on other architectures and
+        # when explicitly requested, but default to Python frames on ARM64.
+        if profile_type.HasField("cpu") and not profile_type.cpu.HasField("native"):
+            architecture = dispatch.exec(["uname", "-m"], timeout=10)
+            if architecture.returncode == 0 and architecture.stdout.strip().lower() in _ARM64_ARCHITECTURES:
+                profile_type.cpu.native = False
 
         try:
             if profile_type.HasField("threads"):
-                data = capture_threads(dispatch, pid="1", include_locals=profile_type.threads.locals)
+                data = capture_threads(
+                    dispatch,
+                    pid="1",
+                    include_locals=profile_type.threads.locals,
+                    include_native=profile_type.threads.native,
+                )
             elif profile_type.HasField("cpu"):
                 data = capture_cpu(dispatch, profile_type.cpu, duration, pid="1")
             elif profile_type.HasField("memory"):
@@ -2628,8 +2555,6 @@ class K8sTaskProvider:
     def close(self) -> None:
         if self._gc_emitter is not None:
             self._gc_emitter.close()
-        if self._resource_collector is not None:
-            self._resource_collector.close()
         if self._periodic_profiler is not None:
             self._periodic_profiler.close()
 
@@ -3030,12 +2955,9 @@ class K8sTaskProvider:
 
         Task logs are shipped by the per-pod log-shipper sidecar, not pulled
         here. This method drives task state and registers running pods with the
-        ResourceCollector, calling set_pods() once with the authoritative set of
-        running pods so the collector can never drift.
+        periodic profiler.
         """
         if not running:
-            if self._resource_collector is not None:
-                self._resource_collector.set_pods({})
             if self._periodic_profiler is not None:
                 self._periodic_profiler.set_pods({})
             if self._task_event_log is not None:
@@ -3077,11 +2999,7 @@ class K8sTaskProvider:
                     if not unresolved:
                         break
 
-        # (task_id_wire, attempt_id) -> pod_name. Resource samples are
-        # appended directly to iris.task by the collector; the controller no
-        # longer multiplexes them through TaskUpdate.
-        resource_pods: dict[tuple[str, int], str] = {}
-        # Same running set, carrying the node name so the periodic profiler can
+        # The running set carries the node name so the periodic profiler can
         # stamp the k8s/<node> vm_id without a per-pod GET.
         profile_targets: dict[tuple[str, int], _ProfileTarget] = {}
         event_log = self._ensure_task_event_log()
@@ -3137,7 +3055,6 @@ class K8sTaskProvider:
                 self._disruption_reasons[entry] = _format_disruption_reason(disruption)
             phase = pod.get("status", {}).get("phase", "")
             if phase == "Running":
-                resource_pods[task_key] = pod_name
                 profile_targets[task_key] = _ProfileTarget(
                     task_id=entry.task_id.to_wire(),
                     attempt_id=entry.attempt_id,
@@ -3149,9 +3066,6 @@ class K8sTaskProvider:
 
             updates.append(update)
 
-        resource_collector = self._ensure_resource_collector()
-        if resource_collector is not None:
-            resource_collector.set_pods(resource_pods)
         periodic_profiler = self._ensure_periodic_profiler()
         if periodic_profiler is not None:
             periodic_profiler.set_pods(profile_targets)

@@ -2195,6 +2195,7 @@ class ControllerServiceImpl:
                     job_config_table.c.res_memory_bytes,
                     job_config_table.c.res_disk_bytes,
                     job_config_table.c.res_device_json,
+                    job_config_table.c.task_image,
                 ).where(job_config_table.c.job_id == task.job_id)
             ).first()
         if jc_row is not None:
@@ -2202,6 +2203,9 @@ class ControllerServiceImpl:
                 job_resources = resource_spec_from_scalars(
                     jc_row.res_cpu_millicores, jc_row.res_memory_bytes, jc_row.res_disk_bytes, jc_row.res_device_json
                 )
+            runtime_image = self._backend_for_id(task.backend_id).runtime_image(jc_row.task_image)
+            if runtime_image:
+                proto.build_metrics.image_tag = runtime_image
 
         return controller_pb2.Controller.GetTaskStatusResponse(
             task=proto,

@@ -67,9 +67,8 @@ skip or weaken checks.
 
 ## 3. Tests and docs checks (when relevant)
 
-- `uv run pytest` over the test directories your change touches. Keep the
-  repository's default marker expression so slow, integration, live-cluster,
-  Docker, and manual tests remain delegated to their dedicated CI jobs.
+- `uv run --no-project infra/ci/run_tests.py` to run affected safe unit tests.
+  Do not override the repository's default marker expression.
 - If docs pages were added/deleted/renamed: `uv run python infra/check_docs_source_links.py`.
 - If the change is docs-heavy: `uv run mkdocs build --strict`.
 
@@ -124,10 +123,10 @@ guidelines — apply them when they make the code *better*; the goal is
 high-quality code, not blind adherence.
 
 Do not recursively rerun `--review` after small, targeted touch-ups made in
-response to its findings. Validate those edits with the normal mechanical checks
-and relevant tests, then continue the workflow. Rerun the advisory review only
-when the follow-up materially changes the branch's design or scope, or when the
-user asks for another pass.
+response to its findings. Validate behavioral edits with the normal mechanical
+checks and relevant tests. For a formatter-only mechanical edit, rerun formatting
+and lint checks only. Rerun the advisory review only when the follow-up materially
+changes the branch's design or scope, or when the user asks for another pass.
 
 Each run writes the raw per-arm prompts and outputs, the combined findings, and a
 summary under `/tmp/marin-linter/<branch>/<timestamp>-<uniq>/` (the path is printed at the end) —
@@ -251,8 +250,8 @@ Act on the event, read any feedback that arrived concurrently, then re-arm:
    and agent comment. Prefix agent-authored replies with `🤖` and resolve the
    thread. The default significant-comment filter ignores the authenticated
    user's comments, review-bot progress placeholders, clean verdicts, wrappers,
-   and Loom's exact
-   `Working on this in loom: <session URL>` acknowledgement.
+   Loom's exact `Working on this in loom: <session URL>` acknowledgement, and
+   Loom access-control replies addressed to a bot.
 4. **Timeout** — report the last statuses in the timeout payload and hand off.
    Do not replace the completed 12-hour block with manual polling.
 

@@ -27,15 +27,19 @@ MoeImplementation: TypeAlias = Literal[
     "ragged_all_to_all_cudnn_cute",  # QuACK activation path plus cuDNN grouped Wgrad.
     "fixed_all_to_all",  # Expert-parallel all-to-all with fixed sender/expert cells.
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
+    "marin_ep",  # Expert-parallel Mosaic-GPU fused transport + pooled waterfilling drops.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
     "sonic_cute",  # Single-process QuACK SM100 (Blackwell/B200) grouped-GEMM backend.
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
+# marin_ep uses the same split-capable ragged transport in multi-controller
+# runs, so the splits-per-peer knob applies to it as well.
 _RAGGED_ALL_TO_ALL_IMPLEMENTATIONS = (
     "ragged_all_to_all",
     "ragged_all_to_all_cute",
     "ragged_all_to_all_cudnn_cute",
+    "marin_ep",
 )
 _EP_MOE_IMPLEMENTATIONS = ("ring", *_RAGGED_ALL_TO_ALL_IMPLEMENTATIONS, "fixed_all_to_all", "deepep")
 # Local means no collectives over an expert axis. These backends can still run

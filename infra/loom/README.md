@@ -86,13 +86,41 @@ identity of the existing `marin-grafana` Cloud Run service account to select
 only the `ops` profile. Pulumi resolves that account's email and immutable
 numeric subject; it does not create or copy a Loom token.
 
+The `fork-ferry` mapping accepts OIDC tokens only from the `marin` repository's
+`ops-fork-ferry.yaml` workflow on `main`. It authorizes the dedicated
+`fork-ferry` automation profile. Loom brokers short-lived `loom-oa-dev` GitHub
+App tokens for the profile's Marin fork repositories, with contents, issues,
+and pull-request write access. The App key remains in `LOOM_DOTENV`; the profile
+does not store a GitHub token or grant Actions access. The GitHub Pulumi stack
+reads the mapping's profile from this stack's `githubFederationProfiles` output
+and publishes it as the workflow's `LOOM_FORK_FERRY_PROFILE` repository variable.
+
+Organization prompt policy lives beside the runtime profiles in
+`profiles/<name>/AGENTS.md`. A profile's `instructionsFile` is resolved below
+`infra/loom`, read by Pulumi, and reconciled into Loom's visible profile
+`instructions` field. Loom therefore does not need access to this checkout at
+runtime, and the effective text remains inspectable in Settings. The production
+`slack.profile` and `github.profile` settings select their dedicated profiles;
+ordinary sessions use the deployment-managed `default` profile, while workload
+and future GitHub Actions callers select the automation profile authorized by
+their federation mapping.
+
+The `default`, `github`, and `slack` profiles allowlist the repositories where
+interactive sessions may fall back to the `loom-oa-dev` GitHub App. Loom stamps
+only the session's current repository and brokers a short-lived installation
+token when the launching user has not stored a personal token. A personal token
+continues to take precedence. Keep these lists aligned with the repositories
+registered in production and the App's installations.
+
 The Pulumi declaration is authoritative at activation time. An unchanged
 profile keeps its database revision; a changed declaration overwrites the
 current row and advances the revision. UI or API edits persist only until the
-next activation. Deployment pruning is enabled, so a profile or federation
-removed from `Pulumi.marin-loom.yaml` is removed from new selection on the next
-activation. Weaver's stock `default`, `github_comment`, and `watch` profiles are
-not deployment-managed and are not pruned.
+next activation. Deployment pruning is enabled, so a deployment-managed
+setting, profile, or federation removed from `Pulumi.marin-loom.yaml` is removed
+from its deployment layer on the next activation. Stock profiles omitted from
+the declaration remain unmanaged and are not pruned; production intentionally
+manages `default` so interactive instruction and runtime policy are reviewed in
+this repository.
 
 At runtime, the Grafana bridge gets a Google-signed ID token from the Cloud Run
 metadata server, exchanges it at `/api/auth/federate`, and uses the resulting

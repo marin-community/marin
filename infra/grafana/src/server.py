@@ -36,6 +36,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /k8s/finelog                             finelog pod, probe, resource, and PVC details
     GET /k8s/finelog_events                      recent Warning events involving finelog
     GET /k8s/health | nodes                      API reachability and CoreWeave node health
+    GET /k8s/node_pools                          CoreWeave NodePool capacity and conditions
     GET /k8s/overview                            explicit workload issue counts (zeros included)
     GET /k8s/gpu_racks                           GPU nodes grouped by physical rack: trays total/ready
     GET /k8s/alerts/unreachable                  alert rows: cluster, error_class, value(0|1)
@@ -550,6 +551,14 @@ def create_app(
         # bug raises here, and Starlette turns that into a 500.
         return JSONResponse(k8s_cache.get_or_compute(key, run))
 
+    def filtered_k8s_endpoint(key: str, run, request: Request, fields: tuple[str, ...]) -> JSONResponse:
+        rows = k8s_cache.get_or_compute(key, run)
+        for field in fields:
+            selected = {value for value in request.query_params.get(field, "").split(",") if value}
+            if selected:
+                rows = [row for row in rows if field not in row or row[field] in selected]
+        return JSONResponse(rows)
+
     def k8s_control_plane(_: Request) -> JSONResponse:
         return k8s_endpoint("control_plane", k8s_fleet.control_plane)
 
@@ -587,8 +596,11 @@ def create_app(
     def k8s_health(_: Request) -> JSONResponse:
         return k8s_endpoint("health", k8s_fleet.health)
 
-    def k8s_nodes(_: Request) -> JSONResponse:
-        return k8s_endpoint("nodes", k8s_fleet.nodes)
+    def k8s_nodes(request: Request) -> JSONResponse:
+        return filtered_k8s_endpoint("nodes", k8s_fleet.nodes, request, ("cluster", "node"))
+
+    def k8s_node_pools(request: Request) -> JSONResponse:
+        return filtered_k8s_endpoint("node_pools", k8s_fleet.node_pools, request, ("cluster", "node_pool"))
 
     def k8s_overview(_: Request) -> JSONResponse:
         def compute() -> list[dict]:
@@ -704,6 +716,7 @@ def create_app(
             Route("/k8s/finelog_events", k8s_finelog_events),
             Route("/k8s/health", k8s_health),
             Route("/k8s/nodes", k8s_nodes),
+            Route("/k8s/node_pools", k8s_node_pools),
             Route("/k8s/overview", k8s_overview),
             Route("/k8s/gpu_racks", k8s_gpu_racks),
             Route("/k8s/arch_mismatch", k8s_arch_mismatch),

@@ -16,9 +16,12 @@ INDEXED_REPOSITORY = "marin-community/marin"
 INDEXED_BRANCH = "main"
 DISPLAY_SHA_CHARACTERS = 12
 FEDERATED_SUMMARY_CHARACTERS = 240
+SEARCH_EXECUTION_HEADER = "X-Echo-Search-Execution-ID"
 SearchDomain = Literal["wiki", "file", "discord", "pr", "issue"]
 SEARCH_DOMAINS: tuple[SearchDomain, ...] = ("wiki", "file", "discord", "pr", "issue")
 DEFAULT_SEARCH_DOMAINS: tuple[SearchDomain, ...] = ("wiki", "file", "pr", "issue")
+SEARCH_FEEDBACK_MIN_GRADE = 0
+SEARCH_FEEDBACK_MAX_GRADE = 10
 SEARCH_DOMAIN_LABELS: Mapping[SearchDomain, str] = MappingProxyType(
     {
         "wiki": "Wiki",
@@ -70,6 +73,10 @@ class SearchWeights:
 
 QUERY_SEARCH_WEIGHTS = SearchWeights(semantic=2.0, lexical=1.0)
 IDENTIFIER_SEARCH_WEIGHTS = SearchWeights(semantic=1.0, lexical=2.0)
+
+
+def normalize_query(query: str) -> str:
+    return " ".join(query.casefold().split())
 
 
 def candidate_limit(limit: int) -> int:

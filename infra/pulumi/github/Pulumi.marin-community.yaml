@@ -4,6 +4,15 @@ config:
   marin-github:organization: marin-community
   marin-github:repositories:
     - marin-community/marin
+  marin-github:forkFerryRepository: marin-community/marin
+  marin-github:dependencyUpdater:
+    repository: marin-community/marin
+    appId: 4563866
+    clientId: Iv23liNdDvC85E67xNa6
+    appSlug: marin-external-runtime-updater
+    reviewRulesetId: 785435
+    actionsKeyId: "3380204578043523366"
+    encryptedPrivateKey: 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
   marin-github:credentials:
     - name: CLAUDE_CODE_OAUTH_TOKEN
       scope: organization
@@ -220,6 +229,16 @@ config:
       source_kind: manual
       source_ref: owner-recovery:claude-nightshift-private-key
       disposition: keep
+    - name: DEPENDENCY_UPDATER_PRIVATE_KEY
+      scope: environment
+      repository: marin-community/marin
+      environment: external-runtime-updater
+      presence: present
+      management: pulumi
+      source_kind: configuration
+      source_ref: config:infra/pulumi/github/Pulumi.marin-community.yaml#dependencyUpdater.encryptedPrivateKey
+      disposition: keep
+      note: Dedicated app key sealed to its Actions environment public key; Pulumi stores ciphertext only.
     - name: R2_ACCESS_KEY_ID
       scope: repository
       repository: marin-community/marin
@@ -286,7 +305,7 @@ config:
       source_kind: current-environment
       source_ref: env:COREWEAVE_API_TOKEN
       disposition: review
-      note: Optional cost-report provider credential; distinct from CoreWeave object-storage keys.
+      note: Used by the hourly CoreWeave storage collector; requires Observability Viewer and differs from storage and Grafana read keys.
     - name: OPENAI_ADMIN_KEY
       scope: repository
       repository: marin-community/marin

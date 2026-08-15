@@ -37,7 +37,7 @@ For each source, this script builds a single :class:`StepSpec`. The step's
   and the shard is re-copied.
 * Otherwise, streams every file in the shard from source to a sibling
   ``.tmp.<uuid>`` key at the destination and publishes it via
-  :func:`rigging.filesystem.atomic_rename` (the per-file copies fan out across
+  :func:`rigging.filesystem.atomic.atomic_rename` (the per-file copies fan out across
   ``copy_threads`` threads), then Zephyr writes the per-shard JSONL — that
   output IS the resume marker. When the destination is ``s3://``, the dst
   ``S3FileSystem`` is constructed with ``fixed_upload_size=True`` so R2
@@ -81,8 +81,9 @@ from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_status import STATUS_SUCCESS, StatusFile, StepAlreadyDone, step_lock
-from rigging.filesystem import atomic_rename, marin_prefix
-from rigging.filesystem import url_to_fs as _rigging_url_to_fs
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.factory import url_to_fs as _rigging_url_to_fs
 from rigging.log_setup import configure_logging
 from zephyr import counters
 from zephyr.dataset import Dataset
@@ -112,7 +113,7 @@ class SyncScope(StrEnum):
     NORMALIZED = "normalized"
 
 
-# Matches the ``.tmp.<uuid.hex>`` suffix that ``rigging.filesystem.atomic_rename``
+# Matches the ``.tmp.<uuid.hex>`` suffix that ``rigging.filesystem.atomic.atomic_rename``
 # uses for its intermediate write key. Used to filter orphan leftovers out
 # of source listings (see ``_list_relative_files``).
 _ATOMIC_RENAME_TMP_RE = re.compile(r"\.tmp\.[0-9a-f]{32}$")
@@ -216,7 +217,7 @@ def _copy_one(src_fs, dst_fs, src_path: str, dst_path: str) -> int:
     instance just for the rename.
     """
     total = 0
-    with atomic_rename(dst_path, fs=dst_fs) as temp_path:
+    with atomic_rename(dst_path, filesystem=dst_fs) as temp_path:
         with src_fs.open(src_path, "rb") as fin, dst_fs.open(temp_path, "wb") as fout:
             while True:
                 chunk = fin.read(COPY_CHUNK_BYTES)
@@ -309,7 +310,7 @@ def _list_relative_files(src_dir: str) -> list[tuple[str, str]]:
             # the whole leaf is done.
             continue
         if _ATOMIC_RENAME_TMP_RE.search(rel):
-            # Orphans from a prior interrupted sync: ``rigging.filesystem.atomic_rename``
+            # Orphans from a prior interrupted sync: ``rigging.filesystem.atomic.atomic_rename``
             # writes ``<dst>.tmp.<uuid.hex>`` then ``fs.mv``s; if the worker is
             # SIGKILLed between the two, the temp lingers. They're never
             # legitimate datakit content — skip them so they don't propagate.

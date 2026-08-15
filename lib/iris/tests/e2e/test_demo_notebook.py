@@ -6,7 +6,7 @@
 from pathlib import Path
 
 import pytest
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.cluster.config import (
     IrisClusterConfig,
     ScaleGroupConfig,

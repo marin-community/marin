@@ -13,7 +13,8 @@ from urllib.parse import urlencode
 
 import jax
 
-from rigging.filesystem import StoragePath, marin_temp_bucket
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.storage_path import StoragePath
 
 from levanter.callbacks._core import StepInfo
 from levanter.utils.jax_utils import barrier_sync
@@ -28,7 +29,7 @@ _XPROF_TTL_SEGMENT = re.compile(r"ttl=[1-9]\d*d")
 
 def xprof_viewer_url(service_url: str, profile_uri: str) -> str:
     """Return the hosted XProf URL for an uploaded profile root."""
-    return f"{service_url.rstrip('/')}/open?{urlencode({'uri': profile_uri})}"
+    return f"{service_url.rstrip('/')}/open?{urlencode({'uri': profile_uri, 'tool': 'trace_viewer'})}"
 
 
 @dataclass(frozen=True)

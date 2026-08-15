@@ -231,15 +231,29 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
         name.index.exact_values,
         [
             "global_step",
+            "gpu_memory_temperature_celsius",
+            "gpu_memory_total_bytes",
             "gpu_memory_used_bytes",
+            "gpu_nvlink_receive_bytes_per_second",
+            "gpu_nvlink_transmit_bytes_per_second",
+            "gpu_pcie_receive_bytes_per_second",
             "gpu_pcie_replay_errors",
+            "gpu_pcie_transmit_bytes_per_second",
             "gpu_power_watts",
             "gpu_row_remap_failures",
+            "gpu_sm_active_ratio",
             "gpu_temperature_celsius",
             "gpu_tensor_active_ratio",
             "gpu_utilization_percent",
             "gpu_xid_error_code",
             "hardware_inventory",
+            "node_cpu_utilization_percent",
+            "node_disk_total_bytes",
+            "node_disk_used_bytes",
+            "node_memory_total_bytes",
+            "node_memory_used_bytes",
+            "node_network_receive_bytes",
+            "node_network_transmit_bytes",
             "phase",
             "progress_time_seconds",
             "step",
@@ -254,12 +268,16 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
         projections.keys().copied().collect::<Vec<_>>(),
         [
             "accelerator-faults",
+            "accelerator-interconnect",
             "accelerator-inventory",
             "accelerator-memory",
             "accelerator-power",
+            "accelerator-sm-activity",
             "accelerator-temperature",
             "accelerator-tensor-activity",
             "accelerator-utilization",
+            "node-host-network",
+            "node-host-utilization",
             "training-run-attribution",
             "training-status",
         ]
@@ -269,6 +287,11 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
     assert_eq!(power.predicate_values, ["gpu_power_watts"]);
     assert!(power.columns.iter().any(|column| column == "value"));
     assert!(power
+        .columns
+        .iter()
+        .any(|column| column == "attributes_json"));
+    let training_status = projections["training-status"];
+    assert!(training_status
         .columns
         .iter()
         .any(|column| column == "attributes_json"));
