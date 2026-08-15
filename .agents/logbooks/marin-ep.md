@@ -31,9 +31,11 @@ Experiment ID prefix: `MEP`.
   needed to evaluate gate G1b.
 
 ## Current TL;DR
-- M0-M3 done ([MEP-001], [MEP-002]): spec, dense oracle, message-passing
-  correctness simulator with explicit backward, L0 roofline, L1
-  discrete-event simulator. 39 CPU tests green.
+- M0-M4 done + M5 prepped ([MEP-001]..[MEP-004]): spec, dense oracle,
+  message-passing correctness simulator with explicit backward, L0/L1 perf
+  models, an XLA stepping-stone backend passing oracle conformance on a
+  real 8-device mesh, and the transport-substrate decision (Pallas
+  Mosaic-GPU distributed) with a ready spike harness. 41 CPU tests green.
 - Drop rule adopted (SPEC S2): group-pooled capacity with per-expert floor,
   G=3 → 0.31% drops at cf 1.33 vs ~4% for per-cell/per-expert (MEP-H1
   promoted).
@@ -51,9 +53,6 @@ Experiment ID prefix: `MEP`.
   ~89% fwd (1.9 ms exposed of 8.8 ms transport+count on a 17.3 ms GEMM
   floor); the residual is the last expert's combine tail — interleaving
   GEMM tiles across local experts should shrink it. Evidence: [MEP-002].
-- `MEP-H3`: symmetric-memory remote stores are reachable from JAX via one of
-  (a) Mosaic-GPU distributed, (b) CuTe DSL nvshmem via cutlass_call, (c)
-  custom CUDA FFI. Next test: M5 hardware spike, 1-2 nodes.
 - `MEP-H4`: rotated, simultaneous per-source sends are required in the real
   kernel (L1 predicts ingress convoys and a serialized combine tail
   otherwise; cross-expert GEMM-tile interleave turned out not to matter).
@@ -64,6 +63,10 @@ Experiment ID prefix: `MEP`.
   tracking (drops are not throughput-equivalent).
 
 ### Promoted
+- `MEP-H3`: symmetric-memory remote stores ARE reachable from JAX —
+  Pallas Mosaic-GPU distributed has the full surface in installed jax.
+  Decision: Mosaic-GPU is the transport substrate ([MEP-004]); hardware
+  validation of the spike is the M5 gate.
 - `MEP-H1`: group-pooled capacity (G=3, per-owner) gives < 2% drops at
   cf <= 1.33 where per-expert pooling and per-cell both give ~4%. Decision:
   adopted into SPEC S2 as waterfilling with per-expert floor ([MEP-002]);
@@ -162,3 +165,40 @@ Experiment ID prefix: `MEP`.
 - Next action: G1b baseline segment measurement; M5 transport-substrate
   survey (Mosaic-GPU distributed vs CuTe nvshmem vs custom FFI) from local
   sources; draft kernels/ API skeleton against SPEC.
+
+### 2026-08-14 20:30 - MEP-004: XLA stepping-stone backend + substrate decision
+- Hypothesis: MEP-H3 (a JAX-reachable symmetric-memory substrate exists).
+- Commit Hash: 0a2bc790ed (+ this commit).
+- Command: `uv run pytest experiments/marin_ep/tests -q` -> 41 passed.
+- Result 1 (implementation): `kernels/xla_backend.py` — the SPEC contract
+  (group-pooled waterfilling, ragged pools) inside shard_map with stock
+  collectives (`ragged_all_to_all` + `ragged_dot`), signature-compatible
+  with the levanter `shard_local_fn` dispatch. Values, drop counts, and
+  all four grads match the oracle on a real 8-device CPU mesh (via an
+  all_gather transport emulation, since ragged-a2a is unimplemented on
+  XLA:CPU); the production ragged path shape-checks at EP64 topology.
+  This is both the first hardware-runnable Marin EP artifact and the
+  fallback if the fused kernel slips.
+- Result 2 (M5 substrate survey, from installed-source inspection):
+  **Pallas Mosaic-GPU distributed is the substrate** — complete
+  device-initiated remote-memory surface in installed jax 0.10.1/0.11.0
+  (`plgpu.remote_ref`, peer TMA both directions, remote ld/st,
+  `pl.semaphore_signal(device_id=)`, `semaphore_signal_parallel`,
+  multimem), with the in-tree `collective_matmul_mgpu.py` example doing
+  exactly our put+signal pattern under shard_map. CuTe DSL: multimem PTX
+  only, no nvshmem bindings, no symmetric allocator (stays the GEMM
+  engine candidate). DeepEP-style FFI: single-process intranode only
+  (template for plumbing, not a substrate). Constraints: nvshmem path
+  needs 1 process/GPU (hero runs 1/node today; ncclep bench has per-GPU
+  supervisor precedent), `--xla_gpu_experimental_enable_nvshmem`, Lane
+  semantics for peer TMA, `nvidia-nvshmem-cu13` ships with the gpu extra.
+  MEP-H3 resolved -> promoted.
+- Result 3: M5 spike harness written (`bench/spike_transport_mgpu.py`,
+  rotated all-to-all put + arrival semaphores, correctness vs all_gather +
+  egress-bandwidth calibration for the L1 model). Import-checked only;
+  needs GB200 to run.
+- Next action: M5 GPU session on cw-us-east-08a (reserve-gpu, 1-2 nodes):
+  run jax's collective_matmul example as litmus, then the spike; calibrate
+  L1 link_efficiency/message_latency; then M6 transport kernel
+  (count exchange + dispatch/combine puts) with XLA GEMMs in the middle.
+  Also: bench xla_backend vs fixed_all_to_all on GPU (cheap first win).

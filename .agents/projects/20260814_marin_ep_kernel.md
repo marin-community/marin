@@ -100,14 +100,26 @@ Later compositions (explicitly out of scope for v1, but the design must not
 preclude them): fp8 dispatch wire (#7665), fp8/MXFP8 expert GEMMs, overlap
 of MoE with attention of the adjacent layer.
 
-**Transport substrate** is the main open question and gets an early
-hardware spike (M5): candidate mechanisms are (a) Mosaic-GPU distributed
-(NVSHMEM-backed remote refs/semaphores), (b) CuTe DSL device-side nvshmem
-via `cutlass_call`, (c) a thin custom CUDA FFI extension in the shape of
-`lib/levanter/src/levanter/kernels/deepep/` (built from scratch, not
-vendored). All three satisfy R3. The choice is driven by: symmetric-memory
-allocation from JAX, XLA buffer aliasing/donation constraints, and
-compatibility with `shard_map` + `custom_vjp`.
+**Transport substrate** (decided 2026-08-14, logbook MEP-004): **Pallas
+Mosaic-GPU distributed**. The installed jax (0.10.1/0.11.0) ships the
+complete device-initiated surface — `plgpu.remote_ref` (direct peer
+ld/st), peer TMA in both directions, `pl.semaphore_signal(device_id=...)`
+/ `semaphore_signal_parallel` arrival flags, multimem store/ld-reduce —
+plus a working all-gather-matmul reference
+(`jax/experimental/pallas/ops/gpu/collective_matmul_mgpu.py`) under
+`shard_map`, with XLA allocating the symmetric buffers itself (no staging
+copies). Alternatives assessed and rejected as the transport layer: CuTe
+DSL has multimem PTX but no nvshmem bindings or symmetric-memory
+allocator (still the grouped-GEMM engine candidate via QuACK); the
+DeepEP-style custom FFI is single-process intranode only.
+Deployment constraints to plan around: the multi-node (nvshmem) path
+requires **one process per GPU** (hero currently runs one per node;
+`experiments/ncclep` has per-GPU supervisor precedent) and
+`--xla_gpu_experimental_enable_nvshmem` in XLA_FLAGS;
+`nvidia-nvshmem-cu13` arrives with the `gpu` extra; peer TMA requires
+Lane (not Warpgroup) lowering semantics; multimem needs
+`collective_axes` == the whole mesh. M5 spike harness:
+`experiments/marin_ep/bench/spike_transport_mgpu.py`.
 
 ## Approach
 

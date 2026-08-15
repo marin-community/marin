@@ -146,7 +146,9 @@ def test_ragged_transport_abstractly_evaluates_at_hero_ep64_topology():
         out_specs=(batch_spec, P()),
         check_vma=False,
     )
-    sds = lambda shape, dtype, spec: jax.ShapeDtypeStruct(shape, dtype, sharding=NamedSharding(mesh, spec))
+    def sds(shape, dtype, spec):
+        return jax.ShapeDtypeStruct(shape, dtype, sharding=NamedSharding(mesh, spec))
+
     with use_abstract_mesh(mesh):
         y, dropped = jax.eval_shape(
             shard_fn,
