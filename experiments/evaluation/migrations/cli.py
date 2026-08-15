@@ -28,13 +28,22 @@ from marin.evaluation.lm_eval_samples import (
     preserved_sample_sources,
     rebuild_lm_eval_samples,
 )
-from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, list_records
+from marin.evaluation.records import (
+    CW_RECORDS_PREFIX,
+    DEFAULT_SCAN_PREFIXES,
+    LEGACY_CW_RECORDS_PREFIX,
+    list_records,
+)
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.evaluation.migrations.format_smoke import (
+    SmokeUpgradeResult,
+    fleet_destination,
     select_v1_archive,
+    select_v1_fleet,
     smoke_destination,
     smoke_upgrade,
+    smoke_upgrade_fleet,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,6 +58,8 @@ def cli() -> None:
 # few hundred megabytes, so this trades throughput against a bounded footprint on a CPU node.
 _DEFAULT_SWEEP_WORKERS = 8
 _DEFAULT_SMOKE_MAX_BYTES = 256 * 1024 * 1024
+_DEFAULT_FLEET_SMOKE_WORKERS = 4
+_CW_RECORDS_PREFIXES = (CW_RECORDS_PREFIX, LEGACY_CW_RECORDS_PREFIX)
 
 
 @dataclass(frozen=True)
@@ -121,6 +132,91 @@ def smoke_upgrade_command(
     click.echo(json.dumps({"status": "copying", "source": source, "destination": resolved_destination}, sort_keys=True))
     result = smoke_upgrade(source, resolved_destination)
     click.echo(json.dumps({"status": "validated", **asdict(result)}, sort_keys=True))
+
+
+@cli.command("smoke-upgrade-fleet")
+@click.option(
+    "--records-prefix",
+    "records_prefixes",
+    multiple=True,
+    help=f"Record roots to scan; repeatable. Defaults to the CoreWeave roots {_CW_RECORDS_PREFIXES}.",
+)
+@click.option("--destination-root", help="Generated fleet root. Defaults to same-region one-day storage.")
+@click.option(
+    "--workers",
+    default=_DEFAULT_FLEET_SMOKE_WORKERS,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help="Archives to clone and validate concurrently.",
+)
+@click.option("--ttl-days", default=1, show_default=True, type=click.IntRange(min=1))
+@click.option(
+    "--cleanup/--keep-temp",
+    default=False,
+    show_default=True,
+    help="Delete the generated fleet only after every archive validates.",
+)
+@click.option("--dry-run", is_flag=True, help="Report the complete selection without writing temporary data.")
+def smoke_upgrade_fleet_command(
+    records_prefixes: tuple[str, ...],
+    destination_root: str | None,
+    workers: int,
+    ttl_days: int,
+    cleanup: bool,
+    dry_run: bool,
+) -> None:
+    """Clone and validate every sealed CoreWeave v1 archive as one fleet rehearsal."""
+    resolved_prefixes = records_prefixes or _CW_RECORDS_PREFIXES
+    if any(path.startswith("s3://") for path in (*resolved_prefixes, destination_root or "")):
+        configure_coreweave_s3()
+    selection = select_v1_fleet(resolved_prefixes)
+    click.echo(json.dumps({"status": "selected", **asdict(selection)}, sort_keys=True))
+    blockers = selection.record_failures + selection.unsealed_v1 + selection.unsupported
+    if blockers:
+        raise click.ClickException(f"fleet selection has {len(blockers)} blocking record or archive issue(s)")
+    if dry_run:
+        return
+
+    root = destination_root or fleet_destination(resolved_prefixes[0], ttl_days=ttl_days)
+    completed = 0
+
+    def report(result: SmokeUpgradeResult) -> None:
+        nonlocal completed
+        completed += 1
+        click.echo(
+            json.dumps(
+                {
+                    "status": "validated_archive",
+                    "completed": completed,
+                    "total": len(selection.sources),
+                    **asdict(result),
+                },
+                sort_keys=True,
+            )
+        )
+
+    click.echo(json.dumps({"status": "starting", "destination_root": root}, sort_keys=True))
+    result = smoke_upgrade_fleet(
+        selection.sources,
+        root,
+        workers=workers,
+        cleanup=cleanup,
+        on_result=report,
+    )
+    click.echo(
+        json.dumps(
+            {
+                "status": "validated_fleet",
+                "destination_root": result.destination_root,
+                "archives": len(result.results),
+                "source_objects": result.source_objects,
+                "source_bytes": result.source_bytes,
+                "rows": result.rows,
+                "cleaned_up": result.cleaned_up,
+            },
+            sort_keys=True,
+        )
+    )
 
 
 @cli.command("backfill-samples")

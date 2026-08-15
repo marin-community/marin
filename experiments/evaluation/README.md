@@ -80,6 +80,32 @@ The final `status=validated` JSON records the source and temporary destination, 
 counts, an aggregate source digest, per-table row counts and digests, and the v2 commit token. The
 source remains format v1. A failed run leaves only lifecycle-managed temporary data for inspection.
 
+Use the fleet rehearsal before changing the production archives. It scans both current and legacy
+CoreWeave record roots, deduplicates shared results paths, and selects every sealed v1 archive. A dry
+run reports the exact selection and refuses to proceed if a record is unreadable or a referenced v1
+archive is unsealed:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --target-cluster cw-us-east-02a \
+  --job-name finestore-v1-v2-fleet-inventory --cpu 2 --memory 8GB --disk 10GB \
+  --enable-extra-resources --sync-package marin-core --extra cpu --timeout 1800 -- \
+  python -m experiments.evaluation.migrations.cli smoke-upgrade-fleet --dry-run
+```
+
+The full rehearsal clones each selected archive beneath one generated `tmp/ttl=1d` fleet root and
+independently compares every copied object and deduplicated Arrow row. `--cleanup` removes that exact
+root only after every archive validates; an error or early exit preserves the partial fleet for
+diagnosis until its lifecycle expiry:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --target-cluster cw-us-east-02a \
+  --job-name finestore-v1-v2-fleet --cpu 4 --memory 32GB --disk 20GB \
+  --enable-extra-resources --sync-package marin-core --extra cpu --timeout 14400 -- \
+  python -m experiments.evaluation.migrations.cli smoke-upgrade-fleet --cleanup
+```
+
 After the platform smoke passes, upgrade the sealed archive fleet before deploying a format-v2
 evaluation reader. The migration publishes existing Parquet shards through `HEAD` and does not copy
 their payload data:

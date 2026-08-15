@@ -6,8 +6,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 import uuid
 from collections import defaultdict
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 import pyarrow as pa
@@ -17,7 +21,7 @@ from finestore.layout import COMMIT_COLUMN, GEN_COLUMN, SEQ_COLUMN, ArchiveMetad
 from finestore.migrations import migrate
 from finestore.migrations.m0001_manifest import LegacyArchive, LegacyTable, inspect_legacy_archive
 from finestore.reader import ReadView
-from marin.evaluation.records import list_records
+from marin.evaluation.records import list_records, read_records
 from pyarrow.fs import FSSpecHandler, PyFileSystem
 from rigging.filesystem import StoragePath, marin_temp_bucket, url_to_fs
 
@@ -25,6 +29,10 @@ _COPY_BUFFER_BYTES = 8 * 1024 * 1024
 _FORMAT_V1 = 1
 _FORMAT_V2 = 2
 _EVAL_SAMPLES_TABLE = "samples"
+_FLEET_DIRECTORY = "finestore-migration-fleet"
+_FLEET_MARKER = "_fleet.json"
+_FLEET_ID = re.compile(r"^[0-9a-f]{32}$")
+_TTL_DIRECTORY = re.compile(r"^ttl=[1-9][0-9]*d$")
 
 
 @dataclass(frozen=True)
@@ -58,6 +66,33 @@ class SmokeUpgradeResult:
     rows: int
     commit_id: str
     commit_sequence: int
+
+
+@dataclass(frozen=True)
+class FleetSelection:
+    """FineStore archives referenced by one or more record prefixes."""
+
+    records: int
+    unique_results: int
+    sources: tuple[str, ...]
+    already_current: int
+    missing_archive: int
+    foreign_results: int
+    record_failures: tuple[str, ...]
+    unsealed_v1: tuple[str, ...]
+    unsupported: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FleetSmokeResult:
+    """Aggregate evidence from a successful fleet-wide migration rehearsal."""
+
+    destination_root: str
+    results: tuple[SmokeUpgradeResult, ...]
+    source_objects: int
+    source_bytes: int
+    rows: int
+    cleaned_up: bool
 
 
 class SmokeUpgradeValidationError(ValueError):
@@ -105,10 +140,7 @@ def _relative_paths(root: StoragePath, paths: tuple[str, ...]) -> tuple[str, ...
 
 
 def _copy_files(source: StoragePath, destination: StoragePath, relative_paths: tuple[str, ...]) -> None:
-    same_storage = source.is_local and destination.is_local
-    if source.is_remote or destination.is_remote:
-        same_storage = source.scheme == destination.scheme and source.bucket == destination.bucket
-    if not same_storage:
+    if not _same_storage(source, destination):
         raise ValueError(f"smoke migration must stay on one storage backend and bucket: {source} -> {destination}")
     if destination.exists():
         raise FileExistsError(f"smoke migration destination already exists: {destination}")
@@ -120,6 +152,12 @@ def _copy_files(source: StoragePath, destination: StoragePath, relative_paths: t
         _destination_fs, destination_key = url_to_fs(str(destination_path))
         destination_path.parent.mkdirs()
         source_fs.cp_file(source_key, destination_key)
+
+
+def _same_storage(left: StoragePath, right: StoragePath) -> bool:
+    if left.is_local and right.is_local:
+        return True
+    return left.scheme == right.scheme and left.bucket == right.bucket
 
 
 def _deduplicate_v1(table: pa.Table, primary_key: tuple[str, ...]) -> pa.Table:
@@ -250,6 +288,158 @@ def smoke_destination(source: str, *, ttl_days: int) -> str:
     identity = hashlib.sha256(source.encode()).hexdigest()[:12]
     prefix = f"finestore-migration-smoke/{run_name}-{identity}-{uuid.uuid4().hex[:12]}"
     return marin_temp_bucket(ttl_days, prefix=prefix, source_prefix=source)
+
+
+def select_v1_fleet(records_prefixes: tuple[str, ...]) -> FleetSelection:
+    """Find every sealed v1 archive referenced by records on the scanned storage backends."""
+    if not records_prefixes:
+        raise ValueError("at least one records prefix is required")
+
+    records = []
+    record_failures = []
+    for prefix in records_prefixes:
+        prefix_records, failures = read_records(prefix)
+        records.extend(prefix_records)
+        record_failures.extend(failure.path for failure in failures)
+
+    backends = {(StoragePath(prefix).scheme, StoragePath(prefix).bucket) for prefix in records_prefixes}
+    results_paths = sorted({record.results_path.rstrip("/") for record in records})
+    sources = []
+    unsealed_v1 = []
+    unsupported = []
+    already_current = 0
+    missing_archive = 0
+    foreign_results = 0
+    for results_path in results_paths:
+        root = StoragePath(results_path)
+        if (root.scheme, root.bucket) not in backends:
+            foreign_results += 1
+            continue
+        archive_path = StoragePath(FineStoreLayout(results_path).archive_path)
+        if not archive_path.exists():
+            missing_archive += 1
+            continue
+        metadata = ArchiveMetadata.model_validate_json(archive_path.read_bytes())
+        if metadata.format_version == _FORMAT_V2:
+            already_current += 1
+            continue
+        if metadata.format_version != _FORMAT_V1:
+            unsupported.append(f"v{metadata.format_version}:{results_path}")
+            continue
+        if not (root / "SEALED").exists():
+            unsealed_v1.append(results_path)
+            continue
+        sources.append(results_path)
+
+    return FleetSelection(
+        records=len(records),
+        unique_results=len(results_paths),
+        sources=tuple(sources),
+        already_current=already_current,
+        missing_archive=missing_archive,
+        foreign_results=foreign_results,
+        record_failures=tuple(sorted(record_failures)),
+        unsealed_v1=tuple(unsealed_v1),
+        unsupported=tuple(unsupported),
+    )
+
+
+def fleet_destination(source_prefix: str, *, ttl_days: int) -> str:
+    """Return a unique lifecycle-managed root for a complete migration rehearsal."""
+    fleet_id = uuid.uuid4().hex
+    return marin_temp_bucket(
+        ttl_days,
+        prefix=f"{_FLEET_DIRECTORY}/{fleet_id}",
+        source_prefix=source_prefix,
+    )
+
+
+def _fleet_archive_destination(root: StoragePath, source: str) -> StoragePath:
+    source_root = StoragePath(source)
+    run_name = source_root.parent.name if source_root.name == "results" else source_root.name
+    identity = hashlib.sha256(source.encode()).hexdigest()[:16]
+    return root / f"{run_name}-{identity}"
+
+
+def _validate_fleet_root(root: StoragePath) -> None:
+    if len(root.segments) < 4:
+        raise ValueError(f"fleet cleanup root is too broad: {root}")
+    if root.segments[-2] != _FLEET_DIRECTORY or _FLEET_ID.fullmatch(root.name) is None:
+        raise ValueError(f"fleet cleanup root lacks a generated fleet identity: {root}")
+    if root.segments[-4] != "tmp" or _TTL_DIRECTORY.fullmatch(root.segments[-3]) is None:
+        raise ValueError(f"fleet cleanup root is not lifecycle-managed temporary storage: {root}")
+
+
+def _prepare_fleet_root(root: StoragePath, sources: tuple[str, ...]) -> None:
+    _validate_fleet_root(root)
+    if root.exists():
+        raise FileExistsError(f"fleet migration destination already exists: {root}")
+    for source in sources:
+        if not _same_storage(StoragePath(source), root):
+            raise ValueError(f"fleet migration must stay on one storage backend and bucket: {source} -> {root}")
+    marker = root / _FLEET_MARKER
+    marker.parent.mkdirs()
+    marker.write_text(json.dumps({"fleet_id": root.name, "root": str(root)}, sort_keys=True))
+
+
+def _cleanup_fleet_root(root: StoragePath) -> None:
+    _validate_fleet_root(root)
+    marker = root / _FLEET_MARKER
+    expected = {"fleet_id": root.name, "root": str(root)}
+    if not marker.exists() or json.loads(marker.read_text()) != expected:
+        raise ValueError(f"fleet cleanup marker does not match the requested root: {root}")
+    root.rmtree()
+    if root.exists():
+        raise RuntimeError(f"fleet cleanup did not remove {root}")
+
+
+def smoke_upgrade_fleet(
+    sources: tuple[str, ...],
+    destination_root: str,
+    *,
+    workers: int,
+    cleanup: bool,
+    on_result: Callable[[SmokeUpgradeResult], None] | None = None,
+) -> FleetSmokeResult:
+    """Rehearse every source migration and optionally remove the fleet after all validate."""
+    if not sources:
+        raise ValueError("no sealed FineStore v1 archives were selected")
+    if workers < 1:
+        raise ValueError("workers must be positive")
+
+    root = StoragePath(destination_root)
+    _prepare_fleet_root(root, sources)
+    results = []
+    executor = ThreadPoolExecutor(max_workers=workers)
+    futures = {
+        executor.submit(smoke_upgrade, source, str(_fleet_archive_destination(root, source))): source
+        for source in sources
+    }
+    try:
+        for future in as_completed(futures):
+            result = future.result()
+            results.append(result)
+            if on_result is not None:
+                on_result(result)
+    except BaseException:
+        for future in futures:
+            future.cancel()
+        executor.shutdown(wait=True, cancel_futures=True)
+        raise
+    else:
+        executor.shutdown(wait=True)
+
+    ordered = tuple(sorted(results, key=lambda result: result.source))
+    if cleanup:
+        _cleanup_fleet_root(root)
+    return FleetSmokeResult(
+        destination_root=destination_root,
+        results=ordered,
+        source_objects=sum(result.source_objects for result in ordered),
+        source_bytes=sum(result.source_bytes for result in ordered),
+        rows=sum(result.rows for result in ordered),
+        cleaned_up=cleanup,
+    )
 
 
 def smoke_upgrade(source: str, destination: str) -> SmokeUpgradeResult:

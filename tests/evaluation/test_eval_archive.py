@@ -34,7 +34,7 @@ from marin.evaluation.records import TaskCoverage
 from rigging.filesystem import StoragePath
 
 from experiments.evaluation.migrations.cli import SweepOutcome, _sweep_archives, selected_archives
-from experiments.evaluation.migrations.format_smoke import smoke_upgrade
+from experiments.evaluation.migrations.format_smoke import smoke_upgrade, smoke_upgrade_fleet
 from experiments.evaluation.migrations.migrate_archive import (
     MigrationCounts,
     archive_sample_count,
@@ -560,9 +560,7 @@ def test_migration_cli_reads_archived_legacy_shards(tmp_path):
     assert summary["skipped_runs"] == 1
 
 
-def test_format_smoke_migrates_a_clone_and_preserves_source_and_rows(tmp_path):
-    source = tmp_path / "evals" / "run-1" / "results"
-    destination = tmp_path / "tmp" / "migration-smoke"
+def _write_v1_smoke_archive(source) -> None:
     (source / "samples" / "w=legacy" / "g=0").mkdir(parents=True)
     (source / "samples" / "w=compact" / "g=1").mkdir(parents=True)
     (source / "blobs" / "w=legacy" / "g=0").mkdir(parents=True)
@@ -592,6 +590,12 @@ def test_format_smoke_migrates_a_clone_and_preserves_source_and_rows(tmp_path):
         source / "blobs" / "w=legacy" / "g=0" / "0000000000000000-blob.parquet",
     )
 
+
+def test_format_smoke_migrates_a_clone_and_preserves_source_and_rows(tmp_path):
+    source = tmp_path / "evals" / "run-1" / "results"
+    destination = tmp_path / "tmp" / "migration-smoke"
+    _write_v1_smoke_archive(source)
+
     result = smoke_upgrade(str(source), str(destination))
 
     assert result.source == str(source)
@@ -603,6 +607,48 @@ def test_format_smoke_migrates_a_clone_and_preserves_source_and_rows(tmp_path):
     migrated = ReadView(str(destination))
     assert migrated.point("samples", doc_id="a")["score"] == 0.7
     assert migrated.read_blob("trajectory.json") == b"payload"
+
+
+def test_fleet_smoke_cleans_up_only_after_every_archive_validates(tmp_path):
+    sources = tuple(tmp_path / "evals" / run / "results" for run in ("run-1", "run-2"))
+    for source in sources:
+        _write_v1_smoke_archive(source)
+    destination = tmp_path / "tmp" / "ttl=1d" / "finestore-migration-fleet" / ("a" * 32)
+
+    result = smoke_upgrade_fleet(
+        tuple(str(source) for source in sources),
+        str(destination),
+        workers=2,
+        cleanup=True,
+    )
+
+    assert len(result.results) == 2
+    assert result.rows == 6
+    assert result.cleaned_up
+    assert not destination.exists()
+    for source in sources:
+        assert json.loads((source / "_archive.json").read_text())["format_version"] == 1
+        assert not (source / "HEAD").exists()
+
+
+def test_fleet_smoke_preserves_partial_results_when_validation_fails(tmp_path):
+    valid = tmp_path / "evals" / "run-1" / "results"
+    invalid = tmp_path / "evals" / "run-2" / "results"
+    _write_v1_smoke_archive(valid)
+    invalid.mkdir(parents=True)
+    (invalid / "_archive.json").write_text('{"format_version": 2}')
+    destination = tmp_path / "tmp" / "ttl=1d" / "finestore-migration-fleet" / ("b" * 32)
+
+    with pytest.raises(ValueError):
+        smoke_upgrade_fleet(
+            (str(valid), str(invalid)),
+            str(destination),
+            workers=1,
+            cleanup=True,
+        )
+
+    assert destination.exists()
+    assert (destination / "_fleet.json").exists()
 
 
 def test_fetch_artifact_keys_cache_by_run(tmp_path):
