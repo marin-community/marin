@@ -96,7 +96,34 @@ class SweepOutcome:
 def upgrade_format(results_paths: tuple[str, ...], prefixes: tuple[str, ...], workers: int) -> None:
     """Upgrade named RESULTS_PATHS, or every recorded run, from FineStore v1 to v2."""
     configure_coreweave_s3()
-    _sweep_archives(selected_archives(_resolve_prefixes(prefixes, results_paths), results_paths), workers, _upgrade_one)
+    resolved_prefixes = _resolve_prefixes(prefixes, results_paths)
+    if results_paths:
+        targets = selected_archives(resolved_prefixes, results_paths)
+    else:
+        selection = select_v1_fleet(resolved_prefixes)
+        click.echo(
+            json.dumps(
+                {
+                    "status": "upgrade_selection",
+                    "records": selection.records,
+                    "unique_results": selection.unique_results,
+                    "sealed_v1": len(selection.sources) - len(selection.unsealed_v1),
+                    "unsealed_v1": selection.unsealed_v1,
+                    "already_current": selection.already_current,
+                    "missing_archive": selection.missing_archive,
+                    "foreign_results": selection.foreign_results,
+                    "record_failures": selection.record_failures,
+                    "unsupported": selection.unsupported,
+                },
+                sort_keys=True,
+            )
+        )
+        blockers = selection.record_failures + selection.unsupported
+        if blockers:
+            raise click.ClickException(f"fleet selection has {len(blockers)} blocking record or archive issue(s)")
+        unsealed = set(selection.unsealed_v1)
+        targets = {source: [] for source in selection.sources if source not in unsealed}
+    _sweep_archives(targets, workers, _upgrade_one)
 
 
 def _upgrade_one(results_path: str) -> SweepOutcome:

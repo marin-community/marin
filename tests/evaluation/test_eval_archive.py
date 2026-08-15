@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -34,6 +35,7 @@ from marin.evaluation.records import TaskCoverage
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.migrations.cli import SweepOutcome, _sweep_archives, selected_archives
+from experiments.evaluation.migrations.cli import cli as migrations_cli
 from experiments.evaluation.migrations.format_smoke import smoke_upgrade, smoke_upgrade_fleet
 from experiments.evaluation.migrations.migrate_archive import (
     MigrationCounts,
@@ -465,6 +467,31 @@ def test_naming_an_archive_directly_does_not_pull_in_the_fleet(tmp_path):
     # Targeting a handful of damaged archives must not re-sweep every recorded run beside them.
     named = str(tmp_path / "one" / "results")
     assert selected_archives((), (named + "/",)) == {named: []}
+
+
+def test_upgrade_format_prefix_migrates_only_sealed_archives(tmp_path, monkeypatch):
+    sealed = tmp_path / "evals" / "sealed" / "results"
+    unsealed = tmp_path / "evals" / "unsealed" / "results"
+    missing = tmp_path / "evals" / "missing" / "results"
+    _write_v1_smoke_archive(sealed)
+    _write_v1_smoke_archive(unsealed)
+    (unsealed / "SEALED").unlink()
+    records = [SimpleNamespace(results_path=str(path)) for path in (sealed, unsealed, missing)]
+    monkeypatch.setattr("experiments.evaluation.migrations.cli.list_records", lambda _: records)
+    monkeypatch.setattr("experiments.evaluation.migrations.format_smoke.read_records", lambda _: (records, ()))
+
+    result = CliRunner().invoke(
+        migrations_cli,
+        ["upgrade-format", "--prefix", str(tmp_path / "evals"), "--workers", "1"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads((sealed / "_archive.json").read_text())["format_version"] == 2
+    assert json.loads((unsealed / "_archive.json").read_text())["format_version"] == 1
+    selection = json.loads(result.output.splitlines()[0])
+    assert selection["sealed_v1"] == 1
+    assert selection["unsealed_v1"] == [str(unsealed)]
+    assert selection["missing_archive"] == 1
 
 
 def test_evaldash_serves_one_extraction_filter_at_a_time(tmp_path):
