@@ -128,8 +128,8 @@ from zephyr.execution import ZephyrContext
 from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.cluster.domain.v0.assign import (
-    ASSIGNMENT_ATTR_DATA_VERSION,
     AssignmentAttrData,
+    assign_hash_attrs,
     assign_source,
 )
 from experiments.datakit.cluster.domain.v0.sample import sample_centroid_inputs
@@ -517,6 +517,29 @@ def _resolve_quality_model_version(quality_model: str, quality_model_version: st
     return quality_model_version
 
 
+def _assign_embedding(
+    output_path: str,
+    embed_path: str,
+    centroids_uri: str,
+    lookup_uris: dict[int, str],
+    scale: PipelineScale,
+) -> AssignmentAttrData:
+    """Assign one source, reading its shape from the luxical embedding artifact."""
+    embedding = read_artifact(embed_path, EmbeddingAttrData)
+    return assign_source(
+        output_path=output_path,
+        embedding_dir=embedding.output_dir,
+        embedding_dim=embedding.embedding_dim,
+        quantization_scale=embedding.quantization_scale,
+        source_key=embedding.source_key,
+        centroids_uri=centroids_uri,
+        lookup_uris=lookup_uris,
+        batch_size=scale.assign_batch_size,
+        worker_resources=scale.pool.worker,
+        max_workers=scale.pool.n_workers,
+    )
+
+
 @dataclass(frozen=True)
 class DatakitSteps:
     """Result of :func:`reference_datakit_steps`."""
@@ -735,22 +758,14 @@ def reference_datakit_steps(
         assign = StepSpec(
             name=f"datakit/cluster_assign/{name}",
             deps=[embed, *centroids_deps],
-            hash_attrs={
-                "centroids_dir": centroids_hash,
-                "k_train": cluster.k_train,
-                "k_views": list(cluster.k_views),
-                "batch_size": scale.assign_batch_size,
-                "v": ASSIGNMENT_ATTR_DATA_VERSION,
-            },
+            hash_attrs=assign_hash_attrs(centroids_hash, cluster.k_train, cluster.k_views, scale.assign_batch_size),
             fn=remote(
-                lambda output_path, ep=embed.output_path: assign_source(
+                lambda output_path, ep=embed.output_path: _assign_embedding(
                     output_path=output_path,
-                    embedding=read_artifact(ep, EmbeddingAttrData),
+                    embed_path=ep,
                     centroids_uri=centroids_uri,
                     lookup_uris=lookup_uris,
-                    window_size=scale.assign_batch_size,
-                    worker_resources=scale.pool.worker,
-                    max_workers=scale.pool.n_workers,
+                    scale=scale,
                 ),
                 resources=DRIVER_RESOURCES,
                 pip_dependency_groups=["datakit"],

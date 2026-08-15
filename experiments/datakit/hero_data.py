@@ -49,6 +49,7 @@ from marin.processing.tokenize.attributes import tokenize_attributes_step
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.datakit.cluster.domain.v0.assign import assign_hash_attrs
 from experiments.datakit.reference_pipeline import select_sources, zephyr_datakit_steps
 
 _MARIN_PREFIX_ENV = "MARIN_PREFIX"
@@ -102,6 +103,12 @@ NEMOTRON_TOKENIZER = TokenizerPin(
 _ARTIFACT_VERSION_OVERRIDES = {"common-crawl-focus-2026-22": 4}
 
 DOMAIN_CLUSTER_ASSIGNMENT_PATH = "datakit/cluster/domain/v1/harrier-all-sources-10m/train_fe81b456"
+
+# The knobs the assign stage hashes. The pinned model ships one coarse view,
+# so widening ``K_VIEWS`` asks for a lookup that does not exist.
+DOMAIN_ASSIGN_K_TRAIN = 5000
+DOMAIN_ASSIGN_K_VIEWS = (40,)
+DOMAIN_ASSIGN_BATCH_SIZE = 4096
 
 # Pinned dedup runs. Both cover all 292 registered sources, and both key the
 # focus crawl under its pre-#8111 extraction, so their attributes do not join
@@ -186,6 +193,28 @@ def domain_cluster_assignment() -> StepSpec:
     return _frozen_step("hero/domain_cluster_assignment", DOMAIN_CLUSTER_ASSIGNMENT_PATH)
 
 
+def assigned_clusters(source: str) -> StepSpec:
+    """Return the cluster each document of ``source`` was assigned to.
+
+    Named apart from :func:`domain_cluster_assignment`, which returns the
+    centroid model these were assigned against, not the assignments.
+
+    Unlike :func:`harrier`, this needs no recorded path: the assign step's
+    identity is the frozen model plus the knobs above, so the output path
+    recomputes exactly. Repointing the model therefore moves these too.
+    """
+    model = domain_cluster_assignment()
+    return _read_only(
+        StepSpec(
+            name=f"datakit/cluster_assign/harrier/{source}",
+            deps=[model],
+            hash_attrs=assign_hash_attrs(
+                model.name_with_hash, DOMAIN_ASSIGN_K_TRAIN, DOMAIN_ASSIGN_K_VIEWS, DOMAIN_ASSIGN_BATCH_SIZE
+            ),
+        )
+    )
+
+
 def harrier(source: str) -> str:
     """Return the fixed complete Harrier path for ``source``."""
     return prefix_join(marin_prefix(), harrier_paths()[source])
@@ -211,6 +240,7 @@ def all_paths() -> dict[str, str]:
         paths[f"tokenize.marin/{source}"] = tokenized(source, MARIN_TOKENIZER).output_path
         paths[f"tokenize.nemotron/{source}"] = tokenized(source, NEMOTRON_TOKENIZER).output_path
         paths[f"harrier/{source}"] = harrier(source)
+        paths[f"cluster_assign/{source}"] = assigned_clusters(source).output_path
     return paths
 
 
