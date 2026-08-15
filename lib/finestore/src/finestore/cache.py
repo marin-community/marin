@@ -71,7 +71,7 @@ class PersistentKvCache:
         return value
 
     def store(self, key: str, value: bytes) -> None:
-        """Remember ``value`` under ``key`` and queue its remote cache commit."""
+        """Remember ``value`` and persist it synchronously or through the remote write queue."""
         with self._lock:
             if self._closed:
                 raise RuntimeError("cache is closed")
@@ -105,6 +105,7 @@ class PersistentKvCache:
             )
 
     def _close(self, *, timeout: float | None) -> bool:
+        """Close the cache, returning false when a queued write exceeds ``timeout``."""
         with self._lock:
             if self._closed:
                 return True

@@ -217,12 +217,7 @@ class GcsLease(DistributedLease):
 
 
 class S3Lease(DistributedLease):
-    """S3-backed lease using conditional writes (If-None-Match / If-Match).
-
-    Works with any S3-compatible store that supports conditional PutObject
-    (AWS S3, Cloudflare R2, MinIO, etc.). Uses botocore directly (available
-    transitively via s3fs) so the PutObject preconditions reach the backend.
-    """
+    """S3-backed lease using the conditional-object adapter."""
 
     def __init__(self, lock_path: str, worker_id: str | None = None):
         super().__init__(lock_path, worker_id)

@@ -20,6 +20,7 @@ import pyarrow.parquet as pq
 from finestore.layout import (
     ARCHIVE_FILE,
     COMMIT_COLUMN,
+    FORMAT_VERSION,
     GEN_COLUMN,
     SEQ_COLUMN,
     ArchiveMetadata,
@@ -42,7 +43,6 @@ from rigging.filesystem import StoragePath, marin_temp_bucket, url_to_fs
 
 _COPY_BUFFER_BYTES = 8 * 1024 * 1024
 _FORMAT_V1 = 1
-_FORMAT_V2 = 2
 _EVAL_SAMPLES_TABLE = "samples"
 _FLEET_DIRECTORY = "finestore-migration-fleet"
 _FLEET_MARKER = "_fleet.json"
@@ -326,7 +326,7 @@ def smoke_destination(source: str, *, ttl_days: int) -> str:
 
 
 def select_v1_fleet(records_prefixes: tuple[str, ...]) -> FleetSelection:
-    """Find every sealed v1 archive referenced by records on the scanned storage backends."""
+    """Find every v1 archive referenced by records on the scanned storage backends."""
     if not records_prefixes:
         raise ValueError("at least one records prefix is required")
 
@@ -355,7 +355,7 @@ def select_v1_fleet(records_prefixes: tuple[str, ...]) -> FleetSelection:
             missing_archive += 1
             continue
         metadata = ArchiveMetadata.model_validate_json(archive_path.read_bytes())
-        if metadata.format_version == _FORMAT_V2:
+        if metadata.format_version == FORMAT_VERSION:
             already_current += 1
             continue
         if metadata.format_version != _FORMAT_V1:
@@ -477,7 +477,7 @@ def smoke_upgrade_fleet(
 
 
 def smoke_upgrade(source: str, destination: str) -> SmokeUpgradeResult:
-    """Clone one sealed v1 archive, migrate the clone, and prove its contents unchanged."""
+    """Clone one v1 archive, migrate the clone, and prove its contents unchanged."""
     source_root = StoragePath(source)
     destination_root = StoragePath(destination)
     archive_path = StoragePath(FineStoreLayout(source).archive_path)
@@ -527,9 +527,9 @@ def smoke_upgrade(source: str, destination: str) -> SmokeUpgradeResult:
     migrated_metadata = ArchiveMetadata.model_validate_json(
         StoragePath(FineStoreLayout(destination).archive_path).read_bytes()
     )
-    if migrated_metadata.format_version != _FORMAT_V2:
+    if migrated_metadata.format_version != FORMAT_VERSION:
         raise SmokeUpgradeValidationError(
-            f"temporary archive format marker is v{migrated_metadata.format_version}, expected v{_FORMAT_V2}"
+            f"temporary archive format marker is v{migrated_metadata.format_version}, expected v{FORMAT_VERSION}"
         )
 
     return SmokeUpgradeResult(

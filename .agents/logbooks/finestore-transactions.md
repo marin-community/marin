@@ -84,16 +84,6 @@ Validation so far:
 - `docker buildx build --target deps --platform linux/amd64 -f lib/iris/Dockerfile .` completed, including the final `uv sync` that installed `marin-finestore` and the Iris native wheel.
 - The repository pre-commit and type-check gates pass after the packaging fix.
 
-### 2026-08-13 — Evalstore CI selection
+### 2026-08-13 — Evaluation archive ownership
 
-- Registered Evalstore as a workspace test scope and moved the archive contract roundtrip into a package-owned suite, so package metadata changes select a real test leg.
-- Evalstore: 1 passed; CI selector: 39 passed; root evaluation archive: 24 passed.
-- `./infra/pre-commit.py --changed-files --fix`: all gates passed.
-- The first isolated CI leg inherited the repository-root Marin pytest plugin. Added a package-local pytest configuration so Evalstore remains independently testable without taking a reverse dependency on `marin-core`.
-- The selected Levanter suite exposed a repeated race between the fake trainer's `os.abort()` core dump and its three-second deadman. Disabled core dumps in that synthetic crash path so the test still observes `SIGABRT` without misclassifying core-dump latency as a stall.
-
-### 2026-08-13 — Evaluation ownership simplified
-
-- Moved the evaluation archive contract to `marin.evaluation.archive`. Evaldash continues to copy the import-light Marin evaluation modules it needs into its image.
-- Removed the `marin-evalstore` workspace member, distribution, release artifact, isolated CI scope, and Docker install. The archive has no independent consumer outside Marin-owned evaluation workflows.
-- The Levanter recovery shard reproduced two interleavings after the synthetic crash disabled core dumps: the child could exit before the deadman sent a signal, or its concurrent `SIGABRT` could win after the deadman sent `SIGTERM`. Process-group termination reports whether the supervisor actually sent a signal, and explicit sentinels or a distinct fatal return code take precedence over the deadman. The supervisor suite passed under two workers; the original boundary passed 30 crash replays, and the final precedence rule passed 20 repeated crash-related cases.
+- Kept the evaluation archive contract in `marin.evaluation.archive`. An independent distribution added release and CI machinery without an independent consumer; EvalDash can continue copying the import-light Marin evaluation modules into its image.

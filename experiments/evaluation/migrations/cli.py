@@ -173,7 +173,7 @@ def smoke_upgrade_fleet_command(
     ttl_days: int,
     mode: str,
 ) -> None:
-    """Clone and validate every sealed CoreWeave v1 archive as one fleet rehearsal."""
+    """Clone and validate every v1 archive selected from the record roots."""
     resolved_prefixes = records_prefixes or _CW_RECORDS_PREFIXES
     if any(path.startswith("s3://") for path in (*resolved_prefixes, destination_root or "")):
         configure_coreweave_s3()
