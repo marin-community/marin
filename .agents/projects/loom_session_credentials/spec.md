@@ -54,8 +54,8 @@ home_files: tuple[HomeFileConfig, ...] = ()
 
 Pulumi key `homeFiles` maps a relative path to an object with:
 
-- `secretRef`: required full GCP Secret Manager version resource with a numeric version;
-- `mode`: optional four-digit octal string, default `0600`, allowed values `0400` and `0600`.
+- `secretRef`: the sole secret input, a required full GCP Secret Manager version resource with a numeric version; parsing decomposes it into the dataclass's `project`, `secret`, and `version` fields;
+- `mode`: required four-digit octal string, allowed values `0400` and `0600`.
 
 Paths use POSIX separators, are relative to `/home/app`, and reject empty segments, `.`, `..`, NUL, a leading slash, duplicates, and ancestor/descendant overlap within one manifest.
 
@@ -78,21 +78,23 @@ The VM metadata key `loom-home-files` contains sorted JSON entries:
 `infra/loom/materialize_home_files.py` has a host-side prepare command:
 
 ```text
-materialize_home_files.py prepare --image=<digest> --manifest=<manifest-file>
+materialize_home_files.py prepare --image=<digest> --manifest=<manifest-file> --state-dir=/var/lib/loom/home-files
 ```
 
 The prepare command:
 
 1. validates the complete manifest before changing the volume;
 2. resolves each Secret Manager version into a mode-0600 temporary host file;
-3. runs the pinned Loom image as root, without a network, with the target volume mounted at `/home/app`;
+3. runs the pinned Loom image as root, without a network, with the target volume mounted at `/home/app`; Docker seeds a new named volume from the image's `/home/app`, and the command fails when the mounted path is absent or is not a directory;
 4. uses directory file descriptors with `O_NOFOLLOW` to reject a target path that crosses a symlink;
-5. copies through a temporary file, restores the session-home uid and gid, and atomically renames it with the declared mode;
+5. copies through a temporary file, restores the uid and gid read from the mounted `/home/app`, and atomically renames it with the declared mode;
 6. removes only regular files present in the previous ledger and absent from the new manifest;
-7. writes `/var/lib/loom/home-files/managed-paths.json` atomically with managed paths only; the root-owned state directory is mounted into the applicator but not ordinary sessions;
+7. writes `/var/lib/loom/home-files/managed-paths.json` atomically with mode `0600` and managed paths only; the root-owned state directory is mounted into the applicator but not ordinary sessions;
 8. deletes all host temporary payloads on exit.
 
-An empty manifest prunes all previously managed files and leaves all unmanaged home contents unchanged. A stale managed file that blocks a new managed directory, or vice versa, is removed before staging; empty ancestors are pruned only as needed, and unmanaged content makes the transition fail closed. Any validation, Secret Manager, or install failure leaves Compose stopped and the activation unsuccessful. Payload bytes never appear in command arguments, stdout, metadata, or the ledger.
+`infra/loom/startup-script.sh` pulls the pinned image, reads the manifest, stops the `loom` and `caddy` Compose services, runs `prepare`, and calls `docker compose up -d` only after preparation succeeds. An empty manifest prunes all previously managed files and leaves all unmanaged home contents unchanged. A stale managed file that blocks a new managed directory, or vice versa, is removed before staging; empty ancestors are pruned only as needed, and unmanaged content makes the transition fail closed. Any validation, Secret Manager, or install failure leaves Loom and Caddy stopped and the activation unsuccessful.
+
+Detached session containers are not stopped. During rotation, readers holding an open file descriptor continue reading the previous payload after the atomic rename; later opens see the new version. Payload bytes never appear in command arguments, stdout, metadata, or the ledger.
 
 ## IAM
 
