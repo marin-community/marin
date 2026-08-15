@@ -33,20 +33,18 @@ def _registered(monkeypatch, tmp_path):
     decon_map.write_text(json.dumps({name: f"datakit/decontam/{name}_deadbeef" for name in hero_data.source_names()}))
     hero_data.decon_paths.cache_clear()
     monkeypatch.setattr(hero_data, "decon_paths_path", lambda: decon_map)
-    monkeypatch.setattr(hero_data, "VERIFIED_FUZZY_DUPS_ID", "verify_fuzzy_dups_c0ffee")
     yield
     hero_data.decon_paths.cache_clear()
     all_sources.cache_clear()
 
 
 def test_pending_lists_unregistered_stages(monkeypatch):
-    """Both jobs are in flight at once, so one run has to name both."""
-    monkeypatch.setattr(hero_data, "VERIFIED_FUZZY_DUPS_ID", None)
+    """Only decontamination is still waiting; the dedup runs are both registered."""
     monkeypatch.setattr(hero_data, "decon_paths_path", lambda: pathlib.Path("/nonexistent.json"))
     hero_data.decon_paths.cache_clear()
 
     stages = {item.stage for item in produce_store.pending()}
-    assert stages == {"verified fuzzy duplicates", "decontamination"}
+    assert stages == {"decontamination"}
 
 
 def test_nothing_registered_is_pending_once_the_pins_are_set():
@@ -73,7 +71,7 @@ def test_dependencies_refuse_to_run():
 def test_repointing_a_pin_moves_the_store(monkeypatch):
     """The store's identity is its inputs', so a new dedup run is a new store."""
     before = produce_store.build_store_step(produce_store.store_inputs(SOURCES), max_workers=4).output_path
-    monkeypatch.setattr(hero_data, "VERIFIED_FUZZY_DUPS_ID", "verify_fuzzy_dups_0ther")
+    monkeypatch.setattr(hero_data, "VERIFIED_FUZZY_DUPS_PATH", "datakit/verify_fuzzy_dups_0ther")
     after = produce_store.build_store_step(produce_store.store_inputs(SOURCES), max_workers=4).output_path
 
     assert before != after
