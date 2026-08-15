@@ -219,3 +219,13 @@ The shared Cloud Run component admits the OpenAthena Workspace domain and the Lo
 account through IAP on every internal site. It registers the Marin desktop OAuth client as a
 programmatic audience. The stack's `viewers` list contains only additional accounts or groups
 needed by evaldash.
+
+Changes to EvalDash or any source copied into its image deploy automatically from `main` through
+`.github/workflows/ops-pulumi-rollout.yaml`. The deploy identity's repository-scoped Artifact
+Registry writer grant is declared in `infra/pulumi/src/iac/gcp/iam_data.yaml`; apply the `marin`
+stack before the first rollout after adding or replacing an image repository. To redeploy the
+current `main` revision manually:
+
+```bash
+gh workflow run ops-pulumi-rollout.yaml --ref main -f service=evaldash
+```

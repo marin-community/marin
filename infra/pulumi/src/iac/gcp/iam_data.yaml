@@ -1657,6 +1657,12 @@ artifact_repositories:
     members:
     - serviceAccount:infra-probes@hai-gcp-models.iam.gserviceaccount.com
 - location: us-central1
+  repository: marin-evaldash
+  grants:
+  - role: roles/artifactregistry.writer
+    members:
+    - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
+- location: us-central1
   repository: marin-grafana
   grants:
   - role: projects/hai-gcp-models/roles/marinArtifactRegistryIamManager
