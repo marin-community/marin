@@ -4,12 +4,14 @@
 import logging
 import os
 import re
+import sys
 from collections.abc import Callable, Sequence
 from typing import TypeVar
 
 from fray.cluster import ResourceConfig
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, create_environment
+from iris.cluster.setup_scripts import default_setup_script
 from iris.rpc.proto_display import priority_band_value
 from marin.training.run_environment import extras_for_resources
 from marin.training.training import resolve_training_env
@@ -52,7 +54,7 @@ def dispatch_grug_training_run(
     processes_per_task: int = 1,
     priority: int = INHERIT_PRIORITY,
     pip_packages: Sequence[str] = (),
-    setup_scripts: Sequence[str] = (),
+    extra_setup_scripts: Sequence[str] = (),
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.
 
@@ -61,6 +63,15 @@ def dispatch_grug_training_run(
     """
     safe_run_id = _safe_job_suffix(run_id)
     env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
+    # A non-None setup_scripts list REPLACES fray's default uv-sync, so custom
+    # scripts must be appended after an explicit default (they need $IRIS_VENV).
+    setup_scripts = None
+    if extra_setup_scripts:
+        python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        setup_scripts = [
+            default_setup_script(extras=list(extras_for_resources(resources)), python_version=python_version),
+            *extra_setup_scripts,
+        ]
     request = JobRequest(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),

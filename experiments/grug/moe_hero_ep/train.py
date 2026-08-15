@@ -782,7 +782,7 @@ def run_grug(config: GrugRunConfig) -> None:
         resources=config.resources,
         processes_per_task=config.processes_per_task,
         pip_packages=config.worker_pip_packages,
-        setup_scripts=config.worker_setup_scripts,
+        extra_setup_scripts=config.worker_setup_scripts,
     )
 
 
