@@ -11,13 +11,14 @@
 Both use a deterministic fake scorer / synthetic labels, so no model or I/O is needed.
 """
 
+import json
 from itertools import pairwise
 from typing import cast
 
 import numpy as np
 import pytest
 
-from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
+from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES, calibration_bucket_edges
 from experiments.datakit.cluster.quality.fast_transformer.calibrate import calibration_knots, fit_cutpoints
 from experiments.datakit.cluster.quality.fast_transformer.score import _systematic_take
 from experiments.datakit.cluster.quality.fast_transformer.scorer import CHUNK_CHARS, PooledScorer, score_bme
@@ -132,3 +133,36 @@ def test_systematic_sample_is_deterministic_and_hits_target_fraction():
         assert kept == [i for i in range(1000) if _systematic_take(i, pct)]
         # ~pct of records, evenly spaced
         assert abs(len(kept) / 1000 - pct) < 0.01
+
+
+# ---------- calibration cutpoints the store reads ----------
+
+
+def test_cutting_raw_scores_at_the_knots_matches_cutting_calibrated_scores(tmp_path):
+    """The store buckets raw scores, so the two routes must agree exactly.
+
+    ``score_corpus`` stores the raw score, and the store cuts it at the
+    calibration's interior knots rather than calibrating 18.7 billion documents
+    to cut at :data:`BUCKET_EDGES`. That is only the same partition because the
+    spline is monotone and sends each interior knot to the matching edge.
+    """
+    levels = np.repeat([1, 2, 3, 4, 5], 4).astype(float)
+    raw = levels / 10.0
+    knots = calibration_knots(raw, levels)
+    path = tmp_path / "calib.json"
+    path.write_text(json.dumps({"default": knots}))
+
+    edges = calibration_bucket_edges(str(path))
+    assert edges == tuple(knots["xk"][1:-1])
+
+    probes = np.linspace(raw.min(), raw.max(), 101)
+    calibrated = np.interp(probes, knots["xk"], knots["yk"])
+    assert list(np.digitize(probes, edges)) == list(np.digitize(calibrated, BUCKET_EDGES))
+
+
+def test_a_calibration_with_the_wrong_number_of_knots_is_rejected(tmp_path):
+    path = tmp_path / "calib.json"
+    path.write_text(json.dumps({"default": {"xk": [0.0, 0.5, 1.0], "yk": [0.0, 0.5, 1.0]}}))
+
+    with pytest.raises(ValueError, match="interior knots"):
+        calibration_bucket_edges(str(path))

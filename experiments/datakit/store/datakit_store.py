@@ -22,7 +22,7 @@ import tempfile
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from functools import partial
 from typing import TypedDict
@@ -55,7 +55,6 @@ from zephyr.dataset import Dataset, format_shard_path
 from zephyr.execution import ZephyrContext
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
-from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
 from experiments.datakit.global_exact_dedup import ExactDupsPerSource, GlobalExactDedupData
 from experiments.datakit.store.bucket_writer import BucketSpillRun, write_bucket_cache_from_spills
 
@@ -97,7 +96,7 @@ def _per_source_shard_tuples(
     tokenize: TokenizedAttrData,
     decontam: DeconAttributes,
     cluster_assign: AssignmentAttrData,
-    quality: QualityScores,
+    quality_dir: str,
     exact_dedup_attr_dir: str,
     dedup_attr_dir: str,
     split: str,
@@ -112,7 +111,7 @@ def _per_source_shard_tuples(
 
     decon_dir = decontam.main_output_dir.rstrip("/")
     cluster_dir = cluster_assign.output_dir.rstrip("/")
-    quality_dir = quality.main_output_dir.rstrip("/")
+    quality_dir = quality_dir.rstrip("/")
     exact_dedup_dir = exact_dedup_attr_dir.rstrip("/")
     dedup_dir = dedup_attr_dir.rstrip("/")
     return [
@@ -148,9 +147,16 @@ def _load_cluster_table(path: str, cluster_col: str) -> tuple[pa.Array, np.ndarr
     return table.column("id").combine_chunks(), np.asarray(table.column(cluster_col), dtype=np.int32)
 
 
-def _load_quality_table(path: str) -> tuple[pa.Array, np.ndarray]:
-    table = _read_columns(path, ["id", "quality_bucket"])
-    return table.column("id").combine_chunks(), np.asarray(table.column("quality_bucket"), dtype=np.int32)
+def _load_quality_table(path: str, bucket_edges: np.ndarray) -> tuple[pa.Array, np.ndarray]:
+    """Read a score shard and cut it into buckets.
+
+    The scorer stores the score, not the bucket: the cutpoints are a corpus-wide
+    decision fitted by calibration, and holding them here means changing them is
+    a store rebuild rather than a rescore of every document.
+    """
+    table = _read_columns(path, ["id", "score"])
+    scores = np.asarray(table.column("score"), dtype=np.float64)
+    return table.column("id").combine_chunks(), np.digitize(scores, bucket_edges).astype(np.int32)
 
 
 def _load_verified_duplicates(path: str) -> set[str]:
@@ -341,6 +347,7 @@ def _iter_tokenized_documents(path: str) -> Iterator[tuple[str, np.ndarray]]:
 def _iter_surviving_docs(
     spec: dict[str, str],
     cluster_col: str,
+    bucket_edges: np.ndarray,
     *,
     stats: _FilterStats,
 ) -> Iterator[_SurvivingDocument]:
@@ -352,9 +359,7 @@ def _iter_surviving_docs(
     """
     decon_ids, contaminated = _load_decon_table(spec["decontam"])
     cluster_ids, cluster_vals = _load_cluster_table(spec["cluster"], cluster_col)
-    # Quality parquets carry a precomputed, calibrated ``quality_bucket`` column
-    # (fast-transformer scorer), consumed as-is -- no score->bucket mapping here.
-    quality_ids, quality_buckets = _load_quality_table(spec["quality"])
+    quality_ids, quality_buckets = _load_quality_table(spec["quality"], bucket_edges)
     n_decon, n_cluster, n_quality = len(decon_ids), len(cluster_ids), len(quality_ids)
     if not (n_decon == n_cluster == n_quality):
         raise RuntimeError(
@@ -412,6 +417,7 @@ def _iter_surviving_docs(
 def _spill_source_shard(
     spec: dict[str, str],
     cluster_col: str,
+    bucket_edges: np.ndarray,
     scratch_dir: str,
     shard_index: int,
 ) -> _SpillShardResult:
@@ -420,7 +426,7 @@ def _spill_source_shard(
     os.makedirs(shard_dir)
     buckets: dict[tuple[int, int], list[np.ndarray]] = defaultdict(list)
     stats = _FilterStats()
-    for document in _iter_surviving_docs(spec, cluster_col, stats=stats):
+    for document in _iter_surviving_docs(spec, cluster_col, bucket_edges, stats=stats):
         buckets[(document.cluster, document.quality)].append(np.asarray(document.input_ids, dtype=np.int32))
 
     results: list[_SpillBucketRun] = []
@@ -474,6 +480,7 @@ def _partition_and_write_task(
     task_input: _StoreTask,
     *,
     cluster_col: str,
+    bucket_edges: np.ndarray,
     output_path: str,
     max_parallel_bucket_writes: int,
     partition_processes: int,
@@ -501,6 +508,7 @@ def _partition_and_write_task(
                 _spill_source_shard,
                 batch_specs,
                 [cluster_col] * len(batch_specs),
+                [bucket_edges] * len(batch_specs),
                 [scratch_dir] * len(batch_specs),
                 range(len(batch_specs)),
             )
@@ -627,7 +635,8 @@ def build_clustered_store(
     tokenize: dict[str, TokenizedAttrData],
     decontam: dict[str, DeconAttributes],
     cluster_assign: dict[str, AssignmentAttrData],
-    quality: dict[str, QualityScores],
+    quality: dict[str, str],
+    bucket_edges: Sequence[float],
     exact_dedup: GlobalExactDedupData,
     dedup: VerifiedFuzzyDupsAttrData,
     output_path: str,
@@ -642,6 +651,12 @@ def build_clustered_store(
     """Build materialized caches for each populated ``(cluster, quality)`` bucket.
 
     Args:
+        quality: Per source, the directory of ``id``/``score`` shards, named by
+            the same basenames as that source's tokenize shards.
+        bucket_edges: Cutpoints applied to ``score`` to get the quality bucket,
+            in ascending order. One set for the whole corpus: bucket ids are only
+            comparable across sources if every source was cut the same way, and
+            the caller owns that because it is the one that knows the scorer.
         task_count: Split input shards round-robin across this many tasks. When
             omitted, each input shard becomes one task.
         max_parallel_bucket_writes: Bucket caches finalized concurrently per
@@ -663,11 +678,9 @@ def build_clustered_store(
     if partition_processes < 1:
         raise ValueError(f"partition_processes must be >= 1, got {partition_processes}")
 
-    # Every source must share one quality model so bucket IDs are comparable.
-    models = {(q.model_dir, q.calib_file, tuple(q.bucket_edges)) for q in quality.values()}
-    if len(models) != 1:
-        raise ValueError(f"build_clustered_store: sources span multiple quality models: {sorted(models)}")
-    bucket_edges = next(iter(quality.values())).bucket_edges
+    edges = np.asarray(bucket_edges, dtype=np.float64)
+    if edges.size == 0 or not np.all(np.diff(edges) > 0):
+        raise ValueError(f"bucket_edges must be non-empty and strictly ascending, got {list(bucket_edges)}")
 
     cluster_col = _validate_cluster_view(cluster_assign, cluster_view)
 
@@ -714,7 +727,7 @@ def build_clustered_store(
             tokenize=tokenize[source_name],
             decontam=decontam[source_name],
             cluster_assign=cluster_assign[source_name],
-            quality=quality[source_name],
+            quality_dir=quality[source_name],
             exact_dedup_attr_dir=exact_dedup_attr_dir,
             dedup_attr_dir=dedup_attr_dir,
             split=split,
@@ -751,6 +764,7 @@ def build_clustered_store(
     write_task = partial(
         _partition_and_write_task,
         cluster_col=cluster_col,
+        bucket_edges=edges,
         output_path=output_path,
         max_parallel_bucket_writes=max_parallel_bucket_writes,
         partition_processes=partition_processes,
@@ -792,7 +806,7 @@ def build_clustered_store(
     artifact = ClusteredStoreData(
         cache_path=output_path,
         cluster_view=cluster_view,
-        bucket_edges=bucket_edges,
+        bucket_edges=edges.tolist(),
         split=split,
         buckets=buckets,
         source_names=sorted(tokenize),
