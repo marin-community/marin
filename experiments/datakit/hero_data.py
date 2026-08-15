@@ -22,12 +22,13 @@ or use it as a dependency of a step you do intend to run::
 :func:`harrier` returns a path string. It reads the fixed source-to-path
 map in ``hero_data_emb_paths.json`` and adds the active Marin prefix.
 
-:func:`normalized` and :func:`minhash` follow current code, so they track main
-as the registry moves. :func:`tokenized` pins the artifact version instead,
-because the tokenize hash includes one and it has changed under the runs that
-produced this data: each tokenizer was applied to the whole registry in a single
-fleet run, and each of those runs wrote a different version. The dedup stages
-and domain cluster assignment are pinned to specific runs outright.
+:func:`normalized`, :func:`minhash`, and :func:`decontaminated` follow current
+code, so they track main as the registry moves. :func:`tokenized` pins the
+artifact version instead, because the tokenize hash includes one and it has
+changed under the runs that produced this data: each tokenizer was applied to
+the whole registry in a single fleet run, and each of those runs wrote a
+different version. The dedup stages and domain cluster assignment are pinned to
+specific runs outright.
 
 All paths resolve against ``MARIN_PREFIX``. CoreWeave Datakit has one storage
 root, ``s3://marin-us-east-02a/marin``; use it regardless of worker placement.
@@ -50,7 +51,12 @@ from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datakit.cluster.domain.v0.assign import assign_hash_attrs
-from experiments.datakit.reference_pipeline import select_sources, zephyr_datakit_steps
+from experiments.datakit.reference_pipeline import (
+    DecontaminationSteps,
+    decontamination_steps,
+    select_sources,
+    zephyr_datakit_steps,
+)
 
 _MARIN_PREFIX_ENV = "MARIN_PREFIX"
 
@@ -179,6 +185,17 @@ def minhash(source: str) -> StepSpec:
     return _read_only(steps.minhash[source])
 
 
+@cache
+def _decontamination_steps(_prefix: str) -> DecontaminationSteps:
+    """Resolve all decontamination marks once for a storage prefix."""
+    return decontamination_steps(select_sources(None))
+
+
+def decontaminated(source: str) -> StepSpec:
+    """Return the decontamination attributes for ``source``."""
+    return _read_only(_decontamination_steps(marin_prefix()).marks[source])
+
+
 def exact_dups() -> StepSpec:
     """Return the pinned global exact-duplicate attributes covering every source."""
     return _frozen_step("hero/exact_dups", f"datakit/{EXACT_DUPS_ID}")
@@ -244,6 +261,7 @@ def all_paths() -> dict[str, str]:
     for source in sorted(sources):
         paths[f"normalized/{source}"] = _read_only(sources[source]).output_path
         paths[f"minhash/{source}"] = _read_only(minhash_steps[source]).output_path
+        paths[f"decontam/{source}"] = decontaminated(source).output_path
         paths[f"tokenize.marin/{source}"] = tokenized(source, MARIN_TOKENIZER).output_path
         paths[f"tokenize.nemotron/{source}"] = tokenized(source, NEMOTRON_TOKENIZER).output_path
         paths[f"harrier/{source}"] = harrier(source)
