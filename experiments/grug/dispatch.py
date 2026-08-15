@@ -52,6 +52,7 @@ def dispatch_grug_training_run(
     processes_per_task: int = 1,
     priority: int = INHERIT_PRIORITY,
     pip_packages: Sequence[str] = (),
+    setup_scripts: Sequence[str] = (),
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.
 
@@ -68,6 +69,7 @@ def dispatch_grug_training_run(
             env_vars=env_vars,
             extras=extras_for_resources(resources),
             pip_packages=pip_packages,
+            setup_scripts=setup_scripts,
         ),
         max_retries_failure=max_retries_failure,
         max_task_failures=10,

@@ -163,6 +163,9 @@ class GrugRunConfig:
     # Exact packages installed on workers after the locked workspace sync. This is reserved for
     # runtime A/Bs such as a pinned JAX nightly and stays empty in production configurations.
     worker_pip_packages: tuple[str, ...] = ()
+    # Task setup scripts appended after environment setup, e.g. installing a
+    # self-built PJRT wheel from object storage.
+    worker_setup_scripts: tuple[str, ...] = ()
 
 
 def build_train_dataset(
@@ -779,6 +782,7 @@ def run_grug(config: GrugRunConfig) -> None:
         resources=config.resources,
         processes_per_task=config.processes_per_task,
         pip_packages=config.worker_pip_packages,
+        setup_scripts=config.worker_setup_scripts,
     )
 
 

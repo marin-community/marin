@@ -40,6 +40,7 @@ def _grug_run_config(
         resources=object(),
         processes_per_task=processes_per_task,
         worker_pip_packages=(),
+        worker_setup_scripts=(),
     )
 
 

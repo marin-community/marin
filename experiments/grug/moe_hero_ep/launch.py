@@ -95,6 +95,66 @@ FLAVORS: dict[str, Flavor] = {
 }
 
 
+# Pinned JAX nightly used by the patched-PJRT arms (post-0.11.0 XLA). This exact
+# set ran cleanly against NCCL 2.30.7 on the cw-us-east-08a GB200 workers.
+JAX_NIGHTLY_WHEELS_20260809: tuple[str, ...] = (
+    "https://us-python.pkg.dev/ml-oss-artifacts-published/jax-public-nightly-artifacts-registry/jax/jax-0.11.1.dev20260809-py3-none-any.whl",
+    "https://us-python.pkg.dev/ml-oss-artifacts-published/jax-public-nightly-artifacts-registry/jaxlib/jaxlib-0.11.1.dev20260809-cp312-cp312-manylinux_2_27_aarch64.whl",
+    "https://us-python.pkg.dev/ml-oss-artifacts-published/jax-public-nightly-artifacts-registry/jax-cuda13-plugin/jax_cuda13_plugin-0.11.1.dev20260809-cp312-cp312-manylinux_2_27_aarch64.whl",
+    "https://us-python.pkg.dev/ml-oss-artifacts-published/jax-public-nightly-artifacts-registry/jax-cuda13-pjrt/jax_cuda13_pjrt-0.11.1.dev20260809-py3-none-manylinux_2_27_aarch64.whl",
+)
+
+
+def _pjrt_wheel_install_script(wheel_url: str) -> str:
+    """Task setup script installing the pinned nightly with a substituted PJRT wheel.
+
+    Installs the three stock dev20260809 wheels plus a self-built ``jax-cuda13-pjrt`` from
+    object storage (the #8077 kMaxPeers rebuild), then forces nvidia-nccl-cu13 to own
+    ``libnccl.so.2`` — the cu12/cu13 wheel collision otherwise mixes NCCL bootstrap wire
+    formats across ranks.
+    """
+    stock_wheels = " ".join(f'"{url}"' for url in JAX_NIGHTLY_WHEELS_20260809 if "pjrt" not in url)
+    return f"""set -e
+: "${{IRIS_WORKDIR:?}}"
+: "${{IRIS_VENV:?}}"
+wheel_dir="$IRIS_WORKDIR/.marin-ep-pjrt"
+rm -rf "$wheel_dir"
+mkdir -p "$wheel_dir"
+echo 'downloading patched PJRT wheel'
+"$IRIS_VENV/bin/python" - <<'PY'
+import os
+from pathlib import Path
+
+import fsspec
+
+wheel_url = {wheel_url!r}
+wheel_dir = Path(os.environ["IRIS_WORKDIR"]) / ".marin-ep-pjrt"
+filesystem, remote_path = fsspec.core.url_to_fs(wheel_url)
+filesystem.get(remote_path, str(wheel_dir / remote_path.rsplit("/", 1)[1]))
+PY
+echo 'installing pinned nightly with patched PJRT'
+uv pip install --python "$IRIS_VENV/bin/python" --no-deps --reinstall {stock_wheels} "$wheel_dir"/*.whl
+"$IRIS_VENV/bin/python" -c \
+  "from importlib.metadata import version; print('jax', version('jax'), 'pjrt', version('jax-cuda13-pjrt'))"
+echo 'forcing nvidia-nccl-cu13 to own libnccl.so.2'
+uv pip uninstall --python "$IRIS_VENV/bin/python" nvidia-nccl-cu12 || true
+uv pip install --python "$IRIS_VENV/bin/python" --no-deps --reinstall nvidia-nccl-cu13==2.30.7
+"$IRIS_VENV/bin/python" - <<'PY'
+import ctypes
+import hashlib
+import importlib
+from pathlib import Path
+
+lib_path = Path(importlib.import_module("nvidia.nccl").__path__[0]) / "lib" / "libnccl.so.2"
+lib = ctypes.CDLL(str(lib_path))
+version = ctypes.c_int()
+lib.ncclGetVersion(ctypes.byref(version))
+digest = hashlib.sha256(lib_path.read_bytes()).hexdigest()[:16]
+print(f"libnccl {{lib_path}} version_code={{version.value}} sha256={{digest}}")
+PY
+"""
+
+
 # Held-out sets, added at weight 0 so they surface as tagged eval sets. The hero trains on
 # llama3-tokenized SlimPajama, so these must carry the same tokenizer.
 #
@@ -152,6 +212,7 @@ def build_hero_run(
     profile_steps: int = 0,
     profile_start_step: int = 5,
     jax_nightly_version: str | None = None,
+    pjrt_wheel: str | None = None,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the hero throughput run on an explicitly sized EP fleet.
@@ -330,7 +391,8 @@ def build_hero_run(
             ),
             stop_after_steps=num_steps,
             processes_per_task=HERO_PROCESSES_PER_TASK,
-            worker_pip_packages=jax_nightly_pip_packages(jax_nightly_version),
+            worker_pip_packages=(() if pjrt_wheel is not None else jax_nightly_pip_packages(jax_nightly_version)),
+            worker_setup_scripts=((_pjrt_wheel_install_script(pjrt_wheel),) if pjrt_wheel is not None else ()),
         )
 
     return ArtifactStep(
@@ -486,6 +548,12 @@ def build_hero_run(
     help="Install this exact JAX nightly on workers after the locked GPU environment sync.",
 )
 @click.option(
+    "--pjrt-wheel",
+    default=None,
+    help="Object-store URL of a self-built jax-cuda13-pjrt wheel. Installs the pinned dev20260809 "
+    "nightly set with that wheel substituted, then forces nvidia-nccl-cu13 to own libnccl.so.2.",
+)
+@click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
@@ -516,6 +584,7 @@ def main(
     profile_steps: int,
     profile_start_step: int,
     jax_nightly_version: str | None,
+    pjrt_wheel: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
         run_id=run_id,
@@ -541,6 +610,7 @@ def main(
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
         jax_nightly_version=jax_nightly_version,
+        pjrt_wheel=pjrt_wheel,
     )
 
 
