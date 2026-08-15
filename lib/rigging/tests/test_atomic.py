@@ -62,7 +62,7 @@ def test_fetch_file_atomic_failure_preserves_destination_and_cleans_temp(tmp_pat
     destination.parent.mkdir(parents=True)
     destination.write_bytes(b'{"version": 1}')
 
-    def fail_replace(*args, **kwargs):
+    def fail_replace(*_args, **_kwargs):
         raise OSError("simulated failure finalizing the fetch")
 
     monkeypatch.setattr("os.replace", fail_replace)

@@ -7,19 +7,24 @@ import contextlib
 import os
 import uuid
 from collections.abc import Generator
-from typing import Any
+from typing import Protocol
 
 import rigging.filesystem.factory as factory
 from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 
+class _AtomicFileSystem(Protocol):
+    def mv(self, source: str, destination: str, *, recursive: bool) -> object: ...
+
+    def rm(self, path: str) -> object: ...
+
+
 def unique_temp_path(output_path: str) -> str:
-    """Return a unique temporary sibling path for ``output_path``."""
     return f"{output_path}.tmp.{uuid.uuid4().hex}"
 
 
-def _mv_with_retry(filesystem: Any, source: str, destination: str) -> None:
+def _mv_with_retry(filesystem: _AtomicFileSystem, source: str, destination: str) -> None:
     retry_with_backoff(
         lambda: filesystem.mv(source, destination, recursive=True),
         retryable=is_transient_s3_error,
@@ -30,7 +35,7 @@ def _mv_with_retry(filesystem: Any, source: str, destination: str) -> None:
 
 
 @contextlib.contextmanager
-def atomic_rename(output_path: str, filesystem: Any = None) -> Generator[str, None, None]:
+def atomic_rename(output_path: str, filesystem: _AtomicFileSystem | None = None) -> Generator[str, None, None]:
     """Write through a temporary sibling and rename it to ``output_path``.
 
     Callers may pass a configured filesystem to reuse backend-specific options.
