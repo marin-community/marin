@@ -451,7 +451,10 @@ def _local_cluster_counts(
         if not StoragePath(shard.candidate_path).exists():
             continue
         with StoragePath(shard.candidate_path).open("rb") as stream:
-            cluster_ids = pq.read_table(stream, columns=["dup_cluster_id"])
+            parquet = pq.ParquetFile(stream)
+            if parquet.metadata.num_rows == 0:
+                continue
+            cluster_ids = parquet.read(columns=["dup_cluster_id"])
         count_frames.append(pl.from_arrow(cluster_ids).group_by("dup_cluster_id").len(name="members"))
     if not count_frames:
         return

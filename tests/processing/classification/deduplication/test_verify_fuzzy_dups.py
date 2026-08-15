@@ -203,6 +203,7 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
                 {"id": "representative", "text": representative},
             ],
             "part-00001.parquet": [{"id": "singleton", "text": "a document outside all candidate clusters"}],
+            "part-00002.parquet": [{"id": "missing", "text": "another document outside candidate clusters"}],
         },
     )
     candidates = _write_candidates(
@@ -213,7 +214,8 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
                     {"id": "accepted", "dup_cluster_id": "cluster-a", "is_cluster_canonical": False},
                     {"id": "rejected", "dup_cluster_id": "cluster-a", "is_cluster_canonical": False},
                     {"id": "representative", "dup_cluster_id": "cluster-a", "is_cluster_canonical": True},
-                ]
+                ],
+                "part-00001.parquet": [],
             }
         },
     )
@@ -227,8 +229,8 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
         local_representative_params=TEST_LOCAL_PARAMS,
     )
 
-    assert verified.counters["dedup/fuzzy/verification/memory_store/workers"] == 2
-    assert verified.counters["dedup/fuzzy/verification/memory_store/shards"] == 2
+    assert verified.counters["dedup/fuzzy/verification/memory_store/workers"] == 3
+    assert verified.counters["dedup/fuzzy/verification/memory_store/shards"] == 3
     assert verified.counters["dedup/fuzzy/verification/memory_store/items"] == 3
     assert _output_rows(verified, source_key) == [
         {
@@ -268,6 +270,7 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
     ]
     assert verified.counters["dedup/fuzzy/verification/candidate_members"] == 3
     assert verified.counters["dedup/fuzzy/verification/candidate_shards_missing"] == 1
+    assert verified.counters["dedup/fuzzy/verification/candidate_shards_empty"] == 1
     assert verified.counters["dedup/fuzzy/verification/clusters"] == 1
     assert verified.counters["dedup/fuzzy/verification/cluster_members"] == 3
     assert verified.counters["dedup/fuzzy/verification/decision/accepted"] == 1
