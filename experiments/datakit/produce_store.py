@@ -111,6 +111,13 @@ STORE_VERSION = 1
 DEFAULT_REPACK_MAX_WORKERS = 64
 DEFAULT_REPACK_WORKER = ResourceConfig(cpu=4, ram="16g", disk="16g")
 
+# What a correct focus-crawl repack emits. Global exact dedup marks every copy of
+# an id but the canonical one, so summing ``f - 1`` over the source is what
+# normalize independently reported as ``duplicate_records_out`` -- 14,316,834
+# against 14,316,837 marks. Three documents of the focus crawl duplicate
+# something outside it, and those three marks are the whole surviving set.
+FOCUS_EXPECTED_MARKS_KEPT = 3
+
 
 @dataclass(frozen=True)
 class SourceStages:
@@ -660,6 +667,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="shards per source whose ids --preflight compares across stages",
     )
     parser.add_argument("--pending", action="store_true", help="list unregistered stages and exit")
+    parser.add_argument(
+        "--repack-only",
+        action="store_true",
+        help="run just the focus-crawl exact-duplicate repack, which needs no stage the store is waiting on",
+    )
+    parser.add_argument("--repack-workers", type=int, default=DEFAULT_REPACK_MAX_WORKERS)
+    parser.add_argument("--repack-worker-cpu", type=float, default=DEFAULT_REPACK_WORKER.cpu)
+    parser.add_argument("--repack-worker-ram", default=DEFAULT_REPACK_WORKER.ram)
     parser.add_argument("--dry-run", action="store_true", help="report the cache state without submitting")
     return parser.parse_args(argv)
 
@@ -676,6 +691,21 @@ def main(argv: list[str] | None = None) -> None:
         if not unregistered:
             logger.info("every stage the store reads is registered")
         return
+
+    if args.repack_only:
+        # Reads nothing the store is still waiting on, so it runs before the rest
+        # of the graph is registered. Same call as ``store_inputs`` makes, so the
+        # step lands at the identity the store will later depend on.
+        target = build_focus_exact_repack_step(
+            hero_data.exact_dups(),
+            max_workers=args.repack_workers,
+            worker_resources=ResourceConfig(cpu=args.repack_worker_cpu, ram=args.repack_worker_ram, disk="16g"),
+        )
+        logger.info("exact-duplicate repack target: %s", target.output_path)
+        logger.info("expect %d marks kept; anything else means the model is wrong", FOCUS_EXPECTED_MARKS_KEPT)
+        StepRunner().run([target], dry_run=args.dry_run, max_concurrent=1)
+        return
+
     if unregistered:
         raise SystemExit(
             "the store cannot be built yet:\n" + "\n".join(f"  {item.stage}: {item.remedy}" for item in unregistered)
