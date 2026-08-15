@@ -404,3 +404,43 @@ Experiment ID prefix: `MEP`.
 - Next action: monitor to completion; compare last-50 tok/s + drops vs
   262,683 / 3.96% baseline; then M8 PR, then hierarchical transport + M7
   GEMM levers via autoresearch.
+
+### 2026-08-15 01:25 - MEP-010: EP64 hero OOMs — backend exonerated, ragged-class regression
+- Hypothesis: the marin_ep EP64 crash (CUDA_ERROR_ILLEGAL_ADDRESS ~4 min in,
+  both with and without the latency-hiding scheduler) is a memory problem,
+  and ours specifically.
+- Command: hero runs mep-m8-marin-25 / -25b (killed); layer-level compile
+  memdiff `experiments/marin_ep/bench/memdiff_backends.py` on one tray at
+  hero per-device shapes (T=65536, El=3, A_global/E=87,381); control run
+  mep-ctl-ragged-25 (levanter's ep-ragged flavor, untouched by this
+  branch, same flags).
+- Result:
+  - Both marin_ep runs failed at the same point with
+    `hlo_rematerialization: Can't reduce memory use below 171.87GiB; only
+    reduced to 183.17GiB` against a 138.22 GiB cudaMallocAsync limit,
+    followed by an alloc-failure -> illegal-address cascade. The LHS flag
+    change made no difference (it was a red herring for THIS failure; it
+    remains required for ragged correctness per wiki:101 / PR #8081).
+  - Layer-level fwd+bwd temp at cf 1.33: marin_ep(ragged) 27.36 GiB ==
+    ep_ragged 27.36 GiB, ep_fixed 25.69 GiB. At cf 1.1 marin_ep is 23.18
+    GiB — BELOW fixed at 1.33. Our backend adds nothing at layer level.
+  - Control CONFIRMED: mep-ctl-ragged (stock levanter ep-ragged flavor)
+    hits the byte-identical remat warning (196,678,221,837 vs ...845
+    bytes) and the same crash. The ragged class OOMs at hero cf 1.33 on
+    today's tree; MHEP-001 ran the same flavor fine on 2026-08-01
+    (snapshot b0d20062a, 14.96% MFU) — a ~45 GiB regression landed in the
+    two weeks since.
+  - A 1.7 GiB/layer flavor delta cannot explain 45 GiB; candidate
+    mechanism: under recompute_all XLA cannot rematerialize the a2a
+    collectives, so per-layer transport buffers stay live across the
+    48-layer scan (48 x ~3.75 GiB ~= 180 GiB matches the reported peak) —
+    the fixed flavor's structured custom VJP exists to avoid exactly this.
+    Unverified; the fixed control (mep-ctl-fixed-25, stock flags) is
+    running to decide flavor-specific vs global regression.
+- Interpretation: M8's benchmark is blocked on a pre-existing tree
+  regression, not on marin_ep. Next decision forks on the fixed control:
+  fixed fits -> ragged-specific regression (bisect or borrow PR #8081's
+  memory work); fixed OOMs too -> global regression (bisect the hero
+  stack, or benchmark from the last-known-good base).
+- Next action: read fixed-control verdict; then either bisect or launch
+  ep-marin at --capacity-factor 1.1 on the surviving configuration.
