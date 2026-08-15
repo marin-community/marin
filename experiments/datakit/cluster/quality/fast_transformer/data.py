@@ -14,7 +14,6 @@ import logging
 from collections import Counter
 from dataclasses import dataclass
 
-import gigatoken
 import numpy as np
 from huggingface_hub import hf_hub_download
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
@@ -60,16 +59,6 @@ def load_tokenizer(tokenizer_name: str):
             auto_error,
         )
         return PreTrainedTokenizerFast(tokenizer_file=tokenizer_file, **kwargs)
-
-
-@functools.lru_cache(maxsize=8)
-def load_gigatoken(tokenizer_name: str):
-    """The HF tokenizer wrapped by the gigatoken Rust backend (drop-in HF API).
-
-    BPE-only: gigatoken itself rejects Unigram tokenizers (e.g. the deployed e5
-    default) with a hard error, so this can never silently mis-tokenize them.
-    """
-    return gigatoken.Tokenizer(load_tokenizer(tokenizer_name)).as_hf()
 
 
 # Reserved compact ids. Real tokens are remapped to dense ids starting at 2.
@@ -146,16 +135,6 @@ def _pack(raw_ids: list[list[int]], remap: dict[int, int], scores: np.ndarray, m
 def encode_texts(tokenizer_name: str, texts: list[str], max_tokens: int) -> list[list[int]]:
     """Tokenize raw in-memory texts (no parquet read), truncating to ``max_tokens``."""
     return _encode(load_tokenizer(tokenizer_name), texts, max_tokens)
-
-
-def encode_texts_fast(tokenizer_name: str, texts: list[str], max_tokens: int) -> list[list[int]]:
-    """``encode_texts`` on the gigatoken backend (measured ~7-8x faster than HF).
-
-    The two backends encode the same BPE, but callers must gate use on an exact
-    token-id parity check against ``encode_texts`` over a real sample of their
-    corpus rather than assume it.
-    """
-    return _encode(load_gigatoken(tokenizer_name), texts, max_tokens)
 
 
 def build_remap(raw_ids: list[list[int]], min_count: int, max_vocab: int | None = None) -> dict[int, int]:
