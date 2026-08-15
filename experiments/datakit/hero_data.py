@@ -192,8 +192,11 @@ def domain_cluster_assignment() -> StepSpec:
     return _frozen_step("hero/domain_cluster_assignment", DOMAIN_CLUSTER_ASSIGNMENT_PATH)
 
 
-def domain_assignment(source: str) -> StepSpec:
-    """Return the per-source domain clusters, as assigned by the pinned model.
+def assigned_clusters(source: str) -> StepSpec:
+    """Return the cluster each document of ``source`` was assigned to.
+
+    Named apart from :func:`domain_cluster_assignment`, which returns the
+    centroid model these were assigned against, not the assignments.
 
     Unlike :func:`harrier`, this needs no recorded path: the assign step's
     identity is the frozen model plus the knobs above, so the output path
@@ -236,7 +239,7 @@ def all_paths() -> dict[str, str]:
         paths[f"tokenize.marin/{source}"] = tokenized(source, MARIN_TOKENIZER).output_path
         paths[f"tokenize.nemotron/{source}"] = tokenized(source, NEMOTRON_TOKENIZER).output_path
         paths[f"harrier/{source}"] = harrier(source)
-        paths[f"cluster_assign/{source}"] = domain_assignment(source).output_path
+        paths[f"cluster_assign/{source}"] = assigned_clusters(source).output_path
     return paths
 
 

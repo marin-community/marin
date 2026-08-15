@@ -63,9 +63,7 @@ def _read_npy(uri: str) -> np.ndarray:
     """Load a small ``.npy``, cached on the worker's local disk.
 
     A subprocess pool re-enters this once per task, so the cache turns one
-    download per shard into one per worker. Concurrent tasks share the
-    directory, so the file lands by atomic rename and no reader ever sees a
-    partial write.
+    download per shard into one per worker.
     """
     digest = hashlib.sha256(uri.encode()).hexdigest()[:12]
     cache_dir = os.path.join(tempfile.gettempdir(), "domain-assign")
@@ -75,6 +73,8 @@ def _read_npy(uri: str) -> np.ndarray:
         with tempfile.NamedTemporaryFile(dir=cache_dir, delete=False) as staged:
             with open_url(uri, "rb") as src:
                 shutil.copyfileobj(src, staged)
+        # Tasks on one worker share this directory, so publish by rename: a
+        # concurrent reader sees either no file or a complete one.
         os.replace(staged.name, local)
     return np.load(local)
 
@@ -115,10 +115,8 @@ def _assign_shard(
 ) -> Iterator[pa.RecordBatch]:
     """Per-shard map: dequantize int8 embeddings, FAISS-search against centroids, emit cluster ids.
 
-    Columnar end to end. Row dicts cost more than the search they feed: on an
-    18k-row shard, ``to_pylist`` plus the list-to-numpy conversion took 7.3 s
-    against 2.5 s of FAISS, while reading the same values out of the Arrow
-    buffer takes 0.1 s. The ``id`` column is never materialized in Python.
+    Yields ``pa.RecordBatch`` matching ``schema``, so the ``id`` column passes
+    through without becoming Python objects.
     """
     ctx = _get_index(centroids_uri, lookup_uris)
     index = ctx["index"]
@@ -128,6 +126,10 @@ def _assign_shard(
 
     n_docs = 0
     for path in paths:
+        # Read columnar throughout. On an 18k-row shard, ``to_pylist`` plus the
+        # list-to-numpy conversion cost 7.3 s against 2.5 s of FAISS, while
+        # taking the same values from the Arrow buffer costs 0.1 s.
+        #
         # PyArrow's own S3 reader is rejected by the CoreWeave store, so the
         # file handle comes from rigging.
         with open_url(path, "rb") as handle:
@@ -220,7 +222,7 @@ def assign_source(
             per-worker centroid cache keeps the rebuild cheap, and separate
             processes keep the Python-side decode off one GIL.
     """
-    embedding_shards = sorted(str(path) for path in StoragePath(f"{embedding_dir.rstrip('/')}/*.parquet").glob())
+    embedding_shards = sorted(str(path) for path in (StoragePath(embedding_dir) / "*.parquet").glob())
     if not embedding_shards:
         raise RuntimeError(f"No embedding shards under {embedding_dir}")
 
