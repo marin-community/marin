@@ -567,3 +567,40 @@ def test_content_type_counters_survive_the_subprocess_boundary(tmp_path, monkeyp
     # "other" has no calibration of its own, so exactly its rows fall back.
     assert artifact.counters["datakit_store/content_type_without_calibration"] == counts["other"]
     assert sum(counts.values()) == artifact.counters["datakit_store/records_in"]
+
+
+def test_per_source_stats_reach_the_artifact(tmp_path, monkeypatch):
+    """Corpus totals cannot say whether each source contributed what it should.
+
+    The fixture is one source, so the per-source block must reconcile exactly
+    with the corpus counters -- which is the property that makes the block worth
+    reading when there are 292 of them and the totals no longer pin anything.
+    """
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path)
+
+    artifact = build_clustered_store(
+        tokenize=tokenize,
+        decontam=decontam,
+        cluster_assign=cluster_assign,
+        quality=quality,
+        bucket_edges={DEFAULT_CALIBRATION_KEY: BUCKET_EDGES},
+        exact_dedup=exact_dedup,
+        dedup=dedup,
+        output_path=str(tmp_path / "store"),
+        cluster_view=CLUSTER_VIEW,
+        split=SPLIT,
+    )
+
+    assert [s.source_name for s in artifact.sources] == ["src"]
+    stat = artifact.sources[0]
+    assert stat.records_in == artifact.counters["datakit_store/records_in"]
+    assert stat.records_out == artifact.counters["datakit_store/records_out"]
+    assert stat.tokens_out == artifact.counters["datakit_store/tokens_out"]
+    assert stat.contaminated_dropped == artifact.counters["datakit_store/contaminated_dropped"]
+    assert stat.exact_duplicate_dropped == artifact.counters["datakit_store/exact_duplicate_dropped"]
+    assert stat.fuzzy_duplicate_dropped == artifact.counters["datakit_store/fuzzy_duplicate_dropped"]
+    # The accounting identity, now per source rather than only corpus-wide.
+    dropped = stat.contaminated_dropped + stat.exact_duplicate_dropped + stat.fuzzy_duplicate_dropped
+    assert stat.records_in - dropped == stat.records_out
+    assert stat.records_out == sum(b.total_elements for b in artifact.buckets)

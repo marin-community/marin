@@ -73,6 +73,24 @@ class BucketCacheStats(BaseModel):
     n_shards: int
 
 
+class SourceStats(BaseModel):
+    """What one source contributed, and what each filter took from it.
+
+    Every counter the store emits is a corpus-wide total, which over hundreds of
+    sources cannot answer the question worth asking: did each one contribute what
+    it should. A source that joined to nothing, or to far too much, disappears
+    into the aggregate. These are the same numbers, kept per source.
+    """
+
+    source_name: str
+    records_in: int
+    records_out: int
+    tokens_out: int
+    contaminated_dropped: int
+    exact_duplicate_dropped: int
+    fuzzy_duplicate_dropped: int
+
+
 class ClusteredStoreData(BaseModel):
     """One Levanter cache per populated (cluster, quality) bucket.
 
@@ -88,6 +106,7 @@ class ClusteredStoreData(BaseModel):
 
     split: str
     buckets: list[BucketCacheStats]
+    sources: list[SourceStats]
     source_names: list[str]
     tokenizer: str
     counters: dict[str, int | float]
@@ -284,6 +303,8 @@ class _TaskCompletion:
 
     buckets: list[_TaskBucketStat]
     counters: dict[str, int | float]
+    sources: dict[str, dict[str, int]] = dataclasses.field(default_factory=dict)
+    """Per-source totals for this task, merged across tasks by the driver."""
 
 
 @dataclasses.dataclass
@@ -348,6 +369,7 @@ class _SpillShardResult:
     buckets: list[_SpillBucketRun]
     stats: _FilterStats
     tokens: int
+    source_name: str
 
 
 # ---------------------------------------------------------------------------
@@ -524,7 +546,7 @@ def _spill_source_shard(
                 ),
             )
         )
-    return _SpillShardResult(buckets=results, stats=stats, tokens=total_tokens)
+    return _SpillShardResult(buckets=results, stats=stats, tokens=total_tokens, source_name=spec["source_name"])
 
 
 def _task_sidecar_path(output_path: str, task: int, total_tasks: int) -> str:
@@ -543,6 +565,7 @@ def _load_task_sidecar(path: str) -> _TaskCompletion:
     return _TaskCompletion(
         buckets=[_TaskBucketStat(**item) for item in payload["buckets"]],
         counters=payload["counters"],
+        sources=payload.get("sources", {}),
     )
 
 
@@ -582,10 +605,23 @@ def _partition_and_write_task(
                 [scratch_dir] * len(batch_specs),
                 range(len(batch_specs)),
             )
+            per_source: dict[str, dict[str, int]] = {}
             for result in results:
                 n_tokens += result.tokens
                 for name, value in result.stats.counters().items():
                     counters.pipeline.update_counter(name, value)
+                # Same numbers, kept per source. A shard belongs to exactly one
+                # source, so this is a roll-up rather than a second measurement.
+                totals = per_source.setdefault(result.source_name, {})
+                for key in (
+                    "records_in",
+                    "records_out",
+                    "contaminated_dropped",
+                    "exact_duplicate_dropped",
+                    "fuzzy_duplicate_dropped",
+                ):
+                    totals[key] = totals.get(key, 0) + getattr(result.stats, key)
+                totals["tokens_out"] = totals.get("tokens_out", 0) + result.tokens
                 for bucket in result.buckets:
                     key = (bucket.cluster, bucket.quality)
                     spill_runs[key].append(bucket.run)
@@ -635,7 +671,7 @@ def _partition_and_write_task(
         if name.startswith("datakit_store/") and value != initial_counters.get(name, 0)
     }
     bucket_stats.sort(key=lambda stat: (stat.cluster, stat.quality))
-    _write_task_sidecar(sidecar_path, _TaskCompletion(buckets=bucket_stats, counters=task_counters))
+    _write_task_sidecar(sidecar_path, _TaskCompletion(buckets=bucket_stats, counters=task_counters, sources=per_source))
     return {"sidecar_path": sidecar_path, "task": task, "resumed": 0}
 
 
@@ -878,6 +914,43 @@ def build_clustered_store(
     sidecar_paths = [str(result["sidecar_path"]) for result in confirmations]
     with ThreadPoolExecutor(max_workers=min(64, len(sidecar_paths))) as executor:
         completions = list(executor.map(_load_task_sidecar, sidecar_paths))
+    merged_sources: dict[str, dict[str, int]] = {}
+    for completion in completions:
+        for source, totals in completion.sources.items():
+            into = merged_sources.setdefault(source, {})
+            for key, value in totals.items():
+                into[key] = into.get(key, 0) + value
+    source_stats = [
+        SourceStats(
+            source_name=source,
+            records_in=totals.get("records_in", 0),
+            records_out=totals.get("records_out", 0),
+            tokens_out=totals.get("tokens_out", 0),
+            contaminated_dropped=totals.get("contaminated_dropped", 0),
+            exact_duplicate_dropped=totals.get("exact_duplicate_dropped", 0),
+            fuzzy_duplicate_dropped=totals.get("fuzzy_duplicate_dropped", 0),
+        )
+        for source, totals in sorted(merged_sources.items())
+    ]
+    # Only meaningful when every task reported per-source totals. A run resumed
+    # across this change reads sidecars written before it, whose sources are
+    # absent because they were never recorded rather than because nothing joined,
+    # and failing on that would make the upgrade break exactly the retry path the
+    # sidecars exist for.
+    if all(completion.sources for completion in completions):
+        missing = sorted(set(tokenize) - {stat.source_name for stat in source_stats})
+        if missing:
+            raise RuntimeError(
+                f"no documents reached the store from {len(missing)} sources, e.g. {missing[:5]}. "
+                "A source that joins to nothing is indistinguishable from one that was never read."
+            )
+    elif source_stats:
+        logger.warning(
+            "per-source totals cover %d of %d sources; the rest ran before the store recorded them",
+            len(source_stats),
+            len(tokenize),
+        )
+
     task_bucket_stats = [stat for completion in completions for stat in completion.buckets]
     buckets = _merge_per_bucket_ledgers(task_bucket_stats=task_bucket_stats, output_path=output_path)
 
@@ -898,6 +971,7 @@ def build_clustered_store(
         bucket_edges={k: v.tolist() for k, v in edges_by_type.items()},
         split=split,
         buckets=buckets,
+        sources=source_stats,
         source_names=sorted(tokenize),
         tokenizer=tokenizer,
         counters=artifact_counters,
