@@ -1107,7 +1107,9 @@ def verify_source(manifest: str, source: str, calibration: str, verify_threads: 
         "zephyr/records_out"
     )
 
-    edges = np.asarray(calibration_bucket_edges(calibration), dtype=np.float64)
+    edges = np.asarray(
+        calibration_bucket_edges(calibration, expected_sha256=NEMOTRON_88K.calibration_sha256), dtype=np.float64
+    )
     counts = np.bincount(np.digitize(scores, edges), minlength=len(edges) + 1)
 
     result = {
