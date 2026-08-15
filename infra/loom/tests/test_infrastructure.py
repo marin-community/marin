@@ -199,6 +199,7 @@ def test_profile_manifest_renders_github_repositories_and_secret_references() ->
         ("/root/.kube/config", {"secretRef": "projects/example/secrets/kube/versions/1"}),
         (".kube/../config", {"secretRef": "projects/example/secrets/kube/versions/1"}),
         (".kube/config", {"secretRef": "projects/example/secrets/kube/versions/latest"}),
+        (".kube/config", {"secretRef": "projects/example/secrets/kube/versions/1"}),
         (".kube/config", {"secretRef": "projects/example/secrets/kube/versions/1", "mode": "0644"}),
     ],
 )

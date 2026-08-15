@@ -119,6 +119,7 @@ registry="${LOOM_IMAGE%%/*}"
 gcloud auth configure-docker "$registry" --quiet
 docker compose -f "$COMPOSE_FILE" pull
 meta instance/attributes/loom-home-files >"$HOME_FILES_MANIFEST"
+docker compose -f "$COMPOSE_FILE" stop loom caddy
 python3 "$HOME_FILE_MATERIALIZER" prepare \
   --manifest="$HOME_FILES_MANIFEST" \
   --image="$LOOM_IMAGE" \

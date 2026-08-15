@@ -98,8 +98,7 @@ SECRET_REF = re.compile(
     r"^projects/(?P<project>[a-z0-9-]+)/secrets/(?P<secret>[A-Za-z0-9_-]+)/versions/(?P<version>latest|[0-9]+)$"
 )
 HOME_FILE_PATH = re.compile(r"(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+")
-DEFAULT_HOME_FILE_MODE = "0600"
-HOME_FILE_MODES = frozenset({"0400", DEFAULT_HOME_FILE_MODE})
+HOME_FILE_MODES = frozenset({"0400", "0600"})
 
 
 @dataclass(frozen=True)
@@ -171,8 +170,8 @@ class HomeFileConfig:
         match = SECRET_REF.fullmatch(secret_ref)
         if not match or match.group("version") == "latest":
             raise ValueError(f"homeFiles entry {path!r} must use a numbered full secretRef")
-        mode = str(value.get("mode", DEFAULT_HOME_FILE_MODE))
-        if mode not in HOME_FILE_MODES:
+        mode = value.get("mode")
+        if not isinstance(mode, str) or mode not in HOME_FILE_MODES:
             raise ValueError(f"homeFiles entry {path!r} mode must be 0400 or 0600")
         return cls(path, match.group("project"), match.group("secret"), match.group("version"), mode)
 

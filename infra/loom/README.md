@@ -65,7 +65,7 @@ checks readiness. It does not clone a repository or build images on the VM.
 
 Machine-wide files required by every trusted interactive session belong in the
 stack's `homeFiles` map. Each entry maps a path relative to `/home/app` to a
-numbered Secret Manager version and a restrictive file mode:
+numbered Secret Manager version and an explicit restrictive file mode:
 
 ```yaml
 config:
@@ -77,11 +77,15 @@ config:
 
 The secret reference and target path appear in Pulumi state and VM metadata;
 the payload does not. The startup unit fetches all declared versions before
-changing the shared `loom_loom_home` volume, replaces each file atomically, and
-records the paths it manages. Removing a declaration removes that managed file
-on the next activation without pruning user-created files. Paths must be
-relative, Secret Manager versions must be numeric, and modes must be `0400` or
-`0600`.
+changing the shared `loom_loom_home` volume, stops the Loom and Caddy Compose
+services, replaces each file atomically, and starts the services with the new
+state. A failure leaves those serving containers stopped instead of continuing
+with stale credentials. Detached sessions remain running and see an atomic
+rename: open file descriptors retain the old payload while later opens see the
+new one. Removing a declaration removes that managed file on the next
+activation without pruning user-created files. Paths must be relative, Secret
+Manager versions must be numeric, and every declaration must set `0400` or
+`0600` explicitly.
 
 The managed-path ledger lives under root-owned `/var/lib/loom/home-files`, not
 in the session-writable volume. This prevents a session from adding arbitrary
