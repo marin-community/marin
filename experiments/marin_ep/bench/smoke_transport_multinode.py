@@ -22,9 +22,22 @@ import time
 import jax
 import numpy as np
 
-REQUIRED_FLAG = "--xla_gpu_experimental_enable_nvshmem"
-if REQUIRED_FLAG not in os.environ.get("XLA_FLAGS", ""):
-    os.environ["XLA_FLAGS"] = os.environ.get("XLA_FLAGS", "") + " " + REQUIRED_FLAG
+# Requires a jax nightly (> 0.11.0). Upstream XLA removed the
+# `xla_gpu_experimental_enable_nvshmem` DebugOptions field (reserved in
+# xla.proto), so passing it as a real flag FATALs the strict env parser —
+# but jax's `mosaic.gpu.is_nvshmem_available` still gates its nvshmem
+# lowering on that SUBSTRING appearing in XLA_FLAGS. Until jax catches up,
+# embed the marker as the value of a harmless legal flag, and point mosaic
+# at the nvshmem libraries the `nvidia-nvshmem-cu13` wheel ships.
+_NVSHMEM_MARKER = "--xla_dump_hlo_pipeline_re=--xla_gpu_experimental_enable_nvshmem"
+if "xla_gpu_experimental_enable_nvshmem" not in os.environ.get("XLA_FLAGS", ""):
+    os.environ["XLA_FLAGS"] = (os.environ.get("XLA_FLAGS", "") + " " + _NVSHMEM_MARKER).strip()
+if "MOSAIC_GPU_NVSHMEM_BC_PATH" not in os.environ:
+    from nvidia import nvshmem as _nvshmem_pkg
+
+    _lib = os.path.join(_nvshmem_pkg.__path__[0], "lib")
+    os.environ["MOSAIC_GPU_NVSHMEM_BC_PATH"] = os.path.join(_lib, "libnvshmem_device.bc")
+    os.environ["MOSAIC_GPU_NVSHMEM_SO_PATH"] = os.path.join(_lib, "libnvshmem_host.so.3")
 
 jax.distributed.initialize(
     coordinator_address=os.environ["MARIN_EP_COORD"],

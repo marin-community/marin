@@ -261,12 +261,19 @@ def _moe_mlp_ep_marin_local(
     num_experts: int,
     capacity_factor: float,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
-    """`moe_mlp` entry point: fused transport, per-owner capacity pooling.
+    """`moe_mlp` entry point: per-owner capacity pooling, best available transport.
 
     Pooling over each owner's co-located experts is free (one receive pool
     per device) and cuts drops ~10x vs per-expert capacity at hero shape,
     so it is not a tunable here.
+
+    The fused Mosaic-GPU transport needs symmetric memory across the expert
+    axis, which current jax provides only within a single process (upstream
+    removed the multi-process NVSHMEM path from Mosaic custom calls in
+    2026-07; the enable flag is `reserved` in xla.proto). Multi-controller
+    runs fall back to `ragged_all_to_all` — same semantics, same drop rule.
     """
+    transport = "mgpu" if jax.process_count() == 1 else "ragged"
     return marin_ep_moe_local(
         x_local,
         selected_experts_local,
@@ -277,5 +284,5 @@ def _moe_mlp_ep_marin_local(
         num_experts=num_experts,
         capacity_factor=capacity_factor,
         pool_group_size=moe_w13_local.shape[0],
-        transport="mgpu",
+        transport=transport,
     )

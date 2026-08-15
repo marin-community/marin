@@ -61,6 +61,11 @@ FLAVORS: dict[str, str] = {
     # drops far less -- every expert on a device draws from one pool. `fixed_all_to_all` exists
     # because this path measured slow, which is what a same-shape run is for.
     "ep-ragged": "ragged_all_to_all",
+    # Marin EP: group-pooled waterfilling drop rule (deterministic, EP-degree
+    # invariant, ~10x fewer drops than the per-cell rule at the same capacity
+    # factor). Multi-controller runs use ragged_all_to_all transport; the fused
+    # Mosaic-GPU transport engages automatically in single-process runs.
+    "ep-marin": "marin_ep",
 }
 
 

@@ -338,3 +338,44 @@ Experiment ID prefix: `MEP`.
   smoke on the held tray + hero EP64 rack benchmark vs the 24.04% MFU /
   262,683 tok/s baseline), M7 fusion/GEMM-upgrade as the follow-on
   autoresearch lever. Multi-node nvshmem path still unvalidated.
+
+### 2026-08-15 07:25 - MEP-008: multi-process mosaic transport is DEAD upstream; M8 pivots to ragged internode
+- Hypothesis: the nvshmem path (1 proc/GPU + `--xla_gpu_experimental_enable_nvshmem`)
+  extends `put_segments` across nodes, per the jax 0.10/0.11-era docs.
+- Command: 8-process (2 nodes x 4 GPUs, 1 proc/GPU) smoke of `put_segments`
+  on cw-us-east-08a, on locked jax 0.10.1, stock 0.11.0, and nightly
+  0.11.1.dev20260814.
+- Result: FALSIFIED at every version, each failing one layer deeper:
+  - 0.10.1 and 0.11.0 host jaxlib: `Unknown flag in XLA_FLAGS` FATAL — the
+    flag never shipped in a released host jaxlib's parser (the cu13 PJRT
+    plugin knows it; the host env parser wins). `compiler_options` is
+    validated host-side too: `No such compile option`.
+  - Nightly: flag still rejected because upstream REMOVED it —
+    `xla_gpu_experimental_enable_nvshmem` is `reserved` in current
+    `xla/xla.proto`. Working around jax's stale substring gate (it checks
+    for the literal in XLA_FLAGS; satisfied via
+    `--xla_dump_hlo_pipeline_re=--xla_gpu_experimental_enable_nvshmem`)
+    plus `MOSAIC_GPU_NVSHMEM_BC_PATH` got all the way to the runtime, which
+    returns `UNIMPLEMENTED: NVSHMEM is not supported in XLA.` — jax commit
+    2026-07-20 "[NFC] Remove leftover NVSHMEM support from Mosaic GPU
+    custom calls" deleted the path; current direction is XLA-managed
+    symmetric memory, explicitly single-process ("Use symmetric memory
+    peer address API ... in a single-process mode", 2026-07-13).
+- Interpretation: `plgpu.remote_ref` is SINGLE-PROCESS ONLY in every
+  installable jax today; the M5-era multi-node recipe described a feature
+  that existed only briefly at jax HEAD. Cross-node fused transport needs
+  either upstream's multi-process symmetric memory to land, or a
+  hierarchical scheme (mosaic puts intranode within each 4-GPU process +
+  NCCL collective internode) — the DeepEP NVL/RDMA factorization. Hero
+  jobs run 1 process/node, which is exactly the topology hierarchy wants.
+- Decision: M8 lands `implementation="marin_ep"` with transport
+  auto-selection (`mgpu` iff `jax.process_count() == 1`, else
+  `ragged_all_to_all`); the EP64 hero benchmark measures the drop-rule win
+  on ragged transport. Hierarchical mgpu-intranode transport becomes the
+  first autoresearch lever (with M7 GEMM work).
+- Env note: dev-pod `uv sync --all-packages --extra=gpu` resolves jax
+  0.10.1 + cu13 plugin 0.11.0 (a fray TPU test group's marker collides
+  with the gpu extra); the lock intends jax 0.11.0 for gpu. The mgpu
+  single-process path works on both.
+- Next action: EP8 2-node/2-process conformance smoke of the ragged path
+  (hero topology in miniature), then the EP64 hero benchmark run.
