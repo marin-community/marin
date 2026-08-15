@@ -134,7 +134,7 @@ from experiments.datakit.cluster.domain.v0.assign import (
 )
 from experiments.datakit.cluster.domain.v0.sample import sample_centroid_inputs
 from experiments.datakit.cluster.domain.v0.train import train_centroids
-from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
+from experiments.datakit.cluster.quality.fast_transformer.artifact import DEFAULT_CALIBRATION_KEY, QualityScores
 from experiments.datakit.cluster.quality.fast_transformer.score import score_normalized
 from experiments.datakit.decontam.config import (
     GLOBAL_DF_COMMON_MIN_ABS,
@@ -860,7 +860,10 @@ def reference_datakit_steps(
                 n: read_artifact(s["assign"].output_path, AssignmentAttrData) for n, s in per_source.items()
             },
             quality={n: q.main_output_dir for n, q in scores.items()},
-            bucket_edges=next(iter(edges)),
+            # This DAG has no content-type stage, so every document is cut at the
+            # content-blind calibration. ``produce_store`` is the path that reads
+            # the per-type cutpoints.
+            bucket_edges={DEFAULT_CALIBRATION_KEY: next(iter(edges))},
             exact_dedup=read_artifact(exact_dedup.output_path, GlobalExactDedupData),
             dedup=read_artifact(verified_dedup.output_path, VerifiedFuzzyDupsAttrData),
             output_path=output_path,

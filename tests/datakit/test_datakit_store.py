@@ -31,7 +31,7 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import (
 from marin.processing.tokenize.attributes import TokenizedAttrData
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
-from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
+from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES, DEFAULT_CALIBRATION_KEY
 from experiments.datakit.global_exact_dedup import ExactDupsPerSource, GlobalExactDedupData
 from experiments.datakit.store.bucket_writer import BucketSpillRun, write_bucket_cache, write_bucket_cache_from_spills
 from experiments.datakit.store.datakit_store import (
@@ -253,7 +253,7 @@ def test_store_filters_routes_and_roundtrips(tmp_path, monkeypatch):
         decontam=decontam,
         cluster_assign=cluster_assign,
         quality=quality,
-        bucket_edges=BUCKET_EDGES,
+        bucket_edges={DEFAULT_CALIBRATION_KEY: BUCKET_EDGES},
         exact_dedup=exact_dedup,
         dedup=dedup,
         output_path=output_path,
@@ -306,7 +306,7 @@ def test_store_batches_input_shards_into_one_leaf_per_bucket(tmp_path, monkeypat
         decontam=decontam,
         cluster_assign=cluster_assign,
         quality=quality,
-        bucket_edges=BUCKET_EDGES,
+        bucket_edges={DEFAULT_CALIBRATION_KEY: BUCKET_EDGES},
         exact_dedup=exact_dedup,
         dedup=dedup,
         output_path=output_path,
@@ -379,7 +379,7 @@ def test_store_ignores_orphans_and_resumes_completed_tasks(tmp_path, monkeypatch
         decontam=decontam,
         cluster_assign=cluster_assign,
         quality=quality,
-        bucket_edges=BUCKET_EDGES,
+        bucket_edges={DEFAULT_CALIBRATION_KEY: BUCKET_EDGES},
         exact_dedup=exact_dedup,
         dedup=dedup,
         output_path=output_path,
@@ -415,7 +415,7 @@ def test_store_rejects_dedup_source_set_mismatch(tmp_path, monkeypatch, label):
             decontam=decontam,
             cluster_assign=cluster_assign,
             quality=quality,
-            bucket_edges=BUCKET_EDGES,
+            bucket_edges={DEFAULT_CALIBRATION_KEY: BUCKET_EDGES},
             exact_dedup=exact_dedup,
             dedup=dedup,
             output_path=str(tmp_path / "store"),
@@ -439,7 +439,7 @@ def test_store_rejects_reordered_tokenize_documents(tmp_path, monkeypatch):
             decontam=decontam,
             cluster_assign=cluster_assign,
             quality=quality,
-            bucket_edges=BUCKET_EDGES,
+            bucket_edges={DEFAULT_CALIBRATION_KEY: BUCKET_EDGES},
             exact_dedup=exact_dedup,
             dedup=dedup,
             output_path=str(tmp_path / "store"),

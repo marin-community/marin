@@ -29,22 +29,33 @@ def _registered(monkeypatch, tmp_path):
     monkeypatch.setenv("MARIN_PREFIX", PREFIX)
     all_sources.cache_clear()
 
-    decon_map = tmp_path / "hero_data_decon_paths.json"
-    decon_map.write_text(json.dumps({name: f"datakit/decontam/{name}_deadbeef" for name in hero_data.source_names()}))
-    hero_data.decon_paths.cache_clear()
-    monkeypatch.setattr(hero_data, "decon_paths_path", lambda: decon_map)
+    content_map = tmp_path / "hero_data_content_type_paths.json"
+    content_map.write_text(
+        json.dumps({name: f"datakit/content-type/{name}_deadbeef" for name in hero_data.source_names()})
+    )
+    hero_data.content_type_paths.cache_clear()
+    monkeypatch.setattr(hero_data, "content_type_paths_path", lambda: content_map)
     yield
     hero_data.decon_paths.cache_clear()
+    hero_data.content_type_paths.cache_clear()
     all_sources.cache_clear()
 
 
 def test_pending_lists_unregistered_stages(monkeypatch):
-    """Only decontamination is still waiting; the dedup runs are both registered."""
+    """A stage whose map is absent is reported, not raised on the first source."""
     monkeypatch.setattr(hero_data, "decon_paths_path", lambda: pathlib.Path("/nonexistent.json"))
     hero_data.decon_paths.cache_clear()
 
     stages = {item.stage for item in produce_store.pending()}
     assert stages == {"decontamination"}
+
+
+def test_the_quality_bucket_depends_on_the_content_type(monkeypatch):
+    """Content type is a store dependency, so an unregistered source blocks the run."""
+    monkeypatch.setattr(hero_data, "content_type_paths_path", lambda: pathlib.Path("/nonexistent.json"))
+    hero_data.content_type_paths.cache_clear()
+
+    assert "content type" in {item.stage for item in produce_store.pending(SOURCES)}
 
 
 def test_nothing_registered_is_pending_once_the_pins_are_set():
@@ -55,8 +66,8 @@ def test_store_depends_on_every_stage_of_every_source():
     inputs = produce_store.store_inputs(SOURCES)
     step = produce_store.build_store_step(inputs, max_workers=4)
 
-    # Four per-source stages plus the two global dedup artifacts.
-    assert len(step.deps) == len(SOURCES) * 4 + 2
+    # Five per-source stages plus the two global dedup artifacts.
+    assert len(step.deps) == len(SOURCES) * 5 + 2
     assert step.name == "datakit/store"
 
 

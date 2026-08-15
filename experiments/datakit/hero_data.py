@@ -81,6 +81,12 @@ def harrier_paths() -> dict[str, str]:
 
 
 @cache
+def content_type_paths_path() -> pathlib.Path:
+    """Return the path to the per-source content-type path map."""
+    return pathlib.Path(__file__).with_name("hero_data_content_type_paths.json")
+
+
+@cache
 def decon_paths_path() -> pathlib.Path:
     """Return the path to the per-source decontamination path map."""
     return pathlib.Path(__file__).with_name("hero_data_decon_paths.json")
@@ -112,6 +118,37 @@ def decon_paths() -> dict[str, str]:
             "the Harrier map was recorded",
         )
     return json.loads(path.read_text())
+
+
+@cache
+def content_type_paths() -> dict[str, str]:
+    """Load the per-source content-type path map."""
+    path = content_type_paths_path()
+    if not path.exists():
+        raise PendingRegistration(
+            "content type",
+            f"check in {path.name}, mapping each source name to its content-type output "
+            f"relative to {MANIFEST_PREFIX}",
+        )
+    return json.loads(path.read_text())
+
+
+def content_type(source: str) -> StepSpec:
+    """Return the per-document content type for ``source``.
+
+    The quality bucket depends on it. One score means different things in code
+    and in prose, and the calibration carries a fitted set of cutpoints per
+    content type; without this the store cuts everything at the content-blind
+    ``default``, which on this corpus moves 36% of math and 24% of code
+    documents into a higher bucket than their own calibration gives them.
+    """
+    paths = content_type_paths()
+    if source not in paths:
+        raise PendingRegistration(
+            f"content type for {source!r}",
+            f"the map in {content_type_paths_path().name} covers {len(paths)} sources but not this one",
+        )
+    return _frozen_step(f"hero/content_type/{source}", paths[source])
 
 
 # The manifest records paths relative to the sole CoreWeave Datakit root.

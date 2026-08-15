@@ -82,7 +82,7 @@ from rigging.log_setup import configure_logging
 
 from experiments.datakit import hero_data
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
-from experiments.datakit.cluster.quality.fast_transformer.artifact import calibration_bucket_edges
+from experiments.datakit.cluster.quality.fast_transformer.artifact import calibration_edges_by_content_type
 from experiments.datakit.global_exact_dedup import GlobalExactDedupData
 from experiments.datakit.reference_pipeline import SPLIT, StoreConfig
 from experiments.datakit.repack_exact_dups import repack_exact_dups_source
@@ -127,9 +127,12 @@ class SourceStages:
     decontam: StepSpec
     cluster_assign: StepSpec
     quality: StepSpec
+    content_type: StepSpec
+    """Which calibration the score is cut against. Not optional: cutting a mixed
+    corpus at the content-blind default measurably promotes code and math."""
 
     def steps(self) -> list[StepSpec]:
-        return [self.tokenize, self.decontam, self.cluster_assign, self.quality]
+        return [self.tokenize, self.decontam, self.cluster_assign, self.quality, self.content_type]
 
 
 @dataclass(frozen=True)
@@ -183,6 +186,7 @@ def pending(sources: list[str] | None = None) -> list[Pending]:
     names = hero_data.source_names() if sources is None else sources
     probes: list[Callable[[], object]] = [hero_data.verified_fuzzy_dups]
     probes += [lambda n=name: hero_data.decontam(n) for name in names]
+    probes += [lambda n=name: hero_data.content_type(n) for name in names]
     missing: list[Pending] = []
     seen: set[str] = set()
     for probe in probes:
@@ -224,6 +228,7 @@ def store_inputs(
             decontam=hero_data.decontam(name),
             cluster_assign=hero_data.assigned_clusters(name),
             quality=hero_data.quality(name, quality_model),
+            content_type=hero_data.content_type(name),
         )
         for name in names
     }
@@ -309,6 +314,7 @@ class ReadInputs:
     decontam: dict[str, DeconAttributes]
     cluster_assign: dict[str, AssignmentAttrData]
     quality_dirs: dict[str, str]
+    content_type_dirs: dict[str, str]
     exact_dups: GlobalExactDedupData
     verified_fuzzy_dups: VerifiedFuzzyDupsAttrData
 
@@ -321,6 +327,7 @@ class PerSourceInputs:
     decontam: dict[str, DeconAttributes]
     cluster_assign: dict[str, AssignmentAttrData]
     quality_dirs: dict[str, str]
+    content_type_dirs: dict[str, str]
     source_keys: dict[str, str]
 
 
@@ -346,6 +353,7 @@ def _read_per_source(inputs: StoreInputs) -> PerSourceInputs:
             n: read_artifact(s.cluster_assign.output_path, AssignmentAttrData) for n, s in inputs.per_source.items()
         },
         quality_dirs={n: s.quality.output_path for n, s in inputs.per_source.items()},
+        content_type_dirs={n: s.content_type.output_path for n, s in inputs.per_source.items()},
         source_keys=source_keys,
     )
 
@@ -363,6 +371,7 @@ def _read_inputs(inputs: StoreInputs) -> ReadInputs:
         decontam=per_source.decontam,
         cluster_assign=per_source.cluster_assign,
         quality_dirs=per_source.quality_dirs,
+        content_type_dirs=per_source.content_type_dirs,
         exact_dups=restricted_exact,
         verified_fuzzy_dups=verified,
     )
@@ -383,17 +392,18 @@ def build_store_step(
 
     def run(output_path: str) -> ClusteredStoreData:
         loaded = _read_inputs(inputs)
-        edges = calibration_bucket_edges(
+        edges = calibration_edges_by_content_type(
             hero_data.quality_calibration(inputs.quality_model),
             expected_sha256=inputs.quality_model.calibration_sha256,
         )
-        logger.info("quality cutpoints from %s: %s", hero_data.quality_calibration(inputs.quality_model), list(edges))
+        logger.info("quality cutpoints per content type: %s", {k: [round(e, 4) for e in v] for k, v in edges.items()})
         return build_clustered_store(
             tokenize=loaded.tokenize,
             decontam=loaded.decontam,
             cluster_assign=loaded.cluster_assign,
             quality=loaded.quality_dirs,
             bucket_edges=edges,
+            content_type=loaded.content_type_dirs,
             exact_dedup=loaded.exact_dups,
             dedup=loaded.verified_fuzzy_dups,
             output_path=output_path,
@@ -480,14 +490,14 @@ def preflight(inputs: StoreInputs, *, shards_per_source: int) -> PreflightReport
         loaded = _read_per_source(inputs)
         exact_dups = read_artifact(inputs.exact_dups_pin.output_path, GlobalExactDedupData)
         verified = read_artifact(inputs.verified_fuzzy_dups.output_path, VerifiedFuzzyDupsAttrData)
-        edges = calibration_bucket_edges(
+        edges = calibration_edges_by_content_type(
             hero_data.quality_calibration(inputs.quality_model),
             expected_sha256=inputs.quality_model.calibration_sha256,
         )
     except (KeyError, ValueError) as failure:
         report.problems.append(str(failure))
         return report
-    logger.info("quality cutpoints: %s", list(edges))
+    logger.info("quality cutpoints: %s", {k: [round(e, 4) for e in v] for k, v in edges.items()})
     report.problems.extend(_dedup_coverage_problems(inputs, loaded, exact_dups, verified))
 
     for name in sorted(inputs.per_source):
@@ -498,6 +508,7 @@ def preflight(inputs: StoreInputs, *, shards_per_source: int) -> PreflightReport
                 decontam=loaded.decontam[name],
                 assign=loaded.cluster_assign[name],
                 quality_dir=loaded.quality_dirs[name],
+                content_type_dir=loaded.content_type_dirs[name],
                 shards_per_source=shards_per_source,
             )
         )
@@ -597,6 +608,7 @@ def _shard_alignment_problems(
     decontam: DeconAttributes,
     assign: AssignmentAttrData,
     quality_dir: str,
+    content_type_dir: str,
     shards_per_source: int,
 ) -> list[str]:
     """Report basename disagreements between one source's four attribute stages.
@@ -622,6 +634,7 @@ def _shard_alignment_problems(
         "decontam": decontam.main_output_dir,
         "cluster_assign": assign.output_dir,
         "quality": quality_dir,
+        "content_type": content_type_dir,
     }
     for label, directory in stages.items():
         missing = tok_names - basenames(directory)
@@ -642,7 +655,7 @@ def _shard_alignment_problems(
     # this is really looking for, and it is invisible to a row count.
     for basename in sorted(tok_names)[:shards_per_source]:
         reference = ids(stages["decontam"], basename)
-        for label in ("cluster_assign", "quality"):
+        for label in ("cluster_assign", "quality", "content_type"):
             other = ids(stages[label], basename)
             if other == reference:
                 continue
