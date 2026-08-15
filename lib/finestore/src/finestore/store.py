@@ -18,6 +18,7 @@ from typing import Protocol
 import pyarrow as pa
 
 from finestore.commit import ClearSeal, CommitCoordinator, CommitDelta, TableAddition, initialize_archive, write_schema
+from finestore.compaction import CompactionResult
 from finestore.compaction import compact as compact_table
 from finestore.layout import (
     BLOB_DATA_COLUMN,
@@ -221,6 +222,11 @@ class DataStore:
             BLOB_DATA_COLUMN: data,
         }
 
+    @staticmethod
+    def estimate_object_bytes(name: str, data: bytes, metadata: Mapping[str, object] | None = None) -> int:
+        """Return the transaction byte estimate for one named object."""
+        return _estimate_bytes(DataStore._blob_row(name, data, metadata))
+
     def read_view(self) -> ReadView:
         """Pin a snapshot using one HEAD read."""
         return ReadView(self.root)
@@ -277,7 +283,7 @@ class DataStore:
                 return snapshot.token
             return self._commits.commit(CommitDelta(additions=additions, seal_update=ClearSeal()))
 
-    def compact(self, table: str):
+    def compact(self, table: str) -> CompactionResult:
         """Logically compact one table against the current manifest."""
         with self._commit_lock:
             return compact_table(self.root, table, coordinator=self._commits)

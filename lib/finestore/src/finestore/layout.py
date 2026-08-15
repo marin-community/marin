@@ -20,6 +20,9 @@ from rigging.filesystem.storage_path import prefix_join
 ARCHIVE_FILE = "_archive.json"
 HEAD_FILE = "HEAD"
 FORMAT_VERSION = 2
+DATA_DIR = "data"
+MANIFESTS_DIR = "manifests"
+SCHEMAS_DIR = "schemas"
 
 SEQ_COLUMN = "_seq"
 WRITER_COLUMN = "_writer"
@@ -150,13 +153,13 @@ class FineStoreLayout:
         return prefix_join(self.root, HEAD_FILE)
 
     def manifest_path(self, commit_id: str) -> str:
-        return prefix_join(self.root, f"manifests/{commit_id}.json")
+        return prefix_join(self.root, f"{MANIFESTS_DIR}/{commit_id}.json")
 
     def schema_path(self, schema_id: str) -> str:
-        return prefix_join(self.root, f"schemas/{schema_id}.json")
+        return prefix_join(self.root, f"{SCHEMAS_DIR}/{schema_id}.json")
 
     def table_dir(self, table: str) -> str:
-        return prefix_join(self.root, f"data/{table}")
+        return prefix_join(self.root, f"{DATA_DIR}/{table}")
 
     def shard_path(self, table: str, writer: str, generation: int, seq: int, uid: str) -> str:
         return prefix_join(self.table_dir(table), f"w={writer}/g={generation}/{seq:016d}-{uid}.parquet")

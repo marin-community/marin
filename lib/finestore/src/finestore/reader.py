@@ -114,7 +114,7 @@ def iter_shard_rows(
     shard: Shard,
     unified: pa.Schema,
     primary_key: tuple[str, ...],
-    pa_fs,
+    pa_fs: PyFileSystem,
     columns: list[str] | None = None,
     where: list[tuple[str, str, object]] | None = None,
 ) -> Iterator[VersionedRow]:

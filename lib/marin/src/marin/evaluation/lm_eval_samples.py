@@ -25,7 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
 import rigging.filesystem.factory as factory
-from finestore.layout import ARCHIVE_FILE, BLOBS_TABLE, HEAD_FILE
+from finestore.layout import ARCHIVE_FILE, BLOBS_TABLE, DATA_DIR, HEAD_FILE, MANIFESTS_DIR, SCHEMAS_DIR
+from finestore.migrations.m0001_manifest import LEGACY_SEAL_FILE
 from finestore.reader import ReadView
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -54,8 +55,10 @@ RESULTS_PREFIX = "results_"
 
 # The archive's own objects, which share the run's results root and must never be preserved into
 # themselves. See :func:`run_artifacts`.
-_ARCHIVE_DIRS = frozenset({"data", "manifests", "schemas", ARCHIVE_SAMPLES_TABLE, ARCHIVE_STEPS_TABLE, BLOBS_TABLE})
-_ARCHIVE_MARKERS = frozenset({ARCHIVE_FILE, HEAD_FILE, "SEALED"})
+_ARCHIVE_DIRS = frozenset(
+    {DATA_DIR, MANIFESTS_DIR, SCHEMAS_DIR, ARCHIVE_SAMPLES_TABLE, ARCHIVE_STEPS_TABLE, BLOBS_TABLE}
+)
+_ARCHIVE_MARKERS = frozenset({ARCHIVE_FILE, HEAD_FILE, LEGACY_SEAL_FILE})
 
 _CONTENT_TYPES = {
     ".jsonl": "application/x-ndjson",

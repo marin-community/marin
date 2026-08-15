@@ -6,7 +6,7 @@
 ``upgrade-format`` moves sealed FineStore v1 archives onto transactional manifests;
 ``backfill-samples`` brings archives up to the current contract from each run's kept
 ``samples_*.jsonl``; ``rebuild-samples`` re-derives them from the sources preserved inside the
-archive, for a run whose results tree is gone. Both are operator tools, not part of launching an
+archive, for a run whose results tree is gone. These are operator tools, not part of launching an
 evaluation.
 """
 
@@ -38,6 +38,7 @@ from marin.evaluation.records import (
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.evaluation.migrations.format_smoke import (
+    FleetSelection,
     SmokeUpgradeResult,
     fleet_destination,
     select_v1_archive,
@@ -118,9 +119,7 @@ def upgrade_format(results_paths: tuple[str, ...], prefixes: tuple[str, ...], wo
                 sort_keys=True,
             )
         )
-        blockers = selection.record_failures + selection.unsupported
-        if blockers:
-            raise click.ClickException(f"fleet selection has {len(blockers)} blocking record or archive issue(s)")
+        _raise_for_selection_blockers(selection)
         unsealed = set(selection.unsealed_v1)
         targets = {source: [] for source in selection.sources if source not in unsealed}
     _sweep_archives(targets, workers, _upgrade_one)
@@ -133,6 +132,12 @@ def _upgrade_one(results_path: str) -> SweepOutcome:
     token = result.token
     assert token is not None
     return SweepOutcome("upgraded", f"commit {token.sequence}:{token.commit_id}")
+
+
+def _raise_for_selection_blockers(selection: FleetSelection) -> None:
+    blockers = selection.record_failures + selection.unsupported
+    if blockers:
+        raise click.ClickException(f"fleet selection has {len(blockers)} blocking record or archive issue(s)")
 
 
 @cli.command("smoke-upgrade")
@@ -223,9 +228,7 @@ def smoke_upgrade_fleet_command(
         )
     )
     click.echo(json.dumps({"status": "selected", **asdict(selection)}, sort_keys=True))
-    blockers = selection.record_failures + selection.unsupported
-    if blockers:
-        raise click.ClickException(f"fleet selection has {len(blockers)} blocking record or archive issue(s)")
+    _raise_for_selection_blockers(selection)
     fleet_mode = FleetSmokeMode(mode)
     if fleet_mode is FleetSmokeMode.INVENTORY:
         return

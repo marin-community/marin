@@ -225,6 +225,8 @@ def migrate(root: str) -> CommitToken:
         try:
             head_object.write(head.model_dump_json().encode(), expected_version=None)
         except ConditionalWriteError:
+            # Another migrator won the HEAD race. The shared validation below accepts its
+            # complete v2 commit or fails before either migrator advances the format marker.
             pass
 
     token = _v2_token(layout)

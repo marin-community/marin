@@ -10,6 +10,8 @@ from finestore.admin import drop_table
 from finestore.cache import PersistentKvCache
 from finestore.layout import BLOBS_TABLE
 from finestore.reader import ReadView
+from finestore.store import DataStore
+from rigging.filesystem.storage_path import StoragePath
 
 _CACHE_PROCESS = textwrap.dedent(
     """
@@ -96,6 +98,24 @@ def test_prefix_cache_uses_region_local_fine_store(tmp_path, monkeypatch):
     cache.store("kernel", b"value")
     cache.close()
     assert PersistentKvCache.for_prefix("cutlass-kernels").load("kernel") == b"value"
+
+
+def test_remote_cache_accounts_for_named_object_overhead(tmp_path, monkeypatch):
+    root = str(tmp_path / "cache")
+    open_store = DataStore.open
+    monkeypatch.setattr(StoragePath, "is_remote", property(lambda _self: True))
+    monkeypatch.setattr(cache_module, "_MAX_TRANSACTION_BYTES", 64)
+    monkeypatch.setattr(
+        cache_module.DataStore,
+        "open",
+        classmethod(lambda _cls, path: open_store(path, max_buffer_bytes=64)),
+    )
+
+    cache = PersistentKvCache.at(root)
+    cache.store("kernel", b"x" * 40)
+    cache.close()
+
+    assert ReadView(root).read_blob("kernel") == b"x" * 40
 
 
 def test_cache_normal_process_exit_drains_pending_remote_commit(tmp_path):

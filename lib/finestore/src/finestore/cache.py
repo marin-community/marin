@@ -127,10 +127,7 @@ class PersistentKvCache:
 
     def _storage_root(self) -> str:
         with self._root_lock:
-            if self._root is None:
-                assert self._resolve_root is not None
-                self._root = self._resolve_root()
-            return self._root
+            return self._storage_root_unlocked()
 
     def _writer(self) -> DataStore:
         with self._root_lock:
@@ -182,7 +179,8 @@ class PersistentKvCache:
         try:
             while pending := self._take_remote_batch():
                 try:
-                    with self._writer().transaction() as transaction:
+                    max_bytes = sum(DataStore.estimate_object_bytes(key, value) for key, value in pending.items())
+                    with self._writer().transaction(max_bytes=max_bytes) as transaction:
                         for key, value in pending.items():
                             transaction.write_object(key, value)
                 except Exception as exc:
@@ -199,12 +197,13 @@ class PersistentKvCache:
             selected = []
             selected_bytes = 0
             for key, value in self._remote_pending.items():
+                object_bytes = DataStore.estimate_object_bytes(key, value)
                 if selected and (
-                    len(selected) >= _MAX_TRANSACTION_OBJECTS or selected_bytes + len(value) > _MAX_TRANSACTION_BYTES
+                    len(selected) >= _MAX_TRANSACTION_OBJECTS or selected_bytes + object_bytes > _MAX_TRANSACTION_BYTES
                 ):
                     break
                 selected.append(key)
-                selected_bytes += len(value)
+                selected_bytes += object_bytes
             if not selected:
                 self._background_thread = None
                 return {}
