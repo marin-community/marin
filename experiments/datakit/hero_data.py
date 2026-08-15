@@ -108,6 +108,38 @@ EXACT_DUPS_ID = "global_exact_dedup_af4c6c3e"
 FUZZY_DUPS_ID = "dedup_709f5997"
 
 
+@dataclass(frozen=True)
+class QualityPin:
+    """A quality scorer's identity: the bytes it reads and the tokens it eats."""
+
+    name: str
+    """Value written into the score rows' ``model`` column."""
+
+    model_sha256: str
+    """Digest over the deployed model directory. Sort the relative paths
+    bytewise, then fold ``rel.encode() + b"\\0" + sha256(content).digest()`` per
+    file into one sha256."""
+
+    calibration_sha256: str
+    """Digest over the calibration file, by the same recipe over one file."""
+
+    tokenizer: TokenizerPin
+    """Which tokenization the scorer reads. Folded in structurally: :func:`quality`
+    makes :func:`tokenized` a dependency rather than naming its leaf."""
+
+    version: int
+    """Bump to rescore the corpus under an unchanged model and calibration."""
+
+
+NEMOTRON_88K = QualityPin(
+    name="nemotron88k_v1",
+    model_sha256="e1be09c903bf7a926046bac97d40db050ca399fbb336c7541df42dc8cf6eda10",
+    calibration_sha256="1a1dcfd31c20d9f3879878d617f0f8fb0b6898c4445885ffae29ebea63738fd8",
+    tokenizer=NEMOTRON_TOKENIZER,
+    version=1,
+)
+
+
 def _refuse_to_run(output_path: str) -> NoReturn:
     """Fail loudly: these steps describe data that already exists."""
     raise AssertionError(
@@ -166,6 +198,35 @@ def minhash(source: str) -> StepSpec:
     """Return the MinHash signatures for ``source``, keyed off its normalized output."""
     steps = zephyr_datakit_steps({source: _normalize_step(source)})
     return _read_only(steps.minhash[source])
+
+
+def quality(source: str, quality_model: QualityPin = NEMOTRON_88K) -> StepSpec:
+    """Return the quality scores for ``source`` under ``quality_model``.
+
+    Unlike the other accessors this one takes no pinned path: its output sits at
+    ``name_with_hash`` like any ordinary step, so the scorer is *in* the path.
+    The scorer's identity reaches the hash two ways, and it needs both. The model
+    and calibration digests go in ``hash_attrs``, which covers the bytes the
+    scorer reads; the tokenization goes in as a dependency, so ``hash_id`` folds
+    it through ``dep_names`` rather than through string surgery on a leaf name.
+
+    The earlier layout derived the score path from the tokenize leaf alone, which
+    left the scorer invisible: two pins over one tokenization resolved to the same
+    directory, so a step could claim one model and read another's bytes. Here two
+    pins that differ anywhere -- model, calibration, tokenizer or version -- differ
+    in ``hash_id``, and so cannot collide.
+    """
+    return StepSpec(
+        name=f"datakit/quality/{source}",
+        deps=[tokenized(source, quality_model.tokenizer)],
+        hash_attrs={
+            "model": quality_model.name,
+            "model_sha256": quality_model.model_sha256,
+            "calibration_sha256": quality_model.calibration_sha256,
+            "version": quality_model.version,
+        },
+        fn=_refuse_to_run,
+    )
 
 
 def exact_dups() -> StepSpec:
