@@ -37,9 +37,11 @@ Experiment ID prefix: `MEP`.
 - Drop rule adopted (SPEC S2): group-pooled capacity with per-expert floor,
   G=3 → 0.31% drops at cf 1.33 vs ~4% for per-cell/per-expert (MEP-H1
   promoted).
-- L1 at hero shape: fwd 19.3 ms pipelined vs 25.7 ms bulk per layer
-  (GEMM floor 17.3 ms) — transport ~89% hidden; kernel must rotate send
-  order and interleave GEMM tiles across local experts.
+- L1 at hero shape ([MEP-003]): fwd 17.9 ms pipelined vs 23.4 ms bulk per
+  layer (GEMM floor 17.4 ms) — transport ~97% hidden with rotated
+  simultaneous sends; tiles 2-8k rows. Under hero-calibrated skew the
+  layer is compute-imbalance-bound (23.3 ms fwd at cf 1.33) — cf trades
+  drops vs balance (MEP-H5: cf 1.10 matches baseline drops, ~17% faster).
 
 ## Hypothesis Queue
 
@@ -52,9 +54,14 @@ Experiment ID prefix: `MEP`.
 - `MEP-H3`: symmetric-memory remote stores are reachable from JAX via one of
   (a) Mosaic-GPU distributed, (b) CuTe DSL nvshmem via cutlass_call, (c)
   custom CUDA FFI. Next test: M5 hardware spike, 1-2 nodes.
-- `MEP-H4`: rotated send order and cross-expert GEMM-tile interleave are
-  required in the real kernel (L1 predicts convoy/tail costs otherwise).
-  Verify on hardware in M6.
+- `MEP-H4`: rotated, simultaneous per-source sends are required in the real
+  kernel (L1 predicts ingress convoys and a serialized combine tail
+  otherwise; cross-expert GEMM-tile interleave turned out not to matter).
+  Evidence: [MEP-003]. Verify on hardware in M6.
+- `MEP-H5`: with G=3 pooling, lowering cf toward ~1.1 beats cf 1.33 on
+  drop-adjusted throughput under realistic skew (compute balance dominates).
+  Evidence: [MEP-003] sim table. Next test: hardware A/B arm with loss
+  tracking (drops are not throughput-equivalent).
 
 ### Promoted
 - `MEP-H1`: group-pooled capacity (G=3, per-owner) gives < 2% drops at
@@ -117,3 +124,41 @@ Experiment ID prefix: `MEP`.
 - Next action: measure baseline routed-MoE segment from an existing hero
   profile (G1b denominator); cross-expert GEMM-tile interleave experiment
   in L1; then M4 autoresearch loop over (tile_rows, send order, G, cf).
+
+### 2026-08-14 19:10 - MEP-003: L1 tail root-caused; tile + cf sweeps
+- Hypothesis: MEP-H2 (transport hideable), MEP-H4 (schedule shape matters).
+- Commit Hash: 13696051e9.
+- Command: inline sweeps via `estimate_layer_makespan` (see commit message);
+  `uv run pytest experiments/marin_ep/tests -q` -> 39 passed.
+- Result:
+  - The 1.9 ms fwd tail was an emission-order artifact (device-major
+    dispatch made the last device's rows arrive last everywhere -> its
+    combine ingress serialized at the end). Step-major rotated emission —
+    the sim's proxy for simultaneous per-device sends — fixes it: hero fwd
+    17.88 ms (GEMM busy floor 17.4), bwd 35.21 ms. Transport ~97% hidden.
+    Pipelined vs bulk: fwd 17.88 vs 23.36, bwd 35.21 vs 40.68 (~19%/13%).
+  - GEMM-tile interleave and arrival-order processing knobs: no effect
+    under readiness-ordered scheduling (removed). MEP-H4 narrows to
+    "rotated + simultaneous sends"; per-expert tile order is free.
+  - tile_rows: 2048-4096 best (17.55 ms fwd), 32768 costs ~10%. Real
+    per-tile overheads will push the optimum up; calibrate on hardware.
+  - Skewed routing (alpha=9.08, hero-calibrated): layer becomes
+    compute-imbalance-bound — fwd 23.3 ms at cf 1.33 (hottest owner's
+    capacity-clipped GEMM). cf now trades drops vs balance:
+    | cf | drops | fwd+bwd ms | drop-adj rel throughput |
+    |---|---|---|---|
+    | 1.10 | 4.5% | 57.6 | 1.16 |
+    | 1.25 | 1.5% | 65.6 | 1.05 |
+    | 1.33 | 0.46% | 69.6 | 1.00 |
+    G=3 pooling lets us either keep cf 1.33 with ~9x fewer drops than
+    today's baseline, or match today's ~4.5% drops at cf 1.10 and take a
+    ~17% faster layer. Proper metric is loss-per-wallclock -> hardware A/B
+    arm. `exploratory` (synthetic skew; sim-only). New hypothesis MEP-H5.
+- Interpretation: v1 kernel design facts frozen so far: count-then-write
+  ragged pools (G=3 waterfilling), rotated simultaneous sends, tile
+  ~2-8k rows, GEMM consumes arrival-flagged tiles, combine streams per
+  tile. Skew-driven compute imbalance is the dominant remaining cost at
+  hero shape — expert placement and cf are the levers.
+- Next action: G1b baseline segment measurement; M5 transport-substrate
+  survey (Mosaic-GPU distributed vs CuTe nvshmem vs custom FFI) from local
+  sources; draft kernels/ API skeleton against SPEC.
