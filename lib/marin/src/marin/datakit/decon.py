@@ -90,7 +90,8 @@ DROP_SET_BUILD_VERSION = 4
 MIN_SHORT_EXACT_TOKENS = 3
 DEFAULT_PARAGRAPH_DELIMITER = "\n\n"
 DROP_SET_SAMPLE_SHARD_BYTES = 64 * 1024 * 1024
-DROP_SET_SHARDS_PER_SOURCE = 512
+DROP_SET_SAMPLE_SHARDS_PER_SOURCE = 512
+DROP_SET_STAGE_PARTITIONS_PER_SOURCE = 128
 
 
 @dataclass(frozen=True)
@@ -1546,7 +1547,7 @@ def _source_sample_shards(
         if rows_planned >= global_sample_docs:
             break
 
-    num_shards = min(DROP_SET_SHARDS_PER_SOURCE, len(ranges))
+    num_shards = min(DROP_SET_SAMPLE_SHARDS_PER_SOURCE, len(ranges))
     if num_shards == 0:
         return [{"sample_shard_id": f"{source_name}:0", "source": source_name, "text_field": text_field, "ranges": []}]
 
@@ -1768,7 +1769,7 @@ def build_all_source_drop_sets(
         .group_by(
             key=lambda row: row["sample_shard_id"],
             reducer=_materialize_sample_shard,
-            num_output_shards=DROP_SET_SHARDS_PER_SOURCE * len(sources),
+            num_output_shards=DROP_SET_STAGE_PARTITIONS_PER_SOURCE * len(sources),
         )
         .map_shard(lambda items, shard: _sample_drop_set_shard(items, shard, bloom_path=bloom_path, ngram=ngram))
         .group_by(
