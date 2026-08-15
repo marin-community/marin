@@ -198,7 +198,6 @@ def test_profile_manifest_renders_github_repositories_and_secret_references() ->
     [
         ("/root/.kube/config", {"secretRef": "projects/example/secrets/kube/versions/1"}),
         (".kube/../config", {"secretRef": "projects/example/secrets/kube/versions/1"}),
-        (".loom-managed-home-files.json", {"secretRef": "projects/example/secrets/kube/versions/1"}),
         (".kube/config", {"secretRef": "projects/example/secrets/kube/versions/latest"}),
         (".kube/config", {"secretRef": "projects/example/secrets/kube/versions/1", "mode": "0644"}),
     ],
@@ -206,6 +205,13 @@ def test_profile_manifest_renders_github_repositories_and_secret_references() ->
 def test_home_files_reject_unsafe_paths_unpinned_versions_and_open_modes(path: str, value: object) -> None:
     with pytest.raises(ValueError, match="homeFiles"):
         HomeFileConfig.parse(path, value)
+
+
+def test_home_files_reject_overlapping_targets() -> None:
+    base = deployment_config()
+    nested = replace(base.home_files[0], path=".kube/coreweave-iris/context")
+    with pytest.raises(ValueError, match="overlapping path"):
+        replace(base, home_files=(*base.home_files, nested))
 
 
 def test_deployment_manifest_preserves_unicode_profile_instructions() -> None:
@@ -294,7 +300,7 @@ def test_deployment_models_durable_resources_without_secret_payloads():
         secret_reader = by_name(mocks, "loom-vm-secret-reader")
         assert secret_reader.inputs["role"] == "roles/secretmanager.secretAccessor"
         runtime_secret_readers = [
-            resource for resource in mocks.resources if resource.name.startswith("loom-runtime-secret-")
+            resource for resource in mocks.resources if resource.name.startswith("loom-profile-secret-")
         ]
         assert {field(resource.inputs, "secret_id", "secretId") for resource in runtime_secret_readers} == {
             "coreweave-iris-kubeconfig",

@@ -18,6 +18,7 @@ HEALTH_URL="http://127.0.0.1:${LOOM_PORT}/api/health"
 STARTUP_SUCCESS=/run/loom-startup-succeeded
 HOME_FILES_MANIFEST=/run/loom-home-files.json
 HOME_FILE_MATERIALIZER="${RUNTIME_DIR}/materialize-home-files.py"
+HOME_FILE_STATE_DIR=/var/lib/loom/home-files
 
 echo "== loom startup-script: ${LOOM_DOMAIN} =="
 rm -f "$STARTUP_SUCCESS"
@@ -80,6 +81,7 @@ if [ "${docker_config_changed:-false}" = true ]; then
 fi
 
 install -d -m 0755 "$RUNTIME_DIR"
+install -d -m 0700 "$HOME_FILE_STATE_DIR"
 meta instance/attributes/loom-compose >"$COMPOSE_FILE"
 meta instance/attributes/loom-caddyfile >"${RUNTIME_DIR}/Caddyfile"
 meta instance/attributes/loom-home-file-materializer >"$HOME_FILE_MATERIALIZER"
@@ -119,7 +121,8 @@ docker compose -f "$COMPOSE_FILE" pull
 meta instance/attributes/loom-home-files >"$HOME_FILES_MANIFEST"
 python3 "$HOME_FILE_MATERIALIZER" prepare \
   --manifest="$HOME_FILES_MANIFEST" \
-  --image="$LOOM_IMAGE"
+  --image="$LOOM_IMAGE" \
+  --state-dir="$HOME_FILE_STATE_DIR"
 rm -f "$HOME_FILES_MANIFEST"
 docker compose -f "$COMPOSE_FILE" up -d
 

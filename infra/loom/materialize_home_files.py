@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import re
@@ -20,7 +21,8 @@ from pathlib import Path
 
 SESSION_HOME = Path("/home/app")
 STAGING_MOUNT = Path("/run/loom-home-files")
-LEDGER_NAME = ".loom-managed-home-files.json"
+STATE_MOUNT = Path("/run/loom-home-file-state")
+LEDGER_NAME = "managed-paths.json"
 PATH_PATTERN = re.compile(r"(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+")
 PROJECT_PATTERN = re.compile(r"[a-z0-9-]+")
 SECRET_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
@@ -48,7 +50,7 @@ class StagedHomeFile:
 def _validated_path(value: object) -> str:
     if not isinstance(value, str) or not PATH_PATTERN.fullmatch(value):
         raise ValueError(f"invalid managed home path {value!r}")
-    if value == LEDGER_NAME or any(part in {".", ".."} for part in value.split("/")):
+    if any(part in {".", ".."} for part in value.split("/")):
         raise ValueError(f"invalid managed home path {value!r}")
     return value
 
@@ -75,8 +77,8 @@ def _load_secret_manifest(path: Path) -> tuple[SecretHomeFile, ...]:
             raise ValueError(f"invalid Secret Manager version for {target!r}")
         if not isinstance(mode, str) or mode not in ALLOWED_MODES:
             raise ValueError(f"invalid mode for {target!r}")
-        if target in seen:
-            raise ValueError(f"duplicate managed home path {target!r}")
+        if target in seen or any(target.startswith(f"{path}/") or path.startswith(f"{target}/") for path in seen):
+            raise ValueError(f"duplicate or overlapping managed home path {target!r}")
         seen.add(target)
         result.append(SecretHomeFile(target, project, secret, version, mode))
     return tuple(result)
@@ -98,16 +100,21 @@ def _load_staged_plan(path: Path) -> tuple[StagedHomeFile, ...]:
             raise ValueError(f"invalid staged source for {target!r}")
         if not isinstance(mode, str) or mode not in ALLOWED_MODES:
             raise ValueError(f"invalid mode for {target!r}")
-        if target in seen:
-            raise ValueError(f"duplicate managed home path {target!r}")
+        if target in seen or any(target.startswith(f"{path}/") or path.startswith(f"{target}/") for path in seen):
+            raise ValueError(f"duplicate or overlapping managed home path {target!r}")
         seen.add(target)
         result.append(StagedHomeFile(target, source, int(mode, 8)))
     return tuple(result)
 
 
-def prepare_home_files(manifest_path: Path, image: str) -> None:
+def prepare_home_files(manifest_path: Path, image: str, state_dir: Path) -> None:
     """Fetch every declared secret, then apply the complete plan in the session image."""
     entries = _load_secret_manifest(manifest_path)
+    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    state_status = state_dir.stat(follow_symlinks=False)
+    if not stat.S_ISDIR(state_status.st_mode):
+        raise ValueError(f"home-file state {state_dir} is not a directory")
+    state_dir.chmod(0o700)
     with tempfile.TemporaryDirectory(prefix="loom-home-files-", dir="/run") as staging_value:
         staging = Path(staging_value)
         plan: list[dict[str, str]] = []
@@ -146,6 +153,8 @@ def prepare_home_files(manifest_path: Path, image: str) -> None:
                 "--mount",
                 f"type=bind,source={staging},target={STAGING_MOUNT},readonly",
                 "--mount",
+                f"type=bind,source={state_dir.resolve()},target={STATE_MOUNT}",
+                "--mount",
                 f"type=bind,source={Path(__file__).resolve()},target=/run/materialize-home-files.py,readonly",
                 image,
                 "/run/materialize-home-files.py",
@@ -178,6 +187,46 @@ def _target_directory(home_fd: int, path: str, owner: tuple[int, int]) -> tuple[
     except BaseException:
         os.close(current_fd)
         raise
+
+
+def _remove_managed_file(home_fd: int, path: str, prune_empty_parents: bool) -> None:
+    parts = path.split("/")
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    current_fd = os.dup(home_fd)
+    open_fds = {current_fd}
+    directories: list[tuple[int, str, int]] = []
+    try:
+        for part in parts[:-1]:
+            try:
+                child_fd = os.open(part, directory_flags, dir_fd=current_fd)
+            except FileNotFoundError:
+                return
+            open_fds.add(child_fd)
+            directories.append((current_fd, part, child_fd))
+            current_fd = child_fd
+
+        try:
+            status = os.stat(parts[-1], dir_fd=current_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            status = None
+        if status is not None:
+            if not stat.S_ISREG(status.st_mode):
+                raise ValueError(f"managed home target {path!r} is not a regular file")
+            os.unlink(parts[-1], dir_fd=current_fd)
+
+        if prune_empty_parents:
+            for parent_fd, name, child_fd in reversed(directories):
+                os.close(child_fd)
+                open_fds.remove(child_fd)
+                try:
+                    os.rmdir(name, dir_fd=parent_fd)
+                except OSError as error:
+                    if error.errno in {errno.EEXIST, errno.ENOTEMPTY}:
+                        break
+                    raise
+    finally:
+        for open_fd in open_fds:
+            os.close(open_fd)
 
 
 def _regular_target_or_missing(parent_fd: int, name: str) -> None:
@@ -224,9 +273,9 @@ def _stage_file(
     return temporary
 
 
-def _managed_paths(home_fd: int) -> set[str]:
+def _managed_paths(state_fd: int) -> set[str]:
     try:
-        ledger_fd = os.open(LEDGER_NAME, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=home_fd)
+        ledger_fd = os.open(LEDGER_NAME, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=state_fd)
     except FileNotFoundError:
         return set()
     try:
@@ -242,34 +291,58 @@ def _managed_paths(home_fd: int) -> set[str]:
     return {_validated_path(item) for item in raw}
 
 
-def _write_ledger(home_fd: int, paths: set[str], owner: tuple[int, int]) -> None:
+def _write_ledger(state_fd: int, paths: set[str], owner: tuple[int, int]) -> None:
     payload = (json.dumps(sorted(paths), separators=(",", ":")) + "\n").encode()
-    temporary, ledger_fd = _temporary_file(home_fd, LEDGER_NAME, 0o600, owner)
+    temporary, ledger_fd = _temporary_file(state_fd, LEDGER_NAME, 0o600, owner)
     try:
         with os.fdopen(ledger_fd, "wb", closefd=False) as ledger:
             ledger.write(payload)
             ledger.flush()
             os.fsync(ledger_fd)
     except BaseException:
-        os.unlink(temporary, dir_fd=home_fd)
+        os.unlink(temporary, dir_fd=state_fd)
         raise
     finally:
         os.close(ledger_fd)
-    os.replace(temporary, LEDGER_NAME, src_dir_fd=home_fd, dst_dir_fd=home_fd)
+    os.replace(temporary, LEDGER_NAME, src_dir_fd=state_fd, dst_dir_fd=state_fd)
 
 
-def apply_home_files(plan_path: Path, home: Path = SESSION_HOME, staging: Path = STAGING_MOUNT) -> None:
+def apply_home_files(
+    plan_path: Path,
+    home: Path = SESSION_HOME,
+    staging: Path = STAGING_MOUNT,
+    state: Path = STATE_MOUNT,
+) -> None:
     """Atomically replace declared files and remove only previously managed paths."""
     entries = _load_staged_plan(plan_path)
     home_status = home.stat(follow_symlinks=False)
     if not stat.S_ISDIR(home_status.st_mode):
         raise ValueError(f"session home {home} is not a directory")
     owner = home_status.st_uid, home_status.st_gid
+    state_status = state.stat(follow_symlinks=False)
+    if not stat.S_ISDIR(state_status.st_mode):
+        raise ValueError(f"home-file state {state} is not a directory")
+    state_owner = state_status.st_uid, state_status.st_gid
     home_fd = os.open(home, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        state_fd = os.open(state, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except BaseException:
+        os.close(home_fd)
+        raise
     staged: list[tuple[int, str, str]] = []
     try:
-        previous_paths = _managed_paths(home_fd)
+        previous_paths = _managed_paths(state_fd)
         next_paths = {entry.path for entry in entries}
+        topology_blockers = {
+            previous_path
+            for previous_path in previous_paths - next_paths
+            if any(
+                previous_path.startswith(f"{next_path}/") or next_path.startswith(f"{previous_path}/")
+                for next_path in next_paths
+            )
+        }
+        for removed_path in sorted(topology_blockers, key=lambda item: item.count("/"), reverse=True):
+            _remove_managed_file(home_fd, removed_path, prune_empty_parents=True)
         for entry in entries:
             source = staging / entry.source
             source_status = source.stat(follow_symlinks=False)
@@ -285,17 +358,9 @@ def apply_home_files(plan_path: Path, home: Path = SESSION_HOME, staging: Path =
 
         for parent_fd, temporary, name in staged:
             os.replace(temporary, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
-        for removed_path in previous_paths - next_paths:
-            parent_fd, name = _target_directory(home_fd, removed_path, owner)
-            try:
-                _regular_target_or_missing(parent_fd, name)
-                try:
-                    os.unlink(name, dir_fd=parent_fd)
-                except FileNotFoundError:
-                    pass
-            finally:
-                os.close(parent_fd)
-        _write_ledger(home_fd, next_paths, owner)
+        for removed_path in previous_paths - next_paths - topology_blockers:
+            _remove_managed_file(home_fd, removed_path, prune_empty_parents=False)
+        _write_ledger(state_fd, next_paths, state_owner)
     finally:
         for parent_fd, temporary, _ in staged:
             try:
@@ -304,6 +369,7 @@ def apply_home_files(plan_path: Path, home: Path = SESSION_HOME, staging: Path =
                 pass
             os.close(parent_fd)
         os.close(home_fd)
+        os.close(state_fd)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -312,6 +378,7 @@ def _parser() -> argparse.ArgumentParser:
     prepare = subparsers.add_parser("prepare")
     prepare.add_argument("--manifest", type=Path, required=True)
     prepare.add_argument("--image", required=True)
+    prepare.add_argument("--state-dir", type=Path, required=True)
     apply = subparsers.add_parser("apply")
     apply.add_argument("--plan", type=Path, required=True)
     return parser
@@ -320,7 +387,7 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     if args.command == "prepare":
-        prepare_home_files(args.manifest, args.image)
+        prepare_home_files(args.manifest, args.image, args.state_dir)
     else:
         apply_home_files(args.plan)
 

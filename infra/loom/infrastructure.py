@@ -100,7 +100,6 @@ SECRET_REF = re.compile(
 HOME_FILE_PATH = re.compile(r"(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+")
 DEFAULT_HOME_FILE_MODE = "0600"
 HOME_FILE_MODES = frozenset({"0400", DEFAULT_HOME_FILE_MODE})
-HOME_FILE_LEDGER = ".loom-managed-home-files.json"
 
 
 @dataclass(frozen=True)
@@ -166,8 +165,6 @@ class HomeFileConfig:
     def parse(cls, path: str, value: object) -> HomeFileConfig:
         if not HOME_FILE_PATH.fullmatch(path) or any(part in {".", ".."} for part in path.split("/")):
             raise ValueError(f"homeFiles has invalid relative path {path!r}")
-        if path == HOME_FILE_LEDGER:
-            raise ValueError(f"homeFiles path {path!r} is reserved")
         if not isinstance(value, dict):
             raise ValueError(f"homeFiles entry {path!r} must use a full secretRef")
         secret_ref = str(value.get("secretRef", "")).strip()
@@ -191,6 +188,16 @@ class HomeFileConfig:
     @property
     def secret_target(self) -> tuple[str, str]:
         return self.project, self.secret
+
+
+def _validate_home_file_paths(home_files: tuple[HomeFileConfig, ...]) -> None:
+    paths: set[str] = set()
+    for home_file in home_files:
+        if home_file.path in paths or any(
+            home_file.path.startswith(f"{path}/") or path.startswith(f"{home_file.path}/") for path in paths
+        ):
+            raise ValueError(f"homeFiles has duplicate or overlapping path {home_file.path!r}")
+        paths.add(home_file.path)
 
 
 def _string_tuple(value: object, field: str, profile: str) -> tuple[str, ...]:
@@ -454,6 +461,7 @@ class DeploymentConfig:
             _positive_config_int(value, name)
         _validated_string_tuple(list(self.vm_project_roles), "vmProjectRoles", IAM_ROLE)
         _validated_string_tuple(list(self.vm_pulumi_kms_keys), "vmPulumiKmsKeys", KMS_CRYPTO_KEY)
+        _validate_home_file_paths(self.home_files)
         profile_names = {profile.name for profile in self.profiles}
         workload_names: set[str] = set()
         for workload in self.workloads:
@@ -883,7 +891,7 @@ def _create_secrets(
         suffix = hashlib.sha256(f"{secret_project}/{secret_name}".encode()).hexdigest()[:RESOURCE_HASH_LENGTH]
         runtime_readers.append(
             gcp.secretmanager.SecretIamMember(
-                f"loom-runtime-secret-{suffix}",
+                f"loom-profile-secret-{suffix}",
                 project=secret_project,
                 secret_id=secret_name,
                 role=SECRET_ACCESSOR_ROLE,

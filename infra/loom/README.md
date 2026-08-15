@@ -83,6 +83,13 @@ on the next activation without pruning user-created files. Paths must be
 relative, Secret Manager versions must be numeric, and modes must be `0400` or
 `0600`.
 
+The managed-path ledger lives under root-owned `/var/lib/loom/home-files`, not
+in the session-writable volume. This prevents a session from adding arbitrary
+paths to the next activation's deletion set. Managed paths also cannot overlap;
+activation safely removes a stale managed file when a later declaration needs
+that path to become a directory, or vice versa, but stops if unmanaged content
+blocks the transition.
+
 This mechanism is intentionally deployment-wide. The Loom control plane and
 ordinary session containers share `/home/app`, so every session using that
 volume can read files permitted to the `app` user. Do not use `homeFiles` for a
