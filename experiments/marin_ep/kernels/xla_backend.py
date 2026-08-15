@@ -44,6 +44,8 @@ from levanter.grug._moe.ep_common import (
 )
 from levanter.grug.sharding import _batch_axes
 
+from experiments.marin_ep.kernels.mgpu_transport import combine_segments, dispatch_segments, put_with_transpose
+
 
 def kept_rows_waterfill(total_counts: Int[Array, " E"], *, capacity: int, group_size: int) -> Int[Array, " E"]:
     """Traceable twin of `oracle.kept_rows_per_expert` (SPEC S2 waterfilling)."""
@@ -105,12 +107,17 @@ def marin_ep_moe_local(
     num_experts: int,
     capacity_factor: float,
     pool_group_size: int,
-    transport: Literal["ragged", "gathered"] = "ragged",
+    transport: Literal["ragged", "gathered", "mgpu"] = "ragged",
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     """Shard-local Marin EP MoE body (runs inside shard_map over "expert").
 
     `transport="ragged"` uses `jax.lax.ragged_all_to_all` (production);
-    `"gathered"` uses the all_gather emulation (XLA:CPU conformance runs).
+    `"gathered"` uses the all_gather emulation (XLA:CPU conformance runs);
+    `"mgpu"` uses the fused Mosaic-GPU put kernel (M6), which writes the
+    expert-major pool layout directly — no local permute on either side.
+    The mgpu path assumes the "expert" axis index equals the flat device
+    id (all other mesh axes size 1 or expert-major); revisit at levanter
+    integration.
     """
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -144,29 +151,53 @@ def marin_ep_moe_local(
         )
         sorted_x = _compact_by_keep_mask(sorted_x, keep_mask)
 
-        shard_counts = jnp.sum(accepted.reshape(ep_size, ep_size, local_experts), axis=2)
-        if transport == "ragged":
-            input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(shard_counts, shard_id)
-            dispatch_out_shape = jnp.zeros((pool_rows, x_local.shape[1]), dtype=x_local.dtype)
-            x_dispatched = jax.lax.ragged_all_to_all(
+        if transport == "mgpu":
+            # Region = compacted per-owner prefix of kept rows: the pool has
+            # no capacity gaps, groups are contiguous, and `ragged_dot`
+            # consumes it directly (kept[g] == sum_d accepted[d, g]).
+            kept_by_owner = kept.reshape(ep_size, local_experts)
+            region = (jnp.cumsum(kept_by_owner, axis=1) - kept_by_owner).reshape(num_experts).astype(jnp.int32)
+            dispatch_plan = dispatch_segments(accepted, region, shard_id, local_experts=local_experts)
+            combine_plan = combine_segments(accepted, region, shard_id, local_experts=local_experts)
+            send_rows = jnp.sum(my_accepted, dtype=jnp.int32)
+            pool_recv_rows = jnp.sum(kept_by_owner[shard_id], dtype=jnp.int32)
+            x_pool = put_with_transpose(
                 sorted_x,
-                dispatch_out_shape,
-                input_offsets,
-                send_sizes,
-                output_offsets,
-                recv_sizes,
-                axis_name="expert",
+                dispatch_plan,
+                combine_plan,
+                pool_recv_rows,
+                send_rows,
+                pool_rows,
+                assignments_per_shard,
+                "expert",
+                ep_size,
             )
+            local_group_sizes = kept_by_owner[shard_id].astype(jnp.int32)
+            local_sorted_indices = shard_counts = None
         else:
-            x_dispatched = _ragged_a2a_gathered(
-                sorted_x, out_rows=pool_rows, shard_counts=shard_counts, shard_id=shard_id, axis_name="expert"
+            shard_counts = jnp.sum(accepted.reshape(ep_size, ep_size, local_experts), axis=2)
+            if transport == "ragged":
+                input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(shard_counts, shard_id)
+                dispatch_out_shape = jnp.zeros((pool_rows, x_local.shape[1]), dtype=x_local.dtype)
+                x_dispatched = jax.lax.ragged_all_to_all(
+                    sorted_x,
+                    dispatch_out_shape,
+                    input_offsets,
+                    send_sizes,
+                    output_offsets,
+                    recv_sizes,
+                    axis_name="expert",
+                )
+            else:
+                x_dispatched = _ragged_a2a_gathered(
+                    sorted_x, out_rows=pool_rows, shard_counts=shard_counts, shard_id=shard_id, axis_name="expert"
+                )
+            x_pool, local_sorted_indices, local_group_sizes = _local_permute_from_counts(
+                x_dispatched,
+                accepted,
+                local_expert_size=local_experts,
+                shard_index=shard_id,
             )
-        x_pool, local_sorted_indices, local_group_sizes = _local_permute_from_counts(
-            x_dispatched,
-            accepted,
-            local_expert_size=local_experts,
-            shard_index=shard_id,
-        )
 
     with jax.named_scope("moe_up_down"):
         w13_out = ragged_dot(x_pool, moe_w13_local, local_group_sizes)
@@ -175,8 +206,22 @@ def marin_ep_moe_local(
         out_pool = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
 
     with jax.named_scope("combine"):
-        local_output = _sort_activations(out_pool, jnp.argsort(local_sorted_indices))
-        if transport == "ragged":
+        if transport == "mgpu":
+            # `out_pool` is already in the (expert, source, rank) layout the
+            # combine plan reads from — no unsort needed.
+            returned = put_with_transpose(
+                out_pool,
+                combine_plan,
+                dispatch_plan,
+                send_rows,
+                pool_recv_rows,
+                assignments_per_shard,
+                pool_rows,
+                "expert",
+                ep_size,
+            )
+        elif transport == "ragged":
+            local_output = _sort_activations(out_pool, jnp.argsort(local_sorted_indices))
             return_out_shape = jnp.zeros((assignments_per_shard, x_local.shape[1]), dtype=local_output.dtype)
             return_input_offsets, return_send_sizes, return_output_offsets, return_recv_sizes = _shard_a2a_params(
                 shard_counts.T, shard_id
@@ -191,6 +236,7 @@ def marin_ep_moe_local(
                 axis_name="expert",
             )
         else:
+            local_output = _sort_activations(out_pool, jnp.argsort(local_sorted_indices))
             returned = _ragged_a2a_gathered(
                 local_output,
                 out_rows=assignments_per_shard,

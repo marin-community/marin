@@ -181,21 +181,24 @@ def test_xla_backend_matches_oracle_values_drops_and_grads_on_8_device_mesh():
     assert "OK" in result.stdout
 
 
+@pytest.mark.parametrize("transport", ["ragged", "mgpu"])
 @pytest.mark.parametrize("group_size", [1, 2, 4])
-def test_real_gpu_ragged_transport_matches_oracle(group_size):
-    """Production ragged transport on real GPUs (passed on GB200, MEP-006).
+def test_real_gpu_transport_matches_oracle(group_size, transport):
+    """Production transports on real GPUs (ragged passed on GB200, MEP-006).
 
     Dims must be Triton-grouped-GEMM safe: haliax ragged_dot's GPU path
     silently miscomputes below its tile minimums (H=32/I=48 gives O(10)
     errors), and it accumulates in tf32 regardless of the jax matmul
-    precision setting — hence the 1e-2 tolerance.
+    precision setting — hence the 1e-2 tolerance. For mgpu, hidden must be
+    LANE-divisible, and tokens are sized so some segments exceed the SMEM
+    tile height (both kernel copy paths run).
     """
     if jax.default_backend() != "gpu":
         pytest.skip("needs real GPUs")
     devices = len(jax.devices())
     if devices < 2:
         pytest.skip("needs >= 2 GPUs")
-    tokens, topk, hidden, intermediate = 64, 3, 256, 256
+    tokens, topk, hidden, intermediate = (512 if transport == "mgpu" else 64), 3, 256, 256
     num_experts = devices * 4
     capacity_factor = 1.1
 
@@ -222,7 +225,7 @@ def test_real_gpu_ragged_transport_matches_oracle(group_size):
             num_experts=num_experts,
             capacity_factor=capacity_factor,
             pool_group_size=group_size,
-            transport="ragged",
+            transport=transport,
         ),
         mesh=mesh,
         in_specs=(batch_spec, batch_spec, batch_spec, weight_spec, weight_spec),

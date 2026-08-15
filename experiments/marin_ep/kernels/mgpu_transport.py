@@ -24,15 +24,29 @@ Constructs were validated on GB200 in MEP-005
 256-elements-per-dim async-copy limit (hence the `[rows, H/256, 256]`
 payload view), and jax 0.10/0.11 `out_shape`/`out_type` compat.
 
-Status: DRAFT — the kernel is unvalidated until the next GPU session; the
-metadata builders are exact and tested on CPU.
+Gradients: dispatch and combine are exact transposes of each other — the
+cotangent of "scatter my segments to peers" is "peers scatter the
+corresponding cotangent segments back", which is the same kernel run with
+the opposite-direction plan. `put_with_transpose` packages that as a
+`custom_vjp` so the backend differentiates end-to-end.
+
+The kernel's output buffer is uninitialized memory (unlike
+`ragged_all_to_all`, which fills from a zeroed operand), so rows not
+covered by any segment are garbage; `put_with_transpose` zeroes rows at or
+beyond `valid_rows` (with the compacted-region layout, coverage is the
+contiguous prefix `[0, valid_rows)`).
+
+Metadata builders are exact and tested on CPU
+(`tests/test_mgpu_transport_metadata.py`); the kernel itself needs GPUs.
 """
 
+import functools
 import inspect
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import lax
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import mosaic_gpu as plgpu
@@ -41,7 +55,10 @@ from jaxtyping import Array, Float, Int
 _OUT_KWARG = "out_type" if "out_type" in inspect.signature(plgpu.kernel).parameters else "out_shape"
 
 LANE = 256  # async-copy limit per dimension
-TILE_ROWS = 64  # rows per put tile: 64 x 4 x 256 bf16 = 128 KB SMEM
+# Per-copy SMEM staging budget; the GB200 carveout is ~228 KB/SM, and the
+# tile height adapts so `tile_rows * hidden * itemsize` stays under this.
+SMEM_TILE_BYTES = 160 * 1024
+MAX_TILE_ROWS = 64
 
 
 @dataclass(frozen=True)
@@ -60,6 +77,9 @@ class SegmentPlan:
     src_lo: Int[Array, " N"]
     dst_lo: Int[Array, " N"]
     rows: Int[Array, " N"]
+
+
+jax.tree_util.register_dataclass(SegmentPlan, [f.name for f in fields(SegmentPlan)], [])
 
 
 def _rotated(dev_id: jax.Array, num_devices: int) -> jax.Array:
@@ -141,19 +161,19 @@ def put_segments(
 ) -> jax.Array:
     """Scatter `plan` segments of `src` into peers' output buffers.
 
-    Every device runs this collectively; each returns its own filled
-    receive buffer `[out_rows, H]` (rows not covered by any segment are
-    zero). Wait condition: every peer signals once per SM after finishing
-    all segments destined to me.
-
-    DRAFT: unvalidated on hardware.
+    Every device runs this collectively; each returns its own receive
+    buffer `[out_rows, H]`. Rows not covered by any segment are
+    UNINITIALIZED — callers mask them (see `put_with_transpose`). Wait
+    condition: every peer signals once per SM after finishing all segments
+    destined to me.
     """
     hidden = src.shape[1]
     if hidden % LANE:
         raise ValueError(f"hidden={hidden} must be divisible by {LANE}")
     lanes = hidden // LANE
+    tile_rows = max(1, min(MAX_TILE_ROWS, SMEM_TILE_BYTES // (hidden * src.dtype.itemsize)))
     src_view = src.reshape(src.shape[0], lanes, LANE)
-    max_tiles = (src.shape[0] + TILE_ROWS - 1) // TILE_ROWS
+    max_tiles = (src.shape[0] + tile_rows - 1) // tile_rows
     entries_per_dest = plan.src_lo.shape[0] // num_devices
 
     def kernel_body(x_ref, dest_ids_ref, src_lo_ref, dst_lo_ref, rows_ref, out_ref, done_ref):
@@ -180,25 +200,25 @@ def put_segments(
             start = src_lo_ref[entry]
             rows = rows_ref[entry]
             offset = dst_lo_ref[entry]
-            num_full = lax.div(rows, jnp.int32(TILE_ROWS))
-            tail = rows - num_full * TILE_ROWS
+            num_full = lax.div(rows, jnp.int32(tile_rows))
+            tail = rows - num_full * tile_rows
 
             # Full tiles strided across SMs; TMA boxes are static, so the
-            # ragged tail (< TILE_ROWS rows) goes row-by-row on one SM.
+            # ragged tail (< tile_rows rows) goes row-by-row on one SM.
             @pl.loop(0, max_tiles)
             def _tile(tile_idx):
                 @pl.when((lax.rem(tile_idx, num_sms) == sm_id) & (tile_idx < num_full))
                 def _():
-                    lo = tile_idx * TILE_ROWS
-                    copy_rows(start + lo, dst_ref, offset + lo, TILE_ROWS)
+                    lo = tile_idx * tile_rows
+                    copy_rows(start + lo, dst_ref, offset + lo, tile_rows)
 
             @pl.when(lax.rem(num_full, num_sms) == sm_id)
             def _tail():
-                @pl.loop(0, TILE_ROWS - 1)
+                @pl.loop(0, tile_rows - 1)
                 def _row(row_idx):
                     @pl.when(row_idx < tail)
                     def _():
-                        lo = num_full * TILE_ROWS + row_idx
+                        lo = num_full * tile_rows + row_idx
                         copy_rows(start + lo, dst_ref, offset + lo, 1)
 
         @pl.loop(0, num_devices)
@@ -232,3 +252,51 @@ def put_segments(
         **{_OUT_KWARG: out_types},
     )(src_view, plan.dest_ids, plan.src_lo, plan.dst_lo, plan.rows)
     return out.reshape(out_rows, hidden)
+
+
+def _zero_invalid_rows(buf: jax.Array, valid_rows: jax.Array) -> jax.Array:
+    positions = jnp.arange(buf.shape[0], dtype=jnp.int32)
+    return jnp.where((positions < valid_rows)[:, None], buf, 0)
+
+
+def _int_cotangents(tree):
+    return jax.tree.map(lambda a: np.zeros(jnp.shape(a), dtype=jax.dtypes.float0), tree)
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(5, 6, 7, 8))
+def put_with_transpose(
+    x: Float[Array, "N H"],
+    fwd_plan: SegmentPlan,
+    bwd_plan: SegmentPlan,
+    fwd_valid: Int[Array, ""],
+    bwd_valid: Int[Array, ""],
+    fwd_rows: int,
+    bwd_rows: int,
+    axis_name: str,
+    num_devices: int,
+) -> jax.Array:
+    """Differentiable `put_segments`: `bwd_plan` is the transpose transfer.
+
+    Dispatch and combine plans built from the same `accepted`/`region` are
+    each other's transposes (entry (d, g) copies the same row range in the
+    opposite direction), so the cotangent of one put is the other put
+    applied to the output cotangent. `*_valid` are the covered-row counts
+    of the respective receive buffers; rows beyond them are zeroed.
+    """
+    out = put_segments(x, fwd_plan, out_rows=fwd_rows, axis_name=axis_name, num_devices=num_devices)
+    return _zero_invalid_rows(out, fwd_valid)
+
+
+def _put_with_transpose_fwd(x, fwd_plan, bwd_plan, fwd_valid, bwd_valid, fwd_rows, bwd_rows, axis_name, num_devices):
+    out = put_with_transpose(x, fwd_plan, bwd_plan, fwd_valid, bwd_valid, fwd_rows, bwd_rows, axis_name, num_devices)
+    return out, (fwd_plan, bwd_plan, fwd_valid, bwd_valid)
+
+
+def _put_with_transpose_bwd(fwd_rows, bwd_rows, axis_name, num_devices, residuals, dy):
+    fwd_plan, bwd_plan, fwd_valid, bwd_valid = residuals
+    dx = put_segments(dy, bwd_plan, out_rows=bwd_rows, axis_name=axis_name, num_devices=num_devices)
+    dx = _zero_invalid_rows(dx, bwd_valid)
+    return (dx, _int_cotangents(fwd_plan), _int_cotangents(bwd_plan), *_int_cotangents((fwd_valid, bwd_valid)))
+
+
+put_with_transpose.defvjp(_put_with_transpose_fwd, _put_with_transpose_bwd)
