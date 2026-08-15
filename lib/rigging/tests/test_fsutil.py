@@ -711,7 +711,7 @@ def test_usage_scan_retries_transient_s3_page_failures(monkeypatch):
             bucket, _, key = path.partition("/")
             return bucket, key, None
 
-        def call_s3(self, method, **kwargs):
+        def call_s3(self, method, **_kwargs):
             assert method == "list_objects_v2"
             self.requests += 1
             if self.requests == 1:
