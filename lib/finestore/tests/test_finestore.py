@@ -807,7 +807,6 @@ def test_legacy_read_view_reads_an_unsealed_listing_snapshot(tmp_path):
 
     view = LegacyReadView(str(root))
 
-    assert view.token is None
     assert not view.is_sealed()
     assert view.schema_version("samples") == 3
     assert view.point("samples", doc_id="1")["score"] == 0.7

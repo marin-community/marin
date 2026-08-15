@@ -62,10 +62,17 @@ class MergedRow:
 class _ReadableShard(Protocol):
     """The shard coordinates needed to scan one archive snapshot."""
 
-    path: str
-    generation: int
-    commit_sequence: int
-    primary_key_sorted: bool
+    @property
+    def path(self) -> str: ...
+
+    @property
+    def generation(self) -> int: ...
+
+    @property
+    def commit_sequence(self) -> int: ...
+
+    @property
+    def primary_key_sorted(self) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -226,20 +233,106 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None) -> pa.Table:
     return combined
 
 
-def _scan_shards(
-    root: str,
-    shards: tuple[_ReadableShard, ...],
-    primary_key: tuple[str, ...],
-    *,
-    columns: Sequence[str] | None = None,
-    where: list[tuple[str, str, object]] | None = None,
-) -> pa.Table | None:
-    """Read and deduplicate one immutable set of Parquet shards."""
-    plan = _read_plan(root, shards, primary_key, columns, where)
-    return None if plan is None else _scan_plan(plan, columns)
+class _ReadOperations:
+    """Read operations shared by manifest and legacy listing snapshots."""
+
+    root: str
+
+    def primary_key(self, table: str) -> tuple[str, ...]:
+        raise NotImplementedError
+
+    def list_shards(self, table: str) -> Sequence[_ReadableShard]:
+        raise NotImplementedError
+
+    def _read_plan(
+        self,
+        table: str,
+        columns: Sequence[str] | None,
+        where: list[tuple[str, str, object]] | None,
+    ) -> _ReadPlan | None:
+        shards = tuple(self.list_shards(table))
+        if not shards:
+            return None
+        return _read_plan(self.root, shards, self.primary_key(table), columns, where)
+
+    def scan(
+        self,
+        table: str,
+        *,
+        columns: Sequence[str] | None = None,
+        where: list[tuple[str, str, object]] | None = None,
+    ) -> pa.Table | None:
+        """Read a deduplicated table, or ``None`` when the table is unknown or has no shards."""
+        plan = self._read_plan(table, columns, where)
+        if plan is None:
+            return None
+        return _scan_plan(plan, columns)
+
+    def iter_rows(
+        self,
+        table: str,
+        *,
+        columns: Sequence[str] | None = None,
+        where: list[tuple[str, str, object]] | None = None,
+    ) -> Iterator[dict]:
+        """Yield deduplicated rows from this view in primary-key order."""
+        plan = self._read_plan(table, columns, where)
+        if plan is None:
+            return
+        streams = [
+            iter_shard_rows(
+                shard,
+                plan.schema,
+                plan.primary_key,
+                plan.filesystem,
+                plan.columns,
+                plan.pushdown_where,
+            )
+            for shard in plan.shards
+        ]
+        for merged in merge_deduplicated_rows(streams):
+            row = merged.row
+            if not _matches_filter(row, plan.post_dedup_where):
+                continue
+            if columns is not None:
+                row = {name: row[name] for name in columns if name in row}
+            yield row
+
+    def point(self, table: str, **keys) -> dict | None:
+        result = self.scan(table, where=[(key, "==", value) for key, value in keys.items()])
+        if result is None or result.num_rows == 0:
+            return None
+        return result.slice(0, 1).to_pylist()[0]
+
+    def keys(self, table: str) -> set[tuple]:
+        if not self.list_shards(table):
+            return set()
+        primary_key = self.primary_key(table)
+        result = self.scan(table, columns=list(primary_key))
+        if result is None:
+            return set()
+        values = [result.column(name).to_pylist() for name in primary_key]
+        return set(zip(*values, strict=True))
+
+    def read_blob(self, name: str) -> bytes | None:
+        """Return a named blob, or ``None`` when it is absent."""
+        row = self.point(BLOBS_TABLE, **{BLOB_NAME_COLUMN: name})
+        if row is None:
+            return None
+        data = row.get(BLOB_DATA_COLUMN)
+        return bytes(data) if data is not None else None
+
+    def resolve(self, uri: str) -> bytes | None:
+        """Resolve a blob URI, returning ``None`` when absent and rejecting unsupported references."""
+        ref = parse_uri(uri)
+        if ref is None:
+            raise ValueError(f"not a finestore:// reference: {uri!r}")
+        if ref.table != BLOBS_TABLE:
+            raise ValueError(f"finestore:// resolution supports the blobs table only, got {ref.table!r}")
+        return self.read_blob(ref.key)
 
 
-class ReadView:
+class ReadView(_ReadOperations):
     """A read-only archive view pinned to one commit token."""
 
     def __init__(self, root: str, snapshot: ArchiveSnapshot | None = None) -> None:
@@ -290,17 +383,6 @@ class ReadView:
         self._meta_cache[table] = metadata
         return metadata
 
-    def _read_plan(
-        self,
-        table: str,
-        columns: Sequence[str] | None,
-        where: list[tuple[str, str, object]] | None,
-    ) -> _ReadPlan | None:
-        shards = tuple(self.list_shards(table))
-        if not shards:
-            return None
-        return _read_plan(self.root, shards, self.primary_key(table), columns, where)
-
     def is_sealed(self) -> bool:
         return self._snapshot.manifest.sealed is not None
 
@@ -308,85 +390,10 @@ class ReadView:
         """Return the committed seal metadata, if this view is sealed."""
         return self._snapshot.manifest.sealed
 
-    def scan(
-        self,
-        table: str,
-        *,
-        columns: Sequence[str] | None = None,
-        where: list[tuple[str, str, object]] | None = None,
-    ) -> pa.Table | None:
-        """Read this view's deduplicated table, or ``None`` when it has no active shards."""
-        plan = self._read_plan(table, columns, where)
-        if plan is None:
-            return None
-        return _scan_plan(plan, columns)
-
-    def iter_rows(
-        self,
-        table: str,
-        *,
-        columns: Sequence[str] | None = None,
-        where: list[tuple[str, str, object]] | None = None,
-    ) -> Iterator[dict]:
-        """Yield deduplicated rows from this view in primary-key order."""
-        plan = self._read_plan(table, columns, where)
-        if plan is None:
-            return
-        streams = [
-            iter_shard_rows(
-                shard,
-                plan.schema,
-                plan.primary_key,
-                plan.filesystem,
-                plan.columns,
-                plan.pushdown_where,
-            )
-            for shard in plan.shards
-        ]
-        for merged in merge_deduplicated_rows(streams):
-            row = merged.row
-            if not _matches_filter(row, plan.post_dedup_where):
-                continue
-            if columns is not None:
-                row = {name: row[name] for name in columns if name in row}
-            yield row
-
-    def point(self, table: str, **keys) -> dict | None:
-        result = self.scan(table, where=[(key, "==", value) for key, value in keys.items()])
-        if result is None or result.num_rows == 0:
-            return None
-        return result.slice(0, 1).to_pylist()[0]
-
     def max_seq(self, table: str) -> int:
         """Return the greatest sequence in active shards, or ``-1`` when there are none."""
         shards = self.list_shards(table)
         return max((shard.max_seq for shard in shards), default=-1)
-
-    def keys(self, table: str) -> set[tuple]:
-        state = self._snapshot.manifest.tables.get(table)
-        if state is None or not state.shards:
-            return set()
-        primary_key = self.primary_key(table)
-        result = self.scan(table, columns=list(primary_key))
-        if result is None:
-            return set()
-        values = [result.column(name).to_pylist() for name in primary_key]
-        return set(zip(*values, strict=True))
-
-    def read_blob(self, name: str) -> bytes | None:
-        row = self.point(BLOBS_TABLE, **{BLOB_NAME_COLUMN: name})
-        if row is None:
-            return None
-        data = row.get(BLOB_DATA_COLUMN)
-        return bytes(data) if data is not None else None
-
-    def resolve(self, uri: str) -> bytes | None:
-        ref = parse_uri(uri)
-        if ref is None:
-            raise ValueError(f"not a finestore:// reference: {uri!r}")
-        if ref.table != BLOBS_TABLE:
-            raise ValueError(f"finestore:// resolution supports the blobs table only, got {ref.table!r}")
-        return self.read_blob(ref.key)
 
     def list_shards(self, table: str) -> list[Shard]:
         state = self._snapshot.manifest.tables.get(table)

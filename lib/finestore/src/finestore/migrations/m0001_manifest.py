@@ -9,9 +9,7 @@ import dataclasses
 import hashlib
 import re
 import uuid
-from collections.abc import Sequence
 
-import pyarrow as pa
 import pyarrow.parquet as pq
 from pydantic import AliasChoices, BaseModel, Field
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
@@ -19,9 +17,6 @@ from rigging.filesystem.storage_path import StoragePath
 
 from finestore.commit import read_snapshot, write_schema
 from finestore.layout import (
-    BLOB_DATA_COLUMN,
-    BLOB_NAME_COLUMN,
-    BLOBS_TABLE,
     SEQ_COLUMN,
     ArchiveMetadata,
     CommitToken,
@@ -33,9 +28,8 @@ from finestore.layout import (
     SealMarker,
     Shard,
     TableMetadata,
-    parse_uri,
 )
-from finestore.reader import _scan_shards
+from finestore.reader import _ReadOperations
 
 MIGRATION_ID = "0001_manifest"
 FROM_VERSION = 1
@@ -95,7 +89,14 @@ class _LegacyReadTable:
     shards: tuple[LegacyReadShard, ...]
 
 
-class LegacyReadView:
+@dataclasses.dataclass(frozen=True)
+class _LegacyShardLocation:
+    path: StoragePath
+    writer: str
+    generation: int
+
+
+class LegacyReadView(_ReadOperations):
     """A read-only, listing-based view of one format-v1 archive.
 
     Version 1 has no atomic HEAD, so this view pins the shard names observed while it is
@@ -144,6 +145,7 @@ class LegacyReadView:
         return tuple(sorted(self._tables))
 
     def schema_version(self, table: str) -> int | None:
+        """Return the table schema version, or ``None`` when the table is unknown or empty."""
         state = self._tables.get(table)
         if state is None or not state.shards:
             return None
@@ -154,49 +156,6 @@ class LegacyReadView:
 
     def seal_marker(self) -> SealMarker | None:
         return self._seal
-
-    def scan(
-        self,
-        table: str,
-        *,
-        columns: Sequence[str] | None = None,
-        where: list[tuple[str, str, object]] | None = None,
-    ) -> pa.Table | None:
-        state = self._tables.get(table)
-        if state is None:
-            return None
-        return _scan_shards(self.root, state.shards, state.metadata.primary_key, columns=columns, where=where)
-
-    def point(self, table: str, **keys) -> dict | None:
-        result = self.scan(table, where=[(key, "==", value) for key, value in keys.items()])
-        if result is None or result.num_rows == 0:
-            return None
-        return result.slice(0, 1).to_pylist()[0]
-
-    def keys(self, table: str) -> set[tuple]:
-        state = self._tables.get(table)
-        if state is None or not state.shards:
-            return set()
-        result = self.scan(table, columns=list(state.metadata.primary_key))
-        if result is None:
-            return set()
-        values = [result.column(name).to_pylist() for name in state.metadata.primary_key]
-        return set(zip(*values, strict=True))
-
-    def read_blob(self, name: str) -> bytes | None:
-        row = self.point(BLOBS_TABLE, **{BLOB_NAME_COLUMN: name})
-        if row is None:
-            return None
-        data = row.get(BLOB_DATA_COLUMN)
-        return bytes(data) if data is not None else None
-
-    def resolve(self, uri: str) -> bytes | None:
-        ref = parse_uri(uri)
-        if ref is None:
-            raise ValueError(f"not a finestore:// reference: {uri!r}")
-        if ref.table != BLOBS_TABLE:
-            raise ValueError(f"finestore:// resolution supports the blobs table only, got {ref.table!r}")
-        return self.read_blob(ref.key)
 
     def list_shards(self, table: str) -> list[LegacyReadShard]:
         state = self._tables.get(table)
@@ -234,8 +193,8 @@ def _legacy_shard(path: StoragePath) -> tuple[str, int] | None:
     return writer, generation
 
 
-def _legacy_read_shards(root: StoragePath, table: str) -> tuple[LegacyReadShard, ...]:
-    shards = []
+def _legacy_shard_locations(root: StoragePath, table: str) -> tuple[_LegacyShardLocation, ...]:
+    locations = []
     for directory, _, names in (root / table).walk():
         for name in names:
             path = directory / name
@@ -243,8 +202,15 @@ def _legacy_read_shards(root: StoragePath, table: str) -> tuple[LegacyReadShard,
             if parsed is None:
                 continue
             writer, generation = parsed
-            shards.append(LegacyReadShard(path=str(path), writer=writer, generation=generation))
-    return tuple(sorted(shards, key=lambda shard: shard.path))
+            locations.append(_LegacyShardLocation(path=path, writer=writer, generation=generation))
+    return tuple(sorted(locations, key=lambda location: str(location.path)))
+
+
+def _legacy_read_shards(root: StoragePath, table: str) -> tuple[LegacyReadShard, ...]:
+    return tuple(
+        LegacyReadShard(path=str(location.path), writer=location.writer, generation=location.generation)
+        for location in _legacy_shard_locations(root, table)
+    )
 
 
 def _sequence_bounds(metadata: pq.FileMetaData) -> tuple[int, int]:
@@ -263,36 +229,30 @@ def _sequence_bounds(metadata: pq.FileMetaData) -> tuple[int, int]:
 
 def _legacy_shards(root: StoragePath, table: str) -> tuple[Shard, ...]:
     shards = []
-    for directory, _, names in (root / table).walk():
-        for name in names:
-            path = directory / name
-            parsed = _legacy_shard(path)
-            if parsed is None:
-                continue
-            writer, generation = parsed
-            with path.open("rb") as handle:
-                metadata = pq.read_metadata(handle)
-                handle.seek(0)
-                digest = hashlib.sha256()
-                size_bytes = 0
-                while chunk := handle.read(_HASH_CHUNK_BYTES):
-                    digest.update(chunk)
-                    size_bytes += len(chunk)
-            min_seq, max_seq = _sequence_bounds(metadata)
-            shards.append(
-                Shard(
-                    path=str(path),
-                    writer=writer,
-                    generation=generation,
-                    rows=metadata.num_rows,
-                    min_seq=min_seq,
-                    max_seq=max_seq,
-                    size_bytes=size_bytes,
-                    content_sha256=digest.hexdigest(),
-                    commit_sequence=1,
-                )
+    for location in _legacy_shard_locations(root, table):
+        with location.path.open("rb") as handle:
+            metadata = pq.read_metadata(handle)
+            handle.seek(0)
+            digest = hashlib.sha256()
+            size_bytes = 0
+            while chunk := handle.read(_HASH_CHUNK_BYTES):
+                digest.update(chunk)
+                size_bytes += len(chunk)
+        min_seq, max_seq = _sequence_bounds(metadata)
+        shards.append(
+            Shard(
+                path=str(location.path),
+                writer=location.writer,
+                generation=location.generation,
+                rows=metadata.num_rows,
+                min_seq=min_seq,
+                max_seq=max_seq,
+                size_bytes=size_bytes,
+                content_sha256=digest.hexdigest(),
+                commit_sequence=1,
             )
-    return tuple(sorted(shards, key=lambda shard: shard.path))
+        )
+    return tuple(shards)
 
 
 def inspect_legacy_snapshot(root: str) -> LegacyArchive:
