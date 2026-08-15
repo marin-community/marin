@@ -510,6 +510,19 @@ def test_decon_long_record_fallback_spans_short_paragraphs(tmp_path: Path):
     assert rows["doc"]["max_overlap"] == 1.0
 
 
+def test_decon_complete_record_with_one_ngram_and_short_answer_matches(tmp_path: Path):
+    text = "In which fiscal quarter of 2024 did Atlassian record its second highest revenue?\n\nQ4"
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "eval", "text": text}],
+        input_records=[{"id": "doc", "text": text, "partition_id": 0}],
+        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5),
+    )
+
+    assert rows["doc"]["contaminated"] is True
+    assert len(rows["doc"]["matched_hashes"]) == 1
+
+
 @pytest.mark.parametrize("short_match", ["September 29, 2011", "2, 3 and 4"])
 def test_decon_does_not_mark_long_document_from_one_short_match(tmp_path: Path, short_match: str):
     rows = _run_decon_one_shot(
