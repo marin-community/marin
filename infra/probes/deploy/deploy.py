@@ -19,7 +19,7 @@ import subprocess
 from pathlib import Path
 
 import click
-from rigging.filesystem import load_cluster_config
+from rigging.filesystem.cluster_config import load_cluster_config
 
 logger = logging.getLogger("deploy")
 

@@ -20,7 +20,11 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     CW_MULTINODE_TOPOLOGY_LABELS,
 )
 from iris.cluster.platforms.k8s.nodepool_manifests import KUEUE_NODE_LABEL
-from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_SYSTEM, IRIS_PRIORITY_CLASSES
+from iris.cluster.platforms.k8s.types import (
+    IRIS_PRIORITY_CLASS_PRODUCTION,
+    IRIS_PRIORITY_CLASS_SYSTEM,
+    IRIS_PRIORITY_CLASSES,
+)
 
 # --------------------------------------------------------------------------
 # Variants
@@ -119,11 +123,12 @@ NON_BINDING_QUOTA = {
 COVERED_RESOURCES = list(NON_BINDING_QUOTA)
 
 
-# Kueue-only priorities within each Iris band. Ordinary, standalone-accelerator,
-# and co-scheduled Workloads occupy consecutive values starting at the native
-# band. This keeps the lowest batch Workload priority at 0, above CoreWeave's
-# priority -1 node-health-check Pods even though Kueue and Pod priority are
-# separate scheduling domains.
+# Kueue-only priorities within each Iris band. Batch and interactive Workloads
+# order ordinary, standalone-accelerator, and co-scheduled work consecutively.
+# Production Workloads share one value so their request shape cannot preempt
+# other production work. The lowest batch Workload priority remains 0, above
+# CoreWeave's priority -1 node-health-check Pods even though Kueue and Pod
+# priority are separate scheduling domains.
 class WorkloadPriorityKind(StrEnum):
     CPU = "cpu"
     ACCELERATOR = "accelerator"
@@ -147,7 +152,7 @@ IRIS_WORKLOAD_PRIORITY_CLASSES = tuple(
         band=class_name.removeprefix("iris-"),
         kind=kind,
         name=workload_priority_class_name(class_name.removeprefix("iris-"), kind),
-        value=value + offset,
+        value=value if class_name == IRIS_PRIORITY_CLASS_PRODUCTION else value + offset,
     )
     for class_name, value, _ in IRIS_PRIORITY_CLASSES
     if class_name != IRIS_PRIORITY_CLASS_SYSTEM

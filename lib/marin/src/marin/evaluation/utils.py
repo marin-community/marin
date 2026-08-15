@@ -3,7 +3,7 @@
 
 import os
 
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 
 def discover_hf_checkpoints(base_path: str) -> list[str]:

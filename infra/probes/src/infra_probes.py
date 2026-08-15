@@ -26,7 +26,7 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpe
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from provisioning import collect_provisioning
-from rigging.filesystem import load_cluster_config
+from rigging.filesystem.cluster_config import load_cluster_config
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration
 from runner import METRIC_UP, Collector, CollectorRunner, MetricSink, health_collector

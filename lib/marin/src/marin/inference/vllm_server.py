@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 import requests
 from iris.runtime import telemetry as runtime_telemetry
 from rigging import telemetry
-from rigging.filesystem import marin_prefix
+from rigging.filesystem.cluster_config import marin_prefix
 from rigging.telemetry.metrics import MetricSnapshotPublisher
 from rigging.telemetry.probes import nccl
 from rigging.telemetry.probes.runner import PeriodicProbe

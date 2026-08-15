@@ -18,7 +18,9 @@ from marin.datakit.ingestion_manifest import (
     write_ingestion_metadata_json,
 )
 from marin.transform.huggingface.dataset_to_eval import get_nested_item
-from rigging.filesystem import StoragePath, atomic_rename, open_url
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import StoragePath
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 

@@ -12,7 +12,7 @@ from typing import Callable, Optional
 import wandb
 
 import jax
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from tqdm_loggable.auto import tqdm
 
 import levanter.tracker

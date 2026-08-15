@@ -36,7 +36,9 @@ from concurrent.futures import wait as wait_for_futures
 from typing import Protocol
 
 from rigging.config_discovery import find_project_root
-from rigging.filesystem import StoragePath, atomic_rename, marin_temp_bucket, prefix_join
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import launch_provenance
 
 logger = logging.getLogger(__name__)
@@ -183,7 +185,7 @@ class PersistentKvCache:
     A load answers from memory, else reads the directory and remembers the value. A
     store writes memory inline; it writes an object-store directory in the
     background, a local directory inline. Writes go through
-    :func:`rigging.filesystem.atomic_rename`, so a concurrent reader never sees a
+    :func:`rigging.filesystem.atomic.atomic_rename`, so a concurrent reader never sees a
     partial value, and two processes writing the same key are safe because a
     content-addressed key means identical bytes.
 

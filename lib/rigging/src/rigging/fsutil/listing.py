@@ -6,7 +6,7 @@
 One :class:`Entry` model serves both the CLI and the TUI, and one navigable tree
 spans every backend: the root lists the declared buckets, and each level below is
 an ordinary object-store listing routed through
-:func:`rigging.filesystem.filesystem_for`.
+:func:`rigging.filesystem.buckets.filesystem_for`.
 """
 
 import dataclasses
@@ -20,7 +20,7 @@ from typing import Any
 
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
-from rigging.filesystem.s3_compat import is_transient_s3_error
+from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.filesystem.storage_path import StoragePath
 from rigging.fsutil.compression import compression_for
 from rigging.timing import ExponentialBackoff, retry_with_backoff

@@ -166,14 +166,16 @@ nine `WorkloadPriorityClass` objects at startup.
 | --- | ---: | ---: | ---: |
 | batch | 0 | 1 | 2 |
 | interactive | 10 | 11 | 12 |
-| production | 1000 | 1001 | 1002 |
+| production | 1000 | 1000 | 1000 |
 
-The ordering is CPU < accelerator < co-scheduled group within a band. Kueue can
-therefore reclaim same-band CPU reservations for one accelerator Pod, or both
-lower tiers for a co-scheduled GPU group. A user-selected higher band still
-outranks every tier in the band below it. Pod `priorityClassName` remains the
-ordinary Iris band, so this ordering affects Kueue admission and preemption but
-does not change kube-scheduler priority within an admitted workload.
+Batch and interactive workloads are ordered CPU < accelerator < co-scheduled
+group within their band. Kueue can reclaim same-band CPU reservations for one
+accelerator Pod, or both lower tiers for a co-scheduled GPU group. Production
+workloads share one Kueue priority, so request shape cannot cause one production
+workload to preempt another. A user-selected higher band still outranks every
+tier in the band below it. Pod `priorityClassName` remains the ordinary Iris
+band, so this ordering affects Kueue admission and preemption but does not change
+kube-scheduler priority within an admitted workload.
 
 For example, a `batch` CPU coordinator uses tier `0`, its separately admitted
 accelerator child uses tier `1`, and a co-scheduled CPU/GPU group uses tier `2`.
@@ -185,18 +187,16 @@ Kubernetes priority `-1`, and Iris batch Pods retain Kubernetes priority `0`.
 Kueue Workload priority and Kubernetes Pod priority are separate scheduling
 domains, but neither representation places Iris work below the health checker.
 
-Workloads created before this mapping use the native band value, equal to the
-new CPU tier. During rollout, a new accelerator or co-scheduled Workload can
-therefore preempt older same-band work. Drain older same-band accelerator and
-co-scheduled Workloads before deployment when they must not be interrupted.
-
 ```mermaid
 flowchart TD
-    request[RunTaskRequest] --> gang{Co-scheduled group?}
+    request[RunTaskRequest] --> production{Production band?}
+    production -- Yes --> prod[Use production priority 1000]
+    production -- No --> gang
     gang -- Yes --> native[Use band plus 2<br/>co-scheduled tier]
     gang -- No --> accelerator{Accelerator requested?}
     accelerator -- Yes --> gpu[Use band plus 1<br/>accelerator tier]
     accelerator -- No --> cpu[Use native Iris band<br/>CPU tier]
+    prod --> queue[Kueue LocalQueue and shared ClusterQueue]
     native --> queue[Kueue LocalQueue and shared ClusterQueue]
     gpu --> queue
     cpu --> queue

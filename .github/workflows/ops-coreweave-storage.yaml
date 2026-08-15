@@ -24,53 +24,49 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # A run that collects nothing must be red. A green run here is the signal that
+      # the Grafana staleness rule trusts, so skipping the collector on a missing
+      # secret would leave the dashboard silently frozen.
       - name: Check CoreWeave token
-        id: coreweave-token
         env:
           COREWEAVE_API_TOKEN: ${{ secrets.COREWEAVE_API_TOKEN }}
         run: |
           if [[ -z "$COREWEAVE_API_TOKEN" ]]; then
-            echo "::notice::COREWEAVE_API_TOKEN is not set. The storage collector is inactive."
-            echo "available=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "::error::COREWEAVE_API_TOKEN is not set, so the storage collector cannot run."
+            exit 1
           fi
 
       - name: Checkout repository
-        if: steps.coreweave-token.outputs.available == 'true'
         uses: actions/checkout@v5
 
       - name: Set up Python
-        if: steps.coreweave-token.outputs.available == 'true'
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install uv
-        if: steps.coreweave-token.outputs.available == 'true'
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
       - name: Sync uv environment
-        if: steps.coreweave-token.outputs.available == 'true'
         run: uv sync --all-packages --extra=cpu --no-default-groups
 
       - name: Authenticate to Google Cloud
-        if: steps.coreweave-token.outputs.available == 'true' && !inputs.dry_run
+        if: ${{ !inputs.dry_run }}
         uses: google-github-actions/auth@v3
         with:
           credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
 
       - name: Set up Google Cloud SDK
-        if: steps.coreweave-token.outputs.available == 'true' && !inputs.dry_run
+        if: ${{ !inputs.dry_run }}
         uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
       - name: Install SSH key
-        if: steps.coreweave-token.outputs.available == 'true' && !inputs.dry_run
+        if: ${{ !inputs.dry_run }}
         env:
           SSH_KEY: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
           SSH_KEY_PUB: ${{ secrets.IRIS_CI_GCP_SSH_KEY_PUB }}
@@ -82,7 +78,6 @@ jobs:
           chmod 644 ~/.ssh/google_compute_engine.pub
 
       - name: Record CoreWeave storage telemetry
-        if: steps.coreweave-token.outputs.available == 'true'
         env:
           COREWEAVE_API_TOKEN: ${{ secrets.COREWEAVE_API_TOKEN }}
         run: |

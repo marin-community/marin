@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import TextIO
 
 from finelog.client.log_client import LogClient, Table
-from rigging.filesystem import open_url
+from rigging.filesystem.factory import open_url
 from sample import Sample
 
 logger = logging.getLogger(__name__)

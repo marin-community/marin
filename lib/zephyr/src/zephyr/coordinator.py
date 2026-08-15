@@ -22,7 +22,7 @@ from fray.current_client import current_client
 from fray.local_backend import LocalClient
 from fray.types import ActorConfig, ResourceConfig
 from rigging import telemetry
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, log_time
 
 from zephyr.memory_store import MemoryTableRegistration

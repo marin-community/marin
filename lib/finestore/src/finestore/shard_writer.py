@@ -17,7 +17,8 @@ import contextlib
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from rigging.filesystem import StoragePath, atomic_rename
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.storage_path import StoragePath
 
 # zstd matches finelog's segment encoding: strong ratio on the repetitive token-id / logprob / JSON
 # columns eval data is dominated by, for negligible CPU at write time.

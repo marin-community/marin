@@ -13,7 +13,8 @@ from pathlib import Path, PurePosixPath
 from fray.types import ResourceConfig, create_environment
 from huggingface_hub import HfApi, hf_hub_download
 from iris.cluster.setup_scripts import default_setup_script
-from rigging.filesystem import StoragePath, filesystem_for
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath
 
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig, has_vllm_option, serve_config_vllm_args

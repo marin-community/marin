@@ -14,7 +14,7 @@ import dataclasses
 import json
 
 import draccus
-from rigging.filesystem import open_url
+from rigging.filesystem.factory import open_url
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 

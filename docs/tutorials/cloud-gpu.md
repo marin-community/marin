@@ -70,7 +70,7 @@ the cluster. Use that prefix for inputs, outputs, and caches. Use a
 lifecycle-managed path for disposable data:
 
 ```python
-from rigging.filesystem import marin_temp_bucket
+from rigging.filesystem.cluster_config import marin_temp_bucket
 
 scratch = marin_temp_bucket(ttl_days=1, prefix="my-experiment")
 ```

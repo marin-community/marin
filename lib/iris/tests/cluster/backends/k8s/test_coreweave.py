@@ -319,8 +319,8 @@ def test_start_controller_creates_controller_resources():
         "iris-accelerator-interactive": 11,
         "iris-coscheduled-interactive": 12,
         "iris-cpu-production": 1000,
-        "iris-accelerator-production": 1001,
-        "iris-coscheduled-production": 1002,
+        "iris-accelerator-production": 1000,
+        "iris-coscheduled-production": 1000,
     }
 
     agent_spec = node_agent["spec"]["template"]["spec"]
