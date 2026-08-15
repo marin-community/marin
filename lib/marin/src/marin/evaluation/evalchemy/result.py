@@ -20,7 +20,7 @@ import logging
 from dataclasses import dataclass
 
 from pydantic import Field
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.lm_eval_samples import is_scratch_artifact
 from marin.execution.artifact import Artifact, result_type_name

@@ -69,7 +69,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.writers import write_parquet_file
 
 from experiments.evaluation.pipeline import EvaluationResult, eval_step

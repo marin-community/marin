@@ -28,8 +28,8 @@ from dataclasses import dataclass
 import pyarrow as pa
 import pyarrow.dataset as pds
 import pyarrow.parquet as pq
+import rigging.filesystem.factory as factory
 from pyarrow.fs import FSSpecHandler, PyFileSystem
-from rigging.filesystem import factory
 
 from finestore.layout import SEQ_COLUMN, FineStoreLayout, Shard
 from finestore.reader import CompositeReader

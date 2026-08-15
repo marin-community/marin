@@ -30,7 +30,8 @@ from fray.types import ResourceConfig
 from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.artifact import write_artifact
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, open_url
+from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import ZephyrContext

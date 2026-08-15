@@ -50,7 +50,7 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     verify_fuzzy_dups_step,
 )
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.reference_pipeline import SAMPLE_PREFIX, sample_sources

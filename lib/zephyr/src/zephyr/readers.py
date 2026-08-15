@@ -21,7 +21,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import vortex
 import zstandard as zstd
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem.factory import open_url, url_to_fs
 
 from zephyr import counters
 from zephyr.expr import referenced_columns, to_pyarrow_expr

@@ -21,7 +21,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import sanitize_job_name
 from marin.external_dependencies import MARIN_SKYRL
 from marin.training.training import LevanterCheckpoint, temporary_storage_base_path
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 _EXECUTION = "skyrl_execution"
 _LAUNCHER_PYTHON = "3.12"

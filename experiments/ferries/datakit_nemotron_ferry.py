@@ -43,14 +43,9 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     verify_fuzzy_dups,
 )
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
-from rigging.filesystem import (
-    StoragePath,
-    check_path_in_region,
-    marin_temp_bucket,
-    prefix_join,
-    region_from_metadata,
-    url_to_fs,
-)
+from rigging.filesystem.cluster_config import check_path_in_region, marin_temp_bucket, region_from_metadata
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from rigging.timing import log_time
 

@@ -125,7 +125,7 @@ Read access on the literal URIs in a query is enforced in two stages:
   (default `gs://marin-,s3://marin-`, i.e. any marin GCS bucket plus the R2/CoreWeave S3
   stores). A URI outside it is hard-refused.
 - Among the allowed URIs, whether a **GCS** read is same-region or egress-costly cross-region
-  is decided at query time by `rigging.filesystem.is_cross_region_url`, which compares the
+  is decided at query time by `rigging.filesystem.cross_region.is_cross_region_url`, which compares the
   bucket's live GCS location metadata against this VM's region (multi-region aware, and
   honoring the `MARIN_I_WILL_PAY_FOR_ALL_FEES` override). A cross-region GCS read must **opt
   in** with a leading comment:

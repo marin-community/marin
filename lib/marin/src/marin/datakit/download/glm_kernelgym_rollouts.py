@@ -30,7 +30,7 @@ token budget mid-reasoning: 3,711 of 3,724 untruncated turns close exactly once,
 from enum import StrEnum
 
 from fray.types import ResourceConfig
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext

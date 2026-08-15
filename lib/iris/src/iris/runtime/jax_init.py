@@ -18,7 +18,8 @@ import time
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.cache import fetch_kv_cache, sync_kv_cache
-from rigging.filesystem import marin_prefix, prefix_join
+from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.storage_path import prefix_join
 from rigging.provenance import LAUNCH_PROVENANCE_ENV
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 

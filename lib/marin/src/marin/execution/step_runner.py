@@ -26,7 +26,8 @@ from fray.current_client import _current_client_var, current_client, set_current
 from fray.local_backend import LocalJobHandle
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.cluster.client.job_info import get_job_info
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 from marin.execution.artifact import (
