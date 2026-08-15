@@ -521,3 +521,26 @@ Experiment ID prefix: `MEP`.
 - Next action: verdict; on success score steps 5-24 vs the S28/S33
   baselines (18.08% split-32 ragged, 19.63% cute, 21.66% cudnn-cute at
   EP16; fixed EP64 ~16.3 s/it from mep-ctl-fixed) and vs drops.
+
+### 2026-08-15 10:40 - MEP-014: FIRST PASSING multi-node marin_ep training — EP16 exact proxy, 0.044% drops
+- Run: mep-m8-marin-ep16d-25 on branch marin-ep-8081 — ep-marin, EP16
+  (4 nodes x 4 GPUs, 1 proc/GPU), E48 (El=3), batch 256 (= 1,048,576
+  tokens/step, 65,536 tokens/device — the weaver S-series exact-proxy
+  load and the hero per-device load), cf 1.1, split-32 ragged transport,
+  LHS off, overlap 1, PGLE/command buffers off.
+- Result: ALL 25 STEPS COMPLETE, zero faults. rate 19.3 s/it (whole-run
+  mean incl. compile), loss 6.18 falling, **drop_fraction 0.00044
+  (0.044%)** — vs 3.575% for fixed_all_to_all at cf 1.33 on the EP64
+  hero (mep-ctl-fixed) and vs sim prediction 0.9-1.5% at cf 1.1 under
+  trained-router skew (near-uniform init routing gives even fewer).
+  ~80x fewer dropped assignments at 17% smaller buffers. R2 satisfied
+  with two orders of magnitude of margin on this geometry.
+- Path here (context for the run-count): EP64 ragged-class is broken on
+  every tree incl. PR #8081's own branch (its exact runs are all 4-node;
+  full-rack is its open gate) -> #8313. EP16 at batch 1024/512 OOMs
+  (261k/131k tokens/device is 4x/2x the hero load — my batch arithmetic
+  error, weaver's exact proxy is batch 256).
+- Now running: mep-ctl2-ragged-ep16-25 — stock ep-ragged at the identical
+  b256/cf1.1/split-32 config for the same-bytes drop + speed A/B.
+- Next: control comparison table (also vs S28 18.08% MFU at cf 1.33);
+  logbook + issue; then M8 PR.
