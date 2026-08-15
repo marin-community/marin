@@ -31,11 +31,19 @@ Experiment ID prefix: `MEP`.
   needed to evaluate gate G1b.
 
 ## Current TL;DR
-- M0-M4 done + M5 prepped ([MEP-001]..[MEP-004]): spec, dense oracle,
-  message-passing correctness simulator with explicit backward, L0/L1 perf
-  models, an XLA stepping-stone backend passing oracle conformance on a
-  real 8-device mesh, and the transport-substrate decision (Pallas
-  Mosaic-GPU distributed) with a ready spike harness. 41 CPU tests green.
+- M0-M5 done ([MEP-001]..[MEP-006]): spec, dense oracle, message-passing
+  correctness simulator with explicit backward, L0/L1 perf models, and a
+  hardware-validated XLA stepping-stone backend (oracle-conformant values
+  + grads + drops on GB200 with production ragged transport). 43 CPU
+  tests green + 3 GPU-marked.
+- Transport substrate proven on GB200 ([MEP-005]): Pallas Mosaic-GPU
+  remote puts + semaphores, 584 GB/s/device egress untuned (65% of
+  NVLink5 peak), collective-metadata path, zero custom CUDA.
+- M6 in flight: generic put_segments kernel drafted; its
+  dispatch/combine metadata builders are CPU-proven against the
+  simulator ([MEP-006]).
+- Watch out: haliax ragged_dot's GPU Triton path silently miscomputes at
+  small dims and pins tf32 ([MEP-006]).
 - Drop rule adopted (SPEC S2): group-pooled capacity with per-expert floor,
   G=3 → 0.31% drops at cf 1.33 vs ~4% for per-cell/per-expert (MEP-H1
   promoted).
@@ -237,3 +245,42 @@ Experiment ID prefix: `MEP`.
 - Next action: ragged-transport GPU conformance of xla_backend (values +
   grads at EP4); then M6: fused dispatch/combine transport kernel
   (count exchange + puts per SPEC F1-F3/F5) with XLA GEMMs between.
+
+### 2026-08-14 22:15 - MEP-006: xla_backend GPU-conformant; M6 metadata done
+- Hypothesis: the production (ragged_all_to_all) path of xla_backend is
+  oracle-conformant on real GPUs.
+- Commit Hash: (this commit). Second GB200 tray session (~15 min; first
+  holder pod self-released mid-session, second pod sat SchedulingGated
+  ~6 min behind another user's gated fleet).
+- Command: pod `uv run python /tmp/gpu_conformance.py` (now in-repo as
+  `test_real_gpu_ragged_transport_matches_oracle`).
+- Result:
+  - CONFORMANT at EP4 x E16, group sizes {1, 2, 4}: values, drop counts,
+    and dx/dweights/dw13/dw2 all match the oracle. Live pooling
+    confirmation: drops on identical routing fall 430 -> 320 -> 134 as
+    G goes 1 -> 2 -> 4.
+  - Debug chain worth remembering: initial 68.7% value mismatch was NOT
+    the transport (a ragged-vs-gathered probe matched exactly) but
+    **haliax ragged_dot's GPU Triton path silently miscomputing at
+    small dims** (H=32/I=48: max|err| ~29 even for zero-size groups;
+    H=I=256: correct up to tf32). It also ignores
+    jax_default_matmul_precision (stays tf32). Conformance dims must be
+    Triton-tile safe; tolerance 1e-2. Candidate upstream issue to file.
+  - M6 transport kernel drafted (`kernels/mgpu_transport.py`): one generic
+    `put_segments` kernel (rotated destinations, per-destination arrival
+    signals, static TMA boxes with row-wise ragged tails) driven by pure
+    metadata builders `dispatch_segments`/`combine_segments`. The builders
+    are CPU-tested: the dispatch plan reproduces the correctness
+    simulator's receive pools bit-exactly and dispatch->combine
+    round-trips (`test_mgpu_transport_metadata.py`).
+  - Env note: pod resolves jax/jaxlib 0.10.1 with a non-functional 0.11
+    cuda plugin warning yet CUDA devices work; the CI/local 0.10/0.11
+    split memory applies to pods too. Mosaic distributed + ragged a2a both
+    fine on 0.10.1.
+- Interpretation: the stepping-stone backend is hardware-validated and
+  drop-in shaped for levanter integration; the fused-transport kernel's
+  routing math is proven; only the Mosaic kernel body needs GPU debugging.
+- Next action (next session): validate `put_segments` on GB200 vs the
+  gathered transport at EP4; integrate as `transport="mgpu"` in
+  xla_backend; measure vs ragged; then EP4 microbench vs fixed_all_to_all
+  and the levanter backend registration.
