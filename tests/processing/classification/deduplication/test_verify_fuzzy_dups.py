@@ -276,7 +276,7 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
     assert verified.sources[source_key].source_tag == "source_000"
 
 
-def test_verifier_splits_large_cluster_by_minhash_bucket(tmp_path, monkeypatch):
+def test_verifier_splits_large_cluster_with_empty_candidate_shard(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     rows = []
     candidate_rows = []
@@ -299,11 +299,19 @@ def test_verifier_splits_large_cluster_by_minhash_bucket(tmp_path, monkeypatch):
     source_key, source = _write_source(
         root=tmp_path,
         name="source",
-        shards={"part-00000.parquet": rows},
+        shards={
+            "part-00000.parquet": rows,
+            "part-00001.parquet": [{"id": "singleton", "text": "outside the candidate clusters"}],
+        },
     )
     candidates = _write_candidates(
         root=tmp_path,
-        rows_by_source={source_key: {"part-00000.parquet": candidate_rows}},
+        rows_by_source={
+            source_key: {
+                "part-00000.parquet": candidate_rows,
+                "part-00001.parquet": [],
+            }
+        },
     )
     minhash = _write_minhash(
         root=tmp_path,
