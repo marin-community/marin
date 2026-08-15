@@ -107,8 +107,9 @@ def decon_paths() -> dict[str, str]:
     if not path.exists():
         raise PendingRegistration(
             "decontamination",
-            f"run experiments/datakit/scripts/register_decontam.py to write {path.name} "
-            "from the completed decontamination run",
+            f"check in {path.name}, mapping each source name to its decon output relative to "
+            f"{MANIFEST_PREFIX}. The run that produces the data records its own paths, the way "
+            "the Harrier map was recorded",
         )
     return json.loads(path.read_text())
 
@@ -326,14 +327,15 @@ def decontam(source: str) -> StepSpec:
     the eval bloom and the cross-source drop sets into its identity through its
     dependencies, and both have moved since the run that produced this data, so
     rebuilding the step from current code addresses a directory that does not
-    exist. ``scripts/register_decontam.py`` writes the map by reading the run.
+    exist. The map is checked in by whoever runs decontamination, from the step
+    paths their own pipeline resolves -- nothing searches storage for it.
     """
     paths = decon_paths()
     if source not in paths:
         raise PendingRegistration(
             f"decontamination for {source!r}",
             f"the map in {decon_paths_path().name} covers {len(paths)} sources but not this one; "
-            "rerun register_decontam.py against a run that includes it",
+            "it must name every source the store builds over",
         )
     return _frozen_step(f"hero/decontam/{source}", paths[source])
 
