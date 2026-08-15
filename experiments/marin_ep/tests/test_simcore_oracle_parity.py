@@ -42,22 +42,26 @@ def _shard_weights(w, devices):
 
 
 @pytest.mark.parametrize(
-    "devices,tokens,topk,num_experts,skew",
+    "devices,tokens,topk,num_experts,skew,group_size",
     [
-        (1, 32, 2, 8, None),
-        (4, 16, 2, 8, None),
-        (4, 16, 3, 8, 0.3),
-        (8, 8, 4, 16, 0.1),
+        (1, 32, 2, 8, None, 1),
+        (4, 16, 2, 8, None, 1),
+        (4, 16, 3, 8, 0.3, 1),
+        (4, 16, 3, 8, 0.3, 2),
+        (8, 8, 4, 16, 0.1, 1),
+        (8, 8, 4, 16, 0.1, 2),
     ],
 )
 @pytest.mark.parametrize("capacity_factor", [1.0, 1.25, 1e9])
-def test_forward_matches_oracle_across_shapes_and_capacity(devices, tokens, topk, num_experts, skew, capacity_factor):
+def test_forward_matches_oracle_across_shapes_and_capacity(
+    devices, tokens, topk, num_experts, skew, group_size, capacity_factor
+):
     rng = np.random.default_rng(seed=hash((devices, tokens, topk, num_experts, capacity_factor)) % 2**32)
     x, experts, weights, w13, w2 = _random_instance(
         rng, devices=devices, tokens=tokens, topk=topk, hidden=8, intermediate=12, num_experts=num_experts, skew=skew
     )
     capacity = expert_capacity(devices * tokens * topk, num_experts, capacity_factor)
-    keep, dropped_oracle = pooled_keep_mask(experts, num_experts=num_experts, capacity=capacity)
+    keep, dropped_oracle = pooled_keep_mask(experts, num_experts=num_experts, capacity=capacity, group_size=group_size)
 
     result = simulate_forward(
         jnp.asarray(x),
@@ -68,6 +72,7 @@ def test_forward_matches_oracle_across_shapes_and_capacity(devices, tokens, topk
         num_experts=num_experts,
         capacity_factor=capacity_factor,
         activation_fn=ACT,
+        pool_group_size=group_size,
     )
     y_oracle = moe_oracle(
         jnp.asarray(x),
@@ -123,8 +128,28 @@ def test_drop_accounting_under_total_hot_expert_skew():
     np.testing.assert_allclose(np.asarray(result.y), np.asarray(y_oracle), rtol=1e-5, atol=1e-5)
 
 
-def test_output_independent_of_ep_partitioning():
-    """SPEC I3: the same global batch gives bitwise-identical results at every EP degree."""
+def test_group_pool_floor_protects_cold_expert_and_grants_surplus():
+    """SPEC S2 waterfilling: a hot expert cannot push a cold groupmate below
+    its floor C, and unused floor capacity is granted to the hot expert."""
+    num_experts, capacity, group_size = 2, 4, 2
+    # Expert 0: 10 assignments (hot). Expert 1: 2 assignments (cold, under C=4).
+    experts = np.array([[0] * 10 + [1] * 2]).reshape(1, 12, 1)
+    keep, dropped = pooled_keep_mask(experts, num_experts=num_experts, capacity=capacity, group_size=group_size)
+    keep = keep.reshape(-1)
+    # Cold expert keeps everything; hot expert gets C plus the groupmate's slack of 2.
+    assert keep[10:].all()
+    assert keep[:10].sum() == capacity + 2
+    assert keep[:6].all() and not keep[6:10].any()  # earliest arrivals kept
+    assert dropped == 10 - (capacity + 2)
+
+
+@pytest.mark.parametrize(
+    "group_size,ep_degrees",
+    [(1, (1, 2, 4, 8)), (2, (1, 2, 4))],  # G must divide El = E / S
+)
+def test_output_independent_of_ep_partitioning(group_size, ep_degrees):
+    """SPEC I3: for fixed pool group size, the same global batch gives
+    bitwise-identical results at every EP degree."""
     rng = np.random.default_rng(seed=1)
     total_tokens, topk, num_experts, hidden, intermediate = 32, 3, 8, 8, 12
     x, experts, weights, w13, w2 = _random_instance(
@@ -142,7 +167,7 @@ def test_output_independent_of_ep_partitioning():
         return a.reshape(devices, total_tokens // devices, *a.shape[2:])
 
     outputs, dropped = [], []
-    for devices in (1, 2, 4, 8):
+    for devices in ep_degrees:
         result = simulate_forward(
             jnp.asarray(resharded(x, devices)),
             resharded(experts, devices),
@@ -152,6 +177,7 @@ def test_output_independent_of_ep_partitioning():
             num_experts=num_experts,
             capacity_factor=1.1,
             activation_fn=ACT,
+            pool_group_size=group_size,
         )
         outputs.append(np.asarray(result.y).reshape(total_tokens, hidden))
         dropped.append(result.dropped_total)
@@ -162,7 +188,8 @@ def test_output_independent_of_ep_partitioning():
 
 
 @pytest.mark.parametrize("capacity_factor", [1.1, 1e9])
-def test_backward_matches_oracle_autodiff(capacity_factor):
+@pytest.mark.parametrize("group_size", [1, 2])
+def test_backward_matches_oracle_autodiff(capacity_factor, group_size):
     """SPEC I5: explicit backward parity with JAX autodiff of the keep-masked oracle."""
     rng = np.random.default_rng(seed=2)
     devices, tokens, topk, num_experts, hidden, intermediate = 4, 12, 3, 8, 8, 12
@@ -177,7 +204,7 @@ def test_backward_matches_oracle_autodiff(capacity_factor):
         skew=0.5,
     )
     capacity = expert_capacity(devices * tokens * topk, num_experts, capacity_factor)
-    keep, _ = pooled_keep_mask(experts, num_experts=num_experts, capacity=capacity)
+    keep, _ = pooled_keep_mask(experts, num_experts=num_experts, capacity=capacity, group_size=group_size)
     dy = rng.standard_normal((devices, tokens, hidden), dtype=np.float32)
 
     result = simulate_forward(
@@ -189,6 +216,7 @@ def test_backward_matches_oracle_autodiff(capacity_factor):
         num_experts=num_experts,
         capacity_factor=capacity_factor,
         activation_fn=ACT,
+        pool_group_size=group_size,
     )
     bwd = simulate_backward(
         jnp.asarray(dy),

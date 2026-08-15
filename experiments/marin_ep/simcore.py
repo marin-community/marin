@@ -31,7 +31,7 @@ import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, Float
 
-from experiments.marin_ep.oracle import expert_capacity
+from experiments.marin_ep.oracle import expert_capacity, kept_rows_per_expert
 
 _F32 = jnp.float32
 
@@ -88,7 +88,7 @@ class Routing:
     base: np.ndarray  # [S, E] exclusive prefix over devices
     keep: np.ndarray  # [S, T, K] kept-assignment mask
     routes: list[list[tuple[np.ndarray, np.ndarray]]]
-    valid_rows: np.ndarray  # [E] rows received per expert: min(N_g, C)
+    kept_rows: np.ndarray  # [E] rows received per expert (SPEC S2 waterfilling)
     dropped_total: int
 
 
@@ -97,7 +97,8 @@ class Saved:
     """Residuals the forward pass saves for backward."""
 
     routing: Routing
-    recv_x: list[jax.Array]  # per owner device: [El, C, H] dispatched inputs
+    region: np.ndarray  # [E] start row of each expert's ragged region in its owner's pool
+    recv_x: list[jax.Array]  # per owner device: [El*C, H] dispatched-input pool
     returned: jax.Array  # [S, T, K, H] per-assignment expert outputs
 
 
@@ -118,7 +119,7 @@ class BackwardResult:
     trace: Trace
 
 
-def _routing(selected_experts: np.ndarray, *, num_experts: int, capacity_factor: float) -> Routing:
+def _routing(selected_experts: np.ndarray, *, num_experts: int, capacity_factor: float, pool_group_size: int) -> Routing:
     """Phases F1-F2: per-device counts, count exchange, offsets, keep rule."""
     num_devices, tokens, topk = selected_experts.shape
     assignments = tokens * topk
@@ -135,12 +136,14 @@ def _routing(selected_experts: np.ndarray, *, num_experts: int, capacity_factor:
         rank_local[d, order] = rank_sorted
 
     base = np.cumsum(counts, axis=0) - counts
+    total_counts = counts.sum(axis=0)
+    kept = kept_rows_per_expert(total_counts, capacity=capacity, group_size=pool_group_size)
 
     keep = np.zeros((num_devices, assignments), dtype=bool)
     routes: list[list[tuple[np.ndarray, np.ndarray]]] = []
     for d in range(num_devices):
         flat = selected_experts[d].reshape(assignments)
-        keep[d] = base[d, flat] + rank_local[d] < capacity
+        keep[d] = base[d, flat] + rank_local[d] < kept[flat]
         device_routes = []
         for g in range(num_experts):
             slots = np.nonzero((flat == g) & keep[d])[0]
@@ -148,15 +151,14 @@ def _routing(selected_experts: np.ndarray, *, num_experts: int, capacity_factor:
             device_routes.append((slots, offsets))
         routes.append(device_routes)
 
-    total_counts = counts.sum(axis=0)
     return Routing(
         capacity=capacity,
         counts=counts,
         base=base,
         keep=keep.reshape(num_devices, tokens, topk),
         routes=routes,
-        valid_rows=np.minimum(total_counts, capacity),
-        dropped_total=int(np.maximum(total_counts - capacity, 0).sum()),
+        kept_rows=kept,
+        dropped_total=int((total_counts - kept).sum()),
     )
 
 
@@ -182,6 +184,7 @@ def simulate_forward(
     num_experts: int,
     capacity_factor: float,
     activation_fn: Callable[[jax.Array], jax.Array],
+    pool_group_size: int = 1,
 ) -> ForwardResult:
     """Run SPEC Section 3 (F1-F6) and return output, residuals, and trace."""
     num_devices, tokens, hidden_dim = x.shape
@@ -190,24 +193,38 @@ def simulate_forward(
     intermediate_dim = w2.shape[2]
     if local_experts * num_devices != num_experts:
         raise ValueError(f"E={num_experts} must equal S*El={num_devices}*{local_experts}")
+    if local_experts % pool_group_size:
+        raise ValueError(f"pool_group_size={pool_group_size} must divide local expert count={local_experts}")
     compute_dtype = x.dtype
     itemsize = jnp.dtype(compute_dtype).itemsize
     trace = Trace()
 
-    routing = _routing(np.asarray(selected_experts), num_experts=num_experts, capacity_factor=capacity_factor)
+    routing = _routing(
+        np.asarray(selected_experts),
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        pool_group_size=pool_group_size,
+    )
     _emit_count_exchange(trace, num_devices, num_experts, "fwd_count_exchange")
 
-    # F3: dispatch puts into per-owner receive buffers [El, C, H].
-    recv_x = [jnp.zeros((local_experts, routing.capacity, hidden_dim), compute_dtype) for _ in range(num_devices)]
+    # Ragged region starts within each owner's fixed [El*C, H] pool.
+    region = np.zeros(num_experts, dtype=np.int64)
+    for owner in range(num_devices):
+        bank = slice(owner * local_experts, (owner + 1) * local_experts)
+        region[bank] = np.cumsum(routing.kept_rows[bank]) - routing.kept_rows[bank]
+    pool_rows = local_experts * routing.capacity
+
+    # F3: dispatch puts into per-owner receive pools.
+    recv_x = [jnp.zeros((pool_rows, hidden_dim), compute_dtype) for _ in range(num_devices)]
     x_assign = jnp.asarray(x)  # [S, T, H]; row for assignment slot a is x[d, a // K]
     for d in range(num_devices):
         for g in range(num_experts):
             slots, offsets = routing.routes[d][g]
             if slots.size == 0:
                 continue
-            owner, local_g = g // local_experts, g % local_experts
+            owner = g // local_experts
             rows = x_assign[d, slots // topk].astype(compute_dtype)
-            recv_x[owner] = recv_x[owner].at[local_g, offsets].set(rows)
+            recv_x[owner] = recv_x[owner].at[region[g] + offsets].set(rows)
             trace.put(d, owner, slots.size * hidden_dim * itemsize, "fwd_dispatch")
 
     # F4: expert GEMMs (fp32 accumulation, outputs in compute dtype).
@@ -216,8 +233,8 @@ def simulate_forward(
         outs = []
         for local_g in range(local_experts):
             g = owner * local_experts + local_g
-            m = int(routing.valid_rows[g])
-            rows = recv_x[owner][local_g, :m]
+            m = int(routing.kept_rows[g])
+            rows = recv_x[owner][int(region[g]) : int(region[g]) + m]
             hidden = jnp.matmul(rows, w13[owner, local_g], preferred_element_type=_F32).astype(compute_dtype)
             act_out = _swiglu(hidden, intermediate_dim, activation_fn)
             z = jnp.matmul(act_out, w2[owner, local_g], preferred_element_type=_F32).astype(compute_dtype)
@@ -245,7 +262,7 @@ def simulate_forward(
         preferred_element_type=_F32,
     ).astype(compute_dtype)
 
-    saved = Saved(routing=routing, recv_x=recv_x, returned=returned)
+    saved = Saved(routing=routing, region=region, recv_x=recv_x, returned=returned)
     return ForwardResult(y=y, dropped_total=routing.dropped_total, saved=saved, trace=trace)
 
 
@@ -288,15 +305,17 @@ def simulate_backward(
         jnp.zeros((), compute_dtype),
     ).reshape(num_devices, tokens * topk, hidden_dim)
 
-    # B3: dispatch dZ along the forward routes.
-    recv_dz = [jnp.zeros((local_experts, routing.capacity, hidden_dim), compute_dtype) for _ in range(num_devices)]
+    # B3: dispatch dZ along the forward routes, into pools laid out as in F3.
+    region = saved.region
+    pool_rows = local_experts * routing.capacity
+    recv_dz = [jnp.zeros((pool_rows, hidden_dim), compute_dtype) for _ in range(num_devices)]
     for d in range(num_devices):
         for g in range(num_experts):
             slots, offsets = routing.routes[d][g]
             if slots.size == 0:
                 continue
-            owner, local_g = g // local_experts, g % local_experts
-            recv_dz[owner] = recv_dz[owner].at[local_g, offsets].set(dz_slots[d, slots])
+            owner = g // local_experts
+            recv_dz[owner] = recv_dz[owner].at[region[g] + offsets].set(dz_slots[d, slots])
             trace.put(d, owner, slots.size * hidden_dim * itemsize, "bwd_dispatch")
 
     # B4: expert MLP backward (recomputes the hidden from saved inputs).
@@ -307,9 +326,10 @@ def simulate_backward(
         outs = []
         for local_g in range(local_experts):
             g = owner * local_experts + local_g
-            m = int(routing.valid_rows[g])
-            rows = saved.recv_x[owner][local_g, :m]
-            dz = recv_dz[owner][local_g, :m]
+            m = int(routing.kept_rows[g])
+            lo = int(region[g])
+            rows = saved.recv_x[owner][lo : lo + m]
+            dz = recv_dz[owner][lo : lo + m]
             hidden = jnp.matmul(rows, w13[owner, local_g], preferred_element_type=_F32).astype(compute_dtype)
             gate, up = jnp.split(hidden, [intermediate_dim], axis=-1)
             act_gate, act_vjp = jax.vjp(activation_fn, gate)

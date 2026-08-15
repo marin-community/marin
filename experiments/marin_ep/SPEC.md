@@ -26,7 +26,8 @@ Inputs, per device `d ∈ [0, S)`:
 | `w2_d` | `[El, I, H]` | compute dtype | down weights |
 
 Static parameters: `activation_fn` (SwiGLU gate activation, silu in
-production), `num_experts = E`, `capacity_factor = cf`.
+production), `num_experts = E`, `capacity_factor = cf`,
+`pool_group_size = G` (Section 2).
 
 Outputs, per device:
 
@@ -42,41 +43,60 @@ Derived sizes: `A = T*K` assignments per device, `A_global = S*A`.
 Duplicate expert ids within one token's `K` entries are permitted and
 treated as distinct assignments (same as existing backends).
 
-## 2. Drop rule: pooled per-expert capacity
+## 2. Drop rule: group-pooled capacity with per-expert floor
 
 Unlike `fixed_all_to_all` (per `(source shard, expert)` cell capacity, an
-idle cell cannot lend rows to a hot cell), Marin EP pools capacity per
-expert across all source shards:
+idle cell cannot lend rows to a hot cell), Marin EP pools capacity across
+fixed **groups** of `G` consecutive experts (static parameter
+`pool_group_size`; hero default `G = 3 = E/S`, making each group exactly
+one owner's expert bank; `G` must divide `El`):
 
-- Per-expert capacity:
+- Per-expert base capacity:
   `C = min(max(1, ceil(cf * A_global / E)), A_global)` rows (the clamp makes
   any sufficiently large `cf` exactly dropless without unbounded buffers).
-  Per-device receive pool is `El * C = ceil-ish(cf * A)` rows — the same
-  memory bound as the ragged backend's receiver pool.
+  A group's pool is `G * C` rows; the per-device receive pool stays
+  `El * C = ceil-ish(cf * A)` rows — the same memory bound as the ragged
+  backend's receiver pool.
+- **Kept rows per expert** (waterfilling within the group): every expert is
+  guaranteed its floor `min(N_g, C)`; the group's slack
+  `Σ_{g' in group} max(0, C − N_{g'})` is then granted to overflowing
+  experts in ascending expert order:
+  `kept_g = min(N_g, C) + min(max(0, N_g − C), slack_remaining_before_g)`.
+  The floor means a hot groupmate can never push a cold expert below `C`.
 - **Arrival order** of assignments to expert `g` is source-major: sort by
   `(source device id, local flat assignment index)`, where the local flat
   index is `t*K + k`. This is the global flat assignment order when tokens
-  are partitioned contiguously across devices.
-- An assignment with arrival rank `r_g` for expert `g` is **kept** iff
-  `r_g < C`.
-- `dropped_total = Σ_g max(0, N_g − C)` where `N_g` is the global count of
-  assignments to expert `g`.
+  are partitioned contiguously across devices. An assignment with arrival
+  rank `r_g` is **kept** iff `r_g < kept_g`.
+- `dropped_total = Σ_groups max(0, Σ_{g in group} N_g − G*C)` where `N_g`
+  is the global count of assignments to expert `g` (waterfilling preserves
+  this total exactly).
+
+Motivation (MEP-H1, `bench/drop_rate_study.py`): with routing skew
+calibrated to the measured hero drop rate, per-expert pooling (`G = 1`)
+barely improves on per-cell (both ~4% drops at cf 1.33 — pooling across
+sources only pools sampling noise) and misses the R2 target, while `G = 3`
+reaches ~0.3%, an order of magnitude under target, at identical worst-case
+memory and identical worst-case per-owner compute (`El * C` rows).
 
 Consequences (enforced as test invariants, Section 6):
 
-- The kept set is a pure function of the *global* routing, independent of
-  `S`. EP1 / EP4 / EP64 produce identical outputs for the same global batch
-  and contiguous token partitioning.
+- For fixed `G`, the kept set is a pure function of the *global* routing,
+  independent of `S` (`G` is deliberately decoupled from the mesh so this
+  holds). EP1 / EP4 / EP64 produce identical outputs for the same global
+  batch and contiguous token partitioning.
 - `cf` large enough ⇒ zero drops ⇒ output equals the dense reference.
 - Dropped assignments contribute exactly zero to `y`; combine weights are
   **not** renormalized after drops (matches existing backends).
 
-Rank computation is distributed-friendly: with per-device counts
-`n_d[g]` (`N` is the `[S, E]` count matrix), the base offset of device
-`d`'s rows for expert `g` is `base[d, g] = Σ_{d' < d} n_{d'}[g]`, and an
-assignment's arrival rank is `base[d, g] + r_local` where `r_local` is its
-rank among device-`d` assignments to `g` in local flat order. Keep iff
-`base[d, g] + r_local < C`.
+Everything is distributed-computable after the count exchange: with
+per-device counts `n_d[g]` (`N` the `[S, E]` count matrix), every device
+derives the totals `N_g`, the grants `kept_g`, the per-source base
+`base[d, g] = Σ_{d' < d} n_{d'}[g]`, and receive-buffer region offsets
+`region[g] = Σ_{g' earlier in the owner's bank} kept_{g'}` (regions are
+ragged within the fixed `El * C`-row pool). Keep iff
+`base[d, g] + r_local < kept_g`; the row lands at
+`region[g] + base[d, g] + r_local` in the owner's pool.
 
 ## 3. Forward algorithm (abstract machine)
 
@@ -95,17 +115,19 @@ entries; v1 sim sends the full row — a few KB). After F2 every device
 knows `base[d, g]` and `N_g` for its own experts, and every sender knows
 `base[d, g]` for all `g` (computable from the full count matrix).
 
-Phase F3 — **dispatch**: for each local expert `g` on owner `o(g)`, a
-receive buffer `X_g` of `C` rows (width `H`, wire dtype) exists. Device
-`d` writes its kept assignments' activation rows to
-`X_g[base[d,g] + r_local]` via `put`. Rows are the token's `x` row (an
-`x` row is written once per kept assignment, i.e. up to `K` times total).
-Wire dtype v1 = `x` dtype. *(v2: fp8 wire with per-token scales; scales
-must never be shared across tokens along the sequence axis.)*
+Phase F3 — **dispatch**: each owner exposes one receive pool of `El * C`
+rows (width `H`, wire dtype); expert `g`'s ragged region starts at
+`region[g]` (Section 2) and holds `kept_g` rows, `X_g`. Device `d` writes
+its kept assignments' activation rows to
+`pool[region[g] + base[d,g] + r_local]` via `put`. Rows are the token's
+`x` row (an `x` row is written once per kept assignment, i.e. up to `K`
+times total). Wire dtype v1 = `x` dtype. *(v2: fp8 wire with per-token
+scales; scales must never be shared across tokens along the sequence
+axis.)*
 
-Phase F4 — **expert GEMM**: for each local expert `g`, with
-`m_g = min(N_g, C)` valid rows:
-`Hd = X_g[:m_g] @ w13[g]` → split `[.., :I]` gate / `[.., I:]` up (contiguous
+Phase F4 — **expert GEMM**: for each local expert `g`, with `kept_g` valid
+rows:
+`Hd = X_g @ w13[g]` → split `[.., :I]` gate / `[.., I:]` up (contiguous
 split, not interleaved) → `Z_g = (act(gate) * up) @ w2[g]`.
 GEMM accumulation in fp32; `Hd` and `Z_g` stored in compute dtype.
 

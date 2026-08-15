@@ -33,18 +33,40 @@ def expert_capacity(num_assignments_global: int, num_experts: int, capacity_fact
     return min(raw, num_assignments_global)
 
 
+def kept_rows_per_expert(total_counts: np.ndarray, *, capacity: int, group_size: int) -> np.ndarray:
+    """Kept rows per expert under the group-pooled waterfilling rule (SPEC S2).
+
+    Each expert keeps its floor `min(N_g, C)`; the group's slack
+    (unused floor capacity) is granted to overflowing experts in ascending
+    expert order. The canonical implementation shared by the oracle, the
+    correctness simulator, and the perf models.
+    """
+    num_experts = total_counts.shape[0]
+    if num_experts % group_size:
+        raise ValueError(f"group_size={group_size} must divide num_experts={num_experts}")
+    counts = np.asarray(total_counts, dtype=np.int64).reshape(-1, group_size)
+    floor = np.minimum(counts, capacity)
+    overflow = counts - floor
+    slack = (capacity - counts).clip(min=0).sum(axis=1, keepdims=True)
+    granted_cum = np.minimum(np.cumsum(overflow, axis=1), slack)
+    grants = np.diff(granted_cum, axis=1, prepend=0)
+    return (floor + grants).reshape(num_experts)
+
+
 def pooled_keep_mask(
     selected_experts: np.ndarray,
     *,
     num_experts: int,
     capacity: int,
+    group_size: int = 1,
 ) -> tuple[np.ndarray, int]:
-    """Kept-assignment mask under the pooled per-expert capacity rule.
+    """Kept-assignment mask under the group-pooled capacity rule.
 
     `selected_experts` is the global routing `[S, T, K]` (any leading shape;
     only the flattened global order matters). Arrival order for an expert is
     the global flat assignment order, so the result is independent of how
-    tokens are partitioned across devices (spec invariant I3).
+    tokens are partitioned across devices (spec invariant I3; `group_size`
+    is a static spec parameter, deliberately decoupled from the mesh).
 
     Returns the boolean keep mask with the input's shape and the exact
     global dropped-assignment count (spec invariant I2).
@@ -53,13 +75,14 @@ def pooled_keep_mask(
     if flat.size and (flat.min() < 0 or flat.max() >= num_experts):
         raise ValueError(f"expert ids must be in [0, {num_experts}), got range [{flat.min()}, {flat.max()}]")
     counts = np.bincount(flat, minlength=num_experts)
+    kept = kept_rows_per_expert(counts, capacity=capacity, group_size=group_size)
     order = np.argsort(flat, kind="stable")
     segment_start = np.cumsum(counts) - counts
     rank_sorted = np.arange(flat.size, dtype=np.int64) - segment_start[flat[order]]
     rank = np.empty_like(rank_sorted)
     rank[order] = rank_sorted
-    keep = (rank < capacity).reshape(np.asarray(selected_experts).shape)
-    dropped = int(np.maximum(counts - capacity, 0).sum())
+    keep = (rank < kept[flat]).reshape(np.asarray(selected_experts).shape)
+    dropped = int((counts - kept).sum())
     return keep, dropped
 
 
