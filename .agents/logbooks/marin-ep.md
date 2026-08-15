@@ -17,8 +17,7 @@ Experiment ID prefix: `MEP`.
   development; oracle parity at every phase. Plan and gates:
   `.agents/projects/20260814_marin_ep_kernel.md`. Behavior spec:
   `experiments/marin_ep/SPEC.md`.
-- Coordinating issue/PR: none yet (file experiment issue when hardware runs
-  begin / first PR opens).
+- Coordinating issue/PR: https://github.com/marin-community/marin/issues/8311
 
 ## Baseline
 - Date: 2026-08-14
@@ -379,3 +378,29 @@ Experiment ID prefix: `MEP`.
   single-process path works on both.
 - Next action: EP8 2-node/2-process conformance smoke of the ragged path
   (hero topology in miniature), then the EP64 hero benchmark run.
+
+### 2026-08-15 00:30 - MEP-009: EP8 multiproc CONFORMANT; EP64 hero benchmark launched
+- Hypothesis: the marin_ep ragged path is correct multi-controller and the
+  EP64 hero run beats the fixed_all_to_all baseline on drop-adjusted
+  throughput via the ~10x drop reduction.
+- Commit Hash: branch tip after "multi-process fallback to ragged
+  transport; ep-marin hero flavor" (pushed).
+- Command: EP8 smoke: `bash run_ep8_smoke.sh {0,1} 10.186.210.61:9876`
+  (2 nodes x 4 GPUs, 1 proc/node). Hero:
+  `uv run iris --config lib/iris/config/marin.yaml job run --no-wait
+  --enable-extra-resources --target-cluster cw-us-east-08a --priority
+  production --cpu 2 --memory 8GB --disk 32GB --timeout 21600
+  --max-retries 50 --job-name mep-m8-marin-25-20260815-coord
+  -e WANDB_MODE offline -- python -m experiments.grug.moe_hero_ep.launch
+  --run-id mep-m8-marin-25-20260815 --dp-racks 1 --num-steps 25
+  --flavor ep-marin --version 2026.08.15 --run`
+- Result: EP8 2-process smoke CONFORMANT (values, drops=1019 bit-exact vs
+  oracle, grads) on the ragged path in hero topology. Traps: (1) loss fn
+  must not close over global arrays multi-process; (2) backward NCCL
+  window registration fails at ~148 GB without
+  XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async (hero env sets it). Experiment
+  issue filed: #8311. Hero coordinator + 16-task training gang running
+  (building) as of 00:30.
+- Next action: monitor to completion; compare last-50 tok/s + drops vs
+  262,683 / 3.96% baseline; then M8 PR, then hierarchical transport + M7
+  GEMM levers via autoresearch.
