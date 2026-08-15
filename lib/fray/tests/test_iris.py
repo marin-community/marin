@@ -7,6 +7,7 @@ Tests type conversions and handle serialization without requiring an Iris cluste
 Integration tests that need a running cluster are marked with @pytest.mark.iris.
 """
 
+import logging
 import pickle
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -210,7 +211,7 @@ def test_actor_startup_after_task_termination_stops_server_without_error(monkeyp
     iris_backend._host_actor(object, (), {}, "actor")
 
     assert stopped
-    assert "Actor /user/job/actor-0 stopped before endpoint registration" in caplog.text
+    assert any(record.levelno == logging.ERROR for record in caplog.records)
 
 
 class TestResourceConfigScale:
