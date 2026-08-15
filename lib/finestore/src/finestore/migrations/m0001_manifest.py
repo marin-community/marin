@@ -49,6 +49,24 @@ class _LegacyTableMetadata(BaseModel):
     on_conflict: OnConflict = OnConflict.ERROR
 
 
+@dataclasses.dataclass(frozen=True)
+class LegacyTable:
+    """One table discovered in a listing-based v1 archive."""
+
+    metadata_path: str
+    metadata: TableMetadata
+    shards: tuple[Shard, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class LegacyArchive:
+    """The sealed v1 state that revision 0001 publishes through a manifest."""
+
+    seal_path: str
+    seal: SealMarker
+    tables: dict[str, LegacyTable]
+
+
 def _legacy_table_metadata(root: StoragePath) -> dict[str, _LegacyTableMetadata]:
     tables = {}
     for directory in root.ls():
@@ -120,6 +138,23 @@ def _legacy_shards(root: StoragePath, table: str) -> tuple[Shard, ...]:
     return tuple(sorted(shards, key=lambda shard: shard.path))
 
 
+def inspect_legacy_archive(root: str) -> LegacyArchive:
+    """Read the complete sealed v1 state without changing the archive."""
+    root_path = StoragePath(root)
+    seal_path = root_path / _LEGACY_SEALED_FILE
+    if not seal_path.exists():
+        raise ValueError(f"FineStore v1 archive at {root!r} is not sealed; quiesce and seal it before migration")
+    seal = SealMarker.model_validate_json(seal_path.read_bytes())
+    tables = {}
+    for name, legacy_metadata in _legacy_table_metadata(root_path).items():
+        tables[name] = LegacyTable(
+            metadata_path=str(root_path / name / _LEGACY_SCHEMA_FILE),
+            metadata=TableMetadata.model_validate(legacy_metadata.model_dump()),
+            shards=_legacy_shards(root_path, name),
+        )
+    return LegacyArchive(seal_path=str(seal_path), seal=seal, tables=tables)
+
+
 def _v2_token(layout: FineStoreLayout) -> CommitToken | None:
     versioned = conditional_object(layout.head_path).read()
     if versioned is None:
@@ -164,20 +199,23 @@ def migrate(root: str) -> CommitToken:
             f"found v{archive_metadata.format_version}"
         )
 
-    seal_path = root_path / _LEGACY_SEALED_FILE
-    if not seal_path.exists():
-        raise ValueError(f"FineStore v1 archive at {root!r} is not sealed; quiesce and seal it before migration")
-    seal = SealMarker.model_validate_json(seal_path.read_bytes())
+    legacy = inspect_legacy_archive(root)
 
     head_object = conditional_object(layout.head_path)
     existing_head = head_object.read()
     if existing_head is None:
         tables = {}
-        for name, legacy_metadata in _legacy_table_metadata(root_path).items():
-            metadata_path = write_schema(layout, TableMetadata.model_validate(legacy_metadata.model_dump()))
-            tables[name] = ManifestTable(metadata_path=metadata_path, shards=_legacy_shards(root_path, name))
+        for name, legacy_table in legacy.tables.items():
+            metadata_path = write_schema(layout, legacy_table.metadata)
+            tables[name] = ManifestTable(metadata_path=metadata_path, shards=legacy_table.shards)
         commit_id = uuid.uuid4().hex
-        manifest = Manifest(format_version=TO_VERSION, commit_id=commit_id, sequence=1, tables=tables, sealed=seal)
+        manifest = Manifest(
+            format_version=TO_VERSION,
+            commit_id=commit_id,
+            sequence=1,
+            tables=tables,
+            sealed=legacy.seal,
+        )
         manifest_path = layout.manifest_path(commit_id)
         StoragePath(manifest_path).write_text(manifest.model_dump_json(indent=2))
         head = HeadMetadata(format_version=TO_VERSION, commit_id=commit_id, sequence=1, manifest_path=manifest_path)

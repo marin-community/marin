@@ -62,8 +62,26 @@ winogrande, truthfulqa, boolq, piqa, openbookqa at OpenLLM-v1 shot counts, plus 
 math500): one model boot, eleven evals against the shared endpoint, eleven records — the dashboard
 shows the full model x task grid of runs.
 
-Before deploying a format-v2 evaluation reader, upgrade the sealed archive fleet. The migration
-publishes existing Parquet shards through `HEAD` and does not copy their payload data:
+Before upgrading a store, run the non-destructive smoke command on its platform. This CoreWeave
+example selects one non-empty sealed v1 archive no larger than 256 MiB, copies only its FineStore
+objects to a same-bucket one-day prefix, migrates the copy, and compares every source object and
+deduplicated table row with the v2 `ReadView`:
+
+```bash
+uv run iris --config lib/iris/config/cw-us-east-02a.yaml job run --no-wait \
+  --job-name finestore-v1-v2-smoke --cpu 2 --memory 8GB --disk 10GB \
+  --enable-extra-resources --sync-package marin-core --extra cpu --timeout 1800 -- \
+  python -m experiments.evaluation.migrations.cli smoke-upgrade \
+  --records-prefix s3://marin-us-east-02a/marin/evals
+```
+
+The final `status=validated` JSON records the source and temporary destination, object and byte
+counts, an aggregate source digest, per-table row counts and digests, and the v2 commit token. The
+source remains format v1. A failed run leaves only lifecycle-managed temporary data for inspection.
+
+After the platform smoke passes, upgrade the sealed archive fleet before deploying a format-v2
+evaluation reader. The migration publishes existing Parquet shards through `HEAD` and does not copy
+their payload data:
 
 ```bash
 uv run python -m experiments.evaluation.migrations.cli upgrade-format --prefix gs://marin-eval-metadata/evals

@@ -17,7 +17,7 @@ import logging
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 import click
 from finestore.migrations import migrate
@@ -31,6 +31,12 @@ from marin.evaluation.lm_eval_samples import (
 from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, list_records
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
+from experiments.evaluation.migrations.format_smoke import (
+    select_v1_archive,
+    smoke_destination,
+    smoke_upgrade,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,6 +48,7 @@ def cli() -> None:
 # One worker holds a run's whole sample file in memory while normalizing it, and the largest are a
 # few hundred megabytes, so this trades throughput against a bounded footprint on a CPU node.
 _DEFAULT_SWEEP_WORKERS = 8
+_DEFAULT_SMOKE_MAX_BYTES = 256 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -79,6 +86,41 @@ def _upgrade_one(results_path: str) -> SweepOutcome:
     token = result.token
     assert token is not None
     return SweepOutcome("upgraded", f"commit {token.sequence}:{token.commit_id}")
+
+
+@cli.command("smoke-upgrade")
+@click.argument("results_path", required=False)
+@click.option("--records-prefix", help="Choose one sealed v1 archive recorded under this prefix.")
+@click.option("--destination", help="Temporary destination. Defaults to a same-region one-day prefix.")
+@click.option(
+    "--max-bytes",
+    default=_DEFAULT_SMOKE_MAX_BYTES,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help="Maximum FineStore-owned bytes when selecting from --records-prefix.",
+)
+@click.option("--ttl-days", default=1, show_default=True, type=click.IntRange(min=1))
+def smoke_upgrade_command(
+    results_path: str | None,
+    records_prefix: str | None,
+    destination: str | None,
+    max_bytes: int,
+    ttl_days: int,
+) -> None:
+    """Clone one v1 archive to temporary storage, migrate it, and validate exact contents."""
+    if (results_path is None) == (records_prefix is None):
+        raise click.UsageError("pass exactly one RESULTS_PATH or --records-prefix")
+    if any(path and path.startswith("s3://") for path in (results_path, records_prefix, destination)):
+        configure_coreweave_s3()
+    if results_path is not None:
+        source = results_path
+    else:
+        assert records_prefix is not None
+        source = select_v1_archive(records_prefix, max_bytes=max_bytes)
+    resolved_destination = destination or smoke_destination(source, ttl_days=ttl_days)
+    click.echo(json.dumps({"status": "copying", "source": source, "destination": resolved_destination}, sort_keys=True))
+    result = smoke_upgrade(source, resolved_destination)
+    click.echo(json.dumps({"status": "validated", **asdict(result)}, sort_keys=True))
 
 
 @cli.command("backfill-samples")

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from finestore.admin import set_table_metadata
@@ -32,6 +34,7 @@ from marin.evaluation.records import TaskCoverage
 from rigging.filesystem import StoragePath
 
 from experiments.evaluation.migrations.cli import SweepOutcome, _sweep_archives, selected_archives
+from experiments.evaluation.migrations.format_smoke import smoke_upgrade
 from experiments.evaluation.migrations.migrate_archive import (
     MigrationCounts,
     archive_sample_count,
@@ -555,6 +558,51 @@ def test_migration_cli_reads_archived_legacy_shards(tmp_path):
     summary = json.loads(result.output.splitlines()[-1])
     assert summary["migrated_runs"] == 1
     assert summary["skipped_runs"] == 1
+
+
+def test_format_smoke_migrates_a_clone_and_preserves_source_and_rows(tmp_path):
+    source = tmp_path / "evals" / "run-1" / "results"
+    destination = tmp_path / "tmp" / "migration-smoke"
+    (source / "samples" / "w=legacy" / "g=0").mkdir(parents=True)
+    (source / "samples" / "w=compact" / "g=1").mkdir(parents=True)
+    (source / "blobs" / "w=legacy" / "g=0").mkdir(parents=True)
+    (source / "_archive.json").write_text('{"format_version": 1}')
+    (source / "SEALED").write_text('{"writer": "legacy", "superseded": {"samples": 1}}')
+    (source / "samples" / "_schema.json").write_text(
+        '{"primary_key": ["doc_id"], "schema_version": 4, "on_conflict": "supersede"}'
+    )
+    (source / "blobs" / "_schema.json").write_text(
+        '{"primary_key": ["name"], "schema_version": 1, "on_conflict": "error"}'
+    )
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {"doc_id": "a", "score": 0.5, "_seq": 1, "_writer": "legacy"},
+                {"doc_id": "b", "score": 0.8, "_seq": 2, "_writer": "legacy"},
+            ]
+        ),
+        source / "samples" / "w=legacy" / "g=0" / "0000000000000001-old.parquet",
+    )
+    pq.write_table(
+        pa.Table.from_pylist([{"doc_id": "a", "score": 0.7, "_seq": 1, "_writer": "compact"}]),
+        source / "samples" / "w=compact" / "g=1" / "0000000000000001-compact.parquet",
+    )
+    pq.write_table(
+        pa.Table.from_pylist([{"name": "trajectory.json", "data": b"payload", "_seq": 0, "_writer": "legacy"}]),
+        source / "blobs" / "w=legacy" / "g=0" / "0000000000000000-blob.parquet",
+    )
+
+    result = smoke_upgrade(str(source), str(destination))
+
+    assert result.source == str(source)
+    assert result.destination == str(destination)
+    assert result.rows == 3
+    assert {table.name: table.rows for table in result.tables} == {"blobs": 1, "samples": 2}
+    assert json.loads((source / "_archive.json").read_text())["format_version"] == 1
+    assert not (source / "HEAD").exists()
+    migrated = ReadView(str(destination))
+    assert migrated.point("samples", doc_id="a")["score"] == 0.7
+    assert migrated.read_blob("trajectory.json") == b"payload"
 
 
 def test_fetch_artifact_keys_cache_by_run(tmp_path):
