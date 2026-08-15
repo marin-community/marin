@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -19,7 +20,7 @@ from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunCon
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.evaluation.model_config import ModelConfig, ResourceHint
+from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint
 from marin.evaluation.records import EvalRef, RunStatus, read_record
 from marin.evaluation.runner import (
     Evaluation,
@@ -455,6 +456,52 @@ def test_file_evalchemy_chat_template_overrides_model_default(monkeypatch):
     evalchemy = batch.evaluations[0].identity.eval_ref.evalchemy
     assert evalchemy is not None
     assert evalchemy.apply_chat_template is True
+
+
+@pytest.mark.parametrize(
+    ("benchmark_limit", "model_limit", "expected_limit", "expected_warnings"),
+    [
+        (128, 8192, 128, 1),
+        (8192, 2048, 2048, 0),
+        (None, 8192, 8192, 0),
+    ],
+)
+def test_evalchemy_generation_budget_preserves_benchmark_protocol(
+    tmp_path,
+    monkeypatch,
+    caplog,
+    benchmark_limit,
+    model_limit,
+    expected_limit,
+    expected_warnings,
+):
+    config_path = tmp_path / "generation.yaml"
+    max_tokens = "" if benchmark_limit is None else f"max_tokens: {benchmark_limit}\n"
+    config_path.write_text(f"tasks: [triviaqa]\n{max_tokens}")
+    model = replace(models()["qwen3-8b"], generation=GenerationConfig(max_gen_toks=model_limit))
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    caplog.set_level(logging.WARNING, logger="experiments.evaluation.evals")
+    spec = LaunchSpec(
+        model=model,
+        evals=(),
+        evalchemy_definitions=(EvalchemyDefinition(name="generation", config_path=config_path),),
+        harbor_definitions=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    evalchemy = batch.evaluations[0].identity.eval_ref.evalchemy
+    assert evalchemy is not None
+    assert evalchemy.max_gen_toks == expected_limit
+    warnings = [record for record in caplog.records if record.name == "experiments.evaluation.evals"]
+    assert len(warnings) == expected_warnings
 
 
 def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
