@@ -41,8 +41,11 @@ from marin.processing.classification.deduplication.fuzzy_verification import (
     verify_candidate,
 )
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    DEFAULT_PIPELINE_SHARDS_PER_WORKER,
+    REFERENCE_LARGE_CLUSTER_PARAMS,
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
     VERIFICATION_WORKER_SCRATCH,
+    FuzzyVerificationImplementation,
     FuzzyVerificationStoreConfig,
     LocalRepresentativeParams,
     VerifiedFuzzyDupsAttrData,
@@ -69,6 +72,7 @@ STORE_CONFIG = FuzzyVerificationStoreConfig(
     recovery_timeout=1_800,
     ready_timeout=1_800,
     lookup_batch_size=128,
+    shards_per_worker=1,
 )
 VERIFIED_COLUMNS = (
     "id",
@@ -596,6 +600,7 @@ def _verify_existing_artifacts(
         verification_params=verification_params,
         local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
         store_config=STORE_CONFIG,
+        implementation=FuzzyVerificationImplementation.EXACT,
         max_workers=max_workers,
         worker_resources=WORKER_RESOURCES,
         coordinator_resources=COORDINATOR_RESOURCES,
@@ -668,6 +673,8 @@ def main() -> None:
                 "minhash_collection": minhash_collection_path,
                 "verification": verification_params.model_dump(mode="json"),
                 "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
+                "large_clusters": REFERENCE_LARGE_CLUSTER_PARAMS.model_dump(mode="json"),
+                "pipeline_shards_per_worker": DEFAULT_PIPELINE_SHARDS_PER_WORKER,
             },
             fn=lambda verified_output_path: _verify_existing_artifacts(
                 output_path=verified_output_path,
@@ -707,6 +714,7 @@ def main() -> None:
             verification_params=verification_params,
             local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
             store_config=STORE_CONFIG,
+            implementation=FuzzyVerificationImplementation.EXACT,
             max_workers=args.max_workers,
             worker_resources=WORKER_RESOURCES,
             coordinator_resources=COORDINATOR_RESOURCES,

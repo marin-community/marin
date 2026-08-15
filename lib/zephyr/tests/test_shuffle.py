@@ -52,6 +52,10 @@ def _read_shard(shard: ScatterReader) -> list:
     return list(_dataframe_to_items(combined))
 
 
+def _parquet_schema(path: str) -> pl.Schema:
+    return pl.Schema(pq.read_schema(path))
+
+
 def _key(item):
     return item["k"]
 
@@ -117,15 +121,21 @@ def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
         }
     ).lazy()
 
-    def scan_parquet(scan_path, *, storage_options):
+    def scan_parquet(scan_path, *, schema, storage_options):
         calls.append((scan_path, storage_options))
+        assert schema == dict(frame.collect_schema())
         return frame
 
     monkeypatch.setenv("AWS_ENDPOINT_URL", "http://cwlota.com")
     monkeypatch.delenv("AWS_ENDPOINT_URL_S3", raising=False)
     monkeypatch.setattr(pl, "scan_parquet", scan_parquet)
 
-    reader = ScatterReader(files=[("source", [path])], target_shard=0, avg_item_bytes=1.0)
+    reader = ScatterReader(
+        files=[("source", [path])],
+        chunk_schemas={path: frame.collect_schema()},
+        target_shard=0,
+        avg_item_bytes=1.0,
+    )
     rows = reader.get_frames()[0].collect().to_dicts()
 
     assert len(rows) == 1
@@ -262,6 +272,20 @@ def test_merge_sorted_chunks_cross_shard_null_sort_value(tmp_path):
     # file but Int64 in shard 1's file; pl.merge_sorted requires identical schemas.
     merged = list(shard.merge_sorted_chunks(external_sort_dir=str(tmp_path / "sort")))
     assert sorted(x["v"] for x in merged) == [0, 1, 2, 3]
+
+
+def test_scatter_reader_does_not_collect_chunk_schemas(tmp_path):
+    paths = [
+        *_build_shard(tmp_path, [{"k": "a", "v": 1}], num_output_shards=1, source_shard=0),
+        *_build_shard(tmp_path, [{"k": "a", "v": 2}], num_output_shards=1, source_shard=1),
+    ]
+    reader = ScatterReader.from_sidecars(paths, target_shard=0)
+
+    with patch.object(pl.LazyFrame, "collect_schema", side_effect=AssertionError("opened a Parquet footer")):
+        frames = reader.get_frames()
+        rows = sorted(_dataframe_to_items(pl.concat(frames).collect()), key=lambda row: row["v"])
+
+    assert rows == [{"k": "a", "v": 1}, {"k": "a", "v": 2}]
 
 
 def test_scatter_with_combiner(tmp_path):
@@ -412,7 +436,13 @@ def test_scatter_bounds_parquet_row_groups(tmp_path):
     parquet = pq.ParquetFile(f"{data_path}c0000.parquet")
     assert parquet.metadata.num_row_groups <= _SCATTER_MAX_ROW_GROUPS_PER_CHUNK
 
-    reader = ScatterReader(files=[(data_path, [f"{data_path}c0000.parquet"])], target_shard=513, avg_item_bytes=1)
+    chunk_path = f"{data_path}c0000.parquet"
+    reader = ScatterReader(
+        files=[(data_path, [chunk_path])],
+        chunk_schemas={chunk_path: _parquet_schema(chunk_path)},
+        target_shard=513,
+        avg_item_bytes=1,
+    )
     assert _read_shard(reader) == [{"k": 513}]
 
 

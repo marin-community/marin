@@ -411,7 +411,12 @@ class OperationFuture:
     def result(self, timeout: float | None = None) -> Any:
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
-            op = self._client.poll_operation_status(self._op_id)
+            try:
+                op = self._client.poll_operation_status(self._op_id)
+            except ConnectError as exc:
+                if exc.code == Code.NOT_FOUND:
+                    raise ActorUnavailableError(f"Operation {self._op_id} was lost while its actor restarted") from exc
+                raise
 
             if op.state == actor_pb2.Operation.SUCCEEDED:
                 return cloudpickle.loads(op.serialized_result)
@@ -738,6 +743,7 @@ class FrayIrisClient:
         *args: Any,
         name: str,
         resources: ResourceConfig = ResourceConfig(),
+        environment: EnvironmentConfig | None = None,
         actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> ActorHandle:
@@ -747,6 +753,7 @@ class FrayIrisClient:
             name=name,
             count=1,
             resources=resources,
+            environment=environment,
             actor_config=actor_config,
             **kwargs,
         )
@@ -759,6 +766,7 @@ class FrayIrisClient:
         name: str,
         count: int,
         resources: ResourceConfig = ResourceConfig(),
+        environment: EnvironmentConfig | None = None,
         actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> IrisActorGroup:
@@ -769,7 +777,7 @@ class FrayIrisClient:
         """
         iris_resources = convert_resources(resources)
         iris_constraints = convert_constraints(resources)
-        iris_environment = convert_environment(None, device=resources.device)
+        iris_environment = convert_environment(environment, device=resources.device)
 
         # Actor group replicas are independent workers, not an NVLink collective.
         if count > 1 and isinstance(resources.device, GpuConfig):

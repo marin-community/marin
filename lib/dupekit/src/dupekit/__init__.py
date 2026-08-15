@@ -22,9 +22,13 @@ try:
         Bloom,
         Document,
         HashAlgorithm,
+        TokenNgramFingerprintSignature,
+        TokenNgrams,
+        TokenNgramSignature,
         Transformation,
     )
-except ImportError:
+except ImportError as import_error:
+    _NATIVE_IMPORT_ERROR = import_error
     _INSTALL_MSG = (
         "dupekit native extension (dupekit_native) is not installed. "
         "Run 'uv sync' to install the pre-built marin-dupekit-native wheel. "
@@ -37,7 +41,7 @@ except ImportError:
         def __getattr__(self, name: str):
             if name.startswith("_"):
                 raise AttributeError(name)
-            raise ImportError(_INSTALL_MSG)
+            raise ImportError(_INSTALL_MSG) from _NATIVE_IMPORT_ERROR
 
     _stub = _StubModule(__name__)
     _stub.__file__ = __file__

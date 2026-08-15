@@ -1,27 +1,34 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Verify fuzzy-duplicate clusters against full normalized text."""
+"""Verify fuzzy-duplicate clusters with exact text or bounded signatures."""
 
 import logging
 import os
+import threading
+import time
 from collections import defaultdict
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import partial
 from itertools import batched, chain, groupby
 from typing import Any
 
+import dupekit
+import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
-from fray.types import ResourceConfig
+import zstandard as zstd
+from fray.types import EnvironmentConfig, ResourceConfig
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
 from zephyr.memory_store import MemoryStore
+from zephyr.shard_keys import deterministic_hash
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
@@ -39,6 +46,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import MinHashA
 from marin.processing.classification.deduplication.fuzzy_verification import (
     FuzzyVerificationParams,
     PreparedVerificationText,
+    VerificationRejection,
     VerificationResult,
     line_count_ratio,
     prepare_verification_text,
@@ -47,7 +55,7 @@ from marin.processing.classification.deduplication.fuzzy_verification import (
 
 logger = logging.getLogger(__name__)
 
-VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION = 3
+VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION = 4
 PERCENT_HISTOGRAM_METRICS = frozenset({"member_containment", "jaccard", "char_jaccard", "local_line_count_ratio"})
 SCORE_HISTOGRAM_MAX_PERCENT = 100
 UNIQUE_NGRAM_HISTOGRAM_OVERFLOW_BIN = 33
@@ -55,6 +63,7 @@ _COUNTER_PREFIX = "dedup/fuzzy/verification"
 _SHARED_SHARDS_KEY = "verified_fuzzy_dups_shards"
 _LOCAL_TOKEN_SEQUENCE_REJECTION = "local_token_sequence_differs"
 _LOCAL_LINE_COUNT_REJECTION = "local_line_count_ratio_below_threshold"
+_LARGE_CLUSTER_PARTITION_HASH_DOMAIN = "fuzzy-verification-large-cluster-partition-v1"
 # Bounds on the head scan that picks each cluster anchor. Cluster size is
 # heavily skewed - the p99 cluster holds 13 members - so a short head covers
 # effectively every cluster while a pathological one stays bounded.
@@ -65,6 +74,26 @@ ANCHOR_SCAN_CHARS = 2_000_000
 # several shards at once, so scratch is sized well above worker RAM. On Kubernetes
 # this becomes the pod's ephemeral-storage limit, and exceeding it evicts the pod.
 VERIFICATION_WORKER_SCRATCH = "256g"
+DOCUMENT_TEXT_COMPRESSION_LEVEL = 1
+PARQUET_READ_BATCH_SIZE = 4_096
+DEFAULT_PIPELINE_SHARDS_PER_WORKER = 8
+_DOCUMENT_TEXT_CODECS = threading.local()
+
+
+@dataclass
+class _SharedArrowMemoryPool:
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    active_users: int = 0
+    memory_pool: pa.MemoryPool | None = None
+    previous_pool: pa.MemoryPool | None = None
+
+
+_SHARED_ARROW_MEMORY_POOL = _SharedArrowMemoryPool()
+
+
+@dataclass
+class _TextAttachmentControl:
+    enabled: bool = True
 
 
 class RepresentativeKind(StrEnum):
@@ -73,6 +102,13 @@ class RepresentativeKind(StrEnum):
     CLUSTER_CANONICAL = "cluster_canonical"
     CLUSTER_LONGEST = "cluster_longest"
     LOCAL_REPRESENTATIVE = "local_representative"
+
+
+class FuzzyVerificationImplementation(StrEnum):
+    """Document representation used by the verifier."""
+
+    EXACT = "exact"
+    FINGERPRINT = "fingerprint"
 
 
 class LocalRepresentativeParams(BaseModel):
@@ -103,6 +139,30 @@ REFERENCE_LOCAL_REPRESENTATIVE_PARAMS = LocalRepresentativeParams(
 )
 
 
+class LargeClusterParams(BaseModel):
+    """Bounds for finding and partitioning large candidate clusters."""
+
+    model_config = ConfigDict(frozen=True)
+
+    maximum_members: int = Field(ge=2)
+    target_members_per_partition: int = Field(ge=1)
+    minimum_local_members: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def target_fits_maximum(self) -> "LargeClusterParams":
+        """Reject a target that is larger than the maximum."""
+        if self.target_members_per_partition > self.maximum_members:
+            raise ValueError("target_members_per_partition cannot exceed maximum_members")
+        return self
+
+
+REFERENCE_LARGE_CLUSTER_PARAMS = LargeClusterParams(
+    maximum_members=1_000_000,
+    target_members_per_partition=500_000,
+    minimum_local_members=8,
+)
+
+
 class VerifiedFuzzyDupsPerSource(BaseModel):
     """Attribute output for one normalized source."""
 
@@ -114,8 +174,10 @@ class VerifiedFuzzyDupsAttrData(BaseModel):
     """Sparse, co-partitioned markers for verified fuzzy duplicates."""
 
     version: str = f"v{VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION}"
+    implementation: FuzzyVerificationImplementation = FuzzyVerificationImplementation.EXACT
     verification: FuzzyVerificationParams
     local_representatives: LocalRepresentativeParams
+    large_clusters: LargeClusterParams
     sources: dict[str, VerifiedFuzzyDupsPerSource]
     counters: dict[str, int | float]
 
@@ -155,6 +217,8 @@ class FuzzyVerificationStoreConfig:
     recovery_timeout: float
     ready_timeout: float
     lookup_batch_size: int
+    shards_per_worker: int
+    load_concurrency: int = 1
 
     def __post_init__(self) -> None:
         if self.recovery_timeout <= 0:
@@ -163,6 +227,10 @@ class FuzzyVerificationStoreConfig:
             raise ValueError("ready_timeout must be positive")
         if self.lookup_batch_size < 1:
             raise ValueError("lookup_batch_size must be at least 1")
+        if self.shards_per_worker < 1:
+            raise ValueError("shards_per_worker must be at least 1")
+        if self.load_concurrency < 1:
+            raise ValueError("load_concurrency must be at least 1")
 
 
 _VERIFIED_DUPLICATE_SCHEMA = pa.schema(
@@ -184,6 +252,26 @@ _VERIFIED_DUPLICATE_SCHEMA = pa.schema(
 )
 
 
+def _parquet_rows(path: str, columns: list[str]) -> Iterator[dict[str, Any]]:
+    """Read selected Parquet columns without a row-order requirement."""
+    with StoragePath(path).open("rb") as stream:
+        parquet = pq.ParquetFile(stream)
+        if parquet.metadata.num_rows == 0:
+            return
+        missing = set(columns) - set(parquet.schema_arrow.names)
+        if missing:
+            raise ValueError(f"{path} does not contain columns {sorted(missing)}")
+
+        for batch in parquet.iter_batches(
+            batch_size=PARQUET_READ_BATCH_SIZE,
+            columns=columns,
+            use_threads=False,
+        ):
+            arrays = [batch.column(index) for index in range(batch.num_columns)]
+            for row_index in range(batch.num_rows):
+                yield {name: array[row_index].as_py() for name, array in zip(columns, arrays, strict=True)}
+
+
 def _rows(path: str, columns: list[str], *, repeated_ids: bool = False) -> Iterator[dict[str, Any]]:
     """Read selected Parquet columns and validate ascending IDs.
 
@@ -193,53 +281,204 @@ def _rows(path: str, columns: list[str], *, repeated_ids: bool = False) -> Itera
     either row answers the join. Descending IDs stay an error: the join walks
     both sides forward once and cannot recover from them.
     """
-    with StoragePath(path).open("rb") as stream:
-        parquet = pq.ParquetFile(stream)
-        if parquet.metadata.num_rows == 0:
-            return
-        missing = set(columns) - set(parquet.schema_arrow.names)
-        if missing:
-            raise ValueError(f"{path} does not contain columns {sorted(missing)}")
+    previous_id = None
+    for row in _parquet_rows(path, columns):
+        row_id = row["id"]
+        if previous_id is not None and row_id < previous_id:
+            raise ValueError(f"{path} IDs are not sorted at {row_id!r}")
+        if previous_id is not None and row_id == previous_id:
+            if not repeated_ids:
+                raise ValueError(f"{path} IDs are not unique at {row_id!r}")
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/repeated_source_ids", 1)
+            continue
+        previous_id = row_id
+        yield row
 
-        previous_id = None
-        for batch in parquet.iter_batches(columns=columns):
-            for row in batch.to_pylist():
-                row_id = row["id"]
-                if previous_id is not None and row_id < previous_id:
-                    raise ValueError(f"{path} IDs are not sorted at {row_id!r}")
-                if previous_id is not None and row_id == previous_id:
-                    if not repeated_ids:
-                        raise ValueError(f"{path} IDs are not unique at {row_id!r}")
+
+@contextmanager
+def _system_arrow_memory_pool() -> Iterator[pa.MemoryPool]:
+    """Share an Arrow decoder pool safely across concurrent shard readers."""
+    state = _SHARED_ARROW_MEMORY_POOL
+    with state.lock:
+        if state.active_users == 0:
+            state.previous_pool = pa.default_memory_pool()
+            state.memory_pool = pa.system_memory_pool()
+            pa.set_memory_pool(state.memory_pool)
+        state.active_users += 1
+        memory_pool = state.memory_pool
+    assert memory_pool is not None
+    try:
+        yield memory_pool
+    finally:
+        with state.lock:
+            state.active_users -= 1
+            if state.active_users == 0:
+                memory_pool.release_unused()
+                previous_pool = state.previous_pool
+                assert previous_pool is not None
+                pa.set_memory_pool(previous_pool)
+                state.memory_pool = None
+                state.previous_pool = None
+
+
+def _copy_to_arrow_buffer(data: bytes, memory_pool: pa.MemoryPool) -> pa.Buffer:
+    buffer = pa.allocate_buffer(len(data), memory_pool=memory_pool)
+    memoryview(buffer).cast("B")[:] = data
+    return buffer
+
+
+@dataclass(frozen=True)
+class _StoredDocument:
+    compressed_text: pa.Buffer
+    chars: int
+    signature: dupekit.TokenNgramSignature
+
+
+def _candidate_documents(
+    shards: list[VerificationShard],
+    ngram_size: int,
+) -> Iterator[tuple[tuple[int, str], _StoredDocument]]:
+    """Join candidate IDs to compressed text without a normalized row-order requirement."""
+    value_memory_pool = pa.mimalloc_memory_pool()
+    with _system_arrow_memory_pool() as memory_pool:
+        for shard in shards:
+            if not StoragePath(shard.candidate_path).exists():
+                continue
+
+            candidate_ids: dict[str, str | None] = {
+                row["id"]: row["id"]
+                for row in _rows(shard.candidate_path, ["id", "dup_cluster_id", "is_cluster_canonical"])
+            }
+            if not candidate_ids:
+                continue
+
+            compressor = zstd.ZstdCompressor(level=DOCUMENT_TEXT_COMPRESSION_LEVEL)
+            loaded = 0
+            text_bytes = 0
+            stored_bytes = 0
+            for source in _parquet_rows(shard.normalized_path, ["id", "text"]):
+                source_id = source["id"]
+                if source_id not in candidate_ids:
+                    continue
+                candidate_id = candidate_ids[source_id]
+                if candidate_id is None:
                     counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/repeated_source_ids", 1)
                     continue
-                previous_id = row_id
-                yield row
-
-
-def _candidate_documents(shards: list[VerificationShard]) -> Iterator[tuple[tuple[int, str], str]]:
-    """Join candidate IDs to normalized text without changing file partitions."""
-    for shard in shards:
-        if not StoragePath(shard.candidate_path).exists():
-            continue
-
-        candidates = iter(_rows(shard.candidate_path, ["id", "dup_cluster_id", "is_cluster_canonical"]))
-        candidate = next(candidates, None)
-        if candidate is None:
-            continue
-
-        normalized = iter(_rows(shard.normalized_path, ["id", "text"], repeated_ids=True))
-        source = next(normalized, None)
-        while candidate is not None:
-            while source is not None and source["id"] < candidate["id"]:
-                source = next(normalized, None)
-            if source is None or source["id"] != candidate["id"]:
-                raise ValueError(
-                    f"{shard.candidate_path} contains ID {candidate['id']!r} "
-                    f"that is absent from {shard.normalized_path}"
+                candidate_ids[source_id] = None
+                text = source["text"] or ""
+                encoded_text = text.encode()
+                compressed_bytes = compressor.compress(encoded_text)
+                compressed_text = _copy_to_arrow_buffer(compressed_bytes, value_memory_pool)
+                loaded += 1
+                text_bytes += len(encoded_text)
+                stored_bytes += len(compressed_bytes)
+                yield (shard.file_idx, candidate_id), _StoredDocument(
+                    compressed_text=compressed_text,
+                    chars=len(text),
+                    signature=dupekit.TokenNgramSignature(text, ngram_size),
                 )
-            yield (shard.file_idx, candidate["id"]), source["text"] or ""
-            candidate = next(candidates, None)
-            source = next(normalized, None)
+                del text, encoded_text, compressed_bytes
+
+            missing_id = next(
+                (candidate_id for candidate_id in candidate_ids.values() if candidate_id is not None),
+                None,
+            )
+            if missing_id is not None:
+                raise ValueError(
+                    f"{shard.candidate_path} contains ID {missing_id!r} " f"that is absent from {shard.normalized_path}"
+                )
+            memory_pool.release_unused()
+            logger.info(
+                "Prepared memory-store shard %d with %d candidate texts: %d bytes compressed to %d bytes",
+                shard.file_idx,
+                loaded,
+                text_bytes,
+                stored_bytes,
+            )
+
+
+def _candidate_signatures(
+    shards: list[VerificationShard],
+    ngram_size: int,
+) -> Iterator[tuple[tuple[int, str], dupekit.TokenNgramFingerprintSignature]]:
+    """Join candidate IDs to fixed-size signatures without retaining text."""
+    with _system_arrow_memory_pool() as memory_pool:
+        for shard in shards:
+            if not StoragePath(shard.candidate_path).exists():
+                continue
+
+            candidate_ids: dict[str, str | None] = {
+                row["id"]: row["id"]
+                for row in _rows(shard.candidate_path, ["id", "dup_cluster_id", "is_cluster_canonical"])
+            }
+            if not candidate_ids:
+                continue
+
+            loaded = 0
+            for source in _parquet_rows(shard.normalized_path, ["id", "text"]):
+                source_id = source["id"]
+                if source_id not in candidate_ids:
+                    continue
+                candidate_id = candidate_ids[source_id]
+                if candidate_id is None:
+                    counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/repeated_source_ids", 1)
+                    continue
+                candidate_ids[source_id] = None
+                text = source["text"] or ""
+                loaded += 1
+                yield (shard.file_idx, candidate_id), dupekit.TokenNgramFingerprintSignature(text, ngram_size)
+
+            missing_id = next(
+                (candidate_id for candidate_id in candidate_ids.values() if candidate_id is not None),
+                None,
+            )
+            if missing_id is not None:
+                raise ValueError(
+                    f"{shard.candidate_path} contains ID {missing_id!r} " f"that is absent from {shard.normalized_path}"
+                )
+            memory_pool.release_unused()
+            logger.info("Prepared memory-store shard %d with %d candidate signatures", shard.file_idx, loaded)
+
+
+def _decompress_document_text(value: pa.Buffer) -> str:
+    decompressor = getattr(_DOCUMENT_TEXT_CODECS, "decompressor", None)
+    if decompressor is None:
+        decompressor = zstd.ZstdDecompressor()
+        _DOCUMENT_TEXT_CODECS.decompressor = decompressor
+    return decompressor.decompress(value).decode()
+
+
+def _decompress_stored_documents(inputs: list[tuple[_StoredDocument, None]]) -> list[str]:
+    return [_decompress_document_text(stored.compressed_text) for stored, _ in inputs]
+
+
+def _serialize_stored_signatures(
+    inputs: list[tuple[dupekit.TokenNgramFingerprintSignature, None]],
+) -> list[bytes]:
+    return [signature.to_bytes() for signature, _ in inputs]
+
+
+def _attach_document_signatures(
+    records: Iterator[dict[str, Any]],
+    document_store: MemoryStore[tuple[int, str], dupekit.TokenNgramFingerprintSignature],
+    lookup_batch_size: int,
+    control: _TextAttachmentControl,
+) -> Iterator[dict[str, Any]]:
+    """Fetch fixed-size signatures while preserving reducer record order."""
+    for record_batch in batched(records, lookup_batch_size):
+        if not control.enabled:
+            yield from record_batch
+            continue
+        serialized = document_store.compute_many(
+            [((record["file_idx"], record["id"]), None) for record in record_batch],
+            _serialize_stored_signatures,
+        )
+        for record, signature_bytes in zip(record_batch, serialized, strict=True):
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_signature_bytes", len(signature_bytes))
+            yield {
+                **record,
+                "fingerprint_signature": dupekit.TokenNgramFingerprintSignature.from_bytes(signature_bytes),
+            }
 
 
 def _joined_cluster_members(shards: list[VerificationShard]) -> Iterator[dict[str, Any]]:
@@ -281,6 +520,56 @@ def _joined_cluster_members(shards: list[VerificationShard]) -> Iterator[dict[st
             minhash = next(minhash_rows, None)
 
 
+def _local_cluster_counts(
+    shards: list[VerificationShard],
+    *,
+    minimum_local_members: int,
+) -> Iterator[dict[str, Any]]:
+    """Emit counts for clusters that repeat within one pipeline input shard."""
+    count_frames = []
+    for shard in shards:
+        if not StoragePath(shard.candidate_path).exists():
+            continue
+        with StoragePath(shard.candidate_path).open("rb") as stream:
+            parquet = pq.ParquetFile(stream)
+            if parquet.metadata.num_rows == 0:
+                continue
+            cluster_ids = parquet.read(columns=["dup_cluster_id"])
+        count_frames.append(pl.from_arrow(cluster_ids).group_by("dup_cluster_id").len(name="members"))
+    if not count_frames:
+        return
+    cluster_counts = (
+        pl.concat(count_frames)
+        .group_by("dup_cluster_id")
+        .agg(pl.col("members").sum())
+        .filter(pl.col("members") >= minimum_local_members)
+    )
+    for row in cluster_counts.iter_rows(named=True):
+        yield {"dup_cluster_id": str(row["dup_cluster_id"]), "members": row["members"]}
+
+
+def _large_cluster_split(
+    cluster_id: str,
+    records: Iterator[dict[str, Any]],
+    *,
+    params: LargeClusterParams,
+    num_input_shards: int,
+) -> Iterator[dict[str, Any]]:
+    """Return a split factor when a cluster can exceed the configured maximum."""
+    observed_members = sum(record["members"] for record in records)
+    omitted_members_upper_bound = (params.minimum_local_members - 1) * num_input_shards
+    upper_bound_members = observed_members + omitted_members_upper_bound
+    if upper_bound_members <= params.maximum_members:
+        return
+    split_factor = (upper_bound_members + params.target_members_per_partition - 1) // params.target_members_per_partition
+    yield {
+        "dup_cluster_id": cluster_id,
+        "observed_members": observed_members,
+        "upper_bound_members": upper_bound_members,
+        "split_factor": split_factor,
+    }
+
+
 def _document_partition(positions: Mapping[int, int], key: tuple[int, str]) -> int:
     """Route a candidate document to its shard's position in this layout.
 
@@ -293,21 +582,35 @@ def _document_partition(positions: Mapping[int, int], key: tuple[int, str]) -> i
 
 def _attach_document_text(
     records: Iterator[dict[str, Any]],
-    document_store: MemoryStore[tuple[int, str], str],
+    document_store: MemoryStore[tuple[int, str], _StoredDocument],
     lookup_batch_size: int,
+    control: _TextAttachmentControl | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Fetch bounded text batches while preserving reducer record order."""
     for record_batch in batched(records, lookup_batch_size):
-        texts = document_store.get_many([(record["file_idx"], record["id"]) for record in record_batch])
+        if control is not None and not control.enabled:
+            yield from record_batch
+            continue
+        texts = document_store.compute_many(
+            [((record["file_idx"], record["id"]), None) for record in record_batch],
+            _decompress_stored_documents,
+        )
         for record, text in zip(record_batch, texts, strict=True):
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_text_chars", len(text))
             yield {**record, "text": text}
 
 
-def _cluster_key(record: dict[str, Any]) -> tuple[str, str]:
+def _cluster_key(split_factors: Mapping[str, int], record: dict[str, Any]) -> tuple[str, str, int]:
     if record["kind"] == "sentinel":
-        return "sentinel", str(record["file_idx"])
-    return "cluster", record["dup_cluster_id"]
+        return "sentinel", str(record["file_idx"]), 0
+    cluster_id = record["dup_cluster_id"]
+    split_factor = split_factors.get(cluster_id, 1)
+    if split_factor == 1:
+        return "cluster", cluster_id, 0
+    buckets = record["buckets"]
+    partition_value = buckets[0] if buckets else record["id"]
+    partition = deterministic_hash((_LARGE_CLUSTER_PARTITION_HASH_DOMAIN, partition_value)) % split_factor
+    return "cluster", cluster_id, partition
 
 
 def _cluster_sort_key(record: dict[str, Any]) -> bytes:
@@ -350,6 +653,18 @@ class _RetainedRepresentative:
     kind: RepresentativeKind
 
 
+@dataclass(frozen=True)
+class _SignatureRejection:
+    """A definitive rejection whose exact similarity scores were not materialized."""
+
+    rejection: VerificationRejection
+    member_chars: int
+
+    @property
+    def accepted(self) -> bool:
+        return False
+
+
 def _record_document_decision(record: dict[str, Any], decision: str) -> None:
     counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/decision/{decision}", 1)
     counters.pipeline.update_counter(
@@ -359,7 +674,7 @@ def _record_document_decision(record: dict[str, Any], decision: str) -> None:
 
 
 def _record_comparison(
-    result: VerificationResult,
+    result: VerificationResult | _SignatureRejection,
     representative_kind: RepresentativeKind,
     decision: str,
     local_line_count_ratio: float | None = None,
@@ -370,6 +685,10 @@ def _record_comparison(
         f"{_COUNTER_PREFIX}/comparison_representative/{representative_kind.value}",
         1,
     )
+    if isinstance(result, _SignatureRejection):
+        if result.rejection == VerificationRejection.CONTAINMENT:
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/signature_rejections", 1)
+        return
     counters.pipeline.update_counter(
         f"{_COUNTER_PREFIX}/histogram/member_containment/{_score_bin(result.member_containment)}",
         1,
@@ -437,6 +756,156 @@ def _local_verification_gate(
     )
 
 
+@dataclass(frozen=True)
+class _StoredComparisonRequest:
+    representative_texts: tuple[str, ...]
+    verification_params: FuzzyVerificationParams
+    local_params: LocalRepresentativeParams
+    return_text: bool = False
+
+
+@dataclass(frozen=True)
+class _StoredComparisonResult:
+    text: str | None
+    comparisons: tuple[VerificationResult | _SignatureRejection, ...]
+    local_decisions: tuple[_LocalVerificationDecision, ...]
+
+
+@dataclass
+class _DeferredRecordGroup:
+    member_id: str
+    records: list[dict[str, Any]]
+    nominee_indices: list[int]
+    shared_counts: dict[int, int]
+    results: list[_StoredComparisonResult | None]
+
+
+def _compare_document_text(
+    text: str,
+    request: _StoredComparisonRequest,
+    representative_cache: dict[tuple[str, ...], list[PreparedVerificationText]] | None = None,
+) -> _StoredComparisonResult:
+    if not request.representative_texts:
+        return _StoredComparisonResult(text=text, comparisons=(), local_decisions=())
+
+    prepared_member = prepare_verification_text(text, request.verification_params)
+    prepared_representatives = (
+        None if representative_cache is None else representative_cache.get(request.representative_texts)
+    )
+    if prepared_representatives is None:
+        prepared_representatives = [
+            prepare_verification_text(representative_text, request.verification_params)
+            for representative_text in request.representative_texts
+        ]
+        if representative_cache is not None:
+            representative_cache[request.representative_texts] = prepared_representatives
+    primary_result = verify_prepared_candidate(
+        prepared_member,
+        prepared_representatives[0],
+        request.verification_params,
+    )
+    comparisons = [primary_result]
+    local_decisions: list[_LocalVerificationDecision] = []
+    if not primary_result.accepted:
+        for prepared_representative in prepared_representatives[1:]:
+            result = verify_prepared_candidate(prepared_member, prepared_representative, request.verification_params)
+            comparisons.append(result)
+            decision = _local_verification_gate(prepared_member, prepared_representative, result, request.local_params)
+            local_decisions.append(decision)
+    return _StoredComparisonResult(
+        text=text if request.return_text else None,
+        comparisons=tuple(comparisons),
+        local_decisions=tuple(local_decisions),
+    )
+
+
+def _compare_stored_documents(
+    inputs: list[tuple[_StoredDocument, _StoredComparisonRequest]],
+) -> list[_StoredComparisonResult]:
+    """Compare stored candidates with the requested representatives."""
+    grouped_inputs: dict[
+        tuple[str, ...],
+        list[tuple[int, _StoredDocument, _StoredComparisonRequest]],
+    ] = defaultdict(list)
+    for index, (value, request) in enumerate(inputs):
+        grouped_inputs[request.representative_texts].append((index, value, request))
+
+    indexed_results = []
+    for group in grouped_inputs.values():
+        representative_cache: dict[tuple[str, ...], list[PreparedVerificationText]] = {}
+        indexed_results.extend(
+            (index, _compare_stored_document(value, request, representative_cache)) for index, value, request in group
+        )
+    indexed_results.sort(key=lambda item: item[0])
+    return [result for _, result in indexed_results]
+
+
+def _signature_rejection(
+    stored: _StoredDocument,
+    representative: PreparedVerificationText,
+    params: FuzzyVerificationParams,
+) -> _SignatureRejection | None:
+    if stored.chars > representative.chars:
+        return _SignatureRejection(VerificationRejection.MEMBER_LONGER, stored.chars)
+    if params.minimum_member_containment != 1.0 or params.maximum_member_unique_ngrams != 0:
+        return None
+    if not stored.signature.may_be_subset_of(representative.signature):
+        return _SignatureRejection(VerificationRejection.CONTAINMENT, stored.chars)
+    return None
+
+
+def _compare_stored_document(
+    stored: _StoredDocument,
+    request: _StoredComparisonRequest,
+    representative_cache: dict[tuple[str, ...], list[PreparedVerificationText]],
+) -> _StoredComparisonResult:
+    prepared_representatives = representative_cache.get(request.representative_texts)
+    if prepared_representatives is None:
+        prepared_representatives = [
+            prepare_verification_text(text, request.verification_params) for text in request.representative_texts
+        ]
+        representative_cache[request.representative_texts] = prepared_representatives
+
+    text: str | None = None
+    prepared_member: PreparedVerificationText | None = None
+
+    def exact_result(representative: PreparedVerificationText) -> VerificationResult:
+        nonlocal text, prepared_member
+        if text is None:
+            text = _decompress_document_text(stored.compressed_text)
+        if prepared_member is None:
+            prepared_member = prepare_verification_text(text, request.verification_params)
+        return verify_prepared_candidate(prepared_member, representative, request.verification_params)
+
+    comparisons: list[VerificationResult | _SignatureRejection] = []
+    local_decisions: list[_LocalVerificationDecision] = []
+    if prepared_representatives:
+        primary_rejection = _signature_rejection(stored, prepared_representatives[0], request.verification_params)
+        primary_result = primary_rejection or exact_result(prepared_representatives[0])
+        comparisons.append(primary_result)
+        if not primary_result.accepted:
+            for representative in prepared_representatives[1:]:
+                signature_rejection = _signature_rejection(stored, representative, request.verification_params)
+                if signature_rejection is not None:
+                    comparisons.append(signature_rejection)
+                    local_decisions.append(_LocalVerificationDecision(False, signature_rejection.rejection.value, None))
+                    continue
+                result = exact_result(representative)
+                comparisons.append(result)
+                assert prepared_member is not None
+                local_decisions.append(
+                    _local_verification_gate(prepared_member, representative, result, request.local_params)
+                )
+
+    if request.return_text and text is None:
+        text = _decompress_document_text(stored.compressed_text)
+    return _StoredComparisonResult(
+        text=text if request.return_text else None,
+        comparisons=tuple(comparisons),
+        local_decisions=tuple(local_decisions),
+    )
+
+
 def _choose_longest_representative(
     records_with_text: Iterator[dict[str, Any]],
 ) -> tuple[dict[str, Any], Iterator[dict[str, Any]]]:
@@ -483,12 +952,12 @@ def _split_record_group(records: Iterator[dict[str, Any]]) -> _SplitRecordGroup:
 def _make_cluster_verifier(
     verification_params: FuzzyVerificationParams,
     local_params: LocalRepresentativeParams,
-    document_store: MemoryStore[tuple[int, str], str],
+    document_store: MemoryStore[tuple[int, str], _StoredDocument],
     lookup_batch_size: int,
 ):
     """Build a reducer that uses bounded, retained local representatives."""
 
-    def verify(group_key: tuple[str, str], records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    def verify(group_key: tuple[str, str, int], records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
         first = next(records)
         if group_key[0] == "sentinel":
             if next(records, None) is not None:
@@ -496,10 +965,12 @@ def _make_cluster_verifier(
             yield {"kind": "sentinel", "file_idx": first["file_idx"], "id": ""}
             return
 
+        attachment_control = _TextAttachmentControl()
         records_with_text = _attach_document_text(
             chain((first,), records),
             document_store,
             lookup_batch_size,
+            attachment_control,
         )
         representative, records_with_text = _choose_longest_representative(records_with_text)
         # The cluster canonical is now provenance only. It still names the
@@ -526,17 +997,17 @@ def _make_cluster_verifier(
         accepted = 0
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/clusters", 1)
 
-        def add_local_representative(member: dict[str, Any], prepared: PreparedVerificationText) -> None:
+        def add_local_representative(member: dict[str, Any], prepared: PreparedVerificationText) -> bool:
             nonlocal local_representative_chars
             if len(retained) >= local_params.maximum_representatives_per_cluster:
                 counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/representative_skipped/cluster_limit", 1)
-                return
+                return False
             if prepared.chars > local_params.maximum_local_representative_chars:
                 counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/representative_skipped/document_chars", 1)
-                return
+                return False
             if local_representative_chars + prepared.chars > local_params.maximum_local_representative_chars_per_cluster:
                 counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/representative_skipped/cluster_chars", 1)
-                return
+                return False
 
             representative_index = len(retained)
             local = _RetainedRepresentative(
@@ -552,8 +1023,11 @@ def _make_cluster_verifier(
             local_representative_chars += prepared.chars
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/local_representatives_added", 1)
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/local_representative_chars", prepared.chars)
+            return True
 
-        for member_id, same_id_records in groupby(records_with_text, key=lambda record: record["id"]):
+        record_groups = groupby(records_with_text, key=lambda record: record["id"])
+        frozen_record_groups: Iterator[tuple[str, Iterator[dict[str, Any]]]] | None = None
+        for member_id, same_id_records in record_groups:
             record_group = _split_record_group(same_id_records)
             member = record_group.first
             representative_id_group = member_id == primary.id
@@ -631,7 +1105,11 @@ def _make_cluster_verifier(
             )
             if matched_representative is None:
                 _record_document_decision(member, "retained_no_match")
-                add_local_representative(member, prepared_member)
+                added = add_local_representative(member, prepared_member)
+                if added and len(retained) == local_params.maximum_representatives_per_cluster:
+                    attachment_control.enabled = False
+                    frozen_record_groups = record_groups
+                    break
                 continue
 
             assert matched_result is not None
@@ -655,6 +1133,667 @@ def _make_cluster_verifier(
                 **_result_fields(matched_result),
                 "dup_local_line_count_ratio": matched_local_line_count_ratio,
             }
+
+        if frozen_record_groups is not None:
+            materialized_groups = ((member_id, list(group)) for member_id, group in frozen_record_groups)
+            for group_batch in batched(materialized_groups, lookup_batch_size):
+                frozen_groups: list[_DeferredRecordGroup] = []
+                remote_requests: list[tuple[tuple[int, str], _StoredComparisonRequest]] = []
+                remote_slots: list[tuple[_DeferredRecordGroup, int]] = []
+                representative_cache: dict[tuple[str, ...], list[PreparedVerificationText]] = {}
+
+                for member_id, group_records in group_batch:
+                    member = group_records[0]
+                    nominee_indices: list[int] = []
+                    shared_counts: dict[int, int] = {}
+                    if member_id != primary.id:
+                        member_buckets = frozenset(member["buckets"])
+                        mutable_shared_counts: dict[int, int] = defaultdict(int)
+                        for bucket in member_buckets:
+                            for representative_index in bucket_representatives.get(bucket, ()):
+                                mutable_shared_counts[representative_index] += 1
+                        shared_counts = dict(mutable_shared_counts)
+                        nominees = sorted(shared_counts, key=lambda index: (-shared_counts[index], index))
+                        local_comparison_limit = local_params.maximum_comparisons_per_document - 1
+                        nominee_indices = nominees[:local_comparison_limit]
+
+                    frozen_group = _DeferredRecordGroup(
+                        member_id=member_id,
+                        records=group_records,
+                        nominee_indices=nominee_indices,
+                        shared_counts=shared_counts,
+                        results=[None] * len(group_records),
+                    )
+                    frozen_groups.append(frozen_group)
+
+                    for record_index, record in enumerate(group_records):
+                        is_comparison = record_index == 0 and member_id != primary.id
+                        representative_texts = ()
+                        if is_comparison:
+                            representative_texts = (
+                                primary.prepared.text,
+                                *(retained[index].prepared.text for index in nominee_indices),
+                            )
+                        request = _StoredComparisonRequest(
+                            representative_texts=representative_texts,
+                            verification_params=verification_params,
+                            local_params=local_params,
+                            return_text=not is_comparison or len(group_records) > 1,
+                        )
+                        if "text" in record:
+                            frozen_group.results[record_index] = _compare_document_text(
+                                record["text"],
+                                request,
+                                representative_cache,
+                            )
+                            continue
+                        remote_requests.append(((record["file_idx"], record["id"]), request))
+                        remote_slots.append((frozen_group, record_index))
+
+                remote_results = document_store.compute_many(remote_requests, _compare_stored_documents)
+                for (frozen_group, record_index), result in zip(remote_slots, remote_results, strict=True):
+                    frozen_group.results[record_index] = result
+                    if result.comparisons:
+                        text_chars = result.comparisons[0].member_chars
+                    else:
+                        assert result.text is not None
+                        text_chars = len(result.text)
+                    counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_text_chars", text_chars)
+
+                for frozen_group in frozen_groups:
+                    member = frozen_group.records[0]
+                    resolved_results = frozen_group.results
+                    assert all(result is not None for result in resolved_results)
+                    results = [result for result in resolved_results if result is not None]
+                    cluster_size += len(frozen_group.records)
+                    canonicals_seen += sum(record["is_cluster_canonical"] for record in frozen_group.records)
+                    if canonicals_seen > 1:
+                        raise ValueError(f"Cluster {group_key[1]!r} has more than one canonical member")
+
+                    if frozen_group.member_id == primary.id:
+                        for record, result in zip(frozen_group.records, results, strict=True):
+                            if result.text != primary.prepared.text:
+                                raise ValueError(
+                                    f"Cluster {group_key[1]!r} has different text "
+                                    f"for content ID {frozen_group.member_id!r}"
+                                )
+                            _record_document_decision(record, "delegated_global_exact")
+                        continue
+
+                    member_result = results[0]
+                    if len(frozen_group.records) > 1:
+                        expected_text = member_result.text
+                        assert expected_text is not None
+                        for exact_record, exact_result in zip(frozen_group.records[1:], results[1:], strict=True):
+                            if exact_result.text != expected_text:
+                                raise ValueError(
+                                    f"Cluster {group_key[1]!r} has different text "
+                                    f"for content ID {frozen_group.member_id!r}"
+                                )
+                            _record_document_decision(exact_record, "delegated_global_exact")
+
+                    comparison_results = member_result.comparisons
+                    assert comparison_results
+                    primary_result = comparison_results[0]
+                    comparison_count = 1
+                    matched_representative: _RetainedRepresentative | None = None
+                    matched_result: VerificationResult | None = None
+                    matched_local_line_count_ratio: float | None = None
+                    member_buckets = frozenset(member["buckets"])
+                    shared_buckets = len(member_buckets & primary.buckets)
+                    primary_decision = (
+                        primary_result.rejection.value if primary_result.rejection is not None else "accepted"
+                    )
+                    _record_comparison(primary_result, primary.kind, primary_decision)
+                    if primary_result.accepted:
+                        assert isinstance(primary_result, VerificationResult)
+                        matched_representative = primary
+                        matched_result = primary_result
+                    else:
+                        nominees = sorted(
+                            frozen_group.shared_counts,
+                            key=lambda index: (-frozen_group.shared_counts[index], index),
+                        )
+                        local_comparison_limit = local_params.maximum_comparisons_per_document - 1
+                        if len(nominees) > local_comparison_limit:
+                            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/comparison_limit_reached", 1)
+                        counters.pipeline.update_counter(
+                            f"{_COUNTER_PREFIX}/local_representative_nominees",
+                            len(nominees),
+                        )
+                        for representative_index, local_result, local_decision in zip(
+                            frozen_group.nominee_indices,
+                            comparison_results[1:],
+                            member_result.local_decisions,
+                            strict=True,
+                        ):
+                            local = retained[representative_index]
+                            comparison_count += 1
+                            _record_comparison(
+                                local_result,
+                                local.kind,
+                                local_decision.reason,
+                                local_decision.line_count_ratio,
+                            )
+                            if local_decision.accepted:
+                                assert isinstance(local_result, VerificationResult)
+                                matched_representative = local
+                                matched_result = local_result
+                                matched_local_line_count_ratio = local_decision.line_count_ratio
+                                shared_buckets = frozen_group.shared_counts[representative_index]
+                                break
+
+                    counters.pipeline.update_counter(
+                        f"{_COUNTER_PREFIX}/comparisons_per_document/{comparison_count}",
+                        1,
+                    )
+                    if matched_representative is None:
+                        _record_document_decision(member, "retained_no_match")
+                        counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/representative_skipped/cluster_limit", 1)
+                        continue
+
+                    assert matched_result is not None
+                    _record_document_decision(member, "accepted")
+                    counters.pipeline.update_counter(
+                        f"{_COUNTER_PREFIX}/accepted_representative/{matched_representative.kind.value}",
+                        1,
+                    )
+                    accepted += 1
+                    yield {
+                        "kind": "verified",
+                        "file_idx": member["file_idx"],
+                        "id": member["id"],
+                        "dup_doc": True,
+                        "dup_cluster_id": member["dup_cluster_id"],
+                        "dup_representative_id": matched_representative.id,
+                        "dup_representative_source_key": matched_representative.source_key,
+                        "dup_representative_kind": matched_representative.kind.value,
+                        "dup_shared_lsh_buckets": shared_buckets,
+                        "dup_comparisons": comparison_count,
+                        **_result_fields(matched_result),
+                        "dup_local_line_count_ratio": matched_local_line_count_ratio,
+                    }
+
+        counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/cluster_size/{_size_bin(cluster_size)}", 1)
+        counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/representatives_per_cluster/{_size_bin(len(retained))}", 1)
+        counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/cluster_members", cluster_size)
+        counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/verified_duplicates", accepted)
+
+    return verify
+
+
+@dataclass(frozen=True)
+class _RetainedSignatureRepresentative:
+    id: str
+    source_key: str
+    signature: dupekit.TokenNgramFingerprintSignature
+    buckets: frozenset[str]
+    kind: RepresentativeKind
+
+
+@dataclass(frozen=True)
+class _SignatureDecision:
+    accepted: bool
+    reason: str
+    line_count_ratio: float | None
+
+
+@dataclass(frozen=True)
+class _StoredSignatureComparisonRequest:
+    representative_signatures: tuple[bytes, ...]
+    minimum_local_line_count_ratio: float
+
+
+@dataclass(frozen=True)
+class _StoredSignatureComparisonResult:
+    decisions: tuple[_SignatureDecision, ...]
+    accepted_member_signature: bytes | None
+
+
+@dataclass
+class _DeferredSignatureRecordGroup:
+    records: list[dict[str, Any]]
+    nominee_indices: list[int]
+    shared_counts: dict[int, int]
+    result: _StoredSignatureComparisonResult | None = None
+
+
+def _signature_decision(
+    member: dupekit.TokenNgramFingerprintSignature,
+    representative: dupekit.TokenNgramFingerprintSignature,
+) -> _SignatureDecision:
+    if member.chars > representative.chars:
+        return _SignatureDecision(False, VerificationRejection.MEMBER_LONGER.value, None)
+    if not member.may_be_subset_of(representative):
+        return _SignatureDecision(False, VerificationRejection.CONTAINMENT.value, None)
+    return _SignatureDecision(True, "accepted", None)
+
+
+def _local_signature_decision(
+    member: dupekit.TokenNgramFingerprintSignature,
+    representative: dupekit.TokenNgramFingerprintSignature,
+    minimum_line_count_ratio: float,
+) -> _SignatureDecision:
+    decision = _signature_decision(member, representative)
+    if not decision.accepted:
+        return decision
+    if member.normalized_sequence_hash != representative.normalized_sequence_hash:
+        return _SignatureDecision(False, _LOCAL_TOKEN_SEQUENCE_REJECTION, None)
+    lines_ratio = min(member.lines, representative.lines) / max(member.lines, representative.lines)
+    if lines_ratio < minimum_line_count_ratio:
+        return _SignatureDecision(False, _LOCAL_LINE_COUNT_REJECTION, lines_ratio)
+    return _SignatureDecision(True, "accepted", lines_ratio)
+
+
+def _compare_stored_signatures(
+    inputs: list[
+        tuple[
+            dupekit.TokenNgramFingerprintSignature,
+            _StoredSignatureComparisonRequest,
+        ]
+    ],
+) -> list[_StoredSignatureComparisonResult]:
+    representative_cache: dict[tuple[bytes, ...], list[dupekit.TokenNgramFingerprintSignature]] = {}
+    results = []
+    for member, request in inputs:
+        representatives = representative_cache.get(request.representative_signatures)
+        if representatives is None:
+            representatives = [
+                dupekit.TokenNgramFingerprintSignature.from_bytes(serialized)
+                for serialized in request.representative_signatures
+            ]
+            representative_cache[request.representative_signatures] = representatives
+        decisions = [
+            _signature_decision(
+                member,
+                representatives[0],
+            )
+        ]
+        if not decisions[0].accepted:
+            decisions.extend(
+                _local_signature_decision(
+                    member,
+                    representative,
+                    request.minimum_local_line_count_ratio,
+                )
+                for representative in representatives[1:]
+            )
+        accepted_member_signature = member.to_bytes() if any(decision.accepted for decision in decisions) else None
+        results.append(_StoredSignatureComparisonResult(tuple(decisions), accepted_member_signature))
+    return results
+
+
+def _record_signature_comparison(
+    decision: _SignatureDecision,
+    representative_kind: RepresentativeKind,
+) -> None:
+    counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/direct_comparisons", 1)
+    counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/comparison/{decision.reason}", 1)
+    counters.pipeline.update_counter(
+        f"{_COUNTER_PREFIX}/comparison_representative/{representative_kind.value}",
+        1,
+    )
+    counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/signature_only_comparisons", 1)
+
+
+def _choose_longest_signature_representative(
+    records: Iterator[dict[str, Any]],
+) -> tuple[dict[str, Any], Iterator[dict[str, Any]]]:
+    head: list[dict[str, Any]] = []
+    buffered_chars = 0
+    for record in records:
+        head.append(record)
+        buffered_chars += record["fingerprint_signature"].chars
+        if len(head) >= ANCHOR_SCAN_RECORDS or buffered_chars >= ANCHOR_SCAN_CHARS:
+            break
+    longest = max(
+        range(len(head)),
+        key=lambda index: (head[index]["fingerprint_signature"].chars, head[index]["id"]),
+    )
+    if longest > 0:
+        counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/representative_longer_than_first", 1)
+    representative = head.pop(longest)
+    return representative, chain(head, records)
+
+
+def _make_signature_cluster_verifier(
+    verification_params: FuzzyVerificationParams,
+    local_params: LocalRepresentativeParams,
+    document_store: MemoryStore[tuple[int, str], dupekit.TokenNgramFingerprintSignature],
+    lookup_batch_size: int,
+):
+    """Build a reducer that verifies clusters from fixed-size signatures only."""
+
+    def verify(group_key: tuple[str, str], records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+        first = next(records)
+        if group_key[0] == "sentinel":
+            if next(records, None) is not None:
+                raise AssertionError(f"Sentinel group {group_key} has more than one record")
+            yield {"kind": "sentinel", "file_idx": first["file_idx"], "id": ""}
+            return
+
+        second = next(records, None)
+        if second is None:
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/clusters", 1)
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/cluster_size/1-1", 1)
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/representatives_per_cluster/1-1", 1)
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/cluster_members", 1)
+            return
+        attachment_control = _TextAttachmentControl()
+        records_with_signatures = _attach_document_signatures(
+            chain((first, second), records),
+            document_store,
+            lookup_batch_size,
+            attachment_control,
+        )
+        representative, records_with_signatures = _choose_longest_signature_representative(records_with_signatures)
+        representative_kind = RepresentativeKind.CLUSTER_CANONICAL
+        if not representative["is_cluster_canonical"]:
+            representative_kind = RepresentativeKind.CLUSTER_LONGEST
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/representative_not_canonical", 1)
+        primary = _RetainedSignatureRepresentative(
+            id=representative["id"],
+            source_key=representative["source_key"],
+            signature=representative["fingerprint_signature"],
+            buckets=frozenset(representative["buckets"]),
+            kind=representative_kind,
+        )
+        retained = [primary]
+        bucket_representatives: dict[str, list[int]] = defaultdict(list)
+        local_representative_chars = 0
+        cluster_size = 1
+        canonicals_seen = int(representative["is_cluster_canonical"])
+        accepted = 0
+        counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/clusters", 1)
+
+        def add_local_representative(
+            member: dict[str, Any],
+            signature: dupekit.TokenNgramFingerprintSignature,
+        ) -> bool:
+            nonlocal local_representative_chars
+            if len(retained) >= local_params.maximum_representatives_per_cluster:
+                counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/representative_skipped/cluster_limit", 1)
+                return False
+            if signature.chars > local_params.maximum_local_representative_chars:
+                counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/representative_skipped/document_chars", 1)
+                return False
+            if (
+                local_representative_chars + signature.chars
+                > local_params.maximum_local_representative_chars_per_cluster
+            ):
+                counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/representative_skipped/cluster_chars", 1)
+                return False
+
+            representative_index = len(retained)
+            local = _RetainedSignatureRepresentative(
+                id=member["id"],
+                source_key=member["source_key"],
+                signature=signature,
+                buckets=frozenset(member["buckets"]),
+                kind=RepresentativeKind.LOCAL_REPRESENTATIVE,
+            )
+            retained.append(local)
+            for bucket in local.buckets:
+                bucket_representatives[bucket].append(representative_index)
+            local_representative_chars += signature.chars
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/local_representatives_added", 1)
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/local_representative_chars", signature.chars)
+            return True
+
+        def verified_record(
+            member: dict[str, Any],
+            signature: dupekit.TokenNgramFingerprintSignature,
+            matched_representative: _RetainedSignatureRepresentative,
+            matched_decision: _SignatureDecision,
+            shared_buckets: int,
+            comparison_count: int,
+        ) -> dict[str, Any]:
+            representative_signature = matched_representative.signature
+            under_tokenized = (
+                signature.chars / max(signature.token_count, 1) > verification_params.maximum_chars_per_token
+                or representative_signature.chars / max(representative_signature.token_count, 1)
+                > verification_params.maximum_chars_per_token
+            )
+            jaccard = (
+                signature.ngram_count / representative_signature.ngram_count
+                if representative_signature.ngram_count
+                else 1.0
+            )
+            return {
+                "kind": "verified",
+                "file_idx": member["file_idx"],
+                "id": member["id"],
+                "dup_doc": True,
+                "dup_cluster_id": member["dup_cluster_id"],
+                "dup_representative_id": matched_representative.id,
+                "dup_representative_source_key": matched_representative.source_key,
+                "dup_representative_kind": matched_representative.kind.value,
+                "dup_shared_lsh_buckets": shared_buckets,
+                "dup_comparisons": comparison_count,
+                "dup_member_containment": 1.0,
+                "dup_jaccard": jaccard,
+                "dup_under_tokenized": under_tokenized,
+                "dup_char_jaccard": None,
+                "dup_local_line_count_ratio": matched_decision.line_count_ratio,
+            }
+
+        record_groups = groupby(records_with_signatures, key=lambda record: record["id"])
+        frozen_record_groups: Iterator[tuple[str, Iterator[dict[str, Any]]]] | None = None
+        for member_id, same_id_records in record_groups:
+            record_group = _split_record_group(same_id_records)
+            member = record_group.first
+            repeated_records = record_group.remaining
+            if member_id == primary.id:
+                repeated_records = chain((member,), repeated_records)
+                for exact_record in repeated_records:
+                    cluster_size += 1
+                    canonicals_seen += exact_record["is_cluster_canonical"]
+                    _record_document_decision(exact_record, "delegated_global_exact")
+                continue
+
+            for exact_record in repeated_records:
+                cluster_size += 1
+                canonicals_seen += exact_record["is_cluster_canonical"]
+                _record_document_decision(exact_record, "delegated_global_exact")
+
+            cluster_size += 1
+            canonicals_seen += member["is_cluster_canonical"]
+            if canonicals_seen > 1:
+                raise ValueError(f"Cluster {group_key[1]!r} has more than one canonical member")
+
+            signature = member["fingerprint_signature"]
+            member_buckets = frozenset(member["buckets"])
+            comparison_count = 1
+            matched_representative: _RetainedSignatureRepresentative | None = None
+            matched_decision: _SignatureDecision | None = None
+            shared_buckets = len(member_buckets & primary.buckets)
+            primary_decision = _signature_decision(
+                signature,
+                primary.signature,
+            )
+            _record_signature_comparison(primary_decision, primary.kind)
+            if primary_decision.accepted:
+                matched_representative = primary
+                matched_decision = primary_decision
+            else:
+                shared_counts: dict[int, int] = defaultdict(int)
+                for bucket in member_buckets:
+                    for representative_index in bucket_representatives.get(bucket, ()):
+                        shared_counts[representative_index] += 1
+                nominees = sorted(shared_counts, key=lambda index: (-shared_counts[index], index))
+                local_comparison_limit = local_params.maximum_comparisons_per_document - 1
+                if len(nominees) > local_comparison_limit:
+                    counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/comparison_limit_reached", 1)
+                counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/local_representative_nominees", len(nominees))
+                for representative_index in nominees[:local_comparison_limit]:
+                    local = retained[representative_index]
+                    comparison_count += 1
+                    local_decision = _local_signature_decision(
+                        signature,
+                        local.signature,
+                        local_params.minimum_local_line_count_ratio,
+                    )
+                    _record_signature_comparison(local_decision, local.kind)
+                    if local_decision.accepted:
+                        matched_representative = local
+                        matched_decision = local_decision
+                        shared_buckets = shared_counts[representative_index]
+                        break
+
+            counters.pipeline.update_counter(
+                f"{_COUNTER_PREFIX}/comparisons_per_document/{comparison_count}",
+                1,
+            )
+            if matched_representative is None:
+                _record_document_decision(member, "retained_no_match")
+                added = add_local_representative(member, signature)
+                if added and len(retained) == local_params.maximum_representatives_per_cluster:
+                    attachment_control.enabled = False
+                    frozen_record_groups = record_groups
+                    break
+                continue
+
+            assert matched_decision is not None
+            _record_document_decision(member, "accepted")
+            counters.pipeline.update_counter(
+                f"{_COUNTER_PREFIX}/accepted_representative/{matched_representative.kind.value}",
+                1,
+            )
+            accepted += 1
+            yield verified_record(
+                member,
+                signature,
+                matched_representative,
+                matched_decision,
+                shared_buckets,
+                comparison_count,
+            )
+
+        if frozen_record_groups is not None:
+            serialized_retained = [representative.signature.to_bytes() for representative in retained]
+            for group_batch in batched(
+                ((member_id, list(group)) for member_id, group in frozen_record_groups),
+                lookup_batch_size,
+            ):
+                deferred_groups: list[_DeferredSignatureRecordGroup] = []
+                remote_requests: list[
+                    tuple[
+                        tuple[int, str],
+                        _StoredSignatureComparisonRequest,
+                    ]
+                ] = []
+                remote_slots: list[_DeferredSignatureRecordGroup] = []
+
+                for member_id, group_records in group_batch:
+                    cluster_size += len(group_records)
+                    canonicals_seen += sum(record["is_cluster_canonical"] for record in group_records)
+                    if canonicals_seen > 1:
+                        raise ValueError(f"Cluster {group_key[1]!r} has more than one canonical member")
+                    member = group_records[0]
+                    if member_id == primary.id:
+                        for record in group_records:
+                            _record_document_decision(record, "delegated_global_exact")
+                        continue
+                    for record in group_records[1:]:
+                        _record_document_decision(record, "delegated_global_exact")
+
+                    member_buckets = frozenset(member["buckets"])
+                    mutable_shared_counts: dict[int, int] = defaultdict(int)
+                    for bucket in member_buckets:
+                        for representative_index in bucket_representatives.get(bucket, ()):
+                            mutable_shared_counts[representative_index] += 1
+                    shared_counts = dict(mutable_shared_counts)
+                    nominees = sorted(shared_counts, key=lambda index: (-shared_counts[index], index))
+                    local_comparison_limit = local_params.maximum_comparisons_per_document - 1
+                    nominee_indices = nominees[:local_comparison_limit]
+                    if len(nominees) > local_comparison_limit:
+                        counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/comparison_limit_reached", 1)
+                    counters.pipeline.update_counter(
+                        f"{_COUNTER_PREFIX}/local_representative_nominees",
+                        len(nominees),
+                    )
+                    request = _StoredSignatureComparisonRequest(
+                        representative_signatures=(
+                            serialized_retained[0],
+                            *(serialized_retained[index] for index in nominee_indices),
+                        ),
+                        minimum_local_line_count_ratio=local_params.minimum_local_line_count_ratio,
+                    )
+                    deferred_group = _DeferredSignatureRecordGroup(
+                        records=group_records,
+                        nominee_indices=nominee_indices,
+                        shared_counts=shared_counts,
+                    )
+                    deferred_groups.append(deferred_group)
+                    attached_signature = member.get("fingerprint_signature")
+                    if attached_signature is not None:
+                        deferred_group.result = _compare_stored_signatures([(attached_signature, request)])[0]
+                        continue
+                    remote_requests.append(((member["file_idx"], member["id"]), request))
+                    remote_slots.append(deferred_group)
+
+                remote_results = document_store.compute_many(remote_requests, _compare_stored_signatures)
+                for deferred_group, result in zip(remote_slots, remote_results, strict=True):
+                    deferred_group.result = result
+
+                for deferred_group in deferred_groups:
+                    member = deferred_group.records[0]
+                    result = deferred_group.result
+                    assert result is not None
+                    primary_decision = result.decisions[0]
+                    _record_signature_comparison(primary_decision, primary.kind)
+                    matched_representative: _RetainedSignatureRepresentative | None = None
+                    matched_decision: _SignatureDecision | None = None
+                    member_buckets = frozenset(member["buckets"])
+                    shared_buckets = len(member_buckets & primary.buckets)
+                    if primary_decision.accepted:
+                        matched_representative = primary
+                        matched_decision = primary_decision
+                    else:
+                        for representative_index, local_decision in zip(
+                            deferred_group.nominee_indices,
+                            result.decisions[1:],
+                            strict=True,
+                        ):
+                            local = retained[representative_index]
+                            _record_signature_comparison(local_decision, local.kind)
+                            if local_decision.accepted:
+                                matched_representative = local
+                                matched_decision = local_decision
+                                shared_buckets = deferred_group.shared_counts[representative_index]
+                                break
+
+                    comparison_count = len(result.decisions)
+                    counters.pipeline.update_counter(
+                        f"{_COUNTER_PREFIX}/comparisons_per_document/{comparison_count}",
+                        1,
+                    )
+                    if matched_representative is None:
+                        _record_document_decision(member, "retained_no_match")
+                        counters.pipeline.update_counter(
+                            f"{_COUNTER_PREFIX}/representative_skipped/cluster_limit",
+                            1,
+                        )
+                        continue
+
+                    assert matched_decision is not None
+                    serialized_member = result.accepted_member_signature
+                    assert serialized_member is not None
+                    signature = dupekit.TokenNgramFingerprintSignature.from_bytes(serialized_member)
+                    _record_document_decision(member, "accepted")
+                    counters.pipeline.update_counter(
+                        f"{_COUNTER_PREFIX}/accepted_representative/{matched_representative.kind.value}",
+                        1,
+                    )
+                    accepted += 1
+                    yield verified_record(
+                        member,
+                        signature,
+                        matched_representative,
+                        matched_decision,
+                        shared_buckets,
+                        comparison_count,
+                    )
 
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/cluster_size/{_size_bin(cluster_size)}", 1)
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/representatives_per_cluster/{_size_bin(len(retained))}", 1)
@@ -783,11 +1922,15 @@ def verify_fuzzy_dups(
     verification_params: FuzzyVerificationParams,
     local_representative_params: LocalRepresentativeParams,
     store_config: FuzzyVerificationStoreConfig,
+    implementation: FuzzyVerificationImplementation,
+    large_cluster_params: LargeClusterParams = REFERENCE_LARGE_CLUSTER_PARAMS,
     max_workers: int | None = None,
+    pipeline_shards_per_worker: int = DEFAULT_PIPELINE_SHARDS_PER_WORKER,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
     map_task_resources: ResourceConfig | None = None,
     reduce_task_resources: ResourceConfig | None = None,
+    actor_environment: EnvironmentConfig | None = None,
     shard_basenames: frozenset[str] | None = None,
 ) -> VerifiedFuzzyDupsAttrData:
     """Verify existing candidate clusters and write sparse duplicate markers.
@@ -795,7 +1938,13 @@ def verify_fuzzy_dups(
     ``shard_basenames`` verifies a prepared subset of the co-partitioned
     shards. Every cluster it covers must be complete inside that subset, since
     a cluster missing members verifies against the wrong representative.
+
+    ``pipeline_shards_per_worker`` controls map and reduce parallelism without
+    changing document-store partitioning. Each map task streams one or more
+    source shards. A bounded count pass partitions candidate clusters that can
+    exceed ``large_cluster_params.maximum_members``.
     """
+    verification_started = time.monotonic()
     if not normalized_sources:
         raise ValueError("verify_fuzzy_dups requires at least one normalized source")
     layout = _verification_shards(
@@ -816,66 +1965,184 @@ def verify_fuzzy_dups(
         max_workers = min(len(shards), MAX_IRIS_WORKER_REPLICAS)
     if max_workers < 1:
         raise ValueError("max_workers must be at least 1")
+    if pipeline_shards_per_worker < 1:
+        raise ValueError("pipeline_shards_per_worker must be at least 1")
+    num_pipeline_shards = min(len(shards), max_workers * pipeline_shards_per_worker)
+    pipeline_shard_groups = [shards[index::num_pipeline_shards] for index in range(num_pipeline_shards)]
+    logger.info(
+        "Grouped %d source shards into %d fuzzy-verification pipeline shards",
+        len(shards),
+        num_pipeline_shards,
+    )
     ctx_kwargs: dict[str, Any] = {
         "name": "verify-fuzzy-dups",
         "resources": resources,
         "max_workers": max_workers,
+        "actor_environment": actor_environment,
     }
     if coordinator_resources is not None:
         ctx_kwargs["coordinator_resources"] = coordinator_resources
     # The document store lives in the workers' own memory, so the context must
     # own an entered pool before the table loads.
+    pool_started = time.monotonic()
     ctx = ZephyrContext(**ctx_kwargs).start()
+    pool_start_elapsed = time.monotonic() - pool_started
     shard_groups = [[shard] for shard in shards]
     document_partitions = {shard.file_idx: position for position, shard in enumerate(shards)}
 
     try:
         ctx.put(_SHARED_SHARDS_KEY, {shard.file_idx: shard for shard in shards})
+        cluster_scan_started = time.monotonic()
+        cluster_scan_outcome = ctx.execute(
+            Dataset.from_list(pipeline_shard_groups)
+            .flat_map(
+                partial(
+                    _local_cluster_counts,
+                    minimum_local_members=large_cluster_params.minimum_local_members,
+                )
+            )
+            .group_by(
+                key=lambda record: record["dup_cluster_id"],
+                reducer=partial(
+                    _large_cluster_split,
+                    params=large_cluster_params,
+                    num_input_shards=num_pipeline_shards,
+                ),
+                num_output_shards=min(num_pipeline_shards, max_workers),
+            ),
+            verbose=True,
+            map_task_resources=map_task_resources,
+            reduce_task_resources=reduce_task_resources,
+        )
+        cluster_scan_elapsed = time.monotonic() - cluster_scan_started
+        large_cluster_splits = sorted(
+            cluster_scan_outcome.results,
+            key=lambda record: (-record["upper_bound_members"], record["dup_cluster_id"]),
+        )
+        split_factors = {record["dup_cluster_id"]: record["split_factor"] for record in large_cluster_splits}
+        logger.info(
+            "Large-cluster scan found %d cluster(s) above %d members in %.2f seconds",
+            len(large_cluster_splits),
+            large_cluster_params.maximum_members,
+            cluster_scan_elapsed,
+        )
+        for record in large_cluster_splits[:10]:
+            logger.info(
+                "Splitting cluster %s into %d partitions (observed %d, upper bound %d)",
+                record["dup_cluster_id"],
+                record["split_factor"],
+                record["observed_members"],
+                record["upper_bound_members"],
+            )
+        if implementation == FuzzyVerificationImplementation.EXACT:
+            document_loader = partial(_candidate_documents, ngram_size=verification_params.ngram_size)
+        else:
+            document_loader = partial(_candidate_signatures, ngram_size=verification_params.ngram_size)
         document_store = ctx.load_memory_store(
-            Dataset.from_list(shard_groups).flat_map(_candidate_documents),
+            Dataset.from_list(shard_groups).flat_map(document_loader),
             name="fuzzy-verification-documents",
             hash_key=partial(_document_partition, document_partitions),
             recovery_timeout=store_config.recovery_timeout,
+            shards_per_worker=store_config.shards_per_worker,
             ready_timeout=store_config.ready_timeout,
+            load_concurrency=store_config.load_concurrency,
         )
+        if implementation == FuzzyVerificationImplementation.EXACT:
+            cluster_reducer = _make_cluster_verifier(
+                verification_params,
+                local_representative_params,
+                document_store,
+                store_config.lookup_batch_size,
+            )
+        else:
+            cluster_reducer = _make_signature_cluster_verifier(
+                verification_params,
+                local_representative_params,
+                document_store,
+                store_config.lookup_batch_size,
+            )
         pipeline = (
-            Dataset.from_list(shard_groups)
+            Dataset.from_list(pipeline_shard_groups)
             .flat_map(_joined_cluster_members)
             .group_by(
-                key=_cluster_key,
+                key=partial(_cluster_key, split_factors),
                 sort_by=_cluster_sort_key,
-                reducer=_make_cluster_verifier(
-                    verification_params,
-                    local_representative_params,
-                    document_store,
-                    store_config.lookup_batch_size,
-                ),
+                reducer=cluster_reducer,
+                num_output_shards=num_pipeline_shards,
             )
             .group_by(
                 key=lambda record: record["file_idx"],
                 sort_by=lambda record: record["id"],
                 reducer=_write_verified_shard,
+                num_output_shards=num_pipeline_shards,
             )
         )
+        pipeline_started = time.monotonic()
         outcome = ctx.execute(
             pipeline,
             verbose=True,
             map_task_resources=map_task_resources,
             reduce_task_resources=reduce_task_resources,
         )
+        pipeline_elapsed = time.monotonic() - pipeline_started
         store_stats = document_store.stats()
     finally:
+        shutdown_started = time.monotonic()
         ctx.shutdown()
+        shutdown_elapsed = time.monotonic() - shutdown_started
 
     write_copartitioned_source_manifest(output_path=output_path, attr_dirs=layout.attr_dirs)
+    total_elapsed = time.monotonic() - verification_started
 
     verified = sum(result["verified_duplicates"] for result in outcome.results)
     output_counters = dict(outcome.counters)
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/actors"] = len(store_stats)
+    store_workers = len({stat.actor_index for stat in store_stats})
+    store_load_cpu_time = sum(stat.load_cpu_time for stat in store_stats)
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/workers"] = store_workers
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/shards"] = len(store_stats)
     output_counters[f"{_COUNTER_PREFIX}/memory_store/items"] = sum(stat.num_items for stat in store_stats)
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/load_cpu_time"] = sum(stat.load_cpu_time for stat in store_stats)
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/max_actor_load_elapsed"] = max(
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/load_cpu_time"] = store_load_cpu_time
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/load_elapsed"] = document_store.load_elapsed
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/load_average_cpu_cores"] = (
+        store_load_cpu_time / document_store.load_elapsed
+    )
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/resident_bytes"] = sum(stat.resident_bytes for stat in store_stats)
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/peak_resident_bytes_upper_bound"] = sum(
+        stat.peak_resident_bytes for stat in store_stats
+    )
+    output_counters[f"{_COUNTER_PREFIX}/memory_store/max_shard_load_elapsed"] = max(
         stat.load_elapsed for stat in store_stats
+    )
+    output_counters[f"{_COUNTER_PREFIX}/pipeline/shards"] = num_pipeline_shards
+    output_counters[f"{_COUNTER_PREFIX}/pipeline/source_shards"] = len(shards)
+    output_counters[f"{_COUNTER_PREFIX}/large_cluster/clusters"] = len(large_cluster_splits)
+    output_counters[f"{_COUNTER_PREFIX}/large_cluster/observed_members"] = sum(
+        record["observed_members"] for record in large_cluster_splits
+    )
+    output_counters[f"{_COUNTER_PREFIX}/large_cluster/upper_bound_members"] = sum(
+        record["upper_bound_members"] for record in large_cluster_splits
+    )
+    output_counters[f"{_COUNTER_PREFIX}/large_cluster/partitions"] = sum(
+        record["split_factor"] for record in large_cluster_splits
+    )
+    output_counters[f"{_COUNTER_PREFIX}/large_cluster/max_partitions"] = max(
+        (record["split_factor"] for record in large_cluster_splits),
+        default=0,
+    )
+    output_counters[f"{_COUNTER_PREFIX}/timing/large_cluster_scan_elapsed"] = cluster_scan_elapsed
+    output_counters[f"{_COUNTER_PREFIX}/timing/pool_start_elapsed"] = pool_start_elapsed
+    output_counters[f"{_COUNTER_PREFIX}/timing/pipeline_elapsed"] = pipeline_elapsed
+    output_counters[f"{_COUNTER_PREFIX}/timing/pool_shutdown_elapsed"] = shutdown_elapsed
+    output_counters[f"{_COUNTER_PREFIX}/timing/total_elapsed"] = total_elapsed
+    logger.info(
+        "Fuzzy verification wall times: pool startup %.2f seconds, large-cluster scan %.2f seconds, "
+        "memory-store load %.2f seconds, pipeline %.2f seconds, pool shutdown %.2f seconds, total %.2f seconds",
+        pool_start_elapsed,
+        cluster_scan_elapsed,
+        document_store.load_elapsed,
+        pipeline_elapsed,
+        shutdown_elapsed,
+        total_elapsed,
     )
     logger.info(
         "Verified %d fuzzy duplicates from %d candidate members across %d shards",
@@ -884,8 +2151,10 @@ def verify_fuzzy_dups(
         len(shards),
     )
     return VerifiedFuzzyDupsAttrData(
+        implementation=implementation,
         verification=verification_params,
         local_representatives=local_representative_params,
+        large_clusters=large_cluster_params,
         sources={
             source_key: VerifiedFuzzyDupsPerSource(
                 attr_dir=attr_dir,
@@ -906,11 +2175,15 @@ def verify_fuzzy_dups_step(
     verification_params: FuzzyVerificationParams,
     local_representative_params: LocalRepresentativeParams,
     store_config: FuzzyVerificationStoreConfig,
+    implementation: FuzzyVerificationImplementation,
+    large_cluster_params: LargeClusterParams = REFERENCE_LARGE_CLUSTER_PARAMS,
+    pipeline_shards_per_worker: int = DEFAULT_PIPELINE_SHARDS_PER_WORKER,
     max_workers: int | None = None,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
     map_task_resources: ResourceConfig | None = None,
     reduce_task_resources: ResourceConfig | None = None,
+    actor_environment: EnvironmentConfig | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a step that verifies one existing fuzzy-candidate artifact."""
@@ -934,17 +2207,24 @@ def verify_fuzzy_dups_step(
             output_path=output_path,
             verification_params=verification_params,
             local_representative_params=local_representative_params,
+            large_cluster_params=large_cluster_params,
             store_config=store_config,
+            implementation=implementation,
+            pipeline_shards_per_worker=pipeline_shards_per_worker,
             max_workers=max_workers,
             worker_resources=worker_resources,
             coordinator_resources=coordinator_resources,
             map_task_resources=map_task_resources,
             reduce_task_resources=reduce_task_resources,
+            actor_environment=actor_environment,
         ),
         hash_attrs={
             "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
             "verification": verification_params.model_dump(mode="json"),
+            "implementation": implementation.value,
             "local_representatives": local_representative_params.model_dump(mode="json"),
+            "large_clusters": large_cluster_params.model_dump(mode="json"),
+            "pipeline_shards_per_worker": pipeline_shards_per_worker,
         },
         override_output_path=override_output_path,
     )

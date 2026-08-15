@@ -20,7 +20,7 @@ import cloudpickle
 from fray.actor import ActorGroup, ActorHandle, current_actor
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
-from fray.types import ActorConfig, ResourceConfig
+from fray.types import ActorConfig, EnvironmentConfig, ResourceConfig
 from rigging import telemetry
 from rigging.filesystem import StoragePath
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, log_time
@@ -369,6 +369,7 @@ class ZephyrCoordinator:
         stage_runner_factory: Callable[[], StageRunner],
         task_resources: ZephyrTaskResources,
         worker_resources: ResourceConfig,
+        worker_environment: EnvironmentConfig | None,
         actor_config: ActorConfig,
     ) -> None:
         """Create the worker group from inside this coordinator's job.
@@ -391,6 +392,7 @@ class ZephyrCoordinator:
             name=f"{self._name}-workers",
             count=worker_count,
             resources=worker_resources,
+            environment=worker_environment,
             actor_config=actor_config,
         )
 

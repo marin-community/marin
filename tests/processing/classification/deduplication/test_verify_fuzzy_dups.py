@@ -1,12 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 from random import Random
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from dupekit import TokenNgramFingerprintSignature
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.datakit.normalize import NormalizedData
@@ -15,8 +19,15 @@ from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAt
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, MinHashParams
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    FuzzyVerificationImplementation,
     FuzzyVerificationStoreConfig,
+    LargeClusterParams,
     LocalRepresentativeParams,
+    VerificationShard,
+    _candidate_documents,
+    _decompress_document_text,
+    _parquet_rows,
+    _system_arrow_memory_pool,
 )
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     verify_fuzzy_dups as _verify_fuzzy_dups,
@@ -42,8 +53,71 @@ TEST_STORE_CONFIG = FuzzyVerificationStoreConfig(
     recovery_timeout=30,
     ready_timeout=30,
     lookup_batch_size=2,
+    shards_per_worker=1,
 )
-verify_fuzzy_dups = partial(_verify_fuzzy_dups, store_config=TEST_STORE_CONFIG)
+verify_fuzzy_dups = partial(
+    _verify_fuzzy_dups,
+    store_config=TEST_STORE_CONFIG,
+    implementation=FuzzyVerificationImplementation.EXACT,
+)
+
+
+def test_parquet_rows_converts_only_the_row_it_yields(tmp_path, monkeypatch):
+    converted: list[tuple[int, int]] = []
+
+    class Scalar:
+        def __init__(self, column_index: int, row_index: int):
+            self.column_index = column_index
+            self.row_index = row_index
+
+        def as_py(self):
+            converted.append((self.column_index, self.row_index))
+            return [["id-0", "id-1"], ["text-0", "text-1"]][self.column_index][self.row_index]
+
+    class Column:
+        def __init__(self, column_index: int):
+            self.column_index = column_index
+
+        def __getitem__(self, row_index: int):
+            return Scalar(self.column_index, row_index)
+
+    class Batch:
+        num_columns = 2
+        num_rows = 2
+
+        def column(self, column_index: int):
+            return Column(column_index)
+
+        def to_pylist(self):
+            return [
+                {"id": Column(0)[row_index].as_py(), "text": Column(1)[row_index].as_py()}
+                for row_index in range(self.num_rows)
+            ]
+
+    class Metadata:
+        num_rows = 2
+
+    class Schema:
+        names = ("id", "text")
+
+    class ParquetFile:
+        metadata = Metadata()
+        schema_arrow = Schema()
+
+        def __init__(self, _stream):
+            pass
+
+        def iter_batches(self, **_kwargs):
+            yield Batch()
+
+    input_path = tmp_path / "input.parquet"
+    input_path.touch()
+    monkeypatch.setattr(pq, "ParquetFile", ParquetFile)
+
+    rows = _parquet_rows(str(input_path), ["id", "text"])
+
+    assert next(rows) == {"id": "id-0", "text": "text-0"}
+    assert converted == [(0, 0), (1, 0)]
 
 
 @pytest.fixture(autouse=True)
@@ -120,7 +194,8 @@ def _output_rows(verified, source_key: str) -> list[dict]:
     return rows
 
 
-def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, monkeypatch):
+@pytest.mark.parametrize("implementation", list(FuzzyVerificationImplementation))
+def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, monkeypatch, implementation):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     representative = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
     accepted = "alpha beta gamma delta epsilon zeta eta theta"
@@ -135,6 +210,7 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
                 {"id": "representative", "text": representative},
             ],
             "part-00001.parquet": [{"id": "singleton", "text": "a document outside all candidate clusters"}],
+            "part-00002.parquet": [{"id": "missing", "text": "another document outside candidate clusters"}],
         },
     )
     candidates = _write_candidates(
@@ -145,7 +221,8 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
                     {"id": "accepted", "dup_cluster_id": "cluster-a", "is_cluster_canonical": False},
                     {"id": "rejected", "dup_cluster_id": "cluster-a", "is_cluster_canonical": False},
                     {"id": "representative", "dup_cluster_id": "cluster-a", "is_cluster_canonical": True},
-                ]
+                ],
+                "part-00001.parquet": [],
             }
         },
     )
@@ -154,12 +231,14 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
         normalized_sources={"source": source},
         minhash_sources={"source": _write_minhash(root=tmp_path, name="source", source=source)},
         candidates=candidates,
-        output_path=str(tmp_path / "verified"),
+        output_path=str(tmp_path / f"verified-{implementation}"),
         verification_params=FuzzyVerificationParams(),
         local_representative_params=TEST_LOCAL_PARAMS,
+        implementation=implementation,
     )
 
-    assert verified.counters["dedup/fuzzy/verification/memory_store/actors"] == 2
+    assert verified.counters["dedup/fuzzy/verification/memory_store/workers"] == 3
+    assert verified.counters["dedup/fuzzy/verification/memory_store/shards"] == 3
     assert verified.counters["dedup/fuzzy/verification/memory_store/items"] == 3
     assert _output_rows(verified, source_key) == [
         {
@@ -199,12 +278,140 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
     ]
     assert verified.counters["dedup/fuzzy/verification/candidate_members"] == 3
     assert verified.counters["dedup/fuzzy/verification/candidate_shards_missing"] == 1
+    assert verified.counters["dedup/fuzzy/verification/candidate_shards_empty"] == 1
     assert verified.counters["dedup/fuzzy/verification/clusters"] == 1
     assert verified.counters["dedup/fuzzy/verification/cluster_members"] == 3
     assert verified.counters["dedup/fuzzy/verification/decision/accepted"] == 1
     assert verified.counters["dedup/fuzzy/verification/decision/retained_no_match"] == 1
     assert verified.counters["dedup/fuzzy/verification/comparison/containment_below_threshold"] == 1
     assert verified.sources[source_key].source_tag == "source_000"
+
+
+def test_fingerprint_verifier_pushes_cluster_tail_comparisons_to_store(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    local_text = " ".join(f"local-{index}" for index in range(40))
+    rows = [{"id": "doc-000", "text": LONG_UNRELATED_CANONICAL}]
+    rows.append({"id": "doc-001", "text": local_text})
+    rows.extend(
+        {
+            "id": f"doc-{index:03d}",
+            "text": " ".join(f"unrelated-{index}-{token}" for token in range(40)),
+        }
+        for index in range(2, 66)
+    )
+    rows.append({"id": "doc-066", "text": local_text})
+    source_key, source = _write_source(
+        root=tmp_path,
+        name="source",
+        shards={"part-00000.parquet": rows},
+    )
+    candidates = _write_candidates(
+        root=tmp_path,
+        rows_by_source={
+            source_key: {
+                "part-00000.parquet": [
+                    {
+                        "id": row["id"],
+                        "dup_cluster_id": "cluster-a",
+                        "is_cluster_canonical": row["id"] == "doc-000",
+                    }
+                    for row in rows
+                ]
+            }
+        },
+    )
+    buckets = {row["id"]: [row["id"]] for row in rows}
+    buckets["doc-001"] = buckets["doc-066"] = ["local"]
+    local_params = LocalRepresentativeParams(
+        maximum_comparisons_per_document=2,
+        maximum_representatives_per_cluster=2,
+        maximum_local_representative_chars=10_000,
+        maximum_local_representative_chars_per_cluster=10_000,
+        minimum_local_line_count_ratio=0.8,
+    )
+
+    verified = verify_fuzzy_dups(
+        normalized_sources={"source": source},
+        minhash_sources={"source": _write_minhash(root=tmp_path, name="source", source=source, buckets_by_id=buckets)},
+        candidates=candidates,
+        output_path=str(tmp_path / "verified"),
+        verification_params=FuzzyVerificationParams(),
+        local_representative_params=local_params,
+        implementation=FuzzyVerificationImplementation.FINGERPRINT,
+        max_workers=1,
+        pipeline_shards_per_worker=1,
+    )
+
+    output = _output_rows(verified, source_key)
+    assert [(row["id"], row["dup_representative_id"]) for row in output] == [("doc-066", "doc-001")]
+    signature_bytes = len(TokenNgramFingerprintSignature(local_text, 3).to_bytes())
+    assert verified.counters[f"{_COUNTER_PREFIX}/candidate_signature_bytes"] < len(rows) * signature_bytes
+    assert verified.counters[f"{_COUNTER_PREFIX}/accepted_representative/local_representative"] == 1
+
+
+def test_verifier_splits_large_cluster_by_minhash_bucket(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    rows = []
+    candidate_rows = []
+    buckets_by_id = {}
+    for pair_index in range(3):
+        text = " ".join(f"pair-{pair_index}-token-{token_index}" for token_index in range(20))
+        bucket = f"pair-bucket-{pair_index}"
+        for copy_index in range(2):
+            document_id = f"pair-{pair_index}-{copy_index}"
+            rows.append({"id": document_id, "text": text})
+            candidate_rows.append(
+                {
+                    "id": document_id,
+                    "dup_cluster_id": "cluster-a",
+                    "is_cluster_canonical": pair_index == 0 and copy_index == 0,
+                }
+            )
+            buckets_by_id[document_id] = [bucket]
+
+    source_key, source = _write_source(
+        root=tmp_path,
+        name="source",
+        shards={"part-00000.parquet": rows},
+    )
+    candidates = _write_candidates(
+        root=tmp_path,
+        rows_by_source={source_key: {"part-00000.parquet": candidate_rows}},
+    )
+    minhash = _write_minhash(
+        root=tmp_path,
+        name="source",
+        source=source,
+        buckets_by_id=buckets_by_id,
+    )
+    large_cluster_params = LargeClusterParams(
+        maximum_members=3,
+        target_members_per_partition=2,
+        minimum_local_members=1,
+    )
+
+    verified = verify_fuzzy_dups(
+        normalized_sources={"source": source},
+        minhash_sources={"source": minhash},
+        candidates=candidates,
+        output_path=str(tmp_path / "verified"),
+        verification_params=FuzzyVerificationParams(),
+        local_representative_params=TEST_LOCAL_PARAMS,
+        large_cluster_params=large_cluster_params,
+    )
+
+    output_ids = [row["id"] for row in _output_rows(verified, source_key)]
+    assert len(output_ids) == 3
+    assert {document_id.rsplit("-", 1)[0] for document_id in output_ids} == {
+        "pair-0",
+        "pair-1",
+        "pair-2",
+    }
+    assert verified.large_clusters == large_cluster_params
+    assert verified.counters[f"{_COUNTER_PREFIX}/large_cluster/clusters"] == 1
+    assert verified.counters[f"{_COUNTER_PREFIX}/large_cluster/observed_members"] == 6
+    assert verified.counters[f"{_COUNTER_PREFIX}/large_cluster/upper_bound_members"] == 6
+    assert verified.counters[f"{_COUNTER_PREFIX}/large_cluster/partitions"] == 3
 
 
 def test_verifier_removes_a_member_that_contains_the_canonical(tmp_path, monkeypatch):
@@ -298,6 +505,8 @@ def test_representative_selection_is_stable_across_input_order(tmp_path, monkeyp
         output_path=str(tmp_path / "verified-first"),
         verification_params=FuzzyVerificationParams(),
         local_representative_params=TEST_LOCAL_PARAMS,
+        max_workers=1,
+        pipeline_shards_per_worker=1,
     )
     second = verify_fuzzy_dups(
         normalized_sources={"a-source-b": source_b, "z-source-a": source_a},
@@ -309,8 +518,13 @@ def test_representative_selection_is_stable_across_input_order(tmp_path, monkeyp
         output_path=str(tmp_path / "verified-second"),
         verification_params=FuzzyVerificationParams(),
         local_representative_params=TEST_LOCAL_PARAMS,
+        max_workers=1,
+        pipeline_shards_per_worker=2,
     )
 
+    assert first.counters["dedup/fuzzy/verification/pipeline/source_shards"] == 2
+    assert first.counters["dedup/fuzzy/verification/pipeline/shards"] == 1
+    assert second.counters["dedup/fuzzy/verification/pipeline/shards"] == 2
     assert _output_rows(first, source_a_key) == _output_rows(second, source_a_key) == []
     assert _output_rows(first, source_b_key) == _output_rows(second, source_b_key)
     assert _output_rows(first, source_b_key)[0]["dup_representative_source_key"] == source_a_key
@@ -1058,3 +1272,165 @@ def test_verifier_accepts_repeated_source_ids(tmp_path, monkeypatch):
     assert rows[0]["dup_doc"] is True
     assert rows[0]["dup_representative_id"] == "aaa"
     assert verified.counters["dedup/fuzzy/verification/repeated_source_ids"] >= 1
+
+
+def test_verifier_reads_candidate_text_from_unordered_source_shard(tmp_path, monkeypatch):
+    """Candidate text lookup must not depend on normalized row order."""
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    source_key, source = _write_source(
+        root=tmp_path,
+        name="source",
+        shards={
+            "part-00000.parquet": [
+                {"id": "aaa", "text": "alpha beta gamma delta epsilon zeta"},
+                {"id": "bbb", "text": "alpha beta gamma delta"},
+            ]
+        },
+    )
+    minhash = _write_minhash(root=tmp_path, name="source", source=source)
+    write_parquet_file(
+        [
+            {"id": "bbb", "text": "alpha beta gamma delta"},
+            {"id": "aaa", "text": "alpha beta gamma delta epsilon zeta"},
+        ],
+        str(Path(source.main_output_dir) / "part-00000.parquet"),
+    )
+    candidates = _write_candidates(
+        root=tmp_path,
+        rows_by_source={
+            source_key: {
+                "part-00000.parquet": [
+                    {"id": "aaa", "dup_cluster_id": "cluster-a", "is_cluster_canonical": True},
+                    {"id": "bbb", "dup_cluster_id": "cluster-a", "is_cluster_canonical": False},
+                ]
+            }
+        },
+    )
+
+    verified = verify_fuzzy_dups(
+        normalized_sources={"source": source},
+        minhash_sources={"source": minhash},
+        candidates=candidates,
+        output_path=str(tmp_path / "verified"),
+        verification_params=FuzzyVerificationParams(),
+        local_representative_params=TEST_LOCAL_PARAMS,
+    )
+
+    rows = _output_rows(verified, source_key)
+    assert [row["id"] for row in rows] == ["bbb"]
+    assert rows[0]["dup_representative_id"] == "aaa"
+
+
+def test_candidate_text_load_streams_unordered_source_shard(tmp_path, monkeypatch):
+    """The first match is available before the normalized scan completes."""
+    candidate_path = tmp_path / "candidates.parquet"
+    candidate_path.touch()
+    shard = VerificationShard(
+        file_idx=7,
+        normalized_path=str(tmp_path / "normalized.parquet"),
+        candidate_path=str(candidate_path),
+        minhash_path=str(tmp_path / "minhash.parquet"),
+        output_path=str(tmp_path / "output.parquet"),
+        source_key="source",
+        source_tag="source_000",
+    )
+
+    def candidate_rows(path, columns, *, repeated_ids=False):
+        del path, columns, repeated_ids
+        yield {"id": "aaa"}
+        yield {"id": "bbb"}
+
+    def normalized_rows(path, columns):
+        del path, columns
+        yield {"id": "bbb", "text": "beta"}
+        raise AssertionError("candidate loading read past the first match")
+
+    monkeypatch.setattr(
+        "marin.processing.classification.deduplication.verify_fuzzy_dups._rows",
+        candidate_rows,
+    )
+    monkeypatch.setattr(
+        "marin.processing.classification.deduplication.verify_fuzzy_dups._parquet_rows",
+        normalized_rows,
+    )
+
+    key, stored = next(_candidate_documents([shard], ngram_size=3))
+    assert key == (7, "bbb")
+    assert _decompress_document_text(stored.compressed_text) == "beta"
+
+
+def test_candidate_text_load_releases_arrow_pages_after_each_shard(tmp_path, monkeypatch):
+    candidate_path = tmp_path / "candidates.parquet"
+    candidate_path.touch()
+    shard = VerificationShard(
+        file_idx=7,
+        normalized_path=str(tmp_path / "normalized.parquet"),
+        candidate_path=str(candidate_path),
+        minhash_path=str(tmp_path / "minhash.parquet"),
+        output_path=str(tmp_path / "output.parquet"),
+        source_key="source",
+        source_tag="source_000",
+    )
+
+    def candidate_rows(path, columns, *, repeated_ids=False):
+        del path, columns, repeated_ids
+        yield {"id": "aaa"}
+
+    def normalized_rows(path, columns):
+        del path, columns
+        yield {"id": "aaa", "text": "alpha"}
+
+    class MemoryPool:
+        def __init__(self):
+            self.release_count = 0
+
+        def release_unused(self):
+            self.release_count += 1
+
+    previous_pool = MemoryPool()
+    memory_pool = MemoryPool()
+    monkeypatch.setattr(
+        "marin.processing.classification.deduplication.verify_fuzzy_dups._rows",
+        candidate_rows,
+    )
+    monkeypatch.setattr(
+        "marin.processing.classification.deduplication.verify_fuzzy_dups._parquet_rows",
+        normalized_rows,
+    )
+    selected_pools = []
+    monkeypatch.setattr(pa, "default_memory_pool", lambda: previous_pool)
+    monkeypatch.setattr(pa, "system_memory_pool", lambda: memory_pool)
+    monkeypatch.setattr(pa, "set_memory_pool", selected_pools.append)
+
+    assert len(list(_candidate_documents([shard], ngram_size=3))) == 1
+    assert memory_pool.release_count == 2
+    assert selected_pools == [memory_pool, previous_pool]
+
+
+def test_candidate_text_load_shares_arrow_pool_across_threads(monkeypatch):
+    class MemoryPool:
+        def __init__(self):
+            self.release_count = 0
+
+        def release_unused(self):
+            self.release_count += 1
+
+    previous_pool = MemoryPool()
+    memory_pool = MemoryPool()
+    selected_pools = []
+    monkeypatch.setattr(pa, "default_memory_pool", lambda: previous_pool)
+    monkeypatch.setattr(pa, "system_memory_pool", lambda: memory_pool)
+    monkeypatch.setattr(pa, "set_memory_pool", selected_pools.append)
+    load_barrier = threading.Barrier(2)
+
+    def use_memory_pool():
+        with _system_arrow_memory_pool() as selected_pool:
+            load_barrier.wait(timeout=5)
+            return selected_pool
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        pools = list(executor.map(lambda _: use_memory_pool(), range(2)))
+
+    assert pools == [memory_pool, memory_pool]
+    assert memory_pool.release_count == 1
+    assert selected_pools == [memory_pool, previous_pool]

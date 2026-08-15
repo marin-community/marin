@@ -212,6 +212,7 @@ def main(argv: list[str] | None = None) -> None:
             recovery_timeout=1_800,
             ready_timeout=1_800,
             lookup_batch_size=128,
+            shards_per_worker=1,
         ),
         max_workers=args.max_workers,
         worker_resources=worker,
