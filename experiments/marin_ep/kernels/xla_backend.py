@@ -115,9 +115,6 @@ def marin_ep_moe_local(
     `"gathered"` uses the all_gather emulation (XLA:CPU conformance runs);
     `"mgpu"` uses the fused Mosaic-GPU put kernel (M6), which writes the
     expert-major pool layout directly — no local permute on either side.
-    The mgpu path assumes the "expert" axis index equals the flat device
-    id (all other mesh axes size 1 or expert-major); revisit at levanter
-    integration.
     """
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:

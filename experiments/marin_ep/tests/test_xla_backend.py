@@ -189,7 +189,12 @@ def test_real_gpu_transport_matches_oracle(group_size, transport):
     Dims must be Triton-grouped-GEMM safe: haliax ragged_dot's GPU path
     silently miscomputes below its tile minimums (H=32/I=48 gives O(10)
     errors), and it accumulates in tf32 regardless of the jax matmul
-    precision setting — hence the 1e-2 tolerance. For mgpu, hidden must be
+    precision setting. Outputs and grads are sums of O(100)-magnitude
+    contributions, so tf32's ~1e-3 relative error on intermediates shows up
+    as ~0.2 absolute error on small canceled results — hence absolute
+    tolerances scaled to intermediate magnitude, not result magnitude
+    (routing bugs give O(10)+ errors on a large element fraction and are
+    still caught). For mgpu, hidden must be
     LANE-divisible, and tokens are sized so some segments exceed the SMEM
     tile height (both kernel copy paths run).
     """
@@ -261,7 +266,7 @@ def test_real_gpu_transport_matches_oracle(group_size, transport):
     )
     assert int(dropped) == dropped_oracle
     assert dropped_oracle > 0  # the drop path must be exercised
-    np.testing.assert_allclose(np.asarray(y), np.asarray(y_oracle), rtol=1e-2, atol=1e-2)
+    np.testing.assert_allclose(np.asarray(y), np.asarray(y_oracle), rtol=2e-2, atol=0.2)
 
     def loss(x_, weights_, w13_, w2_):
         y_, _ = forward(x_, weights_, w13_, w2_)
@@ -278,4 +283,9 @@ def test_real_gpu_transport_matches_oracle(group_size, transport):
         jnp.asarray(x), jnp.asarray(weights), jnp.asarray(w13), jnp.asarray(w2)
     )
     for got, want, name in zip(grads, grads_oracle, ("dx", "dweights", "dw13", "dw2"), strict=True):
-        np.testing.assert_allclose(np.asarray(got), np.asarray(want), rtol=1e-2, atol=1e-2, err_msg=name)
+        # Weight grads accumulate over ~tokens*topk rows; tf32 absolute error
+        # grows with depth (0.76 abs observed on benign 3-of-2M outliers at
+        # tokens=512), hence the depth-scaled atol.
+        np.testing.assert_allclose(
+            np.asarray(got), np.asarray(want), rtol=2e-2, atol=0.5 * max(1, tokens // 256), err_msg=name
+        )

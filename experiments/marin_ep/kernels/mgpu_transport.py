@@ -173,7 +173,6 @@ def put_segments(
     lanes = hidden // LANE
     tile_rows = max(1, min(MAX_TILE_ROWS, SMEM_TILE_BYTES // (hidden * src.dtype.itemsize)))
     src_view = src.reshape(src.shape[0], lanes, LANE)
-    max_tiles = (src.shape[0] + tile_rows - 1) // tile_rows
     entries_per_dest = plan.src_lo.shape[0] // num_devices
 
     def kernel_body(x_ref, dest_ids_ref, src_lo_ref, dst_lo_ref, rows_ref, out_ref, done_ref):
@@ -203,29 +202,37 @@ def put_segments(
             num_full = lax.div(rows, jnp.int32(tile_rows))
             tail = rows - num_full * tile_rows
 
-            # Full tiles strided across SMs; TMA boxes are static, so the
-            # ragged tail (< tile_rows rows) goes row-by-row on one SM.
-            @pl.loop(0, max_tiles)
+            # Full tiles strided across SMs; dynamic bound, so idle
+            # iterations are never issued.
+            @pl.loop(sm_id, num_full, step=num_sms)
             def _tile(tile_idx):
-                @pl.when((lax.rem(tile_idx, num_sms) == sm_id) & (tile_idx < num_full))
-                def _():
-                    lo = tile_idx * tile_rows
+                lo = tile_idx * tile_rows
+                copy_rows(start + lo, dst_ref, offset + lo, tile_rows)
+
+            # TMA boxes are static. Segments with >= tile_rows rows finish
+            # with one shifted full tile over the last tile_rows rows
+            # (overlap re-copies identical data, which is harmless); smaller
+            # segments go row-by-row. Tails are spread over SMs by entry.
+            @pl.when((tail > 0) & (lax.rem(entry, num_sms) == sm_id))
+            def _tail():
+                @pl.when(rows >= tile_rows)
+                def _shifted():
+                    lo = rows - tile_rows
                     copy_rows(start + lo, dst_ref, offset + lo, tile_rows)
 
-            @pl.when(lax.rem(num_full, num_sms) == sm_id)
-            def _tail():
-                @pl.loop(0, tile_rows - 1)
-                def _row(row_idx):
-                    @pl.when(row_idx < tail)
-                    def _():
-                        lo = num_full * tile_rows + row_idx
-                        copy_rows(start + lo, dst_ref, offset + lo, 1)
+                @pl.when(rows < tile_rows)
+                def _tiny():
+                    @pl.loop(0, tail)
+                    def _row(row_idx):
+                        copy_rows(start + row_idx, dst_ref, offset + row_idx, 1)
 
         @pl.loop(0, num_devices)
         def _dest_loop(k):
             dest = dest_ids_ref[k]
             is_remote = dest != dev_id
-            dst_ref = plgpu.remote_ref(out_ref, dest)
+            # Dict device ids: coordinates along other mesh axes default to
+            # the caller's own, so this works on multi-axis meshes.
+            dst_ref = plgpu.remote_ref(out_ref, {axis_name: dest})
 
             @pl.loop(0, entries_per_dest)
             def _entries(j):
@@ -233,7 +240,7 @@ def put_segments(
 
             @pl.when(is_remote)
             def _signal():
-                pl.semaphore_signal(received_sem, device_id=dest)
+                pl.semaphore_signal(received_sem, device_id={axis_name: dest})
 
         pl.semaphore_wait(received_sem, value=(num_devices - 1) * num_sms, decrement=False)
         done_ref[0] = jnp.int32(1)
