@@ -28,11 +28,11 @@ from pathlib import Path
 
 import click
 import duckdb
-import fsspec
 from finelog.deploy.config import load_finelog_config
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.controller.checkpoint import _find_latest_checkpoint_dir, download_checkpoint_to_local
 from rigging.filesystem.cluster_config import get_bucket_location, region_from_prefix
+from rigging.filesystem.factory import url_to_fs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -247,7 +247,7 @@ def choose_log_objects(
     lookback_hours: float,
 ) -> list[dict]:
     logging.info(f"Listing log objects in {remote_logs_dir}")
-    fs, path = fsspec.core.url_to_fs(remote_logs_dir)
+    fs, path = url_to_fs(remote_logs_dir)
     entries = sorted(fs.ls(path, detail=True), key=lambda e: e["mtime"])
     logging.info(f"Found {len(entries)} total log objects")
     mtime_cutoff = window.start - dt.timedelta(hours=lookback_hours)
@@ -303,7 +303,7 @@ def _download_one(fs, entry: dict, target_dir: Path, index: int, total: int) -> 
 
 
 def download_log_objects(remote_logs_dir: str, entries: list[dict], target_dir: Path) -> list[Path]:
-    fs, _ = fsspec.core.url_to_fs(remote_logs_dir)
+    fs, _ = url_to_fs(remote_logs_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     logging.info(f"Downloading {len(entries)} parquet files to {target_dir}")
 

@@ -22,8 +22,8 @@ rewinding to the checkpoint again.
 import logging
 from enum import StrEnum
 
-import fsspec.core
 from pydantic import BaseModel, ConfigDict
+from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import prefix_join
 
 logger = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ def read_rollout_record(remote_state_dir: str) -> RolloutRecord | None:
     """Return the rollout record from remote state, or None if absent/unreadable."""
     url = _record_url(remote_state_dir)
     try:
-        with fsspec.core.open(url, "r") as f:
+        with open_url(url, "r") as f:
             data = f.read()
     except FileNotFoundError:
         return None
@@ -85,5 +85,5 @@ def read_rollout_record(remote_state_dir: str) -> RolloutRecord | None:
 def write_rollout_record(remote_state_dir: str, record: RolloutRecord) -> None:
     """Write the rollout record to remote state, overwriting any existing one."""
     url = _record_url(remote_state_dir)
-    with fsspec.core.open(url, "w") as f:
+    with open_url(url, "w") as f:
         f.write(record.model_dump_json(indent=2))

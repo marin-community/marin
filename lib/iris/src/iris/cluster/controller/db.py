@@ -49,8 +49,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from threading import RLock
 
-import fsspec.core
 from finelog.client.log_client import Table
+from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Timestamp
 from sqlalchemy import Engine, create_engine, event, text
@@ -666,7 +666,7 @@ class ControllerDB:
             # Download main DB
             main_source = f"{source_dir_str}/{self.DB_FILENAME}"
             tmp_path = self._db_path.with_suffix(".tmp")
-            with fsspec.core.open(main_source, "rb") as src, open(tmp_path, "wb") as dst:
+            with open_url(main_source, "rb") as src, open(tmp_path, "wb") as dst:
                 dst.write(src.read())
             self._remove_sidecars(self._db_path)
             tmp_path.rename(self._db_path)
@@ -675,7 +675,7 @@ class ControllerDB:
             auth_source = f"{source_dir_str}/{self.AUTH_DB_FILENAME}"
             if StoragePath(auth_source).exists():
                 auth_tmp = self._auth_db_path.with_suffix(".tmp")
-                with fsspec.core.open(auth_source, "rb") as src, open(auth_tmp, "wb") as dst:
+                with open_url(auth_source, "rb") as src, open(auth_tmp, "wb") as dst:
                     dst.write(src.read())
                 self._remove_sidecars(self._auth_db_path)
                 auth_tmp.rename(self._auth_db_path)

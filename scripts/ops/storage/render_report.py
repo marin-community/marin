@@ -30,9 +30,9 @@ from pathlib import Path
 
 import click
 import duckdb
-import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
+from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from tqdm import tqdm
 
@@ -55,7 +55,7 @@ def _download_gcs_parquet(gcs_dir: str, local_dir: Path) -> Path:
     """
 
     local_dir.mkdir(parents=True, exist_ok=True)
-    fs, _ = fsspec.core.url_to_fs(gcs_dir)
+    fs, _ = url_to_fs(gcs_dir)
     pattern = f"{gcs_dir.rstrip('/')}/*.parquet"
     remote_paths = fs.glob(pattern)
     remote_basenames = {Path(p).name for p in remote_paths}
@@ -997,7 +997,7 @@ def main(parquet_dir: str, output: str | None, history_dir: str | None, change_t
         print(f"Snapshot archived: {snapshot_path(history_dir, today)}", file=sys.stderr)
     if output:
         if output.startswith("gs://"):
-            with fsspec.open(output, "w") as f:
+            with open_url(output, "w") as f:
                 f.write(report)
         else:
             Path(output).write_text(report)
