@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Verify fuzzy-duplicate clusters against full normalized text."""
+"""Verify fuzzy-duplicate clusters with exact text or bounded signatures."""
 
 import logging
 import os
@@ -737,7 +737,7 @@ def _compare_document_text(
 def _compare_stored_documents(
     inputs: list[tuple[_StoredDocument, _StoredComparisonRequest]],
 ) -> list[_StoredComparisonResult]:
-    """Reject from signatures when possible, then compare exact text."""
+    """Compare stored candidates with the requested representatives."""
     grouped_inputs: dict[
         tuple[str, ...],
         list[tuple[int, _StoredDocument, _StoredComparisonRequest]],
@@ -1276,20 +1276,26 @@ class _DeferredSignatureRecordGroup:
 def _signature_decision(
     member: dupekit.TokenNgramFingerprintSignature,
     representative: dupekit.TokenNgramFingerprintSignature,
-    *,
-    local: bool,
-    minimum_local_line_count_ratio: float,
 ) -> _SignatureDecision:
     if member.chars > representative.chars:
         return _SignatureDecision(False, VerificationRejection.MEMBER_LONGER.value, None)
     if not member.may_be_subset_of(representative):
         return _SignatureDecision(False, VerificationRejection.CONTAINMENT.value, None)
-    if not local:
-        return _SignatureDecision(True, "accepted", None)
+    return _SignatureDecision(True, "accepted", None)
+
+
+def _local_signature_decision(
+    member: dupekit.TokenNgramFingerprintSignature,
+    representative: dupekit.TokenNgramFingerprintSignature,
+    minimum_line_count_ratio: float,
+) -> _SignatureDecision:
+    decision = _signature_decision(member, representative)
+    if not decision.accepted:
+        return decision
     if member.normalized_sequence_hash != representative.normalized_sequence_hash:
         return _SignatureDecision(False, _LOCAL_TOKEN_SEQUENCE_REJECTION, None)
     lines_ratio = min(member.lines, representative.lines) / max(member.lines, representative.lines)
-    if lines_ratio < minimum_local_line_count_ratio:
+    if lines_ratio < minimum_line_count_ratio:
         return _SignatureDecision(False, _LOCAL_LINE_COUNT_REJECTION, lines_ratio)
     return _SignatureDecision(True, "accepted", lines_ratio)
 
@@ -1316,17 +1322,14 @@ def _compare_stored_signatures(
             _signature_decision(
                 member,
                 representatives[0],
-                local=False,
-                minimum_local_line_count_ratio=request.minimum_local_line_count_ratio,
             )
         ]
         if not decisions[0].accepted:
             decisions.extend(
-                _signature_decision(
+                _local_signature_decision(
                     member,
                     representative,
-                    local=True,
-                    minimum_local_line_count_ratio=request.minimum_local_line_count_ratio,
+                    request.minimum_local_line_count_ratio,
                 )
                 for representative in representatives[1:]
             )
@@ -1522,8 +1525,6 @@ def _make_signature_cluster_verifier(
             primary_decision = _signature_decision(
                 signature,
                 primary.signature,
-                local=False,
-                minimum_local_line_count_ratio=local_params.minimum_local_line_count_ratio,
             )
             _record_signature_comparison(primary_decision, primary.kind)
             if primary_decision.accepted:
@@ -1542,11 +1543,10 @@ def _make_signature_cluster_verifier(
                 for representative_index in nominees[:local_comparison_limit]:
                     local = retained[representative_index]
                     comparison_count += 1
-                    local_decision = _signature_decision(
+                    local_decision = _local_signature_decision(
                         signature,
                         local.signature,
-                        local=True,
-                        minimum_local_line_count_ratio=local_params.minimum_local_line_count_ratio,
+                        local_params.minimum_local_line_count_ratio,
                     )
                     _record_signature_comparison(local_decision, local.kind)
                     if local_decision.accepted:

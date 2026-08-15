@@ -14,6 +14,7 @@ const FINGERPRINT_MASK: u32 = (1 << FINGERPRINT_BITS) - 1;
 const FINGERPRINT_CAPACITY: usize = 1_333;
 const FINGERPRINT_DATA_BYTES: usize = FINGERPRINT_CAPACITY * FINGERPRINT_BYTES;
 const FINGERPRINT_SERIALIZED_SIZE: usize = 64 + FINGERPRINT_DATA_BYTES;
+const NGRAM_SIZE_ERROR: &str = "ngram_size must be positive";
 
 #[pyclass(frozen)]
 pub struct TokenNgrams {
@@ -60,6 +61,13 @@ fn normalize_text(text: String) -> Result<(String, Vec<u32>), &'static str> {
         normalized.push_str(token);
     }
     Ok((normalized, token_starts))
+}
+
+fn validate_ngram_size(ngram_size: usize) -> PyResult<()> {
+    if ngram_size == 0 {
+        return Err(PyValueError::new_err(NGRAM_SIZE_ERROR));
+    }
+    Ok(())
 }
 
 impl TokenNgrams {
@@ -419,9 +427,7 @@ impl TokenNgramFingerprintSignature {
 impl TokenNgramSignature {
     #[new]
     fn new(py: Python<'_>, text: String, ngram_size: usize) -> PyResult<Self> {
-        if ngram_size == 0 {
-            return Err(PyValueError::new_err("ngram_size must be positive"));
-        }
+        validate_ngram_size(ngram_size)?;
         py.detach(move || Self::from_text(text, ngram_size))
             .map_err(PyValueError::new_err)
     }
@@ -440,9 +446,7 @@ impl TokenNgramSignature {
 impl TokenNgramFingerprintSignature {
     #[new]
     fn new(py: Python<'_>, text: String, ngram_size: usize) -> PyResult<Self> {
-        if ngram_size == 0 {
-            return Err(PyValueError::new_err("ngram_size must be positive"));
-        }
+        validate_ngram_size(ngram_size)?;
         py.detach(move || Self::from_text(text, ngram_size))
             .map_err(PyValueError::new_err)
     }
@@ -490,9 +494,7 @@ impl TokenNgramFingerprintSignature {
 impl TokenNgrams {
     #[new]
     fn new(py: Python<'_>, text: String, ngram_size: usize) -> PyResult<Self> {
-        if ngram_size == 0 {
-            return Err(PyValueError::new_err("ngram_size must be positive"));
-        }
+        validate_ngram_size(ngram_size)?;
         py.detach(move || Self::from_text(text, ngram_size))
             .map_err(PyValueError::new_err)
     }
