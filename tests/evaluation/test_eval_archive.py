@@ -613,6 +613,7 @@ def test_fleet_smoke_cleans_up_only_after_every_archive_validates(tmp_path):
     sources = tuple(tmp_path / "evals" / run / "results" for run in ("run-1", "run-2"))
     for source in sources:
         _write_v1_smoke_archive(source)
+    (sources[1] / "SEALED").unlink()
     destination = tmp_path / "tmp" / "ttl=1d" / "finestore-migration-fleet" / ("a" * 32)
 
     result = smoke_upgrade_fleet(
@@ -629,6 +630,7 @@ def test_fleet_smoke_cleans_up_only_after_every_archive_validates(tmp_path):
     for source in sources:
         assert json.loads((source / "_archive.json").read_text())["format_version"] == 1
         assert not (source / "HEAD").exists()
+    assert not (sources[1] / "SEALED").exists()
 
 
 def test_fleet_smoke_preserves_partial_results_when_validation_fails(tmp_path):

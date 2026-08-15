@@ -178,8 +178,25 @@ def smoke_upgrade_fleet_command(
     if any(path.startswith("s3://") for path in (*resolved_prefixes, destination_root or "")):
         configure_coreweave_s3()
     selection = select_v1_fleet(resolved_prefixes)
+    click.echo(
+        json.dumps(
+            {
+                "status": "selected_summary",
+                "records": selection.records,
+                "unique_results": selection.unique_results,
+                "v1_archives": len(selection.sources),
+                "unsealed_v1": len(selection.unsealed_v1),
+                "already_current": selection.already_current,
+                "missing_archive": selection.missing_archive,
+                "foreign_results": selection.foreign_results,
+                "record_failures": len(selection.record_failures),
+                "unsupported": len(selection.unsupported),
+            },
+            sort_keys=True,
+        )
+    )
     click.echo(json.dumps({"status": "selected", **asdict(selection)}, sort_keys=True))
-    blockers = selection.record_failures + selection.unsealed_v1 + selection.unsupported
+    blockers = selection.record_failures + selection.unsupported
     if blockers:
         raise click.ClickException(f"fleet selection has {len(blockers)} blocking record or archive issue(s)")
     fleet_mode = FleetSmokeMode(mode)

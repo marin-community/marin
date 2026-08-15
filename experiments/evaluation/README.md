@@ -82,8 +82,9 @@ source remains format v1. A failed run leaves only lifecycle-managed temporary d
 
 Use the fleet rehearsal before changing the production archives. It scans both current and legacy
 CoreWeave record roots, deduplicates shared results paths, and selects every sealed v1 archive. A dry
-run reports the exact selection and refuses to proceed if a record is unreadable or a referenced v1
-archive is unsealed:
+run reports the exact selection and refuses to proceed if a record is unreadable. Unsealed v1
+archives are included in the rehearsal as stable snapshots, while production migration continues to
+require a seal:
 
 ```bash
 uv run iris --config lib/iris/config/marin.yaml job run --no-wait \

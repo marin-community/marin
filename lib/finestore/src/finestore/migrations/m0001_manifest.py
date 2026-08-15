@@ -61,10 +61,10 @@ class LegacyTable:
 
 @dataclasses.dataclass(frozen=True)
 class LegacyArchive:
-    """The sealed v1 state that revision 0001 publishes through a manifest."""
+    """One stable v1 state, including its seal when present."""
 
-    seal_path: str
-    seal: SealMarker
+    seal_path: str | None
+    seal: SealMarker | None
     tables: dict[str, LegacyTable]
 
 
@@ -139,13 +139,12 @@ def _legacy_shards(root: StoragePath, table: str) -> tuple[Shard, ...]:
     return tuple(sorted(shards, key=lambda shard: shard.path))
 
 
-def inspect_legacy_archive(root: str) -> LegacyArchive:
-    """Read the complete sealed v1 state without changing the archive."""
+def inspect_legacy_snapshot(root: str) -> LegacyArchive:
+    """Read one v1 listing snapshot without changing the archive."""
     root_path = StoragePath(root)
     seal_path = root_path / LEGACY_SEAL_FILE
-    if not seal_path.exists():
-        raise ValueError(f"FineStore v1 archive at {root!r} is not sealed; quiesce and seal it before migration")
-    seal = SealMarker.model_validate_json(seal_path.read_bytes())
+    has_seal = seal_path.exists()
+    seal = SealMarker.model_validate_json(seal_path.read_bytes()) if has_seal else None
     tables = {}
     for name, legacy_metadata in _legacy_table_metadata(root_path).items():
         tables[name] = LegacyTable(
@@ -153,7 +152,15 @@ def inspect_legacy_archive(root: str) -> LegacyArchive:
             metadata=TableMetadata.model_validate(legacy_metadata.model_dump()),
             shards=_legacy_shards(root_path, name),
         )
-    return LegacyArchive(seal_path=str(seal_path), seal=seal, tables=tables)
+    return LegacyArchive(seal_path=str(seal_path) if has_seal else None, seal=seal, tables=tables)
+
+
+def inspect_legacy_archive(root: str) -> LegacyArchive:
+    """Read the complete sealed v1 state without changing the archive."""
+    archive = inspect_legacy_snapshot(root)
+    if archive.seal is None:
+        raise ValueError(f"FineStore v1 archive at {root!r} is not sealed; quiesce and seal it before migration")
+    return archive
 
 
 def _v2_token(layout: FineStoreLayout) -> CommitToken | None:
@@ -185,6 +192,7 @@ def migrate(root: str) -> CommitToken:
         )
 
     legacy = inspect_legacy_archive(root)
+    assert legacy.seal is not None
 
     head_object = conditional_object(layout.head_path)
     existing_head = head_object.read()

@@ -17,10 +17,25 @@ from dataclasses import dataclass
 import pyarrow as pa
 import pyarrow.dataset as pds
 import pyarrow.parquet as pq
-from finestore.layout import ARCHIVE_FILE, COMMIT_COLUMN, GEN_COLUMN, SEQ_COLUMN, ArchiveMetadata, FineStoreLayout
+from finestore.layout import (
+    ARCHIVE_FILE,
+    COMMIT_COLUMN,
+    GEN_COLUMN,
+    SEQ_COLUMN,
+    ArchiveMetadata,
+    FineStoreLayout,
+    SealMarker,
+)
 from finestore.migrations import migrate
-from finestore.migrations.m0001_manifest import LEGACY_SEAL_FILE, LegacyArchive, LegacyTable, inspect_legacy_archive
+from finestore.migrations.m0001_manifest import (
+    LEGACY_SEAL_FILE,
+    LegacyArchive,
+    LegacyTable,
+    inspect_legacy_archive,
+    inspect_legacy_snapshot,
+)
 from finestore.reader import ReadView
+from finestore.store import DataStore
 from marin.evaluation.records import list_records, read_records
 from pyarrow.fs import FSSpecHandler, PyFileSystem
 from rigging.filesystem import StoragePath, marin_temp_bucket, url_to_fs
@@ -34,6 +49,7 @@ _FLEET_MARKER = "_fleet.json"
 _FLEET_ID = re.compile(r"^[0-9a-f]{32}$")
 _TTL_DIRECTORY = re.compile(r"^ttl=[1-9][0-9]*d$")
 _RESULTS_DIRECTORY = "results"
+_SMOKE_WRITER = "migration-smoke"
 
 
 @dataclass(frozen=True)
@@ -101,7 +117,9 @@ class SmokeUpgradeValidationError(ValueError):
 
 
 def _legacy_paths(root: StoragePath, archive: LegacyArchive) -> tuple[str, ...]:
-    paths = [FineStoreLayout(str(root)).archive_path, archive.seal_path]
+    paths = [FineStoreLayout(str(root)).archive_path]
+    if archive.seal_path is not None:
+        paths.append(archive.seal_path)
     for table in archive.tables.values():
         paths.append(table.metadata_path)
         paths.extend(shard.path for shard in table.shards)
@@ -329,7 +347,6 @@ def select_v1_fleet(records_prefixes: tuple[str, ...]) -> FleetSelection:
             continue
         if not (root / LEGACY_SEAL_FILE).exists():
             unsealed_v1.append(results_path)
-            continue
         sources.append(results_path)
 
     return FleetSelection(
@@ -452,7 +469,7 @@ def smoke_upgrade(source: str, destination: str) -> SmokeUpgradeResult:
     if metadata.format_version != _FORMAT_V1:
         raise ValueError(f"smoke migration source must be FineStore format v1; found v{metadata.format_version}")
 
-    legacy = inspect_legacy_archive(source)
+    legacy = inspect_legacy_snapshot(source)
     source_paths = _legacy_paths(source_root, legacy)
     relative_paths = _relative_paths(source_root, source_paths)
     expected_tables = {name: _read_v1_table(source, table) for name, table in legacy.tables.items()}
@@ -462,17 +479,28 @@ def smoke_upgrade(source: str, destination: str) -> SmokeUpgradeResult:
     copied_files = _fingerprints(destination_root, relative_paths)
     _assert_fingerprints_equal(source_files, copied_files, context="the source-to-temp copy")
 
+    synthetic_seal = legacy.seal is None
+    if synthetic_seal:
+        (destination_root / LEGACY_SEAL_FILE).write_text(SealMarker(writer=_SMOKE_WRITER).model_dump_json())
     migration = migrate(destination)
     token = migration.token
     if migration.applied != ("0001_manifest",) or token is None:
         raise SmokeUpgradeValidationError(f"unexpected migration result: {migration}")
+    if synthetic_seal:
+        (destination_root / LEGACY_SEAL_FILE).rm()
+        with DataStore.open(destination, writer_id=_SMOKE_WRITER):
+            pass
 
     reader = ReadView(destination)
-    if not reader.is_sealed() or reader.seal_marker() != legacy.seal:
+    if reader.is_sealed() != (legacy.seal is not None) or reader.seal_marker() != legacy.seal:
         raise SmokeUpgradeValidationError("seal state changed during migration")
     validations = _validate_tables(source, legacy, expected_tables, reader)
 
-    source_after = _fingerprints(source_root, relative_paths)
+    source_after_snapshot = inspect_legacy_snapshot(source)
+    source_after_paths = _relative_paths(source_root, _legacy_paths(source_root, source_after_snapshot))
+    if source_after_paths != relative_paths:
+        raise SmokeUpgradeValidationError(f"FineStore-owned object set changed during migration of {source!r}")
+    source_after = _fingerprints(source_root, source_after_paths)
     _assert_fingerprints_equal(source_files, source_after, context="migration of the temporary clone")
     immutable_paths = tuple(path for path in relative_paths if path != ARCHIVE_FILE)
     copied_immutable = tuple(file for file in copied_files if file.relative_path != ARCHIVE_FILE)
@@ -495,6 +523,6 @@ def smoke_upgrade(source: str, destination: str) -> SmokeUpgradeResult:
         source_sha256=_archive_digest(source_files),
         tables=validations,
         rows=sum(table.rows for table in validations),
-        commit_id=token.commit_id,
-        commit_sequence=token.sequence,
+        commit_id=reader.token.commit_id,
+        commit_sequence=reader.token.sequence,
     )
