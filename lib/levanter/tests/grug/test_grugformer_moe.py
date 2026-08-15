@@ -554,7 +554,7 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
         out_specs=(P(), P()),
         check_vma=False,
     )
-    with jax.set_mesh(mesh):
+    with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
         actual, dropped = sharded_fixed_a2a(x, selected_experts, combine_weights, w_up_gate, w_down)
 
     keep = jnp.asarray([[True, True], [True, True], [False, False], [False, False]])
@@ -571,7 +571,7 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
         return jnp.einsum("tkh,tk->th", expert_output, combine_weights * keep)
 
     cotangent = jax.random.normal(jax.random.key(42), x.shape)
-    with jax.set_mesh(mesh):
+    with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
         actual_gradients = jax.grad(
             lambda x, w_up_gate, w_down: jnp.sum(
                 sharded_fixed_a2a(x, selected_experts, combine_weights, w_up_gate, w_down)[0] * cotangent
@@ -579,11 +579,11 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
             argnums=(0, 1, 2),
         )(x, w_up_gate, w_down)
 
-    expected = dense_output(x, w_up_gate, w_down)
-    expected_gradients = jax.grad(
-        lambda x, w_up_gate, w_down: jnp.sum(dense_output(x, w_up_gate, w_down) * cotangent),
-        argnums=(0, 1, 2),
-    )(x, w_up_gate, w_down)
+        expected = dense_output(x, w_up_gate, w_down)
+        expected_gradients = jax.grad(
+            lambda x, w_up_gate, w_down: jnp.sum(dense_output(x, w_up_gate, w_down) * cotangent),
+            argnums=(0, 1, 2),
+        )(x, w_up_gate, w_down)
 
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
     for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
@@ -651,7 +651,7 @@ def test_fixed_pooled_wave_all_to_all_matches_dense_value_and_gradients():
         )
         return jnp.einsum("tkh,tk->th", expert_output, combine_weights)
 
-    with jax.set_mesh(mesh):
+    with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
         actual = sharded_pooled_output(x, combine_weights, w_up_gate, w_down)
         actual_gradients = jax.grad(
             lambda x, combine_weights, w_up_gate, w_down: jnp.sum(
@@ -659,13 +659,13 @@ def test_fixed_pooled_wave_all_to_all_matches_dense_value_and_gradients():
             ),
             argnums=(0, 1, 2, 3),
         )(x, combine_weights, w_up_gate, w_down)
-    expected = dense_output(x, combine_weights, w_up_gate, w_down)
-    expected_gradients = jax.grad(
-        lambda x, combine_weights, w_up_gate, w_down: jnp.sum(
-            dense_output(x, combine_weights, w_up_gate, w_down) * cotangent
-        ),
-        argnums=(0, 1, 2, 3),
-    )(x, combine_weights, w_up_gate, w_down)
+        expected = dense_output(x, combine_weights, w_up_gate, w_down)
+        expected_gradients = jax.grad(
+            lambda x, combine_weights, w_up_gate, w_down: jnp.sum(
+                dense_output(x, combine_weights, w_up_gate, w_down) * cotangent
+            ),
+            argnums=(0, 1, 2, 3),
+        )(x, combine_weights, w_up_gate, w_down)
 
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
     for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
