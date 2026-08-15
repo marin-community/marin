@@ -568,3 +568,34 @@ Experiment ID prefix: `MEP`.
 - Next: M8 PR from the rebased marin-ep branch (measurements cite the
   marin-ep-8081 measurement branch); then M7 GEMM + hierarchical
   transport as autoresearch levers.
+
+### 2026-08-15 12:30 - MEP-016: cuDNN/QuACK GEMM lever lands — 18.0 s/step (~21.2% MFU-equivalent)
+- Run: mep-m8-cute-ep16-25 — new `marin_ep_cudnn_cute` implementation
+  (marin_ep drop rule + `_cudnn_cute_expert_mlp` grouped GEMMs via the
+  `expert_mlp` seam factored into `marin_ep_moe_local`), EP16 exact proxy,
+  b256, cf 1.1, split-32. All 25 steps, zero faults.
+- EP16 exact-proxy ladder (1,048,576 tokens/step; steady s/step from
+  tqdm deltas; MFU-equivalents from the S-series 18.077% <-> 21.109 s
+  calibration):
+  | arm | cf | s/step | ~MFU | drops |
+  |---|---|---|---|---|
+  | ep-ragged (S28, weaver) | 1.33 | 21.11 | 18.08% | 0 (init) |
+  | ep-marin (ragged_dot) | 1.1 | 19.4 | 19.7% | 0.044% |
+  | ep-ragged-cute (S33) | 1.33 | 19.11 | 19.63% | 0 (init) |
+  | ep-marin-cudnn-cute | 1.1 | 18.05 | 21.2% | 0.066% |
+  | ep-ragged-cudnn-cute (weaver) | 1.33 | 17.62 | 21.66% | 0 (init) |
+  | ep-ragged-cudnn-cute (weaver) | 1.00 | 17.09 | 22.32% | 0.486% |
+- Interpretation: the GEMM seam transfers cleanly (+8.8% for marin_ep,
+  same as the ragged->cudnn-cute delta on weaver's arms). marin cf1.1 vs
+  weaver cf1.33 cudnn-cute differ by 2.4% — inside the ±2pp placement
+  variance band, needs repeat draws to separate. The drop rule remains
+  the structural advantage: their cf1.00 speed point costs 0.486% drops
+  at init-uniform routing (and per-cell rules degrade ~10x under trained
+  skew), ours holds 0.04-0.07% at cf1.1.
+- Toward the 25%/350k EP64 goal: remaining levers are EP64 unblocking
+  (#8313 — upstream), fused-mgpu/hierarchical transport (single-tray
+  6.7x fwd over ragged suggests several pp at rack scale), M7 GEMM+
+  transport fusion, and weight-gradient kernels (weaver bounded packaged
+  gains at ~19.74% on their arms; our transport savings stack on top).
+- Next: monitor PR #8320 review; EP64 rerun on #8313 fix; consider
+  repeat draws for variance bounds before finer claims.
