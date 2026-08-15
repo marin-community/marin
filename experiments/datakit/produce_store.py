@@ -14,6 +14,13 @@ exists.
     globally:   exact dups, verified fuzzy dups
     -> build_clustered_store -> one Levanter cache per populated bucket
 
+One stage does run: the focus crawl's exact-duplicate marks predate #8111 and
+are addressed by the jusText extraction's shard layout, so
+:mod:`experiments.datakit.repack_exact_dups` moves them onto the current
+normalize first. It is a small job beside the store, and skipping it is not a
+neutral choice -- sparse duplicate attributes read a layout mismatch as "no
+duplicates", so the focus crawl would silently keep its exact duplicates.
+
 Check the graph before submitting anything::
 
     uv run python -m experiments.datakit.produce_store --preflight
@@ -63,6 +70,7 @@ from dataclasses import dataclass, field
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from marin.datakit.decon import DeconAttributes
+from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner, step_is_built
 from marin.execution.step_spec import StepSpec
@@ -77,6 +85,7 @@ from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
 from experiments.datakit.cluster.quality.fast_transformer.artifact import calibration_bucket_edges
 from experiments.datakit.global_exact_dedup import GlobalExactDedupData
 from experiments.datakit.reference_pipeline import SPLIT, StoreConfig
+from experiments.datakit.repack_exact_dups import repack_exact_dups_source
 from experiments.datakit.store.datakit_store import (
     ClusteredStoreData,
     build_clustered_store,
@@ -96,6 +105,11 @@ CLUSTER_VIEW = 40
 # build the same artifact but address their inputs differently, and a bump on one
 # side must not silently invalidate the other's cache.
 STORE_VERSION = 1
+
+# The focus-crawl exact-duplicate repack. Cheap next to the store: one pass over
+# the ``id`` column of a 36.3M-document extraction and its sparse marks.
+DEFAULT_REPACK_MAX_WORKERS = 64
+DEFAULT_REPACK_WORKER = ResourceConfig(cpu=4, ram="16g", disk="16g")
 
 
 @dataclass(frozen=True)
@@ -117,13 +131,27 @@ class StoreInputs:
 
     per_source: dict[str, SourceStages]
     exact_dups: StepSpec
+    """What the store reads. The repack step when this run repacks, else the pin."""
+
+    exact_dups_pin: StepSpec
+    """The pinned dedup run. The same step as :attr:`exact_dups` when nothing is repacked."""
+
+    repacked_sources: tuple[str, ...]
+    """Sources whose exact marks :attr:`exact_dups` moves onto their current normalize."""
+
     verified_fuzzy_dups: StepSpec
     tokenizer: hero_data.TokenizerPin
     quality_model: hero_data.QualityPin
 
     def steps(self) -> list[StepSpec]:
+        """Every dependency of the store step."""
         per_source = [step for stages in self.per_source.values() for step in stages.steps()]
         return [*per_source, self.exact_dups, self.verified_fuzzy_dups]
+
+    def registered_steps(self) -> list[StepSpec]:
+        """The inputs that must already exist, which is all of them but the repack."""
+        per_source = [step for stages in self.per_source.values() for step in stages.steps()]
+        return [*per_source, self.exact_dups_pin, self.verified_fuzzy_dups]
 
 
 @dataclass(frozen=True)
@@ -186,12 +214,54 @@ def store_inputs(
         )
         for name in names
     }
+    pin = hero_data.exact_dups()
+    repacked = (hero_data.FOCUS_SOURCE_NAME,) if hero_data.FOCUS_SOURCE_NAME in per_source else ()
     return StoreInputs(
         per_source=per_source,
-        exact_dups=hero_data.exact_dups(),
+        exact_dups=build_focus_exact_repack_step(pin) if repacked else pin,
+        exact_dups_pin=pin,
+        repacked_sources=repacked,
         verified_fuzzy_dups=hero_data.verified_fuzzy_dups(),
         tokenizer=tokenizer,
         quality_model=quality_model,
+    )
+
+
+def build_focus_exact_repack_step(
+    exact_dups: StepSpec,
+    *,
+    max_workers: int = DEFAULT_REPACK_MAX_WORKERS,
+    worker_resources: ResourceConfig = DEFAULT_REPACK_WORKER,
+) -> StepSpec:
+    """Return the exact-duplicate artifact with the focus crawl moved onto its normalize.
+
+    The only stage of this graph that runs anything besides the store. Both
+    pinned dedup runs read the focus crawl's jusText extraction before #8111 sent
+    it through ``normalize_step``, so their marks are addressed by shard names the
+    current source does not use. Fuzzy verification repacks its own candidates
+    (#8237); the exact marks have no such pass, and left alone they resolve to
+    absent files, which sparse duplicate attributes read as "no duplicates".
+
+    Not a hero pin, because the artifact does not exist yet: repointing
+    ``EXACT_DUPS_ID`` or renormalizing the focus crawl moves this step, and the
+    store's identity follows it.
+    """
+    focus = hero_data.normalized(hero_data.FOCUS_SOURCE_NAME)
+    return StepSpec(
+        name=f"datakit/repack_exact_dups/{hero_data.FOCUS_SOURCE_NAME}",
+        deps=[exact_dups, focus],
+        hash_attrs={
+            "legacy_source_key": hero_data.LEGACY_FOCUS_SOURCE_KEY,
+            "v": 1,
+        },
+        fn=lambda output_path: repack_exact_dups_source(
+            exact_dups=read_artifact(exact_dups.output_path, GlobalExactDedupData),
+            legacy_source_key=hero_data.LEGACY_FOCUS_SOURCE_KEY,
+            normalized=read_artifact(focus.output_path, NormalizedData),
+            output_path=output_path,
+            max_workers=max_workers,
+            worker_resources=worker_resources,
+        ),
     )
 
 
@@ -230,8 +300,19 @@ class ReadInputs:
     verified_fuzzy_dups: VerifiedFuzzyDupsAttrData
 
 
-def _read_inputs(inputs: StoreInputs) -> ReadInputs:
-    """Read every input artifact and restrict the dedup metadata to these sources.
+@dataclass(frozen=True)
+class PerSourceInputs:
+    """One source's four attribute stages, loaded, plus the key dedup files them under."""
+
+    tokenize: dict[str, TokenizedAttrData]
+    decontam: dict[str, DeconAttributes]
+    cluster_assign: dict[str, AssignmentAttrData]
+    quality_dirs: dict[str, str]
+    source_keys: dict[str, str]
+
+
+def _read_per_source(inputs: StoreInputs) -> PerSourceInputs:
+    """Read the per-source artifacts.
 
     The quality stage writes no artifact of its own -- ``score_corpus`` publishes
     narrow ``id``/``score`` shards straight into the step's directory -- so the
@@ -239,27 +320,37 @@ def _read_inputs(inputs: StoreInputs) -> ReadInputs:
     calibration rather than from a manifest beside the data.
     """
     tokenize = {n: read_artifact(s.tokenize.output_path, TokenizedAttrData) for n, s in inputs.per_source.items()}
-    decontam = {n: read_artifact(s.decontam.output_path, DeconAttributes) for n, s in inputs.per_source.items()}
-    assign = {n: read_artifact(s.cluster_assign.output_path, AssignmentAttrData) for n, s in inputs.per_source.items()}
-    quality_dirs = {n: s.quality.output_path for n, s in inputs.per_source.items()}
-
-    source_keys = set()
+    source_keys: dict[str, str] = {}
     for name, tok in tokenize.items():
         key = tok.source_keys.get(SPLIT)
         if key is None:
             raise ValueError(f"{name}: tokenize has no source_key for split={SPLIT!r}")
-        source_keys.add(key)
-    exact_dups, verified = _restrict_to_sources(
+        source_keys[name] = key
+    return PerSourceInputs(
+        tokenize=tokenize,
+        decontam={n: read_artifact(s.decontam.output_path, DeconAttributes) for n, s in inputs.per_source.items()},
+        cluster_assign={
+            n: read_artifact(s.cluster_assign.output_path, AssignmentAttrData) for n, s in inputs.per_source.items()
+        },
+        quality_dirs={n: s.quality.output_path for n, s in inputs.per_source.items()},
+        source_keys=source_keys,
+    )
+
+
+def _read_inputs(inputs: StoreInputs) -> ReadInputs:
+    """Read every input artifact and restrict the dedup metadata to these sources."""
+    per_source = _read_per_source(inputs)
+    restricted_exact, verified = _restrict_to_sources(
         read_artifact(inputs.exact_dups.output_path, GlobalExactDedupData),
         read_artifact(inputs.verified_fuzzy_dups.output_path, VerifiedFuzzyDupsAttrData),
-        source_keys,
+        set(per_source.source_keys.values()),
     )
     return ReadInputs(
-        tokenize=tokenize,
-        decontam=decontam,
-        cluster_assign=assign,
-        quality_dirs=quality_dirs,
-        exact_dups=exact_dups,
+        tokenize=per_source.tokenize,
+        decontam=per_source.decontam,
+        cluster_assign=per_source.cluster_assign,
+        quality_dirs=per_source.quality_dirs,
+        exact_dups=restricted_exact,
         verified_fuzzy_dups=verified,
     )
 
@@ -365,17 +456,20 @@ def preflight(inputs: StoreInputs, *, shards_per_source: int) -> PreflightReport
     are compared here rather than left to the run.
     """
     report = PreflightReport(sources=len(inputs.per_source))
-    report.missing, report.unsealed = _unbuilt_steps(inputs.steps())
+    report.missing, report.unsealed = _unbuilt_steps(inputs.registered_steps())
     if report.missing:
         return report
 
     try:
-        loaded = _read_inputs(inputs)
+        loaded = _read_per_source(inputs)
+        exact_dups = read_artifact(inputs.exact_dups_pin.output_path, GlobalExactDedupData)
+        verified = read_artifact(inputs.verified_fuzzy_dups.output_path, VerifiedFuzzyDupsAttrData)
         edges = calibration_bucket_edges(hero_data.quality_calibration(inputs.quality_model))
     except (KeyError, ValueError) as failure:
         report.problems.append(str(failure))
         return report
     logger.info("quality cutpoints: %s", list(edges))
+    report.problems.extend(_dedup_coverage_problems(inputs, loaded, exact_dups, verified))
 
     for name in sorted(inputs.per_source):
         report.problems.extend(
@@ -388,11 +482,66 @@ def preflight(inputs: StoreInputs, *, shards_per_source: int) -> PreflightReport
                 shards_per_source=shards_per_source,
             )
         )
-        report.problems.extend(_dedup_layout_problems(name=name, tokenize=loaded.tokenize[name], loaded=loaded))
+        if name not in inputs.repacked_sources:
+            report.problems.extend(
+                _dedup_layout_problems(
+                    name=name,
+                    tokenize=loaded.tokenize[name],
+                    source_key=loaded.source_keys[name],
+                    exact_dups=exact_dups,
+                    verified=verified,
+                )
+            )
     return report
 
 
-def _dedup_layout_problems(*, name: str, tokenize: TokenizedAttrData, loaded: ReadInputs) -> list[str]:
+def _dedup_coverage_problems(
+    inputs: StoreInputs,
+    loaded: PerSourceInputs,
+    exact_dups: GlobalExactDedupData,
+    verified: VerifiedFuzzyDupsAttrData,
+) -> list[str]:
+    """Check that both dedup artifacts file every source this run builds.
+
+    A repacked source is the exception in both directions: the pinned artifact
+    must still hold it under its *legacy* key, because that is what the repack
+    reads, and must not hold it under the current one, because that is what the
+    repack writes.
+    """
+    problems: list[str] = []
+    for name in sorted(inputs.repacked_sources):
+        current = loaded.source_keys[name]
+        if hero_data.LEGACY_FOCUS_SOURCE_KEY not in exact_dups.sources:
+            problems.append(
+                f"{name}: exact_dups has no entry for the legacy key "
+                f"{hero_data.LEGACY_FOCUS_SOURCE_KEY!r}, so there is nothing to repack"
+            )
+        if current in exact_dups.sources:
+            problems.append(f"{name}: exact_dups already holds the current key {current!r}; the repack would refuse")
+
+    expected = {loaded.source_keys[n] for n in inputs.per_source if n not in inputs.repacked_sources}
+    for label, sources in (("exact_dups", exact_dups.sources), ("verified_fuzzy_dups", verified.sources)):
+        absent = sorted(expected - set(sources))
+        if absent:
+            problems.append(f"{label} has no entry for {len(absent)} source keys, e.g. {absent[0]!r}")
+    repacked_keys = {loaded.source_keys[n] for n in inputs.repacked_sources}
+    absent_fuzzy = sorted(repacked_keys - set(verified.sources))
+    if absent_fuzzy:
+        problems.append(
+            f"verified_fuzzy_dups has no entry for {absent_fuzzy!r}; fuzzy verification repacks the focus "
+            "crawl itself (#8237), so its output should already carry the current key"
+        )
+    return problems
+
+
+def _dedup_layout_problems(
+    *,
+    name: str,
+    tokenize: TokenizedAttrData,
+    source_key: str,
+    exact_dups: GlobalExactDedupData,
+    verified: VerifiedFuzzyDupsAttrData,
+) -> list[str]:
     """Check one source's sparse duplicate attributes against its tokenize layout.
 
     Sparse means a shard with no duplicates is simply not there, so the only
@@ -404,14 +553,13 @@ def _dedup_layout_problems(*, name: str, tokenize: TokenizedAttrData, loaded: Re
     if tok_dir is None:
         return []
     tok_names = {os.path.basename(str(m)) for m in StoragePath(f"{tok_dir.rstrip('/')}/*.parquet").glob()}
-    source_key = tokenize.source_keys[SPLIT]
 
     problems: list[str] = []
-    for label, sources in (
-        ("exact_dups", loaded.exact_dups.sources),
-        ("verified_fuzzy_dups", loaded.verified_fuzzy_dups.sources),
-    ):
-        attr_dir = sources[source_key].attr_dir.rstrip("/")
+    for label, sources in (("exact_dups", exact_dups.sources), ("verified_fuzzy_dups", verified.sources)):
+        entry = sources.get(source_key)
+        if entry is None:
+            continue
+        attr_dir = entry.attr_dir.rstrip("/")
         attr_names = {os.path.basename(str(m)) for m in StoragePath(f"{attr_dir}/*.parquet").glob()}
         stray = attr_names - tok_names
         if stray:
@@ -563,6 +711,12 @@ def main(argv: list[str] | None = None) -> None:
 
     target = build_store_step(inputs, store=store, max_workers=args.max_workers, cluster_view=args.cluster_view)
     logger.info("store target: %s", target.output_path)
+    if inputs.repacked_sources:
+        logger.info(
+            "repacking exact-duplicate marks for %s first: %s",
+            ", ".join(inputs.repacked_sources),
+            inputs.exact_dups.output_path,
+        )
     logger.info(
         "%d sources, %s tasks, %d concurrent workers of %s cpu / %s ram / %s disk",
         len(inputs.per_source),

@@ -105,3 +105,53 @@ def test_quality_must_match_the_tokenization_it_scored():
 def test_unknown_source_is_rejected():
     with pytest.raises(KeyError):
         produce_store.store_inputs(["no-such-source"])
+
+
+def test_the_focus_crawl_reaches_the_store_through_the_exact_repack():
+    """Both pinned dedup runs filed the focus crawl under its pre-#8111 extraction.
+
+    Fuzzy verification repacks its own candidates, so only the exact marks need a
+    step here, and the store has to read that step rather than the pin.
+    """
+    inputs = produce_store.store_inputs([*SOURCES, hero_data.FOCUS_SOURCE_NAME])
+
+    assert inputs.repacked_sources == (hero_data.FOCUS_SOURCE_NAME,)
+    assert inputs.exact_dups.name == f"datakit/repack_exact_dups/{hero_data.FOCUS_SOURCE_NAME}"
+    assert inputs.exact_dups_pin.output_path.endswith(f"/datakit/{hero_data.EXACT_DUPS_ID}")
+    assert inputs.exact_dups in produce_store.build_store_step(inputs, max_workers=4).deps
+
+
+def test_a_run_without_the_focus_crawl_reads_the_pin_directly():
+    inputs = produce_store.store_inputs(SOURCES)
+
+    assert inputs.repacked_sources == ()
+    assert inputs.exact_dups is inputs.exact_dups_pin
+
+
+def test_the_repack_is_not_something_preflight_expects_to_exist():
+    """It is the one input this run builds, so an absent output is not a problem."""
+    inputs = produce_store.store_inputs([*SOURCES, hero_data.FOCUS_SOURCE_NAME])
+    registered = {step.output_path for step in inputs.registered_steps()}
+
+    assert inputs.exact_dups.output_path not in registered
+    assert inputs.exact_dups_pin.output_path in registered
+
+
+def test_the_repack_reads_the_pin_and_the_current_normalize():
+    inputs = produce_store.store_inputs([hero_data.FOCUS_SOURCE_NAME])
+    deps = {dep.output_path for dep in inputs.exact_dups.deps}
+
+    assert deps == {
+        hero_data.exact_dups().output_path,
+        hero_data.normalized(hero_data.FOCUS_SOURCE_NAME).output_path,
+    }
+
+
+def test_repointing_the_exact_pin_moves_the_repack_and_the_store(monkeypatch):
+    inputs = produce_store.store_inputs([*SOURCES, hero_data.FOCUS_SOURCE_NAME])
+    before = produce_store.build_store_step(inputs, max_workers=4).output_path
+    monkeypatch.setattr(hero_data, "EXACT_DUPS_ID", "global_exact_dedup_0ther")
+    after_inputs = produce_store.store_inputs([*SOURCES, hero_data.FOCUS_SOURCE_NAME])
+
+    assert after_inputs.exact_dups.output_path != inputs.exact_dups.output_path
+    assert produce_store.build_store_step(after_inputs, max_workers=4).output_path != before
