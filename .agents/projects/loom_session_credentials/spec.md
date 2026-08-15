@@ -57,7 +57,7 @@ Pulumi key `homeFiles` maps a relative path to an object with:
 - `secretRef`: required full GCP Secret Manager version resource with a numeric version;
 - `mode`: optional four-digit octal string, default `0600`, allowed values `0400` and `0600`.
 
-Paths use POSIX separators, are relative to `/home/app`, and reject empty segments, `.`, `..`, NUL, a leading slash, and duplicates after normalization. `.loom-managed-home-files.json` is reserved.
+Paths use POSIX separators, are relative to `/home/app`, and reject empty segments, `.`, `..`, NUL, a leading slash, duplicates, and ancestor/descendant overlap within one manifest.
 
 The VM metadata key `loom-home-files` contains sorted JSON entries:
 
@@ -89,10 +89,10 @@ The prepare command:
 4. uses directory file descriptors with `O_NOFOLLOW` to reject a target path that crosses a symlink;
 5. copies through a temporary file, restores the session-home uid and gid, and atomically renames it with the declared mode;
 6. removes only regular files present in the previous ledger and absent from the new manifest;
-7. writes `.loom-managed-home-files.json` atomically with managed paths only;
+7. writes `/var/lib/loom/home-files/managed-paths.json` atomically with managed paths only; the root-owned state directory is mounted into the applicator but not ordinary sessions;
 8. deletes all host temporary payloads on exit.
 
-An empty manifest prunes all previously managed files and leaves all unmanaged home contents unchanged. Any validation, Secret Manager, or install failure leaves Compose stopped and the activation unsuccessful. Payload bytes never appear in command arguments, stdout, metadata, or the ledger.
+An empty manifest prunes all previously managed files and leaves all unmanaged home contents unchanged. A stale managed file that blocks a new managed directory, or vice versa, is removed before staging; empty ancestors are pruned only as needed, and unmanaged content makes the transition fail closed. Any validation, Secret Manager, or install failure leaves Compose stopped and the activation unsuccessful. Payload bytes never appear in command arguments, stdout, metadata, or the ledger.
 
 ## IAM
 

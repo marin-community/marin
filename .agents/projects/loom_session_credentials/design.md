@@ -51,7 +51,7 @@ marin-loom:homeFiles:
 
 Paths must be relative to `/home/app`, normalized, and free of `..`. Secret references must use numbered versions. Modes are limited to owner-readable files (`0400` or `0600`). Pulumi stores only the reference, grants the Loom VM service account access to the named secret, and places the redacted manifest in VM metadata.
 
-Before starting Compose, the activation script resolves every declared secret into a root-only temporary directory, then starts a network-disabled one-shot container with the shared home volume. The container installs each payload through directory file descriptors that reject symlinks, atomically replaces the target, and restores the session-home owner's uid and gid. It records only managed paths in a mode-0600 ledger. Removing a declaration deletes only a regular file previously recorded in that ledger. Secret values never enter metadata, Pulumi state, command arguments, logs, or the ledger.
+Before starting Compose, the activation script resolves every declared secret into a root-only temporary directory, then starts a network-disabled one-shot container with the shared home volume. The container installs each payload through directory file descriptors that reject symlinks, atomically replaces the target, and restores the session-home owner's uid and gid. It records only managed paths in root-owned host state outside the session-writable volume. Removing a declaration deletes only a regular file previously recorded there. Managed paths cannot overlap; file-to-directory transitions remove only stale managed blockers and stop if unmanaged content prevents the change. Secret values never enter metadata, Pulumi state, command arguments, logs, or the ledger.
 
 The production migration creates a dedicated Secret Manager secret, uploads the current kubeconfig as version 1, adds the declaration, previews the IAM and metadata changes, and activates Loom. Rotation adds a numbered version and updates the reference in the stack. The existing manually copied file remains until the first successful managed activation replaces it atomically.
 
@@ -59,7 +59,7 @@ The production migration creates a dedicated Secret Manager secret, uploads the 
 
 Loom's existing Settings Playwright journey verifies the GitHub App editor under `Connections`, the personal token under `Access`, the permission-prefilled PAT URL, and the renamed session environment tab. The frontend typecheck, unit suite, formatter, Rust formatter, and Clippy remain part of the repository gate.
 
-Marin unit tests validate paths, modes, pinned secret references, redacted metadata, Secret Manager IAM grants, and the generated home-file manifest. Filesystem tests run the container-side applicator against a temporary home and cover atomic creation, permissions, managed-file pruning, preservation of unmanaged files, and symlink rejection. A production preview must show only IAM and VM metadata changes before the kubeconfig version is selected.
+Marin unit tests validate paths, modes, pinned secret references, redacted metadata, Secret Manager IAM grants, and the generated home-file manifest. Filesystem tests run the container-side applicator against a temporary home and root-owned state directory. They cover atomic creation, permissions, managed-file pruning, preservation of unmanaged files, symlink rejection, and file-to-directory transitions. A production preview must show only IAM and VM metadata changes before the kubeconfig version is selected.
 
 ## Open Questions
 
