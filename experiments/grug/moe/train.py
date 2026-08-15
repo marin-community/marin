@@ -129,6 +129,7 @@ def build_train_loader(
     *,
     batch_schedule: BatchSchedule,
     mesh: Mesh,
+    skip_head_size_validation: bool = False,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
     # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
@@ -140,6 +141,7 @@ def build_train_loader(
         axis_resources={"__BATCH__": _BATCH_AXES},
         batch_axis_name="__BATCH__",
         allow_nondivisible_batch_size=False,
+        skip_head_size_validation=skip_head_size_validation,
     )
 
 
@@ -442,6 +444,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             train_dataset,
             batch_schedule=batch_schedule,
             mesh=mesh,
+            skip_head_size_validation=trainer.skip_batch_size_schedule_head_validation,
         )
 
         @jax.jit

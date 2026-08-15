@@ -8,7 +8,7 @@ import logging
 import time
 import warnings
 from collections import defaultdict
-from collections.abc import AsyncIterator, Callable, Iterable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Generic, TypeVar
@@ -81,6 +81,7 @@ class DataLoader(Iterable[Ex]):
         prefetch_size: int = 32,
         pad_final_batch: bool = True,
         allow_nondivisible_batch_size: bool = False,
+        skip_head_size_validation: bool = False,
     ):
         """
         Batch- and NamedArray-aware data loader. This class works with an [AsyncDataset][], a Mesh,
@@ -101,6 +102,10 @@ class DataLoader(Iterable[Ex]):
             batch_axis_name (str | None): The name of the batch axis. If None, defaults to "batch" unless batch_size is an Axis.
             pad_final_batch (bool): If True, the final batch will be padded to the size of the previous batch.
             allow_nondivisible_batch_size (bool): All the batch size to be non-divisible by the data axis size (typically the number of devices).
+            skip_head_size_validation (bool): If True, only the largest-start ScheduleStep (the final phase, the one that
+                actually gets iterated) has its batch size checked for data-axis divisibility. Pre-final phases exist only
+                to seed the DataLoader's cumulative sample offset at ``resume_step`` for a BS-ramp resume; they never
+                emit batches to the trainer, so their batch sizes don't need to fit the mesh.
         """
         self.max_buffered_batches = max_buffered_batches
         self.prefetch_size = prefetch_size
@@ -126,6 +131,7 @@ class DataLoader(Iterable[Ex]):
         assert self._data_axis_size is not None, "Data axis size must be known. Make sure you're passing in a mesh"
 
         self._allow_non_divisible_batch_size = allow_nondivisible_batch_size
+        self._skip_head_size_validation = skip_head_size_validation
         self._pad_final_batch = pad_final_batch
 
         with local_cpu_mesh():
@@ -148,7 +154,22 @@ class DataLoader(Iterable[Ex]):
     def _check_batch_size_divisibility(self):
         if self._data_axis_size is None:
             return
-        for size in self.scheduler.unique_batch_sizes():
+        # For a BS-ramp resume with skip_head_size_validation, only the final
+        # phase's BS actually gets iterated (pre-final phases exist only to
+        # seed the DataLoader's cumulative offset at resume_step). Collect the
+        # BS values from those final-only phases; if we can't identify a
+        # schedule structure, fall through to checking all unique sizes.
+        sizes_to_check: set[int]
+        if self._skip_head_size_validation and hasattr(self.scheduler, "schedule"):
+            schedule = self.scheduler.schedule
+            if isinstance(schedule, Sequence) and all(hasattr(p, "start") and hasattr(p, "value") for p in schedule):
+                last_start = max(p.start for p in schedule)
+                sizes_to_check = {int(p.value) for p in schedule if p.start == last_start}
+            else:
+                sizes_to_check = set(self.scheduler.unique_batch_sizes())
+        else:
+            sizes_to_check = set(self.scheduler.unique_batch_sizes())
+        for size in sizes_to_check:
             if size % self._data_axis_size != 0:
                 raise ValueError(
                     f"Batch size {size} is not divisible by data axis size {self._data_axis_size}. "
