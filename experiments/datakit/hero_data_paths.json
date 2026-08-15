@@ -1753,5 +1753,6 @@
  "tokenize.nemotron/swe-rebench-contree": "datakit/tokenize/swe-rebench-contree_c53ad337",
  "tokenize.nemotron/swe-rebench-openhands": "datakit/tokenize/swe-rebench-openhands_9daef156",
  "tokenize.nemotron/swe-zero-12m": "datakit/tokenize/swe-zero-12m_de5f7561",
- "tokenize.nemotron/synthetic-1": "datakit/tokenize/synthetic-1_3f18c02e"
+ "tokenize.nemotron/synthetic-1": "datakit/tokenize/synthetic-1_3f18c02e",
+ "verified_fuzzy_dups": "datakit/verify_fuzzy_dups_c757e4f0"
 }

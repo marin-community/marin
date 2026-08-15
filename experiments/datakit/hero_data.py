@@ -116,6 +116,7 @@ DOMAIN_ASSIGN_BATCH_SIZE = 4096
 # also hash the run id into their own steps.
 EXACT_DUPS_ID = "global_exact_dedup_af4c6c3e"
 FUZZY_DUPS_ID = "dedup_709f5997"
+VERIFIED_FUZZY_DUPS_PATH = "datakit/verify_fuzzy_dups_c757e4f0"
 
 
 def _refuse_to_run(output_path: str) -> NoReturn:
@@ -188,6 +189,11 @@ def fuzzy_dups() -> StepSpec:
     return _frozen_step("hero/fuzzy_dups", f"datakit/{FUZZY_DUPS_ID}")
 
 
+def verified_fuzzy_dups() -> StepSpec:
+    """Return the pinned verified fuzzy-duplicate attributes covering every source."""
+    return _frozen_step("hero/verified_fuzzy_dups", VERIFIED_FUZZY_DUPS_PATH)
+
+
 def domain_cluster_assignment() -> StepSpec:
     """Return the pinned Harrier domain cluster assignment."""
     return _frozen_step("hero/domain_cluster_assignment", DOMAIN_CLUSTER_ASSIGNMENT_PATH)
@@ -233,6 +239,7 @@ def all_paths() -> dict[str, str]:
         "domain_cluster_assignment": domain_cluster_assignment().output_path,
         "exact_dups": exact_dups().output_path,
         "fuzzy_dups": fuzzy_dups().output_path,
+        "verified_fuzzy_dups": verified_fuzzy_dups().output_path,
     }
     for source in sorted(sources):
         paths[f"normalized/{source}"] = _read_only(sources[source]).output_path
