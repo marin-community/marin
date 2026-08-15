@@ -22,8 +22,9 @@ import pytest
 from jax import shard_map
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
+from levanter.grug._moe.ep_marin import _static_capacity, marin_ep_moe_local
+from levanter.grug.grug_moe import moe_mlp
 
-from experiments.marin_ep.kernels.xla_backend import _static_capacity, marin_ep_moe_local
 from experiments.marin_ep.oracle import moe_oracle, pooled_keep_mask
 
 _SCRIPT = """
@@ -34,7 +35,7 @@ _SCRIPT = """
     from jax import shard_map
     from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
-    from experiments.marin_ep.kernels.xla_backend import marin_ep_moe_local, _static_capacity
+    from levanter.grug._moe.ep_marin import marin_ep_moe_local, _static_capacity
     from experiments.marin_ep.oracle import moe_oracle, pooled_keep_mask
 
     devices, tokens, topk, num_experts, hidden, intermediate = 8, 16, 3, 16, 8, 12
@@ -179,6 +180,66 @@ def test_xla_backend_matches_oracle_values_drops_and_grads_on_8_device_mesh():
     )
     assert result.returncode == 0, result.stderr
     assert "OK" in result.stdout
+
+
+def test_moe_mlp_marin_ep_implementation_matches_oracle_on_gpu():
+    """`moe_mlp(implementation="marin_ep")` end-to-end: the levanter dispatch
+    wires the fused backend with per-owner pooling (G = local experts)."""
+    if jax.default_backend() != "gpu":
+        pytest.skip("needs real GPUs")
+    devices = len(jax.devices())
+    if devices < 2:
+        pytest.skip("needs >= 2 GPUs")
+    tokens, topk, hidden, intermediate = 128, 3, 256, 256
+    num_experts = devices * 4
+    local_experts = 4
+    capacity_factor = 1.1
+
+    rng = np.random.default_rng(seed=11)
+    probs = rng.dirichlet(np.full(num_experts, 0.4))
+    experts = rng.choice(num_experts, size=(devices * tokens, topk), p=probs).astype(np.int32)
+    x = rng.standard_normal((devices * tokens, hidden)).astype(np.float32)
+    weights = (rng.random((devices * tokens, topk)) + 0.05).astype(np.float32)
+    w13 = (0.3 * rng.standard_normal((num_experts, hidden, 2 * intermediate))).astype(np.float32)
+    w2 = (0.3 * rng.standard_normal((num_experts, intermediate, hidden))).astype(np.float32)
+
+    mesh = Mesh(
+        np.asarray(jax.devices()).reshape(1, devices, 1),
+        ("data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 3,
+    )
+    batch_spec = P(("data", "expert"))
+
+    def put(a, spec):
+        return jax.device_put(jnp.asarray(a), NamedSharding(mesh, spec))
+
+    with jax.set_mesh(mesh):
+        y, dropped = jax.jit(
+            partial(moe_mlp, implementation="marin_ep", capacity_factor=capacity_factor, report_capacity_overflow=True)
+        )(
+            put(x, batch_spec),
+            put(experts, batch_spec),
+            put(weights, batch_spec),
+            put(w13, P("expert", None, None)),
+            put(w2, P("expert", None, None)),
+        )
+
+    capacity = _static_capacity(devices * tokens * topk, num_experts, capacity_factor)
+    keep, dropped_oracle = pooled_keep_mask(
+        experts.reshape(devices, tokens, topk), num_experts=num_experts, capacity=capacity, group_size=local_experts
+    )
+    y_oracle = moe_oracle(
+        jnp.asarray(x),
+        jnp.asarray(experts),
+        jnp.asarray(weights),
+        jnp.asarray(w13),
+        jnp.asarray(w2),
+        jnp.asarray(keep.reshape(devices * tokens, topk)),
+        activation_fn=jax.nn.silu,
+    )
+    assert int(dropped) == dropped_oracle
+    assert dropped_oracle > 0
+    np.testing.assert_allclose(np.asarray(y), np.asarray(y_oracle), rtol=2e-2, atol=0.2)
 
 
 @pytest.mark.parametrize("transport", ["ragged", "mgpu"])

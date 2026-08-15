@@ -17,8 +17,7 @@ import pytest
 from jax import lax, shard_map
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
-
-from experiments.marin_ep.kernels.mgpu_transport import dispatch_segments, put_segments
+from levanter.grug._moe.marin_ep_transport import dispatch_segments, put_segments
 
 HIDDEN = 512
 LOCAL_EXPERTS = 3

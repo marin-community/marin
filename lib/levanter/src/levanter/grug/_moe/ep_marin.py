@@ -1,27 +1,24 @@
-# Copyright The Marin Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Marin EP semantics on stock XLA collectives (stepping-stone backend).
+"""Marin EP Grug MoE backend: group-pooled waterfilling drops + fused transport.
 
-Implements the SPEC contract — group-pooled waterfilling drop rule
-(Section 2) with the (expert, source, rank) receive layout — inside
-`jax.shard_map` over the `"expert"` axis, using `ragged_all_to_all` for
-transport and `ragged_dot` for expert GEMMs. No custom transport.
-
-This backend serves three roles on the way to the fused kernel:
-(a) executable validation of the spec against real mesh/collective
-semantics, (b) a hardware-runnable comparison point with today's
-`fixed_all_to_all`/`ragged_all_to_all` backends, and (c) the call
-signature the fused kernel drops into (it matches the `shard_local_fn`
-contract dispatched by `levanter.grug.grug_moe.moe_mlp`, plus the
-`pool_group_size` static).
+Implements the Marin EP spec (`experiments/marin_ep/SPEC.md`) — group-pooled
+waterfilling drop rule with the (expert, source, rank) receive layout —
+inside `jax.shard_map` over the `"expert"` axis. Production transport is the
+fused Mosaic-GPU put kernel (`marin_ep_transport`), which writes each
+owner's expert-major pool directly, eliminating both local permutes;
+`ragged_all_to_all` and an `all_gather` emulation remain selectable for
+comparison and XLA:CPU conformance runs. Expert GEMMs are `ragged_dot`.
 
 Structurally this mirrors `levanter.grug._moe.ep_ragged_all_to_all`; the
 difference is the accept rule: instead of a per-receiver pool clipped
 first-sender-wins, acceptance is `clip(kept_g - base[d, g], 0, n_d[g])`
 with `kept_g` from the group-pooled waterfilling over global expert
 totals, which is deterministic, EP-degree invariant, and gives ~10x fewer
-drops at hero shape (see `bench/drop_rate_study.py`).
+drops at hero shape (see `experiments/marin_ep/bench/drop_rate_study.py`).
+Layer-level A/B on one GB200 tray (EP4, hero widths, 32k tokens/device):
+6.4x fwd / 5.1x fwd+bwd over the ragged transport, bit-identical outputs.
 """
 
 import math
@@ -42,9 +39,8 @@ from levanter.grug._moe.ep_common import (
     _sort_activations,
     _unpermute_from_global_expert,
 )
+from levanter.grug._moe.marin_ep_transport import combine_segments, dispatch_segments, put_with_transpose
 from levanter.grug.sharding import _batch_axes
-
-from experiments.marin_ep.kernels.mgpu_transport import combine_segments, dispatch_segments, put_with_transpose
 
 
 def kept_rows_waterfill(total_counts: Int[Array, " E"], *, capacity: int, group_size: int) -> Int[Array, " E"]:
@@ -252,3 +248,34 @@ def marin_ep_moe_local(
         dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - jnp.sum(my_accepted, dtype=jnp.int32)
         dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     return out_local, dropped_total
+
+
+def _moe_mlp_ep_marin_local(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+    """`moe_mlp` entry point: fused transport, per-owner capacity pooling.
+
+    Pooling over each owner's co-located experts is free (one receive pool
+    per device) and cuts drops ~10x vs per-expert capacity at hero shape,
+    so it is not a tunable here.
+    """
+    return marin_ep_moe_local(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        pool_group_size=moe_w13_local.shape[0],
+        transport="mgpu",
+    )

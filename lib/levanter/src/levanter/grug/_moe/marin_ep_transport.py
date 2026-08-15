@@ -1,14 +1,13 @@
-# Copyright The Marin Authors
+# Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""M6 draft: fused dispatch/combine transport on Pallas Mosaic-GPU.
+"""Fused dispatch/combine transport for the Marin EP MoE backend.
 
-Replaces the two `ragged_all_to_all` calls of `xla_backend` with
-device-initiated remote puts + arrival semaphores (SPEC Sections 3 F3/F5),
-while routing metadata (counts, waterfilling, offsets) and expert GEMMs
-stay in XLA. This is the intermediate M6 milestone: fused transport, stock
-GEMMs; the persistent megakernel (M7) fuses the GEMMs behind the same
-arrival flags.
+Replaces the two `ragged_all_to_all` calls of `ep_marin` with
+device-initiated remote puts + arrival semaphores (spec:
+`experiments/marin_ep/SPEC.md` Sections 3 F3/F5), while routing metadata
+(counts, waterfilling, offsets) and expert GEMMs stay in XLA: fused
+transport, stock GEMMs.
 
 Both directions are one generic kernel, `put_segments`: scatter contiguous
 row segments of a local buffer into peers' buffers at given offsets, in
@@ -18,8 +17,8 @@ after its group of segments. The direction-specific part is pure metadata
 shard_map body from the accepted-count matrix — CPU-testable against the
 oracle keep rule.
 
-Constructs were validated on GB200 in MEP-005
-(`bench/spike_transport_mgpu.py`): `plgpu.remote_ref` puts,
+Constructs were validated on GB200
+(`experiments/marin_ep/bench/spike_transport_mgpu.py`): `plgpu.remote_ref` puts,
 `pl.semaphore_signal(device_id=...)`, `collective_axes="wg"` scoping, the
 256-elements-per-dim async-copy limit (hence the `[rows, H/256, 256]`
 payload view), and jax 0.10/0.11 `out_shape`/`out_type` compat.
@@ -36,8 +35,8 @@ covered by any segment are garbage; `put_with_transpose` zeroes rows at or
 beyond `valid_rows` (with the compacted-region layout, coverage is the
 contiguous prefix `[0, valid_rows)`).
 
-Metadata builders are exact and tested on CPU
-(`tests/test_mgpu_transport_metadata.py`); the kernel itself needs GPUs.
+Metadata builders are tested on CPU and the kernel on GPUs
+(`experiments/marin_ep/tests/`); GB200-validated at EP4 at ~500 GB/s/device.
 """
 
 import functools

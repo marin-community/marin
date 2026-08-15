@@ -13,8 +13,8 @@ the identity on each device's compacted send buffer.
 import jax
 import jax.numpy as jnp
 import numpy as np
+from levanter.grug._moe.marin_ep_transport import combine_segments, dispatch_segments
 
-from experiments.marin_ep.kernels.mgpu_transport import combine_segments, dispatch_segments
 from experiments.marin_ep.simcore import simulate_forward
 
 DEVICES, TOKENS, TOPK, EXPERTS, HIDDEN, INTERMEDIATE = 4, 16, 3, 8, 8, 12

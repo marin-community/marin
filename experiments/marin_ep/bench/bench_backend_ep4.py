@@ -23,8 +23,7 @@ import numpy as np
 from jax import shard_map
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
-
-from experiments.marin_ep.kernels.xla_backend import marin_ep_moe_local
+from levanter.grug._moe.ep_marin import marin_ep_moe_local
 
 HIDDEN = 3072  # hero routed latent width
 INTERMEDIATE = 6272
