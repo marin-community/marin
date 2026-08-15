@@ -509,3 +509,61 @@ def test_tokenized_shard_without_chunk_index_is_rejected(tmp_path):
 
     with pytest.raises(RuntimeError, match="no chunk_index column"):
         list(_iter_tokenized_documents(path))
+
+
+# One doc = (id, content_type). Two of these types have their own calibration in
+# the fixture below; "other" has none and must fall back to the default.
+CONTENT_TYPES = {
+    "d0": "code",
+    "d1": "code",
+    "d2": "prose",
+    "d3": "other",
+    "d4": "prose",
+    "d5": "other",
+    "d6": "code",
+    "d7": "other",
+    "d8": "code",
+}
+
+
+def test_content_type_counters_survive_the_subprocess_boundary(tmp_path, monkeypatch):
+    """Shards are joined in a spawned process, whose counter writes are not shared.
+
+    The per-type counts have to travel back as data. If they are emitted where
+    they are computed they vanish, and the fallback to the default calibration
+    becomes exactly the silent thing the counter exists to prevent.
+    """
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path)
+
+    content_dir = str(tmp_path / "content_type")
+    os.makedirs(content_dir, exist_ok=True)
+    for basename, docs in (("part-00000-of-00002.parquet", SHARD0), ("part-00001-of-00002.parquet", SHARD1)):
+        ids = [d[0] for d in docs]
+        _write_parquet(
+            f"{content_dir}/{basename}",
+            pa.table({"id": ids, "content_type": [CONTENT_TYPES[i] for i in ids]}),
+        )
+
+    artifact = build_clustered_store(
+        tokenize=tokenize,
+        decontam=decontam,
+        cluster_assign=cluster_assign,
+        quality=quality,
+        bucket_edges={DEFAULT_CALIBRATION_KEY: BUCKET_EDGES, "code": BUCKET_EDGES, "prose": BUCKET_EDGES},
+        content_type={"src": content_dir},
+        exact_dedup=exact_dedup,
+        dedup=dedup,
+        output_path=str(tmp_path / "store"),
+        cluster_view=CLUSTER_VIEW,
+        split=SPLIT,
+    )
+
+    counts = {
+        t: sum(1 for i in [d[0] for d in SHARD0 + SHARD1] if CONTENT_TYPES[i] == t) for t in ("code", "prose", "other")
+    }
+    for content_type, expected in counts.items():
+        assert artifact.counters[f"datakit_store/content_type/{content_type}"] == expected, content_type
+    # "other" has no calibration of its own, so exactly its rows fall back.
+    assert artifact.counters["datakit_store/content_type_without_calibration"] == counts["other"]
+    assert sum(counts.values()) == artifact.counters["datakit_store/records_in"]

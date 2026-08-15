@@ -157,7 +157,7 @@ def _load_quality_table(
     path: str,
     content_type_path: str,
     edges_by_type: Mapping[str, np.ndarray],
-) -> tuple[pa.Array, np.ndarray, pa.Array | None]:
+) -> tuple[pa.Array, np.ndarray, pa.Array | None, dict[str, int], int]:
     """Read a score shard and cut it into buckets, per content type.
 
     The scorer stores the score, not the bucket: the cutpoints are a calibration
@@ -171,13 +171,15 @@ def _load_quality_table(
     -- fall to ``default``, which is the content-blind fit.
 
     Returns the content-type column too, so the caller can check it lines up with
-    the other dense tables rather than trusting the basename.
+    the other dense tables rather than trusting the basename, plus the rows seen
+    per type and how many of those had no calibration of their own.
     """
     table = _read_columns(path, ["id", "score"])
     ids = table.column("id").combine_chunks()
     scores = np.asarray(table.column("score"), dtype=np.float64)
     if not content_type_path:
-        return ids, np.digitize(scores, edges_by_type[DEFAULT_CALIBRATION_KEY]).astype(np.int32), None
+        buckets = np.digitize(scores, edges_by_type[DEFAULT_CALIBRATION_KEY]).astype(np.int32)
+        return ids, buckets, None, {DEFAULT_CALIBRATION_KEY: len(scores)}, 0
 
     content = _read_columns(content_type_path, ["id", "content_type"])
     types = content.column("content_type").to_pylist()
@@ -187,16 +189,21 @@ def _load_quality_table(
             "-- co-partitioning broken"
         )
     buckets = np.empty(len(scores), dtype=np.int32)
+    seen: dict[str, int] = {}
+    uncalibrated = 0
     # One digitize per distinct type rather than per row: a shard carries a
     # handful of types over hundreds of thousands of documents.
     type_array = np.asarray(types, dtype=object)
     for content_type in set(types):
         selector = type_array == content_type
-        edges = edges_by_type.get(content_type, edges_by_type[DEFAULT_CALIBRATION_KEY])
+        rows = int(selector.sum())
+        edges = edges_by_type.get(content_type)
+        if edges is None:
+            edges = edges_by_type[DEFAULT_CALIBRATION_KEY]
+            uncalibrated += rows
         buckets[selector] = np.digitize(scores[selector], edges)
-        if content_type not in edges_by_type:
-            counters.pipeline.update_counter("datakit_store/content_type_without_calibration", int(selector.sum()))
-    return ids, buckets, content.column("id").combine_chunks()
+        seen[content_type] = rows
+    return ids, buckets, content.column("id").combine_chunks(), seen, uncalibrated
 
 
 def _load_verified_duplicates(path: str) -> set[str]:
@@ -286,14 +293,27 @@ class _FilterStats:
     exact_duplicate_dropped: int = 0
     fuzzy_duplicate_dropped: int = 0
     records_out: int = 0
+    content_type_rows: dict[str, int] = dataclasses.field(default_factory=dict)
+    """Rows read per content type, and how many fell back to ``default``.
+
+    Carried here rather than emitted where it is counted. Shards are joined in a
+    spawned subprocess, whose ``counters.pipeline`` writes never reach the parent,
+    so anything that must survive the process boundary travels as data and is
+    re-emitted by :func:`_partition_and_write_task`.
+    """
+
+    content_type_without_calibration: int = 0
 
     def counters(self) -> dict[str, int]:
+        per_type = {f"datakit_store/content_type/{name}": n for name, n in self.content_type_rows.items()}
         return {
             "datakit_store/records_in": self.records_in,
             "datakit_store/contaminated_dropped": self.contaminated_dropped,
             "datakit_store/exact_duplicate_dropped": self.exact_duplicate_dropped,
             "datakit_store/fuzzy_duplicate_dropped": self.fuzzy_duplicate_dropped,
             "datakit_store/records_out": self.records_out,
+            "datakit_store/content_type_without_calibration": self.content_type_without_calibration,
+            **per_type,
         }
 
 
@@ -399,9 +419,12 @@ def _iter_surviving_docs(
     """
     decon_ids, contaminated = _load_decon_table(spec["decontam"])
     cluster_ids, cluster_vals = _load_cluster_table(spec["cluster"], cluster_col)
-    quality_ids, quality_buckets, content_ids = _load_quality_table(
+    quality_ids, quality_buckets, content_ids, content_rows, uncalibrated = _load_quality_table(
         spec["quality"], spec.get("content_type", ""), edges_by_type
     )
+    for name, rows in content_rows.items():
+        stats.content_type_rows[name] = stats.content_type_rows.get(name, 0) + rows
+    stats.content_type_without_calibration += uncalibrated
     n_decon, n_cluster, n_quality = len(decon_ids), len(cluster_ids), len(quality_ids)
     if not (n_decon == n_cluster == n_quality):
         raise RuntimeError(
