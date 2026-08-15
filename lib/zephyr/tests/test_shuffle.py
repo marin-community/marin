@@ -152,6 +152,7 @@ def transient_parquet_url() -> Iterator[str]:
 
     class TransientParquetHandler(BaseHTTPRequestHandler):
         get_count = 0
+        get_count_lock = threading.Lock()
 
         def log_message(self, _format: str, *_args: object) -> None:
             pass
@@ -163,7 +164,9 @@ def transient_parquet_url() -> Iterator[str]:
             self.end_headers()
 
         def do_GET(self) -> None:
-            type(self).get_count += 1
+            with type(self).get_count_lock:
+                type(self).get_count += 1
+                get_count = type(self).get_count
             range_header = self.headers.get("Range")
             if range_header is None:
                 start, end = 0, len(parquet_data) - 1
@@ -176,7 +179,7 @@ def transient_parquet_url() -> Iterator[str]:
                 self.send_header("Content-Range", f"bytes {start}-{end}/{len(parquet_data)}")
 
             payload = parquet_data[start : end + 1]
-            if type(self).get_count == 1:
+            if get_count == 1:
                 payload = bytes(len(payload))
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()

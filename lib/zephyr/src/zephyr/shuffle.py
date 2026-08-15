@@ -95,8 +95,7 @@ _SCATTER_METADATA_FILENAME = "metadata.msgpack"
 # reducer issues while building its ScatterReader. These reads are GCS
 # GET-bound, so a modest pool keeps latency low without thrashing.
 _SIDECAR_READ_CONCURRENCY = 32
-# Issue #8265 found this error during high read load. A later sequential scan
-# read all 8,230 footers without an error.
+# Concurrent reads can return transient invalid footer bytes for valid Parquet files (#8265).
 _SCHEMA_READ_MAX_ATTEMPTS = 4
 _SCHEMA_READ_BACKOFF = ExponentialBackoff(initial=0.1, maximum=1.0, factor=2.0, jitter=0.25)
 _PARQUET_FILE_SPECIFICATION_ERROR = "parquet: File out of specification"
@@ -349,7 +348,7 @@ def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
         schemas = list(pool.map(_collect_frame_schema, frames))
     if all(s == schemas[0] for s in schemas[1:]):
         return frames
-    unified = pl.concat([f.limit(0) for f in frames], how="diagonal_relaxed").collect_schema()
+    unified = _collect_frame_schema(pl.concat([f.limit(0) for f in frames], how="diagonal_relaxed"))
     return [f.cast(dict(unified)) for f in frames]
 
 
