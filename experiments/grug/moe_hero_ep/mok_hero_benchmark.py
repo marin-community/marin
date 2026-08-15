@@ -24,7 +24,7 @@ from marin.execution.remote import remote
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from pydantic import BaseModel
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 from rigging.provenance import launch_provenance
 
 logger = logging.getLogger(__name__)

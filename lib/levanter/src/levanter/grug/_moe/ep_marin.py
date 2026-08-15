@@ -188,7 +188,9 @@ def marin_ep_moe_local(
                 x_dispatched = _ragged_a2a_gathered(
                     sorted_x, out_rows=pool_rows, shard_counts=shard_counts, shard_id=shard_id, axis_name="expert"
                 )
-            x_pool, local_sorted_indices, local_group_sizes = _local_permute_from_counts(
+            # The physical and active group sizes coincide here: acceptance
+            # already clipped counts, so the receive pool carries no padding.
+            x_pool, local_sorted_indices, _physical_group_sizes, local_group_sizes = _local_permute_from_counts(
                 x_dispatched,
                 accepted,
                 local_expert_size=local_experts,
