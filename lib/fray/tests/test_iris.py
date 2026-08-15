@@ -13,6 +13,8 @@ from unittest.mock import MagicMock
 
 import fray.iris_backend as iris_backend
 import pytest
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from fray.iris_backend import (
     FrayIrisClient,
     IrisActorHandle,
@@ -31,7 +33,7 @@ from fray.types import (
 )
 from iris.cluster.constraints import ConstraintOp
 from iris.cluster.types import Entrypoint as IrisEntrypoint
-from iris.cluster.types import ResourceSpec, gpu_device
+from iris.cluster.types import JobName, ResourceSpec, gpu_device
 
 
 class TestConvertConstraints:
@@ -183,6 +185,32 @@ def test_iris_job_handle_returns_a_globally_bounded_tail():
 
     assert lines == ("task-0 earlier", "task-1 latest")
     job.logs.assert_called_once_with(max_lines=2, tail=True)
+
+
+def test_actor_startup_after_task_termination_stops_server_without_error(monkeypatch, caplog):
+    def reject_registration(_name, _address):
+        raise ConnectError(
+            Code.FAILED_PRECONDITION,
+            "Task /user/job/0 is already terminal; endpoint not registered",
+        )
+
+    stopped = []
+    server = SimpleNamespace(
+        register=lambda _name, _instance: None,
+        serve_background=lambda: 1234,
+        stop=lambda: stopped.append(True),
+    )
+    registry = SimpleNamespace(register=reject_registration)
+    ctx = SimpleNamespace(job_id=JobName.from_wire("/user/job"), registry=registry, get_port=lambda _name: 1234)
+    job_info = SimpleNamespace(task_index=0, advertise_host="worker")
+    monkeypatch.setattr(iris_backend, "ActorServer", lambda **_kwargs: server)
+    monkeypatch.setattr(iris_backend, "iris_ctx", lambda: ctx)
+    monkeypatch.setattr(iris_backend, "get_job_info", lambda: job_info)
+
+    iris_backend._host_actor(object, (), {}, "actor")
+
+    assert stopped
+    assert "Actor /user/job/actor-0 stopped before endpoint registration" in caplog.text
 
 
 class TestResourceConfigScale:
