@@ -10,6 +10,7 @@ import itertools
 from collections import defaultdict
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from typing import Protocol
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -58,9 +59,18 @@ class MergedRow:
     superseded: int
 
 
+class _ReadableShard(Protocol):
+    """The shard coordinates needed to scan one archive snapshot."""
+
+    path: str
+    generation: int
+    commit_sequence: int
+    primary_key_sorted: bool
+
+
 @dataclass(frozen=True)
 class _ReadPlan:
-    shards: tuple[Shard, ...]
+    shards: tuple[_ReadableShard, ...]
     primary_key: tuple[str, ...]
     pushdown_where: list[tuple[str, str, object]]
     post_dedup_where: list[tuple[str, str, object]]
@@ -111,7 +121,7 @@ def _matches_filter(row: dict, where: list[tuple[str, str, object]]) -> bool:
 
 
 def iter_shard_rows(
-    shard: Shard,
+    shard: _ReadableShard,
     unified: pa.Schema,
     primary_key: tuple[str, ...],
     pa_fs: PyFileSystem,
@@ -154,6 +164,79 @@ def merge_deduplicated_rows(streams: list[Iterator[VersionedRow]]) -> Iterator[M
         items = list(group)
         winner = max(items, key=lambda item: (item.commit_sequence, item.sequence, item.generation))
         yield MergedRow(row=winner.row, superseded=len(items) - 1)
+
+
+def _read_plan(
+    root: str,
+    shards: tuple[_ReadableShard, ...],
+    primary_key: tuple[str, ...],
+    columns: Sequence[str] | None,
+    where: list[tuple[str, str, object]] | None,
+) -> _ReadPlan | None:
+    if not shards:
+        return None
+    pushdown_where, post_dedup_where = _partition_filter(where, primary_key)
+    fs, _ = factory.url_to_fs(root)
+    filesystem = PyFileSystem(FSSpecHandler(fs))
+    schema = pa.unify_schemas(
+        [pq.read_schema(shard.path, filesystem=filesystem) for shard in shards],
+        promote_options="permissive",
+    )
+    read_columns = None
+    if columns is not None:
+        filter_columns = {name for name, _operator, _value in post_dedup_where}
+        needed = set(columns) | set(primary_key) | filter_columns | {SEQ_COLUMN, COMMIT_COLUMN}
+        read_columns = [name for name in schema.names if name in needed]
+    return _ReadPlan(
+        shards=shards,
+        primary_key=primary_key,
+        pushdown_where=pushdown_where,
+        post_dedup_where=post_dedup_where,
+        filesystem=filesystem,
+        schema=schema,
+        columns=read_columns,
+    )
+
+
+def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None) -> pa.Table:
+    by_version: dict[tuple[int, int], list[str]] = defaultdict(list)
+    for shard in plan.shards:
+        by_version[(shard.commit_sequence, shard.generation)].append(shard.path)
+
+    parts: list[pa.Table] = []
+    for (commit_sequence, generation), paths in sorted(by_version.items()):
+        dataset = pds.dataset(paths, filesystem=plan.filesystem, format="parquet", schema=plan.schema)
+        part = dataset.to_table(columns=plan.columns, filter=_build_filter(plan.pushdown_where))
+        part = part.append_column(GEN_COLUMN, pa.array([generation] * part.num_rows, pa.int32()))
+        commit_values = pa.array([commit_sequence] * part.num_rows, pa.int64())
+        if COMMIT_COLUMN in part.column_names:
+            commit_index = part.schema.get_field_index(COMMIT_COLUMN)
+            part = part.set_column(commit_index, COMMIT_COLUMN, pc.coalesce(part[COMMIT_COLUMN], commit_values))
+        else:
+            part = part.append_column(COMMIT_COLUMN, commit_values)
+        parts.append(part)
+
+    combined = parts[0] if len(parts) == 1 else pa.concat_tables(parts, promote_options="permissive")
+    if all(name in combined.column_names for name in plan.primary_key):
+        combined = _deduplicate(combined, plan.primary_key)
+    if plan.post_dedup_where:
+        combined = pds.dataset(combined).to_table(filter=_build_filter(plan.post_dedup_where))
+    if columns is not None:
+        combined = combined.select([name for name in columns if name in combined.column_names])
+    return combined
+
+
+def _scan_shards(
+    root: str,
+    shards: tuple[_ReadableShard, ...],
+    primary_key: tuple[str, ...],
+    *,
+    columns: Sequence[str] | None = None,
+    where: list[tuple[str, str, object]] | None = None,
+) -> pa.Table | None:
+    """Read and deduplicate one immutable set of Parquet shards."""
+    plan = _read_plan(root, shards, primary_key, columns, where)
+    return None if plan is None else _scan_plan(plan, columns)
 
 
 class ReadView:
@@ -216,28 +299,7 @@ class ReadView:
         shards = tuple(self.list_shards(table))
         if not shards:
             return None
-        primary_key = self.primary_key(table)
-        pushdown_where, post_dedup_where = _partition_filter(where, primary_key)
-        fs, _ = factory.url_to_fs(self.root)
-        filesystem = PyFileSystem(FSSpecHandler(fs))
-        schema = pa.unify_schemas(
-            [pq.read_schema(shard.path, filesystem=filesystem) for shard in shards],
-            promote_options="permissive",
-        )
-        read_columns = None
-        if columns is not None:
-            filter_columns = {name for name, _operator, _value in post_dedup_where}
-            needed = set(columns) | set(primary_key) | filter_columns | {SEQ_COLUMN, COMMIT_COLUMN}
-            read_columns = [name for name in schema.names if name in needed]
-        return _ReadPlan(
-            shards=shards,
-            primary_key=primary_key,
-            pushdown_where=pushdown_where,
-            post_dedup_where=post_dedup_where,
-            filesystem=filesystem,
-            schema=schema,
-            columns=read_columns,
-        )
+        return _read_plan(self.root, shards, self.primary_key(table), columns, where)
 
     def is_sealed(self) -> bool:
         return self._snapshot.manifest.sealed is not None
@@ -257,32 +319,7 @@ class ReadView:
         plan = self._read_plan(table, columns, where)
         if plan is None:
             return None
-
-        by_version: dict[tuple[int, int], list[str]] = defaultdict(list)
-        for shard in plan.shards:
-            by_version[(shard.commit_sequence, shard.generation)].append(shard.path)
-
-        parts: list[pa.Table] = []
-        for (commit_sequence, generation), paths in sorted(by_version.items()):
-            dataset = pds.dataset(paths, filesystem=plan.filesystem, format="parquet", schema=plan.schema)
-            part = dataset.to_table(columns=plan.columns, filter=_build_filter(plan.pushdown_where))
-            part = part.append_column(GEN_COLUMN, pa.array([generation] * part.num_rows, pa.int32()))
-            commit_values = pa.array([commit_sequence] * part.num_rows, pa.int64())
-            if COMMIT_COLUMN in part.column_names:
-                commit_index = part.schema.get_field_index(COMMIT_COLUMN)
-                part = part.set_column(commit_index, COMMIT_COLUMN, pc.coalesce(part[COMMIT_COLUMN], commit_values))
-            else:
-                part = part.append_column(COMMIT_COLUMN, commit_values)
-            parts.append(part)
-
-        combined = parts[0] if len(parts) == 1 else pa.concat_tables(parts, promote_options="permissive")
-        if all(name in combined.column_names for name in plan.primary_key):
-            combined = _deduplicate(combined, plan.primary_key)
-        if plan.post_dedup_where:
-            combined = pds.dataset(combined).to_table(filter=_build_filter(plan.post_dedup_where))
-        if columns is not None:
-            combined = combined.select([name for name in columns if name in combined.column_names])
-        return combined
+        return _scan_plan(plan, columns)
 
     def iter_rows(
         self,

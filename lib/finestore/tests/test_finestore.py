@@ -22,7 +22,7 @@ from finestore.layout import (
     FormatVersionError,
     OnConflict,
 )
-from finestore.migrations import migrate
+from finestore.migrations import LegacyReadView, migrate
 from finestore.reader import ReadView
 from finestore.store import DataStore, DataTable, PrimaryKeyConflict, TransactionTooLarge
 from rigging.filesystem.storage_path import StoragePath
@@ -784,6 +784,34 @@ def test_manifest_migration_publishes_existing_shards_through_head(tmp_path):
     repeated = migrate(root.as_uri())
     assert repeated.applied == ()
     assert repeated.token == token
+
+
+def test_legacy_read_view_reads_an_unsealed_listing_snapshot(tmp_path):
+    root = tmp_path / "run"
+    old_shard = root / "samples" / "w=legacy" / "g=0" / "0000000000000000-old.parquet"
+    new_shard = root / "samples" / "w=legacy" / "g=1" / "0000000000000001-new.parquet"
+    old_shard.parent.mkdir(parents=True)
+    new_shard.parent.mkdir(parents=True)
+    (root / "_archive.json").write_text('{"format_version": 1}')
+    (root / "samples" / "_schema.json").write_text(
+        '{"primary_key": ["doc_id"], "schema_version": 3, "on_conflict": "supersede"}'
+    )
+    pq.write_table(
+        pa.Table.from_pylist([{"doc_id": "1", "score": 0.5, "_seq": 0, "_writer": "legacy"}]),
+        old_shard,
+    )
+    pq.write_table(
+        pa.Table.from_pylist([{"doc_id": "1", "score": 0.7, "_seq": 1, "_writer": "legacy"}]),
+        new_shard,
+    )
+
+    view = LegacyReadView(str(root))
+
+    assert view.token is None
+    assert not view.is_sealed()
+    assert view.schema_version("samples") == 3
+    assert view.point("samples", doc_id="1")["score"] == 0.7
+    assert view.scan("samples", where=[("score", "==", 0.5)]).num_rows == 0
 
 
 def test_write_open_migrates_a_sealed_legacy_archive(tmp_path):

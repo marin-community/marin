@@ -9,7 +9,9 @@ import dataclasses
 import hashlib
 import re
 import uuid
+from collections.abc import Sequence
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 from pydantic import AliasChoices, BaseModel, Field
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
@@ -17,6 +19,9 @@ from rigging.filesystem.storage_path import StoragePath
 
 from finestore.commit import read_snapshot, write_schema
 from finestore.layout import (
+    BLOB_DATA_COLUMN,
+    BLOB_NAME_COLUMN,
+    BLOBS_TABLE,
     SEQ_COLUMN,
     ArchiveMetadata,
     CommitToken,
@@ -28,7 +33,9 @@ from finestore.layout import (
     SealMarker,
     Shard,
     TableMetadata,
+    parse_uri,
 )
+from finestore.reader import _scan_shards
 
 MIGRATION_ID = "0001_manifest"
 FROM_VERSION = 1
@@ -70,6 +77,132 @@ class LegacyArchive:
     tables: dict[str, LegacyTable]
 
 
+@dataclasses.dataclass(frozen=True)
+class LegacyReadShard:
+    """One v1 shard reference captured by a best-effort listing snapshot."""
+
+    path: str
+    writer: str
+    generation: int
+    commit_sequence: int = 0
+    primary_key_sorted: bool = False
+
+
+@dataclasses.dataclass(frozen=True)
+class _LegacyReadTable:
+    metadata_path: str
+    metadata: TableMetadata
+    shards: tuple[LegacyReadShard, ...]
+
+
+class LegacyReadView:
+    """A read-only, listing-based view of one format-v1 archive.
+
+    Version 1 has no atomic HEAD, so this view pins the shard names observed while it is
+    constructed and has no commit token. It exists for bounded compatibility while old writers
+    remain deployed; new readers that require a durable snapshot use :class:`finestore.reader.ReadView`.
+    """
+
+    def __init__(self, root: str) -> None:
+        self.root = root
+        root_path = StoragePath(root)
+        archive = _LegacyArchiveMetadata.model_validate_json((root_path / "_archive.json").read_bytes())
+        if archive.format_version != FROM_VERSION:
+            raise ValueError(
+                f"FineStore legacy reader requires format v{FROM_VERSION}; found v{archive.format_version} at {root!r}"
+            )
+        seal_path = root_path / LEGACY_SEAL_FILE
+        self._seal = SealMarker.model_validate_json(seal_path.read_bytes()) if seal_path.exists() else None
+        self._tables = {
+            name: _LegacyReadTable(
+                metadata_path=str(root_path / name / _LEGACY_SCHEMA_FILE),
+                metadata=TableMetadata.model_validate(metadata.model_dump()),
+                shards=_legacy_read_shards(root_path, name),
+            )
+            for name, metadata in _legacy_table_metadata(root_path).items()
+        }
+
+    @property
+    def token(self) -> None:
+        """Format v1 has no commit token."""
+        return None
+
+    def primary_key(self, table: str) -> tuple[str, ...]:
+        return self.table_metadata(table).primary_key
+
+    def table_metadata(self, table: str) -> TableMetadata:
+        state = self._tables.get(table)
+        if state is None:
+            raise KeyError(f"table {table!r} is not present in format-v1 archive {self.root!r}")
+        return state.metadata
+
+    def table_metadata_path(self, table: str) -> str | None:
+        state = self._tables.get(table)
+        return None if state is None else state.metadata_path
+
+    def table_names(self) -> tuple[str, ...]:
+        return tuple(sorted(self._tables))
+
+    def schema_version(self, table: str) -> int | None:
+        state = self._tables.get(table)
+        if state is None or not state.shards:
+            return None
+        return state.metadata.schema_version
+
+    def is_sealed(self) -> bool:
+        return self._seal is not None
+
+    def seal_marker(self) -> SealMarker | None:
+        return self._seal
+
+    def scan(
+        self,
+        table: str,
+        *,
+        columns: Sequence[str] | None = None,
+        where: list[tuple[str, str, object]] | None = None,
+    ) -> pa.Table | None:
+        state = self._tables.get(table)
+        if state is None:
+            return None
+        return _scan_shards(self.root, state.shards, state.metadata.primary_key, columns=columns, where=where)
+
+    def point(self, table: str, **keys) -> dict | None:
+        result = self.scan(table, where=[(key, "==", value) for key, value in keys.items()])
+        if result is None or result.num_rows == 0:
+            return None
+        return result.slice(0, 1).to_pylist()[0]
+
+    def keys(self, table: str) -> set[tuple]:
+        state = self._tables.get(table)
+        if state is None or not state.shards:
+            return set()
+        result = self.scan(table, columns=list(state.metadata.primary_key))
+        if result is None:
+            return set()
+        values = [result.column(name).to_pylist() for name in state.metadata.primary_key]
+        return set(zip(*values, strict=True))
+
+    def read_blob(self, name: str) -> bytes | None:
+        row = self.point(BLOBS_TABLE, **{BLOB_NAME_COLUMN: name})
+        if row is None:
+            return None
+        data = row.get(BLOB_DATA_COLUMN)
+        return bytes(data) if data is not None else None
+
+    def resolve(self, uri: str) -> bytes | None:
+        ref = parse_uri(uri)
+        if ref is None:
+            raise ValueError(f"not a finestore:// reference: {uri!r}")
+        if ref.table != BLOBS_TABLE:
+            raise ValueError(f"finestore:// resolution supports the blobs table only, got {ref.table!r}")
+        return self.read_blob(ref.key)
+
+    def list_shards(self, table: str) -> list[LegacyReadShard]:
+        state = self._tables.get(table)
+        return [] if state is None else list(state.shards)
+
+
 def _legacy_table_metadata(root: StoragePath) -> dict[str, _LegacyTableMetadata]:
     tables = {}
     for directory in root.ls():
@@ -99,6 +232,19 @@ def _legacy_shard(path: StoragePath) -> tuple[str, int] | None:
     if writer is None or generation is None:
         return None
     return writer, generation
+
+
+def _legacy_read_shards(root: StoragePath, table: str) -> tuple[LegacyReadShard, ...]:
+    shards = []
+    for directory, _, names in (root / table).walk():
+        for name in names:
+            path = directory / name
+            parsed = _legacy_shard(path)
+            if parsed is None:
+                continue
+            writer, generation = parsed
+            shards.append(LegacyReadShard(path=str(path), writer=writer, generation=generation))
+    return tuple(sorted(shards, key=lambda shard: shard.path))
 
 
 def _sequence_bounds(metadata: pq.FileMetaData) -> tuple[int, int]:
