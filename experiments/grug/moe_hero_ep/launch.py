@@ -150,11 +150,11 @@ def build_hero_run(
     if flavor not in FLAVORS:
         raise ValueError(f"flavor must be one of {sorted(FLAVORS)}, got {flavor!r}")
     moe_implementation = FLAVORS[flavor]
-    # Ragged all-to-all needs one JAX process per GPU: the multi-device-per-
-    # process path hits illegal memory accesses at EP64 (incident wiki:101;
-    # PR #8081 runs ragged EP per-GPU for the same reason). Auto-PGLE must be
-    # off in that topology because concurrent CUPTI sessions collide.
-    processes_per_task = HERO_GPUS_PER_NODE if moe_implementation in ("marin_ep", "ragged_all_to_all") else 1
+    # One process per node, like every passing hero run on this base. The
+    # per-GPU topology wiki:101 recommends needs dispatch machinery
+    # (per-GPU process option, attempt-scoped JAX coordinator) that landed
+    # after this branch point and segfaults without it.
+    processes_per_task = HERO_PROCESSES_PER_TASK
     # `schedule_steps` sets the whole learning-rate schedule; `num_steps` sets how far the run goes.
     # Both matter, and they enter in different places. The optimizer heuristic scales learning rate,
     # adam_lr, and epsilon from a token budget (`num_train_steps * batch * seq`), which fixes the
