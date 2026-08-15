@@ -476,3 +476,22 @@ Experiment ID prefix: `MEP`.
   loss 6.x falling — consistent with the 24.04% MFU-era baseline.
 - Next action: confirmation-run verdict; on success, record the ep-marin
   EP64 numbers vs the fixed baseline and proceed to the M8 PR.
+
+### 2026-08-15 07:15 - MEP-012: NCCL downgrade falsified; MNNVL-off probe launched
+- Result: the 2.28.9 pin SEGFAULTS host-side in the first train step (all
+  64 ranks, inside compiled-executable __call__), in both 1 proc/GPU and
+  1 proc/node topologies — worse than the illegal address it replaced.
+  Candidate mechanisms (undistinguished): cu12/cu13 libnccl.so.2 wheel
+  collision leaving the cu12 build loaded under CUDA 13, or the jax 0.11
+  cu13 plugin requiring 2.30-era symbols. Pin reverted (a7bb70c13d);
+  #8313 updated. Also: 1 proc/GPU on this branch base segfaults even
+  before that (the per-GPU dispatch machinery postdates the branch
+  point) — launcher reverted to 1 proc/node (4bb600c3a1).
+- Now running: mep-m8-marin-nomnnvl-25 — stock 2.30.7 with
+  NCCL_MNNVL_ENABLE=0 (cross-node traffic to IB instead of MNNVL
+  windows), ep-marin cf 1.1, LHS off, overlap 1. If it trains, the fault
+  is scoped to the MNNVL/NCCL-window transport and we have a benchmark
+  configuration; if not, next lever is measuring on top of PR #8081's
+  branch (its EP16 4-node proxy passes on newer machinery).
+- Also this session: #8311 retitled/reworded (experimental framing, per
+  request).
