@@ -22,6 +22,7 @@ try:
         Bloom,
         Document,
         HashAlgorithm,
+        TokenNgramFingerprintSignature,
         TokenNgrams,
         TokenNgramSignature,
         Transformation,

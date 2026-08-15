@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from dupekit import TokenNgrams, TokenNgramSignature
+from dupekit import TokenNgramFingerprintSignature, TokenNgrams, TokenNgramSignature
 
 
 def _token_ngrams(text: str, size: int) -> frozenset[tuple[str, ...]]:
@@ -72,6 +72,31 @@ def test_token_ngram_signature_never_rejects_an_exact_subset(member: str, repres
 def test_token_ngram_signature_rejects_a_missing_ngram():
     member = TokenNgramSignature("one two missing", 2)
     representative = TokenNgramSignature("one two present", 2)
+
+    assert not member.may_be_subset_of(representative)
+
+
+def test_fingerprint_signature_preserves_containment_metadata():
+    member = TokenNgramFingerprintSignature("one\ntwo three", 2)
+    representative = TokenNgramFingerprintSignature("zero one\ntwo three four", 2)
+
+    assert member.chars == len("one\ntwo three")
+    assert member.lines == 2
+    assert member.token_count == 3
+    assert member.ngram_count == 2
+    assert member.may_be_subset_of(representative)
+
+    restored = TokenNgramFingerprintSignature.from_bytes(member.to_bytes())
+    assert restored.chars == member.chars
+    assert restored.lines == member.lines
+    assert restored.token_count == member.token_count
+    assert restored.ngram_count == member.ngram_count
+    assert restored.may_be_subset_of(representative)
+
+
+def test_fingerprint_signature_rejects_a_missing_ngram():
+    member = TokenNgramFingerprintSignature("one two missing", 2)
+    representative = TokenNgramFingerprintSignature("one two present", 2)
 
     assert not member.may_be_subset_of(representative)
 

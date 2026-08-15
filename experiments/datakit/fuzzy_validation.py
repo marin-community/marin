@@ -64,6 +64,7 @@ from marin.processing.classification.deduplication.repack_fuzzy_dups import repa
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     DEFAULT_PIPELINE_SHARDS_PER_WORKER,
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+    FuzzyVerificationImplementation,
     FuzzyVerificationStoreConfig,
     verify_fuzzy_dups_step,
 )
@@ -123,6 +124,7 @@ class CandidateLineage:
 def build_fuzzy_validation_step(
     sources: dict[str, StepSpec],
     *,
+    implementation: FuzzyVerificationImplementation,
     scale: PipelineScale = DEFAULT_SCALE,
     store_config: FuzzyVerificationStoreConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
@@ -147,6 +149,7 @@ def build_fuzzy_validation_step(
         verification_params=FuzzyVerificationParams(),
         local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
         store_config=store_config,
+        implementation=implementation,
         pipeline_shards_per_worker=pipeline_shards_per_worker,
         max_workers=scale.pool.n_workers,
         worker_resources=scale.pool.worker,
@@ -169,6 +172,7 @@ def build_repacked_fuzzy_validation_step(
     validation_step_name: str,
     validation_scale: PipelineScale,
     store_config: FuzzyVerificationStoreConfig,
+    implementation: FuzzyVerificationImplementation,
     coordinator_resources: ResourceConfig,
     task_resources: ResourceConfig,
     actor_environment: EnvironmentConfig | None = None,
@@ -215,6 +219,7 @@ def build_repacked_fuzzy_validation_step(
         verification_params=FuzzyVerificationParams(),
         local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
         store_config=store_config,
+        implementation=implementation,
         pipeline_shards_per_worker=pipeline_shards_per_worker,
         max_workers=validation_scale.pool.n_workers,
         worker_resources=validation_scale.pool.worker,
@@ -233,6 +238,7 @@ def build_pinned_fuzzy_validation_step(
     validation_output_path_prefix: str,
     validation_scale: PipelineScale,
     store_config: FuzzyVerificationStoreConfig,
+    implementation: FuzzyVerificationImplementation,
     coordinator_resources: ResourceConfig,
     task_resources: ResourceConfig,
     actor_environment: EnvironmentConfig | None = None,
@@ -279,6 +285,7 @@ def build_pinned_fuzzy_validation_step(
         verification_params=FuzzyVerificationParams(),
         local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
         store_config=store_config,
+        implementation=implementation,
         pipeline_shards_per_worker=pipeline_shards_per_worker,
         max_workers=validation_scale.pool.n_workers,
         worker_resources=validation_scale.pool.worker,
@@ -419,6 +426,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--store-shards-per-worker", type=int, default=DEFAULT_STORE_SHARDS_PER_WORKER)
     parser.add_argument("--load-concurrency", type=int, default=DEFAULT_LOAD_CONCURRENCY)
     parser.add_argument("--pipeline-shards-per-worker", type=int, default=DEFAULT_PIPELINE_SHARDS_PER_WORKER)
+    parser.add_argument(
+        "--implementation",
+        type=FuzzyVerificationImplementation,
+        choices=list(FuzzyVerificationImplementation),
+        default=FuzzyVerificationImplementation.EXACT,
+    )
     parser.add_argument("--max-concurrent", type=int, default=8)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--reuse-legacy-focus-candidates", action="store_true")
@@ -514,6 +527,7 @@ def main(argv: list[str] | None = None) -> None:
             validation_output_path_prefix=validation_output_path_prefix,
             validation_scale=scale,
             store_config=store_config,
+            implementation=args.implementation,
             coordinator_resources=coordinator_resources,
             task_resources=task_resources,
             actor_environment=actor_environment,
@@ -564,6 +578,7 @@ def main(argv: list[str] | None = None) -> None:
             validation_step_name=validation_step_name,
             validation_scale=scale,
             store_config=store_config,
+            implementation=args.implementation,
             coordinator_resources=coordinator_resources,
             task_resources=task_resources,
             actor_environment=actor_environment,
@@ -577,6 +592,7 @@ def main(argv: list[str] | None = None) -> None:
             select_sources(),
             scale=scale,
             store_config=store_config,
+            implementation=args.implementation,
             coordinator_resources=coordinator_resources,
             task_resources=task_resources,
             actor_environment=actor_environment,

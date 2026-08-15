@@ -26,7 +26,10 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashParams,
     compute_minhash_attrs_step,
 )
-from marin.processing.classification.deduplication.verify_fuzzy_dups import FuzzyVerificationStoreConfig
+from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    FuzzyVerificationImplementation,
+    FuzzyVerificationStoreConfig,
+)
 
 from experiments.datakit import reference_pipeline
 from experiments.datakit.fuzzy_validation import (
@@ -265,7 +268,11 @@ def test_dedup_step_builders_match_the_datakit_graph_identity():
 
 def test_fuzzy_validation_entry_point_matches_reference_graph():
     sources = _sources()
-    target = build_fuzzy_validation_step(sources, scale=SMOKE_SCALE)
+    target = build_fuzzy_validation_step(
+        sources,
+        implementation=FuzzyVerificationImplementation.EXACT,
+        scale=SMOKE_SCALE,
+    )
     reference_target = _steps_by_name(
         reference_datakit_steps(
             sources,
@@ -295,6 +302,7 @@ def test_repacked_fuzzy_validation_uses_current_normalized_and_minhash_steps():
         store_config=FuzzyVerificationStoreConfig(
             recovery_timeout=30, ready_timeout=30, lookup_batch_size=8, shards_per_worker=1
         ),
+        implementation=FuzzyVerificationImplementation.EXACT,
         coordinator_resources=ResourceConfig(cpu=1, ram="1g"),
         task_resources=ResourceConfig(cpu=1, ram="1g"),
     )

@@ -23,6 +23,8 @@ description: Fuzzy-verification memory-store load optimization
 - The production retry used 8,192 map and reduce shards. Each reducer explicitly discovered every mapper chunk schema from Parquet footers; a sampled 281 MB chunk had a 5.62 MB footer, implying about 46 GB of footer metadata per reducer before payload processing. Main now caps chunks at 512 row groups, and the branch groups source shards to eight pipeline shards per worker.
 - Mapper-published schemas remove that explicit reducer footer pass. On the exact 10M-document, 10-worker, 80-shard fixture, pipeline wall fell from 1,272.11s to 984.98s (1.29x) and worker CPU fell 7.7%. All semantic counters and all 52,816 output rows matched exactly.
 - A naïve resident n-gram index is not viable: the current collision-safe `TokenNgrams` representation used about 109 KB/document more RSS than compressed storage on 20,000 real candidates. A packed signature plus cold exact-text fallback remains promising because 81.6% of sample comparisons fail the n-gram containment gate.
+- A 4,063-byte record containing metadata and 1,333 sorted 24-bit bottom-k n-gram fingerprints replaces exact text with 100% document recall and 92.02% precision on the full 10M fixture. It cut pipeline wall from 795.45s to 273.91s and total wall from 939.80s to 417.13s.
+- Signature fetches stop after a cluster accumulates 32 retained representatives. Remaining comparison bundles execute on memory-store workers and return a signature only for accepted members; this reduced signature traffic 79% on the 10% fixture.
 
 ## Hypothesis Queue
 
@@ -31,7 +33,8 @@ description: Fuzzy-verification memory-store load optimization
 - `FD10X-H1`: eight row-group load partitions per worker reduce maximum load elapsed by at least 4x. Next test: sweep 1, 2, 4, and 8 concurrent partitions per worker on the 10M sample.
 - `FD10X-H2`: Arrow-native ID filtering removes most Python work from non-candidate rows and reduces load CPU by at least 2x. Next test: compare the current row iterator with `pyarrow.compute.is_in` and Polars prefiltered scans.
 - `FD10X-H3`: `ZstdCompressor.multi_compress_to_buffer` reduces selected-text compression CPU by at least 2x while retaining one frame per document. Next test: compare frame bytes and decompressed payloads against the current compressor.
-- `FD10X-H6`: a packed per-document n-gram signature can reject containment failures before text decompression while staying within 2x of the current store footprint. Next test: prototype packed signatures over 100k candidates and exact fallback for signature passes.
+- `FD10X-H8`: an adaptive Ribbon/Binary Fuse membership filter plus a packed exact sample can reduce signature-only false accepts below the measured packed bottom-k result. Next test: implement only if production requires materially more than the measured 92% precision.
+- `FD10X-H9`: direct fingerprint construction and multiple store subprocesses per worker can reduce the 122.68s local store-load floor. Next test: compare one and four stores per worker without the local autoscaler timeout that invalidated FD10X-008.
 
 ### Blocked
 
@@ -47,6 +50,7 @@ description: Fuzzy-verification memory-store load optimization
 - `FD10X-H4`: worker-supervised subprocess stores expose independent CPU parallelism without tying store shard count to Zephyr worker count.
 - `FD10X-H5`: native token preparation and store-local intersection remove the dominant Python reducer path.
 - `FD10X-H7`: mapper-written shuffle sidecars carry each chunk's schema so reducers can plan scans without opening every Parquet footer first.
+- `FD10X-H6`: a fixed packed signature replaces exact-text verification within the 50 TB production memory budget and meets the agreed 90% output-precision target.
 
 ## Baseline
 
@@ -242,3 +246,37 @@ description: Fuzzy-verification memory-store load optimization
 - Production estimate: applying the measured 1.24x verifier delta to the live-calibrated mapper-schema projection reduces the 200-worker Stage 1 estimate from 3.61 hours to 2.92 hours. Allowing for map, final reduce, store load, and remote variance gives a 3.5-4 hour clean-run estimate. The combined treatment is material but does not establish a 10x end-to-end improvement.
 - Memory extrapolation: the observed 6.30 KB/candidate store footprint projects to about 37.5 TB for the production retry's 5.95 billion candidates, or 188 GB per worker at 200 workers. A 4 KiB signature-only replacement would use 24.4 TB, or 122 GB per worker, before indexes and process overhead.
 - Next action: publish the exact prefilter treatment as a draft PR and measure the 4 KiB signature-only error rate on the actual comparison stream before replacing exact fallback.
+
+### 2026-08-15 00:02 - FD10X-012 fixed-budget signature audit
+
+- Hypothesis: a fixed record can make the final containment decision without exact document text while keeping false positives and false negatives below 10%.
+- Fixture: 15 complete Focus shards, 547,436 candidate members, 397,942 direct comparisons, 759 exact positives, and 397,183 exact negatives. Every comparison ran through the exact verifier to provide labels.
+- Result:
+
+  | 4 KiB layout | False negatives | False accepts | Negative-pair FPR |
+  |---|---:|---:|---:|
+  | Four-hash bitmap plus counts | 0/759 | 1,920 | 0.483% |
+  | Serialized 32-bit bottom-k, 1,000 entries | 0/759 | 330 | 0.083% |
+  | Packed 24-bit bottom-k, 1,333 entries | 0/759 | 201 | 0.051% |
+  | Simulated 1 KiB adaptive filter plus 3 KiB sample | 0/759 | 118 | 0.030% |
+  | Simulated 4 KiB IBLT, 160 cells | 0/759 | 136,172 | 34.283% |
+
+- The packed 24-bit implementation uses a 64-byte header and 3,999 fingerprint bytes. The header stores character, line, token, and distinct n-gram counts, the n-gram size, a 128-bit normalized-sequence hash, the bottom-k cutoff, and the retained count. Both its serialized record and in-memory Rust value fit within 4,096 bytes.
+- Exact containment cannot be rejected by the bottom-k comparison: every member fingerprint at or below the representative cutoff is present in the representative sample. Truncation and 24-bit collisions can admit non-subsets, which is the measured error direction.
+- Metadata-only heuristics were not competitive: character and n-gram counts admitted 256,475 negatives. Top-word counts do not preserve order and can reject valid set containment, so they are unsuitable as a deciding gate.
+- Research: Broder's resemblance and containment formulation motivates sampled shingles; [b-bit MinHash](https://arxiv.org/abs/0910.3349), [SetSketch](https://arxiv.org/abs/2101.00314), and [Theta sketches](https://datasketches.apache.org/docs/pdf/ThetaSketchFramework.pdf) trade sample width for estimator variance. [Binary Fuse filters](https://arxiv.org/abs/2201.01174) and [Ribbon filters](https://arxiv.org/abs/2103.02515) offer a denser membership tier, while an [IBLT](https://arxiv.org/abs/1101.2245) is useful only when the symmetric difference is small. The measured distribution favors a simple enumerable bottom-k sample.
+- Next action: run the packed implementation as the only verifier on the 10% and full 10M fixtures, compare sparse outputs by document ID and representative edge, and measure store-side pushdown.
+
+### 2026-08-15 00:34 - FD10X-013 packed signature-only verifier
+
+- Hypothesis: the packed 24-bit signature meets 90% full-output precision while removing exact Parquet text, decompression, and `prepare_verification_text` from the comparison path.
+- Implementation: singleton clusters do not fetch signatures. Reducers fetch signatures while selecting up to 32 retained representatives; after the limit is reached, they send member keys and serialized representative signatures to the owning memory-store worker. The store returns decisions in bulk and returns a member signature only when an accepted output needs it.
+- Ten-percent result: 960 outputs versus 759 exact outputs, with all 759 exact documents present and 201 extras. Pipeline wall was 34.08s, total wall 82.65s, store load 28.50s, and resident store memory 5.83 GB. The earlier 32-bit record produced 1,089 outputs and 330 extras; packing improved precision without increasing memory or pipeline wall.
+- Full command: `UV_CACHE_DIR=/tmp/marin-fuzzy-uv-cache uv run --no-sync python /tmp/benchmark_focus_local_iris.py --mode e2e --implementation fingerprint --max-shards 152 --zephyr-workers 10 --store-shards-per-worker 1 --load-concurrency 1 --lookup-batch-size 128 --pipeline-shards-per-worker 8 --loader current --stage-runner subprocess --worker-cpu 2 --worker-ram 7g --task-cpu 1 --task-ram 2g --tag fingerprint24-only-pushdown-10m-10w`.
+- Full performance: 5,537,783 stored candidates, 4,958,360 comparisons, 57,398 outputs, 122.68s store load, 273.91s pipeline, and 417.13s total. The store used 29.03 GB resident with a 30.24 GB peak upper bound. Candidate-signature response traffic was 5.93 GB.
+- Full quality: all 52,816 exact duplicate document IDs were present; the signature verifier added 4,582 documents, giving 100% recall and 92.02% precision. At the representative-edge level, it retained 52,814 of 52,816 exact edges and added 4,584, giving 99.996% recall and 92.01% precision. Two shared documents selected a different representative.
+- Delta: versus the exact 512-byte-prefilter run, pipeline wall improved 2.90x and total wall improved 2.25x. Versus the original footer-discovery control, pipeline wall improved 4.64x. Store memory fell from 34.91 GB to 29.03 GB.
+- Production memory: 4,063 serialized bytes times 5,951,461,965 candidates is 24.18 TB. Applying the measured 5,243 resident bytes per candidate gives 31.20 TB total, or 156 GB per worker at 200 workers; the peak extrapolation is 32.49 TB. All fit within the stated 50 TB fleet budget.
+- Production time: the raw sample-only scaling is deliberately conservative: 1,074.70x more candidates and 20x more store workers projects 4.09 hours of pipeline and 6.23 hours including load/startup. The live-calibrated model applies the measured 2.90x verifier delta to the prior 2.92-hour Stage 1 estimate, yielding about 1.01 hours for Stage 1. Retaining the prior map, final-reduce, load, and variance allowance gives a 1.6-2.1 hour planning range on 200 four-CPU workers. A production canary is necessary because the local and live-calibrated bounds differ by topology and object-store behavior.
+- Validation: four Rust unit tests, 52 focused Python verification tests, and the affected-branch suite passed. The latter expanded to the shared environment and completed with 1,493 passed, three skipped, and five expected failures.
+- Next action: use `--implementation fingerprint` for an explicit production canary. Keep exact as the default until the 8% extra removals are accepted for the downstream corpus.
