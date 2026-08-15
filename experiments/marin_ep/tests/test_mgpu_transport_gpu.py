@@ -19,21 +19,11 @@ from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.grug._moe.marin_ep_transport import dispatch_segments, put_segments
 
+from experiments.marin_ep.planref import execute_plans
+
 HIDDEN = 512
 LOCAL_EXPERTS = 3
 MAX_SEG_ROWS = 200
-
-
-def _plan_reference(plans, sources, out_rows):
-    """What the kernel should copy: execute every device's plan in NumPy."""
-    outputs = [np.zeros((out_rows, HIDDEN), np.float32) for _ in range(len(plans))]
-    for device, plan in enumerate(plans):
-        dest_ids, entry_start = np.asarray(plan.dest_ids), np.asarray(plan.entry_start)
-        src_lo, dst_lo, rows = (np.asarray(a) for a in (plan.src_lo, plan.dst_lo, plan.rows))
-        for k, dest in enumerate(dest_ids):
-            for e in range(entry_start[k], entry_start[k + 1]):
-                outputs[dest][dst_lo[e] : dst_lo[e] + rows[e]] = sources[device][src_lo[e] : src_lo[e] + rows[e]]
-    return outputs
 
 
 def test_put_segments_matches_plan_reference_and_survives_relaunch():
@@ -74,7 +64,7 @@ def test_put_segments_matches_plan_reference_and_survives_relaunch():
     src_global = jax.device_put(jnp.asarray(np.concatenate(sends, axis=0)), NamedSharding(mesh, P("x", None)))
 
     plans = [dispatch_segments(accepted_j, region_j, jnp.int32(d), local_experts=LOCAL_EXPERTS) for d in range(devices)]
-    want = _plan_reference(plans, sends, pool_rows)
+    want = execute_plans(plans, sends, pool_rows)
 
     for attempt in range(2):  # relaunch: semaphores must reset between calls
         got = np.asarray(run(src_global)).reshape(devices, pool_rows, HIDDEN)
@@ -122,7 +112,7 @@ def test_put_segments_full_tile_path():
     got = np.asarray(run(src_global)).reshape(devices, pool_rows, HIDDEN)
 
     plans = [dispatch_segments(accepted_j, region_j, jnp.int32(d), local_experts=1) for d in range(devices)]
-    want = _plan_reference(plans, sends, pool_rows)
+    want = execute_plans(plans, sends, pool_rows)
     for d in range(devices):
         covered = int(kept[d])
         np.testing.assert_array_equal(got[d, :covered], want[d][:covered], err_msg=f"device {d}")

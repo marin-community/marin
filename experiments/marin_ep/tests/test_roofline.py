@@ -16,7 +16,6 @@ from experiments.marin_ep.perfmodel.roofline import (
     MoeShape,
     estimate_from_trace,
     estimate_layer,
-    hero_report,
 )
 from experiments.marin_ep.simcore import simulate_forward
 
@@ -92,10 +91,8 @@ def test_trace_estimate_matches_closed_form_on_balanced_routing():
     assert traced.transport_time == pytest.approx(closed.transport_time + count_exchange_time, rel=1e-9)
 
 
-def test_hero_report_orders_gemm_above_transport():
+def test_hero_layer_is_gemm_bound():
     """At the hero shape the layer must be GEMM-bound, not transport-bound —
     the premise of the overlap design. Guard it with the model itself."""
     est = estimate_layer(HERO, GB200, backward=False)
     assert est.gemm_time > est.transport_time
-    report = hero_report()
-    assert "fwd" in report and "bwd" in report

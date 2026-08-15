@@ -109,7 +109,7 @@ def marin_ep_moe_local(
 
     `transport="ragged"` uses `jax.lax.ragged_all_to_all` (production);
     `"gathered"` uses the all_gather emulation (XLA:CPU conformance runs);
-    `"mgpu"` uses the fused Mosaic-GPU put kernel (M6), which writes the
+    `"mgpu"` uses the fused Mosaic-GPU put kernel, which writes the
     expert-major pool layout directly — no local permute on either side.
     """
     local_experts = moe_w13_local.shape[0]

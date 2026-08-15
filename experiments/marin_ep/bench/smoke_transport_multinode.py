@@ -51,6 +51,8 @@ from jax.sharding import AxisType, Mesh, NamedSharding  # noqa: E402
 from jax.sharding import PartitionSpec as P  # noqa: E402
 from levanter.grug._moe.marin_ep_transport import dispatch_segments, put_segments  # noqa: E402
 
+from experiments.marin_ep.planref import execute_plans  # noqa: E402
+
 HIDDEN = 1024
 LOCAL_EXPERTS = 3
 MAX_SEG_ROWS = 2000
@@ -95,14 +97,8 @@ def main() -> None:
     )
 
     # Reference: every process executes all plans in NumPy (same seed).
-    want = [np.zeros((pool_rows, HIDDEN), np.float32) for _ in range(devices)]
-    for device in range(devices):
-        plan = dispatch_segments(accepted_j, region_j, jnp.int32(device), local_experts=LOCAL_EXPERTS)
-        dest_ids, entry_start = np.asarray(plan.dest_ids), np.asarray(plan.entry_start)
-        src_lo, dst_lo, rows = (np.asarray(a) for a in (plan.src_lo, plan.dst_lo, plan.rows))
-        for k, dest in enumerate(dest_ids):
-            for e in range(entry_start[k], entry_start[k + 1]):
-                want[dest][dst_lo[e] : dst_lo[e] + rows[e]] = sends[device][src_lo[e] : src_lo[e] + rows[e]]
+    plans = [dispatch_segments(accepted_j, region_j, jnp.int32(d), local_experts=LOCAL_EXPERTS) for d in range(devices)]
+    want = execute_plans(plans, sends, pool_rows)
 
     for attempt in range(2):
         pool = run(src_global)
@@ -111,7 +107,7 @@ def main() -> None:
         np.testing.assert_array_equal(local[:covered], want[proc][:covered], err_msg=f"attempt {attempt} proc {proc}")
     print(f"[proc {proc}] CORRECT ({devices} devices, pool {pool_rows}x{HIDDEN})", flush=True)
 
-    # Bandwidth: time the same collective at larger uniform segments.
+    # Bandwidth: re-time the validated collective on the same input.
     times = []
     for _ in range(10):
         t0 = time.perf_counter()

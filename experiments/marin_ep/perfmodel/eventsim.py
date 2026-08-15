@@ -241,10 +241,9 @@ def build_layer_program(
                     dispatch_ids.append(item_id)
 
     # GEMM tiles per expert; each depends on the dispatch tiles overlapping
-    # its row range (pipelined) or on a full dispatch barrier (bulk). With
-    # `gemm_interleave`, tiles round-robin across the owner's local experts so
-    # every expert's combine work streams out early instead of bunching behind
-    # the bank's last expert (the dominant exposed tail in expert-major order).
+    # its row range (pipelined) or on a full dispatch barrier (bulk). Tiles
+    # run in expert-major order; MEP-003 showed readiness-based scheduling
+    # makes cross-expert tile interleaving a no-op, so no such knob exists.
     dispatch_barrier = len(items)
     items.append(WorkItem(name="dispatch_barrier", resources=(), duration=0.0, deps=tuple(dispatch_ids)))
     gemm_cover: dict[int, list[tuple[int, int, int]]] = defaultdict(list)  # g -> [(item, row_lo, row_hi)]

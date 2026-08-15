@@ -16,7 +16,7 @@ block to every peer's receive pool (peer `p` gets the block at slot
 per-device egress bandwidth to calibrate the L1 model's `link_efficiency`
 and `message_latency`.
 
-Run on GB200 (NOT runnable on CPU jaxlib; unvalidated until the M5 session):
+Run on GB200 (NOT runnable on CPU jaxlib; validated 2026-08-14, 584 GB/s/device):
   - jax[cuda13] env (`uv sync --extra gpu`), which brings nvidia-nvshmem-cu13.
   - ONE PROCESS PER GPU (nvshmem path requires local_device_count == 1).
   - XLA_FLAGS must include --xla_gpu_experimental_enable_nvshmem.

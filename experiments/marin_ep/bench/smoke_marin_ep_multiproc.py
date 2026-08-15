@@ -39,6 +39,7 @@ from experiments.marin_ep.oracle import moe_oracle, pooled_keep_mask  # noqa: E4
 def main() -> None:
     proc = jax.process_index()
     devices = jax.device_count()
+    local = jax.local_device_count()
     tokens, topk, hidden, intermediate = 512, 4, 512, 768
     num_experts = devices * 3  # El=3, like hero
     local_experts = 3
@@ -74,14 +75,14 @@ def main() -> None:
     )
 
     def put_batch(a):
-        local = a.reshape(devices, tokens, *a.shape[1:])[proc * 4 : (proc + 1) * 4].reshape(4 * tokens, *a.shape[1:])
-        return jax.make_array_from_process_local_data(NamedSharding(mesh, batch_spec), local, a.shape)
+        mine = a.reshape(devices, tokens, *a.shape[1:])[proc * local : (proc + 1) * local]
+        mine = mine.reshape(local * tokens, *a.shape[1:])
+        return jax.make_array_from_process_local_data(NamedSharding(mesh, batch_spec), mine, a.shape)
 
     def put_weight(a):
-        local = a.reshape(devices, local_experts, *a.shape[1:])[proc * 4 : (proc + 1) * 4].reshape(
-            4 * local_experts, *a.shape[1:]
-        )
-        return jax.make_array_from_process_local_data(NamedSharding(mesh, weight_spec), local, a.shape)
+        mine = a.reshape(devices, local_experts, *a.shape[1:])[proc * local : (proc + 1) * local]
+        mine = mine.reshape(local * local_experts, *a.shape[1:])
+        return jax.make_array_from_process_local_data(NamedSharding(mesh, weight_spec), mine, a.shape)
 
     args = (put_batch(x), put_batch(experts), put_batch(weights), put_weight(w13), put_weight(w2))
     cot_g = put_batch(cot)
@@ -115,7 +116,7 @@ def main() -> None:
         activation_fn=jax.nn.silu,
     )
     y_local = np.concatenate([np.asarray(s.data) for s in y.addressable_shards])
-    want = np.asarray(y_oracle).reshape(devices, tokens, hidden)[proc * 4 : (proc + 1) * 4].reshape(-1, hidden)
+    want = np.asarray(y_oracle).reshape(devices, tokens, hidden)[proc * local : (proc + 1) * local].reshape(-1, hidden)
     np.testing.assert_allclose(y_local, want, rtol=2e-2, atol=0.2)
     print(
         f"[proc {proc}] CONFORMANT: EP{devices} multi-process, dropped={dropped} "

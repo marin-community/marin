@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Segment-plan metadata for the M6 transport kernel, validated on CPU.
+"""Segment-plan metadata for `put_segments`, validated on CPU.
 
 The Mosaic-GPU kernel itself needs hardware, but its metadata (which rows
 go where) is pure index math. These tests execute the plans with NumPy
@@ -15,6 +15,7 @@ import jax.numpy as jnp
 import numpy as np
 from levanter.grug._moe.marin_ep_transport import combine_segments, dispatch_segments
 
+from experiments.marin_ep.planref import execute_plans
 from experiments.marin_ep.simcore import simulate_forward
 
 DEVICES, TOKENS, TOPK, EXPERTS, HIDDEN, INTERMEDIATE = 4, 16, 3, 8, 8, 12
@@ -59,20 +60,6 @@ def _accepted(routing):
     return np.array([[routing.routes[d][g][0].size for g in range(EXPERTS)] for d in range(DEVICES)], dtype=np.int64)
 
 
-def _execute_plan(plans, sources, out_rows):
-    """NumPy interpreter for SegmentPlan: what the GPU kernel would copy."""
-    outputs = [np.zeros((out_rows, sources[0].shape[1]), sources[0].dtype) for _ in range(DEVICES)]
-    for device, plan in enumerate(plans):
-        dest_ids = np.asarray(plan.dest_ids)
-        entry_start = np.asarray(plan.entry_start)
-        src_lo, dst_lo, rows = (np.asarray(a) for a in (plan.src_lo, plan.dst_lo, plan.rows))
-        for k, dest in enumerate(dest_ids):
-            for e in range(entry_start[k], entry_start[k + 1]):
-                n = rows[e]
-                outputs[dest][dst_lo[e] : dst_lo[e] + n] = sources[device][src_lo[e] : src_lo[e] + n]
-    return outputs
-
-
 def test_dispatch_plan_reproduces_simulator_pools():
     x, experts, result = _instance()
     routing = result.saved.routing
@@ -82,7 +69,7 @@ def test_dispatch_plan_reproduces_simulator_pools():
     sends = [_compacted_send_buffer(x, experts, routing, d) for d in range(DEVICES)]
     plans = [dispatch_segments(accepted, region, jnp.int32(d), local_experts=LOCAL_EXPERTS) for d in range(DEVICES)]
     pool_rows = LOCAL_EXPERTS * routing.capacity
-    pools = _execute_plan(plans, sends, pool_rows)
+    pools = execute_plans(plans, sends, pool_rows)
     for d in range(DEVICES):
         np.testing.assert_array_equal(pools[d], np.asarray(result.saved.recv_x[d]))
 
@@ -97,12 +84,12 @@ def test_dispatch_then_combine_roundtrips_send_buffers():
     dispatch_plans = [
         dispatch_segments(accepted, region, jnp.int32(d), local_experts=LOCAL_EXPERTS) for d in range(DEVICES)
     ]
-    pools = _execute_plan(dispatch_plans, sends, LOCAL_EXPERTS * routing.capacity)
+    pools = execute_plans(dispatch_plans, sends, LOCAL_EXPERTS * routing.capacity)
 
     combine_plans = [
         combine_segments(accepted, region, jnp.int32(d), local_experts=LOCAL_EXPERTS) for d in range(DEVICES)
     ]
     kept_per_device = int(np.asarray(accepted).sum(axis=1).max())
-    returned = _execute_plan(combine_plans, pools, kept_per_device)
+    returned = execute_plans(combine_plans, pools, kept_per_device)
     for d in range(DEVICES):
         np.testing.assert_array_equal(returned[d][: sends[d].shape[0]], sends[d])
