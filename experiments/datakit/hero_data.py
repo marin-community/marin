@@ -158,6 +158,14 @@ EXACT_DUPS_ID = "global_exact_dedup_af4c6c3e"
 FUZZY_DUPS_ID = "dedup_709f5997"
 VERIFIED_FUZZY_DUPS_PATH = "datakit/verify_fuzzy_dups_c757e4f0"
 
+# The key the two candidate runs filed the focus crawl under: its jusText
+# extraction, read as a finished source before #8111 sent it through
+# normalize_step. Fuzzy verification already repacked its half (#8237) and keys
+# all 292 sources the way normalize keys them today; the exact marks still carry
+# this key, and :mod:`experiments.datakit.repack_exact_dups` moves them.
+FOCUS_SOURCE_NAME = "common-crawl-focus-2026-22"
+LEGACY_FOCUS_SOURCE_KEY = "data/datakit/normalized/common_crawl_focus_2026_22_ed4b8bc9/outputs/main"
+
 
 @dataclass(frozen=True)
 class QualityPin:
@@ -204,7 +212,7 @@ def quality_calibration(quality_model: QualityPin = NEMOTRON_88K) -> str:
     """Return the calibration file whose knots cut ``quality_model``'s scores."""
     if quality_model != NEMOTRON_88K:
         raise KeyError(f"no calibration path recorded for {quality_model.name!r}")
-    return prefix_join(marin_prefix(), QUALITY_MODEL_DIR, QUALITY_CALIBRATION_FILE)
+    return prefix_join(marin_prefix(), f"{QUALITY_MODEL_DIR}/{QUALITY_CALIBRATION_FILE}")
 
 
 def _refuse_to_run(output_path: str) -> NoReturn:

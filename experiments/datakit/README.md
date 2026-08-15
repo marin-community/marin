@@ -172,6 +172,7 @@ aws s3 ls s3://marin-us-east-02a/marin/datakit/ | grep sample
 | `hero_data.py` | Fixed references to the hero run's built stages, by source name |
 | `produce_store.py` | Builds only the final store, over the stages `hero_data` names (`--preflight`, `--pending`) |
 | `global_exact_dedup.py` | Sparse co-partitioned exact-duplicate attributes by normalized record ID |
+| `repack_exact_dups.py` | Moves one source's exact-duplicate marks onto a normalize that has since replaced its layout |
 | `cluster/quality/fast_transformer/` | Quality classifier: per-source scoring step + training/calibration |
 | `cluster/domain/v0/` | Domain clustering: centroid sampling/training + per-source assignment |
 | `embeddings/luxical/` | Luxical-one document embeddings feeding the domain stage |
