@@ -27,8 +27,8 @@ from typing import Literal
 
 import jax
 import jax.numpy as jnp
-from haliax.nn.ragged_dot import ragged_dot
 from jaxtyping import Array, Float, Int
+from levanter.grug._moe.ep_ragged_all_to_all import _cudnn_cute_expert_mlp, _ragged_dot_expert_mlp
 from levanter.grug._moe.ep_common import (
     _compact_by_keep_mask,
     _expand_from_keep_mask,
@@ -105,6 +105,7 @@ def marin_ep_moe_local(
     pool_group_size: int,
     transport: Literal["ragged", "gathered", "mgpu"] = "ragged",
     splits_per_peer: int = 1,
+    expert_mlp: Callable = _ragged_dot_expert_mlp,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     """Shard-local Marin EP MoE body (runs inside shard_map over "expert").
 
@@ -198,10 +199,9 @@ def marin_ep_moe_local(
             )
 
     with jax.named_scope("moe_up_down"):
-        w13_out = ragged_dot(x_pool, moe_w13_local, local_group_sizes)
-        moe_dim = moe_w2_local.shape[1]
-        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-        out_pool = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
+        # Physical == active group sizes: acceptance already clipped counts,
+        # so the pool carries no padding.
+        out_pool = expert_mlp(x_pool, moe_w13_local, moe_w2_local, local_group_sizes, local_group_sizes, activation_fn)
 
     with jax.named_scope("combine"):
         if transport == "mgpu":
@@ -292,4 +292,34 @@ def _moe_mlp_ep_marin_local(
         pool_group_size=moe_w13_local.shape[0],
         transport=transport,
         splits_per_peer=splits_per_peer,
+    )
+
+
+def _moe_mlp_ep_marin_cudnn_cute_local(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+    splits_per_peer: int = 1,
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+    """marin_ep with the cuDNN/QuACK grouped expert GEMMs (SiLU only)."""
+    transport = "mgpu" if jax.process_count() == 1 else "ragged"
+    return marin_ep_moe_local(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        pool_group_size=moe_w13_local.shape[0],
+        transport=transport,
+        splits_per_peer=splits_per_peer,
+        expert_mlp=_cudnn_cute_expert_mlp,
     )

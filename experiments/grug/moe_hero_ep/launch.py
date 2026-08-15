@@ -84,6 +84,8 @@ FLAVORS: dict[str, Flavor] = {
     # rule at the same capacity factor) on the split-capable ragged transport;
     # single-process runs use its fused Mosaic-GPU transport instead.
     "ep-marin": Flavor(None, "marin_ep"),
+    # marin_ep with the cuDNN/QuACK grouped expert GEMMs.
+    "ep-marin-cudnn-cute": Flavor(None, "marin_ep_cudnn_cute"),
     # The same split-capable ragged transport, with the existing SM100 QuACK grouped GEMMs for
     # activation-path expert compute. Weight gradients retain the ragged-dot implementation.
     "ep-ragged-cute": Flavor(None, "ragged_all_to_all_cute"),
