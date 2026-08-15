@@ -28,8 +28,11 @@ Run it in the CoreWeave data region with ``MARIN_PREFIX`` set to
 import argparse
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 
+from marin.execution.artifact import read_artifact
 from marin.execution.step_status import STATUS_SUCCESS, get_status_path
+from marin.processing.tokenize.attributes import TokenizedAttrData
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
@@ -45,9 +48,17 @@ def _basenames(directory: str) -> set[str]:
 
 
 def shortfall(source: str, quality_model: hero_data.QualityPin) -> tuple[str, set[str]]:
-    """Return the source's score directory and the tokenize shards it is missing."""
+    """Return the source's score directory and the tokenize shards it is missing.
+
+    Takes the tokenize directory from the artifact rather than appending the split
+    to the step path, because that is where the store looks. The two agree today;
+    reading the artifact is what keeps them agreeing.
+    """
     quality_dir = hero_data.quality(source, quality_model).output_path
-    tokenize_dir = f"{hero_data.tokenized(source, quality_model.tokenizer).output_path.rstrip('/')}/{SPLIT}"
+    tokenize = read_artifact(hero_data.tokenized(source, quality_model.tokenizer).output_path, TokenizedAttrData)
+    tokenize_dir = tokenize.output_dirs.get(SPLIT)
+    if tokenize_dir is None:
+        raise KeyError(f"{source}: tokenize has no split={SPLIT!r}")
     return quality_dir, _basenames(tokenize_dir) - _basenames(quality_dir)
 
 
@@ -61,9 +72,12 @@ def main(argv: list[str] | None = None) -> None:
     configure_coreweave_s3()
 
     names = [s.strip() for s in args.sources.split(",") if s.strip()] if args.sources else hero_data.source_names()
+    # Listing two directories per source is the whole cost, and it is all latency.
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        shortfalls = list(pool.map(lambda n: shortfall(n, hero_data.NEMOTRON_88K), names))
+
     sealed, already, short = 0, 0, 0
-    for source in names:
-        quality_dir, missing = shortfall(source, hero_data.NEMOTRON_88K)
+    for source, (quality_dir, missing) in zip(names, shortfalls, strict=True):
         status_path = get_status_path(quality_dir)
         if missing:
             short += 1
