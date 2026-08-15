@@ -17,14 +17,14 @@ from finestore.layout import COMMIT_COLUMN, GEN_COLUMN, SEQ_COLUMN, ArchiveMetad
 from finestore.migrations import migrate
 from finestore.migrations.m0001_manifest import LegacyArchive, LegacyTable, inspect_legacy_archive
 from finestore.reader import ReadView
+from marin.evaluation.records import list_records
 from pyarrow.fs import FSSpecHandler, PyFileSystem
 from rigging.filesystem import StoragePath, marin_temp_bucket, url_to_fs
-
-from marin.evaluation.records import list_records
 
 _COPY_BUFFER_BYTES = 8 * 1024 * 1024
 _FORMAT_V1 = 1
 _FORMAT_V2 = 2
+_EVAL_SAMPLES_TABLE = "samples"
 
 
 @dataclass(frozen=True)
@@ -84,9 +84,7 @@ def _fingerprints(root: StoragePath, relative_paths: tuple[str, ...]) -> tuple[F
     fingerprints = []
     for relative_path in relative_paths:
         path = root / relative_path
-        fingerprints.append(
-            FileFingerprint(relative_path=relative_path, size=path.size(), sha256=_sha256(path))
-        )
+        fingerprints.append(FileFingerprint(relative_path=relative_path, size=path.size(), sha256=_sha256(path)))
     return tuple(fingerprints)
 
 
@@ -119,7 +117,7 @@ def _copy_files(source: StoragePath, destination: StoragePath, relative_paths: t
         source_path = source / relative_path
         destination_path = destination / relative_path
         source_fs, source_key = url_to_fs(str(source_path))
-        destination_fs, destination_key = url_to_fs(str(destination_path))
+        _destination_fs, destination_key = url_to_fs(str(destination_path))
         destination_path.parent.mkdirs()
         source_fs.cp_file(source_key, destination_key)
 
@@ -201,9 +199,7 @@ def _validate_tables(
             continue
         after = _canonical_table(after, legacy_table.metadata.primary_key)
         if not before.equals(after):
-            raise SmokeUpgradeValidationError(
-                f"logical rows changed during migration for {name!r} from {source!r}"
-            )
+            raise SmokeUpgradeValidationError(f"logical rows changed during migration for {name!r} from {source!r}")
         validations.append(TableValidation(name=name, rows=before.num_rows, sha256=_table_digest(before)))
     return tuple(validations)
 
@@ -219,7 +215,7 @@ def _assert_fingerprints_equal(
 
 
 def select_v1_archive(records_prefix: str, *, max_bytes: int) -> str:
-    """Choose the first non-empty sealed v1 archive under a records prefix within ``max_bytes``."""
+    """Choose a sealed v1 eval archive with sample rows and at most ``max_bytes`` of data."""
     prefix = StoragePath(records_prefix)
     for results_path in sorted({record.results_path.rstrip("/") for record in list_records(records_prefix)}):
         root = StoragePath(results_path)
@@ -235,12 +231,16 @@ def select_v1_archive(records_prefix: str, *, max_bytes: int) -> str:
         if not seal_path.exists():
             continue
         archive = inspect_legacy_archive(results_path)
+        samples = archive.tables.get(_EVAL_SAMPLES_TABLE)
+        if samples is None or not any(shard.rows for shard in samples.shards):
+            continue
         paths = _relative_paths(root, _legacy_paths(root, archive))
         total_bytes = sum((root / relative_path).size() for relative_path in paths)
-        total_rows = sum(shard.rows for table in archive.tables.values() for shard in table.shards)
-        if total_rows and total_bytes <= max_bytes:
+        if total_bytes <= max_bytes:
             return results_path
-    raise ValueError(f"no non-empty sealed FineStore v1 archive at or below {max_bytes} bytes under {records_prefix!r}")
+    raise ValueError(
+        f"no sealed FineStore v1 archive with sample rows at or below {max_bytes} bytes under {records_prefix!r}"
+    )
 
 
 def smoke_destination(source: str, *, ttl_days: int) -> str:

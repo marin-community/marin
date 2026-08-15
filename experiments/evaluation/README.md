@@ -63,12 +63,13 @@ math500): one model boot, eleven evals against the shared endpoint, eleven recor
 shows the full model x task grid of runs.
 
 Before upgrading a store, run the non-destructive smoke command on its platform. This CoreWeave
-example selects one non-empty sealed v1 archive no larger than 256 MiB, copies only its FineStore
-objects to a same-bucket one-day prefix, migrates the copy, and compares every source object and
-deduplicated table row with the v2 `ReadView`:
+example selects one sealed v1 archive with sample rows and no more than 256 MiB of FineStore data,
+copies only its FineStore objects to a same-bucket one-day prefix, migrates the copy, and compares
+every source object and deduplicated table row with the v2 `ReadView`:
 
 ```bash
-uv run iris --config lib/iris/config/cw-us-east-02a.yaml job run --no-wait \
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --target-cluster cw-us-east-02a \
   --job-name finestore-v1-v2-smoke --cpu 2 --memory 8GB --disk 10GB \
   --enable-extra-resources --sync-package marin-core --extra cpu --timeout 1800 -- \
   python -m experiments.evaluation.migrations.cli smoke-upgrade \
