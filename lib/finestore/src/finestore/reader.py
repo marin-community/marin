@@ -20,6 +20,7 @@ from rigging.filesystem import StoragePath, factory
 
 from finestore.commit import ArchiveSnapshot, read_snapshot, validate_archive
 from finestore.layout import (
+    BLOB_DATA_COLUMN,
     BLOB_NAME_COLUMN,
     BLOBS_TABLE,
     COMMIT_COLUMN,
@@ -275,7 +276,7 @@ class ReadView:
         row = self.point(BLOBS_TABLE, **{BLOB_NAME_COLUMN: name})
         if row is None:
             return None
-        data = row.get("data")
+        data = row.get(BLOB_DATA_COLUMN)
         return bytes(data) if data is not None else None
 
     def resolve(self, uri: str) -> bytes | None:

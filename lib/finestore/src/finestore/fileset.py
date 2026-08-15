@@ -12,7 +12,7 @@ import threading
 
 from rigging.filesystem import atomic_rename
 
-from finestore.layout import BLOB_NAME_COLUMN, BLOBS_TABLE
+from finestore.layout import BLOB_DATA_COLUMN, BLOB_NAME_COLUMN, BLOBS_TABLE
 from finestore.reader import ReadView
 from finestore.store import DataStore
 
@@ -35,12 +35,12 @@ def fetch_file_set(root: str, local: str) -> set[str]:
     destination = pathlib.Path(local)
     destination.mkdir(parents=True, exist_ok=True)
     fetched = set()
-    for row in ReadView(root).iter_rows(BLOBS_TABLE, columns=[BLOB_NAME_COLUMN, "data"]):
+    for row in ReadView(root).iter_rows(BLOBS_TABLE, columns=[BLOB_NAME_COLUMN, BLOB_DATA_COLUMN]):
         relative = _safe_relative(row[BLOB_NAME_COLUMN])
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         with atomic_rename(str(target)) as staged:
-            pathlib.Path(staged).write_bytes(bytes(row["data"]))
+            pathlib.Path(staged).write_bytes(bytes(row[BLOB_DATA_COLUMN]))
         fetched.add(relative.as_posix())
     return fetched
 
@@ -115,6 +115,6 @@ class FineStoreDirectory:
                 logger.warning("FineStore directory synchronization failed: %s", exc)
 
     def _commit(self, files: list[tuple[str, bytes]]) -> None:
-        with self._store.transaction() as transaction:
+        with self._store.transaction(max_bytes=self._max_transaction_bytes) as transaction:
             for relative, data in files:
                 transaction.write_object(relative, data)

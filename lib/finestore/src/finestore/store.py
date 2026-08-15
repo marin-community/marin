@@ -19,6 +19,7 @@ import pyarrow as pa
 
 from finestore.commit import ClearSeal, CommitCoordinator, CommitDelta, TableAddition, initialize_archive, write_schema
 from finestore.layout import (
+    BLOB_DATA_COLUMN,
     BLOB_NAME_COLUMN,
     BLOBS_TABLE,
     SEQ_COLUMN,
@@ -206,7 +207,7 @@ class DataStore:
             BLOB_NAME_COLUMN: name,
             "size": len(data),
             "metadata_json": json.dumps(dict(metadata or {})),
-            "data": data,
+            BLOB_DATA_COLUMN: data,
         }
 
     def read_view(self) -> ReadView:

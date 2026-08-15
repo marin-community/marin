@@ -18,7 +18,7 @@ import logging
 from finestore.admin import drop_table as drop_manifest_table
 from finestore.reader import ReadView
 from marin.evaluation.archive import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION, SampleKind
-from rigging.filesystem import StoragePath, factory, prefix_join
+from rigging.filesystem import StoragePath
 
 from experiments.evaluation.migrations.archive_backup import superseded_samples_prefix
 
@@ -36,7 +36,6 @@ def copy_table(root: str, table: str, destination: str) -> int:
     shards = reader.list_shards(table)
     if not shards:
         return 0
-    destination_fs, _ = factory.url_to_fs(destination)
     destination_path = StoragePath(destination)
     destination_path.mkdirs()
     copied = 0
@@ -49,18 +48,18 @@ def copy_table(root: str, table: str, destination: str) -> int:
         metadata_target.write_bytes(metadata_bytes)
         copied += 1
     for shard in shards:
-        source_fs, source = factory.url_to_fs(shard.path)
-        _, target = factory.url_to_fs(prefix_join(destination, StoragePath(shard.path).name))
-        if destination_fs.exists(target):
-            written = destination_fs.info(target)["size"]
-            expected = source_fs.info(source)["size"]
+        source = StoragePath(shard.path)
+        target = destination_path / source.name
+        if target.exists():
+            written = target.size()
+            expected = source.size()
             if written != expected:
                 raise OSError(f"existing copy of {source} is {written} bytes, expected {expected}")
             continue
-        with source_fs.open(source, "rb") as source_handle, destination_fs.open(target, "wb") as writer:
+        with source.open("rb") as source_handle, target.open("wb") as writer:
             writer.write(source_handle.read())
-        written = destination_fs.info(target)["size"]
-        expected = source_fs.info(source)["size"]
+        written = target.size()
+        expected = source.size()
         if written != expected:
             raise OSError(f"copy of {source} is {written} bytes, expected {expected}")
         copied += 1

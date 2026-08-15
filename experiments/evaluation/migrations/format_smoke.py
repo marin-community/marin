@@ -17,9 +17,9 @@ from dataclasses import dataclass
 import pyarrow as pa
 import pyarrow.dataset as pds
 import pyarrow.parquet as pq
-from finestore.layout import COMMIT_COLUMN, GEN_COLUMN, SEQ_COLUMN, ArchiveMetadata, FineStoreLayout
+from finestore.layout import ARCHIVE_FILE, COMMIT_COLUMN, GEN_COLUMN, SEQ_COLUMN, ArchiveMetadata, FineStoreLayout
 from finestore.migrations import migrate
-from finestore.migrations.m0001_manifest import LegacyArchive, LegacyTable, inspect_legacy_archive
+from finestore.migrations.m0001_manifest import LEGACY_SEAL_FILE, LegacyArchive, LegacyTable, inspect_legacy_archive
 from finestore.reader import ReadView
 from marin.evaluation.records import list_records, read_records
 from pyarrow.fs import FSSpecHandler, PyFileSystem
@@ -33,6 +33,7 @@ _FLEET_DIRECTORY = "finestore-migration-fleet"
 _FLEET_MARKER = "_fleet.json"
 _FLEET_ID = re.compile(r"^[0-9a-f]{32}$")
 _TTL_DIRECTORY = re.compile(r"^ttl=[1-9][0-9]*d$")
+_RESULTS_DIRECTORY = "results"
 
 
 @dataclass(frozen=True)
@@ -255,7 +256,7 @@ def _assert_fingerprints_equal(
 def select_v1_archive(records_prefix: str, *, max_bytes: int) -> str:
     """Choose a sealed v1 eval archive with sample rows and at most ``max_bytes`` of data."""
     prefix = StoragePath(records_prefix)
-    for results_path in sorted({record.results_path.rstrip("/") for record in list_records(records_prefix)}):
+    for results_path in sorted({str(StoragePath(record.results_path)) for record in list_records(records_prefix)}):
         root = StoragePath(results_path)
         if root.scheme != prefix.scheme or root.bucket != prefix.bucket:
             continue
@@ -265,7 +266,7 @@ def select_v1_archive(records_prefix: str, *, max_bytes: int) -> str:
         metadata = ArchiveMetadata.model_validate_json(archive_path.read_bytes())
         if metadata.format_version != _FORMAT_V1:
             continue
-        seal_path = root / "SEALED"
+        seal_path = root / LEGACY_SEAL_FILE
         if not seal_path.exists():
             continue
         archive = inspect_legacy_archive(results_path)
@@ -284,7 +285,7 @@ def select_v1_archive(records_prefix: str, *, max_bytes: int) -> str:
 def smoke_destination(source: str, *, ttl_days: int) -> str:
     """Return a unique same-region lifecycle-managed prefix for one smoke migration."""
     root = StoragePath(source)
-    run_name = root.parent.name if root.name == "results" else root.name
+    run_name = root.parent.name if root.name == _RESULTS_DIRECTORY else root.name
     identity = hashlib.sha256(source.encode()).hexdigest()[:12]
     prefix = f"finestore-migration-smoke/{run_name}-{identity}-{uuid.uuid4().hex[:12]}"
     return marin_temp_bucket(ttl_days, prefix=prefix, source_prefix=source)
@@ -303,7 +304,7 @@ def select_v1_fleet(records_prefixes: tuple[str, ...]) -> FleetSelection:
         record_failures.extend(failure.path for failure in failures)
 
     backends = {(StoragePath(prefix).scheme, StoragePath(prefix).bucket) for prefix in records_prefixes}
-    results_paths = sorted({record.results_path.rstrip("/") for record in records})
+    results_paths = sorted({str(StoragePath(record.results_path)) for record in records})
     sources = []
     unsealed_v1 = []
     unsupported = []
@@ -326,7 +327,7 @@ def select_v1_fleet(records_prefixes: tuple[str, ...]) -> FleetSelection:
         if metadata.format_version != _FORMAT_V1:
             unsupported.append(f"v{metadata.format_version}:{results_path}")
             continue
-        if not (root / "SEALED").exists():
+        if not (root / LEGACY_SEAL_FILE).exists():
             unsealed_v1.append(results_path)
             continue
         sources.append(results_path)
@@ -356,7 +357,7 @@ def fleet_destination(source_prefix: str, *, ttl_days: int) -> str:
 
 def _fleet_archive_destination(root: StoragePath, source: str) -> StoragePath:
     source_root = StoragePath(source)
-    run_name = source_root.parent.name if source_root.name == "results" else source_root.name
+    run_name = source_root.parent.name if source_root.name == _RESULTS_DIRECTORY else source_root.name
     identity = hashlib.sha256(source.encode()).hexdigest()[:16]
     return root / f"{run_name}-{identity}"
 
@@ -473,8 +474,8 @@ def smoke_upgrade(source: str, destination: str) -> SmokeUpgradeResult:
 
     source_after = _fingerprints(source_root, relative_paths)
     _assert_fingerprints_equal(source_files, source_after, context="migration of the temporary clone")
-    immutable_paths = tuple(path for path in relative_paths if path != "_archive.json")
-    copied_immutable = tuple(file for file in copied_files if file.relative_path != "_archive.json")
+    immutable_paths = tuple(path for path in relative_paths if path != ARCHIVE_FILE)
+    copied_immutable = tuple(file for file in copied_files if file.relative_path != ARCHIVE_FILE)
     migrated_immutable = _fingerprints(destination_root, immutable_paths)
     _assert_fingerprints_equal(copied_immutable, migrated_immutable, context="v2 manifest publication")
 

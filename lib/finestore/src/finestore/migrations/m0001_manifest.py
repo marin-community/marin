@@ -14,8 +14,9 @@ from pydantic import AliasChoices, BaseModel, Field
 from rigging.filesystem import StoragePath
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 
-from finestore.commit import write_schema
+from finestore.commit import read_snapshot, write_schema
 from finestore.layout import (
+    SEQ_COLUMN,
     ArchiveMetadata,
     CommitToken,
     FineStoreLayout,
@@ -34,7 +35,7 @@ TO_VERSION = 2
 WRITE_OPEN_SAFE = True
 
 _LEGACY_SCHEMA_FILE = "_schema.json"
-_LEGACY_SEALED_FILE = "SEALED"
+LEGACY_SEAL_FILE = "SEALED"
 _WRITER_SEGMENT = re.compile(r"^w=(.+)$")
 _GENERATION_SEGMENT = re.compile(r"^g=(\d+)$")
 
@@ -99,9 +100,9 @@ def _legacy_shard(path: StoragePath) -> tuple[str, int] | None:
 
 
 def _sequence_bounds(metadata: pq.FileMetaData) -> tuple[int, int]:
-    if "_seq" not in metadata.schema.names or metadata.num_rows == 0:
+    if SEQ_COLUMN not in metadata.schema.names or metadata.num_rows == 0:
         return 0, 0
-    column = metadata.schema.names.index("_seq")
+    column = metadata.schema.names.index(SEQ_COLUMN)
     minima = []
     maxima = []
     for group in range(metadata.num_row_groups):
@@ -141,7 +142,7 @@ def _legacy_shards(root: StoragePath, table: str) -> tuple[Shard, ...]:
 def inspect_legacy_archive(root: str) -> LegacyArchive:
     """Read the complete sealed v1 state without changing the archive."""
     root_path = StoragePath(root)
-    seal_path = root_path / _LEGACY_SEALED_FILE
+    seal_path = root_path / LEGACY_SEAL_FILE
     if not seal_path.exists():
         raise ValueError(f"FineStore v1 archive at {root!r} is not sealed; quiesce and seal it before migration")
     seal = SealMarker.model_validate_json(seal_path.read_bytes())
@@ -156,23 +157,7 @@ def inspect_legacy_archive(root: str) -> LegacyArchive:
 
 
 def _v2_token(layout: FineStoreLayout) -> CommitToken | None:
-    versioned = conditional_object(layout.head_path).read()
-    if versioned is None:
-        return None
-    head = HeadMetadata.model_validate_json(versioned.data)
-    if head.format_version != TO_VERSION:
-        raise ValueError(f"HEAD at {layout.root!r} is format v{head.format_version}; expected v{TO_VERSION}")
-    manifest = Manifest.model_validate_json(StoragePath(head.manifest_path).read_bytes())
-    if manifest.format_version != TO_VERSION:
-        raise ValueError(f"manifest {head.manifest_path!r} is format v{manifest.format_version}; expected v{TO_VERSION}")
-    if (manifest.commit_id, manifest.sequence) != (head.commit_id, head.sequence):
-        raise ValueError(f"HEAD at {layout.root!r} does not match manifest {head.manifest_path!r}")
-    return CommitToken(
-        commit_id=head.commit_id,
-        sequence=head.sequence,
-        version=versioned.version,
-        manifest_path=head.manifest_path,
-    )
+    return read_snapshot(layout).token
 
 
 def migrate(root: str) -> CommitToken:

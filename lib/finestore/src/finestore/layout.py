@@ -29,6 +29,7 @@ COMMIT_COLUMN = "_commit"
 URI_SCHEME = "finestore"
 BLOBS_TABLE = "blobs"
 BLOB_NAME_COLUMN = "name"
+BLOB_DATA_COLUMN = "data"
 
 
 class FormatVersionError(ValueError):

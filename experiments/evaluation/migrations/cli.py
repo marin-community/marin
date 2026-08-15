@@ -18,6 +18,7 @@ from collections import Counter, defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 
 import click
 from finestore.migrations import migrate
@@ -60,6 +61,14 @@ _DEFAULT_SWEEP_WORKERS = 8
 _DEFAULT_SMOKE_MAX_BYTES = 256 * 1024 * 1024
 _DEFAULT_FLEET_SMOKE_WORKERS = 4
 _CW_RECORDS_PREFIXES = (CW_RECORDS_PREFIX, LEGACY_CW_RECORDS_PREFIX)
+
+
+class FleetSmokeMode(StrEnum):
+    """Write behavior for a fleet migration rehearsal."""
+
+    INVENTORY = "inventory"
+    KEEP_TEMP = "keep-temp"
+    CLEANUP = "cleanup"
 
 
 @dataclass(frozen=True)
@@ -151,19 +160,18 @@ def smoke_upgrade_command(
 )
 @click.option("--ttl-days", default=1, show_default=True, type=click.IntRange(min=1))
 @click.option(
-    "--cleanup/--keep-temp",
-    default=False,
+    "--mode",
+    type=click.Choice(tuple(mode.value for mode in FleetSmokeMode)),
+    default=FleetSmokeMode.KEEP_TEMP.value,
     show_default=True,
-    help="Delete the generated fleet only after every archive validates.",
+    help="Inventory only, retain the validated temporary fleet, or delete it after complete success.",
 )
-@click.option("--dry-run", is_flag=True, help="Report the complete selection without writing temporary data.")
 def smoke_upgrade_fleet_command(
     records_prefixes: tuple[str, ...],
     destination_root: str | None,
     workers: int,
     ttl_days: int,
-    cleanup: bool,
-    dry_run: bool,
+    mode: str,
 ) -> None:
     """Clone and validate every sealed CoreWeave v1 archive as one fleet rehearsal."""
     resolved_prefixes = records_prefixes or _CW_RECORDS_PREFIXES
@@ -174,7 +182,8 @@ def smoke_upgrade_fleet_command(
     blockers = selection.record_failures + selection.unsealed_v1 + selection.unsupported
     if blockers:
         raise click.ClickException(f"fleet selection has {len(blockers)} blocking record or archive issue(s)")
-    if dry_run:
+    fleet_mode = FleetSmokeMode(mode)
+    if fleet_mode is FleetSmokeMode.INVENTORY:
         return
 
     root = destination_root or fleet_destination(resolved_prefixes[0], ttl_days=ttl_days)
@@ -200,7 +209,7 @@ def smoke_upgrade_fleet_command(
         selection.sources,
         root,
         workers=workers,
-        cleanup=cleanup,
+        cleanup=fleet_mode is FleetSmokeMode.CLEANUP,
         on_result=report,
     )
     click.echo(

@@ -90,20 +90,20 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
   --target-cluster cw-us-east-02a \
   --job-name finestore-v1-v2-fleet-inventory --cpu 2 --memory 8GB --disk 10GB \
   --enable-extra-resources --sync-package marin-core --extra cpu --timeout 1800 -- \
-  python -m experiments.evaluation.migrations.cli smoke-upgrade-fleet --dry-run
+  python -m experiments.evaluation.migrations.cli smoke-upgrade-fleet --mode inventory
 ```
 
 The full rehearsal clones each selected archive beneath one generated `tmp/ttl=1d` fleet root and
-independently compares every copied object and deduplicated Arrow row. `--cleanup` removes that exact
-root only after every archive validates; an error or early exit preserves the partial fleet for
-diagnosis until its lifecycle expiry:
+independently compares every copied object and deduplicated Arrow row. `--mode cleanup` removes that
+exact root only after every archive validates; an error or early exit preserves the partial fleet
+for diagnosis until its lifecycle expiry:
 
 ```bash
 uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
   --target-cluster cw-us-east-02a \
   --job-name finestore-v1-v2-fleet --cpu 4 --memory 32GB --disk 20GB \
   --enable-extra-resources --sync-package marin-core --extra cpu --timeout 14400 -- \
-  python -m experiments.evaluation.migrations.cli smoke-upgrade-fleet --cleanup
+  python -m experiments.evaluation.migrations.cli smoke-upgrade-fleet --mode cleanup
 ```
 
 After the platform smoke passes, upgrade the sealed archive fleet before deploying a format-v2
