@@ -34,6 +34,7 @@ import argparse
 import collections
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from marin.execution.artifact import read_record
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -46,27 +47,55 @@ logger = logging.getLogger(__name__)
 
 DECON_RELATIVE = "datakit/decontam"
 
-# Source names nest one to three path levels under the stage root (``stack-v3``,
-# ``cp/usgpo``, ``starcoder2/ir/python``), so a single-level listing finds a
-# fraction of them. The leaf carries the step hash: ``<source>_<hash>``.
-_SOURCE_DEPTHS = ("*", "*/*", "*/*/*")
+# What a step writes to say a directory is its output rather than a parent.
+ARTIFACT_FILENAME = ".artifact.json"
 
 
 def discover(root: str) -> dict[str, list[str]]:
-    """Map each decon output directory to the sources it could belong to.
+    """Map each registered source to the decon output directories it could own.
 
-    Keyed by the ``<source>_<hash>`` directory relative to ``root``. A source
-    name is recovered by stripping the trailing ``_<hash>``, so a directory
-    whose stripped name is not registered is ignored rather than guessed at.
+    Keyed by source name, valued by ``<source>_<hash>`` directories relative to
+    ``root``. A source name is recovered by stripping the trailing ``_<hash>``,
+    so a directory whose stripped name is not registered is ignored rather than
+    guessed at.
+
+    Walks one delimited level at a time rather than globbing. Source names nest
+    one to three path levels under the stage root (``stack-v3``, ``cp/usgpo``,
+    ``starcoder2/ir/python``), and a glob deep enough to reach the third level
+    enumerates every Parquet shard under all of them -- millions of keys to
+    answer a question about directory names. Descending only into prefixes that a
+    registered name actually starts with costs one request per directory.
     """
     registered = set(hero_data.source_names())
-    found: dict[str, list[str]] = collections.defaultdict(list)
-    for depth in _SOURCE_DEPTHS:
-        for match in StoragePath(f"{root}/{depth}/.artifact.json").glob():
-            relative = str(match)[len(root) + 1 : -len("/.artifact.json")]
+    prefixes = {
+        "/".join(parts[:depth]) for name in registered for parts in [name.split("/")] for depth in range(1, len(parts))
+    }
+
+    candidates: list[tuple[str, str, StoragePath]] = []
+    pending = [""]
+    while pending:
+        relative_dir = pending.pop()
+        for child in StoragePath(f"{root}/{relative_dir}" if relative_dir else root).ls():
+            relative = f"{relative_dir}/{child.name}" if relative_dir else child.name
             source = relative.rsplit("_", 1)[0]
+            # The two are not exclusive. ``finepdfs`` is a registered source *and*
+            # the parent of eighteen more, so the run writes both
+            # ``finepdfs_<hash>`` and ``finepdfs/<lang>_<hash>``. A name test alone
+            # reads the parent as the source and never descends past it.
             if source in registered:
-                found[source].append(relative)
+                candidates.append((source, relative, child))
+            if relative in prefixes:
+                pending.append(relative)
+
+    # Carrying the artifact file is what makes a directory an output rather than a
+    # parent, and it is the only part of this that costs a request per directory.
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        is_output = pool.map(lambda entry: (entry[2] / ARTIFACT_FILENAME).exists(), candidates)
+
+    found: dict[str, list[str]] = collections.defaultdict(list)
+    for (source, relative, _), output in zip(candidates, is_output, strict=True):
+        if output:
+            found[source].append(relative)
     return dict(found)
 
 
