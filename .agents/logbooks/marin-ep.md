@@ -444,3 +444,35 @@ Experiment ID prefix: `MEP`.
   stack, or benchmark from the last-known-good base).
 - Next action: read fixed-control verdict; then either bisect or launch
   ep-marin at --capacity-factor 1.1 on the surviving configuration.
+
+### 2026-08-15 03:20 - MEP-011: illegal-address root cause narrowed to the NCCL 2.30.7 bump; fixed baseline refreshed
+- Hypothesis chain (each falsified in turn): OOM (remat estimates 183-195
+  GiB) -> allocator limit -> process topology. Killers: (1) the fixed
+  flavor's estimate (195.09 GiB) is LARGER than ragged's (183.17) yet
+  fixed trains — the remat warning is benign; (2) raising
+  XLA_PYTHON_CLIENT_MEM_FRACTION to 0.80 left the peak at 139.74 GiB,
+  7.7 GiB under the limit, crash unchanged — not memory at all; (3)
+  1 process/GPU (wiki:101 topology) crashed identically. Teardown showed
+  `ncclCommWindowDeregister ... unhandled cuda error` — the ragged a2a
+  runs on NCCL windows/symmetric memory.
+- Repro ladder on one tray (`bench_backend_ep4.py 65536`,
+  `repro_ragged_multiproc.py`): EP4 single-process at full hero
+  per-device shapes: clean (and mgpu is 6.75x fwd / 4.55x fwd+bwd over
+  ragged at this size, bit-identical); EP4 with 4 processes over NCCL
+  P2P: 3 fwd+bwd steps clean. The trigger requires the internode
+  MNNVL/NCCL-window path.
+- Delta hunt: my branch base is fb91b3dc94 (2026-08-10); MHEP-001
+  (ep-ragged, EP64, PASSED 2026-08-01) ran nvidia-nccl-cu13 2.28.9; the
+  2026-08 native-package advance moved the lock to 2.30.7 (plus the known
+  cu12/cu13 libnccl.so.2 path collision). jax/jaxlib 0.11.0 predates
+  MHEP-001 and is exonerated.
+- Action: pinned `nvidia-nccl-cu13==2.28.9` via override-dependencies
+  (commit on marin-ep), filed #8313 (affects main: both ragged flavors),
+  launched confirmation run mep-m8-marin-nccl-25 (ep-marin, cf 1.1,
+  LHS off + overlap 1, 1 proc/GPU) — Kueue-gated behind cluster capacity
+  as of 03:17.
+- Baseline refreshed on this exact base: mep-ctl-fixed-25 completed 25/25
+  at 16.3 s/it (~257k tok/s at 4.19M tokens/step), drop_fraction 3.575%,
+  loss 6.x falling — consistent with the 24.04% MFU-era baseline.
+- Next action: confirmation-run verdict; on success, record the ep-marin
+  EP64 numbers vs the fixed baseline and proceed to the M8 PR.
