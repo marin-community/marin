@@ -599,3 +599,30 @@ Experiment ID prefix: `MEP`.
   gains at ~19.74% on their arms; our transport savings stack on top).
 - Next: monitor PR #8320 review; EP64 rerun on #8313 fix; consider
   repeat draws for variance bounds before finer claims.
+
+### 2026-08-15 14:50 - MEP-017: FIRST FULL EP64 HERO RUN — 227k tok/s (~20.7% MFU) at 0.66% drops
+- Run: mep-ep64c-cute-25 — ep-marin-cudnn-cute, TRUE hero (d6144/L48/E192/
+  top-4, batch 1024 = 4,194,304 tokens/step, EP64, 1 rack), cf 1.1,
+  split-32, LHS off, overlap 1, `--xla_gpu_ragged_all_to_all_mode=symmetric`,
+  and the #8077 kMaxPeers-128 patched PJRT wheel via the newly ported
+  `--pjrt-wheel` (prefix-glob fetch + forced single NCCL). 25/25 steps,
+  16/16 tasks succeeded, loss 6.02 falling, drop_fraction 0.00662.
+- Scored: steady 18.5 s/step (20it@7:14 -> 24it@8:28) = 226.7k tok/s/rack
+  = ~20.75% MFU on the 24.04% <-> 262,683 tok/s hero calibration.
+  Consistent with EP16's 21.2% minus rack-scale transport overhead, and
+  with the sibling campaign's 20.20% EP64 patched-wheel run (E384/top-8).
+- Unblock credit: the #8077 campaign root-caused #8313 as the
+  MultiGpuBarrierWithNcclKernel kMaxPeers=32 overflow at 64 ranks and
+  built the patched wheel. Ported here: --pjrt-wheel + setup-script
+  composition (fray setup_scripts REPLACES the default uv-sync — custom
+  scripts must be appended after an explicit default_setup_script; and
+  the wheel fetch must glob the S3 prefix).
+- Goal gap (>=25% MFU / >=350k tok/s): need <=13.2 s/step, -29% from
+  here. Levers: EP64 same-config stock control (launched:
+  mep-ctl3-ragcute-ep64) for the rack-scale A/B; cf sweep toward 1.0
+  (drop rule holds 0.66% at 1.1 — room below R2's 2%); splits-per-peer
+  retune at 64 ranks; wgrad kernels; hierarchical mgpu-intranode
+  transport (EP4: fused path 6.7x over ragged); M7 fusion.
+- Note: fixed_all_to_all still leads wall-clock (16.3 s/step / 24.04%)
+  but at 3.58% drops; drop-adjusted the gap is 253k vs 225k effective
+  assignments/s.
