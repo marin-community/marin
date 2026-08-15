@@ -55,6 +55,7 @@ from zephyr.dataset import Dataset, format_shard_path
 from zephyr.execution import ZephyrContext
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
+from experiments.datakit.cluster.quality.fast_transformer.artifact import DEFAULT_CALIBRATION_KEY
 from experiments.datakit.global_exact_dedup import ExactDupsPerSource, GlobalExactDedupData
 from experiments.datakit.store.bucket_writer import BucketSpillRun, write_bucket_cache_from_spills
 
@@ -79,10 +80,12 @@ class ClusteredStoreData(BaseModel):
     ``read_artifact(output_path, ClusteredStoreData)``.
     """
 
-    version: str = "v4"
+    version: str = "v5"
     cache_path: DatakitArtifactPath
     cluster_view: int
-    bucket_edges: list[float]
+    bucket_edges: dict[str, list[float]]
+    """Score cutpoints per content type, including the ``default`` fallback."""
+
     split: str
     buckets: list[BucketCacheStats]
     source_names: list[str]
@@ -97,6 +100,7 @@ def _per_source_shard_tuples(
     decontam: DeconAttributes,
     cluster_assign: AssignmentAttrData,
     quality_dir: str,
+    content_type_dir: str | None,
     exact_dedup_attr_dir: str,
     dedup_attr_dir: str,
     split: str,
@@ -112,6 +116,7 @@ def _per_source_shard_tuples(
     decon_dir = decontam.main_output_dir.rstrip("/")
     cluster_dir = cluster_assign.output_dir.rstrip("/")
     quality_dir = quality_dir.rstrip("/")
+    content_dir = content_type_dir.rstrip("/") if content_type_dir else None
     exact_dedup_dir = exact_dedup_attr_dir.rstrip("/")
     dedup_dir = dedup_attr_dir.rstrip("/")
     return [
@@ -120,6 +125,7 @@ def _per_source_shard_tuples(
             "decontam": f"{decon_dir}/{os.path.basename(tok_path)}",
             "cluster": f"{cluster_dir}/{os.path.basename(tok_path)}",
             "quality": f"{quality_dir}/{os.path.basename(tok_path)}",
+            "content_type": f"{content_dir}/{os.path.basename(tok_path)}" if content_dir else "",
             "exact_dedup": f"{exact_dedup_dir}/{os.path.basename(tok_path)}",
             "dedup": f"{dedup_dir}/{os.path.basename(tok_path)}",
             "source_name": source_name,
@@ -147,16 +153,50 @@ def _load_cluster_table(path: str, cluster_col: str) -> tuple[pa.Array, np.ndarr
     return table.column("id").combine_chunks(), np.asarray(table.column(cluster_col), dtype=np.int32)
 
 
-def _load_quality_table(path: str, bucket_edges: np.ndarray) -> tuple[pa.Array, np.ndarray]:
-    """Read a score shard and cut it into buckets.
+def _load_quality_table(
+    path: str,
+    content_type_path: str,
+    edges_by_type: Mapping[str, np.ndarray],
+) -> tuple[pa.Array, np.ndarray, pa.Array | None]:
+    """Read a score shard and cut it into buckets, per content type.
 
-    The scorer stores the score, not the bucket: the cutpoints are a corpus-wide
-    decision fitted by calibration, and holding them here means changing them is
-    a store rebuild rather than a rescore of every document.
+    The scorer stores the score, not the bucket: the cutpoints are a calibration
+    decision, and holding them here means changing them is a store rebuild rather
+    than a rescore of every document.
+
+    Which cutpoints apply depends on what the document is. One score means
+    different things in code and in prose, and the calibration carries a fitted
+    set per content type for exactly that reason. Rows whose type has no
+    calibration of its own -- ``other``, and anything the classifier emits later
+    -- fall to ``default``, which is the content-blind fit.
+
+    Returns the content-type column too, so the caller can check it lines up with
+    the other dense tables rather than trusting the basename.
     """
     table = _read_columns(path, ["id", "score"])
+    ids = table.column("id").combine_chunks()
     scores = np.asarray(table.column("score"), dtype=np.float64)
-    return table.column("id").combine_chunks(), np.digitize(scores, bucket_edges).astype(np.int32)
+    if not content_type_path:
+        return ids, np.digitize(scores, edges_by_type[DEFAULT_CALIBRATION_KEY]).astype(np.int32), None
+
+    content = _read_columns(content_type_path, ["id", "content_type"])
+    types = content.column("content_type").to_pylist()
+    if len(types) != len(scores):
+        raise RuntimeError(
+            f"{content_type_path}: {len(types)} content-type rows against {len(scores)} score rows "
+            "-- co-partitioning broken"
+        )
+    buckets = np.empty(len(scores), dtype=np.int32)
+    # One digitize per distinct type rather than per row: a shard carries a
+    # handful of types over hundreds of thousands of documents.
+    type_array = np.asarray(types, dtype=object)
+    for content_type in set(types):
+        selector = type_array == content_type
+        edges = edges_by_type.get(content_type, edges_by_type[DEFAULT_CALIBRATION_KEY])
+        buckets[selector] = np.digitize(scores[selector], edges)
+        if content_type not in edges_by_type:
+            counters.pipeline.update_counter("datakit_store/content_type_without_calibration", int(selector.sum()))
+    return ids, buckets, content.column("id").combine_chunks()
 
 
 def _load_verified_duplicates(path: str) -> set[str]:
@@ -347,7 +387,7 @@ def _iter_tokenized_documents(path: str) -> Iterator[tuple[str, np.ndarray]]:
 def _iter_surviving_docs(
     spec: dict[str, str],
     cluster_col: str,
-    bucket_edges: np.ndarray,
+    edges_by_type: Mapping[str, np.ndarray],
     *,
     stats: _FilterStats,
 ) -> Iterator[_SurvivingDocument]:
@@ -359,7 +399,9 @@ def _iter_surviving_docs(
     """
     decon_ids, contaminated = _load_decon_table(spec["decontam"])
     cluster_ids, cluster_vals = _load_cluster_table(spec["cluster"], cluster_col)
-    quality_ids, quality_buckets = _load_quality_table(spec["quality"], bucket_edges)
+    quality_ids, quality_buckets, content_ids = _load_quality_table(
+        spec["quality"], spec.get("content_type", ""), edges_by_type
+    )
     n_decon, n_cluster, n_quality = len(decon_ids), len(cluster_ids), len(quality_ids)
     if not (n_decon == n_cluster == n_quality):
         raise RuntimeError(
@@ -373,8 +415,13 @@ def _iter_surviving_docs(
         raise RuntimeError(f"{where}: decon/cluster id mismatch -- co-partitioning broken")
     if not pc.all(pc.equal(decon_ids, quality_ids)).as_py():
         raise RuntimeError(f"{where}: decon/quality id mismatch -- co-partitioning broken")
+    # The content type decides which cutpoints a row is scored against, so a
+    # misaligned type column silently buckets documents under another kind of
+    # content rather than failing.
+    if content_ids is not None and not pc.all(pc.equal(decon_ids, content_ids)).as_py():
+        raise RuntimeError(f"{where}: decon/content-type id mismatch -- co-partitioning broken")
     expected_ids = decon_ids.to_pylist()
-    del decon_ids, cluster_ids, quality_ids
+    del decon_ids, cluster_ids, quality_ids, content_ids
     exact_duplicates = _load_exact_duplicates(spec["exact_dedup"])
     verified_duplicates = _load_verified_duplicates(spec["dedup"])
 
@@ -417,7 +464,7 @@ def _iter_surviving_docs(
 def _spill_source_shard(
     spec: dict[str, str],
     cluster_col: str,
-    bucket_edges: np.ndarray,
+    edges_by_type: Mapping[str, np.ndarray],
     scratch_dir: str,
     shard_index: int,
 ) -> _SpillShardResult:
@@ -426,7 +473,7 @@ def _spill_source_shard(
     os.makedirs(shard_dir)
     buckets: dict[tuple[int, int], list[np.ndarray]] = defaultdict(list)
     stats = _FilterStats()
-    for document in _iter_surviving_docs(spec, cluster_col, bucket_edges, stats=stats):
+    for document in _iter_surviving_docs(spec, cluster_col, edges_by_type, stats=stats):
         buckets[(document.cluster, document.quality)].append(np.asarray(document.input_ids, dtype=np.int32))
 
     results: list[_SpillBucketRun] = []
@@ -480,7 +527,7 @@ def _partition_and_write_task(
     task_input: _StoreTask,
     *,
     cluster_col: str,
-    bucket_edges: np.ndarray,
+    edges_by_type: Mapping[str, np.ndarray],
     output_path: str,
     max_parallel_bucket_writes: int,
     partition_processes: int,
@@ -508,7 +555,7 @@ def _partition_and_write_task(
                 _spill_source_shard,
                 batch_specs,
                 [cluster_col] * len(batch_specs),
-                [bucket_edges] * len(batch_specs),
+                [edges_by_type] * len(batch_specs),
                 [scratch_dir] * len(batch_specs),
                 range(len(batch_specs)),
             )
@@ -636,7 +683,8 @@ def build_clustered_store(
     decontam: dict[str, DeconAttributes],
     cluster_assign: dict[str, AssignmentAttrData],
     quality: dict[str, str],
-    bucket_edges: Sequence[float],
+    bucket_edges: Mapping[str, Sequence[float]],
+    content_type: dict[str, str] | None = None,
     exact_dedup: GlobalExactDedupData,
     dedup: VerifiedFuzzyDupsAttrData,
     output_path: str,
@@ -653,10 +701,16 @@ def build_clustered_store(
     Args:
         quality: Per source, the directory of ``id``/``score`` shards, named by
             the same basenames as that source's tokenize shards.
-        bucket_edges: Cutpoints applied to ``score`` to get the quality bucket,
-            in ascending order. One set for the whole corpus: bucket ids are only
-            comparable across sources if every source was cut the same way, and
-            the caller owns that because it is the one that knows the scorer.
+        bucket_edges: Cutpoints applied to ``score``, keyed by content type, each
+            in ascending order. Must carry a ``default`` entry, which is what a
+            document gets when its type has no calibration of its own. One
+            mapping for the whole corpus: bucket ids are only comparable across
+            sources if every source was cut the same way, and the caller owns
+            that because it is the one that knows the scorer.
+        content_type: Per source, the directory of ``id``/``content_type`` shards
+            co-partitioned with tokenize. Omit to cut every document at
+            ``default``, which reads a corpus spanning code, math and prose
+            through one lens and measurably promotes the first two.
         task_count: Split input shards round-robin across this many tasks. When
             omitted, each input shard becomes one task.
         max_parallel_bucket_writes: Bucket caches finalized concurrently per
@@ -678,9 +732,20 @@ def build_clustered_store(
     if partition_processes < 1:
         raise ValueError(f"partition_processes must be >= 1, got {partition_processes}")
 
-    edges = np.asarray(bucket_edges, dtype=np.float64)
-    if edges.size == 0 or not np.all(np.diff(edges) > 0):
-        raise ValueError(f"bucket_edges must be non-empty and strictly ascending, got {list(bucket_edges)}")
+    if DEFAULT_CALIBRATION_KEY not in bucket_edges:
+        raise ValueError(f"bucket_edges needs a {DEFAULT_CALIBRATION_KEY!r} entry, got {sorted(bucket_edges)}")
+    edges_by_type: dict[str, np.ndarray] = {}
+    for content_key, values in bucket_edges.items():
+        edges = np.asarray(values, dtype=np.float64)
+        if edges.size == 0 or not np.all(np.diff(edges) > 0):
+            raise ValueError(f"bucket_edges[{content_key!r}] must be non-empty and ascending, got {list(values)}")
+        edges_by_type[content_key] = edges
+    widths = {len(v) for v in edges_by_type.values()}
+    if len(widths) != 1:
+        raise ValueError(f"every content type must cut into the same number of buckets, got widths {sorted(widths)}")
+    if content_type is not None and set(content_type) != set(tokenize):
+        missing = sorted(set(tokenize) - set(content_type))
+        raise ValueError(f"content_type source set must equal tokenize: missing={missing!r}")
 
     cluster_col = _validate_cluster_view(cluster_assign, cluster_view)
 
@@ -728,6 +793,7 @@ def build_clustered_store(
             decontam=decontam[source_name],
             cluster_assign=cluster_assign[source_name],
             quality_dir=quality[source_name],
+            content_type_dir=content_type[source_name] if content_type else None,
             exact_dedup_attr_dir=exact_dedup_attr_dir,
             dedup_attr_dir=dedup_attr_dir,
             split=split,
@@ -764,7 +830,7 @@ def build_clustered_store(
     write_task = partial(
         _partition_and_write_task,
         cluster_col=cluster_col,
-        bucket_edges=edges,
+        edges_by_type=edges_by_type,
         output_path=output_path,
         max_parallel_bucket_writes=max_parallel_bucket_writes,
         partition_processes=partition_processes,
@@ -806,7 +872,7 @@ def build_clustered_store(
     artifact = ClusteredStoreData(
         cache_path=output_path,
         cluster_view=cluster_view,
-        bucket_edges=edges.tolist(),
+        bucket_edges={k: v.tolist() for k, v in edges_by_type.items()},
         split=split,
         buckets=buckets,
         source_names=sorted(tokenize),

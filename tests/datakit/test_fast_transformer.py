@@ -19,7 +19,11 @@ from typing import cast
 import numpy as np
 import pytest
 
-from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES, calibration_bucket_edges
+from experiments.datakit.cluster.quality.fast_transformer.artifact import (
+    BUCKET_EDGES,
+    calibration_bucket_edges,
+    calibration_edges_by_content_type,
+)
 from experiments.datakit.cluster.quality.fast_transformer.calibrate import calibration_knots, fit_cutpoints
 from experiments.datakit.cluster.quality.fast_transformer.score import _systematic_take
 from experiments.datakit.cluster.quality.fast_transformer.scorer import CHUNK_CHARS, PooledScorer, score_bme
@@ -184,3 +188,46 @@ def test_a_calibration_that_is_not_the_pinned_one_is_rejected(tmp_path):
 
     with pytest.raises(ValueError, match="digests to"):
         calibration_bucket_edges(str(path), expected_sha256="0" * 64)
+
+
+def test_per_type_cutpoints_are_read_and_fall_back_to_default(tmp_path):
+    """A type with its own calibration gets it; anything else gets ``default``.
+
+    The classifier emits ``other``, which the calibration has no entry for, and
+    it may learn more labels later. Returning ``default`` in the same mapping is
+    what lets the store cut every row without deciding per call site what a
+    missing type means.
+    """
+    levels = np.repeat([1, 2, 3, 4, 5], 4).astype(float)
+    default = calibration_knots(levels / 10.0, levels)
+    code = calibration_knots(levels / 12.0, levels)
+    path = tmp_path / "calib.json"
+    path.write_text(json.dumps({"default": default, "types": {"code": code}}))
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    edges = calibration_edges_by_content_type(str(path), expected_sha256=digest)
+
+    assert set(edges) == {"default", "code"}
+    assert edges["default"] == tuple(default["xk"][1:-1])
+    assert edges["code"] == tuple(code["xk"][1:-1])
+    # The two disagree, which is the whole reason for reading them separately.
+    assert edges["code"] != edges["default"]
+    # An unlabelled type has no entry, so the caller's .get(..., default) applies.
+    assert "other" not in edges
+
+
+def test_a_per_type_calibration_with_the_wrong_knot_count_is_rejected(tmp_path):
+    levels = np.repeat([1, 2, 3, 4, 5], 4).astype(float)
+    path = tmp_path / "calib.json"
+    path.write_text(
+        json.dumps(
+            {
+                "default": calibration_knots(levels / 10.0, levels),
+                "types": {"code": {"xk": [0.0, 0.5, 1.0], "yk": [0.0, 0.5, 1.0]}},
+            }
+        )
+    )
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    with pytest.raises(ValueError, match="types/code"):
+        calibration_edges_by_content_type(str(path), expected_sha256=digest)

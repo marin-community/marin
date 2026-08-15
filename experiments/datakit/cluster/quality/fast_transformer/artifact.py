@@ -21,6 +21,39 @@ from rigging.filesystem.storage_path import StoragePath
 BUCKET_EDGES = (0.2, 0.4, 0.6, 0.8)
 
 
+DEFAULT_CALIBRATION_KEY = "default"
+"""The calibration fitted over the whole labelled set, ignoring content type."""
+
+
+def _interior_knots(entry: dict, where: str) -> tuple[float, ...]:
+    """Return one calibration's interior knots, checked against the bucket scheme."""
+    edges = tuple(float(k) for k in entry["xk"][1:-1])
+    if len(edges) != len(BUCKET_EDGES):
+        raise ValueError(
+            f"{where} has {len(edges)} interior knots but the bucket scheme "
+            f"has {len(BUCKET_EDGES)} cutpoints {BUCKET_EDGES}"
+        )
+    return edges
+
+
+def _verified_calibration(calibration_path: str, expected_sha256: str) -> dict:
+    """Load a calibration, refusing bytes the pin does not vouch for.
+
+    The path that leads here is a constant somebody wrote down, so it is checked
+    against the pin rather than trusted: scoring already refuses a model directory
+    that digests to the wrong value, and reading the cutpoints is the same claim
+    made on the read side.
+    """
+    blob = StoragePath(calibration_path).read_bytes()
+    digest = hashlib.sha256(blob).hexdigest()
+    if digest != expected_sha256:
+        raise ValueError(
+            f"{calibration_path} digests to {digest}, but the pin carries {expected_sha256}; "
+            "its cutpoints would bucket the corpus under a calibration nothing verified"
+        )
+    return json.loads(blob)
+
+
 def calibration_bucket_edges(calibration_path: str, *, expected_sha256: str) -> tuple[float, ...]:
     """Return the cutpoints a calibration puts at :data:`BUCKET_EDGES`, in raw score.
 
@@ -30,27 +63,32 @@ def calibration_bucket_edges(calibration_path: str, *, expected_sha256: str) -> 
     :data:`BUCKET_EDGES`, with one fewer pass over 18.7 billion documents. The
     outer two knots bound the spline's domain rather than dividing it.
 
-    ``expected_sha256`` is the digest a :class:`~experiments.datakit.hero_data.QualityPin`
-    carries, and these cutpoints decide which bucket every document in the corpus
-    lands in. The path that leads here is a constant somebody wrote down, so it is
-    checked against the pin rather than trusted: scoring already refuses a model
-    directory that digests to the wrong value, and reading the cutpoints is the
-    same claim made on the read side.
+    These are the content-type-blind cutpoints. See
+    :func:`calibration_edges_by_content_type` for the per-type ones, which is what
+    a corpus spanning code, math and prose actually wants.
     """
-    blob = StoragePath(calibration_path).read_bytes()
-    digest = hashlib.sha256(blob).hexdigest()
-    if digest != expected_sha256:
-        raise ValueError(
-            f"{calibration_path} digests to {digest}, but the pin carries {expected_sha256}; "
-            "its cutpoints would bucket the corpus under a calibration nothing verified"
-        )
-    knots = json.loads(blob)["default"]["xk"]
-    edges = tuple(float(k) for k in knots[1:-1])
-    if len(edges) != len(BUCKET_EDGES):
-        raise ValueError(
-            f"{calibration_path} has {len(edges)} interior knots but the bucket scheme "
-            f"has {len(BUCKET_EDGES)} cutpoints {BUCKET_EDGES}"
-        )
+    blob = _verified_calibration(calibration_path, expected_sha256)
+    return _interior_knots(blob[DEFAULT_CALIBRATION_KEY], calibration_path)
+
+
+def calibration_edges_by_content_type(calibration_path: str, *, expected_sha256: str) -> dict[str, tuple[float, ...]]:
+    """Return per-content-type cutpoints, keyed by type, plus ``default``.
+
+    One score means different things in different content. The scorer is fitted
+    on a labelled set spanning code, math, prose and the rest, and a single set of
+    cutpoints reads that mixture through one lens: measured on this corpus, the
+    content-blind edges put 36% of math documents and 24% of code documents in a
+    different bucket than their own calibration does, consistently promoting them.
+
+    ``default`` is what a document gets when its content type has no calibration
+    of its own -- ``other``, and anything the classifier learns to emit later.
+    Keeping it in the same mapping means the caller never has to decide what a
+    missing type means.
+    """
+    blob = _verified_calibration(calibration_path, expected_sha256)
+    edges = {DEFAULT_CALIBRATION_KEY: _interior_knots(blob[DEFAULT_CALIBRATION_KEY], calibration_path)}
+    for content_type, entry in blob.get("types", {}).items():
+        edges[content_type] = _interior_knots(entry, f"{calibration_path} types/{content_type}")
     return edges
 
 
