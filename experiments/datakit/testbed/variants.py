@@ -48,7 +48,8 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     verify_fuzzy_dups,
 )
 from marin.processing.tokenize.tokenize import TokenizedCache
-from rigging.filesystem import check_path_in_region, marin_prefix, prefix_join
+from rigging.filesystem.cluster_config import check_path_in_region, marin_prefix
+from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 from zephyr.execution import ZephyrExecutionResult
 

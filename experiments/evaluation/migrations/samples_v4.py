@@ -18,7 +18,7 @@ import logging
 from finestore.admin import drop_table as drop_manifest_table
 from finestore.reader import ReadView
 from marin.evaluation.archive import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION, SampleKind
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.migrations.archive_backup import superseded_samples_prefix
 

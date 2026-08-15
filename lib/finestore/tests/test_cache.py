@@ -20,7 +20,7 @@ _CACHE_PROCESS = textwrap.dedent(
     import finestore.cache as cache_module
     from finestore.cache import PersistentKvCache
     from finestore.store import DataStore
-    from rigging.filesystem import StoragePath
+    from rigging.filesystem.storage_path import StoragePath
 
     root, mode = sys.argv[1:]
     StoragePath.is_remote = property(lambda self: True)

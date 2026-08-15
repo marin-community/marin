@@ -39,7 +39,7 @@ from typing import Any, TypeVar
 
 import cloudpickle
 import psutil
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 from zephyr import counters
 from zephyr.plan import Scatter, StageContext, run_stage

@@ -39,7 +39,9 @@ from finestore.reader import ReadView
 from finestore.store import DataStore
 from marin.evaluation.records import list_records, read_records
 from pyarrow.fs import FSSpecHandler, PyFileSystem
-from rigging.filesystem import StoragePath, marin_temp_bucket, url_to_fs
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 _COPY_BUFFER_BYTES = 8 * 1024 * 1024
 _FORMAT_V1 = 1

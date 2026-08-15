@@ -39,7 +39,7 @@ import pyarrow.parquet as pq
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from pydantic import BaseModel
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 logger = logging.getLogger(__name__)
 

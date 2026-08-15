@@ -31,7 +31,8 @@ from jax._src.sharding import IndivisibleError
 from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
 
-from rigging.filesystem import StoragePath, prefix_join, record_transfer
+from rigging.filesystem.cross_region import record_transfer
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from levanter._debug_logging import flush_debug_output
 from levanter.checkpoint_manifest import CheckpointArray, build_manifest, read_manifest, write_manifest

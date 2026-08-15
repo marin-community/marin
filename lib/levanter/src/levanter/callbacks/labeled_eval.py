@@ -13,7 +13,7 @@ from jax.sharding import Mesh
 import haliax as hax
 from haliax.partitioning import ResourceMapping
 
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 import levanter.tracker
 from levanter.callbacks._core import ProgressEvent, StepInfo, progress_event_scope

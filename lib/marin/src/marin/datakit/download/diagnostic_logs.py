@@ -28,15 +28,10 @@ import requests
 from fray.types import ResourceConfig
 from fsspec.implementations.local import LocalFileSystem
 from pydantic import BaseModel, ConfigDict
-from rigging.filesystem import (
-    StoragePath,
-    atomic_rename,
-    marin_prefix,
-    marin_temp_bucket,
-    open_url,
-    prefix_join,
-    url_to_fs,
-)
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.cluster_config import marin_prefix, marin_temp_bucket
+from rigging.filesystem.factory import open_url, url_to_fs
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
@@ -1268,7 +1263,7 @@ def _concat_archive_parts(fs: fsspec.AbstractFileSystem, target: str, parts: lis
     """
     if isinstance(fs, LocalFileSystem):
         # No server to concatenate on: byte-append, publish with an atomic rename.
-        with atomic_rename(target, fs=fs) as tmp:
+        with atomic_rename(target, filesystem=fs) as tmp:
             with fs.open(tmp, "wb") as out:
                 for part in parts:
                     with fs.open(part, "rb") as src:

@@ -25,7 +25,9 @@ from fray.current_client import current_client
 from fray.local_backend import LocalClient
 from fray.types import ActorConfig, ResourceConfig
 from iris.client.client import get_iris_ctx
-from rigging.filesystem import StoragePath, TransferBudgetExceeded, marin_temp_bucket
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.cross_region import TransferBudgetExceeded
+from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import ExponentialBackoff
 
 from zephyr.coordinator import (

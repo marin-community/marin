@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.archive import EvalSample, EvaluationStore, Grading, SampleKind
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset

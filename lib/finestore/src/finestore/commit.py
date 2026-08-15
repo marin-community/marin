@@ -10,8 +10,8 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 
-from rigging.filesystem import StoragePath
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
+from rigging.filesystem.storage_path import StoragePath
 
 from finestore.layout import (
     FORMAT_VERSION,

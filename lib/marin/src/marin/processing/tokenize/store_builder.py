@@ -36,7 +36,7 @@ from levanter.store.cache import (
     write_levanter_cache,
 )
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.dataset import Dataset, format_shard_path
 from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file

@@ -24,9 +24,10 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
+import rigging.filesystem.factory as factory
 from finestore.layout import ARCHIVE_FILE, BLOBS_TABLE, HEAD_FILE
 from finestore.reader import ReadView
-from rigging.filesystem import StoragePath, factory, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.archive import (
     ARCHIVE_SAMPLES_TABLE,

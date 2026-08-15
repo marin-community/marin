@@ -17,7 +17,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import MAX_IRIS_WORKER_REPLICAS, ZephyrContext

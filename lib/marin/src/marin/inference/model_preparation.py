@@ -6,7 +6,7 @@
 import json
 
 from levanter.model_cache import resolve_cached_model_path
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from transformers import AutoConfig
 
 from marin.inference.vllm_server import _is_object_store_path

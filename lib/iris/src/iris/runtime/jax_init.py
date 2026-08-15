@@ -18,7 +18,8 @@ import time
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finestore.fileset import FineStoreDirectory, fetch_file_set
-from rigging.filesystem import marin_prefix, marin_temp_bucket, prefix_join
+from rigging.filesystem.cluster_config import marin_prefix, marin_temp_bucket
+from rigging.filesystem.storage_path import prefix_join
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 

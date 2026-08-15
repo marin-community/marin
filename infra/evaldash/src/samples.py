@@ -35,7 +35,7 @@ from marin.evaluation.archive import (
     sample_from_archive_row,
 )
 from pydantic import BaseModel, ConfigDict
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
 

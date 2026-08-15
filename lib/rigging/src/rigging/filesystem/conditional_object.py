@@ -24,7 +24,7 @@ from botocore.exceptions import ClientError
 from google.api_core.exceptions import NotFound, PreconditionFailed
 from google.cloud import storage
 
-from rigging.filesystem import factory
+import rigging.filesystem.factory as factory
 from rigging.filesystem.storage_path import StoragePath
 
 _MAX_READ_ATTEMPTS = 8

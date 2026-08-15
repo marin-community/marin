@@ -10,7 +10,7 @@ import logging
 import pathlib
 import threading
 
-from rigging.filesystem import atomic_rename
+from rigging.filesystem.atomic import atomic_rename
 
 from finestore.layout import BLOB_DATA_COLUMN, BLOB_NAME_COLUMN, BLOBS_TABLE
 from finestore.reader import ReadView

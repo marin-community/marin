@@ -9,7 +9,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 from finestore.commit import read_snapshot
 from finestore.layout import FORMAT_VERSION, ArchiveMetadata, CommitToken, FineStoreLayout, FormatVersionError

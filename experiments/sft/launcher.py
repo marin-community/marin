@@ -91,7 +91,7 @@ from marin.experiment.checkpoints import HfToLevanterCheckpoint
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache
 from marin.processing.tokenize.tokenize import tokenize as run_tokenize
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.instruction import (
     InstructionDatasetConfig,

@@ -13,8 +13,8 @@ from typing import Protocol
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import rigging.filesystem.factory as factory
 from pyarrow.fs import FSSpecHandler, PyFileSystem
-from rigging.filesystem import factory
 
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
 from finestore.layout import COMMIT_COLUMN, SEQ_COLUMN, CommitToken, FineStoreLayout, Shard

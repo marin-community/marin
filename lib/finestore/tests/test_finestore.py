@@ -25,7 +25,7 @@ from finestore.layout import (
 from finestore.migrations import migrate
 from finestore.reader import ReadView
 from finestore.store import DataStore, DataTable, PrimaryKeyConflict, TransactionTooLarge
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 
 def _rows(reader: ReadView, table: str, **kwargs) -> list[dict]:

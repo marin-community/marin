@@ -45,8 +45,9 @@ from marin.evaluation.archive import (
     trajectory_step_rows,
 )
 from marin.evaluation.records import list_records
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.migrations.archive_backup import legacy_archive_prefix
 from experiments.evaluation.migrations.samples_v4 import preserve_and_replace_samples

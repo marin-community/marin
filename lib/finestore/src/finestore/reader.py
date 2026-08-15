@@ -15,8 +15,9 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as pds
 import pyarrow.parquet as pq
+import rigging.filesystem.factory as factory
 from pyarrow.fs import FSSpecHandler, PyFileSystem
-from rigging.filesystem import StoragePath, factory
+from rigging.filesystem.storage_path import StoragePath
 
 from finestore.commit import ArchiveSnapshot, read_snapshot, validate_archive
 from finestore.layout import (

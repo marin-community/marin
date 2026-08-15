@@ -31,7 +31,7 @@ from marin.evaluation.lm_eval_samples import (
     run_artifacts,
 )
 from marin.evaluation.records import TaskCoverage
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.migrations.cli import SweepOutcome, _sweep_archives, selected_archives
 from experiments.evaluation.migrations.format_smoke import smoke_upgrade, smoke_upgrade_fleet
