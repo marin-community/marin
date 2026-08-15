@@ -2,12 +2,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build the marin-* lib wheels for PyPI publication.
+"""Build the pure-Python marin-* library wheels for PyPI publication.
 
-Builds the eight pure-Python marin-* lib packages (marin-core, marin-iris,
+Builds the pure-Python marin-* lib packages (marin-core, marin-iris,
 marin-fray, marin-haliax, marin-levanter, marin-rigging, marin-zephyr,
-marin-finestore) into
-dist/. The package release engine passes one exact version to this builder.
+marin-finestore) into dist/. The package release engine passes one exact
+version to this builder.
 Publication is done by `.github/workflows/marin-release-libs-wheels.yaml` via
 `pypa/gh-action-pypi-publish` with OIDC trusted publishing. This script never
 uploads anything and never needs a token.

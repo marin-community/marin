@@ -7,7 +7,7 @@ This directory contains thin trigger YAML around behavior implemented in `script
 `ops-pulumi-rollout.yaml` runs `pulumi up` for registered service projects after their source
 paths change on `main`. `scripts/ci/pulumi_rollouts.py` is the rollout registry and maps each
 service to its Pulumi directory, stack, deploy identity, tests, and additional source roots.
-The registry currently covers Ducky, Echo, Grafana, and XProf. Add one `Rollout` entry when
+The registry currently covers Ducky, Echo, EvalDash, Grafana, and XProf. Add one `Rollout` entry when
 another service should deploy through this workflow.
 
 For an `IrisService`, every registered shared source root must also be present in that

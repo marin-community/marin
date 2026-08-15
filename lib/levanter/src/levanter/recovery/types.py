@@ -9,6 +9,7 @@ the trainer child, so either side can import it without pulling in JAX.
 
 from __future__ import annotations
 
+import signal
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -42,19 +43,19 @@ RECOVERABLE = frozenset({FaultClass.STALL, FaultClass.STICKY, FaultClass.CRASH})
 def classify_returncode(returncode: int, *, deadman: bool = False) -> FaultClass:
     """Map a ``subprocess`` returncode to a fault class.
 
-    ``deadman`` marks a kill the supervisor initiated because the child stopped
-    heart-beating; the returncode is then the supervisor's own signal, so the
-    stall classification is forced regardless of what the signal was.
+    ``deadman`` marks a termination the supervisor initiated because the child
+    stopped heart-beating. An explicit sentinel or different fatal signal still
+    wins because the child may exit concurrently with the deadman.
     """
-    if deadman:
-        return FaultClass.STALL
     if returncode == EXIT_OK:
-        return FaultClass.NONE
+        return FaultClass.STALL if deadman else FaultClass.NONE
     if returncode == EXIT_STALL:
         return FaultClass.STALL
     if returncode == EXIT_STICKY_FAULT:
         return FaultClass.STICKY
     if returncode < 0:
+        if deadman and -returncode in (signal.SIGTERM, signal.SIGKILL):
+            return FaultClass.STALL
         # Popen reports signal deaths as the negated signal number. XLA's hang
         # watchdog and clique-abort paths end in LOG(FATAL) -> SIGABRT (-6); a
         # poisoned context or OOM shows up as SIGSEGV/SIGKILL.

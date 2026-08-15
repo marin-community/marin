@@ -29,7 +29,8 @@ from urllib.parse import urlsplit
 
 import click
 import pyarrow.parquet as pq
-from finestore.eval import (
+from finestore.reader import ReadView
+from marin.evaluation.archive import (
     ARCHIVE_SAMPLES_TABLE,
     ARCHIVE_STEPS_TABLE,
     SAMPLES_PREFIX,
@@ -43,7 +44,6 @@ from finestore.eval import (
     sample_from_archive_row,
     trajectory_step_rows,
 )
-from finestore.reader import CompositeReader
 from marin.evaluation.records import list_records
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -209,7 +209,7 @@ def _replace_stale_samples(results_path: str) -> None:
     so it may replace a table outright where an lm-eval export refuses. Rows written under a narrower
     primary key would otherwise survive beside the new ones as duplicates.
     """
-    stored_version = CompositeReader(results_path).schema_version(ARCHIVE_SAMPLES_TABLE)
+    stored_version = ReadView(results_path).schema_version(ARCHIVE_SAMPLES_TABLE)
     if stored_version is not None and stored_version != SCHEMA_VERSION:
         preserve_and_replace_samples(results_path, stored_version)
 
@@ -261,7 +261,7 @@ def migrate_run(
     return counts
 
 
-def _archive_samples(reader: CompositeReader) -> dict[SampleKey, EvalSample]:
+def _archive_samples(reader: ReadView) -> dict[SampleKey, EvalSample]:
     table = reader.scan(ARCHIVE_SAMPLES_TABLE)
     if table is None:
         return {}
@@ -272,7 +272,7 @@ def _archive_samples(reader: CompositeReader) -> dict[SampleKey, EvalSample]:
     return samples
 
 
-def _archive_steps(reader: CompositeReader) -> dict[StepKey, StepRecord]:
+def _archive_steps(reader: ReadView) -> dict[StepKey, StepRecord]:
     table = reader.scan(ARCHIVE_STEPS_TABLE)
     if table is None:
         return {}
@@ -301,7 +301,7 @@ def validate_run(
     """
     files = legacy_sample_files(results_path) if files is None else files
     legacy_rows, legacy_samples = _legacy_sample_inventory(files)
-    reader = CompositeReader(results_path)
+    reader = ReadView(results_path)
     if not reader.is_sealed():
         raise MigrationValidationError(f"archive at {results_path!r} is not sealed")
     archive_samples = _archive_samples(reader)
@@ -493,7 +493,7 @@ def migrate_run_and_validate(
 
 def archive_sample_count(results_path: str) -> int:
     """The number of samples in a run's finestore archive (for post-migration verification)."""
-    table = CompositeReader(results_path).scan(ARCHIVE_SAMPLES_TABLE, columns=["task"])
+    table = ReadView(results_path).scan(ARCHIVE_SAMPLES_TABLE, columns=["task"])
     return 0 if table is None else table.num_rows
 
 
