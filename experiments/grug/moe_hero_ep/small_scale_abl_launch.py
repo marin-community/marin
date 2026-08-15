@@ -5,8 +5,9 @@
 
 Downsized copies of the ``moe_hero_ep`` hero shape (hidden-wide routed experts, top-4, two shared,
 SConv, hybrid GQA, ``fixed_all_to_all`` EP MoE) at the small sweep widths, each trained to 750 tokens
-per active parameter (the EP sweep budget). The architecture, data (datakit two-phase mixture),
-evals (paloma + uncheatable every 1k), and per-size step counts match the Aug hero LR sweep grid
+per active parameter (the EP sweep budget). The architecture, Harrier token-proportional
+quality/domain mixture, evals (paloma + uncheatable every 1k), and per-size step counts match the
+Aug hero LR sweep grid
 (issue #7856) so these one-rack EP runs are comparable to the FSDP sweep points; only the
 width/depth/head split and the token budget shrink relative to the d6144 shape.
 
@@ -26,7 +27,8 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent
+from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent, LmDataConfig
+from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.datakit.source_key import datakit_source_path
@@ -38,7 +40,7 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
-from experiments.grug.moe.launch_datakit_moe_mix import _datakit_data_config, _val_component
+from experiments.grug.moe.launch_datakit_moe_mix import _val_component
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.launch import (
     DEFAULT_WANDB_PROJECT,
@@ -66,6 +68,54 @@ EVAL_BATCH_SIZE = 256
 # checkpoint, and an interrupted run would otherwise restart at step 0. A d1280 checkpoint is about
 # 38 GB, against 2.7 TiB at the d6144 hero shape.
 CHECKPOINT_INTERVAL = timedelta(minutes=30)
+
+_HARRIER_STORE_PREFIX = (
+    "s3://marin-us-east-02a/marin/datakit/cluster/domain/v1/harrier-all-sources-10m/store/marin_e9d3b067"
+)
+_MIXTURE_BLOCK_SIZE = 49_152
+# Finalized store token counts indexed by cluster, then quality bucket.
+_HARRIER_BUCKET_TOKENS = (
+    (7_799_528_645, 63_529_460_099, 200_953_415_482, 212_493_172_579, 63_873_936_570),
+    (54_924_498_305, 74_610_774_966, 123_094_894_649, 178_649_175_479, 156_738_458_950),
+    (942_610_183, 14_613_318_955, 36_144_319_554, 47_363_175_840, 71_155_013_906),
+    (36_288_936_687, 63_971_368_265, 111_548_818_320, 136_321_431_958, 63_702_383_045),
+    (2_067_648_179, 30_135_025_567, 55_947_074_303, 36_763_019_134, 13_202_234_170),
+    (6_099_791_105, 29_476_248_956, 80_281_664_273, 145_272_402_580, 107_950_346_730),
+    (637_039_374, 15_607_002_447, 41_515_121_078, 48_351_225_396, 60_285_838_266),
+    (29_107_634_244, 54_719_886_153, 49_064_351_107, 32_929_493_698, 9_366_601_605),
+    (243_400_789, 6_989_636_093, 32_383_052_702, 41_666_948_682, 27_427_505_883),
+    (4_132_300_319, 28_814_541_356, 48_514_679_441, 32_508_571_045, 12_042_926_100),
+    (7_915_346_751, 56_200_152_202, 61_500_971_646, 36_001_115_605, 21_185_665_368),
+    (6_271_854_777, 38_093_893_277, 76_285_800_687, 62_796_423_937, 12_412_527_369),
+    (7_807_716_695, 53_641_145_049, 95_009_822_880, 88_296_080_479, 25_088_327_326),
+    (91_580_588, 5_501_918_776, 87_330_336_585, 187_001_787_821, 98_295_106_117),
+    (6_766_297_946, 42_304_178_105, 131_734_956_713, 92_436_768_740, 13_794_026_462),
+    (4_112_469_964, 36_781_315_082, 67_855_111_743, 59_797_819_495, 46_054_838_633),
+    (9_216_341_333, 37_612_801_383, 81_259_658_583, 96_838_336_120, 24_970_010_492),
+    (38_504_486_148, 95_922_882_090, 129_993_524_627, 89_654_957_169, 21_512_707_477),
+    (5_086_902_049, 42_967_570_185, 61_549_531_604, 35_948_643_202, 13_977_334_391),
+    (6_293_587_108, 45_617_251_549, 64_411_953_673, 46_118_477_311, 22_162_616_632),
+    (4_976_837_359, 66_609_336_105, 148_971_691_620, 102_639_189_440, 18_136_608_823),
+    (7_436_307_211, 45_556_896_988, 105_667_107_101, 123_294_920_163, 46_569_805_736),
+    (3_396_062, 390_230_501, 21_800_580_960, 45_881_541_369, 12_789_172_667),
+    (22_137_660_227, 69_410_284_337, 121_261_221_863, 143_731_905_170, 48_372_651_942),
+    (24_417_596_331, 88_287_975_917, 114_437_100_298, 79_496_158_097, 33_537_701_135),
+    (69_992_908_889, 180_889_416_270, 202_579_538_901, 139_119_763_949, 30_661_033_500),
+    (27_326_776_564, 88_687_102_446, 304_166_261_970, 596_876_974_471, 231_934_022_656),
+    (257_811_479, 8_109_729_229, 21_076_182_351, 10_832_937_560, 2_102_107_943),
+    (5_984_857_671, 29_467_991_304, 89_985_283_871, 122_354_378_395, 58_881_707_186),
+    (37_397_055_693, 65_277_898_621, 125_123_491_304, 124_566_318_963, 35_993_030_691),
+    (4_655_437_481, 22_450_355_612, 73_714_390_203, 194_325_146_071, 459_807_879_594),
+    (2_326_973_361, 19_745_203_365, 33_279_294_943, 31_306_639_914, 24_754_309_511),
+    (179_150_229_294, 113_862_729_006, 135_496_049_145, 142_719_721_043, 45_033_196_318),
+    (4_819_948_338, 37_449_118_055, 141_851_734_940, 244_047_254_496, 92_620_493_936),
+    (941_690_364, 12_126_678_796, 28_893_475_962, 32_794_436_254, 24_589_857_619),
+    (21_036_511_359, 83_943_122_872, 114_477_756_152, 84_219_243_985, 16_262_101_764),
+    (4_751_477_311, 34_351_709_878, 41_149_229_507, 24_117_954_309, 13_875_466_657),
+    (10_752_869_052, 47_509_760_344, 77_598_455_063, 93_491_638_639, 77_883_052_088),
+    (63_880_064_256, 124_944_778_906, 151_822_802_515, 196_704_546_012, 126_247_789_219),
+    (3_508_878_769, 32_172_459_058, 133_643_402_062, 114_450_325_473, 85_168_923_680),
+)
 
 # Paloma + uncheatable held-out sets (marin_tokenizer), added as zero-train-weight datakit components
 # so they surface as tagged eval sets -- matching the FSDP sweep.
@@ -249,6 +299,49 @@ def _root_component(component: DatasetComponent | ConcatDatasetComponent) -> Dat
     return dataclasses.replace(component, cache_dir=datakit_source_path(component.cache_dir))
 
 
+def _harrier_data_config(
+    val_components: dict[str, DatasetComponent | ConcatDatasetComponent],
+) -> LmDataConfig:
+    buckets: dict[str, tuple[int, DatasetComponent]] = {}
+    for cluster, quality_tokens in enumerate(_HARRIER_BUCKET_TOKENS):
+        for quality, tokens in enumerate(quality_tokens):
+            name = f"c{cluster:02d}q{quality}"
+            buckets[name] = (
+                tokens,
+                DatasetComponent(
+                    source=None,
+                    cache_dir=f"{_HARRIER_STORE_PREFIX}/cluster={cluster}/quality={quality}",
+                    format=TextLmDatasetFormat(),
+                    tags=[name],
+                    flat_cache=True,
+                ),
+            )
+
+    total_tokens = sum(tokens for tokens, _ in buckets.values())
+    # MixtureDataset floors each component to an integer count per block. Keep rare buckets
+    # represented by concatenating those below one sequence per block into one weighted tail.
+    tail = {
+        name: component for name, (tokens, component) in buckets.items() if tokens * _MIXTURE_BLOCK_SIZE < total_tokens
+    }
+    components: dict[str, DatasetComponent | ConcatDatasetComponent] = {
+        name: component for name, (_, component) in buckets.items() if name not in tail
+    }
+    weights = {name: float(tokens) for name, (tokens, _) in buckets.items() if name not in tail}
+    components["tail"] = ConcatDatasetComponent(children=tail, tags=["tail"])
+    weights["tail"] = float(sum(buckets[name][0] for name in tail))
+    components.update(val_components)
+    weights.update({name: 0.0 for name in val_components})
+
+    return LmDataConfig(
+        tokenizer=marin_tokenizer,
+        cache_dir=None,
+        components=components,
+        train_weights=weights,
+        auto_build_caches=False,
+        mixture_block_size=_MIXTURE_BLOCK_SIZE,
+    )
+
+
 def build_small_run(
     *,
     run_id: str,
@@ -381,6 +474,7 @@ def build_small_run(
                     "hero",
                     "ep",
                     "small-abl",
+                    "harrier-proportional",
                     f"shape-{size}",
                     f"capacity-{capacity_factor:g}",
                     f"seq{seq_len}",
@@ -408,20 +502,12 @@ def build_small_run(
                 keep_last_temporary_checkpoints=1,
             ),
         )
-        # Datakit two-phase mixture, marin_prefix-rooted (relative bucket paths resolve against the
-        # cluster's region-local prefix). Paloma + uncheatable ride in as zero-train-weight components
-        # so they surface as tagged eval sets.
+        # Paloma + uncheatable ride in as zero-train-weight components so they surface as tagged eval sets.
         if ctx.is_fingerprint:
             val_components = {v.name: _val_component(ctx.artifact_path(v)) for v in _VALIDATION}
         else:
             val_components = {v.name: ctx.resolved(v).as_component() for v in _VALIDATION}
-        data = _datakit_data_config(
-            total_steps=num_steps,
-            batch_size=batch_size,
-            max_seq_len=seq_len,
-            enable_simulated_epoching=False,
-            val_components=val_components,
-        )
+        data = _harrier_data_config(val_components)
         data = dataclasses.replace(
             data, components={name: _root_component(component) for name, component in data.components.items()}
         )
