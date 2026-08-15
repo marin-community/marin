@@ -85,13 +85,12 @@ class _FeatureMembership(Protocol):
 FEATURE_FILTER_VERSION = 4
 DECON_ATTRIBUTES_VERSION = 5
 BLOOM_BUILD_VERSION = 2
-# v3 increases sampling fan-out so large sources do not hold the pipeline on a
-# small number of long-running shards.
-DROP_SET_BUILD_VERSION = 3
+# v4 uses more sample shards because a Stack v3 shard exceeded the 16 GiB worker limit.
+DROP_SET_BUILD_VERSION = 4
 MIN_SHORT_EXACT_TOKENS = 3
 DEFAULT_PARAGRAPH_DELIMITER = "\n\n"
 DROP_SET_SAMPLE_SHARD_BYTES = 64 * 1024 * 1024
-DROP_SET_SHARDS_PER_SOURCE = 128
+DROP_SET_SHARDS_PER_SOURCE = 512
 
 
 @dataclass(frozen=True)
