@@ -375,6 +375,8 @@ def _document_overlap_matches_by_minimum(
     max_score = 0.0
     matched = {minimum: set() for minimum in minimums}
     has_paragraph_ngrams = False
+    document_ngram_feature_count = 0
+    document_ngram_hits: set[int] = set()
 
     for paragraph in paragraphs:
         score, hits, _has_features, feature_count, paragraph_has_ngrams = _paragraph_overlap_matches_and_presence(
@@ -382,6 +384,8 @@ def _document_overlap_matches_by_minimum(
         )
         if ngram is not None and paragraph_has_ngrams:
             has_paragraph_ngrams = True
+            document_ngram_feature_count += feature_count
+            document_ngram_hits.update(hits)
         max_score = max(max_score, score)
         if not hits:
             continue
@@ -395,6 +399,12 @@ def _document_overlap_matches_by_minimum(
         for minimum, hashes in matched.items():
             if score >= threshold and (distinct_hits >= minimum or complete_single_feature_document):
                 hashes.update(hits)
+
+    # A complete eval record can have one n-gram and short answer metadata. Keep
+    # the complete-record exception only when no other usable n-gram is present.
+    if ngram is not None and document_ngram_feature_count == 1 and document_ngram_hits:
+        for hashes in matched.values():
+            hashes.update(document_ngram_hits)
 
     if ngram is not None and not has_paragraph_ngrams:
         use_record_fallback = (
