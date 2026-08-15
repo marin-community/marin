@@ -34,7 +34,7 @@ from pathlib import Path
 
 import fsspec.core
 import zstandard
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.controller import reads, writes

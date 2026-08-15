@@ -98,7 +98,7 @@ class DuckyConfig:
     """Object-store URI prefixes a query may read at all, e.g. ``("gs://marin-", "s3://marin-")``
     — the outer bound that keeps queries on marin buckets. A URI outside it is refused before
     execution. Whether an *allowed* GCS URI is same-region or egress-costly cross-region is a
-    separate decision made at query time by :func:`rigging.filesystem.is_cross_region_url`
+    separate decision made at query time by :func:`rigging.filesystem.cross_region.is_cross_region_url`
     (live bucket-location metadata), gated by the ``-- cross-region: allow`` opt-in comment; S3
     URIs (R2/CoreWeave) are never cross-region-gated. Empty disables enforcement (allow all).
     Catches literal URIs in the SQL, not paths hidden behind views/macros."""

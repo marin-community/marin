@@ -40,7 +40,7 @@ normalize_step}`` mapping), a ``quality_model`` dir, and optionally pre-staged
 domain centroids (``None`` trains them inline).
 
 Region-agnostic: worker sizing is one :class:`PoolConfig`. ``MARIN_PREFIX`` is
-resolved by :func:`rigging.filesystem.marin_prefix` -- unset (the normal iris-
+resolved by :func:`rigging.filesystem.cluster_config.marin_prefix` -- unset (the normal iris-
 worker case) it falls back to the in-region bucket, so source artifacts, the
 eval corpus (``EVAL_ROOT``), and every output land in-region. Override via
 ``iris job run -e MARIN_PREFIX <bucket>``.
@@ -121,7 +121,8 @@ from marin.processing.tokenize.attributes import (
     TokenizedAttrData,
     tokenize_attributes_step,
 )
-from rigging.filesystem import StoragePath, marin_prefix
+from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from zephyr.execution import ZephyrContext
 from zephyr.runners import SubprocessRunner

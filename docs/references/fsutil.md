@@ -149,6 +149,6 @@ Buckets and backends are declared in `config/*.yaml` under `data.region_buckets`
 each S3-compatible backend's endpoint and credential variables under `data.stores`.
 `fsutil` builds one filesystem per backend from that config, so adding a bucket is a
 config change rather than a code change. The same routing is available to library code
-as `rigging.filesystem.filesystem_for(url)`, which is the way to reach two S3 backends
+as `rigging.filesystem.buckets.filesystem_for(url)`, which is the way to reach two S3 backends
 from one process — the process-wide `AWS_*` / `FSSPEC_S3` variables can only describe
 one at a time.

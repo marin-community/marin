@@ -32,7 +32,7 @@ from levanter.data.text.datasets import (
 from levanter.data.text.formats import LmDatasetFormatBase, TextLmDatasetFormat
 from levanter.store.cache import ShardedCacheLayout
 from levanter.tokenizers import TokenizerBackend
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.dataset import Dataset, FileEntry
 from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file

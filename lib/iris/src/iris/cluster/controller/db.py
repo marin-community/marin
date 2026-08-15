@@ -51,7 +51,7 @@ from threading import RLock
 
 import fsspec.core
 from finelog.client.log_client import Table
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Timestamp
 from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import Connection

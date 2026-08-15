@@ -16,7 +16,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from rigging.filesystem import open_url
+from rigging.filesystem.factory import open_url
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 

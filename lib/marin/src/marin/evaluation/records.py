@@ -21,7 +21,7 @@ from enum import StrEnum
 import fsspec
 from fsspec.core import url_to_fs
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 logger = logging.getLogger(__name__)
 

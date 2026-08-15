@@ -33,7 +33,7 @@ import duckdb
 import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from tqdm import tqdm
 
 from scripts.ops.storage.constants import (

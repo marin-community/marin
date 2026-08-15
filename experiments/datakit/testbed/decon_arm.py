@@ -32,7 +32,7 @@ from marin.datakit.decon import DropSetSource, all_source_drop_sets_step, build_
 from marin.datakit.sources import all_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem import check_path_in_region, marin_prefix
+from rigging.filesystem.cluster_config import check_path_in_region, marin_prefix
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.decontam.config import (

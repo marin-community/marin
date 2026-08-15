@@ -28,7 +28,7 @@ from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 EUROPE_WEST4_GCS_PREFIX = "gs://marin-eu-west4/"
 REGION = "europe-west4"

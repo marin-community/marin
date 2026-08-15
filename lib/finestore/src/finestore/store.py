@@ -22,7 +22,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Protocol
 
 import pyarrow as pa
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 from finestore.compaction import compact
 from finestore.layout import (

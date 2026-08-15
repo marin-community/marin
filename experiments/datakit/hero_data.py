@@ -46,7 +46,8 @@ from levanter.tokenizers import TokenizerBackend
 from marin.datakit.sources import all_sources
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.attributes import tokenize_attributes_step
-from rigging.filesystem import marin_prefix, prefix_join
+from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datakit.reference_pipeline import select_sources, zephyr_datakit_steps
 

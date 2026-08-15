@@ -25,7 +25,7 @@ from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError
 from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 
 def _running_model() -> RunningModel:

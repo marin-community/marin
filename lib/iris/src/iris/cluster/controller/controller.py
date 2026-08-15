@@ -21,7 +21,7 @@ from pathlib import Path
 import uvicorn
 from finelog.client import RemoteLogHandler
 from rigging import telemetry
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 from rigging.server_auth import IAP_ISSUER, IAP_PUBLIC_KEYS_URL, TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import Row

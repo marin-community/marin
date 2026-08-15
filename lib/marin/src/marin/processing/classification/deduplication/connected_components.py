@@ -7,7 +7,7 @@ from typing import Any, TypedDict
 
 import dupekit
 from fray.types import ResourceConfig
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import ZephyrContext
