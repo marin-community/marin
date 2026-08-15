@@ -626,3 +626,26 @@ Experiment ID prefix: `MEP`.
 - Note: fixed_all_to_all still leads wall-clock (16.3 s/step / 24.04%)
   but at 3.58% drops; drop-adjusted the gap is 253k vs 225k effective
   assignments/s.
+
+### 2026-08-15 15:10 - MEP-018: EP64 same-config A/B — marin_ep leads stock ragged by ~3% at equal drops
+- Run: mep-ctl3-ragcute-ep64-25 — ep-ragged-cudnn-cute at the identical
+  EP64 hero config (cf 1.1, split-32, patched wheel, symmetric mode).
+  25/25 steps, 16/16 succeeded, drop_fraction 0.684%. Steady state from
+  step marks (14it@18:52 -> 22it@21:24): 19.0 s/step (long early-window
+  data-loader stall inflates the cumulative average; scored window only).
+- EP64 hero ladder (4,194,304 tokens/step, one rack):
+  | arm | cf | s/step | tok/s | ~MFU | drops |
+  |---|---|---|---|---|---|
+  | fixed_all_to_all (mep-ctl-fixed) | 1.33 | 16.3 | 257k | 24.04% | 3.58% |
+  | ep-marin-cudnn-cute | 1.1 | 18.5 | 227k | 20.75% | 0.66% |
+  | ep-ragged-cudnn-cute | 1.1 | 19.0-19.2 | 220k | 20.1% | 0.68% |
+- Interpretation: the drop-rule backend is now the fastest ragged-class
+  arm at both EP16 and EP64 (~3% over stock at rack scale, single draws).
+  fixed_all_to_all keeps a 13% wall-clock lead bought with 5.4x more
+  drops; on effective (non-dropped) assignment throughput the gap is
+  253k vs 225k. The 25%/350k goal needs -29% step time from here — the
+  ragged transport segment and wgrad kernels are the dominant remaining
+  costs (weaver's XProf on the EP16 proxy).
+- Next: cf 1.0 marin arm (MEP-H5 curve, expect ~-4% step at ~1.5-2%
+  drops); splits-per-peer retune at 64 ranks; then the deep levers
+  (hierarchical fused transport, wgrad kernels, M7).
