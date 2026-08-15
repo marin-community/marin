@@ -18,10 +18,12 @@ from typing import Protocol
 import pyarrow as pa
 
 from finestore.commit import ClearSeal, CommitCoordinator, CommitDelta, TableAddition, initialize_archive, write_schema
+from finestore.compaction import compact as compact_table
 from finestore.layout import (
     BLOB_DATA_COLUMN,
     BLOB_NAME_COLUMN,
     BLOBS_TABLE,
+    RESERVED_COLUMNS,
     SEQ_COLUMN,
     WRITER_COLUMN,
     CommitToken,
@@ -83,13 +85,21 @@ def _estimate_bytes(value: object) -> int:
 
 
 def _with_stamp_columns(schema: pa.Schema) -> pa.Schema:
-    names = set(schema.names)
+    reserved = set(schema.names) & RESERVED_COLUMNS
+    if reserved:
+        names = ", ".join(sorted(reserved))
+        raise ValueError(f"table schema uses reserved FineStore columns: {names}")
     fields = list(schema)
-    if SEQ_COLUMN not in names:
-        fields.append(pa.field(SEQ_COLUMN, pa.int64()))
-    if WRITER_COLUMN not in names:
-        fields.append(pa.field(WRITER_COLUMN, pa.string()))
+    fields.append(pa.field(SEQ_COLUMN, pa.int64()))
+    fields.append(pa.field(WRITER_COLUMN, pa.string()))
     return pa.schema(fields)
+
+
+def _reject_reserved_columns(columns: Iterable[str]) -> None:
+    reserved = set(columns) & RESERVED_COLUMNS
+    if reserved:
+        names = ", ".join(sorted(reserved))
+        raise ValueError(f"row uses reserved FineStore column: {names}")
 
 
 @dataclass(frozen=True)
@@ -170,6 +180,7 @@ class DataStore:
             metadata = TableMetadata(
                 primary_key=tuple(primary_key), schema_version=schema_version, on_conflict=on_conflict
             )
+            _reject_reserved_columns(primary_key)
             metadata_path = write_schema(self._layout, metadata)
             view = self.read_view()
             existing_metadata_path = view.table_metadata_path(name)
@@ -268,10 +279,8 @@ class DataStore:
 
     def compact(self, table: str):
         """Logically compact one table against the current manifest."""
-        from finestore.compaction import compact  # noqa: PLC0415  (breaks store/compaction cycle)
-
         with self._commit_lock:
-            return compact(self.root, table, coordinator=self._commits)
+            return compact_table(self.root, table, coordinator=self._commits)
 
     def maintain(self) -> CommitToken | None:
         """Flush pending rows and compact tables that crossed the shard threshold."""
@@ -469,6 +478,7 @@ class DataTable:
         stamped_rows = []
         with self._lock:
             for row in rows:
+                _reject_reserved_columns(row)
                 self._check_conflict(row)
                 stamped = dict(row)
                 stamped[SEQ_COLUMN] = self._next_seq
@@ -512,7 +522,7 @@ class DataTable:
         min_seq = min(row[SEQ_COLUMN] for row in rows)
         max_seq = max(row[SEQ_COLUMN] for row in rows)
         path = self._layout.shard_path(self.name, self._writer_id, 0, min_seq, uuid.uuid4().hex[:8])
-        write_table(path, table)
+        written = write_table(path, table)
         return Shard(
             path=path,
             writer=self._writer_id,
@@ -520,6 +530,8 @@ class DataTable:
             rows=len(rows),
             min_seq=min_seq,
             max_seq=max_seq,
+            size_bytes=written.size_bytes,
+            content_sha256=written.content_sha256,
             primary_key_sorted=primary_key_sorted,
         )
 

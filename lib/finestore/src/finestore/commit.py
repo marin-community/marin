@@ -15,6 +15,7 @@ from rigging.filesystem.conditional_object import ConditionalWriteError, conditi
 
 from finestore.layout import (
     FORMAT_VERSION,
+    SUPPORTED_MANIFEST_FEATURES,
     ArchiveMetadata,
     CommitToken,
     FineStoreLayout,
@@ -144,6 +145,10 @@ def read_snapshot(layout: FineStoreLayout) -> ArchiveSnapshot:
         )
     if (manifest.commit_id, manifest.sequence) != (head.commit_id, head.sequence):
         raise ValueError(f"HEAD at {layout.root} does not match manifest {head.manifest_path}")
+    unsupported = set(manifest.required_features) - SUPPORTED_MANIFEST_FEATURES
+    if unsupported:
+        names = ", ".join(sorted(unsupported))
+        raise ValueError(f"manifest {head.manifest_path} requires unsupported FineStore features: {names}")
     token = CommitToken(
         commit_id=head.commit_id,
         sequence=head.sequence,
@@ -167,7 +172,10 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
             for shard in addition.shards
             if shard.path not in paths
         )
-        tables[name] = ManifestTable(metadata_path=addition.metadata_path, shards=prior + added)
+        if current is None:
+            tables[name] = ManifestTable(metadata_path=addition.metadata_path, shards=added)
+        else:
+            tables[name] = current.model_copy(update={"shards": prior + added})
 
     for name, replacement in delta.replacements.items():
         current = tables.get(name)
@@ -178,13 +186,13 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
             raise CommitConflict(f"compaction inputs for table {name!r} are no longer active")
         survivors = tuple(shard for shard in current.shards if shard.path not in replacement.input_paths)
         outputs = tuple(shard.model_copy(update={"commit_sequence": sequence}) for shard in replacement.output_shards)
-        tables[name] = ManifestTable(metadata_path=current.metadata_path, shards=survivors + outputs)
+        tables[name] = current.model_copy(update={"shards": survivors + outputs})
 
     for name, metadata_path in delta.metadata_updates.items():
         current = tables.get(name)
         if current is None:
             raise CommitConflict(f"table {name!r} no longer exists")
-        tables[name] = ManifestTable(metadata_path=metadata_path, shards=current.shards)
+        tables[name] = current.model_copy(update={"metadata_path": metadata_path})
 
     for name in delta.removals:
         tables.pop(name, None)
@@ -194,12 +202,14 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
         sealed = None
     elif delta.seal_update is not None:
         sealed = delta.seal_update
-    return Manifest(
-        commit_id=uuid.uuid4().hex,
-        parent_commit_id=None if base.commit_id == _ROOT_COMMIT_ID else base.commit_id,
-        sequence=sequence,
-        tables=tables,
-        sealed=sealed,
+    return base.model_copy(
+        update={
+            "commit_id": uuid.uuid4().hex,
+            "parent_commit_id": None if base.commit_id == _ROOT_COMMIT_ID else base.commit_id,
+            "sequence": sequence,
+            "tables": tables,
+            "sealed": sealed,
+        }
     )
 
 

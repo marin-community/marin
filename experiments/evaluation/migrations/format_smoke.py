@@ -271,6 +271,22 @@ def _assert_fingerprints_equal(
         raise SmokeUpgradeValidationError(f"FineStore-owned objects changed during {context}")
 
 
+def _validate_manifest_shard_integrity(
+    root: StoragePath, reader: ReadView, copied_files: tuple[FileFingerprint, ...]
+) -> None:
+    expected = {}
+    for file in copied_files:
+        if file.relative_path.endswith(".parquet"):
+            expected[file.relative_path] = (file.size, file.sha256)
+    observed = {}
+    for table in reader.table_names():
+        for shard in reader.list_shards(table):
+            relative_path = StoragePath(shard.path).relative_to(root)
+            observed[relative_path] = (shard.size_bytes, shard.content_sha256)
+    if observed != expected:
+        raise SmokeUpgradeValidationError("v2 manifest shard integrity metadata does not match the copied payloads")
+
+
 def select_v1_archive(records_prefix: str, *, max_bytes: int) -> str:
     """Choose a sealed v1 eval archive with sample rows and at most ``max_bytes`` of data."""
     prefix = StoragePath(records_prefix)
@@ -494,6 +510,7 @@ def smoke_upgrade(source: str, destination: str) -> SmokeUpgradeResult:
     reader = ReadView(destination)
     if reader.is_sealed() != (legacy.seal is not None) or reader.seal_marker() != legacy.seal:
         raise SmokeUpgradeValidationError("seal state changed during migration")
+    _validate_manifest_shard_integrity(destination_root, reader, copied_files)
     validations = _validate_tables(source, legacy, expected_tables, reader)
 
     source_after_snapshot = inspect_legacy_snapshot(source)

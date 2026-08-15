@@ -70,6 +70,34 @@ def _build_filter(where: list[tuple[str, str, object]] | None) -> pds.Expression
     return expr
 
 
+def _partition_filter(
+    where: list[tuple[str, str, object]] | None, primary_key: tuple[str, ...]
+) -> tuple[list[tuple[str, str, object]], list[tuple[str, str, object]]]:
+    primary_key_columns = set(primary_key)
+    pushdown = []
+    after_deduplication = []
+    for clause in where or []:
+        if clause[1] not in _SUPPORTED_OPS:
+            raise ValueError(f"unsupported filter op {clause[1]!r}; expected one of {sorted(_SUPPORTED_OPS)}")
+        target = pushdown if clause[0] in primary_key_columns else after_deduplication
+        target.append(clause)
+    return pushdown, after_deduplication
+
+
+def _matches_filter(row: dict, where: list[tuple[str, str, object]]) -> bool:
+    for column, operator, value in where:
+        candidate = row.get(column)
+        if candidate is None:
+            return False
+        if operator == "==" and candidate != value:
+            return False
+        if operator == "!=" and candidate == value:
+            return False
+        if operator == "in" and candidate not in value:
+            return False
+    return True
+
+
 def iter_shard_rows(
     shard: Shard,
     unified: pa.Schema,
@@ -186,6 +214,7 @@ class ReadView:
         if not shards:
             return None
         primary_key = self.primary_key(table)
+        pushdown_where, post_dedup_where = _partition_filter(where, primary_key)
         fs, _ = factory.url_to_fs(self.root)
         pa_fs = PyFileSystem(FSSpecHandler(fs))
         unified = pa.unify_schemas(
@@ -194,7 +223,8 @@ class ReadView:
 
         read_columns = None
         if columns is not None:
-            needed = set(columns) | set(primary_key) | {SEQ_COLUMN, COMMIT_COLUMN}
+            filter_columns = {name for name, _operator, _value in post_dedup_where}
+            needed = set(columns) | set(primary_key) | filter_columns | {SEQ_COLUMN, COMMIT_COLUMN}
             read_columns = [name for name in unified.names if name in needed]
 
         by_version: dict[tuple[int, int], list[str]] = defaultdict(list)
@@ -204,7 +234,7 @@ class ReadView:
         parts: list[pa.Table] = []
         for (commit_sequence, generation), paths in sorted(by_version.items()):
             dataset = pds.dataset(paths, filesystem=pa_fs, format="parquet", schema=unified)
-            part = dataset.to_table(columns=read_columns, filter=_build_filter(where))
+            part = dataset.to_table(columns=read_columns, filter=_build_filter(pushdown_where))
             part = part.append_column(GEN_COLUMN, pa.array([generation] * part.num_rows, pa.int32()))
             commit_values = pa.array([commit_sequence] * part.num_rows, pa.int64())
             if COMMIT_COLUMN in part.column_names:
@@ -217,6 +247,8 @@ class ReadView:
         combined = parts[0] if len(parts) == 1 else pa.concat_tables(parts, promote_options="permissive")
         if all(name in combined.column_names for name in primary_key):
             combined = _deduplicate(combined, primary_key)
+        if post_dedup_where:
+            combined = pds.dataset(combined).to_table(filter=_build_filter(post_dedup_where))
         if columns is not None:
             combined = combined.select([name for name in columns if name in combined.column_names])
         return combined
@@ -233,6 +265,7 @@ class ReadView:
         if not shards:
             return
         primary_key = self.primary_key(table)
+        pushdown_where, post_dedup_where = _partition_filter(where, primary_key)
         fs, _ = factory.url_to_fs(self.root)
         pa_fs = PyFileSystem(FSSpecHandler(fs))
         unified = pa.unify_schemas(
@@ -243,9 +276,11 @@ class ReadView:
             filter_columns = {name for name, _operator, _value in where or []}
             needed = set(columns) | set(primary_key) | filter_columns | {SEQ_COLUMN, COMMIT_COLUMN}
             read_columns = [name for name in unified.names if name in needed]
-        streams = [iter_shard_rows(shard, unified, primary_key, pa_fs, read_columns, where) for shard in shards]
+        streams = [iter_shard_rows(shard, unified, primary_key, pa_fs, read_columns, pushdown_where) for shard in shards]
         for merged in merge_deduplicated_rows(streams):
             row = merged.row
+            if not _matches_filter(row, post_dedup_where):
+                continue
             if columns is not None:
                 row = {name: row[name] for name in columns if name in row}
             yield row

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem import prefix_join
 
 ARCHIVE_FILE = "_archive.json"
@@ -25,6 +25,9 @@ SEQ_COLUMN = "_seq"
 WRITER_COLUMN = "_writer"
 GEN_COLUMN = "_gen"
 COMMIT_COLUMN = "_commit"
+RESERVED_COLUMNS = frozenset({SEQ_COLUMN, WRITER_COLUMN, GEN_COLUMN, COMMIT_COLUMN})
+
+SUPPORTED_MANIFEST_FEATURES: frozenset[str] = frozenset()
 
 URI_SCHEME = "finestore"
 BLOBS_TABLE = "blobs"
@@ -47,7 +50,11 @@ class FormatVersionError(ValueError):
         )
 
 
-class ArchiveMetadata(BaseModel):
+class _FormatModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+
+class ArchiveMetadata(_FormatModel):
     """The archive-wide format marker advanced by format migrations."""
 
     format_version: int = FORMAT_VERSION
@@ -60,7 +67,7 @@ class OnConflict(StrEnum):
     SUPERSEDE = "supersede"
 
 
-class TableMetadata(BaseModel):
+class TableMetadata(_FormatModel):
     """Logical table metadata stored in an immutable schema object."""
 
     primary_key: tuple[str, ...]
@@ -68,14 +75,14 @@ class TableMetadata(BaseModel):
     on_conflict: OnConflict = OnConflict.ERROR
 
 
-class SealMarker(BaseModel):
+class SealMarker(_FormatModel):
     """Seal state embedded in a committed manifest."""
 
     writer: str
     superseded: dict[str, int] = Field(default_factory=dict)
 
 
-class Shard(BaseModel):
+class Shard(_FormatModel):
     """One immutable Parquet segment referenced by a manifest."""
 
     path: str
@@ -84,29 +91,32 @@ class Shard(BaseModel):
     rows: int
     min_seq: int
     max_seq: int
+    size_bytes: int = Field(ge=0)
+    content_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
     commit_sequence: int = 0
     primary_key_sorted: bool = False
 
 
-class ManifestTable(BaseModel):
+class ManifestTable(_FormatModel):
     """The complete visible state of one table."""
 
     metadata_path: str
     shards: tuple[Shard, ...] = ()
 
 
-class Manifest(BaseModel):
+class Manifest(_FormatModel):
     """One immutable, complete archive snapshot."""
 
     format_version: int = FORMAT_VERSION
     commit_id: str
     parent_commit_id: str | None = None
     sequence: int
+    required_features: tuple[str, ...] = ()
     tables: dict[str, ManifestTable] = Field(default_factory=dict)
     sealed: SealMarker | None = None
 
 
-class HeadMetadata(BaseModel):
+class HeadMetadata(_FormatModel):
     """The small mutable pointer published with compare-and-swap."""
 
     format_version: int = FORMAT_VERSION

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import re
 import uuid
 
@@ -38,6 +39,7 @@ _LEGACY_SCHEMA_FILE = "_schema.json"
 LEGACY_SEAL_FILE = "SEALED"
 _WRITER_SEGMENT = re.compile(r"^w=(.+)$")
 _GENERATION_SEGMENT = re.compile(r"^g=(\d+)$")
+_HASH_CHUNK_BYTES = 1024 * 1024
 
 
 class _LegacyArchiveMetadata(BaseModel):
@@ -124,6 +126,12 @@ def _legacy_shards(root: StoragePath, table: str) -> tuple[Shard, ...]:
             writer, generation = parsed
             with path.open("rb") as handle:
                 metadata = pq.read_metadata(handle)
+                handle.seek(0)
+                digest = hashlib.sha256()
+                size_bytes = 0
+                while chunk := handle.read(_HASH_CHUNK_BYTES):
+                    digest.update(chunk)
+                    size_bytes += len(chunk)
             min_seq, max_seq = _sequence_bounds(metadata)
             shards.append(
                 Shard(
@@ -133,6 +141,8 @@ def _legacy_shards(root: StoragePath, table: str) -> tuple[Shard, ...]:
                     rows=metadata.num_rows,
                     min_seq=min_seq,
                     max_seq=max_seq,
+                    size_bytes=size_bytes,
+                    content_sha256=digest.hexdigest(),
                     commit_sequence=1,
                 )
             )

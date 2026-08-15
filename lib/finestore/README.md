@@ -58,9 +58,9 @@ its results. Create a new view to observe a newer token.
 
 `scan` supports column projection and `==`, `!=`, and `in` filters. FineStore unifies
 compatible Parquet schemas across active shards and keeps the row from the latest
-user commit for each primary key. Compaction preserves each row's original commit
-sequence, so reorganizing files never makes an older value outrank a concurrent
-write.
+user commit for each primary key before applying filters on non-key columns. Compaction
+preserves each row's original commit sequence, so reorganizing files never makes an
+older value outrank a concurrent write.
 
 ## Named objects and caches
 
@@ -115,7 +115,15 @@ archive retention or reader leases; it is outside the current API.
 
 Only `HEAD` is mutable. The `HEAD` document names a manifest, commit id, and logical
 sequence. A manifest names every active shard, its writer and compaction generation,
-row and sequence bounds, each table's metadata object, and optional seal state.
+row and sequence bounds, byte size, SHA-256 digest, each table's metadata object, and
+optional seal state. Writers compute shard integrity metadata while streaming Parquet,
+so it does not require another object-store read.
+
+Manifest models preserve unknown optional JSON fields when an older writer rebases a
+commit. A manifest can also name `required_features`; readers reject features they do
+not implement before exposing a view. This lets future optional metadata remain
+additive while mandatory semantics fail closed without forcing unrelated archives to
+change their format version.
 
 Writable archives require real conditional object writes:
 
@@ -154,8 +162,9 @@ evaluation archives, the fleet operator runs
 `experiments.evaluation.migrations.cli upgrade-format` before deploying format-v2
 readers. The v1-to-v2 revision is write-open-safe when the archive is sealed. A writable
 open then publishes existing Parquet shards through an initial manifest and keeps the
-legacy objects without copying payload data. An unsealed archive still requires the
-owner to quiesce and seal its writers first.
+legacy objects without copying payload data. Migration reads each payload once to bind
+its byte size and SHA-256 digest into the v2 manifest. An unsealed archive still
+requires the owner to quiesce and seal its writers first.
 
 ## Package boundary
 

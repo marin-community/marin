@@ -5,6 +5,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -13,6 +16,7 @@ from finestore.commit import CommitConflict, CommitCoordinator
 from finestore.compaction import compact
 from finestore.layout import (
     FORMAT_VERSION,
+    RESERVED_COLUMNS,
     ArchiveMetadata,
     FineStoreLayout,
     FormatVersionError,
@@ -87,6 +91,30 @@ def test_supersede_keeps_latest_seq(tmp_path):
     rows = _rows(ReadView(root), "samples")
     assert len(rows) == 1
     assert rows[0]["score"] == 2.0
+
+
+def test_filter_applies_to_latest_row_after_supersede(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        table = store.table("samples", primary_key=("doc_id",), on_conflict=OnConflict.SUPERSEDE)
+        table.append({"doc_id": "1", "status": "pending"})
+        store.flush()
+        table.append({"doc_id": "1", "status": "done"})
+        store.flush()
+
+    view = ReadView(root)
+    where = [("status", "==", "pending")]
+    assert _rows(view, "samples", where=where) == []
+    assert list(view.iter_rows("samples", where=where)) == []
+
+
+@pytest.mark.parametrize("column", sorted(RESERVED_COLUMNS))
+def test_append_rejects_reserved_stamp_columns(tmp_path, column):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        table = store.table("samples", primary_key=("doc_id",))
+        with pytest.raises(ValueError, match="reserved FineStore column"):
+            table.append({"doc_id": "1", column: 999})
 
 
 def test_conflicting_primary_key_raises(tmp_path):
@@ -312,6 +340,24 @@ def test_compaction_replaces_sources_logically_and_retains_objects(tmp_path):
     assert {r["doc_id"] for r in rows} == {"0", "1", "2"}
 
 
+def test_manifest_binds_flush_and_compaction_shard_bytes(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        store.table("samples", primary_key=("doc_id",)).append({"doc_id": "1"})
+        store.flush()
+
+    level_zero = ReadView(root).list_shards("samples")[0]
+    level_zero_bytes = StoragePath(level_zero.path).read_bytes()
+    assert level_zero.size_bytes == len(level_zero_bytes)
+    assert level_zero.content_sha256 == hashlib.sha256(level_zero_bytes).hexdigest()
+
+    compact(root, "samples")
+    compacted = ReadView(root).list_shards("samples")[0]
+    compacted_bytes = StoragePath(compacted.path).read_bytes()
+    assert compacted.size_bytes == len(compacted_bytes)
+    assert compacted.content_sha256 == hashlib.sha256(compacted_bytes).hexdigest()
+
+
 def test_read_view_remains_valid_after_compaction(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
@@ -422,6 +468,47 @@ def test_reader_refuses_a_future_format(tmp_path):
         DataStore.open(root)
 
 
+def test_reader_refuses_unknown_required_manifest_feature(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        store.table("samples", primary_key=("doc_id",)).append({"doc_id": "1"})
+        token = store.flush()
+    assert token is not None
+
+    manifest_path = StoragePath(token.manifest_path)
+    manifest = json.loads(manifest_path.read_text())
+    manifest["required_features"] = ["deletion-vectors"]
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="deletion-vectors"):
+        ReadView(root)
+
+
+def test_commit_preserves_unknown_optional_manifest_fields(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="first") as store:
+        store.table("samples", primary_key=("doc_id",)).append({"doc_id": "1"})
+        token = store.flush()
+    assert token is not None
+
+    manifest_path = StoragePath(token.manifest_path)
+    manifest = json.loads(manifest_path.read_text())
+    manifest["future_manifest"] = {"retention": "keep"}
+    manifest["tables"]["samples"]["future_table"] = "keep"
+    manifest["tables"]["samples"]["shards"][0]["future_shard"] = 17
+    manifest_path.write_text(json.dumps(manifest))
+
+    with DataStore.open(root, writer_id="second") as store:
+        store.table("samples", primary_key=("doc_id",)).append({"doc_id": "2"})
+        next_token = store.flush()
+    assert next_token is not None
+
+    committed = json.loads(StoragePath(next_token.manifest_path).read_text())
+    assert committed["future_manifest"] == {"retention": "keep"}
+    assert committed["tables"]["samples"]["future_table"] == "keep"
+    assert committed["tables"]["samples"]["shards"][0]["future_shard"] == 17
+
+
 def test_read_view_refuses_an_older_format_with_migration_instructions(tmp_path):
     root = tmp_path / "run"
     root.mkdir()
@@ -523,8 +610,6 @@ def test_explicit_schema_pins_types_and_rejects_mismatch(tmp_path):
             ("task", pa.string()),
             ("doc_id", pa.string()),
             ("count", pa.int64()),
-            ("_seq", pa.int64()),
-            ("_writer", pa.string()),
         ]
     )
     with pytest.raises(pa.ArrowInvalid):
@@ -614,7 +699,7 @@ def test_failed_multi_table_flush_restores_every_buffer(tmp_path, monkeypatch):
             writes += 1
             if writes == 2:
                 raise OSError("injected shard failure")
-            real_write(path, table)
+            return real_write(path, table)
 
         monkeypatch.setattr("finestore.store.write_table", fail_second_write)
         with pytest.raises(OSError, match="injected"):
@@ -689,7 +774,11 @@ def test_manifest_migration_publishes_existing_shards_through_head(tmp_path):
     assert view.is_sealed()
     assert view.schema_version("samples") == 3
     assert view.point("samples", doc_id="1")["score"] == 0.5
-    assert view.list_shards("samples")[0].max_seq == 7
+    migrated_shard = view.list_shards("samples")[0]
+    shard_bytes = shard.read_bytes()
+    assert migrated_shard.max_seq == 7
+    assert migrated_shard.size_bytes == len(shard_bytes)
+    assert migrated_shard.content_sha256 == hashlib.sha256(shard_bytes).hexdigest()
     assert shard.exists()
     assert (root / "samples" / "_schema.json").exists()
     repeated = migrate(root.as_uri())

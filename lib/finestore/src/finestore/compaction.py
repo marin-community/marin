@@ -101,6 +101,7 @@ def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None 
             written += len(batch)
 
     assert min_seq is not None and max_seq is not None
+    shard_result = writer.result
     output = Shard(
         path=output_path,
         writer=_COMPACTOR,
@@ -108,6 +109,8 @@ def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None 
         rows=written,
         min_seq=min_seq,
         max_seq=max_seq,
+        size_bytes=shard_result.size_bytes,
+        content_sha256=shard_result.content_sha256,
         primary_key_sorted=True,
     )
     try:
