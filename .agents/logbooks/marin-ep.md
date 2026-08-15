@@ -544,3 +544,27 @@ Experiment ID prefix: `MEP`.
   b256/cf1.1/split-32 config for the same-bytes drop + speed A/B.
 - Next: control comparison table (also vs S28 18.08% MFU at cf 1.33);
   logbook + issue; then M8 PR.
+
+### 2026-08-15 10:55 - MEP-015: EP16 A/B complete — parity speed, fewer drops, cf-1.1 win confirmed
+- Result (EP16 exact proxy, 4 nodes x 4 GPUs, E48/El=3, batch 256 =
+  1,048,576 tokens/step, split-32, LHS off, overlap 1; steady-state
+  per-step from tqdm elapsed deltas over the scored window):
+  | arm | cf | steady s/step | drop_fraction |
+  |---|---|---|---|
+  | ep-marin (mep-m8-marin-ep16d) | 1.1 | 19.25-19.5 | 0.00044 |
+  | ep-ragged (mep-ctl2-ragged-ep16) | 1.1 | 19.5-19.7 | 0.00067 |
+  | ep-ragged S28 (weaver, 8081 branch) | 1.33 | 21.11 | 0 |
+  | ep-ragged-cute S33 (weaver) | 1.33 | 19.11 (19.63% MFU) | 0 |
+- Interpretation: at the same configuration marin_ep is speed-parity-to-
+  slightly-faster than stock ragged with ~1.5x fewer drops (init-uniform
+  routing understates the drop advantage; MEP-H1 says ~10x under
+  trained-router skew, where per-receiver pooling saturates). Both cf-1.1
+  arms beat the cf-1.33 baseline ~8%, in line with MEP-H5. Equivalent
+  MFU ~19.7% — ties the CuTe-GEMM variant while still on Triton
+  ragged_dot (M7 GEMM headroom is additive from here).
+- Caveats: single placement draw each (memory says ±2pp variance);
+  init-routing drops only; EP64 remains blocked by #8313, so the R4/goal
+  MFU targets are unmeasurable at rack scale until that fix lands.
+- Next: M8 PR from the rebased marin-ep branch (measurements cite the
+  marin-ep-8081 measurement branch); then M7 GEMM + hierarchical
+  transport as autoresearch levers.
