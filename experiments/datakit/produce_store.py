@@ -169,23 +169,29 @@ class Pending:
     remedy: str
 
 
-def pending() -> list[Pending]:
+def pending(sources: list[str] | None = None) -> list[Pending]:
     """Return every hero stage the store needs that is not registered yet.
 
     Collected rather than raised, so a caller waiting on two jobs learns about
-    both from one run instead of discovering the second only after the first
-    lands.
+    all of them from one run instead of discovering the second only after the
+    first lands.
+
+    Scoped to ``sources``, because decontamination lands per source: a run over
+    the sources that already have it is exactly how the store gets exercised
+    before the rest finish, and a registry-wide probe would refuse it.
     """
-    probes: list[Callable[[], object]] = [
-        hero_data.verified_fuzzy_dups,
-        lambda: hero_data.decontam(hero_data.source_names()[0]),
-    ]
+    names = hero_data.source_names() if sources is None else sources
+    probes: list[Callable[[], object]] = [hero_data.verified_fuzzy_dups]
+    probes += [lambda n=name: hero_data.decontam(n) for name in names]
     missing: list[Pending] = []
+    seen: set[str] = set()
     for probe in probes:
         try:
             probe()
         except hero_data.PendingRegistration as unregistered:
-            missing.append(Pending(unregistered.stage, unregistered.remedy))
+            if unregistered.stage not in seen:
+                seen.add(unregistered.stage)
+                missing.append(Pending(unregistered.stage, unregistered.remedy))
     return missing
 
 
@@ -690,7 +696,8 @@ def main(argv: list[str] | None = None) -> None:
     configure_logging(logging.INFO)
     configure_coreweave_s3()
 
-    unregistered = pending()
+    sources = [s.strip() for s in args.sources.split(",") if s.strip()] if args.sources else None
+    unregistered = pending(sources)
     if args.pending:
         for item in unregistered:
             logger.info("pending: %s -- %s", item.stage, item.remedy)
@@ -717,7 +724,6 @@ def main(argv: list[str] | None = None) -> None:
             "the store cannot be built yet:\n" + "\n".join(f"  {item.stage}: {item.remedy}" for item in unregistered)
         )
 
-    sources = [s.strip() for s in args.sources.split(",") if s.strip()] if args.sources else None
     inputs = store_inputs(sources)
     store = StoreConfig(
         task_count=args.task_count,
