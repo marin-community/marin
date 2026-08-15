@@ -20,8 +20,10 @@ from typing import Any
 
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
+from rigging.filesystem.s3_compat import is_transient_s3_error
 from rigging.filesystem.storage_path import StoragePath
 from rigging.fsutil.compression import compression_for
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 # The root of the browsable tree: the list of declared buckets rather than any one
 # filesystem. Not a URL, so it never reaches fsspec.
@@ -37,6 +39,8 @@ MAX_PREVIEW_BYTES = 10 * 1024 * 1024
 # Bucket listings are network-bound.
 DEFAULT_LISTING_WORKERS = 128
 _S3_MAX_SPLIT_DEPTH = 3
+_S3_LISTING_MAX_ATTEMPTS = 4
+_S3_LISTING_BACKOFF = ExponentialBackoff(initial=0.5, maximum=5.0, factor=2.0)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -398,7 +402,13 @@ def _s3_listing_page(
     kwargs = {"Bucket": bucket, "Prefix": prefix, "Delimiter": delimiter}
     if continuation_token is not None:
         kwargs["ContinuationToken"] = continuation_token
-    response = fs.call_s3("list_objects_v2", **kwargs)
+    response = retry_with_backoff(
+        lambda: fs.call_s3("list_objects_v2", **kwargs),
+        retryable=is_transient_s3_error,
+        max_attempts=_S3_LISTING_MAX_ATTEMPTS,
+        backoff=_S3_LISTING_BACKOFF,
+        operation=f"ListObjectsV2 {path}",
+    )
     entries = [
         {"name": f"{bucket}/{item['Prefix']}", "size": 0, "type": DIRECTORY_TYPE}
         for item in response.get("CommonPrefixes", [])

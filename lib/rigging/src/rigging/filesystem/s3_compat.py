@@ -36,6 +36,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import aiohttp
+import botocore.exceptions
 import fsspec
 import s3fs
 from aiobotocore.httpsession import AIOHTTPSession
@@ -57,6 +58,40 @@ _S3_RETRY_MAX_ATTEMPTS = 5
 # failing a wedged request inside a shard's useful lifetime. Single-object reads
 # of many GB through this filesystem are the case to re-check if this bites.
 _S3_TOTAL_TIMEOUT = 600
+
+# Error codes that are safe to retry after s3fs and botocore exhaust their own
+# request-level retries. ``InvalidPart`` is the R2-specific multipart-copy symptom:
+# every ``UploadPartCopy`` returns 200 but ``CompleteMultipartUpload`` then claims
+# one or more parts are missing.
+_TRANSIENT_S3_ERROR_CODES = frozenset(
+    {
+        "InvalidPart",
+        "InternalError",
+        "ServiceUnavailable",
+        "SlowDown",
+        "RequestTimeout",
+        "RequestTimeTooSkewed",
+    }
+)
+
+# s3fs sometimes translates the underlying ``botocore.ClientError`` into an
+# ``OSError``, leaving only the message available for classification.
+_TRANSIENT_S3_MESSAGE_FRAGMENTS = (
+    "specified parts could not be found",
+    "InternalError",
+    "ServiceUnavailable",
+    "SlowDown",
+    "RequestTimeout",
+)
+
+_TRANSIENT_S3_TRANSPORT_ERRORS = (
+    botocore.exceptions.ConnectionClosedError,
+    botocore.exceptions.ConnectTimeoutError,
+    botocore.exceptions.EndpointConnectionError,
+    botocore.exceptions.ProxyConnectionError,
+    botocore.exceptions.ReadTimeoutError,
+    botocore.exceptions.ResponseStreamingError,
+)
 
 
 class TotalDeadlineAIOHTTPSession(AIOHTTPSession):
@@ -82,6 +117,19 @@ class TotalDeadlineAIOHTTPSession(AIOHTTPSession):
             sock_read=self._timeout.sock_read,
             total=_S3_TOTAL_TIMEOUT,
         )
+
+
+def is_transient_s3_error(exc: BaseException) -> bool:
+    """Return whether an S3 operation can safely be retried."""
+    if isinstance(exc, _TRANSIENT_S3_TRANSPORT_ERRORS):
+        return True
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        code = response.get("Error", {}).get("Code")
+        if code in _TRANSIENT_S3_ERROR_CODES:
+            return True
+    message = str(exc)
+    return any(fragment in message for fragment in _TRANSIENT_S3_MESSAGE_FRAGMENTS)
 
 
 def s3_request_bounds_config_kwargs() -> dict[str, Any]:

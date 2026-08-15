@@ -16,6 +16,8 @@ from datetime import UTC, datetime
 import pytest
 import rigging.fsutil.cli as cli_module
 import rigging.fsutil.transfer as transfer_module
+import rigging.timing as timing
+from botocore.exceptions import EndpointConnectionError
 from click.testing import CliRunner
 from rigging.fsutil import listing
 from rigging.fsutil.cli import cli
@@ -342,6 +344,19 @@ def test_rm_requires_recursive_for_directories(tree):
     result = run(cli, ["rm", str(tree / "b.txt")])
     assert result.exit_code == 0, result.output
     assert not (tree / "b.txt").exists()
+
+
+def test_rm_removes_multiple_files(tmp_path):
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+    first.write_text("first")
+    second.write_text("second")
+
+    result = CliRunner().invoke(cli, ["rm", str(first), str(second)])
+
+    assert result.exit_code == 0, result.output
+    assert not first.exists()
+    assert not second.exists()
 
 
 def test_rm_recursive_unlinks_local_directory_symlink_without_deleting_target(tmp_path):
@@ -682,6 +697,34 @@ def test_usage_scan_splits_large_s3_prefixes_to_bounded_depth(monkeypatch):
     assert progress[-1].listing_pages == 10
     assert progress[-1].prefixes_completed == progress[-1].prefixes_discovered == 5
     assert listing.total_size("s3://bucket") == (100, 5)
+
+
+def test_usage_scan_retries_transient_s3_page_failures(monkeypatch):
+    class ResettingS3FileSystem:
+        protocol = "s3"
+
+        def __init__(self):
+            self.config_kwargs = {}
+            self.requests = 0
+
+        def split_path(self, path):
+            bucket, _, key = path.partition("/")
+            return bucket, key, None
+
+        def call_s3(self, method, **kwargs):
+            assert method == "list_objects_v2"
+            self.requests += 1
+            if self.requests == 1:
+                raise EndpointConnectionError(endpoint_url="https://bucket.example.com")
+            return {"Contents": [{"Key": "data", "Size": 10}]}
+
+    fs = ResettingS3FileSystem()
+    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket"))
+    monkeypatch.setattr(timing.time, "sleep", lambda _delay: None)
+
+    scan = scan_usage("s3://bucket", workers=1)
+
+    assert scan.root.total == UsageStats(size_bytes=10, object_count=1, last_modified=None)
 
 
 def test_usage_ranking_combines_reclaimable_size_with_inactivity():

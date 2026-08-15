@@ -30,7 +30,7 @@ from rigging.filesystem.cross_region import (
     _is_gcs_url,
 )
 from rigging.filesystem.listing_cache import configure_listing_cache_defaults
-from rigging.filesystem.s3_compat import s3_python_config_kwargs
+from rigging.filesystem.s3_compat import is_transient_s3_error, s3_python_config_kwargs
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 logger = logging.getLogger(__name__)
@@ -125,47 +125,10 @@ def unique_temp_path(output_path: str) -> str:
     return f"{output_path}.tmp.{uuid.uuid4().hex}"
 
 
-# AWS error codes that are safe to retry on a server-side multipart copy
-# (``s3fs.S3FileSystem.mv``). ``InvalidPart`` is the R2-specific symptom:
-# every ``UploadPartCopy`` returns 200 but ``CompleteMultipartUpload`` then
-# claims one or more parts are missing.
-_TRANSIENT_S3_ERROR_CODES = frozenset(
-    {
-        "InvalidPart",
-        "InternalError",
-        "ServiceUnavailable",
-        "SlowDown",
-        "RequestTimeout",
-        "RequestTimeTooSkewed",
-    }
-)
-
-# Fragments matched against ``str(exc)`` for the case where s3fs has already
-# translated the underlying ``botocore.ClientError`` into an ``OSError`` and
-# the structured error code is no longer reachable.
-_TRANSIENT_S3_MESSAGE_FRAGMENTS = (
-    "specified parts could not be found",
-    "InternalError",
-    "ServiceUnavailable",
-    "SlowDown",
-    "RequestTimeout",
-)
-
-
-def _is_transient_s3_error(exc: BaseException) -> bool:
-    response = getattr(exc, "response", None)
-    if isinstance(response, dict):
-        code = response.get("Error", {}).get("Code")
-        if code in _TRANSIENT_S3_ERROR_CODES:
-            return True
-    msg = str(exc)
-    return any(frag in msg for frag in _TRANSIENT_S3_MESSAGE_FRAGMENTS)
-
-
 def _mv_with_retry(fs: Any, src: str, dst: str) -> None:
     retry_with_backoff(
         lambda: fs.mv(src, dst, recursive=True),
-        retryable=_is_transient_s3_error,
+        retryable=is_transient_s3_error,
         max_attempts=4,
         backoff=ExponentialBackoff(initial=1.0, maximum=8.0, factor=2.0),
         operation=f"atomic_rename fs.mv {src} -> {dst}",
