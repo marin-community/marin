@@ -221,8 +221,6 @@ SPLIT = "train"
 
 # Decontam. Mandatory AA and best-effort lm-eval artifacts use one versioned root.
 EVAL_ROOT = f"{marin_prefix()}/{EVALS_RELATIVE}"
-AA_MANIFEST_PATH = f"{EVAL_ROOT}/{AA_MANIFEST_RELATIVE}"
-LMH_MANIFEST_PATH = f"{EVAL_ROOT}/{LMH_MANIFEST_RELATIVE}"
 # Bloom capacity -- unique ngram hashes the filter must hold: ~21.78M unique
 # hashes across the AA + LMH corpus, with 2.3x headroom. At FPR=1e-9 this is a
 # ~270 MB filter.
@@ -706,18 +704,19 @@ def decontamination_steps(
     if unknown_names:
         raise ValueError(f"unknown mark sources: {sorted(unknown_names)}")
 
+    eval_root = f"{marin_prefix()}/{EVALS_RELATIVE}"
     bloom = build_eval_bloom_step(
         name="datakit/bloom/_combined_fixed",
-        eval_data_sources=[EVAL_ROOT],
+        eval_data_sources=[eval_root],
         ngram_length=NGRAM_LENGTH,
         overlap_threshold=OVERLAP_THRESHOLD,
         estimated_doc_count=ESTIMATED_DOC_COUNT,
         false_positive_rate=FALSE_POSITIVE_RATE,
         exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
-        required_eval_manifest_path=AA_MANIFEST_PATH,
+        required_eval_manifest_path=f"{eval_root}/{AA_MANIFEST_RELATIVE}",
         required_eval_corpus_version=EVAL_CORPUS_VERSION,
         required_eval_names=AA_BENCHMARK_NAMES,
-        best_effort_eval_manifest_path=LMH_MANIFEST_PATH,
+        best_effort_eval_manifest_path=f"{eval_root}/{LMH_MANIFEST_RELATIVE}",
         best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
         worker_resources=scale.pool.task,
         max_workers=scale.pool.n_workers,

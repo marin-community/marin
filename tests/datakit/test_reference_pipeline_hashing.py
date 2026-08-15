@@ -163,6 +163,16 @@ def test_decontamination_steps_reject_unknown_mark_source():
         decontamination_steps(_sources(), scale=SMOKE_SCALE, mark_source_names=["missing"])
 
 
+def test_decontamination_resolves_eval_root_at_construction(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "gs://first-region")
+    first = decontamination_steps(_sources(), scale=SMOKE_SCALE)
+    monkeypatch.setenv("MARIN_PREFIX", "gs://second-region")
+    second = decontamination_steps(_sources(), scale=SMOKE_SCALE)
+
+    assert first.bloom.hash_attrs["eval_data_sources"] == (f"gs://first-region/{reference_pipeline.EVALS_RELATIVE}",)
+    assert second.bloom.hash_attrs["eval_data_sources"] == (f"gs://second-region/{reference_pipeline.EVALS_RELATIVE}",)
+
+
 def test_centroid_seed_rekeys_training():
     base = _steps_by_name(_build())["datakit/cluster/train_centroids"].hash_id
     seeded = dataclasses.replace(SMOKE_SCALE.cluster, train_seed=7)
