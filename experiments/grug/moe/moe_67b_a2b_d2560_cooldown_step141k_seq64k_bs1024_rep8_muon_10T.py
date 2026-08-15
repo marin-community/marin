@@ -167,6 +167,10 @@ _model = dataclasses.replace(
     sliding_window=2048,
     use_array_stacked_blocks=True,
     qk_mult=_QK_MULT,
+    # Honest FLOPs: 19 of 26 layers run sw=2048, so at seq=65k the naive
+    # all-full-attention count overstates work by ~2.28x. Matches the
+    # step-39k cooldown's MFU accounting.
+    hybrid_attention_flops_accounting=True,
 )
 
 # Optimizer: reuse the resume subclass with a no-op ramp -- we're joining

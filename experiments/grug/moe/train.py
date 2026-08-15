@@ -197,11 +197,12 @@ def _compute_flops(
     *,
     model_config: GrugModelConfig,
 ) -> tuple[float, dict[str, float]]:
-    flops_per_token = lm_flops_per_token(
+    n = model_config.num_layers
+    lm_flops_kwargs: dict = dict(
         hidden_dim=model_config.hidden_dim,
         intermediate_dim=model_config.intermediate_dim,
         shared_intermediate_dim=model_config.shared_expert_intermediate_dim,
-        num_layers=model_config.num_layers,
+        num_layers=n,
         num_kv_heads=model_config.num_kv_heads,
         num_heads=model_config.num_heads,
         seq_len=model_config.max_seq_len,
@@ -211,13 +212,31 @@ def _compute_flops(
         num_shared_experts=1 if model_config.shared_expert_intermediate_dim > 0 else 0,
         num_experts_per_tok=model_config.num_experts_per_token,
     )
+    flops_summary: dict[str, float] = {}
+
+    if model_config.hybrid_attention_flops_accounting:
+        # Every 4th layer plus the last layer runs full causal attention; the
+        # rest use ``sliding_window`` (see ``_long_layer_schedule`` in
+        # model.py). At long context this makes the analytic FLOPs count much
+        # smaller than the naive ``all-layers-full-attention`` estimate,
+        # because each sliding-window layer's attention span is capped at the
+        # window. Default (False) keeps the old naive accounting so resumed
+        # runs preserve a continuous MFU curve.
+        num_full_attention_layers = n // 4 + (0 if (n - 1) % 4 == 3 else 1)
+        lm_flops_kwargs["sliding_window"] = model_config.sliding_window
+        lm_flops_kwargs["num_full_attention_layers"] = num_full_attention_layers
+        flops_summary.update(
+            {
+                "throughput/num_full_attention_layers": float(num_full_attention_layers),
+                "throughput/num_sliding_attention_layers": float(n - num_full_attention_layers),
+                "throughput/sliding_window": float(model_config.sliding_window),
+            }
+        )
+
+    flops_per_token = lm_flops_per_token(**lm_flops_kwargs)
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
-
-    flops_summary: dict[str, float] = {
-        "throughput/flops_per_token_analytic": flops_per_token,
-        "throughput/flops_per_example_analytic": flops_per_example,
-    }
-
+    flops_summary["throughput/flops_per_token_analytic"] = flops_per_token
+    flops_summary["throughput/flops_per_example_analytic"] = flops_per_example
     return flops_per_example, flops_summary
 
 

@@ -147,9 +147,18 @@ _optimizer = GrugMoeMuonHResumeConfig(
 )
 
 _run_id = f"moe_67b_a2b_d{_DIM}_ep{_EP}_rep{_REPLICA_AXIS}_bs{_BS_NEW}_" f"seq{_SEQ}_sw2k_v4_2048_muon_resume15k_v2_10T"
+# Pin output_path to the existing -9fcc1f directory where all prior
+# checkpoints (step-18000 through step-141000+) live. The new
+# hybrid_attention_flops_accounting field on GrugModelConfig (added for
+# the step-141k cooldown's MFU accounting) shifts this launcher's
+# versioned-config hash too; without the pin, iris would send resubmits
+# to a new empty dir and fall back to initialize_from_path (step-15000
+# source), losing all training progress. Semantic behavior unchanged.
+_OVERRIDE_OUTPUT_PATH: str = f"grug/{_run_id}-9fcc1f"
 step = ExecutorStep(
     name=f"grug/{_run_id}",
     fn=run_grug_moe_trial_2x_bs,
+    override_output_path=_OVERRIDE_OUTPUT_PATH,
     config=GrugMoeLaunchConfig2xBS(
         model=versioned(_model),
         data=_datakit_data_config(

@@ -102,6 +102,14 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
+    hybrid_attention_flops_accounting: bool = False
+    """If True, ``_compute_flops`` charges the sliding-window layers their
+    windowed (not full-seq) attention span in the analytic FLOPs / MFU count.
+    Default False preserves the naive all-layers-full-attention accounting used
+    by every existing run's wandb history, so resumed runs keep a continuous
+    MFU curve. Enable this on long-context launchers (e.g. cooldown at
+    seq=64k with sliding_window=2048) where honest hybrid accounting is
+    dramatically different from the naive count (~2.28x smaller at seq=65k)."""
     router_z_loss_coef: float = 0.0
     # When True, the every-4th-and-last "long" layers skip the Partial Key
     # Offset (no shift of the second half of K, no doc-start zeroing). They
