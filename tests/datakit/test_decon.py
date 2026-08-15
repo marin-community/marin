@@ -22,6 +22,7 @@ from marin.datakit.decon import (
     _extract_ngrams,
     _load_drop_set,
     _paragraph_overlap_and_matches,
+    _source_sample_shards,
     bloom_paths,
     build_all_source_drop_sets,
     build_eval_bloom,
@@ -1784,6 +1785,25 @@ def test_all_source_drop_sets_parallel_sample_respects_document_limits(tmp_path:
     rows = _read_attributes(marked)
     assert rows["doc_0"]["contaminated"] is False
     assert rows["doc_6"]["contaminated"] is True
+
+
+def test_source_sample_shards_uses_512_shards_for_large_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    (source_dir / "part.parquet").touch()
+    planned_ranges = [(row, row + 1) for row in range(600)]
+    monkeypatch.setattr("marin.datakit.decon.compute_parquet_splits", lambda *_args: planned_ranges)
+
+    shards = _source_sample_shards(
+        ("source", str(source_dir)),
+        text_field="text",
+        sample_docs=len(planned_ranges),
+        global_sample_docs=len(planned_ranges),
+    )
+
+    assert len(shards) == 512
+    assert sum(len(shard["ranges"]) for shard in shards) == len(planned_ranges)
+    assert max(len(shard["ranges"]) for shard in shards) == 2
 
 
 def test_decon_flagged_sample_sidecar(fox_corpus):
