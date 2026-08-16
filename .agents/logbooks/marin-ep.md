@@ -1144,3 +1144,30 @@ Experiment ID prefix: `MEP`.
 - Next: M7b per .agents/projects/marin-ep-m7.md — bf16 grouped-GEMM tile
   loop in the consumer warpgroup, target >= 0.7x cuDNN-cute on the hero
   shard shape before any further integration.
+
+### 2026-08-16 13:10 - MEP-040: upstream Pallas Blackwell ragged dot beats the production expert GEMM 2.17x at hero shard shape
+- Discovery while scouting the M7b consumer: jax nightly ships
+  jax/experimental/pallas/ops/gpu/blackwell_ragged_dot_mgpu.py — a
+  warp-specialized tcgen05 grouped GEMM with group-aware tile scheduling
+  (GroupInfo) designed for reuse (do_matmul takes external grid indices).
+- Isolated GEMM (m=2560, k=6144, n=3072, G=3, bf16, 1 GB200 GPU): best
+  config (tile 128x128x64, collective 2-CTA, gtw 12, mcs 6) = 66.3 us =
+  1457 TF/s (65% of bf16 peak), 2.49x XLA ragged_dot. collective=False
+  configs fail ("unbound axis name: x" — kernel assumes a cluster axis);
+  128x256 tiles exceed TMEM/SMEM.
+- Full fwd MLP A/B at the hero shard shape (M=2560,H=6144,I=1536,G=3):
+  | arm | us | TF/s |
+  |---|---|---|
+  | production _cudnn_cute_expert_mlp (QuACK SwiGLU + cuDNN) | 252.1 | 575 |
+  | pallas brd (2x ragged_dot_kernel + unfused f32 SwiGLU) | 116.3 | 1247 |
+  | XLA lax.ragged_dot MLP | 162.9 | 890 |
+  The pallas path wins 2.17x over production DESPITE an unfused
+  activation; XLA also beats the cute path at this shape. Microbench
+  caveat applies (bf16-mosaic-vs-triton lesson: e2e can differ), but the
+  margin is large and it attacks the profile's biggest bucket
+  (GEMMs 4.8 s busy/step).
+- Plan: expert_mlp variant with custom_vjp — brd for fwd + dgrad
+  (transposed-weight feeds), keep the cuDNN grouped wgrad (different
+  primitive); tray conformance; hero flavor A/B. M7b fusion then gates
+  THIS kernel's group loop on arrival semaphores (its GroupInfo scheduler
+  is the natural wait point).
