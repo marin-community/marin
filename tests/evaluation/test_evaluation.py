@@ -128,10 +128,8 @@ def _evaluation(root: Path, name: str, executor) -> Evaluation:
     )
 
 
-def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp_path):
-    records = tmp_path / "records"
-    endpoint = "https://iris.example/proxy/t/token/inference/v1"
-    session = RemoteInferenceSession(
+def _remote_session(endpoint: str = "https://inference.example/v1") -> RemoteInferenceSession:
+    return RemoteInferenceSession(
         model=RunningModel(
             endpoint=OpenAIEndpoint(base_url=endpoint, model="model"),
             tokenizer="tokenizer",
@@ -143,6 +141,12 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
         tensor_parallel_size=1,
         backend_name="vllm",
     )
+
+
+def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp_path):
+    records = tmp_path / "records"
+    endpoint = "https://iris.example/proxy/t/token/inference/v1"
+    session = _remote_session(endpoint)
     batch = EvaluationBatch(
         group_id="group",
         user="tester",
@@ -195,18 +199,7 @@ def test_evalchemy_executor_classifies_archive_export_failure(tmp_path, monkeypa
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
         lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
     )
-    session = RemoteInferenceSession(
-        model=RunningModel(
-            endpoint=OpenAIEndpoint(base_url="https://inference.example/v1", model="model"),
-            tokenizer="tokenizer",
-        ),
-        jobs=(),
-        endpoint_name="/serve/test",
-        endpoint_health_timeout_seconds=1800.0,
-        streaming=True,
-        tensor_parallel_size=1,
-        backend_name="vllm",
-    )
+    session = _remote_session()
     executor = EvalchemyExecutor(EvalchemyRunConfig(name="gsm8k", tasks=(EvalTaskConfig(name="gsm8k", num_fewshot=5),)))
 
     with pytest.raises(EvaluationError) as exc_info:
@@ -232,18 +225,7 @@ def test_evalchemy_executor_rejects_a_task_with_no_successful_responses(tmp_path
         recovered_metrics={"humaneval_0shot": {}},
     )
     monkeypatch.setattr("marin.evaluation.evalchemy.runner.run_evalchemy", lambda *_args, **_kwargs: outcome)
-    session = RemoteInferenceSession(
-        model=RunningModel(
-            endpoint=OpenAIEndpoint(base_url="https://inference.example/v1", model="model"),
-            tokenizer="tokenizer",
-        ),
-        jobs=(),
-        endpoint_name="/serve/test",
-        endpoint_health_timeout_seconds=1800.0,
-        streaming=True,
-        tensor_parallel_size=1,
-        backend_name="vllm",
-    )
+    session = _remote_session()
     executor = EvalchemyExecutor(
         EvalchemyRunConfig(name="humaneval", tasks=(EvalTaskConfig(name="humaneval", num_fewshot=0),))
     )

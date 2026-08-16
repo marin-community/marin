@@ -46,6 +46,7 @@ from marin.evaluation.archive import (
     primary_filter,
     primary_metric,
 )
+from marin.evaluation.eval_stats import SAMPLE_COUNT_METRIC
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, TaskCoverage
 
 logger = logging.getLogger(__name__)
@@ -321,7 +322,7 @@ def _is_infrastructure_error(sample: EvalSample) -> bool:
 
 
 def recovered_task_metrics(samples: Sequence[EvalSample]) -> dict[str, float]:
-    """Mean per-sample metrics after excluding infrastructure-error completions."""
+    """Mean successful-sample metrics and their scored-document count."""
     values: dict[str, list[float]] = {}
     scored_doc_ids: set[str] = set()
     for sample in samples:
@@ -333,7 +334,7 @@ def recovered_task_metrics(samples: Sequence[EvalSample]) -> dict[str, float]:
             values.setdefault(metric, []).append(value)
     metrics = {name: sum(entries) / len(entries) for name, entries in values.items()}
     if metrics:
-        metrics["sample_len"] = float(len(scored_doc_ids))
+        metrics[SAMPLE_COUNT_METRIC] = float(len(scored_doc_ids))
     return metrics
 
 
