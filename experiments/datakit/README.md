@@ -145,10 +145,23 @@ flowchart TD
 
 ## Testbed samples
 
-Pre-built testbed samples live under `s3://marin-us-east-02a/marin/datakit/`
-(CoreWeave `us-east-02a`). Each is a tree of already-normalized sources named
-`sample_<tokens>_<hash>`. Pass the full S3 root as `--sample-prefix` (it is used
-verbatim — the bucket prefix is not prepended):
+Each testbed sample is a tree of already-normalized sources named
+`sample_<tokens>_<hash>`. Pass its full root as `--sample-prefix`; the bucket
+prefix is not prepended.
+
+`zephyr_benchmark.py` defaults to this GCP-local copy:
+
+| `--sample-prefix` | Approx. size | Region |
+| --- | --- | --- |
+| `gs://marin-us-central1/datakit/sample_100b_8ae7a94f` | ~100B tokens | GCP `us-central1` |
+
+Materialize it once from the equivalent CoreWeave sample with
+`experiments.datakit.materialize_zephyr_benchmark_sample`. The entry point
+copies the normalized Parquet shards and writes portable GCS artifact records;
+its module docstring contains the Iris launch command.
+
+The original samples remain available under
+`s3://marin-us-east-02a/marin/datakit/` in CoreWeave `us-east-02a`:
 
 | `--sample-prefix` | Approx. size |
 | --- | --- |
@@ -161,7 +174,7 @@ verbatim — the bucket prefix is not prepended):
 List them with:
 
 ```bash
-aws s3 ls s3://marin-us-east-02a/marin/datakit/ | grep sample
+uv run fsutil ls s3://marin-us-east-02a/marin/datakit/
 ```
 
 ## Layout
@@ -169,6 +182,8 @@ aws s3 ls s3://marin-us-east-02a/marin/datakit/ | grep sample
 | Path | What it is |
 | --- | --- |
 | `reference_pipeline.py` | The DAG builder + CLI (`--mode full\|sample`, `--pool-*`, `--sources`, `--quality-model`) |
+| `zephyr_benchmark.py` | GCP-default A/B benchmark over a pre-normalized sample |
+| `materialize_zephyr_benchmark_sample.py` | One-time CoreWeave-to-GCS benchmark sample materializer |
 | `global_exact_dedup.py` | Sparse co-partitioned exact-duplicate attributes by normalized record ID |
 | `cluster/quality/fast_transformer/` | Quality classifier: per-source scoring step + training/calibration |
 | `cluster/domain/v0/` | Domain clustering: centroid sampling/training + per-source assignment |

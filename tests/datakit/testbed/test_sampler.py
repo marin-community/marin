@@ -11,6 +11,7 @@ import pyarrow.parquet as pq
 import pytest
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import DatakitSource
+from rigging.filesystem.factory import url_to_fs
 
 from experiments.datakit.testbed.sampler import (
     proportional_sample_fractions,
@@ -73,6 +74,22 @@ def test_sample_fraction_1_copies_everything(tmp_path: Path):
     source = _make_normalized(tmp_path, {f"part-{i:04d}.parquet": [f"s{i}"] for i in range(5)})
     out = sample_normalized_shards(source=source, output_path=str(tmp_path / "s"), sample_fraction=1.0)
     assert out.counters["sampler/selected_shards"] == 5
+
+
+def test_sample_fraction_1_copies_across_filesystems(tmp_path: Path):
+    source = _make_normalized(tmp_path, {"part-0000.parquet": ["a", "b"]})
+    destination = f"memory://{tmp_path.name}/sampled"
+
+    out = sample_normalized_shards(source=source, output_path=destination, sample_fraction=1.0)
+
+    destination_fs, destination_path = url_to_fs(out.main_output_dir)
+    copied = destination_fs.glob(f"{destination_path}/*.parquet")
+    assert len(copied) == 1
+    with destination_fs.open(copied[0], "rb") as shard:
+        assert pq.read_table(shard).to_pylist() == [
+            {"id": "a", "text": "ta", "source_id": "a"},
+            {"id": "b", "text": "tb", "source_id": "b"},
+        ]
 
 
 def test_sample_tiny_fraction_rounds_up_to_one(tmp_path: Path):
