@@ -977,3 +977,40 @@ Experiment ID prefix: `MEP`.
 - Next: BUILD_OK -> 2-proc layer smoke on the patched wheel -> 8-proc
   cross-node -> `ep-marin-mgpu-cudnn-cute` hero flavor -> EP16 proxy ->
   EP64. Then file the openxla/xla issue with the validated patch.
+
+### 2026-08-16 09:52 - MEP-032: fused transport CONFORMANT multi-process — three-layer runtime fix validated at 8 ranks cross-node
+- Fix stack (all validated on 2 GB200 nodes, 8 procs, 1/GPU):
+  1. Patched PJRT wheel v3 at the #8077 pins: kMaxPeers 32->128 + buffer-
+     assignment color_alignment 256->4096 + tsl BFC RoundedBytes 4096
+     granularity (chunk offsets must be 4KB for NCCL windows;
+     kMinAllocationBits bump trips the BinForSize invariant — round sizes
+     instead). Wheel:
+     s3://marin-us-east-02a/marin/research/mcwitt-ra2a/pjrt-kmax128-align4096-dev0811-20260816/
+  2. `--xla_gpu_enable_dynamic_slice_fusion=false`: the pass wraps the
+     combine put + its pool slice into a %dynamic-slice-fusion computation,
+     hiding the custom call from GpuCollectiveBufferAnalysis (matches on
+     the raw instruction) -> params escape collective coloring.
+  3. `--xla_gpu_enable_allocator_spatial_partitioning=false` (BFC-allocator
+     only): with preallocate + spatial partitioning ON, ONE shared 138 GiB
+     pool serves both default and collective memory; every mosaic window
+     then reserves the whole pool's VA in NCCL's window space
+     (limit 0x2f00000000 = 188 GiB) and the second executable's window
+     fails with `ncclSpaceAlloc ... No suitable space`. Disabling forces
+     the separate CollectiveBFCAllocator (small grow-on-demand regions).
+     Hero runs default to XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async, which
+     already creates the separate collective allocator — flag 3 matters
+     for BFC-allocator contexts (tests/smokes) only.
+- Diagnosis ladder for the record: registration VLOG
+  (TF_CPP_VMODULE=nccl_symmetric_memory=3) gives ptr/size per window; the
+  failing sizes identified each layer (0x...300 offset = 256B BFC chunk
+  packing; 0x228e600000 = the whole 138 GiB shared pool).
+- Result: smoke_mgpu_train_multiproc.py 8/8 ranks CONFORMANT — forward
+  pools, drop count (1019, bit-identical to the ragged-path EP8 smoke's
+  historic value), and x/w13/w2 gradients vs the oracle, cross-node.
+- Launched: mep-mgpu-ep16-25-20260816 — EP16 proxy (4 nodes, b256, E48,
+  cf 1.1) on ep-marin-mgpu-cudnn-cute (2bb65aa8ae) + wheel v3 + settled
+  recipe flags + dynamic-slice-fusion off. Basis: flat ragged 18.05 s,
+  hier 19.2 s at this proxy.
+- Upstream: three findings to file on openxla/xla once EP64 evidence is in
+  (BFC chunk alignment vs NCCL_WIN_REQUIRED_ALIGNMENT; dynamic-slice
+  fusion vs collective coloring; shared-pool window VA exhaustion).
