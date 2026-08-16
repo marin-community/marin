@@ -254,7 +254,10 @@ def _backward_core(
             pl.BlockSpec(block_shape=(None, PAD, H), index_map=lambda BLOCK_ID_B, BLOCK_ID_S: (BLOCK_ID_B, 0, 0)),
         ),
         scratch_shapes=[pltpu.VMEM((PAD, H), jnp.float32), pltpu.VMEM((PAD, H), jnp.float32)],
-        compiler_params=pltpu.CompilerParams(dimension_semantics=("parallel", "arbitrary")),
+        # dW_ref/db_ref alias the same output block across every BLOCK_ID_B and accumulate via
+        # non-atomic +=, so the B dimension must run in program order like S, not in parallel
+        # (megacore could otherwise race two batch programs on the same accumulator).
+        compiler_params=pltpu.CompilerParams(dimension_semantics=("arbitrary", "arbitrary")),
     )
 
     dx, dW, db, dh0 = kernel(x, W, b, h, dy, dht)

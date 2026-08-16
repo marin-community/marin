@@ -203,7 +203,7 @@ def depthwise_causal_convolution(
     if input_state is not None:
         assert input_state.shape == (B, H, K - 1)
 
-    if attention_mask is not None and attention_mask.shape[1] > 1 and attention_mask.shape[0] > 1:
+    if attention_mask is not None:
         input = (input * attention_mask[:, :, None]).astype(input.dtype)
 
     if implementation is None:
@@ -229,5 +229,8 @@ def depthwise_causal_convolution(
         )
     else:
         raise ValueError(f"unexpected implementation ({implementation})")
+
+    if attention_mask is not None:
+        input = (input * attention_mask[:, :, None]).astype(input.dtype)
 
     return input, input_state

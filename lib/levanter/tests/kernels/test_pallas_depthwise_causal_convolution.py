@@ -129,21 +129,53 @@ def test_depthwise_causal_convolution_xla_grad_runs(kernel_size: int) -> None:
         assert bool(jnp.all(jnp.isfinite(grad))), name
 
 
+@pytest.mark.parametrize("B,S", [(1, 6), (2, 1), (1, 1)])
+def test_depthwise_causal_convolution_masks_singleton_batch_and_sequence(B: int, S: int) -> None:
+    H, kernel_size = 3, 3
+    std = 0.1
+
+    key_x, key_w, key_b = jax.random.split(jax.random.PRNGKey(4), 3)
+
+    x = jax.random.normal(key_x, (B, S, H), dtype=jnp.float32) * std
+    weight = jax.random.normal(key_w, (H, kernel_size), dtype=jnp.float32) * std
+    bias = jax.random.normal(key_b, (H,), dtype=jnp.float32) * std
+
+    # mask out the last position of every batch row; masking must still take effect when the
+    # batch or sequence dimension is a singleton
+    attention_mask = jnp.ones((B, S), dtype=jnp.float32).at[:, -1].set(0.0)
+
+    y, _ = depthwise_causal_convolution(x, weight, bias, attention_mask=attention_mask, implementation="xla")
+
+    assert_allclose(np.asarray(y[:, -1, :]), np.zeros((B, H)), atol=0, rtol=0)
+
+
 def _generate_pallas_args() -> list:
-    return list(
-        product(
+    # A full cross product of every axis (kernel_size x S x has_input_state x add_bias x
+    # output_state x dtype x activation_function) would compile 576 forward+backward Pallas/XLA
+    # pairs, which doesn't fit the TPU CI job's time budget. Shape and state handling is where a
+    # hand-written indexing bug is most likely, so that axis gets the full cross product at fixed
+    # dtype/activation/bias; dtype/activation/bias only need one representative shape.
+    shape_args = [
+        (kernel_size, S, has_input_state, True, output_state, jnp.float32, None)
+        for kernel_size, S, has_input_state, output_state in product(
             [2, 4],  # kernel_size: the pallas_tpu implementation assumes kernel_size > 1
-            # sequence length: shorter than, equal to, or not a multiple of the internal block size.
-            # 1 and 2 also cover S < kernel_size - 1, where ht keeps part of input_state rather than
-            # being filled entirely from input.
+            # sequence length: shorter than, equal to, or not a multiple of the internal block
+            # size. 1 and 2 also cover S < kernel_size - 1, where ht keeps part of input_state
+            # rather than being filled entirely from input.
             [1, 2, 3, 16, 37, 130],
             [False, True],  # has_input_state
-            [False, True],  # add_bias
             [False, True],  # output_state
+        )
+    ]
+    option_args = [
+        (4, 37, True, add_bias, True, dtype, activation_function)
+        for dtype, activation_function, add_bias in product(
             [jnp.float32, jnp.bfloat16],
             [None, "silu", "swish"],
+            [False, True],  # add_bias
         )
-    )
+    ]
+    return shape_args + option_args
 
 
 @pytest.mark.parametrize(
