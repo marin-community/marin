@@ -35,6 +35,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
+from marin.datakit.copartitioned import write_copartitioned_source_manifest
 from marin.processing.classification.deduplication.cluster_dedup import (
     ClusterDedupParams,
     ClusterDocument,
@@ -221,6 +222,15 @@ def main(argv: list[str] | None = None) -> None:
     )
     outcome = context.execute(pipeline, verbose=True, map_task_resources=task, reduce_task_resources=task)
 
+    # Consumers resolve an attribute tree through its source manifest, the same
+    # way they resolve every other co-partitioned Datakit output.
+    write_copartitioned_source_manifest(
+        output_path=args.out,
+        attr_dirs={
+            shard["source_key"]: prefix_join(args.out, f"outputs/{shard['source_tag']}")
+            for shard in manifest["shards"]
+        },
+    )
     markers = sum(result["markers"] for result in outcome.results)
     payload = {
         "cluster_text": args.cluster_text,
