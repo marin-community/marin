@@ -839,32 +839,3 @@ Experiment ID prefix: `MEP`.
   kernel launches per direction, no inter-hop overlap, hop-A splits
   untuned) dominate. The informative A/B is EP64 (launched:
   mep-hier-ep64-25-20260815).
-
-### 2026-08-15 21:10 - MEP-027: hier v1 at EP64 = 19.0 s/step; profile shows the sync scope never shrank
-- Runs: mep-hier-ep64-25-20260815 (25/25, steady 19.0 s/step from
-  12it@4:51 -> 24it@8:39 = 228 s / 12, drops 0.538%, loss 6.02) and
-  mep-hier-prof-25-20260815 (25/25, 19.3 cumulative, XProf steps 12-15
-  uploaded; analyzed via the hosted xprof API — note kernel_stats now
-  aggregates 4 devices/process, divide by 4).
-- A/B: hier v1 19.0 vs flat LHS-on 18.1-18.2 — ~5% SLOWER. Per-device
-  attribution vs the flat profile (MEP-021):
-  | bucket | flat | hier v1 |
-  |---|---|---|
-  | ragged-a2a + barrier (op bucket) | 2.30 | 1.46 |
-  | barrier kernel busy | 1.39 | 1.83 (288/step, fewer but longer) |
-  | ragged-a2a kernel busy | 0.91 | 0.88 |
-  | mosaic puts | — | 0.60 |
-  | custom-call total | 8.92 | 10.48 |
-  | fusions | 4.05 | 4.39 |
-- ROOT CAUSE of the miss: hop A ran on the FLAT 64-rank axis with
-  zero-sized sends to the 48 different-rank peers — the NCCL
-  communicator and symmetric-mode barriers stayed 64-rank, so the
-  63->15 peer reduction reduced traffic but not synchronization scope.
-  The staging pass + extra launches then netted ~+0.9 s.
-- Fix implemented (hier v2): `jax.lax.ragged_all_to_all` accepts
-  `axis_index_groups` — hop A now runs in 4 disjoint node-ordered
-  same-rank groups of 16 ranks (group-relative `_shard_a2a_params` on
-  the [Nodes, Nodes] restricted count matrix; group order = node order
-  = the staging layout, so hop-B plans are unchanged). 16-rank comms
-  also sit below the kMaxPeers=32 overflow for hop A itself. A/B
-  launched: mep-hier2-ep64-25-20260815.
