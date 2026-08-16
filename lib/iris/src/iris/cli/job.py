@@ -640,7 +640,7 @@ def run_iris_job(
     target_cluster: str | None = None,
     bundle_exclude: re.Pattern[str] | None = None,
     run_status_path: str | None = None,
-    output_prefix: str | None = None,
+    status_output_prefix: str | None = None,
 ) -> int:
     """Core job submission logic.
 
@@ -665,7 +665,7 @@ def run_iris_job(
             relative to the workspace); matching paths are dropped from the bundle
             so a job can trim otherwise-tracked files it does not need.
         run_status_path: Fixed storage path for a small running/terminal status object.
-        output_prefix: Output prefix recorded in the status object. When omitted,
+        status_output_prefix: Output prefix recorded in the status object. When omitted,
             the worker resolves its region-local ``marin_prefix()``.
 
     Returns:
@@ -763,7 +763,7 @@ def run_iris_job(
         task_image=task_image,
         bundle_exclude=bundle_exclude,
         run_status_path=run_status_path,
-        output_prefix=output_prefix,
+        status_output_prefix=status_output_prefix,
         requested_tpu_types=tpu_variants,
     )
 
@@ -793,7 +793,7 @@ def _submit_and_wait_job(
     task_image: str | None = None,
     bundle_exclude: re.Pattern[str] | None = None,
     run_status_path: str | None = None,
-    output_prefix: str | None = None,
+    status_output_prefix: str | None = None,
     requested_tpu_types: Sequence[str] = (),
 ) -> int:
     """Submit job and optionally wait for completion.
@@ -809,7 +809,7 @@ def _submit_and_wait_job(
             run_command_with_status,
             command,
             run_status_path,
-            output_prefix,
+            status_output_prefix,
             tuple(requested_tpu_types),
         )
         if run_status_path is not None
@@ -1044,7 +1044,7 @@ Examples:
     ),
 )
 @click.option(
-    "--output-prefix",
+    "--status-output-prefix",
     type=str,
     default=None,
     help="Output prefix to record with --run-status-path (default: the worker's region-local Marin prefix).",
@@ -1080,7 +1080,7 @@ def run(
     terminate_on_exit: bool,
     exclude: tuple[str, ...],
     run_status_path: str | None,
-    output_prefix: str | None,
+    status_output_prefix: str | None,
     cmd: tuple[str, ...],
 ):
     """Submit jobs to Iris clusters."""
@@ -1091,8 +1091,8 @@ def run(
     validate_region_zone(region or None, zone, ctx.obj.get("config"))
     if no_sync and sync_package:
         raise click.UsageError("--no-sync skips setup entirely; it cannot be combined with --sync-package.")
-    if output_prefix is not None and run_status_path is None:
-        raise click.UsageError("--output-prefix requires --run-status-path.")
+    if status_output_prefix is not None and run_status_path is None:
+        raise click.UsageError("--status-output-prefix requires --run-status-path.")
 
     command = list(cmd)
     if not command:
@@ -1147,7 +1147,7 @@ def run(
             dashboard_url=dashboard_url or None,
             bundle_exclude=bundle_exclude,
             run_status_path=run_status_path,
-            output_prefix=output_prefix,
+            status_output_prefix=status_output_prefix,
         )
     except Exception:
         bundle = ctx.obj.get("provider_bundle")

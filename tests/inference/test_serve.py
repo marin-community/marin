@@ -448,7 +448,6 @@ def test_resolve_serving_plan_rejects_multihost_slices():
 def test_resolve_serving_plan_accepts_compatible_tpu_alternatives():
     plan = _plan(tpu="v6e-4,v5litepod-4,v5p-8,v4-8")
 
-    assert plan.tpu_type == "v6e-4"
     assert plan.tpu_types == ("v6e-4", "v5litepod-4", "v5p-8", "v4-8")
 
 

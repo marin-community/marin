@@ -370,7 +370,7 @@ def test_job_run_status_entrypoint_writes_requested_output(tmp_path, recorded_jo
         [
             "--run-status-path",
             str(status_path),
-            "--output-prefix",
+            "--status-output-prefix",
             "gs://marin-us-west4/tmp/nightly",
             "--enable-extra-resources",
             "--tpu",
@@ -389,10 +389,10 @@ def test_job_run_status_entrypoint_writes_requested_output(tmp_path, recorded_jo
     assert status["requested_tpu_types"] == ["v6e-4", "v5litepod-4"]
 
 
-def test_job_run_output_prefix_requires_status_path():
-    result = _run_cli(["--output-prefix", "gs://marin-us-west4/tmp/nightly"])
+def test_job_run_status_output_prefix_requires_status_path():
+    result = _run_cli(["--status-output-prefix", "gs://marin-us-west4/tmp/nightly"])
     assert result.exit_code != 0
-    assert "--output-prefix requires --run-status-path" in result.output
+    assert "--status-output-prefix requires --run-status-path" in result.output
 
 
 # ---------------------------------------------------------------------------

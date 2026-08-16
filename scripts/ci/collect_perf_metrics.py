@@ -582,7 +582,7 @@ def upload_report_to_gcs(report: PerfReport, gcs_prefix: str, report_name: str, 
     "--status",
     "status_path",
     default=None,
-    help="Optional FERRY_STATUS_PATH gs:// URL written by the ferry's _write_status helper.",
+    help="Optional FERRY_STATUS_PATH gs:// URL written by iris.run_status.",
 )
 @click.option(
     "--report-name",

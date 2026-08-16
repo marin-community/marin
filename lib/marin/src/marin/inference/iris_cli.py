@@ -47,7 +47,7 @@ import requests
 from click.core import ParameterSource
 from fray.types import ANY_REGION, ResourceConfig, create_environment
 from iris.cli.connect import connect_controller
-from iris.cli.job import parse_gpu_spec
+from iris.cli.job import build_tpu_alternatives, parse_gpu_spec
 from iris.client.client import IrisClient, Job
 from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,
@@ -126,7 +126,6 @@ class ServingPlan:
     engine: VllmEngineConfig | LevanterEngineConfig
     device: job_pb2.DeviceConfig
     worker_extras: tuple[str, ...]
-    tpu_type: str | None = None
     tpu_types: tuple[str, ...] = ()
     gpu_type: str | None = None
     gpu_count: int | None = None
@@ -178,7 +177,7 @@ def _resolve_serving_plan(
             vllm = replace(vllm, launcher=VllmLauncherType.CUDA, source=source, version=version)
         return ServingPlan(vllm, device, (*_GPU_WORKER_EXTRAS, *extras), gpu_type=gpu_type, gpu_count=gpu_count)
 
-    tpu_types = tuple(value.strip() for value in tpu.split(",") if value.strip())
+    tpu_types = tuple(build_tpu_alternatives(tpu))
     if not tpu_types:
         raise click.ClickException("--tpu must specify at least one TPU variant.")
     try:
@@ -199,13 +198,12 @@ def _resolve_serving_plan(
             levanter,
             device,
             (*_LEVANTER_TPU_EXTRAS, *extras),
-            tpu_type=primary_tpu,
             tpu_types=tpu_types,
         )
     # The forked TPU vLLM always runs from an isolated uvx env (it is not in the workspace lock),
     # so the worker venv only needs the `tpu` extra for the serving glue's jax/libtpu.
     vllm = replace(vllm, launcher=VllmLauncherType.TPU)
-    return ServingPlan(vllm, device, ("tpu", *extras), tpu_type=primary_tpu, tpu_types=tpu_types)
+    return ServingPlan(vllm, device, ("tpu", *extras), tpu_types=tpu_types)
 
 
 def _default_job_name(model: str) -> str:
@@ -527,7 +525,7 @@ def main(
         )
     else:
         worker_resources = ResourceConfig.with_tpu(
-            plan.tpu_types or (plan.tpu_type or tpu,),
+            plan.tpu_types,
             cpu=cpu,
             ram=memory,
             disk=disk,
