@@ -691,3 +691,36 @@ Experiment ID prefix: `MEP`.
 - Next: scope the wgrad lever — find what the cudnn_cute expert MLP
   backward actually executes and whether the CuTeDSL grouped GEMM
   (2.2 PF/s in the MXFP8 work) can take dwgrad/dgrad.
+
+### 2026-08-15 17:35 - MEP-021: first EP64 step profile — barrier+metadata overhead named, LHS-off is suspect
+- Run: mep-ep64-prof-25-20260815 — ep-marin-cudnn-cute cf 1.1 s32 with
+  `--profile-steps 3 --profile-start-step 12`; run itself matched
+  baseline (25/25, 18.7 s/it cumulative). Rank-0 XProf uploaded to
+  s3://marin-us-east-02a/tmp/ttl=30d/xprof/mep-ep64-prof-25-20260815;
+  analyzed via the hosted xprof service HTTP API (IAP headers from
+  rigging `credentials_for`; kernel_stats + op_profile tools).
+- Per-step attribution (19.5 s rawTime; 18.5 s wall):
+  | bucket | s/step | note |
+  |---|---|---|
+  | custom-call (QuACK/cuDNN/FA4) | 8.92 | compute |
+  | XLA fusions (loop+input+fmt) | 4.49 | 41k launches/step |
+  | ragged-all-to-all (incl. barrier) | 2.30 | EP transport |
+  | all-gather + all-reduce + reduce-scatter | 2.33 | FSDP/DP collectives |
+  | plain all-to-all (routing counts) | 0.96 | metadata exchange! |
+  | copy | 0.50 | |
+- Kernel-level: MultiGpuBarrierWithNcclKernelImpl = 1.39 s/step busy
+  (576/step, avg 2.4 ms, max 48 ms) — the symmetric-mode barrier
+  absorbing cross-rank skew; RaggedAllToAllWithSymmetricMemoryKernel
+  0.91 s/step; ncclDevKernel_SendRecv 0.78 s/step.
+- Two immediate levers surfaced:
+  1. LHS is OFF (pre-patch stability recipe). The #8313 root cause
+     (kMaxPeers barrier overflow) plausibly explains the original
+     "LHS corrupts ragged-a2a" incident too — with the patched wheel,
+     LHS may be safe again, unlocking overlap of the 2.3 s DP
+     collectives. A/B launched: mep-ep64-lhs-25-20260815 (symmetric
+     mode + patched wheel, LHS/overlap flags dropped).
+  2. The 0.96 s/step routing-counts all-to-all is pure metadata sync
+     (~10 ms per call at 2/layer) — the M7 fused design folds this
+     into the put kernel; also reachable sooner by caching/overlapping
+     the counts exchange.
+- Exploratory (single trace, rank 0 only).
