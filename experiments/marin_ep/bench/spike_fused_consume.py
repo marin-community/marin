@@ -4,14 +4,20 @@
 """M7a spike: consume pool segments behind per-expert arrival flags.
 
 One warp-specialized kernel per device: warpgroup 0 runs the `put_segments`
-transport loop (one whole segment per SM, no tile striding) and signals a
-per-destination-expert arrival semaphore on the owner after each segment;
-warpgroup 1 waits per local expert for all sources' signals and reduces that
-expert's pool region to per-SM partial sums as soon as it is ready — no
-end-of-transport barrier, no second launch.
+transport loop in EXPERT-MAJOR order (every destination's expert-j segments
+before any expert-j+1 traffic) with tile striding across SMs, signaling unit
+arrival semaphores on the owner (one per participating SM per entry, plus
+one per tail — the mosaic backend only supports constant increments);
+warpgroup 1 waits per local expert for the host-computed expected count and
+runs a GEMM-weight consumer (REPEAT rotated read passes) on that region as
+soon as it is ready — no end-of-transport barrier, no second launch.
 
-Gate: bit-equal per-expert sums vs a NumPy reference, and fused wall time
-below put_segments + separate consume launches on the same plans.
+Measured 2026-08-16 (1 GB200 tray, 4 devices, pool 14594x2560): correctness
+exact; fused 0.953 ms vs put+consume 0.981 ms vs put-only 0.578 ms — only
+~7% of the consumer hides because the memory-bound reader contends with
+transport TMA for bandwidth. Verdict: flag-gating mechanism and expert-major
+head starts validated; the perf case needs the compute-bound MMA consumer
+(M7b), whose tensor-core work does not fight the copy engines for HBM.
 
 Single process, >= 2 local GPUs (one GB200 tray):
   uv run python experiments/marin_ep/bench/spike_fused_consume.py
