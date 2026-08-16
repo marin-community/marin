@@ -1085,3 +1085,20 @@ Experiment ID prefix: `MEP`.
   around dispatch; GEMM/fusion work is independent of transport.
 - Next: M7 groundwork begins (task #10) — the multi-process substrate it
   needs is now validated.
+
+### 2026-08-16 11:55 - MEP-037: PGLE arm FAILS (OOM in dense ncclAlltoAll during profiling pass) — negative result
+- Run: mep-mgpu-pgle-25-20260816 (fused flavor + JAX_ENABLE_PGLE=true,
+  otherwise the MEP-034 recipe). All 16 tasks crashed at the PGLE
+  profiling step: `ncclAlltoAll(send_contiguous...) ... Cuda failure 2`
+  (out of memory) — the profiling compile falls back to the DENSE
+  all-to-all decomposition with contiguous packed buffers (same failure
+  class as hier v2's axis_index_groups OOM, MEP-028), which does not fit
+  at hero shape. Killed; PGLE stays OFF for the fused flavor. Third
+  independent PGLE dead end on this stack (B200 null, 1-proc/node wedge,
+  now the mgpu OOM).
+- Launched: mep-mgpu-cb-25-20260816 — command buffers FUSION arm
+  (--xla_gpu_enable_command_buffer=FUSION) on the fused flavor; historic
+  FUSION result on ragged was neutral, retrying because the fused step
+  has 41k launches and no ragged a2a in the capture set.
+- Ops note: killed my wedged mep-mgpu-prof coordinator (all ranks exited
+  0 at 17:35Z but the job held its rack >1h; teardown wedge).
