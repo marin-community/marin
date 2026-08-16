@@ -340,6 +340,7 @@ class TreeCache(AsyncDataset[T_co]):
         pending = self._pending_shard_stores.get(shard_name)
         if pending is None or pending.get_loop() is not loop:
             pending = loop.create_task(self._open_shard_store(shard_name))
+            pending.add_done_callback(_retrieve_task_exception)
             self._pending_shard_stores[shard_name] = pending
         return await asyncio.shield(pending)
 
@@ -351,7 +352,7 @@ class TreeCache(AsyncDataset[T_co]):
             self._shard_stores[shard_name] = store
             return store
         finally:
-            self._pending_shard_stores.pop(shard_name, None)
+            self._discard_pending(self._pending_shard_stores, shard_name)
 
     async def _shard_field_store_async(self, shard_name: str, field: str):
         """Open a shard's field store, sharing one open between concurrent first touches.
@@ -370,6 +371,7 @@ class TreeCache(AsyncDataset[T_co]):
         # per-iterator loops that read it, so a foreign-loop future is not awaitable here.
         if pending is None or pending.get_loop() is not loop:
             pending = loop.create_task(self._open_shard_field_store(shard_name, field))
+            pending.add_done_callback(_retrieve_task_exception)
             self._pending_shard_field_stores[key] = pending
         return await asyncio.shield(pending)
 
@@ -386,7 +388,18 @@ class TreeCache(AsyncDataset[T_co]):
             self._shard_field_stores[key] = store
             return store
         finally:
-            self._pending_shard_field_stores.pop(key, None)
+            self._discard_pending(self._pending_shard_field_stores, key)
+
+    @staticmethod
+    def _discard_pending(pending_opens: Dict[Any, "asyncio.Future"], key) -> None:
+        """Drop ``key`` only if it still maps to the calling task.
+
+        A reader on a second event loop replaces the entry with its own task, so an
+        unconditional discard would evict a live open and cost the readers behind it a
+        duplicate. Clearing on failure is what lets the next reader retry the open.
+        """
+        if pending_opens.get(key) is asyncio.current_task():
+            del pending_opens[key]
 
     async def _get_sharded_batch(self, indices: Sequence[int]) -> List[T_co]:
         if len(indices) == 0:
@@ -727,6 +740,16 @@ def _validate_sharded_ledger(ledger: CacheLedger) -> None:
             "Sharded cache ledger field count mismatch: "
             f"sum(finished shard field counts)={field_counts}, field_counts={ledger.field_counts}"
         )
+
+
+def _retrieve_task_exception(task: "asyncio.Task") -> None:
+    """Consume a shared open's exception so a fully cancelled wait set does not lose it.
+
+    Readers await the shared open through ``asyncio.shield``, so cancelling all of them
+    leaves the task itself running with nobody to retrieve its result.
+    """
+    if not task.cancelled() and task.exception() is not None:
+        logger.debug("Shared shard open failed; the next reader will retry it.", exc_info=task.exception())
 
 
 def _tree_field(tree, field: str):

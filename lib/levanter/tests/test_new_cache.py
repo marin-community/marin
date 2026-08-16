@@ -639,12 +639,9 @@ async def test_sharded_flat_field_batch_opens_shards_concurrently(tmp_path, monk
     assert tracker.max_active == num_shards
 
 
-@pytest.mark.asyncio
-async def test_sharded_shard_open_is_shared_between_concurrent_readers(tmp_path, monkeypatch):
-    """Concurrent first touches of one shard must issue a single open, not one per reader."""
-    cache = _build_sharded_cache(tmp_path, num_shards=1, rows_per_shard=8, seq_len=16)
-
-    opens = []
+def _count_opens(monkeypatch) -> list[str]:
+    """Record the path of every async shard open, yielding once so concurrent readers race."""
+    opens: list[str] = []
     real_open_async = TreeStore.open_async
 
     async def counted_open_async(exemplar, path, **kwargs):
@@ -653,8 +650,57 @@ async def test_sharded_shard_open_is_shared_between_concurrent_readers(tmp_path,
         return await real_open_async(exemplar, path, **kwargs)
 
     monkeypatch.setattr(TreeStore, "open_async", staticmethod(counted_open_async))
+    return opens
+
+
+@pytest.mark.asyncio
+async def test_sharded_field_open_is_shared_between_concurrent_readers(tmp_path, monkeypatch):
+    """Concurrent first touches of one shard must issue a single open, not one per reader."""
+    cache = _build_sharded_cache(tmp_path, num_shards=1, rows_per_shard=8, seq_len=16)
+    opens = _count_opens(monkeypatch)
 
     results = await asyncio.gather(*[cache.get_flat_field_batch("input_ids", [row * 16], 16) for row in range(8)])
 
     assert len(results) == 8
     assert opens == [str(Path(cache.cache_dir) / "shard_0")]
+
+
+@pytest.mark.asyncio
+async def test_sharded_row_batch_shares_and_overlaps_shard_opens(tmp_path, monkeypatch):
+    """`get_batch` reaches shard stores by a separate path than `get_flat_field_batch`."""
+    num_shards, rows_per_shard, seq_len = 4, 4, 16
+    cache = _build_sharded_cache(tmp_path, num_shards, rows_per_shard, seq_len)
+    opens = _count_opens(monkeypatch)
+
+    rows = await cache.get_batch(list(range(num_shards * rows_per_shard)))
+
+    assert len(rows) == num_shards * rows_per_shard
+    for row in rows:
+        np.testing.assert_array_equal(row["input_ids"], np.arange(seq_len, dtype=np.int32))
+    # one open per shard, even though every shard serves several of the requested rows
+    assert sorted(opens) == sorted(str(Path(cache.cache_dir) / f"shard_{i}") for i in range(num_shards))
+
+
+@pytest.mark.asyncio
+async def test_failed_shard_open_is_retried_by_the_next_reader(tmp_path, monkeypatch):
+    """A shared open that fails must not poison the shard for every later reader."""
+    cache = _build_sharded_cache(tmp_path, num_shards=1, rows_per_shard=4, seq_len=16)
+
+    real_open_async = TreeStore.open_async
+    attempts = []
+
+    async def flaky_open_async(exemplar, path, **kwargs):
+        attempts.append(path)
+        await asyncio.sleep(0)
+        if len(attempts) == 1:
+            raise TimeoutError("simulated stalled open")
+        return await real_open_async(exemplar, path, **kwargs)
+
+    monkeypatch.setattr(TreeStore, "open_async", staticmethod(flaky_open_async))
+
+    with pytest.raises(TimeoutError):
+        await cache.get_flat_field_batch("input_ids", [0], 16)
+
+    batch = await cache.get_flat_field_batch("input_ids", [0], 16)
+    np.testing.assert_array_equal(batch[0], np.arange(16, dtype=np.int32))
+    assert len(attempts) == 2
