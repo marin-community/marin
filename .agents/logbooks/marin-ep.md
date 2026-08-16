@@ -724,3 +724,26 @@ Experiment ID prefix: `MEP`.
      into the put kernel; also reachable sooner by caching/overlapping
      the counts exchange.
 - Exploratory (single trace, rank 0 only).
+
+### 2026-08-15 17:58 - MEP-022: LHS scheduler is SAFE and ~-2% with the patched wheel
+- Run: mep-ep64-lhs2-25-20260815 — ep-marin-cudnn-cute cf 1.1 s32 with
+  EXPLICIT `--xla_gpu_enable_latency_hiding_scheduler=true
+  --xla_gpu_experimental_parallel_collective_overlap_limit=4` (+
+  symmetric mode + kMaxPeers-128 wheel). 25/25 steps, no illegal
+  address, drops 0.635%. Steady ~18.1-18.2 s/step (12it@4:37 ->
+  24it@8:14 = 217 s / 12; cumulative 18.1) vs baseline 18.5 and the
+  same-config replicate 18.8 — ~-2%, and the fragile LHS-off recipe is
+  no longer needed. Supports the hypothesis that the historical "LHS
+  corrupts ragged-a2a" incident (wiki:101, PR #8081 flags) was really
+  the #8313 kMaxPeers barrier overflow.
+- Gotcha logged: train.py `_apply_hero_ep_runtime_defaults` re-applies
+  LHS=false/overlap=1 for ragged implementations whenever the flags are
+  absent from XLA_FLAGS — a flag-dropping A/B silently replicates
+  baseline (run mep-ep64-lhs-25-20260815 was this accident: 18.8
+  s/step, a useful draw-noise replicate). A/Bs must pass explicit
+  values.
+- New best marin arm: ~18.1 s/step = ~232k tok/s = ~21.2% MFU at 0.64%
+  drops. Exploratory (single draw).
+- Next: command buffers arm (mep-ep64-cb-25, +`command_buffer=FUSION`
+  on top of LHS-on; #5675 crash was bisected to COLLECTIVES capture so
+  FUSION-only should be safe); then counts-a2a overlap and M7.
