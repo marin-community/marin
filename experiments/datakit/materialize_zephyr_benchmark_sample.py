@@ -37,6 +37,7 @@ from experiments.datakit.zephyr_benchmark import (
 )
 
 DEFAULT_MAX_CONCURRENT = 4
+MATERIALIZE_STEP_PREFIX = "datakit/benchmark_sample"
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def mirror_sample_source_step(name: str, source: StepSpec, destination_prefix: s
         return mirrored.model_copy(update={"dup_output_dir": ""})
 
     return StepSpec(
-        name=f"datakit/benchmark_sample/{name}",
+        name=f"{MATERIALIZE_STEP_PREFIX}/{name}",
         deps=[source],
         hash_attrs={"source_path": source_path, "version": "v1"},
         fn=mirror,
@@ -65,9 +66,7 @@ def mirror_sample_source_step(name: str, source: StepSpec, destination_prefix: s
 def materialize_sample_steps(source_prefix: str, destination_prefix: str) -> list[StepSpec]:
     """Build one mirror step for every source in the benchmark sample."""
     sources = sample_sources(source_prefix)
-    return [
-        mirror_sample_source_step(name, source, destination_prefix) for name, source in sorted(sources.items())
-    ]
+    return [mirror_sample_source_step(name, source, destination_prefix) for name, source in sorted(sources.items())]
 
 
 def main() -> None:
@@ -87,7 +86,7 @@ def main() -> None:
     steps = materialize_sample_steps(args.source_prefix, args.destination_prefix)
     StepRunner().run(steps, max_concurrent=args.max_concurrent)
 
-    source_names = {step.name.removeprefix("datakit/benchmark_sample/") for step in steps}
+    source_names = {step.name.removeprefix(f"{MATERIALIZE_STEP_PREFIX}/") for step in steps}
     destination_names = set(sample_sources(args.destination_prefix))
     if destination_names != source_names:
         raise RuntimeError(
