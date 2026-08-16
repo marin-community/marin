@@ -6,10 +6,8 @@
 # copied from https://github.com/open-lm-engine/accelerated-model-architectures
 # **************************************************
 
-from .op import IMPLEMENTATIONS, Implementation, depthwise_causal_convolution
-
-__all__ = [
-    "IMPLEMENTATIONS",
-    "Implementation",
-    "depthwise_causal_convolution",
-]
+from .op import (
+    IMPLEMENTATIONS as IMPLEMENTATIONS,
+    Implementation as Implementation,
+    depthwise_causal_convolution as depthwise_causal_convolution,
+)

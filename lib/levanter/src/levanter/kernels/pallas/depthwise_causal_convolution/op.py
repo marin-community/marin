@@ -13,7 +13,7 @@ import jax
 import jax.numpy as jnp
 
 from .backward_kernel import _backward_core
-from .forward_kernel import _ceil_div, _forward_core
+from .forward_kernel import _forward_core, _pad_size
 from .reference import _depthwise_causal_convolution_reference
 
 Implementation: TypeAlias = Literal["pallas_tpu", "xla"]
@@ -29,9 +29,8 @@ def _get_block_size_s(H: int) -> int:
 
 
 def _pad_h0(h0: jax.Array, K: int) -> jax.Array:
-    state_size = K - 1
-    pad = _ceil_div(state_size, 8) * 8
-    return jnp.pad(h0, ((0, 0), (pad - state_size, 0), (0, 0)))
+    pad = _pad_size(K)
+    return jnp.pad(h0, ((0, 0), (pad - (K - 1), 0), (0, 0)))
 
 
 def _forward_run(

@@ -18,6 +18,11 @@ def _ceil_div(n: int, d: int) -> int:
     return (n + d - 1) // d
 
 
+def _pad_size(K: int) -> int:
+    """Sublane-aligned width of the `K - 1` history a block must carry."""
+    return _ceil_div(K - 1, 8) * 8
+
+
 def _forward_kernel(
     x_ref,
     W_ref,
@@ -82,7 +87,7 @@ def _forward_core(
 ) -> jax.Array | tuple[jax.Array, jax.Array]:
     B, S, H = x.shape
     K = W.shape[0]
-    PAD = _ceil_div(K - 1, 8) * 8
+    PAD = _pad_size(K)
     NUM_BLOCKS_S = _ceil_div(S, BLOCK_SIZE_S)
 
     x_spec = pl.BlockSpec(

@@ -12,7 +12,7 @@ import jax
 import jax.experimental.pallas as pl
 import jax.experimental.pallas.tpu as pltpu
 import jax.numpy as jnp
-from .forward_kernel import _ceil_div
+from .forward_kernel import _ceil_div, _pad_size
 
 
 def _backward_kernel(
@@ -197,7 +197,7 @@ def _backward_core(
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
     B, S, H = x.shape
     NUM_BLOCKS_S = _ceil_div(S, BLOCK_SIZE_S)
-    PAD = _ceil_div(K - 1, 8) * 8
+    PAD = _pad_size(K)
     state_size = K - 1
 
     # a block has to be long enough to carry the whole history in its leading/trailing PAD rows
