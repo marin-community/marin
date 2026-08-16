@@ -181,7 +181,7 @@ def test_xla_backend_matches_oracle_values_drops_and_grads_on_8_device_mesh():
     assert "OK" in result.stdout
 
 
-@pytest.mark.parametrize("transport", ["ragged", "mgpu"])
+@pytest.mark.parametrize("transport", ["ragged", "mgpu", "hier"])
 @pytest.mark.parametrize("group_size", [1, 2, 4])
 def test_real_gpu_transport_matches_oracle(group_size, transport):
     """Production transports on real GPUs (ragged passed on GB200, MEP-006).
@@ -203,7 +203,10 @@ def test_real_gpu_transport_matches_oracle(group_size, transport):
     devices = len(jax.devices())
     if devices < 2:
         pytest.skip("needs >= 2 GPUs")
-    tokens, topk, hidden, intermediate = (512 if transport == "mgpu" else 64), 3, 256, 256
+    if transport == "hier" and devices % 2:
+        pytest.skip("hier splits the device axis into (nodes, intranode pairs)")
+    transport_kwargs = {"intranode_size": 2} if transport == "hier" else {}
+    tokens, topk, hidden, intermediate = (512 if transport != "ragged" else 64), 3, 256, 256
     num_experts = devices * 4
     capacity_factor = 1.1
 
@@ -231,6 +234,7 @@ def test_real_gpu_transport_matches_oracle(group_size, transport):
             capacity_factor=capacity_factor,
             pool_group_size=group_size,
             transport=transport,
+            **transport_kwargs,
         ),
         mesh=mesh,
         in_specs=(batch_spec, batch_spec, batch_spec, weight_spec, weight_spec),
