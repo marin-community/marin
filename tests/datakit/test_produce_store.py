@@ -105,10 +105,19 @@ def test_worker_shape_does_not_move_the_store():
     assert small.output_path == large.output_path
 
 
-def test_quality_must_match_the_tokenization_it_scored():
-    """The store joins quality onto tokenize shards and then checks ids agree."""
-    with pytest.raises(ValueError, match="not the one"):
-        produce_store.store_inputs(SOURCES, tokenizer=hero_data.MARIN_TOKENIZER)
+def test_the_corpus_tokenization_is_not_the_one_the_scorer_read():
+    """A quality score is a property of the document, not of how it was tokenized.
+
+    The corpus leaf and the scorer's leaf are different steps over the same
+    normalize, and the store joins them by id, so scores land on the right
+    documents. The store still checks the two agree id for id on every shard, so
+    a pair that does not line up fails there rather than here.
+    """
+    inputs = produce_store.store_inputs(SOURCES)
+
+    corpus = inputs.per_source[SOURCES[0]].tokenize.output_path
+    assert corpus == hero_data.tokenized(SOURCES[0]).output_path
+    assert corpus != hero_data.quality_tokenization(SOURCES[0]).output_path
 
 
 def test_unknown_source_is_rejected():

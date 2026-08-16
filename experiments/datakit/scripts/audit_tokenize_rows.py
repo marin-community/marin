@@ -23,7 +23,7 @@ than one. Submit in the CoreWeave data region::
         --target-cluster cw-us-east-02a --priority interactive \\
         --cpu 2 --memory 8g --enable-extra-resources \\
         -e MARIN_PREFIX s3://marin-us-east-02a/marin \\
-        -- python -m experiments.datakit.scripts.audit_tokenize_rows --tokenizer marin
+        -- python -m experiments.datakit.scripts.audit_tokenize_rows
 """
 
 import argparse
@@ -47,7 +47,6 @@ from experiments.datakit.reference_pipeline import SPLIT
 
 logger = logging.getLogger(__name__)
 
-TOKENIZERS = {"marin": hero_data.MARIN_TOKENIZER, "nemotron": hero_data.NEMOTRON_TOKENIZER}
 SHARDS_PER_TASK = 400
 READ_THREADS = 16
 
@@ -82,11 +81,11 @@ def compare_batch(batch: list[_Shard]) -> list[dict]:
         return [row for row in pool.map(one, batch) if row]
 
 
-def build_shards(tokenizer: hero_data.TokenizerPin) -> list[_Shard]:
+def build_shards() -> list[_Shard]:
     """Pair every tokenize shard with the decontamination shard of the same name."""
 
     def per_source(source: str) -> list[_Shard]:
-        tokenize = read_artifact(hero_data.tokenized(source, tokenizer).output_path, TokenizedAttrData)
+        tokenize = read_artifact(hero_data.tokenized(source).output_path, TokenizedAttrData)
         decontam = read_artifact(hero_data.decontam(source).output_path, DeconAttributes)
         tokenize_dir = tokenize.output_dirs[SPLIT].rstrip("/")
         decontam_dir = decontam.main_output_dir.rstrip("/")
@@ -102,7 +101,6 @@ def build_shards(tokenizer: hero_data.TokenizerPin) -> list[_Shard]:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--tokenizer", choices=sorted(TOKENIZERS), default="marin")
     parser.add_argument("--max-workers", type=int, default=64)
     parser.add_argument("--worker-cpu", type=float, default=4)
     parser.add_argument("--worker-ram", default="16g")
@@ -111,11 +109,10 @@ def main(argv: list[str] | None = None) -> None:
     configure_logging(logging.INFO)
     configure_coreweave_s3()
 
-    shards = build_shards(TOKENIZERS[args.tokenizer])
+    shards = build_shards()
     batches = [shards[i : i + SHARDS_PER_TASK] for i in range(0, len(shards), SHARDS_PER_TASK)]
     logger.info(
-        "%s: %d shards over %d sources -> %d tasks",
-        args.tokenizer,
+        "%d shards over %d sources -> %d tasks",
         len(shards),
         len({s["source"] for s in shards}),
         len(batches),
@@ -123,7 +120,7 @@ def main(argv: list[str] | None = None) -> None:
 
     worker = ResourceConfig(cpu=args.worker_cpu, ram=args.worker_ram, disk="8g")
     context = ZephyrContext(
-        name=f"audit-tokenize-rows-{args.tokenizer}",
+        name="audit-tokenize-rows",
         resources=worker,
         max_workers=min(args.max_workers, len(batches)),
     )

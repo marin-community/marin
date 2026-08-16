@@ -16,20 +16,22 @@ or use it as a dependency of a step you do intend to run::
     from marin.execution.artifact import read_artifact
     from marin.processing.tokenize.attributes import TokenizedAttrData
 
-    step = hero_data.tokenized("stack-v3", hero_data.NEMOTRON_TOKENIZER)
+    step = hero_data.tokenized("stack-v3")
     data = read_artifact(step.output_path, TokenizedAttrData)
 
 :func:`harrier` returns a path string. It reads the fixed source-to-path
 map in ``hero_data_emb_paths.json`` and adds the active Marin prefix.
 
+The corpus has one tokenization: the Marin tokenizer, applied to the whole
+registry in a single fleet run. :func:`tokenized` returns it.
+
 :func:`normalized` and :func:`minhash` follow current code, so they track main
 as the registry moves. :func:`tokenized` pins the artifact version instead,
-because the tokenize hash includes one and it has changed under the runs that
-produced this data: each tokenizer was applied to the whole registry in a single
-fleet run, and each of those runs wrote a different version. The dedup stages
-and domain cluster assignment are pinned to specific runs outright.
-:func:`decontam` is pinned per source, like :func:`harrier`, because its step
-folds in an eval bloom and a drop-set stage that have both moved since the run.
+because the tokenize hash includes one and it has moved since the run that
+produced this data. The dedup stages and domain cluster assignment are pinned to
+specific runs outright. :func:`decontam` is pinned per source, like
+:func:`harrier`, because its step folds in an eval bloom and a drop-set stage
+that have both moved since the run.
 
 A stage whose producing job has not finished raises :class:`PendingRegistration`
 when something asks for it. :func:`experiments.datakit.produce_store.pending`
@@ -163,21 +165,29 @@ class TokenizerPin:
     name: str
     """HuggingFace tokenizer name."""
 
-    revision: str
-    """Immutable HF commit. Identity-only -- ``load_tokenizer`` takes no revision."""
+    revision: str | None
+    """Immutable HF commit. Identity-only -- ``load_tokenizer`` takes no revision.
+    ``None`` leaves ``tokenizer_revision`` out of the hash, which is how the run
+    that produced the Marin tokenization addressed it."""
 
     artifact_version: int
     """``TOKENIZED_ATTR_DATA_VERSION`` as of that run. Part of the tokenize hash."""
 
 
-MARIN_TOKENIZER = TokenizerPin("marin-community/marin-tokenizer", "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2", 2)
-NEMOTRON_TOKENIZER = TokenizerPin(
+MARIN_TOKENIZER = TokenizerPin("marin-community/marin-tokenizer", None, 4)
+
+# Historical, and deliberately private: the tokenization NEMOTRON_88K scored,
+# not a tokenization this corpus reads. The quality scores live at a path whose
+# hash folds in this step's ``name_with_hash``, so naming it here is what keeps
+# :func:`quality` pointed at the bytes that exist. Scores join by document id,
+# so they still apply to a corpus tokenized any other way.
+_QUALITY_TOKENIZATION = TokenizerPin(
     "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16", "624ba927cfbef0427354998700de3d51173c8c04", 3
 )
 
-# The Focus Crawl was normalized (#8111) and tokenized after both fleet runs, by
-# which point #8100 had bumped TOKENIZED_ATTR_DATA_VERSION to 4. It is the only
-# source whose outputs sit at the current version, under either tokenizer.
+# The Focus Crawl was normalized (#8111) and tokenized after the quality run, by
+# which point #8100 had bumped TOKENIZED_ATTR_DATA_VERSION to 4. That is where
+# every Marin leaf now sits, so this only still bites the quality tokenization.
 _ARTIFACT_VERSION_OVERRIDES = {"common-crawl-focus-2026-22": 4}
 
 DOMAIN_CLUSTER_ASSIGNMENT_PATH = "datakit/cluster/domain/v1/harrier-all-sources-10m/train_fe81b456"
@@ -226,8 +236,9 @@ class QualityPin:
     document's bucket and the store reads them separately from the model."""
 
     tokenizer: TokenizerPin
-    """Which tokenization the scorer reads. Folded in structurally: :func:`quality`
-    makes :func:`tokenized` a dependency rather than naming its leaf."""
+    """Which tokenization the scorer read. Folded in structurally: :func:`quality`
+    makes that tokenize step a dependency rather than naming its leaf. It is not
+    the corpus tokenization -- see :data:`_QUALITY_TOKENIZATION`."""
 
     version: int
     """Bump to rescore the corpus under an unchanged model and calibration."""
@@ -237,7 +248,7 @@ NEMOTRON_88K = QualityPin(
     name="nemotron88k_v1",
     model_sha256="e1be09c903bf7a926046bac97d40db050ca399fbb336c7541df42dc8cf6eda10",
     calibration_sha256="1a1dcfd31c20d9f3879878d617f0f8fb0b6898c4445885ffae29ebea63738fd8",
-    tokenizer=NEMOTRON_TOKENIZER,
+    tokenizer=_QUALITY_TOKENIZATION,
     version=1,
 )
 
@@ -297,8 +308,7 @@ def normalized(source: str) -> StepSpec:
     return _read_only(_normalize_step(source))
 
 
-def tokenized(source: str, tokenizer: TokenizerPin = NEMOTRON_TOKENIZER) -> StepSpec:
-    """Return the tokenized attributes for ``source`` under ``tokenizer``."""
+def _tokenize_step(source: str, tokenizer: TokenizerPin) -> StepSpec:
     step = tokenize_attributes_step(
         name=f"datakit/tokenize/{source}",
         train_normalize=_normalize_step(source),
@@ -308,6 +318,20 @@ def tokenized(source: str, tokenizer: TokenizerPin = NEMOTRON_TOKENIZER) -> Step
     )
     version = _ARTIFACT_VERSION_OVERRIDES.get(source, tokenizer.artifact_version)
     return _read_only(replace(step, hash_attrs={**step.hash_attrs, "artifact_version": version}))
+
+
+def tokenized(source: str) -> StepSpec:
+    """Return the tokenized attributes for ``source``."""
+    return _tokenize_step(source, MARIN_TOKENIZER)
+
+
+def quality_tokenization(source: str, quality_model: QualityPin = NEMOTRON_88K) -> StepSpec:
+    """Return the tokenization ``quality_model`` reads, which is not :func:`tokenized`.
+
+    Only the scorer needs this. Everything downstream of the scores joins them to
+    the corpus by document id, so it reads :func:`tokenized` instead.
+    """
+    return _tokenize_step(source, quality_model.tokenizer)
 
 
 def minhash(source: str) -> StepSpec:
@@ -334,7 +358,7 @@ def quality(source: str, quality_model: QualityPin = NEMOTRON_88K) -> StepSpec:
     """
     return StepSpec(
         name=f"datakit/quality/{source}",
-        deps=[tokenized(source, quality_model.tokenizer)],
+        deps=[quality_tokenization(source, quality_model)],
         hash_attrs={
             "model": quality_model.name,
             "model_sha256": quality_model.model_sha256,
@@ -430,8 +454,7 @@ def all_paths() -> dict[str, str]:
     for source in sorted(sources):
         paths[f"normalized/{source}"] = _read_only(sources[source]).output_path
         paths[f"minhash/{source}"] = _read_only(minhash_steps[source]).output_path
-        paths[f"tokenize.marin/{source}"] = tokenized(source, MARIN_TOKENIZER).output_path
-        paths[f"tokenize.nemotron/{source}"] = tokenized(source, NEMOTRON_TOKENIZER).output_path
+        paths[f"tokenize/{source}"] = tokenized(source).output_path
         paths[f"harrier/{source}"] = harrier(source)
         paths[f"cluster_assign/{source}"] = assigned_clusters(source).output_path
     return paths

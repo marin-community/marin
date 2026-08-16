@@ -60,9 +60,7 @@ def test_harrier_paths_are_complete_relative_and_include_focus():
 def test_every_registered_source_has_every_stage():
     keys = set(_relative_paths())
     missing = {
-        f"{stage}/{source}"
-        for source in hero_data.source_names()
-        for stage in ("normalized", "minhash", "tokenize.marin", "tokenize.nemotron")
+        f"{stage}/{source}" for source in hero_data.source_names() for stage in ("normalized", "minhash", "tokenize")
     } - keys
     assert not missing
 
@@ -72,7 +70,7 @@ def test_steps_refuse_to_run():
     # overwrite it, so every accessor must fail instead of producing output.
     steps = [
         hero_data.normalized("stack-v3"),
-        hero_data.tokenized("stack-v3", hero_data.MARIN_TOKENIZER),
+        hero_data.tokenized("stack-v3"),
         hero_data.minhash("stack-v3"),
         hero_data.exact_dups(),
         hero_data.fuzzy_dups(),
@@ -127,7 +125,7 @@ def test_quality_path_identifies_the_scorer(field, value):
 
 def test_quality_folds_in_the_tokenization_as_a_dependency():
     step = hero_data.quality("stack-v3")
-    assert step.dep_names == [hero_data.tokenized("stack-v3", hero_data.NEMOTRON_88K.tokenizer).name_with_hash]
+    assert step.dep_names == [hero_data.quality_tokenization("stack-v3").name_with_hash]
     # No pinned path: the output sits at ``name_with_hash`` like any ordinary step,
     # which is what puts the scorer's identity in the path.
     assert step.override_output_path is None

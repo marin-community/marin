@@ -395,7 +395,7 @@ def manifest_mode(args) -> dict:
         raise ValueError(f"no harrier leaf mapped for {len(missing_embed)} source(s): {missing_embed}")
 
     def leaf_shards(source: str) -> SourceShards:
-        tok_dir = f"{hero_data.tokenized(source, NEMOTRON_88K.tokenizer).output_path.rstrip('/')}/{SPLIT}"
+        tok_dir = f"{hero_data.quality_tokenization(source, NEMOTRON_88K).output_path.rstrip('/')}/{SPLIT}"
         out_dir = hero_data.quality(source, NEMOTRON_88K).output_path.rstrip("/")
         embed_dir = hero_data.harrier(source).rstrip("/")
         return pair_shards(

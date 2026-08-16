@@ -150,7 +150,6 @@ class StoreInputs:
     """Sources whose exact marks :attr:`exact_dups` moves onto their current normalize."""
 
     verified_fuzzy_dups: StepSpec
-    tokenizer: hero_data.TokenizerPin
     quality_model: hero_data.QualityPin
 
     def steps(self) -> list[StepSpec]:
@@ -202,21 +201,16 @@ def pending(sources: list[str] | None = None) -> list[Pending]:
 def store_inputs(
     sources: list[str] | None = None,
     *,
-    tokenizer: hero_data.TokenizerPin = hero_data.NEMOTRON_TOKENIZER,
     quality_model: hero_data.QualityPin = hero_data.NEMOTRON_88K,
 ) -> StoreInputs:
     """Resolve the store's inputs for ``sources`` (``None`` selects every source).
 
-    ``tokenizer`` must be the one the quality scorer read. The store joins each
-    quality shard to the tokenize shard of the same basename and then checks the
-    two agree id for id, so scores written against one tokenization do not line
-    up against another's shards.
+    ``quality_model`` scored a different tokenization than the corpus carries,
+    and that is fine: a score is a property of the document, not of how it was
+    tokenized, and the store joins the two by document id. Both leaves derive
+    from the same normalize, so they share shard names and document order. The
+    store checks that per shard rather than taking it on trust.
     """
-    if tokenizer != quality_model.tokenizer:
-        raise ValueError(
-            f"tokenizer {tokenizer.name!r} is not the one {quality_model.name!r} scored against "
-            f"({quality_model.tokenizer.name!r}); the store joins quality onto tokenize shards"
-        )
     names = hero_data.source_names() if sources is None else sorted(sources)
     unknown = sorted(set(names) - set(hero_data.source_names()))
     if unknown:
@@ -224,7 +218,7 @@ def store_inputs(
 
     per_source = {
         name: SourceStages(
-            tokenize=hero_data.tokenized(name, tokenizer),
+            tokenize=hero_data.tokenized(name),
             decontam=hero_data.decontam(name),
             cluster_assign=hero_data.assigned_clusters(name),
             quality=hero_data.quality(name, quality_model),
@@ -240,7 +234,6 @@ def store_inputs(
         exact_dups_pin=pin,
         repacked_sources=repacked,
         verified_fuzzy_dups=hero_data.verified_fuzzy_dups(),
-        tokenizer=tokenizer,
         quality_model=quality_model,
     )
 
@@ -737,7 +730,9 @@ def main(argv: list[str] | None = None) -> None:
             "the store cannot be built yet:\n" + "\n".join(f"  {item.stage}: {item.remedy}" for item in unregistered)
         )
 
-    inputs = store_inputs(sources)
+    inputs = store_inputs(
+        sources,
+    )
     store = StoreConfig(
         task_count=args.task_count,
         partition_processes=args.partition_processes,
