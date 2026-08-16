@@ -916,3 +916,64 @@ Experiment ID prefix: `MEP`.
   M7 fused metadata+transport+GEMM (sync 1.4 s + counts 1.0 s + hides the
   0.9 s a2a). None is a knob; all are engineering projects.
 - Rack experiments paused; PR #8320 monitored for human review.
+
+### 2026-08-16 09:10 - MEP-030: multi-process fused transport is BACK — collective-metadata spike PASSES cross-node
+- Context: MEP-008 concluded multi-process mosaic transport was dead
+  upstream (NVSHMEM removed). That conclusion is now obsolete: upstream
+  REPLACED the backend rather than dropping the capability — "XLA is
+  deprecating NVSHMEM. Instead of NVSHMEM customers should use NCCL
+  Device API through collective metadata" (jax 181661c3a5, 2026-06-18),
+  and jax c98d8fa09c migrated tests/mosaic/gpu_distributed_test.py to a
+  multi-process (1 device/process) collective-metadata test. In current
+  jax, `to_remote`/`async_copy(gmem_peer_id=...)` read per-peer parameter
+  pointers from a collective-metadata buffer whenever the mesh spans
+  processes and `is_nvshmem_available()` is false (no XLA flags needed);
+  Pallas `remote_ref`/semaphores lower through the same path with no
+  process-count gate. All machinery predates our dev20260809 nightly.
+- Spike: `smoke_transport_multinode.py` with the nvshmem hack DELETED
+  (commit f49d1df629), 2 GB200 nodes x 4 GPUs, 1 process/GPU (8 procs),
+  stock nightly wheels + nccl-cu13 2.30.7.
+- Result: ALL 8 processes CORRECT (pool 28182x1024, both attempts),
+  per-rank egress 153-209 GB/s through the fused puts. Confirmed again
+  on the dev20260816 nightly. The `transport="mgpu" iff process_count()==1`
+  gate and its docstring describe the July state and are now wrong.
+- Interpretation: the direct flat fused transport at EP64 (production
+  1 proc/GPU topology, no hierarchy, no FFI) is viable in-framework —
+  standalone. Full-layer integration hits an XLA bug (next entry).
+
+### 2026-08-16 09:40 - MEP-031: full-layer mgpu multi-process blocked by an XLA buffer-alignment bug; patched-wheel fix in progress
+- Smoke: new `smoke_mgpu_train_multiproc.py` (b246e3e59c) — the EP8-style
+  oracle conformance smoke with `transport="mgpu"` forced, 1 proc/GPU.
+- Result: FAILS at first execution on both nightlies:
+  `ncclDevrWindowRegisterInGroup ... Window address must be suitably
+  aligned.` -> `INTERNAL: NCCL operation ... invalid argument` in
+  jit_marin_ep_moe_local. Reproduces with 2 procs on one node.
+- Bisection ladder (repro_align.py on put_segments): single kernel call
+  passes with entry-param, temp, computed-plan, and consumed-output
+  variants; TWO put_segments calls in one executable FAIL. Instrumented
+  registration (TF_CPP_VMODULE=nccl_symmetric_memory=3): first window =
+  2 MiB arena base (aligned, OK); second window = ptr 0x...cf300
+  (offset 0x300 = 768 = 3x256) size 876544 (= send_rows x H x 4 — the
+  second put's src temp) in the DEFAULT BFC arena, not the collective
+  arena. Diagnosis: XLA's GpuCollectiveBufferAnalysis misses some mosaic
+  collective-metadata params; the runtime then window-registers a plain
+  temp at XLA's 256-byte packing alignment
+  (kXlaAllocatedBufferAlignBytes), and NCCL requires
+  NCCL_WIN_REQUIRED_ALIGNMENT = 4096. A minimal pure-Pallas two-kernel
+  repro does NOT trigger the analysis miss (its temps get copied into
+  collective space correctly) — the miss needs put_segments-like
+  structure; upstream issue to follow once the fix is validated.
+- Fix in progress: rebuild `jax-cuda13-pjrt` at the #8077 pins
+  (jax 8d1be7d / xla 60f8069) with kMaxPeers 32->128 (as in the existing
+  patched wheel) PLUS buffer-assignment color_alignment 256->4096 for all
+  colors (compile_module_to_llvm_ir.cc) so every registered window offset
+  is 4KB-aligned. Collective-color-only alignment would NOT cover the
+  default-arena escapee. Build gotcha: aarch64 XNNPACK fp8 kernels need
+  `--define=ynn_enable_arm64_neonfp8=false` (jax ci_linux_aarch64_base
+  does the same); hermetic llvm18 otherwise fine.
+- Pod traps: the task image has no ps/pgrep/pkill — poll scripts must use
+  /proc or log staleness; `git checkout <sha>` keeps prior patch edits
+  (reset --hard before repatching).
+- Next: BUILD_OK -> 2-proc layer smoke on the patched wheel -> 8-proc
+  cross-node -> `ep-marin-mgpu-cudnn-cute` hero flavor -> EP16 proxy ->
+  EP64. Then file the openxla/xla issue with the validated patch.
