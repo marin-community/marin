@@ -35,10 +35,19 @@ _CONFIG = brd.TuningConfig(
     collective=True,
 )
 ROW_ALIGN = 2 * _CONFIG.tile_m
+# The collective config doubles the effective N tile. Hero dims are not all
+# 256-multiples (2I = 6272, I = 3136), so `_grouped` pads the weight's N and
+# slices the output.
+_N_ALIGN = (2 if _CONFIG.collective else 1) * _CONFIG.tile_n
 
 
 def _grouped(a: jax.Array, b: jax.Array, group_sizes: jax.Array) -> jax.Array:
-    return brd.ragged_dot_kernel(a, b, group_sizes, config=_CONFIG)
+    n = b.shape[2]
+    n_pad = -n % _N_ALIGN
+    if n_pad:
+        b = jnp.pad(b, ((0, 0), (0, 0), (0, n_pad)))
+    out = brd.ragged_dot_kernel(a, b, group_sizes, config=_CONFIG)
+    return out[:, :n] if n_pad else out
 
 
 @jax.custom_vjp
