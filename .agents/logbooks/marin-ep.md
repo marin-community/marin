@@ -1057,3 +1057,31 @@ Experiment ID prefix: `MEP`.
   pool exhausting NCCL window VA) with validated one-line fixes and the
   public repro pointers. Cross-referenced #47283.
 - Profile run mep-mgpu-prof-25-20260816 in flight (steps 12-15).
+
+### 2026-08-16 11:00 - MEP-036: fused-EP64 profile — transport is no longer the story
+- Trace: mep-mgpu-prof-25-20260816 steps 12-15 (17.6-18.1 s/step whole-run
+  rate), s3://marin-us-east-02a/tmp/ttl=30d/xprof/mep-mgpu-prof-25-20260816
+  (30d TTL). Kernel-stats busy-time attribution, rank-0 device, per step
+  (streams overlap — busy != exposed; treat as relative):
+  | bucket | ms/step | share |
+  |---|---|---|
+  | GEMMs (quack/cudnn/nvjet/fa4) | 4832 | 27% |
+  | "other" (ncclSymk one-shots incl. FSDP AG/RS/AR) | 3856 | 22% |
+  | XLA fusions | 3758 | 21% |
+  | nccl misc | 2618 | 15% |
+  | MultiGpuBarrierWithNcclKernelImpl | 1531 | 9% |
+  | mosaic put_segments (all four puts + vjp) | 1163 | 6.5% |
+- Key finding: the barrier kernels (3 sites x 48/step, 1.53 s busy) ride
+  the FSDP symmetric one-shot collectives (AllGather_STMC 790 ms,
+  ReduceScatter_LDMC 625 ms, AllReduce_AGxLLMC 314 ms), NOT the MoE
+  transport. The fused transport itself is 1.16 s busy vs the ragged
+  path's 2.30 s ragged+barrier — the win the wall-clock delta (0.25 s)
+  only partially realizes because much of both was already overlapped.
+- Interpretation: transport-lever ceiling reached, as MEP-029 predicted.
+  Remaining mass to the 12.0 s goal: GEMM efficiency (4.8 s busy),
+  fusion mass (3.8 s), FSDP one-shot collectives + their barriers
+  (~3 s), routing metadata. M7 (persistent GEMM consuming pool segments
+  behind arrival flags) attacks transport+sync+part of the fusion mass
+  around dispatch; GEMM/fusion work is independent of transport.
+- Next: M7 groundwork begins (task #10) — the multi-process substrate it
+  needs is now validated.
