@@ -1171,3 +1171,27 @@ Experiment ID prefix: `MEP`.
   primitive); tray conformance; hero flavor A/B. M7b fusion then gates
   THIS kernel's group loop on arrival semaphores (its GroupInfo scheduler
   is the natural wait point).
+
+### 2026-08-16 12:45 - MEP-041: cuDNN grouped Wgrad correctness bug found + fixed; brd expert MLP conformant; hero A/B launched
+- While validating the brd expert MLP's backward, isolated a correctness
+  bug in `cudnn_grouped_wgrad`: the kernel silently miscomputes when a
+  group's row offset is not 64-aligned. Stock 8-row padding -> max err
+  0.17-0.55 rel-to-peak (numpy reference, GB200, incl. production dims
+  k=6144/1536 n=3072/6144 G=3); 64/128/256-aligned -> 0.003 (bf16
+  floor); 32 fails. Grows with G (0.17 at G=2 -> 0.55 at G=12).
+- Scope: NOT on main — introduced by PR #8081 and carried by its derived
+  branches (all our cudnn-cute measurement runs trained with corrupted
+  dw13/dw2; loss still fell, atol in old grad checks absorbed it). Filed
+  #8339 (initially overclaimed "main", corrected), flagged PR #8081 with
+  the fix pointer.
+- Fix: _GROUP_ALIGNMENT 8 -> 64 (f2c9f702f3) + pad test update. Layer
+  conformance after fix: gx 0.006, gw13 0.004, gw2 0.0045 rel-to-peak.
+- brd expert MLP (be00be74fa): custom_vjp with pallas ragged_dot fwd +
+  dgrad (transposed-weight feeds) + cudnn wgrad; rows padded to 256;
+  EP4 single-process conformance PASSED at the bf16 floor. Note the
+  earlier defensive rowmask in _bwd proved unnecessary
+  (pad_grouped_rows excludes tail rows by construction) and is not in
+  the committed version, which is what conformance ran.
+- Launched: mep-brd-ep64-25-20260816 (ep-marin-mgpu-brd, MEP-034 recipe)
+  vs the 17.75 s mgpu-cute basis. GEMM microbench predicts a large win;
+  e2e verdict pending (microbench-overstates-e2e caveat).
