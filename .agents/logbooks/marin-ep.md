@@ -1195,3 +1195,22 @@ Experiment ID prefix: `MEP`.
 - Launched: mep-brd-ep64-25-20260816 (ep-marin-mgpu-brd, MEP-034 recipe)
   vs the 17.75 s mgpu-cute basis. GEMM microbench predicts a large win;
   e2e verdict pending (microbench-overstates-e2e caveat).
+
+### 2026-08-16 12:58 - MEP-042: EP64 hero on pallas ragged-dot GEMMs — 17.08 s/step, third consecutive best
+- Run: mep-brd2-ep64-25-20260816 (ep-marin-mgpu-brd: fused mosaic
+  transport + pallas blackwell ragged-dot fwd/dgrad + 64-aligned cudnn
+  wgrad, N padded to the collective tile for hero 2I=6272/I=3136).
+  25/25 SUCCEEDED, loss 6.09 falling.
+- Scored: steady 17.08 s/step (12it@4:33 -> 24it@7:58 = 205 s / 12),
+  drop_fraction 0.00492. ~245.5k tok/s/rack, ~22.5% MFU.
+- EP64 ladder (wheel v3, same flags): brd 17.08 < mgpu-cute 17.75 <
+  flat ragged cute 18.0 < old-wheel flat 18.1-18.2. Delta vs mgpu-cute
+  (-0.67 s) matches the microbench prediction (fwd MLP 305 vs 482 us at
+  true hero shape = 1.58x on the swapped legs).
+- First fix of the true-shape trap: hero 2I=6272 and I=3136 are not
+  256-multiples — the first launch failed on the collective tile; the
+  padded `_grouped` (597d5bcb4e) resolves it at ~2-6% extra N FLOPs on
+  the padded legs.
+- Goal gap: 12.0 s needs another 5.1 s. Next: brd TuningConfig sweep at
+  true hero shapes (971 TF/s leaves headroom vs the 1457 seen at the
+  aligned shape), then a profile of the brd step, then M7b fusion.
