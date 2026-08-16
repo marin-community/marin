@@ -77,7 +77,13 @@ class PreparedDocument:
     chars: int
     tokens: int
     ngrams: np.ndarray
-    token_set: frozenset[str]
+    text: str
+    """Kept so the token set can be built on demand.
+
+    Holding a frozenset of every document's words costs more than the n-gram
+    array it sits beside, and the zero-novel-token branch reads it for only the
+    few pairs that miss the containment threshold.
+    """
 
 
 @dataclass(frozen=True)
@@ -111,17 +117,21 @@ def prepare(documents: Sequence[ClusterDocument], params: ClusterDedupParams) ->
     """Prepare every member of one cluster."""
     prepared = []
     for index, document in enumerate(documents):
-        tokens = document.text.casefold().split()
         prepared.append(
             PreparedDocument(
                 index=index,
                 chars=len(document.text),
-                tokens=len(tokens),
+                tokens=document.text.count(" ") + 1,
                 ngrams=ngram_hashes(document.text, params.ngram_size),
-                token_set=frozenset(tokens),
+                text=document.text,
             )
         )
     return prepared
+
+
+def novel_token_count(member: PreparedDocument, representative: PreparedDocument) -> int:
+    """Words of the member that the representative does not hold."""
+    return len(frozenset(member.text.casefold().split()) - frozenset(representative.text.casefold().split()))
 
 
 def _overlap(left: np.ndarray, right: np.ndarray) -> int:
@@ -268,12 +278,12 @@ def find_duplicates(
             novel_tokens = -1
             accepted = containment >= params.minimum_containment
             if not accepted and params.accept_zero_novel_tokens:
-                novel_tokens = len(member_prepared.token_set - other.token_set)
+                novel_tokens = novel_token_count(member_prepared, other)
                 accepted = novel_tokens == 0
             if not accepted:
                 continue
             if novel_tokens < 0:
-                novel_tokens = len(member_prepared.token_set - other.token_set)
+                novel_tokens = novel_token_count(member_prepared, other)
             union = member_prepared.ngrams.size + other.ngrams.size - shared
             best = Removal(
                 member_index=member,
