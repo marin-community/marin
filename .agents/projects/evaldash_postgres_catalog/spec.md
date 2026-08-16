@@ -43,10 +43,12 @@ by `/api/status`.
 record_count: int
 catalog_generation: int | null
 snapshot_updated_at: ISO-8601 string | null
+catalog_error: string | null
 ```
 
 `ingest` adds `revalidate_after_seconds`, null for the direct local scanner and `86400` for the
-PostgreSQL reconciler.
+PostgreSQL reconciler, plus `cycle_error`. Catalog polling and ingest-cycle errors persist in status
+until the corresponding background operation succeeds.
 
 ## Configuration
 

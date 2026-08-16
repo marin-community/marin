@@ -36,7 +36,7 @@ import contextlib
 import logging
 import os
 import threading
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -69,8 +69,9 @@ from .metrics import (
     panel_request,
     record_headline,
 )
-from .record_reconciliation import inspect_record_paths
+from .record_reconciliation import VerificationSchedule, inspect_record_paths
 from .results_db import (
+    PrefixStatus,
     RecordObservation,
     SourceState,
     catalog_generation,
@@ -135,6 +136,7 @@ class StoreInfo:
     record_count: int
     catalog_generation: int | None
     snapshot_updated_at: str | None
+    catalog_error: str | None
 
 
 def _deduplicate_records(records: list[EvalRunRecord]) -> list[EvalRunRecord]:
@@ -186,12 +188,7 @@ def _group_sibling_row(record: EvalRunRecord) -> dict:
 
 
 class RecordStore:
-    """In-memory snapshot of eval records plus the read views the API serves over it.
-
-    The base serves every record view from one snapshot. :class:`MemoryRecordStore` fills it from a
-    direct scan; :class:`PgRecordStore` fills it from one committed catalog generation and keeps only
-    mutable model archive state as separate DB reads. The lock guards snapshot and generation swaps.
-    """
+    """Expose dashboard query views over one consistent in-memory record snapshot."""
 
     backend = "memory"
 
@@ -220,6 +217,7 @@ class RecordStore:
             record_count=len(records),
             catalog_generation=None,
             snapshot_updated_at=None,
+            catalog_error=None,
         )
 
     def refresh(self, records: list[EvalRunRecord]) -> None:
@@ -393,6 +391,7 @@ class PgRecordStore(RecordStore):
         snapshot = fetch_snapshot(engine)
         self._catalog_generation = snapshot.generation
         self._snapshot_updated_at = snapshot.updated_at
+        self._catalog_error: str | None = None
         self._set_snapshot(snapshot.records)
 
     def store_info(self) -> StoreInfo:
@@ -404,9 +403,11 @@ class PgRecordStore(RecordStore):
                 record_count=len(self._records),
                 catalog_generation=self._catalog_generation,
                 snapshot_updated_at=self._snapshot_updated_at.isoformat(),
+                catalog_error=self._catalog_error,
             )
 
     def reload_if_changed(self) -> bool:
+        """Load a newer committed generation, returning whether the snapshot advanced."""
         generation = catalog_generation(self._engine)
         with self._lock:
             current_generation = self._catalog_generation
@@ -420,6 +421,10 @@ class PgRecordStore(RecordStore):
             self._snapshot_updated_at = snapshot.updated_at
         logger.info("postgres store loaded generation %d with %d records", snapshot.generation, len(snapshot.records))
         return True
+
+    def set_catalog_error(self, error: str | None) -> None:
+        with self._lock:
+            self._catalog_error = error
 
     def configure_prefixes(self, prefixes: tuple[str, ...]) -> None:
         configure_prefixes(self._engine, prefixes)
@@ -452,7 +457,7 @@ class PgRecordStore(RecordStore):
         prune_untracked_records(self._engine, prefixes)
         self.reload_if_changed()
 
-    def prefix_statuses(self) -> list[dict]:
+    def prefix_statuses(self) -> list[PrefixStatus]:
         return prefix_statuses(self._engine)
 
     def archived_models(self) -> set[str]:
@@ -502,6 +507,26 @@ def _utcnow_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+async def _run_periodically(
+    operation: Callable[[], Awaitable[None]],
+    interval: float,
+    label: str,
+    set_error: Callable[[str | None], None],
+) -> None:
+    while True:
+        try:
+            await operation()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            set_error(error)
+            logger.exception("%s failed; retrying in %ss", label, interval)
+        else:
+            set_error(None)
+        await asyncio.sleep(interval)
+
+
 @dataclass
 class PrefixProbe:
     """Health of the most recent listing of one records prefix.
@@ -542,6 +567,7 @@ class Ingestor:
         self._last_good: dict[str, list[EvalRunRecord]] = {prefix: [] for prefix in prefixes}
         self._record_cache: dict[str, dict[str, EvalRunRecord]] = {prefix: {} for prefix in prefixes}
         self.last_pass_time: str | None = None
+        self.cycle_error: str | None = None
 
     async def run_once(self) -> None:
         """Run one full ingest pass, serialised against any other pass via ``_lock``."""
@@ -580,14 +606,10 @@ class Ingestor:
     async def run_loop(self) -> None:
         if not self._prefixes:
             return  # ingestion disabled; nothing to poll
-        while True:
-            try:
-                await self.run_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("ingest cycle failed; retrying in %ss", self.interval)
-            await asyncio.sleep(self.interval)
+        await _run_periodically(self.run_once, self.interval, "ingest cycle", self._set_cycle_error)
+
+    def _set_cycle_error(self, error: str | None) -> None:
+        self.cycle_error = error
 
     def status(self) -> dict:
         """Serialisable ingest health: cadence, last full pass, and each prefix's probe."""
@@ -595,6 +617,7 @@ class Ingestor:
             "interval_seconds": self.interval,
             "revalidate_after_seconds": None,
             "last_pass_time": self.last_pass_time,
+            "cycle_error": self.cycle_error,
             "prefixes": [asdict(self._probes[prefix]) for prefix in self._prefixes],
         }
 
@@ -619,13 +642,13 @@ class PostgresIngestor:
         store.configure_prefixes(prefixes)
         self._probes = {prefix: PrefixProbe(prefix=prefix) for prefix in prefixes}
         for row in store.prefix_statuses():
-            probe = self._probes.get(row["prefix"])
+            probe = self._probes.get(row.prefix)
             if probe is None:
                 continue
-            probe.last_probe_time = row["last_probe_at"].isoformat() if row["last_probe_at"] else None
-            probe.last_success_time = row["last_success_at"].isoformat() if row["last_success_at"] else None
-            probe.record_count = row["record_count"]
-            probe.error = row["error"]
+            probe.last_probe_time = row.last_probe_at.isoformat() if row.last_probe_at else None
+            probe.last_success_time = row.last_success_at.isoformat() if row.last_success_at else None
+            probe.record_count = row.record_count
+            probe.error = row.error
         for prefix, probe in self._probes.items():
             probe.parse_failures = [
                 RecordParseFailure(path=path, error=state.error)
@@ -633,6 +656,7 @@ class PostgresIngestor:
                 if state.error is not None
             ]
         self.last_pass_time: str | None = None
+        self.cycle_error: str | None = None
 
     async def run_once(self) -> None:
         if not self._prefixes:
@@ -649,9 +673,11 @@ class PostgresIngestor:
                         inspect_record_paths,
                         paths,
                         states,
-                        probe_at,
-                        self.interval,
-                        self.revalidate_after,
+                        VerificationSchedule(
+                            checked_at=probe_at,
+                            retry_after=self.interval,
+                            revalidate_after=self.revalidate_after,
+                        ),
                     )
                     failures = {
                         path: state.error for path, state in states.items() if path in paths and state.error is not None
@@ -694,34 +720,33 @@ class PostgresIngestor:
     async def run_loop(self) -> None:
         if not self._prefixes:
             return
-        while True:
-            try:
-                await self.run_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("reconcile cycle failed; retrying in %ss", self.interval)
-            await asyncio.sleep(self.interval)
+        await _run_periodically(self.run_once, self.interval, "reconcile cycle", self._set_cycle_error)
+
+    def _set_cycle_error(self, error: str | None) -> None:
+        self.cycle_error = error
 
     def status(self) -> dict:
         return {
             "interval_seconds": self.interval,
             "revalidate_after_seconds": self.revalidate_after,
             "last_pass_time": self.last_pass_time,
+            "cycle_error": self.cycle_error,
             "prefixes": [asdict(self._probes[prefix]) for prefix in self._prefixes],
         }
 
 
 async def _reload_catalog_loop(store: PgRecordStore) -> None:
-    """Follow catalog commits from an overlapping service revision independently of object scans."""
-    while True:
-        try:
-            await asyncio.to_thread(store.reload_if_changed)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("catalog generation poll failed; retrying in %ss", CATALOG_POLL_SECONDS)
-        await asyncio.sleep(CATALOG_POLL_SECONDS)
+    """Poll for committed generations and expose any refresh failure through store status."""
+
+    async def reload_once() -> None:
+        await asyncio.to_thread(store.reload_if_changed)
+
+    await _run_periodically(
+        reload_once,
+        CATALOG_POLL_SECONDS,
+        "catalog generation poll",
+        store.set_catalog_error,
+    )
 
 
 # --------------------------------------------------------------------------------------

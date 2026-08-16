@@ -28,6 +28,7 @@ import rigging.filesystem.factory as factory
 from rigging.filesystem.storage_path import StoragePath
 
 _MAX_READ_ATTEMPTS = 8
+_S3_MISSING_CODES = frozenset({"NotFound", "NoSuchKey", "404"})
 
 
 class ConditionalWriteError(RuntimeError):
@@ -52,7 +53,9 @@ class ConditionalObject(Protocol):
     @property
     def path(self) -> str: ...
 
-    def version(self) -> str | None: ...
+    def version(self) -> str | None:
+        """Return the current opaque object version, or None when the object is absent."""
+        ...
 
     def read(self) -> VersionedBytes | None: ...
 
@@ -193,7 +196,7 @@ class S3ConditionalObject:
         try:
             response = self._client(self.endpoint_url).head_object(Bucket=bucket, Key=key)
         except ClientError as exc:
-            if exc.response["Error"]["Code"] in ("NotFound", "NoSuchKey", "404"):
+            if exc.response["Error"]["Code"] in _S3_MISSING_CODES:
                 return None
             raise
         return response["ETag"]
@@ -203,7 +206,7 @@ class S3ConditionalObject:
         try:
             response = self._client(self.endpoint_url).get_object(Bucket=bucket, Key=key)
         except ClientError as exc:
-            if exc.response["Error"]["Code"] in ("NotFound", "NoSuchKey", "404"):
+            if exc.response["Error"]["Code"] in _S3_MISSING_CODES:
                 return None
             raise
         return VersionedBytes(data=response["Body"].read(), version=response["ETag"])

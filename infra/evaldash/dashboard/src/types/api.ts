@@ -200,6 +200,7 @@ export interface StoreInfo {
   record_count: number
   catalog_generation: number | null
   snapshot_updated_at: string | null
+  catalog_error: string | null
 }
 
 export interface Status {
@@ -208,6 +209,7 @@ export interface Status {
     interval_seconds: number
     revalidate_after_seconds: number | null
     last_pass_time: string | null
+    cycle_error: string | null
     prefixes: PrefixProbe[]
   }
 }

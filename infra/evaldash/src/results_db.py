@@ -14,6 +14,7 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 
 import sqlalchemy
 from marin.evaluation.records import EvalRunRecord
@@ -191,6 +192,14 @@ class SourceState:
     error: str | None
 
 
+class ObservationKind(StrEnum):
+    """How a record object differed from its persisted source state."""
+
+    CHANGED = "changed"
+    UNCHANGED = "unchanged"
+    MISSING = "missing"
+
+
 @dataclass(frozen=True)
 class RecordObservation:
     """The result of checking one new or due record object."""
@@ -199,11 +208,23 @@ class RecordObservation:
     object_version: str | None
     verified_at: datetime
     next_verify_at: datetime
-    changed: bool
-    missing: bool = False
+    kind: ObservationKind
     run_id: str | None = None
     record: EvalRunRecord | None = None
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class PrefixStatus:
+    """Persisted configuration and probe health for one record root."""
+
+    prefix: str
+    priority: int
+    active: bool
+    last_probe_at: datetime | None
+    last_success_at: datetime | None
+    record_count: int | None
+    error: str | None
 
 
 @dataclass(frozen=True)
@@ -222,7 +243,7 @@ class _CatalogSource:
 
 
 def connect_engine(instance: str, db: str, user: str, password: str) -> Engine:
-    """Build a SQLAlchemy engine that dials Cloud SQL through the Python connector."""
+    """Create a pooled engine for the configured EvalDash database."""
     from google.cloud.sql.connector import Connector  # noqa: PLC0415
 
     connector = Connector()
@@ -364,7 +385,7 @@ def _metric_rows(record: EvalRunRecord) -> list[dict]:
 
 
 def upsert_legacy_record(engine: Engine, record: EvalRunRecord) -> None:
-    """Model an old revision's write to the pre-catalog tables during migration tests."""
+    """Replace one record and its metrics in the legacy serving tables."""
     with engine.begin() as conn:
         _upsert(conn, eval_runs, [run_row(record)], "run_id")
         conn.execute(eval_metrics.delete().where(eval_metrics.c.run_id == record.run_id))
@@ -388,7 +409,7 @@ def fetch_snapshot(engine: Engine) -> CatalogSnapshot:
 
 
 def source_states(engine: Engine, prefix: str) -> dict[str, SourceState]:
-    """Return the lightweight inventory needed to decide which objects need a HEAD request."""
+    """Return persisted object validation state keyed by record path."""
     stmt = sqlalchemy.select(
         record_sources.c.path,
         record_sources.c.run_id,
@@ -415,15 +436,27 @@ def source_states(engine: Engine, prefix: str) -> dict[str, SourceState]:
 
 
 def catalog_generation(engine: Engine) -> int:
-    """Return the current serving commit token without loading record JSON."""
+    """Return the current committed serving generation."""
     with engine.begin() as conn:
         return conn.execute(sqlalchemy.select(catalog_state.c.generation)).scalar_one()
 
 
-def prefix_statuses(engine: Engine) -> list[dict]:
-    """Return persisted prefix health for status-page bootstrap."""
+def prefix_statuses(engine: Engine) -> list[PrefixStatus]:
+    """Return configuration and probe health for every known record root."""
     with engine.begin() as conn:
-        return [dict(row) for row in conn.execute(sqlalchemy.select(record_prefixes)).mappings().all()]
+        rows = conn.execute(sqlalchemy.select(record_prefixes)).mappings().all()
+    return [
+        PrefixStatus(
+            prefix=row["prefix"],
+            priority=row["priority"],
+            active=row["active"],
+            last_probe_at=row["last_probe_at"],
+            last_success_at=row["last_success_at"],
+            record_count=row["record_count"],
+            error=row["error"],
+        )
+        for row in rows
+    ]
 
 
 def _prefix_row(
@@ -580,7 +613,9 @@ def reconcile_prefix(
     confirm_missing_after: float,
 ) -> None:
     """Atomically apply one complete successful prefix listing to source and serving state."""
-    missing_observations = {observation.path: observation for observation in observations if observation.missing}
+    missing_observations = {
+        observation.path for observation in observations if observation.kind is ObservationKind.MISSING
+    }
     path_set = set(paths) - set(missing_observations)
     with engine.begin() as conn:
         _lock_catalog(conn)
@@ -619,7 +654,10 @@ def reconcile_prefix(
             conn.execute(
                 record_sources.update().where(record_sources.c.path.in_(newly_missing)).values(missing_since=probe_at)
             )
-        for path, observation in missing_observations.items():
+        for observation in observations:
+            if observation.kind is not ObservationKind.MISSING:
+                continue
+            path = observation.path
             if path not in existing or path in deleted:
                 continue
             conn.execute(
@@ -631,7 +669,7 @@ def reconcile_prefix(
                     error=observation.error,
                 )
             )
-        unchanged = [observation for observation in observations if not observation.changed and not observation.missing]
+        unchanged = [observation for observation in observations if observation.kind is ObservationKind.UNCHANGED]
         if unchanged:
             stmt = (
                 record_sources.update()
@@ -658,7 +696,11 @@ def reconcile_prefix(
                 ],
             )
 
-        valid = [observation for observation in observations if observation.changed and observation.record is not None]
+        valid = [
+            observation
+            for observation in observations
+            if observation.kind is ObservationKind.CHANGED and observation.record is not None
+        ]
         for observation in valid:
             old = existing.get(observation.path)
             old_run_id = old.run_id if old is not None else None
@@ -689,7 +731,7 @@ def reconcile_prefix(
         invalid = [
             observation
             for observation in observations
-            if observation.changed and observation.record is None and not observation.missing
+            if observation.kind is ObservationKind.CHANGED and observation.record is None
         ]
         for observation in invalid:
             values = {
@@ -729,10 +771,10 @@ def reconcile_prefix(
         _materialize_runs(conn, affected)
 
 
-def prune_untracked_records(engine: Engine, prefixes: tuple[str, ...]) -> bool:
+def prune_untracked_records(engine: Engine, prefixes: tuple[str, ...]) -> None:
     """Delete pre-inventory serving rows after every configured prefix has listed successfully."""
     if not prefixes:
-        return False
+        return
     with engine.begin() as conn:
         _lock_catalog(conn)
         succeeded = set(
@@ -745,7 +787,7 @@ def prune_untracked_records(engine: Engine, prefixes: tuple[str, ...]) -> bool:
             ).scalars()
         )
         if succeeded != set(prefixes):
-            return False
+            return
         active_sources = record_sources.join(record_prefixes, record_sources.c.prefix == record_prefixes.c.prefix)
         tracked = (
             sqlalchemy.select(record_sources.c.run_id)
@@ -756,7 +798,7 @@ def prune_untracked_records(engine: Engine, prefixes: tuple[str, ...]) -> bool:
             conn.execute(sqlalchemy.select(catalog_runs.c.run_id).where(catalog_runs.c.run_id.not_in(tracked))).scalars()
         )
         if not stale:
-            return False
+            return
         conn.execute(catalog_metrics.delete().where(catalog_metrics.c.run_id.in_(stale)))
         conn.execute(catalog_runs.delete().where(catalog_runs.c.run_id.in_(stale)))
         conn.execute(
@@ -764,4 +806,3 @@ def prune_untracked_records(engine: Engine, prefixes: tuple[str, ...]) -> bool:
             .where(catalog_state.c.singleton.is_(True))
             .values(generation=catalog_state.c.generation + 1, updated_at=sqlalchemy.func.now())
         )
-        return True

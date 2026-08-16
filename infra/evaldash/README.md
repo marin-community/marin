@@ -21,7 +21,8 @@ generation, S3 ETag, or local content hash in the PostgreSQL source inventory; t
 spread across the first day, then each is HEADed once per 24 hours and reread only when its version
 changes. A missing object must be absent on two successful checks before its source is removed. A
 failed prefix listing leaves that prefix's last committed rows untouched, and an invalid rewrite keeps
-the last valid record while surfacing the error on the Debug page.
+the last valid record while surfacing the error on the Debug page. Failures in the catalog poll or the
+overall reconciliation cycle also remain visible there until a later pass succeeds.
 
 Each source change and its selected `eval_catalog_runs`/`eval_catalog_metrics` projection commit in one transaction.
 The lowest configured prefix priority wins duplicate run IDs, so a removed canonical record promotes

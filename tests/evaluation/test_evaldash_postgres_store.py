@@ -202,8 +202,8 @@ def test_stale_failure_cannot_overwrite_a_later_success():
     results_db.mark_prefix_failed(engine, prefix, probe_at, "stale failure")
 
     status = results_db.prefix_statuses(engine)[0]
-    assert status["last_probe_at"].replace(tzinfo=UTC) == probe_at + timedelta(seconds=1)
-    assert status["error"] is None
+    assert status.last_probe_at.replace(tzinfo=UTC) == probe_at + timedelta(seconds=1)
+    assert status.error is None
 
 
 def test_reconciler_keeps_last_valid_row_when_a_prefix_or_rewritten_record_fails(tmp_path, monkeypatch):
@@ -232,7 +232,9 @@ def test_reconciler_keeps_last_valid_row_when_a_prefix_or_rewritten_record_fails
     asyncio.run(ingestor.run_once())
 
     assert store.get_record(record.run_id)["run_id"] == record.run_id
-    assert "object store unavailable" in ingestor.status()["prefixes"][0]["error"]
+    failed_probe = ingestor.status()["prefixes"][0]
+    assert failed_probe["last_probe_time"] != failed_probe["last_success_time"]
+    assert failed_probe["error"]
 
 
 def test_reconciler_preserves_seeded_row_when_first_object_read_is_invalid(tmp_path):

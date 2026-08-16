@@ -95,6 +95,4 @@ def upgrade(conn: sqlalchemy.Connection) -> None:
         if metric_rows := [dict(row) for row in conn.execute(sqlalchemy.select(legacy_metrics)).mappings()]:
             conn.execute(catalog_metrics.insert(), metric_rows)
     if conn.execute(sqlalchemy.select(catalog.c.singleton)).first() is None:
-        conn.execute(
-            catalog.insert().values(singleton=True, generation=0, updated_at=sqlalchemy.func.now())
-        )
+        conn.execute(catalog.insert().values(singleton=True, generation=0, updated_at=sqlalchemy.func.now()))

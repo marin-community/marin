@@ -49,6 +49,9 @@ onViewRefresh(refresh)
                 {{ formatRelativeAge(data.store.snapshot_updated_at) }}
               </dd>
             </div>
+            <div v-if="data.store.catalog_error" class="flex gap-2 text-danger">
+              <dt class="w-24">refresh error</dt><dd class="font-mono break-all">{{ data.store.catalog_error }}</dd>
+            </div>
           </dl>
         </div>
         <div class="rounded-lg border border-surface-border bg-surface p-4">
@@ -61,6 +64,9 @@ onViewRefresh(refresh)
             <div class="flex gap-2">
               <dt class="text-text-muted w-24">last pass</dt>
               <dd :title="formatTimestamp(data.ingest.last_pass_time)">{{ formatRelativeAge(data.ingest.last_pass_time) }}</dd>
+            </div>
+            <div v-if="data.ingest.cycle_error" class="flex gap-2 text-danger">
+              <dt class="w-24">cycle error</dt><dd class="font-mono break-all">{{ data.ingest.cycle_error }}</dd>
             </div>
           </dl>
         </div>
