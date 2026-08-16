@@ -168,8 +168,17 @@ def _build_index(prepared: list[PreparedDocument]) -> _NgramIndex:
     order = np.argsort(values, kind="stable")
     values = values[order]
     owners = owners[order]
-    distinct, starts, counts = np.unique(values, return_index=True, return_counts=True)
-    return _NgramIndex(values=distinct, counts=counts, starts=starts, owners=owners)
+    if values.size == 0:
+        return _NgramIndex(values=values, counts=_EMPTY.astype(np.int64), starts=_EMPTY.astype(np.int64), owners=owners)
+    # ``np.unique`` would sort this array a second time, which dominated the
+    # stage on a cluster holding a hundred million n-grams. The array is
+    # already sorted, so the run boundaries are one comparison per element.
+    boundary = np.empty(values.size, dtype=bool)
+    boundary[0] = True
+    np.not_equal(values[1:], values[:-1], out=boundary[1:])
+    starts = np.flatnonzero(boundary)
+    counts = np.diff(np.append(starts, values.size))
+    return _NgramIndex(values=values[starts], counts=counts, starts=starts, owners=owners)
 
 
 def _index_candidates(
