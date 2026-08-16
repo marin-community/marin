@@ -763,3 +763,30 @@ Experiment ID prefix: `MEP`.
   Remaining -4.9 s to the 13.2 s goal is structural: counts-a2a
   fold/overlap (0.96 s), barrier rounds (1.39 s), fusion-launch mass
   (4.5 s), M7.
+
+### 2026-08-15 19:45 - MEP-024: HIERARCHICAL GATE PASSED — fused intranode puts work in a multi-process mesh (nightly stack)
+- Spike: experiments/marin_ep/bench/spike_hier_intranode.py on 2 GB200
+  nodes (dev pods, 1 process/node x 4 GPUs). put_segments over a
+  process-local "gpu" sub-axis while the mesh's "node" axis spans
+  processes; all 8 pool shards asserted against the NumPy plan
+  reference, cross-talk-tagged sends.
+- Result ladder (stock jax 0.11.0 -> dev20260809 nightly):
+  | probe | stock 0.11.0 | nightly |
+  |---|---|---|
+  | psum over local "gpu" sub-axis | OK | OK |
+  | psum over global 8-rank clique | NCCL bootstrap "connection refused to own IP" (leader deadlocked in clique-init rendezvous callback) | OK |
+  | fused spike (put_segments intranode) | wedged in global clique init | CORRECT on both procs, twice (semaphore reuse fine) |
+- Conclusion: the 1-process-per-node topology (required by the two-hop
+  hierarchical transport) is BROKEN on stock jax 0.11.0 (multi-local-GPU
+  cross-process clique init deadlock — same family as the fast-restart
+  clique hang, but cache rotation does NOT fix it) and WORKS on the
+  production nightly (dev20260809). The 148 GB cuMemAllocAsync errors in
+  the logs are allocator pool-probing noise, not the failure.
+- Unblocked design: EP64 as 16 processes x 4 GPUs, two-hop dispatch —
+  ragged/NCCL internode hop (63->15 peer fan-out, splits retune needed)
+  + fused mgpu intranode hop (replaces local permutes; EP4 measured
+  6.7x over ragged). Combine transposes both hops.
+- Next: implement the two-hop plans (split `accepted` by destination
+  node; stage-A ragged a2a to same-local-rank peers, stage-B
+  put_segments within the node), CPU-conformance first, then EP16 proxy
+  at 4 nodes x 1 proc/node.
