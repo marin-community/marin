@@ -267,6 +267,14 @@ def bounds(n_families: int, n_strata: int = 3) -> tuple[tuple[float, float], ...
         (-2.0, -0.3),  # log offset
         (0.2, 10.0),  # damage exponent
         (-6.0, 1.0),  # log ridge
-        *(((0.005, 2.0),) * n_families),  # readout exponent per family
+        # Readout exponent per family. The upper bound is 12, not 2, and the difference is measured
+        # rather than chosen: at 2 this parameter sits EXACTLY on its bound in 7 of 11 WSD80 fits, and a
+        # parameter railed against its limit in most fits is a specification defect. Widening it lifts the
+        # WSD80 acceptance score from 40/44 to 43/44, recovers Regret@1 to 11/11, and unpins every seed.
+        # It is safe elsewhere: on the 39-bucket panel the exponent pins in 1 fold of 9 and widening
+        # changes nested Uncheatable RMSE only from 0.005909 to 0.005919. The asymmetry is structural --
+        # WSD80 has one bucket per family, so the per-bucket departure block duplicates the family mean
+        # and this exponent is the only flexibility that design has.
+        *(((0.005, 12.0),) * n_families),
         *(((-1.0, 3.5),) * n_strata),  # log boundary scale per exposure stratum
     )
