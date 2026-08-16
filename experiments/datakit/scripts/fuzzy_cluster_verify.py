@@ -29,7 +29,7 @@ import json
 import logging
 import time
 from collections.abc import Iterator
-from itertools import groupby
+
 from typing import Any
 
 import pyarrow as pa
@@ -84,28 +84,26 @@ def solve_text_shard(path: str, params: ClusterDedupParams) -> Iterator[dict[str
     run and the whole file streams without holding more than one cluster.
     """
     started = time.monotonic()
-    with StoragePath(path).open("rb") as handle:
-        table = pq.ParquetFile(handle).read(
-            columns=["cluster_key", "dup_cluster_id", "id", "text", "file_idx", "source_tag"]
-        )
-    rows = table.to_pylist()
-    counters.pipeline.update_counter(f"{COUNTER_PREFIX}/documents", len(rows))
-    counters.pipeline.update_counter(f"{COUNTER_PREFIX}/text_chars", sum(len(row["text"]) for row in rows))
-
+    columns = ["cluster_key", "dup_cluster_id", "id", "text", "file_idx", "source_tag"]
     clusters = 0
     duplicates = 0
-    for _key, group in groupby(rows, key=lambda row: row["cluster_key"]):
-        members = list(group)
+    documents = 0
+    chars = 0
+    pending: list[dict[str, Any]] = []
+    current: str | None = None
+
+    def solve(members: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+        nonlocal clusters, duplicates
         clusters += 1
         counters.pipeline.update_counter(f"{COUNTER_PREFIX}/cluster_size/{_size_bin(len(members))}", 1)
         if len(members) < 2:
             counters.pipeline.update_counter(f"{COUNTER_PREFIX}/singleton_groups", 1)
-            continue
-        documents = [
+            return
+        cluster = [
             ClusterDocument(id=row["id"], text=row["text"], file_idx=row["file_idx"], source_tag=row["source_tag"])
             for row in members
         ]
-        for removal in find_duplicates(documents, params):
+        for removal in find_duplicates(cluster, params):
             member = members[removal.member_index]
             representative = members[removal.representative_index]
             duplicates += 1
@@ -122,6 +120,25 @@ def solve_text_shard(path: str, params: ClusterDedupParams) -> Iterator[dict[str
                 "dup_comparisons": removal.comparisons,
             }
 
+    # The file is written sorted by cluster_key, so a cluster is a contiguous
+    # run and only one cluster is ever resident. Reading the whole file first
+    # would put several gigabytes of text in Python objects at once.
+    with StoragePath(path).open("rb") as handle:
+        for batch in pq.ParquetFile(handle).iter_batches(columns=columns, batch_size=8192):
+            for row in batch.to_pylist():
+                documents += 1
+                chars += len(row["text"])
+                if row["cluster_key"] != current:
+                    if pending:
+                        yield from solve(pending)
+                    pending = []
+                    current = row["cluster_key"]
+                pending.append(row)
+    if pending:
+        yield from solve(pending)
+
+    counters.pipeline.update_counter(f"{COUNTER_PREFIX}/documents", documents)
+    counters.pipeline.update_counter(f"{COUNTER_PREFIX}/text_chars", chars)
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/clusters", clusters)
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/duplicates", duplicates)
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/solve_seconds_milli", int((time.monotonic() - started) * 1000))
