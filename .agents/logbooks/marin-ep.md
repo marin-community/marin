@@ -1102,3 +1102,15 @@ Experiment ID prefix: `MEP`.
   has 41k launches and no ragged a2a in the capture set.
 - Ops note: killed my wedged mep-mgpu-prof coordinator (all ranks exited
   0 at 17:35Z but the job held its rack >1h; teardown wedge).
+
+### 2026-08-16 12:10 - MEP-038: command buffers neutral on the fused flavor — knob space exhausted again
+- Run: mep-mgpu-cb-25-20260816 (--xla_gpu_enable_command_buffer=FUSION on
+  the MEP-034 recipe): steady 17.83 s/step (12it@4:34 -> 24it@8:08 =
+  214 s / 12), drops 0.58%. Wash vs 17.75 baseline (within the ±2pp
+  placement band), same verdict as the ragged-path FUSION test.
+- Fused-flavor knob ledger: PGLE OOMs (MEP-037), command buffers neutral,
+  LHS/overlap/symmetric already in the recipe, splits N/A. Remaining
+  levers are all engineering: M7 fused consume-behind-flags, grouped-GEMM
+  efficiency, XLA fusion mass, FSDP one-shot collective cost.
+- M7a starts: warp-specialized put+consume prototype (plan in
+  .agents/projects/marin-ep-m7.md).
