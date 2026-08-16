@@ -401,7 +401,12 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.region }}: CoreWeave storage exceeds 80% of quota"
+          # BR/DR/R are display-only reduce/math expressions (data-source query
+          # results are not exposed to templates — only expression values are).
+          summary: >-
+            {{ $labels.region }}: CoreWeave storage at
+            {{ humanize $values.BR.Value }}B / {{ humanize $values.DR.Value }}B quota
+            ({{ humanizePercentage $values.R.Value }})
           runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md
         data:
           - refId: A
@@ -454,6 +459,97 @@ groups:
               columns:
                 - { selector: region, text: region, type: string }
                 - { selector: value, text: value, type: number }
+          - refId: B
+            relativeTimeRange: { from: 129600, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: B
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /query
+              url_options:
+                method: GET
+                params:
+                  - key: sql
+                    value: >-
+                      WITH ranked AS (
+                        SELECT metric, zone, bucket, storage_class, value_bytes, observed_at,
+                               ROW_NUMBER() OVER (
+                                 PARTITION BY provider, metric, zone, bucket, storage_class
+                                 ORDER BY observed_at DESC, seq DESC
+                               ) AS row_num
+                        FROM "storage.usage"
+                        WHERE provider = 'coreweave'
+                          AND metric = 'used_bytes'
+                      )
+                      SELECT zone AS region, SUM(value_bytes) AS value
+                      FROM ranked
+                      WHERE row_num = 1
+                        AND observed_at >= CURRENT_TIMESTAMP - INTERVAL '3 hours'
+                      GROUP BY zone
+              columns:
+                - { selector: region, text: region, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: D
+            relativeTimeRange: { from: 129600, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: D
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /query
+              url_options:
+                method: GET
+                params:
+                  - key: sql
+                    value: >-
+                      WITH ranked AS (
+                        SELECT metric, zone, bucket, storage_class, value_bytes, observed_at,
+                               ROW_NUMBER() OVER (
+                                 PARTITION BY provider, metric, zone, bucket, storage_class
+                                 ORDER BY observed_at DESC, seq DESC
+                               ) AS row_num
+                        FROM "storage.usage"
+                        WHERE provider = 'coreweave'
+                          AND metric = 'quota_bytes'
+                      )
+                      SELECT zone AS region, SUM(value_bytes) AS value
+                      FROM ranked
+                      WHERE row_num = 1
+                        AND observed_at >= CURRENT_TIMESTAMP - INTERVAL '3 hours'
+                      GROUP BY zone
+              columns:
+                - { selector: region, text: region, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: BR
+            datasourceUid: __expr__
+            model:
+              refId: BR
+              datasource: { type: __expr__, uid: __expr__ }
+              type: reduce
+              expression: B
+              reducer: last
+          - refId: DR
+            datasourceUid: __expr__
+            model:
+              refId: DR
+              datasource: { type: __expr__, uid: __expr__ }
+              type: reduce
+              expression: D
+              reducer: last
+          - refId: R
+            datasourceUid: __expr__
+            model:
+              refId: R
+              datasource: { type: __expr__, uid: __expr__ }
+              type: math
+              expression: $BR / $DR
           - refId: C
             datasourceUid: __expr__
             model:

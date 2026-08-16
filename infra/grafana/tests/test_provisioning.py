@@ -229,7 +229,9 @@ def test_warning_alerts_remain_visible_without_notifications():
 
 def test_coreweave_storage_capacity_pages_critical_ops():
     (rule,) = [rule for rule in _rules() if rule["uid"] == "coreweave-storage-capacity"]
-    source, threshold = rule["data"]
+    by_ref = {entry["refId"]: entry for entry in rule["data"]}
+    source = by_ref["A"]
+    threshold = by_ref["C"]
     sql = next(param["value"] for param in source["model"]["url_options"]["params"] if param["key"] == "sql")
 
     assert rule["for"] == "5m"
@@ -249,6 +251,33 @@ def test_coreweave_storage_capacity_pages_critical_ops():
         "type": "gt",
         "params": [STORAGE_ALERT_FRACTION],
     }
+
+    # Display-only values surfaced in the summary: usage (BR) / quota (DR)
+    # reduces over their zone-total queries, ratio (R) as a math expression —
+    # expressions, because data-source query results are not exposed to
+    # notification templates via $values.
+    assert by_ref["BR"]["model"] == {
+        "refId": "BR",
+        "datasource": {"type": "__expr__", "uid": "__expr__"},
+        "type": "reduce",
+        "expression": "B",
+        "reducer": "last",
+    }
+    assert by_ref["DR"]["model"]["expression"] == "D"
+    assert by_ref["R"]["model"] == {
+        "refId": "R",
+        "datasource": {"type": "__expr__", "uid": "__expr__"},
+        "type": "math",
+        "expression": "$BR / $DR",
+    }
+    for ref, metric in (("B", "used_bytes"), ("D", "quota_bytes")):
+        q = next(param["value"] for param in by_ref[ref]["model"]["url_options"]["params"] if param["key"] == "sql")
+        assert f"metric = '{metric}'" in q
+        assert "SELECT zone AS region, SUM(value_bytes) AS value" in q
+    summary = rule["annotations"]["summary"]
+    assert "{{ humanize $values.BR.Value }}B" in summary
+    assert "{{ humanize $values.DR.Value }}B" in summary
+    assert "{{ humanizePercentage $values.R.Value }}" in summary
 
     (policy,) = _load(ALERTING / "policies.yaml")["policies"]
     routes = policy["routes"]
