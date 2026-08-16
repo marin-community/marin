@@ -395,6 +395,18 @@ def test_job_run_status_output_prefix_requires_status_path():
     assert "--status-output-prefix requires --run-status-path" in result.output
 
 
+def test_job_run_status_rejects_replicated_jobs():
+    result = _run_cli(["--run-status-path", "gs://bucket/status.json", "--replicas", "2"])
+    assert result.exit_code != 0
+    assert "supports only single-replica jobs" in result.output
+
+
+def test_job_run_status_rejects_no_sync():
+    result = _run_cli(["--run-status-path", "gs://bucket/status.json", "--no-sync"])
+    assert result.exit_code != 0
+    assert "cannot be combined with --no-sync" in result.output
+
+
 # ---------------------------------------------------------------------------
 # validate_extra_resources tests
 # ---------------------------------------------------------------------------

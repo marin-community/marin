@@ -189,6 +189,18 @@ def _accelerator_label(iris: IrisConfig) -> str:
     return device.variant
 
 
+def _assigned_accelerator_label() -> str:
+    job_info = get_job_info()
+    if job_info is None or job_info.worker_device is None:
+        raise RuntimeError("Iris did not report the accelerator assigned to this serving worker")
+    device = job_info.worker_device
+    if device.HasField("gpu"):
+        return f"{device.gpu.variant}x{device.gpu.count}"
+    if device.HasField("tpu"):
+        return device.tpu.variant
+    raise RuntimeError("Iris serving worker was not assigned a GPU or TPU")
+
+
 def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedModelConfig, int]:
     # Keep model-cache and Transformers imports inside accelerator workers.
     from marin.inference.model_preparation import (  # noqa: PLC0415
@@ -288,6 +300,7 @@ def _register_dashboard(
     *,
     tensor_parallel_size: int,
     backend_name: str,
+    accelerator: str,
     streaming: bool,
 ) -> Iterator[None]:
     job_info = get_job_info()
@@ -305,7 +318,7 @@ def _register_dashboard(
         max_model_len=service.model.max_model_len,
         dtype=service.model.dtype,
         has_chat_template=has_chat_template,
-        tpu_type=_accelerator_label(service.iris),
+        tpu_type=accelerator,
         endpoint=service.endpoint_name,
         streaming=streaming,
     )
@@ -320,7 +333,7 @@ def _register_dashboard(
         metadata = _endpoint_metadata(
             model=model.endpoint.model,
             backend=backend_name,
-            accelerator=_accelerator_label(service.iris),
+            accelerator=accelerator,
             tensor_parallel_size=tensor_parallel_size,
             streaming=streaming,
             proxy_timeout_seconds=service.controller_proxy_timeout_seconds,
@@ -360,6 +373,7 @@ def run_iris_service(service: IrisServiceConfig) -> None:
                 local_session.model,
                 tensor_parallel_size=tensor_parallel_size,
                 backend_name=local_session.backend_name,
+                accelerator=_assigned_accelerator_label(),
                 streaming=True,
             ):
                 _block_until_timeout(local_session.check_alive, service.timeout_hours)
@@ -379,6 +393,7 @@ def run_iris_service(service: IrisServiceConfig) -> None:
             session.model,
             tensor_parallel_size=session.tensor_parallel_size,
             backend_name=session.backend_name,
+            accelerator=_accelerator_label(service.iris),
             streaming=session.streaming,
         ):
             _block_until_timeout(session.check_alive, service.timeout_hours)

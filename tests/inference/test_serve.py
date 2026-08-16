@@ -23,6 +23,7 @@ import requests
 from click.testing import CliRunner
 from fray.types import ANY_REGION, ResourceConfig, create_environment
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.types import tpu_device
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.external_dependencies import VLLM_GPU_RELEASE
@@ -43,7 +44,7 @@ from marin.inference.dashboard_server import (
     build_dashboard_app,
     serve_app_background,
 )
-from marin.inference.iris import _resolved_model
+from marin.inference.iris import _assigned_accelerator_label, _resolved_model
 from marin.inference.iris_cli import (
     _checkout_free_setup_script,
     _mint_and_print_capability_url,
@@ -449,6 +450,15 @@ def test_resolve_serving_plan_accepts_compatible_tpu_alternatives():
     plan = _plan(tpu="v6e-4,v5litepod-4,v5p-8,v4-8")
 
     assert plan.tpu_types == ("v6e-4", "v5litepod-4", "v5p-8", "v4-8")
+
+
+def test_assigned_accelerator_label_uses_physical_tpu(monkeypatch):
+    monkeypatch.setattr(
+        "marin.inference.iris.get_job_info",
+        lambda: SimpleNamespace(worker_device=tpu_device("v4-8")),
+    )
+
+    assert _assigned_accelerator_label() == "v4-8"
 
 
 def test_resolve_serving_plan_rejects_incompatible_tpu_alternatives():

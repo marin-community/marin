@@ -8,6 +8,7 @@ import pytest
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName, tpu_device
 from iris.run_status import run_command_with_status, run_status
+from rigging.timing import Timestamp
 
 
 @pytest.fixture(autouse=True)
@@ -17,8 +18,10 @@ def _reset_job_info():
     set_job_info(None)
 
 
-def test_run_status_persists_placement_and_terminal_state(tmp_path):
+def test_run_status_persists_placement_and_terminal_state(tmp_path, monkeypatch):
     status_path = tmp_path / "nested" / "run.json"
+    timestamps = iter((Timestamp.from_ms(1_000), Timestamp.from_ms(2_000), Timestamp.from_ms(3_000)))
+    monkeypatch.setattr("iris.run_status.Timestamp.now", lambda: next(timestamps))
     set_job_info(
         JobInfo(
             task_id=JobName.from_wire("/alice/nightly/0"),
@@ -47,7 +50,9 @@ def test_run_status_persists_placement_and_terminal_state(tmp_path):
     assert succeeded["job_id"] == "/alice/nightly"
     assert succeeded["attempt_id"] == 2
     assert succeeded["exit_code"] == 0
-    assert succeeded["finished_at"] is not None
+    assert succeeded["started_at"] == "1970-01-01T00:00:01+00:00"
+    assert succeeded["updated_at"] == "1970-01-01T00:00:03+00:00"
+    assert succeeded["finished_at"] == "1970-01-01T00:00:03+00:00"
 
 
 def test_run_command_with_status_preserves_nonzero_exit(tmp_path):

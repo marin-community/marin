@@ -5,7 +5,6 @@
 
 import contextlib
 import dataclasses
-import datetime
 import enum
 import json
 import logging
@@ -19,6 +18,7 @@ from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import Timestamp
 
 from iris.cluster.client.job_info import get_job_info
 
@@ -63,10 +63,10 @@ class RunStatusWriter:
     path: str
     output_prefix: str | None = None
     requested_tpu_types: Sequence[str] = ()
-    started_at: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(datetime.UTC))
+    started_at: Timestamp = field(default_factory=lambda: Timestamp.now())
 
     def write(self, status: RunState, *, exit_code: int | None = None, error_type: str | None = None) -> None:
-        now = datetime.datetime.now(datetime.UTC)
+        now = Timestamp.now()
         info = get_job_info()
         device = None
         if info is not None and info.worker_device is not None:
@@ -82,9 +82,9 @@ class RunStatusWriter:
             worker_id=info.worker_id if info is not None else None,
             worker_region=info.worker_region if info is not None else None,
             worker_device=device,
-            started_at=self.started_at.isoformat(),
-            updated_at=now.isoformat(),
-            finished_at=now.isoformat() if status in _TERMINAL_RUN_STATES else None,
+            started_at=self.started_at.as_formatted_date(),
+            updated_at=now.as_formatted_date(),
+            finished_at=now.as_formatted_date() if status in _TERMINAL_RUN_STATES else None,
             exit_code=exit_code,
             error_type=error_type,
         )

@@ -680,6 +680,8 @@ def run_iris_job(
     primary_tpu = tpu_variants[0] if tpu_variants else None
 
     replicas, coscheduling = resolve_multinode_defaults(primary_tpu, gpu, replicas)
+    if run_status_path is not None and replicas != 1:
+        raise click.UsageError("--run-status-path currently supports only single-replica jobs.")
 
     resources_proto = resources.to_proto()
     constraints = build_job_constraints(
@@ -1091,6 +1093,8 @@ def run(
     validate_region_zone(region or None, zone, ctx.obj.get("config"))
     if no_sync and sync_package:
         raise click.UsageError("--no-sync skips setup entirely; it cannot be combined with --sync-package.")
+    if no_sync and run_status_path is not None:
+        raise click.UsageError("--run-status-path cannot be combined with --no-sync.")
     if status_output_prefix is not None and run_status_path is None:
         raise click.UsageError("--status-output-prefix requires --run-status-path.")
 
