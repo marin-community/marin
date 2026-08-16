@@ -1049,3 +1049,11 @@ Experiment ID prefix: `MEP`.
   alignment patches (placement variance is ±2pp; single draws).
 - Goal gate: 12.0 s/step. Transport-lever ceiling nearly reached; the
   remaining mass is GEMMs/fusions/FSDP per MEP-021's attribution.
+
+### 2026-08-16 10:28 - MEP-035: upstream report filed — openxla/xla#47406
+- Filed the three collective-metadata findings (BFC/buffer-assignment
+  256B offsets vs NCCL_WIN_REQUIRED_ALIGNMENT; dynamic-slice fusion hiding
+  mosaic calls from GpuCollectiveBufferAnalysis; shared spatial-partitioned
+  pool exhausting NCCL window VA) with validated one-line fixes and the
+  public repro pointers. Cross-referenced #47283.
+- Profile run mep-mgpu-prof-25-20260816 in flight (steps 12-15).
