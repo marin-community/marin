@@ -129,9 +129,24 @@ def prepare(documents: Sequence[ClusterDocument], params: ClusterDedupParams) ->
     return prepared
 
 
-def novel_token_count(member: PreparedDocument, representative: PreparedDocument) -> int:
-    """Words of the member that the representative does not hold."""
-    return len(frozenset(member.text.casefold().split()) - frozenset(representative.text.casefold().split()))
+def novel_token_count(
+    member: PreparedDocument,
+    representative: PreparedDocument,
+    cache: dict[int, frozenset[str]] | None = None,
+) -> int:
+    """Words of the member that the representative does not hold.
+
+    The caller passes a cache keyed by document index. Without one, a cluster
+    whose members each miss the containment threshold against many candidates
+    re-splits the same megabyte of text once per comparison, which is what
+    turns a large cluster into a straggler.
+    """
+    if cache is None:
+        cache = {}
+    for document in (member, representative):
+        if document.index not in cache:
+            cache[document.index] = frozenset(document.text.casefold().split())
+    return len(cache[member.index] - cache[representative.index])
 
 
 def _overlap(left: np.ndarray, right: np.ndarray) -> int:
@@ -269,6 +284,7 @@ def find_duplicates(
 
     removed: set[int] = set()
     removals: list[Removal] = []
+    token_cache: dict[int, frozenset[str]] = {}
     for member in order:
         best: Removal | None = None
         comparisons = 0
@@ -287,12 +303,12 @@ def find_duplicates(
             novel_tokens = -1
             accepted = containment >= params.minimum_containment
             if not accepted and params.accept_zero_novel_tokens:
-                novel_tokens = novel_token_count(member_prepared, other)
+                novel_tokens = novel_token_count(member_prepared, other, token_cache)
                 accepted = novel_tokens == 0
             if not accepted:
                 continue
             if novel_tokens < 0:
-                novel_tokens = novel_token_count(member_prepared, other)
+                novel_tokens = novel_token_count(member_prepared, other, token_cache)
             union = member_prepared.ngrams.size + other.ngrams.size - shared
             best = Removal(
                 member_index=member,
