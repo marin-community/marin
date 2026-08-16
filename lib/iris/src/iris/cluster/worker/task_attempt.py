@@ -20,6 +20,7 @@ from pathlib import Path
 
 from finelog.client import LogClient, Table
 from finelog.rpc import logging_pb2
+from google.protobuf import json_format
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 from iris.chaos import chaos, chaos_raise
@@ -722,6 +723,11 @@ class TaskAttempt:
         region_attr = self._worker_metadata.attributes.get(WellKnownAttribute.REGION)
         if region_attr and region_attr.string_value:
             env["IRIS_WORKER_REGION"] = region_attr.string_value
+        if self._worker_metadata.HasField("device"):
+            env["IRIS_WORKER_DEVICE"] = json_format.MessageToJson(
+                self._worker_metadata.device,
+                preserving_proto_field_name=True,
+            )
 
         # Get RuntimeEntrypoint proto directly
         rt_ep = self.request.entrypoint

@@ -22,6 +22,7 @@ import pytest
 import requests
 from click.testing import CliRunner
 from fray.types import ANY_REGION, ResourceConfig, create_environment
+from iris.cluster.constraints import WellKnownAttribute
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.external_dependencies import VLLM_GPU_RELEASE
@@ -444,6 +445,18 @@ def test_resolve_serving_plan_rejects_multihost_slices():
         _plan(tpu="v6e-16")
 
 
+def test_resolve_serving_plan_accepts_compatible_tpu_alternatives():
+    plan = _plan(tpu="v6e-4,v5litepod-4,v5p-8,v4-8")
+
+    assert plan.tpu_type == "v6e-4"
+    assert plan.tpu_types == ("v6e-4", "v5litepod-4", "v5p-8", "v4-8")
+
+
+def test_resolve_serving_plan_rejects_incompatible_tpu_alternatives():
+    with pytest.raises(click.ClickException, match="chips_per_vm"):
+        _plan(tpu="v6e-4,v6e-8")
+
+
 def _mint_response(token: str, ttl_hours: float) -> controller_pb2.Controller.MintEndpointTokenResponse:
     expires = Timestamp.from_ms(int(time.time() * 1000) + int(ttl_hours * 3_600_000))
     return controller_pb2.Controller.MintEndpointTokenResponse(token=token, expires_at=timestamp_to_proto(expires))
@@ -536,6 +549,21 @@ def test_iris_serve_configures_region_placement(
     constraints = client.submit.call_args.kwargs["constraints"]
     assert ("region" in {constraint.key for constraint in constraints}) is expects_coordinator_region
     assert services[0].iris.worker_resources.regions == expected_worker_regions
+
+
+def test_iris_serve_submits_compatible_tpu_alternatives(monkeypatch):
+    result, client, services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--tpu",
+        "v6e-4,v5litepod-4,v5p-8,v4-8",
+    )
+
+    assert result.exit_code == 0, result.output
+    constraint = next(
+        item for item in client.submit.call_args.kwargs["constraints"] if item.key == WellKnownAttribute.DEVICE_VARIANT
+    )
+    assert [value.value for value in constraint.values] == ["v6e-4", "v5litepod-4", "v5p-8", "v4-8"]
+    assert services[0].iris.worker_resources.device_alternatives == ["v5litepod-4", "v5p-8", "v4-8"]
 
 
 def _free_port() -> int:

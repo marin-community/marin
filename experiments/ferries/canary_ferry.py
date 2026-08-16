@@ -138,10 +138,11 @@ def _env_bool(key: str, default: bool) -> bool:
 # fallback (both are single-VM 4-chip slices, so training shape is unchanged) and
 # adds us-central2-b plus the v4 reserved pool, which is not subject to preemptible
 # capacity churn. v4 has only ~1/3 the per-chip HBM of v5p (~30.75 vs 95 GiB), so the
-# canary's batch size is sized to fit v4 (see the TPU branch below); keep any new
-# entry's per-chip HBM at or above v4's. All entries must share vm_count and
+# canary's batch size is sized to fit v4 (see the TPU branch below). v6e-4 adds
+# us-east1, us-east5, and europe-west4 capacity with the same 4-chip host shape.
+# Keep any new entry's per-chip HBM at or above v4's. All entries must share vm_count and
 # chips_per_vm (ResourceConfig enforces this).
-_DEFAULT_CANARY_TPU_TYPES = ("v5p-8", "v4-8")
+_DEFAULT_CANARY_TPU_TYPES = ("v5p-8", "v6e-4", "v4-8")
 
 
 def _tpu_types_from_env() -> list[str]:

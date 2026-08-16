@@ -53,6 +53,7 @@ from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,
     Constraint,
     ConstraintOp,
+    device_variant_constraint,
     preemptible_constraint,
     region_constraint,
 )
@@ -126,6 +127,7 @@ class ServingPlan:
     device: job_pb2.DeviceConfig
     worker_extras: tuple[str, ...]
     tpu_type: str | None = None
+    tpu_types: tuple[str, ...] = ()
     gpu_type: str | None = None
     gpu_count: int | None = None
 
@@ -176,19 +178,34 @@ def _resolve_serving_plan(
             vllm = replace(vllm, launcher=VllmLauncherType.CUDA, source=source, version=version)
         return ServingPlan(vllm, device, (*_GPU_WORKER_EXTRAS, *extras), gpu_type=gpu_type, gpu_count=gpu_count)
 
-    topology = get_tpu_topology(tpu)
-    if topology.vm_count != 1:
-        raise click.ClickException(
-            f"{tpu!r} is a multi-host slice (vm_count={topology.vm_count}); marin-serve iris supports "
-            f"single-host slices only (e.g. v6e-8, v5litepod-8)."
-        )
-    device = tpu_device(tpu)
+    tpu_types = tuple(value.strip() for value in tpu.split(",") if value.strip())
+    if not tpu_types:
+        raise click.ClickException("--tpu must specify at least one TPU variant.")
+    try:
+        ResourceConfig.with_tpu(tpu_types)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    for tpu_type in tpu_types:
+        topology = get_tpu_topology(tpu_type)
+        if topology.vm_count != 1:
+            raise click.ClickException(
+                f"{tpu_type!r} is a multi-host slice (vm_count={topology.vm_count}); marin-serve iris supports "
+                f"single-host slices only (e.g. v6e-8, v5litepod-8)."
+            )
+    primary_tpu = tpu_types[0]
+    device = tpu_device(primary_tpu)
     if backend == "levanter":
-        return ServingPlan(levanter, device, (*_LEVANTER_TPU_EXTRAS, *extras), tpu_type=tpu)
+        return ServingPlan(
+            levanter,
+            device,
+            (*_LEVANTER_TPU_EXTRAS, *extras),
+            tpu_type=primary_tpu,
+            tpu_types=tpu_types,
+        )
     # The forked TPU vLLM always runs from an isolated uvx env (it is not in the workspace lock),
     # so the worker venv only needs the `tpu` extra for the serving glue's jax/libtpu.
     vllm = replace(vllm, launcher=VllmLauncherType.TPU)
-    return ServingPlan(vllm, device, ("tpu", *extras), tpu_type=tpu)
+    return ServingPlan(vllm, device, ("tpu", *extras), tpu_type=primary_tpu, tpu_types=tpu_types)
 
 
 def _default_job_name(model: str) -> str:
@@ -295,7 +312,14 @@ def _mint_and_print_capability_url(
 @click.option(
     "--controller", default=None, envvar="IRIS_CONTROLLER", help="Pre-tunneled controller URL (overrides --cluster)."
 )
-@click.option("--tpu", default="v6e-8", help="Single-host TPU slice type (e.g. v6e-8, v5litepod-8).")
+@click.option(
+    "--tpu",
+    default="v6e-8",
+    help=(
+        "Single-host TPU slice type. Pass compatible comma-separated variants "
+        "(e.g. v6e-8,v5litepod-8) to use whichever has capacity."
+    ),
+)
 @click.option(
     "--gpu",
     default=None,
@@ -503,7 +527,7 @@ def main(
         )
     else:
         worker_resources = ResourceConfig.with_tpu(
-            plan.tpu_type or tpu,
+            plan.tpu_types or (plan.tpu_type or tpu,),
             cpu=cpu,
             ram=memory,
             disk=disk,
@@ -558,6 +582,8 @@ def main(
         regions = [r.strip() for r in region.split(",") if r.strip()]
         if regions:
             constraints.append(region_constraint(regions))
+    if not brokered and len(plan.tpu_types) > 1:
+        constraints.append(device_variant_constraint(plan.tpu_types))
     if target_cluster:
         constraints.append(Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=target_cluster))
     if brokered:
@@ -595,7 +621,7 @@ def main(
             if gpu is not None:
                 click.echo(f"  gpu          {plan.gpu_type}x{plan.gpu_count}")
             else:
-                click.echo(f"  tpu          {tpu}")
+                click.echo(f"  tpu          {','.join(plan.tpu_types)}")
             if target_cluster:
                 click.echo(f"  target       {target_cluster}")
             click.echo(f"  endpoint     {endpoint}")

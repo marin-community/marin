@@ -30,7 +30,7 @@ from iris.cluster.runtime.types import (
     MountSpec,
 )
 from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, WORKER_STATS_NAMESPACE, IrisTaskStat, IrisWorkerStat
-from iris.cluster.types import Entrypoint, JobName
+from iris.cluster.types import Entrypoint, JobName, WellKnownAttribute, tpu_device
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
@@ -613,6 +613,21 @@ def test_port_env_vars_set(mock_worker, mock_runtime):
         int(config.env["IRIS_PORT_METRICS"]),
     }
     assert len(ports) == 3
+
+
+def test_worker_placement_env_uses_physical_metadata(mock_worker, mock_runtime, monkeypatch):
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.probe_outbound_ip", lambda: "127.0.0.1")
+    mock_worker._worker_metadata.device.CopyFrom(tpu_device("v6e-4"))
+    mock_worker._worker_metadata.attributes[WellKnownAttribute.REGION].string_value = "us-east5"
+
+    task_id = mock_worker.submit_task(create_run_task_request())
+    task = mock_worker.get_task(task_id)
+    task.thread.join(timeout=15.0)
+    assert task.status == job_pb2.TASK_STATE_SUCCEEDED, task.error
+
+    env = mock_runtime.create_container.call_args[0][0].env
+    assert env["IRIS_WORKER_REGION"] == "us-east5"
+    assert json.loads(env["IRIS_WORKER_DEVICE"])["tpu"]["variant"] == "v6e-4"
 
 
 def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):

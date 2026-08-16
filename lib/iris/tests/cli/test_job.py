@@ -3,6 +3,8 @@
 
 """Tests for iris.cli.job — validation, placement policy, and bulk actions."""
 
+import json
+
 import pytest
 from click.testing import CliRunner
 from connectrpc.code import Code
@@ -360,6 +362,37 @@ def test_tpu_multi_variant_parsing(recorded_job_submissions):
     mismatched = _run_cli(["--enable-extra-resources", "--tpu", "v5p-8,v5p-16"])
     assert mismatched.exit_code != 0
     assert "vm_count" in mismatched.output
+
+
+def test_job_run_status_entrypoint_writes_requested_output(tmp_path, recorded_job_submissions):
+    status_path = tmp_path / "run.json"
+    result = _run_cli(
+        [
+            "--run-status-path",
+            str(status_path),
+            "--output-prefix",
+            "gs://marin-us-west4/tmp/nightly",
+            "--enable-extra-resources",
+            "--tpu",
+            "v6e-4,v5litepod-4",
+        ]
+    )
+    assert result.exit_code == 0, result.output
+
+    entrypoint = recorded_job_submissions[0]["entrypoint"]
+    fn, args, kwargs = entrypoint.resolve()
+    fn(*args, **kwargs)
+
+    status = json.loads(status_path.read_text())
+    assert status["status"] == "succeeded"
+    assert status["marin_prefix"] == "gs://marin-us-west4/tmp/nightly"
+    assert status["requested_tpu_types"] == ["v6e-4", "v5litepod-4"]
+
+
+def test_job_run_output_prefix_requires_status_path():
+    result = _run_cli(["--output-prefix", "gs://marin-us-west4/tmp/nightly"])
+    assert result.exit_code != 0
+    assert "--output-prefix requires --run-status-path" in result.output
 
 
 # ---------------------------------------------------------------------------

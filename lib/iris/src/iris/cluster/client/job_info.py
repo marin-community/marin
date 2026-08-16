@@ -60,6 +60,9 @@ class JobInfo:
     Marin executor's region-pinning path) can inspect where they are running.
     Iris itself no longer auto-inherits this onto child jobs — see #5279."""
 
+    worker_device: job_pb2.DeviceConfig | None = None
+    """Physical accelerator attached to the worker running this task, if any."""
+
     @property
     def task_attempt(self) -> TaskAttempt:
         """Get the structured task identity (task_id + attempt_id)."""
@@ -125,6 +128,11 @@ def get_job_info() -> JobInfo | None:
             env=job_env,
             constraints=constraints,
             worker_region=os.environ.get("IRIS_WORKER_REGION"),
+            worker_device=(
+                json_format.Parse(os.environ["IRIS_WORKER_DEVICE"], job_pb2.DeviceConfig())
+                if "IRIS_WORKER_DEVICE" in os.environ
+                else None
+            ),
         )
         _job_info.set(info)
         return info

@@ -10,7 +10,7 @@ on:
         type: number
         required: false
       tpu_type:
-        description: 'Override TPU slice type(s), comma-separated, primary first (e.g. v5p-8,v4-8)'
+        description: 'Override TPU slice type(s), comma-separated, primary first (e.g. v5p-8,v6e-4,v4-8)'
         type: string
         required: false
 
@@ -29,7 +29,7 @@ jobs:
     env:
       RUN_ID: canary-tpu-${{ github.run_id }}-${{ github.run_attempt }}
       CANARY_ACCELERATOR: tpu
-      CANARY_TPU_TYPE: "v5p-8,v4-8"
+      CANARY_TPU_TYPE: "v5p-8,v6e-4,v4-8"
       CANARY_BATCH_SIZE: "128"
       CANARY_TARGET_TOKENS: "250000000"
       CANARY_MIN_STEPS: "200"
@@ -143,7 +143,8 @@ jobs:
         # from gcsfs off-GCP), and the read raises FileNotFoundError. The
         # google-github-actions/auth step above provides the credentials
         # gcsfs needs to actually scan the remote buckets. The canary lands on
-        # v5p (us-central1/us-east5) or its v4 fallback (us-central2); mirror://
+        # v5p (us-central1/us-east5), v6e (us-east1/us-east5/europe-west4), or
+        # v4 (us-central2); mirror://
         # scans all marin-* regions, and us-central1 keeps the hit rate high.
         env:
           MARIN_PREFIX: gs://marin-us-central1
