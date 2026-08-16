@@ -108,11 +108,16 @@ def _split_hash(text: str) -> int:
     return min(dupekit.hash_xxh3_64_batch(shingles))
 
 
-def _read_table(path: str, columns: list[str]) -> pa.Table:
+def _read_table(path: str, columns: list[str]) -> pa.Table | None:
+    """Read selected columns, or None when the file holds no rows.
+
+    A shard with no candidates is written as an empty Parquet file whose schema
+    carries no columns at all, so selecting by name raises there.
+    """
     with StoragePath(path).open("rb") as handle:
         parquet = pq.ParquetFile(handle)
         if parquet.metadata.num_rows == 0:
-            return parquet.schema_arrow.empty_table().select(columns)
+            return None
         return parquet.read(columns=columns)
 
 
@@ -140,7 +145,7 @@ def _join_shard(shard: TextShard) -> Iterator[dict[str, Any]]:
     oversized: dict[str, int] = zephyr_worker_ctx().get_shared(_SHARED_OVERSIZED_KEY)
 
     candidates = _read_table(shard.candidate_path, ["id", "dup_cluster_id", "is_cluster_canonical"])
-    if candidates.num_rows == 0:
+    if candidates is None:
         counters.pipeline.update_counter(f"{COUNTER_PREFIX}/candidate_shards_empty", 1)
         return
     attributes = {
@@ -193,10 +198,16 @@ def _join_shard(shard: TextShard) -> Iterator[dict[str, Any]]:
             offset += batch.num_rows
 
     if attributes:
-        raise ValueError(
-            f"{shard.candidate_path} holds {len(attributes)} IDs absent from {shard.normalized_path}, "
-            f"first {sorted(attributes)[:3]!r}"
-        )
+        # The candidate tree names the Focus Crawl by a different extraction,
+        # so a shard of it can carry IDs this normalized tree never held.
+        # Counting them keeps one mismatched source from ending the run.
+        counters.pipeline.update_counter(f"{COUNTER_PREFIX}/candidates_without_text", len(attributes))
+        counters.pipeline.update_counter(f"{COUNTER_PREFIX}/shards_with_missing_text", 1)
+        if len(attributes) > max(emitted, 1):
+            raise ValueError(
+                f"{shard.candidate_path} holds {len(attributes)} IDs absent from {shard.normalized_path} "
+                f"against {emitted} joined, first {sorted(attributes)[:3]!r}"
+            )
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/members", emitted)
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/shards_joined", 1)
 
@@ -251,14 +262,15 @@ def _write_group(
     shard: int,
     records: Iterator[dict[str, Any]],
     output_dir: str,
-    params: ClusterDedupParams,
+    params: ClusterDedupParams | None,
 ) -> Iterator[dict[str, Any]]:
-    """Write one grouped text file and solve every cluster inside it.
+    """Write one grouped text file, and solve its clusters when asked.
 
-    The reducer already holds a complete cluster in cluster order, so solving
-    here costs one pass over data that is resident anyway. Re-reading the
-    grouped text in a separate stage would cost a second full scan of the
-    corpus for nothing.
+    Solving here would save a pass, but the reducer's memory is already spoken
+    for by the shuffle merge, and holding a cluster's text on top of that is
+    what kills the stage. Grouping alone keeps this task I/O bound; the solver
+    runs afterwards as a map over the grouped files, where it gets the whole
+    machine.
     """
     path = prefix_join(output_dir, f"part-{shard:05d}.parquet")
     written = 0
@@ -270,7 +282,7 @@ def _write_group(
 
     def flush() -> None:
         nonlocal clusters, duplicates
-        if len(pending) < 2:
+        if params is None or len(pending) < 2:
             pending.clear()
             return
         clusters += 1
@@ -284,10 +296,11 @@ def _write_group(
         nonlocal written, current
         for record in records:
             written += 1
-            if record["cluster_key"] != current:
-                flush()
-                current = record["cluster_key"]
-            pending.append(record)
+            if params is not None:
+                if record["cluster_key"] != current:
+                    flush()
+                    current = record["cluster_key"]
+                pending.append(record)
             yield {field.name: record[field.name] for field in _TEXT_SCHEMA}
         flush()
 
@@ -396,6 +409,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-shards", type=int, default=4096)
     parser.add_argument("--shards-per-task", type=int, default=8, help="Input shards joined by one map task")
     parser.add_argument("--limit-shards", type=int, default=0, help="Join only the first N shards; for a smoke run")
+    parser.add_argument("--solve-inline", action="store_true", help="Also solve clusters in the reducer")
     parser.add_argument("--minimum-containment", type=float, default=0.98)
     parser.add_argument("--no-zero-novel-tokens", action="store_true")
     parser.add_argument("--max-workers", type=int, default=64)
@@ -436,11 +450,15 @@ def main(argv: list[str] | None = None) -> None:
     }
     StoragePath(prefix_join(args.out, "manifest.json")).write_bytes(json.dumps(manifest).encode())
 
-    params = ClusterDedupParams(
-        minimum_containment=args.minimum_containment,
-        accept_zero_novel_tokens=not args.no_zero_novel_tokens,
+    params = (
+        ClusterDedupParams(
+            minimum_containment=args.minimum_containment,
+            accept_zero_novel_tokens=not args.no_zero_novel_tokens,
+        )
+        if args.solve_inline
+        else None
     )
-    logger.info("Duplicate rule: %s", params.model_dump_json())
+    logger.info("Duplicate rule: %s", params.model_dump_json() if params else "grouping only")
     worker = ResourceConfig(cpu=args.worker_cpu, ram=args.worker_ram, disk=args.worker_disk)
     task = ResourceConfig(cpu=args.task_cpu, ram=args.task_ram, disk=args.task_disk)
     context = ZephyrContext(name="fuzzy-cluster-text", resources=worker, max_workers=args.max_workers)
@@ -451,31 +469,29 @@ def main(argv: list[str] | None = None) -> None:
     ]
     logger.info("Map side: %d tasks of up to %d shards", len(shard_groups), args.shards_per_task)
 
+    grouped = Dataset.from_list(shard_groups).flat_map(_join_shard_group).group_by(
+        key=lambda record: output_shard_of(record["cluster_key"], args.output_shards),
+        reducer=lambda shard, records: _write_group(shard, records, prefix_join(args.out, "text"), params),
+        sort_by=lambda record: (record["cluster_key"], record["id"]),
+        num_output_shards=args.output_shards,
+    )
     pipeline = (
-        Dataset.from_list(shard_groups)
-        .flat_map(_join_shard_group)
-        .group_by(
-            key=lambda record: output_shard_of(record["cluster_key"], args.output_shards),
-            reducer=lambda shard, records: _write_group(
-                shard, records, prefix_join(args.out, "text"), params
-            ),
-            sort_by=lambda record: (record["cluster_key"], record["id"]),
-            num_output_shards=args.output_shards,
-        )
-        .group_by(
+        grouped.group_by(
             key=lambda record: record["file_idx"],
             reducer=lambda file_idx, records: _write_markers(file_idx, records, prefix_join(args.out, "verified")),
             sort_by=lambda record: record["id"],
             num_output_shards=min(len(shards), args.output_shards),
         )
+        if params is not None
+        else grouped
     )
     outcome = context.execute(pipeline, verbose=True, map_task_resources=task, reduce_task_resources=task)
 
     markers = sum(result.get("markers", 0) for result in outcome.results if isinstance(result, dict))
+    del markers
     payload = {
         "manifest": prefix_join(args.out, "manifest.json"),
-        "markers": markers,
-        "params": params.model_dump(mode="json"),
+        "params": params.model_dump(mode="json") if params else None,
         "shards": len(shards),
         "oversized_clusters": len(oversized),
         "counters": dict(sorted(outcome.counters.items())),
