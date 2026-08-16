@@ -29,6 +29,7 @@ MoeImplementation: TypeAlias = Literal[
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
     "marin_ep",  # Expert-parallel Mosaic-GPU fused transport + pooled waterfilling drops.
     "marin_ep_cudnn_cute",  # marin_ep with cuDNN/QuACK grouped expert GEMMs.
+    "marin_ep_hier_cudnn_cute",  # marin_ep two-hop transport (ragged internode + fused intranode).
     "scatter",  # Single-process grouped GMM with scatter-add combine.
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
     "sonic_cute",  # Single-process QuACK SM100 (Blackwell/B200) grouped-GEMM backend.
@@ -42,6 +43,7 @@ _RAGGED_ALL_TO_ALL_IMPLEMENTATIONS = (
     "ragged_all_to_all_cudnn_cute",
     "marin_ep",
     "marin_ep_cudnn_cute",
+    "marin_ep_hier_cudnn_cute",
 )
 _EP_MOE_IMPLEMENTATIONS = ("ring", *_RAGGED_ALL_TO_ALL_IMPLEMENTATIONS, "fixed_all_to_all", "deepep")
 # Local means no collectives over an expert axis. These backends can still run

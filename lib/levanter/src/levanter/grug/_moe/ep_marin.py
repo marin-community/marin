@@ -39,7 +39,14 @@ from levanter.grug._moe.ep_common import (
     _sort_activations,
     _unpermute_from_global_expert,
 )
-from levanter.grug._moe.marin_ep_transport import combine_segments, dispatch_segments, put_with_transpose
+from levanter.grug._moe.marin_ep_transport import (
+    combine_segments,
+    dispatch_segments,
+    hier_combine_segments,
+    hier_dispatch_segments,
+    hier_flat_counts,
+    put_with_transpose,
+)
 from levanter.grug.sharding import _batch_axes
 
 
@@ -103,8 +110,9 @@ def marin_ep_moe_local(
     num_experts: int,
     capacity_factor: float,
     pool_group_size: int,
-    transport: Literal["ragged", "gathered", "mgpu"] = "ragged",
+    transport: Literal["ragged", "gathered", "mgpu", "hier"] = "ragged",
     splits_per_peer: int = 1,
+    intranode_size: int = 1,
     expert_mlp: Callable = _ragged_dot_expert_mlp,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     """Shard-local Marin EP MoE body (runs inside shard_map over "expert").
@@ -113,6 +121,9 @@ def marin_ep_moe_local(
     `"gathered"` uses the all_gather emulation (XLA:CPU conformance runs);
     `"mgpu"` uses the fused Mosaic-GPU put kernel, which writes the
     expert-major pool layout directly — no local permute on either side.
+    `"hier"` is the two-hop multi-process variant: ragged over same-local-rank
+    peers internode, then the fused put kernel among the `intranode_size`
+    process-local shards.
     """
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -169,6 +180,53 @@ def marin_ep_moe_local(
             )
             local_group_sizes = kept_by_owner[shard_id].astype(jnp.int32)
             local_sorted_indices = shard_counts = None
+        elif transport == "hier":
+            gpus = intranode_size
+            if ep_size % gpus:
+                raise ValueError(f"intranode_size={gpus} must divide EP degree={ep_size}")
+            nodes = ep_size // gpus
+            kept_by_owner = kept.reshape(ep_size, local_experts)
+            region = (jnp.cumsum(kept_by_owner, axis=1) - kept_by_owner).reshape(num_experts).astype(jnp.int32)
+            # Hop A: ragged over the flat axis; only same-local-rank peers get
+            # rows, and the receive layout is the node-order staging the hop-B
+            # plans address.
+            counts_flat = hier_flat_counts(accepted, nodes=nodes, gpus=gpus)
+            input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(
+                counts_flat, shard_id, splits_per_peer
+            )
+            # Worst case every row kept by my node's experts arrives through my
+            # local rank.
+            stage_cap = gpus * pool_rows
+            staging = jax.lax.ragged_all_to_all(
+                sorted_x,
+                jnp.zeros((stage_cap, x_local.shape[1]), dtype=x_local.dtype),
+                input_offsets,
+                send_sizes,
+                output_offsets,
+                recv_sizes,
+                axis_name="expert",
+            )
+            my_stage_rows = jnp.sum(counts_flat[:, shard_id], dtype=jnp.int32)
+            dispatch_plan = hier_dispatch_segments(
+                accepted, region, shard_id, nodes=nodes, gpus=gpus, local_experts=local_experts
+            )
+            combine_plan = hier_combine_segments(
+                accepted, region, shard_id, nodes=nodes, gpus=gpus, local_experts=local_experts
+            )
+            pool_recv_rows = jnp.sum(kept_by_owner[shard_id], dtype=jnp.int32)
+            x_pool = put_with_transpose(
+                staging,
+                dispatch_plan,
+                combine_plan,
+                pool_recv_rows,
+                my_stage_rows,
+                pool_rows,
+                stage_cap,
+                "expert",
+                gpus,
+            )
+            local_group_sizes = kept_by_owner[shard_id].astype(jnp.int32)
+            local_sorted_indices = shard_counts = None
         else:
             shard_counts = jnp.sum(accepted.reshape(ep_size, ep_size, local_experts), axis=2)
             if transport == "ragged":
@@ -217,6 +275,27 @@ def marin_ep_moe_local(
                 pool_rows,
                 "expert",
                 ep_size,
+            )
+        elif transport == "hier":
+            # Hop B': pool -> staging (transpose put), then hop A': ragged back
+            # to each source's compacted buffer.
+            staging_back = put_with_transpose(
+                out_pool,
+                combine_plan,
+                dispatch_plan,
+                my_stage_rows,
+                pool_recv_rows,
+                stage_cap,
+                pool_rows,
+                "expert",
+                intranode_size,
+            )
+            return_params = _shard_a2a_params(counts_flat.T, shard_id, splits_per_peer)
+            returned = jax.lax.ragged_all_to_all(
+                staging_back,
+                jnp.zeros((assignments_per_shard, x_local.shape[1]), dtype=out_pool.dtype),
+                *return_params,
+                axis_name="expert",
             )
         elif transport == "ragged":
             local_output = _sort_activations(out_pool, jnp.argsort(local_sorted_indices))
@@ -321,5 +400,47 @@ def _moe_mlp_ep_marin_cudnn_cute_local(
         pool_group_size=moe_w13_local.shape[0],
         transport=transport,
         splits_per_peer=splits_per_peer,
+        expert_mlp=_cudnn_cute_expert_mlp,
+    )
+
+
+def _moe_mlp_ep_marin_hier_cudnn_cute_local(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+    splits_per_peer: int = 1,
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+    """marin_ep two-hop hierarchical transport + cuDNN/QuACK expert GEMMs.
+
+    Requires the process-per-node topology: the intranode hop's fused puts
+    reach exactly the local devices of this process. Multi-node EP with one
+    process per GPU cannot run this backend — launch with
+    ``processes_per_task=1`` (4 local GPUs on GB200).
+    """
+    intranode = jax.local_device_count()
+    if jax.process_count() > 1 and intranode == 1:
+        raise ValueError(
+            "marin_ep_hier needs every process to own its node's GPUs (processes_per_task=1); "
+            "got multi-process with one local device"
+        )
+    return marin_ep_moe_local(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        pool_group_size=moe_w13_local.shape[0],
+        transport="hier",
+        splits_per_peer=splits_per_peer,
+        intranode_size=intranode,
         expert_mlp=_cudnn_cute_expert_mlp,
     )

@@ -306,3 +306,120 @@ def _put_with_transpose_bwd(fwd_rows, bwd_rows, axis_name, num_devices, residual
 
 
 put_with_transpose.defvjp(_put_with_transpose_fwd, _put_with_transpose_bwd)
+
+
+def hier_node_counts(accepted: Int[Array, "S E"], *, nodes: int) -> Int[Array, "S Nodes"]:
+    """Rows each source device sends to each destination node (hop A sizes)."""
+    num_experts = accepted.shape[1]
+    node_of_expert = jnp.arange(num_experts) // (num_experts // nodes)
+    return jax.ops.segment_sum(accepted.T, node_of_expert, num_segments=nodes).T
+
+
+def hier_flat_counts(accepted: Int[Array, "S E"], *, nodes: int, gpus: int) -> Int[Array, "S S"]:
+    """Hop-A shard-count matrix on the flat expert axis.
+
+    Source ``(n_s, g)`` sends its whole per-node slice to the same-local-rank
+    peer ``(n_d, g)``; every different-rank cell is zero, so
+    `_shard_a2a_params` on this matrix drives a standard `ragged_all_to_all`
+    whose receive layout is the node-order staging the hop-B plans expect.
+    """
+    node_counts = hier_node_counts(accepted, nodes=nodes)  # [S, Nodes]
+    devices = accepted.shape[0]
+    dst = jnp.arange(devices, dtype=jnp.int32)
+    same_rank = (jnp.arange(devices, dtype=jnp.int32) % gpus)[:, None] == (dst % gpus)[None, :]
+    return jnp.where(same_rank, node_counts[:, dst // gpus], 0)
+
+
+def _hier_node_expert_ids(node_id: jax.Array, *, gpus: int, local_experts: int) -> jax.Array:
+    per_node = gpus * local_experts
+    return node_id * per_node + jnp.arange(per_node, dtype=jnp.int32)
+
+
+def hier_dispatch_segments(
+    accepted: Int[Array, "S E"],
+    region: Int[Array, " E"],
+    shard_id: jax.Array,
+    *,
+    nodes: int,
+    gpus: int,
+    local_experts: int,
+) -> SegmentPlan:
+    """Hop-B plan: my hop-A staging buffer -> intranode owners' pool regions.
+
+    Runs on the flat expert axis: destinations are flat device ids inside my
+    node, so `put_segments(..., num_devices=gpus)` touches only process-local
+    peers. One entry per (dest gpu, node-local expert, source node); the pool
+    keeps the single-hop region layout with sources ordered (gpu, node).
+    """
+    node_id = shard_id // gpus
+    gpu_id = shard_id % gpus
+    node_experts = _hier_node_expert_ids(node_id, gpus=gpus, local_experts=local_experts)
+    acc_src = accepted.reshape(nodes, gpus, -1)[:, gpu_id, :][:, node_experts]  # [Nodes_src, per_node]
+
+    chunk_rows = jnp.sum(acc_src, axis=1)
+    chunk_start = jnp.cumsum(chunk_rows) - chunk_rows
+    within = jnp.cumsum(acc_src, axis=1) - acc_src
+    src_lo = chunk_start[:, None] + within  # [Nodes_src, per_node]
+
+    acc_by_gpu = accepted.reshape(nodes, gpus, -1)[:, :, node_experts]  # [Nodes_src, G_src, per_node]
+    gpu_totals = jnp.sum(acc_by_gpu, axis=0)
+    before_gpu = (jnp.cumsum(gpu_totals, axis=0) - gpu_totals)[gpu_id]
+    before_node = jnp.cumsum(acc_by_gpu[:, gpu_id, :], axis=0) - acc_by_gpu[:, gpu_id, :]
+    dst_lo = region[node_experts][None, :] + before_gpu[None, :] + before_node
+
+    dest_gpus = _rotated(gpu_id, gpus)
+    per_node = gpus * local_experts
+    col = dest_gpus[:, None, None] * local_experts + jnp.arange(local_experts)[None, None, :]
+    node_idx = jnp.arange(nodes, dtype=jnp.int32)[None, :, None]
+    gather = (node_idx * per_node + col).reshape(-1)
+    entries = nodes * local_experts
+    return SegmentPlan(
+        dest_ids=(node_id * gpus + dest_gpus).astype(jnp.int32),
+        entry_start=jnp.arange(gpus + 1, dtype=jnp.int32) * entries,
+        src_lo=src_lo.reshape(-1)[gather].astype(jnp.int32),
+        dst_lo=dst_lo.reshape(-1)[gather].astype(jnp.int32),
+        rows=acc_src.reshape(-1)[gather].astype(jnp.int32),
+    )
+
+
+def hier_combine_segments(
+    accepted: Int[Array, "S E"],
+    region: Int[Array, " E"],
+    shard_id: jax.Array,
+    *,
+    nodes: int,
+    gpus: int,
+    local_experts: int,
+) -> SegmentPlan:
+    """Hop-B' plan: my expert-output pool rows -> intranode staging buffers.
+
+    Exact transpose of `hier_dispatch_segments`.
+    """
+    node_id = shard_id // gpus
+    gpu_id = shard_id % gpus
+    node_experts = _hier_node_expert_ids(node_id, gpus=gpus, local_experts=local_experts)
+    acc_by_gpu = accepted.reshape(nodes, gpus, -1)[:, :, node_experts]  # [Nodes_src, G_src, per_node]
+    my_bank = gpu_id * local_experts + jnp.arange(local_experts, dtype=jnp.int32)
+
+    gpu_totals = jnp.sum(acc_by_gpu, axis=0)
+    before_gpu = jnp.cumsum(gpu_totals, axis=0) - gpu_totals
+    before_node = jnp.cumsum(acc_by_gpu, axis=0) - acc_by_gpu
+    pool_lo = region[node_experts][None, None, :] + before_gpu[None, :, :] + before_node
+
+    chunk_rows = jnp.sum(acc_by_gpu, axis=2)
+    chunk_start = jnp.cumsum(chunk_rows, axis=0) - chunk_rows
+    within = jnp.cumsum(acc_by_gpu, axis=2) - acc_by_gpu
+    stage_lo = chunk_start[:, :, None] + within
+
+    dest_gpus = _rotated(gpu_id, gpus)
+    entries = nodes * local_experts
+    src_parts = pool_lo[:, :, my_bank].transpose(1, 0, 2)[dest_gpus]  # [G, Nodes, El]
+    dst_parts = stage_lo[:, :, my_bank].transpose(1, 0, 2)[dest_gpus]
+    row_parts = acc_by_gpu[:, :, my_bank].transpose(1, 0, 2)[dest_gpus]
+    return SegmentPlan(
+        dest_ids=(node_id * gpus + dest_gpus).astype(jnp.int32),
+        entry_start=jnp.arange(gpus + 1, dtype=jnp.int32) * entries,
+        src_lo=src_parts.reshape(-1).astype(jnp.int32),
+        dst_lo=dst_parts.reshape(-1).astype(jnp.int32),
+        rows=row_parts.reshape(-1).astype(jnp.int32),
+    )

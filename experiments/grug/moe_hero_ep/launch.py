@@ -86,6 +86,9 @@ FLAVORS: dict[str, Flavor] = {
     "ep-marin": Flavor(None, "marin_ep"),
     # marin_ep with the cuDNN/QuACK grouped expert GEMMs.
     "ep-marin-cudnn-cute": Flavor(None, "marin_ep_cudnn_cute"),
+    # Two-hop marin_ep: ragged internode + fused Mosaic puts intranode. Runs
+    # one process per node (see processes_per_task below).
+    "ep-marin-hier-cudnn-cute": Flavor(None, "marin_ep_hier_cudnn_cute"),
     # The same split-capable ragged transport, with the existing SM100 QuACK grouped GEMMs for
     # activation-path expert compute. Weight gradients retain the ragged-dot implementation.
     "ep-ragged-cute": Flavor(None, "ragged_all_to_all_cute"),
@@ -398,7 +401,11 @@ def build_hero_run(
                 GrugEvalConfig(steps_per_eval=eval_every, eval_ema=False, compute_bpb=True) if eval_every > 0 else None
             ),
             stop_after_steps=num_steps,
-            processes_per_task=HERO_PROCESSES_PER_TASK,
+            # The hier backend's intranode fused puts need each process to own
+            # its node's GPUs; every other flavor keeps process-per-GPU.
+            processes_per_task=(
+                1 if sharding.moe_implementation == "marin_ep_hier_cudnn_cute" else HERO_PROCESSES_PER_TASK
+            ),
             worker_pip_packages=(() if pjrt_wheel is not None else jax_nightly_pip_packages(jax_nightly_version)),
             worker_setup_scripts=((_pjrt_wheel_install_script(pjrt_wheel),) if pjrt_wheel is not None else ()),
         )
