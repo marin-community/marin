@@ -790,3 +790,33 @@ Experiment ID prefix: `MEP`.
   node; stage-A ragged a2a to same-local-rank peers, stage-B
   put_segments within the node), CPU-conformance first, then EP16 proxy
   at 4 nodes x 1 proc/node.
+
+### 2026-08-15 20:30 - MEP-025: hier transport GPU-validated single-process (values + grads)
+- Change: `transport="hier"` implemented end to end — hop A =
+  `ragged_all_to_all` on the flat expert axis driven by
+  `_shard_a2a_params(hier_flat_counts(...))` (nonzero only for
+  same-local-rank peers, node-order staging receive layout); hop B =
+  `put_segments` with `num_devices=intranode_size` and flat intranode
+  dest ids (`hier_dispatch_segments`/`hier_combine_segments` in
+  marin_ep_transport); combine transposes both hops; vjp reuses
+  `put_with_transpose` + jax's ragged-a2a transpose. Registered as
+  `marin_ep_hier_cudnn_cute` / flavor `ep-marin-hier-cudnn-cute`
+  (launcher switches that flavor to processes_per_task=1). Host plan
+  tests in experiments/marin_ep/tests/test_hier_plans.py.
+- GPU (1 GB200 tray, single process, nodes=2 x gpus=2 factorization):
+  conformance matrix `pytest experiments/marin_ep/tests/test_xla_backend.py
+  -n0` = 11 passed — ragged/mgpu/hier x group sizes, values AND grads vs
+  the dense oracle; hier result identical across intra=4 and intra=2
+  factorizations.
+- Two traps burned an hour:
+  1. Fresh `uv sync --extra=gpu` left nvidia-nccl-cu12 2.28.9 owning
+     libnccl.so.2 — every ragged-class program segfaulted with EMPTY
+     logs (even hier at nodes=1). Fix as always: uninstall cu12,
+     reinstall nvidia-nccl-cu13==2.30.7. mgpu (no NCCL in the seam)
+     passed throughout, which is what fingered the collision.
+  2. pytest-xdist runs worker PROCESSES that share the tray's 4 GPUs —
+     mixed hier+mgpu sessions failed a different mgpu case each run.
+     Sequential `-n0` is required for multi-GPU collective tests.
+- Next: 2-node smoke of hier (1 proc/node, nightly stack — stock 0.11
+  cannot run the topology per MEP-024), then the EP16 proxy hero run
+  with `--flavor ep-marin-hier-cudnn-cute`.
