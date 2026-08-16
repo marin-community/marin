@@ -820,3 +820,22 @@ Experiment ID prefix: `MEP`.
 - Next: 2-node smoke of hier (1 proc/node, nightly stack — stock 0.11
   cannot run the topology per MEP-024), then the EP16 proxy hero run
   with `--flavor ep-marin-hier-cudnn-cute`.
+
+### 2026-08-15 20:45 - MEP-026: first multi-node hier run — EP16 proxy 19.2 s/step at 0.068% drops
+- Run: mep-hier-ep16-25-20260815 — ep-marin-hier-cudnn-cute at the EP16
+  exact proxy (4 nodes x 1 process/node, batch 256, E48), settled recipe
+  (cf 1.1, split-32, patched wheel, symmetric, LHS on) + JAX_ENABLE_PGLE
+  false (harness defaults PGLE ON for processes_per_task=1 — the
+  per-node auto-PGLE wedge class). 25/25 steps, 4/4 tasks, loss 6.19
+  falling.
+- Scored: steady 19.2 s/step (12it@5:02 -> 24it@8:52 = 230 s / 12);
+  drop_fraction 0.068% — matches the flat path's EP16 proxy drops
+  (0.066%), confirming transport-invariance of the drop rule on real
+  hardware.
+- vs flat single-hop ep-marin-cudnn-cute at the same proxy: 18.05 s
+  (MEP-016) — hier v1 is ~6% slower HERE, but EP16 has only 3 internode
+  peers so the 63->15 peer reduction that motivates hier barely
+  registers; the unoptimized costs (4x-pool staging zeros, two extra
+  kernel launches per direction, no inter-hop overlap, hop-A splits
+  untuned) dominate. The informative A/B is EP64 (launched:
+  mep-hier-ep64-25-20260815).
