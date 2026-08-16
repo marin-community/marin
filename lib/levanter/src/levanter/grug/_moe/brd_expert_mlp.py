@@ -23,22 +23,34 @@ from jax.experimental.pallas.ops.gpu import blackwell_ragged_dot_mgpu as brd
 
 from levanter.grug._moe.cudnn_wgrad_cute import cudnn_grouped_wgrad
 
-# Best measured config at hero shard shapes (MEP-040): 66.3 us / 1457 TF/s on
-# m=2560 k=6144 n=3072 G=3 bf16. collective=True doubles the effective tile.
-_CONFIG = brd.TuningConfig(
-    tile_m=128,
-    tile_n=128,
-    tile_k=64,
-    grid_tile_width=12,
-    grid_minor_dim=blackwell_matmul_mgpu.MatmulDimension(0),
-    max_concurrent_steps=6,
-    collective=True,
-)
+
+def _cfg(tile_n: int, grid_tile_width: int, grid_minor_dim: int, max_concurrent_steps: int) -> "brd.TuningConfig":
+    return brd.TuningConfig(
+        tile_m=128,
+        tile_n=tile_n,
+        tile_k=64,
+        grid_tile_width=grid_tile_width,
+        grid_minor_dim=blackwell_matmul_mgpu.MatmulDimension(grid_minor_dim),
+        max_concurrent_steps=max_concurrent_steps,
+        collective=True,
+    )
+
+
+# Fallback plus per-leg best configs from the GB200 sweep at the hero shard
+# shapes (m=2560, G=3, bf16; MEP-040/043): 1195-1531 TF/s per leg. Keys are
+# (K, padded N).
+_CONFIG = _cfg(128, 12, 0, 6)
+_CONFIGS: dict[tuple[int, int], "brd.TuningConfig"] = {
+    (6144, 6400): _cfg(128, 8, 0, 6),  # w13 forward, 1531 TF/s
+    (3136, 6144): _cfg(128, 12, 0, 6),  # w2 forward, 1407 TF/s
+    (6144, 3200): _cfg(64, 16, 1, 6),  # dact (w2^T), 1195 TF/s
+    (6272, 6144): _cfg(128, 8, 1, 6),  # dx (w13^T), 1492 TF/s
+}
 ROW_ALIGN = 2 * _CONFIG.tile_m
-# The collective config doubles the effective N tile. Hero dims are not all
-# 256-multiples (2I = 6272, I = 3136), so `_grouped` pads the weight's N and
-# slices the output.
-_N_ALIGN = (2 if _CONFIG.collective else 1) * _CONFIG.tile_n
+# The collective config doubles the effective N tile; pad every weight's N to
+# 256 (hero dims are not all 256-multiples: 2I = 6272, I = 3136) and slice
+# the output back.
+_N_ALIGN = 256
 
 
 def _grouped(a: jax.Array, b: jax.Array, group_sizes: jax.Array) -> jax.Array:
@@ -46,7 +58,8 @@ def _grouped(a: jax.Array, b: jax.Array, group_sizes: jax.Array) -> jax.Array:
     n_pad = -n % _N_ALIGN
     if n_pad:
         b = jnp.pad(b, ((0, 0), (0, 0), (0, n_pad)))
-    out = brd.ragged_dot_kernel(a, b, group_sizes, config=_CONFIG)
+    config = _CONFIGS.get((b.shape[1], b.shape[2]), _CONFIG)
+    out = brd.ragged_dot_kernel(a, b, group_sizes, config=config)
     return out[:, :n] if n_pad else out
 
 
