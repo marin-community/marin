@@ -51,12 +51,14 @@ def test_cudnn_wgrad_padding_preserves_groups_and_zeros_inserted_rows():
     values = jnp.arange(18, dtype=jnp.bfloat16).reshape(9, 2)
     padded, offsets = jax.jit(pad_grouped_rows)(values, jnp.array([3, 1, 4], dtype=jnp.int32))
 
-    expected = np.zeros((30, 2), dtype=np.float32)
+    # Groups are padded to 64-row boundaries (the kernel miscomputes below
+    # 64-alignment; see cudnn_wgrad_cute._GROUP_ALIGNMENT).
+    expected = np.zeros((9 + 63 * 3, 2), dtype=np.float32)
     expected[0:3] = np.asarray(values[0:3], dtype=np.float32)
-    expected[8] = np.asarray(values[3], dtype=np.float32)
-    expected[16:20] = np.asarray(values[4:8], dtype=np.float32)
+    expected[64] = np.asarray(values[3], dtype=np.float32)
+    expected[128:132] = np.asarray(values[4:8], dtype=np.float32)
     np.testing.assert_array_equal(np.asarray(padded, dtype=np.float32), expected)
-    np.testing.assert_array_equal(np.asarray(offsets), np.array([8, 16, 24], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(offsets), np.array([64, 128, 192], dtype=np.int32))
 
 
 def test_local_permute_separates_active_groups_from_physical_receiver_capacity():

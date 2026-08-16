@@ -12,7 +12,12 @@ import jax.numpy as jnp
 
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
 
-_GROUP_ALIGNMENT = 8
+# The cuDNN grouped Wgrad kernel silently miscomputes when a group's row
+# offset is not 64-aligned (measured 0.17-0.55 max error relative to the
+# gradient peak at 8/32-aligned sizes vs the bf16 floor of ~0.003 at
+# 64/128/256; probed 2026-08-16 on GB200 at production dims). 64 is the
+# smallest alignment that is exact.
+_GROUP_ALIGNMENT = 64
 _MMA_TILER_MN = (256, 256)
 _CLUSTER_SHAPE_MN = (2, 1)
 
