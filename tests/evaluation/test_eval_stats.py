@@ -646,5 +646,25 @@ def test_a_run_the_model_merely_failed_is_not_flagged_as_unanswered():
     assert ResultFlag.NO_ANSWERS not in measurement.flags
 
 
+def test_infrastructure_errors_do_not_make_successful_samples_look_unanswered():
+    record = _record(
+        metrics={"gsm8k_5shot": {"sample_len": 1.0, "exact_match,none": 1.0}},
+        coverage={
+            "gsm8k_5shot": TaskCoverage(
+                n_attempted=2,
+                n_scored=1,
+                n_correct=1,
+                n_unanswered=1,
+                errors={"EVALCHEMY_INFRASTRUCTURE_ERROR": 1},
+            )
+        },
+    )
+
+    measurement = measurement_from_record(record)
+
+    assert measurement is not None
+    assert ResultFlag.NO_ANSWERS not in measurement.flags
+
+
 def test_record_adapter_returns_nothing_for_a_run_that_produced_no_metrics():
     assert measurement_from_record(_record(metrics={})) is None

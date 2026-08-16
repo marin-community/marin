@@ -39,6 +39,7 @@ DEFAULT_SCAN_PREFIXES = (
 )
 RECORD_FILE = "record.json"
 _MAX_RECORD_READERS = 16
+EVALCHEMY_INFRASTRUCTURE_ERROR = "EVALCHEMY_INFRASTRUCTURE_ERROR"
 
 
 class RunStatus(StrEnum):
@@ -279,9 +280,9 @@ class TaskCoverage(BaseModel):
     reader gets the Bernoulli numerator without inverting a rounded rate out of ``metrics``. It is
     ``None`` for a task whose grade is not pass/fail.
 
-    ``n_unanswered`` counts graded items whose output held no extractable answer. Those score zero
-    like a wrong answer does, so the count is the evidence that separates a model that answers badly
-    from a run whose extraction produced nothing at all.
+    ``n_unanswered`` counts items with no extractable model answer, including requests that failed
+    before generation. Failed requests are excluded from ``n_scored`` and named in ``errors``; an
+    empty model completion remains scored, because it is a model answer the grader can assess.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

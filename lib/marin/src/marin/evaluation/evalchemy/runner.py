@@ -118,6 +118,7 @@ class EvalchemyOutcome:
     jobs: dict[str, str]
     result: EvalchemyResult
     coverage: dict[str, TaskCoverage]
+    recovered_metrics: dict[str, dict[str, float]]
 
 
 def _task_dir(task: EvalTaskConfig) -> str:
@@ -272,6 +273,7 @@ def run_evalchemy(
         jobs={_EVAL_JOB_ROLE: eval_job},
         result=EvalchemyResult(path=output_dir),
         coverage=export.coverage,
+        recovered_metrics=export.recovered_metrics,
     )
 
 
@@ -298,10 +300,16 @@ class EvalchemyExecutor:
                 log_tails=exc.log_tails,
             ) from exc
         metrics = outcome.result.task_metrics()
+        for task, recovered in outcome.recovered_metrics.items():
+            if recovered:
+                metrics[task] = recovered
+            else:
+                metrics.pop(task, None)
         if not metrics:
             raise EvaluationError(
-                f"eval finished but no task metrics were readable under {output_dir!r}",
-                status=RunStatus.ARTIFACT_FAILED,
+                f"eval finished with no successful inference responses under {output_dir!r}",
+                status=RunStatus.INFRA_FAILED,
                 jobs=outcome.jobs,
+                coverage=outcome.coverage,
             )
         return EvaluationOutcome(metrics=metrics, jobs=outcome.jobs, coverage=outcome.coverage)

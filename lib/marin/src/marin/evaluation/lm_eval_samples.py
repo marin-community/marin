@@ -46,7 +46,7 @@ from marin.evaluation.archive import (
     primary_filter,
     primary_metric,
 )
-from marin.evaluation.records import TaskCoverage
+from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, TaskCoverage
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +70,7 @@ _CONTENT_TYPES = {
 # A ``tempfile.mkdtemp`` directory name that ended up inside a results tree. See
 # :func:`is_scratch_artifact`.
 _SCRATCH_SEGMENT = re.compile(r"(?:^|/)tmp[a-z0-9_]{6,}/")
+_INFRASTRUCTURE_ERROR_PREFIX = f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}]"
 
 
 def is_scratch_artifact(relative_path: str) -> bool:
@@ -312,14 +313,38 @@ def _document_extent(doc_ids: Iterable[str]) -> int | None:
     return highest + 1 if highest >= 0 else None
 
 
+def _is_infrastructure_error(sample: EvalSample) -> bool:
+    """Whether Evalchemy substituted a request failure for this sample's completion."""
+    return any(
+        value is not None and _INFRASTRUCTURE_ERROR_PREFIX in value for value in (sample.output, sample.extracted)
+    )
+
+
+def recovered_task_metrics(samples: Sequence[EvalSample]) -> dict[str, float]:
+    """Mean per-sample metrics after excluding infrastructure-error completions."""
+    values: dict[str, list[float]] = {}
+    scored_doc_ids: set[str] = set()
+    for sample in samples:
+        if sample.grading is None or _is_infrastructure_error(sample):
+            continue
+        scored_doc_ids.add(sample.doc_id)
+        for name, value in sample.metrics.items():
+            metric = name if "," in name or sample.grading.filter is None else f"{name},{sample.grading.filter}"
+            values.setdefault(metric, []).append(value)
+    metrics = {name: sum(entries) / len(entries) for name, entries in values.items()}
+    if metrics:
+        metrics["sample_len"] = float(len(scored_doc_ids))
+    return metrics
+
+
 def task_coverage(samples: Sequence[EvalSample]) -> TaskCoverage:
     """One task's coverage, read from the samples it produced.
 
-    A document that yielded no grading is counted as attempted but unscored, and one whose grader
-    extracted no answer is counted as unanswered -- it scored, but on nothing the model actually
-    supplied. A task scoring each document under several extraction filters holds one sample per
-    (document, filter); the tallies come from the filter :func:`~marin.evaluation.archive.primary_filter`
-    picks, which is the one the run's headline metric is also reported under.
+    A document that yielded no grading is counted as attempted but unscored. A request failure is
+    unanswered and unscored, while an empty model completion is unanswered but scored. A task
+    scoring each document under several extraction filters holds one sample per (document, filter);
+    the tallies come from the filter :func:`~marin.evaluation.archive.primary_filter` picks, which is
+    the one the run's headline metric is also reported under.
     """
     graded: dict[str, list[EvalSample]] = {}
     seen: set[str] = set()
@@ -331,19 +356,25 @@ def task_coverage(samples: Sequence[EvalSample]) -> TaskCoverage:
     headline = primary_filter(
         {sample.grading.filter for rows in graded.values() for sample in rows if sample.grading.filter}
     )
-    scored = [
+    graded_samples = [
         next((sample for sample in rows if sample.grading.filter == headline), rows[0]) for rows in graded.values()
     ]
-    ungraded = len(seen) - len(scored)
+    infrastructure_errors = [sample for sample in graded_samples if _is_infrastructure_error(sample)]
+    scored = [sample for sample in graded_samples if not _is_infrastructure_error(sample)]
+    ungraded = len(seen) - len(graded_samples)
     # A pass/fail grade is the only one with a Bernoulli count behind it; a partial-credit score
     # (a rubric, an edit distance) has no numerator to record.
     binary = all(sample.grading.score in (0.0, 1.0) for sample in scored)
+    errors = {"ungraded": ungraded} if ungraded else {}
+    if infrastructure_errors:
+        errors[EVALCHEMY_INFRASTRUCTURE_ERROR] = len(infrastructure_errors)
     return TaskCoverage(
         n_attempted=_document_extent(seen),
         n_scored=len(scored),
         n_correct=sum(1 for sample in scored if sample.correct) if binary and scored else None,
-        n_unanswered=sum(1 for sample in scored if sample.kind is SampleKind.GENERATION and not sample.extracted),
-        errors={"ungraded": ungraded} if ungraded else {},
+        n_unanswered=len(infrastructure_errors)
+        + sum(1 for sample in scored if sample.kind is SampleKind.GENERATION and not sample.extracted),
+        errors=errors,
     )
 
 
@@ -411,6 +442,9 @@ class SampleExport:
     coverage: dict[str, TaskCoverage] = field(default_factory=dict)
     """Per-task coverage keyed like the run's ``metrics`` (see :func:`_task_keys`)."""
 
+    recovered_metrics: dict[str, dict[str, float]] = field(default_factory=dict)
+    """Metrics rebuilt from successful samples for tasks with request failures."""
+
 
 def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> SampleExport:
     """Normalize every lm-eval ``samples_*.jsonl`` under ``out_path`` into the run's finestore archive.
@@ -436,6 +470,7 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> Sa
     store = EvaluationStore.open(out_path, writer_id=writer_id)
     count = 0
     coverage: dict[str, TaskCoverage] = {}
+    recovered_metrics: dict[str, dict[str, float]] = {}
     try:
         for relative in artifacts:
             payload = StoragePath(prefix_join(str(root), relative)).read_bytes()
@@ -447,11 +482,14 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> Sa
             samples = _add_lm_eval_rows(store, relative.rsplit("/", 1)[-1], payload)
             count += len(samples)
             if samples:
-                coverage[keys[relative]] = task_coverage(samples)
+                task_key = keys[relative]
+                coverage[task_key] = task_coverage(samples)
+                if coverage[task_key].errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):
+                    recovered_metrics[task_key] = recovered_task_metrics(samples)
         store.seal()
     finally:
         store.close()
-    return SampleExport(samples=count, coverage=coverage)
+    return SampleExport(samples=count, coverage=coverage, recovered_metrics=recovered_metrics)
 
 
 def require_current_samples(out_path: str) -> None:

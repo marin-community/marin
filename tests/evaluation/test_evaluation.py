@@ -16,12 +16,12 @@ import pytest
 from click.testing import CliRunner
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
-from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
+from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyOutcome, EvalchemyRunConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint
-from marin.evaluation.records import EvalRef, RunStatus, read_record
+from marin.evaluation.records import EvalRef, RunStatus, TaskCoverage, read_record
 from marin.evaluation.runner import (
     Evaluation,
     EvaluationBatch,
@@ -214,6 +214,45 @@ def test_evalchemy_executor_classifies_archive_export_failure(tmp_path, monkeypa
 
     assert exc_info.value.status is RunStatus.ARTIFACT_FAILED
     assert exc_info.value.jobs == {"eval": "/eval/completed"}
+
+
+def test_evalchemy_executor_rejects_a_task_with_no_successful_responses(tmp_path, monkeypatch):
+    coverage = {
+        "humaneval_0shot": TaskCoverage(
+            n_attempted=2,
+            n_scored=0,
+            n_unanswered=2,
+            errors={"EVALCHEMY_INFRASTRUCTURE_ERROR": 2},
+        )
+    }
+    outcome = EvalchemyOutcome(
+        jobs={"eval": "/eval/completed"},
+        result=SimpleNamespace(task_metrics=lambda: {"humaneval_0shot": {"pass@1,create_test": 0.0}}),
+        coverage=coverage,
+        recovered_metrics={"humaneval_0shot": {}},
+    )
+    monkeypatch.setattr("marin.evaluation.evalchemy.runner.run_evalchemy", lambda *_args, **_kwargs: outcome)
+    session = RemoteInferenceSession(
+        model=RunningModel(
+            endpoint=OpenAIEndpoint(base_url="https://inference.example/v1", model="model"),
+            tokenizer="tokenizer",
+        ),
+        jobs=(),
+        endpoint_name="/serve/test",
+        endpoint_health_timeout_seconds=1800.0,
+        streaming=True,
+        tensor_parallel_size=1,
+        backend_name="vllm",
+    )
+    executor = EvalchemyExecutor(
+        EvalchemyRunConfig(name="humaneval", tasks=(EvalTaskConfig(name="humaneval", num_fewshot=0),))
+    )
+
+    with pytest.raises(EvaluationError) as exc_info:
+        executor(session, str(tmp_path), {})
+
+    assert exc_info.value.status is RunStatus.INFRA_FAILED
+    assert exc_info.value.coverage == coverage
 
 
 def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_batch(tmp_path, monkeypatch):

@@ -413,6 +413,30 @@ def test_answers_the_grader_could_not_extract_are_counted_apart_from_wrong_ones(
     assert entry.n_unanswered == 1
 
 
+def test_infrastructure_error_is_unscored_and_recomputes_the_metric(tmp_path):
+    results = tmp_path / "run" / "results"
+    marker = "[EVALCHEMY_INFRASTRUCTURE_ERROR] ClientResponseError: 400 Bad Request"
+    _write_jsonl(
+        results,
+        [
+            _lm_eval_row(0, "none", 1.0, "4"),
+            _lm_eval_row(1, "none", 0.0, marker),
+        ],
+    )
+
+    export = export_lm_eval_samples(str(results))
+    [coverage] = export.coverage.values()
+
+    assert coverage == TaskCoverage(
+        n_attempted=2,
+        n_scored=1,
+        n_correct=1,
+        n_unanswered=1,
+        errors={"EVALCHEMY_INFRASTRUCTURE_ERROR": 1},
+    )
+    assert export.recovered_metrics == {"gsm8k_5shot": {"exact_match,none": 1.0, "sample_len": 1.0}}
+
+
 def test_a_group_task_reports_coverage_per_subtask(tmp_path):
     # One task config evaluating several tasks keys its metrics <task_dir>/<task>; coverage keys the
     # same way or a reader cannot line the two up.
