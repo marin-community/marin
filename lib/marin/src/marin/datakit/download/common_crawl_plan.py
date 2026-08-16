@@ -14,7 +14,7 @@ import json
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol, TypeAlias
+from typing import Protocol
 from urllib.parse import unquote, urlsplit
 
 import fsspec
@@ -38,8 +38,8 @@ _MANIFEST_BATCH_ROWS = 1 << 16
 DISCOVERY_FILENAME = "records.parquet"
 PLAN_FILENAME = "plan.parquet"
 
-JSONScalar: TypeAlias = str | int | float | bool | None
-IndexedRecord: TypeAlias = MainIndexedRecord | SupplementalIndexedRecord
+type JSONScalar = str | int | float | bool | None
+type IndexedRecord = MainIndexedRecord | SupplementalIndexedRecord
 
 
 class CommonCrawlIndexKind(StrEnum):
@@ -400,9 +400,7 @@ def plan_common_crawl_manifest(
     return write_common_crawl_plan(tasks, output_path)
 
 
-def _coalesce_ranges(
-    records: list[SelectedCommonCrawlRecord], *, gap_bytes: int
-) -> list[PlannedCommonCrawlRange]:
+def _coalesce_ranges(records: list[SelectedCommonCrawlRecord], *, gap_bytes: int) -> list[PlannedCommonCrawlRange]:
     ranges: list[PlannedCommonCrawlRange] = []
     open_records: list[IndexedRecord] = []
     open_source: CommonCrawlSource | None = None

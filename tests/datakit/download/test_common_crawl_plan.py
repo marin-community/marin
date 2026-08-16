@@ -13,8 +13,8 @@ from marin.datakit.download.common_crawl_plan import (
     CommonCrawlSelection,
     CommonCrawlSource,
     SelectedCommonCrawlRecord,
-    plan_common_crawl_records,
     plan_common_crawl_manifest,
+    plan_common_crawl_records,
     read_common_crawl_discovery,
     read_common_crawl_tasks,
     write_common_crawl_discovery,
@@ -76,17 +76,18 @@ def test_filter_selects_matching_rows_and_records_selection_signals() -> None:
         }
     )
 
-    assert selection == CommonCrawlSelection(
-        {"declared_mime": True, "detected_mime": False, "url_suffix": True}
+    assert selection == CommonCrawlSelection({"declared_mime": True, "detected_mime": False, "url_suffix": True})
+    assert (
+        selector.select(
+            {
+                "fetch_status": 404,
+                "content_truncated": None,
+                "content_mime_type": "application/docx",
+                "url": "https://example.com/file.docx",
+            }
+        )
+        is None
     )
-    assert selector.select(
-        {
-            "fetch_status": 404,
-            "content_truncated": None,
-            "content_mime_type": "application/docx",
-            "url": "https://example.com/file.docx",
-        }
-    ) is None
 
 
 def test_planner_coalesces_gap_boundary_and_keeps_sparse_record_singleton() -> None:
@@ -137,9 +138,7 @@ def test_per_source_sampling_is_stable_when_another_source_is_added() -> None:
     combined = plan_common_crawl_records([*second_records, *first_records], options)
 
     first_offsets = [selected.start for task in first_only for selected in task.ranges]
-    combined_first_offsets = [
-        selected.start for task in combined if task.source == first for selected in task.ranges
-    ]
+    combined_first_offsets = [selected.start for task in combined if task.source == first for selected in task.ranges]
     assert combined_first_offsets == first_offsets
     assert len(first_offsets) == 5
 
