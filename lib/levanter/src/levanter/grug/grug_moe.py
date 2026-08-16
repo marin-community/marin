@@ -49,6 +49,7 @@ from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_marin import (
     _moe_mlp_ep_marin_cudnn_cute_local,
     _moe_mlp_ep_marin_hier_cudnn_cute_local,
+    _moe_mlp_ep_marin_mgpu_cudnn_cute_local,
     _moe_mlp_ep_marin_local,
 )
 from levanter.grug._moe.ep_ragged_all_to_all import (
@@ -271,6 +272,8 @@ def moe_mlp(
             shard_local_fn = _moe_mlp_ep_marin_cudnn_cute_local
         elif resolved_implementation == "marin_ep_hier_cudnn_cute":
             shard_local_fn = _moe_mlp_ep_marin_hier_cudnn_cute_local
+        elif resolved_implementation == "marin_ep_mgpu_cudnn_cute":
+            shard_local_fn = _moe_mlp_ep_marin_mgpu_cudnn_cute_local
         else:
             raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
 

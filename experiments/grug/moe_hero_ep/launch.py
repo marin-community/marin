@@ -89,6 +89,7 @@ FLAVORS: dict[str, Flavor] = {
     # Two-hop marin_ep: ragged internode + fused Mosaic puts intranode. Runs
     # one process per node (see processes_per_task below).
     "ep-marin-hier-cudnn-cute": Flavor(None, "marin_ep_hier_cudnn_cute"),
+    "ep-marin-mgpu-cudnn-cute": Flavor(None, "marin_ep_mgpu_cudnn_cute"),
     # The same split-capable ragged transport, with the existing SM100 QuACK grouped GEMMs for
     # activation-path expert compute. Weight gradients retain the ragged-dot implementation.
     "ep-ragged-cute": Flavor(None, "ragged_all_to_all_cute"),
