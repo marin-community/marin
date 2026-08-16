@@ -157,8 +157,10 @@ class TreeCache(AsyncDataset[T_co]):
         self.ledger = ledger
         self._exemplar = exemplar
         self._shard_stores: Dict[str, TreeStore[T_co]] = {}
+        self._pending_shard_stores: Dict[str, "asyncio.Future[TreeStore[T_co]]"] = {}
         self._shard_row_offsets: Optional[np.ndarray] = None
         self._shard_field_stores: Dict[Tuple[str, str], Any] = {}
+        self._pending_shard_field_stores: Dict[Tuple[str, str], "asyncio.Future[Any]"] = {}
         self._shard_field_offsets: Dict[str, np.ndarray] = {}
         self._flat_field_offsets: Dict[str, np.ndarray] = {}
         self._flat_field_offset_futures: Dict[str, concurrent.futures.Future[np.ndarray]] = {}
@@ -328,24 +330,52 @@ class TreeCache(AsyncDataset[T_co]):
             self._shard_stores[shard_name] = store
         return store
 
-    def _shard_field_store(self, shard_name: str, field: str):
-        key = (shard_name, field)
-        store = self._shard_field_stores.get(key)
-        if store is None:
-            tree_store = TreeStore.open(
-                _field_exemplar(self._exemplar, field),
-                self._layout.shard(shard_name),
-                mode="r",
-                cache_metadata=True,
+    async def _shard_store_async(self, shard_name: str) -> TreeStore[T_co]:
+        """Open a shard store, sharing one open between concurrent first touches."""
+        store = self._shard_stores.get(shard_name)
+        if store is not None:
+            return store
+
+        loop = asyncio.get_running_loop()
+        pending = self._pending_shard_stores.get(shard_name)
+        if pending is None or pending.get_loop() is not loop:
+            pending = loop.create_task(self._open_shard_store(shard_name))
+            self._pending_shard_stores[shard_name] = pending
+        return await asyncio.shield(pending)
+
+    async def _open_shard_store(self, shard_name: str) -> TreeStore[T_co]:
+        try:
+            store = await TreeStore.open_async(
+                self._exemplar, self._layout.shard(shard_name), mode="r", cache_metadata=True
             )
-            store = _tree_field(tree_store.tree, field)
-            self._shard_field_stores[key] = store
-        return store
+            self._shard_stores[shard_name] = store
+            return store
+        finally:
+            self._pending_shard_stores.pop(shard_name, None)
 
     async def _shard_field_store_async(self, shard_name: str, field: str):
+        """Open a shard's field store, sharing one open between concurrent first touches.
+
+        Readers fan out over many shards at once, so an unshared open would issue the same
+        metadata request once per concurrent reader that misses the cache.
+        """
         key = (shard_name, field)
         store = self._shard_field_stores.get(key)
-        if store is None:
+        if store is not None:
+            return store
+
+        loop = asyncio.get_running_loop()
+        pending = self._pending_shard_field_stores.get(key)
+        # Futures belong to the loop that created them, and a TreeCache outlives the
+        # per-iterator loops that read it, so a foreign-loop future is not awaitable here.
+        if pending is None or pending.get_loop() is not loop:
+            pending = loop.create_task(self._open_shard_field_store(shard_name, field))
+            self._pending_shard_field_stores[key] = pending
+        return await asyncio.shield(pending)
+
+    async def _open_shard_field_store(self, shard_name: str, field: str):
+        key = (shard_name, field)
+        try:
             tree_store = await TreeStore.open_async(
                 _field_exemplar(self._exemplar, field),
                 self._layout.shard(shard_name),
@@ -354,7 +384,9 @@ class TreeCache(AsyncDataset[T_co]):
             )
             store = _tree_field(tree_store.tree, field)
             self._shard_field_stores[key] = store
-        return store
+            return store
+        finally:
+            self._pending_shard_field_stores.pop(key, None)
 
     async def _get_sharded_batch(self, indices: Sequence[int]) -> List[T_co]:
         if len(indices) == 0:
@@ -375,7 +407,8 @@ class TreeCache(AsyncDataset[T_co]):
 
         async def read_shard(shard_index: int, batch: List[Tuple[int, int]]) -> None:
             local_indices = [local_index for _, local_index in batch]
-            shard_batch = await self._shard_store(shard_names[shard_index]).get_batch(local_indices)
+            store = await self._shard_store_async(shard_names[shard_index])
+            shard_batch = await store.get_batch(local_indices)
             for (output_index, _), row in zip(batch, shard_batch, strict=True):
                 output[output_index] = row
 
@@ -421,7 +454,7 @@ class TreeCache(AsyncDataset[T_co]):
         shard_names, shard_offsets = self._ensure_shard_field_offsets(field)
         remaining = length
         position = offset
-        reads = []
+        slices = []
 
         while remaining > 0:
             shard_index = int(np.searchsorted(shard_offsets, position, side="right"))
@@ -432,12 +465,15 @@ class TreeCache(AsyncDataset[T_co]):
             local_start = position - shard_start
             available = int(shard_offsets[shard_index] - position)
             take = min(remaining, available)
-            field_store = self._shard_field_store(shard_names[shard_index], field)
-            reads.append(field_store.data[local_start : local_start + take].read())
+            slices.append((shard_names[shard_index], local_start, take))
             position += take
             remaining -= take
 
-        chunks = await asyncio.gather(*reads)
+        async def read_slice(shard_name: str, local_start: int, take: int) -> np.ndarray:
+            field_store = await self._shard_field_store_async(shard_name, field)
+            return await field_store.data[local_start : local_start + take].read()
+
+        chunks = await asyncio.gather(*[read_slice(*s) for s in slices])
         if len(chunks) == 1:
             return chunks[0]
         return np.concatenate(chunks)

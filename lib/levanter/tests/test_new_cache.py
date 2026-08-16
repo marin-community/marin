@@ -14,9 +14,11 @@ from levanter.data._preprocessor import BatchProcessor
 from levanter.data.sharded_datasource import ShardedDataSource
 from levanter.data.utils import batched
 from levanter.data.sharded_datasource import TextUrlDataSource
+from levanter.store import jagged_array
 from levanter.store.cache import (
     CACHE_LAYOUT_SHARDED,
     CacheLedger,
+    consolidate_shard_cache_ledgers,
     SerialCacheWriter,
     ShardedCacheLayout,
     TreeCache,
@@ -572,3 +574,87 @@ def test_write_levanter_cache_end_to_end():
         assert len(store) == len(records)
         assert store[0]["input_ids"].tolist() == records[0]["input_ids"]
         assert store[len(records) - 1]["input_ids"].tolist() == records[len(records) - 1]["input_ids"]
+
+
+def _build_sharded_cache(root: Path, num_shards: int, rows_per_shard: int, seq_len: int) -> TreeCache:
+    """Write ``num_shards`` shard caches under ``root`` and consolidate them into one sharded cache."""
+    exemplar = {"input_ids": np.array([0], dtype=np.int32)}
+    shard_paths = []
+    for shard in range(num_shards):
+        shard_path = str(root / f"shard_{shard}")
+        with SerialCacheWriter(shard_path, exemplar) as writer:
+            writer.write_batch([{"input_ids": np.arange(seq_len, dtype=np.int32)} for _ in range(rows_per_shard)])
+        shard_paths.append(shard_path)
+
+    consolidate_shard_cache_ledgers(shard_paths, str(root), exemplar)
+    return TreeCache.load(str(root), exemplar)
+
+
+class _OpenTracker:
+    """Counts tensorstore opens and the high-water mark of concurrent ones."""
+
+    def __init__(self):
+        self.total = 0
+        self.active = 0
+        self.max_active = 0
+
+    def wrap(self, monkeypatch):
+        real = jagged_array._ts_open_async
+
+        async def tracked(*args, **kwargs):
+            self.total += 1
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            try:
+                # yield twice so a serialized caller cannot overlap by luck of scheduling
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                return await real(*args, **kwargs)
+            finally:
+                self.active -= 1
+
+        monkeypatch.setattr(jagged_array, "_ts_open_async", tracked)
+
+
+@pytest.mark.asyncio
+async def test_sharded_flat_field_batch_opens_shards_concurrently(tmp_path, monkeypatch):
+    """Regression for #7474.
+
+    A cold read spanning many shards must open them concurrently. Opening them from the
+    synchronous helper blocked the event loop, so one fetch window paid the shard-open
+    latency once per shard in series.
+    """
+    num_shards, rows_per_shard, seq_len = 8, 4, 16
+    cache = _build_sharded_cache(tmp_path, num_shards, rows_per_shard, seq_len)
+
+    tracker = _OpenTracker()
+    tracker.wrap(monkeypatch)
+
+    offsets = [row * seq_len for row in range(num_shards * rows_per_shard)]
+    batch = await cache.get_flat_field_batch("input_ids", offsets, seq_len)
+
+    assert len(batch) == len(offsets)
+    for row in batch:
+        np.testing.assert_array_equal(row, np.arange(seq_len, dtype=np.int32))
+    assert tracker.max_active == num_shards
+
+
+@pytest.mark.asyncio
+async def test_sharded_shard_open_is_shared_between_concurrent_readers(tmp_path, monkeypatch):
+    """Concurrent first touches of one shard must issue a single open, not one per reader."""
+    cache = _build_sharded_cache(tmp_path, num_shards=1, rows_per_shard=8, seq_len=16)
+
+    opens = []
+    real_open_async = TreeStore.open_async
+
+    async def counted_open_async(exemplar, path, **kwargs):
+        opens.append(path)
+        await asyncio.sleep(0)
+        return await real_open_async(exemplar, path, **kwargs)
+
+    monkeypatch.setattr(TreeStore, "open_async", staticmethod(counted_open_async))
+
+    results = await asyncio.gather(*[cache.get_flat_field_batch("input_ids", [row * 16], 16) for row in range(8)])
+
+    assert len(results) == 8
+    assert opens == [str(Path(cache.cache_dir) / "shard_0")]
