@@ -747,3 +747,19 @@ Experiment ID prefix: `MEP`.
 - Next: command buffers arm (mep-ep64-cb-25, +`command_buffer=FUSION`
   on top of LHS-on; #5675 crash was bisected to COLLECTIVES capture so
   FUSION-only should be safe); then counts-a2a overlap and M7.
+
+### 2026-08-15 18:25 - MEP-023: splits-1 under symmetric mode is 1.4x WORSE; cb neutral; recipe settles
+- Runs: mep-ep64-cb-25-20260815 (LHS-on + `command_buffer=FUSION`):
+  steady ~18.2 s/step — command buffers neutral on top of LHS.
+  mep-ep64-s1sym-25-20260815 (LHS-on, splits-per-peer=1): 25.4 s/it
+  cumulative — 1.4x worse; the symmetric-memory kernel still needs the
+  split fan-out for block occupancy. s32 confirmed necessary.
+- Settled EP64 recipe for ep-marin-cudnn-cute: cf 1.1, splits 32,
+  patched kMaxPeers wheel, `--xla_gpu_ragged_all_to_all_mode=symmetric
+  --xla_gpu_enable_latency_hiding_scheduler=true
+  --xla_gpu_experimental_parallel_collective_overlap_limit=4`.
+  Best: ~18.1-18.2 s/step, ~232k tok/s, ~21.2% MFU, 0.64% drops.
+- Knob space is exhausted (cf, splits, LHS, overlap, command buffers).
+  Remaining -4.9 s to the 13.2 s goal is structural: counts-a2a
+  fold/overlap (0.96 s), barrier rounds (1.39 s), fusion-launch mass
+  (4.5 s), M7.
