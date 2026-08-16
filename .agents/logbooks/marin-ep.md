@@ -1114,3 +1114,33 @@ Experiment ID prefix: `MEP`.
   efficiency, XLA fusion mass, FSDP one-shot collective cost.
 - M7a starts: warp-specialized put+consume prototype (plan in
   .agents/projects/marin-ep-m7.md).
+
+### 2026-08-16 12:55 - MEP-039: M7a gate — flag-gated consumption works; naive consumer hides only 7%
+- Spike: experiments/marin_ep/bench/spike_fused_consume.py (7730ae74e0 +
+  docstring commit) on 1 GB200 tray, 4 devices, pool 14594x2560 f32.
+  Warp-specialized kernel: transport wg (put_segments loop, tile-strided)
+  + consumer wg gated on per-expert arrival semaphores.
+- Mechanism findings (all validated, exact checksums, no deadlocks):
+  1. Mosaic semaphore_signal requires a CONSTANT increment
+     (`_ir_constant` in the lowering) — row-count arrivals are
+     inexpressible; use unit signals with a host-computed expected count
+     per expert (one per participating SM per entry + one per tail).
+     semaphore_wait DOES take dynamic values.
+  2. Traced values cannot cross two pl.loop nesting levels into a
+     pl.when body ("Unsupported constant: OpResult") — hoist signals to
+     the entry scope.
+  3. Multithreaded kernels need kernel-level scratch (scratch_types), not
+     per-copy run_scoped SMEM.
+  4. SEND ORDER IS THE OVERLAP LEVER: dest-major order gives every expert
+     ~zero head start (hidden fraction -4%); expert-major order (all
+     dests' expert-j before expert-j+1) creates real head starts, the M4
+     simulator's interleave result reproduced on hardware.
+- Perf: fused 0.953 ms vs serial put+consume 0.981 ms vs put-only
+  0.578 ms — the GEMM-weight stand-in consumer (REPEAT=8 rotated reads,
+  ~0.40 ms) hides only ~7% because it is MEMORY-bound and contends with
+  transport TMA for HBM/NVLink bandwidth. A real tensor-core GEMM
+  consumer is compute-bound and does not fight the copy path — that is
+  the M7b experiment (tcgen05 tile loop as the consumer wg).
+- Next: M7b per .agents/projects/marin-ep-m7.md — bf16 grouped-GEMM tile
+  loop in the consumer warpgroup, target >= 0.7x cuDNN-cute on the hero
+  shard shape before any further integration.
