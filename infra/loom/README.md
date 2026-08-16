@@ -2,11 +2,11 @@
 
 The `marin-loom` Pulumi stack manages `loom.oa.dev`: its GCE host with a
 retained Hyperdisk root disk, Artifact Registry repository, Secret Manager
-access, Cloudflare DNS, and scheduled root-disk snapshots. The production host
-is an on-demand C4D VM with an AMD Turin CPU. It uses NVMe for its boot disk and
-gVNIC for networking, as required by the machine family. The runtime is built
-from the operator's local Loom worktree and runs as a Docker Compose application
-on the GCE host.
+access, and Cloudflare DNS. The production host is an on-demand C4D VM with an
+AMD Turin CPU. It uses NVMe for its boot disk and gVNIC for networking, as
+required by the machine family. Hyperdisk performance is pinned to the included
+3,000 IOPS and 140 MB/s baseline. The runtime is built from the operator's local
+Loom worktree and runs as a Docker Compose application on the GCE host.
 
 ## Prerequisites
 
@@ -173,6 +173,6 @@ sessions are live because it removes their shared network.
 To roll back an application release, check out the prior Loom tree, restore its
 numbered `dotenvSecretVersion` when necessary, and run the normal preview and
 update. The separately managed root disk is protected, retained if removed from
-Pulumi, not auto-deleted with the VM, and covered by scheduled snapshots. A
-replacement root disk must use an explicit `bootDiskSnapshot`; keep that source
-snapshot until a newer rollback point has been verified.
+Pulumi, and not auto-deleted with the VM. A replacement root disk must use an
+explicit `bootDiskSnapshot`; keep that source snapshot until a newer rollback
+point has been verified.
