@@ -1231,3 +1231,28 @@ Experiment ID prefix: `MEP`.
   (~4 s), wgrad legs (cudnn, was 0.97 s busy for both) to dominate now.
 - M7a tray released; M7b (arrival-gated brd group scheduler) to be
   planned against the new profile.
+
+### 2026-08-16 13:25 - MEP-044: brd-step profile — MoE side largely optimized; goal gap now dominated by non-MoE mass
+- Trace: mep-brd-prof-25-20260816 steps 12-15,
+  s3://marin-us-east-02a/tmp/ttl=30d/xprof/mep-brd-prof-25-20260816
+  (30d TTL). Busy-time per step (rank-0 device; streams overlap):
+  | bucket | ms/step | note |
+  |---|---|---|
+  | attention + dense GEMMs (fa4/nvjet) | 4948 | fa4 bwd single kernel 499 |
+  | pallas bucket (brd ragged dots + puts) | 3574 | brd legs ~2.4 s, puts ~1.15 s |
+  | XLA fusions | 3545 | |
+  | FSDP one-shot collectives (ncclSymk) | 2847 | RS_LDMC alone 1034 |
+  | MultiGpuBarrier | 1055 | down from 1531 on the cute arm |
+  | cudnn wgrad | 589 | |
+- Interpretation: after today's ladder (18.1 -> 17.0 s/step) the
+  MoE-specific exposed window is small; even a perfect M7b (zero exposed
+  transport + GEMM launch structure) cannot close the remaining 5.0 s to
+  the 12.0 s / 350k gate. The binding buckets are attention/dense GEMM
+  efficiency, XLA fusion mass, and FSDP one-shot collective cost — all
+  outside the EP transport scope this campaign has been optimizing.
+  Candidate next projects, by expected size: fp8 expert+dispatch wire
+  (#7665 machinery composes with brd), fa4 attention tuning, fusion-mass
+  reduction, FSDP collective scheduling.
+- M7b remains worthwhile as MoE polish (~up to 1 s of launch/sync
+  structure + enabling fp8-fused variants) but is no longer the
+  goal-critical path by itself.
