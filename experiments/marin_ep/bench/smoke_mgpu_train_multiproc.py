@@ -18,6 +18,18 @@ from functools import partial
 
 import jax
 
+# NCCL symmetric windows reserve VA for the whole backing allocation of the
+# collective arena times the clique size; a bounded pool keeps that under
+# NCCL's window-space limit. Value in MiB; 0 leaves the default (a
+# memory-fraction-sized growable pool whose windows exhaust the VA space at
+# 8+ ranks).
+_collective_mb = int(os.environ.get("MARIN_EP_COLLECTIVE_MEMORY_MB", "0"))
+if _collective_mb:
+    jax.config.update(
+        "jax_pjrt_client_create_options",
+        {"collective_memory_size": _collective_mb * 1024 * 1024},
+    )
+
 jax.distributed.initialize(
     coordinator_address=os.environ["MARIN_EP_COORD"],
     num_processes=int(os.environ["MARIN_EP_NUM_PROCS"]),
