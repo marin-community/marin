@@ -6,11 +6,14 @@
 import base64
 import gzip
 import hashlib
+import http.client
 import io
 import re
+import tempfile
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import BinaryIO, Protocol
 
 import requests
 from warcio.archiveiterator import ArchiveIterator
@@ -30,6 +33,7 @@ _CONTENT_RANGE_PATTERN = re.compile(r"bytes (\d+)-(\d+)/(?:\d+|\*)")
 _SHA1_BASE32_PATTERN = re.compile(r"[A-Z2-7]{32}")
 _MAXIMUM_MANIFEST_BYTES = 16 << 20
 _MAXIMUM_DECOMPRESSED_MANIFEST_BYTES = 128 << 20
+_MAXIMUM_DOWNLOAD_STALLS = 8
 
 
 class CommonCrawlWarcError(RuntimeError):
@@ -75,6 +79,10 @@ class WarcRevisitError(WarcParsingError):
 
 class RecordVerificationError(CommonCrawlWarcError):
     """Raised when a fetched WARC record does not match its index expectations."""
+
+
+class MissingPlannedRecordError(CommonCrawlWarcError):
+    """Raised when a coalesced range omits an expected record offset."""
 
 
 class OriginResponseStatusError(CommonCrawlWarcError):
@@ -162,6 +170,22 @@ class CommonCrawlWarcRecord:
     identified_payload_type: str | None
 
 
+class CommonCrawlRangeSource(Protocol):
+    """Source fields required by coalesced range transport."""
+
+    base_url: str
+
+
+class PlannedCommonCrawlRange(Protocol):
+    """Structural boundary implemented by the shared planner's range type."""
+
+    source: CommonCrawlRangeSource
+    warc_filename: str
+    start: int
+    stop: int
+    records: Sequence[MainIndexedRecord | SupplementalIndexedRecord]
+
+
 class CommonCrawlClient:
     """Retrying client for exact Common Crawl WARC record range requests."""
 
@@ -226,6 +250,88 @@ class CommonCrawlClient:
             raise CommonCrawlDownloadError(f"Failed to download WARC record from {url}") from error
 
         return _parse_warc_response(content, maximum_payload_bytes=self._maximum_payload_bytes)
+
+    def fetch_range(self, planned_range: PlannedCommonCrawlRange) -> tuple[CommonCrawlWarcRecord, ...]:
+        """Fetch a coalesced range and return its verified planned records in offset order."""
+        if planned_range.stop <= planned_range.start:
+            raise ValueError("planned range stop must be greater than start")
+        expected: dict[int, MainIndexedRecord | SupplementalIndexedRecord] = {}
+        previous_stop = planned_range.start
+        for indexed in planned_range.records:
+            location = indexed.record_range
+            if location.warc_filename != planned_range.warc_filename:
+                raise ValueError("planned record belongs to another WARC")
+            if location.offset < planned_range.start or location.stop > planned_range.stop:
+                raise ValueError("planned record lies outside the coalesced range")
+            if location.offset < previous_stop:
+                raise ValueError("planned records overlap or are out of order")
+            if location.length > self._maximum_warc_record_bytes:
+                raise WarcRecordTooLargeError(
+                    f"WARC record length {location.length} exceeds limit {self._maximum_warc_record_bytes}"
+                )
+            expected[location.offset] = indexed
+            previous_stop = location.stop
+
+        base_url = planned_range.source.base_url.rstrip("/") or self._base_url
+        url = f"{base_url}/{planned_range.warc_filename.lstrip('/')}"
+        with tempfile.TemporaryFile(prefix="common-crawl-range-", suffix=".warc.gz") as stream:
+            self._download_range(
+                url,
+                start=planned_range.start,
+                stop=planned_range.stop,
+                destination=stream,
+            )
+            return _parse_planned_records(
+                stream,
+                range_start=planned_range.start,
+                expected=expected,
+                maximum_payload_bytes=self._maximum_payload_bytes,
+            )
+
+    def _download_range(self, url: str, *, start: int, stop: int, destination: BinaryIO) -> None:
+        """Stream an exact byte range, resuming from the first unwritten byte after interruption."""
+        expected_bytes = stop - start
+        stalls = 0
+        while destination.tell() < expected_bytes:
+            written = destination.tell()
+            request_start = start + written
+            error: Exception | None = None
+            try:
+                with self._session.get(
+                    url,
+                    headers={"Range": f"bytes={request_start}-{stop - 1}", "user-agent": _USER_AGENT},
+                    stream=True,
+                    timeout=self._request_timeout,
+                ) as response:
+                    response.raise_for_status()
+                    _validate_range_response_headers(
+                        response,
+                        start=request_start,
+                        end=stop - 1,
+                        expected_length=stop - request_start,
+                    )
+                    for chunk in response.iter_content(chunk_size=_DOWNLOAD_CHUNK_BYTES):
+                        if chunk:
+                            destination.write(chunk)
+            except requests.HTTPError as caught:
+                status = caught.response.status_code if caught.response is not None else None
+                if status is not None and 400 <= status < 500 and status not in _RETRY_STATUS:
+                    raise CommonCrawlRequestRejectedError(url, status) from caught
+                error = caught
+            except (requests.RequestException, http.client.IncompleteRead) as caught:
+                error = caught
+
+            if destination.tell() > written:
+                stalls = 0
+            else:
+                stalls += 1
+            if destination.tell() > expected_bytes:
+                raise RangeResponseError(f"WARC range exceeded expected length {expected_bytes}")
+            if stalls > _MAXIMUM_DOWNLOAD_STALLS:
+                raise CommonCrawlDownloadError(
+                    f"WARC range download stalled at {destination.tell()}/{expected_bytes} bytes"
+                ) from error
+        destination.seek(0)
 
 
 def main_record_from_index_row(row: Mapping[str, object], *, crawl_id: str) -> MainIndexedRecord:
@@ -478,6 +584,69 @@ def _parse_warc_response(content: bytes, *, maximum_payload_bytes: int) -> Commo
         http_content_type=record.http_headers.get_header("Content-Type"),
         warc_date=record.rec_headers.get_header("WARC-Date"),
         identified_payload_type=record.rec_headers.get_header("WARC-Identified-Payload-Type"),
+    )
+
+
+def _parse_planned_records(
+    stream: BinaryIO,
+    *,
+    range_start: int,
+    expected: Mapping[int, MainIndexedRecord | SupplementalIndexedRecord],
+    maximum_payload_bytes: int,
+) -> tuple[CommonCrawlWarcRecord, ...]:
+    """Walk a downloaded interval and materialize only records named by absolute offset."""
+    found: dict[int, CommonCrawlWarcRecord] = {}
+    records = ArchiveIterator(stream)
+    try:
+        for record in records:
+            payload = record.content_stream().read(maximum_payload_bytes + 1)
+            absolute_offset = range_start + records.get_record_offset()
+            indexed = expected.get(absolute_offset)
+            if indexed is None:
+                continue
+            if absolute_offset in found:
+                raise WarcParsingError(f"WARC range contained duplicate record offset {absolute_offset}")
+            if record.rec_type == "revisit":
+                raise WarcRevisitError(f"Planned offset {absolute_offset} contains a revisit record")
+            if record.rec_type != "response" or record.http_headers is None:
+                raise WarcParsingError(f"Planned offset {absolute_offset} is not a WARC response record")
+            if len(payload) > maximum_payload_bytes:
+                raise WarcPayloadTooLargeError(f"WARC payload exceeds limit {maximum_payload_bytes}")
+            parsed = _warc_record_from_archive(record, payload)
+            if isinstance(indexed, MainIndexedRecord):
+                verify_url_index_record(parsed, indexed.expectation)
+            else:
+                verify_supplemental_record(parsed, indexed.expectation)
+            found[absolute_offset] = parsed
+    except ArchiveLoadFailed as error:
+        raise WarcParsingError("WARC byte range could not be parsed") from error
+
+    missing = sorted(set(expected) - set(found))
+    if missing:
+        raise MissingPlannedRecordError(f"WARC range omitted {len(missing)} planned records: {missing[:8]}")
+    return tuple(found[offset] for offset in sorted(found))
+
+
+def _warc_record_from_archive(record: object, payload: bytes) -> CommonCrawlWarcRecord:
+    """Build the shared observed-record shape from one consumed warcio record."""
+    rec_headers = record.rec_headers  # pyrefly: ignore[missing-attribute]
+    http_headers = record.http_headers  # pyrefly: ignore[missing-attribute]
+    record_id = rec_headers.get_header("WARC-Record-ID")
+    target_url = rec_headers.get_header("WARC-Target-URI")
+    if record_id is None or target_url is None:
+        raise WarcParsingError("WARC response record is missing its record ID or target URI")
+    status_code = http_headers.get_statuscode()
+    if status_code is None or not status_code.isdigit():
+        raise WarcParsingError(f"WARC response record has invalid HTTP status {status_code!r}")
+    return CommonCrawlWarcRecord(
+        payload=payload,
+        payload_digest=content_digest(payload),
+        warc_record_id=record_id,
+        target_url=target_url,
+        http_status=int(status_code),
+        http_content_type=http_headers.get_header("Content-Type"),
+        warc_date=rec_headers.get_header("WARC-Date"),
+        identified_payload_type=rec_headers.get_header("WARC-Identified-Payload-Type"),
     )
 
 

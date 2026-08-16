@@ -11,6 +11,11 @@ from dataclasses import replace
 
 import pytest
 import requests
+from marin.datakit.download.common_crawl_plan import (
+    CommonCrawlIndexKind,
+    CommonCrawlSource,
+    PlannedCommonCrawlRange,
+)
 from marin.datakit.download.common_crawl_warc import (
     CommonCrawlClient,
     CommonCrawlDownloadError,
@@ -18,6 +23,7 @@ from marin.datakit.download.common_crawl_warc import (
     CommonCrawlRequestRejectedError,
     CommonCrawlTransientError,
     MainIndexedRecord,
+    MissingPlannedRecordError,
     OriginResponseStatusError,
     RecordVerificationError,
     SupplementalIndexedRecord,
@@ -179,6 +185,41 @@ class _ManifestAdapter(BaseAdapter):
         pass
 
 
+class _TruncatingRangeAdapter(BaseAdapter):
+    def __init__(self, content: bytes) -> None:
+        super().__init__()
+        self.content = content
+        self.requested_ranges: list[tuple[int, int]] = []
+
+    def send(
+        self,
+        request: requests.PreparedRequest,
+        stream: bool = False,
+        timeout: float | tuple[float, float] | tuple[float, None] | None = None,
+        verify: bool | str = True,
+        cert: bytes | str | tuple[bytes | str, bytes | str] | None = None,
+        proxies: Mapping[str, str] | None = None,
+    ) -> requests.Response:
+        del stream, timeout, verify, cert, proxies
+        start_text, end_text = request.headers["Range"].removeprefix("bytes=").split("-")
+        start, end = int(start_text), int(end_text)
+        self.requested_ranges.append((start, end))
+        body = self.content[start : end + 1]
+        if len(self.requested_ranges) == 1:
+            body = body[: len(body) // 2]
+
+        response = requests.Response()
+        response.status_code = requests.codes.partial_content
+        response.headers["Content-Length"] = str(end - start + 1)
+        response.headers["Content-Range"] = f"bytes {start}-{end}/{len(self.content)}"
+        response.raw = io.BytesIO(body)
+        response.request = request
+        return response
+
+    def close(self) -> None:
+        pass
+
+
 def _range_session(
     content: bytes,
     *,
@@ -214,6 +255,34 @@ def _indexed_record(warc: bytes, payload: bytes) -> MainIndexedRecord:
             "content_digest": _sha1_digest(payload),
         },
         crawl_id="CC-MAIN-2026-30",
+    )
+
+
+def _indexed_record_at(warc: bytes, payload: bytes, *, offset: int, url: str) -> MainIndexedRecord:
+    return main_record_from_index_row(
+        {
+            "url": url,
+            "warc_filename": "crawl-data/test.warc.gz",
+            "warc_record_offset": offset,
+            "warc_record_length": len(warc),
+            "warc_record_id": RECORD_ID,
+            "content_digest": _sha1_digest(payload),
+        },
+        crawl_id="CC-MAIN-2026-30",
+    )
+
+
+def _planned_range(warc: bytes, records: tuple[MainIndexedRecord, ...]) -> PlannedCommonCrawlRange:
+    return PlannedCommonCrawlRange(
+        source=CommonCrawlSource(
+            crawl_id="CC-MAIN-2026-30",
+            index_kind=CommonCrawlIndexKind.MAIN,
+            paths_manifest_url="https://index.commoncrawl.org/test.paths.gz",
+        ),
+        warc_filename="crawl-data/test.warc.gz",
+        start=0,
+        stop=len(warc),
+        records=records,
     )
 
 
@@ -404,6 +473,73 @@ def test_fetch_record_returns_parsed_payload_then_main_verification_succeeds() -
     assert record.http_content_type == "application/octet-stream"
     assert record.warc_date == "2026-07-21T21:48:44Z"
     assert record.identified_payload_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def test_fetch_range_returns_planned_records_and_ignores_intervening_record() -> None:
+    first_payload = b"first"
+    skipped_payload = b"not selected"
+    third_payload = b"third"
+    first = _warc_response(first_payload, target_url="https://example.com/first")
+    skipped = _warc_response(skipped_payload, target_url="https://example.com/skipped")
+    third = _warc_response(third_payload, target_url="https://example.com/third")
+    warc = first + skipped + third
+    planned = _planned_range(
+        warc,
+        (
+            _indexed_record_at(first, first_payload, offset=0, url="https://example.com/first"),
+            _indexed_record_at(
+                third,
+                third_payload,
+                offset=len(first) + len(skipped),
+                url="https://example.com/third",
+            ),
+        ),
+    )
+
+    with _range_session(warc) as session, _client(session) as client:
+        records = client.fetch_range(planned)
+
+    assert [record.payload for record in records] == [first_payload, third_payload]
+
+
+def test_fetch_range_resumes_from_first_unwritten_byte() -> None:
+    payload = b"document"
+    warc = _warc_response(payload)
+    planned = _planned_range(warc, (_indexed_record_at(warc, payload, offset=0, url=TARGET_URL),))
+    adapter = _TruncatingRangeAdapter(warc)
+
+    with requests.Session() as session:
+        session.mount("https://", adapter)
+        with _client(session) as client:
+            [record] = client.fetch_range(planned)
+
+    assert record.payload == payload
+    assert adapter.requested_ranges == [(0, len(warc) - 1), (len(warc) // 2, len(warc) - 1)]
+
+
+def test_fetch_range_fails_when_a_planned_offset_is_missing() -> None:
+    first_payload = b"first"
+    second_payload = b"second"
+    first = _warc_response(first_payload, target_url="https://example.com/first")
+    second = _warc_response(second_payload, target_url="https://example.com/second")
+    warc = first + second
+    missing = _indexed_record_at(
+        second[:-1],
+        second_payload,
+        offset=len(first) + 1,
+        url="https://example.com/second",
+    )
+    planned = _planned_range(
+        warc,
+        (
+            _indexed_record_at(first, first_payload, offset=0, url="https://example.com/first"),
+            missing,
+        ),
+    )
+
+    with _range_session(warc) as session, _client(session) as client:
+        with pytest.raises(MissingPlannedRecordError):
+            client.fetch_range(planned)
 
 
 @pytest.mark.parametrize(
