@@ -192,7 +192,7 @@ scale_groups:
     resources:
       cpu: 128
       ram: 2048GB
-      disk: 1TB
+      disk: 30.72TB  # 30.72 TB local NVMe (8x 3.84 TB)
       device_type: gpu
       device_variant: H100
       device_count: 8

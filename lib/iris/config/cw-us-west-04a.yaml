@@ -124,7 +124,7 @@ scale_groups:
     resources:
       cpu: 64        # cd-gp-i64-erapids: 64 vCPUs (32 physical Emerald Rapids 8562Y+ cores)
       ram: 512GB     # 512 GB on-node RAM (8 GB per vCPU)
-      disk: 15.36TB  # 15.36 TB local NVMe
+      disk: 7.68TB   # 7.68 TB local NVMe (2x 3.84 TB)
       device_type: cpu
       capacity_type: on-demand
     worker:
@@ -144,7 +144,7 @@ scale_groups:
     resources:
       cpu: 128
       ram: 2048GB
-      disk: 1TB
+      disk: 30.72TB  # 30.72 TB local NVMe (8x 3.84 TB)
       device_type: gpu
       device_variant: H100
       device_count: 8
