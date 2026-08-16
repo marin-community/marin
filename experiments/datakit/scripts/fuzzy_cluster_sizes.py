@@ -46,7 +46,18 @@ _SIZE_SCHEMA = pa.schema(
 )
 
 
-def _read_shard_counts(path: str) -> Iterator[dict[str, Any]]:
+def _read_shard_group(paths: list[str], sample_stride: int = 1) -> Iterator[dict[str, Any]]:
+    """Count a group of shards in one task.
+
+    The shuffle merges every map output in each reducer, so 166,775 map tasks
+    put 166,775 open readers in one process and exhaust its memory. Grouping
+    the inputs bounds that fan-in without changing the counts.
+    """
+    for path in paths:
+        yield from _read_shard_counts(path, sample_stride)
+
+
+def _read_shard_counts(path: str, sample_stride: int = 1) -> Iterator[dict[str, Any]]:
     """Pre-aggregate one candidate shard into per-cluster counts.
 
     ``value_counts`` keeps the aggregation in Arrow. A shard holds tens of
@@ -58,8 +69,13 @@ def _read_shard_counts(path: str) -> Iterator[dict[str, Any]]:
         if parquet.metadata.num_rows == 0:
             counters.pipeline.update_counter(f"{COUNTER_PREFIX}/shards_empty", 1)
             return
-        column = parquet.read(columns=["dup_cluster_id"]).column("dup_cluster_id")
-    tally = pc.value_counts(column.combine_chunks())
+        column = parquet.read(columns=["dup_cluster_id"]).column("dup_cluster_id").combine_chunks()
+    if sample_stride > 1:
+        # Every cluster this stage has to act on holds at least 100,000
+        # members, so a fixed stride over the rows finds it with certainty
+        # while shrinking the shuffle by the stride.
+        column = column.take(pa.array(range(0, len(column), sample_stride), type=pa.int64()))
+    tally = pc.value_counts(column)
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/shards_read", 1)
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/members_read", len(column))
     values = tally.field("values").to_pylist()
@@ -77,15 +93,17 @@ def _size_bin(size: int) -> str:
     return f"{1 << (size.bit_length() - 1):09d}"
 
 
-def _emit_size(key: str, records: Iterator[dict[str, Any]], min_size: int) -> Iterator[dict[str, Any]]:
+def _emit_size(
+    key: str, records: Iterator[dict[str, Any]], min_size: int, sample_stride: int = 1
+) -> Iterator[dict[str, Any]]:
     size = sum(record["n"] for record in records)
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/histogram/{_size_bin(size)}", 1)
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/clusters", 1)
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/members", size)
-    if size >= min_size:
+    if size * sample_stride >= min_size:
         counters.pipeline.update_counter(f"{COUNTER_PREFIX}/large_clusters", 1)
         counters.pipeline.update_counter(f"{COUNTER_PREFIX}/large_cluster_members", size)
-        yield {"dup_cluster_id": key, "size": size}
+        yield {"dup_cluster_id": key, "size": size * sample_stride}
 
 
 def _write_sizes(shard: int, records: Iterator[dict[str, Any]], output_dir: str) -> dict[str, Any]:
@@ -124,6 +142,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--prefix", required=True, help="Storage root the artifact paths resolve against")
     parser.add_argument("--candidates", required=True, help="Candidate artifact path relative to --prefix")
     parser.add_argument("--out", required=True)
+    parser.add_argument("--sample-stride", type=int, default=1, help="Count every Nth row; scales sizes by N")
     parser.add_argument("--min-size", type=int, default=1024, help="Smallest cluster written to the output")
     parser.add_argument("--max-workers", type=int, default=48)
     parser.add_argument("--worker-cpu", type=float, default=48)
@@ -131,6 +150,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--worker-disk", default="1024g")
     parser.add_argument("--task-cpu", type=float, default=1)
     parser.add_argument("--task-ram", default="5g")
+    parser.add_argument("--shards-per-task", type=int, default=64, help="Input shards counted by one map task")
     parser.add_argument("--shuffle-shards", type=int, default=4096)
     parser.add_argument("--output-shards", type=int, default=32)
     return parser.parse_args(argv)
@@ -141,18 +161,19 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     paths = candidate_shard_paths(args.prefix, args.candidates)
-    logger.info("Counting cluster members across %d candidate shards", len(paths))
+    groups = [paths[start : start + args.shards_per_task] for start in range(0, len(paths), args.shards_per_task)]
+    logger.info("Counting %d candidate shards in %d map tasks", len(paths), len(groups))
 
     worker = ResourceConfig(cpu=args.worker_cpu, ram=args.worker_ram, disk=args.worker_disk)
     task = ResourceConfig(cpu=args.task_cpu, ram=args.task_ram, disk="64g")
     context = ZephyrContext(name="fuzzy-cluster-sizes", resources=worker, max_workers=args.max_workers)
 
     pipeline = (
-        Dataset.from_list(paths)
-        .flat_map(_read_shard_counts)
+        Dataset.from_list(groups)
+        .flat_map(lambda group: _read_shard_group(group, args.sample_stride))
         .group_by(
             key=lambda record: record["dup_cluster_id"],
-            reducer=lambda key, records: _emit_size(key, records, args.min_size),
+            reducer=lambda key, records: _emit_size(key, records, args.min_size, args.sample_stride),
             combiner=_combine,
             num_output_shards=args.shuffle_shards,
         )

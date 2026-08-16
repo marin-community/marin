@@ -199,16 +199,20 @@ def _index_candidates(
     within = np.arange(total) - np.repeat(np.cumsum(counts) - counts, counts)
     owners = index.owners[offsets + within]
 
-    shared = np.bincount(owners, minlength=rank.size)
+    # Tally the probed documents only. Counting into an array the size of the
+    # cluster would cost one allocation per member, which is quadratic in the
+    # member count and stalls on a cluster of 100,000.
+    distinct, shared = np.unique(owners, return_counts=True)
     # Only a document that ranks ahead of the member -- longer, or equal and
     # earlier -- can be its representative.
-    shared[rank >= rank[member.index]] = 0
-    shared[member.index] = 0
-    if not np.any(shared):
+    ahead = rank[distinct] < rank[member.index]
+    distinct, shared = distinct[ahead], shared[ahead]
+    if distinct.size == 0:
         return np.empty(0, dtype=np.int32)
-    limit = min(params.maximum_candidates, int(np.count_nonzero(shared)))
-    top = np.argpartition(-shared, limit - 1)[:limit]
-    return top[np.argsort(-shared[top])].astype(np.int32)
+    if distinct.size > params.maximum_candidates:
+        best = np.argpartition(-shared, params.maximum_candidates - 1)[: params.maximum_candidates]
+        distinct, shared = distinct[best], shared[best]
+    return distinct[np.argsort(-shared)].astype(np.int32)
 
 
 def _candidate_pairs(prepared: list[PreparedDocument], params: ClusterDedupParams) -> dict[int, list[int]]:
