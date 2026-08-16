@@ -1031,3 +1031,21 @@ Experiment ID prefix: `MEP`.
   Caveat for the A/B: the 18.1 s flat basis ran the OLD kmax128 wheel; if
   mgpu wins at EP64, rerun the flat control on wheel v3 to isolate
   transport from the wheel's alignment patches.
+
+### 2026-08-16 10:13 - MEP-034: EP64 hero on fused transport — 17.75 s/step, new rack best
+- Run: mep-mgpu-ep64-25-20260816 (ep-marin-mgpu-cudnn-cute, full hero
+  EP64, b1024, cf 1.1, wheel v3, settled flags + dynamic-slice-fusion
+  off). 25/25 SUCCEEDED, loss 6.38 falling.
+- Scored: steady 17.75 s/step (10it@3:50 -> 22it@7:23 = 213 s / 12);
+  drop_fraction 0.00631 (matches flat 0.00662). ~236k tok/s/rack,
+  ~21.6% MFU on the hero calibration.
+- Ladder: mgpu 17.75 < flat ragged 18.1-18.2 (old wheel) < hier 19.0 <
+  ragged-stock 19.0-19.2. ~2% ahead of flat — smaller than EP16's 6%,
+  suggesting put_segments' 63-peer fan-out has scaling costs of its own
+  (worth a profile: did the 1.4 s barrier + 0.9 s a2a buckets shrink and
+  what replaced them?).
+- In flight: mep-ctl4-cute-ep64-25-20260816 — flat ragged control on
+  wheel v3 + same flags, to isolate transport delta from the wheel's
+  alignment patches (placement variance is ±2pp; single draws).
+- Goal gate: 12.0 s/step. Transport-lever ceiling nearly reached; the
+  remaining mass is GEMMs/fusions/FSDP per MEP-021's attribution.
