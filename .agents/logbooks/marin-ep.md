@@ -893,3 +893,26 @@ Experiment ID prefix: `MEP`.
      path, unlike ragged.
 - Next: option 2 is the cheaper experiment and composes with the
   existing hop-B plans (fixed chunk offsets replace ragged offsets).
+
+### 2026-08-15 21:55 - MEP-029: no cheap wins remain — XLA ragged a2a is synchronous, so chunked pipelining is out
+- Observation from both step profiles: `all-gather-start` / `all-reduce-start`
+  appear as async pairs, but `ragged-all-to-all` has no `-start` form — XLA
+  executes it synchronously. Chunked dispatch/GEMM pipelining (split experts
+  into chunks, overlap a2a[c+1] with GEMM[c] under the LHS scheduler) therefore
+  cannot overlap anything: chunks would serialize with extra launch overhead.
+  The idea is dead at the XLA level; it needs either upstream async ragged
+  a2a or the M7 custom persistent kernel.
+- Session-close ladder (EP64 hero, one rack, single draws, ±2pp):
+  | arm | s/step | tok/s | ~MFU | drops |
+  |---|---|---|---|---|
+  | fixed_all_to_all cf1.33 | 16.3 | 257k | 24.0% | 3.58% |
+  | ep-marin-cudnn-cute cf1.1 s32 LHS-on | 18.1-18.2 | 232k | 21.2% | 0.64% |
+  | ep-marin-cudnn-cute cf1.1 s32 (LHS off) | 18.5 | 227k | 20.8% | 0.66% |
+  | ep-marin-hier-cudnn-cute v1 | 19.0 | 221k | 20.2% | 0.54% |
+  | ep-ragged-cudnn-cute cf1.1 s32 | 19.0-19.2 | 220k | 20.1% | 0.68% |
+- Goal gate: 350k tok/s = 12.0 s/step. Ordered remaining levers by size
+  (from the profiles): grouped/attention GEMM efficiency (8.9 s bucket),
+  XLA fusion mass (4.5 s, 41k launches), FSDP collective overlap (2.3 s),
+  M7 fused metadata+transport+GEMM (sync 1.4 s + counts 1.0 s + hides the
+  0.9 s a2a). None is a knob; all are engineering projects.
+- Rack experiments paused; PR #8320 monitored for human review.
