@@ -83,6 +83,9 @@ class EvalchemyResult(EvalResult):
         # gs:// prefix and would reopen as a local path.
         root = StoragePath(self.path)
         found = sorted((root / "**/results_*.json").glob(), key=str)
+        if root.scheme == "file":
+            # fsspec's local glob returns bare paths, while ``relative_to`` compares protocols.
+            found = [StoragePath(scheme="file", segments=path.segments, rooted=path.rooted) for path in found]
         if not found:
             raise FileNotFoundError(f"no evalchemy results_*.json under {self.path}")
         # A retried evaluation leaves a second complete tree under the harness's scratch directory,

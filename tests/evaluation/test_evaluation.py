@@ -16,12 +16,12 @@ import pytest
 from click.testing import CliRunner
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
-from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyOutcome, EvalchemyRunConfig
+from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint
-from marin.evaluation.records import EvalRef, RunStatus, TaskCoverage, read_record
+from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalRef, RunStatus, read_record
 from marin.evaluation.runner import (
     Evaluation,
     EvaluationBatch,
@@ -143,6 +143,31 @@ def _remote_session(endpoint: str = "https://inference.example/v1") -> RemoteInf
     )
 
 
+def _lm_eval_generation(doc_id: int, metric: str, score: float, response: str) -> dict:
+    return {
+        "doc_id": doc_id,
+        "doc": {"question": "2+2?"},
+        "target": "4",
+        "arguments": [["Question: 2+2?"]],
+        "resps": [[response]],
+        "filtered_resps": [response],
+        "filter": "none",
+        "metrics": [metric],
+        metric: score,
+        "schema_version": 1,
+    }
+
+
+def _write_evalchemy_output(
+    output_dir: str, task_dir: str, results: dict[str, dict[str, float]], samples: dict[str, list[dict]]
+) -> None:
+    model_dir = StoragePath(output_dir) / task_dir / "model"
+    model_dir.mkdirs()
+    (model_dir / "results_20260807.json").write_text(json.dumps({"results": results}))
+    for task, rows in samples.items():
+        (model_dir / f"samples_{task}_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+
 def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp_path):
     records = tmp_path / "records"
     endpoint = "https://iris.example/proxy/t/token/inference/v1"
@@ -210,31 +235,62 @@ def test_evalchemy_executor_classifies_archive_export_failure(tmp_path, monkeypa
 
 
 def test_evalchemy_executor_rejects_a_task_with_no_successful_responses(tmp_path, monkeypatch):
-    coverage = {
-        "humaneval_0shot": TaskCoverage(
-            n_attempted=2,
-            n_scored=0,
-            n_unanswered=2,
-            errors={"EVALCHEMY_INFRASTRUCTURE_ERROR": 2},
-        )
-    }
-    outcome = EvalchemyOutcome(
-        jobs={"eval": "/eval/completed"},
-        result=SimpleNamespace(task_metrics=lambda: {"humaneval_0shot": {"pass@1,create_test": 0.0}}),
-        coverage=coverage,
-        recovered_metrics={"humaneval_0shot": {}},
+    output_dir = f"file://{tmp_path / 'results'}"
+    _write_evalchemy_output(
+        output_dir,
+        "humaneval_0shot",
+        {"humaneval": {"pass@1,create_test": 0.0}},
+        {
+            "humaneval": [
+                _lm_eval_generation(
+                    0,
+                    "pass@1",
+                    0.0,
+                    f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}] ClientResponseError: 400 Bad Request",
+                )
+            ]
+        },
     )
-    monkeypatch.setattr("marin.evaluation.evalchemy.runner.run_evalchemy", lambda *_args, **_kwargs: outcome)
-    session = _remote_session()
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
+        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+    )
     executor = EvalchemyExecutor(
         EvalchemyRunConfig(name="humaneval", tasks=(EvalTaskConfig(name="humaneval", num_fewshot=0),))
     )
 
     with pytest.raises(EvaluationError) as exc_info:
-        executor(session, str(tmp_path), {})
+        executor(_remote_session(), output_dir, {})
 
     assert exc_info.value.status is RunStatus.INFRA_FAILED
-    assert exc_info.value.coverage == coverage
+    assert exc_info.value.coverage is not None
+    assert exc_info.value.coverage["humaneval_0shot"].errors == {EVALCHEMY_INFRASTRUCTURE_ERROR: 1}
+
+
+def test_evalchemy_executor_drops_a_group_aggregate_after_a_partial_failure(tmp_path, monkeypatch):
+    output_dir = f"file://{tmp_path / 'results'}"
+    _write_evalchemy_output(
+        output_dir,
+        "mmlu_5shot",
+        {
+            "mmlu": {"acc,none": 0.0},
+            "mmlu_anatomy": {"acc,none": 1.0},
+            "mmlu_astronomy": {"acc,none": 0.0},
+        },
+        {
+            "mmlu_anatomy": [_lm_eval_generation(0, "acc", 1.0, "4")],
+            "mmlu_astronomy": [_lm_eval_generation(0, "acc", 0.0, f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}] request failed")],
+        },
+    )
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
+        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+    )
+    executor = EvalchemyExecutor(EvalchemyRunConfig(name="mmlu", tasks=(EvalTaskConfig(name="mmlu", num_fewshot=5),)))
+
+    outcome = executor(_remote_session(), output_dir, {})
+
+    assert outcome.metrics == {"mmlu_5shot/mmlu_anatomy": {"acc,none": 1.0}}
 
 
 def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_batch(tmp_path, monkeypatch):

@@ -121,6 +121,23 @@ class EvalchemyOutcome:
     recovered_metrics: dict[str, dict[str, float]]
 
 
+def _apply_recovered_metrics(
+    metrics: dict[str, dict[str, float]], recovered_metrics: Mapping[str, dict[str, float]]
+) -> None:
+    """Replace affected leaf metrics and drop lm-eval group aggregates built from failed rows."""
+    group_children = {aggregate: {task for task in metrics if task.startswith(f"{aggregate}_")} for aggregate in metrics}
+    for task, recovered in recovered_metrics.items():
+        if recovered:
+            metrics[task] = recovered
+        else:
+            metrics.pop(task, None)
+    for aggregate, children in group_children.items():
+        if children & recovered_metrics.keys():
+            # The aggregate came from the original lm-eval result, which includes failed requests.
+            # Leaves now hold only successful samples, so let the measurement adapter use them instead.
+            metrics.pop(aggregate, None)
+
+
 def _task_dir(task: EvalTaskConfig) -> str:
     """Return the durable subdirectory identity for one task configuration."""
     shots = "default" if task.num_fewshot is None else str(task.num_fewshot)
@@ -300,11 +317,7 @@ class EvalchemyExecutor:
                 log_tails=exc.log_tails,
             ) from exc
         metrics = outcome.result.task_metrics()
-        for task, recovered in outcome.recovered_metrics.items():
-            if recovered:
-                metrics[task] = recovered
-            else:
-                metrics.pop(task, None)
+        _apply_recovered_metrics(metrics, outcome.recovered_metrics)
         if not metrics:
             raise EvaluationError(
                 f"eval finished with no successful inference responses under {output_dir!r}",
