@@ -22,7 +22,6 @@ import pulumi_github as github
 from iac.gcp.firewall import FirewallPort, GcpFirewallRuleArgs, create_firewall_rule
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_DISK_TYPE = "pd-balanced"
 REPOSITORY_OWNER = "marin-community"
 REPOSITORY_NAME = "loom"
 REPOSITORY_BRANCH = "main"
@@ -387,7 +386,10 @@ class DeploymentConfig:
     instance_name: str
     vm_service_account_name: str
     machine_type: str
+    boot_disk_name: str
+    boot_disk_type: str
     boot_disk_gb: int
+    boot_disk_snapshot: str
     dotenv_secret_version: int
     snapshot_retention_days: int
     prune_deployment: bool = False
@@ -486,7 +488,10 @@ class DeploymentConfig:
             instance_name=config.require("instanceName"),
             vm_service_account_name=config.require("vmServiceAccountName"),
             machine_type=config.require("machineType"),
+            boot_disk_name=config.require("bootDiskName"),
+            boot_disk_type=config.require("bootDiskType"),
             boot_disk_gb=config.require_int("bootDiskGb"),
+            boot_disk_snapshot=config.require("bootDiskSnapshot"),
             dotenv_secret_version=config.require_int("dotenvSecretVersion"),
             prune_deployment=config.get_bool("pruneDeployment") or False,
             settings=tuple(settings),
@@ -602,14 +607,14 @@ def _create_network(config: DeploymentConfig, apis: list[gcp.projects.Service]) 
 
 def _create_root_disk(config: DeploymentConfig, apis: list[gcp.projects.Service]) -> gcp.compute.Disk:
     return gcp.compute.Disk(
-        "loom-root",
+        "loom-primary-root",
         project=config.project,
         zone=config.zone,
-        name=config.instance_name,
-        image="debian-cloud/debian-12",
-        type=DEFAULT_DISK_TYPE,
+        name=config.boot_disk_name,
+        snapshot=config.boot_disk_snapshot,
+        type=config.boot_disk_type,
         size=config.boot_disk_gb,
-        opts=pulumi.ResourceOptions(depends_on=apis, protect=True, ignore_changes=["image"]),
+        opts=pulumi.ResourceOptions(depends_on=apis, protect=True, retain_on_delete=True),
     )
 
 
@@ -886,11 +891,13 @@ def _create_instance(
         tags=[WEB_FIREWALL_TAG, SSH_FIREWALL_TAG],
         boot_disk={
             "auto_delete": False,
+            "interface": "NVME",
             "source": root_disk.id,
         },
         network_interfaces=[
             {
                 "network": config.network,
+                "nic_type": "GVNIC",
                 "access_configs": [{"nat_ip": network.address.address}],
             }
         ],
@@ -899,10 +906,18 @@ def _create_instance(
             "email": vm_account.email,
             "scopes": ["cloud-platform"],
         },
+        reservation_affinity={"type": "NO_RESERVATION"},
+        scheduling={
+            "automatic_restart": True,
+            "on_host_maintenance": "MIGRATE",
+            "preemptible": False,
+            "provisioning_model": "STANDARD",
+        },
         allow_stopping_for_update=False,
         deletion_protection=True,
         opts=pulumi.ResourceOptions(
             depends_on=dependencies,
+            delete_before_replace=True,
             protect=True,
             ignore_changes=['metadata["ssh-keys"]', 'metadata["enable-osconfig"]'],
         ),

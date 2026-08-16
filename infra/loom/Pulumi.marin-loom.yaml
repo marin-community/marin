@@ -11,8 +11,11 @@ config:
   marin-loom:vmProjectRoles: []
   marin-loom:vmPulumiKmsKeys:
     - projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
-  marin-loom:machineType: e2-highmem-4
+  marin-loom:machineType: c4d-highmem-4
+  marin-loom:bootDiskName: loom-hyperdisk
+  marin-loom:bootDiskType: hyperdisk-balanced
   marin-loom:bootDiskGb: "1000"
+  marin-loom:bootDiskSnapshot: loom-pre-c4d-hyperdisk-20260816
   marin-loom:dotenvSecretVersion: "4"
   marin-loom:pruneDeployment: "true"
   marin-loom:snapshotRetentionDays: "14"
