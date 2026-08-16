@@ -3,8 +3,6 @@
 # copied from https://github.com/open-lm-engine/accelerated-model-architectures
 # **************************************************
 
-from __future__ import annotations
-
 from itertools import product
 
 import jax
