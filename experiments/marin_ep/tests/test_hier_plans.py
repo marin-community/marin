@@ -19,7 +19,6 @@ from levanter.grug._moe.marin_ep_transport import (
     hier_combine_segments,
     hier_dispatch_segments,
     hier_flat_counts,
-    hier_node_counts,
 )
 
 from experiments.marin_ep.planref import execute_plans
@@ -94,20 +93,6 @@ def test_flat_hop_a_params_match_emulated_layout():
             got = stagings[d][out_off[d] : out_off[d] + send_sz[d]]
             want = sends[s][in_off[d] : in_off[d] + send_sz[d]]
             np.testing.assert_array_equal(got, want, err_msg=f"src {s} -> dst {d}")
-
-    # The production hop A runs per same-rank group (`axis_index_groups`,
-    # node-ordered members): group-relative params must address the same
-    # staging layout.
-    node_counts = np.asarray(hier_node_counts(jnp.asarray(accepted), nodes=NODES))
-    for n_s in range(NODES):
-        for g in range(GPUS):
-            counts_group = jnp.asarray(node_counts.reshape(NODES, GPUS, NODES)[:, g, :])
-            in_off, send_sz, out_off, _ = (np.asarray(a) for a in _shard_a2a_params(counts_group, jnp.int32(n_s)))
-            src = n_s * GPUS + g
-            for n_d in range(NODES):
-                got = stagings[n_d * GPUS + g][out_off[n_d] : out_off[n_d] + send_sz[n_d]]
-                want = sends[src][in_off[n_d] : in_off[n_d] + send_sz[n_d]]
-                np.testing.assert_array_equal(got, want, err_msg=f"group src {src} -> node {n_d}")
 
 
 def _node_local(plan, node: int):

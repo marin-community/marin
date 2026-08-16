@@ -44,7 +44,7 @@ from levanter.grug._moe.marin_ep_transport import (
     dispatch_segments,
     hier_combine_segments,
     hier_dispatch_segments,
-    hier_node_counts,
+    hier_flat_counts,
     put_with_transpose,
 )
 from levanter.grug.sharding import _batch_axes
@@ -187,17 +187,12 @@ def marin_ep_moe_local(
             nodes = ep_size // gpus
             kept_by_owner = kept.reshape(ep_size, local_experts)
             region = (jnp.cumsum(kept_by_owner, axis=1) - kept_by_owner).reshape(num_experts).astype(jnp.int32)
-            # Hop A: ragged over 16-rank same-local-rank groups. The group list
-            # is node-ordered, so the receive layout is exactly the node-order
-            # staging the hop-B plans address — and the sync scope (NCCL
-            # communicator, symmetric-mode barriers) shrinks from ep_size ranks
-            # to `nodes` ranks, which is the point of the hierarchy.
-            hier_groups = [[n * gpus + g for n in range(nodes)] for g in range(gpus)]
-            node_id = shard_id // gpus
-            gpu_id = shard_id % gpus
-            counts_group = hier_node_counts(accepted, nodes=nodes).reshape(nodes, gpus, nodes)[:, gpu_id, :]
+            # Hop A: ragged over the flat axis; only same-local-rank peers get
+            # rows, and the receive layout is the node-order staging the hop-B
+            # plans address.
+            counts_flat = hier_flat_counts(accepted, nodes=nodes, gpus=gpus)
             input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(
-                counts_group, node_id, splits_per_peer
+                counts_flat, shard_id, splits_per_peer
             )
             # Worst case every row kept by my node's experts arrives through my
             # local rank.
@@ -210,9 +205,8 @@ def marin_ep_moe_local(
                 output_offsets,
                 recv_sizes,
                 axis_name="expert",
-                axis_index_groups=hier_groups,
             )
-            my_stage_rows = jnp.sum(counts_group[:, node_id], dtype=jnp.int32)
+            my_stage_rows = jnp.sum(counts_flat[:, shard_id], dtype=jnp.int32)
             dispatch_plan = hier_dispatch_segments(
                 accepted, region, shard_id, nodes=nodes, gpus=gpus, local_experts=local_experts
             )
@@ -296,13 +290,12 @@ def marin_ep_moe_local(
                 "expert",
                 intranode_size,
             )
-            return_params = _shard_a2a_params(counts_group.T, node_id, splits_per_peer)
+            return_params = _shard_a2a_params(counts_flat.T, shard_id, splits_per_peer)
             returned = jax.lax.ragged_all_to_all(
                 staging_back,
                 jnp.zeros((assignments_per_shard, x_local.shape[1]), dtype=out_pool.dtype),
                 *return_params,
                 axis_name="expert",
-                axis_index_groups=hier_groups,
             )
         elif transport == "ragged":
             local_output = _sort_activations(out_pool, jnp.argsort(local_sorted_indices))
