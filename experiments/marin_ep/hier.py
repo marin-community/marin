@@ -157,7 +157,6 @@ def hier_combine_segments(
     ``(node_id, g_s)`` on behalf of source node ``n_s`` return to ``g_s``'s
     staging buffer at the position hop A deposited them.
     """
-    per_node = gpus * local_experts
     node_experts = _node_expert_ids(node_id, nodes=nodes, gpus=gpus, local_experts=local_experts)
     acc_by_gpu = accepted.reshape(nodes, gpus, -1)[:, :, node_experts]  # [Nodes_src, G_src, per_node]
     my_bank = gpu_id * local_experts + jnp.arange(local_experts, dtype=jnp.int32)  # cols of my experts

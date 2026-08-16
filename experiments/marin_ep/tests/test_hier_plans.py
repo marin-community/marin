@@ -154,10 +154,8 @@ def test_two_hop_dispatch_matches_reference_pool_and_round_trips():
     for n_s in range(NODES):
         for g in range(GPUS):
             d = n_s * GPUS + g
-            rebuilt = []
-            for n_d in range(NODES):
-                in_off, send_sz, out_off, recv_sz = (
-                    np.asarray(a) for a in hop_a_params(acc, jnp.int32(n_s), jnp.int32(g), nodes=NODES, gpus=GPUS)
-                )
-                rebuilt.append(stagings[(n_d, g)][out_off[n_d] : out_off[n_d] + send_sz[n_d]])
+            _, send_sz, out_off, _ = (
+                np.asarray(a) for a in hop_a_params(acc, jnp.int32(n_s), jnp.int32(g), nodes=NODES, gpus=GPUS)
+            )
+            rebuilt = [stagings[(n_d, g)][out_off[n_d] : out_off[n_d] + send_sz[n_d]] for n_d in range(NODES)]
             np.testing.assert_array_equal(np.concatenate(rebuilt, axis=0), sends[d], err_msg=f"round trip {d}")
