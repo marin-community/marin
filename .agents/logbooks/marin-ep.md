@@ -668,3 +668,26 @@ Experiment ID prefix: `MEP`.
   baseline 18.5 s; 63 peers make per-peer slices ~4x smaller than at
   EP16 where s32 won, so fewer splits should now be optimal); then
   wgrad kernels / hierarchical fused transport / M7.
+
+### 2026-08-15 17:20 - MEP-020: splits-per-peer retune at 64 ranks — flat; keep 32
+- Runs: mep-ep64-s16-25-20260815 (steady ~18.2-18.9 s/step, drops
+  0.58%), mep-ep64-s64-25-20260815 (steady ~18.7 s/step from marks
+  10it@3:59 -> 25it@8:39 = 280 s / 15, drops 0.64%). Both
+  ep-marin-cudnn-cute cf 1.1 EP64 hero, 25/25 steps. s8 arm was
+  preempted mid-run by the s64 production gang (one rack actually free;
+  the interactive-priority second rack did not materialize) and
+  requeued; its result lands later but cannot change the decision.
+- Ladder vs the s32 baseline (MEP-017: 18.5 s/step): s16 and s64 are
+  both within the ±2pp placement band. The splits knob is FLAT at EP64
+  in the 16-64 range — with 63 peers the per-peer slices are already
+  small enough that block occupancy is not the constraint (unlike EP16,
+  where s32 vs s1 was 1.4x). Decision: keep splits-per-peer=32.
+- Tuning knobs (cf, splits) are now exhausted at EP64: best ragged-class
+  step time holds at 18.5 s (~20.75% MFU, 227k tok/s). The 25%/350k
+  goal needs 13.2 s/step — only the deep levers can close it: wgrad
+  kernels (Triton ragged_dot ~920 TF/s vs 1747 dense XLA on GB200),
+  hierarchical fused transport (mgpu intranode 6.7x at EP4 + NCCL
+  internode), M7 persistent fusion (sim: ~97% of transport hidable).
+- Next: scope the wgrad lever — find what the cudnn_cute expert MLP
+  backward actually executes and whether the CuTeDSL grouped GEMM
+  (2.2 PF/s in the MXFP8 work) can take dwgrad/dgrad.
