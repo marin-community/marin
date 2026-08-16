@@ -20,6 +20,7 @@ import json
 import logging
 import os
 
+from fray.types import ResourceConfig
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import read_artifact
@@ -129,6 +130,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
             verification_params=verification_params,
             local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
             store_config=FUZZY_VERIFICATION_STORE_CONFIG,
+            worker_resources=ResourceConfig(cpu=2, ram="16g", disk="64g"),
         ),
         override_output_path=prefix_join(ttl_base, "verify_fuzzy_dups"),
     )
