@@ -400,6 +400,12 @@ def _directory_children(fs, path: str) -> list[str]:
     return sorted(child["name"] for child in children if child.get("type") == "directory")
 
 
+def list_record_paths(prefix: str) -> list[str]:
+    """List the current ``{prefix}/*/record.json`` candidates without reading their bodies."""
+    fs, root = url_to_fs(prefix)
+    return [prefix_join(fs.unstrip_protocol(directory), RECORD_FILE) for directory in _directory_children(fs, root)]
+
+
 def _read_candidates(urls: list[str], cached: Mapping[str, EvalRunRecord]) -> list[_RecordRead]:
     def parse(url: str) -> _RecordRead:
         if url in cached:
@@ -425,14 +431,12 @@ def scan_records(prefix: str, cached: Mapping[str, EvalRunRecord] | None = None)
     paths are absent from the returned cache.
     """
     cached = cached or {}
-    fs, root = url_to_fs(prefix)
     records: list[EvalRunRecord] = []
     failures: list[RecordParseFailure] = []
     records_by_path: dict[str, EvalRunRecord] = {}
 
     # Object-store globs recurse into result payloads. List only immediate run directories.
-    top_level = _directory_children(fs, root)
-    flat_urls = [prefix_join(fs.unstrip_protocol(directory), RECORD_FILE) for directory in top_level]
+    flat_urls = list_record_paths(prefix)
     for url, result in zip(flat_urls, _read_candidates(flat_urls, cached), strict=True):
         if result.record is not None:
             records.append(result.record)

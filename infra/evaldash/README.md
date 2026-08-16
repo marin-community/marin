@@ -4,21 +4,35 @@ A benchmark panel and browsable run log over every Marin eval run.
 
 Eval runs write one canonical JSON record per run under `gs://marin-eval-metadata/evals` for GCP or
 `s3://marin-us-east-02a/marin/evals` for CoreWeave. The run directory also contains the evaluator's
-results and per-sample artifacts. A background loop scans the roots in `RECORDS_PREFIXES` (CW
-credentials come from Secret Manager; endpoint/addressing via
-`rigging.filesystem.s3_compat`) and upserts records into a Cloud SQL Postgres index
-(`hai-gcp-models:us-central1:marin-metadata`, database `evals`). A Starlette app serves a JSON API over
-that index and the built Vue SPA. Served at https://evaldash.oa.dev.
+results and per-sample artifacts. Cloud SQL Postgres (`hai-gcp-models:us-central1:marin-metadata`,
+database `evals`) is the dashboard's canonical serving catalog: the process loads the full validated
+record snapshot from PostgreSQL before accepting traffic. Object storage remains the durable producer
+and recovery input. A background reconciler scans it after startup and commits changes to the catalog
+without delaying the first dashboard response. Served at https://evaldash.oa.dev.
 
 The default scan also includes the former flat `gs://marin-eval-metadata/runs` and
 `s3://marin-us-east-02a/marin/eval-metadata/runs` roots because older CLI checkouts still write there.
 Canonical `evals` roots have precedence when the same migrated `run_id` exists in both locations.
 
-Record discovery uses a delimiter-based directory listing and checks only `*/record.json`. It does not
-recursively enumerate results, samples, trajectories, or other evaluator payloads. It reads candidate
-record bodies with up to 16 concurrent object-store requests. Successful records are cached by
-immutable object path, so later ingest passes fetch only new records; directory listings still detect
-additions and deletions.
+Record discovery runs every 10 minutes using a delimiter-based directory listing and checks only
+`*/record.json`. It does not recursively enumerate results, samples, trajectories, or other evaluator
+payloads. New record bodies are read with up to 16 concurrent requests. Known objects carry a GCS
+generation, S3 ETag, or local content hash in the PostgreSQL source inventory; their first recheck is
+spread across the first day, then each is HEADed once per 24 hours and reread only when its version
+changes. A missing object must be absent on two successful checks before its source is removed. A
+failed prefix listing leaves that prefix's last committed rows untouched, and an invalid rewrite keeps
+the last valid record while surfacing the error on the Debug page.
+
+Each source change and its selected `eval_catalog_runs`/`eval_catalog_metrics` projection commit in one transaction.
+The lowest configured prefix priority wins duplicate run IDs, so a removed canonical record promotes
+its legacy copy without rereading it. The transaction advances `eval_catalog_state.generation`; the
+in-memory aggregate views swap to that complete generation only after commit. Startup applies pending
+numbered migrations from `src/migrations/` under a PostgreSQL advisory lock and rejects a database
+whose migration ledger is newer than the running binary. The initial migration adopts the
+pre-migration tables; the next seeds separate catalog projection tables so an overlapping old revision
+cannot mutate the new commit-token state. Seeded serving rows are not pruned until every
+configured prefix has completed one successful inventory, and an unavailable higher-priority prefix
+cannot let a lower-priority duplicate replace a seeded row during that first inventory.
 
 The SPA has four views: the panel (one row per model, one column per benchmark, each cell a score
 with its 95% interval and coverage badge, plus a suite column tree, run-metadata filters, a cohort
@@ -148,7 +162,10 @@ valid JSON.
 
 ```
 src/server.py          Starlette app: JSON API + SPA serving + background ingest
-src/results_db.py      private Cloud SQL schema, connection, upserts, and filtered reads
+src/results_db.py      Cloud SQL serving catalog, source inventory, and transactional projection
+src/db_migrations.py   startup migration runner and schema ledger
+src/migrations/        frozen numbered database migrations
+src/record_reconciliation.py  version checks and record validation
 src/metrics.py         panel and comparison views over the shared statistics engine
 src/discovery.py       resolve a VM internal IP from a GCE list filter
 src/cluster.py         Iris and finelog generated Connect clients over Direct VPC egress

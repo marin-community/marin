@@ -52,6 +52,8 @@ class ConditionalObject(Protocol):
     @property
     def path(self) -> str: ...
 
+    def version(self) -> str | None: ...
+
     def read(self) -> VersionedBytes | None: ...
 
     def write(self, data: bytes, *, expected_version: str | None) -> str: ...
@@ -77,6 +79,15 @@ class LocalConditionalObject:
         if not getattr(fs, "local_file", False):
             raise UnsupportedConditionalWrite(f"{self.path!r} is not a local path")
         return local_path
+
+    def version(self) -> str | None:
+        local_path = self._local_path()
+        try:
+            with open(local_path, "rb") as handle:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+                return _local_version(handle.read())
+        except FileNotFoundError:
+            return None
 
     def read(self) -> VersionedBytes | None:
         local_path = self._local_path()
@@ -118,6 +129,14 @@ class GcsConditionalObject:
     def _bucket_and_key(self):
         parsed = StoragePath(self.path)
         return _gcs_client().bucket(parsed.bucket), parsed.key
+
+    def version(self) -> str | None:
+        bucket, key = self._bucket_and_key()
+        blob = bucket.get_blob(key)
+        if blob is None:
+            return None
+        assert blob.generation is not None
+        return str(blob.generation)
 
     def read(self) -> VersionedBytes | None:
         bucket, key = self._bucket_and_key()
@@ -169,12 +188,22 @@ class S3ConditionalObject:
         parsed = StoragePath(self.path)
         return parsed.bucket, parsed.key
 
+    def version(self) -> str | None:
+        bucket, key = self._parts()
+        try:
+            response = self._client(self.endpoint_url).head_object(Bucket=bucket, Key=key)
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] in ("NotFound", "NoSuchKey", "404"):
+                return None
+            raise
+        return response["ETag"]
+
     def read(self) -> VersionedBytes | None:
         bucket, key = self._parts()
         try:
             response = self._client(self.endpoint_url).get_object(Bucket=bucket, Key=key)
         except ClientError as exc:
-            if exc.response["Error"]["Code"] in ("NoSuchKey", "404"):
+            if exc.response["Error"]["Code"] in ("NotFound", "NoSuchKey", "404"):
                 return None
             raise
         return VersionedBytes(data=response["Body"].read(), version=response["ETag"])

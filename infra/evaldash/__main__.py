@@ -62,8 +62,8 @@ def main() -> None:
             service_name=SERVICE,
             build_context=REPO_ROOT,
             dockerfile=DOCKERFILE,
-            # The ingest loop lists GCS and upserts to Postgres between requests, so CPU must
-            # stay allocated while idle.
+            # The reconciler lists object storage between requests, so CPU must stay allocated
+            # while idle. The service boots from PostgreSQL and remains single-instance.
             cpu_always_allocated=True,
             cpu="1",
             env={
