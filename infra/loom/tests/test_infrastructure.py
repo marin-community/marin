@@ -63,10 +63,14 @@ def deployment_config() -> DeploymentConfig:
         network="default",
         instance_name="loom",
         vm_service_account_name="loom-vm",
-        machine_type="e2-highmem-4",
+        machine_type="c4d-highmem-4",
+        boot_disk_name="loom-hyperdisk",
+        boot_disk_type="hyperdisk-balanced",
         boot_disk_gb=100,
+        boot_disk_iops=3000,
+        boot_disk_throughput=140,
+        boot_disk_snapshot="loom-pre-c4d-hyperdisk-20260816",
         dotenv_secret_version=3,
-        snapshot_retention_days=14,
         vm_project_roles=("roles/cloudsql.client", "roles/cloudsql.instanceUser"),
         vm_pulumi_kms_keys=(
             "projects/example/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key",
@@ -228,6 +232,8 @@ def test_deployment_models_durable_resources_without_secret_payloads():
         assert "gcp:secretmanager/secretVersion:SecretVersion" not in resource_types
         assert "gcp:iam/workloadIdentityPool:WorkloadIdentityPool" not in resource_types
         assert "gcp:iam/workloadIdentityPoolProvider:WorkloadIdentityPoolProvider" not in resource_types
+        assert "gcp:compute/resourcePolicy:ResourcePolicy" not in resource_types
+        assert "gcp:compute/diskResourcePolicyAttachment:DiskResourcePolicyAttachment" not in resource_types
 
         vm = by_name(mocks, "loom")
         attached = field(vm.inputs, "attached_disks", "attachedDisks")
@@ -235,12 +241,24 @@ def test_deployment_models_durable_resources_without_secret_payloads():
         boot_disk = field(vm.inputs, "boot_disk", "bootDisk")
         assert boot_disk is not None
         assert field(boot_disk, "auto_delete", "autoDelete") is False
-        root_disk = by_name(mocks, "loom-root")
+        assert field(boot_disk, "interface", "interface") == "NVME"
+        root_disk = by_name(mocks, "loom-primary-root")
         assert root_disk.typ == "gcp:compute/disk:Disk"
-        assert root_disk.inputs["name"] == "loom"
-        assert boot_disk["source"] == "loom-root_id"
-        snapshot_attachment = by_name(mocks, "loom-snapshot-policy")
-        assert snapshot_attachment.inputs["disk"] == "loom"
+        assert root_disk.inputs["name"] == "loom-hyperdisk"
+        assert root_disk.inputs["type"] == "hyperdisk-balanced"
+        assert field(root_disk.inputs, "provisioned_iops", "provisionedIops") == 3000
+        assert field(root_disk.inputs, "provisioned_throughput", "provisionedThroughput") == 140
+        assert root_disk.inputs["snapshot"] == "loom-pre-c4d-hyperdisk-20260816"
+        assert boot_disk["source"] == "loom-primary-root_id"
+        network_interface = field(vm.inputs, "network_interfaces", "networkInterfaces")[0]
+        assert field(network_interface, "nic_type", "nicType") == "GVNIC"
+        assert field(vm.inputs, "machine_type", "machineType") == "c4d-highmem-4"
+        assert field(vm.inputs, "reservation_affinity", "reservationAffinity")["type"] == "NO_RESERVATION"
+        scheduling = field(vm.inputs, "scheduling", "scheduling")
+        assert field(scheduling, "automatic_restart", "automaticRestart") is True
+        assert field(scheduling, "on_host_maintenance", "onHostMaintenance") == "MIGRATE"
+        assert scheduling["preemptible"] is False
+        assert field(scheduling, "provisioning_model", "provisioningModel") == "STANDARD"
         metadata = vm.inputs["metadata"]
         assert metadata["dotenv-secret-version"] == "3"
         assert json.loads(metadata["docker-daemon-config"]) == {
