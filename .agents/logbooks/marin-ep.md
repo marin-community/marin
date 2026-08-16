@@ -868,3 +868,28 @@ Experiment ID prefix: `MEP`.
   = the staging layout, so hop-B plans are unchanged). 16-rank comms
   also sit below the kMaxPeers=32 overflow for hop A itself. A/B
   launched: mep-hier2-ep64-25-20260815.
+
+### 2026-08-15 21:25 - MEP-028: scoped ragged groups are a dead end in current XLA — v2/v2b OOM
+- Runs: mep-hier2-ep64-25 (symmetric mode, groups) and mep-hier3-ep64-25
+  (no symmetric, mem fraction 0.72) both died in
+  `ncclCuMemAlloc ... 'out of memory'` inside a DENSE `ncclAlltoAll`
+  (`send_contiguous`/`recv_contiguous`) during jit_train_step.
+- Diagnosis: with `axis_index_groups`, XLA does NOT use the
+  symmetric-memory ragged-a2a kernel; it falls back to the
+  dense-alltoall decomposition with contiguous packed buffers, whose
+  allocation at hero shape exceeds HBM regardless of the symmetric flag
+  or memory fraction. The group-comms commit is REVERTED — the branch is
+  back on working hier v1 (flat 64-rank hop A, 19.0 s/step).
+- Remaining routes to a scoped hop A:
+  1. Real ("node","gpu") mesh axes in the trainer so the symmetric
+     ragged kernel runs on a named 16-rank sub-axis (invasive mesh
+     surgery through grug sharding).
+  2. Fixed-internode hybrid: replace hop A with a dense
+     `jax.lax.all_to_all` over node-capacity-padded chunks (the
+     fixed_all_to_all trick at node granularity; waterfill still governs
+     drops, padding costs bytes not assignments) + fused intranode puts.
+     Predictable memory, one NCCL op, no barrier kernels; plain
+     all_to_all with axis_index_groups is a long-standing supported
+     path, unlike ragged.
+- Next: option 2 is the cheaper experiment and composes with the
+  existing hop-B plans (fixed chunk offsets replace ragged offsets).
