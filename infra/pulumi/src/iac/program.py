@@ -9,8 +9,9 @@ typed `provisioning:` section, and declares that cluster's resources. One stack 
 which resources: CoreWeave declares the controller RBAC, reserved NodePools, Kueue objects,
 the Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs; GCP declares
 the reserved federation-egress static IPs, Artifact Registry pull-through mirrors, the shared
-GCLB/IAP ingress, and every IAM grant on the project (`iac.gcp.iam.GcpIam`, replacing
-`infra/permissions`). Components not yet implemented are tracked in README.md's "Future work".
+GCLB/IAP ingress, regional data buckets, and every IAM grant on the project
+(`iac.gcp.iam.GcpIam`, replacing `infra/permissions`). Components not yet implemented are
+tracked in README.md's "Future work".
 """
 
 import os
@@ -32,6 +33,7 @@ from iac.config import (
     CLOUDFLARE_TOKEN_SECRET,
     GcpGclbSpec,
     Provider,
+    load_iac_data_config,
     load_iac_finelog_config,
     load_iris_config,
     load_provisioning,
@@ -42,6 +44,7 @@ from iac.coreweave.kueue import KueueAddon, KueueAddonArgs
 from iac.coreweave.rbac import GrafanaObserverRbac, GrafanaObserverRbacArgs, IrisRbac, IrisRbacArgs
 from iac.coreweave.traefik import TraefikAddon, TraefikAddonArgs
 from iac.gcp.addresses import GcpStaticAddresses, GcpStaticAddressesArgs
+from iac.gcp.buckets import GcpDataBuckets, GcpDataBucketsArgs
 from iac.gcp.gclb import ControllerIngress, FinelogIngress, GcpGclbIap, GcpGclbIapArgs
 from iac.gcp.iam import GcpIam, GcpIamArgs
 from iac.gcp.iam_config import load_iam_config
@@ -50,6 +53,7 @@ from iac.imports import NO_IMPORTS, ImportRegistrar
 from iac.nodepools import derive_nodepools
 
 DEFAULT_NAMESPACE = "iris"
+GCP_DATA_BUCKET_LOG_BUCKET = "marin-usage-logs"
 IAP_AUDIENCE_PATTERN = re.compile(
     r"^/projects/(?P<project_number>[0-9]+)/global/backendServices/(?P<backend_id>[0-9]+)$"
 )
@@ -323,6 +327,16 @@ def _build_gcp(cluster: str, *, imports: ImportRegistrar) -> None:
     iam_config = load_iam_config()
 
     gcp_provider = gcp.Provider("gcp", project=gcp_provisioning.project)
+    GcpDataBuckets(
+        "data-buckets",
+        GcpDataBucketsArgs(
+            project=gcp_provisioning.project,
+            data_config=load_iac_data_config(cluster),
+            log_bucket=GCP_DATA_BUCKET_LOG_BUCKET,
+        ),
+        gcp_provider=gcp_provider,
+        imports=imports,
+    )
     GcpStaticAddresses(
         "addresses",
         GcpStaticAddressesArgs(

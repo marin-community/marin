@@ -15,25 +15,16 @@ REPO_ROOT = STORAGE_DIR.parent.parent
 # Buckets & regions
 # ---------------------------------------------------------------------------
 
-MARIN_BUCKETS = [
-    "marin-us-central1",
-    "marin-us-central2",
-    "marin-eu-west4",
-    "marin-us-east1",
-    "marin-us-east5",
-    "marin-us-west1",
-    "marin-us-west4",
-]
-
 BUCKET_LOCATIONS = {
-    "marin-eu-west4": "EUROPE-WEST4",
     "marin-us-central1": "US-CENTRAL1",
     "marin-us-central2": "US-CENTRAL2",
+    "marin-eu-west4": "EUROPE-WEST4",
     "marin-us-east1": "US-EAST1",
     "marin-us-east5": "US-EAST5",
     "marin-us-west1": "US-WEST1",
     "marin-us-west4": "US-WEST4",
 }
+MARIN_BUCKETS = list(BUCKET_LOCATIONS)
 
 # ---------------------------------------------------------------------------
 # Pricing

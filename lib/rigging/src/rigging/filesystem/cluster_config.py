@@ -11,8 +11,8 @@ region-to-bucket mirror set, the URL scheme, and the temp TTL policy.
 ``marin``), loaded from ``config/<cluster>.yaml``. Every "where does data live"
 answer flows through it: :func:`marin_prefix` is ``data_config().resolved_root()``,
 and :func:`marin_temp_bucket` and the region helpers all read its fields.
-Lifecycle rules on the ``marin-{region}`` buckets are managed by
-``infra/configure_buckets.py``.
+Lifecycle rules on GCS buckets are managed by ``infra/pulumi``; rules on the
+S3-compatible buckets are managed by ``infra/configure_buckets.py``.
 """
 
 import contextlib
@@ -235,6 +235,20 @@ def load_cluster_config(cluster: str | None = None) -> DataConfig:
     return _load_cluster_config_cached(name)
 
 
+def load_cluster_config_from_dirs(cluster: str, config_dirs: Sequence[str]) -> DataConfig:
+    """Load a required data config from an explicit set of config directories.
+
+    Unlike :func:`load_cluster_config`, this does not consult per-user overrides
+    and does not fall back to an empty default when the file or ``data:`` block
+    is absent. It is intended for reviewed infrastructure inputs.
+    """
+    config_path = resolve_cluster_config(cluster, config_dirs)
+    config = _read_data_config(config_path)
+    if config is None:
+        raise ValueError(f"cluster config {config_path} has no `data:` section")
+    return config
+
+
 @functools.cache
 def _load_cluster_config_cached(cluster: str) -> DataConfig:
     try:
@@ -243,11 +257,18 @@ def _load_cluster_config_cached(cluster: str) -> DataConfig:
         if cluster == _DEFAULT_CLUSTER:
             return _FALLBACK_DATA_CONFIG
         raise
+    return _read_data_config(config_path) or _FALLBACK_DATA_CONFIG
+
+
+def _read_data_config(config_path: pathlib.Path) -> DataConfig | None:
+    """Parse the file's data config, returning None when its `data:` block is empty."""
     with config_path.open("rb") as f:
         document = yaml.safe_load(f) or {}
     data = document.get("data")
     if not data:
-        return _FALLBACK_DATA_CONFIG
+        return None
+    if not isinstance(data, Mapping):
+        raise ValueError(f"cluster config {config_path} has a non-mapping `data:` section")
     return _parse_data_config(data)
 
 
@@ -500,9 +521,10 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
 
         {marin_prefix}/tmp/{prefix}
 
-    Lifecycle rules on each ``marin-{region}`` GCS bucket and each R2/CoreWeave
-    data bucket — managed by ``infra/configure_buckets.py`` — auto-delete objects
-    under ``tmp/ttl=Nd/`` after *N* days.
+    Lifecycle rules on each ``marin-{region}`` GCS bucket (managed by
+    ``infra/pulumi``) and each R2/CoreWeave data bucket (managed by
+    ``infra/configure_buckets.py``) auto-delete objects under ``tmp/ttl=Nd/``
+    after *N* days.
 
     Args:
         ttl_days: Lifecycle TTL in days.  Values not in the active config's

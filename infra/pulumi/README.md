@@ -5,7 +5,8 @@ Infrastructure-as-code for the static substrate of Marin clusters, per the desig
 
 It provisions RBAC, reserved NodePools, Kueue objects, the
 Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs for CoreWeave,
-plus shared GCLB/IAP ingress, firewall rules, static addresses, registries, and IAM for GCP.
+plus shared GCLB/IAP ingress, firewall rules, static addresses, regional data buckets,
+registries, and IAM for GCP.
 It is the sole owner of these resources — Iris no longer provisions any of them
 (`verify_prerequisites()` in
 [`k8s/controller.py`](../../lib/iris/src/iris/cluster/platforms/k8s/controller.py) only checks
@@ -18,8 +19,8 @@ Stacks: one per cluster, each a `Pulumi.<cluster>.yaml` pointer to the cluster n
 `cw-us-west-04a`, `cw-us-east-02a`, `cw-rno2a`, `cw-us-east-08a` (GB200), all adopted into
 `gs://marin-iac-state/`. GCP — `marin`, which declares the reserved federation-egress static
 IPs (`GcpStaticAddresses`), shared GCE load-balancer ingress (`GcpGclbIap`), and every
-non-authoritative GCP IAM grant on `hai-gcp-models` (`GcpIam`, driven by
-`src/iac/gcp/iam_data.yaml`; see "User grants" below).
+regional GCS data bucket (`GcpDataBuckets`), plus every non-authoritative GCP IAM grant on
+`hai-gcp-models` (`GcpIam`, driven by `src/iac/gcp/iam_data.yaml`; see "User grants" below).
 
 Beyond cluster prerequisites, the `iac` package also carries the reusable *service* components
 other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run` (IAP-gated Cloud Run,
@@ -86,7 +87,8 @@ while their values remain outside Pulumi.
 
 ## What it reads
 
-Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.yaml`):
+Cluster infrastructure comes from the per-cluster Iris config
+(`lib/iris/config/<cluster>.yaml`):
 
 - NodePools derive from `scale_groups` (`iac.nodepools.derive_nodepools`).
 - Namespace from `kubernetes_provider.namespace`; ClusterQueue name from
@@ -106,6 +108,10 @@ Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.ya
   each referenced Iris config, finelog VM details come from `lib/finelog/config`, and current
   internal VM addresses are read from GCE during preview. See
   [`lib/iris/docs/iap-gclb.md`](../../lib/iris/docs/iap-gclb.md).
+- The GCP regional data buckets, their locations, and scratch TTL values come from the
+  reviewed `data:` block in [`config/marin.yaml`](../../config/marin.yaml). `GcpDataBuckets`
+  applies uniform bucket-level access, public-access prevention, Autoclass, disabled soft
+  delete, access logging, and the `tmp/ttl=Nd/` lifecycle rules.
 
 ## Operations
 
@@ -281,8 +287,8 @@ project's paths and calls `./.github/actions/pulumi-preview` with its own `stack
   resulting cluster identity as config (`CksClusterSpec`). CoreWeave publishes an official
   Terraform provider Pulumi could bridge
   (`pulumi package add terraform-provider coreweave/coreweave`).
-- **Object storage** (`s3://marin-<region>` buckets + access keys): no schema or component
-  exists yet; buckets are created by hand plus `configure_buckets.py` for lifecycle rules.
+- **S3-compatible object storage** (`s3://marin-<region>` buckets + access keys): no Pulumi
+  schema or component exists yet; buckets are created by hand plus `configure_buckets.py` for lifecycle rules.
   Clusters currently mix per-cluster buckets (`cw-us-west-04a`) and shared cross-region reuse
   (`cw-rno2a`/`cw-us-east-08a` both read/write `marin-us-east-02a`'s bucket) — undecided whether
   Pulumi should provision a bucket per cluster or this reuse is the standing choice.
