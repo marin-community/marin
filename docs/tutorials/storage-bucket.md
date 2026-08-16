@@ -77,7 +77,7 @@ For intermediate checkpoints and other short-lived data, Marin reserves a `tmp/`
 Supported TTLs: 1, 2, 3, 4, 5, 6, 7, 14, and 30 days. The canonical list lives in `config/marin.yaml` (`data.temp.ttl_days`); call `marin_temp_bucket(ttl_days=N, prefix=...)` to build a path.
 
 The shared regional `marin-*` buckets are declared by `GcpDataBuckets` in
-[`infra/pulumi`](../../infra/pulumi/README.md). Their names and regions come from
+[`infra/pulumi`](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md). Their names and regions come from
 `config/marin.yaml`; Pulumi owns soft-delete disablement and the complete lifecycle policy.
 To add a region, add its GCS bucket entry to the reviewed `data.region_buckets` map and preview
 the `marin` stack:
@@ -90,7 +90,7 @@ pulumi -C infra/pulumi preview
 ```
 
 If the bucket already exists, adopt it with the Program-first workflow in
-[Adopting live resources](../../infra/pulumi/README.md#adopting-live-resources) before running
+[Adopting live resources](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md#adopting-live-resources) before running
 `pulumi up`. A new bucket is created by the normal update.
 
 ### Custom lifecycle rules for your own buckets
