@@ -1214,3 +1214,20 @@ Experiment ID prefix: `MEP`.
 - Goal gap: 12.0 s needs another 5.1 s. Next: brd TuningConfig sweep at
   true hero shapes (971 TF/s leaves headroom vs the 1457 seen at the
   aligned shape), then a profile of the brd step, then M7b fusion.
+
+### 2026-08-16 13:12 - MEP-043: per-leg configs marginal — EP64 17.0 s/step; GEMM-config knob exhausted
+- Run: mep-brd3-ep64-25-20260816 (per-leg TuningConfigs, 6b60a0edb7):
+  steady 17.0 s/step (12it@4:32 -> 24it@7:56 = 204 s / 12), drops
+  0.582%. ~+0.08 s over the single-config brd2 (within noise).
+- Sweep at true hero leg shapes found per-leg bests 1195-1531 TF/s
+  (fwd13 tn128/gtw8/gmd0, fwd2 tn128/gtw12/gmd0, dact tn64/gtw16/gmd1,
+  dx tn128/gtw8/gmd1, all mcs6 collective) — but the e2e step barely
+  moves; the GEMM legs are no longer the exposed mass.
+- Day ladder (all EP64, 25 steps): 18.1 (start) -> 17.75 (fused
+  transport) -> 17.08 (pallas GEMMs) -> 17.0 (tuned configs).
+  ~247k tok/s, ~22.6% MFU. Goal 12.0 s.
+- In flight: mep-brd-prof-25-20260816 (xprof steps 12-15) — next-lever
+  attribution: expect fusion mass (was 3.8 s), FSDP one-shots + barriers
+  (~4 s), wgrad legs (cudnn, was 0.97 s busy for both) to dominate now.
+- M7a tray released; M7b (arrival-gated brd group scheduler) to be
+  planned against the new profile.
