@@ -66,7 +66,7 @@ config:
       source_kind: gcp-secret
       source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-grafana-slack-webhook/versions/1
       disposition: keep
-      note: Routes GitHub Actions alerts to #marin-alerts; shadowed in marin by the repository secret of the same name.
+      note: Routes GitHub Actions alerts, including marin workflows, to #marin-alerts.
     - name: CW_KUBECONFIG
       scope: repository
       repository: marin-community/marin
@@ -260,14 +260,6 @@ config:
       source_kind: gcp-secret
       source_ref: gcp-secret://projects/hai-gcp-models/secrets/RAY_AUTH_TOKEN/versions/1
       disposition: remove-candidate
-    - name: SLACK_WEBHOOK_URL
-      scope: repository
-      repository: marin-community/marin
-      presence: present
-      source_kind: gcp-secret
-      source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-grafana-slack-webhook/versions/1
-      disposition: keep
-      note: Routes GitHub Actions alerts to #marin-alerts and overrides the organization secret of the same name.
     - name: SPEEDRUN_LEADERBOARD_PAT
       scope: repository
       repository: marin-community/marin
