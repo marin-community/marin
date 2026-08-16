@@ -712,11 +712,15 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
     router_z_loss = router_metrics["router_z_loss_per_layer"]
     capacity_overflow = router_metrics["capacity_overflow_per_layer"]
+    sender_capacity_overflow = router_metrics["sender_capacity_overflow_per_layer"]
+    receiver_capacity_overflow = router_metrics["receiver_capacity_overflow_per_layer"]
     num_layers = int(routing_entropy.shape[0])
 
     # Per-layer total assignments = sum of routing_counts over experts (= tokens * k).
     assignments_per_layer = jnp.sum(routing_counts.astype(jnp.float32), axis=-1)
     capacity_overflow_rate = capacity_overflow.astype(jnp.float32) / jnp.maximum(assignments_per_layer, 1.0)
+    sender_overflow_rate = sender_capacity_overflow.astype(jnp.float32) / jnp.maximum(assignments_per_layer, 1.0)
+    receiver_overflow_rate = receiver_capacity_overflow.astype(jnp.float32) / jnp.maximum(assignments_per_layer, 1.0)
 
     out: dict[str, jax.Array | SummaryStats] = {
         "train/router/routing_entropy_mean": jnp.mean(routing_entropy),
@@ -724,6 +728,8 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         "train/router/router_z_loss": jnp.mean(router_z_loss),
         "train/router/routing_counts_per_layer": routing_counts,
         "train/router/capacity_overflow_rate_mean": jnp.mean(capacity_overflow_rate),
+        "train/router/sender_overflow_rate_mean": jnp.mean(sender_overflow_rate),
+        "train/router/receiver_overflow_rate_mean": jnp.mean(receiver_overflow_rate),
         "qb_beta_per_layer": router_metrics.get("qb_beta_per_layer"),
     }
     for i in range(num_layers):
@@ -953,11 +959,18 @@ class MoEMLP(eqx.Module):
             report_capacity_overflow=self.cfg.report_capacity_overflow,
         )
         if self.cfg.report_capacity_overflow:
-            routed_flat, dropped_assignments = moe_out
+            routed_flat, capacity_overflow = moe_out
+            dropped_assignments = capacity_overflow.total
+            sender_dropped_assignments = capacity_overflow.sender
+            receiver_dropped_assignments = capacity_overflow.receiver
         else:
             routed_flat = moe_out
             dropped_assignments = _zero_dropped_assignments()
+            sender_dropped_assignments = _zero_dropped_assignments()
+            receiver_dropped_assignments = _zero_dropped_assignments()
         router_stats["capacity_overflow"] = dropped_assignments
+        router_stats["sender_capacity_overflow"] = sender_dropped_assignments
+        router_stats["receiver_capacity_overflow"] = receiver_dropped_assignments
 
         # Expand after the combine: `expert_mlp` already returns the weight-summed expert output,
         # which is the vector the paper's W_up acts on.
@@ -1178,6 +1191,8 @@ class Transformer(eqx.Module):
             "router_z_loss_per_layer": stacked_router_stats["router_z_loss"],
             "qb_beta_per_layer": stacked_router_stats["qb_beta"],
             "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
+            "sender_capacity_overflow_per_layer": stacked_router_stats["sender_capacity_overflow"],
+            "receiver_capacity_overflow_per_layer": stacked_router_stats["receiver_capacity_overflow"],
         }
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
@@ -1232,6 +1247,12 @@ class Transformer(eqx.Module):
             )
             if self.config.report_capacity_overflow:
                 summarized_metrics["moe/dropped_assignments"] = jnp.sum(router_metrics["capacity_overflow_per_layer"])
+                summarized_metrics["moe/sender_dropped_assignments"] = jnp.sum(
+                    router_metrics["sender_capacity_overflow_per_layer"]
+                )
+                summarized_metrics["moe/receiver_dropped_assignments"] = jnp.sum(
+                    router_metrics["receiver_capacity_overflow_per_layer"]
+                )
             return loss, summarized_metrics
         return loss
 

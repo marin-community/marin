@@ -417,13 +417,15 @@ def initial_state(
     offload_opt_state: bool = False,
     master_param_mode: MasterParamMode = MasterParamMode.DISABLED,
 ) -> GrugTrainState:
-    params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    initialized_params = Transformer.init(model_config, key=key)
     num_moe_layers = model_config.num_layers
     if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
-        master_params = _FP32_POLICY.cast_to_param(params)
+        master_params = _FP32_POLICY.cast_to_param(initialized_params)
+        params = mp.cast_to_param(master_params)
         opt_state = optimizer.init(master_params)
         master_params = _tree_to_memory_kind(master_params, "pinned_host")
     else:
+        params = mp.cast_to_param(initialized_params)
         master_params = None
         opt_state = optimizer.init(params)
     if offload_opt_state:
@@ -440,6 +442,8 @@ def initial_state(
 
 def _drop_metrics(
     dropped_assignments: jax.Array,
+    sender_dropped_assignments: jax.Array,
+    receiver_dropped_assignments: jax.Array,
     *,
     batch_size: int,
     sequence_length: int,
@@ -448,10 +452,20 @@ def _drop_metrics(
 ) -> dict[str, int | float]:
     # Global assignment totals can exceed int32; float32 would also round large drop counts.
     dropped_assignments_host = int(dropped_assignments)
+    sender_dropped_assignments_host = int(sender_dropped_assignments)
+    receiver_dropped_assignments_host = int(receiver_dropped_assignments)
+    if dropped_assignments_host != sender_dropped_assignments_host + receiver_dropped_assignments_host:
+        raise ValueError("total dropped assignments must equal sender plus receiver dropped assignments")
     total_assignments = batch_size * sequence_length * top_k * num_layers
+    receiver_assignments = total_assignments - sender_dropped_assignments_host
     return {
         "moe/dropped_assignments": dropped_assignments_host,
         "moe/drop_fraction": dropped_assignments_host / total_assignments,
+        "moe/sender_dropped_assignments": sender_dropped_assignments_host,
+        "moe/sender_drop_fraction": sender_dropped_assignments_host / total_assignments,
+        "moe/receiver_dropped_assignments": receiver_dropped_assignments_host,
+        "moe/receiver_drop_fraction": receiver_dropped_assignments_host / total_assignments,
+        "moe/receiver_drop_fraction_of_received": receiver_dropped_assignments_host / max(receiver_assignments, 1),
     }
 
 
@@ -843,6 +857,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if "moe/dropped_assignments" in metrics:
                         drop_metrics = _drop_metrics(
                             metrics["moe/dropped_assignments"],
+                            metrics["moe/sender_dropped_assignments"],
+                            metrics["moe/receiver_dropped_assignments"],
                             batch_size=batch.tokens.shape[0],
                             sequence_length=batch.tokens.shape[1],
                             top_k=config.model.num_experts_per_token,

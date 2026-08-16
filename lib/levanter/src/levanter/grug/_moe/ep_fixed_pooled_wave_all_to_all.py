@@ -12,6 +12,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
+from levanter.grug._moe.common import CapacityOverflow
 from levanter.grug._moe.ep_common import _assignment_sources, _ranks_within_groups, _token_sources
 from levanter.grug._moe.sonic import sonic_gather_sum_available, sonic_gather_sum_masked
 from levanter.grug.sharding import _batch_axes
@@ -480,8 +481,8 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     capacity_factor: float,
     transport_capacity_factor: float,
     num_expert_waves: int,
-) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
-    """Stripe each destination pool over fixed waves with bounded receiver buffers."""
+) -> tuple[Float[Array, "Tlocal H"], CapacityOverflow]:
+    """Stripe each destination pool over fixed waves and report drops at each transport stage."""
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(f"num_experts={num_experts} must be divisible by local expert count={local_experts}")
@@ -555,12 +556,13 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
             expert_shards=expert_shards,
             pool_capacity=pool_capacity,
         )
-        pooled_dispatch = remat(dispatch)()
+        pooled_dispatch = dispatch()
         pooled_output = remat(compute)(pooled_dispatch)
         out_local = out_local + remat(combine)(pooled_output)
         receiver_dropped = receiver_dropped + pooled_dispatch.receiver_dropped
 
     sender_dropped = assignments_per_shard - jnp.sum(sender_keep, dtype=jnp.int32)
-    dropped_local = sender_dropped + receiver_dropped
-    dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
-    return out_local.astype(x_local.dtype), dropped_total
+    dropped_by_stage_local = jnp.stack((sender_dropped, receiver_dropped))
+    dropped_by_stage = jax.lax.psum(dropped_by_stage_local, _batch_axes(jax.sharding.get_abstract_mesh()))
+    overflow = CapacityOverflow(sender=dropped_by_stage[0], receiver=dropped_by_stage[1])
+    return out_local.astype(x_local.dtype), overflow

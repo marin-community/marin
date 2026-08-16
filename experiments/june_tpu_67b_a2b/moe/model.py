@@ -588,14 +588,14 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
-        routed_flat, dropped_assignments = self.expert_mlp(
+        routed_flat, capacity_overflow = self.expert_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
             mesh=get_abstract_mesh(),
             report_capacity_overflow=True,
         )
-        router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
+        router_stats["capacity_overflow"] = capacity_overflow.total.astype(jnp.float32)
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
