@@ -1014,3 +1014,20 @@ Experiment ID prefix: `MEP`.
 - Upstream: three findings to file on openxla/xla once EP64 evidence is in
   (BFC chunk alignment vs NCCL_WIN_REQUIRED_ALIGNMENT; dynamic-slice
   fusion vs collective coloring; shared-pool window VA exhaustion).
+
+### 2026-08-16 10:02 - MEP-033: EP16 proxy NEW BEST — fused transport 17.0 s/step, 6% ahead of flat ragged
+- Run: mep-mgpu-ep16-25-20260816 (ep-marin-mgpu-cudnn-cute, wheel v3,
+  settled flags + --xla_gpu_enable_dynamic_slice_fusion=false, EP16 exact
+  proxy: 4 nodes x 4 GPUs 1 proc/GPU, b256, E48, cf 1.1). 25/25 SUCCEEDED,
+  loss 6.73->falling.
+- Scored: steady 17.0 s/step (12it@4:23 -> 24it@7:47 = 204 s / 12);
+  drop_fraction 0.00044 — IDENTICAL to the flat path's proxy value
+  (MEP-014), third transport to reproduce it exactly.
+- Proxy ladder now: mgpu 17.0 < flat ragged 18.05 < hier 19.2 (s/step).
+  First transport-level win of the campaign; EP16 has only 3 internode
+  peers, so EP64 (63 peers — where symmetric-mode barriers and splits cost
+  the ragged path ~2.3 s) should widen the gap if put_segments scales.
+- Launched: mep-mgpu-ep64-25-20260816 (same recipe, full hero EP64).
+  Caveat for the A/B: the 18.1 s flat basis ran the OLD kmax128 wheel; if
+  mgpu wins at EP64, rerun the flat control on wheel v3 to isolate
+  transport from the wheel's alignment patches.
