@@ -80,9 +80,10 @@ def _make_single_expert_mesh() -> Mesh:
 
 
 def _count_jaxpr_primitives(value, primitive_name: str) -> int:
-    if isinstance(value, jax_core.Jaxpr):
-        return sum(eqn.primitive.name == primitive_name for eqn in value.eqns) + sum(
-            _count_jaxpr_primitives(param, primitive_name) for eqn in value.eqns for param in eqn.params.values()
+    jaxpr = getattr(value, "jaxpr", value)
+    if isinstance(jaxpr, jax_core.Jaxpr):
+        return sum(eqn.primitive.name == primitive_name for eqn in jaxpr.eqns) + sum(
+            _count_jaxpr_primitives(param, primitive_name) for eqn in jaxpr.eqns for param in eqn.params.values()
         )
     if isinstance(value, dict):
         return sum(_count_jaxpr_primitives(item, primitive_name) for item in value.values())
