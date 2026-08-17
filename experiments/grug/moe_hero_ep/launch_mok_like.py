@@ -33,7 +33,7 @@ from marin.experiment.data import mixture, tokenized
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 
-from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
+from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, build_hero_configs
 from experiments.grug.moe_hero_ep.launch import JAX_NIGHTLY_WHEELS_20260809, pjrt_wheel_install_script
 from experiments.grug.moe_hero_ep.train import (
     GpuAllocator,
@@ -66,6 +66,12 @@ MOK_LIKE_MATCHED_NUM_EXPERTS = 8
 # now so the proposed 8-of-384 architecture is reachable.
 MATCHED_NUM_EXPERTS_PER_TOKEN = 4
 MATCHED_NUM_SHARED_EXPERTS = 1
+# The pooled_wave arm exists to put main's production MoE backend on this harness, so its two
+# pooled-transport knobs mirror the hero rather than restating literals. The sender capacity factor
+# has no usable default -- the field defaults to None and `GrugModelConfig` rejects
+# fixed_pooled_wave_all_to_all without it -- so the arm must carry it explicitly.
+HERO_POOLED_TRANSPORT_CAPACITY_FACTOR = HERO_MODEL.pooled_transport_capacity_factor
+HERO_NUM_EXPERT_WAVES = HERO_MODEL.num_expert_waves
 PRODUCTION_MOK_LIKE_WORKSPACE_SLOTS = 1
 DEFAULT_GPU_DEVICE_MEMORY_FRACTION = 0.85
 PROMOTED_MOK_LIKE_PINNED_HOST_MEMORY_LIMIT_GB = 176
@@ -119,6 +125,9 @@ class MoeBackend(StrEnum):
 
     MOK_LIKE = "mok_like"
     EP = "ep"
+    # Main's production MoE backend. It is a separate arm rather than a repointing of `ep`, which
+    # stays on ragged_all_to_all so every measurement already filed under `ep` keeps its meaning.
+    POOLED_WAVE = "pooled_wave"
     FSDP = "fsdp"
 
 
@@ -430,6 +439,27 @@ def build_backend_comparison_run(
         expert_axis_size = GPUS_PER_NODE
         remat_tag = "recompute-all"
         device_memory_fraction = gpu_device_memory_fraction
+    elif backend is MoeBackend.POOLED_WAVE:
+        model = dataclasses.replace(
+            common_model,
+            moe_implementation="fixed_pooled_wave_all_to_all",
+            # Both are inherited from the hero through `common_model`, but this backend is the one
+            # that reads them, so it states them rather than depending on that inheritance.
+            pooled_transport_capacity_factor=HERO_POOLED_TRANSPORT_CAPACITY_FACTOR,
+            num_expert_waves=HERO_NUM_EXPERT_WAVES,
+            mok_like=None,
+            expert_chunks=1,
+            remat_mode="recompute_all",
+        )
+        # This arm reproduces main's production backend, which runs one job-wide expert group:
+        # `launch.py` sets HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE. Anything
+        # narrower is a different parallelization strategy, so a comparison against the 64-way
+        # mok_like arm would measure topology rather than backend -- and it does not fit either,
+        # since 384 experts over a four-way axis is 96 local experts of hero-width BF16 weights
+        # against 186 GiB of HBM. There is deliberately no flag: no other width is a baseline.
+        expert_axis_size = num_nodes * GPUS_PER_NODE
+        remat_tag = "recompute-all"
+        device_memory_fraction = gpu_device_memory_fraction
     else:
         model = dataclasses.replace(
             common_model,
@@ -441,7 +471,9 @@ def build_backend_comparison_run(
         expert_axis_size = 1
         remat_tag = "recompute-all"
         device_memory_fraction = gpu_device_memory_fraction
-    replica_axis_size = num_nodes
+    # The pooled_wave arm has already taken every device for its expert axis, so there is nothing
+    # left to replicate over; every other arm keeps its within-node group replicated per node.
+    replica_axis_size = 1 if backend is MoeBackend.POOLED_WAVE else num_nodes
     # An expert group wider than a node spans hosts, so the expert axis takes those GPUs and the
     # replica axis keeps what is left. Every other arm keeps the sealed within-node group, where
     # this reproduces the previous `replica_axis_size=num_nodes` exactly.
@@ -459,6 +491,18 @@ def build_backend_comparison_run(
             f"num_experts={model.num_experts} must divide over an expert axis of {expert_axis_size}; "
             f"pass --num-experts with a multiple of {expert_axis_size}"
         )
+    # The pooled transport stripes each rank's experts over static waves and rejects a remainder.
+    # That check lives inside the kernel, so it fires after the whole multi-node allocation has been
+    # taken and compiled; charge it here instead, where it costs nothing.
+    if backend is MoeBackend.POOLED_WAVE:
+        local_experts = model.num_experts // expert_axis_size
+        if local_experts % HERO_NUM_EXPERT_WAVES != 0:
+            raise ValueError(
+                f"num_experts={model.num_experts} leaves {local_experts} experts on each of the "
+                f"{expert_axis_size} expert ranks, which the pooled transport's "
+                f"{HERO_NUM_EXPERT_WAVES} waves do not divide; pass --num-experts with a multiple "
+                f"of {expert_axis_size * HERO_NUM_EXPERT_WAVES}"
+            )
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     train_resources = ResourceConfig.with_gpu(
         "GB200",
