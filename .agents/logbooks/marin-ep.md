@@ -1435,3 +1435,20 @@ Experiment ID prefix: `MEP`.
 - Relaunched as mep-fused2b-ep64-25-20260817 (max-retries 3 to fail fast
   if the wedge persists -> then it is EP64-scale and gets a stack
   capture).
+
+### 2026-08-17 02:45 - MEP-053: fused2 "wedge" is a distributed COMPILE deadlock, not runtime
+- fused2b (act residual dropped, no remat warning) wedged identically:
+  zero steps, silent 50 min. Live evidence from task pods: GPUs 0% util
+  (144 GiB resident), all 64 ranks parked in
+  jax backend_compile_and_load (py-spy), ALL threads sleeping, ~0 CPU on
+  every sampled pod, no ptxas children. Nobody is compiling; everyone
+  waits inside the compile path -> cross-process coordination deadlock
+  during XLA compile, not a kernel deadlock and not the memory cliff
+  (that fix stands on its own merits).
+- Prime suspect: --xla_gpu_shard_autotuning (default on) exchanging
+  autotune shards over the distributed runtime; the fused2 executable's
+  different autotune workload plus a diverging rank deadlocks all.
+  Secondary: a stale remote-compilation-cache marker from the first
+  killed run.
+- Arm mep-fused2c-ep64-25-20260817: recipe + --xla_gpu_shard_autotuning=false.
+  If it still wedges, next arm disables the remote compile cache.
