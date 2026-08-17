@@ -128,7 +128,7 @@ def family_sums(values: np.ndarray, family_index: np.ndarray) -> np.ndarray:
     return np.column_stack([values[:, family_index == f].mean(axis=1) for f in np.unique(family_index)])
 
 
-def design(panel: Panel, shape: Shape) -> tuple[np.ndarray, np.ndarray]:
+def design(panel: Panel, shape: Shape, damage: str = "blended") -> tuple[np.ndarray, np.ndarray]:
     """Free-sign columns and non-negative columns.
 
     Free: the intercept, and one late-share term per family. The late-share signs are free because a
@@ -149,26 +149,63 @@ def design(panel: Panel, shape: Shape) -> tuple[np.ndarray, np.ndarray]:
     # model's own bounds predicted up to 23x worse than the mean, and one ordinary 300M component fit
     # returned an RMSE of 562 BPB. Below the knee this is still a power law, so panels whose excess never
     # approaches DAMAGE_KNEE (WSD80 tops out at 25.46) are essentially unaffected.
-    excess = np.maximum(panel.exposure(shape.damage_horizon) - 1.0, 0.0) / DAMAGE_KNEE
-    powered = excess**shape.damage_exponent
-    damage = powered / (1.0 + powered)
-
     free = np.column_stack([np.ones(len(panel.weights)), family_sums(panel.weights[:, 1, :], panel.family_index)])
     constrained = np.column_stack(
         [
             family_sums(near, panel.family_index),
             family_sums(late, panel.family_index),
             family_sums(boundary, panel.family_index),
-            family_sums(damage, panel.family_index),
+            *(family_sums(column, panel.family_index) for column in damage_columns(panel, shape, damage)),
             near,  # per-bucket departures on the main benefit block, shrunk in the solve
         ]
     )
     return free, constrained
 
 
-def pooled_width(panel: Panel) -> int:
+def saturating_damage(epochs: np.ndarray, exponent: float) -> np.ndarray:
+    """Repetition harm, BOUNDED in [0, 1).
+
+    The unbounded `excess ** tau` reached 1.2e24 on this panel (tau up to 10, excess up to 255 epochs) and
+    made the model violently extrapolative: `fit_head` normalises columns by their TRAINING norm, so a
+    test row with slightly larger excess is amplified by the tau-th power. Measured consequence of the old
+    form -- random parameters drawn from this model's own bounds predicted up to 23x worse than the mean,
+    and one ordinary 300M component fit returned an RMSE of 562 BPB. Below the knee this is still a power
+    law, so panels whose excess never approaches DAMAGE_KNEE are essentially unaffected.
+    """
+    excess = np.maximum(epochs - 1.0, 0.0) / DAMAGE_KNEE
+    powered = excess**exponent
+    return powered / (1.0 + powered)
+
+
+def damage_columns(panel: Panel, shape: Shape, variant: str) -> list[np.ndarray]:
+    """The repetition term, in one of three forms that nest exactly (ATOM-016).
+
+    `blended` is the committed form: harm charged on exposure read at a fitted horizon. `physical` charges
+    it on the run's actual total materialized epochs, `c0 * w0 + c1 * w1`, which this family already
+    contains -- since `c1 = c0 (1 - alpha) / alpha` in these swarms, the physical total equals
+    `exposure(1 - alpha)` exactly, so `physical` is `blended` with its horizon pinned rather than fitted.
+
+    `split` keeps that same argument and splits its ATTRIBUTION along the path the run actually takes:
+    cumulative exposure goes 0 -> c0 * w0 -> total, and the increment earned in each phase carries its own
+    non-negative amplitude. The two increments sum back to `physical` exactly, so `physical` is the nested
+    ablation and equal amplitudes reproduce it. On the two-bucket StarCoder ladder this split is what took
+    a leave-one-condition-out rule inside the deployment margin, with the late increment charged about
+    thirteen times the early one in 72 of 72 fits.
+    """
+    if variant == "blended":
+        return [saturating_damage(panel.exposure(shape.damage_horizon), shape.damage_exponent)]
+    total = panel.epochs_early * panel.weights[:, 0, :] + panel.epochs_late * panel.weights[:, 1, :]
+    if variant == "physical":
+        return [saturating_damage(total, shape.damage_exponent)]
+    if variant != "split":
+        raise ValueError(f"unknown damage variant {variant!r}")
+    early = saturating_damage(panel.early_epochs(), shape.damage_exponent)
+    return [early, saturating_damage(total, shape.damage_exponent) - early]
+
+
+def pooled_width(panel: Panel, damage: str = "blended") -> int:
     """Columns carrying the pooled signal; everything after them is a shrunk departure."""
-    return 4 * panel.n_families
+    return (5 if damage == "split" else 4) * panel.n_families
 
 
 def column_space(free: np.ndarray, tolerance: float = 1e-10) -> np.ndarray:
@@ -193,7 +230,13 @@ def column_space(free: np.ndarray, tolerance: float = 1e-10) -> np.ndarray:
 
 
 def fit_head(
-    free: np.ndarray, constrained: np.ndarray, response: np.ndarray, ridge: float, pooled: int
+    free: np.ndarray,
+    constrained: np.ndarray,
+    response: np.ndarray,
+    ridge: float,
+    pooled: int,
+    departures: tuple[tuple[int, int], ...] = (),
+    departure_weight: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Free columns unconstrained, the rest non-negative, departures shrunk hard and levels barely.
 
@@ -207,9 +250,20 @@ def fit_head(
     scale = np.maximum(np.linalg.norm(columns, axis=0), 1e-300)
     scaled = columns / scale
     if ridge > 0:
-        strength = np.sqrt(ridge) * np.concatenate([np.full(pooled, 1e-3), np.ones(scaled.shape[1] - pooled)])
+        strength = np.sqrt(ridge) * np.concatenate([np.full(pooled, 1e-3), np.ones(constrained.shape[1] - pooled)])
         scaled = np.vstack([scaled, np.diag(strength)])
-        target = np.concatenate([target, np.zeros(scaled.shape[1])])
+        target = np.concatenate([target, np.zeros(constrained.shape[1])])
+    if departures and departure_weight > 0:
+        # Shrink a split term toward the unsplit one it generalises: the whole departure is the difference
+        # of the pair's amplitudes, and it is penalised as a CONTRIBUTION, weighted by the first column's
+        # residualised norm. Penalising the bare amplitudes would mean different things at different
+        # fitted damage exponents, which a steeply suppressed column drives apart by orders of magnitude.
+        rows = np.zeros((len(departures), constrained.shape[1]))
+        for row, (first, second) in zip(rows, departures, strict=True):
+            row[first] = np.sqrt(departure_weight)
+            row[second] = -np.sqrt(departure_weight) * scale[first] / scale[second]
+        scaled = np.vstack([scaled, rows])
+        target = np.concatenate([target, np.zeros(len(departures))])
     amplitudes, _ = nnls(scaled, target, maxiter=20000)
     amplitudes = amplitudes / scale
     return np.linalg.lstsq(free, response - constrained @ amplitudes, rcond=None)[0], amplitudes
