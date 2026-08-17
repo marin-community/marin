@@ -820,6 +820,104 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
     assert int(overflow.receiver) == 3
 
 
+def test_fixed_pooled_wave_rotation_across_expert_shards_with_replica_axis():
+    """Multi-rack shape: a `data` (replica) axis crossing a 2-shard `expert` axis. The receiver rotation
+    keys off `axis_index("expert")`, so this exercises that call when another axis is present. At high
+    capacity (no drops) the sharded output and gradients must match the dense reference -- proving the
+    rotation machinery compiles and computes correctly per expert shard on a multi-axis mesh -- and a
+    low-capacity run must still execute and report drops on both shards without error."""
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    script = """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.grug.grug_moe import moe_mlp
+
+        assert jax.device_count() == 4
+        # data=2 (the replica/rack axis) x expert=2 (the pooled-wave all-to-all axis).
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(2, 2),
+            axis_names=("data", "expert"),
+            axis_types=(AxisType.Explicit, AxisType.Explicit),
+        )
+        tokens, hidden, inter, num_experts, topk = 8, 4, 3, 8, 2
+        x = jax.random.normal(jax.random.key(0), (tokens, hidden))
+        selected = ((jnp.arange(tokens)[:, None] + jnp.arange(topk)[None, :]) % num_experts).astype(jnp.int32)
+        combine = jax.nn.softmax(jax.random.normal(jax.random.key(1), (tokens, topk)), axis=-1)
+        w_up_gate = jax.random.normal(jax.random.key(2), (num_experts, hidden, 2 * inter))
+        w_down = jax.random.normal(jax.random.key(3), (num_experts, inter, hidden))
+        cotangent = jax.random.normal(jax.random.key(4), (tokens, hidden))
+
+        def dense(x, w_up_gate, w_down):
+            w13 = w_up_gate[selected]
+            h = jnp.einsum("th,tkhi->tki", x, w13)
+            g, u = jnp.split(h, [inter], axis=-1)
+            eo = jnp.einsum("tki,tkih->tkh", jax.nn.silu(g) * u, w_down[selected])
+            return jnp.einsum("tkh,tk->th", eo, combine)
+
+        expected = dense(x, w_up_gate, w_down)
+        expected_grads = jax.grad(
+            lambda x, a, b: jnp.sum(dense(x, a, b) * cotangent), argnums=(0, 1, 2)
+        )(x, w_up_gate, w_down)
+
+        batch_sh = NamedSharding(mesh, P(("data", "expert"), None))
+        expert_sh = NamedSharding(mesh, P("expert", None, None))
+        x = jax.device_put(x, batch_sh)
+        selected = jax.device_put(selected, batch_sh)
+        combine = jax.device_put(combine, batch_sh)
+        cotangent = jax.device_put(cotangent, batch_sh)
+        w_up_gate = jax.device_put(w_up_gate, expert_sh)
+        w_down = jax.device_put(w_down, expert_sh)
+
+        def pooled(x, a, b, capacity):
+            return moe_mlp(
+                x, selected, combine, a, b,
+                activation=jax.nn.silu,
+                implementation="fixed_pooled_wave_all_to_all",
+                mesh=mesh,
+                capacity_factor=capacity,
+                pooled_transport_capacity_factor=capacity,
+                num_expert_waves=2,
+            )
+
+        with jax.set_mesh(mesh):
+            actual = pooled(x, w_up_gate, w_down, 4.0)
+            actual_grads = jax.grad(
+                lambda x, a, b: jnp.sum(pooled(x, a, b, 4.0) * cotangent), argnums=(0, 1, 2)
+            )(x, w_up_gate, w_down)
+
+            # Low capacity: the rotation-with-drops path must execute on both shards and report drops.
+            _, overflow = moe_mlp(
+                x, selected, combine, w_up_gate, w_down,
+                activation=jax.nn.silu,
+                implementation="fixed_pooled_wave_all_to_all",
+                mesh=mesh,
+                capacity_factor=0.5,
+                pooled_transport_capacity_factor=0.5,
+                num_expert_waves=2,
+                report_capacity_overflow=True,
+            )
+
+        np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+        for a, e in zip(actual_grads, expected_grads, strict=True):
+            np.testing.assert_allclose(np.asarray(a), np.asarray(e), rtol=1e-5, atol=1e-5)
+        assert int(overflow.sender) + int(overflow.receiver) > 0
+        assert jnp.isfinite(actual).all()
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
     env = os.environ.copy()
     env["JAX_PLATFORMS"] = "cpu"
