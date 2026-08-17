@@ -325,26 +325,29 @@ def _receiver_ranks(
     return jnp.sum((inclusive_counts - 1) * expert_indicators, axis=1, dtype=jnp.int32)
 
 
-def _rotated_receiver_ranks(
+def _interleaved_receiver_ranks(
     received_experts: Int[Array, " N"],
     *,
     local_experts: int,
     expert_shards: int,
     pool_capacity: int,
-    rotation: Int[Array, ""] | int,
 ) -> Int[Array, " N"]:
-    """Per-expert receiver capacity ranks with a per-receiver source rotation.
+    """Per-expert receiver capacity ranks that fill capacity round-robin over source shards.
 
-    The received buffer is source-shard-major (``[expert_shards, pool_capacity]``), so the plain
-    cumsum ranks always fill capacity in the same source order at every receiver -- making the same
-    (last-ordered) sender shard absorb the overflow everywhere, a deterministic data-correlated drop
-    bias. Rolling the source axis by ``-rotation`` before the cumsum, then rolling the ranks back, makes
-    each receiver truncate a different source first, so overflow spreads evenly across senders. The
-    per-expert drop count is unchanged; only integer metadata is rolled, never the token payload.
+    The received buffer is source-shard-major (``[expert_shards, pool_capacity]``), so a plain cumsum
+    ranks capacity in source order at every receiver -- the same (last-ordered) sender shard absorbs
+    the overflow everywhere, a deterministic data-correlated drop bias. Transposing to pool-position
+    order (``[pool_capacity, expert_shards]``) before the cumsum visits each source's slot ``p`` before
+    any source's slot ``p+1``, so capacity is allocated round-robin across sources and no sender is
+    truncated first. Transposing the ranks back restores the source-major layout the caller expects.
+
+    The permutation is static (no ``axis_index``), the per-expert keep count stays ``min(count,
+    capacity)``, and within any source pool position order is preserved -- so a later token never
+    displaces an earlier one within a sequence (each expert shard holds whole sequences).
     """
-    rolled = jnp.roll(received_experts.reshape(expert_shards, pool_capacity), -rotation, axis=0)
-    ranks = _receiver_ranks(rolled.reshape(-1), local_experts=local_experts)
-    return jnp.roll(ranks.reshape(expert_shards, pool_capacity), rotation, axis=0).reshape(-1)
+    interleaved = received_experts.reshape(expert_shards, pool_capacity).T.reshape(-1)
+    ranks = _receiver_ranks(interleaved, local_experts=local_experts)
+    return ranks.reshape(pool_capacity, expert_shards).T.reshape(-1)
 
 
 def _dispatch_pooled(
@@ -407,15 +410,13 @@ def _dispatch_pooled(
         received_encoded_experts = received_header.reshape(expert_shards, -1)[:, :pool_capacity].reshape(send_size)
         received_experts = received_encoded_experts.astype(jnp.int32) - 1
 
-        # Rotate the per-receiver capacity priority by this shard's own expert-axis index so each
-        # receiver truncates a different source first (see `_rotated_receiver_ranks`), removing the
-        # fixed-source-order receiver-overflow bias.
-        receiver_ranks = _rotated_receiver_ranks(
+        # Allocate receiver capacity round-robin over source shards (see `_interleaved_receiver_ranks`)
+        # so no sender is systematically truncated first, removing the fixed-source-order overflow bias.
+        receiver_ranks = _interleaved_receiver_ranks(
             received_experts,
             local_experts=local_experts,
             expert_shards=expert_shards,
             pool_capacity=pool_capacity,
-            rotation=jax.lax.axis_index("expert"),
         )
         receiver_valid = received_experts >= 0
         receiver_keep = receiver_valid & (receiver_ranks < receiver_capacity)

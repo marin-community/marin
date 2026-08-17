@@ -27,8 +27,8 @@ from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
     _moe_mlp_ep_fixed_pooled_wave_a2a_local,
+    _interleaved_receiver_ranks,
     _receiver_ranks,
-    _rotated_receiver_ranks,
 )
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
@@ -153,56 +153,76 @@ def _skip_without_sonic_gpu_runtime() -> None:
         pytest.skip("raw Sonic triton_call tests require a GPU")
 
 
-def test_rotated_receiver_ranks_spread_drops_without_changing_counts():
-    """The per-receiver source rotation must (1) match keeping the first `capacity` tokens per expert
-    in rotated source order, (2) leave the per-expert drop count unchanged, and (3) equal the plain
-    ranks at rotation 0, so overflow spreads across senders without altering how many are dropped."""
+def test_interleaved_receiver_ranks_allocate_capacity_round_robin_over_sources():
+    """The interleaved receiver ranks must (1) keep the tokens a round-robin-over-sources fill would
+    keep, (2) leave the per-expert drop count at `min(count, capacity)`, and (3) keep, within any one
+    source, a prefix of pool positions per expert -- so a later token never displaces an earlier one in
+    the same sequence (each expert shard holds whole sequences)."""
     expert_shards, pool_capacity, local_experts, receiver_capacity = 4, 5, 2, 3
     send_size = expert_shards * pool_capacity
     rng = np.random.default_rng(0)
     received = rng.integers(-1, local_experts, size=send_size)  # -1 marks an empty slot
     received_experts = jnp.asarray(received, dtype=jnp.int32)
 
-    def keep_set(rotation: int) -> np.ndarray:
-        ranks = _rotated_receiver_ranks(
-            received_experts,
-            local_experts=local_experts,
-            expert_shards=expert_shards,
-            pool_capacity=pool_capacity,
-            rotation=rotation,
-        )
-        return np.asarray((received_experts >= 0) & (ranks < receiver_capacity))
-
-    def reference_keep(rotation: int) -> np.ndarray:
-        counts = np.zeros(local_experts, dtype=int)
-        keep = np.zeros(send_size, dtype=bool)
-        for shard in range(expert_shards):
-            rotated_shard = (shard + rotation) % expert_shards
-            for pos in range(pool_capacity):
-                i = rotated_shard * pool_capacity + pos
-                e = int(received[i])
-                if e >= 0 and counts[e] < receiver_capacity:
-                    keep[i] = True
-                    counts[e] += 1
-        return keep
-
-    counts_by_expert = lambda keep: {e: int(((received == e) & keep).sum()) for e in range(local_experts)}
-    baseline_counts = counts_by_expert(keep_set(0))
-    # Rotation 0 must reduce to the plain source-order ranks.
-    plain_ranks = _receiver_ranks(received_experts, local_experts=local_experts)
-    rotated_zero = _rotated_receiver_ranks(
+    ranks = _interleaved_receiver_ranks(
         received_experts,
         local_experts=local_experts,
         expert_shards=expert_shards,
         pool_capacity=pool_capacity,
-        rotation=0,
     )
-    np.testing.assert_array_equal(np.asarray(rotated_zero), np.asarray(plain_ranks))
-    for rotation in range(expert_shards):
-        np.testing.assert_array_equal(keep_set(rotation), reference_keep(rotation))
-        assert counts_by_expert(keep_set(rotation)) == baseline_counts
-    # Different rotations keep different tokens (the bias actually moves).
-    assert not np.array_equal(keep_set(0), keep_set(1))
+    keep = np.asarray((received_experts >= 0) & (ranks < receiver_capacity))
+
+    # Reference: visit each source's slot `pos` before any source's slot `pos + 1` (round-robin over
+    # sources), keeping the first `receiver_capacity` per expert.
+    counts = np.zeros(local_experts, dtype=int)
+    reference = np.zeros(send_size, dtype=bool)
+    for pos in range(pool_capacity):
+        for shard in range(expert_shards):
+            i = shard * pool_capacity + pos
+            e = int(received[i])
+            if e >= 0 and counts[e] < receiver_capacity:
+                reference[i] = True
+                counts[e] += 1
+    np.testing.assert_array_equal(keep, reference)
+
+    # Per-expert kept count is exactly min(total, capacity) -- the transpose does not change drop counts.
+    for e in range(local_experts):
+        total = int((received == e).sum())
+        assert int(((received == e) & keep).sum()) == min(total, receiver_capacity)
+
+    # Within a source, kept slots for an expert are the lowest pool positions: causality is preserved.
+    for shard in range(expert_shards):
+        block = slice(shard * pool_capacity, (shard + 1) * pool_capacity)
+        for e in range(local_experts):
+            positions = np.where(received[block] == e)[0]
+            kept_positions = positions[keep[block][positions]]
+            assert list(kept_positions) == list(positions[: len(kept_positions)])
+
+
+def test_interleaved_receiver_ranks_spread_overflow_evenly_across_sources():
+    """When every slot carries one oversubscribed expert, round-robin allocation keeps within one token
+    of `capacity / expert_shards` from each source, instead of a source-major prefix that starves the
+    last sources (the bias this replaces)."""
+    expert_shards, pool_capacity, local_experts, receiver_capacity = 4, 3, 1, 6
+    received_experts = jnp.zeros(expert_shards * pool_capacity, dtype=jnp.int32)  # all carry expert 0
+
+    ranks = _interleaved_receiver_ranks(
+        received_experts,
+        local_experts=local_experts,
+        expert_shards=expert_shards,
+        pool_capacity=pool_capacity,
+    )
+    keep = np.asarray(ranks < receiver_capacity).reshape(expert_shards, pool_capacity)
+    kept_per_source = keep.sum(axis=1)
+
+    assert int(keep.sum()) == receiver_capacity
+    assert kept_per_source.max() - kept_per_source.min() <= 1  # even, not a source prefix
+
+    # The source-major baseline instead keeps a prefix of whole sources (the starvation this fixes).
+    plain = np.asarray(_receiver_ranks(received_experts, local_experts=local_experts) < receiver_capacity).reshape(
+        expert_shards, pool_capacity
+    )
+    assert plain.sum(axis=1).max() - plain.sum(axis=1).min() == pool_capacity
 
 
 def test_moe_mlp_runs_without_ep_axis():
@@ -818,104 +838,6 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
     assert int(overflow.sender) == 3
     assert int(overflow.receiver) == 3
-
-
-def test_fixed_pooled_wave_rotation_across_expert_shards_with_replica_axis():
-    """Multi-rack shape: a `data` (replica) axis crossing a 2-shard `expert` axis. The receiver rotation
-    keys off `axis_index("expert")`, so this exercises that call when another axis is present. At high
-    capacity (no drops) the sharded output and gradients must match the dense reference -- proving the
-    rotation machinery compiles and computes correctly per expert shard on a multi-axis mesh -- and a
-    low-capacity run must still execute and report drops on both shards without error."""
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
-    script = """
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-        from levanter.grug.grug_moe import moe_mlp
-
-        assert jax.device_count() == 4
-        # data=2 (the replica/rack axis) x expert=2 (the pooled-wave all-to-all axis).
-        mesh = Mesh(
-            np.asarray(jax.devices()).reshape(2, 2),
-            axis_names=("data", "expert"),
-            axis_types=(AxisType.Explicit, AxisType.Explicit),
-        )
-        tokens, hidden, inter, num_experts, topk = 8, 4, 3, 8, 2
-        x = jax.random.normal(jax.random.key(0), (tokens, hidden))
-        selected = ((jnp.arange(tokens)[:, None] + jnp.arange(topk)[None, :]) % num_experts).astype(jnp.int32)
-        combine = jax.nn.softmax(jax.random.normal(jax.random.key(1), (tokens, topk)), axis=-1)
-        w_up_gate = jax.random.normal(jax.random.key(2), (num_experts, hidden, 2 * inter))
-        w_down = jax.random.normal(jax.random.key(3), (num_experts, inter, hidden))
-        cotangent = jax.random.normal(jax.random.key(4), (tokens, hidden))
-
-        def dense(x, w_up_gate, w_down):
-            w13 = w_up_gate[selected]
-            h = jnp.einsum("th,tkhi->tki", x, w13)
-            g, u = jnp.split(h, [inter], axis=-1)
-            eo = jnp.einsum("tki,tkih->tkh", jax.nn.silu(g) * u, w_down[selected])
-            return jnp.einsum("tkh,tk->th", eo, combine)
-
-        expected = dense(x, w_up_gate, w_down)
-        expected_grads = jax.grad(
-            lambda x, a, b: jnp.sum(dense(x, a, b) * cotangent), argnums=(0, 1, 2)
-        )(x, w_up_gate, w_down)
-
-        batch_sh = NamedSharding(mesh, P(("data", "expert"), None))
-        expert_sh = NamedSharding(mesh, P("expert", None, None))
-        x = jax.device_put(x, batch_sh)
-        selected = jax.device_put(selected, batch_sh)
-        combine = jax.device_put(combine, batch_sh)
-        cotangent = jax.device_put(cotangent, batch_sh)
-        w_up_gate = jax.device_put(w_up_gate, expert_sh)
-        w_down = jax.device_put(w_down, expert_sh)
-
-        def pooled(x, a, b, capacity):
-            return moe_mlp(
-                x, selected, combine, a, b,
-                activation=jax.nn.silu,
-                implementation="fixed_pooled_wave_all_to_all",
-                mesh=mesh,
-                capacity_factor=capacity,
-                pooled_transport_capacity_factor=capacity,
-                num_expert_waves=2,
-            )
-
-        with jax.set_mesh(mesh):
-            actual = pooled(x, w_up_gate, w_down, 4.0)
-            actual_grads = jax.grad(
-                lambda x, a, b: jnp.sum(pooled(x, a, b, 4.0) * cotangent), argnums=(0, 1, 2)
-            )(x, w_up_gate, w_down)
-
-            # Low capacity: the rotation-with-drops path must execute on both shards and report drops.
-            _, overflow = moe_mlp(
-                x, selected, combine, w_up_gate, w_down,
-                activation=jax.nn.silu,
-                implementation="fixed_pooled_wave_all_to_all",
-                mesh=mesh,
-                capacity_factor=0.5,
-                pooled_transport_capacity_factor=0.5,
-                num_expert_waves=2,
-                report_capacity_overflow=True,
-            )
-
-        np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
-        for a, e in zip(actual_grads, expected_grads, strict=True):
-            np.testing.assert_allclose(np.asarray(a), np.asarray(e), rtol=1e-5, atol=1e-5)
-        assert int(overflow.sender) + int(overflow.receiver) > 0
-        assert jnp.isfinite(actual).all()
-    """
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
 
 
 def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
