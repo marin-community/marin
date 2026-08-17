@@ -30,10 +30,6 @@ def _numeric(values: dict) -> dict[str, float]:
 
 
 def _result_task_dir(result_file: StoragePath) -> str:
-    """Return ``<task_dir>`` from ``<task_dir>/<model>/results_<ts>.json``.
-
-    The evalchemy client assigns each task configuration a unique alias or ``name_Nshot`` directory.
-    """
     task_dir = result_file.parent.parent.name
     if not task_dir:
         raise ValueError(f"unexpected evalchemy results layout (want <task_dir>/<model>/file): {result_file}")
@@ -53,13 +49,10 @@ class EvalResult(Artifact):
 
 
 class EvalchemyResult(EvalResult):
-    """An evalchemy run's output: lm-eval's native ``<task_dir>/<model>/results_<ts>.json`` tree.
+    """Per-task metrics from an Evalchemy result tree.
 
-    The evalchemy fork writes one result file per task configuration under the directory chosen by
-    :func:`~marin.evaluation.evalchemy.runner._task_dir`. Single-task files use that directory as the
-    metric key. Group-task entries use ``<task_dir>/<subtask>``. The task directory keeps shot
-    variants distinct. :func:`compile_eval_report` computes suite-level rollups because evalchemy
-    does not record cross-task averages.
+    Metric keys use task-config directories; group tasks append subtask names. Task-config keys keep
+    shot variants distinct. Evalchemy does not record cross-task averages.
     """
 
     @functools.cached_property
@@ -111,7 +104,6 @@ class EvalReport(Artifact):
     contributions from different results distinct."""
 
 
-# Map serialized result-type names to the readers used by :func:`compile_eval_report`.
 _EVAL_RESULT_TYPES: dict[str, type[EvalResult]] = {result_type_name(cls): cls for cls in (EvalchemyResult,)}
 
 

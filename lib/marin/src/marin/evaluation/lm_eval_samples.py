@@ -310,13 +310,12 @@ def _document_extent(doc_ids: Iterable[str]) -> int | None:
 
 
 def _is_infrastructure_error(sample: EvalSample) -> bool:
-    """Whether Evalchemy substituted a request failure for this sample's completion."""
     return any(
         value is not None and _INFRASTRUCTURE_ERROR_PREFIX in value for value in (sample.output, sample.extracted)
     )
 
 
-def task_coverage(samples: Sequence[EvalSample]) -> tuple[TaskCoverage, dict[str, float]]:
+def task_coverage_and_metrics(samples: Sequence[EvalSample]) -> tuple[TaskCoverage, dict[str, float]]:
     """Compute one task's coverage and metrics recovered after request failures.
 
     Ungraded documents and failed requests are unscored. Empty model completions remain scored and
@@ -468,7 +467,7 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> Sa
             count += len(samples)
             if samples:
                 task_key = keys[relative]
-                task_coverage_result, task_metrics = task_coverage(samples)
+                task_coverage_result, task_metrics = task_coverage_and_metrics(samples)
                 coverage[task_key] = task_coverage_result
                 if task_coverage_result.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):
                     recovered_metrics[task_key] = task_metrics
