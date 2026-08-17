@@ -266,18 +266,59 @@ def bounds_for(name: str) -> list[tuple[float, float]]:
         box.append((0.0, 1.0))  # second horizon
     if name == "gated":
         box.extend([(0.3, 12.0), (-6.0, -1.0)])  # gate sharpness, log gate scale in epochs
+    if name in ("two-bucket-split-damage", "two-horizon-split-damage"):
+        box.append((-6.0, 2.0))  # log shrinkage of the split's departure from the unsplit model
     return box
 
 
-def solve(columns: np.ndarray, response: np.ndarray) -> np.ndarray:
-    """Intercept free, every mechanism column non-negative, as in the committed model."""
+def shrink_for(name: str, theta: np.ndarray):
+    """Which amplitudes are shrunk together, and how hard (ATOM-015).
+
+    The split-damage models generalise the unsplit ones, and the difference between the two damage
+    amplitudes is the whole of that generalisation. Shrinking that difference therefore shrinks toward
+    the nested model rather than toward zero, which is the meaningful null here: the unshrunk fits
+    reproduce the ordering of the fresh two-phase gain but over-disperse its magnitude 5.7-fold, with
+    every error at the longest horizon in the same direction, which is what an unregularised head does to
+    a local gradient.
+    """
+    if name == "two-bucket-split-damage":
+        return ((2, 3),), 10.0 ** theta[-1]
+    if name == "two-horizon-split-damage":
+        return ((4, 5),), 10.0 ** theta[-1]
+    return None
+
+
+def solve(columns: np.ndarray, response: np.ndarray, shrink=None) -> np.ndarray:
+    """Intercept free, every mechanism column non-negative, as in the committed model.
+
+    `shrink` is `(pairs, weight)` from `shrink_for`: a ridge on the DIFFERENCE within each amplitude
+    pair, applied as extra rows so that non-negativity is still enforced by the same solve. A weight of
+    zero recovers the unshrunk fit exactly.
+    """
     if columns.shape[1] == 1:
         return np.array([response.mean()])
     basis = columns[:, :1] / np.linalg.norm(columns[:, :1])
     rest = columns[:, 1:] - basis @ (basis.T @ columns[:, 1:])
     target = response - basis @ (basis.T @ response)
     scale = np.maximum(np.linalg.norm(rest, axis=0), 1e-300)
-    amplitudes, _ = nnls(rest / scale, target)
+    design, target = rest / scale, target
+    if shrink is not None:
+        # Penalise the departure's CONTRIBUTION, not its amplitude. Writing the split as
+        # a_e*f + a_l*(g - f) = a_l*g + (a_e - a_l)*f, the whole departure from the nested model is the
+        # term (a_e - a_l)*f, whose size in response units is |a_e - a_l| times f's residualised norm.
+        # Penalising the bare amplitude difference instead would make the weight mean different things at
+        # different fitted damage exponents, since a steeply suppressed column buys large amplitudes --
+        # the fits here run to 15.5 against columns of order 1e-3 -- so a weight tuned on one fit would
+        # not transfer to the next. In the normalised amplitudes b = a * scale that penalty is a row
+        # sqrt(weight) * (e_i - e_j * scale_i / scale_j).
+        pairs, weight = shrink
+        rows = np.zeros((len(pairs), design.shape[1]))
+        for row, (first, second) in zip(rows, pairs, strict=True):
+            row[first] = np.sqrt(weight)
+            row[second] = -np.sqrt(weight) * scale[first] / scale[second]
+        design = np.vstack([design, rows])
+        target = np.concatenate([target, np.zeros(len(pairs))])
+    amplitudes, _ = nnls(design, target)
     amplitudes = amplitudes / scale
     intercept = float(np.mean(response - columns[:, 1:] @ amplitudes))
     return np.concatenate([[intercept], amplitudes])

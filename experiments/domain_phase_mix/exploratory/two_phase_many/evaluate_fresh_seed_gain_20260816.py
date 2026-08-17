@@ -108,7 +108,7 @@ def predict_gain(support: str, rung: int, tied, untied, name: str) -> dict:
 
     theta = contrast_module.select(panel, response, folds, name, "level")
     columns = stage1.design(panel, name, theta)
-    coefficients = stage1.solve(columns, response)
+    coefficients = stage1.solve(columns, response, stage1.shrink_for(name, theta))
     query = stage1._grid_panel(
         panel, np.array([tied[0], untied[0]], dtype=float), np.array([tied[1], untied[1]], dtype=float)
     )

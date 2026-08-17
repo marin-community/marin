@@ -79,7 +79,7 @@ def fit(rung: int, supports: tuple[str, ...], name: str, seed: int):
     folds = panel_module.spatial_folds(panel, seed=seed)
     theta = contrast_module.select(panel, response, folds, name, "level", seed=20260812 + seed)
     columns = stage1.design(panel, name, theta)
-    return theta, stage1.solve(columns, response)
+    return theta, stage1.solve(columns, response, stage1.shrink_for(name, theta))
 
 
 def predict(rung: int, supports: tuple[str, ...], name: str, targets, seed: int = 0) -> list[dict]:

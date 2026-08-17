@@ -75,7 +75,7 @@ def select(panel, response, folds, name: str, criterion: str, seed: int = 202608
             return 1e6
         total = 0.0
         for train, test in folds:
-            coefficients = stage1.solve(columns[train], response[train])
+            coefficients = stage1.solve(columns[train], response[train], stage1.shrink_for(name, theta))
             predicted = columns[test] @ coefficients
             if criterion == "level":
                 residual = predicted - response[test]
