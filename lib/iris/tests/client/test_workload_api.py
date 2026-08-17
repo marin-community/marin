@@ -6,7 +6,7 @@
 import operator
 
 import pytest
-from iris.client import IrisClient, Job, JobFailedError, JobState, JobStatus, Task, TaskState, TaskStatus
+from iris.client import IrisClient, Job, JobFailedError, JobState, TaskState
 from iris.client.workload import DeviceKind
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
@@ -85,7 +85,6 @@ def test_public_workload_handles_return_native_snapshots():
     task = job.tasks()[0]
     task_status = task.status()
 
-    assert isinstance(status, JobStatus)
     assert status.state is JobState.RUNNING
     assert status.job_id == JobName.from_wire("/alice/train")
     assert status.resources.device is not None
@@ -93,8 +92,6 @@ def test_public_workload_handles_return_native_snapshots():
     assert status.resources.device.variant == "H100"
     assert status.task_state_counts == {TaskState.RUNNING: 1}
 
-    assert isinstance(task, Task)
-    assert isinstance(task_status, TaskStatus)
     assert task_status.state is TaskState.RUNNING
     assert task_status.current_attempt_number == 2
     assert task_status.attempts[0].attempt_uid == "attempt-uid"

@@ -20,6 +20,22 @@ from iris.resources.state import FederationState, JobState, TaskState
 from iris.rpc import job_pb2, time_pb2
 from iris.time_proto import timestamp_from_proto
 
+_FEDERATION_STATES: dict[int, FederationState] = {
+    job_pb2.PEER_STATUS_NONE: FederationState.LOCAL,
+    job_pb2.PEER_STATUS_PENDING_SCHEDULING: FederationState.PENDING,
+    job_pb2.PEER_STATUS_ASSIGNED: FederationState.ASSIGNED,
+    job_pb2.PEER_STATUS_SYNCED: FederationState.SYNCED,
+    job_pb2.PEER_STATUS_REJECTED: FederationState.REJECTED,
+}
+
+
+def job_state_from_proto(value: int) -> JobState:
+    return JobState(job_pb2.JobState.Name(value).removeprefix("JOB_STATE_").lower())
+
+
+def _task_state_from_proto(value: int) -> TaskState:
+    return TaskState(job_pb2.TaskState.Name(value).removeprefix("TASK_STATE_").lower())
+
 
 def _timestamp(value: time_pb2.Timestamp, *, present: bool) -> Timestamp | None:
     return timestamp_from_proto(value) if present else None
@@ -67,7 +83,7 @@ def attempt_status_from_proto(value: job_pb2.TaskAttempt) -> AttemptStatus:
     return AttemptStatus(
         attempt_number=value.attempt_id,
         attempt_uid=value.attempt_uid,
-        state=TaskState(value.state),
+        state=_task_state_from_proto(value.state),
         worker_id=value.worker_id,
         exit_code=value.exit_code,
         error_message=value.error,
@@ -84,7 +100,7 @@ def attempt_status_from_proto(value: job_pb2.TaskAttempt) -> AttemptStatus:
 def task_status_from_proto(value: job_pb2.TaskStatus) -> TaskStatus:
     return TaskStatus(
         task_id=JobName.from_wire(value.task_id),
-        state=TaskState(value.state),
+        state=_task_state_from_proto(value.state),
         worker_id=value.worker_id,
         worker_address=value.worker_address,
         exit_code=value.exit_code,
@@ -121,7 +137,7 @@ def job_status_from_proto(value: job_pb2.JobStatus) -> JobStatus:
     parent_job_id = JobName.from_wire(value.parent_job_id) if value.parent_job_id else None
     return JobStatus(
         job_id=JobName.from_wire(value.job_id),
-        state=JobState(value.state),
+        state=job_state_from_proto(value.state),
         exit_code=value.exit_code,
         error_message=value.error,
         submitted_at=_timestamp(value.submitted_at, present=value.HasField("submitted_at")),
@@ -143,6 +159,6 @@ def job_status_from_proto(value: job_pb2.JobStatus) -> JobStatus:
         parent_job_id=parent_job_id,
         backend_id=value.backend_id,
         execution_cluster_id=value.cluster,
-        federation_state=FederationState(value.peer_status),
+        federation_state=_FEDERATION_STATES[value.peer_status],
         submitting_user=value.submitting_user,
     )

@@ -33,7 +33,7 @@ from rigging.timing import Duration, Timestamp
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.client.context_state import current_context, reset_context, set_context
 from iris.client.workload import JobStatus, TaskStatus
-from iris.client.workload_codec import job_status_from_proto, task_status_from_proto
+from iris.client.workload_codec import job_state_from_proto, job_status_from_proto, task_status_from_proto
 from iris.cluster.client import (
     ClusterClient,
     JobInfo,
@@ -62,7 +62,6 @@ from iris.cluster.types import (
 )
 from iris.resources.state import JobState, TaskState, is_job_finished
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.proto_display import job_state_friendly
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
@@ -833,7 +832,7 @@ class IrisClient:
         wire_id = job_id.to_wire()
         if wire_id not in states:
             raise ConnectError(Code.NOT_FOUND, f"Job {wire_id} not found")
-        return JobState(states[wire_id])
+        return job_state_from_proto(states[wire_id])
 
     def terminate(self, job_id: JobName) -> None:
         """Terminate a running job.
@@ -872,7 +871,7 @@ class IrisClient:
         """
         query = controller_pb2.Controller.JobQuery()
         if state is not None:
-            query.state_filter = job_state_friendly(state)
+            query.state_filter = state.value
         if prefix:
             query.job_id_prefix = prefix
 

@@ -86,7 +86,6 @@ from iris.client.workload import JobStatus
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.rpc.errors import format_connect_error
-from iris.rpc.proto_display import job_state_friendly
 from rigging.timing import ExponentialBackoff
 
 # `gh` calls are quick metadata reads; bound them so a hung call cannot wedge the
@@ -726,7 +725,7 @@ class IrisJobSource(Source):
             self.last_status = "waiting"
             return None
         status = self._result.result()
-        state_name = job_state_friendly(status.state)
+        state_name = status.state.value
         self.last_status = state_name
         return {"state": state_name}
 

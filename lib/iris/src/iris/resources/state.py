@@ -3,43 +3,43 @@
 
 """Workload lifecycle values independent of the RPC transport."""
 
-from enum import IntEnum
+from enum import StrEnum
 
 
-class JobState(IntEnum):
-    UNSPECIFIED = 0
-    PENDING = 1
-    BUILDING = 2
-    RUNNING = 3
-    SUCCEEDED = 4
-    FAILED = 5
-    KILLED = 6
-    WORKER_FAILED = 7
-    UNSCHEDULABLE = 8
+class JobState(StrEnum):
+    UNSPECIFIED = "unspecified"
+    PENDING = "pending"
+    BUILDING = "building"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    KILLED = "killed"
+    WORKER_FAILED = "worker_failed"
+    UNSCHEDULABLE = "unschedulable"
 
 
-class TaskState(IntEnum):
-    UNSPECIFIED = 0
-    PENDING = 1
-    BUILDING = 2
-    RUNNING = 3
-    SUCCEEDED = 4
-    FAILED = 5
-    KILLED = 6
-    WORKER_FAILED = 7
-    UNSCHEDULABLE = 8
-    ASSIGNED = 9
-    PREEMPTED = 10
-    COSCHED_FAILED = 11
-    MISSING = 12
+class TaskState(StrEnum):
+    UNSPECIFIED = "unspecified"
+    PENDING = "pending"
+    BUILDING = "building"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    KILLED = "killed"
+    WORKER_FAILED = "worker_failed"
+    UNSCHEDULABLE = "unschedulable"
+    ASSIGNED = "assigned"
+    PREEMPTED = "preempted"
+    COSCHED_FAILED = "cosched_failed"
+    MISSING = "missing"
 
 
-class FederationState(IntEnum):
-    LOCAL = 0
-    PENDING = 1
-    ASSIGNED = 2
-    SYNCED = 3
-    REJECTED = 4
+class FederationState(StrEnum):
+    LOCAL = "local"
+    PENDING = "pending"
+    ASSIGNED = "assigned"
+    SYNCED = "synced"
+    REJECTED = "rejected"
 
 
 TERMINAL_JOB_STATES = frozenset(

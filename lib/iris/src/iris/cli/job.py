@@ -60,9 +60,7 @@ from iris.rpc.errors import format_connect_error
 from iris.rpc.proto_display import (
     CONTAINER_PROFILE_NAMES,
     PRIORITY_BAND_NAMES,
-    job_state_friendly,
     priority_band_value,
-    task_state_friendly,
 )
 
 logger = logging.getLogger(__name__)
@@ -1286,7 +1284,7 @@ def list_jobs(ctx, state: str | None, prefix: str | None, limit: int) -> None:
 
     for j in jobs:
         job_id = j.job_id
-        state_name = job_state_friendly(j.state)
+        state_name = j.state.value
         submitted = j.submitted_at.as_formatted_date() if j.submitted_at is not None else "-"
 
         reason = j.error_message or j.pending_reason or ""
@@ -1359,7 +1357,7 @@ def build_job_summary(
             {
                 "task_id": str(t.task_id),
                 "index": _task_index(str(t.task_id)),
-                "state": task_state_friendly(t.state),
+                "state": t.state.value,
                 # Only surface exit_code once the task is terminal. Wire scalar
                 # defaults mean a RUNNING/ASSIGNED/BUILDING task would otherwise
                 # report exit=0 and look like a clean success.
@@ -1378,7 +1376,7 @@ def build_job_summary(
     return {
         "job_id": str(job_status.job_id),
         "name": job_status.name,
-        "state": job_state_friendly(job_status.state),
+        "state": job_status.state.value,
         "exit_code": int(job_status.exit_code),
         "error": job_status.error_message,
         "failure_count": int(job_status.failure_count),
@@ -1455,7 +1453,7 @@ def wait(ctx, job_id: str) -> None:
     except ConnectError as exc:
         raise click.ClickException(format_connect_error(exc)) from exc
 
-    click.echo(job_state_friendly(status.state))
+    click.echo(status.state.value)
     if status.state is not JobState.SUCCEEDED:
         raise SystemExit(1)
 

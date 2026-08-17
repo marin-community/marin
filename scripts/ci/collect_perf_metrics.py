@@ -172,14 +172,14 @@ class PerfReport:
 
 
 def _job_status_to_dict(job: JobStatus) -> dict:
-    def timestamp(value):
+    def timestamp_dict(value):
         return {"epoch_ms": value.epoch_ms()} if value is not None else None
 
     return {
         "job_id": str(job.job_id),
         "state": job.state.name.lower(),
-        "started_at": timestamp(job.started_at),
-        "finished_at": timestamp(job.finished_at),
+        "started_at": timestamp_dict(job.started_at),
+        "finished_at": timestamp_dict(job.finished_at),
         "failure_count": job.failure_count,
         "preemption_count": job.preemption_count,
         "task_state_counts": {state.name.lower(): count for state, count in job.task_state_counts.items()},

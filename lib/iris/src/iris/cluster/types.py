@@ -35,6 +35,12 @@ from iris.cluster.setup_scripts import (
     wants_gpu_extra,
 )
 from iris.cluster.tpu_topology import get_tpu_topology
+from iris.resources.state import (
+    TERMINAL_JOB_STATES as NATIVE_TERMINAL_JOB_STATES,
+)
+from iris.resources.state import (
+    TERMINAL_TASK_STATES as NATIVE_TERMINAL_TASK_STATES,
+)
 from iris.rpc import controller_pb2, job_pb2
 
 
@@ -833,25 +839,11 @@ class Namespace(str):
 
 
 TERMINAL_JOB_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.JOB_STATE_SUCCEEDED,
-        job_pb2.JOB_STATE_FAILED,
-        job_pb2.JOB_STATE_KILLED,
-        job_pb2.JOB_STATE_WORKER_FAILED,
-        job_pb2.JOB_STATE_UNSCHEDULABLE,
-    }
+    job_pb2.JobState.Value(f"JOB_STATE_{state.name}") for state in NATIVE_TERMINAL_JOB_STATES
 )
 
 TERMINAL_TASK_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.TASK_STATE_SUCCEEDED,
-        job_pb2.TASK_STATE_FAILED,
-        job_pb2.TASK_STATE_KILLED,
-        job_pb2.TASK_STATE_UNSCHEDULABLE,
-        job_pb2.TASK_STATE_WORKER_FAILED,
-        job_pb2.TASK_STATE_PREEMPTED,
-        job_pb2.TASK_STATE_COSCHED_FAILED,
-    }
+    job_pb2.TaskState.Value(f"TASK_STATE_{state.name}") for state in NATIVE_TERMINAL_TASK_STATES
 )
 
 

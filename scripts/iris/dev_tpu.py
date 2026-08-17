@@ -29,7 +29,7 @@ from iris.cluster.composer import provider_bundle
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.constraints import zone_constraint
 from iris.cluster.types import Entrypoint, JobName, ResourceSpec, tpu_device
-from iris.resources.state import JobState, TaskState
+from iris.resources.state import TERMINAL_JOB_STATES, JobState, TaskState
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from marin.cluster import gcp
@@ -581,13 +581,7 @@ def wait_for_workers(job, client: IrisClient, *, timeout: float, project: str) -
 
 def is_job_active(client: IrisClient, job_id: str) -> bool:
     status = client.status(JobName.from_wire(job_id))
-    return status.state not in {
-        JobState.SUCCEEDED,
-        JobState.FAILED,
-        JobState.KILLED,
-        JobState.WORKER_FAILED,
-        JobState.UNSCHEDULABLE,
-    }
+    return status.state not in TERMINAL_JOB_STATES
 
 
 def sync_all_workers(workers: list[DevTpuWorker], local_path: Path) -> None:
