@@ -341,6 +341,23 @@ def test_coordinator_stage_filter_aggregates_same_name_across_stages():
     assert coord.get_counters() == {"errors": 10}
 
 
+def test_coordinator_stage_filter_splits_same_name_across_stages():
+    """Each stage's total is reported on its own, not folded across stages.
+
+    ``zephyr/item_count`` is recorded under every stage's label, so a shared
+    counter name across stages is the normal case rather than a corner one.
+    """
+    coord = _make_coordinator(
+        [
+            CounterSnapshot(counters={"zephyr/item_count": CounterEntry(10, stage="stage0")}, generation=1),
+            CounterSnapshot(counters={"zephyr/item_count": CounterEntry(7, stage="stage1")}, generation=2),
+        ]
+    )
+    assert coord.get_counters(stage="stage0") == {"zephyr/item_count": 10}
+    assert coord.get_counters(stage="stage1") == {"zephyr/item_count": 7}
+    assert coord.get_counters() == {"zephyr/item_count": 17}
+
+
 # ---------------------------------------------------------------------------
 # update_counter
 # ---------------------------------------------------------------------------
