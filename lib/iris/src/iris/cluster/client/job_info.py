@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from google.protobuf import json_format
 
 from iris.cluster.constraints import Constraint
+from iris.cluster.job_env import IRIS_WORKER_DEVICE_ENV, IRIS_WORKER_REGION_ENV
 from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import job_pb2
 
@@ -127,10 +128,10 @@ def get_job_info() -> JobInfo | None:
             ports=_parse_ports_from_env(),
             env=job_env,
             constraints=constraints,
-            worker_region=os.environ.get("IRIS_WORKER_REGION"),
+            worker_region=os.environ.get(IRIS_WORKER_REGION_ENV),
             worker_device=(
-                json_format.Parse(os.environ["IRIS_WORKER_DEVICE"], job_pb2.DeviceConfig())
-                if "IRIS_WORKER_DEVICE" in os.environ
+                json_format.Parse(os.environ[IRIS_WORKER_DEVICE_ENV], job_pb2.DeviceConfig())
+                if IRIS_WORKER_DEVICE_ENV in os.environ
                 else None
             ),
         )

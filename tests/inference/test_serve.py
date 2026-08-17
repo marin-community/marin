@@ -652,7 +652,7 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
         max_model_len=4096,
         dtype="bfloat16",
         has_chat_template=True,
-        tpu_type="v6e-8",
+        accelerator="v6e-8",
         endpoint="/serve/fake",
     )
 
@@ -698,7 +698,7 @@ def test_dashboard_health_reports_loading_when_upstream_down():
         max_model_len=None,
         dtype="bfloat16",
         has_chat_template=False,
-        tpu_type="v6e-8",
+        accelerator="v6e-8",
         endpoint="/serve/fake",
     )
     # Point at a closed port so the upstream health probe fails fast.

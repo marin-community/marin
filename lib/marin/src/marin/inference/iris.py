@@ -318,7 +318,7 @@ def _register_dashboard(
         max_model_len=service.model.max_model_len,
         dtype=service.model.dtype,
         has_chat_template=has_chat_template,
-        tpu_type=accelerator,
+        accelerator=accelerator,
         endpoint=service.endpoint_name,
         streaming=streaming,
     )

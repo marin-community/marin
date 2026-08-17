@@ -9,7 +9,8 @@ to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
 
     CANARY_ACCELERATOR   tpu | gpu
     CANARY_ATTENTION_IMPLEMENTATION gpu-only attention backend, e.g. gpu_fa4_cute
-    CANARY_TPU_TYPE      tpu-only comma-separated slice types, primary first (default v5p-8,v4-8)
+    CANARY_TPU_TYPE      tpu-only comma-separated slice types, primary first
+                         (default v5p-8,v6e-4,v4-8)
     CANARY_BATCH_SIZE    per-device batch size
     CANARY_CACHE_COPY_MAX_WORKERS gpu-only cache-copy worker cap
     CANARY_GPU_TYPE      gpu-only accelerator type, e.g. H100, GH200, B200
@@ -174,7 +175,7 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
         # batch_size * max_seq_len tokens, so per-device HBM scales with the global
         # batch. 128 leaves comfortable headroom on the v4-8 fallback (~30.75 GiB
         # usable, ~1/3 of v5p) while staying valid on v5p, giving one config across
-        # both pools. With the smaller representative model above this is well
+        # all fallback pools. With the smaller representative model above this is well
         # within v4's budget.
         batch_size = env_int("CANARY_BATCH_SIZE", 128)
         # Keep wall-clock bounded via a fixed token budget: tokens = batch_size *
