@@ -10,6 +10,7 @@ import pulumi
 import pulumi_cloudflare as cloudflare
 from rigging.filesystem.cluster_config import DataConfig, StoreType
 
+from iac.buckets.lifecycle import ExpirationRule, expiration_rules
 from iac.imports import NO_IMPORTS, ImportRegistrar
 
 R2_ENDPOINT_SUFFIX = ".r2.cloudflarestorage.com"
@@ -17,6 +18,7 @@ R2_DEFAULT_JURISDICTION = "default"
 R2_DEFAULT_LOCATION = "wnam"
 R2_DEFAULT_STORAGE_CLASS = "Standard"
 R2_DEFAULT_MULTIPART_EXPIRATION = 7
+R2_AGE_CONDITION_TYPE = "Age"
 SECONDS_PER_DAY = 86_400
 
 
@@ -34,15 +36,15 @@ def _account_id(data_config: DataConfig) -> str:
     return hostname.removesuffix(R2_ENDPOINT_SUFFIX)
 
 
-def _delete_rule(rule_id: str, prefix: str, days: int) -> cloudflare.R2BucketLifecycleRuleArgs:
+def _delete_rule(rule: ExpirationRule) -> cloudflare.R2BucketLifecycleRuleArgs:
     return cloudflare.R2BucketLifecycleRuleArgs(
-        id=rule_id,
+        id=rule.id,
         enabled=True,
-        conditions=cloudflare.R2BucketLifecycleRuleConditionsArgs(prefix=prefix),
+        conditions=cloudflare.R2BucketLifecycleRuleConditionsArgs(prefix=rule.prefix),
         delete_objects_transition=cloudflare.R2BucketLifecycleRuleDeleteObjectsTransitionArgs(
             condition=cloudflare.R2BucketLifecycleRuleDeleteObjectsTransitionConditionArgs(
-                type="Age",
-                max_age=days * SECONDS_PER_DAY,
+                type=R2_AGE_CONDITION_TYPE,
+                max_age=rule.days * SECONDS_PER_DAY,
             )
         ),
     )
@@ -56,20 +58,13 @@ def _lifecycle_rules(data_config: DataConfig) -> list[cloudflare.R2BucketLifecyc
             conditions=cloudflare.R2BucketLifecycleRuleConditionsArgs(prefix=""),
             abort_multipart_uploads_transition=cloudflare.R2BucketLifecycleRuleAbortMultipartUploadsTransitionArgs(
                 condition=cloudflare.R2BucketLifecycleRuleAbortMultipartUploadsTransitionConditionArgs(
-                    type="Age",
+                    type=R2_AGE_CONDITION_TYPE,
                     max_age=R2_DEFAULT_MULTIPART_EXPIRATION * SECONDS_PER_DAY,
                 )
             ),
         )
     ]
-    rules.extend(
-        _delete_rule(
-            f"marin-ttl-{ttl_days}d",
-            f"{data_config.temp_path}/ttl={ttl_days}d/",
-            ttl_days,
-        )
-        for ttl_days in data_config.ttl_days
-    )
+    rules.extend(_delete_rule(rule) for rule in expiration_rules(data_config))
     return rules
 
 
@@ -111,9 +106,8 @@ class R2DataBuckets(pulumi.ComponentResource):
                 provider_id=f"{account_id}/{bucket.name}/{R2_DEFAULT_JURISDICTION}",
             )
 
-            # Cloudflare's provider cannot import R2 lifecycle resources. The first
-            # update adopts the existing whole-bucket policy by writing this equivalent
-            # declaration after the bucket itself has been imported.
+            # Cloudflare's provider cannot import R2 lifecycle resources. After the
+            # bucket import, the first update writes this complete declared policy.
             cloudflare.R2BucketLifecycle(
                 f"lifecycle-{bucket.name}",
                 account_id=account_id,

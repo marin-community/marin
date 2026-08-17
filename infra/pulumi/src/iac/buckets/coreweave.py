@@ -3,31 +3,28 @@
 
 """CoreWeave AI Object Storage data buckets."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
 import pulumi
 import pulumi_coreweave as coreweave
 from rigging.filesystem.cluster_config import DataConfig, StoreType
 
+from iac.buckets.lifecycle import ExpirationRule, expiration_rules
 from iac.imports import NO_IMPORTS, ImportRegistrar
 
-
-@dataclass(frozen=True)
-class ExpirationRule:
-    id: str
-    prefix: str
-    days: int
-
-
-COREWEAVE_EXTRA_EXPIRATION_RULES = {
-    "marin-us-east-02a": (
-        ExpirationRule(
-            id="bench-probe-ttl",
-            prefix="tmp/benchmark/scratch/ttl-probe/",
-            days=1,
+COREWEAVE_EXTRA_EXPIRATION_RULES: Mapping[str, tuple[ExpirationRule, ...]] = MappingProxyType(
+    {
+        "marin-us-east-02a": (
+            ExpirationRule(
+                id="bench-probe-ttl",
+                prefix="tmp/benchmark/scratch/ttl-probe/",
+                days=1,
+            ),
         ),
-    ),
-}
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -48,18 +45,8 @@ def _expiration_rule(rule: ExpirationRule) -> coreweave.ObjectStorageBucketLifec
 def _lifecycle_rules(
     bucket: str, lifecycle_config: DataConfig
 ) -> list[coreweave.ObjectStorageBucketLifecycleConfigurationRuleArgs]:
-    extra_rules = [_expiration_rule(rule) for rule in COREWEAVE_EXTRA_EXPIRATION_RULES.get(bucket, ())]
-    ttl_rules = [
-        _expiration_rule(
-            ExpirationRule(
-                id=f"marin-ttl-{ttl_days}d",
-                prefix=f"{lifecycle_config.temp_path}/ttl={ttl_days}d/",
-                days=ttl_days,
-            )
-        )
-        for ttl_days in lifecycle_config.ttl_days
-    ]
-    return extra_rules + ttl_rules
+    rules = (*COREWEAVE_EXTRA_EXPIRATION_RULES.get(bucket, ()), *expiration_rules(lifecycle_config))
+    return [_expiration_rule(rule) for rule in rules]
 
 
 class CoreweaveDataBuckets(pulumi.ComponentResource):

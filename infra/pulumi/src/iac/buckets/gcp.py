@@ -9,6 +9,7 @@ import pulumi
 import pulumi_gcp as gcp
 from rigging.filesystem.cluster_config import DataConfig, StoreType
 
+from iac.buckets.lifecycle import expiration_rules
 from iac.imports import NO_IMPORTS, ImportRegistrar
 
 
@@ -24,11 +25,11 @@ def _lifecycle_rules(data_config: DataConfig) -> list[gcp.storage.BucketLifecycl
         gcp.storage.BucketLifecycleRuleArgs(
             action=gcp.storage.BucketLifecycleRuleActionArgs(type="Delete"),
             condition=gcp.storage.BucketLifecycleRuleConditionArgs(
-                age=ttl_days,
-                matches_prefixes=[f"{data_config.temp_path}/ttl={ttl_days}d/"],
+                age=rule.days,
+                matches_prefixes=[rule.prefix],
             ),
         )
-        for ttl_days in data_config.ttl_days
+        for rule in expiration_rules(data_config)
     ]
 
 

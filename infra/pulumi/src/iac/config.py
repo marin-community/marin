@@ -288,7 +288,6 @@ def load_iac_finelog_config(cluster: str) -> FinelogConfig:
 
 
 def load_iac_data_config(cluster: str) -> DataConfig:
-    """Load the cluster's data layout from the reviewed in-tree config directory."""
     return load_cluster_config_from_dirs(cluster, (IAC_DATA_CONFIG_DIR,))
 
 
