@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import dataclass
 from pathlib import Path
 
 from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent, LmDataConfig
@@ -14,12 +15,13 @@ from levanter.data.text.formats import TextLmDatasetFormat
 from marin.execution.lazy import ArtifactStep
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.grug.moe.launch_datakit_moe_mix import _phase_1_start_step, _two_phase_data_config
 from experiments.marin_tokenizer import marin_tokenizer
 
-MIXTURE_BLOCK_SIZE = 49_152
 PRETRAIN_TOKENS = 15_000_000_000_000
 COOLDOWN_TOKENS = 3_750_000_000_000
 TOTAL_TOKENS = PRETRAIN_TOKENS + COOLDOWN_TOKENS
+HARRIER_WINNER_QUALITY_REPAIR_TAG = "harrier-winner-quality-repair"
 
 HARRIER_WINNER_QUALITY_REPAIR_STORE = ArtifactStep.adopt(
     "datakit/store/harrier-all-sources-k40-q5",
@@ -27,42 +29,55 @@ HARRIER_WINNER_QUALITY_REPAIR_STORE = ArtifactStep.adopt(
     source="s3://marin-us-east-02a/marin/datakit/store_0381a974",
 )
 
-_SPEC_PATH = Path(__file__).with_name("harrier_winner_quality_repair.json")
-_SPEC = json.loads(_SPEC_PATH.read_text())
-_AVAILABLE_TOKENS: dict[str, int] = _SPEC["available_tokens"]
-_PHASE_WEIGHTS: tuple[dict[str, float], dict[str, float]] = (
-    _SPEC["phase0_weights"],
-    _SPEC["phase1_weights"],
-)
+
+@dataclass(frozen=True)
+class _HarrierQualityRepairSpec:
+    tokenizer: str
+    candidate_store_uri: str
+    phase_budgets: tuple[int, int]
+    available_tokens: tuple[tuple[str, int], ...]
+    phase_weights: tuple[tuple[tuple[str, float], ...], tuple[tuple[str, float], ...]]
 
 
-def _validate_spec() -> None:
-    cells = set(_AVAILABLE_TOKENS)
-    if _SPEC["phase_budgets"] != [PRETRAIN_TOKENS, COOLDOWN_TOKENS]:
+def _load_spec() -> _HarrierQualityRepairSpec:
+    raw = json.loads(Path(__file__).with_name("harrier_winner_quality_repair.json").read_text())
+    return _HarrierQualityRepairSpec(
+        tokenizer=raw["tokenizer"],
+        candidate_store_uri=raw["candidate_store_uri"],
+        phase_budgets=tuple(raw["phase_budgets"]),
+        available_tokens=tuple(raw["available_tokens"].items()),
+        phase_weights=(tuple(raw["phase0_weights"].items()), tuple(raw["phase1_weights"].items())),
+    )
+
+
+_SPEC = _load_spec()
+
+
+def _validate_spec(spec: _HarrierQualityRepairSpec) -> None:
+    available_tokens = dict(spec.available_tokens)
+    phase_weights = tuple(dict(weights) for weights in spec.phase_weights)
+    cells = set(available_tokens)
+    if spec.phase_budgets != (PRETRAIN_TOKENS, COOLDOWN_TOKENS):
         raise ValueError("winner quality repair must use the 15T/3.75T phase budgets")
-    if _SPEC["tokenizer"] != marin_tokenizer:
+    if spec.tokenizer != marin_tokenizer:
         raise ValueError("winner quality repair must use the Marin tokenizer")
-    if _SPEC["candidate_store_uri"] != HARRIER_WINNER_QUALITY_REPAIR_STORE.adopt_source:
+    if spec.candidate_store_uri != HARRIER_WINNER_QUALITY_REPAIR_STORE.adopt_source:
         raise ValueError("winner quality repair store does not match its adopted artifact")
-    for phase, weights in enumerate(_PHASE_WEIGHTS):
+    for phase, weights in enumerate(phase_weights):
         if set(weights) != cells or not math.isclose(sum(weights.values()), 1.0, abs_tol=1e-9):
             raise ValueError(f"winner quality repair phase {phase} is not a dense simplex")
     cumulative_epochs = {
-        cell: sum(tokens * weights[cell] for tokens, weights in zip(_SPEC["phase_budgets"], _PHASE_WEIGHTS))
-        / _AVAILABLE_TOKENS[cell]
+        cell: (
+            sum(tokens * weights[cell] for tokens, weights in zip(spec.phase_budgets, phase_weights, strict=True))
+            / available_tokens[cell]
+        )
         for cell in cells
     }
     if max(cumulative_epochs.values()) > 8.0 + 1e-8:
         raise ValueError("winner quality repair exceeds the eight-epoch cap")
 
 
-_validate_spec()
-
-
-def _phase_1_start_step(total_steps: int, batch_size: int) -> int:
-    requested = int(total_steps * PRETRAIN_TOKENS / TOTAL_TOKENS)
-    step_multiple = MIXTURE_BLOCK_SIZE // math.gcd(MIXTURE_BLOCK_SIZE, batch_size)
-    return max(step_multiple, requested // step_multiple * step_multiple)
+_validate_spec(_SPEC)
 
 
 def winner_quality_repair_data_config(
@@ -74,6 +89,8 @@ def winner_quality_repair_data_config(
     validation: dict[str, DatasetComponent | ConcatDatasetComponent],
 ) -> LmDataConfig:
     """Build the evaluated two-phase mixture for a simulated experiment budget."""
+    available_tokens = dict(_SPEC.available_tokens)
+    phase_weights = tuple(dict(weights) for weights in _SPEC.phase_weights)
     components = {
         cell: DatasetComponent(
             source=None,
@@ -85,27 +102,21 @@ def winner_quality_repair_data_config(
             tags=[cell],
             flat_cache=True,
         )
-        for cell in _AVAILABLE_TOKENS
+        for cell in available_tokens
     }
     collisions = components.keys() & validation.keys()
     if collisions:
         raise ValueError(f"validation components collide with Harrier buckets: {sorted(collisions)}")
-    components.update(validation)
-    validation_weights = {name: 0.0 for name in validation}
     experiment_budget = total_steps * batch_size * max_seq_len
     if experiment_budget > TOTAL_TOKENS:
         raise ValueError(f"experiment budget {experiment_budget} exceeds target budget {TOTAL_TOKENS}")
 
-    return LmDataConfig(
+    return _two_phase_data_config(
         tokenizer=marin_tokenizer,
-        cache_dir=None,
         components=components,
-        train_weights=[
-            (0, {**_PHASE_WEIGHTS[0], **validation_weights}),
-            (_phase_1_start_step(total_steps, batch_size), {**_PHASE_WEIGHTS[1], **validation_weights}),
-        ],
-        auto_build_caches=False,
-        mixture_block_size=MIXTURE_BLOCK_SIZE,
+        phase_weights=phase_weights,
+        phase_1_start=_phase_1_start_step(total_steps, batch_size),
+        val_components=validation,
         target_budget=TOTAL_TOKENS,
         experiment_budget=experiment_budget,
     )

@@ -27,6 +27,7 @@ from experiments.datasets.paloma import paloma_datasets
 from experiments.grug.moe.launch_datakit_moe_mix import _val_component
 from experiments.grug.moe_hero_ep.harrier_quality_repair import (
     HARRIER_WINNER_QUALITY_REPAIR_STORE,
+    HARRIER_WINNER_QUALITY_REPAIR_TAG,
     winner_quality_repair_data_config,
 )
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, build_hero_configs
@@ -217,7 +218,7 @@ def build_hero_run(
                     wave_tag,
                     size_tag,
                     "gb200",
-                    "harrier-winner-quality-repair",
+                    HARRIER_WINNER_QUALITY_REPAIR_TAG,
                     "MHEP",
                 ],
                 group="moe-hero-ep",
