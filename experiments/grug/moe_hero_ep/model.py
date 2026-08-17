@@ -817,9 +817,8 @@ def _qb_beta_hist(
     ``pmean`` estimate with a smoother global quantile at the cost of the per-expert count reduction.
     """
     target_rank = float(s_ma.shape[0]) * num_experts_per_token / num_experts  # tokens at/above beta per expert
-    # Test grid: 10k bins over a grid quantized to multiples of GRID_STEP, starting at +/-GRID_STEP and
-    # expanding in GRID_STEP increments to cover the live margin range (stateless, so no cross-step state).
-    n_bins = 10000
+    # The grid is quantized to multiples of GRID_STEP, starting at +/-GRID_STEP and expanding in
+    # GRID_STEP increments to cover the live margin range (stateless, so no cross-step state).
     GRID_STEP = 100.0
 
     def _fn(s_local: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:

@@ -82,6 +82,22 @@ def test_full_bank_top_k_is_rejected_before_launch():
         )
 
 
+def test_hist_bins_reach_the_model_config():
+    step = launch.build_hero_run(
+        run_id="hist-bins", dp_racks=1, num_steps=1, qb_use_histogram=True, qb_hist_bins=10000, version="dev"
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert (config.model.qb_estimator, config.model.qb_hist_bins) == (model.QbEstimator.HIST, 10000)
+
+
+def test_hist_bins_without_the_histogram_estimator_is_rejected():
+    # The top-k estimator ignores the bin count, so accepting it would silently record a bin
+    # count the run never used -- the same trap as a hardcoded n_bins shadowing the config.
+    with pytest.raises(ValueError, match="only applies to the histogram estimator"):
+        launch.build_hero_run(run_id="bins-without-hist", dp_racks=1, num_steps=1, qb_hist_bins=10000, version="dev")
+
+
 def test_checkpoint_path_overrides_the_step_output_path():
     """A run that only exercises the checkpoint write sends it to disposable storage."""
     temp_path = "s3://marin-us-east-02a/tmp/ttl=1d/hero-ckpt-smoke"

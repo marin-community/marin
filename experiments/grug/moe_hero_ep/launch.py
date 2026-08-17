@@ -100,6 +100,7 @@ def build_hero_run(
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
     qb_use_histogram: bool = False,
+    qb_hist_bins: int | None = None,
     eval_every: int = 0,
     save_checkpoints: bool = False,
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
@@ -162,6 +163,10 @@ def build_hero_run(
     }
     if qb_use_histogram:
         overrides["qb_estimator"] = QbEstimator.HIST
+    if qb_hist_bins is not None:
+        if not qb_use_histogram:
+            raise ValueError("--qb-hist-bins only applies to the histogram estimator; pass --qb-histogram.")
+        overrides["qb_hist_bins"] = qb_hist_bins
     if overrides:
         model = dataclasses.replace(model, **overrides)
     # A bank that is not divisible by the expert axis fails inside `moe_mlp`, which is after the rack
@@ -424,6 +429,12 @@ def build_hero_run(
     show_default=True,
     help="Estimate the QB quantile with the histogram estimator instead of the top-k mean (the hero default).",
 )
+@click.option(
+    "--qb-hist-bins",
+    type=click.IntRange(min=2),
+    default=None,
+    help="Bins for the QB histogram estimator. Requires --qb-histogram.",
+)
 @build_options
 def main(
     run_id: str,
@@ -438,6 +449,7 @@ def main(
     capacity_factor: float | None,
     latent_dim: int | None,
     qb_use_histogram: bool,
+    qb_hist_bins: int | None,
     save_checkpoints: bool,
     checkpoint_minutes: float,
     checkpoint_path: str | None,
@@ -460,6 +472,7 @@ def main(
         capacity_factor=capacity_factor,
         latent_dim=latent_dim,
         qb_use_histogram=qb_use_histogram,
+        qb_hist_bins=qb_hist_bins,
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),
         checkpoint_path=checkpoint_path,
