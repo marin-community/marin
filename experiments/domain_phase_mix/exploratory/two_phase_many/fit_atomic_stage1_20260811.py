@@ -210,11 +210,14 @@ def _path_design(panel, name: str, theta: np.ndarray) -> np.ndarray:
     the only one with a path worth attributing. The complement keeps the incumbent's readout at a fitted
     horizon, unchanged, so that the comparison isolates the split.
 
-    The readout is the retained form `(1 + x/scale)^-gamma` rather than `(x + offset)^-gamma`, because
-    the split evaluates it AT ZERO along a whole edge of the mixture square. The offset form is finite
-    there only by grace of a fitted floor, and drives it to a spike of height `offset^-gamma` that acts
-    as an indicator for that edge. The retained form is exactly 1 at zero exposure by construction and
-    matches the power law wherever exposure is large, which is where the law is claimed to hold.
+    The readout is written in the retained form `(1 + x/scale)^-gamma`. AN EARLIER VERSION OF THIS NOTE
+    CLAIMED THAT FORM MATTERS BECAUSE IT IS EXACTLY 1 AT ZERO EXPOSURE WHERE THE OFFSET FORM SPIKES, AND
+    THAT IS WRONG: `(1 + x/s)^-gamma = s^gamma * (x + s)^-gamma` identically, so the two are the same
+    column up to a constant that the free head amplitude absorbs, and swapping them cannot change any
+    fit. Verified by construction and numerically -- the ratio is constant to ten digits. The changes
+    that DID move the two-bucket results were made at the same time and are the real levers: the scale
+    bound widened from [1e-4, 10^-0.5] to [1e-2, 10^2], and only the replayed bucket being split. The
+    form is kept because the scale then reads directly as a saturation point in epochs.
     """
     ones = np.ones(len(panel.frame))
     gamma, scale, gamma_c, scale_c, horizon = theta[0], 10.0 ** theta[1], theta[2], 10.0 ** theta[3], theta[4]
