@@ -413,6 +413,64 @@ def test_rm_uses_s3_bulk_delete_batches(monkeypatch):
     assert {item["Key"] for batch in batches for item in batch} == {f"prefix/{index}" for index in range(1001)}
 
 
+class _BulkDeleteS3FileSystem:
+    """An S3 stub whose bulk delete reports per-key failures in the response body."""
+
+    protocol = "s3"
+
+    def __init__(self, failures):
+        self.failures = list(failures)
+        self.attempts = 0
+        self.config_kwargs = {}
+
+    def isdir(self, _path):
+        return True
+
+    def split_path(self, path):
+        bucket, key = path.split("/", 1)
+        return bucket, key, None
+
+    def call_s3(self, method, **kwargs):
+        if method == "list_objects_v2":
+            return {"Contents": [{"Key": "prefix/0", "Size": 1}]}
+        self.attempts += 1
+        errors = self.failures.pop(0) if self.failures else []
+        return {"Errors": errors}
+
+    def invalidate_cache(self):
+        pass
+
+
+def test_rm_retries_a_throttled_bulk_delete(monkeypatch):
+    """S3 answers 200 and reports throttling per key, so it never raises on its own.
+
+    A large removal provokes exactly this, and treating it as fatal aborts the run after
+    a partial delete.
+    """
+    fs = _BulkDeleteS3FileSystem([[{"Key": "prefix/0", "Code": "SlowDown"}], []])
+    monkeypatch.setattr(deletion, "_DELETE_BACKOFF", timing.ExponentialBackoff(initial=0.001, maximum=0.001))
+    monkeypatch.setattr(deletion, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+    monkeypatch.setattr(cli_module, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+
+    result = CliRunner().invoke(cli, ["rm", "-R", "s3://bucket/prefix"])
+
+    assert result.exit_code == 0, result.output
+    assert fs.attempts == 2
+
+
+def test_rm_fails_on_a_permanent_bulk_delete_error(monkeypatch):
+    fs = _BulkDeleteS3FileSystem([[{"Key": "prefix/0", "Code": "AccessDenied"}]])
+    monkeypatch.setattr(deletion, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+    monkeypatch.setattr(cli_module, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+
+    result = CliRunner().invoke(cli, ["rm", "-R", "s3://bucket/prefix"])
+
+    assert result.exit_code != 0
+    assert fs.attempts == 1
+
+
 def test_rm_batches_through_a_filesystem_wrapper(monkeypatch):
     """Backend dispatch must survive a proxy that forwards the protocol but not the class.
 

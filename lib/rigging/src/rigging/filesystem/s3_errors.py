@@ -51,3 +51,12 @@ def is_transient_s3_error(error: BaseException) -> bool:
             return True
     message = str(error)
     return any(fragment in message for fragment in _TRANSIENT_S3_MESSAGE_FRAGMENTS)
+
+
+def is_transient_s3_error_code(code: str | None) -> bool:
+    """Return whether an error code reported in a response body can be retried.
+
+    A bulk operation answers 200 and names each failed key in its body, so a throttled
+    key never raises and never reaches :func:`is_transient_s3_error`.
+    """
+    return code in _TRANSIENT_S3_ERROR_CODES

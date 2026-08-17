@@ -21,7 +21,7 @@ from typing import Protocol, cast
 from fsspec import AbstractFileSystem
 
 from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.s3_errors import is_transient_s3_error
+from rigging.filesystem.s3_errors import is_transient_s3_error, is_transient_s3_error_code
 from rigging.fsutil.listing import (
     DEFAULT_LISTING_WORKERS,
     DIRECTORY_TYPE,
@@ -44,6 +44,10 @@ GCS_DELETE_BATCH = 100
 
 _DELETE_MAX_ATTEMPTS = 4
 _DELETE_BACKOFF = ExponentialBackoff(initial=0.5, maximum=5.0, factor=2.0)
+
+
+class _ThrottledBulkDelete(Exception):
+    """Every key in one bulk delete failed with a transient code."""
 
 
 class _BatchDeleteFilesystem(Protocol):
@@ -223,14 +227,27 @@ def _delete_s3_objects(fs: AbstractFileSystem, paths: list[str]) -> None:
         objects.append(item)
     assert len(buckets) == 1
     bucket = buckets.pop()
-    response = retry_with_backoff(
-        lambda: fs.call_s3("delete_objects", Bucket=bucket, Delete={"Objects": objects, "Quiet": True}),
-        retryable=is_transient_s3_error,
+    retry_with_backoff(
+        lambda: _delete_s3_batch(fs, bucket, objects),
+        retryable=lambda error: isinstance(error, _ThrottledBulkDelete) or is_transient_s3_error(error),
         max_attempts=_DELETE_MAX_ATTEMPTS,
         backoff=_DELETE_BACKOFF,
         operation=f"DeleteObjects {bucket}",
     )
+
+
+def _delete_s3_batch(fs: AbstractFileSystem, bucket: str, objects: list[dict[str, str]]) -> None:
+    """Delete one batch, treating a throttled key as a failure of the whole request.
+
+    S3 answers 200 and names each failed key in ``Errors``, so throttling never raises on
+    its own. The retry repeats the whole batch, which is safe because deleting a key that
+    is already gone succeeds.
+    """
+    response = fs.call_s3("delete_objects", Bucket=bucket, Delete={"Objects": objects, "Quiet": True})
     errors = response.get("Errors", [])
-    if errors:
-        details = ", ".join(f"{error['Key']}: {error['Code']}" for error in errors)
-        raise RuntimeError(f"S3 bulk delete failed: {details}")
+    if not errors:
+        return
+    details = ", ".join(f"{error['Key']}: {error['Code']}" for error in errors)
+    if all(is_transient_s3_error_code(error.get("Code")) for error in errors):
+        raise _ThrottledBulkDelete(f"S3 bulk delete throttled: {details}")
+    raise RuntimeError(f"S3 bulk delete failed: {details}")
