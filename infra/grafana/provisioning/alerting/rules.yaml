@@ -399,8 +399,7 @@ groups:
         noDataState: OK
         execErrState: Alerting
         labels:
-          severity: warning
-          notification: slack
+          severity: critical
         annotations:
           summary: "{{ $labels.region }}: CoreWeave storage exceeds 80% of quota"
           runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md
