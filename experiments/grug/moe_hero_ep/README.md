@@ -132,14 +132,17 @@ group `moe-hero-ep` and the supplied run ID. The run output includes the durable
 artifact. Give each concurrent gang its own `IRIS_PORT_JAX`: rank 0 binds and registers that port
 for the JAX coordinator, and the default 8476 is shared by every run on the cluster.
 
-### Legacy small-scale ablations
+### Small-scale hero-shape ablations
 
-`small_scale_abl_launch.py` runs the earlier E192, top-4 shape (`--size` in `d768`…`d2048`) on one
-GB200 rack. It fixes the batch at ~4M tokens per step to hold the fixed-all-to-all drop dynamics, and
-sizes the step count from the model's active-parameter count: `num_steps` trains
-`--tokens-per-active-param` (default 750) tokens per active parameter. `--flavor ep` keeps the
-64-way expert axis; `--flavor fsdp-nodrop` runs the same shape dropless, and `--flavor fsdp-chunk4`
-runs it with four-chunk capacity. Print the plan without a GPU run:
+`small_scale_abl_launch.py` runs the hero shape — pooled-wave transport, 384 experts / top-8,
+hidden/2-wide experts in a hidden/2 latent, receiver/sender capacity 1.15 with 3 waves — at a
+downsized width (`--size` in `d768`…`d2048`) on one GB200 rack. It fixes the batch at ~4M tokens per
+step per rack to hold the pooled-wave drop dynamics, and sizes the step count from the model's
+active-parameter count: `num_steps` trains `--tokens-per-active-param` (default 750) tokens per
+active parameter. `--flavor ep` keeps the 64-way expert axis; `--flavor fsdp-nodrop` runs the same
+shape dropless, and `--flavor fsdp-chunk4` runs it with four-chunk capacity. Both pooled-wave gates
+are tunable: `--capacity-factor` (receiver) and `--transport-capacity-factor` (sender). Print the
+plan without a GPU run:
 
 ```bash
 python -m experiments.grug.moe_hero_ep.small_scale_abl_launch \
