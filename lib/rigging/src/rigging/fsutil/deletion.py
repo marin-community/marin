@@ -21,14 +21,9 @@ from typing import Protocol, cast
 from fsspec import AbstractFileSystem
 
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.protocols import is_gcs_filesystem, is_s3_filesystem
 from rigging.filesystem.s3_errors import is_transient_s3_error, is_transient_s3_error_code
-from rigging.fsutil.listing import (
-    DEFAULT_LISTING_WORKERS,
-    DIRECTORY_TYPE,
-    is_gcs_filesystem,
-    is_s3_filesystem,
-    metadata_listing_pages,
-)
+from rigging.fsutil.listing import DEFAULT_LISTING_WORKERS, DIRECTORY_TYPE, metadata_listing_pages
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 # Deletes are network-bound, but a bucket enforces its own write ceiling: GCS admits
@@ -45,9 +40,33 @@ GCS_DELETE_BATCH = 100
 _DELETE_MAX_ATTEMPTS = 4
 _DELETE_BACKOFF = ExponentialBackoff(initial=0.5, maximum=5.0, factor=2.0)
 
+# gcsfs serves listings and deletes from one session, whose aiohttp connector admits 100
+# sockets by default. A listing sized for its own command would hold most of the pool and
+# leave the deletes queued behind it. s3fs sizes its pool per command, so it needs no cap.
+_GCS_CONNECTION_LIMIT = 100
+
 
 class _ThrottledBulkDelete(Exception):
     """Every key in one bulk delete failed with a transient code."""
+
+
+class _BulkDeleteFailed(Exception):
+    """At least one key in a bulk delete failed with a permanent code."""
+
+
+def _is_retryable_delete(error: BaseException) -> bool:
+    """Classify a bulk delete failure.
+
+    The two outcomes this module raises are decided by type. Anything else came from the
+    transport, which :func:`is_transient_s3_error` classifies. That classifier falls back
+    to a substring scan, so a permanent failure whose message quotes a throttling code
+    would otherwise read as transient and re-send the whole batch.
+    """
+    if isinstance(error, _ThrottledBulkDelete):
+        return True
+    if isinstance(error, _BulkDeleteFailed):
+        return False
+    return is_transient_s3_error(error)
 
 
 class _BatchDeleteFilesystem(Protocol):
@@ -67,7 +86,6 @@ class DeleteProgress:
     bytes_deleted: int
     objects_listed: int
     listing_pages: int
-    requests_completed: int
     requests_active: int
     requests_total: int
     elapsed_seconds: float
@@ -80,7 +98,6 @@ class DeleteResult:
     url: str
     objects_deleted: int
     bytes_deleted: int
-    listing_pages: int
     elapsed_seconds: float
 
 
@@ -100,14 +117,13 @@ class _Listed:
 class _Deleted:
     objects: int = 0
     size_bytes: int = 0
-    requests: int = 0
 
 
 def delete_prefix(
     url: str,
     *,
     workers: int = DEFAULT_DELETE_WORKERS,
-    listing_workers: int = DEFAULT_LISTING_WORKERS,
+    listing_workers: int | None = None,
     progress: Callable[[DeleteProgress], None] | None = None,
 ) -> DeleteResult:
     """Remove every object below *url*, deleting while the listing streams.
@@ -115,14 +131,16 @@ def delete_prefix(
     Args:
         url: Prefix to empty.
         workers: Delete requests in flight at one time.
-        listing_workers: Threads that list prefixes.
+        listing_workers: Threads that list prefixes. Derived from the backend's
+            connection pool when omitted.
         progress: Called as each delete request completes.
 
     Returns:
         The totals for the removal.
     """
     fs, _ = filesystem_for(url)
-    batch_size = delete_batch_size(fs)
+    batch_size = _delete_batch_size(fs)
+    listing_workers = _resolve_listing_workers(fs, workers, listing_workers)
     listed = _Listed()
     deleted = _Deleted()
     started = time.monotonic()
@@ -136,7 +154,6 @@ def delete_prefix(
                 bytes_deleted=deleted.size_bytes,
                 objects_listed=listed.objects,
                 listing_pages=listed.pages,
-                requests_completed=deleted.requests,
                 requests_active=requests_active,
                 requests_total=workers,
                 elapsed_seconds=time.monotonic() - started,
@@ -157,7 +174,6 @@ def delete_prefix(
         url=url,
         objects_deleted=deleted.objects,
         bytes_deleted=deleted.size_bytes,
-        listing_pages=listed.pages,
         elapsed_seconds=time.monotonic() - started,
     )
 
@@ -190,11 +206,19 @@ def _drain(pending: dict[Future, _Batch], deleted: _Deleted, report: Callable[[i
         future.result()
         deleted.objects += len(batch.paths)
         deleted.size_bytes += batch.size_bytes
-        deleted.requests += 1
         report(len(pending))
 
 
-def delete_batch_size(fs: AbstractFileSystem) -> int:
+def _resolve_listing_workers(fs: AbstractFileSystem, workers: int, requested: int | None) -> int:
+    """How many threads may list while *workers* delete requests are in flight."""
+    if requested is not None:
+        return requested
+    if is_gcs_filesystem(fs):
+        return max(1, _GCS_CONNECTION_LIMIT - workers)
+    return DEFAULT_LISTING_WORKERS
+
+
+def _delete_batch_size(fs: AbstractFileSystem) -> int:
     """Objects per delete request, so that one batch costs one request."""
     if is_s3_filesystem(fs):
         return S3_DELETE_BATCH
@@ -229,7 +253,7 @@ def _delete_s3_objects(fs: AbstractFileSystem, paths: list[str]) -> None:
     bucket = buckets.pop()
     retry_with_backoff(
         lambda: _delete_s3_batch(fs, bucket, objects),
-        retryable=lambda error: isinstance(error, _ThrottledBulkDelete) or is_transient_s3_error(error),
+        retryable=_is_retryable_delete,
         max_attempts=_DELETE_MAX_ATTEMPTS,
         backoff=_DELETE_BACKOFF,
         operation=f"DeleteObjects {bucket}",
@@ -250,4 +274,4 @@ def _delete_s3_batch(fs: AbstractFileSystem, bucket: str, objects: list[dict[str
     details = ", ".join(f"{error['Key']}: {error['Code']}" for error in errors)
     if all(is_transient_s3_error_code(error.get("Code")) for error in errors):
         raise _ThrottledBulkDelete(f"S3 bulk delete throttled: {details}")
-    raise RuntimeError(f"S3 bulk delete failed: {details}")
+    raise _BulkDeleteFailed(f"S3 bulk delete failed: {details}")
