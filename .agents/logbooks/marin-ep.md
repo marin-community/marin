@@ -1361,3 +1361,24 @@ Experiment ID prefix: `MEP`.
 - Next action: score fused vs 17.0 s brd baseline; then logbook/issue
   milestone; remaining lever ladder: fused combine leg, fp8 wire (user
   ruling pending), XLA fusion mass.
+
+### 2026-08-16 22:35 - MEP-049: L1 three-mode split — combine fusion carries the whole fused win
+- While the hero fused arm queues (rack contended), replaced the event
+  sim's `pipelined` bool with `PipelineMode` {bulk, dispatch_fused, full};
+  dispatch_fused matches the landed mgpu_fused flavor (arrival-gated GEMM,
+  combine behind a GEMM barrier).
+- Hero EP64, cf 1.1, balanced counts, transport 1.8x-penalized (MEP-045
+  in-kernel measurement) for the gated modes, 48-layer fwd+bwd MoE mass:
+  bulk 3.074 s | dispatch_fused 3.118 s | full 2.583 s.
+- PREREGISTERED PREDICTION for mep-fused-ep64-25-20260817: the
+  dispatch-only fusion is ~neutral vs the 17.0 s brd baseline (-0.04 s,
+  within placement noise). The entire modeled win (+0.49 s/step, ~+0.7pp
+  MFU) requires the combine leg: per-tile combine puts streaming from the
+  GEMM epilogue. If the arm confirms neutral, build combine fusion next.
+- Caveat: sim "bulk" has no XLA cross-layer overlap, so absolute deltas
+  are upper bounds; the mode RANKING is the claim (exploratory).
+- Reusability note (user question): perfmodel/roofline + the
+  WorkItem/run_schedule scheduler are marin-ep-agnostic (other branches
+  supply their own program builder; bulk mode already approximates the
+  stock XLA shape). simcore/oracle stay SPEC-coupled by design. Extraction
+  to a neutral home is ~1h if #8317/#8108 want it.

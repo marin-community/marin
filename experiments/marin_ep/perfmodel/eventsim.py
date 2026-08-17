@@ -13,10 +13,14 @@ real `[S, E]` count matrix, e.g. `simcore.Routing.counts`).
 
 Two program shapes share the same work items:
 
-- `pipelined=True`: the Marin EP design — GEMM tiles depend only on the
-  dispatch tiles covering their rows; combine tiles depend only on their
-  GEMM tile.
-- `pipelined=False`: bulk-synchronous baseline — full barriers between
+- `PipelineMode.FULL`: the Marin EP design — GEMM tiles depend only on
+  the dispatch tiles covering their rows; combine tiles depend only on
+  their GEMM tile.
+- `PipelineMode.DISPATCH_FUSED`: GEMM tiles are arrival-gated, but the
+  combine waits for a full GEMM barrier — the shape of the
+  `mgpu_fused` flavor, which fuses only the forward dispatch + gate/up
+  GEMM launch.
+- `PipelineMode.BULK`: bulk-synchronous baseline — full barriers between
   dispatch, GEMM, and combine phases, approximating today's XLA
   all-to-all schedule shape.
 
@@ -32,11 +36,20 @@ import bisect
 import heapq
 from collections import defaultdict
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 import numpy as np
 
 from experiments.marin_ep.oracle import expert_capacity, kept_rows_per_expert
 from experiments.marin_ep.perfmodel.roofline import GB200, HERO, Hardware
+
+
+class PipelineMode(StrEnum):
+    """How much of the dispatch -> GEMM -> combine chain overlaps."""
+
+    BULK = "bulk"
+    DISPATCH_FUSED = "dispatch_fused"
+    FULL = "full"
 
 
 @dataclass(frozen=True)
@@ -162,7 +175,7 @@ def build_layer_program(
     hw: Hardware,
     *,
     backward: bool,
-    pipelined: bool,
+    mode: PipelineMode,
 ) -> list[WorkItem]:
     """Compile one layer direction into scheduler work items.
 
@@ -241,7 +254,7 @@ def build_layer_program(
                     dispatch_ids.append(item_id)
 
     # GEMM tiles per expert; each depends on the dispatch tiles overlapping
-    # its row range (pipelined) or on a full dispatch barrier (bulk). Tiles
+    # its row range (arrival-gated modes) or on a full dispatch barrier (bulk). Tiles
     # run in expert-major order; MEP-003 showed readiness-based scheduling
     # makes cross-expert tile interleaving a no-op, so no such knob exists.
     dispatch_barrier = len(items)
@@ -253,10 +266,10 @@ def build_layer_program(
         total_rows = int(rows_kept[:, g].sum())
         for tile_lo in range(0, total_rows, params.tile_rows):
             tile_hi = min(tile_lo + params.tile_rows, total_rows)
-            if pipelined:
-                deps = tuple(item for item, lo, hi in arrivals[g] if lo < tile_hi and hi > tile_lo)
-            else:
+            if mode is PipelineMode.BULK:
                 deps = (dispatch_barrier,)
+            else:
+                deps = tuple(item for item, lo, hi in arrivals[g] if lo < tile_hi and hi > tile_lo)
             item_id = len(items)
             items.append(
                 WorkItem(
@@ -285,7 +298,7 @@ def build_layer_program(
                 for tile_lo in range(0, rows, params.tile_rows):
                     tile_rows = min(params.tile_rows, rows - tile_lo)
                     lo, hi = row_lo + tile_lo, row_lo + tile_lo + tile_rows
-                    if pipelined:
+                    if mode is PipelineMode.FULL:
                         deps = tuple(item for item, glo, ghi in gemm_cover[g] if glo < hi and ghi > lo)
                     else:
                         deps = (gemm_barrier,)
@@ -309,13 +322,13 @@ def estimate_layer_makespan(
     hw: Hardware,
     *,
     backward: bool,
-    pipelined: bool,
+    mode: PipelineMode,
 ) -> Schedule:
-    return run_schedule(build_layer_program(counts, params, hw, backward=backward, pipelined=pipelined))
+    return run_schedule(build_layer_program(counts, params, hw, backward=backward, mode=mode))
 
 
 def hero_l1_report(hw: Hardware | None = None) -> str:
-    """L1 makespans at the hero shape, pipelined vs bulk, fwd and bwd."""
+    """L1 makespans at the hero shape across pipeline modes, fwd and bwd."""
     hw = hw or GB200
     counts = balanced_counts(HERO.ep, HERO.num_experts, HERO.assignments_per_device)
     capacity = expert_capacity(HERO.assignments_per_device * HERO.ep, HERO.num_experts, HERO.capacity_factor)
@@ -331,8 +344,7 @@ def hero_l1_report(hw: Hardware | None = None) -> str:
     lines = ["Marin EP L1 event-sim at hero shape (balanced routing, per layer):"]
     for backward in (False, True):
         name = "bwd" if backward else "fwd"
-        for pipelined in (True, False):
-            sched = estimate_layer_makespan(counts, params, hw, backward=backward, pipelined=pipelined)
-            label = "pipelined" if pipelined else "bulk"
-            lines.append(f"  {name} {label}: {sched.makespan * 1e3:.2f} ms")
+        for mode in (PipelineMode.FULL, PipelineMode.DISPATCH_FUSED, PipelineMode.BULK):
+            sched = estimate_layer_makespan(counts, params, hw, backward=backward, mode=mode)
+            lines.append(f"  {name} {mode.value}: {sched.makespan * 1e3:.2f} ms")
     return "\n".join(lines)
