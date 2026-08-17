@@ -6,8 +6,9 @@
 ``--mode copy`` copies normalized Parquet shards from any existing sample to a
 new sample root, rewriting ``NormalizedData`` artifacts for that destination.
 ``--mode regenerate`` downloads the registered source data, normalizes it, and
-samples 100B tokens into a new sample root. See ``experiments/datakit/README.md``
-for the required region-local Iris commands and cost caveats.
+samples the requested token count (100B by default) into a new sample root. See
+``experiments/datakit/README.md`` for the required region-local Iris commands
+and cost caveats.
 """
 
 import argparse
@@ -156,8 +157,9 @@ def main() -> None:
         _validate_data_prefix(args.data_prefix, args.destination_prefix)
         with use_data_config(replace(data_config(), root=args.data_prefix)):
             steps = regenerate_sample_steps(args.source_prefix, args.destination_prefix, args.target_total_tokens_b)
-
-    StepRunner().run(steps, max_concurrent=args.max_concurrent)
+            StepRunner().run(steps, max_concurrent=args.max_concurrent)
+    if args.mode is SampleMode.COPY:
+        StepRunner().run(steps, max_concurrent=args.max_concurrent)
 
     source_names = {step.name.removeprefix(f"{MATERIALIZE_STEP_PREFIX}/") for step in steps}
     _verify_source_set(source_names, args.destination_prefix)
