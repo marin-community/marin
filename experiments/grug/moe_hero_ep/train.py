@@ -537,6 +537,16 @@ def _make_train_step(
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
+    # NCCL symmetric windows reserve VA for the collective arena; the default
+    # growable pool can fail a late 32 GiB growth after parameters fill the
+    # device (observed on the mgpu_fused2 flavor). A nonzero value, in MiB,
+    # preallocates a bounded arena at client creation instead.
+    collective_mb = int(os.environ.get("MARIN_EP_COLLECTIVE_MEMORY_MB", "0"))
+    if collective_mb:
+        jax.config.update(
+            "jax_pjrt_client_create_options",
+            {"collective_memory_size": collective_mb * 1024 * 1024},
+        )
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
