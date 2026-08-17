@@ -886,3 +886,194 @@ def test_drop_metrics_sums_per_layer_counts_in_int64_without_overflow():
     assert metrics["moe/dropped_assignments"] == sender_total + receiver_total  # no int32 wrap
     assert metrics["moe/sender_dropped_assignments"] == sender_total
     assert metrics["moe/receiver_dropped_assignments"] == receiver_total
+
+
+def _run_multi_device(script: str) -> subprocess.CompletedProcess:
+    """Run a script under four host CPU devices, so `_BATCH_AXES` spans more than one shard."""
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    return subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+_MULTI_DEVICE_PREAMBLE = """
+    import math
+
+    import jax
+    import jax.numpy as jnp
+    import numpy as np
+    from jax.sharding import AxisType, Mesh, set_mesh
+    from jax.sharding import PartitionSpec as P
+
+    from experiments.grug.moe_hero_ep import model
+
+    mesh = Mesh(
+        np.asarray(jax.devices()).reshape(1, 1, 4, 1),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+"""
+
+
+def test_router_stats_reduce_once_after_the_layer_scan():
+    # The router metrics are logging-only (`next_token_loss` sets `loss = cross_entropy_loss`) and
+    # `qb_beta` reaches the router bias only on the next step, so none of their cross-device
+    # reductions belongs inside the layer scan: there they cost one small, fully exposed all-reduce
+    # per MoE layer -- 48 per step at hero scale -- for a value nothing in the layer reads.
+    # Assert structurally that the collective sits *after* the scan and carries the layer axis.
+    script = (
+        _MULTI_DEVICE_PREAMBLE
+        + """
+    import re
+
+    cfg = model.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=32,
+        intermediate_dim=16,
+        shared_expert_intermediate_dim=16,
+        num_shared_experts=1,
+        num_experts=8,
+        num_experts_per_token=2,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        local_kv_heads=2,
+        global_kv_heads=2,
+        head_dim=8,
+        max_seq_len=16,
+        sliding_window=8,
+        global_every=2,
+        capacity_factor=1.0,
+        initializer_std=0.5 / math.sqrt(32),
+        qk_mult=1.3,
+        attention_implementation="reference",
+        moe_implementation="fixed_all_to_all",
+        report_capacity_overflow=False,
+    )
+    tokens = jax.ShapeDtypeStruct((8, 16), jnp.int32)
+    with set_mesh(mesh):
+        hlo = (
+            jax.jit(lambda t: model.Transformer.init(cfg, key=jax.random.key(0))(t)[1])
+            .lower(tokens)
+            .compile()
+            .as_text()
+        )
+
+    # Split the module into named computations, then find the ones reachable from a `while` body.
+    comps = {}
+    for m in re.finditer(r"^(?:ENTRY )?(%[\\w.\\-]+|main)[^\\n{]*\\{$", hlo, re.M):
+        depth, k = 1, m.end()
+        while k < len(hlo) and depth:
+            depth += {"{": 1, "}": -1}.get(hlo[k], 0)
+            k += 1
+        comps[m.group(1).lstrip("%")] = hlo[m.end() : k]
+
+    bodies, frontier = set(), [m.group(1) for c in comps.values() for m in re.finditer(r"body=%?([\\w.\\-]+)", c)]
+    while frontier:
+        name = frontier.pop()
+        if name in bodies or name not in comps:
+            continue
+        bodies.add(name)
+        callee = re.compile(r"(?:calls|body|condition|to_apply)=%?([\\w.\\-]+)")
+        frontier += [m.group(1).strip("{}") for m in callee.finditer(comps[name])]
+
+    pattern = re.compile(r"= [^\\n]*\\ball-reduce(?:-start)?\\(")
+    in_scan = [ln.strip() for n in bodies for ln in comps[n].splitlines() if pattern.search(ln)]
+    after_scan = [ln.strip() for n, c in comps.items() if n not in bodies for ln in c.splitlines() if pattern.search(ln)]
+
+    assert not in_scan, f"router reductions leaked back into the layer scan: {in_scan}"
+    assert after_scan, "expected the router reduction to survive after the scan"
+    # The surviving collective must carry the [num_layers, ...] stack, i.e. it reduces all layers at once.
+    assert any("f32[2," in ln or "f32[2]" in ln for ln in after_scan), after_scan
+    """
+    )
+
+    result = _run_multi_device(script)
+    assert result.returncode == 0, result.stderr
+
+
+def test_hoisted_router_stats_match_the_per_layer_reduction():
+    # Reducing per shard and summing once is the same arithmetic as reducing per layer, because
+    # every router metric bottoms out in a linear reduction over tokens. Check against the
+    # pre-hoist implementation, reproduced inline.
+    script = (
+        _MULTI_DEVICE_PREAMBLE
+        + """
+    import jax.scipy as jsp
+
+    E, K, T, L = 8, 2, 64, 3
+
+    def per_layer_reference(selected_experts, router_probs, router_logits):
+        counts = jnp.sum(jax.nn.one_hot(selected_experts, E, dtype=jnp.float32), axis=(0, 1))
+        fraction = counts / jnp.maximum(jnp.sum(counts), 1.0)
+        p = jnp.mean(router_probs.astype(jnp.float32), axis=0)
+        z = jsp.special.logsumexp(router_logits.astype(jnp.float32), axis=-1)
+        return {
+            "routing_counts": counts,
+            "routing_entropy": -jnp.sum(fraction * jnp.log(fraction + 1e-6)),
+            "load_balancing_loss": E * jnp.sum(fraction * K * p),
+            "router_z_loss": jnp.mean(z**2),
+        }
+
+    rng = np.random.default_rng(0)
+    logits_np = (rng.standard_normal((L, T, E)) * 2.0).astype(np.float32)
+    sel_np = np.argsort(-logits_np, axis=-1)[..., :K].astype(np.int32)
+    probs_np = np.asarray(jax.nn.softmax(jnp.asarray(logits_np), axis=-1))
+    margins_np = logits_np - np.sort(logits_np, axis=-1)[..., -(K + 1) : -K]
+
+    spec = P(None, model._BATCH_AXES, None)
+    qb_count = max(1, (T // 4) * K // E)
+
+    def qb_shard(fn, out_spec):
+        return model.shard_map(fn, mesh=mesh, in_specs=(P(model._BATCH_AXES, None),), out_specs=out_spec)
+
+    with set_mesh(mesh):
+        logits = model.reshard(jnp.asarray(logits_np), spec)
+        sel = model.reshard(jnp.asarray(sel_np), spec)
+        probs = model.reshard(jnp.asarray(probs_np), spec)
+        margins = model.reshard(jnp.asarray(margins_np), spec)
+
+        @jax.jit
+        def reference():
+            layers = [per_layer_reference(sel[i], probs[i], logits[i]) for i in range(L)]
+            out = {k: jnp.stack([d[k] for d in layers]) for k in layers[0]}
+
+            def old_beta(x):
+                vals, _ = jax.lax.top_k(x.T, qb_count)
+                return jax.lax.pmean(vals[:, -1], axis_name=model._BATCH_AXES)
+
+            out["qb_beta"] = jnp.stack([qb_shard(old_beta, P())(margins[i]) for i in range(L)])
+            return out
+
+        @jax.jit
+        def hoisted():
+            shards = [model._local_routing_stats(sel[i], probs[i], logits[i], mesh, num_experts=E) for i in range(L)]
+            stacked = {k: jnp.stack([d[k] for d in shards]) for k in shards[0]}
+
+            def local_beta(x):
+                vals, _ = jax.lax.top_k(x.T, qb_count)
+                return vals[:, -1][None, :]
+
+            stacked["qb_beta_local"] = jnp.stack(
+                [qb_shard(local_beta, P(model._BATCH_AXES, None))(margins[i]) for i in range(L)]
+            )
+            return model._reduce_router_stats(stacked, num_experts=E, num_experts_per_token=K, num_tokens=T)
+
+        ref, new = jax.device_get(reference()), jax.device_get(hoisted())
+
+    assert sorted(ref) == sorted(new), (sorted(ref), sorted(new))
+    for key in ref:
+        np.testing.assert_allclose(np.asarray(ref[key]), np.asarray(new[key]), rtol=2e-6, atol=1e-6, err_msg=key)
+    # The counts must still be the *global* assignment totals, not one shard's.
+    np.testing.assert_allclose(np.asarray(new["routing_counts"]).sum(axis=-1), np.full(L, T * K))
+    """
+    )
+
+    result = _run_multi_device(script)
+    assert result.returncode == 0, result.stderr
