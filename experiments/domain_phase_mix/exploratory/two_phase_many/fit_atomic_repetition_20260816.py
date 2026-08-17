@@ -45,6 +45,11 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E
 )
 
 CANDIDATES = ("two-bucket", "two-horizon", "two-bucket-damage", "two-horizon-damage")
+# StarCoder is the bucket being replayed, so only its own targets respond to repetition. Measured at
+# 7.408B, code targets move from -0.00563 at full support to +0.01271 at m400 while broad text moves
+# from +0.00094 to +0.00066. Nineteen of the twenty-three targets are therefore INSENSITIVE to the very
+# variable a damage term is built on, and a median over all of them cannot show whether damage works.
+CODE_MARKERS = ("programing", "github", "arxiv_computer")
 
 
 def observed_gain(panel, response: np.ndarray) -> float:
@@ -99,6 +104,7 @@ def main() -> None:
 
         rows = {name: {"fit": [], "gain_error": [], "regret": []} for name in CANDIDATES}
         truth = []
+        is_code = np.array([any(marker in key for marker in CODE_MARKERS) for key in targets])
         for key in targets:
             y = panel.target(key)
             actual = observed_gain(panel, y)
@@ -113,16 +119,18 @@ def main() -> None:
             f"  observed two-phase gain across {len(truth)} targets: "
             f"median {np.median(truth):+.5f}, positive on {(truth > 0).sum()}/{len(truth)}"
         )
-        for name in CANDIDATES:
-            fit = np.array(rows[name]["fit"])
-            error = np.array(rows[name]["gain_error"])
-            regret = np.array(rows[name]["regret"])
-            print(
-                f"     {name:20s} RMSE {np.median(fit):.5f}   |gain error| {np.median(error):.5f}   "
-                f"selected-policy regret {np.median(regret):.5f}   within 0.002 on "
-                f"{(regret <= 0.002).sum():2d}/{len(regret)}",
-                flush=True,
-            )
+        for family, mask in (("CODE", is_code), ("BROAD", ~is_code)):
+            print(f"   {family} targets (n={int(mask.sum())}), observed gain median {np.median(truth[mask]):+.5f}")
+            for name in CANDIDATES:
+                fit = np.array(rows[name]["fit"])[mask]
+                error = np.array(rows[name]["gain_error"])[mask]
+                regret = np.array(rows[name]["regret"])[mask]
+                print(
+                    f"     {name:20s} RMSE {np.median(fit):.5f}   |gain error| {np.median(error):.5f}   "
+                    f"regret {np.median(regret):.5f}   within 0.002 on "
+                    f"{int((regret <= 0.002).sum()):2d}/{int(mask.sum())}",
+                    flush=True,
+                )
         print()
 
 
