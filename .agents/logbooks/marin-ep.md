@@ -1609,3 +1609,26 @@ Experiment ID prefix: `MEP`.
   with CUDA core-dump arming at process start
   (gb200-gpu-coredump-recipe) to capture the spinning warps' PCs.
 - Rack cost of the arc: 5 failed hero attempts; each killed on signature.
+
+### 2026-08-17 21:20 - MEP-063: stock-wheel EP64 arm FAILED — custom wheel still load-bearing
+- mep-stockwheel-fused-25-20260817 (ep-marin-mgpu-fused, full hero recipe
+  incl. ds-fusion off + cuda_async, stock dev20260809 nightlies, NO
+  --pjrt-wheel): compiled clean, then every rank crashed with
+  CUDA_ERROR_ILLEGAL_ADDRESS in the FIRST jit_train_step execution
+  ("Failed to retrieve branch_index value ... illegal memory access",
+  then ncclCommWindowDeregister failures + cudaFreeAsync spam). Two
+  identical attempts (19:53:18 and 21:09:50 UTC), zero steps completed;
+  killed on the second signature.
+- Interpretation: the ds-fusion flag + cuda_async combination that passes
+  the real smoke at 4 and 8 ranks does NOT carry to 64 ranks. The most
+  plausible remaining wheel delta is kMaxPeers 32->128 (one-shot
+  collective device kernels cap peers at 32; EP64 = 64 ranks;
+  openxla/xla#47283) — the recipe passes
+  --xla_gpu_ragged_all_to_all_mode=symmetric and the step still contains
+  XLA collectives outside our transport. Not root-caused on-rack
+  (exploratory); distinguishing test would be a stock arm with symmetric
+  one-shot paths disabled.
+- DECISION: keep the custom wheel (kMaxPeers=128) in the EP64 hero
+  recipe. Stock-wheel claim stands only at <=8 ranks. #47461/#47406
+  conclusions unaffected (they concern the ds-fusion escapee, validated
+  independently).
