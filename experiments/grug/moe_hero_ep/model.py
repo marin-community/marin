@@ -817,17 +817,22 @@ def _qb_beta_hist(
     ``pmean`` estimate with a smoother global quantile at the cost of the per-expert count reduction.
     """
     target_rank = float(s_ma.shape[0]) * num_experts_per_token / num_experts  # tokens at/above beta per expert
+    # Test grid: 10k bins over a grid quantized to multiples of GRID_STEP, starting at +/-GRID_STEP and
+    # expanding in GRID_STEP increments to cover the live margin range (stateless, so no cross-step state).
+    n_bins = 10000
+    GRID_STEP = 100.0
 
     def _fn(s_local: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
         # pmin/pmax have no autodiff rule and the range is a control quantity, so detach their inputs;
         # the bincount path drops tangents at the integer bin cast, so it needs none downstream either.
-        lo = jax.lax.pmin(jax.lax.stop_gradient(jnp.min(s_local)), axis_name=_BATCH_AXES)
-        hi = jax.lax.pmax(jax.lax.stop_gradient(jnp.max(s_local)), axis_name=_BATCH_AXES)
-        hi = jnp.maximum(hi, lo + 1e-6)  # guard a degenerate all-equal range
+        lo_live = jax.lax.pmin(jax.lax.stop_gradient(jnp.min(s_local)), axis_name=_BATCH_AXES)
+        hi_live = jax.lax.pmax(jax.lax.stop_gradient(jnp.max(s_local)), axis_name=_BATCH_AXES)
+        lo = jnp.minimum(-GRID_STEP, jnp.floor(lo_live / GRID_STEP) * GRID_STEP)
+        hi = jnp.maximum(GRID_STEP, jnp.ceil(hi_live / GRID_STEP) * GRID_STEP)
         beta = _bincount_upper_quantile(
             s_local, num_experts=num_experts, n_bins=n_bins, lo=lo, hi=hi, target_rank=target_rank
         )
-        return beta, lo, hi  # also surface the live margin range for logging
+        return beta, lo_live, hi_live  # surface the live (unquantized) margin range for logging
 
     return shard_map(_fn, mesh=mesh, in_specs=(P(_BATCH_AXES, None),), out_specs=(P(), P(), P()))(s_ma)
 
