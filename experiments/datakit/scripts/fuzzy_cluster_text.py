@@ -15,17 +15,21 @@ tree from anything computed on top of it: the normalized shard is named by
 indexes the manifest this job writes beside the data.
 
 Connected components are heavily skewed. A cluster above ``--max-cluster-size``
-is split on a single MinHash permutation of its own text: two documents with
-Jaccard J share their minimum n-gram hash with probability J, so a split on
-that value keeps most true duplicate pairs together, unlike a split on the
-document ID. The split is deterministic and depends on nothing but the text.
+is split in two levels. The first is a single MinHash permutation of the
+document's own text: two documents with Jaccard J share their minimum n-gram
+hash with probability J, so it keeps duplicate pairs together where a split on
+the document ID would scatter them. The second is a uniform split on the
+content ID, and it exists because the first cannot bound a group at all when
+the cluster is mostly one duplicate group -- identical documents share a
+minimum hash by construction. Both are deterministic functions of the document.
 
-    uv run iris --cluster=cw-us-east-02a job run --no-wait --priority batch \
-        --cpu 4 --memory 16GB -- python experiments/datakit/scripts/fuzzy_cluster_text.py \
+    uv run iris --cluster=marin job run --target-cluster cw-us-east-02a \
+        --no-wait --priority batch --cpu 16 --memory 96GB \
+        -- python experiments/datakit/scripts/fuzzy_cluster_text.py \
             --prefix s3://.../marin --candidates datakit/dedup_709f5997 \
             --verified datakit/verify_fuzzy_dups_c757e4f0 \
-            --sizes s3://.../user/rav/dedup/cluster_sizes/v1/sizes \
-            --out s3://.../user/rav/dedup/cluster_text/v1
+            --large-clusters s3://.../user/rav/dedup/large_clusters/v1/large_clusters.parquet \
+            --out s3://.../user/rav/dedup/cluster_text/v5
 """
 
 import argparse
@@ -59,12 +63,20 @@ COUNTER_PREFIX = "fuzzy/cluster_text"
 _SHARED_SHARDS_KEY = "fuzzy_cluster_text_shards"
 _SHARED_OVERSIZED_KEY = "fuzzy_cluster_text_oversized"
 SPLIT_NGRAM_SIZE = 5
+# Identical documents share a minimum n-gram hash, which is exactly what keeps
+# duplicates in one group -- and exactly why that hash cannot bound a group
+# that is mostly one duplicate group. The largest component produced a split of
+# 1,684,557 members against a 100,000 cap. A uniform sub-split on the content ID
+# caps it: every sub-group still solves internally, so the cost is one extra
+# survivor per sub-group, against 1.68 million removals.
+SPLIT_SUBDIVISIONS = 16
 
 _TEXT_SCHEMA = pa.schema(
     [
         pa.field("cluster_key", pa.string(), nullable=False),
         pa.field("dup_cluster_id", pa.string(), nullable=False),
         pa.field("split_index", pa.int32(), nullable=False),
+        pa.field("sub_index", pa.int32(), nullable=False),
         pa.field("id", pa.string(), nullable=False),
         pa.field("text", pa.large_string(), nullable=False),
         pa.field("file_idx", pa.int32(), nullable=False),
@@ -179,13 +191,18 @@ def _join_shard(shard: TextShard) -> Iterator[dict[str, Any]]:
                     text = text or ""
                     splits = oversized.get(cluster_id, 1)
                     split_index = 0
+                    sub_index = 0
+                    cluster_key = cluster_id
                     if splits > 1:
                         split_index = _split_hash(text) % splits
+                        sub_index = dupekit.hash_xxh3_64(record_id.encode()) % SPLIT_SUBDIVISIONS
+                        cluster_key = f"{cluster_id}:{split_index:04d}:{sub_index:02d}"
                         counters.pipeline.update_counter(f"{COUNTER_PREFIX}/split_members", 1)
                     yield {
-                        "cluster_key": cluster_id if splits == 1 else f"{cluster_id}:{split_index:04d}",
+                        "cluster_key": cluster_key,
                         "dup_cluster_id": cluster_id,
                         "split_index": split_index,
+                        "sub_index": sub_index,
                         "id": record_id,
                         "text": text,
                         "file_idx": shard.file_idx,
@@ -417,8 +434,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--worker-ram", default="128g")
     parser.add_argument("--worker-disk", default="512g")
     parser.add_argument("--task-cpu", type=float, default=1)
-    parser.add_argument("--task-ram", default="8g")
-    parser.add_argument("--task-disk", default="96g")
+    parser.add_argument("--task-ram", default="12g", help="Map task memory")
+    parser.add_argument("--task-disk", default="48g")
+    parser.add_argument("--reduce-task-ram", default="26g", help="Reduce holds a partition and its sort spill")
     return parser.parse_args(argv)
 
 
@@ -445,6 +463,7 @@ def main(argv: list[str] | None = None) -> None:
         "output_shards": args.output_shards,
         "duplicate_rule": None,
         "split_ngram_size": SPLIT_NGRAM_SIZE,
+        "split_subdivisions": SPLIT_SUBDIVISIONS,
         "oversized_clusters": oversized,
         "shards": [dataclasses.asdict(shard) for shard in shards],
     }
@@ -461,6 +480,7 @@ def main(argv: list[str] | None = None) -> None:
     logger.info("Duplicate rule: %s", params.model_dump_json() if params else "grouping only")
     worker = ResourceConfig(cpu=args.worker_cpu, ram=args.worker_ram, disk=args.worker_disk)
     task = ResourceConfig(cpu=args.task_cpu, ram=args.task_ram, disk=args.task_disk)
+    reduce_task = ResourceConfig(cpu=args.task_cpu, ram=args.reduce_task_ram, disk=args.task_disk)
     context = ZephyrContext(name="fuzzy-cluster-text", resources=worker, max_workers=args.max_workers)
     context.put(_SHARED_SHARDS_KEY, shards)
     context.put(_SHARED_OVERSIZED_KEY, oversized)
@@ -485,7 +505,7 @@ def main(argv: list[str] | None = None) -> None:
         if params is not None
         else grouped
     )
-    outcome = context.execute(pipeline, verbose=True, map_task_resources=task, reduce_task_resources=task)
+    outcome = context.execute(pipeline, verbose=True, map_task_resources=task, reduce_task_resources=reduce_task)
 
     markers = sum(result.get("markers", 0) for result in outcome.results if isinstance(result, dict))
     del markers
