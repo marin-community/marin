@@ -11,8 +11,7 @@ region-to-bucket mirror set, the URL scheme, and the temp TTL policy.
 ``marin``), loaded from ``config/<cluster>.yaml``. Every "where does data live"
 answer flows through it: :func:`marin_prefix` is ``data_config().resolved_root()``,
 and :func:`marin_temp_bucket` and the region helpers all read its fields.
-Lifecycle rules on the ``marin-{region}`` buckets are managed by
-``infra/configure_buckets.py``.
+Lifecycle rules on every configured data bucket are managed by ``infra/buckets``.
 """
 
 import contextlib
@@ -235,6 +234,20 @@ def load_cluster_config(cluster: str | None = None) -> DataConfig:
     return _load_cluster_config_cached(name)
 
 
+def load_cluster_config_from_dirs(cluster: str, config_dirs: Sequence[pathlib.Path]) -> DataConfig:
+    """Load a required data config from an explicit set of config directories.
+
+    Unlike :func:`load_cluster_config`, this does not consult per-user overrides
+    and does not fall back to an empty default when the file or ``data:`` block
+    is absent. It is intended for reviewed infrastructure inputs.
+    """
+    config_path = resolve_cluster_config(cluster, config_dirs)
+    config = _read_data_config(config_path)
+    if config is None:
+        raise ValueError(f"cluster config {config_path} has no `data:` section")
+    return config
+
+
 @functools.cache
 def _load_cluster_config_cached(cluster: str) -> DataConfig:
     try:
@@ -243,11 +256,16 @@ def _load_cluster_config_cached(cluster: str) -> DataConfig:
         if cluster == _DEFAULT_CLUSTER:
             return _FALLBACK_DATA_CONFIG
         raise
+    return _read_data_config(config_path) or _FALLBACK_DATA_CONFIG
+
+
+def _read_data_config(config_path: pathlib.Path) -> DataConfig | None:
+    """Parse the file's data config, returning None when its `data:` block is empty."""
     with config_path.open("rb") as f:
         document = yaml.safe_load(f) or {}
     data = document.get("data")
     if not data:
-        return _FALLBACK_DATA_CONFIG
+        return None
     return _parse_data_config(data)
 
 
@@ -423,10 +441,9 @@ def store_config(store: StoreType) -> StoreConfig:
 def s3_data_buckets() -> Mapping[str, BucketSpec]:
     """The R2/CoreWeave subset of :func:`data_buckets`.
 
-    These S3-compatible buckets carry ``tmp/ttl=Nd/`` lifecycle rules; used to
-    route temp paths (:func:`marin_temp_bucket`) and to drive
-    ``infra/configure_buckets.py``. The set is defined in ``config/*.yaml`` via
-    each bucket's ``store`` type (``r2``/``coreweave``).
+    These S3-compatible buckets carry ``tmp/ttl=Nd/`` lifecycle rules and are
+    used to route temp paths (:func:`marin_temp_bucket`). The set is defined in
+    ``config/*.yaml`` via each bucket's ``store`` type (``r2``/``coreweave``).
     """
     return MappingProxyType(
         {name: spec for name, spec in data_buckets().items() if spec.store in (StoreType.R2, StoreType.COREWEAVE)}
@@ -442,7 +459,7 @@ def _s3_bucket_from_prefix(prefix: str | None) -> str | None:
     """Return the bucket from an ``s3://bucket/…`` prefix, or ``None``.
 
     Only recognizes buckets in :func:`s3_data_buckets` (the R2/CoreWeave buckets
-    with lifecycle rules configured by ``infra/configure_buckets.py``), so unknown
+    with lifecycle rules managed by ``infra/buckets``), so unknown
     S3 buckets fall through to the flat non-TTL fallback instead of getting a
     ``tmp/ttl=Nd/`` path that would never be cleaned up.
     """
@@ -500,8 +517,7 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
 
         {marin_prefix}/tmp/{prefix}
 
-    Lifecycle rules on each ``marin-{region}`` GCS bucket and each R2/CoreWeave
-    data bucket — managed by ``infra/configure_buckets.py`` — auto-delete objects
+    Pulumi-managed lifecycle rules on every data bucket auto-delete objects
     under ``tmp/ttl=Nd/`` after *N* days.
 
     Args:
@@ -538,7 +554,7 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
             return _append_path_prefix(path, prefix)
 
     # R2 and CoreWeave temp lives at the bucket root so the `tmp/ttl=Nd/`
-    # lifecycle prefix configured by infra/configure_buckets.py applies. The
+    # lifecycle prefix managed by infra/buckets applies. The
     # bucket already pins the region (R2 is non-regional; CoreWeave encodes it in
     # the name, e.g. marin-us-east-02a), and the runtime marin prefix carries a
     # `marin/` data subdir (e.g. `s3://marin-na/marin`) that we deliberately strip.

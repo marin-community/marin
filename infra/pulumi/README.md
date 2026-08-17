@@ -5,7 +5,7 @@ Infrastructure-as-code for the static substrate of Marin clusters, per the desig
 
 It provisions RBAC, reserved NodePools, Kueue objects, the
 Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs for CoreWeave,
-plus shared GCLB/IAP ingress, firewall rules, static addresses, registries, and IAM for GCP.
+plus shared GCLB/IAP ingress, firewall rules, static addresses, registries, and IAM.
 It is the sole owner of these resources — Iris no longer provisions any of them
 (`verify_prerequisites()` in
 [`k8s/controller.py`](../../lib/iris/src/iris/cluster/platforms/k8s/controller.py) only checks
@@ -19,7 +19,9 @@ Stacks: one per cluster, each a `Pulumi.<cluster>.yaml` pointer to the cluster n
 `gs://marin-iac-state/`. GCP — `marin`, which declares the reserved federation-egress static
 IPs (`GcpStaticAddresses`), shared GCE load-balancer ingress (`GcpGclbIap`), and every
 non-authoritative GCP IAM grant on `hai-gcp-models` (`GcpIam`, driven by
-`src/iac/gcp/iam_data.yaml`; see "User grants" below).
+`src/iac/gcp/iam_data.yaml`; see "User grants" below). The manually operated
+[`infra/buckets`](../buckets/README.md) project owns the shared GCS, CoreWeave AI Object
+Storage, and Cloudflare R2 buckets.
 
 Beyond cluster prerequisites, the `iac` package also carries the reusable *service* components
 other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run` (IAP-gated Cloud Run,
@@ -86,7 +88,8 @@ while their values remain outside Pulumi.
 
 ## What it reads
 
-Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.yaml`):
+Cluster infrastructure comes from the per-cluster Iris config
+(`lib/iris/config/<cluster>.yaml`):
 
 - NodePools derive from `scale_groups` (`iac.nodepools.derive_nodepools`).
 - Namespace from `kubernetes_provider.namespace`; ClusterQueue name from
@@ -172,6 +175,8 @@ export KUBECONFIG=~/.kube/coreweave-iris
 pulumi stack select <cluster>
 pulumi preview
 ```
+
+CoreWeave cluster stacks require `KUBECONFIG` and the DNS credential.
 
 Read the diff before doing anything else. **No-change / update-in-place is safe. Any `replace`
 or `delete` on a NodePool is not** — it deprovisions a reserved bare-metal fleet. Stop and
@@ -263,7 +268,8 @@ posts one aggregated PR comment (status list plus per-stack diffs). Manual
 comment there; omit it for a drift check against the selected ref with no comment.
 **CI never runs `pulumi up`** — see `spec.md §9`. It authenticates as
 `pulumi-ci@hai-gcp-models.iam.gserviceaccount.com`, granted preview-only (decrypt/read, never
-write) access in [`infra/permissions`](../permissions/README.md).
+write) access in [`iam_data.yaml`](src/iac/gcp/iam_data.yaml). Shared data buckets are excluded
+from CI and operated through [`infra/buckets`](../buckets/README.md).
 
 Adapting this to another Pulumi project means a new thin workflow that triggers on that
 project's paths and calls `./.github/actions/pulumi-preview` with its own `stack`/`work-dir`.
@@ -278,14 +284,8 @@ project's paths and calls `./.github/actions/pulumi-preview` with its own `stack
 ## Future work
 
 - **CKS cluster object + VPC**: not yet managed by Pulumi; `CoreweaveCluster` only records the
-  resulting cluster identity as config (`CksClusterSpec`). CoreWeave publishes an official
-  Terraform provider Pulumi could bridge
-  (`pulumi package add terraform-provider coreweave/coreweave`).
-- **Object storage** (`s3://marin-<region>` buckets + access keys): no schema or component
-  exists yet; buckets are created by hand plus `configure_buckets.py` for lifecycle rules.
-  Clusters currently mix per-cluster buckets (`cw-us-west-04a`) and shared cross-region reuse
-  (`cw-rno2a`/`cw-us-east-08a` both read/write `marin-us-east-02a`'s bucket) — undecided whether
-  Pulumi should provision a bucket per cluster or this reuse is the standing choice.
+  resulting cluster identity as config (`CksClusterSpec`). The published CoreWeave Pulumi
+  package used for object storage also exposes the CKS and VPC resource types.
 - **finelog server Deployment**: a planned `FinelogServer` component, not yet built.
 - **Federation peers**: `lib/iris/config/marin.yaml`/`marin-dev.yaml`'s `peers:` entries are
   hand-edited per cluster; generate or CI-validate the peer set from the cluster configs so a

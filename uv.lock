@@ -109,6 +109,7 @@ fork-strategy = "fewest"
 
 [manifest]
 members = [
+    "marin-buckets",
     "marin-core",
     "marin-ducky",
     "marin-dupekit",
@@ -3338,6 +3339,17 @@ wheels = [
 ]
 
 [[package]]
+name = "marin-buckets"
+version = "0.0.0"
+source = { virtual = "infra/buckets" }
+dependencies = [
+    { name = "marin-iac", extra = ["deploy"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "marin-iac", extras = ["deploy"], editable = "infra/pulumi" }]
+
+[[package]]
 name = "marin-core"
 version = "0.2.0"
 source = { editable = "lib/marin" }
@@ -3980,6 +3992,7 @@ deploy = [
     { name = "pulumi" },
     { name = "pulumi-cloudflare" },
     { name = "pulumi-command" },
+    { name = "pulumi-coreweave" },
     { name = "pulumi-docker-build" },
     { name = "pulumi-gcp" },
     { name = "pulumi-github" },
@@ -4003,6 +4016,7 @@ requires-dist = [
     { name = "pulumi", marker = "extra == 'deploy'", specifier = ">=3.226,<4" },
     { name = "pulumi-cloudflare", marker = "extra == 'deploy'", specifier = ">=6,<7" },
     { name = "pulumi-command", marker = "extra == 'deploy'", specifier = ">=1,<2" },
+    { name = "pulumi-coreweave", marker = "extra == 'deploy'", specifier = ">=1,<2" },
     { name = "pulumi-docker-build", marker = "extra == 'deploy'", specifier = ">=0.0.8,<1" },
     { name = "pulumi-gcp", marker = "extra == 'deploy'", specifier = ">=9,<10" },
     { name = "pulumi-github", marker = "extra == 'deploy'", specifier = ">=6,<7" },
@@ -4422,7 +4436,6 @@ dependencies = [
     { name = "fsspec" },
     { name = "gcsfs" },
     { name = "google-auth" },
-    { name = "google-crc32c" },
     { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "pyyaml" },
@@ -6781,6 +6794,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/cf/56/b7f66c9d2e4536b24a5bbe4e743093c7cdd689343d86f020419f4897a88d/pulumi_command-1.2.1.tar.gz", hash = "sha256:cbc9281a6571701ac5db598dac0246a058875b62f28c40c7cc0fcdc36898918d", size = 33022, upload-time = "2026-03-04T00:23:25.84Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fa/ce/1e5f30f868ba0827ca3311b0b171b12606e30c05e864714764d8d943fef1/pulumi_command-1.2.1-py3-none-any.whl", hash = "sha256:c7e465338e4363f114ddff99ee249260c7770ef4451b970ab51f7e8a37c9b030", size = 36861, upload-time = "2026-03-04T00:23:24.571Z" },
+]
+
+[[package]]
+name = "pulumi-coreweave"
+version = "1.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "semver" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b7/18/f4b2c2f80f675c7faa7120ef97318f3735322e1026225b57b0a89023dd70/pulumi_coreweave-1.0.2.tar.gz", hash = "sha256:bddc3618963dbaa1ec822a22532998bf7c9d4249f92aeb4e406941e2023986c0", size = 40678, upload-time = "2026-08-06T11:31:10.985Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8f/42/847c895d8be4e4ece25161b3473e91f5571e0d544450cfff5fcaee617546/pulumi_coreweave-1.0.2-py3-none-any.whl", hash = "sha256:f226788dd45b11c8da96f9053676cca871174e77488555b799ef70fb21f89450", size = 56153, upload-time = "2026-08-06T11:31:09.646Z" },
 ]
 
 [[package]]

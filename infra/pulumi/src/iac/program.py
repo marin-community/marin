@@ -9,8 +9,9 @@ typed `provisioning:` section, and declares that cluster's resources. One stack 
 which resources: CoreWeave declares the controller RBAC, reserved NodePools, Kueue objects,
 the Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs; GCP declares
 the reserved federation-egress static IPs, Artifact Registry pull-through mirrors, the shared
-GCLB/IAP ingress, and every IAM grant on the project (`iac.gcp.iam.GcpIam`, replacing
-`infra/permissions`). Components not yet implemented are tracked in README.md's "Future work".
+GCLB/IAP ingress, and every IAM grant on the project
+(`iac.gcp.iam.GcpIam`, replacing `infra/permissions`). Components not yet implemented are
+tracked in README.md's "Future work".
 """
 
 import os
@@ -321,7 +322,6 @@ def _build_gcp(cluster: str, *, imports: ImportRegistrar) -> None:
     assert provisioning.gcp is not None  # guaranteed by load_provisioning
     gcp_provisioning = provisioning.gcp
     iam_config = load_iam_config()
-
     gcp_provider = gcp.Provider("gcp", project=gcp_provisioning.project)
     GcpStaticAddresses(
         "addresses",

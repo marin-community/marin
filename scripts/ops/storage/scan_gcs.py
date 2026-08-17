@@ -26,6 +26,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from typing import Any
@@ -564,7 +565,7 @@ def worker_job_entrypoint(
 
 
 def discover_top_level_prefixes(
-    buckets: list[str],
+    buckets: Sequence[str],
     project: str | None,
 ) -> list[ScanTask]:
     """Discover top-level prefixes for each bucket via delimiter listing."""
@@ -604,7 +605,7 @@ def discover_top_level_prefixes(
 
 
 def run_distributed(
-    buckets: list[str],
+    buckets: Sequence[str],
     num_workers: int,
     project: str | None,
     staging_dir: str,

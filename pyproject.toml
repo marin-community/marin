@@ -136,6 +136,7 @@ members = [
     "lib/zephyr",
     "lib/finestore",
     "infra/pulumi",
+    "infra/buckets",
 ]
 # Native maturin packages are excluded from uv workspace discovery because each
 # owns its own build backend and package metadata. The path sources below build
@@ -158,6 +159,7 @@ marin-core = { workspace = true }
 marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
 marin-finestore = { workspace = true }
+marin-iac = { workspace = true }
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
