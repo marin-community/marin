@@ -1012,15 +1012,13 @@ class MoEMLP(eqx.Module):
                 routed_x=None if routed_input is None else routed_input.astype(x_flat.dtype),
                 latent_up=None if self.w_latent_up is None else self.w_latent_up.astype(x_flat.dtype),
             )
-            # mok_like drops against `schedule_capacity`, the destination expert rank's padded
-            # receive capacity, so every dropped assignment is a receiver-side loss under the
-            # `CapacityOverflow` convention (cf. `ep_ring`, which reports the same way). The fused
-            # kernel has no separate pre-dispatch capacity, so the sender count is structurally
-            # zero. Publish all three keys: `scan` stacks one dict per layer and the consumer in
-            # `_router_metrics` indexes the sender/receiver split unconditionally.
+            # Publish only `capacity_overflow` here. The sender/receiver split is derived from it
+            # after the layer scan (see `_split_mok_like_overflow`): this body runs inside
+            # `eqx.filter_checkpoint`, whose `offload_moe` policy moves saved residuals to
+            # pinned_host, so every extra per-layer tensor added here is another buffer crossing
+            # that boundary. Keeping the scan body identical to the single-value form avoids
+            # perturbing the offload/donation layout for a value that is a constant and a copy.
             router_stats["capacity_overflow"] = dropped_assignments
-            router_stats["sender_capacity_overflow"] = _zero_dropped_assignments()
-            router_stats["receiver_capacity_overflow"] = dropped_assignments
             routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
             return reshard(routed, _batch_spec()), router_stats
 
@@ -1281,15 +1279,26 @@ class Transformer(eqx.Module):
         hidden, stacked_router_stats = jax.lax.scan(
             _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
         )
+        overflow = stacked_router_stats["capacity_overflow"]
+        if cfg.mok_like is not None:
+            # The fused backend reports one number, a receiver-side loss against the destination
+            # rank's padded receive capacity (cf. `ep_ring`); it has no pre-dispatch capacity, so
+            # the sender count is structurally zero. Split it here rather than inside the scan so
+            # the checkpointed layer body stays a single-value producer.
+            sender_overflow = jnp.zeros_like(overflow)
+            receiver_overflow = overflow
+        else:
+            sender_overflow = stacked_router_stats["sender_capacity_overflow"]
+            receiver_overflow = stacked_router_stats["receiver_capacity_overflow"]
         router_metrics = {
             "routing_entropy_per_layer": stacked_router_stats["routing_entropy"],
             "routing_counts_per_layer": stacked_router_stats["routing_counts"],
             "load_balancing_loss_per_layer": stacked_router_stats["load_balancing_loss"],
             "router_z_loss_per_layer": stacked_router_stats["router_z_loss"],
             "qb_beta_per_layer": stacked_router_stats["qb_beta"],
-            "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
-            "sender_capacity_overflow_per_layer": stacked_router_stats["sender_capacity_overflow"],
-            "receiver_capacity_overflow_per_layer": stacked_router_stats["receiver_capacity_overflow"],
+            "capacity_overflow_per_layer": overflow,
+            "sender_capacity_overflow_per_layer": sender_overflow,
+            "receiver_capacity_overflow_per_layer": receiver_overflow,
         }
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
