@@ -12,7 +12,6 @@ from infra.ci.select_tests import (
     SCOPES,
     UV_PACKAGE,
     MatrixLeg,
-    accelerator_suite_test_paths,
     classify,
     matrix_leg,
     select_changed_tests,
@@ -23,11 +22,6 @@ from infra.ci.select_tests import (
 def select_matrix(changed_files: list[str], repo_root: Path) -> list[MatrixLeg]:
     """Return the selector's diff-driven matrix without invoking git."""
     return select_changed_tests(changed_files, repo_root).matrix
-
-
-def select_accelerator_paths(changed_files: list[str], repo_root: Path) -> dict[str, list[str]]:
-    matrix = select_matrix(changed_files, repo_root)
-    return accelerator_suite_test_paths(changed_files, matrix, repo_root)
 
 
 def write(repo_root: Path, relative: str, body: str = "") -> Path:
@@ -217,34 +211,6 @@ def test_source_files_map_to_dotted_modules(tmp_path: Path) -> None:
 def test_evaldash_source_maps_to_dotted_module(tmp_path: Path) -> None:
     write(tmp_path, "infra/evaldash/src/metrics.py")
     assert classify(["infra/evaldash/src/metrics.py"], tmp_path).src_modules == {"infra.evaldash.src.metrics"}
-
-
-def _levanter_accelerator_workspace(repo_root: Path) -> None:
-    write(repo_root, "lib/haliax/src/haliax/__init__.py", '"""haliax."""\n')
-    write(repo_root, "lib/haliax/src/haliax/core.py", "X = 1\n")
-    write(repo_root, "lib/levanter/src/levanter/__init__.py", '"""levanter."""\n')
-    write(repo_root, "lib/levanter/src/levanter/model.py", "from haliax.core import X\n")
-    write(repo_root, "lib/levanter/src/levanter/unrelated.py", "Y = 2\n")
-    write(
-        repo_root,
-        "lib/levanter/tests/test_model.py",
-        """\
-        from levanter.model import X
-        from test_utils import skip_if_no_torch
-
-        def test_cpu():
-            assert X == 1
-
-        @skip_if_no_torch
-        def test_torch():
-            assert X == 1
-        """,
-    )
-    write(
-        repo_root,
-        "lib/levanter/tests/test_unrelated.py",
-        "from levanter.unrelated import Y\n\ndef test_unrelated():\n    assert Y == 2\n",
-    )
 
 
 def test_broad_trigger_does_not_source_build(tmp_path: Path) -> None:
