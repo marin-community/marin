@@ -117,7 +117,7 @@ Cluster infrastructure comes from the per-cluster Iris config
   `src/iac/buckets/` applies the canonical `tmp/ttl=Nd/` policy from `config/marin.yaml` to
   every backend. GCS also uses uniform bucket-level access, public-access prevention,
   Autoclass, disabled soft delete, and access logging. The live `bench-probe-ttl` rule on
-  `marin-us-east-02a` is declared alongside the generated CoreWeave TTL rules.
+  `marin-us-east-02a` is declared alongside the shared TTL rules.
 
 ## Operations
 
@@ -129,11 +129,6 @@ Cluster infrastructure comes from the per-cluster Iris config
   the Pulumi providers):
   ```bash
   uv sync --all-packages --extra deploy    # run from the repo root or anywhere in the tree
-  ```
-  The CoreWeave Python SDK under `sdks/coreweave/` is generated from the official provider
-  pinned in `Pulumi.yaml`. Regenerate it only when changing that provider version:
-  ```bash
-  pulumi -C infra/pulumi package add terraform-provider coreweave/coreweave 0.13.0
   ```
 - **Helm CLI**: [install](https://helm.sh/docs/intro/install/) (`brew install helm`), then
   register the CoreWeave chart repo:
@@ -312,8 +307,8 @@ project's paths and calls `./.github/actions/pulumi-preview` with its own `stack
 ## Future work
 
 - **CKS cluster object + VPC**: not yet managed by Pulumi; `CoreweaveCluster` only records the
-  resulting cluster identity as config (`CksClusterSpec`). The official CoreWeave provider is
-  already pinned for object storage and exposes the CKS and VPC resource types needed here.
+  resulting cluster identity as config (`CksClusterSpec`). The published CoreWeave Pulumi
+  package used for object storage also exposes the CKS and VPC resource types.
 - **finelog server Deployment**: a planned `FinelogServer` component, not yet built.
 - **Federation peers**: `lib/iris/config/marin.yaml`/`marin-dev.yaml`'s `peers:` entries are
   hand-edited per cluster; generate or CI-validate the peer set from the cluster configs so a

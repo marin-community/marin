@@ -4001,10 +4001,10 @@ requires-dist = [
     { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-iris", extras = ["controller"], editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
-    { name = "pulumi", marker = "extra == 'deploy'", specifier = ">=3.247,<4" },
+    { name = "pulumi", marker = "extra == 'deploy'", specifier = ">=3.226,<4" },
     { name = "pulumi-cloudflare", marker = "extra == 'deploy'", specifier = ">=6,<7" },
     { name = "pulumi-command", marker = "extra == 'deploy'", specifier = ">=1,<2" },
-    { name = "pulumi-coreweave", marker = "extra == 'deploy'", directory = "infra/pulumi/sdks/coreweave" },
+    { name = "pulumi-coreweave", marker = "extra == 'deploy'", specifier = ">=1,<2" },
     { name = "pulumi-docker-build", marker = "extra == 'deploy'", specifier = ">=0.0.8,<1" },
     { name = "pulumi-gcp", marker = "extra == 'deploy'", specifier = ">=9,<10" },
     { name = "pulumi-github", marker = "extra == 'deploy'", specifier = ">=6,<7" },
@@ -4424,7 +4424,6 @@ dependencies = [
     { name = "fsspec" },
     { name = "gcsfs" },
     { name = "google-auth" },
-    { name = "google-crc32c" },
     { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "pyyaml" },
@@ -6787,20 +6786,16 @@ wheels = [
 
 [[package]]
 name = "pulumi-coreweave"
-version = "0.13.0"
-source = { directory = "infra/pulumi/sdks/coreweave" }
+version = "1.0.2"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "parver" },
     { name = "pulumi" },
     { name = "semver" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "parver", specifier = ">=0.2.1" },
-    { name = "pulumi", specifier = ">=3.247.0,<4.0.0" },
-    { name = "semver", specifier = ">=2.8.1" },
-    { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.11,<5" },
+sdist = { url = "https://files.pythonhosted.org/packages/b7/18/f4b2c2f80f675c7faa7120ef97318f3735322e1026225b57b0a89023dd70/pulumi_coreweave-1.0.2.tar.gz", hash = "sha256:bddc3618963dbaa1ec822a22532998bf7c9d4249f92aeb4e406941e2023986c0", size = 40678, upload-time = "2026-08-06T11:31:10.985Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8f/42/847c895d8be4e4ece25161b3473e91f5571e0d544450cfff5fcaee617546/pulumi_coreweave-1.0.2-py3-none-any.whl", hash = "sha256:f226788dd45b11c8da96f9053676cca871174e77488555b799ef70fb21f89450", size = 56153, upload-time = "2026-08-06T11:31:09.646Z" },
 ]
 
 [[package]]

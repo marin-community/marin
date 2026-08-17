@@ -519,10 +519,8 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
 
         {marin_prefix}/tmp/{prefix}
 
-    Lifecycle rules on each ``marin-{region}`` GCS bucket (managed by
-    ``infra/pulumi``) and each R2/CoreWeave data bucket (managed by
-    ``infra/pulumi``) auto-delete objects under ``tmp/ttl=Nd/``
-    after *N* days.
+    Pulumi-managed lifecycle rules on every data bucket auto-delete objects
+    under ``tmp/ttl=Nd/`` after *N* days.
 
     Args:
         ttl_days: Lifecycle TTL in days.  Values not in the active config's

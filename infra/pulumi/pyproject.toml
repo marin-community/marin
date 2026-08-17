@@ -34,14 +34,14 @@ test = [
 # from pulling the pulumi providers into jobs that never deploy.
 [project.optional-dependencies]
 deploy = [
-    "pulumi>=3.247,<4",
+    "pulumi>=3.226,<4",
     "pulumi-kubernetes>=4.18,<5",
     "pulumi-gcp>=9,<10",
     "pulumi-github>=6,<7",
     "pulumi-docker-build>=0.0.8,<1",
     "pulumi-cloudflare>=6,<7",
     "pulumi-command>=1,<2",
-    "pulumi-coreweave",
+    "pulumi-coreweave>=1,<2",
     "google-cloud-kms>=2.24.0",
 ]
 
@@ -50,6 +50,3 @@ deploy = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/iac"]
-
-[tool.uv.sources]
-pulumi-coreweave = { path = "sdks/coreweave" }

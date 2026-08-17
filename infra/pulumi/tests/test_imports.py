@@ -81,25 +81,6 @@ def test_resolve_import_manifest_leaves_uncataloged_create_for_operator_decision
     assert summary.unresolved_by_type == {IAM_MEMBER_TYPE: 1}
 
 
-def test_resolve_import_manifest_preserves_parameterized_provider_dependency():
-    generated = _generated_manifest(component_is_new=True)
-    generated["resources"].insert(
-        1,
-        {
-            "type": "pulumi:providers:coreweave",
-            "name": "coreweave",
-            "logicalName": "coreweave-object-storage",
-        },
-    )
-
-    resolved = resolve_import_manifest(generated, [_member_spec()])
-    summary = import_manifest_summary(resolved)
-
-    assert resolved["resources"][1] == generated["resources"][1]
-    assert summary.imports_by_type == {IAM_MEMBER_TYPE: 1}
-    assert summary.unresolved_by_type == {}
-
-
 def test_validate_reviewed_manifest_accepts_unchanged_subset():
     current = resolve_import_manifest(_generated_manifest(), [_member_spec()])
     current["resources"].append(

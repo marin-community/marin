@@ -28,7 +28,6 @@ from iris.cluster.platforms.k8s.network_manifests import DEFAULT_CLUSTER_ISSUER
 from iris.cluster.platforms.k8s.types import parse_k8s_quantity
 from pydantic import BaseModel, Field, field_validator
 from rigging.config_discovery import resolve_cluster_config
-from rigging.filesystem.cluster_config import DataConfig, load_cluster_config_from_dirs
 
 # IaC reads only the reviewed, in-tree cluster config — deliberately NOT Iris's runtime
 # search path (IRIS_CLUSTER_CONFIG_DIRS), which checks the operator override
@@ -38,7 +37,6 @@ from rigging.filesystem.cluster_config import DataConfig, load_cluster_config_fr
 # project root (resolved by rigging.config_discovery).
 IAC_CLUSTER_CONFIG_DIR = "lib/iris/config"
 IAC_FINELOG_CONFIG_DIR = "lib/finelog/config"
-IAC_DATA_CONFIG_DIR = "config"
 MIN_KUEUE_MANAGER_MEMORY = "2Gi"
 
 
@@ -285,10 +283,6 @@ def load_iac_finelog_config(cluster: str) -> FinelogConfig:
     """Load a finelog config from the reviewed in-tree config directory."""
     path = resolve_cluster_config(cluster, dirs=(IAC_FINELOG_CONFIG_DIR,))
     return load_finelog_config(str(path))
-
-
-def load_iac_data_config(cluster: str) -> DataConfig:
-    return load_cluster_config_from_dirs(cluster, (IAC_DATA_CONFIG_DIR,))
 
 
 def load_provisioning(cluster: str) -> ProvisioningConfig:
