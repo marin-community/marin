@@ -172,7 +172,11 @@ def main(argv: list[str] | None = None) -> None:
                 members[cluster_id].append((doc_id, is_canonical, source_tag, shard))
             if done % 20_000 == 0:
                 logger.info(
-                    "Scanned %d/%d shards, %d clusters, %.0fs", done, len(paths), len(members), time.monotonic() - started
+                    "Scanned %d/%d shards, %d clusters, %.0fs",
+                    done,
+                    len(paths),
+                    len(members),
+                    time.monotonic() - started,
                 )
     logger.info("Sample holds %d clusters and %d members", len(members), sum(len(v) for v in members.values()))
 
@@ -229,7 +233,7 @@ def main(argv: list[str] | None = None) -> None:
         return source_tag, shard, {row for row in table.column("id").to_pylist() if row in ids}
 
     with ThreadPoolExecutor(max_workers=args.threads) as pool:
-        for source_tag, shard, found in pool.map(read_markers, list(needed.items())):
+        for source_tag, _shard, found in pool.map(read_markers, list(needed.items())):
             marker_ids.setdefault(source_tag, set()).update(found)
 
     reviews = []
@@ -337,16 +341,14 @@ def main(argv: list[str] | None = None) -> None:
             "median_novel_line_ratio": _percentile(line_ratios, 0.5),
             "p90_novel_line_ratio": _percentile(line_ratios, 0.9),
             "median_novel_token_ratio": _percentile([row["novelty"]["novel_token_ratio"] for row in group], 0.5),
-            "zero_substantive_novel_lines": sum(
-                1 for row in group if row["novelty"]["novel_substantive_lines"] == 0
-            ),
+            "zero_substantive_novel_lines": sum(1 for row in group if row["novelty"]["novel_substantive_lines"] == 0),
             "at_most_two_substantive_novel_lines": sum(
                 1 for row in group if row["novelty"]["novel_substantive_lines"] <= 2
             ),
         }
 
     examples = []
-    for band, group in sorted(by_band.items()):
+    for _, group in sorted(by_band.items()):
         for row in rng.sample(group, min(args.examples_per_band, len(group))):
             example = {key: value for key, value in row.items() if not key.startswith("_")}
             example["diff"] = unified_diff(row["_member_text"], row["_representative_text"], args.diff_lines)

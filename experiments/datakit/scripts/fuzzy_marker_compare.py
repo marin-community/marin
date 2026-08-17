@@ -25,7 +25,6 @@ from typing import Any
 
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
-from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext

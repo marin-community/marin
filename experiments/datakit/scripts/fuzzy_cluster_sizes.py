@@ -132,7 +132,9 @@ def candidate_shard_paths(prefix: str, candidates: str) -> list[str]:
         _, root = url_to_fs(directory)
         # ``ls`` answers with store-relative keys, so rebuild the full URL: a
         # scheme-less path would be read as a local file by the next stage.
-        names = sorted(str(path).rsplit("/", 1)[-1] for path in fs.ls(root, detail=False) if str(path).endswith(".parquet"))
+        names = sorted(
+            str(path).rsplit("/", 1)[-1] for path in fs.ls(root, detail=False) if str(path).endswith(".parquet")
+        )
         paths.extend(prefix_join(directory, name) for name in names)
     return paths
 

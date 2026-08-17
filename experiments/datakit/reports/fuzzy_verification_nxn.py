@@ -430,9 +430,7 @@ def best_partner(review: ClusterReview, index: int) -> PairScore | None:
     representative.
     """
     candidates = [
-        pair
-        for pair in review.pairs
-        if pair.member_index == index and pair.member_chars <= pair.representative_chars
+        pair for pair in review.pairs if pair.member_index == index and pair.member_chars <= pair.representative_chars
     ]
     if not candidates:
         return None
