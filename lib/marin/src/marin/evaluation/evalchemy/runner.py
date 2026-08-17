@@ -27,7 +27,7 @@ from marin.evaluation.evalchemy.runtime import (
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.lm_eval_samples import export_lm_eval_samples
-from marin.evaluation.records import RunStatus, TaskCoverage
+from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, RunStatus, TaskCoverage
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
@@ -113,11 +113,29 @@ class EvalchemyRunConfig:
 
 @dataclass(frozen=True)
 class EvalchemyOutcome:
-    """A completed result tree, its child job identity, and the coverage its samples establish."""
+    """A completed result tree, child job identity, coverage, and recovered partial-task metrics."""
 
     jobs: dict[str, str]
     result: EvalchemyResult
     coverage: dict[str, TaskCoverage]
+    recovered_metrics: dict[str, dict[str, float]]
+
+
+def _apply_recovered_metrics(
+    metrics: dict[str, dict[str, float]], recovered_metrics: Mapping[str, dict[str, float]]
+) -> None:
+    """Replace affected leaf metrics and drop lm-eval group aggregates built from failed rows."""
+    group_children = {aggregate: {task for task in metrics if task.startswith(f"{aggregate}_")} for aggregate in metrics}
+    for task, recovered in recovered_metrics.items():
+        if recovered:
+            metrics[task] = recovered
+        else:
+            metrics.pop(task, None)
+    for aggregate, children in group_children.items():
+        if children & recovered_metrics.keys():
+            # The aggregate came from the original lm-eval result, which includes failed requests.
+            # Recovered leaves contain successful samples for the measurement adapter to roll up.
+            metrics.pop(aggregate, None)
 
 
 def _task_dir(task: EvalTaskConfig) -> str:
@@ -272,6 +290,7 @@ def run_evalchemy(
         jobs={_EVAL_JOB_ROLE: eval_job},
         result=EvalchemyResult(path=output_dir),
         coverage=export.coverage,
+        recovered_metrics=export.recovered_metrics,
     )
 
 
@@ -298,10 +317,22 @@ class EvalchemyExecutor:
                 log_tails=exc.log_tails,
             ) from exc
         metrics = outcome.result.task_metrics()
+        _apply_recovered_metrics(metrics, outcome.recovered_metrics)
         if not metrics:
+            infrastructure_failures = sum(
+                coverage.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for coverage in outcome.coverage.values()
+            )
+            if not infrastructure_failures:
+                raise EvaluationError(
+                    f"eval finished but no task metrics were readable under {output_dir!r}",
+                    status=RunStatus.ARTIFACT_FAILED,
+                    jobs=outcome.jobs,
+                    coverage=outcome.coverage,
+                )
             raise EvaluationError(
-                f"eval finished but no task metrics were readable under {output_dir!r}",
-                status=RunStatus.ARTIFACT_FAILED,
+                f"eval finished with no successful inference responses under {output_dir!r}",
+                status=RunStatus.INFRA_FAILED,
                 jobs=outcome.jobs,
+                coverage=outcome.coverage,
             )
         return EvaluationOutcome(metrics=metrics, jobs=outcome.jobs, coverage=outcome.coverage)

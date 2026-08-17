@@ -21,7 +21,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint
-from marin.evaluation.records import EvalRef, RunStatus, read_record
+from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalRef, RunStatus, TaskCoverage, read_record
 from marin.evaluation.runner import (
     Evaluation,
     EvaluationBatch,
@@ -128,10 +128,8 @@ def _evaluation(root: Path, name: str, executor) -> Evaluation:
     )
 
 
-def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp_path):
-    records = tmp_path / "records"
-    endpoint = "https://iris.example/proxy/t/token/inference/v1"
-    session = RemoteInferenceSession(
+def _remote_session(endpoint: str = "https://inference.example/v1") -> RemoteInferenceSession:
+    return RemoteInferenceSession(
         model=RunningModel(
             endpoint=OpenAIEndpoint(base_url=endpoint, model="model"),
             tokenizer="tokenizer",
@@ -143,6 +141,37 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
         tensor_parallel_size=1,
         backend_name="vllm",
     )
+
+
+def _lm_eval_generation(doc_id: int, metric: str, score: float, response: str) -> dict:
+    return {
+        "doc_id": doc_id,
+        "doc": {"question": "2+2?"},
+        "target": "4",
+        "arguments": [["Question: 2+2?"]],
+        "resps": [[response]],
+        "filtered_resps": [response],
+        "filter": "none",
+        "metrics": [metric],
+        metric: score,
+        "schema_version": 1,
+    }
+
+
+def _write_evalchemy_output(
+    output_dir: str, task_dir: str, results: dict[str, dict[str, float]], samples: dict[str, list[dict]]
+) -> None:
+    model_dir = StoragePath(output_dir) / task_dir / "model"
+    model_dir.mkdirs()
+    (model_dir / "results_20260807.json").write_text(json.dumps({"results": results}))
+    for task, rows in samples.items():
+        (model_dir / f"samples_{task}_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+
+def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp_path):
+    records = tmp_path / "records"
+    endpoint = "https://iris.example/proxy/t/token/inference/v1"
+    session = _remote_session(endpoint)
     batch = EvaluationBatch(
         group_id="group",
         user="tester",
@@ -195,18 +224,7 @@ def test_evalchemy_executor_classifies_archive_export_failure(tmp_path, monkeypa
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
         lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
     )
-    session = RemoteInferenceSession(
-        model=RunningModel(
-            endpoint=OpenAIEndpoint(base_url="https://inference.example/v1", model="model"),
-            tokenizer="tokenizer",
-        ),
-        jobs=(),
-        endpoint_name="/serve/test",
-        endpoint_health_timeout_seconds=1800.0,
-        streaming=True,
-        tensor_parallel_size=1,
-        backend_name="vllm",
-    )
+    session = _remote_session()
     executor = EvalchemyExecutor(EvalchemyRunConfig(name="gsm8k", tasks=(EvalTaskConfig(name="gsm8k", num_fewshot=5),)))
 
     with pytest.raises(EvaluationError) as exc_info:
@@ -214,6 +232,80 @@ def test_evalchemy_executor_classifies_archive_export_failure(tmp_path, monkeypa
 
     assert exc_info.value.status is RunStatus.ARTIFACT_FAILED
     assert exc_info.value.jobs == {"eval": "/eval/completed"}
+
+
+def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypatch):
+    marker = f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}] request failed"
+    partial_output_dir = f"file://{tmp_path / 'partial'}"
+    _write_evalchemy_output(
+        partial_output_dir,
+        "mmlu_5shot",
+        {
+            "mmlu": {"acc,none": 0.0},
+            "mmlu_anatomy": {"acc,none": 0.5},
+            "mmlu_astronomy": {"acc,none": 1.0},
+        },
+        {
+            "mmlu_anatomy": [
+                _lm_eval_generation(0, "acc", 1.0, "4"),
+                _lm_eval_generation(1, "acc", 0.0, marker),
+            ],
+            "mmlu_astronomy": [_lm_eval_generation(0, "acc", 1.0, "4")],
+        },
+    )
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
+        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+    )
+    executor = EvalchemyExecutor(EvalchemyRunConfig(name="mmlu", tasks=(EvalTaskConfig(name="mmlu", num_fewshot=5),)))
+
+    outcome = executor(_remote_session(), partial_output_dir, {})
+
+    assert outcome.metrics == {
+        "mmlu_5shot/mmlu_anatomy": {"acc,none": 1.0, "sample_len": 1.0},
+        "mmlu_5shot/mmlu_astronomy": {"acc,none": 1.0},
+    }
+    assert outcome.coverage == {
+        "mmlu_5shot/mmlu_anatomy": TaskCoverage(
+            n_attempted=2,
+            n_scored=1,
+            n_correct=1,
+            errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
+        ),
+        "mmlu_5shot/mmlu_astronomy": TaskCoverage(n_attempted=1, n_scored=1, n_correct=1),
+    }
+
+    failed_output_dir = f"file://{tmp_path / 'failed'}"
+    _write_evalchemy_output(
+        failed_output_dir,
+        "mmlu_5shot",
+        {
+            "mmlu": {"acc,none": 0.0},
+            "mmlu_anatomy": {"acc,none": 0.0},
+            "mmlu_astronomy": {"acc,none": 0.0},
+        },
+        {
+            "mmlu_anatomy": [_lm_eval_generation(0, "acc", 0.0, marker)],
+            "mmlu_astronomy": [_lm_eval_generation(0, "acc", 0.0, marker)],
+        },
+    )
+
+    with pytest.raises(EvaluationError) as exc_info:
+        executor(_remote_session(), failed_output_dir, {})
+
+    assert exc_info.value.status is RunStatus.INFRA_FAILED
+    assert exc_info.value.coverage == {
+        "mmlu_5shot/mmlu_anatomy": TaskCoverage(
+            n_attempted=1,
+            n_scored=0,
+            errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
+        ),
+        "mmlu_5shot/mmlu_astronomy": TaskCoverage(
+            n_attempted=1,
+            n_scored=0,
+            errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
+        ),
+    }
 
 
 def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_batch(tmp_path, monkeypatch):
