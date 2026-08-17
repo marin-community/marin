@@ -41,8 +41,11 @@ def microbatched(
 
     ``fn`` must return ``((loss, metrics), grads)`` (i.e. the output of
     ``eqx.filter_value_and_grad(loss_fn, has_aux=True)`` where ``loss_fn`` returns
-    ``(loss, metrics)``). The batch axis is split into microbatches; the loss and grads are summed
-    then averaged over the microbatches, while ``metrics`` are folded with their own reductions.
+    ``(loss, metrics)``). The batch axis is split into microbatches; the loss and ordinary gradients
+    are summed then averaged, custom gradient state uses its own reduction without averaging, and
+    ``metrics`` are folded with their own reductions.
+    Named arrays with ``Batch`` and plain arrays whose leading dimension is ``Batch.size`` are split;
+    other inputs are reused for every microbatch.
 
     Args:
         fn: the value-and-grad function to wrap.
@@ -102,10 +105,20 @@ def microbatched(
             kwargs = kwargs.copy()
             kwargs.pop(patch_in_rng_key)
 
-        args = _reshape_for_microbatch(Batch, Microbatch, AccumStep, args, compute_axis_mapping)
+        def is_batched(value):
+            if isinstance(value, hax.NamedArray):
+                return value.has_axis(Batch.name)
+            return isinstance(value, jnp.ndarray) and value.ndim > 0 and value.shape[0] == Batch.size
+
+        def is_input_leaf(value):
+            return is_named_array(value) or isinstance(value, hq.CustomGradientAccumulation)
+
+        batched_inputs, unbatched_inputs = eqx.partition((args, kwargs), is_batched, is_leaf=is_input_leaf)
+        batched_inputs = _reshape_for_microbatch(Batch, Microbatch, AccumStep, batched_inputs, compute_axis_mapping)
 
         def loop(acc, microbatch_and_key):
-            microbatch, microbatch_kwargs, key = microbatch_and_key
+            microbatch_inputs, key = microbatch_and_key
+            microbatch, microbatch_kwargs = eqx.combine(microbatch_inputs, unbatched_inputs, is_leaf=is_input_leaf)
             with jax.named_scope("compute"):
                 microbatch_kwargs = microbatch_kwargs.copy()
                 if key is not None:
@@ -127,10 +140,7 @@ def microbatched(
                     is_leaf=lambda x: isinstance(x, Metric),
                 )
 
-                # Accumulate gradients with quantization
-                # TODO: this uses the latest value for the scale for fp8, which seems not ideal but probably ok?
-                overwrites, updates = hq.partition_for_grad_overwrite(this_grads)
-                new_grads = hq.apply_updates(acc_grads, updates, overwrites)
+                new_grads = hq.accumulate_gradients(acc_grads, this_grads)
 
                 # Repack and shard
                 acc = ((new_loss, new_metrics), new_grads)
@@ -139,12 +149,16 @@ def microbatched(
             return acc
 
         with jax.named_scope("microbatched"):
-            acc = hax.fold(loop, AccumStep)(acc, (args, kwargs, key))
+            acc = hax.fold(loop, AccumStep)(acc, (batched_inputs, key))
 
             # Average loss and grads over microbatches. Metrics handle their own reduction internally.
             (loss, metrics), grads = acc
             loss = loss / num_micro_steps
-            grads = jax.tree_util.tree_map(lambda x: x / num_micro_steps, grads)
+            grads = jax.tree_util.tree_map(
+                lambda x: x if isinstance(x, hq.CustomGradientAccumulation) else x / num_micro_steps,
+                grads,
+                is_leaf=lambda x: isinstance(x, hq.CustomGradientAccumulation),
+            )
             acc = ((loss, metrics), grads)
 
         return cast(R, acc)
@@ -159,7 +173,7 @@ def _reshape_for_microbatch(Batch: Axis, Microbatch: Axis, AccumStep: Axis, inpu
                 return x
             x = x.unflatten_axis(Batch, (AccumStep, Microbatch))
             return hax.shard(x, axis_mapping)
-        elif isinstance(x, jnp.ndarray):
+        elif isinstance(x, jnp.ndarray) and x.ndim > 0 and x.shape[0] == Batch.size:
             x = x.reshape((AccumStep.size, Microbatch.size) + x.shape[1:])
             return with_sharding_constraint(x, PartitionSpec(None, ResourceAxis.DATA, *(None,) * (len(x.shape) - 2)))
         else:

@@ -6,9 +6,11 @@ import haliax
 import haliax as hax
 import haliax.nn as hnn
 import jax
+import jax.numpy as jnp
 import pytest
 from chex import assert_trees_all_close
 from haliax.partitioning import ResourceAxis
+from haliax.quantization import Fp8DotGeneralOp
 from jax.sharding import NamedSharding, PartitionSpec
 from levanter.testing.helpers import use_test_mesh
 
@@ -78,3 +80,55 @@ def test_accumulate_gradients_sharded(parallelism, accum_steps):
 
         for l1, l2 in zip(jax.tree_util.tree_leaves(acc_g), jax.tree_util.tree_leaves(g)):
             assert_trees_all_close(l1, l2, atol=1e-3, rtol=1e-3)
+
+
+def test_accumulate_fp8_gradients_preserves_largest_amax_and_scale():
+    microbatch_size = len(jax.devices())
+    Batch = hax.Axis("Batch", 2 * microbatch_size)
+    Microbatch = Batch.resize(microbatch_size)
+    In = hax.Axis("In", 8)
+    Out = hax.Axis("Out", 4)
+    linear = hnn.Linear.init(
+        In,
+        Out,
+        key=jax.random.PRNGKey(0),
+        dot_general=Fp8DotGeneralOp.init(amax_history_length=4),
+    )
+    x = hax.named(
+        jnp.concatenate(
+            [
+                jnp.full((microbatch_size, In.size), 32.0),
+                jnp.ones((microbatch_size, In.size)),
+            ]
+        ),
+        (Batch, In),
+    )
+    axis_mapping = {"Batch": ResourceAxis.DATA}
+
+    def loss_fn(model, inputs):
+        return hax.mean(model(inputs) ** 2).scalar(), {}
+
+    @hax.partitioning.named_jit(axis_resources=axis_mapping)
+    def accumulated_grads(model, inputs):
+        grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=True)
+        grad_fn = microbatched(grad_fn, Batch, microbatch_size, axis_mapping, axis_mapping)
+        return grad_fn(model, inputs)[1]
+
+    with use_test_mesh() as mesh:
+        linear = hax.shard(linear, axis_mapping)
+        x = jax.device_put(x, NamedSharding(mesh, PartitionSpec(ResourceAxis.DATA, None)))
+        grads = accumulated_grads(linear, x)
+        grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=True)
+        large_grads = grad_fn(linear, hax.full((Microbatch, In), 32.0))[1]
+        small_grads = grad_fn(linear, hax.ones((Microbatch, In)))[1]
+
+    assert_trees_all_close(
+        grads.dot_general.input_amax_history,
+        jnp.maximum(
+            large_grads.dot_general.input_amax_history,
+            small_grads.dot_general.input_amax_history,
+        ),
+    )
+    assert_trees_all_close(grads.dot_general.input_scale, large_grads.dot_general.input_scale)
+    expected_weight_grads = (large_grads.weight + small_grads.weight) / 2
+    assert_trees_all_close(grads.weight, expected_weight_grads, atol=1e-3, rtol=1e-3)
