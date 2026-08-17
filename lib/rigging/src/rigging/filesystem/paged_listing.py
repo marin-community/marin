@@ -11,6 +11,8 @@ scans at ``fs.listing``:
 - ``flat_pages(path)`` returns a flat (recursive) listing as pages of object detail
   dicts covering every object beneath *path*, so a whole subtree can be measured
   or streamed without descending prefix by prefix.
+- ``page(path, continuation_token, delimiter)`` returns one backend page for
+  adaptive consumers that choose between flat and level listings.
 
 Paths are the protocol-stripped ``bucket/key`` form the filesystems themselves
 use, and every listing excludes the listed prefix's own marker object.
@@ -20,6 +22,7 @@ from collections.abc import Callable, Iterator
 from functools import partial
 from typing import Any
 
+from rigging.filesystem.protocols import normalize_protocols
 from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
@@ -34,12 +37,15 @@ _GCS_PAGE_SIZE = 5000
 
 
 def is_child(listed: str, name: str) -> bool:
-    """Whether *name* differs from *listed* after trimming separator markers.
+    """Whether *name* differs from *listed* after trimming one separator marker.
 
     Object stores commonly report a zero-byte marker object for the prefix being
     listed; it carries no information and would render as an empty-named row.
+    A second trailing separator is an empty path segment and must be preserved.
     """
-    return name.strip("/") != listed.strip("/")
+    listed = listed[:-1] if listed.endswith("/") else listed
+    name = name[:-1] if name.endswith("/") else name
+    return name != listed
 
 
 def s3_listing_page(
@@ -118,6 +124,10 @@ class _PagedListing:
     def __init__(self, listing_page: Callable[[str, str | None, str], tuple[list[dict[str, Any]], str | None]]) -> None:
         self._listing_page = listing_page
 
+    def page(self, path: str, continuation_token: str | None, delimiter: str) -> tuple[list[dict[str, Any]], str | None]:
+        """Return one backend listing page and its next continuation token."""
+        return self._listing_page(path, continuation_token, delimiter)
+
     def level_pages(self, path: str) -> Iterator[tuple[list[dict[str, Any]], list[str]]]:
         for entries in self._pages(path, "/"):
             yield _split_level(path, entries)
@@ -129,7 +139,7 @@ class _PagedListing:
     def _pages(self, path: str, delimiter: str) -> Iterator[list[dict[str, Any]]]:
         token: str | None = None
         while True:
-            entries, token = self._listing_page(path, token, delimiter)
+            entries, token = self.page(path, token, delimiter)
             yield entries
             if token is None:
                 return
@@ -137,8 +147,7 @@ class _PagedListing:
 
 def with_listing(fs: Any) -> Any:
     """Attach backend-aware paged listing operations to a cloud filesystem."""
-    protocol = getattr(fs, "protocol", ())
-    protocols = (protocol,) if isinstance(protocol, str) else protocol
+    protocols = normalize_protocols(getattr(fs, "protocol", ()))
     if "s3" in protocols:
         fs.listing = _PagedListing(partial(s3_listing_page, fs))
     elif any(item in ("gs", "gcs") for item in protocols):

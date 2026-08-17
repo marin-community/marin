@@ -21,6 +21,7 @@ from typing import Any
 
 import s3fs
 
+from rigging.filesystem.bulk_deletion import with_bulk_deletion
 from rigging.filesystem.cluster_config import BucketSpec, StoreType, data_buckets
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.paged_listing import with_listing
@@ -49,7 +50,8 @@ def filesystem_for(url: str) -> tuple[Any, str]:
     kwargs-keyed cache. Everything else — GCS, local paths, ``mirror://``, and
     ``s3://`` buckets no config declares — goes through the guarded
     :func:`rigging.filesystem.factory.url_to_fs`, which reads the ambient environment.
-    S3 and GCS results expose paged object operations through ``fs.listing``.
+    S3 and GCS results expose paged listing and bulk deletion through
+    ``fs.listing`` and ``fs.deletion``.
 
     Raises:
         MissingCredentials: if the routed backend has no credentials configured.
@@ -57,14 +59,18 @@ def filesystem_for(url: str) -> tuple[Any, str]:
     parsed = StoragePath(url)
     if parsed.scheme != "s3":
         fs, path = url_to_fs(url)
-        return with_listing(fs), path
+        return _with_object_store_operations(fs), path
 
     spec = data_buckets().get(parsed.bucket)
     if spec is None or spec.store not in (StoreType.R2, StoreType.COREWEAVE):
         fs, path = url_to_fs(url)
-        return with_listing(fs), path
+        return _with_object_store_operations(fs), path
 
-    return with_listing(_s3_filesystem(spec)), _s3_path(parsed)
+    return _with_object_store_operations(_s3_filesystem(spec)), _s3_path(parsed)
+
+
+def _with_object_store_operations(fs: Any) -> Any:
+    return with_bulk_deletion(with_listing(fs))
 
 
 def _s3_path(parsed: StoragePath) -> str:

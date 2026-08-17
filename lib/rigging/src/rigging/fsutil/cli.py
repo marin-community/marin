@@ -65,6 +65,33 @@ _ACTIVITY_BAR_WIDTH = 8
 _MAX_PROGRESS_PATH_LENGTH = 60
 
 
+class _ProgressDisplay:
+    """Throttled stderr output shared by long-running commands."""
+
+    def __init__(self) -> None:
+        self._interactive = click.get_text_stream("stderr").isatty()
+        self._last_update = time.monotonic()
+        self._rendered_width = 0
+
+    def update(self, line: str, *, complete: bool = False) -> None:
+        now = time.monotonic()
+        interval = _INTERACTIVE_PROGRESS_INTERVAL if self._interactive else _LOG_PROGRESS_INTERVAL
+        if not complete and now - self._last_update < interval:
+            return
+        if self._interactive:
+            self._rendered_width = max(self._rendered_width, len(line))
+            click.echo(f"\r{line.ljust(self._rendered_width)}", nl=False, err=True)
+        else:
+            click.echo(line, err=True)
+        self._last_update = now
+
+    def finish(self, line: str) -> None:
+        if self._interactive and self._rendered_width:
+            click.echo(f"\r{line.ljust(max(self._rendered_width, len(line)))}", err=True)
+        else:
+            click.echo(line, err=True)
+
+
 @click.group(invoke_without_command=True)
 @click.option("-v", "--verbose", is_flag=True, help="Log fsspec/botocore activity.")
 @click.pass_context
@@ -190,37 +217,21 @@ def usage(url: str, prefix_threshold: str, prefix_depth: int, workers: int, outp
         raise click.BadParameter(str(error), param_hint="--prefix-threshold") from error
 
     click.echo(f"Scanning object metadata under {url} ...", err=True)
-    last_update = time.monotonic()
-    rendered_width = 0
+    display = _ProgressDisplay()
     latest_progress: ScanProgress | None = None
-    interactive = click.get_text_stream("stderr").isatty()
 
     def show_progress(progress: ScanProgress) -> None:
-        nonlocal last_update, latest_progress, rendered_width
+        nonlocal latest_progress
         latest_progress = progress
-        now = time.monotonic()
-        interval = _INTERACTIVE_PROGRESS_INTERVAL if interactive else _LOG_PROGRESS_INTERVAL
         complete = progress.prefixes_completed == progress.prefixes_discovered
-        if not complete and now - last_update < interval:
-            return
-        line = _scan_progress_line(progress)
-        if interactive:
-            rendered_width = max(rendered_width, len(line))
-            click.echo(f"\r{line.ljust(rendered_width)}", nl=False, err=True)
-        else:
-            click.echo(line, err=True)
-        last_update = now
+        display.update(_scan_progress_line(progress), complete=complete)
 
     try:
         scan = scan_usage(url, workers=workers, prefix_depth=prefix_depth, progress=show_progress)
     except MissingCredentials as error:
         raise click.ClickException(str(error)) from error
     if latest_progress is not None:
-        line = _finished_scan_line(latest_progress)
-        if interactive:
-            click.echo(f"\r{line.ljust(max(rendered_width, len(line)))}", err=True)
-        else:
-            click.echo(line, err=True)
+        display.finish(_finished_scan_line(latest_progress))
     report = render_usage_report(scan, threshold_bytes=threshold_bytes, generated_at=datetime.now(UTC))
     if output is None:
         click.echo(report)
@@ -386,33 +397,17 @@ def _remove(url: str, recursive: bool, workers: int) -> None:
         return
 
     click.echo(f"Removing objects under {url} ...", err=True)
-    last_update = time.monotonic()
-    rendered_width = 0
-    interactive = click.get_text_stream("stderr").isatty()
+    display = _ProgressDisplay()
 
     def show_progress(progress: DeleteProgress) -> None:
-        nonlocal last_update, rendered_width
-        now = time.monotonic()
-        interval = _INTERACTIVE_PROGRESS_INTERVAL if interactive else _LOG_PROGRESS_INTERVAL
-        if now - last_update < interval:
-            return
-        line = _delete_progress_line(progress)
-        if interactive:
-            rendered_width = max(rendered_width, len(line))
-            click.echo(f"\r{line.ljust(rendered_width)}", nl=False, err=True)
-        else:
-            click.echo(line, err=True)
-        last_update = now
+        display.update(_delete_progress_line(progress))
 
     result = delete_prefix(url, workers=workers, progress=show_progress)
     summary = (
         f"Removed {result.objects_deleted:,} objects ({format_size(result.bytes_deleted)}) "
         f"in {result.elapsed_seconds:.1f}s"
     )
-    if interactive and rendered_width:
-        click.echo(f"\r{summary.ljust(rendered_width)}", err=True)
-    else:
-        click.echo(summary, err=True)
+    display.finish(summary)
     click.echo(url)
 
 

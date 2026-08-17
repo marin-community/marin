@@ -14,11 +14,14 @@ import threading
 from datetime import UTC, datetime
 
 import pytest
+import rigging.filesystem.bulk_deletion as bulk_deletion
 import rigging.fsutil.cli as cli_module
 import rigging.fsutil.transfer as transfer_module
 import rigging.timing as timing
 from botocore.exceptions import EndpointConnectionError
 from click.testing import CliRunner
+from rigging.filesystem.cross_region import CrossRegionGuardedFS
+from rigging.filesystem.paged_listing import with_listing
 from rigging.fsutil import deletion, listing
 from rigging.fsutil.cli import cli
 from rigging.fsutil.listing import MAX_PREVIEW_BYTES, read_decompressed_preview
@@ -373,6 +376,13 @@ def test_rm_recursive_unlinks_local_directory_symlink_without_deleting_target(tm
     assert (target / "keep.txt").read_text() == "keep"
 
 
+def _install_object_store_filesystem(monkeypatch, fs):
+    fs = bulk_deletion.with_bulk_deletion(with_listing(fs))
+    for module in (deletion, listing, cli_module):
+        monkeypatch.setattr(module, "filesystem_for", lambda _url, fs=fs: (fs, "bucket/prefix"))
+    return fs
+
+
 def test_rm_uses_s3_bulk_delete_batches(monkeypatch):
     class RecordingS3FileSystem:
         protocol = "s3"
@@ -400,10 +410,7 @@ def test_rm_uses_s3_bulk_delete_batches(monkeypatch):
         def invalidate_cache(self):
             pass
 
-    fs = RecordingS3FileSystem()
-    monkeypatch.setattr(deletion, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
-    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
-    monkeypatch.setattr(cli_module, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+    fs = _install_object_store_filesystem(monkeypatch, RecordingS3FileSystem())
 
     result = CliRunner().invoke(cli, ["rm", "-R", "s3://bucket/prefix"])
 
@@ -447,11 +454,11 @@ def test_rm_retries_a_throttled_bulk_delete(monkeypatch):
     A large removal provokes exactly this, and treating it as fatal aborts the run after
     a partial delete.
     """
-    fs = _BulkDeleteS3FileSystem([[{"Key": "prefix/0", "Code": "SlowDown"}], []])
-    monkeypatch.setattr(deletion, "_DELETE_BACKOFF", timing.ExponentialBackoff(initial=0.001, maximum=0.001))
-    monkeypatch.setattr(deletion, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
-    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
-    monkeypatch.setattr(cli_module, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+    fs = _install_object_store_filesystem(
+        monkeypatch,
+        _BulkDeleteS3FileSystem([[{"Key": "prefix/0", "Code": "SlowDown"}], []]),
+    )
+    monkeypatch.setattr(bulk_deletion, "_DELETE_BACKOFF", timing.ExponentialBackoff(initial=0.001, maximum=0.001))
 
     result = CliRunner().invoke(cli, ["rm", "-R", "s3://bucket/prefix"])
 
@@ -459,11 +466,17 @@ def test_rm_retries_a_throttled_bulk_delete(monkeypatch):
     assert fs.attempts == 2
 
 
-def test_rm_fails_on_a_permanent_bulk_delete_error(monkeypatch):
-    fs = _BulkDeleteS3FileSystem([[{"Key": "prefix/0", "Code": "AccessDenied"}]])
-    monkeypatch.setattr(deletion, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
-    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
-    monkeypatch.setattr(cli_module, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+def test_rm_does_not_retry_a_batch_holding_a_permanent_error(monkeypatch):
+    failures = [
+        [
+            {"Key": "prefix/0", "Code": "SlowDown"},
+            {"Key": "prefix/1", "Code": "AccessDenied"},
+        ]
+    ]
+    fs = _install_object_store_filesystem(
+        monkeypatch,
+        _BulkDeleteS3FileSystem(failures),
+    )
 
     result = CliRunner().invoke(cli, ["rm", "-R", "s3://bucket/prefix"])
 
@@ -471,14 +484,7 @@ def test_rm_fails_on_a_permanent_bulk_delete_error(monkeypatch):
     assert fs.attempts == 1
 
 
-def test_rm_batches_through_a_filesystem_wrapper(monkeypatch):
-    """Backend dispatch must survive a proxy that forwards the protocol but not the class.
-
-    `filesystem_for` hands back a `CrossRegionGuardedFS` for every GCS URL, which does not
-    subclass `GCSFileSystem`. An `isinstance` check misses it, and the batch size silently
-    collapses to one object per request.
-    """
-
+def test_rm_pages_and_batches_through_a_filesystem_wrapper(monkeypatch):
     class RecordingGCSFileSystem:
         protocol = ("gs", "gcs")
 
@@ -488,33 +494,35 @@ def test_rm_batches_through_a_filesystem_wrapper(monkeypatch):
         def isdir(self, _path):
             return True
 
-        def ls(self, path, detail):
-            assert detail is True
-            return [{"name": f"{path}/{index}", "size": 1, "type": "file"} for index in range(250)]
+        def split_path(self, path):
+            bucket, key = path.split("/", 1)
+            return bucket, key, None
 
-        def rm(self, paths, **_kwargs):
-            self.batch_sizes.append(len(paths))
+        def call(self, _method, _template, _bucket, *, pageToken=None, **_kwargs):
+            start = int(pageToken or 0)
+            end = min(start + 100, 250)
+            page = {"items": [{"name": f"prefix/{index}", "size": "1"} for index in range(start, end)]}
+            if end < 250:
+                page["nextPageToken"] = str(end)
+            return page
+
+        def _process_object(self, bucket, item):
+            return {"name": f"{bucket}/{item['name']}", "size": int(item["size"]), "type": "file"}
+
+        def rm(self, paths, **kwargs):
+            self.batch_sizes.append((len(paths), kwargs["batchsize"]))
 
         def invalidate_cache(self):
             pass
 
-    class GuardWrapper:
-        def __init__(self, fs):
-            self._fs = fs
-
-        def __getattr__(self, name):
-            return getattr(self._fs, name)
-
     inner = RecordingGCSFileSystem()
-    fs = GuardWrapper(inner)
-    monkeypatch.setattr(deletion, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
-    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
-    monkeypatch.setattr(cli_module, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+    guarded = CrossRegionGuardedFS(inner, cross_region_checker=lambda _bucket: False)
+    _install_object_store_filesystem(monkeypatch, guarded)
 
     result = CliRunner().invoke(cli, ["rm", "-R", "gs://bucket/prefix"])
 
     assert result.exit_code == 0, result.output
-    assert sorted(inner.batch_sizes) == [50, 100, 100]
+    assert sorted(inner.batch_sizes) == [(50, 100), (100, 100), (100, 100)]
 
 
 def test_rm_deletes_while_the_listing_still_streams(monkeypatch):
@@ -561,10 +569,7 @@ def test_rm_deletes_while_the_listing_still_streams(monkeypatch):
         def invalidate_cache(self):
             pass
 
-    fs = BlockingS3FileSystem()
-    monkeypatch.setattr(deletion, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
-    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
-    monkeypatch.setattr(cli_module, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+    fs = _install_object_store_filesystem(monkeypatch, BlockingS3FileSystem())
 
     result = CliRunner().invoke(cli, ["rm", "-R", "s3://bucket/prefix", "--workers", "1"])
 
@@ -835,7 +840,7 @@ def test_usage_scan_splits_large_s3_prefixes_to_bounded_depth(monkeypatch):
             assert prefix == "scratch//"
             return {"Contents": [{"Key": "scratch//data", "Size": 40, "LastModified": modified}]}
 
-    fs = PagedS3FileSystem()
+    fs = with_listing(PagedS3FileSystem())
     monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket"))
 
     progress = []
@@ -878,7 +883,7 @@ def test_usage_scan_retries_transient_s3_page_failures(monkeypatch):
                 raise EndpointConnectionError(endpoint_url="https://bucket.example.com")
             return {"Contents": [{"Key": "data", "Size": 10}]}
 
-    fs = ResettingS3FileSystem()
+    fs = with_listing(ResettingS3FileSystem())
     monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket"))
     monkeypatch.setattr(timing.time, "sleep", lambda _delay: None)
 
