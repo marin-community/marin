@@ -196,7 +196,7 @@ scale_groups:
     resources:
       cpu: 64        # cd-gp-i64-erapids: 64 vCPUs (32 physical Emerald Rapids 8562Y+ cores)
       ram: 512GB     # 512 GB on-node RAM (8 GB per vCPU)
-      disk: 7.68TB   # 7.68 TB local NVMe (2x 3.84 TB)
+      disk: 6.98TiB   # 7.68 TB local NVMe (2x 3.84 TB)
       device_type: cpu
       capacity_type: on-demand
     worker:
@@ -216,7 +216,7 @@ scale_groups:
     resources:
       cpu: 144       # gb200-4x: 144 vCPUs (2x NVIDIA Grace Arm v9)
       ram: 960GB     # 960 GB system (LPDDR5X) RAM
-      disk: 15.36TB  # 15.36 TB local NVMe (4x 3.84 TB)
+      disk: 13.97TiB  # 15.36 TB local NVMe (4x 3.84 TB)
       device_type: gpu
       device_variant: GB200
       device_count: 4        # 4 Blackwell GPUs per gb200-4x node
