@@ -197,13 +197,19 @@ export interface StoreInfo {
   backend: string
   instance: string | null
   database: string | null
+  record_count: number
+  catalog_generation: number | null
+  snapshot_updated_at: string | null
+  catalog_error: string | null
 }
 
 export interface Status {
   store: StoreInfo
   ingest: {
     interval_seconds: number
+    revalidate_after_seconds: number | null
     last_pass_time: string | null
+    cycle_error: string | null
     prefixes: PrefixProbe[]
   }
 }

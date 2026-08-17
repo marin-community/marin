@@ -39,15 +39,34 @@ onViewRefresh(refresh)
             <div v-if="data.store.database" class="flex gap-2">
               <dt class="text-text-muted w-24">database</dt><dd class="font-mono">{{ data.store.database }}</dd>
             </div>
+            <div class="flex gap-2"><dt class="text-text-muted w-24">records</dt><dd>{{ data.store.record_count }}</dd></div>
+            <div v-if="data.store.catalog_generation !== null" class="flex gap-2">
+              <dt class="text-text-muted w-24">generation</dt><dd>{{ data.store.catalog_generation }}</dd>
+            </div>
+            <div v-if="data.store.snapshot_updated_at" class="flex gap-2">
+              <dt class="text-text-muted w-24">committed</dt>
+              <dd :title="formatTimestamp(data.store.snapshot_updated_at)">
+                {{ formatRelativeAge(data.store.snapshot_updated_at) }}
+              </dd>
+            </div>
+            <div v-if="data.store.catalog_error" class="flex gap-2 text-danger">
+              <dt class="w-24">refresh error</dt><dd class="font-mono break-all">{{ data.store.catalog_error }}</dd>
+            </div>
           </dl>
         </div>
         <div class="rounded-lg border border-surface-border bg-surface p-4">
           <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Ingest</h3>
           <dl class="text-sm space-y-1">
             <div class="flex gap-2"><dt class="text-text-muted w-24">interval</dt><dd>{{ data.ingest.interval_seconds }}s</dd></div>
+            <div v-if="data.ingest.revalidate_after_seconds" class="flex gap-2">
+              <dt class="text-text-muted w-24">revalidate</dt><dd>{{ data.ingest.revalidate_after_seconds }}s</dd>
+            </div>
             <div class="flex gap-2">
               <dt class="text-text-muted w-24">last pass</dt>
               <dd :title="formatTimestamp(data.ingest.last_pass_time)">{{ formatRelativeAge(data.ingest.last_pass_time) }}</dd>
+            </div>
+            <div v-if="data.ingest.cycle_error" class="flex gap-2 text-danger">
+              <dt class="w-24">cycle error</dt><dd class="font-mono break-all">{{ data.ingest.cycle_error }}</dd>
             </div>
           </dl>
         </div>

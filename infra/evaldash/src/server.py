@@ -3,18 +3,14 @@
 
 """Eval-results dashboard server (Starlette + uvicorn).
 
-Serves a bundled Vue SPA plus a small JSON API over eval run records under the GCS or CoreWeave
-``evals`` output root. It also scans the former flat ``eval-metadata/runs`` roots while older CLI
-checkouts can still write there.
+Serves a bundled Vue SPA plus a small JSON API over eval run records materialized in PostgreSQL.
+Object-store ``record.json`` files remain the producer and recovery format; a background reconciler
+scans the GCS and CoreWeave roots after the server has booted from its last committed DB generation.
 
-A background task ingests the records on startup and every ``EVALDASH_INGEST_INTERVAL`` seconds
-(default 300). Reads are served through a ``RecordStore`` selected by ``EVALDASH_STORE``: the
-production ``postgres`` store upserts each record into Cloud SQL and fails fast if no DB is
-configured, while the ``local`` store serves entirely from the object-store record snapshot with
-no database (for development against a ``RECORDS_PREFIXES`` directory). Both keep an in-memory
-snapshot the panel/meta/groups/history views read from, since ``results_db`` exposes no aggregate
-query for them; a prefix whose listing fails keeps its last successfully-listed records in that
-snapshot rather than dropping out of it.
+A background task discovers records every ``EVALDASH_INGEST_INTERVAL`` seconds (default 600) and
+revalidates each known object's generation or ETag at least daily. The production ``postgres`` store
+serves its committed DB snapshot even when object storage is unavailable. The ``local`` store keeps
+the direct object scan used for development.
 
 ``/api/status`` reports each prefix's last-probe health, the active store, and the ingest
 cadence; ``POST /api/refresh`` runs one ingest pass immediately, serialised with the loop.
@@ -40,19 +36,19 @@ import contextlib
 import logging
 import os
 import threading
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
-import sqlalchemy
 import uvicorn
 from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE, Completeness, MissingPolicy, SelectionRequest
 from marin.evaluation.records import (
     DEFAULT_SCAN_PREFIXES,
     EvalRunRecord,
     RecordParseFailure,
+    list_record_paths,
     scan_records,
 )
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -73,15 +69,24 @@ from .metrics import (
     panel_request,
     record_headline,
 )
+from .record_reconciliation import VerificationSchedule, inspect_record_paths
 from .results_db import (
+    PrefixStatus,
+    RecordObservation,
+    SourceState,
+    catalog_generation,
+    configure_prefixes,
     connect_engine,
     ensure_schema,
-    eval_runs,
     fetch_archived_models,
-    fetch_runs,
+    fetch_snapshot,
+    mark_prefix_failed,
+    prefix_statuses,
+    prune_untracked_records,
+    reconcile_prefix,
     resolve_db_config,
     set_model_archived,
-    upsert_record,
+    source_states,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,7 +99,9 @@ RECORDS_PREFIXES = tuple(
     ).split(",")
     if part.strip()
 )
-INGEST_INTERVAL_SECONDS = int(os.environ.get("EVALDASH_INGEST_INTERVAL", "300"))
+INGEST_INTERVAL_SECONDS = int(os.environ.get("EVALDASH_INGEST_INTERVAL", "600"))
+REVALIDATE_AFTER_SECONDS = int(os.environ.get("EVALDASH_REVALIDATE_AFTER", "86400"))
+CATALOG_POLL_SECONDS = 10
 # Which record store backs reads: "postgres" (production, requires the eval DB) or "local"
 # (development, serves entirely from the RECORDS_PREFIXES record snapshot with no database).
 STORE_MODE = os.environ.get("EVALDASH_STORE", "postgres").strip().lower()
@@ -126,6 +133,10 @@ class StoreInfo:
     backend: str
     instance: str | None
     database: str | None
+    record_count: int
+    catalog_generation: int | None
+    snapshot_updated_at: str | None
+    catalog_error: str | None
 
 
 def _deduplicate_records(records: list[EvalRunRecord]) -> list[EvalRunRecord]:
@@ -177,15 +188,7 @@ def _group_sibling_row(record: EvalRunRecord) -> dict:
 
 
 class RecordStore:
-    """In-memory snapshot of eval records plus the read views the API serves over it.
-
-    The base serves every read from the snapshot the ingest loop swaps wholesale each cycle (run
-    list, run detail, group siblings, panel, meta, groups, history) and holds the archived-model
-    set in memory. :class:`MemoryRecordStore` uses these directly for local, offline runs;
-    :class:`PgRecordStore` overrides the run list, run detail, group siblings, refresh, and archive
-    state to read the durable Postgres index instead. The lock guards the snapshot swap against the
-    ingest worker thread.
-    """
+    """Expose dashboard query views over one consistent in-memory record snapshot."""
 
     backend = "memory"
 
@@ -206,10 +209,19 @@ class RecordStore:
             return self._records, self._by_id
 
     def store_info(self) -> StoreInfo:
-        return StoreInfo(backend=self.backend, instance=None, database=None)
+        records, _by_id = self._snapshot()
+        return StoreInfo(
+            backend=self.backend,
+            instance=None,
+            database=None,
+            record_count=len(records),
+            catalog_generation=None,
+            snapshot_updated_at=None,
+            catalog_error=None,
+        )
 
     def refresh(self, records: list[EvalRunRecord]) -> None:
-        """Absorb a fresh record listing. The base only swaps the snapshot; Postgres also upserts."""
+        """Replace the direct-scan snapshot used by the local store."""
         records = _deduplicate_records(records)
         self._set_snapshot(records)
         logger.info("memory store refreshed: %d records", len(records))
@@ -367,13 +379,7 @@ class MemoryRecordStore(RecordStore):
 
 
 class PgRecordStore(RecordStore):
-    """Serves the run list and run details from the indexed Postgres tables; upserts on refresh.
-
-    ``get_record`` reads the durable ``record`` jsonb from Postgres -- the same table the run list
-    is served from -- so a run indexed there but absent from the latest ingest snapshot (its source
-    prefix failed to list this cycle) still resolves. ``panel``, ``meta``, ``groups``, and
-    ``history`` inherit the base's snapshot reads, since ``results_db`` exposes no aggregate query.
-    """
+    """Boots and serves from a committed PostgreSQL catalog generation."""
 
     backend = "postgres"
 
@@ -382,69 +388,83 @@ class PgRecordStore(RecordStore):
         self._engine = engine
         self._instance = instance
         self._database = database
+        snapshot = fetch_snapshot(engine)
+        self._catalog_generation = snapshot.generation
+        self._snapshot_updated_at = snapshot.updated_at
+        self._catalog_error: str | None = None
+        self._set_snapshot(snapshot.records)
 
     def store_info(self) -> StoreInfo:
-        return StoreInfo(backend=self.backend, instance=self._instance, database=self._database)
+        with self._lock:
+            return StoreInfo(
+                backend=self.backend,
+                instance=self._instance,
+                database=self._database,
+                record_count=len(self._records),
+                catalog_generation=self._catalog_generation,
+                snapshot_updated_at=self._snapshot_updated_at.isoformat(),
+                catalog_error=self._catalog_error,
+            )
 
-    def refresh(self, records: list[EvalRunRecord]) -> None:
-        records = _deduplicate_records(records)
-        self._set_snapshot(records)
-        for record in records:
-            upsert_record(self._engine, record)
-        logger.info("postgres store upserted %d records", len(records))
+    def reload_if_changed(self) -> bool:
+        """Load a newer committed generation, returning whether the snapshot advanced."""
+        generation = catalog_generation(self._engine)
+        with self._lock:
+            current_generation = self._catalog_generation
+        if generation == current_generation:
+            return False
+        snapshot = fetch_snapshot(self._engine)
+        with self._lock:
+            self._records = snapshot.records
+            self._by_id = {record.run_id: record for record in snapshot.records}
+            self._catalog_generation = snapshot.generation
+            self._snapshot_updated_at = snapshot.updated_at
+        logger.info("postgres store loaded generation %d with %d records", snapshot.generation, len(snapshot.records))
+        return True
+
+    def set_catalog_error(self, error: str | None) -> None:
+        with self._lock:
+            self._catalog_error = error
+
+    def configure_prefixes(self, prefixes: tuple[str, ...]) -> None:
+        configure_prefixes(self._engine, prefixes)
+        self.reload_if_changed()
+
+    def source_states(self, prefix: str) -> dict[str, SourceState]:
+        return source_states(self._engine, prefix)
+
+    def reconcile_prefix(
+        self,
+        prefix: str,
+        paths: list[str],
+        observations: list[RecordObservation],
+        probe_at: datetime,
+        confirm_missing_after: float,
+    ) -> None:
+        reconcile_prefix(
+            self._engine,
+            prefix,
+            paths,
+            observations,
+            probe_at,
+            confirm_missing_after,
+        )
+
+    def mark_prefix_failed(self, prefix: str, probe_at: datetime, error: str) -> None:
+        mark_prefix_failed(self._engine, prefix, probe_at, error)
+
+    def finish_reconciliation(self, prefixes: tuple[str, ...]) -> None:
+        prune_untracked_records(self._engine, prefixes)
+        self.reload_if_changed()
+
+    def prefix_statuses(self) -> list[PrefixStatus]:
+        return prefix_statuses(self._engine)
 
     def archived_models(self) -> set[str]:
         return fetch_archived_models(self._engine)
 
     def set_model_archived(self, model_name: str, archived: bool, updated_by: str | None) -> None:
         set_model_archived(self._engine, model_name, archived, updated_by)
-
-    def get_record(self, run_id: str) -> dict | None:
-        stmt = sqlalchemy.select(eval_runs.c.record).where(eval_runs.c.run_id == run_id)
-        with self._engine.begin() as conn:
-            row = conn.execute(stmt).first()
-        return row[0] if row is not None else None
-
-    def fetch_runs(
-        self,
-        *,
-        model: str | None = None,
-        eval_name: str | None = None,
-        user: str | None = None,
-        status: str | None = None,
-        group: str | None = None,
-        limit: int = DEFAULT_RUNS_LIMIT,
-    ) -> list[dict]:
-        rows = fetch_runs(
-            self._engine, model=model, eval_name=eval_name, user=user, status=status, group=group, limit=limit
-        )
-        # The task list and jobs map live in the record jsonb, so enrich each row from the cache.
-        _records, by_id = self._snapshot()
-        for row in rows:
-            record = by_id.get(row.get("run_id"))
-            row["tasks"] = [task.name for task in record.evaluation.tasks] if record else []
-            row["jobs"] = dict(record.jobs) if record else {}
-            # version lives only in the record jsonb, not an eval_runs column, so fill it from the cache.
-            row["version"] = record.version if record else None
-        return rows
-
-    def group_siblings(self, group_id: str, exclude_run_id: str) -> list[dict]:
-        stmt = (
-            sqlalchemy.select(
-                eval_runs.c.run_id,
-                eval_runs.c.eval_name,
-                eval_runs.c.model_name,
-                eval_runs.c.status,
-                eval_runs.c.created_at,
-            )
-            .where(eval_runs.c.group_id == group_id, eval_runs.c.run_id != exclude_run_id)
-            .order_by(eval_runs.c.created_at.desc())
-        )
-        with self._engine.begin() as conn:
-            rows = [dict(row) for row in conn.execute(stmt).mappings().all()]
-        for row in rows:
-            row["created_at"] = row["created_at"].isoformat()
-        return rows
 
 
 def create_store() -> RecordStore:
@@ -467,8 +487,15 @@ def create_store() -> RecordStore:
         )
     engine = connect_engine(config.instance, config.db, config.user, config.password)
     ensure_schema(engine)
-    logger.info("connected to eval DB %s/%s", config.instance, config.db)
-    return PgRecordStore(engine, instance=config.instance, database=config.db)
+    store = PgRecordStore(engine, instance=config.instance, database=config.db)
+    logger.info(
+        "loaded eval DB %s/%s generation %s with %d records",
+        config.instance,
+        config.db,
+        store.store_info().catalog_generation,
+        store.store_info().record_count,
+    )
+    return store
 
 
 # --------------------------------------------------------------------------------------
@@ -478,6 +505,26 @@ def create_store() -> RecordStore:
 
 def _utcnow_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+async def _run_periodically(
+    operation: Callable[[], Awaitable[None]],
+    interval: float,
+    label: str,
+    set_error: Callable[[str | None], None],
+) -> None:
+    while True:
+        try:
+            await operation()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            set_error(error)
+            logger.exception("%s failed; retrying in %ss", label, interval)
+        else:
+            set_error(None)
+        await asyncio.sleep(interval)
 
 
 @dataclass
@@ -520,6 +567,7 @@ class Ingestor:
         self._last_good: dict[str, list[EvalRunRecord]] = {prefix: [] for prefix in prefixes}
         self._record_cache: dict[str, dict[str, EvalRunRecord]] = {prefix: {} for prefix in prefixes}
         self.last_pass_time: str | None = None
+        self.cycle_error: str | None = None
 
     async def run_once(self) -> None:
         """Run one full ingest pass, serialised against any other pass via ``_lock``."""
@@ -558,22 +606,147 @@ class Ingestor:
     async def run_loop(self) -> None:
         if not self._prefixes:
             return  # ingestion disabled; nothing to poll
-        while True:
-            try:
-                await self.run_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("ingest cycle failed; retrying in %ss", self.interval)
-            await asyncio.sleep(self.interval)
+        await _run_periodically(self.run_once, self.interval, "ingest cycle", self._set_cycle_error)
+
+    def _set_cycle_error(self, error: str | None) -> None:
+        self.cycle_error = error
 
     def status(self) -> dict:
         """Serialisable ingest health: cadence, last full pass, and each prefix's probe."""
         return {
             "interval_seconds": self.interval,
+            "revalidate_after_seconds": None,
             "last_pass_time": self.last_pass_time,
+            "cycle_error": self.cycle_error,
             "prefixes": [asdict(self._probes[prefix]) for prefix in self._prefixes],
         }
+
+
+class PostgresIngestor:
+    """Reconcile object membership and versions into PostgreSQL after serving has started."""
+
+    def __init__(
+        self,
+        store: PgRecordStore,
+        prefixes: tuple[str, ...],
+        interval: float,
+        revalidate_after: float,
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        self._store = store
+        self._prefixes = prefixes
+        self.interval = interval
+        self.revalidate_after = revalidate_after
+        self._now = now
+        self._lock = asyncio.Lock()
+        store.configure_prefixes(prefixes)
+        self._probes = {prefix: PrefixProbe(prefix=prefix) for prefix in prefixes}
+        for row in store.prefix_statuses():
+            probe = self._probes.get(row.prefix)
+            if probe is None:
+                continue
+            probe.last_probe_time = row.last_probe_at.isoformat() if row.last_probe_at else None
+            probe.last_success_time = row.last_success_at.isoformat() if row.last_success_at else None
+            probe.record_count = row.record_count
+            probe.error = row.error
+        for prefix, probe in self._probes.items():
+            probe.parse_failures = [
+                RecordParseFailure(path=path, error=state.error)
+                for path, state in sorted(store.source_states(prefix).items())
+                if state.error is not None
+            ]
+        self.last_pass_time: str | None = None
+        self.cycle_error: str | None = None
+
+    async def run_once(self) -> None:
+        if not self._prefixes:
+            return
+        async with self._lock:
+            for prefix in self._prefixes:
+                probe = self._probes[prefix]
+                probe_at = self._now()
+                probe.last_probe_time = probe_at.isoformat()
+                try:
+                    paths = await asyncio.to_thread(list_record_paths, prefix)
+                    states = await asyncio.to_thread(self._store.source_states, prefix)
+                    observations = await asyncio.to_thread(
+                        inspect_record_paths,
+                        paths,
+                        states,
+                        VerificationSchedule(
+                            checked_at=probe_at,
+                            retry_after=self.interval,
+                            revalidate_after=self.revalidate_after,
+                        ),
+                    )
+                    failures = {
+                        path: state.error for path, state in states.items() if path in paths and state.error is not None
+                    }
+                    for observation in observations:
+                        if observation.error is None:
+                            failures.pop(observation.path, None)
+                        else:
+                            failures[observation.path] = observation.error
+                    await asyncio.to_thread(
+                        self._store.reconcile_prefix,
+                        prefix,
+                        paths,
+                        observations,
+                        probe_at,
+                        self.interval,
+                    )
+                except Exception as exc:
+                    error = f"{type(exc).__name__}: {exc}"
+                    probe.error = error
+                    logger.exception("reconcile: %s failed; keeping its committed catalog rows", prefix)
+                    await asyncio.to_thread(self._store.mark_prefix_failed, prefix, probe_at, error)
+                    continue
+                probe.last_success_time = probe.last_probe_time
+                probe.record_count = len(paths)
+                probe.parse_failures = [
+                    RecordParseFailure(path=path, error=error) for path, error in sorted(failures.items())
+                ]
+                probe.error = None
+                logger.info(
+                    "reconcile: %d candidates, %d checked, %d invalid from %s",
+                    len(paths),
+                    len(observations),
+                    len(probe.parse_failures),
+                    prefix,
+                )
+            await asyncio.to_thread(self._store.finish_reconciliation, self._prefixes)
+            self.last_pass_time = self._now().isoformat()
+
+    async def run_loop(self) -> None:
+        if not self._prefixes:
+            return
+        await _run_periodically(self.run_once, self.interval, "reconcile cycle", self._set_cycle_error)
+
+    def _set_cycle_error(self, error: str | None) -> None:
+        self.cycle_error = error
+
+    def status(self) -> dict:
+        return {
+            "interval_seconds": self.interval,
+            "revalidate_after_seconds": self.revalidate_after,
+            "last_pass_time": self.last_pass_time,
+            "cycle_error": self.cycle_error,
+            "prefixes": [asdict(self._probes[prefix]) for prefix in self._prefixes],
+        }
+
+
+async def _reload_catalog_loop(store: PgRecordStore) -> None:
+    """Poll for committed generations and expose any refresh failure through store status."""
+
+    async def reload_once() -> None:
+        await asyncio.to_thread(store.reload_if_changed)
+
+    await _run_periodically(
+        reload_once,
+        CATALOG_POLL_SECONDS,
+        "catalog generation poll",
+        store.set_catalog_error,
+    )
 
 
 # --------------------------------------------------------------------------------------
@@ -708,7 +881,17 @@ def _collect_job_status(gateway: ClusterGatewayLike, jobs: dict[str, str]) -> li
     return [{"role": role, "job_path": path, **gateway.job_status(path)} for role, path in jobs.items()]
 
 
-def _status_payload(store: RecordStore, ingestor: Ingestor) -> dict:
+class IngestorLike(Protocol):
+    interval: float
+
+    async def run_once(self) -> None: ...
+
+    async def run_loop(self) -> None: ...
+
+    def status(self) -> dict: ...
+
+
+def _status_payload(store: RecordStore, ingestor: IngestorLike) -> dict:
     """The ``/api/status`` body: which store serves reads plus ingest/probe health."""
     return {"store": asdict(store.store_info()), "ingest": ingestor.status()}
 
@@ -774,17 +957,25 @@ def create_app(
     ingestion entirely (for a store populated out of band, e.g. tests or a one-shot screenshot run),
     which keeps the app from ever reaching the remote defaults.
     """
-    ingestor = Ingestor(store, prefixes, INGEST_INTERVAL_SECONDS)
+    ingestor: IngestorLike
+    if isinstance(store, PgRecordStore):
+        ingestor = PostgresIngestor(store, prefixes, INGEST_INTERVAL_SECONDS, REVALIDATE_AFTER_SECONDS)
+    else:
+        ingestor = Ingestor(store, prefixes, INGEST_INTERVAL_SECONDS)
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
-        task = asyncio.create_task(ingestor.run_loop())
+        tasks = [asyncio.create_task(ingestor.run_loop())]
+        if isinstance(store, PgRecordStore):
+            tasks.append(asyncio.create_task(_reload_catalog_loop(store)))
         try:
             yield
         finally:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+            for task in tasks:
+                task.cancel()
+            for task in tasks:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
     async def healthz(_request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "store": store.backend})

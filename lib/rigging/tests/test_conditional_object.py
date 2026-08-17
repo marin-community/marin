@@ -21,6 +21,7 @@ def test_local_conditional_object_rejects_stale_version(tmp_path):
     second = conditional_object(path)
 
     initial_version = first.write(b"one", expected_version=None)
+    assert first.version() == initial_version
     stale = second.read()
     assert stale is not None
     assert stale.version == initial_version
@@ -48,6 +49,7 @@ def test_gcs_conditional_object_uses_generation_preconditions():
 
     with patch("rigging.filesystem.conditional_object._gcs_client", return_value=client):
         obj = GcsConditionalObject("gs://bucket/HEAD")
+        assert obj.version() == "7"
         assert obj.read().version == "7"
         assert obj.write(b"two", expected_version="7") == "8"
     current.download_as_bytes.assert_called_once_with(if_generation_match=7)
@@ -56,11 +58,13 @@ def test_gcs_conditional_object_uses_generation_preconditions():
 
 def test_s3_conditional_object_sends_the_etag_precondition(monkeypatch):
     client = MagicMock()
+    client.head_object.return_value = {"ETag": '"v1"'}
     client.get_object.return_value = {"Body": BytesIO(b"one"), "ETag": '"v1"'}
     client.put_object.return_value = {"ETag": '"v2"'}
     monkeypatch.setattr(S3ConditionalObject, "_client", staticmethod(lambda _path: client))
     obj = S3ConditionalObject("s3://bucket/HEAD")
 
+    assert obj.version() == '"v1"'
     assert obj.read().version == '"v1"'
     assert obj.write(b"two", expected_version='"v1"') == '"v2"'
     client.put_object.assert_called_once_with(Bucket="bucket", Key="HEAD", Body=b"two", IfMatch='"v1"')
@@ -74,6 +78,14 @@ def test_s3_conditional_object_requires_absence_for_creation(monkeypatch):
     S3ConditionalObject("s3://bucket/HEAD").write(b"one", expected_version=None)
 
     client.put_object.assert_called_once_with(Bucket="bucket", Key="HEAD", Body=b"one", IfNoneMatch="*")
+
+
+def test_s3_conditional_object_maps_missing_head_to_no_version(monkeypatch):
+    client = MagicMock()
+    client.head_object.side_effect = ClientError({"Error": {"Code": "NotFound", "Message": "missing"}}, "HeadObject")
+    monkeypatch.setattr(S3ConditionalObject, "_client", staticmethod(lambda _path: client))
+
+    assert S3ConditionalObject("s3://bucket/HEAD").version() is None
 
 
 def test_s3_conditional_object_maps_precondition_failure(monkeypatch):
