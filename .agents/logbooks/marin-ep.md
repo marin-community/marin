@@ -1538,3 +1538,26 @@ Experiment ID prefix: `MEP`.
   alone (STE-flavored, ~430 words, #47283 house style); user reopens
   manually. Findings 1/3/4 to be filed separately, staged, on user
   go-ahead; full record stays in the artifact rev 2 + MEP-056.
+
+### 2026-08-17 13:40 - MEP-059: repro campaign COLLAPSES the alignment finding; ds-fusion repro validated
+- Standalone minimal repro (2 collective put kernels, 4x1-GPU procs,
+  cuda_async): PASSES on stock dev20260809. VLOG shows why: one
+  executable's collective buffers coalesce into ONE BufferAllocation whose
+  window registers at the CollectiveBFC's fresh 2 MiB region base --
+  aligned by construction. Windows are per-allocation; 256 B packing is
+  intra-allocation and irrelevant.
+- Ablations never run before today: the REAL transport smoke on the STOCK
+  wheel + ds-fusion-off + cuda_async passes at 4 procs (1 node) AND at
+  8 procs (2 nodes -- the original failing configuration). CONCLUSION:
+  the alignment defect (missing min_alignment) is latent-only at every
+  scale we can test off-rack; every alignment failure we observed was the
+  ds-fusion escapee. The wheel's alignment patches were not load-bearing
+  once the flag existed.
+- Standalone ds-fusion repro (repro_dsfusion.py: put kernel -> GEMM ->
+  static slice -> second put kernel) VALIDATED on stock: default flags
+  fail (INTERNAL 'Cuda failure 1 invalid argument' -- cudaMallocAsync
+  pointer NCCL cannot resolve; BFC-arena variant is the historical
+  "suitably aligned" message), ds-fusion off -> 4/4 ok.
+- Pending user decision: swap #47406 to the ds-fusion issue (observed,
+  repro'd) and downgrade alignment to a latent code-inspection report.
+  2-node session released.
