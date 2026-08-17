@@ -1256,3 +1256,41 @@ Experiment ID prefix: `MEP`.
 - M7b remains worthwhile as MoE polish (~up to 1 s of launch/sync
   structure + enabling fp8-fused variants) but is no longer the
   goal-critical path by itself.
+
+### 2026-08-16 17:45 - MEP-045: M7b prototype WORKS — arrival-gated fused dispatch+GEMM correct, GEMM fully hidden
+- Spike: experiments/marin_ep/bench/spike_fused_gemm.py (20e8b03152) on
+  1 GB200 tray, 4 devices, pool 16640x2560 bf16 -> 1536. One persistent
+  kernel per device: wg0/wg1 = upstream blackwell_ragged_dot do_matmul
+  (imported, unmodified) iterating the tile grid with a per-tile
+  `semaphore_wait(arrivals[group], expected[group])` gate; wg2 = the
+  put_segments transport loop (expert-major, unit signals) writing peers'
+  pools. Bit-correct vs the plan-reference x numpy GEMM.
+- Timing: fused 0.626 ms vs put_segments+ragged_dot two-launch 0.620 ms
+  (0.99x). Attribution: baseline = put 0.35 + gemm 0.27 serial; fused =
+  transport-bound 0.626 with the GEMM fully hidden inside it — the
+  overlap works, but the in-kernel transport (1 wg x 72 clusters,
+  12-row stages) is ~1.8x slower than the dedicated 148-SM Lane put,
+  cancelling the win at this toy GEMM:transport ratio. At hero ratios
+  (gemm 305 us >> transport ~150 us/layer-direction) fused =
+  max(transport, gemm) beats serial if the in-kernel transport stays
+  under the GEMM time — favorable.
+- Framework findings this arc (logbook-only until upstreamable):
+  1. plgpu GMEM ref `.reshape` is not TMA-lowerable ("non-indexing
+     transforms") — keep refs 2D and copy in LANE-wide column chunks
+     (SMEM stage per-lane blocks for contiguity).
+  2. Warpgroup-semantics TMA descriptors are built on the HOST per
+     (ref, peer): remote peer ids must be host-recomputable —
+     `device_id()+const` works, GMEM loads and loop induction vars do
+     not; unroll the dest loop statically.
+  3. UPSTREAM FOOTGUN: blackwell_ragged_dot/matmul hardcode cluster axis
+     name "x"; running them under a shard_map mesh whose axis is also
+     named "x" DEADLOCKS silently (axis-name collision). Our hero mesh
+     dodges it by using replica_dcn/data/expert/model.
+  4. In 2-CTA clusters, gate single-copy work on cluster_idx==0 or both
+     CTAs duplicate sends/signals; host-side expected counts must use
+     core_count//2 (the "sm" grid axis counts clusters).
+- Next tuning levers for the fused transport: double-buffered stages,
+  both CTAs sending disjoint lane halves, bigger stages (SMEM budget
+  trade vs max_concurrent_steps), Lane-semantics transport warp inside
+  the WG kernel if mixing is possible. Then a bwd (combine) variant and
+  hero-shape measurement.
