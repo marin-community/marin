@@ -1519,3 +1519,13 @@ Experiment ID prefix: `MEP`.
   only works under cuda_async -- our hero env; docstring to note).
 - Artifact rewritten (rev 2, same URL); wheel note: drop patch 1, replace
   patch 2 with the min_alignment fix on next rebuild; kMaxPeers stays.
+
+### 2026-08-17 12:10 - MEP-057: #47406 rewritten in place for maintainer review
+- Per user instruction, edited the closed openxla/xla#47406 with the
+  streamlined post-validation text (user reviews and reopens manually).
+  House style matched to #47283; findings reordered to hit-order
+  (VA exhaustion -> alignment -> ds-fusion); root causes cut to 2-3
+  linked sentences with no prescribed fixes; repro as config recipes in a
+  details drawer; STE-flavored prose; 791 words. Finding 4
+  (collective_memory_size ignored) reduced to a one-line aside.
+- Full validation record stays in the artifact (rev 2) and MEP-056.
