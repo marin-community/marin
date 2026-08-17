@@ -6,7 +6,7 @@
 These runs mirror the EP hero: 384 routed experts, top-8 routing, hidden/2-wide experts in a hidden/2
 latent, two shared experts, and the pooled-wave all-to-all transport at receiver/sender capacity 1.15.
 Each run uses the small sweep width and 750 tokens per active parameter. The runs use the Harrier
-winner-quality-repair mixture.
+2026.08.17 mixture.
 
 Each ``--size`` submits one job on the fleet ``--target`` names: a GB200 rack (EP64), 8 H100 nodes
 (EP64), or 2 H100 nodes (EP16). The expert axis spans the fleet, and it sets cell size, so the
@@ -35,10 +35,10 @@ from rigging.filesystem.storage_path import prefix_join
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe.launch_datakit_moe_mix import _val_component
-from experiments.grug.moe_hero_ep.harrier_quality_repair import (
-    HARRIER_WINNER_QUALITY_REPAIR_STORE,
-    HARRIER_WINNER_QUALITY_REPAIR_TAG,
-    winner_quality_repair_data_config,
+from experiments.grug.moe_hero_ep.harrier_mix_2026_08_17 import (
+    HARRIER_MIX_2026_08_17_STORE,
+    HARRIER_MIX_2026_08_17_TAG,
+    harrier_mix_2026_08_17_data_config,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.launch import (
@@ -402,7 +402,7 @@ def build_small_run(
                     "hero",
                     "ep",
                     "small-abl",
-                    HARRIER_WINNER_QUALITY_REPAIR_TAG,
+                    HARRIER_MIX_2026_08_17_TAG,
                     f"shape-{size}",
                     f"capacity-{capacity_factor:g}",
                     f"seq{seq_len}",
@@ -434,8 +434,8 @@ def build_small_run(
             val_components = {v.name: _val_component(ctx.artifact_path(v)) for v in _VALIDATION}
         else:
             val_components = {v.name: ctx.resolved(v).as_component() for v in _VALIDATION}
-        data = winner_quality_repair_data_config(
-            store_path=ctx.artifact_path(HARRIER_WINNER_QUALITY_REPAIR_STORE),
+        data = harrier_mix_2026_08_17_data_config(
+            store_path=ctx.artifact_path(HARRIER_MIX_2026_08_17_STORE),
             total_steps=num_steps,
             batch_size=batch_size,
             max_seq_len=seq_len,
@@ -468,7 +468,7 @@ def build_small_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(HARRIER_WINNER_QUALITY_REPAIR_STORE, *_VALIDATION),
+        deps=(HARRIER_MIX_2026_08_17_STORE, *_VALIDATION),
         runtime_args={"train_resources": train_resources},
     )
 
