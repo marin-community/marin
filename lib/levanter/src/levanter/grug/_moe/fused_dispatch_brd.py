@@ -38,7 +38,13 @@ from jax.experimental.pallas.ops.gpu import ragged_dot_mgpu
 
 from levanter.grug._moe.brd_expert_mlp import _CONFIGS, _N_ALIGN, ROW_ALIGN, _cfg, _grouped
 from levanter.grug._moe.cudnn_wgrad_cute import cudnn_grouped_wgrad
-from levanter.grug._moe.marin_ep_transport import _OUT_KWARG, LANE, SegmentPlan, put_with_transpose
+from levanter.grug._moe.marin_ep_transport import (
+    _OUT_KWARG,
+    LANE,
+    SegmentPlan,
+    _zero_invalid_rows,
+    put_with_transpose,
+)
 
 # Rows per transport SMEM stage and resident lane chunk. SMEM budget at the
 # hero shape (hidden 6144 = 24 lanes): chunk * rows * LANE * 2B = 24.6 KiB on
@@ -440,3 +446,405 @@ def _fused_bwd(pool_rows, assignments_per_shard, axis_name, ep_size, res, dy):
 
 
 fused_dispatch_expert_mlp.defvjp(_fused_fwd, _fused_bwd)
+
+
+def expected_tile_signals(group_sizes: jax.Array, *, padded_rows: int, n_iters: int) -> jax.Array:
+    """Per-128-row-block store-signal totals for the combine-fused kernel.
+
+    The GEMM grid visits each logical 2-CTA tile once per non-empty group
+    overlapping it (`GroupInfo.create` gives group `i` the slot range
+    `[start_block + i, final_block + 1 + i)`), and each visit's store
+    warpgroup signals its CTA's 128-row half once per `n` tile. Spare grid
+    slots past every group's range resolve to block 0 and still signal.
+    """
+    eff = ROW_ALIGN  # 256: logical collective tile rows
+    num_logical = padded_rows // eff
+    num_groups = group_sizes.shape[0]
+    ends = jnp.cumsum(group_sizes)
+    starts = ends - group_sizes
+    nonempty = group_sizes > 0
+    first = starts // eff
+    last = jnp.where(nonempty, (ends - 1) // eff, -1)
+    logical = jnp.arange(num_logical, dtype=jnp.int32)
+    overlap = (first[None, :] <= logical[:, None]) & (logical[:, None] <= last[None, :]) & nonempty[None, :]
+    visits = jnp.sum(overlap, axis=1).astype(jnp.int32)
+    used_slots = jnp.sum(jnp.where(nonempty, last - first + 1, 0)).astype(jnp.int32)
+    spare = jnp.int32(num_logical + num_groups - 1) - used_slots
+    visits = visits.at[0].add(spare)
+    return (jnp.repeat(visits, 2) * jnp.int32(n_iters)).astype(jnp.int32)
+
+
+def _fused_gemm_combine(
+    act: jax.Array,
+    plan: SegmentPlan,
+    weights: jax.Array,
+    group_sizes: jax.Array,
+    *,
+    out_rows: int,
+    axis_name: str,
+    num_devices: int,
+    local_experts: int,
+):
+    """Returns (y_pool, returned): the grouped GEMM and its streamed combine.
+
+    The transport warpgroup sends each combine segment as soon as the store
+    warpgroups have signalled every 128-row output block covering its rows,
+    so returns overlap the remaining GEMM tiles. `returned` is each shard's
+    sender-frame receive buffer; rows not covered by any segment are
+    UNINITIALIZED (callers mask, as with `put_segments`).
+    """
+    padded_rows, k = act.shape
+    num_groups, k2, n = weights.shape
+    if (num_groups, k2) != (local_experts, k):
+        raise ValueError(f"weights {weights.shape} vs experts {local_experts}, K {k}")
+    if n % LANE:
+        raise ValueError(f"n={n} must be divisible by {LANE}")
+    lanes = n // LANE
+    lane_chunk = TRANSPORT_LANE_CHUNK
+    while lanes % lane_chunk:
+        lane_chunk -= 1
+    dtype = weights.dtype
+    config = _fused_config(k, n)
+    tile_m, tile_n, tile_k = config.tile_m, config.tile_n, config.tile_k
+    eff_tile_m, eff_tile_n = 2 * tile_m, 2 * tile_n
+    if padded_rows % eff_tile_m or n % eff_tile_n or k % tile_k:
+        raise ValueError(f"shape ({padded_rows},{k},{n}) not divisible by tiles ({eff_tile_m},{tile_k},{eff_tile_n})")
+    m_iters = padded_rows // eff_tile_m
+    n_iters = n // eff_tile_n
+    max_concurrent_steps = config.max_concurrent_steps
+    epilogue_tile_n = config.epilogue_tile_n
+    entries_per_dest = plan.src_lo.shape[0] // num_devices
+    expected_tiles = expected_tile_signals(group_sizes, padded_rows=padded_rows, n_iters=n_iters)
+
+    swizzle = plgpu.find_swizzle(tile_k * jnp.dtype(dtype).itemsize * 8)
+    swizzle_elems = swizzle // jnp.dtype(dtype).itemsize
+    transforms = (plgpu.TilingTransform((8, swizzle_elems)), plgpu.SwizzleTransform(swizzle))
+
+    def kernel(a_ref, src_lo_ref, dst_lo_ref, rows_ref, gs_ref, tiles_ref, b_gmem, y_gmem, ret_gmem):
+        tile_done = pl.get_global(plgpu.SemaphoreType.REGULAR((padded_rows // tile_m,)))
+        received_sem = pl.get_global(plgpu.SemaphoreType.REGULAR)
+        wg = lax.axis_index("wg")
+        dev_id = lax.axis_index(axis_name)
+        sm_id = lax.axis_index("sm")
+        num_sms = lax.axis_size("sm")
+        cluster_idx = lax.axis_index("cta")
+        linear_grid = (m_iters + local_experts - 1) * n_iters
+        group_sizes_regs = [gs_ref[i] for i in range(local_experts)]
+
+        @functools.partial(
+            pl.run_scoped,
+            a_smem=plgpu.SMEM((max_concurrent_steps, tile_m, tile_k), dtype, transforms=transforms),
+            b_smem=plgpu.SMEM((max_concurrent_steps, tile_k, tile_n), dtype, transforms=transforms),
+            acc_smem=plgpu.SMEM((tile_m, epilogue_tile_n), dtype),
+            a_tma_barrier=plgpu.Barrier(num_arrivals=1, num_barriers=max_concurrent_steps),
+            b_tma_barrier=plgpu.Barrier(num_arrivals=1, num_barriers=max_concurrent_steps),
+            store_done_barrier=plgpu.Barrier(num_arrivals=1, num_barriers=2, orders_tensor_core=True),
+            mma_done_barrier=plgpu.Barrier(num_arrivals=1, num_barriers=2, orders_tensor_core=True),
+            consumed_barrier=plgpu.Barrier(num_arrivals=1, num_barriers=max_concurrent_steps, orders_tensor_core=True),
+            acc_tmem=plgpu.TMEM((tile_m, tile_n * 2), jnp.float32, collective=True),
+            t_smem=plgpu.SMEM((lane_chunk, TRANSPORT_STAGE_ROWS, LANE), dtype),
+            t_barrier=plgpu.Barrier(num_arrivals=lane_chunk),
+            collective_axes=("wg",),
+        )
+        def _scoped(**refs):
+            t_smem = refs.pop("t_smem")
+            t_barrier = refs.pop("t_barrier")
+
+            @pl.when(wg < 2)
+            def _gemm():
+                @plgpu.nd_loop(grid=(linear_grid,), collective_axes="sm")
+                def mn_loop(loop_info: plgpu.NDLoopInfo):
+                    (linear_idx,) = loop_info.index
+                    local_index = loop_info.local_index
+                    m_index, n_index = plgpu.planar_snake(
+                        linear_idx,
+                        (m_iters + local_experts - 1, n_iters),
+                        config.grid_minor_dim,
+                        config.grid_tile_width,
+                    )
+                    group_info = ragged_dot_mgpu.GroupInfo.create(group_sizes_regs, eff_tile_m, m_index)
+                    brd.do_matmul(
+                        a_ref,
+                        b_gmem.at[group_info.group_id],
+                        y_gmem,
+                        grid_indices=(group_info.block, n_index, cluster_idx),
+                        wg_axis="wg",
+                        collective_axes=("cta",),
+                        local_index=local_index,
+                        config=config,
+                        group_info=group_info,
+                        **refs,
+                    )
+
+                    # do_matmul's store warpgroup only waits for SMEM reuse;
+                    # wait for GMEM visibility before publishing the block.
+                    @pl.when(wg == 1)
+                    def _signal_store():
+                        plgpu.wait_smem_to_gmem(0, wait_read_only=False)
+                        pl.semaphore_signal(tile_done.at[group_info.block * 2 + cluster_idx])
+
+            @pl.when((wg == 2) & (cluster_idx == 0))
+            def _transport():
+                def copy_rows(src_lo, dst_ref, dst_lo, rows_shape):
+                    for chunk_lo in range(0, lanes, lane_chunk):
+                        for i in range(lane_chunk):
+                            cols = pl.ds((chunk_lo + i) * LANE, LANE)
+                            stage = t_smem.at[i, pl.ds(0, rows_shape)]
+                            plgpu.copy_gmem_to_smem(y_gmem.at[pl.ds(src_lo, rows_shape), cols], stage, t_barrier)
+                        plgpu.barrier_wait(t_barrier)
+                        for i in range(lane_chunk):
+                            cols = pl.ds((chunk_lo + i) * LANE, LANE)
+                            plgpu.copy_smem_to_gmem(
+                                t_smem.at[i, pl.ds(0, rows_shape)], dst_ref.at[pl.ds(dst_lo, rows_shape), cols]
+                            )
+                        plgpu.wait_smem_to_gmem(0, wait_read_only=False)
+
+                for dest_step in range(num_devices):
+                    dest = lax.rem(dev_id + jnp.int32(1 + dest_step), jnp.int32(num_devices))
+                    dst_ref = plgpu.remote_ref(ret_gmem, {axis_name: dest})
+
+                    @pl.loop(0, entries_per_dest)
+                    def _entries(j, dest_step=dest_step, dst_ref=dst_ref):
+                        entry = dest_step * entries_per_dest + j
+                        start = src_lo_ref[entry]
+                        rows = rows_ref[entry]
+                        offset = dst_lo_ref[entry]
+
+                        @pl.when(rows > 0)
+                        def _send(start=start, rows=rows, offset=offset, dst_ref=dst_ref, j=j):
+                            # Gate on every 128-row output block covering the
+                            # segment having been stored by the GEMM.
+                            block_lo = lax.div(start, jnp.int32(128))
+                            block_hi = lax.div(start + rows - 1, jnp.int32(128))
+
+                            @pl.loop(block_lo, block_hi + 1)
+                            def _gate(b):
+                                pl.semaphore_wait(tile_done.at[b], value=tiles_ref[b], decrement=False)
+
+                            num_full = lax.div(rows, jnp.int32(TRANSPORT_STAGE_ROWS))
+                            tail = rows - num_full * TRANSPORT_STAGE_ROWS
+
+                            @pl.loop(sm_id, num_full, step=num_sms)
+                            def _tile(t, start=start, offset=offset, dst_ref=dst_ref):
+                                lo = t * TRANSPORT_STAGE_ROWS
+                                copy_rows(start + lo, dst_ref, offset + lo, TRANSPORT_STAGE_ROWS)
+
+                            does_tail = (tail > 0) & (lax.rem(j, num_sms) == sm_id)
+
+                            @pl.when(does_tail)
+                            def _tail(start=start, offset=offset, dst_ref=dst_ref, num_full=num_full, tail=tail):
+                                @pl.loop(0, tail)
+                                def _row(r):
+                                    copy_rows(
+                                        start + num_full * TRANSPORT_STAGE_ROWS + r,
+                                        dst_ref,
+                                        offset + num_full * TRANSPORT_STAGE_ROWS + r,
+                                        1,
+                                    )
+
+                    @pl.when(dest != dev_id)
+                    def _signal(dest=dest):
+                        pl.semaphore_signal(received_sem, device_id={axis_name: dest})
+
+                pl.semaphore_wait(received_sem, value=(num_devices - 1) * num_sms, decrement=False)
+
+    compiler_params = plgpu.CompilerParams(lowering_semantics=plgpu.LoweringSemantics.Warpgroup)
+    y_pool, returned = plgpu.kernel(
+        kernel,
+        compiler_params=compiler_params,
+        kernel_name="fused_gemm_combine",
+        grid=(_grid_size(),),
+        grid_names=("sm",),
+        num_threads=3,
+        thread_name="wg",
+        cluster_names=("cta",),
+        cluster=(2,),
+        **{
+            _OUT_KWARG: [
+                jax.ShapeDtypeStruct((padded_rows, n), dtype),
+                jax.ShapeDtypeStruct((out_rows, n), dtype),
+            ]
+        },
+    )(act, plan.src_lo, plan.dst_lo, plan.rows, group_sizes, expected_tiles, weights)
+    return y_pool, returned
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(9, 10, 11, 12))
+def fused_full_moe(
+    sorted_x,
+    moe_w13,
+    moe_w2,
+    dispatch_plan,
+    combine_plan,
+    group_sizes,
+    expected,
+    send_rows,
+    pool_recv_rows,
+    pool_rows: int,
+    assignments_per_shard: int,
+    axis_name: str,
+    ep_size: int,
+):
+    """returned = combine(down(swiglu(dispatch(sorted_x) @ w13)) @ w2).
+
+    Both transports are fused: the dispatch streams into the gate/up GEMM
+    (arrival-gated tiles) and the down GEMM streams into the combine put
+    (store-gated segments). `returned` is the sender-frame combined buffer;
+    rows beyond `send_rows` are zeroed.
+    """
+    returned, _res = _full_fwd(
+        sorted_x,
+        moe_w13,
+        moe_w2,
+        dispatch_plan,
+        combine_plan,
+        group_sizes,
+        expected,
+        send_rows,
+        pool_recv_rows,
+        pool_rows,
+        assignments_per_shard,
+        axis_name,
+        ep_size,
+    )
+    return returned
+
+
+def _full_fwd(
+    sorted_x,
+    moe_w13,
+    moe_w2,
+    dispatch_plan,
+    combine_plan,
+    group_sizes,
+    expected,
+    send_rows,
+    pool_recv_rows,
+    pool_rows: int,
+    assignments_per_shard: int,
+    axis_name: str,
+    ep_size: int,
+):
+    local_experts = moe_w13.shape[0]
+    moe_dim = moe_w2.shape[1]
+    padded_rows = _round_up(pool_rows, ROW_ALIGN)
+    n = moe_w13.shape[2]
+    n_pad = -n % _N_ALIGN
+    w13_padded = jnp.pad(moe_w13, ((0, 0), (0, 0), (0, n_pad))) if n_pad else moe_w13
+    x_pool, gu_padded = _fused_dispatch_gemm(
+        sorted_x,
+        dispatch_plan,
+        w13_padded,
+        group_sizes,
+        expected,
+        out_rows=padded_rows,
+        axis_name=axis_name,
+        num_devices=ep_size,
+        local_experts=local_experts,
+    )
+    gu = gu_padded[:, :n] if n_pad else gu_padded
+    gate, up = gu[:, :moe_dim], gu[:, moe_dim:]
+    act = (jax.nn.silu(gate.astype(jnp.float32)) * up.astype(jnp.float32)).astype(sorted_x.dtype)
+    _y_pool, returned = _fused_gemm_combine(
+        act,
+        combine_plan,
+        moe_w2,
+        group_sizes,
+        out_rows=assignments_per_shard,
+        axis_name=axis_name,
+        num_devices=ep_size,
+        local_experts=local_experts,
+    )
+    returned = _zero_invalid_rows(returned, send_rows)
+    res = (
+        sorted_x,
+        x_pool,
+        moe_w13,
+        moe_w2,
+        gu,
+        act,
+        group_sizes,
+        expected,
+        dispatch_plan,
+        combine_plan,
+        send_rows,
+        pool_recv_rows,
+    )
+    return returned, res
+
+
+def _full_bwd(pool_rows, assignments_per_shard, axis_name, ep_size, res, d_returned):
+    (
+        sorted_x,
+        x_pool,
+        moe_w13,
+        moe_w2,
+        gu,
+        act,
+        group_sizes,
+        expected,
+        dispatch_plan,
+        combine_plan,
+        send_rows,
+        pool_recv_rows,
+    ) = res
+    moe_dim = moe_w2.shape[1]
+    padded_rows = x_pool.shape[0]
+    d_returned = d_returned.astype(x_pool.dtype)
+    # The combine cotangent is a dispatch-shaped put: sender-frame rows back
+    # into the pool frame.
+    dy_pool = put_with_transpose(
+        d_returned,
+        dispatch_plan,
+        combine_plan,
+        pool_recv_rows,
+        send_rows,
+        pool_rows,
+        assignments_per_shard,
+        axis_name,
+        ep_size,
+    )
+    if padded_rows != pool_rows:
+        dy_pool = jnp.pad(dy_pool, ((0, padded_rows - pool_rows), (0, 0)))
+    dact = _grouped(dy_pool, moe_w2.transpose(0, 2, 1), group_sizes)
+    dw2 = cudnn_grouped_wgrad(act, dy_pool, group_sizes)
+    gate = gu[:, :moe_dim].astype(jnp.float32)
+    up = gu[:, moe_dim:].astype(jnp.float32)
+    sg = jax.nn.sigmoid(gate)
+    silu = gate * sg
+    dact_f = dact.astype(jnp.float32)
+    dgate = dact_f * up * (sg + silu * (1.0 - sg))
+    dup = dact_f * silu
+    d_gu = jnp.concatenate([dgate, dup], axis=1).astype(x_pool.dtype)
+    dw13 = cudnn_grouped_wgrad(x_pool, d_gu, group_sizes)
+    # The dispatch cotangent fuses the dx GEMM with its return put: the same
+    # store-gated combine kernel with w13^T as the weight.
+    _dx_pool, dsorted_x = _fused_gemm_combine(
+        d_gu,
+        combine_plan,
+        moe_w13.transpose(0, 2, 1),
+        group_sizes,
+        out_rows=assignments_per_shard,
+        axis_name=axis_name,
+        num_devices=ep_size,
+        local_experts=moe_w13.shape[0],
+    )
+    dsorted_x = _zero_invalid_rows(dsorted_x, send_rows).astype(sorted_x.dtype)
+
+    def float0(a):
+        return np.zeros(jnp.shape(a), dtype=jax.dtypes.float0)
+
+    return (
+        dsorted_x,
+        dw13,
+        dw2,
+        jax.tree.map(float0, dispatch_plan),
+        jax.tree.map(float0, combine_plan),
+        float0(group_sizes),
+        float0(expected),
+        float0(send_rows),
+        float0(pool_recv_rows),
+    )
+
+
+fused_full_moe.defvjp(_full_fwd, _full_bwd)

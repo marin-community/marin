@@ -92,6 +92,7 @@ FLAVORS: dict[str, Flavor] = {
     "ep-marin-mgpu-cudnn-cute": Flavor(None, "marin_ep_mgpu_cudnn_cute"),
     "ep-marin-mgpu-brd": Flavor(None, "marin_ep_mgpu_brd"),
     "ep-marin-mgpu-fused": Flavor(None, "marin_ep_mgpu_fused"),
+    "ep-marin-mgpu-fused2": Flavor(None, "marin_ep_mgpu_fused2"),
     # The same split-capable ragged transport, with the existing SM100 QuACK grouped GEMMs for
     # activation-path expert compute. Weight gradients retain the ragged-dot implementation.
     "ep-ragged-cute": Flavor(None, "ragged_all_to_all_cute"),

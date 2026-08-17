@@ -30,7 +30,12 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 from levanter.grug._moe.brd_expert_mlp import brd_expert_mlp_padded
 from levanter.grug._moe.ep_ragged_all_to_all import _cudnn_cute_expert_mlp, _ragged_dot_expert_mlp
-from levanter.grug._moe.fused_dispatch_brd import _grid_size, expected_arrival_signals, fused_dispatch_expert_mlp
+from levanter.grug._moe.fused_dispatch_brd import (
+    _grid_size,
+    expected_arrival_signals,
+    fused_dispatch_expert_mlp,
+    fused_full_moe,
+)
 from levanter.grug._moe.ep_common import (
     _compact_by_keep_mask,
     _expand_from_keep_mask,
@@ -112,7 +117,7 @@ def marin_ep_moe_local(
     num_experts: int,
     capacity_factor: float,
     pool_group_size: int,
-    transport: Literal["ragged", "gathered", "mgpu", "mgpu_fused", "hier"] = "ragged",
+    transport: Literal["ragged", "gathered", "mgpu", "mgpu_fused", "mgpu_fused2", "hier"] = "ragged",
     splits_per_peer: int = 1,
     intranode_size: int = 1,
     expert_mlp: Callable = _ragged_dot_expert_mlp,
@@ -159,7 +164,7 @@ def marin_ep_moe_local(
         )
         sorted_x = _compact_by_keep_mask(sorted_x, keep_mask)
 
-        if transport in ("mgpu", "mgpu_fused"):
+        if transport in ("mgpu", "mgpu_fused", "mgpu_fused2"):
             # Region = compacted per-owner prefix of kept rows: the pool has
             # no capacity gaps, groups are contiguous, and `ragged_dot`
             # consumes it directly (kept[g] == sum_d accepted[d, g]).
@@ -260,7 +265,31 @@ def marin_ep_moe_local(
             )
 
     with jax.named_scope("moe_up_down"):
-        if transport == "mgpu_fused":
+        returned_fused = None
+        if transport == "mgpu_fused2":
+            # Both transports fused: dispatch streams into the gate/up GEMM
+            # and the down GEMM streams into the combine put.
+            if activation_fn is not jax.nn.silu:
+                raise ValueError("mgpu_fused2 fuses SiLU-gated SwiGLU only")
+            expected = expected_arrival_signals(
+                accepted, shard_id, local_experts=local_experts, grid_size=_grid_size()
+            )
+            returned_fused = fused_full_moe(
+                sorted_x,
+                moe_w13_local,
+                moe_w2_local,
+                dispatch_plan,
+                combine_plan,
+                local_group_sizes,
+                expected,
+                send_rows,
+                pool_recv_rows,
+                pool_rows,
+                assignments_per_shard,
+                "expert",
+                ep_size,
+            )
+        elif transport == "mgpu_fused":
             # The dispatch put and the gate/up GEMM run in one persistent
             # kernel; each GEMM tile gates on its expert's arrival count.
             if activation_fn is not jax.nn.silu:
@@ -291,7 +320,10 @@ def marin_ep_moe_local(
             )
 
     with jax.named_scope("combine"):
-        if transport in ("mgpu", "mgpu_fused"):
+        if transport == "mgpu_fused2":
+            # The combine put already ran inside the fused down-GEMM kernel.
+            returned = returned_fused
+        elif transport in ("mgpu", "mgpu_fused"):
             # `out_pool` is already in the (expert, source, rank) layout the
             # combine plan reads from — no unsort needed.
             returned = put_with_transpose(
@@ -523,6 +555,34 @@ def _moe_mlp_ep_marin_mgpu_fused_local(
         capacity_factor=capacity_factor,
         pool_group_size=moe_w13_local.shape[0],
         transport="mgpu_fused",
+    )
+
+
+def _moe_mlp_ep_marin_mgpu_fused2_local(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+    splits_per_peer: int = 1,
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+    """Fully fused forward: dispatch-gated gate/up GEMM + combine-streaming down GEMM."""
+    del splits_per_peer  # The fused transport has no per-peer split knob.
+    return marin_ep_moe_local(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        pool_group_size=moe_w13_local.shape[0],
+        transport="mgpu_fused2",
     )
 
 

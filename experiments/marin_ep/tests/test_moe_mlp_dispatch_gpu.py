@@ -88,8 +88,9 @@ def test_moe_mlp_marin_ep_implementation_matches_oracle_on_gpu():
     np.testing.assert_allclose(np.asarray(y), np.asarray(y_oracle), rtol=2e-2, atol=0.2)
 
 
-def test_moe_mlp_mgpu_fused_matches_mgpu_brd_on_gpu():
-    """The fused dispatch+GEMM flavor must reproduce the two-launch brd flavor.
+@pytest.mark.parametrize("fused_implementation", ["marin_ep_mgpu_fused", "marin_ep_mgpu_fused2"])
+def test_moe_mlp_mgpu_fused_matches_mgpu_brd_on_gpu(fused_implementation):
+    """The fused flavors must reproduce the multi-launch brd flavor.
 
     Both run identical GEMM kernels on identical pool layouts; only the
     dispatch fusion differs, so values and gradients must match bitwise.
@@ -151,7 +152,7 @@ def test_moe_mlp_mgpu_fused_matches_mgpu_brd_on_gpu():
         return jax.block_until_ready((y, dropped, grads))
 
     y_b, dropped_b, grads_b = run("marin_ep_mgpu_brd")
-    y_f, dropped_f, grads_f = run("marin_ep_mgpu_fused")
+    y_f, dropped_f, grads_f = run(fused_implementation)
 
     assert int(dropped_f) == int(dropped_b)
     np.testing.assert_array_equal(np.asarray(y_f, np.float32), np.asarray(y_b, np.float32))

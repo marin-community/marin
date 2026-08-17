@@ -52,10 +52,11 @@ def main() -> None:
     devices = jax.device_count()
     local = jax.local_device_count()
     assert local == 1, "this smoke wants the production 1 process/GPU topology"
-    # MARIN_EP_TRANSPORT=mgpu_fused additionally runs the fused dispatch+GEMM
-    # kernel (bf16, Blackwell-only) and requires it to match the mgpu path
-    # bitwise on values and gradients.
-    check_fused = os.environ.get("MARIN_EP_TRANSPORT", "mgpu") == "mgpu_fused"
+    # MARIN_EP_TRANSPORT=mgpu_fused (or mgpu_fused2) additionally runs the
+    # fused kernels (bf16, Blackwell-only) and requires them to match the
+    # mgpu path bitwise on values and gradients.
+    fused_env = os.environ.get("MARIN_EP_TRANSPORT", "mgpu")
+    fused_arms = {"mgpu_fused": ("mgpu_fused",), "mgpu_fused2": ("mgpu_fused", "mgpu_fused2")}.get(fused_env, ())
     tokens, topk, hidden, intermediate = 512, 4, 512, 768
     num_experts = devices * 3  # El=3, like hero
     local_experts = 3
@@ -175,7 +176,7 @@ def main() -> None:
 
     print(f"[proc {proc}] MGPU TRAIN CONFORMANT (drops {dropped}, {devices} devices)", flush=True)
 
-    if check_fused:
+    if fused_arms:
         # A/B the fused dispatch+GEMM kernel against the mgpu path in bf16:
         # identical GEMM kernels and pool layouts, so values and gradients
         # must match bitwise.
@@ -189,7 +190,7 @@ def main() -> None:
         cot_bf16 = put_batch(cot).astype(jnp.bfloat16)
         results = {}
         with jax.set_mesh(mesh):
-            for transport in ("mgpu", "mgpu_fused"):
+            for transport in ("mgpu", *fused_arms):
                 # The reference leg must run the same Pallas GEMMs the fused
                 # kernel uses, or the comparison drowns in cross-GEMM ULPs.
                 kwargs = {"expert_mlp": brd_expert_mlp_padded} if transport == "mgpu" else {}
@@ -207,11 +208,12 @@ def main() -> None:
         def local_np(arr):
             return np.concatenate([np.asarray(s.data, np.float32) for s in arr.addressable_shards])
 
-        assert results["mgpu_fused"][0] == results["mgpu"][0]
-        np.testing.assert_array_equal(local_np(results["mgpu_fused"][1]), local_np(results["mgpu"][1]))
-        for gf, gb, name in zip(results["mgpu_fused"][2], results["mgpu"][2], ("dx", "dw13", "dw2"), strict=True):
-            np.testing.assert_array_equal(local_np(gf), local_np(gb), err_msg=name)
-        print(f"[proc {proc}] MGPU_FUSED CONFORMANT (bitwise vs mgpu, {devices} devices)", flush=True)
+        for arm in fused_arms:
+            assert results[arm][0] == results["mgpu"][0], arm
+            np.testing.assert_array_equal(local_np(results[arm][1]), local_np(results["mgpu"][1]), err_msg=arm)
+            for gf, gb, name in zip(results[arm][2], results["mgpu"][2], ("dx", "dw13", "dw2"), strict=True):
+                np.testing.assert_array_equal(local_np(gf), local_np(gb), err_msg=f"{arm}:{name}")
+            print(f"[proc {proc}] {arm.upper()} CONFORMANT (bitwise vs mgpu, {devices} devices)", flush=True)
 
 
 if __name__ == "__main__":

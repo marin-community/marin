@@ -13,7 +13,11 @@ the identity on each device's compacted send buffer.
 import jax
 import jax.numpy as jnp
 import numpy as np
-from levanter.grug._moe.fused_dispatch_brd import TRANSPORT_STAGE_ROWS, expected_arrival_signals
+from levanter.grug._moe.fused_dispatch_brd import (
+    TRANSPORT_STAGE_ROWS,
+    expected_arrival_signals,
+    expected_tile_signals,
+)
 from levanter.grug._moe.marin_ep_transport import combine_segments, dispatch_segments
 
 from experiments.marin_ep.planref import execute_plans
@@ -112,3 +116,31 @@ def test_expected_arrival_signals_matches_reference_loop():
                 full, tail = divmod(rows, TRANSPORT_STAGE_ROWS)
                 want += min(full, grid_size) + (1 if tail else 0)
             assert int(got[j]) == want, (shard, j)
+
+
+def test_expected_tile_signals_matches_groupinfo_slot_replay():
+    """Replay GroupInfo.create's slot assignment: group i gets the slot range
+    [start_block + i, final_block + 1 + i) over 256-row logical tiles, each
+    visit signals both CTA halves once per n tile, and spare grid slots past
+    every range resolve to logical block 0."""
+    rng = np.random.default_rng(3)
+    n_iters, eff = 4, 256
+    for case in range(20):
+        num_groups = int(rng.integers(1, 6))
+        gs = rng.integers(0, 700, size=num_groups).astype(np.int32)
+        padded = max(256, int(-(-gs.sum() // eff) * eff + eff * int(rng.integers(0, 3))))
+        num_logical = padded // eff
+        visits = np.zeros(num_logical, np.int64)
+        end = 0
+        used = 0
+        for b in gs:
+            start, end = end, end + int(b)
+            if b == 0:
+                continue
+            first, final = start // eff, (end - 1) // eff
+            visits[first : final + 1] += 1
+            used += final - first + 1
+        visits[0] += (num_logical + num_groups - 1) - used
+        want = np.repeat(visits, 2) * n_iters
+        got = np.asarray(expected_tile_signals(jnp.asarray(gs), padded_rows=padded, n_iters=n_iters))
+        np.testing.assert_array_equal(got, want, err_msg=str((case, gs, padded)))
