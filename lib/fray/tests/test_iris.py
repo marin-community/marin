@@ -468,9 +468,10 @@ def test_wrap_multiprocess_one_process_per_gpu() -> None:
         IrisEntrypoint.from_command("python", "train.py", "--steps", "10"), _gpu_resources(8), processes_per_task=8
     )
     assert wrapped.command == [
-        "python",
-        "-m",
-        "iris.hooks.multigpu_main",
+        "bash",
+        "-c",
+        'exec "${IRIS_PYTHON:-python}" -m iris.hooks.multigpu_main "$@"',
+        "iris-multigpu",
         "--nproc",
         "8",
         "--devices-per-proc",
@@ -487,10 +488,11 @@ def test_wrap_multiprocess_groups_devices_when_fewer_processes() -> None:
     wrapped = wrap_multiprocess(
         IrisEntrypoint.from_command("python", "train.py"), _gpu_resources(8), processes_per_task=4
     )
-    assert wrapped.command[:8] == [
-        "python",
-        "-m",
-        "iris.hooks.multigpu_main",
+    assert wrapped.command[:9] == [
+        "bash",
+        "-c",
+        'exec "${IRIS_PYTHON:-python}" -m iris.hooks.multigpu_main "$@"',
+        "iris-multigpu",
         "--nproc",
         "4",
         "--devices-per-proc",

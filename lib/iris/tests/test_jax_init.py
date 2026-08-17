@@ -812,7 +812,6 @@ def test_xla_autotune_directory_does_not_change_the_compilation_cache_key() -> N
     assert compilation_cache_key("/cache/node-a") == compilation_cache_key("/cache/node-b")
 
 
-
 def test_supervised_coordinator_binds_ipv4_any_on_the_advertised_port(monkeypatch):
     """A [::] listener refuses IPv4 peers where bindv6only is set, and a portless bind loses the port."""
     assert jax_init_module._ipv4_bind_address("10.0.0.1:45678") == "0.0.0.0:45678"
