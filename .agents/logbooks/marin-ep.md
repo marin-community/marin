@@ -1561,3 +1561,13 @@ Experiment ID prefix: `MEP`.
 - Pending user decision: swap #47406 to the ds-fusion issue (observed,
   repro'd) and downgrade alignment to a latent code-inspection report.
   2-node session released.
+
+### 2026-08-17 14:05 - MEP-060: #47406 closed as not planned with the corrected diagnosis
+- Per user: posted the closing comment (premature diagnosis; observed
+  failures were the ds-fusion escapee; flag+cuda_async workaround passes
+  on stock nightlies at 4/8 ranks; min_alignment gap latent-only) and
+  closed #47406 as not planned.
+  https://github.com/openxla/xla/issues/47406#issuecomment-5318893238
+- The ds-fusion issue (with the validated standalone repro
+  repro_dsfusion.py) remains DRAFTED, not filed -- awaiting user
+  go-ahead. Stock-wheel EP64 validation arm also proposed, not queued.
