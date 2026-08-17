@@ -677,6 +677,60 @@ def test_latent_moe_flops_replace_routed_width_and_add_projections():
     assert latent_flops - full_width_flops == expected_delta
 
 
+def test_bias_stats_describe_the_mean_centered_bias_not_the_raw_betas():
+    # Two layers with deliberately different offsets: centering is per-layer, so a shared
+    # offset must cancel and only the within-layer spread may survive into the stats.
+    qb_betas = jnp.array([[0.0, 1.0, 2.0, 3.0], [10.0, 11.0, 12.0, 13.0]])
+
+    stats = train._bias_stats(qb_betas)
+
+    # Applied bias is -beta re-centered per layer, so both layers collapse to [1.5, .5, -.5, -1.5].
+    assert float(stats["moe_bias/mean"]) == pytest.approx(0.0, abs=1e-6)
+    assert float(stats["moe_bias/min"]) == pytest.approx(-1.5)
+    assert float(stats["moe_bias/max"]) == pytest.approx(1.5)
+    expected = np.array([1.5, 0.5, -0.5, -1.5] * 2)
+    assert float(stats["moe_bias/p05"]) == pytest.approx(float(np.percentile(expected, 5.0)))
+    assert float(stats["moe_bias/p95"]) == pytest.approx(float(np.percentile(expected, 95.0)))
+
+
+def test_train_step_logs_bias_stats_for_the_pending_betas():
+    params = _TinyWatchModel(weight=jnp.array(2.0))
+    optimizer = optax.sgd(0.1)
+    pending = jnp.array([[0.0, 1.0, 2.0, 3.0]])
+    state = train.GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        master_params=None,
+        opt_state=optimizer.init(params),
+        ema_params=None,
+        pending_qb_betas=pending,
+    )
+
+    def loss_and_grads(current_params, batch, mp, z_loss):
+        del batch, mp, z_loss
+        grads = _TinyWatchModel(weight=2 * current_params.weight)
+        return (current_params.weight**2, {"qb_beta_per_layer": pending}), grads
+
+    # train_step donates its state, so snapshot the expectation before the call deletes it.
+    expected = {key: float(value) for key, value in train._bias_stats(pending).items()}
+
+    with (
+        patch.object(train, "_apply_qb_betas", lambda model, qb_betas: model),
+        patch.object(train, "_loss_and_grads", loss_and_grads),
+    ):
+        train_step = train._make_train_step(
+            optimizer,
+            jmp.get_policy("params=float32,compute=float32,output=float32"),
+            z_loss_weight=0,
+            ema_beta=None,
+        )
+        _, metrics, _ = train_step(state, jnp.array(0))
+
+    assert set(expected) <= set(metrics)
+    for key, value in expected.items():
+        assert float(metrics[key]) == pytest.approx(value)
+
+
 class _TinyWatchModel(eqx.Module):
     weight: jax.Array
 

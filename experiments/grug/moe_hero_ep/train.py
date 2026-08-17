@@ -385,11 +385,32 @@ class GrugTrainState:
     pending_qb_betas: jax.Array
 
 
+def _qb_router_bias(qb_betas: jax.Array) -> jax.Array:
+    """Router bias for the coming step: the negated, per-layer mean-centered QB betas."""
+    bias = -qb_betas
+    return bias - jnp.mean(bias, axis=-1, keepdims=True)
+
+
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     """Set router biases from QB betas (computed on previous step)."""
-    new_bias = -qb_betas
-    new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
-    return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
+    return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, _qb_router_bias(qb_betas))
+
+
+def _bias_stats(qb_betas: jax.Array) -> dict[str, jax.Array]:
+    """Router-bias distribution summary pooled over all MoE layers (QB diagnostics).
+
+    ``qb_betas`` has shape ``[num_moe_layers, num_experts]``. The spread between ``p05`` and
+    ``p95`` sizes the band the QB quantile actually has to resolve, so it is the scale a
+    histogram estimator's bin width must be read against.
+    """
+    flat = _qb_router_bias(qb_betas).reshape(-1)
+    return {
+        "moe_bias/min": jnp.min(flat),
+        "moe_bias/max": jnp.max(flat),
+        "moe_bias/mean": jnp.mean(flat),
+        "moe_bias/p05": jnp.percentile(flat, 5.0),
+        "moe_bias/p95": jnp.percentile(flat, 95.0),
+    }
 
 
 def _tree_to_memory_kind(tree, memory_kind: str):
@@ -555,6 +576,7 @@ def _make_train_step(
 
         (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
         metrics = {"train/loss": loss, **summarized_metrics}
+        metrics.update(_bias_stats(state.pending_qb_betas))
         opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
         if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
             if state.master_params is None:
