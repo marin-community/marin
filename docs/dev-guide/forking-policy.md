@@ -28,7 +28,9 @@ revision directly. There are three pin kinds:
 `.github/workflows/ops-fork-ferry.yaml` runs every Monday at 08:00 UTC. It has one
 matrix leg per fork unit (`tpu-vllm`, `vllm-gpu`, `evalchemy`, `harbor`). Each leg
 mints a GitHub OIDC token, exchanges it for a short-lived Loom token, and launches
-one Weaver session for that unit. There is no stored PAT.
+one Weaver session for that unit. The `fork-ferry` Loom profile admits all four
+scheduled units; a test keeps its concurrency limit at or above the matrix size.
+There is no stored PAT.
 
 `MarinSkyRL` is pinned and refreshable through the skill on demand, but is not yet
 in the weekly rotation. A human runs the skill for a single fork the same way.

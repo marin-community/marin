@@ -227,14 +227,14 @@ def test_warning_alerts_remain_visible_without_notifications():
     ]
 
 
-def test_coreweave_storage_alert_compares_latest_finelog_usage_to_zone_quota_and_notifies_slack():
+def test_coreweave_storage_capacity_pages_critical_ops():
     (rule,) = [rule for rule in _rules() if rule["uid"] == "coreweave-storage-capacity"]
     source, threshold = rule["data"]
     sql = next(param["value"] for param in source["model"]["url_options"]["params"] if param["key"] == "sql")
 
     assert rule["for"] == "5m"
     assert rule["noDataState"] == "OK"
-    assert rule["labels"] == {"severity": "warning", "notification": "slack"}
+    assert rule["labels"] == {"severity": "critical"}
     assert source["datasourceUid"] == "finelog-marin"
     assert 'FROM "storage.usage"' in sql
     assert "metric IN ('used_bytes', 'quota_bytes')" in sql
@@ -252,11 +252,9 @@ def test_coreweave_storage_alert_compares_latest_finelog_usage_to_zone_quota_and
 
     (policy,) = _load(ALERTING / "policies.yaml")["policies"]
     routes = policy["routes"]
-    route = next(route for route in routes if route["object_matchers"] == [["notification", "=", "slack"]])
-    muted_warning = next(route for route in routes if route["object_matchers"] == [["severity", "=", "warning"]])
-    assert route["receiver"] == "ops-slack"
+    route = next(route for route in routes if route["object_matchers"] == [["severity", "=", "critical"]])
+    assert route["receiver"] == "ops-critical"
     assert "mute_time_intervals" not in route
-    assert routes.index(route) < routes.index(muted_warning)
 
 
 def test_coreweave_storage_alert_notifies_slack_when_a_known_series_is_stale():

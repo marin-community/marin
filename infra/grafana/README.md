@@ -266,7 +266,8 @@ redeploy.
 
 Critical rules notify operators immediately: an unreachable cluster or
 federation peer, a crash-looping watched component, an admission webhook with no ready endpoints, a
-dead production Iris controller, or an unhealthy finelog hub or mirror.
+dead production Iris controller, an unhealthy finelog hub or mirror, or CoreWeave
+storage above 80 percent of quota.
 Warning rules remain in Grafana's home alert list without sending email, Slack,
 or Loom notifications: a degraded component, a failed infra probe, a GPU
 pod that stays node-bound and
@@ -283,6 +284,8 @@ stage start or shard completion, then remains pending for five minutes. The
 execution ID separates concurrent pipelines under one root job. The stuck-pod
 rule groups by node and links the cordon-first
 recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
+The CoreWeave storage-telemetry freshness warning carries the explicit
+`notification=slack` exception, so it announces without launching an ops agent.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
 dashboard panels rather than alert rules because they have expected benign
 causes. `severity=critical` routes to `ops-critical` (email

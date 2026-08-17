@@ -74,7 +74,7 @@ config:
       envClear: true
       ambientAllowlist: []
       idleArchiveSeconds: 3600
-      maxConcurrent: 3
+      maxConcurrent: 4
       turnBudget: 100
       prelude: weaver
       instructionsFile: profiles/fork-ferry/AGENTS.md

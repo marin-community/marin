@@ -86,10 +86,11 @@ tunnel. It needs the repository secret `COREWEAVE_API_TOKEN` and fails without
 it, because a green run that collects nothing hides a frozen dashboard.
 
 The Grafana `Storage` dashboard shows bucket bytes and quota use for each zone.
-The `CoreWeaveStorageCapacity` rule sends a Slack warning after quota use stays
-above 80 percent for five minutes. For example, a 900 TiB live quota starts the
-warning above 720 TiB. The rule reads the quota metric, so it also follows a
-later quota change.
+The `CoreWeaveStorageCapacity` rule pages after quota use stays above 80 percent
+for five minutes. The critical notification reaches Slack and opens the Loom ops
+agent on that alert thread. For example, a 900 TiB live quota starts the alert
+above 720 TiB. The rule reads the quota metric, so it also follows a later quota
+change.
 
 The `CoreWeaveStorageTelemetryStale` rule sends a Slack warning when a known
 storage series is more than three hours old. For a stale-data warning, check the
