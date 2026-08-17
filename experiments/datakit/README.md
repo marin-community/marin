@@ -155,10 +155,56 @@ prefix is not prepended.
 | --- | --- | --- |
 | `gs://marin-us-central1/datakit/sample_100b_8ae7a94f` | ~100B tokens | GCP `us-central1` |
 
-Materialize it once from the equivalent CoreWeave sample with
-`experiments.datakit.materialize_zephyr_benchmark_sample`. The entry point
-copies the normalized Parquet shards and writes portable GCS artifact records;
-its module docstring contains the Iris launch command.
+### Create a regional sample
+
+`experiments.datakit.materialize_zephyr_benchmark_sample` creates a benchmark
+sample in the region where it will run. It either copies an existing normalized
+sample or rebuilds it from the source Hugging Face datasets. Neither mode is
+part of the A/B benchmark workflow.
+
+Copying preserves the normalized Parquet payloads and writes destination-local
+`NormalizedData` artifacts. Run the job in the destination region, keep
+concurrency bounded, and confirm transfer charges before a cross-region copy.
+For the CoreWeave source, pass its credentials; for a GCS-to-GCS copy, omit
+them and use GCP credentials that can read the source bucket. Do not use Storage
+Transfer Service.
+
+```bash
+uv run iris --cluster=marin job run --no-wait \
+  --region <DESTINATION_REGION> --memory=8G --disk=5G --cpu=4 --extra=cpu \
+  --priority batch \
+  -e CW_KEY_ID "$CW_KEY_ID" -e CW_KEY_SECRET "$CW_KEY_SECRET" \
+  -- python -m experiments.datakit.materialize_zephyr_benchmark_sample \
+    --mode copy \
+    --source-prefix s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f \
+    --destination-prefix gs://<DESTINATION_BUCKET>/datakit/sample_100b_8ae7a94f \
+    --max-concurrent 4
+```
+
+The same command supports GCS-to-GCS copies by passing a `gs://` source prefix
+and removing the two CoreWeave credential arguments.
+
+Regeneration reads the source names from `--source-prefix`, then runs the source
+registry's Hugging Face download and normalization steps before sampling 100B
+tokens into the destination. It reads no source Parquet payloads. `--data-prefix`
+is the region-local root for raw and normalized intermediate artifacts. The
+source prefix must be readable for its artifact metadata; pass CoreWeave
+credentials when it is the legacy S3 sample. Regeneration can produce different
+bytes as source revisions or normalization code change.
+
+```bash
+uv run iris --cluster=marin job run --no-wait \
+  --region <DESTINATION_REGION> --memory=8G --disk=5G --cpu=4 --extra=cpu \
+  --priority batch \
+  -e CW_KEY_ID "$CW_KEY_ID" -e CW_KEY_SECRET "$CW_KEY_SECRET" \
+  -- python -m experiments.datakit.materialize_zephyr_benchmark_sample \
+    --mode regenerate \
+    --source-prefix s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f \
+    --data-prefix gs://<DESTINATION_BUCKET> \
+    --destination-prefix gs://<DESTINATION_BUCKET>/datakit/sample_100b_8ae7a94f \
+    --target-total-tokens-b 100 \
+    --max-concurrent 4
+```
 
 The original samples remain available under
 `s3://marin-us-east-02a/marin/datakit/` in CoreWeave `us-east-02a`:
@@ -183,7 +229,7 @@ uv run fsutil ls s3://marin-us-east-02a/marin/datakit/
 | --- | --- |
 | `reference_pipeline.py` | The DAG builder + CLI (`--mode full\|sample`, `--pool-*`, `--sources`, `--quality-model`) |
 | `zephyr_benchmark.py` | GCP-default A/B benchmark over a pre-normalized sample |
-| `materialize_zephyr_benchmark_sample.py` | One-time CoreWeave-to-GCS benchmark sample materializer |
+| `materialize_zephyr_benchmark_sample.py` | One-time benchmark sample copy or regeneration tool |
 | `global_exact_dedup.py` | Sparse co-partitioned exact-duplicate attributes by normalized record ID |
 | `cluster/quality/fast_transformer/` | Quality classifier: per-source scoring step + training/calibration |
 | `cluster/domain/v0/` | Domain clustering: centroid sampling/training + per-source assignment |

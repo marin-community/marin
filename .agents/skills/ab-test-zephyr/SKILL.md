@@ -181,35 +181,6 @@ Delegate monitoring to `babysit-zephyr`. A failed or preempted arm is evidence
 about infrastructure reliability, not a performance verdict. Diagnose repeated
 failures with `debug`.
 
-## Materialize the default GCS sample
-
-The GCS sample is a one-time copy of the normalized main Parquet shards in the
-CoreWeave 100B sample. A recursive object copy is insufficient because the
-legacy `.artifact.json` payloads contain S3 paths. The materializer writes new
-portable `NormalizedData` artifacts rooted at the GCS destination and omits
-duplicate side outputs that this benchmark does not consume.
-
-First check whether the destination is already present:
-
-```bash
-uv run fsutil ls gs://marin-us-central1/datakit/sample_100b_8ae7a94f
-```
-
-If it is absent, export `CW_KEY_ID` and `CW_KEY_SECRET`, confirm the transfer
-cost with the requester, and launch the materializer in `us-central1`:
-
-```bash
-uv run iris --cluster=marin job run --no-wait \
-  --region us-central1 --memory=8G --disk=5G --cpu=4 --extra=cpu \
-  --priority batch \
-  -e CW_KEY_ID "$CW_KEY_ID" -e CW_KEY_SECRET "$CW_KEY_SECRET" \
-  -- python -m experiments.datakit.materialize_zephyr_benchmark_sample
-```
-
-The entry point verifies that the destination contains the same source set
-after every per-source copy succeeds. Monitor this job with `babysit-job`.
-Do not use Storage Transfer Service for this copy.
-
 ## Collect execution IDs
 
 A benchmark job can run many Zephyr pipelines on one shared pool. Collect every
