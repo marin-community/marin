@@ -32,7 +32,7 @@ from jax.experimental.pallas.ops.gpu import blackwell_matmul_mgpu, ragged_dot_mg
 from jax.experimental.pallas.ops.gpu import blackwell_ragged_dot_mgpu as brd
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
-from levanter.grug._moe.marin_ep_transport import LANE, dispatch_segments
+from levanter.grug._moe.marin_ep_transport import LANE, dispatch_segments, put_segments
 
 from experiments.marin_ep.planref import execute_plans
 
@@ -42,7 +42,7 @@ HIDDEN = 2560  # k; must divide LANE for the transport view and tile_k for the G
 N_OUT = 1536  # n per expert (weight columns)
 LOCAL_EXPERTS = 3
 MAX_SEG_ROWS = 2000
-TRANSPORT_STAGE_ROWS = 4  # rows per transport SMEM stage (k * rows * 4B each)
+TRANSPORT_STAGE_ROWS = 12  # rows per transport SMEM stage (bf16: lanes*rows*512B)
 
 CONFIG = brd.TuningConfig(
     tile_m=128,
@@ -86,7 +86,6 @@ def fused_dispatch_gemm(
     max_concurrent_steps = CONFIG.max_concurrent_steps
     epilogue_tile_n = CONFIG.epilogue_tile_n
     entries_per_dest = plan.src_lo.shape[0] // num_devices
-    src_view = src.reshape(src.shape[0], lanes, LANE)
 
     swizzle = plgpu.find_swizzle(tile_k * jnp.dtype(dtype).itemsize * 8)
     swizzle_elems = swizzle // jnp.dtype(dtype).itemsize
@@ -101,11 +100,9 @@ def fused_dispatch_gemm(
         dev_id = lax.axis_index(axis_name)
         sm_id = lax.axis_index("sm")
         num_sms = lax.axis_size("sm")
-        cluster_idx = lax.axis_index("x")
+        cluster_idx = lax.axis_index("cta")
         linear_grid = (m_iters + local_experts - 1) * n_iters
         group_sizes_regs = [gs_ref[i] for i in range(local_experts)]
-        # The pool the GEMM reads is viewed [rows, lanes, LANE] for the puts.
-        pool_view = pool_gmem.reshape(out_rows, lanes, LANE)
 
         @functools.partial(
             pl.run_scoped,
@@ -118,21 +115,32 @@ def fused_dispatch_gemm(
             mma_done_barrier=plgpu.Barrier(num_arrivals=1, num_barriers=2, orders_tensor_core=True),
             consumed_barrier=plgpu.Barrier(num_arrivals=1, num_barriers=max_concurrent_steps, orders_tensor_core=True),
             acc_tmem=plgpu.TMEM((block_tile_m, tile_n * 2), jnp.float32, collective=True),
-            t_smem=plgpu.SMEM((TRANSPORT_STAGE_ROWS, lanes, LANE), src.dtype),
-            t_barrier=plgpu.Barrier(num_arrivals=1),
+            t_smem=plgpu.SMEM((lanes, TRANSPORT_STAGE_ROWS, LANE), src.dtype),
+            t_barrier=plgpu.Barrier(num_arrivals=1, num_barriers=1) if False else plgpu.Barrier(num_arrivals=lanes),
             collective_axes=("wg",),
         )
         def _scoped(**refs):
             t_smem = refs.pop("t_smem")
             t_barrier = refs.pop("t_barrier")
 
-            @pl.when(wg == 2)
+            # Only CTA 0 of each 2-CTA cluster transports; otherwise both
+            # cluster members duplicate sends and double the arrival signals.
+            @pl.when((wg == 2) & (cluster_idx == 0))
             def _transport():
                 def copy_rows(src_lo, dst_ref, dst_lo, rows_shape):
-                    stage = t_smem.at[pl.ds(0, rows_shape)]
-                    plgpu.copy_gmem_to_smem(x_ref.at[pl.ds(src_lo, rows_shape)], stage, t_barrier)
+                    # TMA boxes cap at 256 elements per dimension, so rows move
+                    # in LANE-wide column chunks against the 2D refs; all lane
+                    # loads are issued before one multi-arrival barrier wait.
+                    for lane in range(lanes):
+                        cols = pl.ds(lane * LANE, LANE)
+                        stage = t_smem.at[lane, pl.ds(0, rows_shape)]
+                        plgpu.copy_gmem_to_smem(x_ref.at[pl.ds(src_lo, rows_shape), cols], stage, t_barrier)
                     plgpu.barrier_wait(t_barrier)
-                    plgpu.copy_smem_to_gmem(stage, dst_ref.at[pl.ds(dst_lo, rows_shape)])
+                    for lane in range(lanes):
+                        cols = pl.ds(lane * LANE, LANE)
+                        plgpu.copy_smem_to_gmem(
+                            t_smem.at[lane, pl.ds(0, rows_shape)], dst_ref.at[pl.ds(dst_lo, rows_shape), cols]
+                        )
                     plgpu.wait_smem_to_gmem(0, wait_read_only=False)
 
                 def signal(j, dest):
@@ -146,10 +154,13 @@ def fused_dispatch_gemm(
 
                 @pl.loop(0, entries_per_dest)
                 def _expert_loop(j):
-                    @pl.loop(0, num_devices)
-                    def _dest_loop(k):
-                        dest = dest_ids_ref[k]
-                        dst_ref = plgpu.remote_ref(pool_view, {axis_name: dest})
+                    # The dest loop is a static Python unroll: Warpgroup-semantics
+                    # TMA descriptors are built on the host per (ref, peer), so
+                    # the peer id must be host-recomputable — `device_id() +
+                    # constant` qualifies, a loop induction variable does not.
+                    for k in range(num_devices):
+                        dest = lax.rem(dev_id + jnp.int32(1 + k), jnp.int32(num_devices))
+                        dst_ref = plgpu.remote_ref(pool_gmem, {axis_name: dest})
                         entry = k * entries_per_dest + j
                         start = src_lo_ref[entry]
                         rows = rows_ref[entry]
@@ -208,7 +219,7 @@ def fused_dispatch_gemm(
                         out_gmem,
                         grid_indices=(group_info.block, n_index, cluster_idx),
                         wg_axis="wg",
-                        collective_axes=("x",),
+                        collective_axes=("cta",),
                         local_index=local_index,
                         config=CONFIG,
                         group_info=group_info,
@@ -225,7 +236,7 @@ def fused_dispatch_gemm(
         grid_names=("sm",),
         num_threads=3,
         thread_name="wg",
-        cluster_names=("x",),
+        cluster_names=("cta",),
         cluster=(2,),
         **{
             _OUT_KWARG: [
@@ -233,7 +244,7 @@ def fused_dispatch_gemm(
                 jax.ShapeDtypeStruct((out_rows, n), dtype),
             ]
         },
-    )(src_view, plan.dest_ids, plan.src_lo, plan.dst_lo, plan.rows, group_sizes, expected, weights)
+    )(src, plan.dest_ids, plan.src_lo, plan.dst_lo, plan.rows, group_sizes, expected, weights)
     return pool, out
 
 
@@ -258,12 +269,14 @@ def main() -> None:
         buf[:cnt] = (d * 7 + np.arange(cnt)[:, None] % 13 + np.arange(HIDDEN)[None, :] % 5) * 0.01
         sends.append(buf.astype(np.float32))
 
-    mesh = Mesh(np.asarray(jax.devices()), ("x",), axis_types=(AxisType.Explicit,))
+    mesh = Mesh(np.asarray(jax.devices()), ("ep",), axis_types=(AxisType.Explicit,))
     accepted_j = jnp.asarray(accepted)
     region_j = jnp.asarray(region)
     w_all = (0.05 * rng.standard_normal((devices, LOCAL_EXPERTS, HIDDEN, N_OUT))).astype(jnp.bfloat16)
 
-    num_sms = jax.local_devices()[0].core_count
+    # The fused kernel's "sm" grid axis counts 2-CTA clusters, and only CTA 0
+    # of each cluster transports.
+    num_sms = jax.local_devices()[0].core_count // 2
 
     def build(shard_id):
         plan = dispatch_segments(accepted_j, region_j, shard_id, local_experts=LOCAL_EXPERTS)
@@ -278,7 +291,7 @@ def main() -> None:
         return plan, my_bank, expected
 
     def fused_fn(src, w_local):
-        shard_id = lax.axis_index("x")
+        shard_id = lax.axis_index("ep")
         plan, my_bank, expected = build(shard_id)
         pool, out = fused_dispatch_gemm(
             src.astype(jnp.bfloat16),
@@ -287,14 +300,14 @@ def main() -> None:
             my_bank,
             expected,
             out_rows=pool_rows,
-            axis_name="x",
+            axis_name="ep",
             num_devices=devices,
             local_experts=LOCAL_EXPERTS,
         )
         return out
 
-    spec = P("x", None)
-    wspec = P("x", None, None, None)
+    spec = P("ep", None)
+    wspec = P("ep", None, None, None)
     run_fused = jax.jit(shard_map(fused_fn, mesh=mesh, in_specs=(spec, wspec), out_specs=spec, check_vma=False))
     src_global = jax.device_put(np.concatenate(sends, axis=0), NamedSharding(mesh, spec))
     w_global = jax.device_put(np.asarray(w_all), NamedSharding(mesh, wspec))
@@ -314,6 +327,29 @@ def main() -> None:
             ref = a @ np.asarray(w_all[d, g], np.float32)
             np.testing.assert_allclose(out_np[d, lo : lo + cnt], ref, rtol=5e-2, atol=0.1)
     print(f"FUSED GEMM CORRECT ({devices} devices, pool {pool_rows}x{HIDDEN} -> {N_OUT})", flush=True)
+
+    def baseline_fn(src, w_local):
+        shard_id = lax.axis_index("ep")
+        plan, my_bank, _expected = build(shard_id)
+        pool = put_segments(src.astype(jnp.bfloat16), plan, out_rows=pool_rows, axis_name="ep", num_devices=devices)
+        return brd.ragged_dot_kernel(pool, w_local[0], my_bank, config=CONFIG)
+
+    run_base = jax.jit(shard_map(baseline_fn, mesh=mesh, in_specs=(spec, wspec), out_specs=spec, check_vma=False))
+    jax.block_until_ready(run_base(src_global, w_global))
+
+    import time
+
+    def best_of(fn, n=10):
+        ts = []
+        for _ in range(n):
+            t0 = time.perf_counter()
+            jax.block_until_ready(fn(src_global, w_global))
+            ts.append(time.perf_counter() - t0)
+        return min(ts)
+
+    t_fused = best_of(run_fused)
+    t_base = best_of(run_base)
+    print(f"fused {t_fused * 1e3:.3f} ms vs put+gemm {t_base * 1e3:.3f} ms ({t_base / t_fused:.2f}x)", flush=True)
 
 
 if __name__ == "__main__":
