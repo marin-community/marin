@@ -325,6 +325,28 @@ def _receiver_ranks(
     return jnp.sum((inclusive_counts - 1) * expert_indicators, axis=1, dtype=jnp.int32)
 
 
+def _rotated_receiver_ranks(
+    received_experts: Int[Array, " N"],
+    *,
+    local_experts: int,
+    expert_shards: int,
+    pool_capacity: int,
+    rotation: Int[Array, ""] | int,
+) -> Int[Array, " N"]:
+    """Per-expert receiver capacity ranks with a per-receiver source rotation.
+
+    The received buffer is source-shard-major (``[expert_shards, pool_capacity]``), so the plain
+    cumsum ranks always fill capacity in the same source order at every receiver -- making the same
+    (last-ordered) sender shard absorb the overflow everywhere, a deterministic data-correlated drop
+    bias. Rolling the source axis by ``-rotation`` before the cumsum, then rolling the ranks back, makes
+    each receiver truncate a different source first, so overflow spreads evenly across senders. The
+    per-expert drop count is unchanged; only integer metadata is rolled, never the token payload.
+    """
+    rolled = jnp.roll(received_experts.reshape(expert_shards, pool_capacity), -rotation, axis=0)
+    ranks = _receiver_ranks(rolled.reshape(-1), local_experts=local_experts)
+    return jnp.roll(ranks.reshape(expert_shards, pool_capacity), rotation, axis=0).reshape(-1)
+
+
 def _dispatch_pooled(
     *,
     x_local: Float[Array, "Tlocal H"],
@@ -385,7 +407,16 @@ def _dispatch_pooled(
         received_encoded_experts = received_header.reshape(expert_shards, -1)[:, :pool_capacity].reshape(send_size)
         received_experts = received_encoded_experts.astype(jnp.int32) - 1
 
-        receiver_ranks = _receiver_ranks(received_experts, local_experts=local_experts)
+        # Rotate the per-receiver capacity priority by this shard's own expert-axis index so each
+        # receiver truncates a different source first (see `_rotated_receiver_ranks`), removing the
+        # fixed-source-order receiver-overflow bias.
+        receiver_ranks = _rotated_receiver_ranks(
+            received_experts,
+            local_experts=local_experts,
+            expert_shards=expert_shards,
+            pool_capacity=pool_capacity,
+            rotation=jax.lax.axis_index("expert"),
+        )
         receiver_valid = received_experts >= 0
         receiver_keep = receiver_valid & (receiver_ranks < receiver_capacity)
         compact_size = local_experts * receiver_capacity

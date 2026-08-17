@@ -25,7 +25,11 @@ from levanter.grug._moe.common import (
 )
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
-from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import _moe_mlp_ep_fixed_pooled_wave_a2a_local
+from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
+    _moe_mlp_ep_fixed_pooled_wave_a2a_local,
+    _receiver_ranks,
+    _rotated_receiver_ranks,
+)
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -147,6 +151,58 @@ def _skip_without_sonic_gpu_runtime() -> None:
         pytest.skip("raw Sonic optional dependencies are not installed")
     if not any(device.platform == "gpu" for device in jax.devices()):
         pytest.skip("raw Sonic triton_call tests require a GPU")
+
+
+def test_rotated_receiver_ranks_spread_drops_without_changing_counts():
+    """The per-receiver source rotation must (1) match keeping the first `capacity` tokens per expert
+    in rotated source order, (2) leave the per-expert drop count unchanged, and (3) equal the plain
+    ranks at rotation 0, so overflow spreads across senders without altering how many are dropped."""
+    expert_shards, pool_capacity, local_experts, receiver_capacity = 4, 5, 2, 3
+    send_size = expert_shards * pool_capacity
+    rng = np.random.default_rng(0)
+    received = rng.integers(-1, local_experts, size=send_size)  # -1 marks an empty slot
+    received_experts = jnp.asarray(received, dtype=jnp.int32)
+
+    def keep_set(rotation: int) -> np.ndarray:
+        ranks = _rotated_receiver_ranks(
+            received_experts,
+            local_experts=local_experts,
+            expert_shards=expert_shards,
+            pool_capacity=pool_capacity,
+            rotation=rotation,
+        )
+        return np.asarray((received_experts >= 0) & (ranks < receiver_capacity))
+
+    def reference_keep(rotation: int) -> np.ndarray:
+        counts = np.zeros(local_experts, dtype=int)
+        keep = np.zeros(send_size, dtype=bool)
+        for shard in range(expert_shards):
+            rotated_shard = (shard + rotation) % expert_shards
+            for pos in range(pool_capacity):
+                i = rotated_shard * pool_capacity + pos
+                e = int(received[i])
+                if e >= 0 and counts[e] < receiver_capacity:
+                    keep[i] = True
+                    counts[e] += 1
+        return keep
+
+    counts_by_expert = lambda keep: {e: int(((received == e) & keep).sum()) for e in range(local_experts)}
+    baseline_counts = counts_by_expert(keep_set(0))
+    # Rotation 0 must reduce to the plain source-order ranks.
+    plain_ranks = _receiver_ranks(received_experts, local_experts=local_experts)
+    rotated_zero = _rotated_receiver_ranks(
+        received_experts,
+        local_experts=local_experts,
+        expert_shards=expert_shards,
+        pool_capacity=pool_capacity,
+        rotation=0,
+    )
+    np.testing.assert_array_equal(np.asarray(rotated_zero), np.asarray(plain_ranks))
+    for rotation in range(expert_shards):
+        np.testing.assert_array_equal(keep_set(rotation), reference_keep(rotation))
+        assert counts_by_expert(keep_set(rotation)) == baseline_counts
+    # Different rotations keep different tokens (the bias actually moves).
+    assert not np.array_equal(keep_set(0), keep_set(1))
 
 
 def test_moe_mlp_runs_without_ep_axis():

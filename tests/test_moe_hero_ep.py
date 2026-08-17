@@ -55,7 +55,7 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
         8,
         3072,
         1.15,
-        1.10,
+        1.15,
         3,
         "fixed_pooled_wave_all_to_all",
         1024,
@@ -444,9 +444,15 @@ def test_ep_ablation_defaults_match_the_documented_arm_and_scale_per_rack():
     one = abl.build_small_run(run_id="d768", size="d768", flavor="ep", version="dev")
     cfg = one.build_config(StepContext.for_fingerprint(one.runtime_args, one.deps))
     m = cfg.model
-    # The EP rung is a downsized hero: latent = hidden/2, capacity 1.33, top-k QB (the hero default).
+    # The EP rung is a downsized hero: pooled-wave transport, 384 experts / top-8, hidden/2-wide experts
+    # in a hidden/2 latent, receiver/sender capacity 1.15 with 3 waves, and top-k QB (the hero default).
+    assert m.moe_implementation == "fixed_pooled_wave_all_to_all"
+    assert (m.num_experts, m.num_experts_per_token) == (384, 8)
+    assert m.intermediate_dim == m.hidden_dim // 2
     assert m.latent_dim == m.hidden_dim // 2
-    assert m.capacity_factor == 1.33
+    assert m.capacity_factor == 1.15
+    assert m.pooled_transport_capacity_factor == 1.15
+    assert m.num_expert_waves == 3
     assert m.qb_estimator == model.QbEstimator.TOPK
     assert m.num_layers % 2 == 0  # even depth applied in the launcher, not GrugModelConfig
     # The histogram QB estimator is selectable on through the builder.
