@@ -29,7 +29,8 @@ from google.protobuf import json_format
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient, Job
 from iris.cluster.constraints import region_constraint
-from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec, is_job_finished
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
+from iris.resources.state import is_job_finished
 from iris.rpc import job_pb2
 from rigging.connect import proxy_path
 from rigging.credentials import ClientCredentials
@@ -231,7 +232,7 @@ def terminate_service(client: IrisClient, job_id: JobName, *, wait: float = TERM
             return
         raise
     if is_job_finished(state):
-        logger.info("job %s already terminal (%s)", job_id, job_pb2.JobState.Name(state))
+        logger.info("job %s already terminal (%s)", job_id, state.name)
         return
     client.terminate(job_id)
     deadline = time.monotonic() + wait

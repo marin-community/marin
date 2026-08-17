@@ -29,12 +29,14 @@ from fray.types import (
     Entrypoint,
     GpuConfig,
     JobRequest,
+    JobStatus,
     ResourceConfig,
     TpuConfig,
 )
 from iris.cluster.constraints import ConstraintOp
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.cluster.types import JobName, ResourceSpec, gpu_device
+from iris.resources.state import JobState as IrisJobState
 
 
 class TestConvertConstraints:
@@ -186,6 +188,22 @@ def test_iris_job_handle_returns_a_globally_bounded_tail():
 
     assert lines == ("task-0 earlier", "task-1 latest")
     job.logs.assert_called_once_with(max_lines=2, tail=True)
+
+
+@pytest.mark.parametrize(
+    ("iris_state", "expected"),
+    [
+        (IrisJobState.RUNNING, JobStatus.RUNNING),
+        (IrisJobState.SUCCEEDED, JobStatus.SUCCEEDED),
+        (IrisJobState.FAILED, JobStatus.FAILED),
+        (IrisJobState.KILLED, JobStatus.STOPPED),
+    ],
+)
+def test_iris_job_handle_maps_native_workload_state(iris_state: IrisJobState, expected: JobStatus):
+    job = MagicMock()
+    job.state_only.return_value = iris_state
+
+    assert IrisJobHandle(job).status() is expected
 
 
 def test_actor_startup_after_task_termination_stops_server_without_error(monkeypatch, caplog):

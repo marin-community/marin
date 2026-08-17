@@ -46,6 +46,7 @@ from iris.cluster.types import (
 )
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.hooks.multigpu import build_multigpu_hook
+from iris.resources.state import JobState as IrisJobState
 from iris.resources.state import is_job_finished
 from iris.rpc import actor_pb2, job_pb2
 from iris.rpc.errors import is_retryable_error
@@ -236,19 +237,17 @@ def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | No
     )
 
 
-def map_iris_job_state(iris_state: int) -> JobStatus:
-    """Map Iris protobuf JobState enum to fray JobStatus."""
-
-    _STATE_MAP = {
-        job_pb2.JOB_STATE_PENDING: JobStatus.PENDING,
-        job_pb2.JOB_STATE_RUNNING: JobStatus.RUNNING,
-        job_pb2.JOB_STATE_SUCCEEDED: JobStatus.SUCCEEDED,
-        job_pb2.JOB_STATE_FAILED: JobStatus.FAILED,
-        job_pb2.JOB_STATE_KILLED: JobStatus.STOPPED,
-        job_pb2.JOB_STATE_WORKER_FAILED: JobStatus.FAILED,
-        job_pb2.JOB_STATE_UNSCHEDULABLE: JobStatus.FAILED,
-    }
-    return _STATE_MAP.get(iris_state, JobStatus.PENDING)
+def map_iris_job_state(iris_state: IrisJobState) -> JobStatus:
+    """Map an Iris workload state to Fray's smaller lifecycle."""
+    if iris_state is IrisJobState.RUNNING:
+        return JobStatus.RUNNING
+    if iris_state is IrisJobState.SUCCEEDED:
+        return JobStatus.SUCCEEDED
+    if iris_state is IrisJobState.KILLED:
+        return JobStatus.STOPPED
+    if is_job_finished(iris_state):
+        return JobStatus.FAILED
+    return JobStatus.PENDING
 
 
 class IrisJobHandle:
