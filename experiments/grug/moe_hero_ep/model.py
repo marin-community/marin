@@ -1012,7 +1012,15 @@ class MoEMLP(eqx.Module):
                 routed_x=None if routed_input is None else routed_input.astype(x_flat.dtype),
                 latent_up=None if self.w_latent_up is None else self.w_latent_up.astype(x_flat.dtype),
             )
+            # mok_like drops against `schedule_capacity`, the destination expert rank's padded
+            # receive capacity, so every dropped assignment is a receiver-side loss under the
+            # `CapacityOverflow` convention (cf. `ep_ring`, which reports the same way). The fused
+            # kernel has no separate pre-dispatch capacity, so the sender count is structurally
+            # zero. Publish all three keys: `scan` stacks one dict per layer and the consumer in
+            # `_router_metrics` indexes the sender/receiver split unconditionally.
             router_stats["capacity_overflow"] = dropped_assignments
+            router_stats["sender_capacity_overflow"] = _zero_dropped_assignments()
+            router_stats["receiver_capacity_overflow"] = dropped_assignments
             routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
             return reshard(routed, _batch_spec()), router_stats
 

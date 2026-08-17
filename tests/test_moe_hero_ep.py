@@ -2437,6 +2437,130 @@ def test_latent_moe_is_absent_by_default():
     assert built.expert_mlp.w_gate.shape[1] == cfg.hidden_dim
 
 
+# mok_like constrains hidden / intermediate / shared-intermediate to multiples of 256.
+_TRACE_HIDDEN = 256
+
+
+def _traceable_config(moe_implementation, *, mok_like=None, **kw):
+    return model.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=_TRACE_HIDDEN,
+        intermediate_dim=256,
+        shared_expert_intermediate_dim=256,
+        num_shared_experts=1,
+        num_experts=4,
+        num_experts_per_token=1,
+        latent_dim=256,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        local_kv_heads=2,
+        global_kv_heads=2,
+        head_dim=64,
+        max_seq_len=8,
+        sliding_window=4,
+        global_every=2,
+        capacity_factor=1.0,
+        initializer_std=0.5 / math.sqrt(_TRACE_HIDDEN),
+        qk_mult=1.3,
+        attention_implementation="reference",
+        moe_implementation=moe_implementation,
+        report_capacity_overflow=True,
+        mok_like=mok_like,
+        **kw,
+    )
+
+
+def _fake_mok_like_mlp(x, *args, **kwargs):
+    """Shape-faithful stand-in for the fused CUDA call, which needs Linux + a GPU."""
+    latent_up = kwargs.get("latent_up")
+    width = x.shape[-1] if latent_up is None else latent_up.shape[-1]
+    return jnp.zeros((x.shape[0], width), dtype=x.dtype), jnp.array(0, dtype=jnp.int32)
+
+
+def _traced_router_metric_keys(cfg, *, mok_runtime=None):
+    """Trace a loss step and return the metric keys the model actually publishes."""
+    mesh = AbstractMesh(
+        axis_sizes=(1, 1, 4, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+
+    def step(tokens, weights):
+        built = model.Transformer.init(cfg, key=jax.random.key(0))
+        if mok_runtime is not None:
+            built = built.bind_mok_like_runtime(mok_runtime)
+        return built.next_token_loss(tokens, weights, return_router_metrics=True)
+
+    with use_abstract_mesh(mesh):
+        _, metrics = jax.eval_shape(
+            step,
+            jax.ShapeDtypeStruct((4, 8), jnp.int32),
+            jax.ShapeDtypeStruct((4, 8), jnp.float32),
+        )
+    return set(metrics)
+
+
+def test_every_moe_backend_publishes_the_same_router_metrics(monkeypatch):
+    # Regression: the mok_like arm published only `capacity_overflow` while the shared
+    # consumer indexed the sender/receiver split that the pooled-wave work introduced,
+    # so every rank died with KeyError('sender_capacity_overflow') on the first step.
+    # Importing the module and printing a launch plan both miss this -- the offending
+    # dict is only built while tracing -- so trace each backend and compare key sets.
+    ep_keys = _traced_router_metric_keys(
+        _traceable_config(
+            "fixed_pooled_wave_all_to_all",
+            num_expert_waves=1,
+            pooled_transport_capacity_factor=1.1,
+        )
+    )
+    ragged_keys = _traced_router_metric_keys(_traceable_config("ragged_all_to_all"))
+
+    monkeypatch.setattr(model, "mok_like_mlp", _fake_mok_like_mlp)
+    mok_keys = _traced_router_metric_keys(
+        _traceable_config("fixed_all_to_all", mok_like=MokLikeConfig(), remat_mode="offload_moe"),
+        mok_runtime=object(),
+    )
+
+    assert ep_keys == ragged_keys == mok_keys
+    # The keys train.py indexes on the live training path.
+    assert {
+        "qb_beta_per_layer",
+        "train/cross_entropy_loss",
+        "moe/dropped_assignments",
+        "moe/sender_dropped_assignments",
+        "moe/receiver_dropped_assignments",
+    } <= mok_keys
+
+
+def test_mok_like_runtime_handle_survives_the_master_param_round_trip():
+    # Under FP32_PINNED_HOST the live params are recast from master_params every step,
+    # and `mok_like_runtime` is a static field, so binding it only to `params` would
+    # drop it after one update and fail the *second* step.
+    sentinel = object()
+    cfg = _traceable_config("fixed_all_to_all", mok_like=MokLikeConfig(), remat_mode="offload_moe")
+    mesh = AbstractMesh(
+        axis_sizes=(1, 1, 4, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    with use_abstract_mesh(mesh):
+        state = jax.eval_shape(
+            lambda: train.initial_state(
+                cfg,
+                optimizer=optax.adam(1e-3),
+                mp=jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16"),
+                key=jax.random.key(0),
+                ema_beta=None,
+                master_param_mode=train.MasterParamMode.FP32_PINNED_HOST,
+                mok_like_runtime=sentinel,
+            )
+        )
+
+    assert state.params.mok_like_runtime is sentinel
+    assert state.master_params.mok_like_runtime is sentinel
+
+
 def test_latent_moe_hf_config_roundtrip_preserves_the_architecture():
     cfg = _latent_config(latent_dim=16)
 
