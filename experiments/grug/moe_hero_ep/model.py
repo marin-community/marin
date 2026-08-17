@@ -714,6 +714,8 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     capacity_overflow = router_metrics["capacity_overflow_per_layer"]
     sender_capacity_overflow = router_metrics["sender_capacity_overflow_per_layer"]
     receiver_capacity_overflow = router_metrics["receiver_capacity_overflow_per_layer"]
+    margin_min = router_metrics["margin_min_per_layer"]  # HIST estimator's live grid lo per layer
+    margin_max = router_metrics["margin_max_per_layer"]  # HIST estimator's live grid hi per layer
     num_layers = int(routing_entropy.shape[0])
 
     # Per-layer total assignments = sum of routing_counts over experts (= tokens * k).
@@ -730,6 +732,9 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         "train/router/capacity_overflow_rate_mean": jnp.mean(capacity_overflow_rate),
         "train/router/sender_overflow_rate_mean": jnp.mean(sender_overflow_rate),
         "train/router/receiver_overflow_rate_mean": jnp.mean(receiver_overflow_rate),
+        # QB HIST margin range: min over layers and max over layers, plus per-layer below.
+        "train/router/margin_min": jnp.min(margin_min),
+        "train/router/margin_max": jnp.max(margin_max),
         "qb_beta_per_layer": router_metrics.get("qb_beta_per_layer"),
     }
     for i in range(num_layers):
@@ -738,6 +743,8 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         out[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
         out[f"train/router/layer_{i}/routing_hist"] = _histogram_from_expert_counts(routing_counts[i])
         out[f"train/router/layer_{i}/capacity_overflow_rate"] = capacity_overflow_rate[i]
+        out[f"train/router/layer_{i}/margin_min"] = margin_min[i]
+        out[f"train/router/layer_{i}/margin_max"] = margin_max[i]
     return out
 
 
@@ -811,17 +818,18 @@ def _qb_beta_hist(
     """
     target_rank = float(s_ma.shape[0]) * num_experts_per_token / num_experts  # tokens at/above beta per expert
 
-    def _fn(s_local: jax.Array) -> jax.Array:
+    def _fn(s_local: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
         # pmin/pmax have no autodiff rule and the range is a control quantity, so detach their inputs;
         # the bincount path drops tangents at the integer bin cast, so it needs none downstream either.
         lo = jax.lax.pmin(jax.lax.stop_gradient(jnp.min(s_local)), axis_name=_BATCH_AXES)
         hi = jax.lax.pmax(jax.lax.stop_gradient(jnp.max(s_local)), axis_name=_BATCH_AXES)
         hi = jnp.maximum(hi, lo + 1e-6)  # guard a degenerate all-equal range
-        return _bincount_upper_quantile(
+        beta = _bincount_upper_quantile(
             s_local, num_experts=num_experts, n_bins=n_bins, lo=lo, hi=hi, target_rank=target_rank
         )
+        return beta, lo, hi  # also surface the live margin range for logging
 
-    return shard_map(_fn, mesh=mesh, in_specs=(P(_BATCH_AXES, None),), out_specs=P())(s_ma)
+    return shard_map(_fn, mesh=mesh, in_specs=(P(_BATCH_AXES, None),), out_specs=(P(), P(), P()))(s_ma)
 
 
 class MoEMLP(eqx.Module):
@@ -912,13 +920,16 @@ class MoEMLP(eqx.Module):
         mesh = get_abstract_mesh()
         s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
         if self.cfg.qb_estimator == QbEstimator.HIST:
-            router_stats["qb_beta"] = _qb_beta_hist(
+            beta, margin_min, margin_max = _qb_beta_hist(
                 s_minus_alpha,
                 mesh,
                 num_experts_per_token=self.cfg.num_experts_per_token,
                 num_experts=self.cfg.num_experts,
                 n_bins=self.cfg.qb_hist_bins,
             )
+            router_stats["qb_beta"] = beta
+            router_stats["margin_min"] = margin_min
+            router_stats["margin_max"] = margin_max
         else:
             num_devices = 1
             for a in _BATCH_AXES:
@@ -937,6 +948,9 @@ class MoEMLP(eqx.Module):
                 in_specs=(P(_BATCH_AXES, None),),
                 out_specs=P(),
             )(s_minus_alpha)
+            zero = jnp.zeros((), dtype=jnp.float32)
+            router_stats["margin_min"] = zero
+            router_stats["margin_max"] = zero
 
         # LatentMoE: compress before dispatch so the expert-parallel all-to-all carries
         # `latent_dim`-wide rows in both directions. The router above already read the full-width
@@ -1193,6 +1207,8 @@ class Transformer(eqx.Module):
             "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
             "sender_capacity_overflow_per_layer": stacked_router_stats["sender_capacity_overflow"],
             "receiver_capacity_overflow_per_layer": stacked_router_stats["receiver_capacity_overflow"],
+            "margin_min_per_layer": stacked_router_stats["margin_min"],
+            "margin_max_per_layer": stacked_router_stats["margin_max"],
         }
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
