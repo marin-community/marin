@@ -1294,3 +1294,16 @@ Experiment ID prefix: `MEP`.
   trade vs max_concurrent_steps), Lane-semantics transport warp inside
   the WG kernel if mixing is possible. Then a bwd (combine) variant and
   hero-shape measurement.
+
+### 2026-08-16 17:55 - MEP-046: both-CTA lane-split transport is a wash — fused spike stays at the single-CTA variant
+- Variant: both cluster CTAs sending disjoint lane halves (2x participants,
+  5-lane batches, 24-row stages): 0.653 ms vs 0.626 ms single-CTA — the
+  in-kernel transport is issue/latency-bound, not SM-count-bound. Reverted
+  to 20e8b03152.
+- M7b tuning state: fused = 0.626 ms vs 0.620 two-launch at the toy EP4
+  ratio (GEMM fully hidden; transport-bound). Remaining levers if resumed:
+  double-buffered stages (cross-tile pipelining), and hero-ratio
+  measurement where GEMM >> transport makes the same structure a
+  projected net win. Integration into marin_ep (fwd fused + combine
+  separate, custom_vjp) is the next full milestone.
+- Tray released; M7b prototype milestone met (correct + overlap proven).
