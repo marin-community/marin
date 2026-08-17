@@ -19,7 +19,6 @@ from iris.cli.job import (
     wait,
 )
 from iris.client.client import IrisClient
-from iris.client.workload_codec import job_status_from_proto, task_status_from_proto
 from iris.cluster.config import IrisClusterConfig, ScaleGroupConfig, WorkerSettings
 from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,
@@ -414,8 +413,26 @@ def _task(index: int, state, *, peak_mb: int, cur_mb: int, exit_code: int, durat
     return t
 
 
+class _SummaryTransport:
+    def __init__(self, job: _job_pb2.JobStatus, tasks: tuple[_job_pb2.TaskStatus, ...]):
+        self.job = job
+        self.tasks = tasks
+
+    def get_job_status(self, _job_id):
+        return self.job
+
+    def list_tasks(self, _job_id):
+        return list(self.tasks)
+
+
+def _summary_statuses(job: _job_pb2.JobStatus, *tasks: _job_pb2.TaskStatus):
+    client = IrisClient(_SummaryTransport(job, tasks))
+    job_id = JobName.from_wire(job.job_id)
+    return client.status(job_id), client.list_tasks(job_id)
+
+
 def test_build_job_summary_includes_peak_memory_and_sorts_numerically():
-    job = job_status_from_proto(
+    job, tasks = _summary_statuses(
         _job_pb2.JobStatus(
             job_id="/u/j",
             name="train",
@@ -424,18 +441,11 @@ def test_build_job_summary_includes_peak_memory_and_sorts_numerically():
             task_count=3,
             completed_count=3,
             task_state_counts={"succeeded": 2, "failed": 1},
-        )
+        ),
+        _task(10, _job_pb2.TASK_STATE_SUCCEEDED, peak_mb=2048, cur_mb=100, exit_code=0, duration_ms=65_000),
+        _task(2, _job_pb2.TASK_STATE_FAILED, peak_mb=10_240, cur_mb=0, exit_code=137, duration_ms=5_000, error="OOM"),
+        _task(1, _job_pb2.TASK_STATE_SUCCEEDED, peak_mb=1024, cur_mb=50, exit_code=0, duration_ms=3_000),
     )
-    tasks = [
-        task_status_from_proto(task)
-        for task in [
-            _task(10, _job_pb2.TASK_STATE_SUCCEEDED, peak_mb=2048, cur_mb=100, exit_code=0, duration_ms=65_000),
-            _task(
-                2, _job_pb2.TASK_STATE_FAILED, peak_mb=10_240, cur_mb=0, exit_code=137, duration_ms=5_000, error="OOM"
-            ),
-            _task(1, _job_pb2.TASK_STATE_SUCCEEDED, peak_mb=1024, cur_mb=50, exit_code=0, duration_ms=3_000),
-        ]
-    ]
 
     summary = build_job_summary(job, tasks)
 
@@ -454,19 +464,13 @@ def test_build_job_summary_includes_peak_memory_and_sorts_numerically():
 def test_build_job_summary_hides_exit_code_for_non_terminal_tasks():
     # The wire scalar default for exit_code is 0 — a RUNNING/BUILDING task must
     # not be reported as a clean exit=0 in the summary.
-    job = job_status_from_proto(
-        _job_pb2.JobStatus(job_id="/u/j", state=_job_pb2.JOB_STATE_RUNNING, task_count=3, completed_count=0)
+    job, tasks = _summary_statuses(
+        _job_pb2.JobStatus(job_id="/u/j", state=_job_pb2.JOB_STATE_RUNNING, task_count=3, completed_count=0),
+        _task(0, _job_pb2.TASK_STATE_RUNNING, peak_mb=100, cur_mb=80, exit_code=0, duration_ms=1000),
+        _job_pb2.TaskStatus(task_id="/u/j/1", state=_job_pb2.TASK_STATE_BUILDING, exit_code=0),
+        _task(2, _job_pb2.TASK_STATE_SUCCEEDED, peak_mb=100, cur_mb=0, exit_code=0, duration_ms=1000),
     )
-    running = task_status_from_proto(
-        _task(0, _job_pb2.TASK_STATE_RUNNING, peak_mb=100, cur_mb=80, exit_code=0, duration_ms=1000)
-    )
-    building = task_status_from_proto(
-        _job_pb2.TaskStatus(task_id="/u/j/1", state=_job_pb2.TASK_STATE_BUILDING, exit_code=0)
-    )
-    done = task_status_from_proto(
-        _task(2, _job_pb2.TASK_STATE_SUCCEEDED, peak_mb=100, cur_mb=0, exit_code=0, duration_ms=1000)
-    )
-    summary = build_job_summary(job, [running, building, done])
+    summary = build_job_summary(job, tasks)
     by_idx = {t["index"]: t for t in summary["tasks"]}
     assert by_idx["0"]["exit_code"] is None
     assert by_idx["1"]["exit_code"] is None
@@ -474,22 +478,18 @@ def test_build_job_summary_hides_exit_code_for_non_terminal_tasks():
 
 
 def test_job_summary_cli_shows_peak_memory(monkeypatch):
-    job = job_status_from_proto(
-        _job_pb2.JobStatus(job_id="/u/j", state=_job_pb2.JOB_STATE_FAILED, task_count=1, completed_count=1)
+    job, tasks = _summary_statuses(
+        _job_pb2.JobStatus(job_id="/u/j", state=_job_pb2.JOB_STATE_FAILED, task_count=1, completed_count=1),
+        _task(
+            0,
+            _job_pb2.TASK_STATE_FAILED,
+            peak_mb=9999,
+            cur_mb=0,
+            exit_code=137,
+            duration_ms=1000,
+            error="OOM",
+        ),
     )
-    tasks = [
-        task_status_from_proto(
-            _task(
-                0,
-                _job_pb2.TASK_STATE_FAILED,
-                peak_mb=9999,
-                cur_mb=0,
-                exit_code=137,
-                duration_ms=1000,
-                error="OOM",
-            )
-        )
-    ]
 
     class FakeClient:
         def status(self, _job_id):
@@ -509,13 +509,13 @@ def test_job_summary_cli_shows_peak_memory(monkeypatch):
 
 
 def test_job_summary_cli_shows_active_backend_status(monkeypatch):
-    job = job_status_from_proto(_job_pb2.JobStatus(job_id="/u/j", state=_job_pb2.JOB_STATE_RUNNING, task_count=1))
-    task = task_status_from_proto(
+    job, tasks = _summary_statuses(
+        _job_pb2.JobStatus(job_id="/u/j", state=_job_pb2.JOB_STATE_RUNNING, task_count=1),
         _job_pb2.TaskStatus(
             task_id="/u/j/0",
             state=_job_pb2.TASK_STATE_BUILDING,
             status_message='Kueue: excluded: resource "memory": 32',
-        )
+        ),
     )
 
     class FakeClient:
@@ -523,7 +523,7 @@ def test_job_summary_cli_shows_active_backend_status(monkeypatch):
             return job
 
         def list_tasks(self, _job_id):
-            return [task]
+            return tasks
 
     monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: FakeClient())
     result = CliRunner().invoke(summary, ["/u/j"], obj={"controller_url": "http://controller.test"})
