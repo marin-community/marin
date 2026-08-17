@@ -101,7 +101,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
-from training_stalls import task_state_query, telemetry_query, training_stall_alert_rows
+from training_stalls import active_hero_runs, task_state_query, telemetry_query, training_stall_alert_rows
 from vllm_observability import (
     VLLM_MAX_RESULT_ROWS,
     VLLM_OVERVIEW_SECTIONS,
@@ -447,7 +447,10 @@ def create_app(
             def run() -> list[dict]:
                 source = finelog_sources[target.name]
                 task_states = source.query(task_state_query(now), max_rows=config.max_rows)
-                telemetry_metrics = source.query(telemetry_query(now), max_rows=config.max_rows)
+                runs = active_hero_runs(task_states)
+                telemetry_metrics = (
+                    source.query(telemetry_query(now, runs), max_rows=config.max_rows) if runs else pa.table({})
+                )
                 return training_stall_alert_rows(task_states, telemetry_metrics, now)
 
             key = ("training_stalls", _bucket(now, config.cache_ttl))

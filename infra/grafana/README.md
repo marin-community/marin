@@ -278,19 +278,23 @@ redeploy.
 
 Critical rules notify operators immediately: an unreachable cluster or
 federation peer, a crash-looping watched component, an admission webhook with no ready endpoints, a
-dead production Iris controller, an unhealthy finelog hub or mirror, or CoreWeave
-storage above 80 percent of quota.
+dead production Iris controller, an unhealthy finelog hub or mirror, CoreWeave
+storage above 80 percent of quota, or stalled training on an enrolled hero run.
 Warning rules remain in Grafana's home alert list without sending email, Slack,
 or Loom notifications: a degraded component, a failed infra probe, a GPU
 pod that stays node-bound and
 nonterminal without finalizers for five minutes after the bridge's two-minute
 overdue threshold, and a GB200 rack with fewer than 16 trays Ready for five
 minutes (the NVL72 rack spec is 18; a floor rather than an outright outage —
-see `gpu_racks` above). A warning-only training rule joins fresh running
-`iris.task_state` rows to root jobs with retained `service=levanter` phase telemetry,
-while bounding progress samples to the prior 24 hours: it waits 15 minutes for
+see `gpu_racks` above). The hero training rule selects fresh running
+`iris.task_state` roots named `hero-*-coord`, derives their run IDs, and reads exact
+matches from structured `service=levanter` telemetry. It waits 15 minutes for
 training progress or 45 minutes for initialization, then remains pending for five
-minutes. It does not require task-to-node GPU attribution. A warning-only Zephyr rule reads fresh
+minutes. Its `notification=hero-run`
+route uses the critical receiver and groups each root job separately. It does not
+require task-to-node GPU attribution. The root suffix before `-coord` and the
+Levanter trainer ID must match; zero eligible roots produce an explicit healthy
+row. A warning-only Zephyr rule reads fresh
 `progress_time_seconds` rows from `service=zephyr` telemetry. It waits 45 minutes after a
 stage start or shard completion, then remains pending for five minutes. The
 execution ID separates concurrent pipelines under one root job. The stuck-pod

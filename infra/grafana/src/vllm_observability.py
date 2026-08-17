@@ -79,16 +79,16 @@ _HISTOGRAM_NAMES = tuple(
 _METRIC_NAMES = (*_TOKEN_COUNTERS, *_PREEMPTION_COUNTERS, *_OUTCOME_COUNTERS, *_GAUGES, *_HISTOGRAM_NAMES)
 
 
-def _sql_string(value: str) -> str:
+def sql_string(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
 def _sql_values(values: tuple[str, ...]) -> str:
-    return ", ".join(_sql_string(value) for value in values)
+    return ", ".join(sql_string(value) for value in values)
 
 
 def _case_for(mapping: tuple[tuple[str, str], ...], expression: str) -> str:
-    cases = " ".join(f"WHEN {_sql_string(source)} THEN {_sql_string(target)}" for source, target in mapping)
+    cases = " ".join(f"WHEN {sql_string(source)} THEN {sql_string(target)}" for source, target in mapping)
     return f"CASE {expression} {cases} END"
 
 
@@ -144,7 +144,7 @@ def vllm_overview_query(
 
     bucket_ms = _bounded_bucket_ms(start_ms, end_ms, requested_bucket_ms)
     scan_start_ms = max(0, start_ms - VLLM_SNAPSHOT_LOOKBACK_MS)
-    identity_literal = _sql_string(identity)
+    identity_literal = sql_string(identity)
     metric_names = _sql_values(_METRIC_NAMES)
     token_counters = _sql_values(_TOKEN_COUNTERS)
     preemption_counters = _sql_values(_PREEMPTION_COUNTERS)
