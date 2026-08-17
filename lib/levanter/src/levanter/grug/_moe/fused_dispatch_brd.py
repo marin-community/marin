@@ -291,6 +291,11 @@ def _round_up(value: int, multiple: int) -> int:
     return (value + multiple - 1) // multiple * multiple
 
 
+def _swiglu(gu: jax.Array, moe_dim: int, dtype) -> jax.Array:
+    gate, up = gu[:, :moe_dim], gu[:, moe_dim:]
+    return (jax.nn.silu(gate.astype(jnp.float32)) * up.astype(jnp.float32)).astype(dtype)
+
+
 @functools.partial(jax.custom_vjp, nondiff_argnums=(9, 10, 11, 12))
 def fused_dispatch_expert_mlp(
     sorted_x,
@@ -363,16 +368,17 @@ def _fused_fwd(
         local_experts=local_experts,
     )
     gu = gu_padded[:, :n] if n_pad else gu_padded
-    gate, up = gu[:, :moe_dim], gu[:, moe_dim:]
-    act = (jax.nn.silu(gate.astype(jnp.float32)) * up.astype(jnp.float32)).astype(sorted_x.dtype)
+    act = _swiglu(gu, moe_dim, sorted_x.dtype)
     y = _grouped(act, moe_w2, group_sizes)
+    # `act` is recomputed from `gu` in the backward: keeping both as
+    # residuals costs ~0.45 GiB/layer at hero shape, and the fused ops sit
+    # ~1.4 GiB from the rematerialization cliff (MEP-052).
     res = (
         sorted_x,
         x_pool,
         moe_w13,
         moe_w2,
         gu,
-        act,
         group_sizes,
         expected,
         dispatch_plan,
@@ -390,7 +396,6 @@ def _fused_bwd(pool_rows, assignments_per_shard, axis_name, ep_size, res, dy):
         moe_w13,
         moe_w2,
         gu,
-        act,
         group_sizes,
         expected,
         dispatch_plan,
@@ -400,6 +405,7 @@ def _fused_bwd(pool_rows, assignments_per_shard, axis_name, ep_size, res, dy):
     ) = res
     moe_dim = moe_w2.shape[1]
     padded_rows = x_pool.shape[0]
+    act = _swiglu(gu, moe_dim, x_pool.dtype)
     dy = dy.astype(x_pool.dtype)
     if padded_rows != pool_rows:
         dy = jnp.pad(dy, ((0, padded_rows - pool_rows), (0, 0)))
@@ -747,8 +753,7 @@ def _full_fwd(
         local_experts=local_experts,
     )
     gu = gu_padded[:, :n] if n_pad else gu_padded
-    gate, up = gu[:, :moe_dim], gu[:, moe_dim:]
-    act = (jax.nn.silu(gate.astype(jnp.float32)) * up.astype(jnp.float32)).astype(sorted_x.dtype)
+    act = _swiglu(gu, moe_dim, sorted_x.dtype)
     _y_pool, returned = _fused_gemm_combine(
         act,
         combine_plan,
@@ -760,13 +765,14 @@ def _full_fwd(
         local_experts=local_experts,
     )
     returned = _zero_invalid_rows(returned, send_rows)
+    # See _fused_fwd: `act` is recomputed in the backward to stay clear of
+    # the rematerialization cliff.
     res = (
         sorted_x,
         x_pool,
         moe_w13,
         moe_w2,
         gu,
-        act,
         group_sizes,
         expected,
         dispatch_plan,
@@ -784,7 +790,6 @@ def _full_bwd(pool_rows, assignments_per_shard, axis_name, ep_size, res, d_retur
         moe_w13,
         moe_w2,
         gu,
-        act,
         group_sizes,
         expected,
         dispatch_plan,
@@ -794,6 +799,7 @@ def _full_bwd(pool_rows, assignments_per_shard, axis_name, ep_size, res, d_retur
     ) = res
     moe_dim = moe_w2.shape[1]
     padded_rows = x_pool.shape[0]
+    act = _swiglu(gu, moe_dim, x_pool.dtype)
     d_returned = d_returned.astype(x_pool.dtype)
     # The combine cotangent is a dispatch-shaped put: sender-frame rows back
     # into the pool frame.
