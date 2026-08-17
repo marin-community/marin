@@ -1417,3 +1417,21 @@ Experiment ID prefix: `MEP`.
   is consistent; the draw is if anything slightly better than modeled.
 - Single draw (exploratory). fused2 (combine-streaming) admitted
   immediately after; sim expects it to carry the real win (~-0.5 s).
+
+### 2026-08-17 01:35 - MEP-052: fused2 hero wedge root-caused to the remat cliff; act residual dropped
+- mep-fused2-ep64-25-20260817 made zero steps in 33 min, all ranks silent
+  after compile; killed. Remat logs pin it: fused arm "reduced to
+  186.65 GiB" and RAN; fused2 "reduced to 188.04 GiB" and wedged -- the
+  wider custom_vjp region blocks remat splits and the extra ~1.4 GiB
+  crosses the device cliff (silent allocator wedge, the
+  iris-log-reads-wedge class).
+- Fix (842bb3478f): drop the act residual from both fused ops; recompute
+  from gu in the backward (identical elementwise expr, bitwise grads).
+  ~0.4 GiB per live layer released.
+- Revalidated on a tray: hero-width EP4 A/B NEW GATE (hidden 6144,
+  2I 6272 -- kernel 2's first run at hero widths) bitwise vs mgpu+brd,
+  drops 2827; 4-proc smoke all three transports CONFORMANT. The
+  hero-width pass also argues against a width-triggered kernel hang.
+- Relaunched as mep-fused2b-ep64-25-20260817 (max-retries 3 to fail fast
+  if the wedge persists -> then it is EP64-scale and gets a stack
+  capture).
