@@ -16,6 +16,7 @@ import jax.numpy as jnp
 import jmp
 import levanter.callbacks as callbacks
 import levanter.tracker
+import numpy as np
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
@@ -450,10 +451,14 @@ def _drop_metrics(
     top_k: int,
     num_layers: int,
 ) -> dict[str, int | float]:
-    # Global assignment totals can exceed int32; float32 would also round large drop counts.
-    dropped_assignments_host = int(dropped_assignments)
-    sender_dropped_assignments_host = int(sender_dropped_assignments)
-    receiver_dropped_assignments_host = int(receiver_dropped_assignments)
+    # Per-layer int32 counts summed over layers in int64 on the host: the global totals exceed int32 at
+    # large batch (jax_enable_x64 is off, so an in-device sum would overflow), and float32 would round them.
+    def _sum_int64(per_layer: jax.Array) -> int:
+        return int(np.asarray(per_layer).astype(np.int64).sum())
+
+    dropped_assignments_host = _sum_int64(dropped_assignments)
+    sender_dropped_assignments_host = _sum_int64(sender_dropped_assignments)
+    receiver_dropped_assignments_host = _sum_int64(receiver_dropped_assignments)
     if dropped_assignments_host != sender_dropped_assignments_host + receiver_dropped_assignments_host:
         raise ValueError("total dropped assignments must equal sender plus receiver dropped assignments")
     total_assignments = batch_size * sequence_length * top_k * num_layers

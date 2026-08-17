@@ -10,7 +10,7 @@ pairs it with the fixed hero model spec so a launcher gets both configs back fro
 
 The hero model is d6144 with 48 layers and 384 routed experts. Each expert has width 3,072, and
 the router selects eight experts per token. The pooled transport uses three static waves. The
-receiver capacity factor is 1.15, and the sender capacity factor is 1.10.
+receiver and sender capacity factors are both 1.15.
 """
 
 import math
@@ -106,7 +106,7 @@ HERO_MODEL = GrugModelConfig(
     sconv=True,
     attention_implementation="gpu_fa4_cute",
     moe_implementation="fixed_pooled_wave_all_to_all",
-    pooled_transport_capacity_factor=1.10,
+    pooled_transport_capacity_factor=1.15,
     num_expert_waves=3,
     expert_chunks=1,
     report_capacity_overflow=True,

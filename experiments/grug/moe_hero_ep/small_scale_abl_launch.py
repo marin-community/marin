@@ -1,9 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Legacy E192 small-scale ablation: d768 / d1024 / d1280 / d1536.
+"""Small-scale hero-shape ablation: d768 / d1024 / d1280 / d1536 / d2048.
 
-These runs use hidden-wide experts, top-4 routing, two shared experts, and fixed all-to-all EP.
+These runs mirror the EP hero: 384 routed experts, top-8 routing, hidden/2-wide experts in a hidden/2
+latent, two shared experts, and the pooled-wave all-to-all transport at receiver/sender capacity 1.15.
 Each run uses the small sweep width and 750 tokens per active parameter. The data, evaluations,
 and step counts match the Aug hero learning-rate sweep from issue #7856.
 
@@ -52,9 +53,11 @@ from experiments.marin_tokenizer import marin_tokenizer
 SEQ_LEN = 4096
 SMALL_BATCH_SIZE = 1024
 # Tokens per step are fixed at ~4M (batch 1024 x seq 4096) to approximate the per-shard token-dropping
-# dynamics under the fixed_all_to_all EP MoE; a sequence-length sweep holds this constant and moves only
+# dynamics under the pooled-wave EP MoE; a sequence-length sweep holds this constant and moves only
 # the context length.
 TOKENS_PER_STEP = SMALL_BATCH_SIZE * SEQ_LEN
+# Receiver and sender capacity both 1.15, matching the EP hero; kept paired through one constant.
+_EP_CAPACITY_FACTOR = 1.15
 SLIDING_WINDOW = 2048
 GLOBAL_EVERY = 4
 EVAL_BATCH_SIZE = 256
@@ -100,23 +103,25 @@ class Target:
 # SM100 symmetric GEMM, so Hopper takes the plain vmapped path instead.
 TARGETS: dict[str, Target] = {
     "gb200-rack": Target("GB200", HERO_GPUS_PER_NODE, HERO_EP_NODES, 120, "850g", "1t", "gpu_fa4_cute", True),
-    # 8 nodes, not 1: capacity is per (sender shard, expert) cell, so the shard count sets how
-    # readily cells overflow. EP8 would give 4,096-row cells against 512 at EP64 and would drop far
-    # less on the same routing, which is not the behavior these runs are meant to reproduce.
+    # 8 nodes, not 1: under pooled-wave the receiver cell pools over all senders and is
+    # shard-count-independent, so only the sender pool tracks the fleet. The sender cell is per
+    # (destination shard, wave) and shrinks as 1/shards^2 -- ~50,244 rows at EP8 against ~785 at EP64
+    # on the 1M-token grid -- so EP8 drops far less at the sender, which is not the behavior these
+    # runs reproduce.
     # 32 CPU and 600g, not 120 and 1900g: an H100 node allocates 127 CPU and about 2 TB, so the
     # larger request demands an effectively empty node and Kueue rejects the whole 8-pod gang
     # ("excluded: resource cpu: 39, resource memory: 25" of 65 nodes). Host memory here holds the
     # loader and checkpoint staging -- a d1280 checkpoint is about 38 GB -- so 600g keeps a wide
     # margin, and the trainer is GPU-bound at these capacity factors.
     "h100-8node": Target("H100", 8, 8, 32, "600g", "900g", "reference", False),
-    # 2 nodes = EP16, which reproduces the d6144 hero's per-shard routing statistics exactly.
-    # Cell capacity is `cf * (tokens_per_step / shards) * top_k / num_experts`, so the shard count --
-    # not the expert count -- is what sets cell size. At EP16 with the grid's 1,048,576 tokens per
-    # step, each shard carries the hero's 65,536 tokens and 2,048-row cells. Pair this with
-    # `--seq-len 4096` (the batch widens to 256) and each shard also holds the hero's 16 documents,
-    # instead of the 2 that EP64 gives. Two documents per shard is why the EP64 ablation drops ~7%
-    # at cf 2.5 where the hero drops 0.27%: per-cell load is a sum over correlated document blocks,
-    # so the effective sample size is the document count, not the token count.
+    # 2 nodes = EP16. Under pooled-wave the receiver cell is `cf * tokens_per_step * top_k /
+    # (num_experts * waves)` -- ~8,374 rows at the grid's 1,048,576 tokens per step, shard-count
+    # independent, so it matches the EP64 hero at any fleet. Only the sender pool `cf_s *
+    # tokens_per_step * top_k / (shards^2 * waves)` tracks the shard count, and EP16's sender cell is
+    # ~16x the EP64 hero's -- a much looser sender gate. So this is a small-fleet option, not a
+    # per-shard reproduction of the hero; gb200-rack / h100-8node at EP64 is the faithful sender gate.
+    # (The sender gate pools each shard's ~65,536 tokens over ~2 documents, which is why per-cell
+    # variance -- not the token count -- drives the drop rate.)
     "h100-2node": Target("H100", 8, 2, 32, "600g", "900g", "reference", False),
 }
 
@@ -125,20 +130,28 @@ TARGETS: dict[str, Target] = {
 class Flavor:
     """How the MoE layer shards, and what that implies for routing capacity.
 
-    ``ep`` spans the fleet with expert parallelism and drops assignments above each fixed
-    (sender shard, expert) cell. The FSDP arms keep one expert axis, so every device holds the whole
-    bank and the local `sonic_cute` kernel runs the experts: ``fsdp-nodrop`` at one chunk computes
-    every assignment (dropless), and ``fsdp-chunk4`` splits into four chunks to match the FSDP hero's
-    minor-dropping reference. Both use the same kernel; only the chunk count (drop rate) differs.
+    ``ep`` spans the fleet with expert parallelism and drops assignments through the pooled-wave
+    transport's two gates: a sender pool (per destination shard, capped by
+    ``pooled_transport_capacity_factor``) and per-wave receiver buffers (capped by ``capacity_factor``).
+    The FSDP arms keep one expert axis, so every device holds the whole bank and the local `sonic_cute`
+    kernel runs the experts: ``fsdp-nodrop`` at one chunk computes every assignment (dropless), and
+    ``fsdp-chunk4`` splits into four chunks to match the FSDP hero's minor-dropping reference. Both use
+    the same kernel; only the chunk count (drop rate) differs.
     """
 
     expert_axis_size: int | None  # None spans the fleet
     moe_implementation: str
     expert_chunks: int
+    pooled_transport_capacity_factor: float | None = None  # sender pool cap; pooled-wave only
+    num_expert_waves: int = 1  # receiver-buffer waves; pooled-wave only
 
 
 FLAVORS: dict[str, Flavor] = {
-    "ep": Flavor(None, "fixed_all_to_all", 1),
+    # Pooled-wave EP mirroring the hero: 3 receiver waves and a 1.15 sender-pool cap (paired with the
+    # 1.15 receiver capacity_factor default).
+    "ep": Flavor(
+        None, "fixed_pooled_wave_all_to_all", 1, pooled_transport_capacity_factor=_EP_CAPACITY_FACTOR, num_expert_waves=3
+    ),
     # The dropless FSDP arm is `sonic_cute` at one chunk -- "1 computes every assignment" per the FSDP
     # hero -- so it matches `fsdp-chunk4`'s kernel and only the chunk count (drop rate) differs. The
     # `scatter` grouped-GMM path mis-routes this QB/sigmoid-combine model (loss ~1.1 above chunk4).
@@ -179,18 +192,17 @@ def _small_model(
     num_experts_per_token: int,
     intermediate_dim: int | None,
     latent_dim: int | None,
+    pooled_transport_capacity_factor: float | None = None,
+    num_expert_waves: int = 1,
     qb_use_histogram: bool = False,
     qb_hist_bins: int = 1000,
 ) -> GrugModelConfig:
-    """Build the legacy E192, top-4 ablation at the selected width.
-
-    The function keeps the routing and attention fields from the completed small-scale sweep.
-    """
+    """Build the hero-shape ablation (E384, top-8, pooled-wave) at the selected width."""
     return GrugModelConfig(
         vocab_size=128_256,
         hidden_dim=shape.hidden_dim,
-        # Routed experts default hidden-wide, matching the EP hero; only the shared expert is hidden/2.
-        intermediate_dim=intermediate_dim if intermediate_dim is not None else shape.hidden_dim,
+        # Routed experts default hidden/2-wide in a hidden/2 latent, matching the EP hero.
+        intermediate_dim=intermediate_dim if intermediate_dim is not None else shape.hidden_dim // 2,
         shared_expert_intermediate_dim=shape.hidden_dim // 2,
         num_shared_experts=2,
         num_experts=num_experts,
@@ -213,6 +225,8 @@ def _small_model(
         attention_implementation=attention_implementation,
         moe_implementation=moe_implementation,
         expert_chunks=expert_chunks,
+        pooled_transport_capacity_factor=pooled_transport_capacity_factor,
+        num_expert_waves=num_expert_waves,
         # Routed experts run in a latent space half the hidden width, matching the EP hero arm.
         latent_dim=latent_dim if latent_dim is not None else shape.hidden_dim // 2,
         qb_estimator=QbEstimator.HIST if qb_use_histogram else QbEstimator.TOPK,
@@ -250,11 +264,12 @@ def build_small_run(
     size: str,
     target: str = "gb200-rack",
     flavor: str = "ep",
-    capacity_factor: float = 1.33,
+    capacity_factor: float = _EP_CAPACITY_FACTOR,
+    transport_capacity_factor: float | None = None,
     seq_len: int = SEQ_LEN,
     tokens_per_step: int = TOKENS_PER_STEP,
-    num_experts: int = 192,
-    num_experts_per_token: int = 4,
+    num_experts: int = 384,
+    num_experts_per_token: int = 8,
     intermediate_dim: int | None = None,
     latent_dim: int | None = None,
     qb_use_histogram: bool = False,
@@ -302,11 +317,17 @@ def build_small_run(
     fleet = TARGETS[target]
     sharding = FLAVORS[flavor]
     # `tokens_per_step` is the per-rack (per expert mesh) token load; it stays fixed so the
-    # fixed-all-to-all drop dynamics are constant across sizes. The global batch scales with the
+    # pooled-wave drop dynamics are constant across sizes. The global batch scales with the
     # rack count, so a wider rung on more racks keeps the same per-rack load as a one-rack rung.
     global_tokens_per_step = tokens_per_step * dp_racks
     batch_size = global_tokens_per_step // seq_len
     expert_axis_size = fleet.expert_axis_size if sharding.expert_axis_size is None else sharding.expert_axis_size
+    # ``--transport-capacity-factor`` overrides the Flavor's sender-pool cap; ``None`` keeps the paired
+    # 1.15 default. The two pooled-wave gates cap independently, so a run that sweeps only the receiver
+    # (``--capacity-factor``) flattens once the sender gate takes over -- vary this to move that gate.
+    transport_capacity = (
+        transport_capacity_factor if transport_capacity_factor is not None else sharding.pooled_transport_capacity_factor
+    )
     model = _small_model(
         shape,
         capacity_factor,
@@ -318,6 +339,8 @@ def build_small_run(
         num_experts_per_token,
         intermediate_dim,
         latent_dim,
+        transport_capacity,
+        sharding.num_expert_waves,
         qb_use_histogram,
         qb_hist_bins,
     )
@@ -348,6 +371,14 @@ def build_small_run(
     )
     if model.num_experts % expert_axis_size != 0:
         raise ValueError(f"num_experts={model.num_experts} must divide the expert axis {expert_axis_size}")
+    # Fail fast here (before the fleet is allocated) on the same divisibility the pooled-wave transport
+    # enforces at runtime, mirroring the hero launcher's pre-allocation check.
+    local_experts = model.num_experts // expert_axis_size
+    if model.moe_implementation == "fixed_pooled_wave_all_to_all" and local_experts % model.num_expert_waves != 0:
+        raise ValueError(
+            f"local expert count={local_experts} (num_experts={model.num_experts} / expert axis "
+            f"{expert_axis_size}) must divide num_expert_waves={model.num_expert_waves}"
+        )
     train_resources = ResourceConfig.with_gpu(
         fleet.accelerator,
         count=fleet.gpus_per_node,
@@ -491,17 +522,27 @@ def build_small_run(
 @click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
-    default=1.33,
+    default=_EP_CAPACITY_FACTOR,
     show_default=True,
-    help="Fixed all-to-all capacity factor (EP hero arm is 1.33). Higher drops fewer and pads more.",
+    help=(
+        "Receiver-buffer capacity factor (pooled-wave EP hero arm is 1.15). The receiver cell pools over "
+        "all senders, so it is rarely the limiting gate; raising this alone flattens once the sender pool "
+        "takes over -- pair it with --transport-capacity-factor."
+    ),
 )
-@click.option("--num-experts", type=click.IntRange(min=1), default=192, help="Routed expert count (hero bank).")
-@click.option("--num-experts-per-token", type=click.IntRange(min=1), default=4, help="Routed experts per token.")
+@click.option(
+    "--transport-capacity-factor",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="Sender-pool capacity factor (the limiting gate). Defaults to the Flavor value (1.15 for `ep`).",
+)
+@click.option("--num-experts", type=click.IntRange(min=1), default=384, help="Routed expert count (hero bank).")
+@click.option("--num-experts-per-token", type=click.IntRange(min=1), default=8, help="Routed experts per token.")
 @click.option(
     "--intermediate-dim",
     type=click.IntRange(min=1),
     default=None,
-    help="Routed expert MLP width. Defaults to hidden_dim (hidden-wide), matching the EP hero.",
+    help="Routed expert MLP width. Defaults to hidden_dim // 2, matching the EP hero.",
 )
 @click.option(
     "--latent-dim",
@@ -559,6 +600,7 @@ def main(
     seq_len: int,
     tokens_per_step: int,
     capacity_factor: float,
+    transport_capacity_factor: float | None,
     num_experts: int,
     num_experts_per_token: int,
     intermediate_dim: int | None,
@@ -578,6 +620,7 @@ def main(
         seq_len=seq_len,
         tokens_per_step=tokens_per_step,
         capacity_factor=capacity_factor,
+        transport_capacity_factor=transport_capacity_factor,
         num_experts=num_experts,
         num_experts_per_token=num_experts_per_token,
         intermediate_dim=intermediate_dim,

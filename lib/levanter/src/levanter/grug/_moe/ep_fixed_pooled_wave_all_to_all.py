@@ -325,6 +325,31 @@ def _receiver_ranks(
     return jnp.sum((inclusive_counts - 1) * expert_indicators, axis=1, dtype=jnp.int32)
 
 
+def _interleaved_receiver_ranks(
+    received_experts: Int[Array, " N"],
+    *,
+    local_experts: int,
+    expert_shards: int,
+    pool_capacity: int,
+) -> Int[Array, " N"]:
+    """Per-expert receiver capacity ranks that fill capacity round-robin over source shards.
+
+    The received buffer is source-shard-major (``[expert_shards, pool_capacity]``), so a plain cumsum
+    ranks capacity in source order at every receiver -- the same (last-ordered) sender shard absorbs
+    the overflow everywhere, a deterministic data-correlated drop bias. Transposing to pool-position
+    order (``[pool_capacity, expert_shards]``) before the cumsum visits each source's slot ``p`` before
+    any source's slot ``p+1``, so capacity is allocated round-robin across sources and no sender is
+    truncated first. Transposing the ranks back restores the source-major layout the caller expects.
+
+    The permutation is static (no ``axis_index``), the per-expert keep count stays ``min(count,
+    capacity)``, and within any source pool position order is preserved -- so a later token never
+    displaces an earlier one within a sequence (each expert shard holds whole sequences).
+    """
+    interleaved = received_experts.reshape(expert_shards, pool_capacity).T.reshape(-1)
+    ranks = _receiver_ranks(interleaved, local_experts=local_experts)
+    return ranks.reshape(pool_capacity, expert_shards).T.reshape(-1)
+
+
 def _dispatch_pooled(
     *,
     x_local: Float[Array, "Tlocal H"],
@@ -385,7 +410,14 @@ def _dispatch_pooled(
         received_encoded_experts = received_header.reshape(expert_shards, -1)[:, :pool_capacity].reshape(send_size)
         received_experts = received_encoded_experts.astype(jnp.int32) - 1
 
-        receiver_ranks = _receiver_ranks(received_experts, local_experts=local_experts)
+        # Allocate receiver capacity round-robin over source shards (see `_interleaved_receiver_ranks`)
+        # so no sender is systematically truncated first, removing the fixed-source-order overflow bias.
+        receiver_ranks = _interleaved_receiver_ranks(
+            received_experts,
+            local_experts=local_experts,
+            expert_shards=expert_shards,
+            pool_capacity=pool_capacity,
+        )
         receiver_valid = received_experts >= 0
         receiver_keep = receiver_valid & (receiver_ranks < receiver_capacity)
         compact_size = local_experts * receiver_capacity

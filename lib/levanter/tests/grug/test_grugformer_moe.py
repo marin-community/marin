@@ -25,7 +25,11 @@ from levanter.grug._moe.common import (
 )
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
-from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import _moe_mlp_ep_fixed_pooled_wave_a2a_local
+from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
+    _moe_mlp_ep_fixed_pooled_wave_a2a_local,
+    _interleaved_receiver_ranks,
+    _receiver_ranks,
+)
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -147,6 +151,78 @@ def _skip_without_sonic_gpu_runtime() -> None:
         pytest.skip("raw Sonic optional dependencies are not installed")
     if not any(device.platform == "gpu" for device in jax.devices()):
         pytest.skip("raw Sonic triton_call tests require a GPU")
+
+
+def test_interleaved_receiver_ranks_allocate_capacity_round_robin_over_sources():
+    """The interleaved receiver ranks must (1) keep the tokens a round-robin-over-sources fill would
+    keep, (2) leave the per-expert drop count at `min(count, capacity)`, and (3) keep, within any one
+    source, a prefix of pool positions per expert -- so a later token never displaces an earlier one in
+    the same sequence (each expert shard holds whole sequences)."""
+    expert_shards, pool_capacity, local_experts, receiver_capacity = 4, 5, 2, 3
+    send_size = expert_shards * pool_capacity
+    rng = np.random.default_rng(0)
+    received = rng.integers(-1, local_experts, size=send_size)  # -1 marks an empty slot
+    received_experts = jnp.asarray(received, dtype=jnp.int32)
+
+    ranks = _interleaved_receiver_ranks(
+        received_experts,
+        local_experts=local_experts,
+        expert_shards=expert_shards,
+        pool_capacity=pool_capacity,
+    )
+    keep = np.asarray((received_experts >= 0) & (ranks < receiver_capacity))
+
+    # Reference: visit each source's slot `pos` before any source's slot `pos + 1` (round-robin over
+    # sources), keeping the first `receiver_capacity` per expert.
+    counts = np.zeros(local_experts, dtype=int)
+    reference = np.zeros(send_size, dtype=bool)
+    for pos in range(pool_capacity):
+        for shard in range(expert_shards):
+            i = shard * pool_capacity + pos
+            e = int(received[i])
+            if e >= 0 and counts[e] < receiver_capacity:
+                reference[i] = True
+                counts[e] += 1
+    np.testing.assert_array_equal(keep, reference)
+
+    # Per-expert kept count is exactly min(total, capacity) -- the transpose does not change drop counts.
+    for e in range(local_experts):
+        total = int((received == e).sum())
+        assert int(((received == e) & keep).sum()) == min(total, receiver_capacity)
+
+    # Within a source, kept slots for an expert are the lowest pool positions: causality is preserved.
+    for shard in range(expert_shards):
+        block = slice(shard * pool_capacity, (shard + 1) * pool_capacity)
+        for e in range(local_experts):
+            positions = np.where(received[block] == e)[0]
+            kept_positions = positions[keep[block][positions]]
+            assert list(kept_positions) == list(positions[: len(kept_positions)])
+
+
+def test_interleaved_receiver_ranks_spread_overflow_evenly_across_sources():
+    """When every slot carries one oversubscribed expert, round-robin allocation keeps within one token
+    of `capacity / expert_shards` from each source, instead of a source-major prefix that starves the
+    last sources (the bias this replaces)."""
+    expert_shards, pool_capacity, local_experts, receiver_capacity = 4, 3, 1, 6
+    received_experts = jnp.zeros(expert_shards * pool_capacity, dtype=jnp.int32)  # all carry expert 0
+
+    ranks = _interleaved_receiver_ranks(
+        received_experts,
+        local_experts=local_experts,
+        expert_shards=expert_shards,
+        pool_capacity=pool_capacity,
+    )
+    keep = np.asarray(ranks < receiver_capacity).reshape(expert_shards, pool_capacity)
+    kept_per_source = keep.sum(axis=1)
+
+    assert int(keep.sum()) == receiver_capacity
+    assert kept_per_source.max() - kept_per_source.min() <= 1  # even, not a source prefix
+
+    # The source-major baseline instead keeps a prefix of whole sources (the starvation this fixes).
+    plain = np.asarray(_receiver_ranks(received_experts, local_experts=local_experts) < receiver_capacity).reshape(
+        expert_shards, pool_capacity
+    )
+    assert plain.sum(axis=1).max() - plain.sum(axis=1).min() == pool_capacity
 
 
 def test_moe_mlp_runs_without_ep_axis():
