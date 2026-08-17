@@ -154,10 +154,21 @@ Cluster infrastructure comes from the per-cluster Iris config
   `hai-gcp-models`, the same one `infra/grafana` uses) under your GCP credentials above — no
   separate export needed, just `roles/secretmanager.secretAccessor` on that secret.
 - **Data-bucket credentials**: the `marin` stack reads `COREWEAVE_API_TOKEN` for the official
-  CoreWeave provider and `CLOUDFLARE_API_TOKEN` for R2. The Cloudflare token needs account-level
-  `Workers R2 Storage Write`; the DNS-only token above cannot list or update R2 buckets. Keep
-  both values in the environment so they remain provider credentials and do not become Pulumi
-  inputs or stack state.
+  CoreWeave provider and `CLOUDFLARE_API_TOKEN` for R2. R2 uses two account tokens stored in
+  Secret Manager: `cloudflare-r2-pulumi-read-token` has `Workers R2 Storage Read` for preview
+  and import, while `cloudflare-r2-pulumi-write-token` has `Workers R2 Storage Write` for an
+  operator's reviewed update. Fetch the appropriate token for each command:
+
+  ```bash
+  export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
+    --project=hai-gcp-models --secret=cloudflare-r2-pulumi-read-token)"  # preview/import
+  export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
+    --project=hai-gcp-models --secret=cloudflare-r2-pulumi-write-token)" # up
+  ```
+
+  The DNS-only token above and R2 S3 access keys cannot manage R2 buckets or lifecycle policy.
+  Secret values are added and rotated out of band; Pulumi manages the read-token access grant
+  and receives both tokens only through the process environment, outside stack config and state.
 - **Cluster access** (for the k8s dry-run): export `KUBECONFIG` with the CoreWeave kubeconfig
   path (typically `~/.kube/coreweave-iris`). The provider keeps this execution credential out
   of Pulumi configuration and state.
@@ -245,7 +256,14 @@ import and reconciles the protection settings.
 Cloudflare's `R2BucketLifecycle` resource does not support import. Remove its unresolved entry
 from the reviewed import subset. After the R2 bucket is imported, the normal preview shows one
 lifecycle create; `pulumi up` writes the declared whole-bucket policy, including seven-day
-incomplete-multipart cleanup and every Marin TTL prefix.
+incomplete-multipart cleanup and every Marin TTL prefix. Audit the live policy before that first
+write because Cloudflare replaces the complete lifecycle configuration:
+
+```bash
+curl -fsS \
+  "https://api.cloudflare.com/client/v4/accounts/74981a43be0de7712369306c7b19133d/r2/buckets/marin-na/lifecycle" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" | jq .result.rules
+```
 
 For a new stack, initialize it before generating the transaction:
 
@@ -287,11 +305,11 @@ posts one aggregated PR comment (status list plus per-stack diffs). Manual
 comment there; omit it for a drift check against the selected ref with no comment.
 **CI never runs `pulumi up`** — see `spec.md §9`. It authenticates as
 `pulumi-ci@hai-gcp-models.iam.gserviceaccount.com`, granted preview-only (decrypt/read, never
-write) access in [`infra/permissions`](../permissions/README.md).
-The `marin` job passes repository secrets `COREWEAVE_OBJECT_STORAGE_API_TOKEN` and
-`CLOUDFLARE_R2_API_TOKEN` as the providers' standard environment variables. The existing
-`COREWEAVE_API_TOKEN` secret belongs to the storage telemetry collector and does not have AI
-Object Storage API access.
+write) access in [`iam_data.yaml`](src/iac/gcp/iam_data.yaml). The `marin` job passes the
+repository secret `COREWEAVE_OBJECT_STORAGE_API_TOKEN` as `COREWEAVE_API_TOKEN`. It obtains the
+R2 read token from Secret Manager through its federated GCP identity and exports it as
+`CLOUDFLARE_API_TOKEN` only for the preview process. The existing `COREWEAVE_API_TOKEN` secret
+belongs to the storage telemetry collector and does not have AI Object Storage API access.
 
 Adapting this to another Pulumi project means a new thin workflow that triggers on that
 project's paths and calls `./.github/actions/pulumi-preview` with its own `stack`/`work-dir`.

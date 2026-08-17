@@ -23,6 +23,9 @@ inputs:
   config-map:
     description: 'Optional config to apply before preview, as JSON: {"key": {"value": "v", "secret": false}}.'
     default: ""
+  cloudflare-secret-name:
+    description: "Optional Secret Manager secret exported as CLOUDFLARE_API_TOKEN."
+    default: ""
 
 runs:
   using: composite
@@ -33,6 +36,21 @@ runs:
         project_id: ${{ inputs.gcp-project-id }}
         workload_identity_provider: ${{ inputs.workload-identity-provider }}
         service_account: ${{ inputs.service-account }}
+
+    - name: Set up Google Cloud SDK
+      if: inputs.cloudflare-secret-name != ''
+      uses: google-github-actions/setup-gcloud@v3
+      with:
+        project_id: ${{ inputs.gcp-project-id }}
+
+    - name: Fetch Cloudflare API token
+      if: inputs.cloudflare-secret-name != ''
+      shell: bash
+      run: |
+        token="$(gcloud secrets versions access latest \
+          --secret="${{ inputs.cloudflare-secret-name }}" --project="${{ inputs.gcp-project-id }}")"
+        echo "::add-mask::$token"
+        echo "CLOUDFLARE_API_TOKEN=$token" >> "$GITHUB_ENV"
 
     - name: Set up uv
       uses: astral-sh/setup-uv@v7

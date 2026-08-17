@@ -1448,6 +1448,11 @@ secrets:
     members:
     - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
     - serviceAccount:pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
+- secret: cloudflare-r2-pulumi-read-token
+  grants:
+  - role: roles/secretmanager.secretAccessor
+    members:
+    - serviceAccount:pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
 - secret: cloudsql-pulumi-admin-password
   grants:
   - role: roles/secretmanager.secretAccessor
