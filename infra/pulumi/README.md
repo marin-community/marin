@@ -116,8 +116,7 @@ Cluster infrastructure comes from the per-cluster Iris config
   [`config/coreweave.yaml`](../../config/coreweave.yaml). `DataBuckets` in
   `src/iac/buckets/` applies the canonical `tmp/ttl=Nd/` policy from `config/marin.yaml` to
   every backend. GCS also uses uniform bucket-level access, public-access prevention,
-  Autoclass, disabled soft delete, and access logging. The live `bench-probe-ttl` rule on
-  `marin-us-east-02a` is declared alongside the shared TTL rules.
+  Autoclass, disabled soft delete, and access logging.
 
 ## Operations
 

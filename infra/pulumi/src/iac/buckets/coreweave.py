@@ -7,18 +7,8 @@ import pulumi
 import pulumi_coreweave as coreweave
 from rigging.filesystem.cluster_config import DataConfig, StoreType
 
-from iac.buckets.lifecycle import ExpirationRule, expiration_rules
+from iac.buckets.lifecycle import expiration_rules
 from iac.imports import NO_IMPORTS, ImportRegistrar
-
-COREWEAVE_EXTRA_EXPIRATION_RULES: dict[str, tuple[ExpirationRule, ...]] = {
-    "marin-us-east-02a": (
-        ExpirationRule(
-            id="bench-probe-ttl",
-            prefix="tmp/benchmark/scratch/ttl-probe/",
-            days=1,
-        ),
-    ),
-}
 
 
 class CoreweaveDataBuckets(pulumi.ComponentResource):
@@ -64,10 +54,7 @@ class CoreweaveDataBuckets(pulumi.ComponentResource):
                         filter=coreweave.ObjectStorageBucketLifecycleConfigurationRuleFilterArgs(prefix=rule.prefix),
                         expiration=coreweave.ObjectStorageBucketLifecycleConfigurationRuleExpirationArgs(days=rule.days),
                     )
-                    for rule in (
-                        *COREWEAVE_EXTRA_EXPIRATION_RULES.get(bucket.name, ()),
-                        *expiration_rules(lifecycle_config),
-                    )
+                    for rule in expiration_rules(lifecycle_config)
                 ],
                 opts=pulumi.ResourceOptions(
                     parent=self,
