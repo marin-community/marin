@@ -1452,3 +1452,23 @@ Experiment ID prefix: `MEP`.
   killed run.
 - Arm mep-fused2c-ep64-25-20260817: recipe + --xla_gpu_shard_autotuning=false.
   If it still wedges, next arm disables the remote compile cache.
+
+### 2026-08-17 03:55 - MEP-054: fused2 memory arc — residual slimming insufficient; collective arena preallocation arm
+- fused2c (autotune-shard off) surfaced the real error: the collective
+  allocator fails a late growth ("could not allocate collective of size:
+  34359738368" = 32 GiB, CUDA_ERROR_OUT_OF_MEMORY) after ~144 GiB is
+  resident. The earlier silent wedges were the same failure stuck inside
+  executable load (all ranks parked in backend_compile_and_load, 0% GPU,
+  0 CPU -- py-spy evidence).
+- act-recompute (842bb3478f) and x_pool-recompute (10220afaf6) barely
+  moved the remat projection (188.04 -> 187.89): the peak sits inside the
+  backward where those buffers are recreated regardless. fused2d wedged
+  identically. Both changes kept bitwise conformance (hero-width EP4 A/B
+  + 4-proc smoke re-green) and are kept for the residual-liveness win
+  they do provide.
+- New trainer knob MARIN_EP_COLLECTIVE_MEMORY_MB (2cb475de42) preallocates
+  the collective arena at client creation, before parameters land.
+  Launched mep-fused2e-ep64-25-20260817 with 36 GiB.
+- Rack discipline note: three failed fused2 hero attempts (~35 min rack
+  each); each killed promptly on the wedge signature (no step by ~25 min
+  past train-loop entry).
