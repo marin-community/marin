@@ -70,17 +70,6 @@ logger = logging.getLogger(__name__)
 # jobs table (which would hit the controller's deep-offset cap on a busy cluster).
 DEFAULT_JOB_LIST_LIMIT = 50
 
-_STATE_MAP: dict[str, JobState] = {
-    "pending": JobState.PENDING,
-    "building": JobState.BUILDING,
-    "running": JobState.RUNNING,
-    "succeeded": JobState.SUCCEEDED,
-    "failed": JobState.FAILED,
-    "killed": JobState.KILLED,
-    "worker_failed": JobState.WORKER_FAILED,
-    "unschedulable": JobState.UNSCHEDULABLE,
-}
-
 
 def _remote_client(ctx: click.Context) -> IrisClient:
     return iris_client_for_ctx(ctx, workspace=Path.cwd())
@@ -1264,11 +1253,13 @@ def list_jobs(ctx, state: str | None, prefix: str | None, limit: int) -> None:
 
     state_value: JobState | None = None
     if state is not None:
-        state_lower = state.lower()
-        if state_lower not in _STATE_MAP:
-            valid = ", ".join(sorted(_STATE_MAP.keys()))
-            raise click.UsageError(f"Unknown state '{state}'. Valid states: {valid}")
-        state_value = _STATE_MAP[state_lower]
+        try:
+            state_value = JobState(state.lower())
+            if state_value is JobState.UNSPECIFIED:
+                raise ValueError
+        except ValueError:
+            valid = ", ".join(candidate.value for candidate in JobState if candidate is not JobState.UNSPECIFIED)
+            raise click.UsageError(f"Unknown state '{state}'. Valid states: {valid}") from None
 
     jobs = client.list_jobs(state=state_value, prefix=prefix, limit=limit)
 

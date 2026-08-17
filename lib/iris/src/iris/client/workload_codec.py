@@ -20,14 +20,6 @@ from iris.resources.state import FederationState, JobState, TaskState
 from iris.rpc import job_pb2, time_pb2
 from iris.time_proto import timestamp_from_proto
 
-_FEDERATION_STATES: dict[int, FederationState] = {
-    job_pb2.PEER_STATUS_NONE: FederationState.LOCAL,
-    job_pb2.PEER_STATUS_PENDING_SCHEDULING: FederationState.PENDING,
-    job_pb2.PEER_STATUS_ASSIGNED: FederationState.ASSIGNED,
-    job_pb2.PEER_STATUS_SYNCED: FederationState.SYNCED,
-    job_pb2.PEER_STATUS_REJECTED: FederationState.REJECTED,
-}
-
 
 def job_state_from_proto(value: int) -> JobState:
     return JobState(job_pb2.JobState.Name(value).removeprefix("JOB_STATE_").lower())
@@ -35,6 +27,20 @@ def job_state_from_proto(value: int) -> JobState:
 
 def _task_state_from_proto(value: int) -> TaskState:
     return TaskState(job_pb2.TaskState.Name(value).removeprefix("TASK_STATE_").lower())
+
+
+def _federation_state_from_proto(value: int) -> FederationState:
+    if value == job_pb2.PEER_STATUS_NONE:
+        return FederationState.LOCAL
+    if value == job_pb2.PEER_STATUS_PENDING_SCHEDULING:
+        return FederationState.PENDING
+    if value == job_pb2.PEER_STATUS_ASSIGNED:
+        return FederationState.ASSIGNED
+    if value == job_pb2.PEER_STATUS_SYNCED:
+        return FederationState.SYNCED
+    if value == job_pb2.PEER_STATUS_REJECTED:
+        return FederationState.REJECTED
+    raise ValueError(f"Unknown peer status: {value}")
 
 
 def _timestamp(value: time_pb2.Timestamp, *, present: bool) -> Timestamp | None:
@@ -159,6 +165,6 @@ def job_status_from_proto(value: job_pb2.JobStatus) -> JobStatus:
         parent_job_id=parent_job_id,
         backend_id=value.backend_id,
         execution_cluster_id=value.cluster,
-        federation_state=_FEDERATION_STATES[value.peer_status],
+        federation_state=_federation_state_from_proto(value.peer_status),
         submitting_user=value.submitting_user,
     )

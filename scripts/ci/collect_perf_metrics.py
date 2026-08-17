@@ -171,7 +171,7 @@ class PerfReport:
 # --------------------------------------------------------------------------- #
 
 
-def _job_status_to_dict(job: JobStatus) -> dict:
+def _job_tree_entry_dict(job: JobStatus) -> dict:
     def timestamp_dict(value):
         return {"epoch_ms": value.epoch_ms()} if value is not None else None
 
@@ -208,7 +208,7 @@ def fetch_job_tree(client: IrisClient, job_id: str) -> list[dict] | None:
     try:
         jobs = client.list_jobs(prefix=job_id)
         jobs.sort(key=lambda job: job.submitted_at.epoch_ms() if job.submitted_at is not None else 0, reverse=True)
-        return [_job_status_to_dict(job) for job in jobs]
+        return [_job_tree_entry_dict(job) for job in jobs]
     except ConnectError as exc:
         logger.warning("iris client job list failed for prefix %s: %s", job_id, exc)
         return None
