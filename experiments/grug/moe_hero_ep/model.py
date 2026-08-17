@@ -58,7 +58,16 @@ _ROUTING_RENORM_SUM = 2.5
 # Large-vocab CE via the plain-XLA path (no shared-memory tiling, so v_block can be large).
 # v=4096 is the dominant MFU lever for the 128k vocab; the SMEM-tiled batched_xla kernel caps the
 # h*v weight tile at ~99KB and cannot take v=4096.
-_CE_BLOCK_SIZES = BlockSizes(v_block_size=4096)
+#
+# b_block_size is the CE forward's batch tile. The 1024 default splits the per-rank
+# B=65,536 CE shard into 64 batch blocks, and with 32 vocab blocks that is 2,048
+# forward iterations of ~11 kernels each. Measured single-GPU at the hero shape on
+# GB200 (lib/levanter/scripts/bench/bench_ce_hero_shape.py), those kernels average
+# 15.6 us with the compute stream 98.8% busy: they are back-to-back but far too
+# small to fill the SMs. Setting the tile to the whole shard turns the forward into
+# one GEMM per vocab block. Measured: forward 171.3 ms -> 81.9 ms, peak HBM +0.04 GiB.
+_CE_TOKENS_PER_RANK = 65_536
+_CE_BLOCK_SIZES = BlockSizes(b_block_size=_CE_TOKENS_PER_RANK, v_block_size=4096)
 # The embedding is fully replicated for a local lookup. The language-model head
 # is sharded across the data, expert, and model axes.
 _EMBED_PARTITION_SPEC = P(None, None)
@@ -1221,6 +1230,18 @@ class Transformer(eqx.Module):
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
+        # NOTE (2026-08-17): gradients from this loss differ from hero runs before
+        # this date, and the difference is intentional. "xla_fast_bwd" keeps the
+        # same forward -- the loss is bitwise identical -- but its backward is the
+        # scan/one-hot/bf16-tensor-core rewrite, whose grad_x and grad_w are ~30%
+        # CLOSER to a float32 reference than the old "xla" backward (rel-RMS
+        # 2.170e-03 -> 1.445e-03 for grad_x, 1.946e-03 -> 1.433e-03 for grad_w,
+        # measured at this exact CE shape on GB200). Widening _CE_BLOCK_SIZES'
+        # b_block_size above moves grad_w too, for the same reason: it removes a
+        # bf16 accumulation across batch blocks. If you are diffing a checkpoint
+        # against an older run, this is why. Set LEVANTER_CE_XLA_FAST_BWD=0 to
+        # force the old backward back on without editing code, or swap this to
+        # implementation="xla" for a code-level A/B.
         cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
             self.output_proj,
@@ -1229,7 +1250,7 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
-            implementation="xla",
+            implementation="xla_fast_bwd",
             block_sizes=_CE_BLOCK_SIZES,
         )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
