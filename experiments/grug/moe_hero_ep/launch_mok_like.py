@@ -114,6 +114,11 @@ _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, p
 _SCALE_METADATA = {
     1: ("four-gb200", "moe-backend-comparison-4gb200"),
     2: ("two-node", "moe-backend-comparison-2node"),
+    # 4 and 8 nodes exist only to bisect scale-dependent failures. Without them the ladder jumps
+    # 8 -> 64 ranks, which is precisely the interval the mok_like rank-64 hang lives in; nothing
+    # here is functional, so the gap was a missing table entry rather than a real constraint.
+    4: ("four-node", "moe-backend-comparison-4node"),
+    8: ("eight-node", "moe-backend-comparison-8node"),
     16: ("one-rack", "moe-backend-comparison-1rack"),
     32: ("two-rack", "moe-backend-comparison-2rack"),
 }
