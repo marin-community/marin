@@ -1382,3 +1382,27 @@ Experiment ID prefix: `MEP`.
   supply their own program builder; bulk mode already approximates the
   stock XLA shape). simcore/oracle stay SPEC-coupled by design. Extraction
   to a neutral home is ~1h if #8317/#8108 want it.
+
+### 2026-08-16 22:45 - MEP-050: mgpu_fused2 conformant after an empty-group deadlock fix
+- Built during the rack-capacity hold: fused_gemm_combine (66dc77e2b5) runs
+  the down GEMM and the combine put in one kernel -- the store warpgroup
+  publishes per-128-block semaphores (write-visible wait; do_matmul's own
+  wait is SMEM-reuse only) and the transport streams each segment once its
+  covering blocks land. fused_full_moe fuses the whole local pipeline; the
+  backward reuses the kernel to fuse dx GEMM + return put. Flavor
+  ep-marin-mgpu-fused2. Sim (MEP-049) attributes the entire 0.49 s/step
+  modeled win to this leg.
+- DEADLOCK found by the in-process pytest (skewed dirichlet routing):
+  GroupInfo.create gives an empty group one grid slot when its start is
+  mid-block (floor-division final_block == start_block) and that slot
+  still signals; expected_tile_signals excluded all empty groups, so the
+  transport waited on unreachable totals and wedged the device. The CPU
+  replay test had encoded the same wrong assumption -- fixed both, forced
+  empty groups into the replay (7e699995ed). Smoke's flatter routing had
+  no empty kept groups, which is why it passed first.
+- Validation after fix, GB200 tray: pytest fused+fused2 vs mgpu_brd
+  bitwise (2 passed); 4-process smoke MGPU / MGPU_FUSED / MGPU_FUSED2 all
+  CONFORMANT bitwise. Tray released.
+- Queued mep-fused2-ep64-25-20260817 behind mep-fused-ep64-25-20260817
+  (both Kueue-gated on a free NVLink domain). Prediction stands: fused
+  ~neutral vs 17.0 s, fused2 carries ~-0.5 s.
