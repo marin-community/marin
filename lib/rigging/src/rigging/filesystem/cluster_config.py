@@ -234,7 +234,7 @@ def load_cluster_config(cluster: str | None = None) -> DataConfig:
     return _load_cluster_config_cached(name)
 
 
-def load_cluster_config_from_dirs(cluster: str, config_dirs: Sequence[pathlib.Path | str]) -> DataConfig:
+def load_cluster_config_from_dirs(cluster: str, config_dirs: Sequence[pathlib.Path]) -> DataConfig:
     """Load a required data config from an explicit set of config directories.
 
     Unlike :func:`load_cluster_config`, this does not consult per-user overrides

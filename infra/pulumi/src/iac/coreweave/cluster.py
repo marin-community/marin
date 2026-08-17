@@ -7,10 +7,9 @@ Renders the cluster's NodePools as `compute.coreweave.com/v1alpha1 NodePool` cus
 resources, the objects Iris applies today, and targets an existing CKS cluster and its
 kubeconfig.
 
-The CKS cluster object (`coreweave_cks_cluster` + VPC) stays outside Pulumi. The CoreWeave
-package used for object storage exposes those resources. Adopting the live cluster remains
-future work. `CksClusterSpec` (`args.cluster`, exported below) records that externally-provisioned
-cluster as in-tree config.
+The CKS cluster object (`coreweave_cks_cluster` + VPC) stays outside Pulumi.
+`CksClusterSpec` (`args.cluster`, exported below) records that externally provisioned cluster
+as in-tree config.
 """
 
 from dataclasses import dataclass
