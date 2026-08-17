@@ -85,6 +85,7 @@ def test_accumulate_gradients_sharded(parallelism, accum_steps):
 def test_accumulate_fp8_gradients_preserves_largest_amax_and_scale():
     microbatch_size = len(jax.devices())
     Batch = hax.Axis("Batch", 2 * microbatch_size)
+    Microbatch = Batch.resize(microbatch_size)
     In = hax.Axis("In", 8)
     Out = hax.Axis("Out", 4)
     linear = hnn.Linear.init(
@@ -117,11 +118,17 @@ def test_accumulate_fp8_gradients_preserves_largest_amax_and_scale():
         linear = hax.shard(linear, axis_mapping)
         x = jax.device_put(x, NamedSharding(mesh, PartitionSpec(ResourceAxis.DATA, None)))
         grads = accumulated_grads(linear, x)
-        full_batch_grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(linear, x)[1]
+        grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=True)
+        large_grads = grad_fn(linear, hax.full((Microbatch, In), 32.0))[1]
+        small_grads = grad_fn(linear, hax.ones((Microbatch, In)))[1]
 
     assert_trees_all_close(
         grads.dot_general.input_amax_history,
-        full_batch_grads.dot_general.input_amax_history,
+        jnp.maximum(
+            large_grads.dot_general.input_amax_history,
+            small_grads.dot_general.input_amax_history,
+        ),
     )
-    assert_trees_all_close(grads.dot_general.input_scale, full_batch_grads.dot_general.input_scale)
-    assert_trees_all_close(grads.weight, full_batch_grads.weight, atol=1e-3, rtol=1e-3)
+    assert_trees_all_close(grads.dot_general.input_scale, large_grads.dot_general.input_scale)
+    expected_weight_grads = (large_grads.weight + small_grads.weight) / 2
+    assert_trees_all_close(grads.weight, expected_weight_grads, atol=1e-3, rtol=1e-3)
