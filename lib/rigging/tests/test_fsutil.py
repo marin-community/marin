@@ -19,7 +19,7 @@ import rigging.fsutil.transfer as transfer_module
 import rigging.timing as timing
 from botocore.exceptions import EndpointConnectionError
 from click.testing import CliRunner
-from rigging.fsutil import listing
+from rigging.fsutil import deletion, listing
 from rigging.fsutil.cli import cli
 from rigging.fsutil.listing import MAX_PREVIEW_BYTES, read_decompressed_preview
 from rigging.fsutil.render import file_lines
@@ -375,25 +375,24 @@ def test_rm_recursive_unlinks_local_directory_symlink_without_deleting_target(tm
 
 def test_rm_uses_s3_bulk_delete_batches(monkeypatch):
     class RecordingS3FileSystem:
+        protocol = "s3"
+
         def __init__(self):
             self.requests = []
+            self.config_kwargs = {}
 
         def isdir(self, _path):
             return True
-
-        def find(self, path, *, detail):
-            assert path == "bucket/prefix"
-            assert detail is True
-            return {
-                f"bucket/prefix/{index}": {"name": f"bucket/prefix/{index}", "size": 1, "type": "file"}
-                for index in range(1001)
-            }
 
         def split_path(self, path):
             bucket, key = path.split("/", 1)
             return bucket, key, None
 
         def call_s3(self, method, **kwargs):
+            if method == "list_objects_v2":
+                assert kwargs["Prefix"] == "prefix/"
+                contents = [{"Key": f"prefix/{index}", "Size": 1} for index in range(1001)]
+                return {"Contents": contents}
             assert method == "delete_objects"
             self.requests.append(kwargs)
             return {}
@@ -402,7 +401,8 @@ def test_rm_uses_s3_bulk_delete_batches(monkeypatch):
             pass
 
     fs = RecordingS3FileSystem()
-    monkeypatch.setattr(cli_module, "S3FileSystem", RecordingS3FileSystem)
+    monkeypatch.setattr(deletion, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
     monkeypatch.setattr(cli_module, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
 
     result = CliRunner().invoke(cli, ["rm", "-R", "s3://bucket/prefix"])
@@ -411,6 +411,108 @@ def test_rm_uses_s3_bulk_delete_batches(monkeypatch):
     batches = [request["Delete"]["Objects"] for request in fs.requests]
     assert sorted(map(len, batches)) == [1, 1000]
     assert {item["Key"] for batch in batches for item in batch} == {f"prefix/{index}" for index in range(1001)}
+
+
+def test_rm_batches_through_a_filesystem_wrapper(monkeypatch):
+    """Backend dispatch must survive a proxy that forwards the protocol but not the class.
+
+    `filesystem_for` hands back a `CrossRegionGuardedFS` for every GCS URL, which does not
+    subclass `GCSFileSystem`. An `isinstance` check misses it, and the batch size silently
+    collapses to one object per request.
+    """
+
+    class RecordingGCSFileSystem:
+        protocol = ("gs", "gcs")
+
+        def __init__(self):
+            self.batch_sizes = []
+
+        def isdir(self, _path):
+            return True
+
+        def ls(self, path, detail):
+            assert detail is True
+            return [{"name": f"{path}/{index}", "size": 1, "type": "file"} for index in range(250)]
+
+        def rm(self, paths, **_kwargs):
+            self.batch_sizes.append(len(paths))
+
+        def invalidate_cache(self):
+            pass
+
+    class GuardWrapper:
+        def __init__(self, fs):
+            self._fs = fs
+
+        def __getattr__(self, name):
+            return getattr(self._fs, name)
+
+    inner = RecordingGCSFileSystem()
+    fs = GuardWrapper(inner)
+    monkeypatch.setattr(deletion, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+    monkeypatch.setattr(cli_module, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+
+    result = CliRunner().invoke(cli, ["rm", "-R", "gs://bucket/prefix"])
+
+    assert result.exit_code == 0, result.output
+    assert sorted(inner.batch_sizes) == [50, 100, 100]
+
+
+def test_rm_deletes_while_the_listing_still_streams(monkeypatch):
+    """A prefix wider than one page must not wait for the whole scan before deleting.
+
+    The first delete has to land while later pages are still outstanding; otherwise a
+    prefix with tens of millions of objects buys a full scan, and the memory to hold it,
+    before it removes anything.
+    """
+
+    class BlockingS3FileSystem:
+        protocol = "s3"
+        pages = 3
+
+        def __init__(self):
+            self.first_delete = threading.Event()
+            self.streamed = False
+            self.deleted_keys = set()
+            self.config_kwargs = {}
+
+        def isdir(self, _path):
+            return True
+
+        def split_path(self, path):
+            bucket, key = path.split("/", 1)
+            return bucket, key, None
+
+        def call_s3(self, method, **kwargs):
+            if method == "delete_objects":
+                self.deleted_keys.update(item["Key"] for item in kwargs["Delete"]["Objects"])
+                self.first_delete.set()
+                return {}
+            page = int((kwargs.get("ContinuationToken") or "token-0").removeprefix("token-"))
+            start = page * 1000
+            contents = [{"Key": f"prefix/{index}", "Size": 1} for index in range(start, start + 1000)]
+            if page < self.pages - 1:
+                return {"Contents": contents, "NextContinuationToken": f"token-{page + 1}"}
+            # The final page is served only once an earlier batch has already been
+            # deleted, so a scan-then-delete implementation deadlocks here instead of
+            # quietly passing.
+            self.streamed = self.first_delete.wait(timeout=30)
+            return {"Contents": contents}
+
+        def invalidate_cache(self):
+            pass
+
+    fs = BlockingS3FileSystem()
+    monkeypatch.setattr(deletion, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+    monkeypatch.setattr(cli_module, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+
+    result = CliRunner().invoke(cli, ["rm", "-R", "s3://bucket/prefix", "--workers", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert fs.streamed, "the last listing page was reached before any object was deleted"
+    assert fs.deleted_keys == {f"prefix/{index}" for index in range(3000)}
 
 
 def test_json_previews_render_as_tables_and_degrade_safely():

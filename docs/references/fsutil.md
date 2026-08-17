@@ -63,7 +63,7 @@ that touch its buckets; the rest keep working.
 | `mv SRC ... DST [-r]` | Move or rename one or more sources. Sources are removed after every copy succeeds |
 | `rsync SRC DST [--delete] [--dry-run] [--checksum]` | Synchronize the files beneath two directories or prefixes |
 | `hash URL ... [--hex]` | Stream complete files and print MD5 digests in base64 or hexadecimal |
-| `rm URL ... [-r]` | Remove one or more objects. `-r` or `-R` recursively removes every prefix; remote prefixes show object-count progress |
+| `rm URL ... [-r] [--workers N]` | Remove one or more objects. `-r` or `-R` recursively removes every prefix; remote prefixes delete while they list and show progress |
 | `browse [URL]` | The interactive browser |
 
 `cp` and `mv` append each source basename when the destination is an existing directory,
@@ -87,8 +87,25 @@ by default. `--hex` selects hexadecimal output.
 
 `du` scans prefixes with up to 128 concurrent metadata-bearing listings. S3 prefixes
 that exceed one listing page are split at the next `/` through three directory levels,
-then paginated flat. Recursive `rm` uses S3's 1,000-key bulk delete and GCS's 20-key
-batch delete, with up to eight batches in flight.
+then paginated flat.
+
+Recursive `rm` on a remote prefix runs on that same parallel page scanner and deletes
+each page as it lands, rather than scanning the whole prefix first. Deletes start
+immediately, and the objects held in memory are bounded by the requests in flight
+instead of by the size of the prefix. One batch is one request, at each backend's
+documented maximum: 1,000 keys for S3 `DeleteObjects`, 100 sub-requests for the GCS
+batch endpoint. `--workers` sets the requests in flight, defaulting to 16 and accepting
+up to 256. Failed S3 batches are retried with backoff on transient errors.
+
+Raising `--workers` past the default helps only until the bucket throttles. A GCS bucket
+admits roughly 1,000 writes per second before it returns 429, and deletes count as
+writes, so 60M objects need about 17 hours whatever the client does. At that scale an
+object lifecycle rule costs nothing and needs no listing. It is the better tool, and it
+is why throwaway data belongs under a `ttl=` prefix that a rule already covers.
+
+One case still lists serially: a GCS prefix whose objects sit directly under it, with no
+sub-prefixes to split across threads. gcsfs pages such a listing in one call, so the
+scanner cannot fan out. Nested layouts, and all S3 prefixes, parallelize.
 
 `usage` uses the same parallel metadata-page scanner as `du`, defaults to 128 workers,
 accepts up to 1,024 workers, and writes a Markdown report. Starting at the bucket root,
