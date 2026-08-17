@@ -7,3 +7,11 @@ backend:
 runtime: python
 description: Infrastructure-as-code for Marin cluster prerequisites (see .agents/projects/iac).
 # The secrets provider is configured per-stack in Pulumi.<stack>.yaml during stack init.
+
+packages:
+  coreweave:
+    source: pulumi/pulumi/terraform-provider
+    version: 1.3.0
+    parameters:
+      - coreweave/coreweave
+      - 0.13.0

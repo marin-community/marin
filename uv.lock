@@ -3980,6 +3980,7 @@ deploy = [
     { name = "pulumi" },
     { name = "pulumi-cloudflare" },
     { name = "pulumi-command" },
+    { name = "pulumi-coreweave" },
     { name = "pulumi-docker-build" },
     { name = "pulumi-gcp" },
     { name = "pulumi-github" },
@@ -4000,9 +4001,10 @@ requires-dist = [
     { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-iris", extras = ["controller"], editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
-    { name = "pulumi", marker = "extra == 'deploy'", specifier = ">=3.226,<4" },
+    { name = "pulumi", marker = "extra == 'deploy'", specifier = ">=3.247,<4" },
     { name = "pulumi-cloudflare", marker = "extra == 'deploy'", specifier = ">=6,<7" },
     { name = "pulumi-command", marker = "extra == 'deploy'", specifier = ">=1,<2" },
+    { name = "pulumi-coreweave", marker = "extra == 'deploy'", directory = "infra/pulumi/sdks/coreweave" },
     { name = "pulumi-docker-build", marker = "extra == 'deploy'", specifier = ">=0.0.8,<1" },
     { name = "pulumi-gcp", marker = "extra == 'deploy'", specifier = ">=9,<10" },
     { name = "pulumi-github", marker = "extra == 'deploy'", specifier = ">=6,<7" },
@@ -6781,6 +6783,24 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/cf/56/b7f66c9d2e4536b24a5bbe4e743093c7cdd689343d86f020419f4897a88d/pulumi_command-1.2.1.tar.gz", hash = "sha256:cbc9281a6571701ac5db598dac0246a058875b62f28c40c7cc0fcdc36898918d", size = 33022, upload-time = "2026-03-04T00:23:25.84Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fa/ce/1e5f30f868ba0827ca3311b0b171b12606e30c05e864714764d8d943fef1/pulumi_command-1.2.1-py3-none-any.whl", hash = "sha256:c7e465338e4363f114ddff99ee249260c7770ef4451b970ab51f7e8a37c9b030", size = 36861, upload-time = "2026-03-04T00:23:24.571Z" },
+]
+
+[[package]]
+name = "pulumi-coreweave"
+version = "0.13.0"
+source = { directory = "infra/pulumi/sdks/coreweave" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "semver" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "parver", specifier = ">=0.2.1" },
+    { name = "pulumi", specifier = ">=3.247.0,<4.0.0" },
+    { name = "semver", specifier = ">=2.8.1" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.11,<5" },
 ]
 
 [[package]]

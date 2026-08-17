@@ -76,15 +76,18 @@ For intermediate checkpoints and other short-lived data, Marin reserves a `tmp/`
 
 Supported TTLs: 1, 2, 3, 4, 5, 6, 7, 14, and 30 days. The canonical list lives in `config/marin.yaml` (`data.temp.ttl_days`); call `marin_temp_bucket(ttl_days=N, prefix=...)` to build a path.
 
-The shared regional `marin-*` buckets are declared by `GcpDataBuckets` in
-[`infra/pulumi`](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md). Their names and regions come from
-`config/marin.yaml`; Pulumi owns soft-delete disablement and the complete lifecycle policy.
+The shared `marin-*` buckets on GCS, CoreWeave, and R2 are declared by `DataBuckets` in
+[`infra/pulumi`](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md).
+Their names and regions come from `config/marin.yaml` and `config/coreweave.yaml`; Pulumi owns
+the complete lifecycle policy on every backend and GCS soft-delete disablement.
 To add a region, add its GCS bucket entry to the reviewed `data.region_buckets` map and preview
 the `marin` stack:
 
 ```bash
 uv sync --package marin-iac --extra deploy
 export PULUMI_PYTHON_CMD="$PWD/.venv/bin/python"
+export COREWEAVE_API_TOKEN=...
+export CLOUDFLARE_API_TOKEN=...  # account token with Workers R2 Storage Write
 pulumi -C infra/pulumi stack select marin
 pulumi -C infra/pulumi preview
 ```

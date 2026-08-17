@@ -5,8 +5,8 @@ Infrastructure-as-code for the static substrate of Marin clusters, per the desig
 
 It provisions RBAC, reserved NodePools, Kueue objects, the
 Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs for CoreWeave,
-plus shared GCLB/IAP ingress, firewall rules, static addresses, regional data buckets,
-registries, and IAM for GCP.
+plus shared GCLB/IAP ingress, firewall rules, static addresses, registries, IAM, and every
+GCS/CoreWeave/R2 data bucket.
 It is the sole owner of these resources — Iris no longer provisions any of them
 (`verify_prerequisites()` in
 [`k8s/controller.py`](../../lib/iris/src/iris/cluster/platforms/k8s/controller.py) only checks
@@ -18,9 +18,12 @@ The cluster project retains the `marin-iac` Pulumi name so this directory's move
 Stacks: one per cluster, each a `Pulumi.<cluster>.yaml` pointer to the cluster name. CoreWeave —
 `cw-us-west-04a`, `cw-us-east-02a`, `cw-rno2a`, `cw-us-east-08a` (GB200), all adopted into
 `gs://marin-iac-state/`. GCP — `marin`, which declares the reserved federation-egress static
-IPs (`GcpStaticAddresses`), shared GCE load-balancer ingress (`GcpGclbIap`), and every
-regional GCS data bucket (`GcpDataBuckets`), plus every non-authoritative GCP IAM grant on
-`hai-gcp-models` (`GcpIam`, driven by `src/iac/gcp/iam_data.yaml`; see "User grants" below).
+IPs (`GcpStaticAddresses`), shared GCE load-balancer ingress (`GcpGclbIap`), and all shared
+data buckets (`DataBuckets`), plus every non-authoritative GCP IAM grant on `hai-gcp-models`
+(`GcpIam`, driven by `src/iac/gcp/iam_data.yaml`; see "User grants" below). `DataBuckets`
+owns the seven GCS buckets, two CoreWeave AI Object Storage buckets, and the Cloudflare R2
+bucket. The CoreWeave cluster stacks consume these buckets but do not declare duplicate
+resources for them.
 
 Beyond cluster prerequisites, the `iac` package also carries the reusable *service* components
 other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run` (IAP-gated Cloud Run,
@@ -108,10 +111,13 @@ Cluster infrastructure comes from the per-cluster Iris config
   each referenced Iris config, finelog VM details come from `lib/finelog/config`, and current
   internal VM addresses are read from GCE during preview. See
   [`lib/iris/docs/iap-gclb.md`](../../lib/iris/docs/iap-gclb.md).
-- The GCP regional data buckets, their locations, and scratch TTL values come from the
-  reviewed `data:` block in [`config/marin.yaml`](../../config/marin.yaml). `GcpDataBuckets`
-  applies uniform bucket-level access, public-access prevention, Autoclass, disabled soft
-  delete, access logging, and the `tmp/ttl=Nd/` lifecycle rules.
+- Data-bucket names, stores, locations, and endpoints come from the reviewed `data:` blocks in
+  [`config/marin.yaml`](../../config/marin.yaml) and
+  [`config/coreweave.yaml`](../../config/coreweave.yaml). `DataBuckets` in
+  `src/iac/buckets/` applies the canonical `tmp/ttl=Nd/` policy from `config/marin.yaml` to
+  every backend. GCS also uses uniform bucket-level access, public-access prevention,
+  Autoclass, disabled soft delete, and access logging. The live `bench-probe-ttl` rule on
+  `marin-us-east-02a` is declared alongside the generated CoreWeave TTL rules.
 
 ## Operations
 
@@ -123,6 +129,11 @@ Cluster infrastructure comes from the per-cluster Iris config
   the Pulumi providers):
   ```bash
   uv sync --all-packages --extra deploy    # run from the repo root or anywhere in the tree
+  ```
+  The CoreWeave Python SDK under `sdks/coreweave/` is generated from the official provider
+  pinned in `Pulumi.yaml`. Regenerate it only when changing that provider version:
+  ```bash
+  pulumi -C infra/pulumi package add terraform-provider coreweave/coreweave 0.13.0
   ```
 - **Helm CLI**: [install](https://helm.sh/docs/intro/install/) (`brew install helm`), then
   register the CoreWeave chart repo:
@@ -148,6 +159,11 @@ Cluster infrastructure comes from the per-cluster Iris config
   DNS-only Cloudflare token straight from Secret Manager (`cloudflare-oa-dns-token` in
   `hai-gcp-models`, the same one `infra/grafana` uses) under your GCP credentials above — no
   separate export needed, just `roles/secretmanager.secretAccessor` on that secret.
+- **Data-bucket credentials**: the `marin` stack reads `COREWEAVE_API_TOKEN` for the official
+  CoreWeave provider and `CLOUDFLARE_API_TOKEN` for R2. The Cloudflare token needs account-level
+  `Workers R2 Storage Write`; the DNS-only token above cannot list or update R2 buckets. Keep
+  both values in the environment so they remain provider credentials and do not become Pulumi
+  inputs or stack state.
 - **Cluster access** (for the k8s dry-run): export `KUBECONFIG` with the CoreWeave kubeconfig
   path (typically `~/.kube/coreweave-iris`). The provider keeps this execution credential out
   of Pulumi configuration and state.
@@ -178,6 +194,9 @@ export KUBECONFIG=~/.kube/coreweave-iris
 pulumi stack select <cluster>
 pulumi preview
 ```
+
+The `marin` stack requires the two data-bucket credentials above. CoreWeave cluster stacks
+require `KUBECONFIG` and the DNS credential instead.
 
 Read the diff before doing anything else. **No-change / update-in-place is safe. Any `replace`
 or `delete` on a NodePool is not** — it deprovisions a reserved bare-metal fleet. Stop and
@@ -229,6 +248,11 @@ any unexpected provider update, replacement, or deletion, especially for a NodeP
 follow-up preview is correct, run a normal `pulumi up`; that creates entries omitted from the
 import and reconciles the protection settings.
 
+Cloudflare's `R2BucketLifecycle` resource does not support import. Remove its unresolved entry
+from the reviewed import subset. After the R2 bucket is imported, the normal preview shows one
+lifecycle create; `pulumi up` writes the declared whole-bucket policy, including seven-day
+incomplete-multipart cleanup and every Marin TTL prefix.
+
 For a new stack, initialize it before generating the transaction:
 
 ```bash
@@ -270,6 +294,10 @@ comment there; omit it for a drift check against the selected ref with no commen
 **CI never runs `pulumi up`** — see `spec.md §9`. It authenticates as
 `pulumi-ci@hai-gcp-models.iam.gserviceaccount.com`, granted preview-only (decrypt/read, never
 write) access in [`infra/permissions`](../permissions/README.md).
+The `marin` job passes repository secrets `COREWEAVE_OBJECT_STORAGE_API_TOKEN` and
+`CLOUDFLARE_R2_API_TOKEN` as the providers' standard environment variables. The existing
+`COREWEAVE_API_TOKEN` secret belongs to the storage telemetry collector and does not have AI
+Object Storage API access.
 
 Adapting this to another Pulumi project means a new thin workflow that triggers on that
 project's paths and calls `./.github/actions/pulumi-preview` with its own `stack`/`work-dir`.
@@ -284,14 +312,8 @@ project's paths and calls `./.github/actions/pulumi-preview` with its own `stack
 ## Future work
 
 - **CKS cluster object + VPC**: not yet managed by Pulumi; `CoreweaveCluster` only records the
-  resulting cluster identity as config (`CksClusterSpec`). CoreWeave publishes an official
-  Terraform provider Pulumi could bridge
-  (`pulumi package add terraform-provider coreweave/coreweave`).
-- **S3-compatible object storage** (`s3://marin-<region>` buckets + access keys): no Pulumi
-  schema or component exists yet; buckets are created by hand plus `configure_buckets.py` for lifecycle rules.
-  Clusters currently mix per-cluster buckets (`cw-us-west-04a`) and shared cross-region reuse
-  (`cw-rno2a`/`cw-us-east-08a` both read/write `marin-us-east-02a`'s bucket) — undecided whether
-  Pulumi should provision a bucket per cluster or this reuse is the standing choice.
+  resulting cluster identity as config (`CksClusterSpec`). The official CoreWeave provider is
+  already pinned for object storage and exposes the CKS and VPC resource types needed here.
 - **finelog server Deployment**: a planned `FinelogServer` component, not yet built.
 - **Federation peers**: `lib/iris/config/marin.yaml`/`marin-dev.yaml`'s `peers:` entries are
   hand-edited per cluster; generate or CI-validate the peer set from the cluster configs so a

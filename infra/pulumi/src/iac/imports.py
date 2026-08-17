@@ -131,6 +131,15 @@ def _logical_name(resource: Mapping[str, Any]) -> str:
     return logical_name
 
 
+def _is_provider_resource(resource: Mapping[str, Any]) -> bool:
+    resource_type = resource.get("type")
+    return isinstance(resource_type, str) and resource_type.startswith("pulumi:providers:")
+
+
+def _is_manifest_dependency(resource: Mapping[str, Any]) -> bool:
+    return resource.get("component") is True or _is_provider_resource(resource)
+
+
 def _type_and_name_from_urn(urn: str) -> tuple[str, str]:
     parts = urn.rsplit("::", 2)
     if len(parts) != 3:
@@ -200,7 +209,7 @@ def resolve_import_manifest(
         specs_by_identity[spec.identity] = spec
 
     for resource in resources:
-        if resource.get("component") is True:
+        if _is_manifest_dependency(resource):
             continue
         if resource.get("id") != IMPORT_ID_PLACEHOLDER:
             raise ValueError("generated import resource did not contain an ID placeholder")
@@ -229,6 +238,8 @@ def import_manifest_summary(manifest: Mapping[str, Any]) -> ImportManifestSummar
             raise ValueError("import resource has no resource type")
         if resource.get("component") is True:
             component_count += 1
+        elif _is_provider_resource(resource):
+            continue
         elif resource.get("id") == IMPORT_ID_PLACEHOLDER:
             unresolved_by_type[resource_type] += 1
         else:
@@ -267,7 +278,7 @@ def validate_reviewed_manifest(reviewed: Mapping[str, Any], current: Mapping[str
         if current_resources[encoded] == 0:
             raise ValueError(f"reviewed import entry {resource_index} is stale or edited")
         current_resources[encoded] -= 1
-        if resource.get("component") is not True:
+        if not _is_manifest_dependency(resource):
             if resource.get("id") == IMPORT_ID_PLACEHOLDER:
                 raise ValueError(f"unresolved import ID at entry {resource_index}")
             imported_leaf_count += 1

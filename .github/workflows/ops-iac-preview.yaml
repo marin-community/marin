@@ -9,6 +9,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
+      - "config/**"
       - "infra/pulumi/**"
       - "lib/iris/config/**"
       - ".github/workflows/ops-iac-preview.yaml"
@@ -93,6 +94,9 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || (inputs.pr_number != '' && format('refs/pull/{0}/head', inputs.pr_number)) || github.sha }}
 
       - name: Preview marin
+        env:
+          COREWEAVE_API_TOKEN: ${{ secrets.COREWEAVE_OBJECT_STORAGE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_R2_API_TOKEN }}
         uses: ./.github/actions/pulumi-preview
         with:
           stack: marin

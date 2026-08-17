@@ -11,8 +11,7 @@ region-to-bucket mirror set, the URL scheme, and the temp TTL policy.
 ``marin``), loaded from ``config/<cluster>.yaml``. Every "where does data live"
 answer flows through it: :func:`marin_prefix` is ``data_config().resolved_root()``,
 and :func:`marin_temp_bucket` and the region helpers all read its fields.
-Lifecycle rules on GCS buckets are managed by ``infra/pulumi``; rules on the
-S3-compatible buckets are managed by ``infra/configure_buckets.py``.
+Lifecycle rules on every configured data bucket are managed by ``infra/pulumi``.
 """
 
 import contextlib
@@ -444,10 +443,9 @@ def store_config(store: StoreType) -> StoreConfig:
 def s3_data_buckets() -> Mapping[str, BucketSpec]:
     """The R2/CoreWeave subset of :func:`data_buckets`.
 
-    These S3-compatible buckets carry ``tmp/ttl=Nd/`` lifecycle rules; used to
-    route temp paths (:func:`marin_temp_bucket`) and to drive
-    ``infra/configure_buckets.py``. The set is defined in ``config/*.yaml`` via
-    each bucket's ``store`` type (``r2``/``coreweave``).
+    These S3-compatible buckets carry ``tmp/ttl=Nd/`` lifecycle rules and are
+    used to route temp paths (:func:`marin_temp_bucket`). The set is defined in
+    ``config/*.yaml`` via each bucket's ``store`` type (``r2``/``coreweave``).
     """
     return MappingProxyType(
         {name: spec for name, spec in data_buckets().items() if spec.store in (StoreType.R2, StoreType.COREWEAVE)}
@@ -463,7 +461,7 @@ def _s3_bucket_from_prefix(prefix: str | None) -> str | None:
     """Return the bucket from an ``s3://bucket/…`` prefix, or ``None``.
 
     Only recognizes buckets in :func:`s3_data_buckets` (the R2/CoreWeave buckets
-    with lifecycle rules configured by ``infra/configure_buckets.py``), so unknown
+    with lifecycle rules managed by ``infra/pulumi``), so unknown
     S3 buckets fall through to the flat non-TTL fallback instead of getting a
     ``tmp/ttl=Nd/`` path that would never be cleaned up.
     """
@@ -523,7 +521,7 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
 
     Lifecycle rules on each ``marin-{region}`` GCS bucket (managed by
     ``infra/pulumi``) and each R2/CoreWeave data bucket (managed by
-    ``infra/configure_buckets.py``) auto-delete objects under ``tmp/ttl=Nd/``
+    ``infra/pulumi``) auto-delete objects under ``tmp/ttl=Nd/``
     after *N* days.
 
     Args:
@@ -560,7 +558,7 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
             return _append_path_prefix(path, prefix)
 
     # R2 and CoreWeave temp lives at the bucket root so the `tmp/ttl=Nd/`
-    # lifecycle prefix configured by infra/configure_buckets.py applies. The
+    # lifecycle prefix managed by infra/pulumi applies. The
     # bucket already pins the region (R2 is non-regional; CoreWeave encodes it in
     # the name, e.g. marin-us-east-02a), and the runtime marin prefix carries a
     # `marin/` data subdir (e.g. `s3://marin-na/marin`) that we deliberately strip.

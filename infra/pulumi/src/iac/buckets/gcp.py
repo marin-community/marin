@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Regional GCS data buckets for the GCP arm."""
+"""Regional GCS data buckets."""
 
 from dataclasses import dataclass
 
@@ -44,7 +44,7 @@ class GcpDataBuckets(pulumi.ComponentResource):
         imports: ImportRegistrar = NO_IMPORTS,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
-        super().__init__("marin:gcp:GcpDataBuckets", name, None, opts)
+        super().__init__("marin:buckets:GcpDataBuckets", name, None, opts)
         lifecycle_rules = _lifecycle_rules(args.data_config)
         for region, bucket in sorted(args.data_config.region_buckets.items()):
             if bucket.store is not StoreType.GCS:

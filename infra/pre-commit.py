@@ -846,7 +846,12 @@ PRECOMMIT_CONFIGS = [
     ),
     PrecommitConfig(
         patterns=["**/*.py"],
-        exclude_patterns=["lib/levanter/**", "lib/haliax/**", "lib/**/vendor/**"],
+        exclude_patterns=[
+            "lib/levanter/**",
+            "lib/haliax/**",
+            "lib/**/vendor/**",
+            "infra/pulumi/sdks/**",
+        ],
         checks=[
             check_ruff,
             check_black,

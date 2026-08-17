@@ -9,7 +9,7 @@ typed `provisioning:` section, and declares that cluster's resources. One stack 
 which resources: CoreWeave declares the controller RBAC, reserved NodePools, Kueue objects,
 the Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs; GCP declares
 the reserved federation-egress static IPs, Artifact Registry pull-through mirrors, the shared
-GCLB/IAP ingress, regional data buckets, and every IAM grant on the project
+GCLB/IAP ingress, all shared data buckets, and every IAM grant on the project
 (`iac.gcp.iam.GcpIam`, replacing `infra/permissions`). Components not yet implemented are
 tracked in README.md's "Future work".
 """
@@ -29,6 +29,7 @@ from iris.cluster.platforms.vm_lifecycle import DEFAULT_CONTROLLER_PORT, control
 from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT
 from rigging.secrets import resolve_secret_spec
 
+from iac.buckets import DataBuckets, DataBucketsArgs
 from iac.config import (
     CLOUDFLARE_TOKEN_SECRET,
     GcpGclbSpec,
@@ -44,7 +45,6 @@ from iac.coreweave.kueue import KueueAddon, KueueAddonArgs
 from iac.coreweave.rbac import GrafanaObserverRbac, GrafanaObserverRbacArgs, IrisRbac, IrisRbacArgs
 from iac.coreweave.traefik import TraefikAddon, TraefikAddonArgs
 from iac.gcp.addresses import GcpStaticAddresses, GcpStaticAddressesArgs
-from iac.gcp.buckets import GcpDataBuckets, GcpDataBucketsArgs
 from iac.gcp.gclb import ControllerIngress, FinelogIngress, GcpGclbIap, GcpGclbIapArgs
 from iac.gcp.iam import GcpIam, GcpIamArgs
 from iac.gcp.iam_config import load_iam_config
@@ -327,11 +327,12 @@ def _build_gcp(cluster: str, *, imports: ImportRegistrar) -> None:
     iam_config = load_iam_config()
 
     gcp_provider = gcp.Provider("gcp", project=gcp_provisioning.project)
-    GcpDataBuckets(
+    DataBuckets(
         "data-buckets",
-        GcpDataBucketsArgs(
+        DataBucketsArgs(
             project=gcp_provisioning.project,
-            data_config=load_iac_data_config(cluster),
+            gcp_data_config=load_iac_data_config(cluster),
+            s3_data_config=load_iac_data_config("coreweave"),
             log_bucket=GCP_DATA_BUCKET_LOG_BUCKET,
         ),
         gcp_provider=gcp_provider,
