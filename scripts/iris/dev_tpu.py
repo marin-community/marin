@@ -29,6 +29,7 @@ from iris.cluster.composer import provider_bundle
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.constraints import zone_constraint
 from iris.cluster.types import Entrypoint, JobName, ResourceSpec, tpu_device
+from iris.resources.state import JobState, TaskState
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from marin.cluster import gcp
@@ -523,13 +524,8 @@ def wait_for_workers(job, client: IrisClient, *, timeout: float, project: str) -
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         status = job.status()
-        if status.state in (
-            job_pb2.JOB_STATE_FAILED,
-            job_pb2.JOB_STATE_KILLED,
-            job_pb2.JOB_STATE_UNSCHEDULABLE,
-            job_pb2.JOB_STATE_WORKER_FAILED,
-        ):
-            error = status.error or job_pb2.JobState.Name(status.state)
+        if status.state in (JobState.FAILED, JobState.KILLED, JobState.UNSCHEDULABLE, JobState.WORKER_FAILED):
+            error = status.error_message or status.state.name
             raise click.ClickException(f"Dev TPU allocation failed: {error}")
 
         tasks = job.tasks()
@@ -538,7 +534,7 @@ def wait_for_workers(job, client: IrisClient, *, timeout: float, project: str) -
             all_running = True
             for task in tasks:
                 task_status = task.status()
-                if task_status.state != job_pb2.TASK_STATE_RUNNING or not task_status.worker_address:
+                if task_status.state is not TaskState.RUNNING or not task_status.worker_address:
                     all_running = False
                     break
                 rpc_host = parse_worker_host(task_status.worker_address)
@@ -586,11 +582,11 @@ def wait_for_workers(job, client: IrisClient, *, timeout: float, project: str) -
 def is_job_active(client: IrisClient, job_id: str) -> bool:
     status = client.status(JobName.from_wire(job_id))
     return status.state not in {
-        job_pb2.JOB_STATE_SUCCEEDED,
-        job_pb2.JOB_STATE_FAILED,
-        job_pb2.JOB_STATE_KILLED,
-        job_pb2.JOB_STATE_WORKER_FAILED,
-        job_pb2.JOB_STATE_UNSCHEDULABLE,
+        JobState.SUCCEEDED,
+        JobState.FAILED,
+        JobState.KILLED,
+        JobState.WORKER_FAILED,
+        JobState.UNSCHEDULABLE,
     }
 
 

@@ -42,11 +42,11 @@ from iris.cluster.types import (
     CoschedulingConfig,
     EnvironmentSpec,
     ResourceSpec,
-    is_job_finished,
     tpu_device,
 )
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.hooks.multigpu import build_multigpu_hook
+from iris.resources.state import is_job_finished
 from iris.rpc import actor_pb2, job_pb2
 from iris.rpc.errors import is_retryable_error
 from rigging.timing import ExponentialBackoff
@@ -609,7 +609,7 @@ class IrisActorGroup:
             client = self._get_client()
             state = client.job_state(self._job_id)
             if is_job_finished(state):
-                error = client.status(self._job_id).error or "unknown error"
+                error = client.status(self._job_id).error_message or "unknown error"
                 raise RuntimeError(
                     f"Actor job {self._job_id} finished before all actors registered "
                     f"({len(self._discovered_names)}/{target} ready). "

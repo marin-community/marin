@@ -29,10 +29,10 @@ from pathlib import Path
 
 import click
 from connectrpc.errors import ConnectError
-from google.protobuf import json_format
 from iris.cli.connect import connect_controller, rpc_client
 from iris.cli.job import build_job_summary
 from iris.client.client import IrisClient
+from iris.client.workload import JobStatus
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2, query_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
@@ -171,10 +171,20 @@ class PerfReport:
 # --------------------------------------------------------------------------- #
 
 
-def _job_status_to_dict(job: job_pb2.JobStatus) -> dict:
-    data = json_format.MessageToDict(job, preserving_proto_field_name=True)
-    data["has_children"] = bool(job.has_children)
-    return data
+def _job_status_to_dict(job: JobStatus) -> dict:
+    def timestamp(value):
+        return {"epoch_ms": value.epoch_ms()} if value is not None else None
+
+    return {
+        "job_id": str(job.job_id),
+        "state": job.state.name.lower(),
+        "started_at": timestamp(job.started_at),
+        "finished_at": timestamp(job.finished_at),
+        "failure_count": job.failure_count,
+        "preemption_count": job.preemption_count,
+        "task_state_counts": {state.name.lower(): count for state, count in job.task_state_counts.items()},
+        "has_children": job.has_children,
+    }
 
 
 def fetch_job_summary(client: IrisClient, job_id: str) -> dict | None:
@@ -197,7 +207,7 @@ def fetch_job_tree(client: IrisClient, job_id: str) -> list[dict] | None:
     """
     try:
         jobs = client.list_jobs(prefix=job_id)
-        jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)
+        jobs.sort(key=lambda job: job.submitted_at.epoch_ms() if job.submitted_at is not None else 0, reverse=True)
         return [_job_status_to_dict(job) for job in jobs]
     except ConnectError as exc:
         logger.warning("iris client job list failed for prefix %s: %s", job_id, exc)

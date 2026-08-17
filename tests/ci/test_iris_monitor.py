@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
+from iris.client.workload import JobStatus
+from iris.client.workload_codec import job_status_from_proto
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from rigging.redaction import REDACTED_VALUE
@@ -16,11 +18,11 @@ from scripts.ci import iris_monitor
 
 class FakeIrisClient:
     def __init__(self, jobs: list[job_pb2.JobStatus]) -> None:
-        self.jobs = jobs
+        self.jobs = [job_status_from_proto(job) for job in jobs]
         self.terminated: list[str] = []
 
-    def list_jobs(self, *, prefix: str) -> list[job_pb2.JobStatus]:
-        return [job for job in self.jobs if job.job_id.startswith(prefix)]
+    def list_jobs(self, *, prefix: str) -> list[JobStatus]:
+        return [job for job in self.jobs if str(job.job_id).startswith(prefix)]
 
     def terminate(self, job_id: JobName) -> None:
         self.terminated.append(job_id.to_wire())

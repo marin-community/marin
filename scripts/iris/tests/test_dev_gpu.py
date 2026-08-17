@@ -3,12 +3,14 @@
 
 import click
 import pytest
+from iris.client.workload_codec import task_status_from_proto
 from iris.cluster.config import (
     CoreweavePlatformConfig,
     IrisClusterConfig,
     KubernetesProviderConfig,
     PlatformConfig,
 )
+from iris.resources.state import JobState
 from iris.rpc import job_pb2
 
 from scripts.iris.dev_gpu import (
@@ -121,7 +123,7 @@ class FakeTask:
         self.task_index = task_index
 
     def status(self):
-        return job_pb2.TaskStatus(state=job_pb2.TASK_STATE_RUNNING)
+        return task_status_from_proto(job_pb2.TaskStatus(task_id=self.task_id, state=job_pb2.TASK_STATE_RUNNING))
 
 
 class FakeJob:
@@ -131,7 +133,7 @@ class FakeJob:
         self.tasks_returned = [FakeTask(index) for index in reversed(range(replicas))]
 
     def state_only(self):
-        return job_pb2.JOB_STATE_RUNNING
+        return JobState.RUNNING
 
     def tasks(self):
         return self.tasks_returned

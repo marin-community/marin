@@ -25,6 +25,7 @@ from iris.cluster.composer import provider_bundle
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE, gpu_gang_coscheduling_level
 from iris.cluster.types import CoschedulingConfig, Entrypoint, JobName, ResourceSpec, gpu_device
+from iris.resources.state import TaskState
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -281,10 +282,10 @@ def wait_for_running_tasks(job: Job, *, node_count: int, timeout: float) -> list
     while time.monotonic() < deadline:
         state = job.state_only()
         if state in TERMINAL_JOB_STATES:
-            error = job.status().error or job_pb2.JobState.Name(state)
+            error = job.status().error_message or state.name
             raise click.ClickException(f"Dev GPU allocation failed: {error}")
         tasks = job.tasks()
-        if len(tasks) == node_count and all(task.status().state == job_pb2.TASK_STATE_RUNNING for task in tasks):
+        if len(tasks) == node_count and all(task.status().state is TaskState.RUNNING for task in tasks):
             return [str(task.task_id) for task in sorted(tasks, key=lambda task: task.task_index)]
         time.sleep(5)
     raise click.ClickException(f"Timed out waiting for {node_count} dev GPU task(s) after {int(timeout)}s")

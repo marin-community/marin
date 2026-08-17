@@ -27,7 +27,7 @@ uv run iris --cluster=marin cluster stop
 ### Submit a Job
 
 ```python
-from iris.client.client import IrisClient
+from iris.client import IrisClient, JobState
 from iris.cluster.types import Entrypoint, ResourceSpec
 
 def my_task():
@@ -39,8 +39,15 @@ job = client.submit(
     entrypoint=Entrypoint.from_callable(my_task),
     resources=ResourceSpec(cpu=1, memory="2GB"),
 )
-job.wait()
+status = job.wait()
+assert status.state is JobState.SUCCEEDED
 ```
+
+`Job.status()`, `Job.wait()`, `Task.status()`, `IrisClient.list_jobs()`, and
+`IrisClient.list_tasks()` return immutable Iris values rather than generated
+protobuf messages. These reads and `Job.terminate()` address the logical job
+name on the deployed ControllerService; exact-incarnation actions require the
+resource operation API.
 
 For accelerator jobs, request the accelerator on the task itself with `--tpu ...` or `--gpu ...`.
 `--reserve <accel>` is a hard constraint that confines the job to a zone where `<accel>` has actually

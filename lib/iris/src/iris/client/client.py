@@ -32,6 +32,8 @@ from rigging.timing import Duration, Timestamp
 
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.client.context_state import current_context, reset_context, set_context
+from iris.client.workload import JobStatus, TaskStatus
+from iris.client.workload_codec import job_status_from_proto, task_status_from_proto
 from iris.cluster.client import (
     ClusterClient,
     JobInfo,
@@ -57,8 +59,8 @@ from iris.cluster.types import (
     ResourceSpec,
     TaskAttempt,
     adjust_tpu_replicas,
-    is_job_finished,
 )
+from iris.resources.state import JobState, TaskState, is_job_finished
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.proto_display import job_state_friendly
 from iris.time_proto import timestamp_from_proto
@@ -102,15 +104,15 @@ def _task_id_from_key(key: str) -> JobName:
 
 
 class JobFailedError(Exception):
-    """Raised when a job ends in a non-SUCCESS terminal state."""
+    """Raised when a job ends in a state other than SUCCEEDED."""
 
-    def __init__(self, job_id: JobName, status: job_pb2.JobStatus):
+    def __init__(self, job_id: JobName, status: JobStatus):
         self.job_id = job_id
         self.status = status
-        state_name = job_pb2.JobState.Name(status.state)
+        state_name = status.state.name
         msg = f"Job {job_id} {state_name}"
-        if status.error:
-            msg += f": {status.error}"
+        if status.error_message:
+            msg += f": {status.error_message}"
         super().__init__(msg)
 
 
@@ -155,16 +157,12 @@ class Task:
         """Parent job identifier."""
         return self._task_name.parent or self._task_name
 
-    def status(self) -> job_pb2.TaskStatus:
-        """Get current task status.
-
-        Returns:
-            TaskStatus proto containing state, worker assignment, and metrics
-        """
-        return self._client._cluster_client.get_task_status(self.task_id)
+    def status(self) -> TaskStatus:
+        """Return the current snapshot for this logical Task."""
+        return self._client.task_status(self.task_id)
 
     @property
-    def state(self) -> job_pb2.TaskState:
+    def state(self) -> TaskState:
         """Get current task state (shortcut for status().state)."""
         return self.status().state
 
@@ -222,7 +220,7 @@ class Job:
 
     @property
     def job_id(self) -> JobName:
-        """Unique job identifier."""
+        """Logical Job name."""
         return self._job_id
 
     def __str__(self) -> str:
@@ -231,20 +229,16 @@ class Job:
     def __repr__(self) -> str:
         return f"Job({self._job_id!r})"
 
-    def status(self) -> job_pb2.JobStatus:
-        """Get current job status.
+    def status(self) -> JobStatus:
+        """Return the current snapshot for this logical Job."""
+        return self._client.status(self._job_id)
 
-        Returns:
-            JobStatus proto with current state, task counts, and error info
-        """
-        return self._client._cluster_client.get_job_status(self._job_id)
-
-    def state_only(self) -> job_pb2.JobState:
+    def state_only(self) -> JobState:
         """Lightweight state query that avoids loading tasks/attempts/workers."""
         return self._client.job_state(self._job_id)
 
     @property
-    def state(self) -> job_pb2.JobState:
+    def state(self) -> JobState:
         """Get current job state via the lightweight state-only RPC."""
         return self.state_only()
 
@@ -254,8 +248,7 @@ class Job:
         Returns:
             List of Task handles, one per task in the job
         """
-        task_statuses = self._client._cluster_client.list_tasks(self._job_id)
-        return [Task(self._client, JobName.from_wire(ts.task_id)) for ts in task_statuses]
+        return [Task(self._client, status.task_id) for status in self._client.list_tasks(self._job_id)]
 
     def logs(self, *, max_lines: int = 0, tail: bool = False) -> list[TaskLogEntry]:
         """Fetch globally timestamp-ordered logs across this job's tasks.
@@ -275,7 +268,7 @@ class Job:
         stream_logs: bool = False,
         since_ms: int = 0,
         min_level: str = "",
-    ) -> job_pb2.JobStatus:
+    ) -> JobStatus:
         """Wait for job to complete.
 
         Args:
@@ -297,17 +290,18 @@ class Job:
             JobFailedError: Job ended in non-SUCCESS state and raise_on_failure=True
         """
         if not stream_logs:
-            status = self._client._cluster_client.wait_for_job(self._job_id, timeout, poll_interval)
+            response = self._client._cluster_client.wait_for_job(self._job_id, timeout, poll_interval)
         else:
-            status = self._client._cluster_client.wait_for_job_with_streaming(
+            response = self._client._cluster_client.wait_for_job_with_streaming(
                 self._job_id,
                 timeout=timeout,
                 poll_interval=poll_interval,
                 since_ms=since_ms,
                 min_level=min_level,
             )
+        status = job_status_from_proto(response)
 
-        if raise_on_failure and status.state != job_pb2.JOB_STATE_SUCCEEDED:
+        if raise_on_failure and status.state is not JobState.SUCCEEDED:
             raise JobFailedError(self._job_id, status)
 
         return status
@@ -826,18 +820,11 @@ class IrisClient:
 
         return Job(self, canonical_id)
 
-    def status(self, job_id: JobName) -> job_pb2.JobStatus:
-        """Get job status.
+    def status(self, job_id: JobName) -> JobStatus:
+        """Return the current snapshot for a logical Job name."""
+        return job_status_from_proto(self._cluster_client.get_job_status(job_id))
 
-        Args:
-            job_id: Job ID to query
-
-        Returns:
-            JobStatus proto with current state
-        """
-        return self._cluster_client.get_job_status(job_id)
-
-    def job_state(self, job_id: JobName) -> job_pb2.JobState:
+    def job_state(self, job_id: JobName) -> JobState:
         """Lightweight state query that avoids loading tasks/attempts/workers.
 
         Prefer this over ``status(job_id).state`` for polling loops.
@@ -846,7 +833,7 @@ class IrisClient:
         wire_id = job_id.to_wire()
         if wire_id not in states:
             raise ConnectError(Code.NOT_FOUND, f"Job {wire_id} not found")
-        return cast(job_pb2.JobState, states[wire_id])
+        return JobState(states[wire_id])
 
     def terminate(self, job_id: JobName) -> None:
         """Terminate a running job.
@@ -859,10 +846,10 @@ class IrisClient:
     def list_jobs(
         self,
         *,
-        state: job_pb2.JobState | None = None,
+        state: JobState | None = None,
         prefix: str | None = None,
         limit: int | None = None,
-    ) -> list[job_pb2.JobStatus]:
+    ) -> list[JobStatus]:
         """List jobs with optional filtering.
 
         Filters are pushed down to the server via ``JobQuery``: ``state``
@@ -889,7 +876,7 @@ class IrisClient:
         if prefix:
             query.job_id_prefix = prefix
 
-        return list(self._cluster_client.list_jobs(query=query, limit=limit))
+        return [job_status_from_proto(job) for job in self._cluster_client.list_jobs(query=query, limit=limit)]
 
     def list_workers(
         self,
@@ -900,7 +887,7 @@ class IrisClient:
 
     def active_job_names_for_prefix(self, prefix: str) -> list[JobName]:
         """Return nonterminal jobs whose wire IDs start with ``prefix`` verbatim."""
-        return [JobName.from_wire(job.job_id) for job in self.list_jobs(prefix=prefix) if not is_job_finished(job.state)]
+        return [job.job_id for job in self.list_jobs(prefix=prefix) if not is_job_finished(job.state)]
 
     def terminate_prefix(self, prefix: str) -> list[JobName]:
         """Terminate all active jobs matching a prefix.
@@ -916,16 +903,9 @@ class IrisClient:
             self.terminate(job_id)
         return job_ids
 
-    def task_status(self, task_name: JobName) -> job_pb2.TaskStatus:
-        """Get status of a specific task.
-
-        Args:
-            task_name: Full task name (/job/.../index)
-
-        Returns:
-            TaskStatus proto containing state, worker assignment, and metrics
-        """
-        return self._cluster_client.get_task_status(task_name)
+    def task_status(self, task_name: JobName) -> TaskStatus:
+        """Return the current snapshot for a logical Task name."""
+        return task_status_from_proto(self._cluster_client.get_task_status(task_name))
 
     def report_task_status_text(
         self,
@@ -958,16 +938,9 @@ class IrisClient:
         """Mint a scoped token for a link-accessible endpoint."""
         return self._cluster_client.mint_endpoint_token(endpoint_name, ttl=ttl)
 
-    def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
-        """List all tasks for a job.
-
-        Args:
-            job_id: Job identifier
-
-        Returns:
-            List of TaskStatus protos, one per task
-        """
-        return self._cluster_client.list_tasks(job_id)
+    def list_tasks(self, job_id: JobName) -> list[TaskStatus]:
+        """Return current Task snapshots for a logical Job name."""
+        return [task_status_from_proto(task) for task in self._cluster_client.list_tasks(job_id)]
 
     def kick_tasks(
         self,
