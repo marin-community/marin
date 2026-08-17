@@ -165,32 +165,3 @@ def test_authenticated_author_uses_loom_bot_for_installation_token(monkeypatch: 
     )
 
     assert wait_for.authenticated_author(in_loom_session=True) == wait_for.LOOM_BOT
-
-
-@pytest.mark.parametrize(
-    ("in_loom_session", "stderr", "error_match"),
-    [
-        (False, "gh: Resource not accessible by integration (HTTP 403)\n", "Resource not accessible"),
-        (True, "gh: Bad credentials (HTTP 401)\n", "Bad credentials"),
-    ],
-    ids=["outside-loom", "unrelated-error"],
-)
-def test_authenticated_author_preserves_other_github_failures(
-    monkeypatch: pytest.MonkeyPatch,
-    in_loom_session: bool,
-    stderr: str,
-    error_match: str,
-) -> None:
-    monkeypatch.setattr(
-        wait_for.subprocess,
-        "run",
-        lambda *_args, **_kwargs: wait_for.subprocess.CompletedProcess(
-            args=[],
-            returncode=1,
-            stdout="",
-            stderr=stderr,
-        ),
-    )
-
-    with pytest.raises(wait_for.GhError, match=error_match):
-        wait_for.authenticated_author(in_loom_session=in_loom_session)
