@@ -1472,3 +1472,19 @@ Experiment ID prefix: `MEP`.
 - Rack discipline note: three failed fused2 hero attempts (~35 min rack
   each); each killed promptly on the wedge signature (no step by ~25 min
   past train-loop entry).
+
+### 2026-08-17 08:20 - MEP-055: fused2e spins at 100% GPU — cross-collective SM-occupancy deadlock hypothesis
+- With the 36 GiB collective arena, fused2e got PAST load (181.5 GiB
+  resident) and wedged EXECUTING step 1: GPUs 100% util, host in
+  pxla.__call__ (py-spy). Device-side spin, not compile/alloc.
+- Hypothesis (fits every observation): kernel2(L) and kernel1(L+1) are
+  dataflow-independent, so with overlap limit 4 ranks may execute them in
+  different orders; both need ~168 KB SMEM/CTA so they cannot co-reside
+  on an SM. Rank A spins in kernel2(L) awaiting B's combine signals while
+  B spins in kernel1(L+1) awaiting A's dispatch arrivals -- mutual
+  SM-occupancy exclusion, no preemption. The fused arm survived because
+  put_segments is small-SMEM and co-schedules alongside kernel 1.
+- Test arm mep-fused2f-ep64-25-20260817: overlap limit 1 (serializes
+  collectives into one global order). If it trains, mechanism confirmed;
+  engineering fixes then: SMEM diet for co-residency (mcs 2 both
+  kernels), or explicit cross-kernel chaining.
