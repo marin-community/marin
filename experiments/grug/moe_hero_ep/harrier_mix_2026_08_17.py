@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Harrier winner-quality-repair data mixture."""
+"""Harrier data mixture selected on 2026.08.17."""
 
 from __future__ import annotations
 
@@ -21,9 +21,9 @@ from experiments.marin_tokenizer import marin_tokenizer
 PRETRAIN_TOKENS = 15_000_000_000_000
 COOLDOWN_TOKENS = 3_750_000_000_000
 TOTAL_TOKENS = PRETRAIN_TOKENS + COOLDOWN_TOKENS
-HARRIER_WINNER_QUALITY_REPAIR_TAG = "harrier-winner-quality-repair"
+HARRIER_MIX_2026_08_17_TAG = "harrier-mix-2026.08.17"
 
-HARRIER_WINNER_QUALITY_REPAIR_STORE = ArtifactStep.adopt(
+HARRIER_MIX_2026_08_17_STORE = ArtifactStep.adopt(
     "datakit/store/harrier-all-sources-k40-q5",
     "2026.08.16",
     source="s3://marin-us-east-02a/marin/datakit/store_0381a974",
@@ -31,7 +31,7 @@ HARRIER_WINNER_QUALITY_REPAIR_STORE = ArtifactStep.adopt(
 
 
 @dataclass(frozen=True)
-class _HarrierQualityRepairSpec:
+class _HarrierMixSpec:
     tokenizer: str
     candidate_store_uri: str
     phase_budgets: tuple[int, int]
@@ -39,9 +39,9 @@ class _HarrierQualityRepairSpec:
     phase_weights: tuple[tuple[tuple[str, float], ...], tuple[tuple[str, float], ...]]
 
 
-def _load_spec() -> _HarrierQualityRepairSpec:
-    raw = json.loads(Path(__file__).with_name("harrier_winner_quality_repair.json").read_text())
-    return _HarrierQualityRepairSpec(
+def _load_spec() -> _HarrierMixSpec:
+    raw = json.loads(Path(__file__).with_name("harrier_mix_2026_08_17.json").read_text())
+    return _HarrierMixSpec(
         tokenizer=raw["tokenizer"],
         candidate_store_uri=raw["candidate_store_uri"],
         phase_budgets=tuple(raw["phase_budgets"]),
@@ -53,19 +53,19 @@ def _load_spec() -> _HarrierQualityRepairSpec:
 _SPEC = _load_spec()
 
 
-def _validate_spec(spec: _HarrierQualityRepairSpec) -> None:
+def _validate_spec(spec: _HarrierMixSpec) -> None:
     available_tokens = dict(spec.available_tokens)
     phase_weights = tuple(dict(weights) for weights in spec.phase_weights)
     cells = set(available_tokens)
     if spec.phase_budgets != (PRETRAIN_TOKENS, COOLDOWN_TOKENS):
-        raise ValueError("winner quality repair must use the 15T/3.75T phase budgets")
+        raise ValueError("Harrier 2026.08.17 must use the 15T/3.75T phase budgets")
     if spec.tokenizer != marin_tokenizer:
-        raise ValueError("winner quality repair must use the Marin tokenizer")
-    if spec.candidate_store_uri != HARRIER_WINNER_QUALITY_REPAIR_STORE.adopt_source:
-        raise ValueError("winner quality repair store does not match its adopted artifact")
+        raise ValueError("Harrier 2026.08.17 must use the Marin tokenizer")
+    if spec.candidate_store_uri != HARRIER_MIX_2026_08_17_STORE.adopt_source:
+        raise ValueError("Harrier 2026.08.17 store does not match its adopted artifact")
     for phase, weights in enumerate(phase_weights):
         if set(weights) != cells or not math.isclose(sum(weights.values()), 1.0, abs_tol=1e-9):
-            raise ValueError(f"winner quality repair phase {phase} is not a dense simplex")
+            raise ValueError(f"Harrier 2026.08.17 phase {phase} is not a dense simplex")
     cumulative_epochs = {
         cell: (
             sum(tokens * weights[cell] for tokens, weights in zip(spec.phase_budgets, phase_weights, strict=True))
@@ -74,13 +74,13 @@ def _validate_spec(spec: _HarrierQualityRepairSpec) -> None:
         for cell in cells
     }
     if max(cumulative_epochs.values()) > 8.0 + 1e-8:
-        raise ValueError("winner quality repair exceeds the eight-epoch cap")
+        raise ValueError("Harrier 2026.08.17 exceeds the eight-epoch cap")
 
 
 _validate_spec(_SPEC)
 
 
-def winner_quality_repair_data_config(
+def harrier_mix_2026_08_17_data_config(
     *,
     store_path: str,
     total_steps: int,
