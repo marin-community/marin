@@ -29,8 +29,9 @@ PRODUCTION_PRIORITY = priority_band_value("production")
 # given (e.g. `iris job run -e XLA_FLAGS ...`) must be re-exported explicitly.
 # JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
 # not leak onto accelerator tasks.
-_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_")
-_FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
+_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "CUDA_")
+# CUDA_VISIBLE_DEVICES must stay per-task (same reason as JAX_PLATFORMS).
+_FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS", "CUDA_VISIBLE_DEVICES")
 
 
 def _forwarded_env_vars() -> dict[str, str]:

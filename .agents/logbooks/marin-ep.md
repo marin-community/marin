@@ -1649,3 +1649,34 @@ Experiment ID prefix: `MEP`.
   workaround; #47283 (barrier kMaxPeers) has NO workaround at >32 ranks —
   the one-constant recompile stays until it lands upstream. Nothing else in
   the custom wheel is load-bearing.
+
+### 2026-08-17 23:25 - MEP-065: user-triggered GPU core dump VALIDATED on GB200 — fused2 debug unblocked
+- The fused2 deadlock is a spin, not an exception, so
+  CUDA_ENABLE_COREDUMP_ON_EXCEPTION never fires. Validated the
+  user-triggered path end-to-end on a 1-tray dev session (driver
+  595.71.05, stock dev20260809):
+  env `CUDA_ENABLE_USER_TRIGGERED_COREDUMP=1` +
+  `CUDA_COREDUMP_PIPE=<dir>/corepipe_%h_%p` +
+  `CUDA_COREDUMP_FILE=<dir>/core_%h_%p.nvcudmp` +
+  `CUDA_COREDUMP_GENERATION_FLAGS=skip_global_memory` creates a FIFO at
+  context init; `echo 1 > <pipe>` mid-spin produced a 1.1 MB dump in ~2 s
+  while a Mosaic-GPU kernel spun. cuda-gdb (linux-sbsa 13.2.86 redist,
+  no GPU needed) reads it: kernel name/grid/status, per-warp PCs for all
+  128 threads, SOURCE-LINE attribution through Mosaic (PC -> the exact
+  while_loop line of the probe), and SASS at the PC.
+- Gotchas: (1) without skip_abort the process is killed right after the
+  dump lands — add skip_abort for a hero arm so surviving ranks stay
+  inspectable; (2) a FIFO write blocks forever when the reader died —
+  always `timeout N bash -c "echo 1 > pipe"`; (3) writing a genuine GPU
+  spin took three attempts: counted loops fold via scalar evolution even
+  with runtime bounds, and side-effect-free loops whose outputs are
+  provable from the exit condition are deleted — an LCG orbit SUM is the
+  working spin body. Probe + driver + reader scripts in the session
+  scratchpad (coredump_trigger_probe.py, run_coredump_probe.sh,
+  read_dump.sh).
+- Iris env forwarding: dispatch.py now forwards CUDA_* (excl.
+  CUDA_VISIBLE_DEVICES) to train tasks — required for arming a hero arm.
+- Next: fused2 hero debug arm with the trigger armed on all ranks;
+  on spin detection, trigger dumps on 2-3 ranks, pull the .nvcudmp files,
+  and read the stuck warp PCs to identify which wait (arrival sem, tile
+  sem, received_sem) the transport/GEMM warpgroups are parked on.
