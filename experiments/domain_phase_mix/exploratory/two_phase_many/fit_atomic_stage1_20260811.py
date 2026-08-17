@@ -55,6 +55,7 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E
 
 EPOCH_FLOOR = 1e-4  # epochs; the readout is regularised, never divided by zero
 GRID = 201
+DAMAGE_KNEE = 105.0  # excess epochs at which repetition harm saturates; measured on 300M, not fitted
 
 
 def exposure(panel, horizon: float) -> np.ndarray:
@@ -104,27 +105,37 @@ def design(panel, name: str, theta: np.ndarray) -> np.ndarray:
                 (complement_b + offset) ** -theta[3],
             ]
         )
+    if name in ("two-bucket-split-damage", "two-horizon-split-damage"):
+        # The incumbent damage term, and NOTHING else, with its attribution split along the path
+        # (ATOM-012). Total materialized epochs are a pure function of the aggregate share here -- the
+        # ratio spans 105.44 to 105.84 across the whole m400 panel -- so charging damage on the total
+        # makes it near-constant on aggregate-matched pairs and unable to express a phase preference by
+        # itself. Splitting the ATTRIBUTION of the same law into what was incurred before the phase
+        # boundary and what was added after gives the two increments separate non-negative amplitudes,
+        # which is the statement that repetition damage taken early is partly repaired by what follows.
+        # The pair sums back to the incumbent's single column exactly, so equal amplitudes reproduce it
+        # and this adds one head column and NO shared parameter.
+        base = "two-bucket-damage" if name.startswith("two-bucket") else "two-horizon-damage"
+        columns = design(panel, base, theta)
+        early = _hill(panel.epochs_phase_0, theta[4])
+        return np.column_stack([columns[:, :-1], early, columns[:, -1] - early])
     if name == "two-bucket-damage":
         # The repetition conditions activate a term the no-replay panel could not test. Damage is charged
         # on EXACT materialized epochs -- the panel supplies them per phase -- in the bounded Hill form,
         # so it saturates rather than diverging. The knee is the 105 excess epochs measured elsewhere in
         # this project, and m400 is the first condition whose maximum exposure, 106.11, actually reaches
         # it, so this panel can finally see the saturation rather than assuming it.
-        excess = np.maximum(panel.epochs_phase_0 + panel.epochs_phase_1 - 1.0, 0.0) / 105.0
-        powered = excess ** theta[4]
         complement = (1.0 - horizon) * panel.complement_epochs_phase_0 + horizon * panel.complement_epochs_phase_1
         return np.column_stack(
             [
                 ones,
                 (exposure(panel, horizon) + offset) ** -gamma,
                 (complement + offset) ** -theta[3],
-                powered / (1.0 + powered),
+                _hill(panel.epochs_phase_0 + panel.epochs_phase_1, theta[4]),
             ]
         )
     if name == "two-horizon-damage":
         second = theta[5]
-        excess = np.maximum(panel.epochs_phase_0 + panel.epochs_phase_1 - 1.0, 0.0) / 105.0
-        powered = excess ** theta[4]
         complement_a = (1.0 - horizon) * panel.complement_epochs_phase_0 + horizon * panel.complement_epochs_phase_1
         complement_b = (1.0 - second) * panel.complement_epochs_phase_0 + second * panel.complement_epochs_phase_1
         return np.column_stack(
@@ -134,7 +145,7 @@ def design(panel, name: str, theta: np.ndarray) -> np.ndarray:
                 (exposure(panel, second) + offset) ** -gamma,
                 (complement_a + offset) ** -theta[3],
                 (complement_b + offset) ** -theta[3],
-                powered / (1.0 + powered),
+                _hill(panel.epochs_phase_0 + panel.epochs_phase_1, theta[4]),
             ]
         )
     if name == "gated":
@@ -166,18 +177,90 @@ def design(panel, name: str, theta: np.ndarray) -> np.ndarray:
         early = (panel.epochs_phase_0 + offset) ** -gamma
         late = (panel.epochs_phase_1 + offset) ** -gamma
         return np.column_stack([ones, early, late])
+    if name in ("path-exposure", "path-damage", "path-tied"):
+        return _path_design(panel, name, theta)
     raise ValueError(f"unknown candidate {name!r}")
+
+
+def _path_design(panel, name: str, theta: np.ndarray) -> np.ndarray:
+    """Path-attributed columns: split the ATTRIBUTION of each law, never its argument (ATOM-012).
+
+    A run traverses cumulative StarCoder exposure 0 -> E0 -> E0+E1. Benefit and damage are both functions
+    of cumulative exposure, so per-phase treatment cannot mean evaluating either law separately on E0 and
+    on E1 -- that would assert f(E0+E1) = f(E0) + f(E1), which is false for every saturating law. What is
+    well defined is the INCREMENT each phase contributes along the path, and those increments carry
+    separate amplitudes.
+
+    Two facts make this the right shape here, both exact rather than fitted. The complement readout is
+    antiparallel to the StarCoder readout at every horizon, because PHASE_0_FRACTION/(1-PHASE_0_FRACTION)
+    and the epoch-rate ratio r0/r1 are both exactly 4, so `two-bucket` is a one-dimensional index at any
+    theta and predicts zero two-phase gain by construction. And total epochs are a pure function of the
+    aggregate share, so a damage law charged on the total is near-constant on aggregate-matched pairs.
+    Splitting along the path breaks both degeneracies: H(E0) and H(E0+E1)-H(E0) point at (1.000, 0.014)
+    and (0.182, 0.983), near-orthogonal where every incumbent column lies on one line.
+
+    Each pair sums back to the unsplit law exactly, so equal amplitudes reproduce the total-exposure
+    model and `path-tied` is the same model with only this degree of freedom removed.
+
+    ONLY THE REPLAYED BUCKET IS SPLIT, and that is a measurement rather than a preference. The complement
+    pool's per-phase exposures span 0 to 1.03e-3 epochs, so a readout of them is constant to within 0.7%
+    and splitting it adds two directions that are null in everything but noise: the head answered with
+    amplitudes of 66.7 and 199.3 against an intercept of -73.3, and out-of-fold error rose above the
+    response's own spread. StarCoder traverses 0 to 85 epochs and is the bucket being repeated, so it is
+    the only one with a path worth attributing. The complement keeps the incumbent's readout at a fitted
+    horizon, unchanged, so that the comparison isolates the split.
+
+    The readout is the retained form `(1 + x/scale)^-gamma` rather than `(x + offset)^-gamma`, because
+    the split evaluates it AT ZERO along a whole edge of the mixture square. The offset form is finite
+    there only by grace of a fitted floor, and drives it to a spike of height `offset^-gamma` that acts
+    as an indicator for that edge. The retained form is exactly 1 at zero exposure by construction and
+    matches the power law wherever exposure is large, which is where the law is claimed to hold.
+    """
+    ones = np.ones(len(panel.frame))
+    gamma, scale, gamma_c, scale_c, horizon = theta[0], 10.0 ** theta[1], theta[2], 10.0 ** theta[3], theta[4]
+    e0 = panel.epochs_phase_0
+    e_total = e0 + panel.epochs_phase_1
+    complement = (1.0 - horizon) * panel.complement_epochs_phase_0 + horizon * panel.complement_epochs_phase_1
+    complement_readout = _retained(complement, scale_c, gamma_c)
+    if name == "path-tied":
+        return np.column_stack([ones, _retained(e_total, scale, gamma), complement_readout])
+    early = _retained(e0, scale, gamma)
+    columns = [ones, early, _retained(e_total, scale, gamma) - early, complement_readout]
+    if name == "path-damage":
+        # The knee is the 105 excess epochs measured elsewhere; m400's maximum of 106.11 is the first
+        # condition that reaches it, so the saturation is observed rather than assumed.
+        harm = _hill(e0, theta[5])
+        columns.extend([harm, _hill(e_total, theta[5]) - harm])
+    return np.column_stack(columns)
+
+
+def _retained(epochs: np.ndarray, scale: float, gamma: float) -> np.ndarray:
+    return (1.0 + epochs / scale) ** -gamma
+
+
+def _hill(epochs: np.ndarray, tau: float) -> np.ndarray:
+    excess = np.maximum(epochs - 1.0, 0.0) / DAMAGE_KNEE
+    powered = excess**tau
+    return powered / (1.0 + powered)
 
 
 def bounds_for(name: str) -> list[tuple[float, float]]:
     if name in ("intercept", "quadratic"):
         return []
+    if name in ("path-exposure", "path-tied", "path-damage"):
+        # StarCoder's phase structure comes from the path rather than from a fitted readout time; the
+        # horizon here belongs to the complement readout alone, which is not split. Each pool gets its
+        # own retained scale, since a saturation scale is a property of the pool and the two differ by
+        # five orders of magnitude in epochs.
+        box = [(0.01, 4.0), (-2.0, 2.0), (0.01, 4.0), (-5.0, -1.0), (0.0, 1.0)]
+        return [*box, (0.2, 10.0)] if name == "path-damage" else box
     box = [(0.01, 4.0), (-4.0, -0.5), (0.0, 1.0)]  # gamma, log offset, horizon
-    if name in ("two-bucket", "two-horizon", "gated", "two-bucket-damage", "two-horizon-damage"):
+    damage = ("two-bucket-damage", "two-horizon-damage", "two-bucket-split-damage", "two-horizon-split-damage")
+    if name in ("two-bucket", "two-horizon", "gated", *damage):
         box.append((0.01, 4.0))  # complement readout exponent
-    if name in ("two-bucket-damage", "two-horizon-damage"):
+    if name in damage:
         box.append((0.2, 10.0))  # repetition-damage exponent
-    if name == "two-horizon-damage":
+    if name in ("two-horizon-damage", "two-horizon-split-damage"):
         box.append((0.0, 1.0))  # second horizon
     if name == "two-horizon":
         box.append((0.0, 1.0))  # second horizon

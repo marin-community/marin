@@ -5,6 +5,7 @@
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
+#   "google-cloud-storage",
 #   "numpy",
 #   "pandas",
 #   "plotly",
@@ -17,13 +18,21 @@ from __future__ import annotations
 
 import argparse
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from google.cloud import storage
 from plotly.offline import get_plotlyjs
 from scipy.spatial import ConvexHull, Delaunay
 from scipy.spatial.distance import cdist
+from starcoder_wsd80_atomic_metrics import (
+    ATOMIC_METRICS,
+    DEFAULT_METRIC_KEY,
+    METRIC_KEYS,
+    final_atomic_metrics,
+)
 from starcoder_wsd80_epoch_accounting import (
     SIMULATED_EPOCH_TARGET_BUDGET,
     simulated_materialized_epochs,
@@ -64,6 +73,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-design", type=Path, default=DEFAULT_SOURCE_DESIGN)
     parser.add_argument("--historical-dense", type=Path, default=DEFAULT_HISTORICAL_DENSE)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--refresh-metrics", action="store_true")
+    parser.add_argument("--fetch-workers", type=int, default=32)
     return parser.parse_args()
 
 
@@ -106,6 +117,7 @@ def _load_observations(path: Path, cells: pd.DataFrame) -> pd.DataFrame:
     frame = pd.read_csv(path)
     required = {
         "cell_id",
+        "metric_uri",
         "phase_0_starcoder",
         "phase_1_starcoder",
         "policy_class",
@@ -136,6 +148,76 @@ def _load_observations(path: Path, cells: pd.DataFrame) -> pd.DataFrame:
         if counts.get("untied") != EXPECTED_UNTIED_PER_CELL or counts.get("tied") not in {15, 16}:
             raise ValueError(f"{cell_id}: unexpected policy counts {counts}")
     return frame
+
+
+def _split_gs_uri(uri: str) -> tuple[str, str]:
+    if not uri.startswith("gs://"):
+        raise ValueError(f"Expected a GCS URI, got {uri}")
+    bucket_name, separator, blob_name = uri.removeprefix("gs://").partition("/")
+    if not separator or not bucket_name or not blob_name:
+        raise ValueError(f"Invalid GCS URI: {uri}")
+    return bucket_name, blob_name
+
+
+def _fetch_atomic_metric_row(client: storage.Client, run_name: str, uri: str) -> dict[str, object]:
+    bucket_name, blob_name = _split_gs_uri(uri)
+    text = client.bucket(bucket_name).blob(blob_name).download_as_text()
+    return {"run_name": run_name, **final_atomic_metrics(text, source=uri)}
+
+
+def _load_atomic_metrics(
+    observations: pd.DataFrame,
+    path: Path,
+    *,
+    refresh: bool,
+    workers: int,
+) -> pd.DataFrame:
+    expected_runs = set(observations["run_name"])
+    if path.exists() and not refresh:
+        metrics = pd.read_csv(path)
+        cache_is_complete = (
+            set(metrics["run_name"]) == expected_runs
+            and set(METRIC_KEYS).issubset(metrics.columns)
+            and not metrics[list(METRIC_KEYS)].isna().any().any()
+        )
+        if cache_is_complete:
+            return metrics
+
+    client = storage.Client()
+    rows = observations[["run_name", "metric_uri"]].to_dict("records")
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        metric_rows = list(
+            executor.map(
+                lambda row: _fetch_atomic_metric_row(client, str(row["run_name"]), str(row["metric_uri"])),
+                rows,
+            )
+        )
+    metrics = pd.DataFrame(metric_rows).sort_values("run_name").reset_index(drop=True)
+    if len(metrics) != len(observations) or set(metrics["run_name"]) != expected_runs:
+        raise ValueError("Materialized metric rows do not match the matched N-D observations")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    metrics.to_csv(path, index=False)
+    return metrics
+
+
+def _attach_atomic_metrics(
+    observations: pd.DataFrame,
+    output_dir: Path,
+    *,
+    refresh: bool,
+    workers: int,
+) -> pd.DataFrame:
+    metrics = _load_atomic_metrics(
+        observations,
+        output_dir / "atomic_metric_observations.csv",
+        refresh=refresh,
+        workers=workers,
+    )
+    joined = observations.merge(metrics, on="run_name", validate="one_to_one")
+    if not np.allclose(joined[DEFAULT_METRIC_KEY], joined["starcoder_bpb"], atol=1e-7, rtol=0.0):
+        maximum_delta = float(np.max(np.abs(joined[DEFAULT_METRIC_KEY] - joined["starcoder_bpb"])))
+        raise ValueError(f"Programming metric cache disagrees with source observations by {maximum_delta:.3g} BPB")
+    return joined
 
 
 def _load_candidates(path: Path, cells: pd.DataFrame) -> pd.DataFrame:
@@ -247,6 +329,50 @@ def _sampling_read(
     return findings
 
 
+def _metric_payloads(
+    frame: pd.DataFrame,
+    *,
+    points: np.ndarray,
+    hull_vertices: set[int],
+    prior_untied_points: np.ndarray,
+) -> dict[str, dict[str, object]]:
+    tied = frame.loc[frame["policy_class"].eq("tied")]
+    untied = frame.loc[frame["policy_class"].eq("untied")]
+    stage1 = frame.loc[frame["source_stage"].eq("stage1")]
+    payloads: dict[str, dict[str, object]] = {}
+    for metric_key, metric_label in ATOMIC_METRICS:
+        best_tied_index = int(tied[metric_key].idxmin())
+        best_untied_index = int(untied[metric_key].idxmin())
+        best_tied_bpb = float(frame.loc[best_tied_index, metric_key])
+        best_untied_bpb = float(frame.loc[best_untied_index, metric_key])
+        ordered_untied = untied.sort_values(metric_key)
+        untied_margin = float(ordered_untied.iloc[1][metric_key] - ordered_untied.iloc[0][metric_key])
+        best_untied_point = points[best_untied_index]
+        untied_points = points[np.flatnonzero(frame["policy_class"].eq("untied").to_numpy())]
+        local_distances = np.linalg.norm(untied_points - best_untied_point, axis=1)
+        prior_distances = np.linalg.norm(prior_untied_points - best_untied_point, axis=1)
+        values = frame[metric_key].to_numpy(dtype=float)
+        span = float(values.max() - values.min())
+        stage1_tied = float(stage1.loc[stage1["policy_class"].eq("tied"), metric_key].min())
+        stage1_untied = float(stage1.loc[stage1["policy_class"].eq("untied"), metric_key].min())
+        payloads[metric_key] = {
+            "label": metric_label,
+            "z": values.tolist(),
+            "colorMax": float(min(values.max(), values.min() + max(0.05, 0.35 * span))),
+            "bestTiedIndex": best_tied_index,
+            "bestUntiedIndex": best_untied_index,
+            "bestTiedBpb": best_tied_bpb,
+            "bestUntiedBpb": best_untied_bpb,
+            "rawGain": best_tied_bpb - best_untied_bpb,
+            "stage1Gain": stage1_tied - stage1_untied,
+            "untiedMargin": untied_margin,
+            "bestUntiedOnHull": best_untied_index in hull_vertices,
+            "localUntiedNeighbors": int(np.sum((local_distances > 1e-12) & (local_distances <= LOCAL_RADIUS))),
+            "priorLocalUntiedNeighbors": int(np.sum((prior_distances > 1e-12) & (prior_distances <= LOCAL_RADIUS))),
+        }
+    return payloads
+
+
 def _cell_payload(
     cell: pd.Series,
     observations: pd.DataFrame,
@@ -274,29 +400,23 @@ def _cell_payload(
         prior["policy_class"].eq("untied"), ["phase_0_starcoder", "phase_1_starcoder"]
     ].to_numpy(dtype=float)
 
-    tied = frame.loc[frame["policy_class"].eq("tied")]
-    untied = frame.loc[frame["policy_class"].eq("untied")]
-    best_tied_index = int(tied["starcoder_bpb"].idxmin())
-    best_untied_index = int(untied["starcoder_bpb"].idxmin())
+    metric_payloads = _metric_payloads(
+        frame,
+        points=points,
+        hull_vertices=hull_vertices,
+        prior_untied_points=prior_untied_points,
+    )
+    default_metric = metric_payloads[DEFAULT_METRIC_KEY]
+    best_tied_index = int(default_metric["bestTiedIndex"])
+    best_untied_index = int(default_metric["bestUntiedIndex"])
     best_tied = frame.loc[best_tied_index]
     best_untied = frame.loc[best_untied_index]
-    raw_gain = max(0.0, float(best_tied["starcoder_bpb"] - best_untied["starcoder_bpb"]))
+    raw_gain = max(0.0, float(default_metric["rawGain"]))
     winner_index = best_untied_index if raw_gain > 0.0 else best_tied_index
-
-    stage1 = frame.loc[frame["source_stage"].eq("stage1")]
-    stage1_tied = stage1.loc[stage1["policy_class"].eq("tied"), "starcoder_bpb"].min()
-    stage1_untied = stage1.loc[stage1["policy_class"].eq("untied"), "starcoder_bpb"].min()
-    stage1_gain = max(0.0, float(stage1_tied - stage1_untied))
-
-    ordered_untied = untied.sort_values("starcoder_bpb")
-    untied_margin = float(ordered_untied.iloc[1]["starcoder_bpb"] - ordered_untied.iloc[0]["starcoder_bpb"])
-    best_untied_point = points[best_untied_index]
-    distances_from_best = np.linalg.norm(untied_points - best_untied_point, axis=1)
-    local_untied_neighbors = int(np.sum((distances_from_best > 1e-12) & (distances_from_best <= LOCAL_RADIUS)))
-    prior_distances_from_best = np.linalg.norm(prior_untied_points - best_untied_point, axis=1)
-    prior_local_untied_neighbors = int(
-        np.sum((prior_distances_from_best > 1e-12) & (prior_distances_from_best <= LOCAL_RADIUS))
-    )
+    stage1_gain = max(0.0, float(default_metric["stage1Gain"]))
+    untied_margin = float(default_metric["untiedMargin"])
+    local_untied_neighbors = int(default_metric["localUntiedNeighbors"])
+    prior_local_untied_neighbors = int(default_metric["priorLocalUntiedNeighbors"])
 
     aggregate = PHASE_0_FRACTION * frame["phase_0_starcoder"] + (1.0 - PHASE_0_FRACTION) * frame["phase_1_starcoder"]
     frame["aggregate_starcoder"] = aggregate
@@ -311,7 +431,7 @@ def _cell_payload(
     frame["nemotron_phase_0_simulated_epochs"] = [row.nemotron.phase_0 for row in epoch_rows]
     frame["nemotron_phase_1_simulated_epochs"] = [row.nemotron.phase_1 for row in epoch_rows]
     frame["nemotron_total_simulated_epochs"] = [row.nemotron.total for row in epoch_rows]
-    hover = [
+    hover_base = [
         "<br>".join(
             [
                 f"{row.source_stage.title()} · {row.policy_class}",
@@ -331,8 +451,6 @@ def _cell_payload(
                     f"{row.nemotron_phase_1_simulated_epochs:.3f} late = "
                     f"{row.nemotron_total_simulated_epochs:.3f}"
                 ),
-                "<br>Outcome",
-                f"Programming BPB: {row.starcoder_bpb:.6f}",
                 f"Run: {row.run_name}",
             ]
         )
@@ -357,7 +475,8 @@ def _cell_payload(
         "y": frame["phase_1_starcoder"].astype(float).tolist(),
         "z": frame["starcoder_bpb"].astype(float).tolist(),
         "colorMax": float(min(frame["starcoder_bpb"].max(), frame["starcoder_bpb"].min() + 0.05)),
-        "hover": hover,
+        "hoverBase": hover_base,
+        "metrics": metric_payloads,
         "customdata": customdata,
         "triangles": triangles.tolist(),
         "edges": _unique_edges(triangles),
@@ -381,7 +500,7 @@ def _cell_payload(
         "largestTriangleHullFraction": float(triangle_areas.max() / hull.volume),
         "priorLargestTriangleHullFraction": float(prior_triangle_areas.max() / prior_hull.volume),
         "untiedMedianNearestNeighbor": float(np.median(untied_neighbor_distances)),
-        "bestUntiedOnHull": best_untied_index in hull_vertices,
+        "bestUntiedOnHull": bool(default_metric["bestUntiedOnHull"]),
         "localUntiedNeighbors": local_untied_neighbors,
         "priorLocalUntiedNeighbors": prior_local_untied_neighbors,
         "untiedMargin": untied_margin,
@@ -394,7 +513,7 @@ def _cell_payload(
             bootstrap_positive_gain_probability=float(candidate["bootstrap_positive_gain_probability"]),
             bootstrap_candidate_l2_p90=float(candidate["bootstrap_candidate_l2_p90"]),
             confirmation_eligible=bool(candidate["confirmation_eligible"]),
-            best_untied_on_hull=best_untied_index in hull_vertices,
+            best_untied_on_hull=bool(default_metric["bestUntiedOnHull"]),
             prior_local_untied_neighbors=prior_local_untied_neighbors,
             local_untied_neighbors=local_untied_neighbors,
             untied_median_nearest_neighbor=float(np.median(untied_neighbor_distances)),
@@ -527,6 +646,23 @@ def _payload(
             "cells": selected["cell_id"].astype(str).tolist(),
         }
     return {
+        "mode": "matched_nd",
+        "page": {
+            "eyebrow": "Completed surface audit · 714 observed checkpoints",
+            "title": "StarCoder 80/20 WSD matched-compute N-D surfaces",
+            "dek": (
+                "Select an atomic evaluation metric and scaling intervention, then move through its four rungs. "
+                "The 3D mesh and top-down map use every completed Stage-1/2/3 outcome."
+            ),
+            "method": (
+                "<strong>Interpretation boundary.</strong> Each cell has 71 or 72 observed coordinates, including "
+                "56 untied policies. The mesh is linear triangulation of measurements, not the fitted surrogate. "
+                "Atomic-metric extrema are selection-biased. Smooth-fit inference is available only for the "
+                "Programming Languages metric and remains labeled as such."
+            ),
+        },
+        "metrics": [{"key": key, "label": label} for key, label in ATOMIC_METRICS],
+        "defaultMetricKey": DEFAULT_METRIC_KEY,
         "trackOrder": list(TRACK_ORDER),
         "tracks": tracks,
         "cells": cell_payloads,
@@ -534,7 +670,7 @@ def _payload(
     }, pd.DataFrame(diagnostics)
 
 
-def _html(payload: dict[str, object]) -> str:
+def render_surface_explorer_html(payload: dict[str, object]) -> str:
     payload_json = json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")
     plotly_js = get_plotlyjs()
     return f"""<!doctype html>
@@ -564,7 +700,7 @@ def _html(payload: dict[str, object]) -> str:
     .eyebrow {{ color: var(--orange); font-size: 12px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }}
     h1 {{ margin: 8px 0 8px; max-width: 1100px; font: 600 35px/1.12 Georgia, serif; }}
     .dek {{ max-width: 1080px; margin: 0; color: var(--muted); font-size: 16px; line-height: 1.55; }}
-    .controls {{ display: grid; grid-template-columns: minmax(260px, .7fr) minmax(440px, 1.3fr) 250px; gap: 22px;
+    .controls {{ display: grid; grid-template-columns: minmax(220px, .7fr) minmax(280px, .9fr) minmax(420px, 1.3fr) 230px; gap: 22px;
       padding: 20px 42px; align-items: end; background: rgba(255,253,248,.9); border-bottom: 1px solid var(--line); }}
     label {{ display: block; margin-bottom: 7px; color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }}
     select {{ width: 100%; padding: 13px 14px; color: var(--ink); border: 1px solid #bcb3a3; border-radius: 0; background: var(--panel); font: 700 15px Avenir Next, sans-serif; }}
@@ -576,7 +712,7 @@ def _html(payload: dict[str, object]) -> str:
     .check input {{ accent-color: var(--orange); }}
     .checks {{ display: grid; grid-template-columns: 1fr; gap: 0; }}
     main {{ padding: 22px 28px 52px; }}
-    .facts {{ display: grid; grid-template-columns: repeat(7, minmax(120px, 1fr)); border: 1px solid var(--line); background: var(--panel); }}
+    .facts {{ display: grid; grid-template-columns: repeat(8, minmax(115px, 1fr)); border: 1px solid var(--line); background: var(--panel); }}
     .fact {{ min-height: 82px; padding: 14px 16px; border-right: 1px solid var(--line); }}
     .fact:last-child {{ border-right: 0; }}
     .fact-name {{ color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }}
@@ -621,18 +757,24 @@ def _html(payload: dict[str, object]) -> str:
 </head>
 <body>
   <header>
-    <div class="eyebrow">Completed surface audit · 714 observed checkpoints</div>
-    <h1>StarCoder 80/20 WSD matched-compute N-D surfaces</h1>
-    <p class="dek">Select a scaling intervention, then move through its four rungs. The 3D mesh uses every completed Stage-1/2/3 outcome and labels the observed optima of the tied and untied policy classes. Smooth-fit inference and fresh-confirmation eligibility remain in the facts and sampling read.</p>
+    <div class="eyebrow" id="page-eyebrow"></div>
+    <h1 id="page-title"></h1>
+    <p class="dek" id="page-dek"></p>
   </header>
   <section class="controls">
-    <div><label for="track-select">Scaling setting</label><select id="track-select"></select></div>
+    <div id="track-control"><label for="track-select">Scaling setting</label><select id="track-select"></select></div>
+    <div><label for="metric-select">Atomic evaluation metric</label><select id="metric-select"></select></div>
+    <div id="replay-control" style="display:none">
+      <label for="replay-slider">Simulated epoching repetition regime</label>
+      <input id="replay-slider" type="range" min="0" max="0" step="1" value="0">
+      <div class="rung-marks" id="replay-marks"></div>
+    </div>
     <div>
       <label for="rung-slider">Scaling rung</label>
       <input id="rung-slider" type="range" min="0" max="3" step="1" value="0">
       <div class="rung-marks" id="rung-marks"></div>
     </div>
-    <div class="checks"><label class="check"><input id="focus-optimum" type="checkbox"> Focus vertical axis near optimum</label></div>
+    <div class="checks"><label class="check"><input id="focus-optimum" type="checkbox" checked> Focus vertical axis near optimum</label></div>
   </section>
   <main>
     <section class="facts" id="facts"></section>
@@ -655,7 +797,7 @@ def _html(payload: dict[str, object]) -> str:
       <div class="comparison-card" id="historical-card"></div>
       <div class="comparison-card" id="matched-card"></div>
     </section>
-    <section class="method"><strong>Interpretation boundary.</strong> Each cell has 71 or 72 observed coordinates, including 56 untied policies. The mesh is linear triangulation of measurements, not the fitted surrogate. The labeled observed optima are selection-biased; smooth quartic-ridge estimates and bootstrap diagnostics appear above and in the sampling read. Bootstrap gain support does not imply a stable exact location: inspect candidate-location L2 p90 before interpreting the coordinates.</section>
+    <section class="method" id="method-note"></section>
   </main>
   <script>
     const DATA = {payload_json};
@@ -664,12 +806,22 @@ def _html(payload: dict[str, object]) -> str:
     const PANEL = '#fffdf8';
     const GRID = '#ded6c7';
     const trackSelect = document.getElementById('track-select');
+    const metricSelect = document.getElementById('metric-select');
+    const replaySlider = document.getElementById('replay-slider');
     const rungSlider = document.getElementById('rung-slider');
     const focusOptimum = document.getElementById('focus-optimum');
 
+    document.getElementById('page-eyebrow').textContent = DATA.page.eyebrow;
+    document.getElementById('page-title').textContent = DATA.page.title;
+    document.getElementById('page-dek').textContent = DATA.page.dek;
+    document.getElementById('method-note').innerHTML = DATA.page.method;
+
     const fmt = (value, digits=2) => Number(value).toLocaleString(undefined, {{minimumFractionDigits: digits, maximumFractionDigits: digits}});
     const sci = value => Number(value).toExponential(2);
-    const currentCell = () => DATA.cells[DATA.tracks[trackSelect.value].cells[Number(rungSlider.value)]];
+    const currentReplay = () => DATA.replayOrder ? DATA.replayRegimes[DATA.replayOrder[Number(replaySlider.value)]] : null;
+    const currentCellIds = () => currentReplay()?.cells || DATA.tracks[trackSelect.value].cells;
+    const currentCell = () => DATA.cells[currentCellIds()[Number(rungSlider.value)]];
+    const currentMetric = cell => cell.metrics[metricSelect.value];
 
     function populateControls() {{
       DATA.trackOrder.forEach(track => {{
@@ -678,13 +830,43 @@ def _html(payload: dict[str, object]) -> str:
         option.textContent = DATA.tracks[track].label;
         trackSelect.appendChild(option);
       }});
+      if (DATA.trackOrder.length === 1) document.getElementById('track-control').style.display = 'none';
+      DATA.metrics.forEach(metric => {{
+        const option = document.createElement('option');
+        option.value = metric.key;
+        option.textContent = metric.label;
+        metricSelect.appendChild(option);
+      }});
+      metricSelect.value = DATA.defaultMetricKey;
+      if (DATA.replayOrder) {{
+        document.getElementById('replay-control').style.display = 'block';
+        replaySlider.max = DATA.replayOrder.length - 1;
+        replaySlider.value = 0;
+        renderReplayMarks();
+      }}
       renderRungMarks();
+    }}
+
+    function renderReplayMarks() {{
+      if (!DATA.replayOrder) return;
+      const marks = document.getElementById('replay-marks');
+      marks.innerHTML = '';
+      DATA.replayOrder.forEach((replayId, index) => {{
+        const replay = DATA.replayRegimes[replayId];
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = index === Number(replaySlider.value) ? 'active' : '';
+        button.textContent = replay.shortLabel;
+        button.title = replay.label;
+        button.onclick = () => {{ replaySlider.value = index; render(); }};
+        marks.appendChild(button);
+      }});
     }}
 
     function renderRungMarks() {{
       const marks = document.getElementById('rung-marks');
       marks.innerHTML = '';
-      DATA.tracks[trackSelect.value].cells.forEach((cellId, rung) => {{
+      currentCellIds().forEach((cellId, rung) => {{
         const cell = DATA.cells[cellId];
         const button = document.createElement('button');
         button.type = 'button';
@@ -699,88 +881,201 @@ def _html(payload: dict[str, object]) -> str:
       return `<div class="fact"><div class="fact-name">${{name}}</div><div class="fact-value">${{value}}</div><div class="fact-sub">${{sub}}</div></div>`;
     }}
 
-    function renderFacts(cell) {{
+    function renderFacts(cell, metric) {{
+      if (DATA.mode === 'full_pool') {{
+        const replay = currentReplay();
+        const replayValue = replay ? replay.shortLabel : 'Full pool';
+        const replaySub = replay ? replay.label : 'no simulated epoching repetition';
+        const confirmation = metric.repeatConfirmation;
+        const tiedShift = confirmation ? confirmation.policies.tied.mean - confirmation.policies.tied.discoveryBpb : null;
+        const untiedShift = confirmation ? confirmation.policies.untied.mean - confirmation.policies.untied.discoveryBpb : null;
+        const facts = [
+          fact('Architecture', `${{fmt(cell.parameters / 1e6, 1)}}M`, `${{cell.layers}} layers · width ${{cell.hiddenSize}}`),
+          fact('Tokens D', `${{fmt(cell.tokens / 1e9, 3)}}B`, `total TPP ${{fmt(cell.totalTpp, 2)}}`),
+          fact('Repetition regime', replayValue, replaySub),
+          fact('Coordinates', `${{cell.x.length}} observed`, `${{cell.untiedCount}} untied · ${{cell.tiedCount}} tied`),
+          fact('Raw selected 2p gain', `${{fmt(metric.rawGain, 6)}} BPB`, `1p ${{fmt(metric.bestTiedBpb, 6)}} · 2p ${{fmt(metric.bestUntiedBpb, 6)}}`),
+        ];
+        if (confirmation) {{
+          const significant = confirmation.holmPositive ? 'positive after correction' : 'not positive after correction';
+          facts.push(
+            fact('Fresh paired 2p gain', `${{fmt(confirmation.pairedGain, 6)}} BPB`, `95% CI [${{fmt(confirmation.pairedCi95Low, 6)}}, ${{fmt(confirmation.pairedCi95High, 6)}}]`),
+            fact('Paired evidence', confirmation.holmPositive ? 'Confirmed' : 'Not confirmed', `${{significant}} · fresh-discovery 1p ${{fmt(tiedShift, 4)}}, 2p ${{fmt(untiedShift, 4)}}`),
+          );
+        }} else {{
+          facts.push(
+            fact('Fresh paired 2p gain', 'Not targeted', 'no candidate-specific repeats for this metric'),
+            fact('Paired evidence', 'Unavailable', 'raw extrema remain descriptive'),
+          );
+        }}
+        facts.push(fact('Selected metric', metric.label, 'atomic dataset-level BPB'));
+        document.getElementById('facts').innerHTML = facts.join('');
+        document.getElementById('surface-title').textContent = `${{metric.label}} · ${{replaySub}} · rung ${{cell.rung}}`;
+        const metricRead = [
+          `${{cell.x.length}} measured coordinates define this triangulation; median untied nearest-neighbor spacing is ${{fmt(cell.untiedMedianNearestNeighbor, 3)}}.`,
+          `This surface uses the ${{replaySub.toLowerCase()}} design at ${{fmt(cell.tokens / 1e9, 3)}}B materialized tokens.`,
+          `Raw selected two-phase gain is ${{fmt(metric.rawGain, 6)}} BPB (positive means the best strictly untied observation beats the best tied observation); the margin between the best and second-best untied observations is ${{fmt(metric.untiedMargin, 6)}} BPB.`,
+          `${{metric.localUntiedNeighbors}} untied observations lie within L2 radius 0.15 of the selected untied winner.`,
+          'No smooth expected-response surface is imposed here; the mesh linearly triangulates one-seed observations.',
+        ];
+        if (confirmation) {{
+          const conclusion = confirmation.holmPositive
+            ? 'The selected untied policy has a positive paired gain after Holm correction.'
+            : 'The selected untied policy does not have a positive paired gain after Holm correction.';
+          metricRead.push(
+            `Fresh n=5 means and their marginal 95% t-intervals are overlaid vertically on the 3D plot. The mesh is the independent one-seed discovery surface; a confidence interval for a mean is not a prediction interval for that one seed.`,
+            `Fresh mean minus discovery BPB is ${{fmt(tiedShift, 6)}} for tied and ${{fmt(untiedShift, 6)}} for 2p. Selecting minima from a noisy one-seed surface creates winner's curse, and the discovery seed was also broadly favorable across repeated calibration controls.`,
+            `The paired tied-minus-untied gain is ${{fmt(confirmation.pairedGain, 6)}} BPB with 95% t-interval [${{fmt(confirmation.pairedCi95Low, 6)}}, ${{fmt(confirmation.pairedCi95High, 6)}}] and Holm-adjusted p=${{Number(confirmation.holmP).toPrecision(3)}}. ${{conclusion}}`,
+          );
+          if (!confirmation.matchesRawUntied) {{
+            metricRead.push(`The frozen repeat experiment required |phase contrast| ≥ ${{fmt(confirmation.minimumEligibleContrast, 2)}}. Its repeated 2p coordinate is therefore not the unrestricted nonzero-contrast raw minimum in this cell; that raw minimum remains unconfirmed.`);
+          }}
+        }} else {{
+          metricRead.push('Candidate-specific repeats were selected only for Programming Languages BPB; this atomic metric has no direct confidence interval for its raw extrema.');
+        }}
+        if (metric.bestUntiedOnHull) metricRead.push('The selected untied winner lies on the sampled convex-hull edge, so the optimum may be outside current support.');
+        document.getElementById('sampling-read').innerHTML = metricRead.map(item => `<li>${{item}}</li>`).join('');
+        return;
+      }}
       const gate = cell.confirmationEligible ? 'passes gate' : 'does not pass';
       document.getElementById('facts').innerHTML = [
         fact('Architecture', `${{fmt(cell.parameters / 1e6, 1)}}M`, `${{cell.layers}} layers · width ${{cell.hiddenSize}}`),
         fact('Tokens D', `${{fmt(cell.tokens / 1e9, 3)}}B`, `total TPP ${{fmt(cell.totalTpp, 2)}}`),
         fact('Compute', `${{fmt(cell.computeFlops / 1e18, 3)}}e18`, `non-embed TPP ${{fmt(cell.nonEmbeddingTpp, 2)}}`),
         fact('Coordinates', `${{cell.x.length}} observed`, `56 untied · ${{cell.x.length - 56}} tied`),
-        fact('Smooth phase gain', `${{fmt(cell.fittedGain, 6)}} BPB`, `${{gate}} · P(gain>0) ${{fmt(cell.bootstrapPositiveGainProbability, 3)}}`),
-        fact('Raw min gain', `${{fmt(cell.rawGain, 6)}} BPB`, `Stage 1 ${{fmt(cell.stage1Gain, 6)}} · selection-biased`),
-        fact('Location stability', `L2 p90 ${{fmt(cell.bootstrapCandidateL2P90, 3)}}`, `gain p05/p95 ${{fmt(cell.bootstrapGainP05, 4)}} / ${{fmt(cell.bootstrapGainP95, 4)}}`),
+        fact('Raw global 2p gain', `${{fmt(metric.rawGain, 6)}} BPB`, `selected metric · selection-biased`),
+        fact('Observed 1p optimum', `${{fmt(metric.bestTiedBpb, 6)}}`, `BPB · tied spine`),
+        fact('Observed 2p optimum', `${{fmt(metric.bestUntiedBpb, 6)}}`, `BPB · strictly untied`),
+        fact('Programming smooth fit', `${{fmt(cell.fittedGain, 6)}} BPB`, `${{gate}} · only for Programming Languages`),
       ].join('');
-      document.getElementById('surface-title').textContent = `${{DATA.tracks[trackSelect.value].label}} · rung ${{cell.rung}}`;
-      document.getElementById('sampling-read').innerHTML = cell.samplingRead.map(item => `<li>${{item}}</li>`).join('');
+      document.getElementById('surface-title').textContent = `${{metric.label}} · ${{DATA.tracks[trackSelect.value].label}} · rung ${{cell.rung}}`;
+      const metricRead = [
+        `${{cell.x.length}} measured coordinates define this triangulation; median untied nearest-neighbor spacing is ${{fmt(cell.untiedMedianNearestNeighbor, 3)}}.`,
+        `Raw global two-phase gain is ${{fmt(metric.rawGain, 6)}} BPB (positive means the untied policy is better); the margin between the best and second-best untied observations is ${{fmt(metric.untiedMargin, 6)}} BPB.`,
+        `${{metric.localUntiedNeighbors}} untied observations lie within L2 radius 0.15 of the selected untied winner.`,
+      ];
+      if (metric.bestUntiedOnHull) metricRead.push('The selected untied winner lies on the sampled convex-hull edge, so the optimum may be outside current support.');
+      if (metricSelect.value === DATA.defaultMetricKey) {{
+        metricRead.push(`The frozen Programming Languages smooth fit estimates ${{fmt(cell.fittedGain, 6)}} BPB gain with candidate-location L2 p90 ${{fmt(cell.bootstrapCandidateL2P90, 3)}}.`);
+      }} else {{
+        metricRead.push('No smooth surrogate was fitted for this atomic metric; extrema and gain on this page are raw observed values.');
+      }}
+      document.getElementById('sampling-read').innerHTML = metricRead.map(item => `<li>${{item}}</li>`).join('');
     }}
 
-    function observedPointTrace(cell, is3d) {{
+    function observedPointTrace(cell, metric, is3d) {{
       const indices = cell.x.map((_, index) => index);
+      const hover = indices.map(index => `${{cell.hoverBase[index]}}<br><br>Outcome<br>${{metric.label}}: ${{fmt(metric.z[index], 6)}} BPB`);
       const trace = {{
         type: is3d ? 'scatter3d' : 'scatter',
         mode: 'markers',
         x: indices.map(index => cell.x[index]),
         y: indices.map(index => cell.y[index]),
-        text: indices.map(index => cell.hover[index]),
+        text: hover,
         customdata: indices.map(index => cell.customdata[index]),
         hovertemplate: '%{{text}}<extra></extra>',
         name: 'observed checkpoints',
+        showlegend: false,
         marker: {{
           size: is3d ? 5.5 : 9,
-          color: indices.map(index => cell.z[index]),
+          color: indices.map(index => metric.z[index]),
           colorscale: COLORSCALE,
-          cmin: Math.min(...cell.z),
-          cmax: cell.colorMax,
+          cmin: Math.min(...metric.z),
+          cmax: metric.colorMax,
           showscale: false,
           symbol: 'circle',
           line: {{color: PANEL, width: 1.1}},
         }},
       }};
-      if (is3d) trace.z = indices.map(index => cell.z[index]);
+      if (is3d) trace.z = indices.map(index => metric.z[index]);
       return trace;
     }}
 
-    function edgeCoordinates(cell, includeZ) {{
+    function edgeCoordinates(cell, metric, includeZ) {{
       const x = [], y = [], z = [];
       cell.edges.forEach(([left, right]) => {{
         x.push(cell.x[left], cell.x[right], null);
         y.push(cell.y[left], cell.y[right], null);
-        if (includeZ) z.push(cell.z[left], cell.z[right], null);
+        if (includeZ) z.push(metric.z[left], metric.z[right], null);
       }});
       return {{x, y, z}};
     }}
 
-    function highlightTrace(cell, index, name, symbol, color, is3d, size, textposition) {{
+    function highlightTrace(cell, metric, index, name, symbol, color, is3d, size, textposition) {{
+      const hover = `${{cell.hoverBase[index]}}<br><br>Outcome<br>${{metric.label}}: ${{fmt(metric.z[index], 6)}} BPB`;
       const trace = {{
         type: is3d ? 'scatter3d' : 'scatter', mode: 'markers+text', x: [cell.x[index]], y: [cell.y[index]],
         text: [name], textposition,
         textfont: {{family: 'Avenir Next, sans-serif', size: is3d ? 11 : 12, color: NAVY}},
-        hovertext: [cell.hover[index]], customdata: [cell.customdata[index]],
+        hovertext: [hover], customdata: [cell.customdata[index]],
         hovertemplate: '%{{hovertext}}<extra></extra>', name,
+        showlegend: false,
         marker: {{symbol, size, color, line: {{color: PANEL, width: 2.2}}}},
       }};
-      if (is3d) trace.z = [cell.z[index]];
+      if (is3d) trace.z = [metric.z[index]];
       return trace;
     }}
 
-    function surfaceTraces(cell) {{
-      const edges = edgeCoordinates(cell, true);
-      const triangles = cell.triangles;
-      return [
-        {{type: 'mesh3d', x: cell.x, y: cell.y, z: cell.z,
-          i: triangles.map(t => t[0]), j: triangles.map(t => t[1]), k: triangles.map(t => t[2]),
-          intensity: cell.z, colorscale: COLORSCALE, cmin: Math.min(...cell.z), cmax: cell.colorMax,
-          opacity: .42, flatshading: false, hoverinfo: 'skip', name: 'linear triangulation', showscale: true,
-          colorbar: {{title: 'BPB', len: .53, thickness: 14, x: .99}}}},
-        {{type: 'scatter3d', mode: 'lines', ...edges, line: {{color: 'rgba(23,50,77,.34)', width: 2}}, hoverinfo: 'skip', name: 'triangulation edges'}},
-        observedPointTrace(cell, true),
-        highlightTrace(cell, cell.bestTiedIndex, 'observed 1p optimum', 'x', '#e7b416', true, 9, 'top left'),
-        highlightTrace(cell, cell.bestUntiedIndex, 'observed 2p optimum', 'diamond-open', '#0b6e69', true, 10, 'bottom right'),
-      ];
+    function confirmationTrace(metric, policyClass) {{
+      const confirmation = metric.repeatConfirmation;
+      if (!confirmation) return null;
+      const policy = confirmation.policies[policyClass];
+      const isTied = policyClass === 'tied';
+      const label = isTied ? 'tied' : 'strictly untied';
+      const color = isTied ? '#e7b416' : '#0b6e69';
+      const intervalColor = isTied ? '#573700' : '#003f3b';
+      const status = confirmation.holmPositive ? 'positive after Holm correction' : 'not positive after Holm correction';
+      const candidateNote = confirmation.matchesRawUntied
+        ? 'repeated 2p coordinate matches the raw nonzero-contrast minimum'
+        : `repeated 2p coordinate uses the frozen |contrast| ≥ ${{fmt(confirmation.minimumEligibleContrast, 2)}} eligibility rule`;
+      const hover = [
+        `Fresh ${{label}} mean`,
+        `p0=${{fmt(policy.phase0, 4)}} · p1=${{fmt(policy.phase1, 4)}}`,
+        `mean BPB=${{fmt(policy.mean, 6)}}`,
+        `marginal 95% t-CI=[${{fmt(policy.ci95Low, 6)}}, ${{fmt(policy.ci95High, 6)}}]`,
+        `n=${{policy.n}} fresh paired seeds`,
+        `one-seed discovery BPB=${{fmt(policy.discoveryBpb, 6)}}`,
+        `fresh mean - discovery=${{fmt(policy.mean - policy.discoveryBpb, 6)}} BPB`,
+        '',
+        `Paired gain (tied - untied)=${{fmt(confirmation.pairedGain, 6)}} BPB`,
+        `paired 95% t-CI=[${{fmt(confirmation.pairedCi95Low, 6)}}, ${{fmt(confirmation.pairedCi95High, 6)}}]`,
+        `Holm p=${{Number(confirmation.holmP).toPrecision(3)}} · ${{status}}`,
+        candidateNote,
+      ].join('<br>');
+      return {{
+        type: 'scatter3d', mode: 'markers',
+        x: [policy.phase0], y: [policy.phase1], z: [policy.mean],
+        marker: {{symbol: isTied ? 'square' : 'diamond', size: 11, color, line: {{color: NAVY, width: 2.8}}}},
+        error_z: {{
+          type: 'data', symmetric: false,
+          array: [policy.ci95High - policy.mean], arrayminus: [policy.mean - policy.ci95Low],
+          color: intervalColor, thickness: 12, width: 20,
+        }},
+        hovertext: [hover], hovertemplate: '%{{hovertext}}<extra></extra>',
+        name: `Fresh n=5 ${{label}} mean ± 95% CI`, showlegend: true,
+      }};
     }}
 
-    function mapTraces(cell) {{
-      const edges = edgeCoordinates(cell, false);
+    function surfaceTraces(cell, metric) {{
+      const edges = edgeCoordinates(cell, metric, true);
+      const triangles = cell.triangles;
+      const traces = [
+        {{type: 'mesh3d', x: cell.x, y: cell.y, z: metric.z,
+          i: triangles.map(t => t[0]), j: triangles.map(t => t[1]), k: triangles.map(t => t[2]),
+          intensity: metric.z, colorscale: COLORSCALE, cmin: Math.min(...metric.z), cmax: metric.colorMax,
+          opacity: .42, flatshading: false, hoverinfo: 'skip', name: 'linear triangulation', showscale: true, showlegend: false,
+          colorbar: {{title: 'BPB', len: .53, thickness: 14, x: .99}}}},
+        {{type: 'scatter3d', mode: 'lines', ...edges, line: {{color: 'rgba(23,50,77,.34)', width: 2}}, hoverinfo: 'skip', name: 'triangulation edges', showlegend: false}},
+        observedPointTrace(cell, metric, true),
+        highlightTrace(cell, metric, metric.bestTiedIndex, 'observed 1p optimum', 'x', '#e7b416', true, 9, 'top left'),
+        highlightTrace(cell, metric, metric.bestUntiedIndex, 'observed 2p optimum', 'diamond-open', '#0b6e69', true, 10, 'bottom right'),
+      ];
+      const confirmationTraces = ['tied', 'untied'].map(policyClass => confirmationTrace(metric, policyClass)).filter(Boolean);
+      return [...traces, ...confirmationTraces];
+    }}
+
+    function mapTraces(cell, metric) {{
+      const edges = edgeCoordinates(cell, metric, false);
       const hullX = cell.hull.map(index => cell.x[index]);
       const hullY = cell.hull.map(index => cell.y[index]);
       const traces = [];
@@ -791,24 +1086,37 @@ def _html(payload: dict[str, object]) -> str:
         {{type: 'scatter', mode: 'lines', ...edges, line: {{color: 'rgba(23,50,77,.26)', width: 1}}, hoverinfo: 'skip', name: 'triangulation'}},
       );
       traces.push(
-        observedPointTrace(cell, false),
-        highlightTrace(cell, cell.bestTiedIndex, 'observed 1p optimum', 'x', '#e7b416', false, 15, 'bottom left'),
-        highlightTrace(cell, cell.bestUntiedIndex, 'observed 2p optimum', 'diamond-open', '#0b6e69', false, 16, 'top right'),
+        observedPointTrace(cell, metric, false),
+        highlightTrace(cell, metric, metric.bestTiedIndex, 'observed 1p optimum', 'x', '#e7b416', false, 15, 'bottom left'),
+        highlightTrace(cell, metric, metric.bestUntiedIndex, 'observed 2p optimum', 'diamond-open', '#0b6e69', false, 16, 'top right'),
       );
       return traces;
     }}
 
-    function renderPlots(cell) {{
-      const minimum = Math.min(...cell.z), maximum = Math.max(...cell.z), span = Math.max(maximum - minimum, .01);
+    function renderPlots(cell, metric) {{
+      const minimum = Math.min(...metric.z), maximum = Math.max(...metric.z), span = Math.max(maximum - minimum, .01);
       const focusMax = Math.min(maximum, minimum + Math.max(.045, .28 * span));
-      const zRange = focusOptimum.checked ? [minimum - .025 * span, focusMax] : [minimum - .035 * span, maximum + .035 * span];
+      let focusedRange = [minimum - .025 * span, focusMax];
+      if (metric.repeatConfirmation) {{
+        const confirmation = metric.repeatConfirmation;
+        const candidates = [
+          metric.bestTiedBpb, metric.bestUntiedBpb,
+          confirmation.policies.tied.ci95Low, confirmation.policies.tied.ci95High,
+          confirmation.policies.untied.ci95Low, confirmation.policies.untied.ci95High,
+        ];
+        const candidateMin = Math.min(...candidates), candidateMax = Math.max(...candidates);
+        const candidateSpan = Math.max(candidateMax - candidateMin, .025);
+        focusedRange = [candidateMin - .24 * candidateSpan, candidateMax + .32 * candidateSpan];
+      }}
+      const zRange = focusOptimum.checked ? focusedRange : [minimum - .035 * span, maximum + .035 * span];
       const surfaceLayout = {{
-        paper_bgcolor: PANEL, plot_bgcolor: PANEL, margin: {{l: 0, r: 30, t: 10, b: 0}},
-        font: {{family: 'Avenir Next, sans-serif', color: NAVY, size: 12}}, showlegend: false, uirevision: 'matched-nd-surface',
+        paper_bgcolor: PANEL, plot_bgcolor: PANEL, margin: {{l: 0, r: metric.repeatConfirmation ? 210 : 30, t: 10, b: 0}},
+        font: {{family: 'Avenir Next, sans-serif', color: NAVY, size: 12}}, showlegend: Boolean(metric.repeatConfirmation), uirevision: 'matched-nd-surface',
+        legend: {{x: 1.01, xanchor: 'left', y: .98, yanchor: 'top', bgcolor: 'rgba(255,253,248,.95)', bordercolor: GRID, borderwidth: 1, font: {{size: 11}}}},
         scene: {{
           xaxis: {{title: {{text: 'Phase 0 StarCoder weight'}}, range: [0, 1], gridcolor: GRID, backgroundcolor: '#eef2f4'}},
           yaxis: {{title: {{text: 'Phase 1 StarCoder weight'}}, range: [0, 1], gridcolor: GRID, backgroundcolor: '#eef2f4'}},
-          zaxis: {{title: {{text: 'Programming BPB'}}, range: zRange, gridcolor: '#fff', backgroundcolor: '#e5edf2'}},
+          zaxis: {{title: {{text: `${{metric.label}} BPB`}}, range: zRange, gridcolor: '#fff', backgroundcolor: '#e5edf2'}},
           aspectmode: 'manual', aspectratio: {{x: 1, y: 1, z: 1.35}},
           camera: {{eye: {{x: 1.5, y: 1.45, z: 1.05}}}},
         }},
@@ -820,8 +1128,8 @@ def _html(payload: dict[str, object]) -> str:
         yaxis: {{title: 'Phase 1 StarCoder weight', range: [-.02, 1.02], dtick: .2, gridcolor: GRID, zeroline: false, scaleanchor: 'x', scaleratio: 1}},
       }};
       const config = {{displaylogo: false, responsive: true, toImageButtonOptions: {{format: 'png', scale: 4}}}};
-      Plotly.react('surface-plot', surfaceTraces(cell), surfaceLayout, config);
-      Plotly.react('map-plot', mapTraces(cell), mapLayout, config);
+      Plotly.react('surface-plot', surfaceTraces(cell, metric), surfaceLayout, config);
+      Plotly.react('map-plot', mapTraces(cell, metric), mapLayout, config);
       bindPointInspector('surface-plot'); bindPointInspector('map-plot');
     }}
 
@@ -839,6 +1147,10 @@ def _html(payload: dict[str, object]) -> str:
     }}
 
     function renderComparison() {{
+      if (!DATA.comparison) {{
+        document.getElementById('dense-comparison').style.display = 'none';
+        return;
+      }}
       const historical = DATA.comparison.historical;
       const matched = DATA.comparison.matchedR0;
       document.getElementById('historical-card').innerHTML = `
@@ -858,12 +1170,17 @@ def _html(payload: dict[str, object]) -> str:
     }}
 
     function render() {{
+      renderReplayMarks();
       renderRungMarks();
       const cell = currentCell();
-      renderFacts(cell); renderPlots(cell);
+      const metric = currentMetric(cell);
+      renderFacts(cell, metric); renderPlots(cell, metric);
+      document.getElementById('dense-comparison').style.display = DATA.comparison && metricSelect.value === DATA.defaultMetricKey ? 'grid' : 'none';
     }}
 
     trackSelect.addEventListener('change', () => {{ rungSlider.value = 0; render(); }});
+    metricSelect.addEventListener('change', render);
+    replaySlider.addEventListener('input', render);
     rungSlider.addEventListener('input', render);
     focusOptimum.addEventListener('change', render);
     populateControls(); renderComparison(); render();
@@ -877,12 +1194,18 @@ def main() -> None:
     args = parse_args()
     cells = _load_cells(args.source_design)
     observations = _load_observations(args.observations, cells)
+    observations = _attach_atomic_metrics(
+        observations,
+        args.output_dir,
+        refresh=args.refresh_metrics,
+        workers=args.fetch_workers,
+    )
     candidates = _load_candidates(args.candidates, cells)
     historical_dense = _load_historical_dense(args.historical_dense)
     payload, diagnostics = _payload(cells, observations, candidates, historical_dense)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     output_path = args.output_dir / "starcoder_wsd80_matched_nd_surface_explorer.html"
-    output_path.write_text(_html(payload), encoding="utf-8")
+    output_path.write_text(render_surface_explorer_html(payload), encoding="utf-8")
     diagnostics.to_csv(args.output_dir / "cell_sampling_diagnostics.csv", index=False)
     print(output_path)
 

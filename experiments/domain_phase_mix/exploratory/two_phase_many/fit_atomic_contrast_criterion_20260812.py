@@ -66,7 +66,7 @@ def contrast(panel, response: np.ndarray, rows: np.ndarray, evaluate: np.ndarray
     return response[evaluate] - np.interp(panel.aggregate[evaluate], x, y)
 
 
-def select(panel, response, folds, name: str, criterion: str) -> np.ndarray:
+def select(panel, response, folds, name: str, criterion: str, seed: int = 20260812) -> np.ndarray:
     box = stage1.bounds_for(name)
 
     def objective(theta):
@@ -96,7 +96,7 @@ def select(panel, response, folds, name: str, criterion: str) -> np.ndarray:
     return differential_evolution(
         objective,
         box,
-        rng=np.random.default_rng(20260812),
+        rng=np.random.default_rng(seed),
         popsize=10,
         maxiter=20,
         tol=1e-10,

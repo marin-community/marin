@@ -109,6 +109,26 @@ def load_full_pool(refresh: bool = False) -> pd.DataFrame:
     return full
 
 
+_PRELOADED: dict[str, pd.DataFrame] = {}
+
+
+def seed_cache(frames: dict[str, pd.DataFrame]) -> None:
+    """Install already-loaded per-support frames so `load_support` never touches disk.
+
+    `load_observations` rewrites its metric cache on every call, so several worker processes calling it
+    concurrently race on that file and some of them read it half-written. Parallel drivers load once in
+    the parent and seed the workers through this, which removes the race and the repeated parse.
+    """
+    _PRELOADED.update(frames)
+
+
+def load_all_supports(refresh: bool = False) -> dict[str, pd.DataFrame]:
+    observations = explorer.load_observations(COVERAGE, EXPLORER_DIR, refresh=refresh, workers=1)
+    return {
+        support_id: group.reset_index(drop=True) for support_id, group in observations.groupby("support_id", sort=True)
+    }
+
+
 def load_support(support_id: str, refresh: bool = False) -> pd.DataFrame:
     """One replay condition. `full` is the zero-replay panel; the rest carry real repetition.
 
@@ -121,11 +141,13 @@ def load_support(support_id: str, refresh: bool = False) -> pd.DataFrame:
     that cannot express phase structure scores well there regardless. Repetition is where the effect
     being modelled actually exists.
     """
-    observations = explorer.load_observations(COVERAGE, EXPLORER_DIR, refresh=refresh, workers=1)
-    frame = observations.loc[observations["support_id"] == support_id].reset_index(drop=True)
+    if support_id in _PRELOADED:
+        frame = _PRELOADED[support_id]
+    else:
+        observations = explorer.load_observations(COVERAGE, EXPLORER_DIR, refresh=refresh, workers=1)
+        frame = observations.loc[observations["support_id"] == support_id].reset_index(drop=True)
     if frame.empty:
-        available = sorted(observations["support_id"].unique())
-        raise ValueError(f"unknown support_id {support_id!r}; available: {available}")
+        raise ValueError(f"unknown support_id {support_id!r}")
     if support_id == "full":
         assert_no_replay(frame)
     return frame

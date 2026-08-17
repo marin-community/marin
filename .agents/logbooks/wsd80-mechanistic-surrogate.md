@@ -5969,3 +5969,244 @@ for, nearly repeated within the same round.
 
 Net: no free fix among the remedies tested. The open direction is keeping departures but shrinking them
 much harder, with the penalty selected on held-out prediction *range* rather than error.
+
+## 2026-08-15 - Convex-surrogate viability audit
+
+Audited whether the dense StarCoder WSD80 surfaces support replacing the current nonconvex policy search
+with a convex surrogate. This was local analysis only; no training jobs were submitted.
+
+### Reproduction and provenance
+
+- Base commit: `cb3d1b72b61b53756192afda2aa7a612d84b2ac9`.
+- Entry point:
+  `experiments/domain_phase_mix/exploratory/two_phase_many/audit_starcoder_wsd80_convex_surrogate_viability_20260815.py`.
+- Command:
+  `uv run experiments/domain_phase_mix/exploratory/two_phase_many/audit_starcoder_wsd80_convex_surrogate_viability_20260815.py`.
+- Script SHA-256: `2f70b25119eb7b1bf0233bf9f3fb5e9514a309063f974deaab6013ccc226650a`.
+- Report and machine-readable outputs:
+  `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/starcoder_wsd80_convex_surrogate_viability_20260815/`.
+- The protocol records source hashes, four outer and three inner spatial folds, fixed fold seeds, ridge grids,
+  multiplicity correction, and the fresh-selected-policy gate. All models fit all 125 coordinates per cell;
+  the single-observation shape screen uses the 84 interior coordinates.
+- `./infra/pre-commit.py` passed on the entry point. Nested SCS solves sometimes returned an
+  `inaccurate` status, but every accepted fit was checked to have maximum shape-constraint violation at
+  most `1e-4`; all full nonparametric convex fits used CLARABEL.
+
+### Model-free shape evidence
+
+- There are 180 exact collinear chord tests with four aligned seeds. Two positive Jensen gaps survive
+  correction within their r0/m400 cell, but none survives one Holm family across all 180 tests. The two
+  within-cell findings are tied-diagonal chords with gaps `+0.175204` and `+0.116432` BPB.
+- The direct fixed-aggregate evidence is narrow: 24 aligned-seed chord tests, all on one coordinate
+  geometry, with no positive mean Jensen gap. It is compatible with conditional phase convexity but cannot
+  certify it.
+- The larger pooled-variance screen finds 23 globally corrected violations in three m400 cells, but this
+  result relies on extrapolating heteroskedastic variance beyond the calibrated aggregate range. It falls
+  to four violations at 4x variance and zero at 9x. It is exploratory, not load-bearing.
+- Decision: the current data do **not** familywise reject global convexity of raw BPB. They also do not
+  establish it, especially along the fixed-aggregate directions relevant to phase control.
+
+### Predictive and optimization audit
+
+- An exact PSD quadratic costs essentially nothing relative to the identical unconstrained quadratic:
+  median/p90 interior blocked-CV RMSE ratios are `0.9926/1.0030`. This is not adequacy: its absolute median
+  interior RMSE is `0.169249` BPB, or `21.89` modeled coordinate SDs, and it fails all three fresh optimum
+  gates.
+- The aggregate-conditioned cubic
+  `L(a, delta) = A(a) + B(a) delta + 1/2 C(a) delta^2`, with `C(a) >= 0`, is worse than its matched
+  unconstrained form: median/p90 ratios `1.2292/1.3759`. Its median interior RMSE is `0.276367` BPB and both
+  variants fail all fresh optimum gates. Ridge selection changes across outer folds in all 28 cells, with
+  median penalty span `1000x`.
+- A deliberately non-mechanistic max-affine convex regression tested whether the failures were merely due
+  to low polynomial expressivity. It reaches median in-sample interior RMSE `0.047394` BPB but degrades to
+  `0.229661` under blocked CV, has unstable regularization in 27/28 cells, and fails all fresh optimum gates.
+- Fresh-confirmed selected-pair gains at r3 are `0.007576`, `0.010487`, and `0.013843` BPB for m100,
+  m200, and m400. No tested convex model simultaneously locates these policies and predicts their paired
+  gains inside the fresh 95% intervals.
+- The matched unconstrained versions also fail, so convexity is not the only bottleneck. The tested state
+  representations and their spatial generalization are inadequate.
+
+### Decision and surviving route
+
+No globally convex raw-BPB surrogate is promoted. This is not a proof that a useful convex representation
+cannot exist: a fixed, mechanistically declared, strictly increasing response link could make a latent
+score convex while preserving the optimum. No such link was frozen or tested here, and an arbitrary
+learned monotone calibration layer remains inadmissible.
+
+The defensible convexification is conditional rather than global. For fixed aggregate `a` and frozen
+incoming state, test a phase-control objective
+
+`V_a(delta) = c(a) - b(a)^T delta + 1/2 delta^T H(a) delta + sum[p,i] lambda[p,i] [e[p,i] - tau[p,i]]_+^q[p,i]`,
+
+where `H(a)` is PSD, `lambda >= 0`, `q >= 1`, and each exposure is affine in `delta`. The feasible phase
+contrast set is linear, so the inner phase solve is convex. Joint optimization over aggregate and phase is
+generally nonconvex because aggregate-conditioned alignment, curvature, and retained-state transitions
+introduce products or nonlinear state dependence. The next admissible route is therefore a flexible outer
+aggregate model/search plus a convex inner phase-control solve, or sequential convex trust regions. Do not
+reinstate the falsified hard fiber-optimality constraint.
+
+This audit is WSD80 development evidence only. Any candidate derived from it must be frozen before testing
+on 300M 39-bucket data and cannot use a post-hoc output calibrator. Two prior Opus reviews informed the
+statistical and scope corrections; an additional final invocation returned no review and was not treated
+as evidence.
+
+## 2026-08-15 - Noise-aware repaired-RPL head ablation
+
+Tested whether observation noise, heavy tails, or aggregate-matched phase differences explain the remaining
+surrogate error without changing the repaired RPL equation. This was a local fixed-shape screen; no training
+jobs were submitted.
+
+### Frozen protocol and reproduction
+
+- Base commit: `cb3d1b72b61b53756192afda2aa7a612d84b2ac9`.
+- Primary entry point:
+  `experiments/domain_phase_mix/exploratory/two_phase_many/benchmark_noise_aware_rpl_heads_20260815.py`.
+- Primary command:
+  `uv run experiments/domain_phase_mix/exploratory/two_phase_many/benchmark_noise_aware_rpl_heads_20260815.py`.
+- Primary script SHA-256: `0681a9b8000cf506492484937f92effa6d9583e94011bb8ef19d92ef40aa669d`.
+- Optimizer diagnostic:
+  `experiments/domain_phase_mix/exploratory/two_phase_many/diagnose_noise_aware_rpl_student_t_20260815.py`.
+- Diagnostic command:
+  `uv run experiments/domain_phase_mix/exploratory/two_phase_many/diagnose_noise_aware_rpl_student_t_20260815.py`.
+- Diagnostic script SHA-256: `36641ee01c2435c2023a0c7bc2a8c935f4686e06211be1705264a918f2b08e53`.
+- Artifacts:
+  `reference_outputs/noise_aware_rpl_head_ablation_20260815/` and
+  `reference_outputs/noise_aware_rpl_student_t_diagnostic_20260815/` under the two-phase experiment directory.
+- Published fold-specific and full-fit RPL shapes and ridges were reused. Only the linear-head residual
+  objective changed. WSD80 headline metrics used the previously published interior mask; 300M metrics used
+  all 520 rows with correspondence-grouped folds.
+- `./infra/pre-commit.py` passed on both entry points.
+
+### Results
+
+No noise-aware head is promoted.
+
+- On WSD80 random folds, Student-t changes interior RMSE from `0.007575` to `0.007417` BPB. The
+  aggregate-cluster bootstrap difference is `-0.000158`, 95% interval `[-0.000683, +0.000314]`. MAE does
+  improve by `-0.000403`, interval `[-0.000667, -0.000119]`.
+- On WSD80 blocked folds, Student-t is decisively worse: RMSE `0.033174` versus Huber `0.026530`, difference
+  `+0.006644`, interval `[+0.004339, +0.009114]`; Regret@1 is `0.025108` versus `0.001900`; optimism errors
+  above 0.05 BPB are 21 versus 9.
+- A fixed-scale, two-start bounded Student-t diagnostic confirmed this is not an optimizer basin. All six
+  solves succeeded, the least-squares and Huber starts agreed within `3.1e-14` objective units, blocked RMSE
+  remained `0.032428`, and Regret@1 remained `0.025108`.
+- Student-t and the paired auxiliary objective do not improve 300M Uncheatable or Table-9 RMSE beyond
+  correspondence-cluster bootstrap uncertainty. The paired objective slightly improves some 300M phase-delta
+  diagnostics but preserves or worsens end-to-end RMSE and Regret@1.
+- The transferred WSD80 variance shape does not help. It estimates seed noise, while blocked residuals are
+  dominated by model misspecification; it is nearly indistinguishable from homoskedastic Student-t.
+
+### Review corrections and decision
+
+An independent read-only Opus 5 review was run through the verified OAuth subscription. It found that the
+WSD80 paired arm is not decision-valid: 255 differences reuse a small set of tied fiber anchors, but the
+diagonal pair-variance approximation treats them as independent. The arm therefore concentrates anchor
+leverage and double-counts shared noise. It remains a failed diagnostic, not evidence that paired information
+is useless. The same defect does not affect the 300M arm, whose 238 pairs have distinct matched anchors.
+
+The review also identified the strongest surviving lead: plain MSE beats Huber on the frozen blocked shape.
+Its RMSE is `0.021544` versus `0.026530`, a difference of `-0.004986` BPB with interval
+`[-0.008637, -0.002832]`; Spearman, Regret@1, and optimism counts also improve. This does not promote MSE
+because the nonlinear shape and ridge were selected under Huber and only one spatial partition was tested.
+
+**Decision:** robust losses improve ordinary interpolation by ignoring large residuals, but those residuals
+are precisely the spatial anchors needed for extrapolation. Quantile or rank loss should not replace cardinal
+mean-BPB regression. The next high-value local test is fully nested MSE shape/ridge selection across multiple
+blocked-region partitions. Do not spend another round tuning Student-t, the current heteroskedastic instrument,
+or the invalid WSD pair pseudo-likelihood.
+
+## 2026-08-15 - Successor selected-policy acceptance protocol
+
+Removed coordinate distance from the current deployment acceptance decision without rewriting the exposed
+44-cell history. The successor protocol uses one fresh same-seed paired non-inferiority gate: for
+`d_s = BPB_s(candidate) - BPB_s(reference)`, pass only when the one-sided 95% upper confidence bound on
+`mean(d)` is at most the predeclared `0.002` BPB practical margin. A nonsignificant or underpowered comparison
+does not pass. Coordinate distance remains descriptive.
+
+The checked GEN-039 driver had two reproducibility defects: nested fold selection built the design on the full
+panel while indexing a fold-local response, and its repository-root path prevented direct PEP 723 execution.
+Both are repaired in `fit_frontier_wsd80_20260812.py`. The corrected distance-free diagnostics pass `33/33`
+cells over 11 seeds: RMSE `11/11`, Regret@1 `11/11`, and phase-gain error `11/11`. Mean selected coordinate is
+`(0.0616, 0.4807)`. Distance would fail seed 4 at `0.050062` and seed 8 at `0.100778`; seed 8 nevertheless has
+observed-row Regret@1 `0.001495` BPB, showing why geometry is not a performance gate.
+
+The current seed-0 recommendation `(0.06, 0.4875)` has no exact repeated observations. The new deployment gate
+therefore returns `not_evaluable_missing_candidate_coordinate`; it is not promoted by the `33/33` diagnostic
+tally. Existing five-seed repeats at `(0.30, 0.30)` versus `(0.10, 0.50)` provide a sanity check: mean candidate
+minus reference is `+0.010072` BPB and the one-sided upper bound is `+0.012151`, correctly failing the `0.002`
+margin.
+
+Protocol and report:
+`reference_outputs/wsd80_selected_policy_noninferiority_gate_20260815/`. Evaluator:
+`evaluate_wsd80_selected_policy_noninferiority_20260815.py`. Four focused tests and targeted pre-commit pass.
+
+### Review correction and protocol v2
+
+The preceding entry records the first local draft and must not be treated as the final protocol. Independent
+read-only Opus 5 review found that `n >= 5` left optional stopping open and had only about 52% power to certify
+a truly equal policy under the observed `0.002181` BPB paired-SD proxy. It also found a zero-variance auto-pass
+and correctly identified that observed-row Regret@1 is not the regret of the continuous full-fit optimum. The
+seed-8 Regret@1/distance comparison in the preceding entry is therefore withdrawn as a justification for
+removing distance.
+
+Protocol v2 freezes candidate `(0.0575, 0.4900)`, reference `(0.1000, 0.5000)`, and exactly twelve fresh paired
+seeds `20260816` through `20260827`. At the SD proxy, twelve pairs provide approximately 90.8% power at true
+equality for the one-sided `0.002` BPB non-inferiority margin. The evaluator has no CLI overrides for alpha,
+margin, or seeds; records input SHA-256; rejects identical coordinates and zero paired variance; and reports
+manifest mismatches and nearest coordinates. Six focused tests and targeted pre-commit pass.
+
+The frontier driver now also separates inner-fold seeds using the frozen `31000` base, uses equal tied and 2D
+grid resolution for gain error, and asserts complete OOF coverage. The resulting model-form tally remains
+`33/33`, with mean selected coordinate `(0.0664, 0.4811)`. Under the historical four-gate denominator the same
+run is `42/44`, not `43/44`: distance fails seeds 4 and 5. The `33/33` count reflects removal of one diagnostic,
+not an improvement in the model, and none of these diagnostics certifies the continuous selected policy.
+
+The defensible reason to demote coordinate distance is that it measures proximity to a noisy, selection-biased
+one-seed argmin and has no fixed mapping to expected BPB regret. The selected coordinate currently has no direct
+performance evidence and remains not evaluable until the frozen fresh paired panel is complete.
+
+Final targeted verification adds an explicit out-of-simplex coordinate guard: seven focused tests now pass.
+
+The protocol CLI now compiles in the exact frozen candidate and reference coordinates rather than accepting
+coordinate overrides under the same protocol identifier. This closes the final provenance loophole before
+any fresh outcomes exist; eight focused tests pass.
+
+### The with-repetition two-bucket cell, scored on runs the models never saw
+
+The criterion this cell had been using was measuring noise, and replacing it changed every conclusion.
+Predicted gain was scored against `y[best tied] - y[global min]` on the single-seed discovery panel.
+Both terms are extrema of a noisy surface: across the sixteen discovery-positive blocks the discovery
+gain exceeds the fresh-seed gain by `0.001412` BPB, against true gains of a few thousandths, and per-run
+seed noise is `0.00310` BPB so a difference of two runs carries `0.00439` -- more than twice the `0.002`
+margin. Separately, `np.argmin` was choosing recommendations for models that cannot make them: a
+single-index model is exactly flat along a family of policies, and the raveling order returns the lowest
+phase-0 share on that plateau, which at 4x replay is the `p0 = 0` edge where the true code optimum
+happens to sit. Scoring the plateau's mean realised loss moved `two-bucket`'s regret there from `0.01134`
+to `0.05340`.
+
+The replacement was already on disk and had never been used to score a model: 28 preregistered blocks,
+each rerunning a frozen tied and a frozen untied policy on five fresh seeds, 280 separately trained runs.
+On that target, fitted per block, no candidate predicts the gain -- RMSE `0.016` to `0.029` against a
+measurement floor of `0.00191` and a total truth range of `0.024` -- and reading the discovery argmin with
+no model at all beats every model.
+
+What passes is one mechanism fitted across the repetition ladder rather than per condition. The seven
+supports are the same experiment with the StarCoder pool size changed, an exact doubling of the epoch rate
+from `2.646` to `84.674`, sharing a zero-StarCoder run whose BPB agrees across supports to `0.00000`.
+Fitted leave-one-support-out on the finite ladder, `two-horizon-split-damage` gives mean fresh-seed
+decision regret `0.00048` to `0.00102` BPB with support-clustered upper bounds of `0.00122`, `0.00111` and
+`0.00183` -- inside the margin on five of five seeds -- and Spearman `0.452` to `0.638`, `p <= 0.027`
+throughout. It never sees the held-out pool size, and it matches the no-model baseline that reads the
+held-out condition's own panel.
+
+The registered ablation carries it. The split replaces the incumbent's single damage column with two
+increments that sum back to it exactly, adding one head column and no shared parameter, so the ablation is
+the incumbent itself: unsplit damage fails on both backbones, `0/5` and `1/5` seeds, while both split
+forms pass `5/5`. Two boundaries came with it. Fitted per block on 125 rows the same split *hurts*,
+dropping rank correlation from `0.610` to `0.310`, because the extra column needs pool-size variation to
+be identified. And pooling the no-repetition support in sends `two-bucket` and `two-horizon`
+anti-correlated with the truth, `-0.527` and `-0.547`, since one readout cannot span a 3000x epoch-rate
+range.
+
+Gain magnitude remains unpredicted: RMSE `0.031` to `0.147` against a `0.00178` floor. This is a decision
+rule, not a value estimate, on one metric, between two frozen policies per block.
