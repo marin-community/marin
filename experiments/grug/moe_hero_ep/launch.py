@@ -53,6 +53,71 @@ HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 _SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
 _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
 
+# Pinned JAX nightly for arms that need post-0.11.0 XLA (e.g. the device-initiated ragged
+# all-to-all kernel from openxla#46116). This exact set ran cleanly against NCCL 2.30.7 on
+# the cw-us-east-08a GB200 workers (marin#8108, MOK-JAX arms, 2026-08-10).
+JAX_NIGHTLY_WHEELS_20260809: tuple[str, ...] = (
+    "https://us-python.pkg.dev/ml-oss-artifacts-published/jax-public-nightly-artifacts-registry/jax/jax-0.11.1.dev20260809-py3-none-any.whl",
+    "https://us-python.pkg.dev/ml-oss-artifacts-published/jax-public-nightly-artifacts-registry/jaxlib/jaxlib-0.11.1.dev20260809-cp312-cp312-manylinux_2_27_aarch64.whl",
+    "https://us-python.pkg.dev/ml-oss-artifacts-published/jax-public-nightly-artifacts-registry/jax-cuda13-plugin/jax_cuda13_plugin-0.11.1.dev20260809-cp312-cp312-manylinux_2_27_aarch64.whl",
+    "https://us-python.pkg.dev/ml-oss-artifacts-published/jax-public-nightly-artifacts-registry/jax-cuda13-pjrt/jax_cuda13_pjrt-0.11.1.dev20260809-py3-none-manylinux_2_27_aarch64.whl",
+)
+
+
+def pjrt_wheel_install_script(wheel_url: str) -> str:
+    """Task setup script installing the pinned nightly with a substituted PJRT wheel.
+
+    Installs the three stock dev20260809 wheels plus a self-built ``jax-cuda13-pjrt`` from
+    object storage, so the runtime matches ``--jax-nightly`` except for the PJRT patch.
+    """
+    stock_wheels = " ".join(f'"{url}"' for url in JAX_NIGHTLY_WHEELS_20260809 if "pjrt" not in url)
+    return f"""set -e
+: "${{IRIS_WORKDIR:?}}"
+: "${{IRIS_VENV:?}}"
+wheel_dir="$IRIS_WORKDIR/.pjrt-wheel"
+rm -rf "$wheel_dir"
+mkdir -p "$wheel_dir"
+echo 'downloading patched PJRT wheel'
+"$IRIS_VENV/bin/python" - <<'PY'
+import os
+from pathlib import Path
+
+import fsspec
+
+wheel_url = {wheel_url!r}
+wheel_dir = Path(os.environ["IRIS_WORKDIR"]) / ".pjrt-wheel"
+filesystem, remote_path = fsspec.core.url_to_fs(wheel_url)
+filesystem.get(remote_path, str(wheel_dir / remote_path.rsplit("/", 1)[1]))
+PY
+echo 'installing pinned nightly with patched PJRT'
+uv pip install --python "$IRIS_VENV/bin/python" --no-deps --reinstall {stock_wheels} "$wheel_dir"/*.whl
+"$IRIS_VENV/bin/python" - <<'PY'
+from importlib.metadata import version
+
+print("jax", version("jax"), "pjrt", version("jax-cuda13-pjrt"))
+PY
+# nvidia-nccl-cu12 (torch dep) and nvidia-nccl-cu13 (jax dep) both install
+# nvidia/nccl/lib/libnccl.so.2; the last writer wins per node, so a fresh env can
+# end up with different NCCL bootstrap wire formats across ranks (d08: rank 0 at
+# 2.28.9 expected 172-byte messages, peers at 2.30.7 sent 176). Force cu13 last.
+echo 'forcing nvidia-nccl-cu13 to own libnccl.so.2'
+uv pip uninstall --python "$IRIS_VENV/bin/python" nvidia-nccl-cu12 || true
+uv pip install --python "$IRIS_VENV/bin/python" --no-deps --reinstall nvidia-nccl-cu13==2.30.7
+"$IRIS_VENV/bin/python" - <<'PY'
+import ctypes
+import hashlib
+import importlib
+from pathlib import Path
+
+lib_path = Path(importlib.import_module("nvidia.nccl").__path__[0]) / "lib" / "libnccl.so.2"
+lib = ctypes.CDLL(str(lib_path))
+version = ctypes.c_int()
+lib.ncclGetVersion(ctypes.byref(version))
+digest = hashlib.sha256(lib_path.read_bytes()).hexdigest()[:16]
+print(f"libnccl {{lib_path}} version_code={{version.value}} sha256={{digest}}")
+PY
+"""
+
 
 FLAVORS: dict[str, str] = {
     "ep": "fixed_all_to_all",

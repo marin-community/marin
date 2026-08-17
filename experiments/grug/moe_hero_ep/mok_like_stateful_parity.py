@@ -29,17 +29,21 @@ from levanter.kernels.mixture_of_kittens.schedule import schedule_capacity
 from experiments.grug.moe_hero_ep.mok_like_correctness import (
     BF16_ATOL,
     BF16_RTOL,
+    DEFAULT_TOP_K,
     MOK_LIKE_BUILD_ROOT,
     MOK_LIKE_SOURCE_ROOT,
     NUM_EXPERTS,
     NUM_LOCAL_EXPERTS,
     SHARED_GRADIENT_ATOL,
-    TOP_K,
     WORLD_SIZE,
     RouteScenario,
     _required_schedule_capacity,
     _routes,
 )
+
+# This harness pins one routing shape across every update, so it takes the correctness gate's
+# default rather than exposing a knob of its own.
+TOP_K = DEFAULT_TOP_K
 
 DEFAULT_NUM_UPDATES = 64
 DEFAULT_SEED = 20260812
@@ -367,7 +371,7 @@ def main(
     capacity = schedule_capacity(num_tokens, TOP_K, NUM_LOCAL_EXPERTS, config)
     route_plan = _stateful_route_plan(num_updates)
     route_metrics_by_scenario = {
-        scenario: _route_metrics(_routes(num_tokens, scenario), capacity=capacity) for scenario in set(route_plan)
+        scenario: _route_metrics(_routes(num_tokens, scenario, TOP_K), capacity=capacity) for scenario in set(route_plan)
     }
     overflowing = {
         scenario.value: metrics["required_schedule_capacity"]
@@ -416,7 +420,7 @@ def main(
         num_tokens=num_tokens,
         hidden_dim=hidden_dim,
     )
-    initial_routes = _routes(num_tokens, route_plan[0]).reshape(-1, TOP_K)
+    initial_routes = _routes(num_tokens, route_plan[0], TOP_K).reshape(-1, TOP_K)
     example_arguments = (
         fused_parameters,
         fused_momentum,
@@ -524,7 +528,7 @@ def main(
                 num_tokens=num_tokens,
                 hidden_dim=hidden_dim,
             )
-            routes = _routes(num_tokens, scenario)
+            routes = _routes(num_tokens, scenario, TOP_K)
             step_arguments = (
                 jax.device_put(jnp.asarray(x, dtype=jnp.bfloat16), batch_sharding),
                 jax.device_put(jnp.asarray(routes.reshape(-1, TOP_K), dtype=jnp.int32), batch_sharding),

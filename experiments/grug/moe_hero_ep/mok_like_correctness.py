@@ -25,6 +25,7 @@ from levanter.kernels.mixture_of_kittens import (
     MokLikeBuildConfig,
     MokLikeConfig,
     MokLikeForwardXStorage,
+    MokLikeRuntimeHandle,
     MokLikeWorkspaceTransport,
     initialize_mok_like_runtime,
     mok_like_mlp,
@@ -35,13 +36,19 @@ from levanter.kernels.mixture_of_kittens.runtime import MokLikeTestFailurePhase,
 from levanter.kernels.mixture_of_kittens.schedule import schedule_capacity
 
 WORLD_SIZE = 4
-TOP_K = 4
+DEFAULT_TOP_K = 4
 NUM_LOCAL_EXPERTS = 2
 NUM_EXPERTS = WORLD_SIZE * NUM_LOCAL_EXPERTS
 BF16_ATOL = 0.5
 BF16_RTOL = 0.01
 SHARED_GRADIENT_ATOL = 1.0
 ROUTER_GRADIENT_RELATIVE_L2_TOLERANCE = 0.01
+# A gradient is a reduction, so its absolute error tracks the magnitude of the summed terms rather
+# than of any one output element. Elements near zero through cancellation therefore carry the same
+# absolute error as the largest ones, which no elementwise relative tolerance can express: the floor
+# has to scale with the tensor's peak. Four bf16 ULP -- the format has an eight-bit significand, so
+# `4 * 2**-8` of the peak -- leaves every leaf measured so far at one to two ULP of headroom.
+BF16_PEAK_RELATIVE_ATOL = 4 * 2**-8
 MOK_LIKE_SOURCE_ROOT = "/tmp/marin-mok-like/source"
 MOK_LIKE_BUILD_ROOT = "/tmp/marin-mok-like/build"
 
@@ -56,45 +63,113 @@ class RouteScenario(StrEnum):
     ALL_TO_ONE = "all_to_one"
 
 
-def _routes(num_tokens: int, scenario: RouteScenario) -> np.ndarray:
+def _routes(num_tokens: int, scenario: RouteScenario, top_k: int) -> np.ndarray:
     source_ranks = np.arange(WORLD_SIZE, dtype=np.int32)[:, None, None]
     token_indices = np.arange(num_tokens, dtype=np.int32)[None, :, None]
-    route_indices = np.arange(TOP_K, dtype=np.int32)[None, None, :]
+    route_indices = np.arange(top_k, dtype=np.int32)[None, None, :]
     destination_ranks = (source_ranks + route_indices) % WORLD_SIZE
     if scenario is RouteScenario.ALL_TO_ONE:
-        destination_ranks = np.zeros((WORLD_SIZE, num_tokens, TOP_K), dtype=np.int32)
-        local_experts = np.broadcast_to(route_indices % NUM_LOCAL_EXPERTS, (WORLD_SIZE, num_tokens, TOP_K))
+        destination_ranks = np.zeros((WORLD_SIZE, num_tokens, top_k), dtype=np.int32)
+        local_experts = np.broadcast_to(route_indices % NUM_LOCAL_EXPERTS, (WORLD_SIZE, num_tokens, top_k))
     elif scenario is RouteScenario.BALANCED:
         local_experts = ((source_ranks + token_indices + route_indices) % NUM_LOCAL_EXPERTS).astype(np.int32)
     elif scenario is RouteScenario.ZERO_TOKEN_EXPERT:
-        local_experts = np.zeros((WORLD_SIZE, num_tokens, TOP_K), dtype=np.int32)
+        local_experts = np.zeros((WORLD_SIZE, num_tokens, top_k), dtype=np.int32)
     elif scenario is RouteScenario.SKEWED:
         local_experts = np.broadcast_to(
             ((source_ranks + token_indices) % 4 == 0).astype(np.int32),
-            (WORLD_SIZE, num_tokens, TOP_K),
+            (WORLD_SIZE, num_tokens, top_k),
         )
     else:
         raise AssertionError(f"unhandled route scenario {scenario}")
     return destination_ranks * NUM_LOCAL_EXPERTS + local_experts
 
 
+# The differentiable tuple carries the shared-width leaves first; a latent projection appends
+# `routed_x` and `latent_up` so both stay under the same gradient comparison.
+_NUM_SHARED_WIDTH_LEAVES = 8
+
+
 def _canonical_inputs(
     *,
     num_tokens: int,
+    top_k: int,
     hidden_dim: int,
     intermediate_dim: int,
+    routed_intermediate_dim: int | None,
+    latent_dim: int | None,
 ) -> tuple[np.ndarray, ...]:
     random = np.random.default_rng(1234)
     global_tokens = WORLD_SIZE * num_tokens
+    routed_dim = hidden_dim if latent_dim is None else latent_dim
+    routed_i = intermediate_dim if routed_intermediate_dim is None else routed_intermediate_dim
     x = random.normal(size=(global_tokens, hidden_dim)).astype(np.float32)
-    combine_weights = np.ones((global_tokens, TOP_K), dtype=np.float32)
-    w_gate = (random.normal(size=(NUM_EXPERTS, hidden_dim, intermediate_dim)) / hidden_dim**0.5).astype(np.float32)
-    w_up = (random.normal(size=(NUM_EXPERTS, hidden_dim, intermediate_dim)) / hidden_dim**0.5).astype(np.float32)
-    w_down = (random.normal(size=(NUM_EXPERTS, intermediate_dim, hidden_dim)) / intermediate_dim**0.5).astype(np.float32)
+    combine_weights = np.ones((global_tokens, top_k), dtype=np.float32)
+    w_gate = (random.normal(size=(NUM_EXPERTS, routed_dim, routed_i)) / routed_dim**0.5).astype(np.float32)
+    w_up = (random.normal(size=(NUM_EXPERTS, routed_dim, routed_i)) / routed_dim**0.5).astype(np.float32)
+    w_down = (random.normal(size=(NUM_EXPERTS, routed_i, routed_dim)) / routed_i**0.5).astype(np.float32)
     shared_gate = (random.normal(size=(hidden_dim, intermediate_dim)) / hidden_dim**0.5).astype(np.float32)
     shared_up = (random.normal(size=(hidden_dim, intermediate_dim)) / hidden_dim**0.5).astype(np.float32)
     shared_down = (random.normal(size=(intermediate_dim, hidden_dim)) / intermediate_dim**0.5).astype(np.float32)
-    return x, combine_weights, w_gate, w_up, w_down, shared_gate, shared_up, shared_down
+    leaves = (x, combine_weights, w_gate, w_up, w_down, shared_gate, shared_up, shared_down)
+    if latent_dim is None:
+        return leaves
+    routed_x = random.normal(size=(global_tokens, latent_dim)).astype(np.float32)
+    latent_up = (random.normal(size=(latent_dim, hidden_dim)) / latent_dim**0.5).astype(np.float32)
+    return (*leaves, routed_x, latent_up)
+
+
+def _latent_pair(values: tuple[jax.Array, ...]) -> tuple[jax.Array | None, jax.Array | None]:
+    """Return the `(routed_x, latent_up)` tail, or a pair of `None` at a single width."""
+
+    if len(values) == _NUM_SHARED_WIDTH_LEAVES:
+        return None, None
+    return values[-2], values[-1]
+
+
+def _fused_call(
+    values: tuple[jax.Array, ...],
+    routing: jax.Array,
+    *,
+    mesh: Mesh,
+    runtime: MokLikeRuntimeHandle,
+    config: MokLikeConfig,
+    collective_id: int,
+) -> tuple[jax.Array, jax.Array]:
+    routed_x, latent_up = _latent_pair(values)
+    shared_width = values[:_NUM_SHARED_WIDTH_LEAVES]
+    return mok_like_mlp(
+        shared_width[0],
+        routing,
+        *shared_width[1:],
+        mesh=mesh,
+        runtime=runtime,
+        config=config,
+        collective_id=collective_id,
+        routed_x=routed_x,
+        latent_up=latent_up,
+    )
+
+
+def _reference_call(
+    values: tuple[jax.Array, ...],
+    routing: jax.Array,
+    *,
+    mesh: Mesh,
+    config: MokLikeConfig,
+) -> jax.Array:
+    routed_x, latent_up = _latent_pair(values)
+    shared_width = values[:_NUM_SHARED_WIDTH_LEAVES]
+    return mok_like_reference(
+        shared_width[0],
+        routing,
+        *shared_width[1:],
+        mesh=mesh,
+        config=config,
+        fallback_implementation="ring",
+        routed_x=routed_x,
+        latent_up=latent_up,
+    )
 
 
 def _real_macrobuffers(routes: np.ndarray, *, capacity: int, macrobatch_size: int) -> int:
@@ -132,12 +207,15 @@ def _error_metrics(
     actual_float = np.asarray(jax.device_get(actual), dtype=np.float32)
     expected_float = np.asarray(jax.device_get(expected), dtype=np.float32)
     absolute_error = np.abs(actual_float - expected_float)
-    close = np.isclose(actual_float, expected_float, atol=absolute_tolerance, rtol=BF16_RTOL)
+    peak = float(np.max(np.abs(expected_float))) if expected_float.size else 0.0
+    tolerance = max(absolute_tolerance, BF16_PEAK_RELATIVE_ATOL * peak)
+    close = np.isclose(actual_float, expected_float, atol=tolerance, rtol=BF16_RTOL)
     worst_flat_index = int(np.argmax(absolute_error))
     reference_l2 = float(np.linalg.norm(expected_float))
     return {
         "allclose": bool(np.all(close)),
-        "absolute_tolerance": absolute_tolerance,
+        "absolute_tolerance": tolerance,
+        "peak_magnitude": peak,
         "max_absolute_error": float(np.max(absolute_error)),
         "mean_absolute_error": float(np.mean(absolute_error)),
         "mismatch_fraction": float(np.mean(~close)),
@@ -178,8 +256,28 @@ def _error_metrics(
     help="run only the forward comparison; the rest of the matrix cannot run cross-process yet",
 )
 @click.option("--num-tokens", type=click.IntRange(min=256), default=512, show_default=True)
+@click.option(
+    "--top-k",
+    type=click.IntRange(min=1),
+    default=DEFAULT_TOP_K,
+    show_default=True,
+    help="Routed experts per token. The symmetric arena scales with 1 + top_k, so this is the "
+    "widest single lever on workspace size.",
+)
 @click.option("--hidden-dim", type=click.IntRange(min=256), default=512, show_default=True)
+@click.option(
+    "--latent-dim",
+    type=click.IntRange(min=256),
+    default=None,
+    help="Run the routed path at this width, leaving the shared expert on --hidden-dim.",
+)
 @click.option("--intermediate-dim", type=click.IntRange(min=256), default=512, show_default=True)
+@click.option(
+    "--routed-intermediate-dim",
+    type=click.IntRange(min=256),
+    default=None,
+    help="Widen the routed experts against the shared one, as the hero shape does.",
+)
 @click.option("--minibatch-size", type=click.IntRange(min=256), default=256, show_default=True)
 @click.option("--macrobatch-size", type=click.IntRange(min=256), default=256, show_default=True)
 @click.option(
@@ -262,8 +360,11 @@ def main(
     forward_only: bool,
     workspace_transport: str,
     num_tokens: int,
+    top_k: int,
     hidden_dim: int,
+    latent_dim: int | None,
     intermediate_dim: int,
+    routed_intermediate_dim: int | None,
     minibatch_size: int,
     macrobatch_size: int,
     schedule_capacity_factor: float,
@@ -289,11 +390,16 @@ def main(
         ("num_tokens", num_tokens),
         ("hidden_dim", hidden_dim),
         ("intermediate_dim", intermediate_dim),
+        *((("routed_intermediate_dim", routed_intermediate_dim),) if routed_intermediate_dim is not None else ()),
         ("minibatch_size", minibatch_size),
         ("macrobatch_size", macrobatch_size),
     ):
         if value % 256 != 0:
             raise click.BadParameter(f"{name} must be divisible by 256, got {value}")
+    if latent_dim is not None and latent_dim % 256 != 0:
+        raise click.BadParameter(f"latent_dim must be divisible by 256, got {latent_dim}")
+    if routed_intermediate_dim is not None and routed_intermediate_dim % 256 != 0:
+        raise click.BadParameter(f"routed_intermediate_dim must be divisible by 256, got {routed_intermediate_dim}")
     if macrobatch_size % minibatch_size != 0:
         raise click.BadParameter("macrobatch_size must be divisible by minibatch_size")
     if remat and offload:
@@ -349,10 +455,13 @@ def main(
     router_sharding = NamedSharding(mesh, P(None, None))
     arrays = _canonical_inputs(
         num_tokens=replicas * num_tokens,
+        top_k=top_k,
         hidden_dim=hidden_dim,
         intermediate_dim=intermediate_dim,
+        routed_intermediate_dim=routed_intermediate_dim,
+        latent_dim=latent_dim,
     )
-    x, combine_weights, w_gate, w_up, w_down, shared_gate, shared_up, shared_down = arrays
+    x, combine_weights, w_gate, w_up, w_down, shared_gate, shared_up, shared_down = arrays[:_NUM_SHARED_WIDTH_LEAVES]
     differentiable = (
         jax.device_put(jnp.asarray(x, dtype=jnp.bfloat16), batch_sharding),
         jax.device_put(jnp.asarray(combine_weights), batch_sharding),
@@ -363,10 +472,19 @@ def main(
         jax.device_put(jnp.asarray(shared_up, dtype=jnp.bfloat16), shared_sharding),
         jax.device_put(jnp.asarray(shared_down, dtype=jnp.bfloat16), shared_sharding),
     )
-    process_routes = _routes(num_tokens, scenario)
+    if latent_dim is not None:
+        routed_x, latent_up = arrays[_NUM_SHARED_WIDTH_LEAVES:]
+        differentiable += (
+            jax.device_put(jnp.asarray(routed_x, dtype=jnp.bfloat16), batch_sharding),
+            jax.device_put(jnp.asarray(latent_up, dtype=jnp.bfloat16), shared_sharding),
+        )
+    # A latent projection adds two leaves, so every gradient comparison indexes off this rather
+    # than off the eight-leaf single-width shape.
+    differentiable_argnums = tuple(range(len(differentiable)))
+    process_routes = _routes(num_tokens, scenario, top_k)
     routes = np.tile(process_routes, (replicas, 1, 1))
     selected_experts = jax.device_put(
-        jnp.asarray(routes.reshape(-1, TOP_K)),
+        jnp.asarray(routes.reshape(-1, top_k)),
         batch_sharding,
     )
     router = jax.device_put(
@@ -392,7 +510,7 @@ def main(
         backward_peer_storage=backward_peer_storage,
         workspace_transport=transport,
     )
-    capacity = schedule_capacity(num_tokens, TOP_K, NUM_LOCAL_EXPERTS, config)
+    capacity = schedule_capacity(num_tokens, top_k, NUM_LOCAL_EXPERTS, config)
     required_capacity = _required_schedule_capacity(process_routes)
     if capacity < required_capacity:
         raise click.BadParameter(
@@ -420,45 +538,34 @@ def main(
         "shared_up",
         "shared_down",
     )
+    if latent_dim is not None:
+        gradient_names += ("routed_x", "latent_up")
 
+    # Only routed activations cross the wire, so the arena follows the routed width.
     with initialize_mok_like_runtime(
         build_config=build_config,
         num_tokens=num_tokens,
-        hidden_dim=hidden_dim,
-        top_k=TOP_K,
+        hidden_dim=hidden_dim if latent_dim is None else latent_dim,
+        top_k=top_k,
         workspace_slots=config.workspace_slots,
         mesh=mesh,
         workspace_transport=transport,
     ) as runtime:
 
         def fused_loss(*arguments: jax.Array) -> jax.Array:
-            output, _ = mok_like_mlp(
-                arguments[0],
-                selected_experts,
-                *arguments[1:],
-                mesh=mesh,
-                runtime=runtime,
-                config=config,
-                collective_id=0,
+            output, _ = _fused_call(
+                arguments, selected_experts, mesh=mesh, runtime=runtime, config=config, collective_id=0
             )
             return jnp.sum(output.astype(jnp.float32) * output_gradient.astype(jnp.float32))
 
         def reference_loss(*arguments: jax.Array) -> jax.Array:
-            output = mok_like_reference(
-                arguments[0],
-                selected_experts,
-                *arguments[1:],
-                mesh=mesh,
-                config=config,
-                fallback_implementation="ring",
-            )
+            output = _reference_call(arguments, selected_experts, mesh=mesh, config=config)
             return jnp.sum(output.astype(jnp.float32) * output_gradient.astype(jnp.float32))
 
         def fused_output(*arguments: jax.Array, collective_id: int = 0) -> jax.Array:
-            return mok_like_mlp(
-                arguments[0],
+            return _fused_call(
+                arguments,
                 selected_experts,
-                *arguments[1:],
                 mesh=mesh,
                 runtime=runtime,
                 config=config,
@@ -466,25 +573,13 @@ def main(
             )[0]
 
         def fused_output_and_drops(routing: jax.Array, *arguments: jax.Array) -> tuple[jax.Array, jax.Array]:
-            return mok_like_mlp(
-                arguments[0],
-                routing,
-                *arguments[1:],
-                mesh=mesh,
-                runtime=runtime,
-                config=config,
-                collective_id=0,
-            )
+            return _fused_call(arguments, routing, mesh=mesh, runtime=runtime, config=config, collective_id=0)
 
-        def reference_output(routing: jax.Array, *arguments: jax.Array) -> jax.Array:
-            return mok_like_reference(
-                arguments[0],
-                routing,
-                *arguments[1:],
-                mesh=mesh,
-                config=config,
-                fallback_implementation="ring",
-            )
+        # Takes the differentiable leaves and closes over the routing, matching `fused_output`.
+        # Its callers substitute one leaf at a time, so a routing parameter here would silently
+        # absorb the substituted leaf instead.
+        def reference_output(*arguments: jax.Array) -> jax.Array:
+            return _reference_call(arguments, selected_experts, mesh=mesh, config=config)
 
         if failure_gate is not None:
             phase = (
@@ -503,10 +598,9 @@ def main(
                 *arguments: jax.Array,
                 collective_id: int,
             ) -> jax.Array:
-                return mok_like_mlp(
-                    arguments[0],
+                return _fused_call(
+                    arguments,
                     failure_routes,
-                    *arguments[1:],
                     mesh=mesh,
                     runtime=runtime,
                     config=config,
@@ -537,7 +631,7 @@ def main(
                     jax.jit(
                         jax.value_and_grad(
                             partial(failure_loss, collective_id=collective_id),
-                            argnums=tuple(range(2, 10)),
+                            argnums=tuple(2 + index for index in differentiable_argnums),
                         )
                     )
                     .lower(*failure_arguments)
@@ -603,7 +697,7 @@ def main(
                     )
                     success_matches = bool(success_metrics["allclose"])
                 else:
-                    expected_success = jax.jit(jax.value_and_grad(reference_loss, argnums=tuple(range(8))))(
+                    expected_success = jax.jit(jax.value_and_grad(reference_loss, argnums=differentiable_argnums))(
                         *successful_differentiable
                     )
                     jax.block_until_ready(expected_success)
@@ -700,10 +794,15 @@ def main(
         if corrupt_stamp:
 
             def corrupted_stamp_execution(*arguments: jax.Array) -> jax.Array:
-                _, _, context = _fused_forward_with_context(
-                    arguments[0],
+                shared_width = arguments[:_NUM_SHARED_WIDTH_LEAVES]
+                routed_x, _ = _latent_pair(arguments)
+                routed_x = shared_width[0] if routed_x is None else routed_x
+                routed_output_gradient = output_gradient[:, : routed_x.shape[1]]
+                _, _, _, context = _fused_forward_with_context(
+                    shared_width[0],
+                    routed_x,
                     selected_experts,
-                    *arguments[1:],
+                    *shared_width[1:],
                     mesh=mesh,
                     runtime=runtime,
                     config=config,
@@ -712,15 +811,11 @@ def main(
                 corrupt_context = context._replace(stamp_runtime_epoch=context.stamp_runtime_epoch + 1)
                 gradients = _fused_backward(
                     output_gradient,
-                    arguments[0],
+                    routed_output_gradient,
+                    shared_width[0],
+                    routed_x,
                     selected_experts,
-                    arguments[1],
-                    arguments[2],
-                    arguments[3],
-                    arguments[4],
-                    arguments[5],
-                    arguments[6],
-                    arguments[7],
+                    *shared_width[1:],
                     corrupt_context,
                     mesh=mesh,
                     runtime=runtime,
@@ -750,10 +845,8 @@ def main(
             arguments = (differentiable[0], combine_weights_from_router(router_matrix), *differentiable[2:])
             return reference_loss(*arguments)
 
-        actual_output, fused_dropped_assignments = jax.jit(fused_output_and_drops)(
-            selected_experts, *differentiable
-        )
-        expected_output = jax.jit(reference_output)(selected_experts, *differentiable)
+        actual_output, fused_dropped_assignments = jax.jit(fused_output_and_drops)(selected_experts, *differentiable)
+        expected_output = jax.jit(reference_output)(*differentiable)
         actual_output.block_until_ready()
         expected_output.block_until_ready()
         if forward_only:
@@ -761,9 +854,7 @@ def main(
             # collective id, so slot acquisition, generation stamping and release all have to
             # survive repetition. A single call never exercises that.
             for repeat in range(1, forward_repeats):
-                repeated_output, repeated_drops = jax.jit(fused_output_and_drops)(
-                    selected_experts, *differentiable
-                )
+                repeated_output, repeated_drops = jax.jit(fused_output_and_drops)(selected_experts, *differentiable)
                 repeated_output.block_until_ready()
                 repeat_difference = float(
                     jnp.max(jnp.abs(repeated_output.astype(jnp.float32) - expected_output.astype(jnp.float32)))
@@ -778,9 +869,7 @@ def main(
             # The forward comparison alone answers whether the kernel executes and agrees with the
             # reference. The rest of the matrix closes over sharded arrays, which is legal only
             # when one process owns every device, so it cannot run under the fabric transport yet.
-            difference = float(
-                jnp.max(jnp.abs(actual_output.astype(jnp.float32) - expected_output.astype(jnp.float32)))
-            )
+            difference = float(jnp.max(jnp.abs(actual_output.astype(jnp.float32) - expected_output.astype(jnp.float32))))
             dropped = int(jnp.sum(fused_dropped_assignments))
             print(f"FORWARD max_abs_difference={difference:.6f} dropped_assignments={dropped}", flush=True)
             if difference > BF16_ATOL:
@@ -793,13 +882,13 @@ def main(
                 # repeat loop above blocks between calls and so serializes the ranks; this does
                 # not, and it is the shape in which a premature workspace release would bite.
                 def chained(routing: jax.Array, *values: jax.Array) -> jax.Array:
-                    first, _ = mok_like_mlp(
-                        values[0], routing, *values[1:],
-                        mesh=mesh, runtime=runtime, config=config, collective_id=0,
-                    )
-                    second, _ = mok_like_mlp(
-                        first.astype(values[0].dtype), routing, *values[1:],
-                        mesh=mesh, runtime=runtime, config=config, collective_id=0,
+                    first, _ = _fused_call(values, routing, mesh=mesh, runtime=runtime, config=config, collective_id=0)
+                    # Feeding the shared-width result back is what a scanned block does; under a
+                    # latent projection the routed input is projected from it, so reuse the
+                    # original one rather than inventing a second projection here.
+                    chained_values = (first.astype(values[0].dtype), *values[1:])
+                    second, _ = _fused_call(
+                        chained_values, routing, mesh=mesh, runtime=runtime, config=config, collective_id=0
                     )
                     return second
 
@@ -816,15 +905,7 @@ def main(
                 # gradients and the backward readiness flags). The arena binds them, but no
                 # cross-process run has ever executed them -- the training path does, and faults.
                 def gated_loss(routing: jax.Array, gradient: jax.Array, *values: jax.Array) -> jax.Array:
-                    output, _ = mok_like_mlp(
-                        values[0],
-                        routing,
-                        *values[1:],
-                        mesh=mesh,
-                        runtime=runtime,
-                        config=config,
-                        collective_id=0,
-                    )
+                    output, _ = _fused_call(values, routing, mesh=mesh, runtime=runtime, config=config, collective_id=0)
                     return jnp.sum(output.astype(jnp.float32) * gradient.astype(jnp.float32))
 
                 # The training path saves the native context under a remat policy and, in the
@@ -848,7 +929,7 @@ def main(
                         policy=jax.checkpoint_policies.save_any_names_but_these(MOK_CONTEXT_CHECKPOINT_NAME),
                     )
                 loss_value, gradients = jax.jit(
-                    jax.value_and_grad(gated, argnums=tuple(range(2, 10)))
+                    jax.value_and_grad(gated, argnums=tuple(2 + index for index in differentiable_argnums))
                 )(selected_experts, output_gradient, *differentiable)
                 jax.block_until_ready(gradients)
                 finite = all(bool(jnp.all(jnp.isfinite(gradient))) for gradient in gradients)
@@ -880,15 +961,15 @@ def main(
             differentiated_fused_loss = fused_loss
         runtime.reset_call_counts()
         runtime.reset_debug_counters()
-        fused_value, fused_gradients = jax.jit(jax.value_and_grad(differentiated_fused_loss, argnums=tuple(range(8))))(
-            *differentiable
-        )
+        fused_value, fused_gradients = jax.jit(
+            jax.value_and_grad(differentiated_fused_loss, argnums=differentiable_argnums)
+        )(*differentiable)
         fused_value.block_until_ready()
         call_counts = runtime.call_counts()
         debug_counters = runtime.debug_counters()
-        reference_value, reference_gradients = jax.jit(jax.value_and_grad(reference_loss, argnums=tuple(range(8))))(
-            *differentiable
-        )
+        reference_value, reference_gradients = jax.jit(
+            jax.value_and_grad(reference_loss, argnums=differentiable_argnums)
+        )(*differentiable)
         reference_value.block_until_ready()
         fused_router_gradient = jax.jit(jax.grad(fused_router_loss))(router)
         reference_router_gradient = jax.jit(jax.grad(reference_router_loss))(router)
@@ -920,7 +1001,7 @@ def main(
                 *differentiable[1:],
             )
             compiled_chained = (
-                jax.jit(jax.value_and_grad(fused_chained_loss, argnums=tuple(range(9))))
+                jax.jit(jax.value_and_grad(fused_chained_loss, argnums=tuple(range(len(differentiable) + 1))))
                 .lower(*chained_arguments)
                 .compile()
             )
@@ -930,9 +1011,9 @@ def main(
             jax.block_until_ready(actual_twice)
             twice_call_counts = runtime.call_counts()
             twice_counters = runtime.debug_counters()
-            expected_twice = jax.jit(jax.value_and_grad(reference_chained_loss, argnums=tuple(range(9))))(
-                *chained_arguments
-            )
+            expected_twice = jax.jit(
+                jax.value_and_grad(reference_chained_loss, argnums=tuple(range(len(differentiable) + 1)))
+            )(*chained_arguments)
             jax.block_until_ready(expected_twice)
             chained_gradient_names = ("x_first", "x_second", *gradient_names[1:])
             twice_gradient_metrics = {
@@ -974,14 +1055,16 @@ def main(
 
         if concurrent_calls:
             compiled_fused_loss = (
-                jax.jit(jax.value_and_grad(fused_loss, argnums=tuple(range(8)))).lower(*differentiable).compile()
+                jax.jit(jax.value_and_grad(fused_loss, argnums=differentiable_argnums)).lower(*differentiable).compile()
             )
             concurrent_arguments = (
                 differentiable,
                 (differentiable[0] * jnp.asarray(0.5, dtype=jnp.bfloat16), *differentiable[1:]),
             )
             compiled_reference_loss = (
-                jax.jit(jax.value_and_grad(reference_loss, argnums=tuple(range(8)))).lower(*differentiable).compile()
+                jax.jit(jax.value_and_grad(reference_loss, argnums=differentiable_argnums))
+                .lower(*differentiable)
+                .compile()
             )
             expected_concurrent = tuple(compiled_reference_loss(*arguments) for arguments in concurrent_arguments)
             jax.block_until_ready(expected_concurrent)
@@ -1062,6 +1145,13 @@ def main(
         )
         for name, actual, expected in zip(gradient_names, fused_gradients, reference_gradients, strict=True)
     }
+    # The elementwise check tolerates a few ULP at the tensor's peak, which a systematic error --
+    # a transposed index, a dropped term -- would slip under while moving the norm by orders of
+    # magnitude. Require both.
+    for metrics in gradient_metrics.values():
+        metrics["allclose"] = bool(metrics["allclose"]) and (
+            float(metrics["relative_l2_error"]) <= ROUTER_GRADIENT_RELATIVE_L2_TOLERANCE
+        )
     router_gradient_metrics = _error_metrics(
         fused_router_gradient,
         reference_router_gradient,
@@ -1082,8 +1172,11 @@ def main(
         raise AssertionError(f"FFI call counts do not divide evenly across ranks: {call_counts}")
     forward_invocations = call_counts[0] // WORLD_SIZE
     backward_invocations = call_counts[1] // WORLD_SIZE
-    activation_bytes = num_tokens * hidden_dim * jnp.dtype(jnp.bfloat16).itemsize
-    router_bytes = num_tokens * TOP_K * jnp.dtype(jnp.float32).itemsize
+    # Only routed activations are staged for peers, so this follows the routed width. That it does
+    # is the point of a latent projection: it is the expert-parallel wire traffic that narrows.
+    routed_dim = hidden_dim if latent_dim is None else latent_dim
+    activation_bytes = num_tokens * routed_dim * jnp.dtype(jnp.bfloat16).itemsize
+    router_bytes = num_tokens * top_k * jnp.dtype(jnp.float32).itemsize
     expected_forward_staging = (
         (forward_invocations, forward_invocations * activation_bytes)
         if forward_x_storage is MokLikeForwardXStorage.RUNTIME_STAGED

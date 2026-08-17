@@ -212,6 +212,9 @@ class GrugRunConfig:
     gpu_device_memory_fraction: float | None = None
     xla_flag_overrides: tuple[str, ...] = ()
     pip_packages: tuple[str, ...] = ()
+    # Task setup scripts appended after the default environment setup, for runtime pieces pip
+    # cannot express -- currently a self-built PJRT wheel pulled from object storage.
+    extra_setup_scripts: tuple[str, ...] = ()
     max_retries_failure: int = 3
     max_retries_preemption: int = 100
     max_task_failures: int = 10
@@ -255,10 +258,13 @@ def _initialize_mok_like_for_config(
         )
 
     num_tokens = _mok_like_tokens_per_rank(batch_size=batch_size, sequence_length=config.model.max_seq_len, mesh=mesh)
+    # Only routed activations reach the symmetric arena, so a latent projection sizes it. That is
+    # where the compression pays off: the arena then carries no full-width tensor at all.
+    routed_dim = config.model.hidden_dim if config.model.latent_dim is None else config.model.latent_dim
     return initialize_mok_like_runtime(
         build_config=config.mok_like_build,
         num_tokens=num_tokens,
-        hidden_dim=config.model.hidden_dim,
+        hidden_dim=routed_dim,
         top_k=config.model.num_experts_per_token,
         workspace_slots=config.model.mok_like.workspace_slots,
         mesh=mesh,
@@ -1479,7 +1485,8 @@ def _run_grug_local_inner(config: GrugRunConfig) -> None:
                         sequence_length=config.model.max_seq_len,
                         mesh=mesh,
                     ),
-                    hidden_dim=config.model.hidden_dim,
+                    # Staged peer copies are routed activations, so the audit follows that width.
+                    hidden_dim=(config.model.hidden_dim if config.model.latent_dim is None else config.model.latent_dim),
                     top_k=config.model.num_experts_per_token,
                     workspace_slots=config.model.mok_like.workspace_slots,
                 )
@@ -1525,6 +1532,7 @@ def run_grug(config: GrugRunConfig) -> None:
         max_task_failures=config.max_task_failures,
         processes_per_task=config.processes_per_task,
         pip_packages=config.pip_packages,
+        extra_setup_scripts=config.extra_setup_scripts,
     )
 
 

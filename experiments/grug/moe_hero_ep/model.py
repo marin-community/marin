@@ -238,9 +238,11 @@ class GrugModelConfig:
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
         if self.mok_like is not None:
-            if self.shared_expert_intermediate_dim != self.intermediate_dim:
-                raise ValueError("mok_like requires matching routed and shared intermediate dimensions")
-            if self.hidden_dim % 256 != 0 or self.intermediate_dim % 256 != 0:
+            if (
+                self.hidden_dim % 256 != 0
+                or self.intermediate_dim % 256 != 0
+                or self.shared_expert_intermediate_dim % 256 != 0
+            ):
                 raise ValueError("mok_like hidden and intermediate dimensions must be divisible by 256")
             if self.remat_mode == "recompute_all":
                 raise ValueError("mok_like requires remat_mode='save_moe' or 'offload_moe'")
@@ -735,6 +737,19 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         "train/router/capacity_overflow_rate_mean": jnp.mean(capacity_overflow_rate),
         "qb_beta_per_layer": router_metrics.get("qb_beta_per_layer"),
     }
+    # `qb_beta_per_layer` is train state rather than a metric -- it is a [layer, expert] array and
+    # the logger filters it out. Its scalar summary is still worth having: the next step's router
+    # bias is exactly its negation, so a degenerate estimate here shows up as a routing collapse one
+    # step later with nothing in the trace to explain it. `spread` is the range the bias spans
+    # across experts, which is what actually rebalances load.
+    qb_betas = router_metrics.get("qb_beta_per_layer")
+    if qb_betas is not None:
+        finite = jnp.isfinite(qb_betas)
+        out["train/router/qb_beta_mean"] = jnp.mean(jnp.where(finite, qb_betas, 0.0))
+        out["train/router/qb_beta_min"] = jnp.min(jnp.where(finite, qb_betas, jnp.inf))
+        out["train/router/qb_beta_max"] = jnp.max(jnp.where(finite, qb_betas, -jnp.inf))
+        out["train/router/qb_beta_spread_mean"] = jnp.mean(jnp.max(qb_betas, axis=-1) - jnp.min(qb_betas, axis=-1))
+        out["train/router/qb_beta_nonfinite_fraction"] = 1.0 - jnp.mean(finite.astype(jnp.float32))
     for i in range(num_layers):
         out[f"train/router/layer_{i}/routing_entropy"] = routing_entropy[i]
         out[f"train/router/layer_{i}/load_balancing_loss"] = load_balancing_loss[i]
@@ -942,16 +957,27 @@ class MoEMLP(eqx.Module):
                 out_specs=P(),
             )(s_minus_alpha)
 
+        # LatentMoE: compress before dispatch so the expert-parallel all-to-all carries
+        # `latent_dim`-wide rows in both directions. The router above already read the full-width
+        # token, and the shared experts never see this path.
+        routed_input = None
+        if self.w_latent_down is not None and self.latent_norm is not None:
+            routed_input = jnp.einsum(
+                "td,dl->tl",
+                x_flat,
+                self.w_latent_down.astype(x_flat.dtype),
+                out_sharding=_batch_spec(),
+            )
+            # Keep the expert input scale independent of the down-projection initialization.
+            routed_input = self.latent_norm(routed_input)
+
         if self.cfg.mok_like is not None:
             if shared_expert is None:
                 raise ValueError("mok_like requires the block's shared expert")
             if mok_like_runtime is None:
                 raise ValueError("mok_like requires an initialized runtime handle bound to the model")
-            if self.w_latent_down is not None:
-                # LatentMoE narrows only the routed path, leaving the shared experts on full-width
-                # tokens. The fused kernel takes a single `x` for both, so the asymmetry cannot be
-                # expressed without splitting the megakernel's input contract.
-                raise ValueError("mok_like does not support latent_dim; the fused kernel shares one input width")
+            # The fused call runs the shared expert too, and expands the routed result through
+            # `w_latent_up` itself, so its output is already the summed full-width block output.
             routed_flat, dropped_assignments = mok_like_mlp(
                 x_flat,
                 selected_experts.astype(jnp.int32),
@@ -966,33 +992,25 @@ class MoEMLP(eqx.Module):
                 runtime=mok_like_runtime,
                 config=self.cfg.mok_like,
                 collective_id=MOK_LIKE_MODEL_COLLECTIVE_ID,
+                routed_x=None if routed_input is None else routed_input.astype(x_flat.dtype),
+                latent_up=None if self.w_latent_up is None else self.w_latent_up.astype(x_flat.dtype),
             )
+            router_stats["capacity_overflow"] = dropped_assignments
+            routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
+            return reshard(routed, _batch_spec()), router_stats
+
+        moe_out = self.expert_mlp(
+            x_flat if routed_input is None else routed_input,
+            selected_experts.astype(jnp.int32),
+            combine_weights,
+            mesh=get_abstract_mesh(),
+            report_capacity_overflow=self.cfg.report_capacity_overflow,
+        )
+        if self.cfg.report_capacity_overflow:
+            routed_flat, dropped_assignments = moe_out
         else:
-            # LatentMoE: compress before dispatch so the expert-parallel all-to-all carries
-            # `latent_dim`-wide rows in both directions. The router above already read the full-width
-            # token, and the shared experts in the enclosing block never see this path.
-            routed_input = x_flat
-            if self.w_latent_down is not None and self.latent_norm is not None:
-                routed_input = jnp.einsum(
-                    "td,dl->tl",
-                    x_flat,
-                    self.w_latent_down.astype(x_flat.dtype),
-                    out_sharding=_batch_spec(),
-                )
-                # Keep the expert input scale independent of the down-projection initialization.
-                routed_input = self.latent_norm(routed_input)
-            moe_out = self.expert_mlp(
-                routed_input,
-                selected_experts.astype(jnp.int32),
-                combine_weights,
-                mesh=get_abstract_mesh(),
-                report_capacity_overflow=self.cfg.report_capacity_overflow,
-            )
-            if self.cfg.report_capacity_overflow:
-                routed_flat, dropped_assignments = moe_out
-            else:
-                routed_flat = moe_out
-                dropped_assignments = _zero_dropped_assignments()
+            routed_flat = moe_out
+            dropped_assignments = _zero_dropped_assignments()
         router_stats["capacity_overflow"] = dropped_assignments
 
         # Expand after the combine: `expert_mlp` already returns the weight-summed expert output,

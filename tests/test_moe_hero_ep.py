@@ -20,9 +20,9 @@ import optax
 import pytest
 from click.testing import CliRunner
 from fray.cluster import ResourceConfig
-from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, use_abstract_mesh
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
+from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.grug.sharding import _compact_grug_mesh_shape
 from levanter.kernels.mixture_of_kittens import (
     MokLikeBackwardPeerStorage,
@@ -36,8 +36,6 @@ from levanter.kernels.mixture_of_kittens import (
 from levanter.kernels.mixture_of_kittens.schedule import schedule_capacity
 from levanter.schedule import ScheduleStep
 from marin.execution.lazy import StepContext
-from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from marin.execution.lazy import StepContext
 
 from experiments.grug import dispatch as grug_dispatch
 from experiments.grug.moe_hero_ep import (
@@ -49,6 +47,7 @@ from experiments.grug.moe_hero_ep import (
     mok_like_stateful_parity,
     train,
 )
+from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
 
 
 def test_mok_like_debug_metrics_preserve_peer_wait_distribution() -> None:
@@ -461,7 +460,7 @@ def test_initial_state_binds_runtime_before_optimizer_state_construction() -> No
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
-        ({"shared_expert_intermediate_dim": 512}, "matching routed and shared"),
+        ({"shared_expert_intermediate_dim": 384}, "divisible by 256"),
         ({"remat_mode": "recompute_all"}, "requires remat_mode"),
     ],
 )
@@ -483,6 +482,23 @@ def test_mok_like_model_config_rejects_unsupported_block_contract(
 
     with pytest.raises(ValueError, match=message):
         model.GrugModelConfig(**kwargs)
+
+
+def test_mok_like_model_config_accepts_a_routed_intermediate_wider_than_the_shared_one() -> None:
+    """The hero widens the routed experts against the shared one; the fused backend now carries it."""
+
+    config = model.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=256,
+        intermediate_dim=512,
+        shared_expert_intermediate_dim=256,
+        num_experts=8,
+        num_experts_per_token=2,
+        mok_like=MokLikeConfig(),
+        remat_mode="save_moe",
+    )
+
+    assert (config.intermediate_dim, config.shared_expert_intermediate_dim) == (512, 256)
 
 
 def test_mok_like_launcher_keeps_capacity_limited_control_distinct_from_promoted_dropless_preset() -> None:
@@ -1076,8 +1092,6 @@ def test_mok_like_rejects_eval_with_a_different_static_token_shape() -> None:
 
     with pytest.raises(ValueError, match="evaluation must use the training batch size"):
         train._initialize_mok_like_for_config(config, object(), batch_size=4)
-from experiments.grug.moe_hero_ep import grugmuon_hero, launch, model, train
-from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
 
 
 def test_hero_run_without_shape_overrides_uses_the_selected_model():
@@ -1190,7 +1204,7 @@ def test_schedule_steps_do_not_extend_the_run():
 def test_mok_like_correctness_routes_have_the_intended_local_expert_distribution(
     scenario: mok_like_correctness.RouteScenario,
 ) -> None:
-    routes = mok_like_correctness._routes(512, scenario)
+    routes = mok_like_correctness._routes(512, scenario, mok_like_correctness.DEFAULT_TOP_K)
     local_experts = routes % mok_like_correctness.NUM_LOCAL_EXPERTS
     destination_ranks = routes // mok_like_correctness.NUM_LOCAL_EXPERTS
     counts = np.bincount(local_experts.reshape(-1), minlength=mok_like_correctness.NUM_LOCAL_EXPERTS)
@@ -1209,7 +1223,9 @@ def test_mok_like_correctness_routes_have_the_intended_local_expert_distribution
 
 @pytest.mark.parametrize(("macrobatch_size", "expected"), [(2048, 1), (1024, 2), (256, 8)])
 def test_mok_like_correctness_counts_nonpadding_macrobuffers(macrobatch_size: int, expected: int) -> None:
-    routes = mok_like_correctness._routes(512, mok_like_correctness.RouteScenario.BALANCED)
+    routes = mok_like_correctness._routes(
+        512, mok_like_correctness.RouteScenario.BALANCED, mok_like_correctness.DEFAULT_TOP_K
+    )
 
     assert (
         mok_like_correctness._real_macrobuffers(
@@ -1257,6 +1273,7 @@ def test_mok_like_stateful_parity_route_plan_alternates_imbalance_and_exact_capa
     all_to_one_routes = mok_like_stateful_parity._routes(
         512,
         mok_like_stateful_parity.RouteScenario.ALL_TO_ONE,
+        mok_like_stateful_parity.TOP_K,
     )
 
     assert plan == (
@@ -1382,6 +1399,7 @@ def test_mok_like_stateful_parity_rejects_gradient_on_inactive_routed_expert() -
             mok_like_stateful_parity._routes(
                 1,
                 mok_like_stateful_parity.RouteScenario.ALL_TO_ONE,
+                mok_like_stateful_parity.TOP_K,
             ),
             (bad_gradient, *gradients[1:]),
         )
@@ -1391,6 +1409,7 @@ def test_mok_like_stateful_parity_derives_inactive_experts_from_the_full_route_b
     routes = mok_like_stateful_parity._routes(
         512,
         mok_like_stateful_parity.RouteScenario.SKEWED,
+        mok_like_stateful_parity.TOP_K,
     )
     gradients = (
         jnp.ones((8, 1, 1)),
@@ -1459,6 +1478,7 @@ def test_run_grug_applies_ep_xla_defaults_and_default_pool_preallocation(
         resources=object(),
         processes_per_task=1,
         pip_packages=(),
+        extra_setup_scripts=(),
         mok_like_pinned_host_memory_limit_gb=None,
         gpu_allocator=train.GpuAllocator.CUDA_ASYNC,
         gpu_temp_buffer_pool=train.GpuTempBufferPool.SHARED,
@@ -1505,6 +1525,7 @@ def test_grug_dispatch_sends_attempt_zero_limits_on_child_request(monkeypatch: p
         resources=ResourceConfig(cpu=1, ram="1g", disk="1g"),
         processes_per_task=1,
         pip_packages=(),
+        extra_setup_scripts=(),
         mok_like_pinned_host_memory_limit_gb=None,
         gpu_allocator=train.GpuAllocator.CUDA_ASYNC,
         gpu_temp_buffer_pool=train.GpuTempBufferPool.SHARED,
@@ -1538,6 +1559,7 @@ def test_run_grug_applies_backend_xla_flag_overrides(monkeypatch: pytest.MonkeyP
         resources=object(),
         processes_per_task=1,
         pip_packages=(),
+        extra_setup_scripts=(),
         mok_like_pinned_host_memory_limit_gb=None,
         gpu_allocator=train.GpuAllocator.CUDA_ASYNC,
         gpu_temp_buffer_pool=train.GpuTempBufferPool.SHARED,
@@ -1578,6 +1600,7 @@ def test_run_grug_isolates_temp_buffer_pool_without_default_pool_preallocation(
         resources=object(),
         processes_per_task=1,
         pip_packages=(),
+        extra_setup_scripts=(),
         mok_like_pinned_host_memory_limit_gb=None,
         gpu_allocator=train.GpuAllocator.CUDA_ASYNC,
         gpu_temp_buffer_pool=train.GpuTempBufferPool.SEPARATE,
@@ -1630,6 +1653,7 @@ def test_run_grug_rejects_inapplicable_default_pool_preallocation(
         resources=object(),
         processes_per_task=1,
         pip_packages=(),
+        extra_setup_scripts=(),
         mok_like_pinned_host_memory_limit_gb=None,
         gpu_allocator=allocator,
         gpu_temp_buffer_pool=temp_pool,
@@ -1675,6 +1699,7 @@ def test_run_grug_rejects_default_pool_trim_outside_shared_cuda_async_mode(
         resources=object(),
         processes_per_task=1,
         pip_packages=(),
+        extra_setup_scripts=(),
         mok_like_pinned_host_memory_limit_gb=192,
         gpu_allocator=allocator,
         gpu_temp_buffer_pool=temp_pool,
@@ -1839,6 +1864,7 @@ def test_run_grug_requires_explicit_pinned_host_memory_for_mok_like_offload(monk
         resources=object(),
         processes_per_task=1,
         pip_packages=(),
+        extra_setup_scripts=(),
         mok_like_pinned_host_memory_limit_gb=None,
         gpu_allocator=train.GpuAllocator.CUDA_ASYNC,
         gpu_temp_buffer_pool=train.GpuTempBufferPool.SHARED,
@@ -1872,6 +1898,7 @@ def test_run_grug_applies_explicit_mok_like_pinned_host_memory_limit(monkeypatch
         resources=object(),
         processes_per_task=1,
         pip_packages=(),
+        extra_setup_scripts=(),
         mok_like_pinned_host_memory_limit_gb=192,
         gpu_allocator=train.GpuAllocator.VMM,
         gpu_temp_buffer_pool=train.GpuTempBufferPool.SHARED,
@@ -1906,6 +1933,7 @@ def test_run_grug_requires_explicit_mok_like_device_memory_fraction(monkeypatch:
         resources=object(),
         processes_per_task=1,
         pip_packages=(),
+        extra_setup_scripts=(),
         mok_like_pinned_host_memory_limit_gb=192,
         gpu_allocator=train.GpuAllocator.CUDA_ASYNC,
         gpu_temp_buffer_pool=train.GpuTempBufferPool.SHARED,
@@ -1937,6 +1965,7 @@ def _run_grug_config(**overrides):
         resources=object(),
         processes_per_task=1,
         pip_packages=(),
+        extra_setup_scripts=(),
         mok_like_pinned_host_memory_limit_gb=None,
         gpu_allocator=train.GpuAllocator.CUDA_ASYNC,
         gpu_temp_buffer_pool=train.GpuTempBufferPool.SHARED,

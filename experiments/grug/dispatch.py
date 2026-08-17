@@ -4,12 +4,14 @@
 import logging
 import os
 import re
-from collections.abc import Callable
+import sys
+from collections.abc import Callable, Sequence
 from typing import TypeVar
 
 from fray.cluster import ResourceConfig
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, create_environment
+from iris.cluster.setup_scripts import default_setup_script
 from iris.rpc.proto_display import priority_band_value
 from iris.runtime.jax_init import XLA_AUTOTUNE_CACHE_MODE_ENV
 from marin.training.run_environment import extras_for_resources
@@ -77,14 +79,29 @@ def dispatch_grug_training_run(
     processes_per_task: int = 1,
     priority: int = INHERIT_PRIORITY,
     pip_packages: tuple[str, ...] = (),
+    extra_setup_scripts: Sequence[str] = (),
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.
 
     ``INHERIT_PRIORITY`` takes the submitting job's band, or ``interactive`` when the submitter is
     not itself an Iris job -- which is the case for a launcher run from a dev box.
+
+    ``pip_packages`` installs extra wheels into the task environment after the workspace sync,
+    e.g. pinned JAX nightly wheel URLs for arms that need a runtime newer than the workspace pin.
+
+    ``extra_setup_scripts`` appends custom task setup scripts after the default environment setup,
+    e.g. to install a self-built PJRT wheel from object storage. Supplying any of them means the
+    caller now owns the whole script list, so the default setup has to be reproduced explicitly.
     """
     safe_run_id = _safe_job_suffix(run_id)
     env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
+    setup_scripts = None
+    if extra_setup_scripts:
+        python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        setup_scripts = [
+            default_setup_script(extras=list(extras_for_resources(resources)), python_version=python_version),
+            *extra_setup_scripts,
+        ]
     request = JobRequest(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
@@ -93,6 +110,7 @@ def dispatch_grug_training_run(
             env_vars=env_vars,
             extras=extras_for_resources(resources),
             pip_packages=pip_packages,
+            setup_scripts=setup_scripts,
         ),
         max_retries_failure=max_retries_failure,
         max_retries_preemption=max_retries_preemption,

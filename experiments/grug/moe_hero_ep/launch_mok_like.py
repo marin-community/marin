@@ -34,6 +34,7 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
+from experiments.grug.moe_hero_ep.launch import JAX_NIGHTLY_WHEELS_20260809, pjrt_wheel_install_script
 from experiments.grug.moe_hero_ep.train import (
     GpuAllocator,
     GpuDefaultPoolPreallocation,
@@ -60,6 +61,11 @@ MOK_LIKE_EXPERT_INTERMEDIATE_DIM = 3072
 # The matched comparison shape from #8108. An expert group wider than this needs more experts:
 # the axis has to divide them.
 MOK_LIKE_MATCHED_NUM_EXPERTS = 8
+# The hero routes top-4 of its bank and carries two shared experts. The matched comparison ran a
+# single shared expert because the fused kernel could only express one shared width; both are knobs
+# now so the proposed 8-of-384 architecture is reachable.
+MATCHED_NUM_EXPERTS_PER_TOKEN = 4
+MATCHED_NUM_SHARED_EXPERTS = 1
 PRODUCTION_MOK_LIKE_WORKSPACE_SLOTS = 1
 DEFAULT_GPU_DEVICE_MEMORY_FRACTION = 0.85
 PROMOTED_MOK_LIKE_PINNED_HOST_MEMORY_LIMIT_GB = 176
@@ -216,7 +222,22 @@ def build_backend_comparison_run(
     mok_like_preset: MokLikeExperimentPreset | None = None,
     mok_like_num_devices: int = 4,
     mok_like_workspace_transport: str = MokLikeWorkspaceTransport.IN_PROCESS_PEER.value,
+    # A latent projection halves the bytes each comm CTA moves, so an SM split tuned for
+    # full-width traffic over-provisions comms. Left unset these keep the kernel defaults.
+    mok_like_num_comm_sms: int | None = None,
+    mok_like_bwd_num_comm_sms: int | None = None,
+    mok_like_minibatch_size: int | None = None,
+    mok_like_macrobatch_size: int | None = None,
+    # Zero disables the hero's latent projection on both arms, which is the control the fused
+    # backend needs to attribute a regression to the two-width path rather than to the shape.
+    latent_dim: int | None = None,
+    routed_intermediate_dim: int | None = None,
+    pinned_host_memory_limit_gb: int | None = None,
+    batch_size_per_node: int | None = None,
+    shared_intermediate_dim: int = MOK_LIKE_EXPERT_INTERMEDIATE_DIM,
     num_experts: int = MOK_LIKE_MATCHED_NUM_EXPERTS,
+    num_experts_per_token: int = MATCHED_NUM_EXPERTS_PER_TOKEN,
+    num_shared_experts: int = MATCHED_NUM_SHARED_EXPERTS,
     mok_like_remat_mode: str = "offload_moe",
     mok_like_schedule_capacity_factor: float | None = None,
     mok_like_workspace_slots: int | None = None,
@@ -228,6 +249,11 @@ def build_backend_comparison_run(
     gpu_default_pool_trim_interval_updates: int | None = None,
     xla_autotune_cache_mode: XlaAutotuneCacheMode | None = None,
     gpu_device_memory_fraction: float | None = None,
+    max_retries_preemption: int | None = None,
+    max_retries_failure: int | None = None,
+    max_task_failures: int | None = None,
+    jax_nightly: bool = False,
+    pjrt_wheel: str | None = None,
     version: str | None = None,
 ) -> ArtifactStep[MoeBackendComparisonResult]:
     """Build one arm of the weak-scaled matched MoE backend comparison."""
@@ -236,6 +262,10 @@ def build_backend_comparison_run(
     if backend is MoeBackend.MOK_LIKE:
         mok_like_preset = mok_like_preset or MokLikeExperimentPreset.PROMOTED_DROPLESS_V12
         preset = _MOK_LIKE_PRESETS[mok_like_preset]
+        if pinned_host_memory_limit_gb is not None:
+            # Widening the routed experts widens the offloaded context with them, so the reviewed
+            # pin is not a property of the backend -- it is a property of one shape.
+            preset = dataclasses.replace(preset, pinned_host_memory_limit_gb=pinned_host_memory_limit_gb)
     else:
         if mok_like_preset is not None:
             raise ValueError("mok_like_preset is only supported by the mok_like backend")
@@ -246,6 +276,22 @@ def build_backend_comparison_run(
         else mok_like_schedule_capacity_factor
     )
     mok_like_workspace_slots = preset.workspace_slots if mok_like_workspace_slots is None else mok_like_workspace_slots
+    # The presets tolerate zero preemption retries because a seal wants a run that either completes
+    # untouched or reports why it did not. Iteration on a contended cluster wants the opposite: a
+    # rack run pays twenty minutes of compile before its first update, so one preemption discards
+    # the entire attempt. Buying restarts here keeps a measurement reachable without moving to a
+    # priority band that displaces other users' work.
+    max_retries_preemption = preset.max_retries_preemption if max_retries_preemption is None else max_retries_preemption
+    # A preemption often surfaces on the surviving ranks as a coordination-service connection
+    # failure rather than as a preemption, and that is charged here instead. At rack scale the
+    # exposure grows with the task count, so an iteration run needs both budgets to be non-zero
+    # or one lost task discards every other rank's compile.
+    max_retries_failure = preset.max_retries_failure if max_retries_failure is None else max_retries_failure
+    # A gang tolerates zero task failures by default, so one rank losing the coordination service
+    # kills every other rank's compile. That is the right contract for a seal and the wrong one
+    # for a thirty-two node iteration run, where a transient connection failure is likely enough
+    # to prevent any measurement from ever completing.
+    max_task_failures = preset.max_task_failures if max_task_failures is None else max_task_failures
     forward_x_storage = preset.forward_x_storage if forward_x_storage is None else forward_x_storage
     backward_peer_storage = preset.backward_peer_storage if backward_peer_storage is None else backward_peer_storage
     # The direct-read storage modes reach a peer's XLA buffer through a process-local peer mapping.
@@ -327,22 +373,28 @@ def build_backend_comparison_run(
         raise ValueError("backward_peer_storage is only supported by the mok_like backend")
     if backend is not MoeBackend.MOK_LIKE and mok_like_workspace_slots != PRODUCTION_MOK_LIKE_WORKSPACE_SLOTS:
         raise ValueError("mok_like_workspace_slots is only supported by the mok_like backend")
-    global_batch_size = BATCH_SIZE_PER_NODE * num_nodes
+    # Data-parallel reduction costs the same per step whatever the batch, so tokens per node per
+    # step set how much compute that fixed cost is amortised over. It is the lever on the gap
+    # between a single node's MFU and a rack's.
+    global_batch_size = (batch_size_per_node or BATCH_SIZE_PER_NODE) * num_nodes
     scale_tag, wandb_group = _SCALE_METADATA[num_nodes]
     model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=global_batch_size)
     common_model = dataclasses.replace(
         model,
         num_experts=num_experts,
-        num_shared_experts=1,
+        num_experts_per_token=num_experts_per_token,
+        num_shared_experts=num_shared_experts,
         capacity_factor=MATCHED_CAPACITY_FACTOR,
-        # The fused kernel runs the routed and shared experts through one megakernel at a single
-        # width, and LatentMoE narrows only the routed path. The hero's widened routed experts
-        # (intermediate_dim 6144 against a 3072 shared width) and its latent compression are both
-        # inexpressible here, so pin the shape on the shared config -- the control arm has to move
-        # with it or the comparison stops being matched.
-        intermediate_dim=MOK_LIKE_EXPERT_INTERMEDIATE_DIM,
-        shared_expert_intermediate_dim=MOK_LIKE_EXPERT_INTERMEDIATE_DIM,
-        latent_dim=None,
+        # The fused kernel now carries separate routed and shared widths on both axes -- the token
+        # width a latent projection narrows, and the intermediate width the hero widens -- so the
+        # whole hero shape comes through unpinned. `--routed-intermediate-dim` still overrides it,
+        # and moves both arms together so the comparison stays matched.
+        **(
+            {}
+            if routed_intermediate_dim is None
+            else {"intermediate_dim": routed_intermediate_dim, "shared_expert_intermediate_dim": shared_intermediate_dim}
+        ),
+        **({} if latent_dim is None else {"latent_dim": latent_dim or None}),
         **({"num_layers": num_layers} if num_layers is not None else {}),
     )
     if backend is MoeBackend.MOK_LIKE:
@@ -356,6 +408,10 @@ def build_backend_comparison_run(
                 backward_peer_storage=backward_peer_storage,
                 num_devices=mok_like_num_devices,
                 workspace_transport=workspace_transport,
+                **({} if mok_like_minibatch_size is None else {"minibatch_size": mok_like_minibatch_size}),
+                **({} if mok_like_macrobatch_size is None else {"macrobatch_size": mok_like_macrobatch_size}),
+                **({} if mok_like_num_comm_sms is None else {"num_comm_sms": mok_like_num_comm_sms}),
+                **({} if mok_like_bwd_num_comm_sms is None else {"bwd_num_comm_sms": mok_like_bwd_num_comm_sms}),
             ),
             expert_chunks=1,
             remat_mode=mok_like_remat_mode,
@@ -425,6 +481,13 @@ def build_backend_comparison_run(
     name = f"grug/moe-backend-comparison/{backend.value}/{run_id}"
     version = resolve_version(name, version)
     slim = _slimpajama_6b_dataset()
+
+    # A self-built PJRT wheel carries the stock nightly alongside it, so asking for both would
+    # install the nightly twice and let the stock plugin win the second write.
+    runtime_packages = _mok_like_build_packages() if backend is MoeBackend.MOK_LIKE else ()
+    if jax_nightly and pjrt_wheel is None:
+        runtime_packages += JAX_NIGHTLY_WHEELS_20260809
+    runtime_setup_scripts = (pjrt_wheel_install_script(pjrt_wheel),) if pjrt_wheel is not None else ()
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
         profiler_enabled = num_steps >= 10
@@ -575,10 +638,11 @@ def build_backend_comparison_run(
             processes_per_task=(
                 GPUS_PER_NODE if workspace_transport is MokLikeWorkspaceTransport.FABRIC_SYMMETRIC else 1
             ),
-            pip_packages=_mok_like_build_packages() if backend is MoeBackend.MOK_LIKE else (),
-            max_retries_failure=preset.max_retries_failure,
-            max_retries_preemption=preset.max_retries_preemption,
-            max_task_failures=preset.max_task_failures,
+            pip_packages=runtime_packages,
+            extra_setup_scripts=runtime_setup_scripts,
+            max_retries_failure=max_retries_failure,
+            max_retries_preemption=max_retries_preemption,
+            max_task_failures=max_task_failures,
         )
 
     return ArtifactStep(
@@ -601,7 +665,18 @@ def build_mok_like_run(
     watch_interval: int = 0,
     mok_like_preset: MokLikeExperimentPreset = MokLikeExperimentPreset.PROMOTED_DROPLESS_V12,
     mok_like_num_devices: int = 4,
+    mok_like_num_comm_sms: int | None = None,
+    mok_like_bwd_num_comm_sms: int | None = None,
+    mok_like_minibatch_size: int | None = None,
+    mok_like_macrobatch_size: int | None = None,
+    latent_dim: int | None = None,
+    routed_intermediate_dim: int | None = None,
+    pinned_host_memory_limit_gb: int | None = None,
+    batch_size_per_node: int | None = None,
+    shared_intermediate_dim: int = MOK_LIKE_EXPERT_INTERMEDIATE_DIM,
     num_experts: int = MOK_LIKE_MATCHED_NUM_EXPERTS,
+    num_experts_per_token: int = MATCHED_NUM_EXPERTS_PER_TOKEN,
+    num_shared_experts: int = MATCHED_NUM_SHARED_EXPERTS,
     mok_like_remat_mode: str = "offload_moe",
     mok_like_workspace_transport: str = MokLikeWorkspaceTransport.IN_PROCESS_PEER.value,
     mok_like_schedule_capacity_factor: float | None = None,
@@ -614,6 +689,11 @@ def build_mok_like_run(
     gpu_default_pool_trim_interval_updates: int | None = None,
     xla_autotune_cache_mode: XlaAutotuneCacheMode | None = None,
     gpu_device_memory_fraction: float | None = None,
+    max_retries_preemption: int | None = None,
+    max_retries_failure: int | None = None,
+    max_task_failures: int | None = None,
+    jax_nightly: bool = False,
+    pjrt_wheel: str | None = None,
     version: str | None = None,
 ) -> ArtifactStep[MoeBackendComparisonResult]:
     """Build the supported Marin-native arm of the matched comparison."""
@@ -623,7 +703,18 @@ def build_mok_like_run(
         backend=MoeBackend.MOK_LIKE,
         mok_like_preset=mok_like_preset,
         mok_like_num_devices=mok_like_num_devices,
+        mok_like_num_comm_sms=mok_like_num_comm_sms,
+        mok_like_bwd_num_comm_sms=mok_like_bwd_num_comm_sms,
+        mok_like_minibatch_size=mok_like_minibatch_size,
+        mok_like_macrobatch_size=mok_like_macrobatch_size,
+        latent_dim=latent_dim,
+        routed_intermediate_dim=routed_intermediate_dim,
+        shared_intermediate_dim=shared_intermediate_dim,
+        pinned_host_memory_limit_gb=pinned_host_memory_limit_gb,
+        batch_size_per_node=batch_size_per_node,
         num_experts=num_experts,
+        num_experts_per_token=num_experts_per_token,
+        num_shared_experts=num_shared_experts,
         mok_like_remat_mode=mok_like_remat_mode,
         mok_like_workspace_transport=mok_like_workspace_transport,
         num_nodes=num_nodes,
@@ -639,6 +730,11 @@ def build_mok_like_run(
         gpu_default_pool_trim_interval_updates=gpu_default_pool_trim_interval_updates,
         xla_autotune_cache_mode=xla_autotune_cache_mode,
         gpu_device_memory_fraction=gpu_device_memory_fraction,
+        max_retries_preemption=max_retries_preemption,
+        max_retries_failure=max_retries_failure,
+        max_task_failures=max_task_failures,
+        jax_nightly=jax_nightly,
+        pjrt_wheel=pjrt_wheel,
         version=version,
     )
 
@@ -714,12 +810,82 @@ def build_mok_like_run(
     "save_moe keeps the saved context on device.",
 )
 @click.option(
+    "--batch-size-per-node",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Sequences per node per step. Raising it amortises the data-parallel reduction.",
+)
+@click.option(
+    "--pinned-host-memory-limit-gb",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Override the reviewed pinned-host cap that bounds the offloaded MoE context.",
+)
+@click.option(
+    "--routed-intermediate-dim",
+    type=click.IntRange(min=256),
+    default=None,
+    help="Pin the routed expert intermediate width on both arms. Unset keeps the hero's own.",
+)
+@click.option(
+    "--shared-intermediate-dim",
+    type=click.IntRange(min=256),
+    default=MOK_LIKE_EXPERT_INTERMEDIATE_DIM,
+    show_default=True,
+    help="Shared expert intermediate width used when --routed-intermediate-dim pins the routed one.",
+)
+@click.option(
+    "--latent-dim",
+    type=click.IntRange(min=0),
+    default=None,
+    help="Override the hero latent width on both arms. Zero removes the projection entirely.",
+)
+@click.option(
+    "--mok-like-minibatch-size",
+    type=click.IntRange(min=256),
+    default=None,
+    help="Override the routed minibatch size, which sets how finely comms overlap compute.",
+)
+@click.option(
+    "--mok-like-macrobatch-size",
+    type=click.IntRange(min=256),
+    default=None,
+    help="Override the routed macrobatch size.",
+)
+@click.option(
+    "--mok-like-num-comm-sms",
+    type=click.IntRange(min=2),
+    default=None,
+    help="Override the forward comm-SM count. Latent narrows the wire, so fewer may suffice.",
+)
+@click.option(
+    "--mok-like-bwd-num-comm-sms",
+    type=click.IntRange(min=2),
+    default=None,
+    help="Override the backward comm-SM count.",
+)
+@click.option(
     "--num-experts",
     type=int,
     default=MOK_LIKE_MATCHED_NUM_EXPERTS,
     show_default=True,
     help="Routed experts on the matched shape. Must divide over the expert axis, so an expert "
     "group wider than this needs a larger count.",
+)
+@click.option(
+    "--num-experts-per-token",
+    type=click.IntRange(min=1),
+    default=MATCHED_NUM_EXPERTS_PER_TOKEN,
+    show_default=True,
+    help="Routed experts each token selects. Per-token routed FLOPs scale with this, so it moves "
+    "the MFU denominator as well as the shape.",
+)
+@click.option(
+    "--num-shared-experts",
+    type=click.IntRange(min=0),
+    default=MATCHED_NUM_SHARED_EXPERTS,
+    show_default=True,
+    help="Shared experts every token passes through. The hero carries two of them.",
 )
 @click.option(
     "--mok-like-workspace-transport",
@@ -788,6 +954,56 @@ def build_mok_like_run(
     default=None,
     help="Override the preset's XLA device-memory fraction.",
 )
+@click.option(
+    "--max-retries-preemption",
+    type=click.IntRange(min=0),
+    default=None,
+    help=(
+        "Override the preset's zero preemption retries. A rack run pays its compile before the "
+        "first update, so one preemption discards the whole attempt; restarts keep a measurement "
+        "reachable on a contended cluster without taking a higher priority band."
+    ),
+)
+@click.option(
+    "--max-retries-failure",
+    type=click.IntRange(min=0),
+    default=None,
+    help=(
+        "Override the preset's zero failure retries. A preemption often reaches the surviving "
+        "ranks as a coordination-service connection failure, which is charged here rather than to "
+        "the preemption budget."
+    ),
+)
+@click.option(
+    "--max-task-failures",
+    type=click.IntRange(min=0),
+    default=None,
+    help=(
+        "Override the preset's zero tolerated task failures. One rank losing the coordination "
+        "service otherwise destroys every other rank's compile, which at thirty-two nodes can "
+        "prevent a measurement from ever completing."
+    ),
+)
+@click.option(
+    "--jax-nightly",
+    is_flag=True,
+    default=False,
+    help=(
+        "Install the pinned dev20260809 JAX nightly instead of the workspace pin. Stock 0.11.0 "
+        "deadlocks in cross-process clique init when one process owns several local GPUs "
+        "(marin#8081, MEP-024); the nightly does not."
+    ),
+)
+@click.option(
+    "--pjrt-wheel",
+    type=str,
+    default=None,
+    help=(
+        "Object-store URL of a self-built jax-cuda13-pjrt wheel. Installs the pinned nightly with "
+        "this PJRT substituted, so it implies --jax-nightly. Use it to pick up the kMaxPeers-128 "
+        "and 4 KiB window-alignment patches that sixty-four-rank collectives need."
+    ),
+)
 @build_options
 def main(
     run_id: str,
@@ -798,7 +1014,18 @@ def main(
     watch_interval: int,
     mok_like_preset: MokLikeExperimentPreset | None,
     mok_like_num_devices: int,
+    mok_like_num_comm_sms: int | None,
+    mok_like_bwd_num_comm_sms: int | None,
+    mok_like_minibatch_size: int | None,
+    mok_like_macrobatch_size: int | None,
+    latent_dim: int | None,
+    routed_intermediate_dim: int | None,
+    shared_intermediate_dim: int,
+    pinned_host_memory_limit_gb: int | None,
+    batch_size_per_node: int | None,
     num_experts: int,
+    num_experts_per_token: int,
+    num_shared_experts: int,
     mok_like_remat_mode: str,
     mok_like_workspace_transport: str,
     mok_like_schedule_capacity_factor: float | None,
@@ -811,6 +1038,11 @@ def main(
     gpu_default_pool_trim_interval_updates: int | None,
     xla_autotune_cache_mode: XlaAutotuneCacheMode | None,
     gpu_device_memory_fraction: float | None,
+    max_retries_preemption: int | None,
+    max_retries_failure: int | None,
+    max_task_failures: int | None,
+    jax_nightly: bool,
+    pjrt_wheel: str | None,
 ) -> ArtifactStep[MoeBackendComparisonResult]:
     return build_backend_comparison_run(
         run_id=run_id,
@@ -818,7 +1050,18 @@ def main(
         backend=MoeBackend(backend),
         mok_like_preset=mok_like_preset,
         mok_like_num_devices=mok_like_num_devices,
+        mok_like_num_comm_sms=mok_like_num_comm_sms,
+        mok_like_bwd_num_comm_sms=mok_like_bwd_num_comm_sms,
+        mok_like_minibatch_size=mok_like_minibatch_size,
+        mok_like_macrobatch_size=mok_like_macrobatch_size,
+        latent_dim=latent_dim,
+        routed_intermediate_dim=routed_intermediate_dim,
+        shared_intermediate_dim=shared_intermediate_dim,
+        pinned_host_memory_limit_gb=pinned_host_memory_limit_gb,
+        batch_size_per_node=batch_size_per_node,
         num_experts=num_experts,
+        num_experts_per_token=num_experts_per_token,
+        num_shared_experts=num_shared_experts,
         mok_like_remat_mode=mok_like_remat_mode,
         mok_like_workspace_transport=mok_like_workspace_transport,
         num_nodes=num_nodes,
@@ -834,6 +1077,11 @@ def main(
         gpu_default_pool_trim_interval_updates=gpu_default_pool_trim_interval_updates,
         xla_autotune_cache_mode=xla_autotune_cache_mode,
         gpu_device_memory_fraction=gpu_device_memory_fraction,
+        max_retries_preemption=max_retries_preemption,
+        max_retries_failure=max_retries_failure,
+        max_task_failures=max_task_failures,
+        jax_nightly=jax_nightly,
+        pjrt_wheel=pjrt_wheel,
     )
 
 
