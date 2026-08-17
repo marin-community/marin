@@ -1529,3 +1529,12 @@ Experiment ID prefix: `MEP`.
   details drawer; STE-flavored prose; 791 words. Finding 4
   (collective_memory_size ignored) reduced to a one-line aside.
 - Full validation record stays in the artifact (rev 2) and MEP-056.
+
+### 2026-08-17 12:40 - MEP-058: #47406 narrowed to finding 2 (alignment); staged-filing plan
+- Priority ruling with user: finding 2 is P0 (only defect with no
+  stock-wheel workaround; 6-line upstream fix; regression from PR #44156).
+  Findings 1/3 have flag-only workarounds (spatial-off|cuda_async;
+  ds-fusion off); finding 4 is a papercut. #47406 re-edited to finding 2
+  alone (STE-flavored, ~430 words, #47283 house style); user reopens
+  manually. Findings 1/3/4 to be filed separately, staged, on user
+  go-ahead; full record stays in the artifact rev 2 + MEP-056.
