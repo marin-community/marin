@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,7 +31,12 @@ from levanter.kernels.mixture_of_kittens.collective_memory_probe import (
     collective_memory_ring_u32,
     memory_space_frontend_attributes,
 )
-from levanter.kernels.mixture_of_kittens.ffi import MokLikeForwardContext, backward_bf16_local, fence_mok_like_failure
+from levanter.kernels.mixture_of_kittens.ffi import (
+    MokLikeForwardContext,
+    backward_bf16_local,
+    fence_mok_like_failure,
+    forward_bf16_local,
+)
 from levanter.kernels.mixture_of_kittens.runtime import MokLikeRuntimeHandle
 from levanter.kernels.mixture_of_kittens.schedule import build_schedule, schedule_capacity
 
@@ -174,6 +180,92 @@ def test_schedule_capacity_includes_headroom_and_per_expert_padding() -> None:
 
     assert capacity >= 65536 * 4 * config.schedule_capacity_factor + 2 * 255
     assert capacity % config.minibatch_size == 0
+
+
+def _routes_with_hot_expert(
+    world: int,
+    tokens: int,
+    top_k: int,
+    num_experts: int,
+    hot_expert_assignments: int,
+) -> np.ndarray:
+    """Build routes where expert 0 carries exactly `hot_expert_assignments` of them.
+
+    Every other assignment is spread round-robin over the remaining experts, and
+    expert 0 takes at most one slot per token, so no token routes to the same
+    expert twice.
+    """
+    total_tokens = world * tokens
+    if hot_expert_assignments > total_tokens:
+        raise ValueError("expert 0 can take at most one slot per token")
+
+    routes = np.empty((total_tokens, top_k), dtype=np.int32)
+    filler = 1 + np.arange(total_tokens * top_k) % (num_experts - 1)
+    routes[:] = filler.reshape(total_tokens, top_k)
+    routes[:hot_expert_assignments, 0] = 0
+    return routes.reshape(world, tokens, top_k)
+
+
+def test_schedule_is_dropless_at_expert_parallel_scale_when_routing_is_balanced() -> None:
+    """One expert per rank over sixty-four ranks drops nothing while routing stays balanced.
+
+    The first EP64 training runs reported an 18.8% drop fraction, which is a
+    property of the router collapsing rather than of this builder: at balanced
+    routing the static capacity is never reached, even at the matched factor.
+    """
+    world = 64
+    tokens = 256
+    top_k = 4
+    config = dataclasses.replace(MokLikeConfig(), schedule_capacity_factor=1.1, minibatch_size=256)
+    capacity = schedule_capacity(tokens, top_k, 1, config)
+
+    flat = np.arange(world * tokens * top_k, dtype=np.int32) % world
+    routes = jnp.asarray(flat.reshape(world, tokens, top_k))
+
+    for rank in (0, 1, 63):
+        schedule = build_schedule(
+            routes,
+            num_local_experts=1,
+            schedule_capacity=capacity,
+            rank=jnp.asarray(rank, dtype=jnp.int32),
+        )
+        assert int(schedule.dropped_assignments) == 0
+        assert not bool(schedule.overflow)
+
+
+@pytest.mark.parametrize(
+    ("imbalance", "expect_drops"),
+    [(3.0, False), (5.0, True)],
+)
+def test_schedule_capacity_factor_bounds_the_tolerated_routing_imbalance(
+    imbalance: float,
+    expect_drops: bool,
+) -> None:
+    """Capacity factor F is the peak-to-mean expert load the schedule absorbs.
+
+    Drops begin only once one expert's share exceeds F times the balanced load,
+    which is what a collapsing router eventually does and a healthy one does not.
+    """
+    world = 64
+    tokens = 1024
+    top_k = 4
+    factor = 4.0
+    config = dataclasses.replace(MokLikeConfig(), schedule_capacity_factor=factor, minibatch_size=256)
+    capacity = schedule_capacity(tokens, top_k, 1, config)
+
+    mean_load = world * tokens * top_k // world
+    hot_load = int(imbalance * mean_load)
+    routes = jnp.asarray(_routes_with_hot_expert(world, tokens, top_k, world, hot_load))
+
+    schedule = build_schedule(
+        routes,
+        num_local_experts=1,
+        schedule_capacity=capacity,
+        rank=jnp.asarray(0, dtype=jnp.int32),
+    )
+
+    assert bool(schedule.overflow) is expect_drops
+    assert int(schedule.dropped_assignments) == max(0, hot_load - capacity)
 
 
 def test_collective_memory_probe_preserves_shard_shape_and_dtype_during_abstract_evaluation() -> None:
@@ -338,6 +430,8 @@ def test_backward_peer_storage_reaches_typed_ffi_abi(storage: MokLikeBackwardPee
     arguments = (
         bf16((256, 256)),
         bf16((256, 256)),
+        bf16((256, 256)),
+        bf16((256, 256)),
         f32((256, 2)),
         bf16((512, 256)),
         bf16((2, 512, 256)),
@@ -377,7 +471,7 @@ def test_backward_peer_storage_reaches_typed_ffi_abi(storage: MokLikeBackwardPee
     assert attributes["backward_peer_storage"] == np.int32(expected_code)
     assert attributes["collective_id"] == np.int64(7)
 
-    routed_gradient_avals = tuple(variable.aval for variable in ffi_equation.outvars[2:5])
+    routed_gradient_avals = tuple(variable.aval for variable in ffi_equation.outvars[3:6])
     assert tuple(aval.shape for aval in routed_gradient_avals) == (
         (2, 512, 256),
         (2, 512, 256),
@@ -402,6 +496,179 @@ def test_backward_peer_storage_reaches_typed_ffi_abi(storage: MokLikeBackwardPee
 
     distinct_lowering = jax.jit(distinct_call_sites).lower(*arguments).as_text()
     assert distinct_lowering.count("@levanter_mok_backward_bf16_4") == 2
+
+
+def test_traced_ffi_carries_the_routed_width_through_both_directions() -> None:
+    """A latent projection must narrow the routed tensors and leave the shared ones alone.
+
+    The two widths only meet in the FFI's shape lists, and a mistake there lands as a silent
+    out-of-bounds read on device rather than an error, so pin them here where no GPU is needed.
+    """
+
+    class CompatibleRuntime:
+        def __init__(self) -> None:
+            self.hidden_dims: list[int] = []
+
+        def require_compatible(self, *, num_tokens: int, hidden_dim: int, top_k: int, workspace_slots: int) -> None:
+            del num_tokens, top_k, workspace_slots
+            self.hidden_dims.append(hidden_dim)
+
+    tokens, hidden, latent, intermediate, experts, top_k = 256, 512, 256, 512, 2, 2
+    config = MokLikeConfig(minibatch_size=256, macrobatch_size=256)
+
+    def bf16(shape: tuple[int, ...]) -> jax.ShapeDtypeStruct:
+        return jax.ShapeDtypeStruct(shape, jnp.bfloat16)
+
+    forward_runtime = CompatibleRuntime()
+    forward_arguments = (
+        bf16((tokens, hidden)),
+        bf16((tokens, latent)),
+        jax.ShapeDtypeStruct((tokens, top_k), jnp.float32),
+        bf16((intermediate, hidden)),
+        bf16((experts, intermediate, latent)),
+        bf16((intermediate, hidden)),
+        bf16((experts, intermediate, latent)),
+        bf16((hidden, intermediate)),
+        bf16((experts, latent, intermediate)),
+        jax.ShapeDtypeStruct((1024,), jnp.int32),
+        jax.ShapeDtypeStruct((1024,), jnp.int32),
+        jax.ShapeDtypeStruct((), jnp.int32),
+        jax.ShapeDtypeStruct((experts,), jnp.int32),
+    )
+    forward_jaxpr = jax.make_jaxpr(
+        lambda *values: forward_bf16_local(*values, runtime=forward_runtime, config=config, collective_id=1)
+    )(*forward_arguments).jaxpr
+    forward_call = next(equation for equation in forward_jaxpr.eqns if equation.primitive.name == "ffi_call")
+
+    # Result zero is the routed combine and result eight the shared output: the two widths the
+    # caller joins through `latent_up`.
+    assert forward_call.outvars[0].aval.shape == (tokens, latent)
+    assert forward_call.outvars[8].aval.shape == (tokens, hidden)
+    assert forward_runtime.hidden_dims == [latent]
+
+    backward_runtime = CompatibleRuntime()
+    context = MokLikeForwardContext(
+        x_routed=bf16((config.macrobatch_size, latent)),
+        gate_shared=bf16((tokens, intermediate)),
+        gate_routed=bf16((config.macrobatch_size, intermediate)),
+        up_shared=bf16((tokens, intermediate)),
+        up_routed=bf16((config.macrobatch_size, intermediate)),
+        hidden_shared=bf16((tokens, intermediate)),
+        hidden_routed=bf16((config.macrobatch_size, intermediate)),
+        stamp_slot=jax.ShapeDtypeStruct((1,), jnp.int32),
+        stamp_generation_high=jax.ShapeDtypeStruct((1,), jnp.int32),
+        stamp_generation_low=jax.ShapeDtypeStruct((1,), jnp.int32),
+        stamp_runtime_epoch=jax.ShapeDtypeStruct((1,), jnp.int32),
+    )
+    backward_arguments = (
+        bf16((tokens, hidden)),
+        bf16((tokens, latent)),
+        *forward_arguments[:9],
+        context,
+        *forward_arguments[9:],
+    )
+    backward_jaxpr = jax.make_jaxpr(
+        lambda *values: backward_bf16_local(*values, runtime=backward_runtime, config=config, collective_id=1)
+    )(*backward_arguments).jaxpr
+    backward_call = next(equation for equation in backward_jaxpr.eqns if equation.primitive.name == "ffi_call")
+
+    assert backward_call.outvars[0].aval.shape == (tokens, hidden)
+    assert backward_call.outvars[1].aval.shape == (tokens, latent)
+    assert tuple(variable.aval.shape for variable in backward_call.outvars[3:6]) == (
+        (experts, intermediate, latent),
+        (experts, intermediate, latent),
+        (experts, latent, intermediate),
+    )
+    assert tuple(variable.aval.shape for variable in backward_call.outvars[6:9]) == (
+        (intermediate, hidden),
+        (intermediate, hidden),
+        (hidden, intermediate),
+    )
+    assert backward_runtime.hidden_dims == [latent]
+
+
+def test_traced_ffi_carries_a_widened_routed_intermediate() -> None:
+    """The routed experts may be wider than the shared one, on both traced ABIs.
+
+    The hero runs routed intermediate 6144 against a 3072 shared width. Every routed activation,
+    routed weight gradient and routed readiness array follows the routed width; the shared ones do
+    not. The readiness arrays are the subtle part: routed tiles are indexed after shared tiles, so
+    their length is a sum of two products rather than one product over the combined row blocks.
+    """
+
+    class CompatibleRuntime:
+        def require_compatible(self, *, num_tokens: int, hidden_dim: int, top_k: int, workspace_slots: int) -> None:
+            del num_tokens, hidden_dim, top_k, workspace_slots
+
+    tokens, hidden, latent, shared_i, routed_i, experts, top_k = 512, 1024, 512, 512, 1024, 2, 2
+    config = MokLikeConfig(minibatch_size=256, macrobatch_size=256)
+    capacity = 1024
+
+    def bf16(shape: tuple[int, ...]) -> jax.ShapeDtypeStruct:
+        return jax.ShapeDtypeStruct(shape, jnp.bfloat16)
+
+    forward_arguments = (
+        bf16((tokens, hidden)),
+        bf16((tokens, latent)),
+        jax.ShapeDtypeStruct((tokens, top_k), jnp.float32),
+        bf16((shared_i, hidden)),
+        bf16((experts, routed_i, latent)),
+        bf16((shared_i, hidden)),
+        bf16((experts, routed_i, latent)),
+        bf16((hidden, shared_i)),
+        bf16((experts, latent, routed_i)),
+        jax.ShapeDtypeStruct((capacity,), jnp.int32),
+        jax.ShapeDtypeStruct((capacity,), jnp.int32),
+        jax.ShapeDtypeStruct((), jnp.int32),
+        jax.ShapeDtypeStruct((experts,), jnp.int32),
+    )
+    forward_jaxpr = jax.make_jaxpr(
+        lambda *values: forward_bf16_local(*values, runtime=CompatibleRuntime(), config=config, collective_id=1)
+    )(*forward_arguments).jaxpr
+    forward_call = next(e for e in forward_jaxpr.eqns if e.primitive.name == "ffi_call")
+
+    # Saved routed activations take the routed intermediate; the shared ones keep theirs.
+    assert forward_call.outvars[3].aval.shape == (config.macrobatch_size, routed_i)
+    assert forward_call.outvars[2].aval.shape == (tokens, shared_i)
+    shared_row_blocks, routed_row_blocks = tokens // 256, capacity // 256
+    expected_gate_ready = shared_row_blocks * (shared_i // 256) + routed_row_blocks * (routed_i // 256)
+    assert forward_call.outvars[11].aval.shape == (expected_gate_ready,)
+
+    context = MokLikeForwardContext(
+        x_routed=bf16((config.macrobatch_size, latent)),
+        gate_shared=bf16((tokens, shared_i)),
+        gate_routed=bf16((config.macrobatch_size, routed_i)),
+        up_shared=bf16((tokens, shared_i)),
+        up_routed=bf16((config.macrobatch_size, routed_i)),
+        hidden_shared=bf16((tokens, shared_i)),
+        hidden_routed=bf16((config.macrobatch_size, routed_i)),
+        stamp_slot=jax.ShapeDtypeStruct((1,), jnp.int32),
+        stamp_generation_high=jax.ShapeDtypeStruct((1,), jnp.int32),
+        stamp_generation_low=jax.ShapeDtypeStruct((1,), jnp.int32),
+        stamp_runtime_epoch=jax.ShapeDtypeStruct((1,), jnp.int32),
+    )
+    backward_arguments = (
+        bf16((tokens, hidden)),
+        bf16((tokens, latent)),
+        *forward_arguments[:9],
+        context,
+        *forward_arguments[9:],
+    )
+    backward_jaxpr = jax.make_jaxpr(
+        lambda *values: backward_bf16_local(*values, runtime=CompatibleRuntime(), config=config, collective_id=1)
+    )(*backward_arguments).jaxpr
+    backward_call = next(e for e in backward_jaxpr.eqns if e.primitive.name == "ffi_call")
+
+    assert tuple(v.aval.shape for v in backward_call.outvars[3:6]) == (
+        (experts, routed_i, latent),
+        (experts, routed_i, latent),
+        (experts, latent, routed_i),
+    )
+    assert tuple(v.aval.shape for v in backward_call.outvars[6:9]) == (
+        (shared_i, hidden),
+        (shared_i, hidden),
+        (hidden, shared_i),
+    )
 
 
 def _canonical_shapes(dtype: jnp.dtype = jnp.bfloat16) -> tuple[jax.ShapeDtypeStruct, ...]:
@@ -698,6 +965,126 @@ def test_reference_caps_ring_capacity_to_assignment_population() -> None:
     assert output.shape == x.shape
 
 
+def _latent_leaves(hidden: int = 512, latent: int = 256, intermediate: int = 512, tokens: int = 512):
+    """Canonical Grug leaves for a latent projection: routed at `latent`, shared at `hidden`."""
+    return {
+        "x": jax.ShapeDtypeStruct((tokens, hidden), jnp.bfloat16),
+        "selected_experts": jax.ShapeDtypeStruct((tokens, 4), jnp.int32),
+        "combine_weights": jax.ShapeDtypeStruct((tokens, 4), jnp.float32),
+        "w_gate": jax.ShapeDtypeStruct((8, latent, intermediate), jnp.bfloat16),
+        "w_up": jax.ShapeDtypeStruct((8, latent, intermediate), jnp.bfloat16),
+        "w_down": jax.ShapeDtypeStruct((8, intermediate, latent), jnp.bfloat16),
+        "shared_gate": jax.ShapeDtypeStruct((hidden, intermediate), jnp.bfloat16),
+        "shared_up": jax.ShapeDtypeStruct((hidden, intermediate), jnp.bfloat16),
+        "shared_down": jax.ShapeDtypeStruct((intermediate, hidden), jnp.bfloat16),
+        "routed_x": jax.ShapeDtypeStruct((tokens, latent), jnp.bfloat16),
+        "latent_up": jax.ShapeDtypeStruct((latent, hidden), jnp.bfloat16),
+    }
+
+
+def test_validate_accepts_routed_and_shared_paths_at_different_widths() -> None:
+    validate_mok_like_inputs(**_latent_leaves())
+
+
+def test_validate_rejects_routed_weights_that_expect_the_shared_width() -> None:
+    leaves = _latent_leaves()
+    # Routed weights sized for `hidden` rather than `latent`: the shape the pre-latent code produced.
+    leaves["w_gate"] = jax.ShapeDtypeStruct((8, 512, 512), jnp.bfloat16)
+    leaves["w_up"] = leaves["w_gate"]
+
+    with pytest.raises(ValueError, match="must match the routed input"):
+        validate_mok_like_inputs(**leaves)
+
+
+def test_validate_rejects_a_latent_up_that_does_not_span_the_two_widths() -> None:
+    leaves = _latent_leaves()
+    leaves["latent_up"] = jax.ShapeDtypeStruct((256, 256), jnp.bfloat16)
+
+    with pytest.raises(ValueError, match=r"latent_up must have shape"):
+        validate_mok_like_inputs(**leaves)
+
+
+def _latent_reference_mesh() -> jax.sharding.AbstractMesh:
+    return jax.sharding.AbstractMesh(
+        (1, 1, 4, 1),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(jax.sharding.AxisType.Explicit,) * 4,
+    )
+
+
+def test_reference_narrows_only_the_routed_path_under_a_latent_projection() -> None:
+    """The experts consume `latent_dim` rows while the shared expert keeps the full width.
+
+    LatentMoE compresses before dispatch so the expert-parallel exchange carries narrow rows, and
+    expands after the combine. The shared expert never sees that projection, so the routed weights
+    are latent-shaped while the shared weights stay full-width, and the output returns to `x`.
+    """
+    hidden, latent = 256, 128
+    mesh = _latent_reference_mesh()
+    x = jax.ShapeDtypeStruct((2048, hidden), jnp.bfloat16)
+    routed_x = jax.ShapeDtypeStruct((2048, latent), jnp.bfloat16)
+    selected_experts = jax.ShapeDtypeStruct((2048, 4), jnp.int32)
+    combine_weights = jax.ShapeDtypeStruct((2048, 4), jnp.float32)
+    routed_weight = jax.ShapeDtypeStruct((8, latent, latent), jnp.bfloat16)
+    shared_weight = jax.ShapeDtypeStruct((hidden, hidden), jnp.bfloat16)
+    latent_up = jax.ShapeDtypeStruct((latent, hidden), jnp.bfloat16)
+
+    output = jax.eval_shape(
+        lambda *arguments: mok_like_reference(
+            *arguments[:9],
+            mesh=mesh,
+            config=MokLikeConfig(schedule_capacity_factor=4, workspace_slots=2),
+            fallback_implementation="ring",
+            routed_x=arguments[9],
+            latent_up=arguments[10],
+        ),
+        x,
+        selected_experts,
+        combine_weights,
+        routed_weight,
+        routed_weight,
+        routed_weight,
+        shared_weight,
+        shared_weight,
+        shared_weight,
+        routed_x,
+        latent_up,
+    )
+
+    assert output.shape == x.shape
+
+
+def test_reference_rejects_a_half_specified_latent_projection() -> None:
+    mesh = _latent_reference_mesh()
+    x = jax.ShapeDtypeStruct((2048, 256), jnp.bfloat16)
+    routed_x = jax.ShapeDtypeStruct((2048, 128), jnp.bfloat16)
+    selected_experts = jax.ShapeDtypeStruct((2048, 4), jnp.int32)
+    combine_weights = jax.ShapeDtypeStruct((2048, 4), jnp.float32)
+    routed_weight = jax.ShapeDtypeStruct((8, 128, 128), jnp.bfloat16)
+    shared_weight = jax.ShapeDtypeStruct((256, 256), jnp.bfloat16)
+
+    with pytest.raises(ValueError, match="must be given together"):
+        jax.eval_shape(
+            lambda *arguments: mok_like_reference(
+                *arguments[:9],
+                mesh=mesh,
+                config=MokLikeConfig(schedule_capacity_factor=4, workspace_slots=2),
+                fallback_implementation="ring",
+                routed_x=arguments[9],
+            ),
+            x,
+            selected_experts,
+            combine_weights,
+            routed_weight,
+            routed_weight,
+            routed_weight,
+            shared_weight,
+            shared_weight,
+            shared_weight,
+            routed_x,
+        )
+
+
 def test_generated_peer_wait_validator_requires_cancellation_on_every_wait() -> None:
     source = """
 system_generation_wait(const uint64_t *counter, const uint64_t *cancellation, uint64_t target) {}
@@ -717,6 +1104,32 @@ system_generation_wait(peer_ready, cancellation, target);
 """
 
     assert mok_build._validate_and_count_cancellable_generation_waits(source) == 2
+
+
+@pytest.mark.parametrize("source_root", [Path("/tmp/marin-mok-like/source")])
+def test_generated_backward_reads_routed_transfer_widths_from_the_routed_tensor(source_root: Path) -> None:
+    """No routed-transfer site in the backward may take its width from `d_y_shared`.
+
+    Upstream reads the reverse-combine tile counts and the wgrad readiness counts off the shared
+    activation because both widths are equal there. Under a latent projection they are not, and the
+    mismatch is invisible to a small parity shape: the counts divide by `DISPATCH_Nb` of 512, so
+    hidden 512 against latent 256 rounds both to one block and agrees by accident. At the hero
+    widths it is a factor of two, and the rank spins on a barrier that can never be satisfied.
+    Pin the result of the patch set rather than trusting a gate shape to expose it.
+    """
+
+    if not (source_root / "csrc" / "mok_megakernel.cuh").is_file():
+        pytest.skip("the pinned Mixture-of-Kittens checkout is not present")
+
+    shared_width_reads = [
+        line.strip()
+        for line in mok_build._prepared_source_bytes(source_root)[0].decode().splitlines()
+        if "d_y_shared.cols()" in line
+    ]
+
+    # The only legitimate readers are the two definitions of the shared column-block count itself.
+    assert shared_width_reads, "the backward source no longer mentions the shared activation width"
+    assert all("hidden_dim_col_blocks" in line for line in shared_width_reads), shared_width_reads
 
 
 def test_failure_agreement_excludes_only_the_process_local_expert_axis() -> None:

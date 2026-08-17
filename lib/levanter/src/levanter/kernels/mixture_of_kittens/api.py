@@ -52,11 +52,24 @@ def validate_mok_like_inputs(
     shared_gate: jax.Array,
     shared_up: jax.Array,
     shared_down: jax.Array,
+    routed_x: jax.Array | None = None,
+    latent_up: jax.Array | None = None,
 ) -> None:
-    """Validate the canonical Grug leaves before tracing native work."""
+    """Validate the canonical Grug leaves before tracing native work.
+
+    Under a latent projection the routed and shared paths run at different widths: `routed_x` and
+    the routed weights carry `latent_dim`, the shared weights keep `hidden_dim`, and `latent_up`
+    spans the two. Without it both paths share `x`'s width.
+    """
 
     if x.ndim != 2:
         raise ValueError(f"x must have shape [tokens, hidden], got {x.shape}")
+    if (routed_x is None) != (latent_up is None):
+        raise ValueError("routed_x and latent_up describe one latent projection and must be given together")
+    if routed_x is not None and routed_x.ndim != 2:
+        raise ValueError(f"routed_x must have shape [tokens, latent], got {routed_x.shape}")
+    if routed_x is not None and routed_x.shape[0] != x.shape[0]:
+        raise ValueError("routed_x token count must match x")
     if selected_experts.ndim != 2 or selected_experts.shape != combine_weights.shape:
         raise ValueError("selected_experts and combine_weights must have identical [tokens, top_k] shapes")
     if selected_experts.shape[0] != x.shape[0]:
@@ -66,24 +79,38 @@ def validate_mok_like_inputs(
     if combine_weights.dtype != jnp.float32:
         raise TypeError(f"combine_weights must be float32, got {combine_weights.dtype}")
     arrays = (x, w_gate, w_up, w_down, shared_gate, shared_up, shared_down)
+    if routed_x is not None:
+        arrays += (routed_x, latent_up)
     if any(array.dtype != jnp.bfloat16 for array in arrays):
         dtypes = tuple(array.dtype for array in arrays)
         raise TypeError(f"mok_like activations and weights must be bfloat16, got {dtypes}")
 
     tokens, hidden_dim = x.shape
+    routed_dim = hidden_dim if routed_x is None else routed_x.shape[1]
     if w_gate.ndim != 3 or w_up.shape != w_gate.shape:
         raise ValueError("routed gate and up weights must have identical [experts, hidden, intermediate] shapes")
-    num_experts, routed_hidden, intermediate_dim = w_gate.shape
-    if num_experts <= 0 or routed_hidden != hidden_dim:
-        raise ValueError("routed gate/up hidden dimension must match x")
-    if w_down.shape != (num_experts, intermediate_dim, hidden_dim):
-        raise ValueError("routed down weights must have shape [experts, intermediate, hidden]")
-    if shared_gate.shape != (hidden_dim, intermediate_dim) or shared_up.shape != shared_gate.shape:
+    # The routed experts carry their own intermediate width. The hero widens them against the
+    # shared expert, so this is a second axis on which the two paths differ.
+    num_experts, routed_hidden, routed_intermediate_dim = w_gate.shape
+    if num_experts <= 0 or routed_hidden != routed_dim:
+        raise ValueError("routed gate/up hidden dimension must match the routed input")
+    if w_down.shape != (num_experts, routed_intermediate_dim, routed_dim):
+        raise ValueError("routed down weights must have shape [experts, intermediate, routed hidden]")
+    if latent_up is not None and latent_up.shape != (routed_dim, hidden_dim):
+        raise ValueError("latent_up must have shape [latent, hidden]")
+    if shared_gate.ndim != 2 or shared_gate.shape[0] != hidden_dim or shared_up.shape != shared_gate.shape:
         raise ValueError("shared gate/up weights must have shape [hidden, intermediate]")
+    intermediate_dim = shared_gate.shape[1]
     if shared_down.shape != (intermediate_dim, hidden_dim):
         raise ValueError("shared down weights must have shape [intermediate, hidden]")
-    if tokens <= 0 or hidden_dim % 256 != 0 or intermediate_dim % 256 != 0:
-        raise ValueError("tokens must be positive and hidden/intermediate dimensions must be divisible by 256")
+    if (
+        tokens <= 0
+        or hidden_dim % 256 != 0
+        or intermediate_dim % 256 != 0
+        or routed_intermediate_dim % 256 != 0
+        or routed_dim % 256 != 0
+    ):
+        raise ValueError("tokens must be positive and hidden/intermediate/routed dimensions must be divisible by 256")
 
 
 def _validate_topology(
@@ -125,6 +152,7 @@ def _validate_topology(
 
 def _fused_forward_with_context(
     x: jax.Array,
+    routed_x: jax.Array,
     selected_experts: jax.Array,
     combine_weights: jax.Array,
     w_gate: jax.Array,
@@ -138,13 +166,14 @@ def _fused_forward_with_context(
     runtime: MokLikeRuntimeHandle,
     config: MokLikeConfig,
     collective_id: int,
-) -> tuple[jax.Array, jax.Array, MokLikeForwardContext]:
+) -> tuple[jax.Array, jax.Array, jax.Array, MokLikeForwardContext]:
     _validate_topology(mesh, config.num_devices, config.workspace_transport)
     batch_spec = _batch_spec_from_x(x, mesh)
     expert_weight_spec = P(_EXPERT_AXIS, None, None)
     shared_weight_spec = P(None, None)
 
     x = _reshard_for_shard_map(x, mesh, batch_spec)
+    routed_x = _reshard_for_shard_map(routed_x, mesh, batch_spec)
     selected_experts = _reshard_for_shard_map(selected_experts, mesh, batch_spec)
     combine_weights = _reshard_for_shard_map(combine_weights, mesh, batch_spec)
     w_gate = _reshard_for_shard_map(w_gate, mesh, expert_weight_spec)
@@ -156,6 +185,7 @@ def _fused_forward_with_context(
 
     def local_forward(
         local_x: jax.Array,
+        local_routed_x: jax.Array,
         local_selected_experts: jax.Array,
         local_combine_weights: jax.Array,
         local_w_gate: jax.Array,
@@ -164,7 +194,7 @@ def _fused_forward_with_context(
         local_shared_gate: jax.Array,
         local_shared_up: jax.Array,
         local_shared_down: jax.Array,
-    ) -> tuple[jax.Array, jax.Array, MokLikeForwardContext]:
+    ) -> tuple[jax.Array, jax.Array, jax.Array, MokLikeForwardContext]:
         all_selected_experts = jax.lax.all_gather(local_selected_experts, _EXPERT_AXIS)
         rank = jax.lax.axis_index(_EXPERT_AXIS)
         local_experts = local_w_gate.shape[0]
@@ -180,8 +210,9 @@ def _fused_forward_with_context(
             schedule_capacity=capacity,
             rank=rank,
         )
-        output, context, local_failure = forward_bf16_local(
+        routed_output, shared_output, context, local_failure = forward_bf16_local(
             local_x,
+            local_routed_x,
             local_combine_weights,
             jnp.transpose(local_shared_gate),
             jnp.transpose(local_w_gate, (0, 2, 1)),
@@ -202,15 +233,20 @@ def _fused_forward_with_context(
         # (process-spanning) mesh axis instead of forming an all-device group.
         global_failure = jax.lax.pmax(local_failure, _failure_agreement_axes(mesh))
 
-        def success(_: None) -> tuple[jax.Array, jax.Array, MokLikeForwardContext]:
-            return output, jax.lax.psum(schedule.dropped_assignments, _EXPERT_AXIS), context
-
-        def failure(_: None) -> tuple[jax.Array, jax.Array, MokLikeForwardContext]:
-            failed_output, failed_dropped_assignments = _failure_outputs(
-                global_failure,
-                (output, schedule.dropped_assignments),
+        def success(_: None) -> tuple[jax.Array, jax.Array, jax.Array, MokLikeForwardContext]:
+            return (
+                routed_output,
+                shared_output,
+                jax.lax.psum(schedule.dropped_assignments, _EXPERT_AXIS),
+                context,
             )
-            return failed_output, failed_dropped_assignments, context
+
+        def failure(_: None) -> tuple[jax.Array, jax.Array, jax.Array, MokLikeForwardContext]:
+            failed_routed, failed_shared, failed_dropped_assignments = _failure_outputs(
+                global_failure,
+                (routed_output, shared_output, schedule.dropped_assignments),
+            )
+            return failed_routed, failed_shared, failed_dropped_assignments, context
 
         return jax.lax.cond(global_failure == 0, success, failure, operand=None)
 
@@ -236,6 +272,7 @@ def _fused_forward_with_context(
             batch_spec,
             batch_spec,
             batch_spec,
+            batch_spec,
             expert_weight_spec,
             expert_weight_spec,
             expert_weight_spec,
@@ -243,13 +280,25 @@ def _fused_forward_with_context(
             shared_weight_spec,
             shared_weight_spec,
         ),
-        out_specs=(batch_spec, P(), context_specs),
+        out_specs=(batch_spec, batch_spec, P(), context_specs),
         check_vma=False,
-    )(x, selected_experts, combine_weights, w_gate, w_up, w_down, shared_gate, shared_up, shared_down)
+    )(
+        x,
+        routed_x,
+        selected_experts,
+        combine_weights,
+        w_gate,
+        w_up,
+        w_down,
+        shared_gate,
+        shared_up,
+        shared_down,
+    )
 
 
 def _fused_forward(
     x: jax.Array,
+    routed_x: jax.Array,
     selected_experts: jax.Array,
     combine_weights: jax.Array,
     w_gate: jax.Array,
@@ -263,9 +312,10 @@ def _fused_forward(
     runtime: MokLikeRuntimeHandle,
     config: MokLikeConfig,
     collective_id: int,
-) -> tuple[jax.Array, jax.Array]:
-    output, dropped_assignments, _ = _fused_forward_with_context(
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    routed_output, shared_output, dropped_assignments, _ = _fused_forward_with_context(
         x,
+        routed_x,
         selected_experts,
         combine_weights,
         w_gate,
@@ -279,12 +329,14 @@ def _fused_forward(
         config=config,
         collective_id=collective_id,
     )
-    return output, dropped_assignments
+    return routed_output, shared_output, dropped_assignments
 
 
 def _fused_backward(
     output_gradient: jax.Array,
+    routed_output_gradient: jax.Array,
     x: jax.Array,
+    routed_x: jax.Array,
     selected_experts: jax.Array,
     combine_weights: jax.Array,
     w_gate: jax.Array,
@@ -308,6 +360,7 @@ def _fused_backward(
         getattr(jax.typeof(value).sharding, "spec", default)
         for value, default in (
             (x, batch_spec),
+            (routed_x, batch_spec),
             (combine_weights, batch_spec),
             (w_gate, expert_weight_spec),
             (w_up, expert_weight_spec),
@@ -333,7 +386,9 @@ def _fused_backward(
     )
 
     output_gradient = _reshard_for_shard_map(output_gradient, mesh, batch_spec)
+    routed_output_gradient = _reshard_for_shard_map(routed_output_gradient, mesh, batch_spec)
     x = _reshard_for_shard_map(x, mesh, batch_spec)
+    routed_x = _reshard_for_shard_map(routed_x, mesh, batch_spec)
     selected_experts = _reshard_for_shard_map(selected_experts, mesh, batch_spec)
     combine_weights = _reshard_for_shard_map(combine_weights, mesh, batch_spec)
     w_gate = _reshard_for_shard_map(w_gate, mesh, expert_weight_spec)
@@ -348,7 +403,9 @@ def _fused_backward(
 
     def local_backward(
         local_output_gradient: jax.Array,
+        local_routed_output_gradient: jax.Array,
         local_x: jax.Array,
+        local_routed_x: jax.Array,
         local_selected_experts: jax.Array,
         local_combine_weights: jax.Array,
         local_w_gate: jax.Array,
@@ -376,7 +433,9 @@ def _fused_backward(
         )
         gradients, local_failure = backward_bf16_local(
             local_output_gradient,
+            local_routed_output_gradient,
             local_x,
+            local_routed_x,
             local_combine_weights,
             jnp.transpose(local_shared_gate),
             jnp.transpose(local_w_gate, (0, 2, 1)),
@@ -395,6 +454,7 @@ def _fused_backward(
         )
         (
             d_x,
+            d_routed_x,
             d_combine_weights,
             d_w_gate,
             d_w_up,
@@ -408,6 +468,7 @@ def _fused_backward(
         def success(_: None) -> tuple[jax.Array, ...]:
             return (
                 d_x.astype(local_x.dtype),
+                d_routed_x.astype(local_routed_x.dtype),
                 d_combine_weights.astype(local_combine_weights.dtype),
                 jnp.transpose(d_w_gate, (0, 2, 1)).astype(local_w_gate.dtype),
                 jnp.transpose(d_w_up, (0, 2, 1)).astype(local_w_up.dtype),
@@ -430,6 +491,7 @@ def _fused_backward(
                 global_failure,
                 (
                     local_x,
+                    local_routed_x,
                     local_combine_weights,
                     local_w_gate,
                     local_w_up,
@@ -455,6 +517,8 @@ def _fused_backward(
             batch_spec,
             batch_spec,
             batch_spec,
+            batch_spec,
+            batch_spec,
             expert_weight_spec,
             expert_weight_spec,
             expert_weight_spec,
@@ -464,6 +528,7 @@ def _fused_backward(
             context_specs,
         ),
         out_specs=(
+            batch_spec,
             batch_spec,
             batch_spec,
             expert_weight_spec,
@@ -476,7 +541,9 @@ def _fused_backward(
         check_vma=False,
     )(
         output_gradient,
+        routed_output_gradient,
         x,
+        routed_x,
         selected_experts,
         combine_weights,
         w_gate,
@@ -506,8 +573,19 @@ def mok_like_reference(
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh,
     config: MokLikeConfig,
     fallback_implementation: MoeImplementation,
+    routed_x: jax.Array | None = None,
+    latent_up: jax.Array | None = None,
 ) -> jax.Array:
-    """Run the JAX forward used to differentiate the fused call."""
+    """Run the JAX forward used to differentiate the fused call.
+
+    LatentMoE narrows only the routed path. `routed_x` carries the `latent_dim`-wide rows the
+    experts consume, while the shared expert keeps reading the full-width `x`, and `latent_up`
+    expands the combined routed result back to that width before the two are summed. Omitting both
+    reproduces the single-width behaviour, where one `x` feeds both paths and no expansion happens.
+    """
+    if (routed_x is None) != (latent_up is None):
+        raise ValueError("routed_x and latent_up describe one latent projection and must be given together")
+    routed_input = x if routed_x is None else routed_x
     expert_axis_size = int(mesh.shape[_EXPERT_AXIS])
     reference_capacity_factor = schedule_capacity(
         x.shape[0] // expert_axis_size,
@@ -520,7 +598,7 @@ def mok_like_reference(
         # capacity past that population is invalid for lax.top_k.
         reference_capacity_factor = min(reference_capacity_factor, float(expert_axis_size))
     routed = moe_mlp(
-        x,
+        routed_input,
         selected_experts,
         combine_weights,
         jnp.concatenate((w_gate, w_up), axis=-1),
@@ -532,6 +610,15 @@ def mok_like_reference(
     )
     if isinstance(routed, tuple):
         raise AssertionError("The fallback MoE returned capacity data when only output was requested")
+    if latent_up is not None:
+        # Expand after the combine: the experts already produced the weight-summed latent vector,
+        # which is what the up-projection acts on.
+        routed = jnp.einsum(
+            "tl,ld->td",
+            routed,
+            latent_up.astype(routed.dtype),
+            out_sharding=NamedSharding(mesh, _batch_spec_from_x(x, mesh)),
+        )
     gate = jnp.einsum("td,di->ti", x, shared_gate)
     up = jnp.einsum("td,di->ti", x, shared_up)
     shared = jnp.einsum(
@@ -549,10 +636,11 @@ def _custom_forward(
     runtime: MokLikeRuntimeHandle,
     config: MokLikeConfig,
     collective_id: int,
-) -> Callable[..., tuple[jax.Array, jax.Array]]:
+) -> Callable[..., tuple[jax.Array, jax.Array, jax.Array]]:
     @jax.custom_vjp
     def fused(
         x: jax.Array,
+        routed_x: jax.Array,
         selected_experts: jax.Array,
         combine_weights: jax.Array,
         w_gate: jax.Array,
@@ -561,9 +649,10 @@ def _custom_forward(
         shared_gate: jax.Array,
         shared_up: jax.Array,
         shared_down: jax.Array,
-    ) -> tuple[jax.Array, jax.Array]:
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
         return _fused_forward(
             x,
+            routed_x,
             selected_experts,
             combine_weights,
             w_gate,
@@ -580,23 +669,36 @@ def _custom_forward(
 
     def fused_fwd(
         *arguments: jax.Array,
-    ) -> tuple[tuple[jax.Array, jax.Array], tuple[tuple[jax.Array, ...], MokLikeForwardContext]]:
-        output, dropped_assignments, context = _fused_forward_with_context(
+    ) -> tuple[tuple[jax.Array, jax.Array, jax.Array], tuple[tuple[jax.Array, ...], MokLikeForwardContext]]:
+        routed_output, shared_output, dropped_assignments, context = _fused_forward_with_context(
             *arguments, mesh=mesh, runtime=runtime, config=config, collective_id=collective_id
         )
         context = tree_checkpoint_name(context, MOK_CONTEXT_CHECKPOINT_NAME)
-        return (output, dropped_assignments), (arguments, context)
+        return (routed_output, shared_output, dropped_assignments), (arguments, context)
 
     def fused_bwd(
         residual: tuple[tuple[jax.Array, ...], MokLikeForwardContext],
-        output_gradients: tuple[jax.Array, jax.Array],
+        output_gradients: tuple[jax.Array, jax.Array, jax.Array],
     ) -> tuple[jax.Array | None, ...]:
-        output_gradient, _ = output_gradients
+        routed_output_gradient, output_gradient, _ = output_gradients
         arguments, context = residual
-        x, selected_experts, combine_weights, w_gate, w_up, w_down, shared_gate, shared_up, shared_down = arguments
+        (
+            x,
+            routed_x,
+            selected_experts,
+            combine_weights,
+            w_gate,
+            w_up,
+            w_down,
+            shared_gate,
+            shared_up,
+            shared_down,
+        ) = arguments
         gradients = _fused_backward(
             output_gradient,
+            routed_output_gradient,
             x,
+            routed_x,
             selected_experts,
             combine_weights,
             w_gate,
@@ -611,7 +713,7 @@ def _custom_forward(
             config=config,
             collective_id=collective_id,
         )
-        return gradients[0], None, *gradients[1:]
+        return gradients[0], gradients[1], None, *gradients[2:]
 
     fused.defvjp(fused_fwd, fused_bwd)
     return fused
@@ -632,8 +734,15 @@ def mok_like_mlp(
     runtime: MokLikeRuntimeHandle,
     config: MokLikeConfig,
     collective_id: int,
+    routed_x: jax.Array | None = None,
+    latent_up: jax.Array | None = None,
 ) -> tuple[jax.Array, jax.Array]:
-    """Run the fused BF16 forward and backward for one explicit collective site."""
+    """Run the fused BF16 forward and backward for one explicit collective site.
+
+    Under a latent projection the experts consume the narrower `routed_x` while the shared expert
+    keeps reading `x`, and `latent_up` expands the combined routed result back to the shared width.
+    Omitting both runs one width through both paths.
+    """
     validate_mok_like_inputs(
         x,
         selected_experts,
@@ -644,6 +753,8 @@ def mok_like_mlp(
         shared_gate,
         shared_up,
         shared_down,
+        routed_x=routed_x,
+        latent_up=latent_up,
     )
     forward = _custom_forward(
         mesh=mesh,
@@ -651,8 +762,9 @@ def mok_like_mlp(
         config=config,
         collective_id=collective_id,
     )
-    output, dropped_assignments = forward(
+    routed_output, shared_output, dropped_assignments = forward(
         x,
+        x if routed_x is None else routed_x,
         selected_experts,
         combine_weights,
         w_gate,
@@ -662,6 +774,21 @@ def mok_like_mlp(
         shared_up,
         shared_down,
     )
+    if latent_up is not None:
+        # Name the combine before expanding it. Its transpose is what `w_latent_up`'s gradient
+        # contracts against, so leaving it anonymous makes a remat policy recompute the whole fused
+        # call to recover it -- the forward then runs twice per layer. It is the routed width, so
+        # saving it costs half of what the composed output already costs.
+        routed_output = tree_checkpoint_name(routed_output, _CHECKPOINT_MOE_OUTPUT)
+        # Expand after the combine, matching the reference: the routed result is already the
+        # weight-summed latent vector, so one projection covers every selected expert.
+        routed_output = jnp.einsum(
+            "tl,ld->td",
+            routed_output,
+            latent_up.astype(routed_output.dtype),
+            out_sharding=NamedSharding(mesh, _batch_spec_from_x(x, mesh)),
+        )
+    output = (routed_output.astype(jnp.float32) + shared_output.astype(jnp.float32)).astype(x.dtype)
     return (
         tree_checkpoint_name(output, _CHECKPOINT_MOE_OUTPUT),
         tree_checkpoint_name(dropped_assignments, _CHECKPOINT_MOE_OUTPUT),

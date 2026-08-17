@@ -1905,48 +1905,59 @@ void LaunchKernel(const Globals& globals, cudaStream_t stream) {
       "cudaLaunchKernelEx(MoK forward)");
 }
 
+// Weight-sum the top-k routed rows, optionally folding in the shared expert.
+//
+// `routed_dim` is the width of the routed path, which a latent projection narrows below the shared
+// expert's `hidden_dim`. The two can only be added once the routed result has been expanded back,
+// so a caller running that projection passes `y_shared == nullptr` and performs the expansion and
+// the sum itself; the widths then never meet inside this kernel. When the paths share a width the
+// caller passes `y_shared` and the sum stays fused here, which is one less pass over the output.
 __global__ void ForwardEpilogueKernel(
     const __nv_bfloat16* y_shared,
     const __nv_bfloat16* combine,
     const float* router_weights,
     __nv_bfloat16* output,
     int num_tokens,
-    int hidden_dim,
+    int routed_dim,
     int top_k) {
   const size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  const size_t num_elements = static_cast<size_t>(num_tokens) * hidden_dim;
+  const size_t num_elements = static_cast<size_t>(num_tokens) * routed_dim;
   if (index >= num_elements) {
     return;
   }
-  const int token = static_cast<int>(index / hidden_dim);
-  const int hidden = static_cast<int>(index % hidden_dim);
-  float value = __bfloat162float(y_shared[static_cast<size_t>(token) * hidden_dim + hidden]);
+  const int token = static_cast<int>(index / routed_dim);
+  const int channel = static_cast<int>(index % routed_dim);
+  const size_t destination = static_cast<size_t>(token) * routed_dim + channel;
+  float value = y_shared == nullptr ? 0.0f : __bfloat162float(y_shared[destination]);
   for (int k = 0; k < top_k; ++k) {
     const size_t route = static_cast<size_t>(token) * top_k + k;
-    value += router_weights[route] * __bfloat162float(combine[route * hidden_dim + hidden]);
+    value += router_weights[route] * __bfloat162float(combine[route * routed_dim + channel]);
   }
-  output[static_cast<size_t>(token) * hidden_dim + hidden] = __float2bfloat16_rn(value);
+  output[destination] = __float2bfloat16_rn(value);
 }
 
+// Reduce the per-assignment routed input gradients back onto one row per token. The result is the
+// gradient of the routed input alone; the shared path's gradient is a separate output, because a
+// latent projection leaves the two at different widths and the caller joins them through it.
 __global__ void BackwardEpilogueKernel(
-    __nv_bfloat16* d_x,
+    __nv_bfloat16* d_routed_x,
     const __nv_bfloat16* d_x_routed,
     int num_tokens,
-    int hidden_dim,
+    int routed_dim,
     int top_k) {
   const size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  const size_t num_elements = static_cast<size_t>(num_tokens) * hidden_dim;
+  const size_t num_elements = static_cast<size_t>(num_tokens) * routed_dim;
   if (index >= num_elements) {
     return;
   }
-  const int token = static_cast<int>(index / hidden_dim);
-  const int hidden = static_cast<int>(index % hidden_dim);
-  float value = __bfloat162float(d_x[static_cast<size_t>(token) * hidden_dim + hidden]);
+  const int token = static_cast<int>(index / routed_dim);
+  const int channel = static_cast<int>(index % routed_dim);
+  float value = 0.0f;
   for (int k = 0; k < top_k; ++k) {
     const size_t route = static_cast<size_t>(token) * top_k + k;
-    value += __bfloat162float(d_x_routed[route * hidden_dim + hidden]);
+    value += __bfloat162float(d_x_routed[route * routed_dim + channel]);
   }
-  d_x[static_cast<size_t>(token) * hidden_dim + hidden] = __float2bfloat16_rn(value);
+  d_routed_x[static_cast<size_t>(token) * routed_dim + channel] = __float2bfloat16_rn(value);
 }
 
 template <typename GL, typename T>
@@ -1959,6 +1970,9 @@ ffi::Error ForwardBf16(
     cudaStream_t stream,
     ffi::RunId run_id,
     ffi::Buffer<ffi::BF16, 2> x,
+    // The rows the experts consume. A latent projection narrows these below `x`, which the shared
+    // expert keeps reading at full width; callers without a projection pass `x` for both.
+    ffi::Buffer<ffi::BF16, 2> routed_x,
     ffi::Buffer<ffi::F32, 2> router_weights,
     ffi::Buffer<ffi::BF16, 2> shared_gate,
     ffi::Buffer<ffi::BF16, 3> routed_gate,
@@ -2001,9 +2015,16 @@ ffi::Error ForwardBf16(
   try {
     const int local_tokens = static_cast<int>(x.dimensions()[0]);
     const int hidden_dim = static_cast<int>(x.dimensions()[1]);
+    const int routed_dim = static_cast<int>(routed_x.dimensions()[1]);
     const int intermediate_dim = static_cast<int>(shared_gate.dimensions()[0]);
+    // The hero widens the routed experts against the shared ones, so the intermediate width is a
+    // second axis on which the two paths differ. Every routed tensor follows this one.
+    const int routed_intermediate_dim = static_cast<int>(routed_gate.dimensions()[1]);
     const int local_experts = static_cast<int>(routed_gate.dimensions()[0]);
     const int schedule_capacity = static_cast<int>(schedule_peer_rank.dimensions()[0]);
+    if (routed_x.dimensions()[0] != local_tokens) {
+      return ffi::Error::InvalidArgument("routed_x must carry the same token count as x");
+    }
     if (router_weights.dimensions()[0] != local_tokens || router_weights.dimensions()[1] != top_k) {
       return ffi::Error::InvalidArgument("router_weights shape does not match x and top_k");
     }
@@ -2018,13 +2039,14 @@ ffi::Error ForwardBf16(
         shared_down.dimensions()[1] != intermediate_dim) {
       return ffi::Error::InvalidArgument("shared weight shape mismatch");
     }
-    if (routed_gate.dimensions()[1] != intermediate_dim || routed_gate.dimensions()[2] != hidden_dim ||
+    if (routed_gate.dimensions()[2] != routed_dim ||
         routed_up.dimensions() != routed_gate.dimensions() || routed_down.dimensions()[0] != local_experts ||
-        routed_down.dimensions()[1] != hidden_dim || routed_down.dimensions()[2] != intermediate_dim) {
+        routed_down.dimensions()[1] != routed_dim || routed_down.dimensions()[2] != routed_intermediate_dim) {
       return ffi::Error::InvalidArgument("routed weight shape mismatch");
     }
     if (local_tokens % MoK::config::MLP_Mb != 0 || schedule_capacity % MoK::config::MLP_Mb != 0 ||
-        hidden_dim % MoK::config::MLP_Nb != 0 || intermediate_dim % MoK::config::MLP_Nb != 0 ||
+        hidden_dim % MoK::config::MLP_Nb != 0 || routed_dim % MoK::config::MLP_Nb != 0 ||
+        intermediate_dim % MoK::config::MLP_Nb != 0 || routed_intermediate_dim % MoK::config::MLP_Nb != 0 ||
         macrobatch_size <= 0 || minibatch_size <= 0 || macrobatch_size % minibatch_size != 0 ||
         schedule_capacity % minibatch_size != 0) {
       return ffi::Error::InvalidArgument("MoK dimensions do not meet the 256-row and 256-column tile rules");
@@ -2046,12 +2068,14 @@ ffi::Error ForwardBf16(
       RuntimeManager::Instance().ConfiguredShape(arena_tokens, arena_hidden, arena_top_k, arena_slots);
       std::fprintf(
           stderr,
-          "[mok-trace] forward shapes local_tokens=%d hidden=%d intermediate=%d local_experts=%d "
-          "top_k=%d schedule_capacity=%d macrobatch=%d minibatch=%d storage=%d | arena tokens=%d "
-          "hidden=%d top_k=%d slots=%d\n",
+          "[mok-trace] forward shapes local_tokens=%d hidden=%d routed=%d intermediate=%d "
+          "routed_intermediate=%d local_experts=%d top_k=%d schedule_capacity=%d macrobatch=%d "
+          "minibatch=%d storage=%d | arena tokens=%d hidden=%d top_k=%d slots=%d\n",
           local_tokens,
           hidden_dim,
+          routed_dim,
           intermediate_dim,
+          routed_intermediate_dim,
           local_experts,
           top_k,
           schedule_capacity,
@@ -2065,13 +2089,15 @@ ffi::Error ForwardBf16(
       std::fflush(stderr);
     }
 
-    const size_t x_bytes = static_cast<size_t>(local_tokens) * hidden_dim * sizeof(uint16_t);
+    // Only the routed rows cross the wire, so the arena and the peer registration follow
+    // `routed_x`. The shared expert reads `x` locally and never needs a peer mapping.
+    const size_t x_bytes = static_cast<size_t>(local_tokens) * routed_dim * sizeof(uint16_t);
     lease = RuntimeManager::Instance().Acquire(
         run_id,
         collective_id,
         InvocationPhase::kForward,
         ForwardXRegistration{
-            .pointer = x.typed_data(),
+            .pointer = routed_x.typed_data(),
             .size_bytes = x_bytes,
             .storage = x_storage,
         });
@@ -2084,7 +2110,7 @@ ffi::Error ForwardBf16(
 
     if (active_x_storage == ForwardXStorage::kRuntimeStaged) {
       ThrowOnCuda(
-          cudaMemcpyAsync(runtime.x, x.typed_data(), x_bytes, cudaMemcpyDeviceToDevice, stream),
+          cudaMemcpyAsync(runtime.x, routed_x.typed_data(), x_bytes, cudaMemcpyDeviceToDevice, stream),
           "cudaMemcpyAsync(x workspace)");
     }
     ThrowOnCuda(cudaMemsetAsync(x_routed_ready->typed_data(), 0, x_routed_ready->size_bytes(), stream), "memset(x ready)");
@@ -2106,36 +2132,34 @@ ffi::Error ForwardBf16(
       combine_pointer_data[peer] = reinterpret_cast<kittens::bf16*>(runtime.combine_ptrs[peer]);
     }
 
-    const void* local_x_pointer = active_x_storage == ForwardXStorage::kXlaPeerExperimental
-                                      ? lease->forward_x_ptrs[lease->rank]
-                                      : runtime.x;
-
     MoK::globals_fwd globals{
+        // The shared expert reads the XLA input in place. It is a rank-local GEMM operand, so
+        // unlike the dispatch source it needs neither staging nor a peer mapping.
         .x_shared = MakeGl<MoK::mlp_bf16_gl>(
-            reinterpret_cast<kittens::bf16*>(const_cast<void*>(local_x_pointer)),
+            reinterpret_cast<kittens::bf16*>(x.typed_data()),
             1,
             1,
             local_tokens,
             hidden_dim),
-        .x_fp8_routed = MakeGl<MoK::routed_activation_gl>(reinterpret_cast<kittens::bf16*>(x_routed->typed_data()), 1, 1, macrobatch_size, hidden_dim),
+        .x_fp8_routed = MakeGl<MoK::routed_activation_gl>(reinterpret_cast<kittens::bf16*>(x_routed->typed_data()), 1, 1, macrobatch_size, routed_dim),
         .x_sc_routed = {},
-        .x_fp8_t_routed = MakeGl<MoK::routed_transposed_gl>(reinterpret_cast<kittens::bf16*>(x_routed->typed_data()), 1, 1, macrobatch_size, hidden_dim),
+        .x_fp8_t_routed = MakeGl<MoK::routed_transposed_gl>(reinterpret_cast<kittens::bf16*>(x_routed->typed_data()), 1, 1, macrobatch_size, routed_dim),
         .x_sc_t_routed = {},
         .gate_shared = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(gate_shared->typed_data()), 1, 1, local_tokens, intermediate_dim),
-        .gate_routed = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(gate_routed->typed_data()), 1, 1, macrobatch_size, intermediate_dim),
-        .gate_fp8_routed = MakeGl<MoK::routed_gate_up_gl>(reinterpret_cast<kittens::bf16*>(gate_routed->typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .gate_routed = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(gate_routed->typed_data()), 1, 1, macrobatch_size, routed_intermediate_dim),
+        .gate_fp8_routed = MakeGl<MoK::routed_gate_up_gl>(reinterpret_cast<kittens::bf16*>(gate_routed->typed_data()), 1, 1, macrobatch_size, routed_intermediate_dim),
         .gate_sc_routed = {},
         .up_shared = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(up_shared->typed_data()), 1, 1, local_tokens, intermediate_dim),
-        .up_routed = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(up_routed->typed_data()), 1, 1, macrobatch_size, intermediate_dim),
-        .up_fp8_routed = MakeGl<MoK::routed_gate_up_gl>(reinterpret_cast<kittens::bf16*>(up_routed->typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .up_routed = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(up_routed->typed_data()), 1, 1, macrobatch_size, routed_intermediate_dim),
+        .up_fp8_routed = MakeGl<MoK::routed_gate_up_gl>(reinterpret_cast<kittens::bf16*>(up_routed->typed_data()), 1, 1, macrobatch_size, routed_intermediate_dim),
         .up_sc_routed = {},
         .hidden_shared = MakeGl<MoK::mlp_bf16_gl>(reinterpret_cast<kittens::bf16*>(hidden_shared->typed_data()), 1, 1, local_tokens, intermediate_dim),
-        .hidden_fp8_routed = MakeGl<MoK::routed_activation_gl>(reinterpret_cast<kittens::bf16*>(hidden_routed->typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .hidden_fp8_routed = MakeGl<MoK::routed_activation_gl>(reinterpret_cast<kittens::bf16*>(hidden_routed->typed_data()), 1, 1, macrobatch_size, routed_intermediate_dim),
         .hidden_sc_routed = {},
-        .hidden_fp8_t_routed = MakeGl<MoK::routed_transposed_gl>(reinterpret_cast<kittens::bf16*>(hidden_routed->typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .hidden_fp8_t_routed = MakeGl<MoK::routed_transposed_gl>(reinterpret_cast<kittens::bf16*>(hidden_routed->typed_data()), 1, 1, macrobatch_size, routed_intermediate_dim),
         .hidden_sc_t_routed = {},
         .y_shared = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(y_shared->typed_data()), 1, 1, local_tokens, hidden_dim),
-        .y_routed = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(y_routed->typed_data()), 1, 1, macrobatch_size, hidden_dim),
+        .y_routed = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(y_routed->typed_data()), 1, 1, macrobatch_size, routed_dim),
         .x_routed_send_buffer = x_pointer_data,
         .y_routed_recv_buffer = combine_pointer_data,
         .peer_input_ready = runtime.forward_input_ready,
@@ -2148,13 +2172,13 @@ ffi::Error ForwardBf16(
         .peer_wait_cycles = runtime.debug_counters->values + kPeerWaitCycles,
         .peer_wait_max_cycles = runtime.debug_counters->values + kPeerWaitMaxCycles,
         .w_shared_gate = MakeGl<MoK::weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(shared_gate.typed_data()), 1, 1, intermediate_dim, hidden_dim),
-        .w_routed_gate = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_gate.typed_data()), 1, local_experts, intermediate_dim, hidden_dim),
+        .w_routed_gate = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_gate.typed_data()), 1, local_experts, routed_intermediate_dim, routed_dim),
         .w_routed_gate_sc = {},
         .w_shared_up = MakeGl<MoK::weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(shared_up.typed_data()), 1, 1, intermediate_dim, hidden_dim),
-        .w_routed_up = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_up.typed_data()), 1, local_experts, intermediate_dim, hidden_dim),
+        .w_routed_up = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_up.typed_data()), 1, local_experts, routed_intermediate_dim, routed_dim),
         .w_routed_up_sc = {},
         .w_shared_down = MakeGl<MoK::weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(shared_down.typed_data()), 1, 1, hidden_dim, intermediate_dim),
-        .w_routed_down = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_down.typed_data()), 1, local_experts, hidden_dim, intermediate_dim),
+        .w_routed_down = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_down.typed_data()), 1, local_experts, routed_dim, routed_intermediate_dim),
         .w_routed_down_sc = {},
         .schedule_peer_rank = MakeGl<MoK::index_gl>(schedule_peer_rank.typed_data(), 1, 1, 1, schedule_capacity),
         .schedule_peer_token_idx = MakeGl<MoK::index_gl>(schedule_peer_token_idx.typed_data(), 1, 1, 1, schedule_capacity),
@@ -2186,16 +2210,18 @@ ffi::Error ForwardBf16(
         lease->generation,
         PeerWaitPhase::kForwardPost);
 
+    // The routed combine stops at the routed width. `y_shared` is returned alongside it and the
+    // caller adds the two, which is what lets a latent projection expand the routed result first.
     constexpr int kThreads = 256;
-    const size_t output_elements = static_cast<size_t>(local_tokens) * hidden_dim;
+    const size_t output_elements = static_cast<size_t>(local_tokens) * routed_dim;
     const dim3 grid((output_elements + kThreads - 1) / kThreads, 1, 1);
     ForwardEpilogueKernel<<<grid, kThreads, 0, stream>>>(
-        reinterpret_cast<const __nv_bfloat16*>(y_shared->typed_data()),
+        nullptr,
         reinterpret_cast<const __nv_bfloat16*>(runtime.combine),
         router_weights.typed_data(),
         reinterpret_cast<__nv_bfloat16*>(output->typed_data()),
         local_tokens,
-        hidden_dim,
+        routed_dim,
         top_k);
     ThrowOnCuda(cudaGetLastError(), "ForwardEpilogueKernel");
     LaunchForwardStamp(
@@ -2235,8 +2261,12 @@ ffi::Error ForwardBf16(
 ffi::Error BackwardBf16(
     cudaStream_t stream,
     ffi::RunId run_id,
+    // `grad_output` is the gradient of the shared output; `grad_routed_output` the gradient of the
+    // routed combine, which a latent projection narrows. `routed_x` mirrors the forward's split.
     ffi::Buffer<ffi::BF16, 2> grad_output,
+    ffi::Buffer<ffi::BF16, 2> grad_routed_output,
     ffi::Buffer<ffi::BF16, 2> x,
+    ffi::Buffer<ffi::BF16, 2> routed_x,
     ffi::Buffer<ffi::F32, 2> router_weights,
     ffi::Buffer<ffi::BF16, 2> shared_gate,
     ffi::Buffer<ffi::BF16, 3> routed_gate,
@@ -2266,6 +2296,7 @@ ffi::Error BackwardBf16(
     int32_t backward_peer_storage,
     int64_t collective_id,
     ffi::Result<ffi::Buffer<ffi::BF16, 2>> d_x,
+    ffi::Result<ffi::Buffer<ffi::BF16, 2>> d_routed_x,
     ffi::Result<ffi::Buffer<ffi::F32, 2>> d_router_weights,
     ffi::Result<ffi::Buffer<ffi::F32, 3>> d_w_routed_gate,
     ffi::Result<ffi::Buffer<ffi::F32, 3>> d_w_routed_up,
@@ -2298,12 +2329,18 @@ ffi::Error BackwardBf16(
   try {
     const int local_tokens = static_cast<int>(x.dimensions()[0]);
     const int hidden_dim = static_cast<int>(x.dimensions()[1]);
+    const int routed_dim = static_cast<int>(routed_x.dimensions()[1]);
     const int intermediate_dim = static_cast<int>(shared_gate.dimensions()[0]);
+    const int routed_intermediate_dim = static_cast<int>(routed_gate.dimensions()[1]);
     const int local_experts = static_cast<int>(routed_gate.dimensions()[0]);
     const int schedule_capacity = static_cast<int>(schedule_peer_rank.dimensions()[0]);
     if (grad_output.dimensions() != x.dimensions() || router_weights.dimensions()[0] != local_tokens ||
         router_weights.dimensions()[1] != top_k) {
       return ffi::Error::InvalidArgument("backward token input shapes do not match");
+    }
+    if (routed_x.dimensions()[0] != local_tokens || grad_routed_output.dimensions()[0] != local_tokens ||
+        grad_routed_output.dimensions()[1] != routed_dim) {
+      return ffi::Error::InvalidArgument("backward routed input and gradient shapes do not match");
     }
     if (schedule_peer_token_idx.dimensions()[0] != schedule_capacity || num_tokens.dimensions()[0] != 1 ||
         tokens_per_expert.dimensions()[0] != local_experts) {
@@ -2313,25 +2350,25 @@ ffi::Error BackwardBf16(
         schedule_capacity % minibatch_size != 0) {
       return ffi::Error::InvalidArgument("backward batch sizes do not meet the kernel rules");
     }
-    if (x_routed.dimensions()[0] != macrobatch_size || x_routed.dimensions()[1] != hidden_dim ||
+    if (x_routed.dimensions()[0] != macrobatch_size || x_routed.dimensions()[1] != routed_dim ||
         gate_shared.dimensions()[0] != local_tokens || gate_shared.dimensions()[1] != intermediate_dim ||
-        gate_routed.dimensions()[0] != macrobatch_size || gate_routed.dimensions()[1] != intermediate_dim ||
+        gate_routed.dimensions()[0] != macrobatch_size || gate_routed.dimensions()[1] != routed_intermediate_dim ||
         up_shared.dimensions() != gate_shared.dimensions() || up_routed.dimensions() != gate_routed.dimensions() ||
         hidden_shared.dimensions() != gate_shared.dimensions() ||
         hidden_routed.dimensions() != gate_routed.dimensions()) {
       return ffi::Error::InvalidArgument("backward forward-context shape mismatch");
     }
     if (d_w_routed_gate->dimensions()[0] != local_experts ||
-        d_w_routed_gate->dimensions()[1] != intermediate_dim ||
-        d_w_routed_gate->dimensions()[2] != hidden_dim ||
+        d_w_routed_gate->dimensions()[1] != routed_intermediate_dim ||
+        d_w_routed_gate->dimensions()[2] != routed_dim ||
         d_w_routed_up->dimensions() != d_w_routed_gate->dimensions() ||
         d_w_routed_down->dimensions()[0] != local_experts ||
-        d_w_routed_down->dimensions()[1] != hidden_dim ||
-        d_w_routed_down->dimensions()[2] != intermediate_dim) {
+        d_w_routed_down->dimensions()[1] != routed_dim ||
+        d_w_routed_down->dimensions()[2] != routed_intermediate_dim) {
       return ffi::Error::InvalidArgument("backward routed weight-gradient shape mismatch");
     }
     if (d_router_weight_partials->dimensions()[0] != macrobatch_size ||
-        d_router_weight_partials->dimensions()[1] != intermediate_dim / MoK::config::SWIGLU_Nb) {
+        d_router_weight_partials->dimensions()[1] != routed_intermediate_dim / MoK::config::SWIGLU_Nb) {
       return ffi::Error::InvalidArgument("backward router-gradient partial shape mismatch");
     }
     if (backward_peer_storage != static_cast<int32_t>(BackwardPeerStorage::kRuntimeStaged) &&
@@ -2341,8 +2378,10 @@ ffi::Error BackwardBf16(
     }
     const auto peer_storage = static_cast<BackwardPeerStorage>(backward_peer_storage);
 
-    const size_t x_bytes = static_cast<size_t>(local_tokens) * hidden_dim * sizeof(uint16_t);
-    const size_t routed_x_bytes = static_cast<size_t>(local_tokens) * top_k * hidden_dim * sizeof(uint16_t);
+    // Every peer-visible activation in the backward is a routed one, so the arena follows the
+    // routed width exactly as it does in the forward.
+    const size_t x_bytes = static_cast<size_t>(local_tokens) * routed_dim * sizeof(uint16_t);
+    const size_t routed_x_bytes = static_cast<size_t>(local_tokens) * top_k * routed_dim * sizeof(uint16_t);
     const size_t router_bytes = static_cast<size_t>(local_tokens) * top_k * sizeof(float);
     lease = RuntimeManager::Instance().Acquire(
         run_id,
@@ -2350,8 +2389,8 @@ ffi::Error BackwardBf16(
         InvocationPhase::kBackward,
         std::nullopt,
         BackwardPeerRegistration{
-            .d_y_pointer = grad_output.typed_data(),
-            .x_pointer = x.typed_data(),
+            .d_y_pointer = grad_routed_output.typed_data(),
+            .x_pointer = routed_x.typed_data(),
             .router_weight_pointer = router_weights.typed_data(),
             .d_router_weight_pointer = d_router_weights->typed_data(),
             .activation_size_bytes = x_bytes,
@@ -2376,9 +2415,10 @@ ffi::Error BackwardBf16(
         stamp_runtime_epoch.typed_data());
 
     if (!direct_inputs) {
-      ThrowOnCuda(cudaMemcpyAsync(runtime.d_y, grad_output.typed_data(), x_bytes, cudaMemcpyDeviceToDevice, stream),
-                  "cudaMemcpyAsync(d_y workspace)");
-      ThrowOnCuda(cudaMemcpyAsync(runtime.x, x.typed_data(), x_bytes, cudaMemcpyDeviceToDevice, stream),
+      ThrowOnCuda(
+          cudaMemcpyAsync(runtime.d_y, grad_routed_output.typed_data(), x_bytes, cudaMemcpyDeviceToDevice, stream),
+          "cudaMemcpyAsync(d_y workspace)");
+      ThrowOnCuda(cudaMemcpyAsync(runtime.x, routed_x.typed_data(), x_bytes, cudaMemcpyDeviceToDevice, stream),
                   "cudaMemcpyAsync(x backward workspace)");
       ThrowOnCuda(cudaMemcpyAsync(runtime.router_weights, router_weights.typed_data(), router_bytes,
                                   cudaMemcpyDeviceToDevice, stream),
@@ -2429,49 +2469,48 @@ ffi::Error BackwardBf16(
           direct_router_output ? lease->backward_d_router_weight_ptrs[peer] : runtime.d_router_weight_ptrs[peer]);
     }
 
-    auto* local_x = reinterpret_cast<kittens::bf16*>(
-        direct_inputs ? x.typed_data() : runtime.x);
-    auto* local_d_y = reinterpret_cast<kittens::bf16*>(
-        direct_inputs ? grad_output.typed_data() : runtime.d_y);
-
     MoK::globals_bwd globals{
-        .x_shared = MakeGl<MoK::wgrad_bf16_gl>(local_x, 1, 1, local_tokens, hidden_dim),
-        .x_fp8_routed = MakeGl<MoK::routed_activation_gl>(reinterpret_cast<kittens::bf16*>(x_routed.typed_data()), 1, 1, macrobatch_size, hidden_dim),
+        // The shared wgrad operands are read rank-locally, so they come straight from XLA whatever
+        // the peer-storage mode does with the routed buffers.
+        .x_shared = MakeGl<MoK::wgrad_bf16_gl>(
+            reinterpret_cast<kittens::bf16*>(x.typed_data()), 1, 1, local_tokens, hidden_dim),
+        .x_fp8_routed = MakeGl<MoK::routed_activation_gl>(reinterpret_cast<kittens::bf16*>(x_routed.typed_data()), 1, 1, macrobatch_size, routed_dim),
         .x_sc_routed = {},
-        .x_fp8_t_routed = MakeGl<MoK::routed_transposed_gl>(reinterpret_cast<kittens::bf16*>(x_routed.typed_data()), 1, 1, macrobatch_size, hidden_dim),
+        .x_fp8_t_routed = MakeGl<MoK::routed_transposed_gl>(reinterpret_cast<kittens::bf16*>(x_routed.typed_data()), 1, 1, macrobatch_size, routed_dim),
         .x_sc_t_routed = {},
         .gate_shared = MakeGl<MoK::swiglu_bf16_gl>(reinterpret_cast<kittens::bf16*>(gate_shared.typed_data()), 1, 1, local_tokens, intermediate_dim),
-        .gate_routed = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(gate_routed.typed_data()), 1, 1, macrobatch_size, intermediate_dim),
-        .gate_fp8_routed = MakeGl<MoK::routed_gate_up_gl>(reinterpret_cast<kittens::bf16*>(gate_routed.typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .gate_routed = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(gate_routed.typed_data()), 1, 1, macrobatch_size, routed_intermediate_dim),
+        .gate_fp8_routed = MakeGl<MoK::routed_gate_up_gl>(reinterpret_cast<kittens::bf16*>(gate_routed.typed_data()), 1, 1, macrobatch_size, routed_intermediate_dim),
         .gate_sc_routed = {},
         .up_shared = MakeGl<MoK::swiglu_bf16_gl>(reinterpret_cast<kittens::bf16*>(up_shared.typed_data()), 1, 1, local_tokens, intermediate_dim),
-        .up_routed = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(up_routed.typed_data()), 1, 1, macrobatch_size, intermediate_dim),
-        .up_fp8_routed = MakeGl<MoK::routed_gate_up_gl>(reinterpret_cast<kittens::bf16*>(up_routed.typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .up_routed = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(up_routed.typed_data()), 1, 1, macrobatch_size, routed_intermediate_dim),
+        .up_fp8_routed = MakeGl<MoK::routed_gate_up_gl>(reinterpret_cast<kittens::bf16*>(up_routed.typed_data()), 1, 1, macrobatch_size, routed_intermediate_dim),
         .up_sc_routed = {},
         .hidden_shared = MakeGl<MoK::wgrad_bf16_gl>(reinterpret_cast<kittens::bf16*>(hidden_shared.typed_data()), 1, 1, local_tokens, intermediate_dim),
-        .hidden_fp8_routed = MakeGl<MoK::routed_activation_gl>(reinterpret_cast<kittens::bf16*>(hidden_routed.typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .hidden_fp8_routed = MakeGl<MoK::routed_activation_gl>(reinterpret_cast<kittens::bf16*>(hidden_routed.typed_data()), 1, 1, macrobatch_size, routed_intermediate_dim),
         .hidden_sc_routed = {},
-        .hidden_fp8_t_routed = MakeGl<MoK::routed_transposed_gl>(reinterpret_cast<kittens::bf16*>(hidden_routed.typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .hidden_fp8_t_routed = MakeGl<MoK::routed_transposed_gl>(reinterpret_cast<kittens::bf16*>(hidden_routed.typed_data()), 1, 1, macrobatch_size, routed_intermediate_dim),
         .hidden_sc_t_routed = {},
-        .d_y_shared = MakeGl<MoK::mlp_bf16_gl>(local_d_y, 1, 1, local_tokens, hidden_dim),
-        .d_y_fp8_routed = MakeGl<MoK::routed_activation_gl>(reinterpret_cast<kittens::bf16*>(d_y_routed->typed_data()), 1, 1, macrobatch_size, hidden_dim),
+        .d_y_shared = MakeGl<MoK::mlp_bf16_gl>(
+            reinterpret_cast<kittens::bf16*>(grad_output.typed_data()), 1, 1, local_tokens, hidden_dim),
+        .d_y_fp8_routed = MakeGl<MoK::routed_activation_gl>(reinterpret_cast<kittens::bf16*>(d_y_routed->typed_data()), 1, 1, macrobatch_size, routed_dim),
         .d_y_sc_routed = {},
-        .d_y_fp8_t_routed = MakeGl<MoK::routed_transposed_gl>(reinterpret_cast<kittens::bf16*>(d_y_routed->typed_data()), 1, 1, macrobatch_size, hidden_dim),
+        .d_y_fp8_t_routed = MakeGl<MoK::routed_transposed_gl>(reinterpret_cast<kittens::bf16*>(d_y_routed->typed_data()), 1, 1, macrobatch_size, routed_dim),
         .d_y_sc_t_routed = {},
         .d_hidden_shared = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_hidden_shared->typed_data()), 1, 1, local_tokens, intermediate_dim),
-        .d_hidden_routed = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_hidden_routed->typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .d_hidden_routed = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_hidden_routed->typed_data()), 1, 1, macrobatch_size, routed_intermediate_dim),
         .d_gate_shared = MakeGl<MoK::mlp_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_gate_shared->typed_data()), 1, 1, local_tokens, intermediate_dim),
-        .d_gate_fp8_routed = MakeGl<MoK::routed_activation_gl>(reinterpret_cast<kittens::bf16*>(d_gate_routed->typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .d_gate_fp8_routed = MakeGl<MoK::routed_activation_gl>(reinterpret_cast<kittens::bf16*>(d_gate_routed->typed_data()), 1, 1, macrobatch_size, routed_intermediate_dim),
         .d_gate_sc_routed = {},
-        .d_gate_fp8_t_routed = MakeGl<MoK::routed_transposed_gl>(reinterpret_cast<kittens::bf16*>(d_gate_routed->typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .d_gate_fp8_t_routed = MakeGl<MoK::routed_transposed_gl>(reinterpret_cast<kittens::bf16*>(d_gate_routed->typed_data()), 1, 1, macrobatch_size, routed_intermediate_dim),
         .d_gate_sc_t_routed = {},
         .d_up_shared = MakeGl<MoK::mlp_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_up_shared->typed_data()), 1, 1, local_tokens, intermediate_dim),
-        .d_up_fp8_routed = MakeGl<MoK::routed_activation_gl>(reinterpret_cast<kittens::bf16*>(d_up_routed->typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .d_up_fp8_routed = MakeGl<MoK::routed_activation_gl>(reinterpret_cast<kittens::bf16*>(d_up_routed->typed_data()), 1, 1, macrobatch_size, routed_intermediate_dim),
         .d_up_sc_routed = {},
-        .d_up_fp8_t_routed = MakeGl<MoK::routed_transposed_gl>(reinterpret_cast<kittens::bf16*>(d_up_routed->typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .d_up_fp8_t_routed = MakeGl<MoK::routed_transposed_gl>(reinterpret_cast<kittens::bf16*>(d_up_routed->typed_data()), 1, 1, macrobatch_size, routed_intermediate_dim),
         .d_up_sc_t_routed = {},
         .d_x_shared = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_x->typed_data()), 1, 1, local_tokens, hidden_dim),
-        .d_x_routed = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_x_routed->typed_data()), 1, 1, macrobatch_size, hidden_dim),
+        .d_x_routed = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_x_routed->typed_data()), 1, 1, macrobatch_size, routed_dim),
         .x_routed_send_buffer = x_pointer_data,
         .d_y_buffer = d_y_pointer_data,
         .d_x_routed_buffer = d_x_pointer_data,
@@ -2490,26 +2529,26 @@ ffi::Error BackwardBf16(
         .peer_wait_max_cycles = runtime.debug_counters->values + kPeerWaitMaxCycles +
                                 static_cast<int>(PeerWaitPhase::kBackwardPre) * kNumDevices,
         .router_weights = MakeGl<MoK::router_weight_gl>(router_weights_staged->typed_data(), 1, 1, 1, macrobatch_size),
-        .d_router_weight_partials = MakeGl<MoK::d_router_weight_partials_gl>(d_router_weight_partials->typed_data(), 1, 1, macrobatch_size, intermediate_dim / MoK::config::SWIGLU_Nb),
-        .w_routed_gate = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_gate.typed_data()), 1, local_experts, intermediate_dim, hidden_dim),
+        .d_router_weight_partials = MakeGl<MoK::d_router_weight_partials_gl>(d_router_weight_partials->typed_data(), 1, 1, macrobatch_size, routed_intermediate_dim / MoK::config::SWIGLU_Nb),
+        .w_routed_gate = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_gate.typed_data()), 1, local_experts, routed_intermediate_dim, routed_dim),
         .w_routed_gate_sc = {},
-        .w_routed_up = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_up.typed_data()), 1, local_experts, intermediate_dim, hidden_dim),
+        .w_routed_up = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_up.typed_data()), 1, local_experts, routed_intermediate_dim, routed_dim),
         .w_routed_up_sc = {},
         .w_shared_gate = MakeGl<MoK::weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(shared_gate.typed_data()), 1, 1, intermediate_dim, hidden_dim),
-        .w_routed_gate_T = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_gate.typed_data()), 1, local_experts, intermediate_dim, hidden_dim),
+        .w_routed_gate_T = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_gate.typed_data()), 1, local_experts, routed_intermediate_dim, routed_dim),
         .w_routed_gate_T_sc = {},
         .w_shared_up = MakeGl<MoK::weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(shared_up.typed_data()), 1, 1, intermediate_dim, hidden_dim),
-        .w_routed_up_T = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_up.typed_data()), 1, local_experts, intermediate_dim, hidden_dim),
+        .w_routed_up_T = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_up.typed_data()), 1, local_experts, routed_intermediate_dim, routed_dim),
         .w_routed_up_T_sc = {},
         .w_shared_down = MakeGl<MoK::weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(shared_down.typed_data()), 1, 1, hidden_dim, intermediate_dim),
-        .w_routed_down_T = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_down.typed_data()), 1, local_experts, hidden_dim, intermediate_dim),
+        .w_routed_down_T = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_down.typed_data()), 1, local_experts, routed_dim, routed_intermediate_dim),
         .w_routed_down_T_sc = {},
         .d_w_shared_gate = MakeGl<MoK::d_weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_w_shared_gate->typed_data()), 1, 1, intermediate_dim, hidden_dim),
-        .d_w_routed_gate = MakeGl<MoK::d_routed_weight_f32_gl>(d_w_routed_gate->typed_data(), 1, local_experts, intermediate_dim, hidden_dim),
+        .d_w_routed_gate = MakeGl<MoK::d_routed_weight_f32_gl>(d_w_routed_gate->typed_data(), 1, local_experts, routed_intermediate_dim, routed_dim),
         .d_w_shared_up = MakeGl<MoK::d_weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_w_shared_up->typed_data()), 1, 1, intermediate_dim, hidden_dim),
-        .d_w_routed_up = MakeGl<MoK::d_routed_weight_f32_gl>(d_w_routed_up->typed_data(), 1, local_experts, intermediate_dim, hidden_dim),
+        .d_w_routed_up = MakeGl<MoK::d_routed_weight_f32_gl>(d_w_routed_up->typed_data(), 1, local_experts, routed_intermediate_dim, routed_dim),
         .d_w_shared_down = MakeGl<MoK::d_weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_w_shared_down->typed_data()), 1, 1, hidden_dim, intermediate_dim),
-        .d_w_routed_down = MakeGl<MoK::d_routed_weight_f32_gl>(d_w_routed_down->typed_data(), 1, local_experts, hidden_dim, intermediate_dim),
+        .d_w_routed_down = MakeGl<MoK::d_routed_weight_f32_gl>(d_w_routed_down->typed_data(), 1, local_experts, routed_dim, routed_intermediate_dim),
         .schedule_peer_rank = MakeGl<MoK::index_gl>(schedule_peer_rank.typed_data(), 1, 1, 1, schedule_capacity),
         .schedule_peer_token_idx = MakeGl<MoK::index_gl>(schedule_peer_token_idx.typed_data(), 1, 1, 1, schedule_capacity),
         .num_tokens = MakeGl<MoK::index_gl>(num_tokens.typed_data(), 1, 1, 1, 1),
@@ -2545,13 +2584,13 @@ ffi::Error BackwardBf16(
         PeerWaitPhase::kBackwardPost);
 
     constexpr int kThreads = 256;
-    const size_t output_elements = static_cast<size_t>(local_tokens) * hidden_dim;
+    const size_t output_elements = static_cast<size_t>(local_tokens) * routed_dim;
     const dim3 epilogue_grid((output_elements + kThreads - 1) / kThreads, 1, 1);
     BackwardEpilogueKernel<<<epilogue_grid, kThreads, 0, stream>>>(
-        reinterpret_cast<__nv_bfloat16*>(d_x->typed_data()),
+        reinterpret_cast<__nv_bfloat16*>(d_routed_x->typed_data()),
         reinterpret_cast<const __nv_bfloat16*>(runtime.d_x_routed),
         local_tokens,
-        hidden_dim,
+        routed_dim,
         top_k);
     ThrowOnCuda(cudaGetLastError(), "BackwardEpilogueKernel");
     if (!direct_router_output) {
@@ -2584,6 +2623,7 @@ auto ForwardBinding() {
   return ffi::Ffi::Bind()
       .Ctx<ffi::PlatformStream<cudaStream_t>>()
       .Ctx<ffi::RunId>()
+      .Arg<ffi::Buffer<ffi::BF16, 2>>()
       .Arg<ffi::Buffer<ffi::BF16, 2>>()
       .Arg<ffi::Buffer<ffi::F32, 2>>()
       .Arg<ffi::Buffer<ffi::BF16, 2>>()
@@ -2630,6 +2670,8 @@ auto BackwardBinding() {
       .Ctx<ffi::RunId>()
       .Arg<ffi::Buffer<ffi::BF16, 2>>()
       .Arg<ffi::Buffer<ffi::BF16, 2>>()
+      .Arg<ffi::Buffer<ffi::BF16, 2>>()
+      .Arg<ffi::Buffer<ffi::BF16, 2>>()
       .Arg<ffi::Buffer<ffi::F32, 2>>()
       .Arg<ffi::Buffer<ffi::BF16, 2>>()
       .Arg<ffi::Buffer<ffi::BF16, 3>>()
@@ -2658,6 +2700,7 @@ auto BackwardBinding() {
       .Attr<int32_t>("minibatch_size")
       .Attr<int32_t>("backward_peer_storage")
       .Attr<int64_t>("collective_id")
+      .Ret<ffi::Buffer<ffi::BF16, 2>>()
       .Ret<ffi::Buffer<ffi::BF16, 2>>()
       .Ret<ffi::Buffer<ffi::F32, 2>>()
       .Ret<ffi::Buffer<ffi::F32, 3>>()

@@ -477,6 +477,111 @@ using d_routed_weight_f32_gl = gl<float, 1, -1, -1, -1, mlp_f32_d_tile>;""",
         if constexpr (USE_ROUTED_MXFP8) {""",
         ),
         ("store_bf16();", "store_output();"),
+        # A latent projection narrows the routed path below the shared one, so the backward's
+        # column-block count stops being a single number. Everything that produces a routed-width
+        # output -- the routed dgrad gate/up and all three routed wgrads -- moves to `d_x_routed`,
+        # while the shared terms keep reading `d_y_shared`. The forward needs no equivalent edit
+        # because it already derives every routed count from the routed weights.
+        (
+            """        const int intermediate_dim_col_blocks = hidden_shared.cols() / config::MLP_Nb;
+        const int hidden_dim_col_blocks = d_y_shared.cols() / config::MLP_Nb;""",
+            """        const int intermediate_dim_col_blocks = hidden_shared.cols() / config::MLP_Nb;
+        const int hidden_dim_col_blocks = d_y_shared.cols() / config::MLP_Nb;
+        const int routed_dim_col_blocks = d_x_routed.cols() / config::MLP_Nb;
+        const int routed_intermediate_col_blocks = hidden_fp8_routed.cols() / config::MLP_Nb;""",
+        ),
+        (
+            """        const int minibatch_bwd_tasks = minibatch_row_blocks * intermediate_dim_col_blocks + minibatch_swiglu_bwd_tasks + minibatch_row_blocks * hidden_dim_col_blocks;""",
+            """        const int minibatch_bwd_tasks = minibatch_row_blocks * routed_intermediate_col_blocks + minibatch_swiglu_bwd_tasks + minibatch_row_blocks * routed_dim_col_blocks;""",
+        ),
+        (
+            """        const int wgrad_tasks = 3 * w_routed_gate.depth() * intermediate_dim_col_blocks * hidden_dim_col_blocks;""",
+            """        const int wgrad_tasks = 3 * w_routed_gate.depth() * routed_intermediate_col_blocks * routed_dim_col_blocks;""",
+        ),
+        (
+            """        const int minibatch_replay_tasks = 2 * minibatch_row_blocks * intermediate_dim_col_blocks + minibatch_swiglu_fwd_tasks;""",
+            """        const int minibatch_replay_tasks = 2 * minibatch_row_blocks * routed_intermediate_col_blocks + minibatch_swiglu_fwd_tasks;""",
+        ),
+        (
+            """    const int intermediate_dim_col_blocks = g.hidden_shared.cols() / config::MLP_Nb;
+    const int hidden_dim_col_blocks = g.d_y_shared.cols() / config::MLP_Nb;""",
+            """    const int intermediate_dim_col_blocks = g.hidden_shared.cols() / config::MLP_Nb;
+    const int hidden_dim_col_blocks = g.d_y_shared.cols() / config::MLP_Nb;
+    const int routed_dim_col_blocks = g.d_x_routed.cols() / config::MLP_Nb;
+    const int routed_intermediate_col_blocks = g.hidden_fp8_routed.cols() / config::MLP_Nb;""",
+        ),
+        (
+            """    const int minibatch_routed_dgrad_gate_up_tasks = minibatch_routed_row_blocks * hidden_dim_col_blocks;""",
+            """    const int minibatch_routed_dgrad_gate_up_tasks = minibatch_routed_row_blocks * routed_dim_col_blocks;""",
+        ),
+        (
+            """    const int wgrad_matrix_tasks = num_local_experts * intermediate_dim_col_blocks * hidden_dim_col_blocks;""",
+            """    const int wgrad_matrix_tasks = num_local_experts * routed_intermediate_col_blocks * routed_dim_col_blocks;""",
+        ),
+        # The routed dgrad-down output and the replayed routed gate/up are routed-intermediate wide.
+        (
+            """    const int minibatch_routed_dgrad_down_tasks = minibatch_routed_row_blocks * intermediate_dim_col_blocks;""",
+            """    const int minibatch_routed_dgrad_down_tasks = minibatch_routed_row_blocks * routed_intermediate_col_blocks;""",
+        ),
+        (
+            """    const int minibatch_routed_gate_up_tasks = minibatch_routed_row_blocks * intermediate_dim_col_blocks;""",
+            """    const int minibatch_routed_gate_up_tasks = minibatch_routed_row_blocks * routed_intermediate_col_blocks;""",
+        ),
+        # The backward's reverse-combine and reverse-dispatch move routed rows, so their tile counts
+        # follow the routed width. Upstream reads them off `d_y_shared` because the two widths are
+        # equal there; under a latent projection that over-counts the transfer by the compression
+        # ratio, and the comm CTAs walk off the end of a buffer half the size they assume.
+        (
+            """        const int col_blocks = (g.d_y_shared.cols() + config::DISPATCH_Nb - 1) / config::DISPATCH_Nb;""",
+            """        const int col_blocks = (g.d_x_routed.cols() + config::DISPATCH_Nb - 1) / config::DISPATCH_Nb;""",
+        ),
+        (
+            """        const int col_blocks = (g.d_y_shared.cols() + config::COMBINE_Nb - 1) / config::COMBINE_Nb;""",
+            """        const int col_blocks = (g.d_x_routed.cols() + config::COMBINE_Nb - 1) / config::COMBINE_Nb;""",
+        ),
+        # `wait_for_wgrad_operands` cannot read the transferred width off its A operand the way the
+        # non-wgrad path does -- wgrad iterates K over token rows, so `a_gmem.cols()` is the
+        # intermediate dim. It takes the width as a parameter instead, and all three routed wgrads
+        # were handed the shared one. The waiter then demands `ceil(hidden/DISPATCH_Nb)` arrivals
+        # where only `ceil(routed/DISPATCH_Nb)` are ever published, and the rank spins forever.
+        (
+            """                                                     g.d_y_shared.cols(), 0, d_gate_up_row_block_ready_required_count, 0, macrobatch_idx, smem_base_addr);""",
+            """                                                     g.d_x_routed.cols(), 0, d_gate_up_row_block_ready_required_count, 0, macrobatch_idx, smem_base_addr);""",
+        ),
+        (
+            """                                                     g.d_y_shared.cols(), shared_row_blocks, d_gate_up_row_block_ready_required_count,""",
+            """                                                     g.d_x_routed.cols(), shared_row_blocks, d_gate_up_row_block_ready_required_count,""",
+        ),
+        # A row block is ready once every SwiGLU tile across its intermediate width has arrived, so
+        # this count is per-path the moment the two intermediates differ. It is an arrival count on
+        # a barrier -- the same class as the width bug above -- so give each side its own rather
+        # than letting the routed tasks wait on the shared width.
+        (
+            """    const int hidden_row_block_ready_required_count = (config::MLP_Mb / config::SWIGLU_Mb) * (g.hidden_shared.cols() / config::SWIGLU_Nb);""",
+            """    const int hidden_row_block_ready_required_count = (config::MLP_Mb / config::SWIGLU_Mb) * (g.hidden_shared.cols() / config::SWIGLU_Nb);
+    const int routed_hidden_row_block_ready_required_count = (config::MLP_Mb / config::SWIGLU_Mb) * (g.hidden_fp8_routed.cols() / config::SWIGLU_Nb);""",
+        ),
+        (
+            """                                           0, shared_row_blocks, hidden_row_block_ready_required_count, 0, 0, smem_base_addr);""",
+            """                                           0, shared_row_blocks, routed_hidden_row_block_ready_required_count, 0, 0, smem_base_addr);""",
+        ),
+        (
+            """    const int d_gate_up_row_block_ready_required_count = (config::MLP_Mb / config::SWIGLU_Mb) * (g.hidden_shared.cols() / config::SWIGLU_Nb);""",
+            """    const int d_gate_up_row_block_ready_required_count = (config::MLP_Mb / config::SWIGLU_Mb) * (g.hidden_shared.cols() / config::SWIGLU_Nb);
+    const int routed_d_gate_up_row_block_ready_required_count = (config::MLP_Mb / config::SWIGLU_Mb) * (g.hidden_fp8_routed.cols() / config::SWIGLU_Nb);""",
+        ),
+        (
+            """                                               0, shared_row_blocks, d_gate_up_row_block_ready_required_count, 0, macrobatch_idx, smem_base_addr);""",
+            """                                               0, shared_row_blocks, routed_d_gate_up_row_block_ready_required_count, 0, macrobatch_idx, smem_base_addr);""",
+        ),
+        (
+            """                                                     g.d_x_routed.cols(), 0, d_gate_up_row_block_ready_required_count, 0, macrobatch_idx, smem_base_addr);""",
+            """                                                     g.d_x_routed.cols(), 0, routed_d_gate_up_row_block_ready_required_count, 0, macrobatch_idx, smem_base_addr);""",
+        ),
+        (
+            """                                                     g.d_x_routed.cols(), shared_row_blocks, d_gate_up_row_block_ready_required_count,""",
+            """                                                     g.d_x_routed.cols(), shared_row_blocks, routed_d_gate_up_row_block_ready_required_count,""",
+        ),
     )
     for old, new in source_edits:
         if old not in mok_text:
@@ -615,8 +720,7 @@ def build_native_library(build_config: MokLikeBuildConfig) -> Path:
                 detail = (completed.stderr or completed.stdout or "").strip()
                 tail = "\n".join(detail.splitlines()[-40:])
                 raise RuntimeError(
-                    f"nvcc failed with exit status {completed.returncode} building "
-                    f"{_ffi_source().name}:\n{tail}"
+                    f"nvcc failed with exit status {completed.returncode} building " f"{_ffi_source().name}:\n{tail}"
                 )
             os.replace(temporary_library, library_path)
         finally:

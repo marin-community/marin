@@ -58,6 +58,7 @@ class MokLikeForwardContext(NamedTuple):
 
 def forward_bf16_local(
     x: jax.Array,
+    routed_x: jax.Array,
     router_weights: jax.Array,
     shared_gate: jax.Array,
     routed_gate: jax.Array,
@@ -73,12 +74,20 @@ def forward_bf16_local(
     runtime: MokLikeRuntime,
     config: MokLikeConfig,
     collective_id: int,
-) -> tuple[jax.Array, MokLikeForwardContext, jax.Array]:
-    """Run fused dispatch, shared and routed SwiGLU, combine, and epilogue."""
-    if x.ndim != 2 or router_weights.ndim != 2:
-        raise ValueError("x and router_weights must be rank two")
+) -> tuple[jax.Array, jax.Array, MokLikeForwardContext, jax.Array]:
+    """Run fused dispatch, shared and routed SwiGLU, combine, and epilogue.
+
+    The routed combine and the shared output are returned separately, at the routed and shared
+    widths respectively, so a caller with a latent projection can expand the first before adding
+    the second.
+    """
+    if x.ndim != 2 or routed_x.ndim != 2 or router_weights.ndim != 2:
+        raise ValueError("x, routed_x, and router_weights must be rank two")
     num_tokens, hidden_dim = x.shape
+    routed_dim = routed_x.shape[1]
     top_k = router_weights.shape[1]
+    if routed_x.shape[0] != num_tokens:
+        raise ValueError("routed_x must have the same token count as x")
     if router_weights.shape[0] != num_tokens:
         raise ValueError("router_weights must have the same token count as x")
     if schedule_peer_rank.shape != schedule_peer_token_idx.shape:
@@ -89,32 +98,39 @@ def forward_bf16_local(
     if num_tokens % _TILE_ROWS != 0 or capacity % _TILE_ROWS != 0:
         raise ValueError("token count and schedule capacity must be divisible by 256")
 
+    # Only routed activations cross the wire, so the symmetric arena is sized from the routed width.
     runtime.require_compatible(
         num_tokens=num_tokens,
-        hidden_dim=hidden_dim,
+        hidden_dim=routed_dim,
         top_k=top_k,
         workspace_slots=config.workspace_slots,
     )
     intermediate_dim = shared_gate.shape[0]
+    # The routed experts may be wider than the shared one, so every routed tile count is its own.
+    routed_intermediate_dim = routed_gate.shape[1]
     routed_rows = config.macrobatch_size
     global_minibatches = capacity // config.minibatch_size
     global_row_blocks = capacity // (_TILE_ROWS // _CLUSTER_SIZE)
     shared_row_blocks = num_tokens // _TILE_ROWS
     routed_row_blocks = capacity // _TILE_ROWS
-    gate_ready = (shared_row_blocks + routed_row_blocks) * (intermediate_dim // _TILE_ROWS)
+    # The routed tiles are indexed after the shared ones, so this array is the sum of two products
+    # rather than one product over their combined row blocks.
+    gate_ready = shared_row_blocks * (intermediate_dim // _TILE_ROWS) + routed_row_blocks * (
+        routed_intermediate_dim // _TILE_ROWS
+    )
     hidden_ready = shared_row_blocks + routed_row_blocks
 
     result_shapes = (
+        jax.ShapeDtypeStruct((num_tokens, routed_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((routed_rows, routed_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((num_tokens, intermediate_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((routed_rows, routed_intermediate_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((num_tokens, intermediate_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((routed_rows, routed_intermediate_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((num_tokens, intermediate_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((routed_rows, routed_intermediate_dim), jnp.bfloat16),
         jax.ShapeDtypeStruct((num_tokens, hidden_dim), jnp.bfloat16),
-        jax.ShapeDtypeStruct((routed_rows, hidden_dim), jnp.bfloat16),
-        jax.ShapeDtypeStruct((num_tokens, intermediate_dim), jnp.bfloat16),
-        jax.ShapeDtypeStruct((routed_rows, intermediate_dim), jnp.bfloat16),
-        jax.ShapeDtypeStruct((num_tokens, intermediate_dim), jnp.bfloat16),
-        jax.ShapeDtypeStruct((routed_rows, intermediate_dim), jnp.bfloat16),
-        jax.ShapeDtypeStruct((num_tokens, intermediate_dim), jnp.bfloat16),
-        jax.ShapeDtypeStruct((routed_rows, intermediate_dim), jnp.bfloat16),
-        jax.ShapeDtypeStruct((num_tokens, hidden_dim), jnp.bfloat16),
-        jax.ShapeDtypeStruct((routed_rows, hidden_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((routed_rows, routed_dim), jnp.bfloat16),
         jax.ShapeDtypeStruct((global_minibatches,), jnp.int32),
         jax.ShapeDtypeStruct((gate_ready,), jnp.int32),
         jax.ShapeDtypeStruct((hidden_ready,), jnp.int32),
@@ -135,6 +151,7 @@ def forward_bf16_local(
         vmap_method="broadcast_all",
     )(
         jnp.asarray(x, dtype=jnp.bfloat16),
+        jnp.asarray(routed_x, dtype=jnp.bfloat16),
         jnp.asarray(router_weights, dtype=jnp.float32),
         jnp.asarray(shared_gate, dtype=jnp.bfloat16),
         jnp.asarray(routed_gate, dtype=jnp.bfloat16),
@@ -166,12 +183,14 @@ def forward_bf16_local(
         stamp_generation_low=results[17],
         stamp_runtime_epoch=results[18],
     )
-    return results[0], context, results[-1][0]
+    return results[0], results[8], context, results[-1][0]
 
 
 def backward_bf16_local(
     grad_output: jax.Array,
+    grad_routed_output: jax.Array,
     x: jax.Array,
+    routed_x: jax.Array,
     router_weights: jax.Array,
     shared_gate: jax.Array,
     routed_gate: jax.Array,
@@ -193,7 +212,12 @@ def backward_bf16_local(
     if x.ndim != 2 or router_weights.ndim != 2 or grad_output.shape != x.shape:
         raise ValueError("x, grad_output, and router_weights must have matching rank-two token shapes")
     num_tokens, hidden_dim = x.shape
+    routed_dim = routed_x.shape[1]
     top_k = router_weights.shape[1]
+    if routed_x.ndim != 2 or grad_routed_output.shape != routed_x.shape:
+        raise ValueError("routed_x and grad_routed_output must have matching rank-two token shapes")
+    if routed_x.shape[0] != num_tokens:
+        raise ValueError("routed_x must have the same token count as x")
     if router_weights.shape[0] != num_tokens:
         raise ValueError("router_weights must have the same token count as x")
     if schedule_peer_rank.shape != schedule_peer_token_idx.shape:
@@ -206,11 +230,12 @@ def backward_bf16_local(
 
     runtime.require_compatible(
         num_tokens=num_tokens,
-        hidden_dim=hidden_dim,
+        hidden_dim=routed_dim,
         top_k=top_k,
         workspace_slots=config.workspace_slots,
     )
     intermediate_dim = shared_gate.shape[0]
+    routed_intermediate_dim = routed_gate.shape[1]
     local_experts = routed_gate.shape[0]
     routed_rows = config.macrobatch_size
     global_minibatches = capacity // config.minibatch_size
@@ -218,33 +243,38 @@ def backward_bf16_local(
     shared_row_blocks = num_tokens // _TILE_ROWS
     routed_row_blocks = capacity // _TILE_ROWS
     intermediate_col_blocks = intermediate_dim // _TILE_ROWS
+    routed_intermediate_col_blocks = routed_intermediate_dim // _TILE_ROWS
 
     result_shapes = (
         jax.ShapeDtypeStruct((num_tokens, hidden_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((num_tokens, routed_dim), jnp.bfloat16),
         jax.ShapeDtypeStruct((num_tokens, top_k), jnp.float32),
-        jax.ShapeDtypeStruct((local_experts, intermediate_dim, hidden_dim), jnp.float32),
-        jax.ShapeDtypeStruct((local_experts, intermediate_dim, hidden_dim), jnp.float32),
-        jax.ShapeDtypeStruct((local_experts, hidden_dim, intermediate_dim), jnp.float32),
+        jax.ShapeDtypeStruct((local_experts, routed_intermediate_dim, routed_dim), jnp.float32),
+        jax.ShapeDtypeStruct((local_experts, routed_intermediate_dim, routed_dim), jnp.float32),
+        jax.ShapeDtypeStruct((local_experts, routed_dim, routed_intermediate_dim), jnp.float32),
         jax.ShapeDtypeStruct((intermediate_dim, hidden_dim), jnp.bfloat16),
         jax.ShapeDtypeStruct((intermediate_dim, hidden_dim), jnp.bfloat16),
         jax.ShapeDtypeStruct((hidden_dim, intermediate_dim), jnp.bfloat16),
         jax.ShapeDtypeStruct((routed_rows,), jnp.float32),
-        jax.ShapeDtypeStruct((routed_rows, intermediate_dim // _SWIGLU_TILE_COLUMNS), jnp.float32),
-        jax.ShapeDtypeStruct((routed_rows, hidden_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((routed_rows, routed_intermediate_dim // _SWIGLU_TILE_COLUMNS), jnp.float32),
+        jax.ShapeDtypeStruct((routed_rows, routed_dim), jnp.bfloat16),
         jax.ShapeDtypeStruct((num_tokens, intermediate_dim), jnp.bfloat16),
-        jax.ShapeDtypeStruct((routed_rows, intermediate_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((routed_rows, routed_intermediate_dim), jnp.bfloat16),
         jax.ShapeDtypeStruct((num_tokens, intermediate_dim), jnp.bfloat16),
-        jax.ShapeDtypeStruct((routed_rows, intermediate_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((routed_rows, routed_intermediate_dim), jnp.bfloat16),
         jax.ShapeDtypeStruct((num_tokens, intermediate_dim), jnp.bfloat16),
-        jax.ShapeDtypeStruct((routed_rows, intermediate_dim), jnp.bfloat16),
-        jax.ShapeDtypeStruct((routed_rows, hidden_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((routed_rows, routed_intermediate_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((routed_rows, routed_dim), jnp.bfloat16),
         jax.ShapeDtypeStruct((num_macrobatches,), jnp.int32),
         jax.ShapeDtypeStruct((global_minibatches,), jnp.int32),
-        jax.ShapeDtypeStruct(((shared_row_blocks + routed_row_blocks) * intermediate_col_blocks,), jnp.int32),
+        jax.ShapeDtypeStruct(
+            (shared_row_blocks * intermediate_col_blocks + routed_row_blocks * routed_intermediate_col_blocks,),
+            jnp.int32,
+        ),
         jax.ShapeDtypeStruct((shared_row_blocks + routed_row_blocks,), jnp.int32),
         jax.ShapeDtypeStruct((global_minibatches,), jnp.int32),
         jax.ShapeDtypeStruct((global_minibatches,), jnp.int32),
-        jax.ShapeDtypeStruct((routed_row_blocks * intermediate_col_blocks,), jnp.int32),
+        jax.ShapeDtypeStruct((routed_row_blocks * routed_intermediate_col_blocks,), jnp.int32),
         jax.ShapeDtypeStruct((routed_row_blocks,), jnp.int32),
         jax.ShapeDtypeStruct((num_macrobatches,), jnp.int32),
         jax.ShapeDtypeStruct((1,), jnp.int32),
@@ -259,7 +289,9 @@ def backward_bf16_local(
         vmap_method="broadcast_all",
     )(
         jnp.asarray(grad_output, dtype=jnp.bfloat16),
+        jnp.asarray(grad_routed_output, dtype=jnp.bfloat16),
         jnp.asarray(x, dtype=jnp.bfloat16),
+        jnp.asarray(routed_x, dtype=jnp.bfloat16),
         jnp.asarray(router_weights, dtype=jnp.float32),
         jnp.asarray(shared_gate, dtype=jnp.bfloat16),
         jnp.asarray(routed_gate, dtype=jnp.bfloat16),
@@ -291,9 +323,9 @@ def backward_bf16_local(
     )
     active_experts = tokens_per_expert > 0
     routed_weight_gradients = tuple(
-        jnp.where(active_experts[:, None, None], gradient, 0).astype(jnp.bfloat16) for gradient in results[2:5]
+        jnp.where(active_experts[:, None, None], gradient, 0).astype(jnp.bfloat16) for gradient in results[3:6]
     )
-    gradients = tuple(results[:2]) + routed_weight_gradients + tuple(results[5:8])
+    gradients = tuple(results[:3]) + routed_weight_gradients + tuple(results[6:9])
     return gradients, results[-1][0]
 
 
