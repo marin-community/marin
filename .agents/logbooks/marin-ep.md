@@ -1307,3 +1307,30 @@ Experiment ID prefix: `MEP`.
   projected net win. Integration into marin_ep (fwd fused + combine
   separate, custom_vjp) is the next full milestone.
 - Tray released; M7b prototype milestone met (correct + overlap proven).
+
+### 2026-08-16 19:45 - MEP-047: gate reframed to 25% MFU; parallel-session import; b2048 arm
+- User reframe: 350k tok/s/rack likely not theoretically reachable; the gate
+  is now >=25% MFU at hero EP64 (~15.4 s/step at b1024 calibration), tok/s
+  best-effort. Gap from 17.0 s best: ~1.6 s.
+- Imported findings from parallel sessions:
+  - ragged-a2a (#8317): closed at 21.82% MFU; flag/compute levers exhausted,
+    defers to marin-ep for structural transport. Reference: fixed transport
+    iso-compute 23.6% MFU at ~3.9% drops -- our 22.6% at <1% drops is at
+    parity with the fixed baseline.
+  - mixture-of-kittens (#8108, 2026-08-16 comment): megakernel 25.28% MFU
+    dropless but at 16 layers / 8 experts / expert-axis 4 (in-process
+    peers); EP64+E192 blocked on their fabric deadlock. Two measured
+    transferable levers: (1) 128 seq/node (global batch 2048, the sealed
+    two-rack posture) gave +1.1pp because the DP reduction is per-step,
+    not per-token -- attacks exactly our 2.8 s FSDP + 1.05 s barrier
+    buckets; (2) cf 1.1 costs nothing in drops (independently confirms
+    our setting).
+- Launched mep-b2048-brd-25-20260816: MEP-043 recipe (ep-marin-mgpu-brd,
+  wheel v3, cf 1.1, splits 32) with --batch-size 2048. Risk: 2x activation
+  memory; hero keeps MuonH state host-offloaded so HBM verdict empirical.
+- fp8 wire (#7665, 1.144x fwd+bwd at EP64) flagged as candidate but may
+  violate the fidelity constraint cited in #8317 (no quantization beyond
+  main's moe_hero_ep, per the Slack fidelity discussion) -- needs a user
+  ruling before any arm.
+- Next action: score b2048; if positive adopt as the new posture; then M7b
+  integration (fwd fused dispatch+GEMM) as the remaining structural lever.
