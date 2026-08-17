@@ -1334,3 +1334,30 @@ Experiment ID prefix: `MEP`.
   ruling before any arm.
 - Next action: score b2048; if positive adopt as the new posture; then M7b
   integration (fwd fused dispatch+GEMM) as the remaining structural lever.
+
+### 2026-08-16 20:35 - MEP-048: batch lever memory-blocked; mgpu_fused lands both conformance gates
+- b2048 arm (mep-b2048-brd-25-20260816): FAILED, single 188.66 GiB
+  jit_train_step allocation (over HBM). b1280 arm: FAILED, ncclAlltoAll
+  CUDA OOM inside the step. The MoK-derived batch lever is
+  activation-memory-blocked at 48 layers without remat surgery -- matches
+  #8108's "48 layers at the hero routed width does not fit". Negative
+  result; both jobs killed.
+- M7b integration (fee6ffd54f + 2a1824da69): marin_ep_mgpu_fused --
+  fused_dispatch_brd single-kernel dispatch + arrival-gated gate/up GEMM,
+  pool dual-write, custom_vjp backward = brd _bwd + transpose put.
+  Lane-chunked transport staging (chunk 6 x 8 rows) fits the hero 24-lane
+  SMEM budget at mcs4.
+- Gate 1 (tray, in-process EP4, pytest): bitwise equal to mgpu_brd on
+  values + dx/dw13/dw2 at tile-straddling dims (hidden 512, 2I 640).
+- Gate 2 (tray, 4 processes x 1 GPU): MGPU_FUSED CONFORMANT bitwise vs
+  the mgpu+brd reference; needs the v3 wheel + dynamic-slice-fusion off +
+  cuda_async (same 3-part fix as mgpu). First multi-process validation of
+  Warpgroup-semantics remote TMA.
+- A/B trap: the smoke's default expert_mlp is XLA ragged_dot; comparing
+  fused (Pallas GEMMs) against it shows 63% ULP-level "mismatches" (max
+  abs 0.5 at |y|~20). Reference leg must pin expert_mlp=brd.
+- Launched mep-fused-ep64-25-20260817 (hero EP64, MEP-043 recipe, flavor
+  ep-marin-mgpu-fused). Tray released.
+- Next action: score fused vs 17.0 s brd baseline; then logbook/issue
+  milestone; remaining lever ladder: fused combine leg, fp8 wire (user
+  ruling pending), XLA fusion mass.
