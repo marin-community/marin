@@ -150,3 +150,52 @@ def test_loom_placeholder_text_from_human_remains_significant() -> None:
     body = "Working on this in loom: https://loom.oa.dev/s/qhb71pit"
 
     assert wait_for.classify_significance(body, "human-reviewer") is wait_for.Significance.CONCERN
+
+
+def test_authenticated_author_uses_loom_bot_for_installation_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOOM_SESSION_ID", "session-id")
+    monkeypatch.setattr(
+        wait_for.subprocess,
+        "run",
+        lambda *_args, **_kwargs: wait_for.subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr="gh: Resource not accessible by integration (HTTP 403)\n",
+        ),
+    )
+
+    assert wait_for.authenticated_author() == wait_for.LOOM_BOT
+
+
+@pytest.mark.parametrize(
+    ("loom_session_id", "stderr", "error_match"),
+    [
+        (None, "gh: Resource not accessible by integration (HTTP 403)\n", "Resource not accessible"),
+        ("session-id", "gh: Bad credentials (HTTP 401)\n", "Bad credentials"),
+    ],
+    ids=["outside-loom", "unrelated-error"],
+)
+def test_authenticated_author_preserves_other_github_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    loom_session_id: str | None,
+    stderr: str,
+    error_match: str,
+) -> None:
+    if loom_session_id is None:
+        monkeypatch.delenv("LOOM_SESSION_ID", raising=False)
+    else:
+        monkeypatch.setenv("LOOM_SESSION_ID", loom_session_id)
+    monkeypatch.setattr(
+        wait_for.subprocess,
+        "run",
+        lambda *_args, **_kwargs: wait_for.subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr=stderr,
+        ),
+    )
+
+    with pytest.raises(wait_for.GhError, match=error_match):
+        wait_for.authenticated_author()
