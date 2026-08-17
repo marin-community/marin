@@ -4,6 +4,7 @@
 """Shared constants and tiny helpers for the storage tooling."""
 
 from pathlib import Path
+from types import MappingProxyType
 
 import pyarrow as pa
 from rigging.filesystem.cluster_config import StoreType, load_cluster_config_from_dirs
@@ -16,12 +17,14 @@ REPO_ROOT = SCRIPT_PATH.parents[3]
 # Buckets & regions
 # ---------------------------------------------------------------------------
 
-BUCKET_LOCATIONS = {
-    bucket.name: region.upper()
-    for region, bucket in load_cluster_config_from_dirs("marin", (str(REPO_ROOT / "config"),)).region_buckets.items()
-    if bucket.store is StoreType.GCS
-}
-MARIN_BUCKETS = list(BUCKET_LOCATIONS)
+BUCKET_LOCATIONS = MappingProxyType(
+    {
+        bucket.name: region.upper()
+        for region, bucket in load_cluster_config_from_dirs("marin", (str(REPO_ROOT / "config"),)).region_buckets.items()
+        if bucket.store is StoreType.GCS
+    }
+)
+MARIN_BUCKETS = tuple(BUCKET_LOCATIONS)
 
 # ---------------------------------------------------------------------------
 # Pricing
