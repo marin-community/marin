@@ -1246,13 +1246,17 @@ class Transformer(eqx.Module):
                 jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
             )
             if self.config.report_capacity_overflow:
-                summarized_metrics["moe/dropped_assignments"] = jnp.sum(router_metrics["capacity_overflow_per_layer"])
-                summarized_metrics["moe/sender_dropped_assignments"] = jnp.sum(
-                    router_metrics["sender_capacity_overflow_per_layer"]
-                )
-                summarized_metrics["moe/receiver_dropped_assignments"] = jnp.sum(
-                    router_metrics["receiver_capacity_overflow_per_layer"]
-                )
+                # Keep the per-layer int32 counts (each fits int32); the trainer sums them over layers on
+                # the host in int64. Summing here with jnp.sum overflows int32 at large batch (e.g. batch
+                # 4096: 4096*4096*8*48 ~ 6.4e9 assignments > 2.1e9) and breaks the total==sender+receiver
+                # accounting check, since jax_enable_x64 is off so an in-device int64 sum silently downcasts.
+                summarized_metrics["moe/dropped_assignments"] = router_metrics["capacity_overflow_per_layer"]
+                summarized_metrics["moe/sender_dropped_assignments"] = router_metrics[
+                    "sender_capacity_overflow_per_layer"
+                ]
+                summarized_metrics["moe/receiver_dropped_assignments"] = router_metrics[
+                    "receiver_capacity_overflow_per_layer"
+                ]
             return loss, summarized_metrics
         return loss
 

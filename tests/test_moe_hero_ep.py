@@ -861,3 +861,28 @@ def test_drop_metrics_reports_sender_and_receiver_fractions():
         "moe/receiver_drop_fraction": 3 / 16,
         "moe/receiver_drop_fraction_of_received": 3 / 14,
     }
+
+
+def test_drop_metrics_sums_per_layer_counts_in_int64_without_overflow():
+    # Per-layer int32 counts whose 48-layer sum exceeds int32 (jax_enable_x64 is off, so an in-device
+    # jnp.sum would wrap and break the total==sender+receiver check). The host sum must stay exact.
+    num_layers = 48
+    per_layer_sender = jnp.full((num_layers,), 40_000_000, dtype=jnp.int32)  # 48 * 40M = 1.92e9
+    per_layer_receiver = jnp.full((num_layers,), 60_000_000, dtype=jnp.int32)  # 48 * 60M = 2.88e9 > int32
+    per_layer_total = per_layer_sender + per_layer_receiver
+    sender_total = 48 * 40_000_000
+    receiver_total = 48 * 60_000_000
+
+    metrics = train._drop_metrics(
+        per_layer_total,
+        per_layer_sender,
+        per_layer_receiver,
+        batch_size=4096,
+        sequence_length=4096,
+        top_k=8,
+        num_layers=num_layers,
+    )
+
+    assert metrics["moe/dropped_assignments"] == sender_total + receiver_total  # no int32 wrap
+    assert metrics["moe/sender_dropped_assignments"] == sender_total
+    assert metrics["moe/receiver_dropped_assignments"] == receiver_total
