@@ -49,6 +49,7 @@ from levanter.grug.grug_moe import (
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
+from levanter.kernels.pallas.short_conv import short_conv
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
@@ -422,8 +423,10 @@ class ShortConv(eqx.Module):
     A kernel of ``W`` taps mixes each channel with its own ``W-1`` causal predecessors,
     ``out[t] = sum_{lag} weight[lag] * x[t-lag]``, independently per channel. Identity-init
     (``weight[0]=1``, later taps 0) makes it a pass-through at step 0. Weights are tiny (``W*C``) and
-    routed to Adam. Implemented as a pad-and-shift weighted sum (XLA fuses it well and it is
-    shard-local -- no cross-channel or cross-shard dependency, so no collectives).
+    routed to Adam. Shard-local -- no cross-channel or cross-shard dependency, so no collectives.
+
+    The body dispatches to ``levanter.kernels.pallas.short_conv``, which selects a fused Pallas
+    kernel on GPU and the pad-and-shift weighted sum everywhere else; see that module's docstring.
     """
 
     weight: Float[Array, "W C"]
@@ -432,24 +435,16 @@ class ShortConv(eqx.Module):
     @staticmethod
     def init(channels: int, kernel_size: int) -> "ShortConv":
         weight = jnp.zeros((kernel_size, channels)).at[0].set(1.0)
-        # FSDP-shard the channel dim over data so the grad reduce-scatters (coalesced) instead of a
-        # standalone replicated all-reduce; the forward gathers the weight back to replicated.
-        return ShortConv(weight=reshard(weight, P(None, "data")), kernel_size=kernel_size)
+        # FSDP-shard the channel dim so the grad reduce-scatters instead of all-reducing; the
+        # forward gathers the weight back to replicated.
+        return ShortConv(weight=reshard(weight, P(None, _FSDP_AXES)), kernel_size=kernel_size)
 
     def __call__(self, x: Float[Array, "B S C"], segment_ids: Int[Array, "B S"] | None = None) -> Float[Array, "B S C"]:
-        # Depthwise causal shift-and-sum. With segment_ids (packed documents), a tap that reaches
-        # into a previous document is zeroed so the conv never mixes across a boundary; the lag-0
-        # (current-token) tap is always kept.
-        seq_len = x.shape[1]
+        # With segment_ids (packed documents), a tap that reaches into a previous document is
+        # zeroed so the conv never mixes across a boundary; the lag-0 (current-token) tap is
+        # always kept.
         weight = reshard(self.weight, P(None, None))
-        out = weight[0] * x
-        for lag in range(1, self.kernel_size):
-            shifted = jnp.pad(x, ((0, 0), (lag, 0), (0, 0)))[:, :seq_len, :]
-            if segment_ids is not None:
-                seg_shifted = jnp.pad(segment_ids, ((0, 0), (lag, 0)), constant_values=-1)[:, :seq_len]
-                shifted = jnp.where((seg_shifted == segment_ids)[..., None], shifted, 0.0)
-            out = out + weight[lag] * shifted
-        return out
+        return short_conv(weight, x, segment_ids, batch_axes=_BATCH_AXES)
 
 
 class CausalSelfAttention(eqx.Module):
