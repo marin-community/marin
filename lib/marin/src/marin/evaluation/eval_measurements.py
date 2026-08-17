@@ -26,7 +26,7 @@ from marin.evaluation.eval_stats import (
     MetricKind,
     ResultFlag,
 )
-from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalRunRecord
+from marin.evaluation.records import EvalRunRecord
 
 # A value derived from n items is integral in k to within this tolerance when it really is k/n.
 _INTEGRALITY_TOLERANCE = 1e-6
@@ -230,8 +230,7 @@ def _flags(coverage: Coverage, kind: MetricKind, stderr: float | None, item_cap:
         flags.add(ResultFlag.ATTRITION)
     if item_cap is not None:
         flags.add(ResultFlag.CAPPED)
-    unanswered_scored = coverage.n_unanswered - coverage.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0)
-    if coverage.n_scored > 0 and unanswered_scored >= coverage.n_scored:
+    if coverage.n_scored > 0 and coverage.n_unanswered >= coverage.n_scored:
         flags.add(ResultFlag.NO_ANSWERS)
     if kind is MetricKind.CONTINUOUS:
         if stderr is None:

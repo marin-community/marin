@@ -21,7 +21,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint
-from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalRef, RunStatus, read_record
+from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalRef, RunStatus, TaskCoverage, read_record
 from marin.evaluation.runner import (
     Evaluation,
     EvaluationBatch,
@@ -234,52 +234,23 @@ def test_evalchemy_executor_classifies_archive_export_failure(tmp_path, monkeypa
     assert exc_info.value.jobs == {"eval": "/eval/completed"}
 
 
-def test_evalchemy_executor_rejects_a_task_with_no_successful_responses(tmp_path, monkeypatch):
-    output_dir = f"file://{tmp_path / 'results'}"
+def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypatch):
+    marker = f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}] request failed"
+    partial_output_dir = f"file://{tmp_path / 'partial'}"
     _write_evalchemy_output(
-        output_dir,
-        "humaneval_0shot",
-        {"humaneval": {"pass@1,create_test": 0.0}},
-        {
-            "humaneval": [
-                _lm_eval_generation(
-                    0,
-                    "pass@1",
-                    0.0,
-                    f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}] ClientResponseError: 400 Bad Request",
-                )
-            ]
-        },
-    )
-    monkeypatch.setattr(
-        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
-        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
-    )
-    executor = EvalchemyExecutor(
-        EvalchemyRunConfig(name="humaneval", tasks=(EvalTaskConfig(name="humaneval", num_fewshot=0),))
-    )
-
-    with pytest.raises(EvaluationError) as exc_info:
-        executor(_remote_session(), output_dir, {})
-
-    assert exc_info.value.status is RunStatus.INFRA_FAILED
-    assert exc_info.value.coverage is not None
-    assert exc_info.value.coverage["humaneval_0shot"].errors == {EVALCHEMY_INFRASTRUCTURE_ERROR: 1}
-
-
-def test_evalchemy_executor_drops_a_group_aggregate_after_a_partial_failure(tmp_path, monkeypatch):
-    output_dir = f"file://{tmp_path / 'results'}"
-    _write_evalchemy_output(
-        output_dir,
+        partial_output_dir,
         "mmlu_5shot",
         {
             "mmlu": {"acc,none": 0.0},
-            "mmlu_anatomy": {"acc,none": 1.0},
-            "mmlu_astronomy": {"acc,none": 0.0},
+            "mmlu_anatomy": {"acc,none": 0.5},
+            "mmlu_astronomy": {"acc,none": 1.0},
         },
         {
-            "mmlu_anatomy": [_lm_eval_generation(0, "acc", 1.0, "4")],
-            "mmlu_astronomy": [_lm_eval_generation(0, "acc", 0.0, f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}] request failed")],
+            "mmlu_anatomy": [
+                _lm_eval_generation(0, "acc", 1.0, "4"),
+                _lm_eval_generation(1, "acc", 0.0, marker),
+            ],
+            "mmlu_astronomy": [_lm_eval_generation(0, "acc", 1.0, "4")],
         },
     )
     monkeypatch.setattr(
@@ -288,9 +259,53 @@ def test_evalchemy_executor_drops_a_group_aggregate_after_a_partial_failure(tmp_
     )
     executor = EvalchemyExecutor(EvalchemyRunConfig(name="mmlu", tasks=(EvalTaskConfig(name="mmlu", num_fewshot=5),)))
 
-    outcome = executor(_remote_session(), output_dir, {})
+    outcome = executor(_remote_session(), partial_output_dir, {})
 
-    assert outcome.metrics == {"mmlu_5shot/mmlu_anatomy": {"acc,none": 1.0}}
+    assert outcome.metrics == {
+        "mmlu_5shot/mmlu_anatomy": {"acc,none": 1.0, "sample_len": 1.0},
+        "mmlu_5shot/mmlu_astronomy": {"acc,none": 1.0},
+    }
+    assert outcome.coverage == {
+        "mmlu_5shot/mmlu_anatomy": TaskCoverage(
+            n_attempted=2,
+            n_scored=1,
+            n_correct=1,
+            errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
+        ),
+        "mmlu_5shot/mmlu_astronomy": TaskCoverage(n_attempted=1, n_scored=1, n_correct=1),
+    }
+
+    failed_output_dir = f"file://{tmp_path / 'failed'}"
+    _write_evalchemy_output(
+        failed_output_dir,
+        "mmlu_5shot",
+        {
+            "mmlu": {"acc,none": 0.0},
+            "mmlu_anatomy": {"acc,none": 0.0},
+            "mmlu_astronomy": {"acc,none": 0.0},
+        },
+        {
+            "mmlu_anatomy": [_lm_eval_generation(0, "acc", 0.0, marker)],
+            "mmlu_astronomy": [_lm_eval_generation(0, "acc", 0.0, marker)],
+        },
+    )
+
+    with pytest.raises(EvaluationError) as exc_info:
+        executor(_remote_session(), failed_output_dir, {})
+
+    assert exc_info.value.status is RunStatus.INFRA_FAILED
+    assert exc_info.value.coverage == {
+        "mmlu_5shot/mmlu_anatomy": TaskCoverage(
+            n_attempted=1,
+            n_scored=0,
+            errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
+        ),
+        "mmlu_5shot/mmlu_astronomy": TaskCoverage(
+            n_attempted=1,
+            n_scored=0,
+            errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
+        ),
+    }
 
 
 def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_batch(tmp_path, monkeypatch):

@@ -27,7 +27,7 @@ from marin.evaluation.evalchemy.runtime import (
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.lm_eval_samples import export_lm_eval_samples
-from marin.evaluation.records import RunStatus, TaskCoverage
+from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, RunStatus, TaskCoverage
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
@@ -134,7 +134,7 @@ def _apply_recovered_metrics(
     for aggregate, children in group_children.items():
         if children & recovered_metrics.keys():
             # The aggregate came from the original lm-eval result, which includes failed requests.
-            # Leaves now hold only successful samples, so let the measurement adapter use them instead.
+            # Recovered leaves contain successful samples for the measurement adapter to roll up.
             metrics.pop(aggregate, None)
 
 
@@ -319,6 +319,16 @@ class EvalchemyExecutor:
         metrics = outcome.result.task_metrics()
         _apply_recovered_metrics(metrics, outcome.recovered_metrics)
         if not metrics:
+            infrastructure_failures = sum(
+                coverage.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR, 0) for coverage in outcome.coverage.values()
+            )
+            if not infrastructure_failures:
+                raise EvaluationError(
+                    f"eval finished but no task metrics were readable under {output_dir!r}",
+                    status=RunStatus.ARTIFACT_FAILED,
+                    jobs=outcome.jobs,
+                    coverage=outcome.coverage,
+                )
             raise EvaluationError(
                 f"eval finished with no successful inference responses under {output_dir!r}",
                 status=RunStatus.INFRA_FAILED,

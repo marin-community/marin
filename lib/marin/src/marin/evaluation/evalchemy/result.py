@@ -1,17 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed eval-output artifacts and the aggregated report.
+"""Typed readers for evaluation output artifacts and aggregate reports.
 
-An eval step writes its backend's native output; the typed artifact reads the metrics back
-*through* the artifact, so a consumer calls ``result.task_metrics()`` instead of guessing the
-directory layout. :class:`EvalchemyResult` reads the evalchemy fork's output — lm-eval's native
-nested tree (``<task_dir>/<model>/results_<ts>.json``, one file per task-config) — by globbing and
-keying each file's metrics by its ``<task_dir>`` (which the producer makes unique per task-config).
-
-:func:`compile_eval_report` reads every dependency uniformly
-(``dep.artifact_type.raw_load(path).task_metrics()``) and materializes one :class:`EvalReport` — a
-value artifact carrying the merged per-task metrics and averages.
+Eval steps write backend-native output. :class:`EvalResult` subclasses parse each backend's layout.
+:class:`EvalchemyResult` reads lm-eval's ``<task_dir>/<model>/results_<ts>.json`` trees and keys the
+metrics by task-config directory. :func:`compile_eval_report` merges several typed results.
 """
 
 import functools
@@ -36,10 +30,9 @@ def _numeric(values: dict) -> dict[str, float]:
 
 
 def _result_task_dir(result_file: StoragePath) -> str:
-    """The task-config directory a results file sits under: ``<task_dir>/<model>/results_<ts>.json``.
+    """Return ``<task_dir>`` from ``<task_dir>/<model>/results_<ts>.json``.
 
-    The evalchemy client uploads each task-config's lm-eval output under a dir unique to that config
-    (alias or ``name_Nshot``), so this dir — not the bare task name inside the JSON — is the stable key.
+    The evalchemy client assigns each task configuration a unique alias or ``name_Nshot`` directory.
     """
     task_dir = result_file.parent.parent.name
     if not task_dir:
@@ -48,11 +41,7 @@ def _result_task_dir(result_file: StoragePath) -> str:
 
 
 class EvalResult(Artifact):
-    """One eval's output: per-task metrics and (where the backend provides them) cross-task averages.
-
-    A path-ref artifact — ``raw_load`` returns a handle into the output directory and the metrics are
-    parsed on demand. Subclasses implement the two accessors for their backend's on-disk shape.
-    """
+    """Path-backed per-task metrics and cross-task averages for one evaluation."""
 
     def task_metrics(self) -> dict[str, dict[str, float]]:
         """Numeric metrics for every evaluated task, as ``{task: {metric: value}}``."""
@@ -66,15 +55,11 @@ class EvalResult(Artifact):
 class EvalchemyResult(EvalResult):
     """An evalchemy run's output: lm-eval's native ``<task_dir>/<model>/results_<ts>.json`` tree.
 
-    The evalchemy fork runs each task-config through lm-eval's ``EvaluationTracker`` and writes one
-    ``results_<ts>.json``, uploaded whole under a ``<task_dir>`` the producer makes unique per config
-    (see :func:`~marin.evaluation.evalchemy.runner._task_dir`). The accessor keys each file's
-    metrics by that dir, not by the task name lm-eval writes inside the JSON: two shot variants of one
-    task (``hellaswag`` at 0- and 10-shot) share that inner name but land in different dirs, so keying
-    by the dir keeps them distinct instead of silently overwriting. A group task (e.g. ``mmlu``) writes
-    several entries in one file, so those are namespaced ``<task_dir>/<subtask>``. evalchemy records no
-    cross-task average, so :meth:`averages` is empty — :func:`compile_eval_report` computes suite-level
-    rollups instead.
+    The evalchemy fork writes one result file per task configuration under the directory chosen by
+    :func:`~marin.evaluation.evalchemy.runner._task_dir`. Single-task files use that directory as the
+    metric key. Group-task entries use ``<task_dir>/<subtask>``. The task directory keeps shot
+    variants distinct. :func:`compile_eval_report` computes suite-level rollups because evalchemy
+    does not record cross-task averages.
     """
 
     @functools.cached_property
@@ -126,8 +111,7 @@ class EvalReport(Artifact):
     contributions from different results distinct."""
 
 
-# result_type name -> reader class, so :func:`compile_eval_report` reconstructs the right accessor
-# from the identity string a step records (the class itself cannot ride through the JSON config).
+# Map serialized result-type names to the readers used by :func:`compile_eval_report`.
 _EVAL_RESULT_TYPES: dict[str, type[EvalResult]] = {result_type_name(cls): cls for cls in (EvalchemyResult,)}
 
 
