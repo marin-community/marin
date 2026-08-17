@@ -174,7 +174,7 @@ class GrugModelConfig:
     qk_mult: float = 1.3
     sconv: bool = False
     sconv_kernel: int = 4
-    sconv_sites: tuple[str, ...] = ("k", "v", "attn", "mlp")
+    sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
@@ -313,7 +313,7 @@ class GrugModelConfig:
             rope_fused=bool(_hf_config_attr(hf_config, ("rope_fused",), False)),
             sconv=bool(_hf_config_attr(hf_config, ("sconv",), False)),
             sconv_kernel=int(_hf_config_attr(hf_config, ("sconv_kernel",), 4)),
-            sconv_sites=tuple(_hf_config_attr(hf_config, ("sconv_sites",), ("k", "v", "attn", "mlp"))),
+            sconv_sites=tuple(_hf_config_attr(hf_config, ("sconv_sites",), ("k", "attn", "mlp"))),
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: dict[str, Any] | None = None) -> GrugMoeHfConfig:
@@ -450,7 +450,6 @@ class CausalSelfAttention(eqx.Module):
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"]
     sconv_k: "ShortConv | None"  # SConv after the K projection (cfg.sconv)
-    sconv_v: "ShortConv | None"  # SConv after the V projection (cfg.sconv)
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -464,7 +463,6 @@ class CausalSelfAttention(eqx.Module):
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", _FSDP_AXES)),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
             sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
-            sconv_v=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "v" in cfg.sconv_sites else None),
             cfg=cfg,
         )
 
@@ -483,14 +481,12 @@ class CausalSelfAttention(eqx.Module):
         q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
         k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
         v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
-        # SConv: depthwise causal conv after the K/V projections. segment_ids (packed-document
+        # SConv: depthwise causal conv after the K projection. segment_ids (packed-document
         # boundaries) come from the mask so the conv never mixes across a document boundary.
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
         sconv_segment_ids = _seg[0] if _seg is not None else None
         if self.sconv_k is not None:
             k_flat = self.sconv_k(k_flat, sconv_segment_ids)
-        if self.sconv_v is not None:
-            v_flat = self.sconv_v(v_flat, sconv_segment_ids)
         q = rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
         k = rearrange(k_flat, "... (m d) -> ... m d", d=head_dim)
         v = rearrange(v_flat, "... (m d) -> ... m d", d=head_dim)
@@ -1345,7 +1341,6 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
         # SConv weights are learned; export them per site so the checkpoint reconstructs an sconv model.
         for site_name, conv in (
             ("self_attn.sconv_k", block.attn.sconv_k),
-            ("self_attn.sconv_v", block.attn.sconv_v),
             ("sconv_attn", block.sconv_attn),
             ("sconv_mlp", block.sconv_mlp),
         ):
