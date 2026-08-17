@@ -1589,3 +1589,23 @@ Experiment ID prefix: `MEP`.
 - Notable mechanism detail from the VLOG: the fusion operand registered
   is the WHOLE producer buffer (19456 B), not the 15-row slice --
   consistent with the fusion slicing internally.
+
+### 2026-08-17 15:55 - MEP-062: fused2 SHELVED — deadlock persists under overlap limit 1
+- mep-fused2g-ep64-25-20260817 (20 GiB arena + overlap limit 1): admitted,
+  compiled, then spun 3 h at 100% GPU in step 1 (py-spy: host in
+  pxla.__call__). Same signature as fused2e. The SM-occupancy
+  cross-collective-ordering hypothesis (MEP-055) is FALSIFIED as the sole
+  cause: overlap-1 serializes collectives program-wide and the deadlock
+  persists.
+- Ladder of eliminated causes: load-time collective-arena OOM (fixed by
+  MARIN_EP_COLLECTIVE_MEMORY_MB prealloc, MEP-054), remat-cliff memory
+  (residual slimming, MEP-052), cross-collective SM exclusion (this arm).
+  Remaining hypothesis space: a genuine kernel-level deadlock in
+  fused_gemm_combine at EP64 (63-dest unroll x tile gating x received_sem)
+  or a mosaic/runtime interaction invisible at EP4 -- all EP4 gates incl.
+  hero widths are bitwise-green.
+- DECISION: shelve the fused2 hero arc. ep-marin-mgpu-fused (16.3 s/step,
+  MEP-051) stays the production flavor. Reopening requires a debug session
+  with CUDA core-dump arming at process start
+  (gb200-gpu-coredump-recipe) to capture the spinning warps' PCs.
+- Rack cost of the arc: 5 failed hero attempts; each killed on signature.
