@@ -8,6 +8,7 @@ import re
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import partial
 
 from rigging.filesystem.paged_listing import DIRECTORY_TYPE, is_child
 from rigging.fsutil.listing import (
@@ -226,9 +227,21 @@ def ranked_groups(groups: list[PrefixGroup], now: datetime) -> list[PrefixGroup]
     )
 
 
-def render_usage_report(scan: UsageScan, *, threshold_bytes: int, generated_at: datetime) -> str:
-    """Render a self-contained Markdown usage and deletion-candidate report."""
+def render_usage_report(
+    scan: UsageScan,
+    *,
+    threshold_bytes: int,
+    generated_at: datetime,
+    binary: bool = True,
+) -> str:
+    """Render a self-contained Markdown usage and deletion-candidate report.
+
+    ``binary`` selects IEC (1024, "TiB") or SI (1000, "TB") for every size in
+    the report; the unit is stated in the header so a pasted table is
+    self-describing.
+    """
     now = generated_at.replace(tzinfo=UTC) if generated_at.tzinfo is None else generated_at.astimezone(UTC)
+    fmt = partial(format_size, binary=binary)
     groups = threshold_prefix_groups(scan, threshold_bytes)
     ranked = ranked_groups(groups, now)
     total = scan.root.total
@@ -237,9 +250,10 @@ def render_usage_report(scan: UsageScan, *, threshold_bytes: int, generated_at: 
         "",
         f"- Target: `{_markdown_code(scan.url)}`",
         f"- Generated: {now.isoformat(timespec='seconds')}",
-        f"- Total: {format_size(total.size_bytes)} across {total.object_count:,} objects",
+        f"- Total: {fmt(total.size_bytes)} across {total.object_count:,} objects",
+        f"- Units: {'binary (IEC, 1024)' if binary else 'decimal (SI, 1000)'}",
         f"- Scan: {scan.listing_pages:,} listing pages in {scan.elapsed_seconds:.1f}s (metadata only)",
-        f"- Prefix threshold: {format_size(threshold_bytes)}; prefixes at or above it are expanded "
+        f"- Prefix threshold: {fmt(threshold_bytes)}; prefixes at or above it are expanded "
         f"through {scan.prefix_depth} path components",
         "",
         "## Ranked deletion candidates",
@@ -253,7 +267,7 @@ def render_usage_report(scan: UsageScan, *, threshold_bytes: int, generated_at: 
         score = stale_tib_years(group.stats, now)
         share = group.stats.size_bytes / total.size_bytes if total.size_bytes else 0.0
         lines.append(
-            f"| {rank} | {_format_score(score)} | {format_size(group.stats.size_bytes)} | {share:.1%} | "
+            f"| {rank} | {_format_score(score)} | {fmt(group.stats.size_bytes)} | {share:.1%} | "
             f"{group.stats.object_count:,} | {_format_date(group.stats.last_modified)} | "
             f"{_format_age(group.stats.last_modified, now)} | `{_markdown_code(_display_path(scan.url, group.label))}` |"
         )
@@ -270,7 +284,7 @@ def render_usage_report(scan: UsageScan, *, threshold_bytes: int, generated_at: 
     for group in groups:
         share = group.stats.size_bytes / total.size_bytes if total.size_bytes else 0.0
         lines.append(
-            f"| `{_markdown_code(_display_path(scan.url, group.label))}` | {format_size(group.stats.size_bytes)} | "
+            f"| `{_markdown_code(_display_path(scan.url, group.label))}` | {fmt(group.stats.size_bytes)} | "
             f"{share:.1%} | {group.stats.object_count:,} | {_format_date(group.stats.last_modified)} |"
         )
     lines.append("")

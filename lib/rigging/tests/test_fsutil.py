@@ -25,12 +25,15 @@ from rigging.filesystem.paged_listing import with_listing
 from rigging.fsutil import deletion, listing
 from rigging.fsutil.cli import cli
 from rigging.fsutil.listing import MAX_PREVIEW_BYTES, read_decompressed_preview
-from rigging.fsutil.render import file_lines
+from rigging.fsutil.render import file_lines, format_size
 from rigging.fsutil.usage import (
     PrefixGroup,
+    PrefixUsage,
+    UsageScan,
     UsageStats,
     parse_byte_size,
     ranked_groups,
+    render_usage_report,
     scan_usage,
     threshold_prefix_groups,
 )
@@ -943,3 +946,45 @@ def test_usage_size_parser_accepts_decimal_and_binary_units():
     assert parse_byte_size("1TiB") == 1024**4
     with pytest.raises(ValueError):
         parse_byte_size("1iB")
+
+
+def test_format_size_labels_match_the_base_it_divides_by():
+    """A report reading "812.6 TB" was really 812.6 TiB, a 10% misread against a
+    quota quoted in TiB. IEC keeps the historical numbers and fixes the suffix."""
+    tib = 1024**4
+    assert format_size(tib) == "1.0 TiB"
+    assert format_size(tib, binary=False) == "1.1 TB"
+    assert format_size(10**12, binary=False) == "1.0 TB"
+    # Bytes are unit-free either way; None renders as a dash.
+    assert format_size(512) == "512 B"
+    assert format_size(512, binary=False) == "512 B"
+    assert format_size(None) == "-"
+
+
+def test_usage_report_header_states_its_units_and_sizes_follow():
+    """A pasted report has to be self-describing: the header names the base, and
+    every size in it is rendered in that base."""
+    stats = UsageStats(size_bytes=2 * 1024**4, object_count=3, last_modified=datetime(2026, 7, 1, tzinfo=UTC))
+    scan = UsageScan(
+        url="s3://bucket",
+        root=PrefixUsage(prefix="", direct=stats, total=stats, children=()),
+        prefix_depth=2,
+        listing_pages=1,
+        elapsed_seconds=0.5,
+    )
+    when = datetime(2026, 8, 17, tzinfo=UTC)
+
+    def header(binary: bool) -> list[str]:
+        report = render_usage_report(scan, threshold_bytes=1024**4, generated_at=when, binary=binary)
+        return [line for line in report.split("\n") if line.startswith(("- Total:", "- Units:", "- Prefix threshold:"))]
+
+    assert header(binary=True) == [
+        "- Total: 2.0 TiB across 3 objects",
+        "- Units: binary (IEC, 1024)",
+        "- Prefix threshold: 1.0 TiB; prefixes at or above it are expanded through 2 path components",
+    ]
+    assert header(binary=False) == [
+        "- Total: 2.2 TB across 3 objects",
+        "- Units: decimal (SI, 1000)",
+        "- Prefix threshold: 1.1 TB; prefixes at or above it are expanded through 2 path components",
+    ]

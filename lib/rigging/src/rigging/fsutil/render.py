@@ -14,22 +14,32 @@ from datetime import datetime
 
 from rigging.fsutil.compression import uncompressed_name
 
-_SIZE_UNITS = ("B", "KB", "MB", "GB", "TB", "PB")
+# Binary (IEC) and decimal (SI) ladders. The historical behaviour was to divide
+# by 1024 while printing SI labels, so "812.6 TB" in a usage report was really
+# 812.6 TiB — a 10% misread against a quota that is itself quoted in TiB.
+_IEC_UNITS = ("B", "KiB", "MiB", "GiB", "TiB", "PiB")
+_SI_UNITS = ("B", "KB", "MB", "GB", "TB", "PB")
 
 # Longest single-cell value rendered from a JSON object before truncation.
 _MAX_CELL = 120
 
 
-def format_size(size: int | None) -> str:
-    """A byte count in the largest unit that keeps it under 1024, or ``-`` for ``None``."""
+def format_size(size: int | None, *, binary: bool = True) -> str:
+    """A byte count in the largest unit that keeps it under the base, or ``-`` for ``None``.
+
+    ``binary`` (the default) divides by 1024 and labels IEC — TiB, GiB — which
+    is what this function has always computed; only the suffixes were wrong.
+    Pass ``binary=False`` for decimal SI (1000, "TB").
+    """
     if size is None:
         return "-"
+    base, units = (1024.0, _IEC_UNITS) if binary else (1000.0, _SI_UNITS)
     value = float(size)
-    for unit in _SIZE_UNITS:
-        if value < 1024 or unit == _SIZE_UNITS[-1]:
+    for unit in units:
+        if value < base or unit == units[-1]:
             return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
-        value /= 1024
-    return f"{value:.1f} {_SIZE_UNITS[-1]}"
+        value /= base
+    return f"{value:.1f} {units[-1]}"
 
 
 def format_time(when: datetime | None) -> str:

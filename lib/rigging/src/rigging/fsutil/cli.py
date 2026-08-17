@@ -229,7 +229,23 @@ def du(url: str) -> None:
     type=click.IntRange(min=1, max=MAX_USAGE_WORKERS),
 )
 @click.option("-o", "--output", type=click.Path(dir_okay=False, path_type=Path), help="Write Markdown here.")
-def usage(url: str, prefix_threshold: str, prefix_depth: int, workers: int, output: Path | None) -> None:
+@click.option(
+    "-u",
+    "--units",
+    type=click.Choice(["iec", "si"]),
+    default="iec",
+    show_default=True,
+    help="Size units: iec = 1024-based (TiB), si = 1000-based (TB). Sizes were previously "
+    "computed 1024-based but labelled TB/GB; iec keeps those numbers with correct suffixes.",
+)
+def usage(
+    url: str,
+    prefix_threshold: str,
+    prefix_depth: int,
+    workers: int,
+    output: Path | None,
+    units: str,
+) -> None:
     """Scan URL metadata and rank old, large prefixes for cleanup."""
     try:
         threshold_bytes = parse_byte_size(prefix_threshold)
@@ -252,7 +268,12 @@ def usage(url: str, prefix_threshold: str, prefix_depth: int, workers: int, outp
         raise click.ClickException(str(error)) from error
     if latest_progress is not None:
         display.finish(_finished_scan_line(latest_progress))
-    report = render_usage_report(scan, threshold_bytes=threshold_bytes, generated_at=datetime.now(UTC))
+    report = render_usage_report(
+        scan,
+        threshold_bytes=threshold_bytes,
+        generated_at=datetime.now(UTC),
+        binary=units == "iec",
+    )
     if output is None:
         click.echo(report)
         return
