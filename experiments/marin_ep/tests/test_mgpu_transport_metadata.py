@@ -128,6 +128,9 @@ def test_expected_tile_signals_matches_groupinfo_slot_replay():
     for case in range(20):
         num_groups = int(rng.integers(1, 6))
         gs = rng.integers(0, 700, size=num_groups).astype(np.int32)
+        # Force empty groups: mid-block empties occupy a GroupInfo slot,
+        # block-aligned empties do not (the deadlock class MEP-050 fixed).
+        gs[rng.random(num_groups) < 0.4] = 0
         padded = max(256, int(-(-gs.sum() // eff) * eff + eff * int(rng.integers(0, 3))))
         num_logical = padded // eff
         visits = np.zeros(num_logical, np.int64)
@@ -135,11 +138,12 @@ def test_expected_tile_signals_matches_groupinfo_slot_replay():
         used = 0
         for b in gs:
             start, end = end, end + int(b)
-            if b == 0:
-                continue
+            # Floor division exactly as GroupInfo: an empty group starting
+            # mid-block occupies (and signals) one slot.
             first, final = start // eff, (end - 1) // eff
-            visits[first : final + 1] += 1
-            used += final - first + 1
+            if final >= first:
+                visits[first : final + 1] += 1
+                used += final - first + 1
         visits[0] += (num_logical + num_groups - 1) - used
         want = np.repeat(visits, 2) * n_iters
         got = np.asarray(expected_tile_signals(jnp.asarray(gs), padded_rows=padded, n_iters=n_iters))

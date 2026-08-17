@@ -460,15 +460,19 @@ def expected_tile_signals(group_sizes: jax.Array, *, padded_rows: int, n_iters: 
     eff = ROW_ALIGN  # 256: logical collective tile rows
     num_logical = padded_rows // eff
     num_groups = group_sizes.shape[0]
-    ends = jnp.cumsum(group_sizes)
+    ends = jnp.cumsum(group_sizes).astype(jnp.int32)
     starts = ends - group_sizes
-    nonempty = group_sizes > 0
     first = starts // eff
-    last = jnp.where(nonempty, (ends - 1) // eff, -1)
+    # Exact GroupInfo semantics: group i occupies slots [start_block + i,
+    # final_block + 1 + i) with final_block = (end - 1) // eff under FLOOR
+    # division. An empty group starting mid-block therefore still occupies
+    # one slot (and signals); an empty group at a block boundary occupies
+    # none.
+    last = (ends - 1) // eff
     logical = jnp.arange(num_logical, dtype=jnp.int32)
-    overlap = (first[None, :] <= logical[:, None]) & (logical[:, None] <= last[None, :]) & nonempty[None, :]
+    overlap = (first[None, :] <= logical[:, None]) & (logical[:, None] <= last[None, :])
     visits = jnp.sum(overlap, axis=1).astype(jnp.int32)
-    used_slots = jnp.sum(jnp.where(nonempty, last - first + 1, 0)).astype(jnp.int32)
+    used_slots = jnp.sum(jnp.maximum(last - first + 1, 0)).astype(jnp.int32)
     spare = jnp.int32(num_logical + num_groups - 1) - used_slots
     visits = visits.at[0].add(spare)
     return (jnp.repeat(visits, 2) * jnp.int32(n_iters)).astype(jnp.int32)
