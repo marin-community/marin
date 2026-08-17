@@ -1406,3 +1406,14 @@ Experiment ID prefix: `MEP`.
 - Queued mep-fused2-ep64-25-20260817 behind mep-fused-ep64-25-20260817
   (both Kueue-gated on a free NVLink domain). Prediction stands: fused
   ~neutral vs 17.0 s, fused2 carries ~-0.5 s.
+
+### 2026-08-17 00:35 - MEP-051: EP64 hero dispatch-fused arm — ~16.3 s/step, prediction consistent
+- Run: mep-fused-ep64-25-20260817 (ep-marin-mgpu-fused, MEP-043 recipe).
+  25/25 SUCCEEDED, loss 6.02 falling, drop_fraction 0.00631.
+- Scored: 10it@6:55 -> 22it@10:11 = 196 s / 12 = 16.33 s/step steady
+  (final tqdm running rate 16.8 s/it includes the slow ramp). vs the
+  17.0 s brd baseline: -0.3 to -0.7 s, at the edge of the +-2pp placement
+  band. The MEP-049 preregistered prediction (dispatch-only ~neutral)
+  is consistent; the draw is if anything slightly better than modeled.
+- Single draw (exploratory). fused2 (combine-streaming) admitted
+  immediately after; sim expects it to carry the real win (~-0.5 s).
