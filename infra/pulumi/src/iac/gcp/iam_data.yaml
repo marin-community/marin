@@ -116,6 +116,7 @@ custom_roles:
   - iap.webServices.getSettings
   - resourcemanager.projects.getIamPolicy
   - secretmanager.secrets.getIamPolicy
+  - storage.buckets.get
   - storage.buckets.getIamPolicy
 - role_id: marinSecretIamManager
   title: Marin Secret IAM Manager
