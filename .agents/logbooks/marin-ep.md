@@ -1571,3 +1571,21 @@ Experiment ID prefix: `MEP`.
 - The ds-fusion issue (with the validated standalone repro
   repro_dsfusion.py) remains DRAFTED, not filed -- awaiting user
   go-ahead. Stock-wheel EP64 validation arm also proposed, not queued.
+
+### 2026-08-17 15:10 - MEP-061: ds-fusion issue FILED upstream as openxla/xla#47461
+- Codex adversarial review round 1: NEEDS-CHANGES (5 blockers: process
+  pinning + launch commands, S(1) chronology, missing HLO evidence,
+  overclaimed runtime diagnosis; 6 nits). Collected the missing evidence
+  on a fresh tray: per-rank HLO dumps (flag-on: %dynamic-slice-fusion
+  wrapping mosaic_gpu_v2, call site without S(1); flag-off: both call
+  results S(1)) and registration VLOG (arena window ok, then
+  Create-NCCL-symmetric-memory on ptr=0x340000000 size=19456 = the FULL
+  f32[19,256] GEMM output passed through the fusion boundary -> Cuda
+  failure 1 invalid argument). Driver 595.71.05, stock dev20260809.
+- Round 2: 1 blocker + 2 nits (launch-arm command, device-rank comment,
+  phrasing); fixed. Round 3: READY. Filed per user's conditional
+  go-ahead: https://github.com/openxla/xla/issues/47461. Cross-linked
+  from the closed #47406.
+- Notable mechanism detail from the VLOG: the fusion operand registered
+  is the WHOLE producer buffer (19456 B), not the 15-row slice --
+  consistent with the fusion slicing internally.
