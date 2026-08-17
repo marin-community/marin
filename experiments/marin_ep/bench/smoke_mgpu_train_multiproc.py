@@ -41,6 +41,7 @@ import numpy as np  # noqa: E402
 from jax import shard_map  # noqa: E402
 from jax.sharding import AxisType, Mesh, NamedSharding  # noqa: E402
 from jax.sharding import PartitionSpec as P  # noqa: E402
+from levanter.grug._moe.brd_expert_mlp import brd_expert_mlp_padded  # noqa: E402
 from levanter.grug._moe.ep_marin import _static_capacity, marin_ep_moe_local  # noqa: E402
 
 from experiments.marin_ep.oracle import moe_oracle, pooled_keep_mask  # noqa: E402
@@ -51,6 +52,10 @@ def main() -> None:
     devices = jax.device_count()
     local = jax.local_device_count()
     assert local == 1, "this smoke wants the production 1 process/GPU topology"
+    # MARIN_EP_TRANSPORT=mgpu_fused additionally runs the fused dispatch+GEMM
+    # kernel (bf16, Blackwell-only) and requires it to match the mgpu path
+    # bitwise on values and gradients.
+    check_fused = os.environ.get("MARIN_EP_TRANSPORT", "mgpu") == "mgpu_fused"
     tokens, topk, hidden, intermediate = 512, 4, 512, 768
     num_experts = devices * 3  # El=3, like hero
     local_experts = 3
@@ -72,20 +77,25 @@ def main() -> None:
     )
     batch_spec = P(("replica_dcn", "data", "expert"))
     weight_spec = P("expert", None, None)
-    shard_fn = shard_map(
-        partial(
-            marin_ep_moe_local,
-            activation_fn=jax.nn.silu,
-            num_experts=num_experts,
-            capacity_factor=capacity_factor,
-            pool_group_size=local_experts,
-            transport="mgpu",
-        ),
-        mesh=mesh,
-        in_specs=(batch_spec, batch_spec, batch_spec, weight_spec, weight_spec),
-        out_specs=(batch_spec, P()),
-        check_vma=False,
-    )
+
+    def make_shard_fn(transport, **kwargs):
+        return shard_map(
+            partial(
+                marin_ep_moe_local,
+                activation_fn=jax.nn.silu,
+                num_experts=num_experts,
+                capacity_factor=capacity_factor,
+                pool_group_size=local_experts,
+                transport=transport,
+                **kwargs,
+            ),
+            mesh=mesh,
+            in_specs=(batch_spec, batch_spec, batch_spec, weight_spec, weight_spec),
+            out_specs=(batch_spec, P()),
+            check_vma=False,
+        )
+
+    shard_fn = make_shard_fn("mgpu")
 
     def put_batch(a):
         mine = a.reshape(devices, tokens, *a.shape[1:])[proc * local : (proc + 1) * local]
@@ -164,6 +174,44 @@ def main() -> None:
     np.testing.assert_allclose(gw2_local, gw2_want, rtol=5e-2, atol=0.5)
 
     print(f"[proc {proc}] MGPU TRAIN CONFORMANT (drops {dropped}, {devices} devices)", flush=True)
+
+    if check_fused:
+        # A/B the fused dispatch+GEMM kernel against the mgpu path in bf16:
+        # identical GEMM kernels and pool layouts, so values and gradients
+        # must match bitwise.
+        args_bf16 = (
+            put_batch(x.astype(np.float32)).astype(jnp.bfloat16),
+            args[1],
+            put_batch(weights).astype(jnp.bfloat16),
+            put_weight(w13).astype(jnp.bfloat16),
+            put_weight(w2).astype(jnp.bfloat16),
+        )
+        cot_bf16 = put_batch(cot).astype(jnp.bfloat16)
+        results = {}
+        with jax.set_mesh(mesh):
+            for transport in ("mgpu", "mgpu_fused"):
+                # The reference leg must run the same Pallas GEMMs the fused
+                # kernel uses, or the comparison drowns in cross-GEMM ULPs.
+                kwargs = {"expert_mlp": brd_expert_mlp_padded} if transport == "mgpu" else {}
+                fn = make_shard_fn(transport, **kwargs)
+                y_t, dropped_t = jax.jit(fn)(*args_bf16)
+
+                def loss_t(x_, e_, w_, w13_, w2_, cot_, fn=fn):
+                    y_, _ = fn(x_, e_, w_, w13_, w2_)
+                    return jnp.sum((y_ * cot_).astype(jnp.float32))
+
+                grads_t = jax.jit(jax.grad(loss_t, argnums=(0, 3, 4)))(*args_bf16, cot_bf16)
+                jax.block_until_ready(grads_t)
+                results[transport] = (int(dropped_t), y_t, grads_t)
+
+        def local_np(arr):
+            return np.concatenate([np.asarray(s.data, np.float32) for s in arr.addressable_shards])
+
+        assert results["mgpu_fused"][0] == results["mgpu"][0]
+        np.testing.assert_array_equal(local_np(results["mgpu_fused"][1]), local_np(results["mgpu"][1]))
+        for gf, gb, name in zip(results["mgpu_fused"][2], results["mgpu"][2], ("dx", "dw13", "dw2"), strict=True):
+            np.testing.assert_array_equal(local_np(gf), local_np(gb), err_msg=name)
+        print(f"[proc {proc}] MGPU_FUSED CONFORMANT (bitwise vs mgpu, {devices} devices)", flush=True)
 
 
 if __name__ == "__main__":
