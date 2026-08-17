@@ -62,8 +62,12 @@ def pooled_panel(scale: str, target: str):
     fit, held = swarm39.load_scale(scale)
     weights = np.concatenate([np.stack([p.phase0, p.phase1], axis=1) for p in (fit, held)])
     response = np.concatenate([fit.targets[target], held.targets[target]])
-    panel = gen.Panel(weights, fit.c0, fit.c1, fit.family_index)
-    return panel, response, fit
+    # Not every row carries every target -- at 300M the Uncheatable macro is missing on 17 heldout rows --
+    # and a missing outcome is not a fittable one. Dropping them beats letting NaN reach the solver, where
+    # it surfaces as an opaque failure inside the parameter search rather than as a data problem.
+    observed = np.isfinite(response)
+    panel = gen.Panel(weights[observed], fit.c0, fit.c1, fit.family_index)
+    return panel, response[observed], fit
 
 
 def loss_curvature(panel: gen.Panel, shape, amplitudes, offsets, variant: str) -> dict[str, float]:
