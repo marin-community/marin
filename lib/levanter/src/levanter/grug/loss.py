@@ -9,9 +9,10 @@ reference implementation on non-TPU backends.
 
 import jax
 import jax.numpy as jnp
-from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, get_abstract_mesh, get_mesh, reshard
+from jax.sharding import PartitionSpec as P
 
 from haliax.jax_utils import named_call
+from levanter.grug.sharding import _current_mesh, _reshard_for_shard_map
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     BlockSizes,
     fused_cross_entropy_loss_and_logsumexp_penalty,
@@ -45,26 +46,6 @@ def _psum_over_axes(x: jax.Array, axis_names: tuple[str, ...]) -> jax.Array:
     if len(axis_names) == 1:
         return jax.lax.psum(x, axis_names[0])
     return jax.lax.psum(x, axis_names)
-
-
-def _current_mesh() -> Mesh | jax.sharding.AbstractMesh:
-    try:
-        mesh = get_mesh()
-    except ValueError:
-        mesh = None
-    if mesh is not None and not mesh.empty:
-        return mesh
-    return get_abstract_mesh()
-
-
-def _reshard_for_shard_map(
-    x: jax.Array,
-    mesh: Mesh | jax.sharding.AbstractMesh | None,
-    spec: P,
-) -> jax.Array:
-    if mesh is not None and not mesh.empty:
-        return reshard(x, NamedSharding(mesh, spec))
-    return x
 
 
 @named_call
