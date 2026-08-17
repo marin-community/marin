@@ -7,7 +7,6 @@ Runs against the FineWeb-Edu ``sample/10BT`` subset using the StepSpec DAG runne
 Output paths are placed under a region-local one-day temp prefix.
 """
 
-import json
 import logging
 import os
 
@@ -44,6 +43,8 @@ from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from rigging.timing import log_time
+
+from infra.ci.run_status import run_status
 
 logger = logging.getLogger(__name__)
 
@@ -169,26 +170,15 @@ def build_steps(base: str) -> list[StepSpec]:
     return [downloaded, normalized, minhash, candidates, verified, consolidated, tokenized]
 
 
-def _write_status(status: str, marin_prefix: str) -> None:
-    """Write ferry run status to FERRY_STATUS_PATH if set."""
-    status_path = os.environ.get("FERRY_STATUS_PATH")
-    if not status_path:
-        return
-    payload = json.dumps({"status": status, "marin_prefix": marin_prefix})
-    StoragePath(status_path).write_text(payload)
-    logger.info("Wrote ferry status to %s", status_path)
-
-
 def main() -> None:
     configure_logging()
     run_id = os.environ["SMOKE_RUN_ID"]
     output_prefix = marin_temp_bucket(ttl_days=1, prefix=f"datakit-smoke/{run_id}")
     logger.info("Output prefix: %s", output_prefix)
 
-    _write_status("running", output_prefix)
-    with log_time("Datakit ferry total wall time"):
-        StepRunner().run(build_steps(output_prefix))
-    _write_status("succeeded", output_prefix)
+    with run_status(os.environ.get("FERRY_STATUS_PATH"), marin_prefix=output_prefix):
+        with log_time("Datakit ferry total wall time"):
+            StepRunner().run(build_steps(output_prefix))
 
 
 if __name__ == "__main__":

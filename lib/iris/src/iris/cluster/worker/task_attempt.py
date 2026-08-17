@@ -20,11 +20,13 @@ from pathlib import Path
 
 from finelog.client import LogClient, Table
 from finelog.rpc import logging_pb2
+from google.protobuf import json_format
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.job_env import IRIS_WORKER_DEVICE_ENV, IRIS_WORKER_REGION_ENV
 from iris.cluster.log_keys import INJECTED_ERROR_SOURCE, STDERR_SOURCE, classify_log_level, task_log_key
 from iris.cluster.platforms.types import probe_outbound_ip
 from iris.cluster.runtime.docker import DockerContainerHandle
@@ -721,7 +723,12 @@ class TaskAttempt:
         # user-configurable preference, so task/user env_vars cannot spoof it.
         region_attr = self._worker_metadata.attributes.get(WellKnownAttribute.REGION)
         if region_attr and region_attr.string_value:
-            env["IRIS_WORKER_REGION"] = region_attr.string_value
+            env[IRIS_WORKER_REGION_ENV] = region_attr.string_value
+        if self._worker_metadata.HasField("device"):
+            env[IRIS_WORKER_DEVICE_ENV] = json_format.MessageToJson(
+                self._worker_metadata.device,
+                preserving_proto_field_name=True,
+            )
 
         # Get RuntimeEntrypoint proto directly
         rt_ep = self.request.entrypoint

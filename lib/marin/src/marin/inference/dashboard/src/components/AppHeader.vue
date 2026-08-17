@@ -27,7 +27,7 @@ const chips = computed(() => {
   const info = props.info
   return [
     info.backend,
-    info.tpu_type,
+    info.accelerator,
     `tp ${info.tensor_parallel_size}`,
     info.dtype,
     info.max_model_len ? `${info.max_model_len} ctx` : 'auto ctx',
