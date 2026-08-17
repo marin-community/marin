@@ -27,6 +27,7 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, build_hero_configs
+from experiments.grug.moe_hero_ep.model import QbEstimator
 from experiments.grug.moe_hero_ep.train import (
     GrugEvalConfig,
     GrugRunConfig,
@@ -98,6 +99,7 @@ def build_hero_run(
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
+    qb_use_histogram: bool = False,
     eval_every: int = 0,
     save_checkpoints: bool = False,
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
@@ -158,6 +160,8 @@ def build_hero_run(
         )
         if value is not None
     }
+    if qb_use_histogram:
+        overrides["qb_estimator"] = QbEstimator.HIST
     if overrides:
         model = dataclasses.replace(model, **overrides)
     # A bank that is not divisible by the expert axis fails inside `moe_mlp`, which is after the rack
@@ -413,6 +417,13 @@ def build_hero_run(
     show_default=True,
     help="Override the pooled receiver capacity factor.",
 )
+@click.option(
+    "--qb-histogram/--qb-topk",
+    "qb_use_histogram",
+    default=False,
+    show_default=True,
+    help="Estimate the QB quantile with the histogram estimator instead of the top-k mean (the hero default).",
+)
 @build_options
 def main(
     run_id: str,
@@ -426,6 +437,7 @@ def main(
     intermediate_dim: int | None,
     capacity_factor: float | None,
     latent_dim: int | None,
+    qb_use_histogram: bool,
     save_checkpoints: bool,
     checkpoint_minutes: float,
     checkpoint_path: str | None,
@@ -447,6 +459,7 @@ def main(
         intermediate_dim=intermediate_dim,
         capacity_factor=capacity_factor,
         latent_dim=latent_dim,
+        qb_use_histogram=qb_use_histogram,
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),
         checkpoint_path=checkpoint_path,
