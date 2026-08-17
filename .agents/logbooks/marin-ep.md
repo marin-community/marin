@@ -1488,3 +1488,34 @@ Experiment ID prefix: `MEP`.
   collectives into one global order). If it trains, mechanism confirmed;
   engineering fixes then: SMEM diet for co-residency (mcs 2 both
   kernels), or explicit cross-kernel chaining.
+
+### 2026-08-17 11:05 - MEP-056: XLA draft validated by three adversarial passes; rewritten (rev 2)
+- Per user request, three opus subagents adversarially validated the three
+  claims of the upstream draft against XLA 60f8069e8b, origin/main
+  f0bfd165e0 (2026-08-17), and NCCL v2.30.7-1/v2.31.2-1 sources. All
+  three findings survive; NONE fixed in main; two are recent regressions
+  with citable enabling commits.
+- Finding 1 was MISDIAGNOSED: windows register per BufferAllocation base
+  (collective_memory.cc), never at packed-buffer offsets -- our
+  color_alignment wheel patch was INERT and the global BFC RoundedBytes
+  patch an over-broad stand-in. Real bug: the separate
+  CollectiveBFCAllocator (the cuda_async / spatial-off path) never sets
+  AllocatorInfo::min_alignment -- a regression from PR #44156, ~6-line
+  fix at se_gpu_pjrt_client.cc:1586-1591. Our failing-pointer evidence
+  (default-arena window) actually evidences finding 2. Decisive A/B
+  outstanding: stock wheel + ds-fusion off + cuda_async + VLOG.
+- Finding 2 confirmed end-to-end incl. jax producer side; ds-fusion pass
+  default-on only since 2026-06-30 (PR #43831); right fix = ~3-line
+  rewriter exclusion (dead-code IsCollectiveMosaicGpuInstruction is the
+  natural gate); draft's MosaicGpuInitialize claim corrected to the
+  MosaicGpuPrepare/RequestSymmetricAddress chain.
+- Finding 3 STRONGER than drafted: spatial partitioning default-on and
+  built FOR symmetric buffers (PR #43912); 0.75-pool vs ceil(mem,4GiB)
+  window budget => at most ONE window per GPU ever, device-independent.
+  NCCL as-designed (v2.31.2 unchanged). Remedy = XLA's own TODO
+  (per-backing-allocation windows + process-level cache).
+- NEW finding 4: collective_memory_size silently ignored under the
+  default allocator config (explains why MARIN_EP_COLLECTIVE_MEMORY_MB
+  only works under cuda_async -- our hero env; docstring to note).
+- Artifact rewritten (rev 2, same URL); wheel note: drop patch 1, replace
+  patch 2 with the min_alignment fix on next rebuild; kMaxPeers stays.
