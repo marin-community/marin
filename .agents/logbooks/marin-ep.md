@@ -1632,3 +1632,20 @@ Experiment ID prefix: `MEP`.
   recipe. Stock-wheel claim stands only at <=8 ranks. #47461/#47406
   conclusions unaffected (they concern the ds-fusion escapee, validated
   independently).
+
+### 2026-08-17 22:05 - MEP-064: MEP-063 attribution firmed up — it is the #47283 barrier overflow
+- The stock-wheel EP64 crash is not merely "plausibly kMaxPeers": kMaxPeers=32
+  is declared in xla/stream_executor/gpu/multi_gpu_barrier_kernel.h and
+  LaunchMultiGpuBarrierWithNccl has NO bounds check, so any 64-rank clique
+  overflows the 32-slot signal region — the deterministic step-0
+  CUDA_ERROR_ILLEGAL_ADDRESS characterized in the #8077 campaign, whose
+  standalone repro was validated on STOCK nightlies at 64 devices (3/3) and
+  filed as openxla/xla#47283 (still open). The mgpu-fused flavor exercises
+  the barrier directly: MEP-044 profile shows MultiGpuBarrier at 1055
+  ms/step busy. MEP-063 wording ("one-shot collective device kernels")
+  should read "multi-GPU barrier kernel used by the symmetric one-shot
+  collective paths".
+- Net stock-wheel requirement matrix: #47461 (ds-fusion) has a flag
+  workaround; #47283 (barrier kMaxPeers) has NO workaround at >32 ranks —
+  the one-constant recompile stays until it lands upstream. Nothing else in
+  the custom wheel is load-bearing.
