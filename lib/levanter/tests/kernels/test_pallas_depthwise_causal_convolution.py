@@ -12,6 +12,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.sharding import AbstractMesh, AxisType, PartitionSpec as P, use_abstract_mesh
 from numpy.testing import assert_allclose
 
 from levanter.kernels.pallas.depthwise_causal_convolution import depthwise_causal_convolution
@@ -127,6 +128,24 @@ def test_depthwise_causal_convolution_xla_grad_runs(kernel_size: int) -> None:
     ]:
         assert grad.shape == expected_shape, name
         assert bool(jnp.all(jnp.isfinite(grad))), name
+
+
+def test_depthwise_causal_convolution_xla_lowers_with_explicit_sharding() -> None:
+    mesh = AbstractMesh(
+        axis_sizes=(2, 1),
+        axis_names=("data", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
+    )
+
+    def run():
+        x = jax.sharding.reshard(jnp.zeros((4, 8, 6)), P("data", None, "model"))
+        weight = jax.sharding.reshard(jnp.zeros((6, 4)), P("model", None))
+        return depthwise_causal_convolution(x, weight, implementation="xla")[0]
+
+    with use_abstract_mesh(mesh):
+        output = jax.eval_shape(run)
+
+    assert output.shape == (4, 8, 6)
 
 
 @pytest.mark.parametrize("B,S", [(1, 6), (2, 1), (1, 1)])

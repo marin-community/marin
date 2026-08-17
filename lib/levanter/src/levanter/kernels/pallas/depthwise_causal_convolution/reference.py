@@ -8,6 +8,7 @@
 
 import jax
 import jax.numpy as jnp
+from jax.sharding import NamedSharding
 
 
 def _depthwise_causal_convolution_reference(
@@ -38,6 +39,10 @@ def _depthwise_causal_convolution_reference(
         if output_state:
             ht = x[:, :, -state_size:]
 
+    out_sharding = jax.typeof(x).sharding
+    if not isinstance(out_sharding, NamedSharding):
+        out_sharding = None
+
     x = jax.lax.conv_general_dilated(
         lhs=x,
         rhs=W[:, None, :],
@@ -45,6 +50,7 @@ def _depthwise_causal_convolution_reference(
         padding=padding,
         feature_group_count=H,
         dimension_numbers=("NCH", "OIH", "NCH"),
+        out_sharding=out_sharding,
     )
 
     if b is not None:
