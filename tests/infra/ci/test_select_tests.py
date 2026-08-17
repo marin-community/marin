@@ -24,6 +24,7 @@ from infra.ci.select_tests import (
     scope_legs,
     select_changed_tests,
     select_local_tests,
+    selected_scope_test_paths,
     shard_files,
     torch_membership_for_test_file,
 )
@@ -149,6 +150,16 @@ def test_iris_and_ducky_changes_select_dependent_ducky_test(tmp_path: Path, chan
     matrix = select_matrix([changed_file], tmp_path)
 
     assert leg_paths(matrix, "ducky") == ["lib/ducky/tests/test_server.py"]
+
+
+def test_job_info_change_does_not_select_unrelated_levanter_models() -> None:
+    repo_root = Path(__file__).parents[3]
+
+    selection = select_local_tests(["lib/iris/src/iris/cluster/client/job_info.py"], repo_root)
+    selected = selected_scope_test_paths(selection.matrix, "levanter")
+
+    assert "lib/levanter/tests/test_train_lm.py" in selected
+    assert "lib/levanter/tests/test_olmo3.py" not in selected
 
 
 def test_test_helper_module_propagates_source_changes(tmp_path: Path) -> None:

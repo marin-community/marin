@@ -19,7 +19,6 @@ prefix; pipeline outputs use absolute one-day TTL paths.
 import logging
 import os
 
-from iris.run_status import run_status
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import read_artifact
@@ -52,6 +51,8 @@ from rigging.filesystem.cluster_config import marin_prefix, marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 from rigging.timing import log_time
+
+from infra.ci.run_status import run_status
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +181,7 @@ def main() -> None:
     logger.info("HF source: %s @ %s", HF_DATASET_ID, HF_REVISION)
     run_id = os.environ["SMOKE_RUN_ID"]
 
-    with run_status(os.environ.get("FERRY_STATUS_PATH"), output_prefix=prefix):
+    with run_status(os.environ.get("FERRY_STATUS_PATH"), marin_prefix=prefix):
         with log_time("Datakit tier2-skewed ferry total wall time"):
             StepRunner().run(build_steps(run_id))
 

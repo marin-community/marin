@@ -11,7 +11,6 @@ import logging
 import os
 
 from fray.types import ResourceConfig
-from iris.run_status import run_status
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import read_artifact
@@ -44,6 +43,8 @@ from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from rigging.timing import log_time
+
+from infra.ci.run_status import run_status
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +176,7 @@ def main() -> None:
     output_prefix = marin_temp_bucket(ttl_days=1, prefix=f"datakit-smoke/{run_id}")
     logger.info("Output prefix: %s", output_prefix)
 
-    with run_status(os.environ.get("FERRY_STATUS_PATH"), output_prefix=output_prefix):
+    with run_status(os.environ.get("FERRY_STATUS_PATH"), marin_prefix=output_prefix):
         with log_time("Datakit ferry total wall time"):
             StepRunner().run(build_steps(output_prefix))
 
