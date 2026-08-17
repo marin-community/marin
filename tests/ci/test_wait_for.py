@@ -153,7 +153,6 @@ def test_loom_placeholder_text_from_human_remains_significant() -> None:
 
 
 def test_authenticated_author_uses_loom_bot_for_installation_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LOOM_SESSION_ID", "session-id")
     monkeypatch.setattr(
         wait_for.subprocess,
         "run",
@@ -165,27 +164,23 @@ def test_authenticated_author_uses_loom_bot_for_installation_token(monkeypatch: 
         ),
     )
 
-    assert wait_for.authenticated_author() == wait_for.LOOM_BOT
+    assert wait_for.authenticated_author(in_loom_session=True) == wait_for.LOOM_BOT
 
 
 @pytest.mark.parametrize(
-    ("loom_session_id", "stderr", "error_match"),
+    ("in_loom_session", "stderr", "error_match"),
     [
-        (None, "gh: Resource not accessible by integration (HTTP 403)\n", "Resource not accessible"),
-        ("session-id", "gh: Bad credentials (HTTP 401)\n", "Bad credentials"),
+        (False, "gh: Resource not accessible by integration (HTTP 403)\n", "Resource not accessible"),
+        (True, "gh: Bad credentials (HTTP 401)\n", "Bad credentials"),
     ],
     ids=["outside-loom", "unrelated-error"],
 )
 def test_authenticated_author_preserves_other_github_failures(
     monkeypatch: pytest.MonkeyPatch,
-    loom_session_id: str | None,
+    in_loom_session: bool,
     stderr: str,
     error_match: str,
 ) -> None:
-    if loom_session_id is None:
-        monkeypatch.delenv("LOOM_SESSION_ID", raising=False)
-    else:
-        monkeypatch.setenv("LOOM_SESSION_ID", loom_session_id)
     monkeypatch.setattr(
         wait_for.subprocess,
         "run",
@@ -198,4 +193,4 @@ def test_authenticated_author_preserves_other_github_failures(
     )
 
     with pytest.raises(wait_for.GhError, match=error_match):
-        wait_for.authenticated_author()
+        wait_for.authenticated_author(in_loom_session=in_loom_session)

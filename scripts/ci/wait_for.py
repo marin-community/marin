@@ -350,14 +350,14 @@ _LOOM_SESSION_ENV = "LOOM_SESSION_ID"
 _INSTALLATION_TOKEN_USER_ERROR = "Resource not accessible by integration (HTTP 403)"
 
 
-def authenticated_author() -> str:
+def authenticated_author(*, in_loom_session: bool) -> str:
     """Resolve the actor whose comments the current credential creates."""
     try:
         return authenticated_user()
     except GhError as exc:
         # Installation tokens cannot query /user. Loom sessions using that
         # credential post comments as the known Loom App bot.
-        if os.environ.get(_LOOM_SESSION_ENV) and _INSTALLATION_TOKEN_USER_ERROR in str(exc):
+        if in_loom_session and _INSTALLATION_TOKEN_USER_ERROR in str(exc):
             return LOOM_BOT
         raise
 
@@ -966,7 +966,7 @@ def main(
         resolved_repo = resolve_repo(repo) if needs_github else ""
         ignored = set(ignore_authors)
         if needs_authors and not include_self:
-            ignored.add(authenticated_author())
+            ignored.add(authenticated_author(in_loom_session=bool(os.environ.get(_LOOM_SESSION_ENV))))
         iris_job_waiter = _iris_job_waiter_from_job_info() if needs_iris else None
         sources = [
             build_source(
