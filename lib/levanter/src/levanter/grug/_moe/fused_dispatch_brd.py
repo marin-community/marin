@@ -765,11 +765,14 @@ def _full_fwd(
         local_experts=local_experts,
     )
     returned = _zero_invalid_rows(returned, send_rows)
-    # See _fused_fwd: `act` is recomputed in the backward to stay clear of
-    # the rematerialization cliff.
+    del x_pool
+    # `act` and `x_pool` are recomputed in the backward (elementwise from gu,
+    # and one transport put of the already-saved sorted_x): the fused arm
+    # measured 186.65 GiB at the 172 GiB remat target and ran, fused2 at
+    # 188.04 GiB wedged the collective allocator -- the residual set must
+    # shrink, not grow, relative to the two-launch path.
     res = (
         sorted_x,
-        x_pool,
         moe_w13,
         moe_w2,
         gu,
@@ -786,7 +789,6 @@ def _full_fwd(
 def _full_bwd(pool_rows, assignments_per_shard, axis_name, ep_size, res, d_returned):
     (
         sorted_x,
-        x_pool,
         moe_w13,
         moe_w2,
         gu,
@@ -798,8 +800,21 @@ def _full_bwd(pool_rows, assignments_per_shard, axis_name, ep_size, res, d_retur
         pool_recv_rows,
     ) = res
     moe_dim = moe_w2.shape[1]
-    padded_rows = x_pool.shape[0]
-    act = _swiglu(gu, moe_dim, x_pool.dtype)
+    padded_rows = gu.shape[0]
+    act = _swiglu(gu, moe_dim, sorted_x.dtype)
+    x_pool = put_with_transpose(
+        sorted_x,
+        dispatch_plan,
+        combine_plan,
+        pool_recv_rows,
+        send_rows,
+        pool_rows,
+        assignments_per_shard,
+        axis_name,
+        ep_size,
+    )
+    if padded_rows != pool_rows:
+        x_pool = jnp.pad(x_pool, ((0, padded_rows - pool_rows), (0, 0)))
     d_returned = d_returned.astype(x_pool.dtype)
     # The combine cotangent is a dispatch-shaped put: sender-frame rows back
     # into the pool frame.
