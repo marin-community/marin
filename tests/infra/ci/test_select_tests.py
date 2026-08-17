@@ -9,24 +9,14 @@ from pathlib import Path
 import pytest
 
 from infra.ci.select_tests import (
-    MIN_FILES_PER_SHARD,
     SCOPES,
-    SHARD_COUNT,
     UV_PACKAGE,
     MatrixLeg,
     accelerator_suite_test_paths,
     classify,
-    dependencies_by_test_file,
-    extra_suites,
-    full_matrix,
-    is_test_module,
     matrix_leg,
-    scope_legs,
     select_changed_tests,
     select_local_tests,
-    selected_scope_test_paths,
-    shard_files,
-    torch_membership_for_test_file,
 )
 
 
