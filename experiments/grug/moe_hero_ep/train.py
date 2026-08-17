@@ -355,6 +355,11 @@ def _apply_dispatch_environment(config: GrugRunConfig) -> None:
             raise ValueError("mok_like pinned-host memory configuration requires a mok_like model")
         return
     if host_memory_limit is None:
+        # `HERO_EP_RUNTIME_ENV` pins a 192 GiB host arena for every hero EP run, and it is applied
+        # before this function. mok_like sizes its own pinned-host arena from the workspace it
+        # allocates, so it must not silently inherit the EP default: for this backend an unset
+        # limit means the PJRT default, not 192 GiB.
+        os.environ.pop("XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB", None)
         if config.model.remat_mode == "offload_moe":
             raise ValueError("mok_like with offload_moe requires an explicit pinned-host memory limit")
     elif host_memory_limit <= 0:
