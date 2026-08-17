@@ -109,6 +109,37 @@ def load_full_pool(refresh: bool = False) -> pd.DataFrame:
     return full
 
 
+def load_support(support_id: str, refresh: bool = False) -> pd.DataFrame:
+    """One replay condition. `full` is the zero-replay panel; the rest carry real repetition.
+
+    The panel spans a repetition ladder that the no-replay work never used: maximum total StarCoder
+    epochs run 0.034 at `full`, then 3.31, 6.62, 13.26, 26.53, 53.06 and 106.11 across m0125 to m400,
+    with 288 to 492 of 500 rows exceeding one full pass. That range matters because the measured
+    repetition-damage knee sits near 105 excess epochs, so m400 is the first condition that reaches it.
+
+    It also matters because the zero-replay panel has NO positive two-phase gain to predict, so a model
+    that cannot express phase structure scores well there regardless. Repetition is where the effect
+    being modelled actually exists.
+    """
+    observations = explorer.load_observations(COVERAGE, EXPLORER_DIR, refresh=refresh, workers=1)
+    frame = observations.loc[observations["support_id"] == support_id].reset_index(drop=True)
+    if frame.empty:
+        available = sorted(observations["support_id"].unique())
+        raise ValueError(f"unknown support_id {support_id!r}; available: {available}")
+    if support_id == "full":
+        assert_no_replay(frame)
+    return frame
+
+
+def repetition_summary(frame: pd.DataFrame) -> dict[str, float]:
+    total = frame["starcoder_phase_0_epochs"].to_numpy(float) + frame["starcoder_phase_1_epochs"].to_numpy(float)
+    return {
+        "max_epochs": float(total.max()),
+        "median_epochs": float(np.median(total)),
+        "rows_repeated": float((total > 1.0).mean()),
+    }
+
+
 def assert_no_replay(frame: pd.DataFrame) -> None:
     """Fail loudly if this panel is not the zero-replay setting it is claimed to be."""
     total = frame["starcoder_phase_0_epochs"].to_numpy(float) + frame["starcoder_phase_1_epochs"].to_numpy(float)

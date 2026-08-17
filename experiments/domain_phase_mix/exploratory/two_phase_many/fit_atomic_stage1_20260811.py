@@ -104,6 +104,39 @@ def design(panel, name: str, theta: np.ndarray) -> np.ndarray:
                 (complement_b + offset) ** -theta[3],
             ]
         )
+    if name == "two-bucket-damage":
+        # The repetition conditions activate a term the no-replay panel could not test. Damage is charged
+        # on EXACT materialized epochs -- the panel supplies them per phase -- in the bounded Hill form,
+        # so it saturates rather than diverging. The knee is the 105 excess epochs measured elsewhere in
+        # this project, and m400 is the first condition whose maximum exposure, 106.11, actually reaches
+        # it, so this panel can finally see the saturation rather than assuming it.
+        excess = np.maximum(panel.epochs_phase_0 + panel.epochs_phase_1 - 1.0, 0.0) / 105.0
+        powered = excess ** theta[4]
+        complement = (1.0 - horizon) * panel.complement_epochs_phase_0 + horizon * panel.complement_epochs_phase_1
+        return np.column_stack(
+            [
+                ones,
+                (exposure(panel, horizon) + offset) ** -gamma,
+                (complement + offset) ** -theta[3],
+                powered / (1.0 + powered),
+            ]
+        )
+    if name == "two-horizon-damage":
+        second = theta[5]
+        excess = np.maximum(panel.epochs_phase_0 + panel.epochs_phase_1 - 1.0, 0.0) / 105.0
+        powered = excess ** theta[4]
+        complement_a = (1.0 - horizon) * panel.complement_epochs_phase_0 + horizon * panel.complement_epochs_phase_1
+        complement_b = (1.0 - second) * panel.complement_epochs_phase_0 + second * panel.complement_epochs_phase_1
+        return np.column_stack(
+            [
+                ones,
+                (exposure(panel, horizon) + offset) ** -gamma,
+                (exposure(panel, second) + offset) ** -gamma,
+                (complement_a + offset) ** -theta[3],
+                (complement_b + offset) ** -theta[3],
+                powered / (1.0 + powered),
+            ]
+        )
     if name == "gated":
         # ORDER WITHOUT WEIGHTING. Every exposure-weighting scheme tried reduces to linear indices in
         # (p0, p1), which tie every untied policy to a tied one -- see ATOM-003. A gate is different in
@@ -140,8 +173,12 @@ def bounds_for(name: str) -> list[tuple[float, float]]:
     if name in ("intercept", "quadratic"):
         return []
     box = [(0.01, 4.0), (-4.0, -0.5), (0.0, 1.0)]  # gamma, log offset, horizon
-    if name in ("two-bucket", "two-horizon", "gated"):
+    if name in ("two-bucket", "two-horizon", "gated", "two-bucket-damage", "two-horizon-damage"):
         box.append((0.01, 4.0))  # complement readout exponent
+    if name in ("two-bucket-damage", "two-horizon-damage"):
+        box.append((0.2, 10.0))  # repetition-damage exponent
+    if name == "two-horizon-damage":
+        box.append((0.0, 1.0))  # second horizon
     if name == "two-horizon":
         box.append((0.0, 1.0))  # second horizon
     if name == "gated":
