@@ -13,6 +13,7 @@ the identity on each device's compacted send buffer.
 import jax
 import jax.numpy as jnp
 import numpy as np
+from levanter.grug._moe.fused_dispatch_brd import TRANSPORT_STAGE_ROWS, expected_arrival_signals
 from levanter.grug._moe.marin_ep_transport import combine_segments, dispatch_segments
 
 from experiments.marin_ep.planref import execute_plans
@@ -93,3 +94,21 @@ def test_dispatch_then_combine_roundtrips_send_buffers():
     returned = execute_plans(combine_plans, pools, kept_per_device)
     for d in range(DEVICES):
         np.testing.assert_array_equal(returned[d][: sends[d].shape[0]], sends[d])
+
+
+def test_expected_arrival_signals_matches_reference_loop():
+    rng = np.random.default_rng(7)
+    devices, local_experts, grid_size = 4, 3, 5
+    accepted = rng.integers(0, 4 * TRANSPORT_STAGE_ROWS, size=(devices, devices * local_experts)).astype(np.int32)
+    accepted[0, 1] = 0  # zero-row senders must not be counted
+    for shard in range(devices):
+        got = expected_arrival_signals(
+            jnp.asarray(accepted), jnp.int32(shard), local_experts=local_experts, grid_size=grid_size
+        )
+        for j in range(local_experts):
+            want = 0
+            for src in range(devices):
+                rows = int(accepted[src, shard * local_experts + j])
+                full, tail = divmod(rows, TRANSPORT_STAGE_ROWS)
+                want += min(full, grid_size) + (1 if tail else 0)
+            assert int(got[j]) == want, (shard, j)

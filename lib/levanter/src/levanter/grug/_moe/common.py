@@ -32,6 +32,7 @@ MoeImplementation: TypeAlias = Literal[
     "marin_ep_hier_cudnn_cute",  # marin_ep two-hop transport (ragged internode + fused intranode).
     "marin_ep_mgpu_cudnn_cute",  # marin_ep fused transport forced multi-process (collective metadata).
     "marin_ep_mgpu_brd",  # marin_ep fused transport + Pallas Blackwell ragged-dot expert GEMMs.
+    "marin_ep_mgpu_fused",  # marin_ep single-kernel dispatch + arrival-gated gate/up GEMM (M7b).
     "scatter",  # Single-process grouped GMM with scatter-add combine.
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
     "sonic_cute",  # Single-process QuACK SM100 (Blackwell/B200) grouped-GEMM backend.
@@ -48,6 +49,7 @@ _RAGGED_ALL_TO_ALL_IMPLEMENTATIONS = (
     "marin_ep_hier_cudnn_cute",
     "marin_ep_mgpu_cudnn_cute",
     "marin_ep_mgpu_brd",
+    "marin_ep_mgpu_fused",
 )
 _EP_MOE_IMPLEMENTATIONS = ("ring", *_RAGGED_ALL_TO_ALL_IMPLEMENTATIONS, "fixed_all_to_all", "deepep")
 # Local means no collectives over an expert axis. These backends can still run

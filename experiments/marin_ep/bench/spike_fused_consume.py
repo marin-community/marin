@@ -24,6 +24,7 @@ Single process, >= 2 local GPUs (one GB200 tray):
 """
 
 import inspect
+import time
 
 import jax
 import jax.numpy as jnp
@@ -323,8 +324,6 @@ def main() -> None:
 
     base = jax.block_until_ready(run_base(src_global))
     np.testing.assert_allclose(np.asarray(base).reshape(devices, -1, LOCAL_EXPERTS).sum(axis=1), want, rtol=1e-5)
-
-    import time
 
     def best_of(fn, arg, n=10):
         ts = []

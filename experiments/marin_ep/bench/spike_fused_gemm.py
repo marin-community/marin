@@ -21,6 +21,7 @@ Single process, >= 2 local GPUs (one GB200 tray):
 
 import functools
 import inspect
+import time
 
 import jax
 import jax.numpy as jnp
@@ -169,14 +170,14 @@ def fused_dispatch_gemm(
                         tail = rows - num_full * TRANSPORT_STAGE_ROWS
 
                         @pl.loop(sm_id, num_full, step=num_sms)
-                        def _tile(t):
+                        def _tile(t, start=start, offset=offset, dst_ref=dst_ref):
                             lo = t * TRANSPORT_STAGE_ROWS
                             copy_rows(start + lo, dst_ref, offset + lo, TRANSPORT_STAGE_ROWS)
 
                         does_tail = (tail > 0) & (lax.rem(entry, num_sms) == sm_id)
 
                         @pl.when(does_tail)
-                        def _tail():
+                        def _tail(start=start, offset=offset, dst_ref=dst_ref, num_full=num_full, tail=tail):
                             @pl.loop(0, tail)
                             def _row(r):
                                 copy_rows(
@@ -189,11 +190,11 @@ def fused_dispatch_gemm(
                         my_full = jnp.maximum(lax.div(num_full - sm_id + num_sms - 1, num_sms), 0)
 
                         @pl.when(my_full > 0)
-                        def _sig_full():
+                        def _sig_full(j=j, dest=dest):
                             signal(j, dest)
 
                         @pl.when(does_tail)
-                        def _sig_tail():
+                        def _sig_tail(j=j, dest=dest):
                             signal(j, dest)
 
             @pl.when(wg < 2)
@@ -293,7 +294,7 @@ def main() -> None:
     def fused_fn(src, w_local):
         shard_id = lax.axis_index("ep")
         plan, my_bank, expected = build(shard_id)
-        pool, out = fused_dispatch_gemm(
+        _pool, out = fused_dispatch_gemm(
             src.astype(jnp.bfloat16),
             plan,
             w_local[0],
@@ -336,8 +337,6 @@ def main() -> None:
 
     run_base = jax.jit(shard_map(baseline_fn, mesh=mesh, in_specs=(spec, wspec), out_specs=spec, check_vma=False))
     jax.block_until_ready(run_base(src_global, w_global))
-
-    import time
 
     def best_of(fn, n=10):
         ts = []
