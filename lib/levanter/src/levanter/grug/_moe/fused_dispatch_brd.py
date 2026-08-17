@@ -112,7 +112,9 @@ def _fused_dispatch_gemm(
     tile_m, tile_n, tile_k = config.tile_m, config.tile_n, config.tile_k
     eff_tile_m, eff_tile_n = 2 * tile_m, 2 * tile_n  # collective 2-CTA tiles
     if out_rows % eff_tile_m or n % eff_tile_n or hidden % tile_k:
-        raise ValueError(f"shape ({out_rows},{hidden},{n}) not divisible by tiles ({eff_tile_m},{tile_k},{eff_tile_n})")
+        raise ValueError(
+            f"shape ({out_rows},{hidden},{n}) not divisible by tiles ({eff_tile_m},{tile_k},{eff_tile_n})"
+        )
     m_iters = out_rows // eff_tile_m
     n_iters = n // eff_tile_n
     max_concurrent_steps = config.max_concurrent_steps
@@ -420,6 +422,7 @@ def _fused_bwd(pool_rows, assignments_per_shard, axis_name, ep_size, res, dy):
         axis_name,
         ep_size,
     ).astype(sorted_x.dtype)
+
     def float0(a):
         return np.zeros(jnp.shape(a), dtype=jax.dtypes.float0)
 
