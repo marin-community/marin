@@ -29,7 +29,8 @@ minimum hash by construction. Both are deterministic functions of the document.
             --prefix s3://.../marin --candidates datakit/dedup_709f5997 \
             --verified datakit/verify_fuzzy_dups_c757e4f0 \
             --large-clusters s3://.../user/rav/dedup/large_clusters/v1/large_clusters.parquet \
-            --out s3://.../user/rav/dedup/cluster_text/v5
+            --out s3://.../user/rav/dedup/cluster_text/v6 \
+            --output-shards 8192 --shards-per-task 96 --max-workers 96
 """
 
 import argparse
@@ -44,17 +45,17 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
+from marin.processing.classification.deduplication.cluster_dedup import (
+    ClusterDedupParams,
+    ClusterDocument,
+    find_duplicates,
+)
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 from zephyr.worker_context import zephyr_worker_ctx
-from marin.processing.classification.deduplication.cluster_dedup import (
-    ClusterDedupParams,
-    ClusterDocument,
-    find_duplicates,
-)
 from zephyr.writers import write_parquet_file
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,11 @@ SPLIT_NGRAM_SIZE = 5
 # caps it: every sub-group still solves internally, so the cost is one extra
 # survivor per sub-group, against 1.68 million removals.
 SPLIT_SUBDIVISIONS = 16
+# One Parquet value cannot span data pages, so a single document above
+# ``i32::MAX`` uncompressed bytes fails its whole partition on write. 64 MB
+# leaves three orders of magnitude of headroom and is far above any document
+# the duplicate rule can use: it hashes n-grams from the head of the text.
+MAXIMUM_DOCUMENT_CHARS = 64 * 1024 * 1024
 
 _TEXT_SCHEMA = pa.schema(
     [
@@ -189,6 +195,15 @@ def _join_shard(shard: TextShard) -> Iterator[dict[str, Any]]:
                         continue
                     cluster_id, canonical = attribute
                     text = text or ""
+                    if len(text) > MAXIMUM_DOCUMENT_CHARS:
+                        # Parquet cannot split one value across data pages, so a
+                        # single pathological document fails the whole partition
+                        # once it passes i32::MAX uncompressed bytes. The v9 run
+                        # died on a 2.99 GB page after writing 8,187 of 8,192
+                        # partitions. Duplicate detection reads n-grams from the
+                        # head anyway, so the tail carries no signal it can use.
+                        counters.pipeline.update_counter(f"{COUNTER_PREFIX}/oversized_documents", 1)
+                        text = text[:MAXIMUM_DOCUMENT_CHARS]
                     splits = oversized.get(cluster_id, 1)
                     split_index = 0
                     sub_index = 0
@@ -229,14 +244,20 @@ def _join_shard(shard: TextShard) -> Iterator[dict[str, Any]]:
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/shards_joined", 1)
 
 
-def output_shard_of(cluster_key: str, shards: int) -> int:
-    """Stable output shard for one cluster group.
+def group_key_of(cluster_key: str, groups: int) -> int:
+    """Stable output group for one cluster group.
 
     Partitions on the *split* key, not the cluster ID. The largest component
     holds 831 million members: routing all of its splits to one file would
     hand one reduce task the whole component and undo the split.
+
+    Keep ``groups`` well above the reduce-task count. Zephyr hashes this key
+    again to pick a reduce task, so one group per task is balls-into-bins:
+    ``e**-1`` of the tasks get nothing and the unlucky ones get five or more
+    groups. The v5 run measured 37% idle reducers and a 31 GB partition
+    against a 5.6 GB mean. Eight groups per task flattens that tail.
     """
-    return dupekit.hash_xxh3_64(cluster_key.encode("utf-8")) % shards
+    return dupekit.hash_xxh3_64(cluster_key.encode("utf-8")) % groups
 
 
 _MARKER_SCHEMA = pa.schema(
@@ -276,7 +297,7 @@ def _solve_cluster(members: list[dict[str, Any]], params: ClusterDedupParams) ->
 
 
 def _write_group(
-    shard: int,
+    group: int,
     records: Iterator[dict[str, Any]],
     output_dir: str,
     params: ClusterDedupParams | None,
@@ -289,7 +310,7 @@ def _write_group(
     runs afterwards as a map over the grouped files, where it gets the whole
     machine.
     """
-    path = prefix_join(output_dir, f"part-{shard:05d}.parquet")
+    path = prefix_join(output_dir, f"part-{group:06d}.parquet")
     written = 0
     clusters = 0
     duplicates = 0
@@ -423,12 +444,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--large-clusters", required=True, help="large_clusters.parquet from fuzzy_large_clusters.py")
     parser.add_argument("--out", required=True)
     parser.add_argument("--max-cluster-size", type=int, default=100_000)
-    parser.add_argument("--output-shards", type=int, default=4096)
+    parser.add_argument("--output-shards", type=int, default=4096, help="Reduce tasks")
+    parser.add_argument("--groups-per-shard", type=int, default=8, help="Output files per reduce task; see group_key_of")
     parser.add_argument("--shards-per-task", type=int, default=8, help="Input shards joined by one map task")
     parser.add_argument("--limit-shards", type=int, default=0, help="Join only the first N shards; for a smoke run")
     parser.add_argument("--solve-inline", action="store_true", help="Also solve clusters in the reducer")
-    parser.add_argument("--minimum-containment", type=float, default=0.98)
-    parser.add_argument("--no-zero-novel-tokens", action="store_true")
+    parser.add_argument("--minimum-containment", type=float, default=0.60)
     parser.add_argument("--max-workers", type=int, default=64)
     parser.add_argument("--worker-cpu", type=float, default=32)
     parser.add_argument("--worker-ram", default="128g")
@@ -461,6 +482,7 @@ def main(argv: list[str] | None = None) -> None:
         "verified": args.verified,
         "max_cluster_size": args.max_cluster_size,
         "output_shards": args.output_shards,
+        "groups_per_shard": args.groups_per_shard,
         "duplicate_rule": None,
         "split_ngram_size": SPLIT_NGRAM_SIZE,
         "split_subdivisions": SPLIT_SUBDIVISIONS,
@@ -472,7 +494,6 @@ def main(argv: list[str] | None = None) -> None:
     params = (
         ClusterDedupParams(
             minimum_containment=args.minimum_containment,
-            accept_zero_novel_tokens=not args.no_zero_novel_tokens,
         )
         if args.solve_inline
         else None
@@ -489,11 +510,17 @@ def main(argv: list[str] | None = None) -> None:
     ]
     logger.info("Map side: %d tasks of up to %d shards", len(shard_groups), args.shards_per_task)
 
-    grouped = Dataset.from_list(shard_groups).flat_map(_join_shard_group).group_by(
-        key=lambda record: output_shard_of(record["cluster_key"], args.output_shards),
-        reducer=lambda shard, records: _write_group(shard, records, prefix_join(args.out, "text"), params),
-        sort_by=lambda record: (record["cluster_key"], record["id"]),
-        num_output_shards=args.output_shards,
+    key_groups = args.output_shards * args.groups_per_shard
+    logger.info("Reduce side: %d output files across %d reduce tasks", key_groups, args.output_shards)
+    grouped = (
+        Dataset.from_list(shard_groups)
+        .flat_map(_join_shard_group)
+        .group_by(
+            key=lambda record: group_key_of(record["cluster_key"], key_groups),
+            reducer=lambda group, records: _write_group(group, records, prefix_join(args.out, "text"), params),
+            sort_by=lambda record: (record["cluster_key"], record["id"]),
+            num_output_shards=args.output_shards,
+        )
     )
     pipeline = (
         grouped.group_by(
