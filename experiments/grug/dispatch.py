@@ -99,7 +99,15 @@ def dispatch_grug_training_run(
     if extra_setup_scripts:
         python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
         setup_scripts = [
-            default_setup_script(extras=list(extras_for_resources(resources)), python_version=python_version),
+            # The reproduced default must carry pip_packages too: create_environment only applies
+            # them when it owns the script list, so omitting them here silently drops the caller's
+            # wheels. mok_like's CUDA build deps arrive this way, and losing them fails preflight
+            # with "required CUDA build distribution is not installed" long after setup looks fine.
+            default_setup_script(
+                extras=list(extras_for_resources(resources)),
+                pip_packages=list(pip_packages),
+                python_version=python_version,
+            ),
             *extra_setup_scripts,
         ]
     request = JobRequest(
