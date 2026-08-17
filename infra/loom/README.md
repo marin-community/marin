@@ -1,10 +1,12 @@
 # Loom production deployment
 
 The `marin-loom` Pulumi stack manages `loom.oa.dev`: its GCE host with a
-persistent root disk, Artifact Registry repository, Secret Manager access,
-Cloudflare DNS, and scheduled root-disk snapshots. The runtime is built from
-the operator's local Loom worktree and runs as a Docker Compose application on
-the GCE host.
+retained Hyperdisk root disk, Artifact Registry repository, Secret Manager
+access, and Cloudflare DNS. The production host is an on-demand C4D VM with an
+AMD Turin CPU. It uses NVMe for its boot disk and gVNIC for networking, as
+required by the machine family. Hyperdisk performance is pinned to the included
+3,000 IOPS and 140 MB/s baseline. The runtime is built from the operator's local
+Loom worktree and runs as a Docker Compose application on the GCE host.
 
 ## Prerequisites
 
@@ -86,6 +88,15 @@ identity of the existing `marin-grafana` Cloud Run service account to select
 only the `ops` profile. Pulumi resolves that account's email and immutable
 numeric subject; it does not create or copy a Loom token.
 
+The `fork-ferry` mapping accepts OIDC tokens only from the `marin` repository's
+`ops-fork-ferry.yaml` workflow on `main`. It authorizes the dedicated
+`fork-ferry` automation profile. Loom brokers short-lived `loom-oa-dev` GitHub
+App tokens for the profile's Marin fork repositories, with contents, issues,
+and pull-request write access. The App key remains in `LOOM_DOTENV`; the profile
+does not store a GitHub token or grant Actions access. The GitHub Pulumi stack
+reads the mapping's profile from this stack's `githubFederationProfiles` output
+and publishes it as the workflow's `LOOM_FORK_FERRY_PROFILE` repository variable.
+
 Organization prompt policy lives beside the runtime profiles in
 `profiles/<name>/AGENTS.md`. A profile's `instructionsFile` is resolved below
 `infra/loom`, read by Pulumi, and reconciled into Loom's visible profile
@@ -95,6 +106,13 @@ runtime, and the effective text remains inspectable in Settings. The production
 ordinary sessions use the deployment-managed `default` profile, while workload
 and future GitHub Actions callers select the automation profile authorized by
 their federation mapping.
+
+The `default`, `github`, and `slack` profiles allowlist the repositories where
+interactive sessions may fall back to the `loom-oa-dev` GitHub App. Loom stamps
+only the session's current repository and brokers a short-lived installation
+token when the launching user has not stored a personal token. A personal token
+continues to take precedence. Keep these lists aligned with the repositories
+registered in production and the App's installations.
 
 The Pulumi declaration is authoritative at activation time. An unchanged
 profile keeps its database revision; a changed declaration overwrites the
@@ -152,7 +170,9 @@ Recreating the control-plane service preserves those containers, and the new
 control plane discovers and adopts them. Do not run `docker compose down` while
 sessions are live because it removes their shared network.
 
-To roll back, check out the prior Loom tree, restore its numbered
-`dotenvSecretVersion` when necessary, and run the normal preview and update.
-The separately managed persistent root disk is protected, is not auto-deleted
-with the VM, and has scheduled snapshots.
+To roll back an application release, check out the prior Loom tree, restore its
+numbered `dotenvSecretVersion` when necessary, and run the normal preview and
+update. The separately managed root disk is protected, retained if removed from
+Pulumi, and not auto-deleted with the VM. A replacement root disk must use an
+explicit `bootDiskSnapshot`; keep that source snapshot until a newer rollback
+point has been verified.

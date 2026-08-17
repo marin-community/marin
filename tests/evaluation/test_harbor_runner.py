@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-from finestore.reader import CompositeReader
+from finestore.reader import ReadView
 from fsspec.implementations.memory import MemoryFileSystem
 from marin.evaluation.harbor import driver_config, runner
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
@@ -25,7 +25,8 @@ from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError
 from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
-from rigging.filesystem import StoragePath
+from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes
+from rigging.filesystem.storage_path import StoragePath
 
 
 def _running_model() -> RunningModel:
@@ -152,7 +153,7 @@ def test_write_archive_writes_agentic_samples(tmp_path):
     root = _write_archive([trial], "hf://DCAgent2/terminal_bench_2", str(tmp_path))
 
     assert root == str(tmp_path)
-    rows = CompositeReader(str(tmp_path)).scan("samples").to_pylist()
+    rows = ReadView(str(tmp_path)).scan("samples").to_pylist()
     assert len(rows) == 1
     assert rows[0]["doc_id"] == "task-one"
     assert rows[0]["trial_id"] == "trial-1"
@@ -183,7 +184,7 @@ def test_read_trials_and_archive_captures_trajectory(tmp_path):
 
     archive_root = str(tmp_path / "archive")
     _write_archive(trials, "aime", archive_root)
-    reader = CompositeReader(archive_root)
+    reader = ReadView(archive_root)
     samples = {row["doc_id"]: row for row in reader.scan("samples").to_pylist()}
     # The archived sample references its trajectory by a finestore:// URI, not the job-tree path.
     assert samples["task-one"]["trajectory_uri"].startswith("finestore://blobs/")
@@ -214,6 +215,7 @@ def _memory_remote(protocol: str, monkeypatch) -> None:
     RemoteMemoryFileSystem.store = {}
     RemoteMemoryFileSystem.pseudo_dirs = [""]
     remote_fs = RemoteMemoryFileSystem()
+    versions: dict[str, int] = {}
 
     def remote_url_to_fs(url: str, **_kwargs):
         path = StoragePath(url)
@@ -224,8 +226,29 @@ def _memory_remote(protocol: str, monkeypatch) -> None:
         fs, path = remote_url_to_fs(url)
         return fs.open(path, mode, **kwargs)
 
+    class MemoryConditionalObject:
+        def __init__(self, path: str) -> None:
+            self.path = path
+
+        def read(self) -> VersionedBytes | None:
+            _, key = remote_url_to_fs(self.path)
+            if not remote_fs.exists(key):
+                return None
+            return VersionedBytes(remote_fs.cat(key), str(versions[self.path]))
+
+        def write(self, data: bytes, *, expected_version: str | None) -> str:
+            current = versions.get(self.path)
+            if (None if current is None else str(current)) != expected_version:
+                raise ConditionalWriteError(f"stale version for {self.path}")
+            version = (current or 0) + 1
+            _, key = remote_url_to_fs(self.path)
+            remote_fs.pipe(key, data)
+            versions[self.path] = version
+            return str(version)
+
     monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", remote_url_to_fs)
     monkeypatch.setattr("rigging.filesystem.factory.open_url", remote_open_url)
+    monkeypatch.setattr("finestore.commit.conditional_object", MemoryConditionalObject)
 
 
 @pytest.mark.parametrize("protocol", ["gs", "s3"])
@@ -271,7 +294,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
     # The resumed driver produced no trials, so total==1 means the durable trial was read back.
     assert outcome.metrics[executor.config.record_dataset]["total"] == 1.0
     assert outcome.metrics[executor.config.record_dataset]["accuracy"] == 1.0
-    assert StoragePath(f"{output_dir}/SEALED").exists()
+    assert ReadView(output_dir).is_sealed()
     assert StoragePath(f"{output_dir}/harbor_result.json").exists()
 
 

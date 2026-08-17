@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from google.protobuf import json_format
 
 from iris.cluster.constraints import Constraint
+from iris.cluster.job_env import IRIS_WORKER_DEVICE_ENV, IRIS_WORKER_REGION_ENV
 from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import job_pb2
 
@@ -59,6 +60,9 @@ class JobInfo:
     Surfaced via the ``IRIS_WORKER_REGION`` env var so legacy clients (e.g. the
     Marin executor's region-pinning path) can inspect where they are running.
     Iris itself no longer auto-inherits this onto child jobs — see #5279."""
+
+    worker_device: job_pb2.DeviceConfig | None = None
+    """Physical accelerator attached to the worker running this task, if any."""
 
     @property
     def task_attempt(self) -> TaskAttempt:
@@ -124,7 +128,12 @@ def get_job_info() -> JobInfo | None:
             ports=_parse_ports_from_env(),
             env=job_env,
             constraints=constraints,
-            worker_region=os.environ.get("IRIS_WORKER_REGION"),
+            worker_region=os.environ.get(IRIS_WORKER_REGION_ENV),
+            worker_device=(
+                json_format.Parse(os.environ[IRIS_WORKER_DEVICE_ENV], job_pb2.DeviceConfig())
+                if IRIS_WORKER_DEVICE_ENV in os.environ
+                else None
+            ),
         )
         _job_info.set(info)
         return info

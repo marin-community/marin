@@ -16,6 +16,7 @@ import threading
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
+from unittest import mock
 
 import marin.inference.vllm_server as vllm_server
 import pytest
@@ -121,7 +122,11 @@ def _run_entrypoint(
         compute_capability=compute_capability,
         core_stems=core_stems,
     )
-    command = vllm_server.IsolatedCudaVllm(source=vllm_server.VllmType.MARIN_FORK).command()
+    # command() selects the fork wheel by platform.machine(); pin it to the architecture under test so
+    # the run does not depend on the host's (e.g. arm64 macOS, absent from the release manifest). The
+    # provenance the test passes below overrides whatever command() embeds.
+    with mock.patch("platform.machine", return_value=wheel.architecture):
+        command = vllm_server.IsolatedCudaVllm(source=vllm_server.VllmType.MARIN_FORK).command()
     bootstrap_index = command.index("-c")
     wrapped_command = command[bootstrap_index + 2 :]
     marker = tmp_path / "cli.json"

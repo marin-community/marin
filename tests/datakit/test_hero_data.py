@@ -14,20 +14,24 @@ nothing behind it, or at a tokenize output built from a different normalize.
 import json
 
 import pytest
+from marin.datakit.sources import all_sources
 
 from experiments.datakit import hero_data
 
 PREFIX = hero_data.MANIFEST_PREFIX
-MANIFEST = hero_data.MANIFEST_PATH
+MANIFEST = hero_data.manifest_path()
+EMBED_MANIFEST = hero_data.harrier_paths_path()
 
 
 @pytest.fixture(autouse=True)
 def _marin_prefix(monkeypatch):
-    # ``StepSpec.output_path`` resolves ``marin_prefix()``; pin it so the test never
-    # depends on ambient GCS metadata. It must be the prefix the manifest was built
-    # under: ghalogs/public hashes its region-specific download path, so its entries
-    # differ per region.
+    # Hero data has one CoreWeave location. Pin it instead of inheriting the test
+    # process's prefix because some step hashes include resolved paths.
     monkeypatch.setenv("MARIN_PREFIX", PREFIX)
+    # The registry caches prefix-resolved GHALogs steps for the life of the process.
+    all_sources.cache_clear()
+    yield
+    all_sources.cache_clear()
 
 
 def _relative_paths() -> dict[str, str]:
@@ -41,6 +45,15 @@ def test_paths_match_the_checked_in_manifest():
     so regenerate only once the new paths are known to hold the data.
     """
     assert _relative_paths() == json.loads(MANIFEST.read_text())
+
+
+def test_harrier_paths_are_complete_relative_and_include_focus():
+    paths = json.loads(EMBED_MANIFEST.read_text())
+
+    assert set(paths) == set(hero_data.source_names())
+    assert all("://" not in path and not path.startswith("/") for path in paths.values())
+    expected = f"{PREFIX}/datakit/embed/harrier-all/common-crawl-focus-2026-22_fc8cffa4"
+    assert hero_data.harrier("common-crawl-focus-2026-22") == expected
 
 
 def test_every_registered_source_has_every_stage():
@@ -62,6 +75,8 @@ def test_steps_refuse_to_run():
         hero_data.minhash("stack-v3"),
         hero_data.exact_dups(),
         hero_data.fuzzy_dups(),
+        hero_data.domain_cluster_assignment(),
+        hero_data.assigned_clusters("stack-v3"),
     ]
     for step in steps:
         with pytest.raises(AssertionError, match="must never execute"):

@@ -40,7 +40,7 @@ from iris.actor.server import ActorServer
 from iris.client.client import iris_ctx
 from iris.cluster.client import get_job_info
 from iris.cluster.types import Entrypoint, ResourceSpec
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 from scripts.ops.storage.constants import (
     ADAPTIVE_MAX_DEPTH,

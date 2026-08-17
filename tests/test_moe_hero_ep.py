@@ -1106,9 +1106,33 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
         config.model.num_experts_per_token,
         config.model.latent_dim,
         config.model.capacity_factor,
+        config.model.pooled_transport_capacity_factor,
+        config.model.num_expert_waves,
+        config.model.moe_implementation,
         config.trainer.trainer.train_batch_size,
         config.model.max_seq_len,
-    ) == (6144, 48, 192, 6144, 4, 3072, 1.33, 1024, 4096)
+        config.processes_per_task,
+        config.trainer.trainer.mp.param_dtype,
+        config.trainer.trainer.mp.compute_dtype,
+        config.trainer.master_param_mode,
+    ) == (
+        6144,
+        48,
+        384,
+        3072,
+        8,
+        3072,
+        1.15,
+        1.10,
+        3,
+        "fixed_pooled_wave_all_to_all",
+        1024,
+        4096,
+        1,
+        jnp.bfloat16,
+        jnp.bfloat16,
+        train.MasterParamMode.FP32_PINNED_HOST,
+    )
 
 
 def test_full_bank_top_k_is_rejected_before_launch():
@@ -1446,11 +1470,16 @@ def test_mok_like_stateful_parity_optimizer_carries_state_across_updates() -> No
     np.testing.assert_allclose(second_momentum[0], [3.0])
 
 
-def test_expert_bank_override_must_divide_the_expert_axis():
+def test_expert_bank_override_must_be_divisible_by_the_expert_axis():
     # `moe_mlp` raises on an indivisible bank only once the 16-node gang is already allocated and
     # its workspace is built, so the launcher has to reject it while it is still free to do so.
-    with pytest.raises(ValueError, match="must divide the expert axis"):
+    with pytest.raises(ValueError, match="must be divisible by 64"):
         launch.build_hero_run(run_id="bad-bank", dp_racks=1, num_steps=1, num_experts=200, version="dev")
+
+
+def test_expert_bank_override_must_support_three_waves():
+    with pytest.raises(ValueError, match="local expert count=4 must be divisible by num_expert_waves=3"):
+        launch.build_hero_run(run_id="bad-waves", dp_racks=1, num_steps=1, num_experts=256, version="dev")
 
 
 @pytest.mark.parametrize(
@@ -1993,7 +2022,8 @@ def test_run_grug_applies_the_hero_runtime_environment(monkeypatch):
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)
 
-    assert os.environ["JAX_ENABLE_PGLE"] == "true"
+    assert os.environ["JAX_ENABLE_PGLE"] == "false"
+    assert os.environ["XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB"] == "192"
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "cuda_async"
 
 
@@ -2525,6 +2555,7 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
     state = train.GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
+        master_params=None,
         opt_state=optimizer.init(params),
         ema_params=None,
         pending_qb_betas=jnp.zeros((1, 1)),
@@ -2554,3 +2585,96 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
     assert step_one_stats is not None
     np.testing.assert_allclose(step_zero_stats["grad/norm/total"], 4.0)
     np.testing.assert_allclose(step_one_stats["grad/norm/total"], 3.2)
+
+
+def test_fp32_host_master_accumulates_updates_before_bfloat16_cast(monkeypatch):
+    params = _TinyWatchModel(weight=jnp.array(1.0, dtype=jnp.bfloat16))
+    master_params = _TinyWatchModel(weight=jnp.array(1.0, dtype=jnp.float32))
+    optimizer = optax.sgd(0.1)
+    state = train.GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        master_params=master_params,
+        opt_state=optimizer.init(master_params),
+        ema_params=None,
+        pending_qb_betas=jnp.zeros((1, 1)),
+    )
+
+    def loss_and_grads(current_params, batch, mp, z_loss):
+        del current_params, batch, mp, z_loss
+        loss = jnp.array(0.0)
+        grads = _TinyWatchModel(weight=jnp.array(0.01, dtype=jnp.bfloat16))
+        metrics = {"qb_beta_per_layer": jnp.zeros((1, 1))}
+        return (loss, metrics), grads
+
+    monkeypatch.setattr(train, "_apply_qb_betas", lambda model, qb_betas: model)
+    monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
+    train_step = train._make_train_step(
+        optimizer,
+        jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16"),
+        z_loss_weight=0,
+        ema_beta=None,
+        master_param_mode=train.MasterParamMode.FP32_PINNED_HOST,
+    )
+
+    for _ in range(10):
+        state, _, _ = train_step(state, jnp.array(0))
+
+    assert state.master_params is not None
+    assert state.master_params.weight.dtype == jnp.float32
+    assert state.params.weight.dtype == jnp.bfloat16
+    expected_master = 1.0 - 10 * 0.1 * float(jnp.array(0.01, dtype=jnp.bfloat16))
+    np.testing.assert_allclose(state.master_params.weight, expected_master, rtol=1e-6)
+    np.testing.assert_allclose(state.params.weight, jnp.asarray(expected_master, dtype=jnp.bfloat16))
+
+
+def test_fp32_host_master_preserves_float32_initialization(monkeypatch):
+    config = _latent_config()
+    key = jax.random.key(17)
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    monkeypatch.setattr(train, "_tree_to_memory_kind", lambda tree, memory_kind: tree)
+
+    with set_mesh(mesh):
+        expected = model.Transformer.init(config, key=key)
+        state = train.initial_state(
+            config,
+            optimizer=optax.sgd(0.1),
+            mp=jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16"),
+            key=key,
+            ema_beta=None,
+            master_param_mode=train.MasterParamMode.FP32_PINNED_HOST,
+        )
+
+    assert state.master_params is not None
+    expected_leaves = jax.tree.leaves(expected)
+    master_leaves = jax.tree.leaves(state.master_params)
+    param_leaves = jax.tree.leaves(state.params)
+    for expected_leaf, master_leaf, param_leaf in zip(expected_leaves, master_leaves, param_leaves, strict=True):
+        np.testing.assert_array_equal(master_leaf, expected_leaf)
+        np.testing.assert_array_equal(param_leaf, expected_leaf.astype(jnp.bfloat16))
+    assert any(
+        not np.array_equal(master_leaf, param_leaf.astype(jnp.float32))
+        for master_leaf, param_leaf in zip(master_leaves, param_leaves, strict=True)
+    )
+
+
+def test_drop_metrics_reports_sender_and_receiver_fractions():
+    metrics = train._drop_metrics(
+        jnp.array(5, dtype=jnp.int32),
+        jnp.array(2, dtype=jnp.int32),
+        jnp.array(3, dtype=jnp.int32),
+        batch_size=2,
+        sequence_length=4,
+        top_k=2,
+        num_layers=1,
+    )
+
+    assert metrics == {
+        "moe/dropped_assignments": 5,
+        "moe/drop_fraction": 5 / 16,
+        "moe/sender_dropped_assignments": 2,
+        "moe/sender_drop_fraction": 2 / 16,
+        "moe/receiver_dropped_assignments": 3,
+        "moe/receiver_drop_fraction": 3 / 16,
+        "moe/receiver_drop_fraction_of_received": 3 / 14,
+    }

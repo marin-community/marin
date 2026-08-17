@@ -1,14 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Small-scale hero-shape ablation: d768 / d1024 / d1280 / d1536.
+"""Legacy E192 small-scale ablation: d768 / d1024 / d1280 / d1536.
 
-Downsized copies of the ``moe_hero_ep`` hero shape (hidden-wide routed experts, top-4, two shared,
-SConv, hybrid GQA, ``fixed_all_to_all`` EP MoE) at the small sweep widths, each trained to 750 tokens
-per active parameter (the EP sweep budget). The architecture, data (datakit two-phase mixture),
-evals (paloma + uncheatable every 1k), and per-size step counts match the Aug hero LR sweep grid
-(issue #7856) so these one-rack EP runs are comparable to the FSDP sweep points; only the
-width/depth/head split and the token budget shrink relative to the d6144 shape.
+These runs use hidden-wide experts, top-4 routing, two shared experts, and fixed all-to-all EP.
+Each run uses the small sweep width and 750 tokens per active parameter. The data, evaluations,
+and step counts match the Aug hero learning-rate sweep from issue #7856.
 
 Each ``--size`` submits one job on the fleet ``--target`` names: a GB200 rack (EP64), 8 H100 nodes
 (EP64), or 2 H100 nodes (EP16). The expert axis spans the fleet, and it sets cell size, so the
@@ -34,7 +31,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -44,7 +41,6 @@ from experiments.grug.moe_hero_ep.launch import (
     DEFAULT_WANDB_PROJECT,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
-    HERO_MIXED_PRECISION,
     HeroThroughputResult,
 )
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
@@ -66,6 +62,7 @@ EVAL_BATCH_SIZE = 256
 # checkpoint, and an interrupted run would otherwise restart at step 0. A d1280 checkpoint is about
 # 38 GB, against 2.7 TiB at the d6144 hero shape.
 CHECKPOINT_INTERVAL = timedelta(minutes=30)
+SMALL_SCALE_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 
 # Paloma + uncheatable held-out sets (marin_tokenizer), added as zero-train-weight datakit components
 # so they surface as tagged eval sets -- matching the FSDP sweep.
@@ -185,11 +182,9 @@ def _small_model(
     qb_use_histogram: bool = False,
     qb_hist_bins: int = 1000,
 ) -> GrugModelConfig:
-    """The hero shape (moe_hero_ep ``HERO_MODEL``) downsized to this width.
+    """Build the legacy E192, top-4 ablation at the selected width.
 
-    Every routing/MoE/attention-kernel field is kept from the d6144 hero shape; only the width,
-    depth, head split, and intermediate width shrink. ``fixed_all_to_all`` is the EP MoE backend, so
-    ``num_experts`` (192, the hero bank) still divides the EP64 expert axis.
+    The function keeps the routing and attention fields from the completed small-scale sweep.
     """
     return GrugModelConfig(
         vocab_size=128_256,
@@ -371,7 +366,7 @@ def build_small_run(
             train_batch_size=batch_size,
             num_train_steps=num_steps,
             profiler=ProfilerConfig(enabled=False),
-            mp=jmp.get_policy(HERO_MIXED_PRECISION),
+            mp=jmp.get_policy(SMALL_SCALE_MIXED_PRECISION),
             tracker=WandbConfig(
                 entity="marin-community",
                 project=os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT,

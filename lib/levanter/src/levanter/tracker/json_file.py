@@ -9,7 +9,7 @@ import os
 from typing import Any, Mapping, Optional
 
 import jax
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 from levanter.tracker.json_logger import _flatten, _to_jsonable
 from levanter.tracker.tracker import NoopTracker, Tracker, TrackerConfig

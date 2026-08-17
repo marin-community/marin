@@ -1,15 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The writer: a :class:`DataStore` of append-only :class:`DataTable` shard streams.
-
-A store is one archive rooted at a URL prefix, written by one ``writer_id``. Appends buffer in
-memory; a background thread flushes each table's buffer to an immutable Parquet shard on a time
-ceiling (or when the buffer's payload grows past a byte cap). :meth:`DataStore.flush` and
-:meth:`DataStore.close` block until every buffered row is durable, which is the "writes block until
-persisted" guarantee. Concurrent writers of the same run each use a distinct ``writer_id`` and write
-under their own key prefix, so they never coordinate; the reader composes and deduplicates them.
-"""
+"""Transactional FineStore writer with bounded in-memory level-zero batches."""
 
 from __future__ import annotations
 
@@ -19,98 +11,71 @@ import logging
 import threading
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from types import TracebackType
 from typing import Protocol
 
 import pyarrow as pa
-from rigging.filesystem import StoragePath
 
-from finestore.compaction import compact
+from finestore.commit import ClearSeal, CommitCoordinator, CommitDelta, TableAddition, initialize_archive, write_schema
+from finestore.compaction import CompactionResult
+from finestore.compaction import compact as compact_table
 from finestore.layout import (
+    BLOB_DATA_COLUMN,
     BLOB_NAME_COLUMN,
     BLOBS_TABLE,
+    RESERVED_COLUMNS,
     SEQ_COLUMN,
     WRITER_COLUMN,
-    ArchiveMetadata,
+    CommitToken,
     FineStoreLayout,
     OnConflict,
     SealMarker,
+    Shard,
     TableMetadata,
     build_uri,
 )
-from finestore.reader import CompositeReader
+from finestore.migrations import migrate_for_write
+from finestore.reader import ReadView
 from finestore.shard_writer import write_table
 
 logger = logging.getLogger(__name__)
 
-# Flush on a time ceiling by default: eval writes are latency-sensitive and modestly sized, so a
-# small interval keeps shards fresh without a manifest commit per flush.
 DEFAULT_FLUSH_INTERVAL = 5.0
-# Flush early when a table's buffered payload crosses this, so memory (and a single shard's size)
-# stays bounded regardless of row count. Bytes, not rows: one row can be a multi-MB trajectory blob
-# and another a small sample, so a row count is a poor proxy for the RAM a buffer holds. This is the
-# only backstop against an unbounded buffer -- finelog additionally floors the flush rate at one
-# per second, which eval's write volume does not need.
 DEFAULT_MAX_BUFFER_BYTES = 100 * 1024 * 1024
+DEFAULT_COMPACTION_SHARDS = 8
 
 
 def _default_writer_id() -> str:
-    """A writer identity unique enough that two writers never share a key prefix."""
     return uuid.uuid4().hex
 
 
 class PrimaryKeyConflict(ValueError):
-    """Two rows in one writer session share a primary key but carry different payloads."""
+    """Two rows in one writer session share a key but have different payloads."""
+
+
+class TransactionTooLarge(ValueError):
+    """A transaction exceeded its configured in-memory byte limit."""
 
 
 def _row_digest(row: Mapping[str, object]) -> bytes:
-    """A stable digest of a row's payload, ignoring finestore's ``_seq``/``_writer`` stamps.
-
-    Two appends of the same logical row must digest equal, so the stamp columns — which differ by
-    construction on every append — are excluded. ``default=repr`` keeps values Parquet accepts but
-    JSON does not (bytes payloads, enums) from breaking the digest.
-    """
     payload = {name: value for name, value in row.items() if name not in (SEQ_COLUMN, WRITER_COLUMN)}
-    encoded = json.dumps(payload, sort_keys=True, default=repr).encode()
-    return hashlib.blake2b(encoded, digest_size=16).digest()
+    return hashlib.blake2b(json.dumps(payload, sort_keys=True, default=repr).encode(), digest_size=16).digest()
 
 
 def _drop_empty_struct_keys(rows: list[dict]) -> list[dict]:
-    """Drop keys whose values are only ``None`` or empty dicts across the batch.
-
-    Parquet cannot store a zero-field struct, so a dict column that no row populates (e.g. a batch of
-    ungraded samples whose ``metrics`` are all ``{}``) would fail to write. Dropping the column here
-    is transparent: read-time schema unification restores it as absent, and the row model's default
-    fills it back in. Non-empty dicts are untouched.
-    """
     if not rows:
         return rows
     keys = set().union(*(row.keys() for row in rows))
     drop = set()
     for key in keys:
-        saw_dict = False
-        nonempty = False
-        for row in rows:
-            value = row.get(key)
-            if isinstance(value, dict):
-                saw_dict = True
-                if value:
-                    nonempty = True
-                    break
-        if saw_dict and not nonempty:
+        dicts = [row.get(key) for row in rows if isinstance(row.get(key), dict)]
+        if dicts and not any(dicts):
             drop.add(key)
-    if not drop:
-        return rows
-    return [{k: v for k, v in row.items() if k not in drop} for row in rows]
+    return rows if not drop else [{key: value for key, value in row.items() if key not in drop} for row in rows]
 
 
 def _estimate_bytes(value: object) -> int:
-    """A cheap estimate of a value's in-RAM payload size, summed over a row to bound the write buffer.
-
-    Counts the sizes that vary by orders of magnitude -- byte and text payloads by length, containers
-    by recursion -- and charges a flat width for scalars, ignoring per-object overhead. It only has to
-    be good enough to keep a buffer's memory near a target, which a row count cannot do once one row is
-    a multi-MB blob and the next a small sample.
-    """
     if isinstance(value, (bytes, str)):
         return len(value)
     if isinstance(value, dict):
@@ -121,33 +86,43 @@ def _estimate_bytes(value: object) -> int:
 
 
 def _with_stamp_columns(schema: pa.Schema) -> pa.Schema:
-    """Append finestore's ``_seq``/``_writer`` stamp columns to a caller's schema when absent.
-
-    A caller pins only its own columns; the write path stamps ``_seq``/``_writer`` on every row, so the
-    schema a flush validates against must carry them too. Idempotent: a schema that already declares
-    them (e.g. one round-tripped from a shard) is returned unchanged.
-    """
-    names = set(schema.names)
+    reserved = set(schema.names) & RESERVED_COLUMNS
+    if reserved:
+        names = ", ".join(sorted(reserved))
+        raise ValueError(f"table schema uses reserved FineStore columns: {names}")
     fields = list(schema)
-    if SEQ_COLUMN not in names:
-        fields.append(pa.field(SEQ_COLUMN, pa.int64()))
-    if WRITER_COLUMN not in names:
-        fields.append(pa.field(WRITER_COLUMN, pa.string()))
+    fields.append(pa.field(SEQ_COLUMN, pa.int64()))
+    fields.append(pa.field(WRITER_COLUMN, pa.string()))
     return pa.schema(fields)
 
 
+def _reject_reserved_columns(columns: Iterable[str]) -> None:
+    reserved = set(columns) & RESERVED_COLUMNS
+    if reserved:
+        names = ", ".join(sorted(reserved))
+        raise ValueError(f"row uses reserved FineStore column: {names}")
+
+
+@dataclass(frozen=True)
+class PendingRows:
+    """Rows exclusively claimed from a table buffer for one commit attempt."""
+
+    rows: tuple[dict, ...]
+    estimated_bytes: int
+
+
 class FlushScheduler(Protocol):
-    """The store-side controls a :class:`DataTable` needs, kept narrow so the table does not reach
-    into the store's internals: ask for a background flush when a buffer crosses its cap, and re-raise
-    a failure the background flusher hit."""
+    """Store operations needed by a table handle."""
 
     def request_flush(self) -> None: ...
 
     def raise_if_failed(self) -> None: ...
 
+    def flush_table(self, table: DataTable) -> CommitToken | None: ...
+
 
 class DataStore:
-    """A writable columnar archive under ``root`` for one ``writer_id``."""
+    """A writable FineStore archive for one writer identity."""
 
     def __init__(
         self,
@@ -156,38 +131,34 @@ class DataStore:
         writer_id: str | None = None,
         flush_interval: float = DEFAULT_FLUSH_INTERVAL,
         max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
+        compaction_shards: int = DEFAULT_COMPACTION_SHARDS,
     ) -> None:
-        self.root = root.rstrip("/")
+        self.root = root
         self._layout = FineStoreLayout(self.root)
+        initialize_archive(self._layout)
+        self._commits = CommitCoordinator(self._layout)
         self.writer_id = writer_id or _default_writer_id()
         self._flush_interval = flush_interval
         self._max_buffer_bytes = max_buffer_bytes
+        self._compaction_shards = compaction_shards
         self._tables: dict[str, DataTable] = {}
         self._register_lock = threading.Lock()
+        self._commit_lock = threading.Lock()
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._error: BaseException | None = None
         self._closed = False
-        # Stamp the archive-wide metadata at open. Concurrent writers write identical content, so a
-        # last-writer-wins overwrite is harmless.
-        StoragePath(self._layout.archive_path).write_text(ArchiveMetadata().model_dump_json(indent=2))
-        # An archive being written is not complete. Clearing a prior session's marker here is what
-        # makes "sealed" mean "these are the finished contents" rather than "some session once
-        # finished": without it an export that dies partway leaves the old marker vouching for a
-        # table it no longer describes.
-        sealed = StoragePath(self._layout.sealed_path)
-        if sealed.exists():
-            sealed.rm()
-            logger.info("finestore reopened sealed archive %s for writing", self.root)
-        self._thread = threading.Thread(target=self._run, name="finestore-flush", daemon=True)
+        snapshot = self._commits.snapshot()
+        if snapshot.manifest.sealed is not None:
+            self._commits.commit(CommitDelta(seal_update=ClearSeal()), base=snapshot)
+            logger.info("FineStore reopened sealed archive %s for writing", self.root)
+        self._thread = threading.Thread(target=self._run, name="finestore-maintenance", daemon=True)
         self._thread.start()
 
     @classmethod
     def open(cls, root: str, **kwargs) -> DataStore:
-        """Open an archive for writing under ``root``, produced by one ``writer_id``."""
+        migrate_for_write(root)
         return cls(root, **kwargs)
-
-    # -- table registration ------------------------------------------------------------------------
 
     def table(
         self,
@@ -198,111 +169,153 @@ class DataStore:
         schema_version: int = 1,
         on_conflict: OnConflict = OnConflict.ERROR,
     ) -> DataTable:
-        """Register (or fetch) a table and return a handle for appending to it.
+        """Register or return a table handle.
 
-        ``primary_key`` names the columns that identify a row, and is persisted to ``_schema.json``
-        so a reader that did not open the writer can recover it. A table whose rows have no natural
-        identity declares a nonce column rather than no key.
-
-        ``on_conflict`` decides what two rows sharing a key mean: :attr:`OnConflict.ERROR` raises
-        :class:`PrimaryKeyConflict` unless the payloads are identical, :attr:`OnConflict.SUPERSEDE`
-        accepts the newer row.
-
-        Calling ``table`` again with the same ``name`` returns the same handle, so every appender
-        shares one buffer and one sequence counter. The counter resumes above the highest ``_seq``
-        any shard has persisted, so a row appended now outranks one a prior session left behind.
+        Registration writes content-addressed metadata. A transaction can then refer to the
+        table by name without repeating its schema contract.
         """
         with self._register_lock:
             existing = self._tables.get(name)
             if existing is not None:
                 return existing
-            key = tuple(primary_key)
-            start_seq = CompositeReader(self.root).max_seq(name) + 1
+            metadata = TableMetadata(
+                primary_key=tuple(primary_key), schema_version=schema_version, on_conflict=on_conflict
+            )
+            _reject_reserved_columns(primary_key)
+            metadata_path = write_schema(self._layout, metadata)
+            view = self.read_view()
+            existing_metadata_path = view.table_metadata_path(name)
+            if existing_metadata_path is not None and existing_metadata_path != metadata_path:
+                raise ValueError(f"table {name!r} already exists with different metadata")
             table = DataTable(
                 name,
                 writer_id=self.writer_id,
                 layout=self._layout,
+                metadata_path=metadata_path,
                 max_buffer_bytes=self._max_buffer_bytes,
                 scheduler=self,
-                primary_key=key,
+                primary_key=metadata.primary_key,
                 schema=schema,
                 schema_version=schema_version,
                 on_conflict=on_conflict,
-                start_seq=start_seq,
+                start_seq=view.max_seq(name) + 1,
             )
             self._tables[name] = table
-            self._write_schema_meta(table)
             return table
 
-    def _write_schema_meta(self, table: DataTable) -> None:
-        """Persist the table's primary key, logical schema version, and conflict policy to ``_schema.json``."""
-        meta = TableMetadata(
-            primary_key=table.primary_key,
-            schema_version=table.schema_version,
-            on_conflict=table.on_conflict,
-        )
-        StoragePath(self._layout.schema_path(table.name)).write_text(meta.model_dump_json(indent=2))
-
-    def write(self, name: str, metadata: Mapping[str, object] | None, data: bytes) -> str:
-        """Append one opaque blob to the reserved ``blobs`` table; return its ``finestore://`` URI.
-
-        The blob is buffered and flushed with every other table, so many small writes never block on a
-        per-object round trip -- the point of routing them through the archive rather than one object
-        each. The payload rides inline as a Parquet binary column and ``metadata`` as a JSON string the
-        reader can project without touching the payload. The table's primary key is the blob name, so a
-        re-write supersedes the prior one and a compacted shard is sorted by name for a pruned lookup.
-        """
-        blobs = self._tables.get(BLOBS_TABLE) or self.table(
-            BLOBS_TABLE, primary_key=(BLOB_NAME_COLUMN,), on_conflict=OnConflict.SUPERSEDE
-        )
-        blobs.append(
-            {
-                BLOB_NAME_COLUMN: name,
-                "size": len(data),
-                "metadata_json": json.dumps(dict(metadata or {})),
-                "data": data,
-            }
-        )
+    def write_object(self, name: str, data: bytes, metadata: Mapping[str, object] | None = None) -> str:
+        """Buffer one named byte object and return its ``finestore://`` URI."""
+        self._blob_table().append(self._blob_row(name, data, metadata))
         return build_uri(BLOBS_TABLE, name)
 
-    # -- flush / seal / close ----------------------------------------------------------------------
+    def _blob_table(self) -> DataTable:
+        return self._tables.get(BLOBS_TABLE) or self.table(
+            BLOBS_TABLE, primary_key=(BLOB_NAME_COLUMN,), on_conflict=OnConflict.SUPERSEDE
+        )
 
-    def flush(self) -> None:
-        """Write every table's buffered rows to shards now, blocking until they are durable."""
+    @staticmethod
+    def _blob_row(name: str, data: bytes, metadata: Mapping[str, object] | None) -> dict:
+        return {
+            BLOB_NAME_COLUMN: name,
+            "size": len(data),
+            "metadata_json": json.dumps(dict(metadata or {})),
+            BLOB_DATA_COLUMN: data,
+        }
+
+    @staticmethod
+    def estimate_object_bytes(name: str, data: bytes, metadata: Mapping[str, object] | None = None) -> int:
+        """Return the transaction byte estimate for one named object."""
+        return _estimate_bytes(DataStore._blob_row(name, data, metadata))
+
+    def read_view(self) -> ReadView:
+        """Pin a snapshot using one HEAD read."""
+        return ReadView(self.root)
+
+    def transaction(self, *, max_bytes: int | None = None) -> Transaction:
+        """Create a transaction bounded by ``max_bytes`` of estimated payload data."""
         self.raise_if_failed()
-        for table in list(self._tables.values()):
-            table.flush()
+        transaction_limit = self._max_buffer_bytes if max_bytes is None else max_bytes
+        if transaction_limit <= 0:
+            raise ValueError("max_bytes must be positive")
+        return Transaction(self, max_bytes=transaction_limit)
 
-    def seal(self) -> None:
-        """Flush, compact every table to one deduplicated generation, then mark the archive sealed.
+    def flush(self) -> CommitToken | None:
+        """Commit all buffers with one HEAD update, or return ``None`` when empty."""
+        self.raise_if_failed()
+        return self._flush_tables(list(self._tables.values()))
 
-        Sealing is the materialize contract: afterward each table is a single deduplicated Parquet
-        shard and every blob is its own object, so a plain Parquet reader over the archive sees each
-        row once without having to apply finestore's generation/``_seq`` dedup rule. Compaction is
-        still only an optimization for the finestore reader, which deduplicates either way.
+    def flush_table(self, table: DataTable) -> CommitToken | None:
+        """Commit only ``table``'s current buffer."""
+        self.raise_if_failed()
+        return self._flush_tables([table])
 
-        Rows compaction drops because a later write replaced them are counted per table and recorded
-        in the seal marker, so cross-session supersession leaves a number behind instead of vanishing.
-        """
+    def _flush_tables(self, tables: Sequence[DataTable]) -> CommitToken | None:
+        with self._commit_lock:
+            claimed = {table: table._claim_pending() for table in tables}
+            claimed = {table: pending for table, pending in claimed.items() if pending is not None}
+            if not claimed:
+                return None
+            try:
+                additions = {
+                    table.name: TableAddition(metadata_path=table.metadata_path, shards=(table._write(pending),))
+                    for table, pending in claimed.items()
+                }
+                return self._commits.commit(CommitDelta(additions=additions, seal_update=ClearSeal()))
+            except BaseException:
+                for table, pending in claimed.items():
+                    table._restore(pending)
+                raise
+
+    def _commit_transaction(self, rows: dict[str, list[dict]]) -> CommitToken:
+        with self._commit_lock:
+            additions = {}
+            for name, pending_rows in rows.items():
+                table = self._tables.get(name)
+                if table is None:
+                    raise KeyError(f"table {name!r} must be registered before the transaction")
+                stamped = table._stamp(pending_rows)
+                pending = PendingRows(tuple(stamped), sum(_estimate_bytes(row) for row in pending_rows))
+                additions[name] = TableAddition(metadata_path=table.metadata_path, shards=(table._write(pending),))
+            if not additions:
+                snapshot = self._commits.snapshot()
+                if snapshot.token is None:
+                    return self._commits.commit(CommitDelta())
+                return snapshot.token
+            return self._commits.commit(CommitDelta(additions=additions, seal_update=ClearSeal()))
+
+    def compact(self, table: str) -> CompactionResult:
+        """Logically compact one table against the current manifest."""
+        with self._commit_lock:
+            return compact_table(self.root, table, coordinator=self._commits)
+
+    def maintain(self) -> CommitToken | None:
+        """Flush pending rows and compact tables that crossed the shard threshold."""
+        token = self.flush()
+        view = self.read_view()
+        for name in view.table_names():
+            if len(view.list_shards(name)) >= self._compaction_shards:
+                self.compact(name)
+                view = self.read_view()
+                token = view.token
+        return token
+
+    def seal(self) -> CommitToken:
+        """Flush, compact active tables, and publish sealed state in the manifest."""
         self.flush()
         superseded = {}
-        for name in list(self._tables):
-            result = compact(self.root, name)
+        for name in self.read_view().table_names():
+            result = self.compact(name)
             if result.superseded:
                 superseded[name] = result.superseded
-                logger.info("finestore sealed %s: %d row(s) superseded by a later write", name, result.superseded)
-        marker = SealMarker(writer=self.writer_id, superseded=superseded)
-        StoragePath(self._layout.sealed_path).write_text(marker.model_dump_json())
+        return self._commits.commit(CommitDelta(seal_update=SealMarker(writer=self.writer_id, superseded=superseded)))
 
     def close(self) -> None:
-        """Stop the background thread and flush any remaining rows."""
         if self._closed:
             return
         self._closed = True
         self._stop.set()
         self._wake.set()
-        if self._thread is not None:
-            self._thread.join()
+        self._thread.join()
         self.flush()
 
     def __enter__(self) -> DataStore:
@@ -311,37 +324,111 @@ class DataStore:
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.close()
 
-    # -- background flusher ------------------------------------------------------------------------
-
     def _run(self) -> None:
         while not self._stop.is_set():
             self._wake.wait(timeout=self._flush_interval)
             self._wake.clear()
+            if self._stop.is_set():
+                return
             try:
-                self.flush()
+                self.maintain()
             except BaseException as exc:
                 self._error = exc
-                logger.exception("finestore background flush failed")
+                logger.exception("FineStore background maintenance failed")
                 return
 
-    # -- FlushScheduler (the seam DataTable talks to) ----------------------------------------------
-
     def request_flush(self) -> None:
-        """Wake the background flusher early because a table's buffer crossed its byte cap."""
         self._wake.set()
 
     def raise_if_failed(self) -> None:
-        """Re-raise the exception the background flusher died with, if any."""
         if self._error is not None:
             raise self._error
 
 
-class DataTable:
-    """An append-only table: it buffers appended rows and flushes them to immutable shards.
+class TransactionTable:
+    """One table's rows inside a transaction."""
 
-    The table owns its pending rows, its per-writer sequence counter, and how they persist. Reads go
-    through :class:`CompositeReader`.
-    """
+    def __init__(self, transaction: Transaction, name: str) -> None:
+        self._transaction = transaction
+        self._name = name
+
+    def add(self, row: dict) -> None:
+        self._transaction._add(self._name, row)
+
+    def extend(self, rows: Iterable[dict]) -> None:
+        for row in rows:
+            self.add(row)
+
+
+class Transaction:
+    """A bounded set of rows and objects published through one commit token."""
+
+    def __init__(self, store: DataStore, *, max_bytes: int) -> None:
+        self._store = store
+        self._base = store.read_view()
+        self._rows: dict[str, list[dict]] = {}
+        self._objects: dict[str, bytes] = {}
+        self._max_bytes = max_bytes
+        self._estimated_bytes = 0
+        self._closed = False
+        self.token: CommitToken | None = None
+
+    def table(self, name: str) -> TransactionTable:
+        if name not in self._store._tables:
+            raise KeyError(f"table {name!r} must be registered before the transaction")
+        return TransactionTable(self, name)
+
+    def _add(self, name: str, row: dict) -> None:
+        if self._closed:
+            raise RuntimeError("transaction is closed")
+        copied = dict(row)
+        estimated_bytes = _estimate_bytes(copied)
+        if self._estimated_bytes + estimated_bytes > self._max_bytes:
+            raise TransactionTooLarge(f"transaction payload exceeds {self._max_bytes} bytes; commit a smaller batch")
+        self._estimated_bytes += estimated_bytes
+        self._rows.setdefault(name, []).append(copied)
+
+    def write_object(self, name: str, data: bytes, metadata: Mapping[str, object] | None = None) -> str:
+        """Buffer one named byte object and return its ``finestore://`` URI."""
+        if self._closed:
+            raise RuntimeError("transaction is closed")
+        self._store._blob_table()
+        self._add(BLOBS_TABLE, self._store._blob_row(name, data, metadata))
+        self._objects[name] = data
+        return build_uri(BLOBS_TABLE, name)
+
+    def lookup(self, name: str) -> bytes | None:
+        """Read this transaction's latest object value, then its pinned committed base."""
+        if name in self._objects:
+            return self._objects[name]
+        return self._base.read_blob(name)
+
+    def commit(self) -> CommitToken:
+        if self._closed:
+            if self.token is None:
+                raise RuntimeError("transaction closed without committing")
+            return self.token
+        self.token = self._store._commit_transaction(self._rows)
+        self._closed = True
+        return self.token
+
+    def __enter__(self) -> Transaction:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        _exc_val: BaseException | None,
+        _exc_tb: TracebackType | None,
+    ) -> None:
+        if exc_type is None:
+            self.commit()
+        else:
+            self._closed = True
+
+
+class DataTable:
+    """An append buffer whose claimed batches become immutable level-zero shards."""
 
     def __init__(
         self,
@@ -349,9 +436,10 @@ class DataTable:
         *,
         writer_id: str,
         layout: FineStoreLayout,
+        metadata_path: str,
         max_buffer_bytes: int,
         scheduler: FlushScheduler,
-        primary_key: tuple[str, ...] | None,
+        primary_key: tuple[str, ...],
         schema: pa.Schema | None,
         schema_version: int,
         on_conflict: OnConflict = OnConflict.ERROR,
@@ -361,6 +449,7 @@ class DataTable:
         self.primary_key = primary_key
         self.schema_version = schema_version
         self.on_conflict = on_conflict
+        self.metadata_path = metadata_path
         self._writer_id = writer_id
         self._layout = layout
         self._max_buffer_bytes = max_buffer_bytes
@@ -370,76 +459,87 @@ class DataTable:
         self._pending_bytes = 0
         self._next_seq = start_seq
         self._lock = threading.Lock()
-        # Merge key -> payload digest for every row this session appended, so a conflicting repeat is
-        # caught even when the earlier row was already flushed to a shard. Only an ERROR table pays
-        # for this; a SUPERSEDE table means to replace rows and keeps no history.
-        self._digests: dict[tuple, bytes] | None = (
-            {} if primary_key is not None and on_conflict is OnConflict.ERROR else None
-        )
+        self._digests: dict[tuple, bytes] | None = {} if on_conflict is OnConflict.ERROR else None
 
     def append(self, row: dict) -> None:
-        """Buffer one row. Non-blocking: the row is durable after the next flush tick or an explicit
-        ``flush``. Appends from one writer are ordered by a monotonic ``_seq``; the reader keeps the
-        highest ``_seq`` per primary key."""
         self.extend([row])
 
     def _check_conflict(self, row: dict) -> None:
-        """Raise if ``row`` repeats a primary key this session already wrote with a different payload."""
         if self._digests is None:
             return
-        assert self.primary_key is not None
         key = tuple(row.get(name) for name in self.primary_key)
         digest = _row_digest(row)
         previous = self._digests.get(key)
         if previous is None:
             self._digests[key] = digest
             return
-        if previous == digest:
-            return
-        pairs = ", ".join(f"{name}={row.get(name)!r}" for name in self.primary_key)
-        raise PrimaryKeyConflict(
-            f"table {self.name!r} already holds a different row for primary key ({pairs}). "
-            f"The reader keeps one row per primary key, so writing both would discard one silently. "
-            f"Widen {self.primary_key} to identify the row, or declare on_conflict=SUPERSEDE to replace it."
-        )
+        if previous != digest:
+            pairs = ", ".join(f"{name}={row.get(name)!r}" for name in self.primary_key)
+            raise PrimaryKeyConflict(
+                f"table {self.name!r} already holds a different row for primary key ({pairs}); "
+                "declare on_conflict=SUPERSEDE when replacement is intended"
+            )
 
-    def extend(self, rows: Iterable[dict]) -> None:
-        """Buffer many rows for the next flush (see :meth:`append`).
-
-        Raises :class:`PrimaryKeyConflict` on an ``ERROR`` table when a row repeats a primary key with a
-        different payload. The conflicting row is rejected before it enters the buffer, so the
-        exception leaves the table holding exactly the rows that were accepted.
-        """
-        self._scheduler.raise_if_failed()
+    def _stamp(self, rows: Iterable[dict]) -> list[dict]:
+        stamped_rows = []
         with self._lock:
             for row in rows:
+                _reject_reserved_columns(row)
                 self._check_conflict(row)
                 stamped = dict(row)
                 stamped[SEQ_COLUMN] = self._next_seq
                 stamped[WRITER_COLUMN] = self._writer_id
                 self._next_seq += 1
-                self._pending.append(stamped)
-                self._pending_bytes += _estimate_bytes(row)
+                stamped_rows.append(stamped)
+        return stamped_rows
+
+    def extend(self, rows: Iterable[dict]) -> None:
+        self._scheduler.raise_if_failed()
+        rows = list(rows)
+        stamped = self._stamp(rows)
+        with self._lock:
+            self._pending.extend(stamped)
+            self._pending_bytes += sum(_estimate_bytes(row) for row in rows)
             over_cap = self._pending_bytes >= self._max_buffer_bytes
         if over_cap:
             self._scheduler.request_flush()
 
-    def flush(self) -> None:
-        """Write this table's buffered rows to one immutable shard now, blocking until it is durable.
-
-        Swaps the pending rows out under the table lock, then writes outside it, so a concurrent
-        flush of the same table (the background thread and a caller) each claim a disjoint batch and
-        never double-write a row.
-        """
-        self._scheduler.raise_if_failed()
+    def _claim_pending(self) -> PendingRows | None:
         with self._lock:
             if not self._pending:
-                return
-            rows = self._pending
+                return None
+            pending = PendingRows(tuple(self._pending), self._pending_bytes)
             self._pending = []
             self._pending_bytes = 0
+            return pending
+
+    def _restore(self, pending: PendingRows) -> None:
+        with self._lock:
+            self._pending = list(pending.rows) + self._pending
+            self._pending_bytes += pending.estimated_bytes
+
+    def _write(self, pending: PendingRows) -> Shard:
+        rows = list(pending.rows)
         table = pa.Table.from_pylist(_drop_empty_struct_keys(rows), schema=self._schema)
+        sort_columns = [(name, "ascending") for name in self.primary_key if name in table.column_names]
+        primary_key_sorted = len(sort_columns) == len(self.primary_key)
+        if primary_key_sorted:
+            table = table.sort_by(sort_columns)
         min_seq = min(row[SEQ_COLUMN] for row in rows)
+        max_seq = max(row[SEQ_COLUMN] for row in rows)
         path = self._layout.shard_path(self.name, self._writer_id, 0, min_seq, uuid.uuid4().hex[:8])
-        write_table(path, table)
-        logger.debug("finestore flushed %d rows to %s", len(rows), path)
+        written = write_table(path, table)
+        return Shard(
+            path=path,
+            writer=self._writer_id,
+            generation=0,
+            rows=len(rows),
+            min_seq=min_seq,
+            max_seq=max_seq,
+            size_bytes=written.size_bytes,
+            content_sha256=written.content_sha256,
+            primary_key_sorted=primary_key_sorted,
+        )
+
+    def flush(self) -> CommitToken | None:
+        return self._scheduler.flush_table(self)

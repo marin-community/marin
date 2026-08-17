@@ -59,7 +59,8 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
-from rigging.filesystem import marin_prefix, prefix_join
+from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -78,7 +79,8 @@ _BF16_BYTES = 2
 _FLOAT32_BYTES = 4
 
 HERO_EP_RUNTIME_ENV = {
-    "JAX_ENABLE_PGLE": "true",
+    "JAX_ENABLE_PGLE": "false",
+    "XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB": "192",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
 _XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
@@ -91,6 +93,7 @@ INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 XLA_SEPARATE_TEMP_BUFFER_FLAG = "--xla_gpu_temp_buffer_use_separate_color"
 XLA_FLAGS_ENV = "XLA_FLAGS"
+_FP32_POLICY = jmp.get_policy("params=float32,compute=float32,output=float32")
 
 
 class GpuAllocator(StrEnum):
@@ -119,6 +122,13 @@ class WatchMode(StrEnum):
 
     INLINE = "inline"
     DIAGNOSTIC = "diagnostic"
+
+
+class MasterParamMode(StrEnum):
+    """Storage mode for optimizer master parameters."""
+
+    DISABLED = "disabled"
+    FP32_PINNED_HOST = "fp32_pinned_host"
 
 
 def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per_task: int = 1) -> None:
@@ -154,6 +164,7 @@ class GrugTrainerConfig:
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
+    master_param_mode: MasterParamMode = MasterParamMode.DISABLED
     # Inline watch computes statistics on every step and uses the watch interval only for logging.
     # This keeps one training executable resident. A diagnostic watch repeats forward and backward
     # in a separate executable, which costs compute but shortens gradient liveness.
@@ -927,6 +938,7 @@ def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: 
 class GrugTrainState:
     step: jax.Array
     params: Transformer
+    master_params: Transformer | None
     opt_state: optax.OptState
     ema_params: Transformer | None
     pending_qb_betas: jax.Array
@@ -939,8 +951,8 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
 
 
-def _optimizer_state_to_memory_kind(tree, memory_kind: str):
-    """Move named-sharded optimizer arrays to a JAX memory kind."""
+def _tree_to_memory_kind(tree, memory_kind: str):
+    """Move named-sharded arrays to a JAX memory kind."""
 
     def _move(leaf):
         if not isinstance(leaf, jax.Array):
@@ -963,18 +975,31 @@ def initial_state(
     key: PRNGKeyArray,
     ema_beta: float | None,
     offload_opt_state: bool = False,
+    master_param_mode: MasterParamMode = MasterParamMode.DISABLED,
     mok_like_runtime: MokLikeRuntimeHandle | None = None,
 ) -> GrugTrainState:
-    params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    initialized_params = Transformer.init(model_config, key=key)
+    # `mok_like_runtime` is a static (non-leaf) field, so bind it before the master-param split:
+    # under FP32_PINNED_HOST the live `params` are recast from `master_params` every step, and
+    # a handle bound only to `params` would be dropped on the first update.
     if mok_like_runtime is not None:
-        params = params.bind_mok_like_runtime(mok_like_runtime)
+        initialized_params = initialized_params.bind_mok_like_runtime(mok_like_runtime)
     num_moe_layers = model_config.num_layers
-    opt_state = optimizer.init(params)
+    if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
+        master_params = _FP32_POLICY.cast_to_param(initialized_params)
+        params = mp.cast_to_param(master_params)
+        opt_state = optimizer.init(master_params)
+        master_params = _tree_to_memory_kind(master_params, "pinned_host")
+    else:
+        params = mp.cast_to_param(initialized_params)
+        master_params = None
+        opt_state = optimizer.init(params)
     if offload_opt_state:
-        opt_state = _optimizer_state_to_memory_kind(opt_state, "pinned_host")
+        opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
+        master_params=master_params,
         opt_state=opt_state,
         ema_params=params if ema_beta is not None else None,
         pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
@@ -983,6 +1008,8 @@ def initial_state(
 
 def _drop_metrics(
     dropped_assignments: jax.Array,
+    sender_dropped_assignments: jax.Array,
+    receiver_dropped_assignments: jax.Array,
     *,
     batch_size: int,
     sequence_length: int,
@@ -991,10 +1018,20 @@ def _drop_metrics(
 ) -> dict[str, int | float]:
     # Global assignment totals can exceed int32; float32 would also round large drop counts.
     dropped_assignments_host = int(dropped_assignments)
+    sender_dropped_assignments_host = int(sender_dropped_assignments)
+    receiver_dropped_assignments_host = int(receiver_dropped_assignments)
+    if dropped_assignments_host != sender_dropped_assignments_host + receiver_dropped_assignments_host:
+        raise ValueError("total dropped assignments must equal sender plus receiver dropped assignments")
     total_assignments = batch_size * sequence_length * top_k * num_layers
+    receiver_assignments = total_assignments - sender_dropped_assignments_host
     return {
         "moe/dropped_assignments": dropped_assignments_host,
         "moe/drop_fraction": dropped_assignments_host / total_assignments,
+        "moe/sender_dropped_assignments": sender_dropped_assignments_host,
+        "moe/sender_drop_fraction": sender_dropped_assignments_host / total_assignments,
+        "moe/receiver_dropped_assignments": receiver_dropped_assignments_host,
+        "moe/receiver_drop_fraction": receiver_dropped_assignments_host / total_assignments,
+        "moe/receiver_drop_fraction_of_received": receiver_dropped_assignments_host / max(receiver_assignments, 1),
     }
 
 
@@ -1055,6 +1092,7 @@ def _make_train_step(
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
+    master_param_mode: MasterParamMode = MasterParamMode.DISABLED,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -1078,11 +1116,21 @@ def _make_train_step(
 
         (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
         metrics = {"train/loss": loss, **summarized_metrics}
-        opt_state_in = (
-            _optimizer_state_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
-        )
-        updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
-        params = optax.apply_updates(qb_params, updates)
+        opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
+        if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
+            if state.master_params is None:
+                raise ValueError("master_params must be initialized for an FP32 pinned-host master.")
+            master_params_in = _tree_to_memory_kind(state.master_params, "device")
+            master_params_in = _apply_qb_betas(master_params_in, state.pending_qb_betas)
+            master_grads = _FP32_POLICY.cast_to_param(grads)
+            updates, opt_state = optimizer.update(master_grads, opt_state_in, master_params_in)
+            master_params = optax.apply_updates(master_params_in, updates)
+            params = mp.cast_to_param(master_params)
+            master_params = _tree_to_memory_kind(master_params, "pinned_host")
+        else:
+            updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
+            params = optax.apply_updates(qb_params, updates)
+            master_params = None
 
         if ema_beta is None:
             ema_params = None
@@ -1111,12 +1159,13 @@ def _make_train_step(
             )
 
         if offload_opt_state:
-            opt_state = _optimizer_state_to_memory_kind(opt_state, "pinned_host")
+            opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
 
         next_state = dataclasses.replace(
             state,
             step=state.step + one,
             params=params,
+            master_params=master_params,
             opt_state=opt_state,
             ema_params=ema_params,
             pending_qb_betas=metrics["qb_beta_per_layer"],
@@ -1187,6 +1236,7 @@ def _run_grug_local_inner(config: GrugRunConfig) -> None:
         ema_beta=config.trainer.ema_beta,
         watch_config=inline_watch_config,
         offload_opt_state=config.trainer.offload_opt_state,
+        master_param_mode=config.trainer.master_param_mode,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -1234,6 +1284,7 @@ def _run_grug_local_inner(config: GrugRunConfig) -> None:
                 key=model_rng,
                 ema_beta=config.trainer.ema_beta,
                 offload_opt_state=config.trainer.offload_opt_state,
+                master_param_mode=config.trainer.master_param_mode,
                 mok_like_runtime=mok_like_runtime,
             )
 
@@ -1431,6 +1482,8 @@ def _run_grug_local_inner(config: GrugRunConfig) -> None:
                     if "moe/dropped_assignments" in metrics:
                         drop_metrics = _drop_metrics(
                             metrics["moe/dropped_assignments"],
+                            metrics["moe/sender_dropped_assignments"],
+                            metrics["moe/receiver_dropped_assignments"],
                             batch_size=batch.tokens.shape[0],
                             sequence_length=batch.tokens.shape[1],
                             top_k=config.model.num_experts_per_token,
@@ -1544,6 +1597,7 @@ __all__ = [
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "MasterParamMode",
     "XlaAutotuneCacheMode",
     "initial_state",
     "run_grug",

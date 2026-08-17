@@ -22,7 +22,6 @@ import pulumi_github as github
 from iac.gcp.firewall import FirewallPort, GcpFirewallRuleArgs, create_firewall_rule
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_DISK_TYPE = "pd-balanced"
 REPOSITORY_OWNER = "marin-community"
 REPOSITORY_NAME = "loom"
 REPOSITORY_BRANCH = "main"
@@ -232,6 +231,7 @@ class ProfileConfig:
     prelude: str
     instructions: str
     restricted: bool
+    github_repositories: tuple[str, ...]
     allowed_tools: tuple[str, ...]
     mcp_access: McpAccessConfig
     env: tuple[ProfileSecretConfig, ...]
@@ -265,6 +265,7 @@ class ProfileConfig:
             prelude=str(value.get("prelude", "weaver")),
             instructions=_profile_instructions(value, name),
             restricted=bool(value.get("restricted", False)),
+            github_repositories=_string_tuple(value.get("githubRepositories", []), "githubRepositories", name),
             allowed_tools=_string_tuple(value.get("allowedTools", []), "allowedTools", name),
             mcp_access=McpAccessConfig.parse(value.get("mcpAccess", {}), name),
             env=env,
@@ -289,6 +290,7 @@ class ProfileConfig:
             "prelude": self.prelude,
             "instructions": self.instructions,
             "restricted": self.restricted,
+            "github_repositories": list(self.github_repositories),
             "allowed_tools": list(self.allowed_tools),
             "mcp_access": self.mcp_access.manifest(),
         }
@@ -384,9 +386,13 @@ class DeploymentConfig:
     instance_name: str
     vm_service_account_name: str
     machine_type: str
+    boot_disk_name: str
+    boot_disk_type: str
     boot_disk_gb: int
+    boot_disk_iops: int
+    boot_disk_throughput: int
+    boot_disk_snapshot: str
     dotenv_secret_version: int
-    snapshot_retention_days: int
     prune_deployment: bool = False
     settings: tuple[tuple[str, str | int | bool], ...] = ()
     profiles: tuple[ProfileConfig, ...] = ()
@@ -400,7 +406,8 @@ class DeploymentConfig:
             raise ValueError("domain must be a canonical hostname without a scheme, path, or trailing dot")
         for name, value in (
             ("bootDiskGb", self.boot_disk_gb),
-            ("snapshotRetentionDays", self.snapshot_retention_days),
+            ("bootDiskIops", self.boot_disk_iops),
+            ("bootDiskThroughput", self.boot_disk_throughput),
             ("dotenvSecretVersion", self.dotenv_secret_version),
         ):
             _positive_config_int(value, name)
@@ -483,14 +490,18 @@ class DeploymentConfig:
             instance_name=config.require("instanceName"),
             vm_service_account_name=config.require("vmServiceAccountName"),
             machine_type=config.require("machineType"),
+            boot_disk_name=config.require("bootDiskName"),
+            boot_disk_type=config.require("bootDiskType"),
             boot_disk_gb=config.require_int("bootDiskGb"),
+            boot_disk_iops=config.require_int("bootDiskIops"),
+            boot_disk_throughput=config.require_int("bootDiskThroughput"),
+            boot_disk_snapshot=config.require("bootDiskSnapshot"),
             dotenv_secret_version=config.require_int("dotenvSecretVersion"),
             prune_deployment=config.get_bool("pruneDeployment") or False,
             settings=tuple(settings),
             profiles=tuple(profiles),
             workloads=tuple(workloads),
             github_federations=tuple(github_federations),
-            snapshot_retention_days=config.require_int("snapshotRetentionDays"),
             vm_project_roles=vm_project_roles,
             vm_pulumi_kms_keys=vm_pulumi_kms_keys,
         )
@@ -599,44 +610,16 @@ def _create_network(config: DeploymentConfig, apis: list[gcp.projects.Service]) 
 
 def _create_root_disk(config: DeploymentConfig, apis: list[gcp.projects.Service]) -> gcp.compute.Disk:
     return gcp.compute.Disk(
-        "loom-root",
+        "loom-primary-root",
         project=config.project,
         zone=config.zone,
-        name=config.instance_name,
-        image="debian-cloud/debian-12",
-        type=DEFAULT_DISK_TYPE,
+        name=config.boot_disk_name,
+        snapshot=config.boot_disk_snapshot,
+        type=config.boot_disk_type,
         size=config.boot_disk_gb,
-        opts=pulumi.ResourceOptions(depends_on=apis, protect=True, ignore_changes=["image"]),
-    )
-
-
-def _create_boot_disk_snapshots(
-    config: DeploymentConfig,
-    apis: list[gcp.projects.Service],
-    root_disk: gcp.compute.Disk,
-) -> gcp.compute.DiskResourcePolicyAttachment:
-    snapshot_policy = gcp.compute.ResourcePolicy(
-        "loom-snapshots",
-        project=config.project,
-        region=config.region,
-        name=f"{config.instance_name}-daily",
-        snapshot_schedule_policy={
-            "schedule": {"daily_schedule": {"days_in_cycle": 1, "start_time": "04:00"}},
-            "retention_policy": {
-                "max_retention_days": config.snapshot_retention_days,
-                "on_source_disk_delete": "KEEP_AUTO_SNAPSHOTS",
-            },
-            "snapshot_properties": {"storage_locations": config.region},
-        },
-        opts=pulumi.ResourceOptions(depends_on=apis),
-    )
-    return gcp.compute.DiskResourcePolicyAttachment(
-        "loom-snapshot-policy",
-        project=config.project,
-        zone=config.zone,
-        disk=root_disk.name,
-        name=snapshot_policy.name,
-        opts=pulumi.ResourceOptions(depends_on=[root_disk]),
+        provisioned_iops=config.boot_disk_iops,
+        provisioned_throughput=config.boot_disk_throughput,
+        opts=pulumi.ResourceOptions(depends_on=apis, protect=True, retain_on_delete=True),
     )
 
 
@@ -732,6 +715,26 @@ def _workload_service_account(
     )
 
 
+def _deployment_manifest(
+    config: DeploymentConfig,
+    profiles: list[dict[str, Any]],
+    workload_values: list[dict[str, Any]],
+) -> str:
+    return json.dumps(
+        {
+            "settings": dict(config.settings),
+            "profiles": profiles,
+            "federations": (
+                [mapping.manifest(config.public_url) for mapping in config.github_federations] + workload_values
+            ),
+            "prune": config.prune_deployment,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _create_runtime_policy(
     config: DeploymentConfig,
     api_options: pulumi.ResourceOptions,
@@ -759,25 +762,13 @@ def _create_runtime_policy(
                 }
             )
         )
-    github_mappings = [mapping.manifest(audience) for mapping in config.github_federations]
-
-    def render(workload_values: list[dict[str, Any]]) -> str:
-        return json.dumps(
-            {
-                "settings": dict(config.settings),
-                "profiles": profiles,
-                "federations": github_mappings + workload_values,
-                "prune": config.prune_deployment,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-
     manifest: pulumi.Input[str]
     if workload_mappings:
-        manifest = pulumi.Output.all(*workload_mappings).apply(lambda values: render(list(values)))
+        manifest = pulumi.Output.all(*workload_mappings).apply(
+            lambda values: _deployment_manifest(config, profiles, list(values))
+        )
     else:
-        manifest = render([])
+        manifest = _deployment_manifest(config, profiles, [])
     return RuntimePolicyResources(audience, manifest, workload_clients, profile_secret_refs)
 
 
@@ -875,11 +866,13 @@ def _create_instance(
         tags=[WEB_FIREWALL_TAG, SSH_FIREWALL_TAG],
         boot_disk={
             "auto_delete": False,
+            "interface": "NVME",
             "source": root_disk.id,
         },
         network_interfaces=[
             {
                 "network": config.network,
+                "nic_type": "GVNIC",
                 "access_configs": [{"nat_ip": network.address.address}],
             }
         ],
@@ -888,10 +881,18 @@ def _create_instance(
             "email": vm_account.email,
             "scopes": ["cloud-platform"],
         },
+        reservation_affinity={"type": "NO_RESERVATION"},
+        scheduling={
+            "automatic_restart": True,
+            "on_host_maintenance": "MIGRATE",
+            "preemptible": False,
+            "provisioning_model": "STANDARD",
+        },
         allow_stopping_for_update=False,
         deletion_protection=True,
         opts=pulumi.ResourceOptions(
             depends_on=dependencies,
+            delete_before_replace=True,
             protect=True,
             ignore_changes=['metadata["ssh-keys"]', 'metadata["enable-osconfig"]'],
         ),
@@ -903,7 +904,6 @@ def _create_activation(
     config: DeploymentConfig,
     instance: InstanceResources,
     dns_record: cloudflare.DnsRecord,
-    snapshot_attachment: gcp.compute.DiskResourcePolicyAttachment,
 ) -> command.local.Command:
     return command.local.Command(
         "loom-activate",
@@ -917,7 +917,7 @@ def _create_activation(
             "LOOM_DOMAIN": config.domain,
         },
         triggers=[instance.instance.id, pulumi.Output.json_dumps(instance.metadata)],
-        opts=pulumi.ResourceOptions(depends_on=[instance.instance, dns_record, snapshot_attachment]),
+        opts=pulumi.ResourceOptions(depends_on=[instance.instance, dns_record]),
     )
 
 
@@ -970,6 +970,10 @@ def _export_outputs(
     pulumi.export("tokenAudience", runtime_policy.audience)
     pulumi.export("profileNames", sorted(profile.name for profile in config.profiles))
     pulumi.export(
+        "githubFederationProfiles",
+        {federation.name: federation.profile for federation in config.github_federations},
+    )
+    pulumi.export(
         "workloadClients",
         pulumi.Output.all(*runtime_policy.workload_clients) if runtime_policy.workload_clients else [],
     )
@@ -1010,7 +1014,6 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         runtime_policy,
         vm_permissions,
     )
-    snapshot_attachment = _create_boot_disk_snapshots(config, apis, root_disk)
-    activation = _create_activation(config, instance, network.dns_record, snapshot_attachment)
+    activation = _create_activation(config, instance, network.dns_record)
     _export_outputs(config, instance.instance, network, image, runtime_policy)
     return Infrastructure(instance.instance, activation)

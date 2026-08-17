@@ -63,10 +63,7 @@ def test_committed_stack_covers_workflow_references_and_isolates_removal_candida
         "repository:marin-community/marin:COREWEAVE_API_TOKEN",
         "repository:marin-community/marin:OPENAI_ADMIN_KEY",
     }
-    assert set(report.shadowed) == {
-        "organization:GCP_PROJECT_ID",
-        "organization:SLACK_WEBHOOK_URL",
-    }
+    assert set(report.shadowed) == {"organization:GCP_PROJECT_ID"}
 
 
 def test_committed_stack_models_every_present_external_secret_as_a_read_only_resource() -> None:

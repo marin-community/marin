@@ -26,6 +26,7 @@ from marin.rl.skyrl import (
     SkyRLLaunchRequest,
     SkyRLModel,
     SkyRLOutputPaths,
+    SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRunConfig,
     SkyRLRuntime,
@@ -73,7 +74,7 @@ def _role_plan() -> SkyRLRolePlan:
 
 def _spec() -> SkyRLSpec:
     return SkyRLSpec(
-        name="tests/iceball-rl",
+        name="users/tester/tests/iceball-rl",
         version="2026.08.01",
         config_yaml="trainer:\n  max_steps: 8\n",
         runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
@@ -91,6 +92,7 @@ def _spec() -> SkyRLSpec:
             gpu_variant="GB200",
             role_plan=_role_plan(),
         ),
+        retention=SkyRLRetentionPolicy(),
         seed=17,
         overrides=("++trainer.max_steps=8",),
     )
@@ -106,6 +108,14 @@ def _execution(cluster: str = "cw-us-east-08a") -> IrisSkyRLExecution:
         priority="interactive",
         max_retries=3,
     )
+
+
+def test_skyrl_retention_allows_explicit_rollback_depth_up_to_five() -> None:
+    policy = SkyRLRetentionPolicy(resume_checkpoint_count=5)
+
+    assert policy.resume_checkpoint_count == 5
+    with pytest.raises(ValueError, match="between one and five"):
+        SkyRLRetentionPolicy(resume_checkpoint_count=6)
 
 
 def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement() -> None:
@@ -147,6 +157,40 @@ def test_skyrl_step_declares_model_and_data_dependencies() -> None:
         ("tests/iceball-sft", "2026.08.01"),
         ("tests/iceball-gsm8k", "2026.08.01"),
     ]
+
+
+def test_skyrl_step_routes_disposable_state_to_ttl_storage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "marin.rl.skyrl.temporary_storage_base_path",
+        lambda _output_path, *, ttl_days, category: f"s3://temp/ttl={ttl_days}d/{category}/users/alice/run",
+    )
+    spec = dataclasses.replace(_spec(), name="users/alice/tests/iceball-rl", version="dev")
+    step = skyrl_step(spec, _execution())
+    output_path = "s3://durable/users/alice/tests/iceball-rl/dev"
+    config = step.build_config(
+        StepContext.for_run(
+            output_path=output_path,
+            prefix="s3://durable",
+            runtime_args=step.runtime_args,
+            deps=step.deps,
+        )
+    )
+
+    assert step.name == "users/alice/tests/iceball-rl"
+    assert config.request.output == SkyRLOutputPaths(
+        checkpoint_root="s3://temp/ttl=14d/skyrl/users/alice/run/checkpoints",
+        export_root=f"{output_path}/exports",
+        attempts_root="s3://temp/ttl=14d/skyrl/users/alice/run/attempts",
+        resolved_config_uri=f"{output_path}/resolved-skyrl.json",
+        terminal_manifest_uri=f"{output_path}/terminal.json",
+    )
+    assert config.request.overrides[-3:] == (
+        "++trainer.max_ckpts_to_keep=2",
+        "++terminal_bench_config.trials_dir=" "s3://temp/ttl=14d/skyrl/users/alice/run/attempts/trace_jobs",
+        "++generator.trajectory_retention.output_path=" "s3://temp/ttl=14d/skyrl/users/alice/run/attempts/trajectories",
+    )
 
 
 def test_terminal_policy_composes_into_shared_evaluation_step() -> None:

@@ -12,7 +12,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple, cast
 
 import fsspec
 import humanfriendly
-from rigging.filesystem import filesystem as marin_filesystem
+from rigging.filesystem.factory import filesystem as marin_filesystem
 import jax
 import jax.numpy as jnp
 import numpy as np

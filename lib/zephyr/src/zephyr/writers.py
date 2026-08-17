@@ -20,7 +20,9 @@ import pyarrow.parquet as pq
 import vortex
 import zstandard as zstd
 from pyarrow import fs as pa_fs
-from rigging.filesystem import StoragePath, atomic_rename, url_to_fs
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 from zephyr import counters
 

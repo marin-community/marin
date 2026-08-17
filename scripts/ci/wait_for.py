@@ -38,8 +38,9 @@ automated-review wrapper whose findings arrive as separate inline comments. Only
 automation a rule names is ever suppressed, so a comment from a human — or from a bot the
 catalog does not cover — always fires. The catalog also suppresses Loom's exact
 ``Working on this in loom: <session URL>`` acknowledgement, only when the Loom bot
-authored it. Comments are keyed on content, so a placeholder a bot later edits into a
-real finding re-surfaces as new activity. Pass
+authored it. It also suppresses Loom access-control replies addressed to a bot. Comments
+are keyed on content, so a placeholder a bot later edits into a real finding re-surfaces as
+new activity. Pass
 ``--comment-filter all`` to fire on every new comment instead.
 
 `poll` is the escape hatch for anything without a built-in: compose the predicate
@@ -329,6 +330,7 @@ class Significance(StrEnum):
     PROGRESS = "progress"  # an in-progress placeholder, edited in place once the bot is done
     CLEAN = "clean"  # an explicit "nothing to address" verdict
     WRAPPER = "wrapper"  # an automated-review container; its findings arrive separately
+    HANDSHAKE = "handshake"  # an access-control reply between bots
 
 
 class CommentFilter(StrEnum):
@@ -399,6 +401,11 @@ _WRAPPER_RE = re.compile(
     r"automated review suggestions|<summary>[^<]*About Codex|#+\s*💡?\s*Codex Review", re.IGNORECASE
 )
 _LOOM_PLACEHOLDER_RE = re.compile(r"^Working on this in loom: https://loom\.oa\.dev/s/[A-Za-z0-9_-]+/?$")
+_LOOM_ACCESS_HANDSHAKE_RE = re.compile(
+    r"^Hi @[A-Za-z0-9-]+\[bot\] — thanks for the ping\. "
+    r"You're not on this loom instance's access list yet, so I can't pick this up\. "
+    r"Ask an operator to grant you access, then tag me again and I'll jump in\.$"
+)
 
 
 def _placeholder_residue(body: str) -> str:
@@ -434,6 +441,10 @@ def is_loom_placeholder(body: str) -> bool:
     return bool(_LOOM_PLACEHOLDER_RE.fullmatch(body))
 
 
+def is_loom_access_handshake(body: str) -> bool:
+    return bool(_LOOM_ACCESS_HANDSHAKE_RE.fullmatch(body))
+
+
 @dataclass(frozen=True)
 class CommentRule:
     """One entry in the noise catalog: whose comments it judges, and which shape it suppresses."""
@@ -452,6 +463,7 @@ COMMENT_RULES: tuple[CommentRule, ...] = (
     CommentRule(CLAUDE_BOT, is_clean_verdict, Significance.CLEAN),
     CommentRule(CODEX_BOT, is_review_wrapper, Significance.WRAPPER),
     CommentRule(LOOM_BOT, is_loom_placeholder, Significance.PROGRESS),
+    CommentRule(LOOM_BOT, is_loom_access_handshake, Significance.HANDSHAKE),
 )
 
 
@@ -903,9 +915,9 @@ def _iris_job_waiter_from_job_info() -> Callable[[JobName], job_pb2.JobStatus]:
     "--comment-filter",
     type=click.Choice([f.value for f in CommentFilter]),
     default=CommentFilter.SIGNIFICANT.value,
-    help="Which new comments fire github.pr_comment/github.review: 'significant' skips the review bots' "
-    "in-progress placeholders, clean verdicts, review wrappers, and Loom's session acknowledgement; "
-    "'all' fires on every new comment.",
+    help="Which new comments fire github.pr_comment/github.review: 'significant' skips catalogued bot progress, "
+    "clean verdicts, review wrappers, session acknowledgements, and access handshakes; 'all' fires on every new "
+    "comment.",
 )
 @click.option("--quiet", is_flag=True, help="Print only the fired event kind, not the JSON payload.")
 def main(

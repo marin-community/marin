@@ -22,7 +22,8 @@ import json
 import sys
 from datetime import datetime, timedelta
 
-from finestore.eval import (
+from fsspec.core import url_to_fs
+from marin.evaluation.archive import (
     SAMPLES_PREFIX,
     SAMPLES_SUFFIX,
     Choice,
@@ -32,7 +33,6 @@ from finestore.eval import (
     SampleKind,
     write_sample_parquet,
 )
-from fsspec.core import url_to_fs
 from marin.evaluation.records import (
     RECORD_FILE,
     EvalRef,

@@ -28,7 +28,8 @@ from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from rigging.filesystem import StoragePath
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 EUROPE_WEST4_GCS_PREFIX = "gs://marin-eu-west4/"
 REGION = "europe-west4"
@@ -80,9 +81,7 @@ def _join_path(base: str, *parts: str) -> str:
 
 
 def _fs_path(path: str):
-    import fsspec  # noqa: PLC0415
-
-    return fsspec.core.url_to_fs(path)
+    return url_to_fs(path)
 
 
 def _exists(path: str) -> bool:

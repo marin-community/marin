@@ -687,7 +687,7 @@ def test_autotune_cache_modes_share_the_local_path_and_select_remote_sync(tmp_pa
     with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
         os.environ["MARIN_PROVENANCE"] = "{}"
         with (
-            patch.object(jax_init_module, "sync_kv_cache", lambda prefix, local: calls.append((prefix, local))),
+            patch.object(jax_init_module, "sync_file_set_cache", lambda prefix, local: calls.append((prefix, local))),
             patch.object(jax_init_module, "get_job_info", return_value=_make_job_info(task_index=0, num_tasks=8)),
             patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"),
         ):
@@ -720,8 +720,8 @@ def test_non_primary_task_fetches_without_uploading_autotune_cache(tmp_path) -> 
     with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
         os.environ["MARIN_PROVENANCE"] = "{}"
         with (
-            patch.object(jax_init_module, "fetch_kv_cache", lambda prefix, local: fetches.append((prefix, local))),
-            patch.object(jax_init_module, "sync_kv_cache", lambda prefix, local: uploads.append((prefix, local))),
+            patch.object(jax_init_module, "fetch_file_set_cache", lambda prefix, local: fetches.append((prefix, local))),
+            patch.object(jax_init_module, "sync_file_set_cache", lambda prefix, local: uploads.append((prefix, local))),
             patch.object(jax_init_module, "get_job_info", return_value=_make_job_info(task_index=3, num_tasks=8)),
             patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"),
         ):
@@ -746,8 +746,8 @@ def test_multigpu_task_fetches_autotune_cache_once_per_node(tmp_path, process_in
         os.environ[jax_init_module.IRIS_MULTIGPU_PROCESS_COUNT_ENV] = "16"
         os.environ[jax_init_module.IRIS_MULTIGPU_PROCESS_INDEX_ENV] = str(process_index)
         with (
-            patch.object(jax_init_module, "fetch_kv_cache", lambda prefix, local: fetches.append((prefix, local))),
-            patch.object(jax_init_module, "sync_kv_cache", lambda prefix, local: uploads.append((prefix, local))),
+            patch.object(jax_init_module, "fetch_file_set_cache", lambda prefix, local: fetches.append((prefix, local))),
+            patch.object(jax_init_module, "sync_file_set_cache", lambda prefix, local: uploads.append((prefix, local))),
             patch.object(jax_init_module, "get_job_info", return_value=_make_job_info(task_index=1, num_tasks=2)),
             patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"),
         ):
@@ -763,12 +763,23 @@ def test_autotune_cache_stays_node_local_without_a_launch_provenance(tmp_path) -
 
     with _isolated_jax_cache_config(), _gpu_task(tmp_path):
         with (
-            patch.object(jax_init_module, "sync_kv_cache", lambda *args: calls.append(args)),
+            patch.object(jax_init_module, "sync_file_set_cache", lambda *args: calls.append(args)),
             patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"),
         ):
             configure_jax_compilation_cache()
 
     assert calls == []
+
+
+def test_autotune_file_set_storage_failure_starts_cold(tmp_path) -> None:
+    """The shared file set is an optimization, so an object-store outage cannot abort JAX startup."""
+    with (
+        patch.object(jax_init_module, "_file_set_cache_root", return_value="gs://cache/tree"),
+        patch.object(jax_init_module, "FineStoreDirectory", side_effect=OSError("unavailable")),
+        patch.object(jax_init_module, "fetch_file_set", side_effect=OSError("unavailable")),
+    ):
+        assert jax_init_module.sync_file_set_cache("xla", str(tmp_path)) is None
+        jax_init_module.fetch_file_set_cache("xla", str(tmp_path))
 
 
 def test_explicit_remote_cache_dir_still_gets_the_xla_guard(tmp_path) -> None:

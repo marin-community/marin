@@ -25,6 +25,9 @@ To add a secret, create or rotate it through an approved external path, then add
 declaration. Record a pinned Secret Manager version when one exists; it is recovery metadata and is
 never dereferenced by this program.
 
+GitHub resolves a repository secret before an organization secret with the same name. Keep each
+secret name at one scope unless a repository override has a separate owner and rotation path.
+
 To remove a secret, first confirm it is an unreferenced `remove-candidate` with the live audit. Delete
 it externally, then remove its declaration. For example:
 
@@ -37,6 +40,11 @@ done
 Keep service-account JSON and SSH credentials until their workflows use OIDC. GitHub variables,
 environments, repository settings, and other non-secret resources can be added here as normally
 managed Pulumi resources.
+
+The `LOOM_FORK_FERRY_PROFILE` repository variable is derived from the production Loom
+stack's `githubFederationProfiles` output. Deploy the Loom stack first when changing the
+mapping or profile name; the stack reference then keeps the workflow variable aligned with
+the profile authorized by Loom.
 
 ## Dependency updater app
 

@@ -36,7 +36,7 @@ from iris.client.client import IrisClient
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2, query_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
 
@@ -582,7 +582,7 @@ def upload_report_to_gcs(report: PerfReport, gcs_prefix: str, report_name: str, 
     "--status",
     "status_path",
     default=None,
-    help="Optional FERRY_STATUS_PATH gs:// URL written by the ferry's _write_status helper.",
+    help="Optional FERRY_STATUS_PATH gs:// URL written by infra.ci.run_status.",
 )
 @click.option(
     "--report-name",

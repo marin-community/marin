@@ -35,7 +35,7 @@ from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.models.loss import next_token_loss
 from levanter.trainer import TrainerConfig
 from levanter.utils.tree_utils import inference_mode
-from rigging.filesystem import open_url
+from rigging.filesystem.factory import open_url
 
 from marin.evaluation.model_loading import load_eval_model
 from marin.processing.tokenize.data_configs import with_pack

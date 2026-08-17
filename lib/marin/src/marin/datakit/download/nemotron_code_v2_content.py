@@ -9,7 +9,7 @@ canonical copy lives on Cloudflare R2 at ``s3://marin-na/users/held/nemotron-cod
 (133 shards, 139 GB, free egress) — copy from there when staging to a new cluster.
 """
 
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.datakit.normalize import DedupMode, normalize_step
 from marin.execution.step_spec import StepSpec

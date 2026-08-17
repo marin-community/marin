@@ -20,8 +20,8 @@ import os
 import sys
 from collections.abc import Callable
 
-from rigging.filesystem import StoragePath
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.ferries.canary_ferry import build
 

@@ -23,11 +23,18 @@ from marin.experiment.cli import build_options
 from marin.experiment.data import mixture, tokenized
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
-from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
-from experiments.grug.moe_hero_ep.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, WatchMode, run_grug
+from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, build_hero_configs
+from experiments.grug.moe_hero_ep.train import (
+    GrugEvalConfig,
+    GrugRunConfig,
+    GrugTrainerConfig,
+    MasterParamMode,
+    WatchMode,
+    run_grug,
+)
 from experiments.llama import llama3_tokenizer
 
 DEFAULT_HERO_STEPS = 25
@@ -36,16 +43,9 @@ HERO_EP_BATCH_SIZE = 1024
 HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
 HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
-# One JAX process per GPU. The old one-process-per-node layout has two reproducible
-# failure modes on this stack, both from auto-PGLE (which only engages per-node):
-# a profiling-session collision that kills the gang during early dispatch
-# (ALREADY_EXISTS: Another profiling session active), and a silent wedge at the
-# FDO-recompile clique re-initialization (#7344). Per-GPU also matches the FSDP
-# hero (#8040) and is required by the ragged EP backend (#8081).
-HERO_PROCESSES_PER_TASK = HERO_GPUS_PER_NODE
-HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
-# The hero shape keeps its MuonH state on pinned host memory: 24.59 GiB of parameters and 27.78 GiB
-# of optimizer state per device leave too little room for the fixed all-to-all buffers otherwise.
+HERO_PROCESSES_PER_TASK = 1
+HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
+# Keep MuonH state on pinned host memory to leave room for the pooled all-to-all buffers.
 HERO_OFFLOAD_OPT_STATE = True
 HERO_WATCH_INTERVAL = 0
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
@@ -119,16 +119,6 @@ PY
 """
 
 
-FLAVORS: dict[str, str] = {
-    "ep": "fixed_all_to_all",
-    # The upstream transport. Its capacity factor scales one pooled receiver buffer per device
-    # rather than a per-(sender, expert) cell, so at the same factor it buys the same bytes and
-    # drops far less -- every expert on a device draws from one pool. `fixed_all_to_all` exists
-    # because this path measured slow, which is what a same-shape run is for.
-    "ep-ragged": "ragged_all_to_all",
-}
-
-
 # Held-out sets, added at weight 0 so they surface as tagged eval sets. The hero trains on
 # llama3-tokenized SlimPajama, so these must carry the same tokenizer.
 #
@@ -173,7 +163,6 @@ def build_hero_run(
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
-    flavor: str = "ep",
     eval_every: int = 0,
     save_checkpoints: bool = False,
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
@@ -207,9 +196,6 @@ def build_hero_run(
         raise ValueError(f"profile_start_step must be non-negative, got {profile_start_step}")
     if profile_steps > 0 and profile_start_step >= num_steps:
         raise ValueError(f"profile_start_step must be less than num_steps={num_steps}, got {profile_start_step}")
-    if flavor not in FLAVORS:
-        raise ValueError(f"flavor must be one of {sorted(FLAVORS)}, got {flavor!r}")
-    moe_implementation = FLAVORS[flavor]
     # `schedule_steps` sets the whole learning-rate schedule; `num_steps` sets how far the run goes.
     # Both matter, and they enter in different places. The optimizer heuristic scales learning rate,
     # adam_lr, and epsilon from a token budget (`num_train_steps * batch * seq`), which fixes the
@@ -239,17 +225,23 @@ def build_hero_run(
     }
     if overrides:
         model = dataclasses.replace(model, **overrides)
-    model = dataclasses.replace(
-        model,
-        moe_implementation=moe_implementation,
-        expert_chunks=1,
-    )
-    # A bank that does not divide the expert axis fails inside `moe_mlp`, which is after the rack is
-    # already allocated and the workspace is built. Reject it here instead.
+    # A bank that is not divisible by the expert axis fails inside `moe_mlp`, which is after the rack
+    # is already allocated and the workspace is built. Reject it here instead.
     if model.num_experts % HERO_EP_EXPERT_AXIS_SIZE != 0:
-        raise ValueError(f"num_experts={model.num_experts} must divide the expert axis {HERO_EP_EXPERT_AXIS_SIZE}")
-    backend_tag = moe_implementation.replace("_", "-")
+        raise ValueError(f"num_experts={model.num_experts} must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}")
+    local_experts = model.num_experts // HERO_EP_EXPERT_AXIS_SIZE
+    if local_experts % model.num_expert_waves != 0:
+        raise ValueError(
+            f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
+        )
+    if model.moe_implementation != "fixed_pooled_wave_all_to_all":
+        raise AssertionError(f"unexpected hero MoE implementation: {model.moe_implementation}")
+    if model.pooled_transport_capacity_factor is None:
+        raise AssertionError("the pooled-wave hero requires a transport capacity factor")
+    backend_tag = model.moe_implementation.replace("_", "-")
     capacity_tag = f"capacity-{model.capacity_factor:g}"
+    transport_capacity_tag = f"transport-capacity-{model.pooled_transport_capacity_factor:g}"
+    wave_tag = f"expert-waves-{model.num_expert_waves}"
     size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     grug_trainer = GrugTrainerConfig(
@@ -258,6 +250,7 @@ def build_hero_run(
         ema_beta=None,
         z_loss_weight=1e-4,
         offload_opt_state=HERO_OFFLOAD_OPT_STATE,
+        master_param_mode=MasterParamMode.FP32_PINNED_HOST,
         watch_mode=watch_mode,
         # The default offloaded optimizer state has a known memory-kind mismatch during restore.
         save_checkpoints=save_checkpoints,
@@ -303,8 +296,9 @@ def build_hero_run(
                     "hero",
                     "ep",
                     backend_tag,
-                    f"flavor-{flavor}",
                     capacity_tag,
+                    transport_capacity_tag,
+                    wave_tag,
                     size_tag,
                     "gb200",
                     "MHEP",
@@ -360,7 +354,8 @@ def build_hero_run(
 @click.option(
     "--dp-racks",
     type=click.IntRange(min=1),
-    required=True,
+    default=1,
+    show_default=True,
     help="Data-parallel NVL72 rack count. --batch-size stays global across all racks.",
 )
 @click.option(
@@ -389,19 +384,25 @@ def build_hero_run(
 @click.option(
     "--num-experts",
     type=click.IntRange(min=1),
-    default=None,
-    help=f"Override the routed expert count. Must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}.",
+    default=HERO_MODEL.num_experts,
+    show_default=True,
+    help=(
+        f"Override the routed expert count. The count must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}, "
+        f"and the local expert count must support {HERO_MODEL.num_expert_waves} waves."
+    ),
 )
 @click.option(
     "--num-experts-per-token",
     type=click.IntRange(min=1),
-    default=None,
+    default=HERO_MODEL.num_experts_per_token,
+    show_default=True,
     help="Override the routed top-k. Scales both active parameters and the EP dispatch buffers.",
 )
 @click.option(
     "--intermediate-dim",
     type=click.IntRange(min=1),
-    default=None,
+    default=HERO_MODEL.intermediate_dim,
+    show_default=True,
     help="Override the routed expert width.",
 )
 @click.option(
@@ -416,13 +417,6 @@ def build_hero_run(
     type=click.IntRange(min=1),
     default=None,
     help="LatentMoE: run routed experts at this width. Divides all-to-all traffic by hidden/latent.",
-)
-@click.option(
-    "--flavor",
-    type=click.Choice(sorted(FLAVORS)),
-    default="ep",
-    show_default=True,
-    help="Expert-parallel MoE implementation.",
 )
 @click.option(
     "--save-checkpoints/--no-save-checkpoints",
@@ -480,8 +474,9 @@ def build_hero_run(
 @click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
-    default=None,
-    help="Override the fixed all-to-all capacity factor.",
+    default=HERO_MODEL.capacity_factor,
+    show_default=True,
+    help="Override the pooled receiver capacity factor.",
 )
 @build_options
 def main(
@@ -496,7 +491,6 @@ def main(
     intermediate_dim: int | None,
     capacity_factor: float | None,
     latent_dim: int | None,
-    flavor: str,
     save_checkpoints: bool,
     checkpoint_minutes: float,
     checkpoint_path: str | None,
@@ -518,7 +512,6 @@ def main(
         intermediate_dim=intermediate_dim,
         capacity_factor=capacity_factor,
         latent_dim=latent_dim,
-        flavor=flavor,
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),
         checkpoint_path=checkpoint_path,

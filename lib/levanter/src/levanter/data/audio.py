@@ -13,7 +13,7 @@ from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 import datasets
 import equinox as eqx
 import haliax as hax
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 import jax
 import numpy as np
 from draccus import field

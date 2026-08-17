@@ -7,6 +7,8 @@ A run's durable output is a finestore archive rooted at its ``results_path``: a 
 (one row per evaluated question, the shared :class:`EvalSample` contract) plus a ``blobs`` table that
 holds raw agent trajectories a sample references by a ``finestore://`` URI. This module discovers the
 tasks, pages the samples for one task, and resolves a trajectory reference, returning typed responses.
+EvalDash explicitly reads both transactional format v2 and listing-based format v1 while old eval
+runtime images remain deployed.
 
 Runs written before the archive existed still carry one ``samples_<task>_<ts>.parquet`` per (sub)task
 and a ``gs://`` trajectory URI; the reader falls back to that layout when a run has no archive, so a
@@ -22,7 +24,11 @@ from typing import Generic, TypeVar
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.eval import (
+from finestore.layout import FormatVersionError
+from finestore.migrations import LEGACY_READ_FORMAT_VERSION, LegacyReadView
+from finestore.reader import ReadView
+from fsspec.core import url_to_fs
+from marin.evaluation.archive import (
     ARCHIVE_SAMPLES_TABLE,
     FILTER_COLUMN,
     SAMPLES_PREFIX,
@@ -32,10 +38,8 @@ from finestore.eval import (
     primary_metric,
     sample_from_archive_row,
 )
-from finestore.reader import CompositeReader
-from fsspec.core import url_to_fs
 from pydantic import BaseModel, ConfigDict
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +163,16 @@ _discovery_cache: _TtlCache[tuple[int, tuple[str, ...]]] = _TtlCache(CACHE_TTL)
 # --------------------------------------------------------------------------------------------------
 
 
+def _archive_view(results_path: str) -> ReadView | LegacyReadView:
+    """Open a v2 snapshot, or the bounded v1 compatibility view used by EvalDash."""
+    try:
+        return ReadView(results_path)
+    except FormatVersionError as exc:
+        if exc.found != LEGACY_READ_FORMAT_VERSION:
+            raise
+        return LegacyReadView(results_path)
+
+
 def _archive_discovery(results_path: str) -> tuple[int, tuple[str, ...]]:
     """The run's ``samples`` shard count and distinct task names; ``(0, ())`` means no archive.
 
@@ -169,7 +183,7 @@ def _archive_discovery(results_path: str) -> tuple[int, tuple[str, ...]]:
     cached = _discovery_cache.get(results_path)
     if cached is not None:
         return cached
-    reader = CompositeReader(results_path)
+    reader = _archive_view(results_path)
     shard_count = len(reader.list_shards(ARCHIVE_SAMPLES_TABLE))
     tasks: tuple[str, ...] = ()
     if shard_count:
@@ -187,7 +201,7 @@ def _archive_task_table(results_path: str, task: str) -> pa.Table:
     cached = _table_cache.get(key)
     if cached is not None:
         return cached
-    table = CompositeReader(results_path).scan(ARCHIVE_SAMPLES_TABLE, where=[("task", "==", task)])
+    table = _archive_view(results_path).scan(ARCHIVE_SAMPLES_TABLE, where=[("task", "==", task)])
     if table is None:
         table = pa.table({})
     _table_cache.put(key, table)
@@ -418,7 +432,7 @@ def _artifact_within_results(results_path: str, uri: str) -> bool:
 def _resolve_archive_artifact(results_path: str, uri: str, max_bytes: int) -> ArtifactResponse:
     """Resolve a ``finestore://`` trajectory reference to decoded text from the run's blobs table."""
     try:
-        raw = CompositeReader(results_path).resolve(uri)
+        raw = _archive_view(results_path).resolve(uri)
     except Exception as exc:
         logger.info("archive artifact resolve failed for %s: %s", uri, exc)
         return _unavailable_artifact(uri, f"{type(exc).__name__}: {exc}"[:400])

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import cloudpickle
+from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.actor.client import ActorClient
 from iris.actor.resolver import Resolver
@@ -329,7 +330,15 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     # XXX: this should be handled by the actor server?
     address = f"http://{advertise_host}:{actual_port}"
     logger.info(f"Registering endpoint: {actor_name} -> {address}")
-    ctx.registry.register(actor_name, address)
+    try:
+        ctx.registry.register(actor_name, address)
+    except ConnectError as exc:
+        if exc.code == Code.FAILED_PRECONDITION:
+            logger.error("Actor %s stopped before endpoint registration: %s", actor_name, exc)
+            server.stop()
+            return
+        server.stop()
+        raise
     logger.info(f"Actor {actor_name} ready and listening")
 
     # Block until the actor signals shutdown via shutdown_event

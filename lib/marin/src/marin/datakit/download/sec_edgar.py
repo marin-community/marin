@@ -14,7 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from huggingface_hub import HfFileSystem
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 from zephyr import counters
 from zephyr.dataset import Dataset
