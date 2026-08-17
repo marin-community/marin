@@ -1,27 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import cast
+from types import SimpleNamespace
 
 import click
 import pytest
-from iris.client import IrisClient
-from iris.client.workload_codec import task_status_from_proto
 from iris.cluster.config import (
     CoreweavePlatformConfig,
     IrisClusterConfig,
     KubernetesProviderConfig,
     PlatformConfig,
 )
-from iris.resources.state import JobState
-from iris.rpc import job_pb2
+from iris.resources.state import JobState, TaskState
 
 from scripts.iris.dev_gpu import (
     CoreweaveTarget,
     DevGpuState,
     PodRef,
     Priority,
-    is_job_active,
     parse_running_pod,
     require_coreweave_platform,
     resolve_coscheduling,
@@ -127,7 +123,7 @@ class FakeTask:
         self.task_index = task_index
 
     def status(self):
-        return task_status_from_proto(job_pb2.TaskStatus(task_id=self.task_id, state=job_pb2.TASK_STATE_RUNNING))
+        return SimpleNamespace(state=TaskState.RUNNING)
 
 
 class FakeJob:
@@ -143,28 +139,8 @@ class FakeJob:
         return self.tasks_returned
 
 
-class FakeStateClient:
-    def __init__(self, state: JobState):
-        self.state = state
-
-    def job_state(self, _job_id):
-        return self.state
-
-
 def test_running_tasks_come_back_in_task_index_order():
     # `connect --node 1` means "the second node", so pod order must follow the task
     # index rather than whatever order the controller happens to list tasks in.
     task_ids = wait_for_running_tasks(FakeJob(2), node_count=2, timeout=1)
     assert task_ids == [f"{JOB_ID}/0", f"{JOB_ID}/1"]
-
-
-@pytest.mark.parametrize(
-    ("state", "expected"),
-    [
-        (JobState.RUNNING, True),
-        (JobState.SUCCEEDED, False),
-        (JobState.FAILED, False),
-    ],
-)
-def test_job_activity_uses_native_terminal_states(state: JobState, expected: bool):
-    assert is_job_active(cast(IrisClient, FakeStateClient(state)), JOB_ID) is expected

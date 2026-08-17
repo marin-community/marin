@@ -67,7 +67,3 @@ TERMINAL_TASK_STATES = frozenset(
 
 def is_job_finished(state: JobState) -> bool:
     return state in TERMINAL_JOB_STATES
-
-
-def is_task_finished(state: TaskState) -> bool:
-    return state in TERMINAL_TASK_STATES

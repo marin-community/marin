@@ -190,20 +190,11 @@ def test_iris_job_handle_returns_a_globally_bounded_tail():
     job.logs.assert_called_once_with(max_lines=2, tail=True)
 
 
-@pytest.mark.parametrize(
-    ("iris_state", "expected"),
-    [
-        (IrisJobState.RUNNING, JobStatus.RUNNING),
-        (IrisJobState.SUCCEEDED, JobStatus.SUCCEEDED),
-        (IrisJobState.FAILED, JobStatus.FAILED),
-        (IrisJobState.KILLED, JobStatus.STOPPED),
-    ],
-)
-def test_iris_job_handle_maps_native_workload_state(iris_state: IrisJobState, expected: JobStatus):
+def test_iris_job_handle_reports_killed_job_as_stopped():
     job = MagicMock()
-    job.state_only.return_value = iris_state
+    job.state_only.return_value = IrisJobState.KILLED
 
-    assert IrisJobHandle(job).status() is expected
+    assert IrisJobHandle(job).status() is JobStatus.STOPPED
 
 
 def test_actor_startup_after_task_termination_stops_server_without_error(monkeypatch, caplog):

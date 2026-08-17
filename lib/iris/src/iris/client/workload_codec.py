@@ -85,7 +85,7 @@ def _build_metrics(value: job_pb2.BuildMetrics) -> BuildMetrics:
     )
 
 
-def attempt_status_from_proto(value: job_pb2.TaskAttempt) -> AttemptStatus:
+def _attempt_status_from_proto(value: job_pb2.TaskAttempt) -> AttemptStatus:
     return AttemptStatus(
         attempt_number=value.attempt_id,
         attempt_uid=value.attempt_uid,
@@ -118,7 +118,7 @@ def task_status_from_proto(value: job_pb2.TaskStatus) -> TaskStatus:
         resource_usage=_usage(value.resource_usage) if value.HasField("resource_usage") else None,
         build_metrics=_build_metrics(value.build_metrics) if value.HasField("build_metrics") else None,
         current_attempt_number=value.current_attempt_id,
-        attempts=tuple(attempt_status_from_proto(attempt) for attempt in value.attempts),
+        attempts=tuple(_attempt_status_from_proto(attempt) for attempt in value.attempts),
         pending_reason=value.pending_reason,
         can_be_scheduled=value.can_be_scheduled,
         container_id=value.container_id,
