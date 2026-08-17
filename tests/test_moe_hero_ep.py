@@ -54,8 +54,8 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
         3072,
         8,
         3072,
-        1.33,
-        1.05,
+        1.15,
+        1.10,
         3,
         "fixed_pooled_wave_all_to_all",
         1024,
@@ -803,3 +803,55 @@ def test_fp32_host_master_accumulates_updates_before_bfloat16_cast(monkeypatch):
     expected_master = 1.0 - 10 * 0.1 * float(jnp.array(0.01, dtype=jnp.bfloat16))
     np.testing.assert_allclose(state.master_params.weight, expected_master, rtol=1e-6)
     np.testing.assert_allclose(state.params.weight, jnp.asarray(expected_master, dtype=jnp.bfloat16))
+
+
+def test_fp32_host_master_preserves_float32_initialization(monkeypatch):
+    config = _latent_config()
+    key = jax.random.key(17)
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    monkeypatch.setattr(train, "_tree_to_memory_kind", lambda tree, memory_kind: tree)
+
+    with set_mesh(mesh):
+        expected = model.Transformer.init(config, key=key)
+        state = train.initial_state(
+            config,
+            optimizer=optax.sgd(0.1),
+            mp=jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16"),
+            key=key,
+            ema_beta=None,
+            master_param_mode=train.MasterParamMode.FP32_PINNED_HOST,
+        )
+
+    assert state.master_params is not None
+    expected_leaves = jax.tree.leaves(expected)
+    master_leaves = jax.tree.leaves(state.master_params)
+    param_leaves = jax.tree.leaves(state.params)
+    for expected_leaf, master_leaf, param_leaf in zip(expected_leaves, master_leaves, param_leaves, strict=True):
+        np.testing.assert_array_equal(master_leaf, expected_leaf)
+        np.testing.assert_array_equal(param_leaf, expected_leaf.astype(jnp.bfloat16))
+    assert any(
+        not np.array_equal(master_leaf, param_leaf.astype(jnp.float32))
+        for master_leaf, param_leaf in zip(master_leaves, param_leaves, strict=True)
+    )
+
+
+def test_drop_metrics_reports_sender_and_receiver_fractions():
+    metrics = train._drop_metrics(
+        jnp.array(5, dtype=jnp.int32),
+        jnp.array(2, dtype=jnp.int32),
+        jnp.array(3, dtype=jnp.int32),
+        batch_size=2,
+        sequence_length=4,
+        top_k=2,
+        num_layers=1,
+    )
+
+    assert metrics == {
+        "moe/dropped_assignments": 5,
+        "moe/drop_fraction": 5 / 16,
+        "moe/sender_dropped_assignments": 2,
+        "moe/sender_drop_fraction": 2 / 16,
+        "moe/receiver_dropped_assignments": 3,
+        "moe/receiver_drop_fraction": 3 / 16,
+        "moe/receiver_drop_fraction_of_received": 3 / 14,
+    }

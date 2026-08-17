@@ -29,6 +29,7 @@ from levanter.grug._moe.common import (
     _DEFAULT_EP_CAPACITY_FACTOR,
     _EP_MOE_IMPLEMENTATIONS,
     _init_weight,
+    CapacityOverflow,
     MOE_REMAT_SAVE_NAMES as MOE_REMAT_SAVE_NAMES,
     MoEExpertMlpPspecs,
     MoeActivation,
@@ -124,7 +125,7 @@ class MoEExpertMlp(eqx.Module):
         *,
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
-    ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
+    ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], CapacityOverflow]:
         w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
         return moe_mlp(
             x,
@@ -159,15 +160,15 @@ def moe_mlp(
     report_capacity_overflow: bool = False,
     expert_chunks: int = 1,
     num_expert_waves: int = 1,
-) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
+) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], CapacityOverflow]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
     This helper handles dispatch/permute/unpermute (+EP collectives) from
     precomputed token-to-expert assignments. Routing logits/top-k selection
     stays in the caller (e.g. model MLP block).
 
-    Set `report_capacity_overflow=True` to also return a scalar count of
-    dropped expert assignments from EP capacity clipping.
+    Set `report_capacity_overflow=True` to also return sender and receiver
+    counts for expert assignments dropped by EP capacity clipping.
 
     `expert_chunks` applies only to the local `sonic_cute` FSDP path. Values
     greater than one split the expert bank into equal, statically sized chunks.
@@ -223,7 +224,7 @@ def moe_mlp(
             expert_chunks=expert_chunks,
         )
         if report_capacity_overflow:
-            return out, dropped
+            return out, CapacityOverflow(sender=dropped, receiver=jnp.zeros_like(dropped))
         return out
 
     batch_spec = _batch_spec_from_x(x, mesh)
@@ -283,12 +284,12 @@ def moe_mlp(
                 w_up_gate_spec,
                 w_down_spec,
             ),
-            out_specs=(batch_spec, P()),
+            out_specs=(batch_spec, CapacityOverflow(sender=P(), receiver=P())),
             check_vma=False,
         )
-        out, dropped = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        out, overflow = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
         if report_capacity_overflow:
-            return out, dropped
+            return out, overflow
         return out
 
     # Fallback path for no expert axis (or expert axis size 1) keeps routing
@@ -353,11 +354,12 @@ def moe_mlp(
     )
     out, dropped = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
     if report_capacity_overflow:
-        return out, dropped
+        return out, CapacityOverflow(sender=dropped, receiver=jnp.zeros_like(dropped))
     return out
 
 
 __all__ = [
+    "CapacityOverflow",
     "MoeActivation",
     "MoEExpertMlp",
     "MoEExpertMlpPspecs",

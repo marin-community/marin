@@ -5,7 +5,7 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Literal, TypeAlias, cast, get_args
+from typing import Literal, NamedTuple, TypeAlias, cast, get_args
 
 import jax
 import jax.numpy as jnp
@@ -61,6 +61,17 @@ MOE_REMAT_SAVE_NAMES = (
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_MOE_OUTPUT,
 )
+
+
+class CapacityOverflow(NamedTuple):
+    """Expert assignments dropped before and after transport."""
+
+    sender: Int[Array, ""]
+    receiver: Int[Array, ""]
+
+    @property
+    def total(self) -> Int[Array, ""]:
+        return self.sender + self.receiver
 
 
 @dataclass(frozen=True)

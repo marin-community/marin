@@ -18,25 +18,33 @@ data-parallel rack uses one 64-device expert mesh.
 - MoE backend: `fixed_pooled_wave_all_to_all`. Each sender uses one fixed pool per
   destination and stripes it over three static waves. The receiver runs all six local experts in
   each wave and drops rows above the fixed expert capacity. Expert IDs travel in the activation
-  payload, so the method does not use a metadata collective. The receiver capacity factor is 1.33,
-  and the sender capacity factor is 1.05. Each wave has receiver capacity equal to two full expert
-  buffers.
+  payload, so the method does not use a metadata collective. The receiver capacity factor is 1.15,
+  and the sender capacity factor is 1.10.
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
 - Runtime: one JAX process per four-GPU worker, BF16 parameters and compute, GPU command buffers
   off, `cuda_async`, PGLE off, and collective overlap limit 4.
 - Output: Metrics only by default. `--save-checkpoints` writes checkpoints, but restore with the
   pinned-host optimizer state has a known memory-kind mismatch. Do not use these checkpoints to
-  restart a run.
+  restart a run. Drop metrics include the sender and receiver shares of all assignments. The
+  receiver also reports its drop share of assignments that reached it.
 
 The attention, shared-expert, language-model-head, and optimizer states use the combined `data` and
 `expert` axes. The expert axis stays sharded during Newton-Schulz.
 
-## Result
+## Results
 
-The selected configuration completed 200 steps on one rack. Over steps 150 through 199, median
-throughput was 256,818 tokens/s and median MFU was 24.03%. Median routing drop rate was 2.41%, and
-the final drop rate was 2.21%. The final loss was 3.2510. All 16 workers completed without an OOM,
-nonfinite value, failure, or preemption. See the
+The current 1.10 sender and 1.15 receiver configuration completed a 20-step, one-rack gate. Median
+throughput over steps 2 through 19 was 250,691 tokens/s, and final throughput was 246,947 tokens/s.
+The final loss was 6.3224. The final total drop rate was 19.33%: 7.14% at the sender and 12.19% at
+the receiver. The receiver dropped 13.12% of assignments that reached it. This short gate validates
+memory use and metric reporting. It does not estimate the steady drop rate. All 16 workers completed
+without an OOM, nonfinite value, failure, or preemption. See the
+[W&B run](https://wandb.ai/marin-community/rav_moe/runs/mhep-118-recv-metrics-send110-recv115-smoke).
+
+The prior 1.05 sender and 1.33 receiver configuration completed 200 steps on one rack. Over steps
+150 through 199, median throughput was 256,818 tokens/s and median MFU was 24.03%. Median routing
+drop rate was 2.41%, and the final drop rate was 2.21%. The final loss was 3.2510. All 16 workers
+completed without an OOM, nonfinite value, failure, or preemption. See the
 [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mhep-103-bf16params-pooled-striped-wave2-send105-recv133-200-20260814)
 and the [XProf trace](https://iris.oa.dev/proxy/xprof/open?uri=s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D30d%2Fxprof%2Fmhep-101-bf16params-pooled-striped-wave2-send105-recv133-profile-20260814&tool=trace_viewer).
 
@@ -77,7 +85,7 @@ Three quantities set what a sweep can fit on one rack:
 - The sender pool is token assignments multiplied by the sender capacity factor and divided across
   three waves.
 
-The selected E384 model runs at expert width 3072 and capacity factor 1.33.
+The selected E384 model runs at expert width 3072 and receiver capacity factor 1.15.
 
 ## Run Controls
 
