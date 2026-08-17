@@ -29,6 +29,7 @@ import requests
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
     MaterializedOutputMetadata,
+    verify_content_fingerprint,
     write_ingestion_metadata_json,
 )
 from rigging.filesystem.atomic import atomic_rename
@@ -275,12 +276,7 @@ def stage_web_data_commons_source(cfg: WebDataCommonsStagingConfig) -> dict[str,
     """Stage a WebDataCommons WebTables sample archive into JSONL."""
     if cfg.max_bytes_per_source <= 0:
         raise ValueError(f"max_bytes_per_source must be positive, got {cfg.max_bytes_per_source}")
-    if cfg.source_manifest is not None and cfg.content_fingerprint:
-        expected = cfg.source_manifest.fingerprint()
-        if cfg.content_fingerprint != expected:
-            raise ValueError(
-                f"content_fingerprint mismatch: config has {cfg.content_fingerprint}, source manifest has {expected}"
-            )
+    verify_content_fingerprint(cfg.source_manifest, cfg.content_fingerprint)
 
     StoragePath(cfg.output_path).mkdirs(exist_ok=True)
     out_file = posixpath.join(cfg.output_path, cfg.output_filename)

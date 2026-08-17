@@ -25,6 +25,7 @@ from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
     JsonValue,
     MaterializedOutputMetadata,
+    verify_content_fingerprint,
     write_ingestion_metadata_json,
 )
 from rigging.filesystem.atomic import atomic_rename
@@ -109,12 +110,7 @@ def stage_continuation_slice(
     Returns the staged slice summary: record count, bytes written, output file,
     and the metadata file path when a source manifest is configured.
     """
-    if cfg.source_manifest is not None and cfg.content_fingerprint:
-        expected = cfg.source_manifest.fingerprint()
-        if cfg.content_fingerprint != expected:
-            raise ValueError(
-                f"content_fingerprint mismatch: config has {cfg.content_fingerprint}, source manifest has {expected}"
-            )
+    verify_content_fingerprint(cfg.source_manifest, cfg.content_fingerprint)
 
     StoragePath(cfg.output_path).mkdirs(exist_ok=True)
     out_file = posixpath.join(cfg.output_path, cfg.output_filename)

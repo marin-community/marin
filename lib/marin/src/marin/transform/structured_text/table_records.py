@@ -21,6 +21,7 @@ from typing import Any
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
     MaterializedOutputMetadata,
+    verify_content_fingerprint,
     write_ingestion_metadata_json,
 )
 from marin.transform.hf_parquet_splits import load_hf_split_iterable
@@ -342,12 +343,7 @@ def stage_table_record_source(cfg: TableRecordStagingConfig) -> dict[str, int | 
     if cfg.serializer_name not in SERIALIZERS:
         raise ValueError(f"Unknown serializer {cfg.serializer_name!r}; known: {sorted(SERIALIZERS)}")
     serializer = SERIALIZERS[cfg.serializer_name]
-    if cfg.source_manifest is not None and cfg.content_fingerprint:
-        expected = cfg.source_manifest.fingerprint()
-        if cfg.content_fingerprint != expected:
-            raise ValueError(
-                f"content_fingerprint mismatch: config has {cfg.content_fingerprint}, source manifest has {expected}"
-            )
+    verify_content_fingerprint(cfg.source_manifest, cfg.content_fingerprint)
 
     StoragePath(cfg.output_path).mkdirs(exist_ok=True)
     out_file = posixpath.join(cfg.output_path, cfg.output_filename)

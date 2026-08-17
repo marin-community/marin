@@ -15,6 +15,7 @@ import yaml
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
     MaterializedOutputMetadata,
+    verify_content_fingerprint,
     write_ingestion_metadata_json,
 )
 from marin.transform.hf_parquet_splits import load_hf_split_iterable
@@ -227,12 +228,7 @@ def _validate_mmlu_fewshot_config(cfg: LmEvalRawStagingConfig) -> None:
 
 def stage_lm_eval_source(cfg: LmEvalRawStagingConfig) -> dict[str, int | str]:
     """Stage one LM-eval-style dataset split into raw-text JSONL."""
-    if cfg.source_manifest is not None and cfg.content_fingerprint:
-        expected = cfg.source_manifest.fingerprint()
-        if cfg.content_fingerprint != expected:
-            raise ValueError(
-                f"content_fingerprint mismatch: config has {cfg.content_fingerprint}, source manifest has {expected}"
-            )
+    verify_content_fingerprint(cfg.source_manifest, cfg.content_fingerprint)
 
     if cfg.renderer_name is LmEvalRawRenderer.MMLU:
         _validate_mmlu_fewshot_config(cfg)
