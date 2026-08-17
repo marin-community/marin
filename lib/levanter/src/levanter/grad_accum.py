@@ -41,8 +41,9 @@ def microbatched(
 
     ``fn`` must return ``((loss, metrics), grads)`` (i.e. the output of
     ``eqx.filter_value_and_grad(loss_fn, has_aux=True)`` where ``loss_fn`` returns
-    ``(loss, metrics)``). The batch axis is split into microbatches; the loss and grads are summed
-    then averaged over the microbatches, while ``metrics`` are folded with their own reductions.
+    ``(loss, metrics)``). The batch axis is split into microbatches; the loss and ordinary gradients
+    are summed then averaged, custom gradient state uses its own reduction without averaging, and
+    ``metrics`` are folded with their own reductions.
     Named arrays with ``Batch`` and plain arrays whose leading dimension is ``Batch.size`` are split;
     other inputs are reused for every microbatch.
 

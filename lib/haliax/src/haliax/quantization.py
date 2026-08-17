@@ -80,7 +80,9 @@ def accumulate_gradients(accumulated: T, gradient: T) -> T:
 
     def _accumulate(accumulated_leaf, gradient_leaf):
         if isinstance(accumulated_leaf, CustomGradientAccumulation):
-            if type(accumulated_leaf) is not type(gradient_leaf):
+            if not isinstance(gradient_leaf, CustomGradientAccumulation) or type(accumulated_leaf) is not type(
+                gradient_leaf
+            ):
                 raise ValueError(
                     "Custom gradient accumulation requires matching types, got "
                     f"{type(accumulated_leaf).__name__} and {type(gradient_leaf).__name__}"
