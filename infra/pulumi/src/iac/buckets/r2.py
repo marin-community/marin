@@ -10,7 +10,6 @@ import pulumi_cloudflare as cloudflare
 from rigging.filesystem.cluster_config import DataConfig, StoreType
 
 from iac.buckets.lifecycle import expiration_rules
-from iac.imports import NO_IMPORTS, ImportRegistrar
 
 R2_ENDPOINT_SUFFIX = ".r2.cloudflarestorage.com"
 R2_DEFAULT_JURISDICTION = "default"
@@ -31,7 +30,6 @@ class R2DataBuckets(pulumi.ComponentResource):
         data_config: DataConfig,
         lifecycle_config: DataConfig,
         cloudflare_provider: pulumi.ProviderResource,
-        imports: ImportRegistrar = NO_IMPORTS,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__("marin:buckets:R2DataBuckets", name, None, opts)
@@ -86,11 +84,6 @@ class R2DataBuckets(pulumi.ComponentResource):
                     protect=True,
                     retain_on_delete=True,
                 ),
-            )
-            imports.register(
-                resource,
-                parent=self,
-                provider_id=f"{account_id}/{bucket.name}/{R2_DEFAULT_JURISDICTION}",
             )
 
             # Cloudflare's provider cannot import R2 lifecycle resources. After the

@@ -8,7 +8,6 @@ import pulumi_gcp as gcp
 from rigging.filesystem.cluster_config import DataConfig, StoreType
 
 from iac.buckets.lifecycle import expiration_rules
-from iac.imports import NO_IMPORTS, ImportRegistrar
 
 
 class GcpDataBuckets(pulumi.ComponentResource):
@@ -22,7 +21,6 @@ class GcpDataBuckets(pulumi.ComponentResource):
         data_config: DataConfig,
         log_bucket: str,
         gcp_provider: pulumi.ProviderResource,
-        imports: ImportRegistrar = NO_IMPORTS,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__("marin:buckets:GcpDataBuckets", name, None, opts)
@@ -39,7 +37,7 @@ class GcpDataBuckets(pulumi.ComponentResource):
         for region, bucket in sorted(data_config.region_buckets.items()):
             if bucket.store is not StoreType.GCS:
                 continue
-            resource = gcp.storage.Bucket(
+            gcp.storage.Bucket(
                 f"bucket-{region}",
                 project=project,
                 name=bucket.name,
@@ -62,5 +60,4 @@ class GcpDataBuckets(pulumi.ComponentResource):
                     retain_on_delete=True,
                 ),
             )
-            imports.register(resource, parent=self, provider_id=f"{project}/{bucket.name}")
         self.register_outputs({})

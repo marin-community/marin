@@ -109,6 +109,7 @@ fork-strategy = "fewest"
 
 [manifest]
 members = [
+    "marin-buckets",
     "marin-core",
     "marin-ducky",
     "marin-dupekit",
@@ -3336,6 +3337,17 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/8e/63/981401c5680c1eb30893f00a19641ac80db5d1e7086c62cb4b13ed813038/lxml-6.1.0-cp313-cp313-win_amd64.whl", hash = "sha256:4a1503c56e4e2b38dc76f2f2da7bae69670c0f1933e27cfa34b2fa5876410b16", size = 3995728, upload-time = "2026-04-18T04:31:58.763Z" },
     { url = "https://files.pythonhosted.org/packages/e7/e8/c358a38ac3e541d16a1b527e4e9cb78c0419b0506a070ace11777e5e8404/lxml-6.1.0-cp313-cp313-win_arm64.whl", hash = "sha256:e0af85773850417d994d019741239b901b22c6680206f46a34766926e466141d", size = 3658372, upload-time = "2026-04-18T04:32:03.629Z" },
 ]
+
+[[package]]
+name = "marin-buckets"
+version = "0.0.0"
+source = { virtual = "infra/buckets" }
+dependencies = [
+    { name = "marin-iac", extra = ["deploy"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "marin-iac", extras = ["deploy"], editable = "infra/pulumi" }]
 
 [[package]]
 name = "marin-core"

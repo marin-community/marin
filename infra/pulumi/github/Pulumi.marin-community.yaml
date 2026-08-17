@@ -298,14 +298,6 @@ config:
       source_ref: env:COREWEAVE_API_TOKEN
       disposition: review
       note: Used by the hourly CoreWeave storage collector; requires Observability Viewer and differs from storage and Grafana read keys.
-    - name: COREWEAVE_OBJECT_STORAGE_API_TOKEN
-      scope: repository
-      repository: marin-community/marin
-      presence: referenced-missing
-      source_kind: current-environment
-      source_ref: env:COREWEAVE_OBJECT_STORAGE_API_TOKEN
-      disposition: review
-      note: Pulumi data-bucket provider credential; requires AI Object Storage access.
     - name: OPENAI_ADMIN_KEY
       scope: repository
       repository: marin-community/marin

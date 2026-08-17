@@ -18,8 +18,10 @@ own image and deployment lifecycle.
 This project provisions cluster prerequisites and shared GCP infrastructure.
 Cluster-scoped resources use one stack per cluster, with configuration in
 `Pulumi.<cluster>.yaml`. Shared GCP resources, including IAM grants, belong to
-the `marin` stack and its `Pulumi.marin.yaml` configuration. Do not create
-another infrastructure stack or permissions project for shared GCP resources.
+the `marin` stack and its `Pulumi.marin.yaml` configuration. Cross-cloud data
+buckets are the exception: `infra/buckets` owns the GCS, CoreWeave, and R2
+buckets in a manually operated project because its provider credentials are not
+available to CI. Bucket-scoped GCP IAM remains in `marin`.
 
 Resources often exist before a cluster or GCP resource is brought under Pulumi.
 Use the Program-first import command in `infra/pulumi/README.md` for a one-time
@@ -85,7 +87,8 @@ All projects share these conventions:
 ## Picking a pattern for new work
 
 1. Add cluster-scoped or shared GCP infrastructure to `infra/pulumi`. Put
-   shared GCP configuration in `Pulumi.marin.yaml`.
+   shared GCP configuration in `Pulumi.marin.yaml`. Keep the cross-cloud data
+   bucket graph in `infra/buckets`.
 2. Give a deployed service its own directory and project. Configure a shared
    `iac` component unless the service needs a different deployment lifecycle.
 3. Put third-party resources in a SaaS project that matches their provider and

@@ -9,7 +9,7 @@ typed `provisioning:` section, and declares that cluster's resources. One stack 
 which resources: CoreWeave declares the controller RBAC, reserved NodePools, Kueue objects,
 the Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs; GCP declares
 the reserved federation-egress static IPs, Artifact Registry pull-through mirrors, the shared
-GCLB/IAP ingress, all shared data buckets, and every IAM grant on the project
+GCLB/IAP ingress, and every IAM grant on the project
 (`iac.gcp.iam.GcpIam`, replacing `infra/permissions`). Components not yet implemented are
 tracked in README.md's "Future work".
 """
@@ -27,10 +27,8 @@ from iris.cluster.endpoints import gcp_instance_internal_ip
 from iris.cluster.platforms.types import Labels
 from iris.cluster.platforms.vm_lifecycle import DEFAULT_CONTROLLER_PORT, controller_vm_name
 from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT
-from rigging.filesystem.cluster_config import load_cluster_config_from_dirs
 from rigging.secrets import resolve_secret_spec
 
-from iac.buckets import DataBuckets
 from iac.config import (
     CLOUDFLARE_TOKEN_SECRET,
     GcpGclbSpec,
@@ -53,8 +51,6 @@ from iac.imports import NO_IMPORTS, ImportRegistrar
 from iac.nodepools import derive_nodepools
 
 DEFAULT_NAMESPACE = "iris"
-GCP_DATA_BUCKET_LOG_BUCKET = "marin-usage-logs"
-IAC_DATA_CONFIG_DIRS = ("config",)
 IAP_AUDIENCE_PATTERN = re.compile(
     r"^/projects/(?P<project_number>[0-9]+)/global/backendServices/(?P<backend_id>[0-9]+)$"
 )
@@ -326,19 +322,7 @@ def _build_gcp(cluster: str, *, imports: ImportRegistrar) -> None:
     assert provisioning.gcp is not None  # guaranteed by load_provisioning
     gcp_provisioning = provisioning.gcp
     iam_config = load_iam_config()
-    gcp_data_config = load_cluster_config_from_dirs(cluster, IAC_DATA_CONFIG_DIRS)
-    s3_data_config = load_cluster_config_from_dirs("coreweave", IAC_DATA_CONFIG_DIRS)
-
     gcp_provider = gcp.Provider("gcp", project=gcp_provisioning.project)
-    DataBuckets(
-        "data-buckets",
-        project=gcp_provisioning.project,
-        gcp_data_config=gcp_data_config,
-        s3_data_config=s3_data_config,
-        log_bucket=GCP_DATA_BUCKET_LOG_BUCKET,
-        gcp_provider=gcp_provider,
-        imports=imports,
-    )
     GcpStaticAddresses(
         "addresses",
         GcpStaticAddressesArgs(

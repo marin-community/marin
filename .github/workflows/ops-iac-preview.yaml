@@ -94,15 +94,12 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || (inputs.pr_number != '' && format('refs/pull/{0}/head', inputs.pr_number)) || github.sha }}
 
       - name: Preview marin
-        env:
-          COREWEAVE_API_TOKEN: ${{ secrets.COREWEAVE_OBJECT_STORAGE_API_TOKEN }}
         uses: ./.github/actions/pulumi-preview
         with:
           stack: marin
           work-dir: infra/pulumi
           service-account: ${{ env.PULUMI_CI_SERVICE_ACCOUNT }}
           gcp-project-id: ${{ env.PULUMI_CI_PROJECT }}
-          cloudflare-secret-name: cloudflare-r2-pulumi-read-token
 
   comment:
     if: >-

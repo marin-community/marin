@@ -61,7 +61,6 @@ def test_committed_stack_covers_workflow_references_and_isolates_removal_candida
         "repository:marin-community/marin:ANTHROPIC_ADMIN_KEY",
         "repository:marin-community/marin:CLAUDE_MAX_OAUTH_TOKEN",
         "repository:marin-community/marin:COREWEAVE_API_TOKEN",
-        "repository:marin-community/marin:COREWEAVE_OBJECT_STORAGE_API_TOKEN",
         "repository:marin-community/marin:OPENAI_ADMIN_KEY",
     }
     assert set(report.shadowed) == {"organization:GCP_PROJECT_ID"}

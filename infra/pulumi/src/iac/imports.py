@@ -22,7 +22,6 @@ import pulumi
 
 IMPORT_ID_PLACEHOLDER = "<PLACEHOLDER>"
 IMPORT_MANIFEST_MODE = 0o600
-PULUMI_PROVIDER_TYPE_PREFIX = "pulumi:providers:"
 
 ImportManifest = dict[str, Any]
 
@@ -201,7 +200,7 @@ def resolve_import_manifest(
         specs_by_identity[spec.identity] = spec
 
     for resource in resources:
-        if resource.get("component") is True or resource.get("type", "").startswith(PULUMI_PROVIDER_TYPE_PREFIX):
+        if resource.get("component") is True:
             continue
         if resource.get("id") != IMPORT_ID_PLACEHOLDER:
             raise ValueError("generated import resource did not contain an ID placeholder")
@@ -230,8 +229,6 @@ def import_manifest_summary(manifest: Mapping[str, Any]) -> ImportManifestSummar
             raise ValueError("import resource has no resource type")
         if resource.get("component") is True:
             component_count += 1
-        elif resource_type.startswith(PULUMI_PROVIDER_TYPE_PREFIX):
-            continue
         elif resource.get("id") == IMPORT_ID_PLACEHOLDER:
             unresolved_by_type[resource_type] += 1
         else:
@@ -270,9 +267,7 @@ def validate_reviewed_manifest(reviewed: Mapping[str, Any], current: Mapping[str
         if current_resources[encoded] == 0:
             raise ValueError(f"reviewed import entry {resource_index} is stale or edited")
         current_resources[encoded] -= 1
-        if resource.get("component") is not True and not resource.get("type", "").startswith(
-            PULUMI_PROVIDER_TYPE_PREFIX
-        ):
+        if resource.get("component") is not True:
             if resource.get("id") == IMPORT_ID_PLACEHOLDER:
                 raise ValueError(f"unresolved import ID at entry {resource_index}")
             imported_leaf_count += 1

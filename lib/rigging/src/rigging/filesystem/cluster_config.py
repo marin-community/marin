@@ -11,7 +11,7 @@ region-to-bucket mirror set, the URL scheme, and the temp TTL policy.
 ``marin``), loaded from ``config/<cluster>.yaml``. Every "where does data live"
 answer flows through it: :func:`marin_prefix` is ``data_config().resolved_root()``,
 and :func:`marin_temp_bucket` and the region helpers all read its fields.
-Lifecycle rules on every configured data bucket are managed by ``infra/pulumi``.
+Lifecycle rules on every configured data bucket are managed by ``infra/buckets``.
 """
 
 import contextlib
@@ -234,7 +234,7 @@ def load_cluster_config(cluster: str | None = None) -> DataConfig:
     return _load_cluster_config_cached(name)
 
 
-def load_cluster_config_from_dirs(cluster: str, config_dirs: Sequence[str]) -> DataConfig:
+def load_cluster_config_from_dirs(cluster: str, config_dirs: Sequence[pathlib.Path | str]) -> DataConfig:
     """Load a required data config from an explicit set of config directories.
 
     Unlike :func:`load_cluster_config`, this does not consult per-user overrides
@@ -266,8 +266,6 @@ def _read_data_config(config_path: pathlib.Path) -> DataConfig | None:
     data = document.get("data")
     if not data:
         return None
-    if not isinstance(data, Mapping):
-        raise ValueError(f"cluster config {config_path} has a non-mapping `data:` section")
     return _parse_data_config(data)
 
 
@@ -461,7 +459,7 @@ def _s3_bucket_from_prefix(prefix: str | None) -> str | None:
     """Return the bucket from an ``s3://bucket/…`` prefix, or ``None``.
 
     Only recognizes buckets in :func:`s3_data_buckets` (the R2/CoreWeave buckets
-    with lifecycle rules managed by ``infra/pulumi``), so unknown
+    with lifecycle rules managed by ``infra/buckets``), so unknown
     S3 buckets fall through to the flat non-TTL fallback instead of getting a
     ``tmp/ttl=Nd/`` path that would never be cleaned up.
     """
@@ -556,7 +554,7 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
             return _append_path_prefix(path, prefix)
 
     # R2 and CoreWeave temp lives at the bucket root so the `tmp/ttl=Nd/`
-    # lifecycle prefix managed by infra/pulumi applies. The
+    # lifecycle prefix managed by infra/buckets applies. The
     # bucket already pins the region (R2 is non-regional; CoreWeave encodes it in
     # the name, e.g. marin-us-east-02a), and the runtime marin prefix carries a
     # `marin/` data subdir (e.g. `s3://marin-na/marin`) that we deliberately strip.

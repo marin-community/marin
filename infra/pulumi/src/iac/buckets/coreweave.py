@@ -8,7 +8,6 @@ import pulumi_coreweave as coreweave
 from rigging.filesystem.cluster_config import DataConfig, StoreType
 
 from iac.buckets.lifecycle import expiration_rules
-from iac.imports import NO_IMPORTS, ImportRegistrar
 
 
 class CoreweaveDataBuckets(pulumi.ComponentResource):
@@ -21,7 +20,6 @@ class CoreweaveDataBuckets(pulumi.ComponentResource):
         data_config: DataConfig,
         lifecycle_config: DataConfig,
         coreweave_provider: pulumi.ProviderResource,
-        imports: ImportRegistrar = NO_IMPORTS,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__("marin:buckets:CoreweaveDataBuckets", name, None, opts)
@@ -42,9 +40,8 @@ class CoreweaveDataBuckets(pulumi.ComponentResource):
                     retain_on_delete=True,
                 ),
             )
-            imports.register(resource, parent=self, provider_id=bucket.name)
 
-            lifecycle = coreweave.ObjectStorageBucketLifecycleConfiguration(
+            coreweave.ObjectStorageBucketLifecycleConfiguration(
                 f"lifecycle-{bucket.name}",
                 bucket=resource.name,
                 rules=[
@@ -63,5 +60,4 @@ class CoreweaveDataBuckets(pulumi.ComponentResource):
                     retain_on_delete=True,
                 ),
             )
-            imports.register(lifecycle, parent=self, provider_id=bucket.name)
         self.register_outputs({})
