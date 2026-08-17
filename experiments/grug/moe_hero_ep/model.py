@@ -678,32 +678,96 @@ class DenseMLP(eqx.Module):
         return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
 
 
-def _routing_stats(
+def _local_routing_stats(
     selected_experts: Int[Array, "T K"],
     router_probs: Float[Array, "T E"],
     router_logits: Float[Array, "T E"],
+    mesh: jax.sharding.AbstractMesh,
+    *,
+    num_experts: int,
+) -> dict[str, jax.Array]:
+    """Per-shard partial sums for the router metrics, with the cross-device reduction left undone.
+
+    Every router metric bottoms out in a *linear* reduction over tokens -- an expert count, a
+    probability sum, a sum of squared logsumexps -- followed by pointwise algebra on the reduced
+    values. Reducing over the batch axes here, inside the layer, costs one ~1.5 KB single-block
+    ``ncclDevKernel_AllReduce_Sum_f32_RING_LL`` per MoE layer (48 per step at hero scale, fully
+    exposed) and buys nothing, because nothing inside the layer reads the reduced value: entropy,
+    the load-balance term and the z-loss are logging-only (``next_token_loss`` sets
+    ``loss = cross_entropy_loss``) and ``qb_beta`` reaches the router bias only on the *next* step,
+    via the trainer's ``pending_qb_betas``.
+
+    So return the unreduced per-shard partials and let ``_reduce_router_stats`` do the collective
+    once, on the stacked ``[num_layers, num_shards, ...]`` scan outputs. The returned arrays carry a
+    leading shard axis that stays sharded over ``_BATCH_AXES``; per device they are the same size as
+    the replicated per-layer metrics they replace.
+    """
+
+    def _local(sel: jax.Array, probs: jax.Array, logits: jax.Array) -> dict[str, jax.Array]:
+        probs_f = probs.astype(jnp.float32)
+        logits_f = logits.astype(jnp.float32)
+        counts = jnp.sum(jax.nn.one_hot(sel, num_experts, dtype=jnp.float32), axis=(0, 1))
+        z = jsp.special.logsumexp(logits_f, axis=-1)
+        return {
+            "routing_counts_local": counts[None, :],
+            "router_prob_sum_local": jnp.sum(probs_f, axis=0)[None, :],
+            "router_z_sq_sum_local": jnp.sum(z**2)[None],
+        }
+
+    return shard_map(
+        _local,
+        mesh=mesh,
+        in_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES, None), P(_BATCH_AXES, None)),
+        out_specs={
+            "routing_counts_local": P(_BATCH_AXES, None),
+            "router_prob_sum_local": P(_BATCH_AXES, None),
+            "router_z_sq_sum_local": P(_BATCH_AXES),
+        },
+    )(selected_experts, router_probs, router_logits)
+
+
+def _reduce_router_stats(
+    stacked: dict[str, jax.Array],
     *,
     num_experts: int,
     num_experts_per_token: int,
+    num_tokens: int,
 ) -> dict[str, jax.Array]:
-    router_probs_f = router_probs.astype(jnp.float32)
-    router_logits_f = router_logits.astype(jnp.float32)
-    expert_counts = jnp.sum(jax.nn.one_hot(selected_experts, num_experts, dtype=jnp.float32), axis=(0, 1))
-    total_assignments = jnp.maximum(jnp.sum(expert_counts), 1.0)
-    assignment_fraction = expert_counts / total_assignments
-    routing_entropy = -jnp.sum(assignment_fraction * jnp.log(assignment_fraction + 1e-6))
-    token_fraction = assignment_fraction * num_experts_per_token
-    p = jnp.mean(router_probs_f, axis=0)
-    load_balancing_loss = num_experts * jnp.sum(token_fraction * p)
-    z = jsp.special.logsumexp(router_logits_f, axis=-1)
-    router_z_loss = jnp.mean(z**2)
+    """Reduce the stacked per-shard router partials across devices once, after the layer scan.
 
-    return {
-        "routing_counts": expert_counts,
+    ``stacked`` holds the scan's ``ys``: a leading ``[num_layers]`` axis over a shard axis that is
+    still sharded over ``_BATCH_AXES``. Summing that shard axis is one all-reduce for the whole
+    stack rather than one per layer; XLA's all-reduce combiner then merges the four into a single
+    tupled collective, so the layer scan emits none at all. The pointwise algebra below is
+    identical to what the old per-layer ``_routing_stats`` did, just vectorized over the layer axis.
+
+    ``num_tokens`` is the global (batch x seq) token count, the denominator the per-layer
+    ``jnp.mean(..., axis=0)`` used to carry.
+    """
+    counts = jnp.sum(stacked["routing_counts_local"], axis=1)
+    prob_sum = jnp.sum(stacked["router_prob_sum_local"], axis=1)
+    z_sq_sum = jnp.sum(stacked["router_z_sq_sum_local"], axis=1)
+
+    total_assignments = jnp.maximum(jnp.sum(counts, axis=-1, keepdims=True), 1.0)
+    assignment_fraction = counts / total_assignments
+    routing_entropy = -jnp.sum(assignment_fraction * jnp.log(assignment_fraction + 1e-6), axis=-1)
+    token_fraction = assignment_fraction * num_experts_per_token
+    p = prob_sum / num_tokens
+    load_balancing_loss = num_experts * jnp.sum(token_fraction * p, axis=-1)
+
+    out = {
+        "routing_counts": counts,
         "routing_entropy": routing_entropy,
         "load_balancing_loss": load_balancing_loss,
-        "router_z_loss": router_z_loss,
+        "router_z_loss": z_sq_sum / num_tokens,
     }
+    # The TOPK estimator defers its `pmean`; the HIST estimator cannot (its bin grid needs a global
+    # pmin/pmax before binning), so it arrives already reduced.
+    if "qb_beta_local" in stacked:
+        out["qb_beta"] = jnp.mean(stacked["qb_beta_local"], axis=1)
+    else:
+        out["qb_beta"] = stacked["qb_beta"]
+    return out
 
 
 def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
@@ -901,15 +965,16 @@ class MoEMLP(eqx.Module):
         denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
         combine_weights = combine_weights_f.astype(x.dtype)
-        router_stats = _routing_stats(
-            selected_experts,
-            router_probs,
-            router_logits,
+        mesh = get_abstract_mesh()
+        # Per-shard partials only; the cross-device reduction happens once after the layer scan.
+        router_stats = _local_routing_stats(
+            reshard(selected_experts, P(_BATCH_AXES, None)),
+            reshard(router_probs, P(_BATCH_AXES, None)),
+            reshard(router_logits, P(_BATCH_AXES, None)),
+            mesh,
             num_experts=self.cfg.num_experts,
-            num_experts_per_token=self.cfg.num_experts_per_token,
         )
         # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha`.
-        mesh = get_abstract_mesh()
         s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
         if self.cfg.qb_estimator == QbEstimator.HIST:
             router_stats["qb_beta"] = _qb_beta_hist(
@@ -928,14 +993,16 @@ class MoEMLP(eqx.Module):
 
             def _local_qb_beta(s_ma):
                 topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
-                beta = topk_vals[:, -1]
-                return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
+                # The `pmean` that used to live here is deferred to `_reduce_router_stats`: the
+                # mean of the per-shard betas is the same number whether it is taken per layer or
+                # once over the stacked layers, and beta is not read until the *next* step.
+                return topk_vals[:, -1][None, :]
 
-            router_stats["qb_beta"] = shard_map(
+            router_stats["qb_beta_local"] = shard_map(
                 _local_qb_beta,
                 mesh=mesh,
                 in_specs=(P(_BATCH_AXES, None),),
-                out_specs=P(),
+                out_specs=P(_BATCH_AXES, None),
             )(s_minus_alpha)
 
         # LatentMoE: compress before dispatch so the expert-parallel all-to-all carries
@@ -1184,12 +1251,20 @@ class Transformer(eqx.Module):
         hidden, stacked_router_stats = jax.lax.scan(
             _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
         )
+        # One cross-device reduction for the whole stack of layers, instead of one inside every
+        # scan iteration. See `_local_routing_stats`.
+        reduced_router_stats = _reduce_router_stats(
+            stacked_router_stats,
+            num_experts=cfg.num_experts,
+            num_experts_per_token=cfg.num_experts_per_token,
+            num_tokens=batch_size * seq_len,
+        )
         router_metrics = {
-            "routing_entropy_per_layer": stacked_router_stats["routing_entropy"],
-            "routing_counts_per_layer": stacked_router_stats["routing_counts"],
-            "load_balancing_loss_per_layer": stacked_router_stats["load_balancing_loss"],
-            "router_z_loss_per_layer": stacked_router_stats["router_z_loss"],
-            "qb_beta_per_layer": stacked_router_stats["qb_beta"],
+            "routing_entropy_per_layer": reduced_router_stats["routing_entropy"],
+            "routing_counts_per_layer": reduced_router_stats["routing_counts"],
+            "load_balancing_loss_per_layer": reduced_router_stats["load_balancing_loss"],
+            "router_z_loss_per_layer": reduced_router_stats["router_z_loss"],
+            "qb_beta_per_layer": reduced_router_stats["qb_beta"],
             "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
             "sender_capacity_overflow_per_layer": stacked_router_stats["sender_capacity_overflow"],
             "receiver_capacity_overflow_per_layer": stacked_router_stats["receiver_capacity_overflow"],
