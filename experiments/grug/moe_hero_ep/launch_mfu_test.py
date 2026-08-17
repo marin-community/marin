@@ -13,19 +13,22 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text.datasets import BlockShuffleConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
-from marin.experiment.data import mixture, tokenized
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
+from experiments.grug.moe.launch_datakit_moe_mix import _val_component
+from experiments.grug.moe_hero_ep.harrier_quality_repair import (
+    HARRIER_WINNER_QUALITY_REPAIR_STORE,
+    winner_quality_repair_data_config,
+)
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, build_hero_configs
 from experiments.grug.moe_hero_ep.train import (
     GrugEvalConfig,
@@ -35,7 +38,7 @@ from experiments.grug.moe_hero_ep.train import (
     WatchMode,
     run_grug,
 )
-from experiments.llama import llama3_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 
 DEFAULT_HERO_STEPS = 25
 DEFAULT_WANDB_PROJECT = "marin_moe"
@@ -50,31 +53,10 @@ HERO_OFFLOAD_OPT_STATE = True
 HERO_WATCH_INTERVAL = 0
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 
-_SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
-_SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
 
-
-# Held-out sets, added at weight 0 so they surface as tagged eval sets. The hero trains on
-# llama3-tokenized SlimPajama, so these must carry the same tokenizer.
-#
-# Paloma only, deliberately. `paloma_dataset` and `uncheatable_dataset` both hardcode a `-llama3`
-# suffix in the cache name while taking an arbitrary `tokenizer` argument, so callers asking for
-# different tokenizers collide on one cache identity and whoever materializes first wins. The
-# uncheatable caches under that name currently hold marin-tokenizer data, which fails the mixture's
-# single-tokenizer check. Paloma is also the suite the scaling-law scoring uses, so dropping
-# uncheatable costs nothing here.
+# Held-out sets are added at weight 0 so they surface as tagged eval sets.
 def _validation_datasets() -> list[ArtifactStep[TokenizedCache]]:
-    return list(paloma_datasets(tokenizer=llama3_tokenizer).values())
-
-
-def _slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
-    return tokenized(
-        "slimpajama-6b",
-        source="DKYoon/SlimPajama-6B",
-        tokenizer=llama3_tokenizer,
-        resources=_SLIMPAJAMA_TOKENIZE_RESOURCES,
-        version="2026.06.28",
-    )
+    return list(paloma_datasets(tokenizer=marin_tokenizer).values())
 
 
 class HeroThroughputResult(Artifact):
@@ -203,7 +185,6 @@ def build_hero_run(
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
-    slim = _slimpajama_6b_dataset()
     validation = _validation_datasets() if eval_every > 0 else []
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
@@ -236,6 +217,7 @@ def build_hero_run(
                     wave_tag,
                     size_tag,
                     "gb200",
+                    "harrier-winner-quality-repair",
                     "MHEP",
                 ],
                 group="moe-hero-ep",
@@ -258,9 +240,20 @@ def build_hero_run(
                 keep_last_temporary_checkpoints=1,
             ),
         )
+        if ctx.is_fingerprint:
+            val_components = {v.name: _val_component(ctx.artifact_path(v)) for v in validation}
+        else:
+            val_components = {v.name: ctx.resolved(v).as_component() for v in validation}
+        data = winner_quality_repair_data_config(
+            store_path=ctx.artifact_path(HARRIER_WINNER_QUALITY_REPAIR_STORE),
+            total_steps=total_schedule_steps,
+            batch_size=batch_size,
+            max_seq_len=model.max_seq_len,
+            validation=val_components,
+        )
         return GrugRunConfig(
             model=model,
-            data=mixture(ctx, {slim: 1.0}, validation=validation, shuffle=_SLIMPAJAMA_SHUFFLE),
+            data=data,
             resources=ctx.runtime_arg("train_resources"),
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
@@ -279,7 +272,7 @@ def build_hero_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(slim, *validation),
+        deps=(HARRIER_WINNER_QUALITY_REPAIR_STORE, *validation),
         runtime_args={"train_resources": train_resources},
     )
 
