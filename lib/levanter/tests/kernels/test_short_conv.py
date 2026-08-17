@@ -15,6 +15,13 @@ reference, because a fused conv changes only *when* bytes cross HBM, never the
 arithmetic. `dw` is a reduction over 65,536 tokens whose association order XLA does not
 define, so it is checked against a float64 oracle instead -- the kernel must be at least
 as accurate as the reference, not identical to it.
+
+The whole module is scoped to the backends this Triton kernel targets. `dx` is bitwise
+only because `_dx_body` accumulates in the order XLA's transpose of the pad-and-shift
+forward emits, and that order is a property of the backend's transpose, not of the
+algorithm: on TPU the multi-tap shapes disagree in the last bit or two while `W=1`, which
+has no accumulation to associate, still matches exactly. Running the interpreter on TPU
+therefore measures XLA:TPU rather than the kernel that ships.
 """
 
 import jax
@@ -28,6 +35,11 @@ from levanter.kernels.pallas.short_conv import (
     short_conv_reference,
 )
 from levanter.kernels.pallas.short_conv.pallas_gpu import interpret_mode
+
+pytestmark = pytest.mark.skipif(
+    jax.default_backend() == "tpu",
+    reason="Triton kernel: dx parity is defined against XLA's CPU/GPU transpose of the reference",
+)
 
 # (batch, seq_len, channels, kernel_size, s_block, c_block)
 SHAPES = [
