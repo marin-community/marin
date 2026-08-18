@@ -4,10 +4,10 @@
 """Hero-shape scaling ladder: one recipe, five widths.
 
 Every rung trains the *same* EP hero recipe -- 384 routed experts, top-8, hidden/2-wide experts in a
-hidden/2 latent, pooled-wave transport, SlimPajama/llama3 data, offloaded MuonH state on FP32
-pinned-host master params, the QB histogram estimator, and a dropless held-out eval -- and differs
-only in width and the rack count it spans. Behaviour is uniform across the ladder so a rung predicts
-the d6144 hero. ``d6144`` is the hero itself.
+hidden/2 latent, pooled-wave transport, the Harrier 2026.08.17.1 two-phase mixture on the Marin
+tokenizer, offloaded MuonH state on FP32 pinned-host master params, the QB histogram estimator, and
+a dropless held-out eval -- and differs only in width and the rack count it spans. Behaviour is
+uniform across the ladder so a rung predicts the d6144 hero. ``d6144`` is the hero itself.
 
     size   racks  batch    steps  eval        checkpoints  tokens  active  total   FLOPs
     d768     1     1024    11420  every 5%    final only     48B     61M    1.6B    5.5e19
@@ -35,13 +35,16 @@ from levanter.trainer import TrainerConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
-from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.grug.moe_hero_ep.harrier_mix_2026_08_17_1 import (
+    HARRIER_MIX_2026_08_17_1_STORE,
+    HARRIER_MIX_2026_08_17_1_TAG,
+    harrier_mix_2026_08_17_1_data_config,
+)
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, MoeHeuristic, build_hero_configs
 from experiments.grug.moe_hero_ep.launch_mfu_test import (
-    _SLIMPAJAMA_SHUFFLE,
     DEFAULT_WANDB_PROJECT,
     HERO_EP_BATCH_SIZE,
     HERO_EP_EXPERT_AXIS_SIZE,
@@ -49,7 +52,6 @@ from experiments.grug.moe_hero_ep.launch_mfu_test import (
     HERO_GPUS_PER_NODE,
     HERO_MIXED_PRECISION,
     HeroThroughputResult,
-    _slimpajama_6b_dataset,
     _validation_datasets,
 )
 from experiments.grug.moe_hero_ep.model import QbEstimator
@@ -185,7 +187,6 @@ def build_ladder_run(
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
-    slim = _slimpajama_6b_dataset()
     validation = _validation_datasets()
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
 
@@ -200,7 +201,17 @@ def build_ladder_run(
             tracker=WandbConfig(
                 entity="marin-community",
                 project=wandb_project,
-                tags=["grug", "moe", "hero", "ep", "scaling-ladder", f"shape-{size}", f"racks-{dp_racks}", "gb200"],
+                tags=[
+                    "grug",
+                    "moe",
+                    "hero",
+                    "ep",
+                    "scaling-ladder",
+                    f"shape-{size}",
+                    f"racks-{dp_racks}",
+                    "gb200",
+                    HARRIER_MIX_2026_08_17_1_TAG,
+                ],
                 group="moe-hero-ep-scaling-ladder",
                 name=run_id,
                 replicate_path=ctx.output_path,
@@ -228,7 +239,13 @@ def build_ladder_run(
         )
         return GrugRunConfig(
             model=model,
-            data=mixture(ctx, {slim: 1.0}, validation=validation, shuffle=_SLIMPAJAMA_SHUFFLE),
+            data=harrier_mix_2026_08_17_1_data_config(
+                ctx=ctx,
+                total_steps=num_steps,
+                batch_size=batch_size,
+                max_seq_len=model.max_seq_len,
+                validation=validation,
+            ),
             resources=ctx.runtime_arg("train_resources"),
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
@@ -248,7 +265,7 @@ def build_ladder_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(slim, *validation),
+        deps=(HARRIER_MIX_2026_08_17_1_STORE, *validation),
         runtime_args={"train_resources": train_resources},
     )
 
