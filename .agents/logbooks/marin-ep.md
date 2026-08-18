@@ -1839,3 +1839,39 @@ Experiment ID prefix: `MEP`.
 - DECISION: quote 8/384 at cf 1.1 for apples-to-apples (near-dropless);
   cf 1.0 available as a perf/fidelity tradeoff. Remaining 8/384 headroom:
   per-leg GEMM retune at i3072 (fallback configs in use), splits retune.
+
+### 2026-08-18 11:45 - MEP-073: register-capture round — wedge narrowed to the received_sem wait; unified zeroing theory
+- mep-fused2regb (fused2e recipe + dumps armed): wedged again (6/6 overall).
+  This round 46/60 read ranks parked in the AllGather; ~14 in kernel2
+  (my hunt greps misclassified them as unknown; verified by direct read).
+- Thread-table of a kernel2-parked rank (core_s2zpxs64_819, grid 1685):
+  EVERY thread of EVERY block is in the kernel-exit barrier complex
+  (76x384 odd-CTA at UCGABAR_WAIT, 75x256 GEMM wgs at ARV, transport
+  lanes 1-127 at the pre-barrier PCs) EXCEPT each even block transport
+  lane 0, parked one instruction group earlier at 3 nearby PCs — the
+  final semaphore poll. The only wait at kernel end is
+  semaphore_wait(received_sem, (num_devices-1)*num_sms) — REMOTE-fed.
+  All sends completed; the rank waits for remote combine signals that
+  never sum to the expected count.
+- Contrast with MEP-066 round 3 (transport parked in the per-block tile
+  gate on a different rank): BOTH semaphore families can come up short.
+  Unified hypothesis: the pallas GMEM semaphore scratch is zero-initialized
+  by an XLA op; under multi-stream execution + buffer reuse, a LATER
+  launch scratch zeroing can run concurrently with a STILL-EXECUTING
+  kernel that shares the memory (or an early peer signal predates the
+  receiver zeroing, MEP-069) — erasing live counts on either tile_done
+  or received_sem. Consistent with: overlap-limit-1 not fixing it
+  (MEP-055/062 — the limiter gates collectives, not the zeros fusion),
+  per-rank probabilistic wedging, EP4-green (tight sync, low reuse
+  pressure), and both observed park sites.
+- Pod preempted before the SASS at the new binary poll PCs could be
+  disassembled; registers of one lane-0 captured (compare-pair mapping
+  needs the disasm — inconclusive alone).
+- Next candidates: (a) HLO/buffer-assignment inspection of the fused2
+  step to check scratch reuse across layer launches and the stream of
+  the zeros ops (off-rack, needs a dumped module); (b) upstream-side:
+  semaphore scratch lifecycle in pallas mosaic-gpu (get_global + remote
+  signals + per-launch rezero is race-prone by construction) — issue
+  material once (a) confirms; (c) workaround experiment: run fused2 with
+  command buffers / single-stream scheduling to serialize zeros against
+  kernels.
