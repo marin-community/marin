@@ -7,7 +7,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from scripts.ops.storage.recompress_parquet import RewriteDisposition, RewriteOptions, recompress_parquet, run_migration
+from scripts.ops.storage.recompress_parquet import (
+    RewriteDisposition,
+    RewriteMode,
+    RewriteOptions,
+    recompress_parquet,
+    run_migration,
+)
 
 
 def _compressions(path: Path) -> set[str]:
@@ -37,7 +43,7 @@ def test_recompress_parquet_replaces_snappy_with_smaller_zstd(tmp_path):
     abandoned_path = Path(f"{path}.tmp.abandoned")
     abandoned_path.write_bytes(b"incomplete prior attempt")
 
-    result = recompress_parquet(str(path), RewriteOptions(apply=True, batch_rows=100))
+    result = recompress_parquet(str(path), RewriteOptions(mode=RewriteMode.APPLY, batch_rows=100))
 
     assert result.disposition is RewriteDisposition.REWRITTEN
     assert result.input_bytes == input_bytes
@@ -63,14 +69,14 @@ def test_recompress_parquet_dry_run_preserves_source(tmp_path):
     assert _compressions(path) == {"SNAPPY"}
 
 
-def test_recompress_parquet_skips_existing_zstd(tmp_path):
+def test_recompress_parquet_skips_zstd_with_page_indexes(tmp_path):
     path = tmp_path / "records.parquet"
     pq.write_table(pa.table({"value": ["same"] * 1_000}), path, compression="zstd", write_page_index=True)
     original = path.read_bytes()
 
-    result = recompress_parquet(str(path), RewriteOptions(apply=True))
+    result = recompress_parquet(str(path), RewriteOptions(mode=RewriteMode.APPLY))
 
-    assert result.disposition is RewriteDisposition.ALREADY_ZSTD
+    assert result.disposition is RewriteDisposition.ALREADY_TARGET
     assert result.output_bytes is None
     assert path.read_bytes() == original
 
@@ -80,7 +86,7 @@ def test_recompress_parquet_adds_page_indexes_to_existing_zstd(tmp_path):
     expected = pa.table({"value": [f"record {index}" for index in range(10_000)]})
     pq.write_table(expected, path, compression="zstd")
 
-    result = recompress_parquet(str(path), RewriteOptions(apply=True))
+    result = recompress_parquet(str(path), RewriteOptions(mode=RewriteMode.APPLY))
 
     assert result.disposition is RewriteDisposition.REWRITTEN
     assert _compressions(path) == {"ZSTD"}
@@ -98,7 +104,7 @@ def test_recompress_parquet_preserves_source_when_zstd_is_larger(tmp_path):
     )
     original = path.read_bytes()
 
-    result = recompress_parquet(str(path), RewriteOptions(apply=True))
+    result = recompress_parquet(str(path), RewriteOptions(mode=RewriteMode.APPLY))
 
     assert result.disposition is RewriteDisposition.NOT_SMALLER
     assert result.output_bytes is not None
@@ -113,7 +119,7 @@ def test_recompress_parquet_rejects_lifecycle_prefix(tmp_path):
     pq.write_table(pa.table({"value": [1]}), path, compression="snappy")
 
     with pytest.raises(ValueError):
-        recompress_parquet(str(path), RewriteOptions(apply=True))
+        recompress_parquet(str(path), RewriteOptions(mode=RewriteMode.APPLY))
 
 
 def test_run_migration_rewrites_files_with_bounded_worker_pool(tmp_path):
@@ -123,11 +129,11 @@ def test_run_migration_rewrites_files_with_bounded_worker_pool(tmp_path):
         pq.write_table(pa.table({"value": values}), path, compression="snappy")
 
     run_migration(
-        str(tmp_path / "*.parquet"),
+        (str(tmp_path / "*.parquet"),),
         workers=2,
         worker_cpu=1,
         worker_ram="1g",
-        options=RewriteOptions(apply=True),
+        options=RewriteOptions(mode=RewriteMode.APPLY),
     )
 
     assert [_compressions(path) for path in paths] == [{"ZSTD"}, {"ZSTD"}, {"ZSTD"}]

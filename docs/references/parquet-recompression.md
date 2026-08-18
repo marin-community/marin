@@ -44,12 +44,12 @@ object lifecycle clock.
 
 ## Ordered Datakit migrations
 
-`experiments/datakit/parquet_rewrite.py` turns a reviewed list of Datakit
-directories into an ordered sequence of `ArtifactStep`s. The coordinator runs
-one step at a time, and each step launches one Zephyr migration. Its completion
-record and aggregate counters are cached for 30 days under the region-local
+`experiments/datakit/parquet_rewrite.py` turns a reviewed inventory snapshot
+into an ordered sequence of `ArtifactStep`s. The coordinator runs one step at a
+time, and each step launches one Zephyr migration. Its completion record and
+aggregate counters are cached for 30 days under the region-local
 `tmp/ttl=30d/datakit-rewrite/` prefix. Rerunning the coordinator therefore
-resumes at the first directory without a successful record.
+resumes at the first step without a successful record.
 
 The manifest is an allowlist of quiescent prefixes. Review every addition and
 confirm its producers have stopped before launching it. Run the coordinator on
@@ -65,22 +65,44 @@ uv run iris --cluster=marin job run \
   --manifest svg --apply-to-quiescent-prefixes
 ```
 
-The `hero` manifest derives its paths from
-`experiments/datakit/hero_data_paths.json`, so the rewrite list follows the
-canonical retained outputs rather than obsolete hash-addressed results. In the
-August 18 storage inventory, it selects 1,462 Parquet artifact directories and
-115.84 TiB across exact-dedup, verified fuzzy-dedup, cluster assignments,
-minhash, Harrier embeddings, and both tokenized variants. The steps run in that
-order, from the smaller metadata products to the tokenized corpora.
+The production inventory is computed offline from the storage-scan Parquet logs
+with DuckDB. Each leaf Parquet directory is assigned to its nearest enclosing
+`.artifact.json` root, or to itself when there is no artifact marker. Artifact
+roots larger than 100 GiB receive their own steps. Smaller roots are packed
+smallest-first into steps of roughly 100 GiB, with at most 256 roots per step.
+Every step records explicit, non-overlapping leaf globs.
 
-The 76.90 TiB fuzzy-dedup root is deliberately excluded. Most of its Parquet
-storage is iterative connected-components state; decide which iterations can
-be deleted before spending I/O to recompress them. Normalized hero paths are
-also excluded because the inventory contains no Parquet objects below them.
-Before running `--manifest hero`, refresh the inventory totals and confirm that
-the canonical hero outputs are no longer being produced. Inspect the complete
-ordered list with `--manifest hero --list-manifest`; this does not read or write
-the datasets.
+The reviewed August 18 snapshot is stored at
+`s3://marin-us-east-02a/marin/ops/parquet-rewrite-manifests/storage-scan-2026-08-18-100g.parquet`.
+It covers 36,940 durable Parquet directories, 24,432 artifact roots, 6,000,433
+files, and 486.125 TiB. The 100 GiB schedule has 746 steps: 404 large-artifact
+steps and 342 rollups. It does not distinguish current, obsolete, or
+intermediate outputs. The only excluded paths contain `tmp/ttl=`, because
+replacing those objects would reset their retention clock.
+
+Inspect the exact ordered list without touching the datasets:
+
+```bash
+python -m experiments.datakit.parquet_rewrite \
+  --manifest inventory --list-manifest
+```
+
+This prints one row per artifact root with its file count, GiB, assigned step,
+and path. The coordinator reads that same fixed manifest; it does not rescan the
+bucket at startup. Already-target files are skipped inside each step, and steps
+run from smallest to largest. Keep all selected directories quiescent until
+their steps finish.
+
+Launch the fixed train on the Iris cluster local to the bucket:
+
+```bash
+uv run iris --cluster=marin job run \
+  --cpu 1 --memory 2GB --disk 8GB --priority batch \
+  --target-cluster cw-us-east-02a --no-wait \
+  --job-name datakit-parquet-rewrite-inventory-100g -- \
+  python -m experiments.datakit.parquet_rewrite \
+  --manifest inventory --apply-to-quiescent-prefixes
+```
 
 The ArtifactStep record is a resumability marker; the Parquet files remain in
 their original directory and are still replaced in place. A record only appears

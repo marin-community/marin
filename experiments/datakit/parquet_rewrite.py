@@ -9,24 +9,23 @@ rerun skips their cached records and resumes at the first incomplete directory.
 """
 
 import contextlib
-import hashlib
-import json
 import logging
 import os
-import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
 import click
+import pyarrow.parquet as pq
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, run
 from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.storage_path import StoragePath
 
 from scripts.ops.storage.recompress_parquet import (
     DEFAULT_WORKER_CPU,
     DEFAULT_WORKER_RAM,
     DEFAULT_WORKERS,
+    RewriteMode,
     RewriteOptions,
     run_migration,
 )
@@ -35,99 +34,145 @@ logger = logging.getLogger(__name__)
 
 ARTIFACT_TTL_DAYS = 30
 ARTIFACT_PREFIX = "datakit-rewrite"
-REWRITE_VERSION = "2026.08.18"
-MARIN_DATA_PREFIX = "s3://marin-us-east-02a/marin"
-HERO_DATA_PATHS = Path(__file__).with_name("hero_data_paths.json")
-HERO_PARQUET_STAGES = (
-    "exact_dups",
-    "verified_fuzzy_dups",
-    "cluster_assign",
-    "minhash",
-    "harrier",
-    "tokenize.marin",
-    "tokenize.nemotron",
+REWRITE_VERSION = "2026.08.18.2"
+DEFAULT_INVENTORY_MANIFEST = (
+    "s3://marin-us-east-02a/marin/ops/parquet-rewrite-manifests/storage-scan-2026-08-18-100g.parquet"
 )
+MANIFEST_NAMES = ("inventory", "svg")
 
 
 @dataclass(frozen=True)
 class RewritePrefix:
-    """One quiescent directory selected for an in-place rewrite."""
+    """One set of quiescent directories selected for an in-place rewrite."""
 
     name: str
+    source_globs: tuple[str, ...]
+    inventory_files: int | None = None
+    inventory_bytes: int | None = None
+
+
+@dataclass(frozen=True)
+class InventoryManifestRow:
+    """One leaf Parquet directory assigned to a fixed rewrite step."""
+
+    step_index: int
+    step_name: str
+    step_files: int
+    step_bytes: int
+    artifact_root: str
+    artifact_files: int
+    artifact_bytes: int
     source_glob: str
+    directory_files: int
+    directory_bytes: int
+
+
+@dataclass(frozen=True)
+class RewriteWorkerPool:
+    """Resources for each Zephyr migration in the train."""
+
+    workers: int = DEFAULT_WORKERS
+    worker_cpu: int = DEFAULT_WORKER_CPU
+    worker_ram: str = DEFAULT_WORKER_RAM
 
 
 @dataclass(frozen=True)
 class RewriteConfig:
     """Materialized inputs for one directory in the rewrite train."""
 
-    source_glob: str
-    workers: int
-    worker_cpu: int
-    worker_ram: str
+    source_globs: tuple[str, ...]
+    pool: RewriteWorkerPool
 
 
 class ParquetRewriteArtifact(Artifact):
     """Cached completion record and counters for one rewritten directory."""
 
-    source_glob: str
+    source_globs: tuple[str, ...]
     counters: dict[str, int | float]
 
 
 SVG_REWRITE_PREFIXES = (
     RewritePrefix(
         name="svg-tokenize-a50a1068",
-        source_glob="s3://marin-us-east-02a/marin/datakit/tokenize/svg_a50a1068/**/*.parquet",
+        source_globs=("s3://marin-us-east-02a/marin/datakit/tokenize/svg_a50a1068/**/*.parquet",),
     ),
 )
 
 
-def _rewrite_name(key: str, relative_path: str) -> str:
-    slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", key).strip("-")[:80]
-    path_digest = hashlib.sha256(relative_path.encode()).hexdigest()[:8]
-    return f"{slug}-{path_digest}"
+def read_inventory_manifest(path: str) -> tuple[InventoryManifestRow, ...]:
+    """Read the reviewed inventory snapshot consumed by the coordinator."""
+    with StoragePath(path).open("rb") as source:
+        rows = tuple(InventoryManifestRow(**row) for row in pq.read_table(source).to_pylist())
+    if not rows:
+        raise ValueError(f"inventory manifest is empty: {path}")
+    source_globs = [row.source_glob for row in rows]
+    if len(source_globs) != len(set(source_globs)):
+        raise ValueError(f"inventory manifest contains duplicate source globs: {path}")
+    if tuple(rows) != tuple(sorted(rows, key=lambda row: (row.step_index, row.source_glob))):
+        raise ValueError(f"inventory manifest rows are not in step order: {path}")
+    return rows
 
 
-def _hero_rewrite_prefixes() -> tuple[RewritePrefix, ...]:
-    paths: dict[str, str] = json.loads(HERO_DATA_PATHS.read_text())
-    prefixes = []
-    for stage in HERO_PARQUET_STAGES:
-        stage_paths = (
-            (key, relative_path) for key, relative_path in paths.items() if key == stage or key.startswith(f"{stage}/")
-        )
-        for key, relative_path in sorted(stage_paths):
-            prefixes.append(
-                RewritePrefix(
-                    name=_rewrite_name(key, relative_path),
-                    source_glob=f"{MARIN_DATA_PREFIX}/{relative_path}/**/*.parquet",
-                )
+def inventory_rewrite_prefixes(rows: Sequence[InventoryManifestRow]) -> tuple[RewritePrefix, ...]:
+    """Build the exact ordered steps recorded in an inventory manifest."""
+    steps: list[RewritePrefix] = []
+    current_step_index = -1
+    for row in rows:
+        if row.step_index == current_step_index:
+            previous = steps[-1]
+            if previous.name != row.step_name:
+                raise ValueError(f"inventory step {row.step_index} has multiple names")
+            if (previous.inventory_files, previous.inventory_bytes) != (row.step_files, row.step_bytes):
+                raise ValueError(f"inconsistent totals for inventory step {row.step_name}")
+            steps[-1] = RewritePrefix(
+                name=previous.name,
+                source_globs=(*previous.source_globs, row.source_glob),
+                inventory_files=previous.inventory_files,
+                inventory_bytes=previous.inventory_bytes,
             )
-    return tuple(prefixes)
+            continue
+        if row.step_index != current_step_index + 1:
+            raise ValueError(f"inventory step {row.step_name} is not contiguous")
+        current_step_index = row.step_index
+        steps.append(
+            RewritePrefix(
+                name=row.step_name,
+                source_globs=(row.source_glob,),
+                inventory_files=row.step_files,
+                inventory_bytes=row.step_bytes,
+            )
+        )
+    return tuple(steps)
 
 
-REWRITE_MANIFESTS = {
-    "svg": SVG_REWRITE_PREFIXES,
-    "hero": _hero_rewrite_prefixes(),
-}
+def manifest_prefixes(
+    manifest_name: str,
+    *,
+    inventory_manifest_path: str,
+) -> tuple[RewritePrefix, ...]:
+    """Resolve a static smoke manifest or a reviewed inventory snapshot."""
+    if manifest_name == "svg":
+        return SVG_REWRITE_PREFIXES
+    if manifest_name == "inventory":
+        return inventory_rewrite_prefixes(read_inventory_manifest(inventory_manifest_path))
+    raise ValueError(f"unknown rewrite manifest: {manifest_name}")
 
 
 def _rewrite_prefix(config: RewriteConfig) -> ParquetRewriteArtifact:
     counters = run_migration(
-        config.source_glob,
-        workers=config.workers,
-        worker_cpu=config.worker_cpu,
-        worker_ram=config.worker_ram,
-        options=RewriteOptions(apply=True),
+        config.source_globs,
+        workers=config.pool.workers,
+        worker_cpu=config.pool.worker_cpu,
+        worker_ram=config.pool.worker_ram,
+        options=RewriteOptions(mode=RewriteMode.APPLY),
     )
-    return ParquetRewriteArtifact(source_glob=config.source_glob, counters=counters)
+    return ParquetRewriteArtifact(source_globs=config.source_globs, counters=counters)
 
 
 def rewrite_train(
     prefixes: Sequence[RewritePrefix],
     *,
-    workers: int = DEFAULT_WORKERS,
-    worker_cpu: int = DEFAULT_WORKER_CPU,
-    worker_ram: str = DEFAULT_WORKER_RAM,
+    pool: RewriteWorkerPool = RewriteWorkerPool(),
 ) -> tuple[ArtifactStep[ParquetRewriteArtifact], ...]:
     """Build the ordered ArtifactSteps for the selected directories."""
     if not prefixes:
@@ -145,10 +190,8 @@ def rewrite_train(
                 artifact_type=ParquetRewriteArtifact,
                 run=_rewrite_prefix,
                 build_config=lambda _ctx, prefix=prefix: RewriteConfig(
-                    source_glob=prefix.source_glob,
-                    workers=workers,
-                    worker_cpu=worker_cpu,
-                    worker_ram=worker_ram,
+                    source_globs=prefix.source_globs,
+                    pool=pool,
                 ),
             )
         )
@@ -172,12 +215,10 @@ def run_rewrite_train(
     prefixes: Sequence[RewritePrefix],
     *,
     artifact_prefix: str,
-    workers: int = DEFAULT_WORKERS,
-    worker_cpu: int = DEFAULT_WORKER_CPU,
-    worker_ram: str = DEFAULT_WORKER_RAM,
+    pool: RewriteWorkerPool = RewriteWorkerPool(),
 ) -> ParquetRewriteArtifact:
     """Run the train sequentially and return the final completion artifact."""
-    steps = rewrite_train(prefixes, workers=workers, worker_cpu=worker_cpu, worker_ram=worker_ram)
+    steps = rewrite_train(prefixes, pool=pool)
     logger.info("Caching Parquet rewrite records under %s", artifact_prefix)
     with _artifact_prefix(artifact_prefix):
         result = None
@@ -189,7 +230,8 @@ def run_rewrite_train(
 
 
 @click.command()
-@click.option("--manifest", "manifest_name", type=click.Choice(sorted(REWRITE_MANIFESTS)), required=True)
+@click.option("--manifest", "manifest_name", type=click.Choice(MANIFEST_NAMES), required=True)
+@click.option("--inventory-manifest-path", default=DEFAULT_INVENTORY_MANIFEST, show_default=True)
 @click.option("--workers", default=DEFAULT_WORKERS, show_default=True, type=click.IntRange(min=1))
 @click.option("--worker-cpu", default=DEFAULT_WORKER_CPU, show_default=True, type=click.IntRange(min=1))
 @click.option("--worker-ram", default=DEFAULT_WORKER_RAM, show_default=True)
@@ -201,6 +243,7 @@ def run_rewrite_train(
 )
 def main(
     manifest_name: str,
+    inventory_manifest_path: str,
     workers: int,
     worker_cpu: int,
     worker_ram: str,
@@ -208,10 +251,33 @@ def main(
     apply_to_quiescent_prefixes: bool,
 ) -> None:
     """Rewrite every directory in a reviewed manifest in order."""
-    prefixes = REWRITE_MANIFESTS[manifest_name]
+    prefixes = manifest_prefixes(
+        manifest_name,
+        inventory_manifest_path=inventory_manifest_path,
+    )
+    if not prefixes:
+        raise click.UsageError("the selected manifest contains no directories")
     if list_manifest:
-        for prefix in prefixes:
-            click.echo(f"{prefix.name}\t{prefix.source_glob}")
+        if manifest_name == "inventory":
+            seen_artifacts: set[str] = set()
+            for row in read_inventory_manifest(inventory_manifest_path):
+                if row.artifact_root in seen_artifacts:
+                    continue
+                seen_artifacts.add(row.artifact_root)
+                click.echo(
+                    "\t".join(
+                        (
+                            str(row.artifact_files),
+                            f"{row.artifact_bytes / 1024**3:.3f}",
+                            row.step_name,
+                            row.artifact_root,
+                        )
+                    )
+                )
+        else:
+            for prefix in prefixes:
+                for source_glob in prefix.source_globs:
+                    click.echo(f"\t\t{prefix.name}\t{source_glob}")
         return
     if not apply_to_quiescent_prefixes:
         raise click.UsageError("pass --apply-to-quiescent-prefixes after confirming that every prefix is quiescent")
@@ -220,14 +286,12 @@ def main(
     artifact_prefix = marin_temp_bucket(
         ttl_days=ARTIFACT_TTL_DAYS,
         prefix=ARTIFACT_PREFIX,
-        source_prefix=prefixes[0].source_glob,
+        source_prefix=prefixes[0].source_globs[0],
     )
     result = run_rewrite_train(
         prefixes,
         artifact_prefix=artifact_prefix,
-        workers=workers,
-        worker_cpu=worker_cpu,
-        worker_ram=worker_ram,
+        pool=RewriteWorkerPool(workers=workers, worker_cpu=worker_cpu, worker_ram=worker_ram),
     )
     click.echo(f"completed {len(prefixes)} directories; final record: {result.path}")
 
