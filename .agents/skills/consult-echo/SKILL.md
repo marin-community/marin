@@ -38,11 +38,11 @@ uv run infra/echo/cli.py get <domain:id>
 ```
 
 When a result materially helps, is irrelevant, or the result set fails the task,
-submit a compact judgment using the exact query and printed result IDs:
+submit a compact judgment using the exact query and printed grading keys:
 
 ```bash
 uv run infra/echo/cli.py feedback --query "stalled TPU collective" \
-  --grade wiki:123=0 --grade file:lib/iris/OPS.md=10 \
+  --grade wiki:730=0 --grade file:731=10 \
   <<< "The file result answered the task; wiki results were off-topic."
 ```
 

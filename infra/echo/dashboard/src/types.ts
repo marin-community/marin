@@ -43,6 +43,7 @@ export interface SearchConfiguration {
 }
 
 export interface FederatedResult {
+  key: string | null
   id: string
   domain: SearchDomain
   title: string
@@ -85,7 +86,8 @@ export interface WorkLogEntry extends WorkLogSummary {
 }
 
 export interface SearchFeedbackResultGrade {
-  result_id: string
+  key: string | null
+  source_id: string
   grade: number
   title: string
   url: string

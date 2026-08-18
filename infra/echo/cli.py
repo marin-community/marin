@@ -15,7 +15,7 @@ ambient service-account credentials with no login. See ``infra/echo/README.md``.
 
     uv run infra/echo/cli.py search "expert parallel MoE MFU on B200" --limit 10
     uv run infra/echo/cli.py get file:lib/iris/OPS.md
-    uv run infra/echo/cli.py feedback --query "deploy iris" --grade file:lib/iris/OPS.md=10
+    uv run infra/echo/cli.py feedback --query "deploy iris" --grade file:731=10
     uv run infra/echo/cli.py grep ragged_all_to_all --source discord
     uv run infra/echo/cli.py wiki search "grafana access" --tag ops
     uv run infra/echo/cli.py wiki add --file note.md          # OKF: frontmatter title/use_when + body
@@ -170,20 +170,22 @@ def print_search_results(results: list[SearchResult]) -> None:
         print("No results.")
         return
 
+    keys = [result.key or "unavailable" for result in results]
     ids = [result.id for result in results]
     titles = [one_line(result.title) for result in results]
+    key_width = max(len("KEY"), *(len(value) for value in keys))
     id_width = max(len("ID"), *(len(value) for value in ids))
-    available = max(40, shutil.get_terminal_size(fallback=(160, 24)).columns - id_width - 4)
+    available = max(40, shutil.get_terminal_size(fallback=(160, 24)).columns - key_width - id_width - 6)
     title_width = min(max(len("TITLE"), *(len(value) for value in titles)), 36, max(16, available // 3))
     detail_width = max(20, available - title_width)
-    print(f"{'ID':<{id_width}}  {'TITLE':<{title_width}}  DETAIL")
-    for result in results:
+    print(f"{'KEY':<{key_width}}  {'ID':<{id_width}}  {'TITLE':<{title_width}}  DETAIL")
+    for result, key in zip(results, keys, strict=True):
         if result.references:
             detail = " · ".join(f"L{reference.line} {reference.text}" for reference in result.references)
         else:
             detail = result.subtitle if result.domain == "wiki" else result.snippet
         print(
-            f"{result.id:<{id_width}}  "
+            f"{key:<{key_width}}  {result.id:<{id_width}}  "
             f"{truncate_cell(one_line(result.title), title_width):<{title_width}}  "
             f"{truncate_cell(one_line(detail), detail_width)}"
         )
@@ -237,7 +239,7 @@ def cmd_search(args: argparse.Namespace) -> None:
     print(
         "Feedback: uv run infra/echo/cli.py feedback "
         f"--query {shlex.quote(args.query)} {execution_flag}"
-        f"--grade '<id>=<{search_feedback.MIN_GRADE}-{search_feedback.MAX_GRADE}>' "
+        f"--grade '<key>=<{search_feedback.MIN_GRADE}-{search_feedback.MAX_GRADE}>' "
         "<<< 'brief overall assessment'"
     )
 
@@ -261,7 +263,7 @@ def cmd_feedback(args: argparse.Namespace) -> None:
         raise SystemExit("provide a short overall explanation on stdin")
     body = {
         "query": args.query,
-        "grades": [{"result_id": grade.result_id, "grade": grade.grade} for grade in args.grade],
+        "grades": [{"key": grade.key, "grade": grade.grade} for grade in args.grade],
         "note": note,
     }
     if args.execution_id is not None:
@@ -405,7 +407,7 @@ def nonblank(value: str) -> str:
 
 def artifact_id(value: str) -> str:
     try:
-        return search_feedback.checked_result_id(value)
+        return search_feedback.checked_artifact_id(value)
     except ValueError as error:
         raise argparse.ArgumentTypeError(str(error)) from error
 
@@ -445,7 +447,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         type=feedback_grade,
         default=[],
-        metavar=f"<result-id>=<{search_feedback.MIN_GRADE}-{search_feedback.MAX_GRADE}>",
+        metavar=f"<result-key>=<{search_feedback.MIN_GRADE}-{search_feedback.MAX_GRADE}>",
         help="grade one result; repeat as needed (a short overall explanation is read from stdin)",
     )
     feedback.add_argument("--execution-id", type=int, help="execution ID printed by the corresponding search")

@@ -21,6 +21,7 @@ def json_response(value, headers=None):
 
 def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys):
     remote_result = {
+        "key": "file:731",
         "id": "file:lib/iris/src/iris/scheduler.py",
         "domain": "file",
         "title": "scheduler.py",
@@ -61,6 +62,7 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
     output = capsys.readouterr().out
     assert "1 result in 1.23s" in output
     assert cli.SEARCH_DETAIL_INSTRUCTION in output
+    assert "file:731" in output
     assert "L42 raise FAILED_PRECONDITION" in output
 
 
@@ -138,9 +140,9 @@ def test_feedback_submits_replayable_grades_and_stdin_note(monkeypatch, capsys):
             "--query",
             "how do I deploy Iris?",
             "--grade",
-            "wiki:123=0",
+            "wiki:730=0",
             "--grade",
-            "file:lib/iris/OPS.md=10",
+            "file:731=10",
         ]
     )
     args.func(args)
@@ -153,8 +155,8 @@ def test_feedback_submits_replayable_grades_and_stdin_note(monkeypatch, capsys):
                 "body": {
                     "query": "how do I deploy Iris?",
                     "grades": [
-                        {"result_id": "wiki:123", "grade": 0},
-                        {"result_id": "file:lib/iris/OPS.md", "grade": 10},
+                        {"key": "wiki:730", "grade": 0},
+                        {"key": "file:731", "grade": 10},
                     ],
                     "note": "Wiki result was unrelated.",
                 }
@@ -181,7 +183,7 @@ def test_feedback_links_execution_when_provided(monkeypatch):
             "--execution-id",
             "991",
             "--grade",
-            "file:lib/iris/OPS.md=10",
+            "file:731=10",
         ]
     )
 

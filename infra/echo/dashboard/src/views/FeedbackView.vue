@@ -55,7 +55,7 @@ onMounted(load)
           <p class="font-medium leading-5 text-ink/80">{{ entry.query }}</p>
           <p class="mt-1 leading-5 text-ink/50">{{ entry.note }}</p>
           <div v-if="entry.grades.length" class="mt-4 divide-y divide-line/70 border-y border-line/70">
-            <div v-for="result in entry.grades" :key="result.result_id" class="flex items-start gap-3 py-3">
+            <div v-for="result in entry.grades" :key="result.key || result.source_id" class="flex items-start gap-3 py-3">
               <span
                 class="inline-flex min-w-9 shrink-0 justify-center rounded-full px-2 py-1 font-mono text-xs font-semibold"
                 :class="gradeClass(result.grade)"
@@ -66,7 +66,7 @@ onMounted(load)
                 <a class="font-semibold leading-5 hover:text-moss" :href="result.url" rel="noreferrer" target="_blank">
                   {{ result.title }}
                 </a>
-                <span class="mt-1 block truncate font-mono text-[11px] text-ink/35">{{ result.result_id }}</span>
+                <span class="mt-1 block truncate font-mono text-[11px] text-ink/35">{{ result.key || result.source_id }}</span>
               </div>
             </div>
           </div>
@@ -97,7 +97,12 @@ onMounted(load)
               <td class="max-w-44 truncate px-3 py-4 text-xs text-ink/50">{{ entry.author }}</td>
               <td class="px-3 py-4 text-xs text-ink/45">{{ formatDateTime(entry.created_at) }}</td>
             </tr>
-            <tr v-for="(result, index) in entry.grades" v-else :key="result.result_id" class="align-top hover:bg-white/35">
+            <tr
+              v-for="(result, index) in entry.grades"
+              v-else
+              :key="result.key || result.source_id"
+              class="align-top hover:bg-white/35"
+            >
               <td class="px-3 py-4">
                 <span
                   class="inline-flex min-w-9 justify-center rounded-full px-2 py-1 font-mono text-xs font-semibold"
@@ -110,7 +115,7 @@ onMounted(load)
                 <a class="line-clamp-2 font-semibold leading-5 hover:text-moss" :href="result.url" rel="noreferrer" target="_blank">
                   {{ result.title }}
                 </a>
-                <span class="mt-1 block truncate font-mono text-[11px] text-ink/35">{{ result.result_id }}</span>
+                <span class="mt-1 block truncate font-mono text-[11px] text-ink/35">{{ result.key || result.source_id }}</span>
               </td>
               <td v-if="index === 0" class="px-3 py-4" :rowspan="entry.grades.length">
                 <p class="font-medium leading-5 text-ink/80">{{ entry.query }}</p>
