@@ -1,13 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Multi-process (1 GPU/process) smoke of `put_segments` over nvshmem.
+"""Multi-process (1 GPU/process) smoke of `put_segments` over collective metadata.
 
-The single-tray validation ran one process with 4 local devices, where XLA
-serves symmetric memory through its collective-metadata path. Real hero
-jobs span nodes, which requires the nvshmem path: one process per GPU and
-`--xla_gpu_experimental_enable_nvshmem` in XLA_FLAGS. This script is run
-once per GPU with:
+Upstream removed Mosaic-GPU's NVSHMEM backend and replaced it with the NCCL
+Device API served through collective metadata (jax c98d8fa09c migrated the
+multi-process distributed test to it). On that path a multi-process mesh
+needs NO extra XLA flags: kernel parameters are allocated in NCCL symmetric
+windows and `to_remote`/`async_copy(gmem_peer_id=...)` resolve per-peer
+pointers from the metadata buffer. Requires a jax nightly (> 0.11.0) and
+one process per GPU. This script is run once per GPU with:
 
   MARIN_EP_COORD=<host:port> MARIN_EP_NUM_PROCS=<N> MARIN_EP_PROC_ID=<i>
   CUDA_VISIBLE_DEVICES=<local gpu> uv run python .../smoke_transport_multinode.py
@@ -22,22 +24,9 @@ import time
 import jax
 import numpy as np
 
-# Requires a jax nightly (> 0.11.0). Upstream XLA removed the
-# `xla_gpu_experimental_enable_nvshmem` DebugOptions field (reserved in
-# xla.proto), so passing it as a real flag FATALs the strict env parser —
-# but jax's `mosaic.gpu.is_nvshmem_available` still gates its nvshmem
-# lowering on that SUBSTRING appearing in XLA_FLAGS. Until jax catches up,
-# embed the marker as the value of a harmless legal flag, and point mosaic
-# at the nvshmem libraries the `nvidia-nvshmem-cu13` wheel ships.
-_NVSHMEM_MARKER = "--xla_dump_hlo_pipeline_re=--xla_gpu_experimental_enable_nvshmem"
-if "xla_gpu_experimental_enable_nvshmem" not in os.environ.get("XLA_FLAGS", ""):
-    os.environ["XLA_FLAGS"] = (os.environ.get("XLA_FLAGS", "") + " " + _NVSHMEM_MARKER).strip()
-if "MOSAIC_GPU_NVSHMEM_BC_PATH" not in os.environ:
-    from nvidia import nvshmem as _nvshmem_pkg
-
-    _lib = os.path.join(_nvshmem_pkg.__path__[0], "lib")
-    os.environ["MOSAIC_GPU_NVSHMEM_BC_PATH"] = os.path.join(_lib, "libnvshmem_device.bc")
-    os.environ["MOSAIC_GPU_NVSHMEM_SO_PATH"] = os.path.join(_lib, "libnvshmem_host.so.3")
+# The nvshmem lowering (dead upstream) is gated on this substring; make sure
+# nothing in the environment routes us onto it.
+assert "xla_gpu_experimental_enable_nvshmem" not in os.environ.get("XLA_FLAGS", "")
 
 jax.distributed.initialize(
     coordinator_address=os.environ["MARIN_EP_COORD"],

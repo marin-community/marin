@@ -55,7 +55,7 @@ def test_moe_mlp_marin_ep_implementation_matches_oracle_on_gpu():
         return jax.device_put(jnp.asarray(a), NamedSharding(mesh, spec))
 
     with jax.set_mesh(mesh):
-        y, dropped = jax.jit(
+        y, overflow = jax.jit(
             partial(
                 grug_moe.moe_mlp,
                 implementation="marin_ep",
@@ -83,6 +83,7 @@ def test_moe_mlp_marin_ep_implementation_matches_oracle_on_gpu():
         jnp.asarray(keep.reshape(devices * tokens, topk)),
         activation_fn=jax.nn.silu,
     )
-    assert int(dropped) == dropped_oracle
+    assert int(overflow.sender) == 0
+    assert int(overflow.receiver) == dropped_oracle
     assert dropped_oracle > 0
     np.testing.assert_allclose(np.asarray(y), np.asarray(y_oracle), rtol=2e-2, atol=0.2)
