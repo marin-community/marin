@@ -45,7 +45,8 @@ dependencies = [
 
 [project.optional-dependencies]
 controller = [
-    "kubernetes>=31.0.0,<36",
+    # v36.0.0 omits bearer-token auth: https://github.com/kubernetes-client/python/pull/2585
+    "kubernetes>=31.0.0,!=36.0.0,<37",
     # The controller resolves `gcp-secret://` config references (e.g. the auth
     # signing key) at startup via rigging.secrets, which imports the Secret
     # Manager client. Only the controller runs resolve_config_secrets, so this
@@ -72,7 +73,8 @@ test = [
     # Keep the test environment on the workspace runtime pin. The node-local
     # XLA autotune cache requires JAX's cache-key exclusion for its directory.
     "jax==0.11.0",
-    "kubernetes>=31.0.0,<36",
+    # v36.0.0 omits bearer-token auth: https://github.com/kubernetes-client/python/pull/2585
+    "kubernetes>=31.0.0,!=36.0.0,<37",
     "memray>=1.19.3",
     "playwright>=1.49.0",
     "pytest-asyncio",
