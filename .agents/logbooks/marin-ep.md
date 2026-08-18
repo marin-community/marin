@@ -1903,3 +1903,30 @@ Experiment ID prefix: `MEP`.
   measured the pooled/striped incumbent at 256,818 tok/s median, 24.03%
   MFU, 2.41% median drops at 8/384 one-rack — different meter/branch, so
   the parity call uses our control arm, not that number.
+
+### 2026-08-18 14:25 - MEP-075: matched-config treatment 18.0 s/it; i3072 GEMM retune banked
+- Treatment arm mep-hero384m2-fused-25-20260818 (matched config: E384/
+  top-8/i3072, sliding_window 2048, global_every 4, Aug MuonH refit,
+  params=bf16; flavor ep-marin-mgpu-fused, cf 1.1): 25/25 steps, loss
+  6.08, tqdm meter 18.0 s/it at completion (cumulative 45.7 -> 18.9 ->
+  18.0 at it5/17/25; it17->25 window = 18.6 s/step, so steady is
+  ~18.0-18.6). drop_fraction 0.188% — up from 0.095% at the drifted
+  config (different routing dynamics under matched attention/LR), still
+  ~13x below the incumbent reference (2.41%). Arms sat gang-gated ~2 h
+  behind rav's campaign before running.
+- Control arm mep-ctrl-pooled-25-20260818 (origin/main 954a5251a2,
+  moe_hero_ep as-pinned) is now RUNNING (16/16 tasks); the parity delta
+  scores against it on the same meter.
+- GEMM retune (ranked direction #2) DONE off-rack on a 1-GPU job:
+  mep-tune-brd-i3072b-20260818 swept brd TuningConfig at the three
+  8/384 keys (pool rows 576,768, G=6). Best vs fallback _cfg(128,12,0,6):
+  | key | fallback | best | config |
+  | (6144,6144) w13+dx | 1468 TF/s | 1725 | _cfg(128, 8, 0, 4) |
+  | (3072,6144) w2 | 1742 | 1745 (neutral) | _cfg(128, 8, 0, 6) |
+  | (6144,3072) dact | 1586 | 1738 | _cfg(128, 12, 1, 4) |
+  ~10 ms/layer -> ~0.5 s/step estimate. Configs committed (83daa1f1c1);
+  first attempt (mep-tune-brd-i3072) crashed by capturing 7.5 GB inputs
+  as jit constants — sweep inputs must be jit ARGUMENTS (fix 3b0/commit
+  in tune_brd_i3072.py).
+- Tuned treatment arm mep-hero384t-fused-25-20260818 queued behind the
+  control.
