@@ -128,7 +128,7 @@ class UrlIndexRecordExpectation:
     """Identity fields available from the current CC-MAIN URL Index."""
 
     url: str
-    warc_record_id: str
+    warc_record_id: str | None
     content_digest: str
 
 
@@ -216,41 +216,6 @@ class CommonCrawlClient:
         if self._owns_session:
             self._session.close()
 
-    def fetch_record(self, record_range: WarcRecordRange) -> CommonCrawlWarcRecord:
-        """Range-fetch and parse one WARC record without source-specific verification."""
-        if record_range.length > self._maximum_warc_record_bytes:
-            raise WarcRecordTooLargeError(
-                f"WARC record length {record_range.length} exceeds limit {self._maximum_warc_record_bytes}"
-            )
-
-        start, end = record_range.http_range
-        url = f"{self._base_url}/{record_range.warc_filename.lstrip('/')}"
-        try:
-            with self._session.get(
-                url,
-                headers={"Range": f"bytes={start}-{end}", "user-agent": COMMON_CRAWL_USER_AGENT},
-                stream=True,
-                timeout=self._request_timeout,
-            ) as response:
-                response.raise_for_status()
-                _validate_range_response_headers(
-                    response,
-                    start=start,
-                    end=end,
-                    expected_length=record_range.length,
-                )
-                content = _read_exact_response(response, expected_length=record_range.length)
-        except requests.HTTPError as error:
-            error_response = error.response
-            status = error_response.status_code if error_response is not None else None
-            if status is not None and 400 <= status < 500 and status not in _RETRY_STATUS:
-                raise CommonCrawlRequestRejectedError(url, status) from error
-            raise CommonCrawlDownloadError(f"Failed to download WARC record from {url}") from error
-        except requests.RequestException as error:
-            raise CommonCrawlDownloadError(f"Failed to download WARC record from {url}") from error
-
-        return _parse_warc_response(content, maximum_payload_bytes=self._maximum_payload_bytes)
-
     def fetch_range(self, planned_range: PlannedCommonCrawlRange) -> tuple[CommonCrawlWarcRecord, ...]:
         """Fetch a coalesced range and return its verified planned records in offset order."""
         if planned_range.stop <= planned_range.start:
@@ -299,7 +264,7 @@ class CommonCrawlClient:
             try:
                 with self._session.get(
                     url,
-                    headers={"Range": f"bytes={request_start}-{stop - 1}", "user-agent": _USER_AGENT},
+                    headers={"Range": f"bytes={request_start}-{stop - 1}", "user-agent": COMMON_CRAWL_USER_AGENT},
                     stream=True,
                     timeout=self._request_timeout,
                 ) as response:
@@ -340,7 +305,7 @@ def main_record_from_index_row(row: Mapping[str, object], *, crawl_id: str) -> M
         record_range=_record_range_from_index_row(row, crawl_id=crawl_id),
         expectation=UrlIndexRecordExpectation(
             url=_required_string(row, "url"),
-            warc_record_id=_canonical_record_id(row.get("warc_record_id")),
+            warc_record_id=_optional_canonical_record_id(row.get("warc_record_id")),
             content_digest=_canonical_content_digest(_required_string(row, "content_digest")),
         ),
     )
@@ -492,6 +457,10 @@ def _canonical_record_id(value: object) -> str:
     return f"<urn:uuid:{record_uuid}>"
 
 
+def _optional_canonical_record_id(value: object) -> str | None:
+    return None if value is None else _canonical_record_id(value)
+
+
 def _canonical_content_digest(value: str) -> str:
     algorithm, separator, encoded_digest = value.partition(":")
     if not separator:
@@ -524,67 +493,6 @@ def _validate_range_response_headers(
             raise RangeResponseError(f"Invalid Content-Length {content_length!r}") from error
         if observed_length != expected_length:
             raise RangeResponseError(f"Expected Content-Length {expected_length}, received {content_length!r}")
-
-
-def _read_exact_response(response: requests.Response, *, expected_length: int) -> bytes:
-    content = bytearray()
-    for chunk in response.iter_content(chunk_size=_DOWNLOAD_CHUNK_BYTES):
-        content.extend(chunk)
-        if len(content) > expected_length:
-            raise RangeResponseError(f"WARC range exceeded expected length {expected_length}")
-    if len(content) != expected_length:
-        raise RangeResponseError(f"Expected {expected_length} WARC bytes, received {len(content)}")
-    return bytes(content)
-
-
-def _parse_warc_response(content: bytes, *, maximum_payload_bytes: int) -> CommonCrawlWarcRecord:
-    iterator = iter(ArchiveIterator(io.BytesIO(content)))
-    try:
-        record = next(iterator)
-    except StopIteration as error:
-        raise WarcParsingError("WARC byte range contained no records") from error
-    except ArchiveLoadFailed as error:
-        raise WarcParsingError("WARC byte range could not be parsed") from error
-
-    if record.rec_type == "revisit":
-        raise WarcRevisitError("WARC range contains a revisit record without an embedded payload")
-    if record.rec_type != "response":
-        raise WarcParsingError(f"Expected a WARC response record, received {record.rec_type!r}")
-    if record.http_headers is None:
-        raise WarcParsingError("WARC response record did not contain HTTP headers")
-
-    # Common Crawl's content digest covers the decoded HTTP entity returned by
-    # warcio's content_stream(), not the transfer/content-encoded wire bytes.
-    payload = record.content_stream().read(maximum_payload_bytes + 1)
-    if len(payload) > maximum_payload_bytes:
-        raise WarcPayloadTooLargeError(f"WARC payload exceeds limit {maximum_payload_bytes}")
-    try:
-        next(iterator)
-    except StopIteration:
-        pass
-    else:
-        raise WarcParsingError("WARC byte range contained more than one record")
-
-    record_id = record.rec_headers.get_header("WARC-Record-ID")
-    target_url = record.rec_headers.get_header("WARC-Target-URI")
-    if record_id is None or target_url is None:
-        raise WarcParsingError("WARC response record is missing its record ID or target URI")
-    status_code = record.http_headers.get_statuscode()
-    if status_code is None or not status_code.isdigit():
-        raise WarcParsingError(f"WARC response record has invalid HTTP status {status_code!r}")
-
-    return CommonCrawlWarcRecord(
-        payload=payload,
-        payload_digest=content_digest(payload),
-        # WARC-Record-ID permits any absolute URI. CC-MAIN UUID expectations
-        # are normalized separately and compared during source verification.
-        warc_record_id=record_id,
-        target_url=target_url,
-        http_status=int(status_code),
-        http_content_type=record.http_headers.get_header("Content-Type"),
-        warc_date=record.rec_headers.get_header("WARC-Date"),
-        identified_payload_type=record.rec_headers.get_header("WARC-Identified-Payload-Type"),
-    )
 
 
 def _parse_planned_records(
@@ -653,7 +561,9 @@ def _warc_record_from_archive(record: object, payload: bytes) -> CommonCrawlWarc
 def verify_url_index_record(record: CommonCrawlWarcRecord, expected: UrlIndexRecordExpectation) -> None:
     """Verify an observed record against the fields available from CC-MAIN."""
     mismatches = []
-    if _comparable_record_id(record.warc_record_id) != _comparable_record_id(expected.warc_record_id):
+    if expected.warc_record_id is not None and _comparable_record_id(record.warc_record_id) != _comparable_record_id(
+        expected.warc_record_id
+    ):
         mismatches.append(f"record ID {record.warc_record_id!r} != {expected.warc_record_id!r}")
     _verify_url_and_digest(record, expected.url, expected.content_digest, mismatches)
     if mismatches:

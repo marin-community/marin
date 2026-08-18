@@ -15,17 +15,23 @@ import fsspec
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from marin.datakit.download.common_crawl_docx import (
-    CANDIDATE_SCHEMA,
     COMMON_CRAWL_DOCX_SCHEMA,
-    CommonCrawlDocxSource,
+    CommonCrawlDocxConfig,
     CommonCrawlDocxStageResult,
-    CommonCrawlIndexKind,
     DoclingDocxExtractor,
+    DocxRecordSelector,
     DocxSelectionReason,
     LinguaLanguageDetector,
-    candidate_record,
-    docx_candidates,
     extract_common_crawl_docx,
+)
+from marin.datakit.download.common_crawl_plan import (
+    DISCOVERY_SCHEMA,
+    CommonCrawlDiscoverySummary,
+    CommonCrawlIndexKind,
+    CommonCrawlSource,
+    common_crawl_plan_step,
+    discover_index_partition,
+    selected_common_crawl_record,
 )
 from marin.datakit.download.common_crawl_warc import common_crawl_index_partitions
 from marin.datakit.normalize import DedupMode, NormalizedData, normalize_step
@@ -36,6 +42,7 @@ from marin.execution.step_spec import StepSpec
 from pydantic import BaseModel
 from rigging.filesystem import prefix_join, url_to_fs
 from rigging.log_setup import configure_logging
+from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 
@@ -69,56 +76,70 @@ def stratified_partition_slice(partitions: Sequence[str], count: int) -> tuple[s
 def sample_partition_records(
     index_partition: str,
     *,
-    source: CommonCrawlDocxSource,
+    source: CommonCrawlSource,
+    batch_rows: int,
     candidates_per_reason: int,
 ) -> Iterator[dict[str, object]]:
     """Take the first deterministic candidates from each primary selection stratum."""
     selected: Counter[DocxSelectionReason] = Counter()
-    for candidate in docx_candidates(
+    for candidate in discover_index_partition(
         index_partition,
-        crawl_id=source.crawl_id,
-        index_kind=source.index_kind,
-        base_url=source.base_url,
-        batch_rows=source.index_batch_rows,
+        source=source,
+        selector=DocxRecordSelector(),
+        batch_rows=batch_rows,
     ):
-        reason = candidate.selection_reason
+        reason = DocxSelectionReason(str(candidate.selection.metadata["selection_reason"]))
         if selected[reason] >= candidates_per_reason:
             continue
         selected[reason] += 1
-        yield candidate_record(candidate)
+        counters.pipeline.update_counter("common_crawl/selected_records", 1)
+        yield selected_common_crawl_record(candidate)
         if all(selected[reason] >= candidates_per_reason for reason in DocxSelectionReason):
             return
 
 
 def discover_sample_candidates(
     output_path: str,
-    source: CommonCrawlDocxSource,
+    config: CommonCrawlDocxConfig,
     *,
     index_partitions: int,
     candidates_per_reason: int,
-) -> CommonCrawlDocxStageResult:
+) -> CommonCrawlDiscoverySummary:
     """Scan an evenly spaced partition slice and materialize a bounded candidate manifest."""
-    all_partitions = common_crawl_index_partitions(source.paths_manifest_url, crawl_id=source.crawl_id)
+    if len(config.sources) != 1:
+        raise ValueError("The bounded sample pipeline requires exactly one Common Crawl source")
+    source = config.sources[0]
+    all_partitions = common_crawl_index_partitions(
+        source.paths_manifest_url,
+        crawl_id=source.crawl_id,
+        subset=source.subset,
+    )
     selected_partitions = stratified_partition_slice(all_partitions, index_partitions)
     pipeline = (
         Dataset.from_list(list(selected_partitions))
-        .flat_map(partial(sample_partition_records, source=source, candidates_per_reason=candidates_per_reason))
+        .flat_map(
+            partial(
+                sample_partition_records,
+                source=source,
+                batch_rows=config.index_batch_rows,
+                candidates_per_reason=candidates_per_reason,
+            )
+        )
         .write_parquet(
-            prefix_join(output_path, "candidates/part-{shard:05d}-of-{total:05d}.parquet"),
-            schema=CANDIDATE_SCHEMA,
+            prefix_join(output_path, "records/part-{shard:05d}-of-{total:05d}.parquet"),
+            schema=DISCOVERY_SCHEMA,
             skip_existing=True,
         )
     )
     outcome = ZephyrContext(
         name=f"common-crawl-docx-sample-discovery-{source.crawl_id.lower()}",
         resources=ResourceConfig(cpu=1, ram="8g"),
-        max_workers=min(source.max_workers, len(selected_partitions)),
+        max_workers=min(config.max_workers, len(selected_partitions)),
     ).execute(pipeline)
-    counters = dict(outcome.counters)
-    counters["common_crawl_docx/sample_partitions"] = len(selected_partitions)
-    return CommonCrawlDocxStageResult(
-        data_dir=prefix_join(output_path, "candidates"),
-        counters=counters,
+    return CommonCrawlDiscoverySummary(
+        manifest_path=prefix_join(output_path, "records"),
+        num_sources=1,
+        num_records=int(outcome.counters.get("common_crawl/selected_records", 0)),
     )
 
 
@@ -142,16 +163,21 @@ def _excerpt(text: object, maximum_chars: int = 600) -> str:
     return compact if len(compact) <= maximum_chars else f"{compact[:maximum_chars].rstrip()}…"
 
 
+def _candidate_selection_reason(row: Mapping[str, object]) -> str:
+    metadata = json.loads(str(row["selection_metadata"]))
+    return str(metadata["selection_reason"])
+
+
 def sample_report_markdown(
     *,
-    source: CommonCrawlDocxSource,
+    source: CommonCrawlSource,
     candidate_rows: list[dict[str, object]],
     extracted_rows: list[dict[str, object]],
     normalized_rows: list[dict[str, object]],
     extraction_counters: Mapping[str, int | float],
     examples_per_reason: int,
 ) -> tuple[str, list[dict[str, object]]]:
-    candidate_counts = Counter(str(row["selection_reason"]) for row in candidate_rows)
+    candidate_counts = Counter(_candidate_selection_reason(row) for row in candidate_rows)
     extracted_counts = Counter(str(row["selection_reason"]) for row in extracted_rows)
     examples_by_reason: dict[str, list[dict[str, object]]] = defaultdict(list)
     for row in sorted(extracted_rows, key=lambda item: (str(item["selection_reason"]), str(item["url"]))):
@@ -250,14 +276,15 @@ def sample_report_markdown(
 def write_sample_report(
     output_path: str,
     *,
-    source: CommonCrawlDocxSource,
+    source: CommonCrawlSource,
     discovery_path: str,
     extraction_path: str,
     normalized_path: str,
     examples_per_reason: int,
 ) -> CommonCrawlDocxSampleReport:
     """Render the sample funnel and bounded review examples as Markdown and JSONL."""
-    candidate_rows = _parquet_rows(prefix_join(discovery_path, "candidates"))
+    discovery = read_artifact(discovery_path, CommonCrawlDiscoverySummary)
+    candidate_rows = _parquet_rows(discovery.manifest_path)
     extracted_rows = _parquet_rows(prefix_join(extraction_path, "data"))
     normalized = read_artifact(normalized_path, NormalizedData)
     normalized_rows = _parquet_rows(normalized.main_output_dir)
@@ -287,22 +314,25 @@ def write_sample_report(
 
 
 def common_crawl_docx_sample_steps(
-    source: CommonCrawlDocxSource,
+    config: CommonCrawlDocxConfig,
     *,
     index_partitions: int = DEFAULT_INDEX_PARTITIONS,
     candidates_per_reason: int = DEFAULT_CANDIDATES_PER_REASON_PER_PARTITION,
     examples_per_reason: int = DEFAULT_EXAMPLES_PER_REASON,
-) -> tuple[StepSpec, StepSpec, StepSpec, StepSpec]:
+) -> tuple[StepSpec, StepSpec, StepSpec, StepSpec, StepSpec]:
     """Build the sample discovery, extraction, normalization, and report DAG."""
     if candidates_per_reason <= 0 or examples_per_reason <= 0:
         raise ValueError("candidate and example limits must be positive")
-    slug = source.crawl_id.lower()
+    if len(config.sources) != 1:
+        raise ValueError("The bounded sample pipeline requires exactly one Common Crawl source")
+    source = config.sources[0]
+    slug = config.name.lower()
     discovery = StepSpec(
         name=f"samples/common-crawl-docx/{slug}/candidates",
         fn=remote(
             partial(
                 discover_sample_candidates,
-                source=source,
+                config=config,
                 index_partitions=index_partitions,
                 candidates_per_reason=candidates_per_reason,
             ),
@@ -314,10 +344,16 @@ def common_crawl_docx_sample_steps(
             "index_kind": source.index_kind,
             "paths_manifest_url": source.paths_manifest_url,
             "base_url": source.base_url,
+            "subset": source.subset,
             "index_partitions": index_partitions,
             "candidates_per_reason": candidates_per_reason,
-            "schema_version": 1,
+            "schema_version": 2,
         },
+    )
+    plan = common_crawl_plan_step(
+        name=f"samples/common-crawl-docx/{slug}/plan",
+        discovery=discovery,
+        options=config.plan,
     )
     extractor = DoclingDocxExtractor()
     detector = LinguaLanguageDetector()
@@ -326,23 +362,23 @@ def common_crawl_docx_sample_steps(
         fn=remote(
             partial(
                 extract_common_crawl_docx,
-                candidate_path=discovery.output_path,
-                source=source,
+                plan_output_path=plan.output_path,
+                config=config,
                 extractor=extractor,
                 language_detector=detector,
             ),
             resources=ResourceConfig(cpu=1, ram="4g"),
             pip_dependency_groups=["datakit"],
         ),
-        deps=[discovery],
+        deps=[plan],
         hash_attrs={
-            "maximum_warc_record_bytes": source.maximum_warc_record_bytes,
-            "maximum_payload_bytes": source.maximum_payload_bytes,
-            "maximum_zip_entries": source.maximum_zip_entries,
-            "maximum_uncompressed_bytes": source.maximum_uncompressed_bytes,
+            "maximum_warc_record_bytes": config.maximum_warc_record_bytes,
+            "maximum_payload_bytes": config.maximum_payload_bytes,
+            "maximum_zip_entries": config.maximum_zip_entries,
+            "maximum_uncompressed_bytes": config.maximum_uncompressed_bytes,
             "extractor": extractor.version,
             "language_detector": detector.version,
-            "schema_version": 1,
+            "schema_version": 2,
         },
     )
     normalized = normalize_step(
@@ -367,7 +403,7 @@ def common_crawl_docx_sample_steps(
         deps=[discovery, extraction, normalized],
         hash_attrs={"examples_per_reason": examples_per_reason, "report_version": 1},
     )
-    return discovery, extraction, normalized, report
+    return discovery, plan, extraction, normalized, report
 
 
 def main() -> None:
@@ -381,21 +417,24 @@ def main() -> None:
         default=DEFAULT_CANDIDATES_PER_REASON_PER_PARTITION,
     )
     parser.add_argument("--examples-per-reason", type=int, default=DEFAULT_EXAMPLES_PER_REASON)
-    parser.add_argument("--extraction-shards", type=int, default=24)
     parser.add_argument("--max-workers", type=int, default=24)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     configure_logging(logging.INFO)
-    source = CommonCrawlDocxSource(
-        crawl_id=args.crawl_id,
-        index_kind=CommonCrawlIndexKind.MAIN,
-        paths_manifest_url=args.paths_manifest_url,
-        extraction_shards=args.extraction_shards,
+    config = CommonCrawlDocxConfig(
+        name=args.crawl_id,
+        sources=(
+            CommonCrawlSource(
+                crawl_id=args.crawl_id,
+                index_kind=CommonCrawlIndexKind.MAIN,
+                paths_manifest_url=args.paths_manifest_url,
+            ),
+        ),
         max_workers=args.max_workers,
     )
     steps = common_crawl_docx_sample_steps(
-        source,
+        config,
         index_partitions=args.index_partitions,
         candidates_per_reason=args.candidates_per_reason_per_partition,
         examples_per_reason=args.examples_per_reason,

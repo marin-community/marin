@@ -13,6 +13,7 @@ import pytest
 import requests
 from marin.datakit.download.common_crawl_plan import (
     CommonCrawlIndexKind,
+    CommonCrawlSelection,
     CommonCrawlSource,
     PlannedCommonCrawlRange,
 )
@@ -29,14 +30,12 @@ from marin.datakit.download.common_crawl_warc import (
     SupplementalIndexedRecord,
     WarcParsingError,
     WarcPayloadTooLargeError,
-    WarcRecordRange,
     WarcRecordTooLargeError,
     WarcRevisitError,
     common_crawl_index_partitions,
     content_digest,
     main_record_from_index_row,
     supplemental_record_from_index_row,
-    verify_supplemental_record,
     verify_url_index_record,
 )
 from requests.adapters import BaseAdapter
@@ -283,15 +282,7 @@ def _planned_range(warc: bytes, records: tuple[MainIndexedRecord, ...]) -> Plann
         start=0,
         stop=len(warc),
         records=records,
-    )
-
-
-def _record_range(warc: bytes) -> WarcRecordRange:
-    return WarcRecordRange(
-        crawl_id="CC-MAIN-2026-30",
-        warc_filename="crawl-data/test.warc.gz",
-        offset=0,
-        length=len(warc),
+        selections=tuple(CommonCrawlSelection({"reason": "test"}) for _ in records),
     )
 
 
@@ -398,6 +389,21 @@ def test_main_record_from_index_row_normalizes_uuid_blob() -> None:
     assert string_record.expectation.content_digest == index_digest
 
 
+def test_main_record_from_index_row_allows_index_without_record_id() -> None:
+    indexed_record = main_record_from_index_row(
+        {
+            "url": TARGET_URL,
+            "warc_filename": "crawl-data/test.warc.gz",
+            "warc_record_offset": 42,
+            "warc_record_length": 100,
+            "content_digest": _sha1_digest(b"index row"),
+        },
+        crawl_id="CC-MAIN-2026-25",
+    )
+
+    assert indexed_record.expectation.warc_record_id is None
+
+
 @pytest.mark.parametrize(
     "digest",
     ["sha1:ABC", "sha1:0123456789abcdef0123456789abcdef01234567", "md5:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"],
@@ -455,15 +461,13 @@ def test_client_default_session_constructs_and_closes(monkeypatch: pytest.Monkey
     assert sessions[0].closed
 
 
-def test_fetch_record_returns_parsed_payload_then_main_verification_succeeds() -> None:
+def test_fetch_range_returns_parsed_and_verified_singleton() -> None:
     payload = b"PK\x03\x04example docx bytes"
     warc = _warc_response(payload)
     indexed_record = _indexed_record(warc, payload)
 
     with _range_session(warc) as session, _client(session) as client:
-        record = client.fetch_record(indexed_record.record_range)
-
-    verify_url_index_record(record, indexed_record.expectation)
+        [record] = client.fetch_range(_planned_range(warc, (indexed_record,)))
 
     assert record.payload == payload
     assert record.payload_digest == _sha1_digest(payload)
@@ -555,51 +559,51 @@ def test_url_index_verification_accepts_equivalent_uuid_spelling(observed_record
     indexed_record = _indexed_record(warc, payload)
 
     with _range_session(warc) as session, _client(session) as client:
-        record = client.fetch_record(indexed_record.record_range)
+        [record] = client.fetch_range(_planned_range(warc, (indexed_record,)))
 
     verify_url_index_record(record, indexed_record.expectation)
 
 
-def test_fetch_record_rejects_incorrect_content_range() -> None:
+def test_fetch_range_rejects_incorrect_content_range() -> None:
     payload = b"document"
     warc = _warc_response(payload)
-    record_range = _record_range(warc)
+    planned = _planned_range(warc, (_indexed_record(warc, payload),))
 
     with _range_session(warc, content_range=f"bytes 1-{len(warc)}/{len(warc)}") as session:
         with _client(session) as client:
             with pytest.raises(CommonCrawlTransientError):
-                client.fetch_record(record_range)
+                client.fetch_range(planned)
 
 
-def test_fetch_record_rejects_full_response_to_range_request() -> None:
+def test_fetch_range_rejects_full_response_to_range_request() -> None:
     payload = b"document"
     warc = _warc_response(payload)
 
     with _range_session(warc, response_status=requests.codes.ok) as session, _client(session) as client:
         with pytest.raises(CommonCrawlTransientError):
-            client.fetch_record(_record_range(warc))
+            client.fetch_range(_planned_range(warc, (_indexed_record(warc, payload),)))
 
 
 @pytest.mark.parametrize("status", [400, 404])
-def test_fetch_record_classifies_permanent_object_error(status: int) -> None:
+def test_fetch_range_classifies_permanent_object_error(status: int) -> None:
     payload = b"missing"
     warc = _warc_response(payload)
 
     with _range_session(warc, response_status=status) as session, _client(session) as client:
         with pytest.raises(CommonCrawlRequestRejectedError) as error:
-            client.fetch_record(_record_range(warc))
+            client.fetch_range(_planned_range(warc, (_indexed_record(warc, payload),)))
 
     assert error.value.status == status
     assert error.value.url.endswith("/crawl-data/test.warc.gz")
 
 
-def test_fetch_record_classifies_rate_limit_as_transient() -> None:
+def test_fetch_range_classifies_rate_limit_as_transient() -> None:
     payload = b"rate limited"
     warc = _warc_response(payload)
 
     with _range_session(warc, response_status=403) as session, _client(session) as client:
         with pytest.raises(CommonCrawlDownloadError):
-            client.fetch_record(_record_range(warc))
+            client.fetch_range(_planned_range(warc, (_indexed_record(warc, payload),)))
 
 
 def test_url_index_verification_rejects_payload_digest_mismatch() -> None:
@@ -612,7 +616,7 @@ def test_url_index_verification_rejects_payload_digest_mismatch() -> None:
     )
 
     with _range_session(warc) as session, _client(session) as client:
-        record = client.fetch_record(indexed_record.record_range)
+        [record] = client.fetch_range(_planned_range(warc, (indexed_record,)))
 
     with pytest.raises(RecordVerificationError):
         verify_url_index_record(record, expectation)
@@ -632,7 +636,7 @@ def test_url_index_verification_rejects_identity_mismatch(field: str, value: str
     expectation = replace(indexed_record.expectation, **{field: value})
 
     with _range_session(warc) as session, _client(session) as client:
-        record = client.fetch_record(indexed_record.record_range)
+        [record] = client.fetch_range(_planned_range(warc, (indexed_record,)))
 
     with pytest.raises(RecordVerificationError):
         verify_url_index_record(record, expectation)
@@ -643,10 +647,8 @@ def test_url_index_verification_rejects_non_success_origin_response() -> None:
     warc = _warc_response(payload, http_status="404 Not Found")
 
     with _range_session(warc) as session, _client(session) as client:
-        record = client.fetch_record(_record_range(warc))
-
-    with pytest.raises(OriginResponseStatusError) as error:
-        verify_url_index_record(record, _indexed_record(warc, payload).expectation)
+        with pytest.raises(OriginResponseStatusError) as error:
+            client.fetch_range(_planned_range(warc, (_indexed_record(warc, payload),)))
 
     assert error.value.status == 404
 
@@ -657,73 +659,63 @@ def test_url_index_verification_reports_identity_mismatch_before_origin_status()
     indexed_record = _indexed_record(warc, payload)
 
     with _range_session(warc) as session, _client(session) as client:
-        record = client.fetch_record(indexed_record.record_range)
-
-    with pytest.raises(RecordVerificationError):
-        verify_url_index_record(record, indexed_record.expectation)
+        with pytest.raises(RecordVerificationError):
+            client.fetch_range(_planned_range(warc, (indexed_record,)))
 
 
-def test_fetch_record_distinguishes_revisit_record() -> None:
+def test_fetch_range_distinguishes_revisit_record() -> None:
     warc = _warc_revisit()
 
     with _range_session(warc) as session, _client(session) as client:
         with pytest.raises(WarcRevisitError):
-            client.fetch_record(_record_range(warc))
+            client.fetch_range(_planned_range(warc, (_indexed_record(warc, b"document"),)))
 
 
-def test_fetch_record_rejects_non_response_record() -> None:
+def test_fetch_range_rejects_non_response_record() -> None:
     warc = _warc_record("metadata", include_http_headers=False)
 
     with _range_session(warc) as session, _client(session) as client:
         with pytest.raises(WarcParsingError):
-            client.fetch_record(_record_range(warc))
+            client.fetch_range(_planned_range(warc, (_indexed_record(warc, b"document"),)))
 
 
-def test_fetch_record_rejects_response_without_http_headers() -> None:
+def test_fetch_range_rejects_response_without_http_headers() -> None:
     metadata_warc = _warc_record("metadata", include_http_headers=False, gzip_output=False, payload=b"")
     warc = metadata_warc.replace(b"WARC-Type: metadata", b"WARC-Type: response", 1)
 
     with _range_session(warc) as session, _client(session) as client:
         with pytest.raises(WarcParsingError):
-            client.fetch_record(_record_range(warc))
-
-
-def test_fetch_record_rejects_multiple_records_in_range() -> None:
-    warc = _warc_response(b"first") + _warc_response(b"second")
-
-    with _range_session(warc) as session, _client(session) as client:
-        with pytest.raises(WarcParsingError):
-            client.fetch_record(_record_range(warc))
+            client.fetch_range(_planned_range(warc, (_indexed_record(warc, b"document"),)))
 
 
 @pytest.mark.parametrize("body_delta", [-1, 1])
-def test_fetch_record_rejects_body_length_different_from_range(body_delta: int) -> None:
+def test_fetch_range_rejects_body_length_different_from_range(body_delta: int) -> None:
     warc = _warc_response(b"document")
     body = warc[:-1] if body_delta < 0 else warc + b"x"
 
     with _range_session(warc, body_override=body, include_content_length=False) as session, _client(session) as client:
         with pytest.raises(CommonCrawlTransientError):
-            client.fetch_record(_record_range(warc))
+            client.fetch_range(_planned_range(warc, (_indexed_record(warc, b"document"),)))
 
 
-def test_fetch_record_rejects_invalid_content_length() -> None:
+def test_fetch_range_rejects_invalid_content_length() -> None:
     warc = _warc_response(b"document")
 
     with _range_session(warc, content_length="not-an-integer") as session, _client(session) as client:
         with pytest.raises(CommonCrawlTransientError):
-            client.fetch_record(_record_range(warc))
+            client.fetch_range(_planned_range(warc, (_indexed_record(warc, b"document"),)))
 
 
-def test_fetch_record_rejects_index_range_over_limit_before_download() -> None:
+def test_fetch_range_rejects_index_range_over_limit_before_download() -> None:
     payload = b"document"
     warc = _warc_response(payload)
 
     with _range_session(warc) as session, _client(session, maximum_warc_record_bytes=len(warc) - 1) as client:
         with pytest.raises(WarcRecordTooLargeError):
-            client.fetch_record(_record_range(warc))
+            client.fetch_range(_planned_range(warc, (_indexed_record(warc, payload),)))
 
 
-def test_fetch_record_rejects_payload_over_limit() -> None:
+def test_fetch_range_rejects_payload_over_limit() -> None:
     payload = b"document"
     warc = _warc_response(payload)
 
@@ -734,7 +726,7 @@ def test_fetch_record_rejects_payload_over_limit() -> None:
             maximum_payload_bytes=len(payload) - 1,
         ) as client:
             with pytest.raises(WarcPayloadTooLargeError):
-                client.fetch_record(_record_range(warc))
+                client.fetch_range(_planned_range(warc, (_indexed_record(warc, payload),)))
 
 
 def test_supplemental_verification_uses_url_and_digest_without_expected_record_id() -> None:
@@ -752,9 +744,7 @@ def test_supplemental_verification_uses_url_and_digest_without_expected_record_i
     )
 
     with _range_session(warc) as session, _client(session) as client:
-        record = client.fetch_record(indexed_record.record_range)
-
-    verify_supplemental_record(record, indexed_record.expectation)
+        [record] = client.fetch_range(_planned_range(warc, (indexed_record,)))
     assert record.warc_record_id == RECORD_ID
 
 
@@ -773,9 +763,7 @@ def test_supplemental_verification_preserves_non_uuid_record_id() -> None:
     )
 
     with _range_session(warc) as session, _client(session) as client:
-        record = client.fetch_record(indexed_record.record_range)
-
-    verify_supplemental_record(record, indexed_record.expectation)
+        [record] = client.fetch_range(_planned_range(warc, (indexed_record,)))
     assert record.warc_record_id == "<https://example.com/rec/1>"
 
 
@@ -801,8 +789,7 @@ def test_supplemental_verification_rejects_index_mismatch(field: str, value: str
     )
     expectation = replace(indexed_record.expectation, **{field: value})
 
+    mismatched = replace(indexed_record, expectation=expectation)
     with _range_session(warc) as session, _client(session) as client:
-        record = client.fetch_record(indexed_record.record_range)
-
-    with pytest.raises(RecordVerificationError):
-        verify_supplemental_record(record, expectation)
+        with pytest.raises(RecordVerificationError):
+            client.fetch_range(_planned_range(warc, (mismatched,)))

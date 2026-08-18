@@ -12,8 +12,9 @@ The split keeps an expensive URL-index scan reusable when only transfer policy c
 import hashlib
 import json
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
+from functools import partial
 from typing import Protocol
 from urllib.parse import unquote, urlsplit
 
@@ -21,16 +22,26 @@ import fsspec
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+from fray.types import ResourceConfig
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, prefix_join
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 from marin.datakit.download.common_crawl_warc import (
     COMMON_CRAWL_DATA_URL,
+    CommonCrawlClient,
+    CommonCrawlWarcRecord,
     MainIndexedRecord,
     SupplementalIndexedRecord,
+    common_crawl_index_partitions,
     main_record_from_index_row,
     supplemental_record_from_index_row,
 )
+from marin.execution.artifact import read_artifact
+from marin.execution.remote import remote
+from marin.execution.step_spec import StepSpec
 
 DEFAULT_COALESCE_GAP_BYTES = 1 << 20
 DEFAULT_TASK_BYTES = 256 << 20
@@ -166,12 +177,15 @@ class PlannedCommonCrawlRange:
     start: int
     stop: int
     records: tuple[IndexedRecord, ...]
+    selections: tuple[CommonCrawlSelection, ...]
 
     def __post_init__(self) -> None:
         if self.start < 0 or self.stop <= self.start:
             raise ValueError("planned range must have non-negative start and stop > start")
         if not self.records:
             raise ValueError("planned range must contain records")
+        if len(self.selections) != len(self.records):
+            raise ValueError("planned range selections must align with records")
 
     @property
     def size(self) -> int:
@@ -243,6 +257,28 @@ class CommonCrawlDiscoverySummary(BaseModel):
     num_records: int
 
 
+@dataclass(frozen=True)
+class FetchedCommonCrawlRecord:
+    """One verified payload paired with its index record and selection metadata."""
+
+    indexed_record: IndexedRecord
+    selection: CommonCrawlSelection
+    observed_record: CommonCrawlWarcRecord
+
+
+@dataclass(frozen=True)
+class CommonCrawlDiscoveryOptions:
+    """Operational sizing for distributed URL-index discovery."""
+
+    batch_rows: int = 1 << 14
+    max_workers: int = 128
+    worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="8g"))
+
+    def __post_init__(self) -> None:
+        if self.batch_rows <= 0 or self.max_workers <= 0:
+            raise ValueError("batch_rows and max_workers must be positive")
+
+
 class CommonCrawlPlanError(ValueError):
     """Raised when selected records or a persisted plan are inconsistent."""
 
@@ -254,6 +290,7 @@ _MEMBER_TYPE = pa.struct(
         pa.field("url", pa.string(), nullable=False),
         pa.field("content_digest", pa.string(), nullable=False),
         pa.field("warc_record_id", pa.string()),
+        pa.field("selection_metadata", pa.string(), nullable=False),
     ]
 )
 DISCOVERY_SCHEMA = pa.schema(
@@ -315,7 +352,7 @@ def discover_index_partition(
             "warc_record_offset",
             "warc_record_length",
         ]
-        if source.index_kind is CommonCrawlIndexKind.MAIN:
+        if source.index_kind is CommonCrawlIndexKind.MAIN and "warc_record_id" in parquet.schema_arrow.names:
             columns.append("warc_record_id")
         missing = set(columns) - set(parquet.schema_arrow.names)
         if missing:
@@ -334,6 +371,57 @@ def discover_index_partition(
                 except ValueError:
                     continue
                 yield SelectedCommonCrawlRecord(source=source, indexed_record=indexed, selection=selection)
+
+
+def discover_partition_rows(
+    request: tuple[CommonCrawlSource, str],
+    *,
+    selector: CommonCrawlRecordSelector,
+    batch_rows: int,
+) -> Iterator[dict[str, object]]:
+    """Scan one source partition and serialize its selected records."""
+    source, partition = request
+    for selected in discover_index_partition(partition, source=source, selector=selector, batch_rows=batch_rows):
+        counters.pipeline.update_counter("common_crawl/selected_records", 1)
+        yield selected_common_crawl_record(selected)
+
+
+def discover_common_crawl(
+    output_path: str,
+    sources: tuple[CommonCrawlSource, ...],
+    selector: CommonCrawlRecordSelector,
+    options: CommonCrawlDiscoveryOptions,
+) -> CommonCrawlDiscoverySummary:
+    """Scan every source partition and write a reusable sharded discovery manifest."""
+    requests = [
+        (source, partition)
+        for source in sources
+        for partition in common_crawl_index_partitions(
+            source.paths_manifest_url,
+            crawl_id=source.crawl_id,
+            subset=source.subset,
+        )
+    ]
+    records_dir = prefix_join(output_path, "records")
+    pipeline = (
+        Dataset.from_list(requests)
+        .flat_map(partial(discover_partition_rows, selector=selector, batch_rows=options.batch_rows))
+        .write_parquet(
+            prefix_join(records_dir, "part-{shard:05d}-of-{total:05d}.parquet"),
+            schema=DISCOVERY_SCHEMA,
+            skip_existing=True,
+        )
+    )
+    outcome = ZephyrContext(
+        name="common-crawl-discovery",
+        resources=options.worker_resources,
+        max_workers=max(1, min(options.max_workers, len(requests))),
+    ).execute(pipeline)
+    return CommonCrawlDiscoverySummary(
+        manifest_path=records_dir,
+        num_sources=len(sources),
+        num_records=int(outcome.counters.get("common_crawl/selected_records", 0)),
+    )
 
 
 def plan_common_crawl_records(
@@ -368,7 +456,7 @@ def write_common_crawl_discovery(
             for selected in records:
                 source_ids.add(selected.source.source_id)
                 num_records += 1
-                rows.append(_selected_record(selected))
+                rows.append(selected_common_crawl_record(selected))
                 if len(rows) == _MANIFEST_BATCH_ROWS:
                     writer.write_table(pa.Table.from_pylist(rows, schema=DISCOVERY_SCHEMA))
                     rows.clear()
@@ -383,11 +471,14 @@ def write_common_crawl_discovery(
 
 def read_common_crawl_discovery(manifest_path: str) -> Iterator[SelectedCommonCrawlRecord]:
     """Yield selected records from a persisted discovery manifest in manifest order."""
-    with StoragePath(manifest_path).open("rb") as stream:
-        parquet = pq.ParquetFile(stream)
-        for batch in parquet.iter_batches():
-            for row in batch.to_pylist():
-                yield _selected_from_row(row)
+    path = StoragePath(manifest_path)
+    paths = StoragePath(prefix_join(manifest_path, "*.parquet")).glob() if path.isdir() else [path]
+    for selected_path in sorted(paths, key=str):
+        with selected_path.open("rb") as stream:
+            parquet = pq.ParquetFile(stream)
+            for batch in parquet.iter_batches():
+                for row in batch.to_pylist():
+                    yield _selected_from_row(row)
 
 
 def plan_common_crawl_manifest(
@@ -400,9 +491,62 @@ def plan_common_crawl_manifest(
     return write_common_crawl_plan(tasks, output_path)
 
 
+def plan_common_crawl_artifact(
+    output_path: str,
+    discovery_output_path: str,
+    options: CommonCrawlPlanOptions,
+) -> CommonCrawlPlanSummary:
+    """Plan the manifest recorded by a discovery step artifact."""
+    discovery = read_artifact(discovery_output_path, CommonCrawlDiscoverySummary)
+    return plan_common_crawl_manifest(discovery.manifest_path, output_path, options)
+
+
+def common_crawl_discovery_step(
+    *,
+    name: str,
+    sources: tuple[CommonCrawlSource, ...],
+    selector: CommonCrawlRecordSelector,
+    options: CommonCrawlDiscoveryOptions = CommonCrawlDiscoveryOptions(),
+) -> StepSpec:
+    """Build a distributed Common Crawl discovery step."""
+    return StepSpec(
+        name=name,
+        fn=remote(
+            partial(discover_common_crawl, sources=sources, selector=selector, options=options),
+            resources=ResourceConfig(cpu=1, ram="4g"),
+            pip_dependency_groups=["datakit"],
+        ),
+        hash_attrs={
+            "sources": [_source_identity(source) for source in sources],
+            "selector": dict(selector.identity),
+            "schema_version": 1,
+        },
+    )
+
+
+def common_crawl_plan_step(
+    *,
+    name: str,
+    discovery: StepSpec,
+    options: CommonCrawlPlanOptions = CommonCrawlPlanOptions(),
+) -> StepSpec:
+    """Build a plan step over a shared discovery artifact."""
+    return StepSpec(
+        name=name,
+        deps=[discovery],
+        fn=remote(
+            partial(plan_common_crawl_artifact, discovery_output_path=discovery.output_path, options=options),
+            resources=ResourceConfig(cpu=8, ram="32g", disk="32g"),
+            pip_dependency_groups=["datakit"],
+        ),
+        hash_attrs={"options": asdict(options), "schema_version": 1},
+    )
+
+
 def _coalesce_ranges(records: list[SelectedCommonCrawlRecord], *, gap_bytes: int) -> list[PlannedCommonCrawlRange]:
     ranges: list[PlannedCommonCrawlRange] = []
     open_records: list[IndexedRecord] = []
+    open_selections: list[CommonCrawlSelection] = []
     open_source: CommonCrawlSource | None = None
     open_warc = ""
     open_start = -1
@@ -417,6 +561,7 @@ def _coalesce_ranges(records: list[SelectedCommonCrawlRecord], *, gap_bytes: int
                     start=open_start,
                     stop=open_stop,
                     records=tuple(open_records),
+                    selections=tuple(open_selections),
                 )
             )
 
@@ -432,6 +577,7 @@ def _coalesce_ranges(records: list[SelectedCommonCrawlRecord], *, gap_bytes: int
         if open_records and same_warc and record_range.offset - open_stop <= gap_bytes:
             open_stop = record_range.stop
             open_records.append(selected.indexed_record)
+            open_selections.append(selected.selection)
             continue
         close_range()
         open_source = selected.source
@@ -439,6 +585,7 @@ def _coalesce_ranges(records: list[SelectedCommonCrawlRecord], *, gap_bytes: int
         open_start = record_range.offset
         open_stop = record_range.stop
         open_records = [selected.indexed_record]
+        open_selections = [selected.selection]
     close_range()
     return ranges
 
@@ -533,11 +680,19 @@ def _task_rows(task: CommonCrawlFetchTask) -> Iterator[dict[str, object]]:
             "warc_filename": selected.warc_filename,
             "range_start": selected.start,
             "range_end": selected.stop,
-            "records": [_member_record(record) for record in selected.records],
+            "records": [
+                _member_record(record, selection)
+                for record, selection in zip(
+                    selected.records,
+                    selected.selections or (CommonCrawlSelection({}) for _ in selected.records),
+                    strict=True,
+                )
+            ],
         }
 
 
-def _selected_record(selected: SelectedCommonCrawlRecord) -> dict[str, object]:
+def selected_common_crawl_record(selected: SelectedCommonCrawlRecord) -> dict[str, object]:
+    """Serialize one selected record into the shared discovery schema."""
     source = selected.source
     indexed = selected.indexed_record
     location = indexed.record_range
@@ -568,7 +723,7 @@ def _selected_from_row(row: Mapping[str, object]) -> SelectedCommonCrawlRecord:
     return SelectedCommonCrawlRecord(source, indexed, CommonCrawlSelection(metadata))
 
 
-def _member_record(record: IndexedRecord) -> dict[str, object]:
+def _member_record(record: IndexedRecord, selection: CommonCrawlSelection) -> dict[str, object]:
     expectation = record.expectation
     return {
         "offset": record.record_range.offset,
@@ -576,6 +731,7 @@ def _member_record(record: IndexedRecord) -> dict[str, object]:
         "url": expectation.url,
         "content_digest": expectation.content_digest,
         "warc_record_id": expectation.warc_record_id if isinstance(record, MainIndexedRecord) else None,
+        "selection_metadata": json.dumps(dict(selection.metadata), sort_keys=True, separators=(",", ":")),
     }
 
 
@@ -585,6 +741,7 @@ def _range_from_row(row: Mapping[str, object]) -> PlannedCommonCrawlRange:
     members = row["records"]
     assert isinstance(members, list)
     indexed: list[IndexedRecord] = []
+    selections: list[CommonCrawlSelection] = []
     for member in members:
         assert isinstance(member, dict)
         index_row = {
@@ -600,13 +757,38 @@ def _range_from_row(row: Mapping[str, object]) -> PlannedCommonCrawlRange:
             if source.index_kind is CommonCrawlIndexKind.MAIN
             else supplemental_record_from_index_row(index_row, crawl_id=source.crawl_id)
         )
+        metadata = json.loads(str(member["selection_metadata"]))
+        if not isinstance(metadata, dict):
+            raise CommonCrawlPlanError("selection metadata must be a JSON object")
+        selections.append(CommonCrawlSelection(metadata))
     return PlannedCommonCrawlRange(
         source=source,
         warc_filename=warc_filename,
         start=int(row["range_start"]),
         stop=int(row["range_end"]),
         records=tuple(indexed),
+        selections=tuple(selections),
     )
+
+
+def fetch_common_crawl_task(
+    task: CommonCrawlFetchTask,
+    *,
+    maximum_warc_record_bytes: int,
+    maximum_payload_bytes: int,
+) -> Iterator[FetchedCommonCrawlRecord]:
+    """Fetch every range in one task and retain index and selection provenance."""
+    with CommonCrawlClient(
+        maximum_warc_record_bytes=maximum_warc_record_bytes,
+        maximum_payload_bytes=maximum_payload_bytes,
+        base_url=task.source.base_url,
+    ) as client:
+        for selected_range in task.ranges:
+            observed = client.fetch_range(selected_range)
+            for indexed, selection, record in zip(
+                selected_range.records, selected_range.selections, observed, strict=True
+            ):
+                yield FetchedCommonCrawlRecord(indexed, selection, record)
 
 
 def _source_from_row(row: Mapping[str, object]) -> CommonCrawlSource:
@@ -620,6 +802,16 @@ def _source_from_row(row: Mapping[str, object]) -> CommonCrawlSource:
     if row["source_id"] != source.source_id:
         raise CommonCrawlPlanError("persisted source ID does not match source fields")
     return source
+
+
+def _source_identity(source: CommonCrawlSource) -> dict[str, str]:
+    return {
+        "crawl_id": source.crawl_id,
+        "index_kind": source.index_kind.value,
+        "paths_manifest_url": source.paths_manifest_url,
+        "base_url": source.base_url,
+        "subset": source.subset,
+    }
 
 
 def _indexed_from_row(row: Mapping[str, object], source: CommonCrawlSource) -> IndexedRecord:
