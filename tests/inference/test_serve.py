@@ -4,6 +4,7 @@
 """Tests for inference serving and the dashboard reverse proxy."""
 
 import dataclasses
+import hashlib
 import json
 import os
 import re
@@ -11,6 +12,7 @@ import socket
 import subprocess
 import sys
 import time
+import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -61,6 +63,7 @@ from marin.inference.levanter_backend import (
 from marin.inference.model_preparation import resolve_model_path, select_tensor_parallel_size
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.types import OpenAIEndpoint, RunningModel
+from marin.inference.verified_uvx import download_verified_wheel
 from marin.inference.vllm_backend import VllmBackend, vllm_launcher
 from marin.inference.vllm_release import (
     vllm_gpu_wheel_for_architecture,
@@ -224,6 +227,75 @@ def test_isolated_cuda_vllm_marin_fork_rejects_unpublished_architecture(monkeypa
 
     with pytest.raises(ValueError):
         IsolatedCudaVllm(source=VllmType.MARIN_FORK).command()
+
+
+def test_tpu_uvx_cache_uses_iris_workdir(monkeypatch, tmp_path):
+    monkeypatch.setenv("IRIS_WORKDIR", str(tmp_path))
+    launcher = IsolatedTpuVllm(
+        vllm_wheel_url="https://example.invalid/vllm.whl",
+        vllm_wheel_sha256="a" * 64,
+        tpu_inference_wheel_url="https://example.invalid/tpu_inference.whl",
+        tpu_inference_wheel_sha256="b" * 64,
+        exclude_newer="2026-08-12T00:00:00Z",
+    )
+
+    assert Path(launcher.env()["UV_CACHE_DIR"]).parent == tmp_path
+
+
+def _write_probe_wheel(path: Path) -> None:
+    dist_info = "marin_verified_uvx_probe-1.0.0.dist-info"
+    files = {
+        "marin_verified_uvx_probe/__init__.py": 'VALUE = "installed verified wheel"\n',
+        f"{dist_info}/METADATA": "Metadata-Version: 2.1\nName: marin-verified-uvx-probe\nVersion: 1.0.0\n",
+        f"{dist_info}/WHEEL": "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+    }
+    files[f"{dist_info}/RECORD"] = "".join(f"{name},,\n" for name in (*files, f"{dist_info}/RECORD"))
+    with zipfile.ZipFile(path, "w") as wheel:
+        for name, content in files.items():
+            wheel.writestr(name, content)
+
+
+def test_verified_uvx_installs_the_verified_wheel(tmp_path):
+    wheel = tmp_path / "marin_verified_uvx_probe-1.0.0-py3-none-any.whl"
+    _write_probe_wheel(wheel)
+    digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    capture = tmp_path / "capture.txt"
+    environment = os.environ.copy()
+    environment["UV_CACHE_DIR"] = str(tmp_path / "uv-cache")
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "marin.inference.verified_uvx",
+            "--from-wheel",
+            wheel.as_uri(),
+            digest,
+            "--",
+            "--offline",
+            "--python",
+            sys.executable,
+            "python",
+            "-c",
+            (
+                "import pathlib, sys; import marin_verified_uvx_probe as probe; "
+                "pathlib.Path(sys.argv[1]).write_text(probe.VALUE)"
+            ),
+            str(capture),
+        ],
+        check=True,
+        env=environment,
+    )
+
+    assert capture.read_text() == "installed verified wheel"
+
+
+def test_verified_uvx_rejects_changed_wheel_bytes(tmp_path):
+    wheel = tmp_path / "changed.whl"
+    wheel.write_text("changed bytes\n")
+
+    with pytest.raises(RuntimeError, match="wheel SHA-256 mismatch"):
+        download_verified_wheel(wheel.as_uri(), "a" * 64, tmp_path / "cache")
 
 
 def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
@@ -394,7 +466,7 @@ def _plan(**overrides):
 @pytest.mark.parametrize(
     ("overrides", "backend_type", "worker_extras"),
     [
-        # The forked TPU vLLM always comes from an isolated uvx env, so the worker venv needs only
+        # The TPU wheel pair always comes from an isolated uvx env, so the worker venv needs only
         # the `tpu` extra for the serving glue's JAX/libtpu, in a checkout or not.
         ({}, VllmEngineConfig, ("tpu",)),
         ({"in_checkout": False}, VllmEngineConfig, ("tpu",)),
@@ -432,7 +504,7 @@ def test_gpu_plan_task_image_serves_preinstalled_vllm():
 
 
 def test_tpu_plan_always_isolates_vllm():
-    # The forked TPU vLLM always runs from a pinned uvx env (it is not in the workspace lock),
+    # The qualified TPU wheel pair runs from a pinned uvx env (it is not in the workspace lock),
     # in a checkout or not.
     assert _plan(in_checkout=False).engine.launcher is VllmLauncherType.TPU
     assert _plan().engine.launcher is VllmLauncherType.TPU

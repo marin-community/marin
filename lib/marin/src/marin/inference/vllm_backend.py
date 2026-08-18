@@ -10,7 +10,7 @@ import tempfile
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
-from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT
+from marin.external_dependencies import VLLM_TPU_RELEASE
 from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
@@ -34,9 +34,14 @@ def vllm_launcher(config: VllmEngineConfig) -> VllmLauncher:
     if config.launcher is VllmLauncherType.PREINSTALLED:
         return PreinstalledVllm()
     if config.launcher is VllmLauncherType.TPU:
+        # The tpu-inference wheel carries the JAX/JAXlib/libtpu pins qualified with this pair.
         return IsolatedTpuVllm(
-            vllm_ref=VLLM_FORK_REQUIREMENT,
-            tpu_inference_ref=TPU_INFERENCE_FORK_REQUIREMENT,
+            vllm_wheel_url=VLLM_TPU_RELEASE.vllm.url,
+            vllm_wheel_sha256=VLLM_TPU_RELEASE.vllm.sha256,
+            tpu_inference_wheel_url=VLLM_TPU_RELEASE.tpu_inference.url,
+            tpu_inference_wheel_sha256=VLLM_TPU_RELEASE.tpu_inference.sha256,
+            exclude_newer=VLLM_TPU_RELEASE.exclude_newer,
+            python_version=VLLM_TPU_RELEASE.python_version,
         )
     source = VllmType.MARIN_FORK if config.source is VllmSource.MARIN_FORK else VllmType.UPSTREAM
     version = config.version if source is VllmType.UPSTREAM else None

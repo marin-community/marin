@@ -1,0 +1,31 @@
+schema_version = 1
+status = "candidate"
+release_tag = "marin-vllm-tpu-candidate-3d26773be1d7-c63712cb74eb-ac3c42e02dcb-7a69bb2e0699"
+workflow_commit = "ac3c42e02dcb59161cee9a896101c918d870ef0e"
+workflow_run_url = "https://github.com/marin-community/vllm/actions/runs/32191611248"
+qualification_run_url = "https://github.com/marin-community/vllm/actions/runs/32191969476"
+validation_sha256 = "4f19f9f65e950693ec6c6968c875cdbabcb81073a6fd90efbc998c224ac1fda7"
+validated_hardware = "v6e-8"
+python_version = "3.12"
+exclude_newer = "2026-08-12T00:00:00Z"
+runtime_requirements = ["jax==0.10.2", "jaxlib==0.10.2", "libtpu==0.0.43"]
+index_url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-tpu-candidate-3d26773be1d7-c63712cb74eb-ac3c42e02dcb-7a69bb2e0699/marin-vllm-tpu-index-0eefa778a30232cc.html"
+index_sha256 = "0eefa778a30232cc7be564ee8b3b8c2cd309719cd60ace618831973c5cf6b1a9"
+
+[[packages]]
+distribution = "tpu-inference"
+version = "0.26.0+marin.c63712cb74eb"
+repository = "marin-community/tpu-inference"
+source_commit = "c63712cb74eb8183999b9bec1a75a810edb4abab"
+wheel_filename = "tpu_inference-0.26.0+marin.c63712cb74eb-py3-none-any.whl"
+wheel_url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-tpu-candidate-3d26773be1d7-c63712cb74eb-ac3c42e02dcb-7a69bb2e0699/tpu_inference-0.26.0+marin.c63712cb74eb-py3-none-any.whl"
+wheel_sha256 = "acc412c61dae42016c2c116d6303da257cc00b0dd39e5bd0a300987196631aee"
+
+[[packages]]
+distribution = "vllm"
+version = "0.20.1rc1.dev0+marin.3d26773be1d7.tpu"
+repository = "marin-community/vllm"
+source_commit = "3d26773be1d7aa7361a542943e3ef14f023d6f3a"
+wheel_filename = "vllm-0.20.1rc1.dev0+marin.3d26773be1d7.tpu-cp312-cp312-linux_x86_64.whl"
+wheel_url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-tpu-candidate-3d26773be1d7-c63712cb74eb-ac3c42e02dcb-7a69bb2e0699/vllm-0.20.1rc1.dev0+marin.3d26773be1d7.tpu-cp312-cp312-linux_x86_64.whl"
+wheel_sha256 = "526332073d6039fb6909a1ee70e2f48e5e50dd8045be741b8f1161b410d12e5a"
