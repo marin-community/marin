@@ -23,7 +23,13 @@ from zephyr.memory_store import (
     MemoryTableStatsResult,
 )
 from zephyr.stage_io import ShardTask, StageRunner, TaskResult, ZephyrTaskResources, _stage_throughput
-from zephyr.stats import ZEPHYR_WORKER_MEM_CURRENT_KEY, StatsWriter, ZephyrWorkerStatStatus, _push_iris_task_status
+from zephyr.stats import (
+    WORKER_STATS_INTERVAL,
+    ZEPHYR_WORKER_MEM_CURRENT_KEY,
+    StatsWriter,
+    ZephyrWorkerStatStatus,
+    _push_iris_task_status,
+)
 from zephyr.worker_context import CounterEntry, CounterSnapshot, merge_counter_entries
 
 logger = logging.getLogger(__name__)
@@ -34,7 +40,6 @@ logger = logging.getLogger(__name__)
 RPC_POLL_INTERVAL = 0.5
 REGISTER_WARN_AFTER = 60.0
 PULL_TASK_WARN_AFTER = 30.0
-HEARTBEAT_INTERVAL = 5.0
 
 
 @dataclass
@@ -107,7 +112,7 @@ class ZephyrWorker:
 
         self._heartbeat_thread = threading.Thread(
             target=self._heartbeat_loop,
-            args=(coordinator_handle, HEARTBEAT_INTERVAL),
+            args=(coordinator_handle, WORKER_STATS_INTERVAL),
             daemon=True,
             name=f"zephyr-hb-{self._worker_id}",
         )

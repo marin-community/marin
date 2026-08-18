@@ -30,13 +30,13 @@ import pyarrow as pa
 from rigging.log_setup import configure_logging
 
 from zephyr.runners import (
-    SUBPROCESS_STATS_INTERVAL,
     _InProcessWorkerContext,
     _run_stage_with_ctx,
     _set_counter_aggregations,
     _shard_counter_session,
 )
 from zephyr.stage_io import _ensure_picklable_exception, _stage_throughput
+from zephyr.stats import WORKER_STATS_INTERVAL
 from zephyr.worker_context import _worker_ctx_var
 
 logger = logging.getLogger(__name__)
@@ -117,7 +117,7 @@ def _execute_shard_subprocess(task_file: str, result_file: str, external_sort_di
             stop_event = threading.Event()
             flusher = threading.Thread(
                 target=_periodic_counter_writer,
-                args=(stop_event, ctx, counter_file, SUBPROCESS_STATS_INTERVAL),
+                args=(stop_event, ctx, counter_file, WORKER_STATS_INTERVAL),
                 daemon=True,
                 name="zephyr-subprocess-counter-flusher",
             )
@@ -133,7 +133,7 @@ def _execute_shard_subprocess(task_file: str, result_file: str, external_sort_di
                     task.shard_idx,
                     task.total_shards,
                     start_time,
-                    SUBPROCESS_STATS_INTERVAL,
+                    WORKER_STATS_INTERVAL,
                 ),
                 daemon=True,
                 name="zephyr-subprocess-status-logger",

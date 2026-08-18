@@ -51,6 +51,7 @@ from zephyr.stage_io import (
     _write_stage_output,
 )
 from zephyr.stats import (
+    WORKER_STATS_INTERVAL,
     ZEPHYR_STAGE_BYTES_PROCESSED_KEY,
     ZEPHYR_STAGE_ITEM_COUNT_KEY,
     ZEPHYR_WORKER_CPU_PCT_AVERAGE_KEY,
@@ -68,17 +69,16 @@ logger = logging.getLogger(__name__)
 __all__ = ["InlineRunner", "StageRunner", "SubprocessRunner"]
 
 
-SUBPROCESS_STATS_INTERVAL = 5.0
-"""How often runners sample resource use and flush subprocess counters.
-
-Matches the parent's heartbeat cadence so each beat reads at most one stale
-snapshot before a fresh flush lands.
-"""
-
 _ACCUMULATED_RESOURCE_COUNTER_KEYS = (
     ZEPHYR_WORKER_CPU_PCT_AVERAGE_KEY,
     ZEPHYR_WORKER_MEM_AVERAGE_KEY,
     ZEPHYR_WORKER_MEM_PEAK_KEY,
+)
+_RESOURCE_COUNTER_AGGREGATIONS = (
+    (ZEPHYR_WORKER_CPU_PCT_AVERAGE_KEY, Aggregation.AVERAGE),
+    (ZEPHYR_WORKER_CPU_TIME_KEY, Aggregation.SUM),
+    (ZEPHYR_WORKER_MEM_AVERAGE_KEY, Aggregation.AVERAGE),
+    (ZEPHYR_WORKER_MEM_PEAK_KEY, Aggregation.MAX),
 )
 
 # ---------------------------------------------------------------------------
@@ -169,7 +169,7 @@ def _wrap_stage_stats(gen: Iterator[_T]) -> Iterator[_T]:
 
 
 def _sample_process_stats(
-    cpu_s_at_start: float,
+    cpu_time_at_start: float,
     proc: psutil.Process,
     ctx: _InProcessWorkerContext,
 ) -> None:
@@ -177,7 +177,7 @@ def _sample_process_stats(
 
     Uses set_counter (not increment) because these are point-in-time metrics.
     Peak memory is tracked as a monotonically increasing max across calls.
-    ``cpu_s_at_start`` is subtracted from cumulative CPU time to give per-shard delta.
+    ``cpu_time_at_start`` is subtracted from cumulative CPU time to give per-shard delta.
     ``proc`` must be the same object across calls so cpu_percent() has a
     prior measurement to diff against; prime it once before the first sample.
     The context is explicit because sampler threads do not inherit ContextVars.
@@ -188,7 +188,11 @@ def _sample_process_stats(
     stage = ctx.current_stage_name()
     ctx.set_counter(ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, cpu_pct, stage=stage)
     ctx.update_counter(ZEPHYR_WORKER_CPU_PCT_AVERAGE_KEY, cpu_pct, stage=stage)
-    ctx.set_counter(ZEPHYR_WORKER_CPU_TIME_KEY, cpu_times.user + cpu_times.system - cpu_s_at_start, stage=stage)
+    ctx.set_counter(
+        ZEPHYR_WORKER_CPU_TIME_KEY,
+        cpu_times.user + cpu_times.system - cpu_time_at_start,
+        stage=stage,
+    )
     ctx.set_counter(ZEPHYR_WORKER_MEM_CURRENT_KEY, rss, stage=stage)
     ctx.update_counter(ZEPHYR_WORKER_MEM_AVERAGE_KEY, rss, stage=stage)
     ctx.update_counter(ZEPHYR_WORKER_MEM_PEAK_KEY, rss, stage=stage)
@@ -201,13 +205,11 @@ def _set_counter_aggregations() -> None:
     so that AVERAGE/MAX counters are reduced correctly.  SUM is the default
     and listed only for documentation.
     """
-    sc = counters.current_stage()
-    sc.set_aggregation(ZEPHYR_STAGE_ITEM_COUNT_KEY, Aggregation.SUM)
-    sc.set_aggregation(ZEPHYR_STAGE_BYTES_PROCESSED_KEY, Aggregation.SUM)
-    sc.set_aggregation(ZEPHYR_WORKER_CPU_PCT_AVERAGE_KEY, Aggregation.AVERAGE)
-    sc.set_aggregation(ZEPHYR_WORKER_CPU_TIME_KEY, Aggregation.SUM)
-    sc.set_aggregation(ZEPHYR_WORKER_MEM_AVERAGE_KEY, Aggregation.AVERAGE)
-    sc.set_aggregation(ZEPHYR_WORKER_MEM_PEAK_KEY, Aggregation.MAX)
+    stage_counters = counters.current_stage()
+    stage_counters.set_aggregation(ZEPHYR_STAGE_ITEM_COUNT_KEY, Aggregation.SUM)
+    stage_counters.set_aggregation(ZEPHYR_STAGE_BYTES_PROCESSED_KEY, Aggregation.SUM)
+    for name, aggregation in _RESOURCE_COUNTER_AGGREGATIONS:
+        stage_counters.set_aggregation(name, aggregation)
 
 
 def _periodic_sampler(
@@ -215,13 +217,13 @@ def _periodic_sampler(
     ctx: _InProcessWorkerContext,
     interval: float,
     *,
-    cpu_s_at_start: float,
+    cpu_time_at_start: float,
     proc: psutil.Process,
 ) -> None:
     """Periodically sample process stats into the shard context."""
     while not stop_event.wait(timeout=interval):
         try:
-            _sample_process_stats(cpu_s_at_start, proc, ctx)
+            _sample_process_stats(cpu_time_at_start, proc, ctx)
         except Exception:
             logger.warning("Failed to sample process stats", exc_info=True)
 
@@ -237,7 +239,7 @@ def _shard_counter_session(
     proc = psutil.Process()
     proc.cpu_percent()  # prime so subsequent calls have a baseline
     cpu_times_at_start = proc.cpu_times()
-    cpu_s_at_start = cpu_times_at_start.user + cpu_times_at_start.system
+    cpu_time_at_start = cpu_times_at_start.user + cpu_times_at_start.system
     start_time = time.monotonic()
 
     stop_event = threading.Event()
@@ -250,7 +252,7 @@ def _shard_counter_session(
                 "stop_event": stop_event,
                 "ctx": ctx,
                 "interval": sample_interval,
-                "cpu_s_at_start": cpu_s_at_start,
+                "cpu_time_at_start": cpu_time_at_start,
                 "proc": proc,
             },
             daemon=True,
@@ -266,7 +268,7 @@ def _shard_counter_session(
             sampler.join(timeout=2.0)
         if sampler is None or not sampler.is_alive():
             try:
-                _sample_process_stats(cpu_s_at_start, proc, ctx)
+                _sample_process_stats(cpu_time_at_start, proc, ctx)
             except Exception:
                 logger.warning("Failed to take final process stats sample", exc_info=True)
 
@@ -337,7 +339,7 @@ class InlineRunner:
         try:
             with _shard_counter_session(
                 ctx,
-                sample_interval=SUBPROCESS_STATS_INTERVAL,
+                sample_interval=WORKER_STATS_INTERVAL,
                 sampler_thread_name="zephyr-inline-stats-sampler",
             ):
                 result = _run_stage_with_ctx(task, chunk_prefix, execution_id)
@@ -372,9 +374,49 @@ class SubprocessRunner:
         self._counter_file: str | None = None
         self._process: psutil.Process | None = None
         self._process_stats: _InProcessWorkerContext | None = None
-        self._cpu_s_at_start = 0.0
+        self._cpu_time_at_start = 0.0
         self._last_counters: dict[str, CounterEntry] = {}
         self._state_lock = threading.Lock()
+
+    def _child_returncode(
+        self,
+        command: list[str],
+        child_env: dict[str, str],
+        execution_id: str,
+        stage_name: str,
+    ) -> int:
+        with sp.Popen(
+            command,
+            env=child_env,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+        ) as proc:
+            process = psutil.Process(proc.pid)
+            process.cpu_percent()
+            cpu_times_at_start = process.cpu_times()
+            process_stats = _InProcessWorkerContext("", execution_id, stage_name)
+            for name, aggregation in _RESOURCE_COUNTER_AGGREGATIONS:
+                process_stats.set_aggregation(name, aggregation)
+            with self._state_lock:
+                self._process = process
+                self._process_stats = process_stats
+                self._cpu_time_at_start = cpu_times_at_start.user + cpu_times_at_start.system
+            try:
+                return proc.wait()
+            finally:
+                with self._state_lock:
+                    self._process = None
+
+    def _final_counters(self, child_counters: dict[str, CounterEntry]) -> dict[str, CounterEntry]:
+        with self._state_lock:
+            process_counters = dict(self._process_stats._counters) if self._process_stats is not None else {}
+        final_counters = dict(child_counters)
+        for name in _ACCUMULATED_RESOURCE_COUNTER_KEYS:
+            entries = [(name, entry) for entry in (process_counters.get(name), final_counters.get(name)) if entry]
+            if entries:
+                merged, _ = merge_counter_entries(entries)
+                final_counters[name] = merged[name]
+        return final_counters
 
     def execute(
         self,
@@ -398,27 +440,12 @@ class SubprocessRunner:
             child_env = os.environ.copy()
             child_env["POLARS_MAX_THREADS"] = str(max(1, math.ceil(task.cost.cpu)))
             with tempfile.TemporaryDirectory(prefix=f"zephyr-external-sort-{task.shard_idx:04d}-") as sort_dir:
-                with sp.Popen(
+                returncode = self._child_returncode(
                     [sys.executable, "-u", "-m", "zephyr.shard_subprocess", task_file, result_file, sort_dir],
-                    env=child_env,
-                    stdout=sys.stdout,
-                    stderr=sys.stderr,
-                ) as proc:
-                    process = psutil.Process(proc.pid)
-                    process.cpu_percent()
-                    cpu_times_at_start = process.cpu_times()
-                    process_stats = _InProcessWorkerContext("", execution_id, task.stage_name)
-                    process_stats.set_aggregation(ZEPHYR_WORKER_CPU_PCT_AVERAGE_KEY, Aggregation.AVERAGE)
-                    process_stats.set_aggregation(ZEPHYR_WORKER_MEM_AVERAGE_KEY, Aggregation.AVERAGE)
-                    process_stats.set_aggregation(ZEPHYR_WORKER_MEM_PEAK_KEY, Aggregation.MAX)
-                    cpu_s_at_start = cpu_times_at_start.user + cpu_times_at_start.system
-                    with self._state_lock:
-                        self._process = process
-                        self._process_stats = process_stats
-                        self._cpu_s_at_start = cpu_s_at_start
-                    returncode = proc.wait()
-                    with self._state_lock:
-                        self._process = None
+                    child_env,
+                    execution_id,
+                    task.stage_name,
+                )
 
             if returncode != 0:
                 # Linux OOM-killer sends SIGKILL → returncode == -9. Distinguish
@@ -436,14 +463,7 @@ class SubprocessRunner:
             with open(result_file, "rb") as f:
                 result_or_error, child_counters = cloudpickle.load(f)
 
-            with self._state_lock:
-                process_counters = dict(self._process_stats._counters) if self._process_stats is not None else {}
-            final_counters = dict(child_counters)
-            for name in _ACCUMULATED_RESOURCE_COUNTER_KEYS:
-                entries = [(name, entry) for entry in (process_counters.get(name), final_counters.get(name)) if entry]
-                if entries:
-                    merged, _ = merge_counter_entries(entries)
-                    final_counters[name] = merged[name]
+            final_counters = self._final_counters(child_counters)
             self._last_counters = final_counters
 
             # Switch heartbeat reads to the final snapshot before returning.
@@ -478,9 +498,11 @@ class SubprocessRunner:
         with self._state_lock:
             if self._process is not None and self._process_stats is not None:
                 try:
-                    _sample_process_stats(self._cpu_s_at_start, self._process, self._process_stats)
-                except psutil.Error:
+                    _sample_process_stats(self._cpu_time_at_start, self._process, self._process_stats)
+                except psutil.NoSuchProcess:
                     pass
+                except psutil.Error:
+                    logger.warning("Failed to sample subprocess resource use", exc_info=True)
                 counters.update(self._process_stats._counters)
         if counters:
             self._last_counters = dict(counters)

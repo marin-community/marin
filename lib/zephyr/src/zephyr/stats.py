@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 ZEPHYR_STAGE_STATS_NAMESPACE = "zephyr.stage"
 ZEPHYR_WORKER_STATS_NAMESPACE = "zephyr.worker"
+WORKER_STATS_INTERVAL = 5.0
 
 ZEPHYR_STAGE_ITEM_COUNT_KEY = "zephyr/item_count"
 """Counter key for items processed"""

@@ -208,8 +208,8 @@ def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypat
         return w
 
     monkeypatch.setattr(StatsWriter, "connect", staticmethod(make_writer))
-    monkeypatch.setattr(runners, "SUBPROCESS_STATS_INTERVAL", 0.01)
-    monkeypatch.setattr(worker, "HEARTBEAT_INTERVAL", 0.01)
+    monkeypatch.setattr(runners, "WORKER_STATS_INTERVAL", 0.01)
+    monkeypatch.setattr(worker, "WORKER_STATS_INTERVAL", 0.01)
 
     def slow_identity(x: int) -> int:
         # Keep the shard alive long enough for the background sampler to emit.
@@ -343,10 +343,18 @@ def test_subprocess_finelog_stats_use_worker_connection(local_client, tmp_path, 
         def __init__(self) -> None:
             self.worker_rows: list[tuple[str, dict[str, int | float]]] = []
 
-        def emit_stage_stat(self, *args, **kwargs) -> None:
+        def emit_stage_stat(self, *_args, **_kwargs) -> None:
             pass
 
-        def emit_worker_stat(self, stage_name, shard_idx, execution_id, status, start_time, counters) -> None:
+        def emit_worker_stat(
+            self,
+            _stage_name,
+            _shard_idx,
+            _execution_id,
+            status,
+            _start_time,
+            counters,
+        ) -> None:
             self.worker_rows.append((status, counters))
 
         def close(self) -> None:
@@ -360,7 +368,7 @@ def test_subprocess_finelog_stats_use_worker_connection(local_client, tmp_path, 
         return writer
 
     monkeypatch.setattr(StatsWriter, "connect", staticmethod(make_writer))
-    monkeypatch.setattr(worker, "HEARTBEAT_INTERVAL", 0.01)
+    monkeypatch.setattr(worker, "WORKER_STATS_INTERVAL", 0.01)
 
     ctx = _ctx(local_client, tmp_path, stage_runner_factory=lambda: SubprocessRunner(), max_workers=1)
     try:
