@@ -11,7 +11,7 @@
 
 ## Consumer discovery
 
-`installed_consumer_matrix()` lists repositories visible to the dependency-updater App installation and excludes `marin-community/marin`. Each row carries the repository name and default branch returned by GitHub. An optional selector accepts the short or `owner/name` repository name and must match exactly one installed repository.
+`installed_consumer_matrix_json()` lists repositories visible to the dependency-updater App installation and excludes `marin-community/marin`. Each row carries the repository name and default branch returned by GitHub. An optional selector accepts the short or `owner/name` repository name and must match exactly one installed repository.
 
 The App installation is the only central repository list. A checkout opts in by containing exactly one canonical `marin-style` URL and full revision in `infra/pre-commit.py`. The update job fails if an installed repository lacks that pin. Adding a consumer requires App installation selection, the canonical pin, labels, and reviewed branch protection; it does not require a Marin registry entry.
 
@@ -46,7 +46,7 @@ def generate_marin_style_update(
     """
 ```
 
-`revision` is exactly 40 lowercase hexadecimal characters. The workflow verifies it is reachable from the `marin-style` default branch; an omitted revision resolves the current head. After removing manifest-owned paths, the manifest itself, and the generated lockfile, every tracked file containing the old revision must be one of:
+`revision` is exactly 40 lowercase hexadecimal characters. `base_branch` becomes the pull request base and must still match the repository's default branch at preflight. The workflow verifies the revision is reachable from the `marin-style` default branch; an omitted revision resolves the current head. After removing manifest-owned paths, the manifest itself, and the generated lockfile, every tracked file containing the old revision must be one of:
 
 - `infra/pre-commit.py`, containing a `marin-style` reference;
 - YAML beneath `.github/workflows/`, where each matching line names `marin-style` or `MARIN_STYLE_REV`;
@@ -158,13 +158,12 @@ def update_consumer(
     """Prepare, publish, and optionally merge one consumer update.
 
     CURRENT has an empty pull-request URL; PUBLISHED and MERGED carry the exact
-    URL. The function constructs the dynamic pull-request policy in memory
-    after comparing the old checked-in manifest with output from the old pinned
-    package and the target installed package. The same policy object is passed
-    to publication and merge validation, so old-only paths are not lost between
-    CLI steps.
+    URL. BOOTSTRAP with MERGE raises ValueError because the first manifest must
+    receive human review.
     """
 ```
+
+`ManifestMode.BOOTSTRAP` and `LEGACY_MANAGED_FILES` are rollout scaffolding owned by Marin maintainers. Remove both after every repository selected in the App installation has a manifest on its default branch.
 
 The command-line entry point is:
 
