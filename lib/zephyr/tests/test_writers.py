@@ -122,8 +122,20 @@ def test_write_parquet_file_basic():
         assert Path(output_path).exists()
 
         # Verify we can read it back
-        table = pq.read_table(output_path)
+        parquet_file = pq.ParquetFile(output_path)
+        table = parquet_file.read()
         assert len(table) == 2
+        assert {
+            parquet_file.metadata.row_group(row_group).column(column).compression
+            for row_group in range(parquet_file.metadata.num_row_groups)
+            for column in range(parquet_file.metadata.num_columns)
+        } == {"ZSTD"}
+        assert all(
+            parquet_file.metadata.row_group(row_group).column(column).has_column_index
+            and parquet_file.metadata.row_group(row_group).column(column).has_offset_index
+            for row_group in range(parquet_file.metadata.num_row_groups)
+            for column in range(parquet_file.metadata.num_columns)
+        )
 
 
 def test_write_parquet_file_accepts_record_batches(tmp_path):
