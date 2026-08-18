@@ -1378,7 +1378,6 @@ project_grants:
   - serviceAccount:loom-dev@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-crawl-bigquery@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-data-browser@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-gcs-proxy@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/storageinsights.serviceAgent
   members:
@@ -1554,6 +1553,11 @@ secrets:
     members:
     - serviceAccount:service-748532799086@gcp-sa-devconnect.iam.gserviceaccount.com
 buckets:
+- bucket: marin-eval-metadata
+  grants:
+  - role: roles/storage.objectViewer
+    members:
+    - serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
 - bucket: marin-iac-state
   grants:
   - role: projects/hai-gcp-models/roles/marinStorageBucketIamManager
