@@ -107,7 +107,7 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 Print the plan without a GPU run:
 
 ```bash
-python -m experiments.grug.moe_hero_ep.launch \
+python -m experiments.grug.moe_hero_ep.launch_mfu_test \
   --run-id mhep-pooled-wave \
   --num-steps 200 \
   --version 2026.08.14
@@ -123,7 +123,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
   --job-name "${run_id}-coord" \
   -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
   -e IRIS_PORT_JAX 32575 \
-  -- python -m experiments.grug.moe_hero_ep.launch \
+  -- python -m experiments.grug.moe_hero_ep.launch_mfu_test \
     --run-id "$run_id" --num-steps 200 --version 2026.08.14 --run
 ```
 
@@ -169,6 +169,35 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
 The wider rungs need more than one rack to hold their batch: `--dp-racks N` replicates the run
 across `N` racks, and the launcher sizes the fleet request accordingly. Ablation runs report to W&B
 group `moe-hero-ep-small-abl` and carry Paloma and uncheatable evaluation at `--steps-per-eval`.
+
+### Scaling ladder
+
+`launch_scaling_ladder.py` trains one uniform hero recipe at five widths so a narrow rung predicts
+the `d6144` hero (which is the hero itself). Every rung shares the hero data (SlimPajama/llama3),
+the offloaded MuonH optimizer on FP32 pinned-host master params, the hero mixed precision, 384
+experts / top-8, pooled-wave transport, the QB histogram estimator at 10k bins, and a dropless
+held-out eval. Only the width and the rack count vary; the rack count, batch, step budget, eval
+cadence, and checkpoint policy all follow `--size`:
+
+| size | racks | batch | steps | eval | checkpoints |
+|---|---|---|---|---|---|
+| d768 | 1 | 1024 | 11,420 | every 5% | final only |
+| d1024 | 2 | 2048 | 15,276 | every 5% | final only |
+| d1536 | 6 | 6144 | 15,128 | every 5% | final only |
+| d2048 | 11 | 11264 | 20,072 | every 5% | final only |
+| d6144 | 11 | 11264 | 390,251 | every 3000 | every 6k |
+
+Train batch is 1024 × racks; eval batch is 64 × racks (one sequence per device). The step budget is
+791 tokens per active parameter (18T at d6144); pass `--num-steps` to override. Checkpoints are
+output-only — an offloaded run cannot restore from one, so a preempted run restarts at step 0.
+
+```bash
+python -m experiments.grug.moe_hero_ep.launch_scaling_ladder \
+  --run-id ladder-d768 --size d768 --version dev
+```
+
+Submit a rung through the Marin Iris controller as with the launchers above, swapping the module and
+passing `--size`. Runs report to W&B group `moe-hero-ep-scaling-ladder`.
 
 ## Result Record
 

@@ -22,7 +22,8 @@ from jax.sharding import PartitionSpec as P
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from marin.execution.lazy import StepContext
 
-from experiments.grug.moe_hero_ep import grugmuon_hero, launch, model, train
+from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
+from experiments.grug.moe_hero_ep import launch_mfu_test as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
 
 

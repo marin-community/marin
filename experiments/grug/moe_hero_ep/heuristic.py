@@ -40,7 +40,7 @@ class MoeHeuristic:
     lr_dim_exp: float = -0.3448
     muonh_ratio: float = 13 / 3
     epsilon_coeff: float = 9.676e-18
-    beta1: float = 0.9062
+    beta1: float = 0.90
     beta2_base: float = 0.999
     beta2_reference_tpb: int = 131_072
     min_lr_ratio: float = 0.05
