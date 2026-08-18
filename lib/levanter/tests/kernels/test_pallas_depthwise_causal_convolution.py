@@ -12,7 +12,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P, use_abstract_mesh
+from jax.sharding import AbstractMesh, AxisType, NamedSharding, PartitionSpec as P, use_abstract_mesh
 from numpy.testing import assert_allclose
 
 from levanter.kernels.pallas.depthwise_causal_convolution import depthwise_causal_convolution
@@ -173,16 +173,16 @@ def test_depthwise_causal_convolution_pallas_tpu_lowers_with_explicit_sharding()
     assert weight_grad.dtype == jnp.float32
 
 
-def test_depthwise_causal_convolution_pallas_tpu_lowers_without_mesh_context() -> None:
-    mesh = Mesh(np.array(jax.devices()[:1]), ("device",))
-    x = jax.device_put(jnp.zeros((1, 8, 4)), NamedSharding(mesh, P(None, None, None)))
-    weight = jax.device_put(jnp.zeros((4, 4)), NamedSharding(mesh, P(None, None)))
+def test_depthwise_causal_convolution_pallas_tpu_lowers_with_empty_mesh() -> None:
+    mesh = AbstractMesh(axis_sizes=(), axis_names=(), axis_types=())
+    x = jax.ShapeDtypeStruct((1, 8, 4), jnp.float32, sharding=NamedSharding(mesh, P(None, None, None)))
+    weight = jax.ShapeDtypeStruct((4, 4), jnp.float32, sharding=NamedSharding(mesh, P(None, None)))
 
     output, _ = jax.eval_shape(
         lambda x, weight: depthwise_causal_convolution(x, weight, implementation="pallas_tpu"), x, weight
     )
 
-    assert output.shape == x.shape
+    assert output.shape == (1, 8, 4)
 
 
 @pytest.mark.parametrize("B,S", [(1, 6), (2, 1), (1, 1)])

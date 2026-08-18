@@ -142,7 +142,7 @@ def _depthwise_causal_convolution_pallas_sharded(
     activation_function: str | None,
 ) -> tuple[jax.Array, jax.Array | None]:
     sharding = jax.typeof(x).sharding
-    if not isinstance(sharding, NamedSharding):
+    if not isinstance(sharding, NamedSharding) or not sharding.mesh.axis_names:
         return _depthwise_causal_convolution_pallas(x, W, b, h0, output_state, activation_function)
 
     input_parts = tuple(sharding.spec) + (None,) * (x.ndim - len(sharding.spec))
