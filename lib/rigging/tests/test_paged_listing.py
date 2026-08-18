@@ -1,17 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the paged listing methods on rigging's S3 and GCS filesystems."""
+"""Tests for paged listings over standard S3 and GCS fsspec filesystems."""
 
 from datetime import UTC, datetime
 
-from rigging.filesystem.paged_listing import GcsListingFileSystem, S3ListingFileSystem
+import s3fs
+from gcsfs.core import GCSFileSystem
+from rigging.filesystem.cross_region import CrossRegionGuardedFS
+from rigging.filesystem.paged_listing import with_listing
 
 MODIFIED = datetime(2025, 1, 1, tzinfo=UTC)
 
 
 def _s3_filesystem(monkeypatch, responses, expected_delimiter):
-    fs = S3ListingFileSystem(key="test", secret="test", skip_instance_cache=True)
+    fs = s3fs.S3FileSystem(key="test", secret="test", skip_instance_cache=True)
     calls = []
 
     def call_s3(method, **kwargs):
@@ -21,7 +24,7 @@ def _s3_filesystem(monkeypatch, responses, expected_delimiter):
         return responses[kwargs.get("ContinuationToken")]
 
     monkeypatch.setattr(fs, "call_s3", call_s3)
-    return fs, calls
+    return with_listing(fs), calls
 
 
 def test_s3_level_pages_yield_one_page_per_continuation_token(monkeypatch):
@@ -37,7 +40,7 @@ def test_s3_level_pages_yield_one_page_per_continuation_token(monkeypatch):
     }
     fs, calls = _s3_filesystem(monkeypatch, responses, expected_delimiter="/")
 
-    pages = list(fs.level_pages("bucket"))
+    pages = list(fs.listing.level_pages("bucket"))
 
     assert len(pages) == 2
     first_files, first_subdirs = pages[0]
@@ -65,7 +68,7 @@ def test_s3_flat_pages_resume_by_token_and_drop_self_marker(monkeypatch):
     }
     fs, calls = _s3_filesystem(monkeypatch, responses, expected_delimiter="")
 
-    pages = list(fs.flat_pages("bucket/root"))
+    pages = list(fs.listing.flat_pages("bucket/root"))
 
     # The flat listing is recursive: objects below sub-prefixes appear directly.
     assert [[e["name"] for e in page] for page in pages] == [["bucket/root/a.bin"], ["bucket/root/deep/b.bin"]]
@@ -73,7 +76,7 @@ def test_s3_flat_pages_resume_by_token_and_drop_self_marker(monkeypatch):
 
 
 def test_gcs_level_pages_split_files_from_subdirs_and_drop_self_marker(monkeypatch):
-    fs = GcsListingFileSystem(token="anon", skip_instance_cache=True)
+    fs = GCSFileSystem(token="anon", skip_instance_cache=True)
 
     def call(method, template, bucket, *, prefix, delimiter, maxResults, pageToken, json_out):
         assert (bucket, prefix, delimiter, pageToken) == ("bucket", "root/", "/", None)
@@ -87,7 +90,8 @@ def test_gcs_level_pages_split_files_from_subdirs_and_drop_self_marker(monkeypat
 
     monkeypatch.setattr(fs, "call", call)
 
-    pages = list(fs.level_pages("bucket/root"))
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _bucket: False)
+    pages = list(with_listing(guarded).listing.level_pages("bucket/root"))
 
     assert len(pages) == 1
     files, subdirs = pages[0]
@@ -108,7 +112,7 @@ def test_gcs_flat_pages_resume_by_page_token_and_normalize_like_ls(monkeypatch):
             "items": [{"name": "root/deep/b.txt", "size": "7"}],
         },
     }
-    fs = GcsListingFileSystem(token="anon", skip_instance_cache=True)
+    fs = GCSFileSystem(token="anon", skip_instance_cache=True)
     calls = []
 
     def call(method, template, bucket, *, prefix, delimiter, maxResults, pageToken, json_out):
@@ -118,7 +122,7 @@ def test_gcs_flat_pages_resume_by_page_token_and_normalize_like_ls(monkeypatch):
 
     monkeypatch.setattr(fs, "call", call)
 
-    pages = list(fs.flat_pages("bucket/root"))
+    pages = list(with_listing(fs).listing.flat_pages("bucket/root"))
 
     assert [[e["name"] for e in page] for page in pages] == [["bucket/root/a.txt"], ["bucket/root/deep/b.txt"]]
     first = pages[0][0]

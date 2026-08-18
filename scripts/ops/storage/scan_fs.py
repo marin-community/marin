@@ -4,11 +4,10 @@
 
 """Distributed object-storage scanning via Iris actors, over any Marin backend.
 
-Backend-agnostic successor to the GCS-only scanner: ``rigging.filesystem``
-serves filesystems that carry paged listing methods for their backend
-(``flat_pages``/``level_pages``), so the same coordinator/worker machinery walks
-``gs://`` and ``s3://`` buckets alike and writes the same parquet segments that
-``render_report.py`` rolls up.
+Backend-agnostic successor to the GCS-only scanner: ``filesystem_for`` attaches
+backend-aware paged listing operations at ``fs.listing``, so the same
+coordinator/worker machinery walks ``gs://`` and ``s3://`` buckets alike and
+writes the parquet segments that ``render_report.py`` rolls up.
 
 Architecture:
   - Coordinator actor: holds a task queue of (bucket_url, prefix_path) pairs.
@@ -76,7 +75,7 @@ log = logging.getLogger(__name__)
 
 WORKER_THREADS = 16
 
-# Streaming chunk size — worker sends this many objects per RPC during long scans.
+# Worker sends this many objects per RPC during long scans.
 # Keeps worker memory bounded regardless of prefix size.
 WORKER_STREAM_CHUNK = 5_000
 
@@ -98,7 +97,7 @@ COORDINATOR_FLUSH_THRESHOLD = 2_000_000
 
 # Abandon stragglers when the queue has been empty AND no progress has been
 # reported for this long. "Progress" means either a task completed *or* a
-# worker streamed objects to the coordinator — workers scanning a huge flat
+# worker streamed objects to the coordinator. Workers scanning a huge flat
 # prefix can take many minutes between task completions while still streaming
 # steady chunks of objects, and we don't want to abandon those mid-flight.
 # Truly hung workers (no RPCs at all) get timed out here; everything else is
@@ -200,8 +199,8 @@ def _truncate_staging_dir(staging_dir: str) -> None:
     """Delete all `objects_*.parquet` segments under staging_dir before a run.
 
     Segments are written under fresh UUIDs so reruns cannot overwrite prior
-    files — without this, every re-run strictly appends and the consumer
-    sees N-way duplicated (bucket, name) rows.
+    files. Otherwise, every re-run appends and the consumer sees N-way
+    duplicated (bucket, name) rows.
     """
 
     pattern = f"{staging_dir.rstrip('/')}/objects_*.parquet"
@@ -284,7 +283,7 @@ class ScanCoordinatorActor:
         self._active_workers = 0
         self._buf = ColumnBuffer()
         self._flush_thread: threading.Thread | None = None
-        # Wall-clock of the last forward-progress signal from any worker —
+        # Wall-clock of the last forward-progress signal from any worker:
         # either a streamed batch of objects or a task completion. Used to
         # distinguish slow-but-progressing scans from genuinely hung workers
         # in the straggler-timeout check.
@@ -434,16 +433,16 @@ def scan_one_prefix(
     Probes the subtree with a flat listing first: one that exhausts within
     FLAT_PROBE_MAX_OBJECTS is consumed whole here, so small directories never
     become per-prefix tasks. A larger subtree relists one delimiter level,
-    streaming this level's files (the probe objects are discarded rather than
-    double-counted) and returning the sub-prefixes as new tasks — when there are
-    none, that level listing already covered the whole subtree. At
+    discarding the probe objects to avoid double-counting, and returning the
+    sub-prefixes as new tasks. When there are none, the level listing covered
+    the whole subtree. At
     MAX_SPLIT_DEPTH the flat listing streams to completion instead. Every path
     reports page by page, keeping worker memory bounded.
 
     Returns new sub-prefix tasks for re-queuing (empty at a leaf).
     """
     fs, bucket_name = filesystems.get(task.bucket_url)
-    pages = fs.flat_pages(task.path)
+    pages = fs.listing.flat_pages(task.path)
     probe: list[dict] = []
     subtree_exhausted = True
     for page in pages:
@@ -458,7 +457,7 @@ def scan_one_prefix(
 
     if task.depth < MAX_SPLIT_DEPTH:
         subdirs: list[str] = []
-        for files, dirs in fs.level_pages(task.path):
+        for files, dirs in fs.listing.level_pages(task.path):
             _report_chunks(coordinator, [_entry_to_object(entry, bucket_name) for entry in files])
             subdirs.extend(dirs)
         return [ScanTask(bucket_url=task.bucket_url, path=sub, depth=task.depth + 1) for sub in subdirs]
@@ -568,7 +567,7 @@ def discover_top_level_prefixes(
         bucket_name = _bucket_name(url)
         root_objects = 0
         subdirs: list[str] = []
-        for files, dirs in fs.level_pages(root_path):
+        for files, dirs in fs.listing.level_pages(root_path):
             _report_chunks(coordinator, [_entry_to_object(entry, bucket_name) for entry in files])
             root_objects += len(files)
             subdirs.extend(dirs)
@@ -624,9 +623,8 @@ def run_distributed(
     print(f"Loaded {len(tasks)} initial tasks into queue")
 
     # Submit one worker job with N replicas. A bucket whose objects all live at
-    # the root yields no tasks — discovery already streamed those objects, so
-    # skip the worker gang entirely rather than waiting on a queue that can
-    # never drain.
+    # the root yields no tasks because discovery already streamed those objects.
+    # In that case there is no worker job or queue to drain.
     worker_job = None
     if tasks:
         worker_job = client.submit(

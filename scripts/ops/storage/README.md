@@ -34,8 +34,8 @@ prefixes whose size moved ≥ 100 GiB since the prior snapshot, split into
 baseline. Snapshots are dated UTC; a run never diffs against a same-date
 snapshot.
 
-**Modules:** `scan_fs.py` (distributed object scan over any Marin backend —
-GCS, CoreWeave, R2 — via `rigging.filesystem`), `render_report.py` (DuckDB
+**Modules:** `scan_fs.py` (distributed object scan over GCS, CoreWeave, and R2
+via `rigging.filesystem`), `render_report.py` (DuckDB
 rollup + diff + markdown), `generate_report.py` (orchestrate + publish).
 
 **Automation.** `.github/workflows/ops-storage-report.yaml` runs it weekly

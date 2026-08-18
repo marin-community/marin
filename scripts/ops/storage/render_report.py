@@ -48,9 +48,9 @@ from scripts.ops.storage.constants import (
 def _download_remote_parquet(remote_dir: str, local_dir: Path) -> Path:
     """Mirror all *.parquet files from remote_dir (gs:// or s3://) to local_dir.
 
-    Deletes local parquets that no longer exist at the source — without
-    this, segments from prior scans accumulate locally and the report ends
-    up reading a stale union of every historical scan.
+    Deletes local parquets that no longer exist at the source. Otherwise,
+    segments from prior scans accumulate locally and the report reads a stale
+    union of every historical scan.
 
     Returns the local directory.
     """
@@ -267,7 +267,7 @@ def load_parquet_db(parquet_dir: Path | str, local_cache: Path | None = None) ->
     """Build an in-memory DuckDB with a pre-aggregated `dir_summary` table.
 
     For gs:// and s3:// paths, downloads files to local_cache (or a temp dir)
-    first so DuckDB reads from local disk — avoids the object-store auth maze.
+    first so DuckDB reads from local disk with fsspec authentication.
     """
     dir_str = str(parquet_dir)
     if "://" in dir_str:

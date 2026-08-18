@@ -32,12 +32,6 @@ logger = logging.getLogger(__name__)
 # distributed-lock backends. fsspec imports the class on the first mirror:// use.
 fsspec.register_implementation("mirror", "rigging.filesystem.mirror.MirrorFileSystem")
 
-# Serve S3 and GCS through rigging's subclasses so every filesystem carries the
-# paged listing methods (level_pages/flat_pages); see rigging.filesystem.paged_listing.
-fsspec.register_implementation("s3", "rigging.filesystem.paged_listing.S3ListingFileSystem", clobber=True)
-fsspec.register_implementation("gs", "rigging.filesystem.paged_listing.GcsListingFileSystem", clobber=True)
-fsspec.register_implementation("gcs", "rigging.filesystem.paged_listing.GcsListingFileSystem", clobber=True)
-
 # fsspec has no constructor-default hook shared by raw and guarded entry points.
 # Its environment/file config is loaded before this point, so explicit cache settings win.
 configure_listing_cache_defaults()
