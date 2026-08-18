@@ -198,6 +198,33 @@ _smoke_model, _smoke_optimizer, _smoke_batch, _ = build_from_heuristic(
 GRUG_MOE_TRIAL_MODEL: GrugModelConfig = _smoke_model
 
 
+@dataclass(frozen=True)
+class _ScaleConfig:
+    experiment_id: str
+    gate: int
+    hidden_dim: int
+    budget: float
+    target_steps: int
+
+    @property
+    def label(self) -> str:
+        return f"d{self.hidden_dim}"
+
+    @property
+    def run_id(self) -> str:
+        return f"{self.experiment_id}-{self.label}-v5p8-gate{self.gate}"
+
+
+_GATE_1_SCALES = (
+    _ScaleConfig("MOE-PSC-101", 1, 512, 3.82e17, 10_980),
+    _ScaleConfig("MOE-PSC-102", 1, 768, 2.81e18, 16_875),
+)
+_GATE_2_SCALES = (
+    _ScaleConfig("MOE-PSC-201", 2, 1024, 1.16e19, 16_080),
+    _ScaleConfig("MOE-PSC-202", 2, 1280, 3.46e19, 14_325),
+)
+
+
 def grug_moe_pallas_sconv_smoke(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """Run the d512 four-site Pallas SConv smoke test on the Nemotron mix.
 
@@ -248,6 +275,73 @@ def grug_moe_pallas_sconv_smoke(*, version: str | None = None) -> ArtifactStep[L
         deps=(*train, *validation),
         runtime_args={"train_resources": _TRAIN_RESOURCES},
     )
+
+
+def _grug_moe_pallas_sconv_scale(scale: _ScaleConfig, *, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    name = f"grug/moe_pallas_sconv_gate{scale.gate}_{scale.label}"
+    version = resolve_version(name, version)
+    model, optimizer, batch_size, steps = build_from_heuristic(
+        budget=scale.budget,
+        hidden_dim=scale.hidden_dim,
+        target_steps=scale.target_steps,
+    )
+    nem = nemotron_datasets(tokenizer=llama3_tokenizer)
+    train = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
+    train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
+    train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
+    validation = [
+        *paloma_datasets(tokenizer=llama3_tokenizer).values(),
+        *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
+    ]
+
+    def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
+        return GrugMoeLaunchConfig(
+            model=model,
+            data=mixture(ctx, train, validation=validation),
+            output_path=ctx.output_path,
+            run_id=scale.run_id,
+            resources=ctx.runtime_arg("train_resources"),
+            steps=steps,
+            batch_size=batch_size,
+            seed=0,
+            mp="params=float32,compute=bfloat16,output=bfloat16",
+            tracker=WandbConfig(
+                entity="marin-community",
+                project="marin_moe",
+                tags=["MOE-PSC", "issue-8377", f"gate-{scale.gate}", scale.label, "pallas-sconv"],
+                group="MOE-PSC-gates-issue-8377",
+                name=None,
+            ),
+            optimizer=optimizer,
+            grug_trainer=GrugTrainerConfig(z_loss_weight=1e-4, ema_beta=None, log_every=1),
+            eval=GrugEvalConfig(
+                eval_batch_size=512,
+                steps_per_eval=1000,
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
+            ),
+        )
+
+    return ArtifactStep(
+        name=user_namespaced_name(name, version),
+        version=version,
+        artifact_type=LevanterCheckpoint,
+        run=run_grug_moe_trial,
+        build_config=build_config,
+        deps=(*train, *validation),
+        runtime_args={"train_resources": _TRAIN_RESOURCES},
+    )
+
+
+def grug_moe_pallas_sconv_gate1(*, version: str | None = None) -> dict[str, ArtifactStep[LevanterCheckpoint]]:
+    """Build the d512 and d768 Gate 1 experiments."""
+    return {scale.label: _grug_moe_pallas_sconv_scale(scale, version=version) for scale in _GATE_1_SCALES}
+
+
+def grug_moe_pallas_sconv_gate2(*, version: str | None = None) -> dict[str, ArtifactStep[LevanterCheckpoint]]:
+    """Build the d1024 and d1280 Gate 2 experiments."""
+    return {scale.label: _grug_moe_pallas_sconv_scale(scale, version=version) for scale in _GATE_2_SCALES}
 
 
 if __name__ == "__main__":

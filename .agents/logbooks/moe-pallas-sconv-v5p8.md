@@ -1,7 +1,7 @@
 ---
 topic: moe-pallas-sconv-v5p8
 issue: https://github.com/marin-community/marin/issues/8377
-description: Verify the Pallas depthwise causal convolution in the Grug MoE recipe on v5p-8.
+description: Evaluate Pallas SConv with the Grug MoE two-gate scaling workflow on v5p-8.
 author: held
 ---
 
@@ -9,13 +9,13 @@ author: held
 
 ## Current TL;DR
 
-`MOE-PSC-001` completed 25 d512 training steps on one v5p-8. Iris and W&B finished successfully, final loss was 9.7629, steady-state throughput was approximately 349k tokens/s, and the step-25 checkpoint was published.
+`MOE-PSC-001` completed the 25-step integration smoke. Gate 1 launchers are validated for the fixed-budget d512 and d768 cells; the quality and effective-speedup decision is pending those runs.
 
 ## Scope
 
-- Goal: verify that the #8331 Pallas convolution compiles and trains in the four-site Inkling SConv configuration on one v5p-8.
-- Primary metrics: terminal Iris state, finite training loss, `throughput/tokens_per_second`, and final W&B state.
-- Constraints: d512 May Recipe shape, kernel size 4, K/V/attention-output/MLP-output sites, identity initialization, packed-document boundary masking, 25 training steps.
+- Goal: run the two-gate scaling workflow in `experiments/grug/moe/agent.md` for the #8331 Pallas convolution in the four-site Inkling SConv configuration.
+- Primary metrics: final Paloma macro loss, mean throughput over the final 100 steps, final total tokens, terminal Iris state, and final W&B state.
+- Constraints: fixed baseline compute budgets, kernel size 4, K/V/attention-output/MLP-output sites, identity initialization, packed-document boundary masking, and v5p-8 resources.
 - Coordinating issue: https://github.com/marin-community/marin/issues/8377
 
 ## Baseline
@@ -28,7 +28,8 @@ author: held
 
 ### Active
 
-None.
+- `MOE-PSC-101`: d512 Gate 1 has effective speedup greater than 1 against the published baseline.
+- `MOE-PSC-102`: d768 Gate 1 has effective speedup greater than 1 against the published baseline.
 
 ### Blocked
 
@@ -162,3 +163,12 @@ Inkling uses short causal convolutions with kernel size 4 in the K stream, V str
 - Checkpoint: `gs://marin-us-central1/users/held/grug/moe_pallas_sconv_smoke/dev/checkpoints/step-25/metadata.json`
 - Interpretation: the four-site Pallas SConv forward and backward kernels compile and train successfully in the d512 Grug MoE recipe on v5p-8. This smoke establishes integration viability; it does not measure a quality delta against a control.
 - Next action: use this variant for a controlled quality or throughput comparison if the SConv line is promoted beyond integration testing.
+
+### 2026-08-18 - Gate 1 launch snapshot
+
+- Hypothesis: the Pallas SConv variant has effective speedup greater than 1 at the fixed d512 and d768 baseline compute budgets.
+- Run IDs: `MOE-PSC-101-d512-v5p8-gate1` and `MOE-PSC-102-d768-v5p8-gate1`.
+- Config: d512 uses 6 layers, batch 32, sequence length 8192, and 3,494 steps; d768 uses 8 layers, batch 32, sequence length 8192, and 11,430 steps. Both use the Nemotron, StarCoder, and ProofPile mixture with final Paloma and uncheatable evaluation.
+- Baseline: d512 loss 3.5422 at 433,986 tokens/s and d768 loss 3.2273 at 294,726 tokens/s. These published cells used the prior sequence-length, PKO, long-RoPE, and z-loss defaults, so the gate is a historical-recipe comparison rather than a single-variable ablation.
+- Validation: both Gate 1 and conditional Gate 2 experiment graphs resolve; 75 targeted model, optimizer, and convolution tests pass with 60 TPU-dependent cases skipped.
+- Next action: publish the snapshot, submit Gate 1 in us-central1-a, and monitor both cells through final W&B metrics and checkpoints.
