@@ -1930,3 +1930,22 @@ Experiment ID prefix: `MEP`.
   in tune_brd_i3072.py).
 - Tuned treatment arm mep-hero384t-fused-25-20260818 queued behind the
   control.
+
+### 2026-08-18 14:58 - MEP-076: control arm scored — parity gap 8-12%, drops requirement met
+- Control mep-ctrl-pooled-25-20260818 (origin/main 954a5251a2 as-pinned:
+  fixed_pooled_wave cf 1.15/1.15, waves 3, stock wheel, 1 proc/node):
+  25/25 in 7:55 wall (warm compile cache), tqdm 17.0 s/it cumulative,
+  it16->25 elapsed window 16.6 s/step, loss 6.09. drop_fraction readings
+  fell 2.40% -> 1.05% as the router trained over 25 steps.
+- Same-meter A/B at the matched config (both arms, same rack day):
+  | arm | cumulative | late window | drops | loss |
+  | control (pooled-wave) | 17.0 | ~16.6 | 2.40->1.05% | 6.09 |
+  | treatment (marin-ep fused) | 18.0 | ~18.6 | 0.188% | 6.08 |
+  Loss parity is a fidelity cross-check. GATE STATUS: "significantly
+  lower drops" MET (5.6-12.8x lower); "parity" NOT met — gap 1.4-2.0
+  s/step (~8-12%). Note the treatment ran its first steps compile-heavy;
+  its late window may still carry straggler skew (placement variance
+  ±2pp = ±0.35 s caveat applies to the gap's tail, not its existence).
+- Tuned-GEMM treatment arm (mep-hero384t, expected ~-0.5 s) queued/next.
+  Remaining gap after it needs profile-driven work: fused-transport SM
+  footprint vs the incumbent's stock a2a, MultiGpuBarrier cost, wgrad.
