@@ -1,12 +1,16 @@
 import { toDataFrame } from '@grafana/data';
 import {
   frameByRefId,
+  clusterNodes,
   frameWithField,
   nightlyCells,
+  nodeMetrics,
   provisioningRegions,
   provisioningStatus,
   seriesPoints,
+  taskUsage,
   workerRegions,
+  workloadAllocations,
 } from './data';
 
 function frame(rows: Array<Record<string, unknown>>, refId?: string) {
@@ -89,4 +93,29 @@ test('frameByRefId isolates one status source', () => {
   const workers = frame([{ healthy: 12 }], 'W');
   expect(frameByRefId([nightly, workers], 'W')).toBe(workers);
   expect(frameByRefId([nightly], 'W')).toBeUndefined();
+});
+
+test('cluster capacity contracts read placement, inventory, and observed usage by field name', () => {
+  expect(workloadAllocations(frame([{
+    cluster: 'cw-us-east-02a', namespace: 'iris', pod: 'train-0', node: 'gpu-1', job: '/alice/train',
+    task: '/alice/train/0', phase: 'Running', ready: true, priority_class: 'production', age_seconds: 120,
+    cpu_request_millicores: 8000, memory_request_bytes: 64, gpu_request_count: 4, gpu_variant: 'H100',
+  }]))[0]).toMatchObject({ job: '/alice/train', gpuRequestCount: 4, cpuRequestMillicores: 8000 });
+
+  expect(clusterNodes(frame([{
+    cluster: 'cw-us-east-02a', node: 'gpu-1', instance_type: 'h100-8', node_pool: 'train', gpu_model: 'H100',
+    gpu_capacity: 8, gpu_allocatable: 8, cpu_allocatable: '96', memory_allocatable: '1Ti', ready: true,
+    unschedulable: false,
+  }]))[0]).toMatchObject({ node: 'gpu-1', gpuAllocatable: 8, cpuAllocatable: '96' });
+
+  expect(taskUsage(frame([{
+    cluster: 'cw-us-east-02a', task: '/alice/train/0', pod: 'train-0', cpu_millicores: 3200,
+    memory_bytes: 32, sampled_at: 1000,
+  }]))[0]).toMatchObject({ pod: 'train-0', cpuMillicores: 3200, memoryBytes: 32 });
+
+  expect(nodeMetrics(frame([{
+    cluster: 'cw-us-east-02a', node: 'gpu-1', name: 'gpu_utilization_percent', value: 82, sampled_at: 1000,
+  }]))).toEqual([{
+    cluster: 'cw-us-east-02a', node: 'gpu-1', name: 'gpu_utilization_percent', value: 82, sampledAt: 1000,
+  }]);
 });

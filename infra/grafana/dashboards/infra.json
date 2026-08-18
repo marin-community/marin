@@ -88,6 +88,9 @@
       "url": "/d/marin-clusters"
     },
     {
+      "linkRef": "cluster_capacity_without_vars"
+    },
+    {
       "asDropdown": false,
       "icon": "dashboard",
       "includeVars": false,

@@ -77,6 +77,9 @@
       "url": "/d/marin-home"
     },
     {
+      "linkRef": "cluster_capacity"
+    },
+    {
       "asDropdown": false,
       "icon": "dashboard",
       "includeVars": true,
