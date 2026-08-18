@@ -73,6 +73,8 @@ from experiments.grug.moe_hero_ep.train import (
 # HERO_MODEL; the narrower rungs reuse the ablation's `_small_model` at the same hero routing geometry.
 LADDER_RACKS: dict[str, int] = {"d768": 1, "d1024": 2, "d1536": 6, "d2048": 11, "d6144": 11}
 QB_HIST_BINS = 10_000
+# Gradient and parameter norm logs every 10 steps on every rung.
+WATCH_INTERVAL = 10
 # 791 tokens per active parameter sets the step budget: it lands the d6144 hero at 18T tokens and
 # scales every narrower rung by the same ratio.
 TOKENS_PER_ACTIVE_PARAM = 791
@@ -203,7 +205,7 @@ def build_ladder_run(
                 name=run_id,
                 replicate_path=ctx.output_path,
             ),
-            watch=WatchConfig(interval=0),
+            watch=WatchConfig(interval=WATCH_INTERVAL),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
