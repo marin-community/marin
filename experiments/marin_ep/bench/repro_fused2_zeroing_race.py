@@ -114,8 +114,22 @@ def main() -> None:
         put_weight(w2),
     )
 
+    # Squeeze the heap so XLA must reuse scratch buffers across layers,
+    # chaining each layer's semaphore zeroing behind earlier work (the hero
+    # regime that opens the race window).
+    filler_gb = int(os.environ.get("MARIN_EP_FILLER_GB", "120"))
+    filler = jnp.zeros((filler_gb * 2**27,), jnp.float64) if filler_gb else None  # 8B elems
+
+    def layers(x0, e_, w_, w13_, w2_, n_layers=6):
+        def body(x_c, _):
+            y_, d_ = shard_fn(x_c, e_, w_, w13_, w2_)
+            return (x_c + y_).astype(x_c.dtype), d_
+
+        xf, ds = jax.lax.scan(body, x0, None, length=n_layers)
+        return xf, jnp.sum(ds)
+
     with jax.set_mesh(mesh):
-        fn = jax.jit(shard_fn)
+        fn = jax.jit(layers)
         t0 = time.time()
         y, dropped = jax.block_until_ready(fn(*args))
         print(f"[{proc}] warmup ok {time.time() - t0:.1f}s dropped={int(dropped)}", flush=True)
@@ -123,6 +137,7 @@ def main() -> None:
             t1 = time.time()
             jax.block_until_ready(fn(*args))
             print(f"[{proc}] iter {it} ok {time.time() - t1:.2f}s", flush=True)
+        del filler
     print(f"[{proc}] REPRO_COMPLETED", flush=True)
 
 
