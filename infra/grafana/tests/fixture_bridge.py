@@ -165,6 +165,63 @@ def _provisioning() -> list[dict]:
 
 def _finelog(query: str) -> list[dict]:
     sql = parse_qs(query).get("sql", [""])[0]
+    if 'FROM "iris.task"' in sql:
+        return [
+            {
+                "cluster": "cw-us-east-02a",
+                "task": task,
+                "pod": pod,
+                "cpu_millicores": cpu,
+                "memory_bytes": memory,
+                "sampled_at": round((_NOW - timedelta(seconds=20)).timestamp() * 1000),
+            }
+            for task, pod, cpu, memory in (
+                ("/alice/llama/0", "llama-0", 29_000, 310_000_000_000),
+                ("/alice/llama/1", "llama-1", 14_000, 180_000_000_000),
+                ("/bob/eval/0", "eval-0", 9_500, 92_000_000_000),
+                ("/carol/embed/0", "embed-0", 5_200, 48_000_000_000),
+                ("/ops/loader/0", "loader-0", 1_800, 12_000_000_000),
+            )
+        ]
+    if "gpu_memory_total_bytes" in sql and "ROW_NUMBER" in sql:
+        sampled_at = round((_NOW - timedelta(seconds=15)).timestamp() * 1000)
+        values = {
+            "gpu-a": {
+                "node_cpu_utilization_percent": 61,
+                "node_memory_used_bytes": 760_000_000_000,
+                "node_memory_total_bytes": 1_100_000_000_000,
+                "gpu_utilization_percent": 88,
+                "gpu_memory_used_bytes": 590_000_000_000,
+                "gpu_memory_total_bytes": 640_000_000_000,
+            },
+            "gpu-b": {
+                "node_cpu_utilization_percent": 44,
+                "node_memory_used_bytes": 430_000_000_000,
+                "node_memory_total_bytes": 1_100_000_000_000,
+                "gpu_utilization_percent": 55,
+                "gpu_memory_used_bytes": 350_000_000_000,
+                "gpu_memory_total_bytes": 640_000_000_000,
+            },
+            "gpu-c": {
+                "node_cpu_utilization_percent": 28,
+                "node_memory_used_bytes": 190_000_000_000,
+                "node_memory_total_bytes": 550_000_000_000,
+                "gpu_utilization_percent": 36,
+                "gpu_memory_used_bytes": 91_000_000_000,
+                "gpu_memory_total_bytes": 320_000_000_000,
+            },
+        }
+        return [
+            {
+                "cluster": "cw-us-east-02a",
+                "node": node,
+                "name": name,
+                "value": value,
+                "sampled_at": sampled_at,
+            }
+            for node, metrics in values.items()
+            for name, value in metrics.items()
+        ]
     if "probe_latency_ms" in sql and "ROW_NUMBER" not in sql:
         return [
             {
@@ -374,11 +431,18 @@ def _rows(path: str, query: str) -> list[dict] | dict:
             for component in ("iris/iris-controller", "kueue-system/kueue-controller-manager")
         ]
     if path == "/k8s/nodes":
-        return [
+        selected = parse_qs(query).get("cluster", [""])[0]
+        rows = [
             {
                 "cluster": cluster,
-                "node": "g8fd930" if cluster == _CW_NODE_WITH_DEADLOCK else f"{cluster}-node-1",
-                "instance_type": "cd-gp-i64-erapids",
+                "node": node_name,
+                "instance_type": instance_type,
+                "node_pool": "training",
+                "gpu_model": gpu_model,
+                "gpu_capacity": gpu_count,
+                "gpu_allocatable": gpu_count,
+                "cpu_allocatable": cpu,
+                "memory_allocatable": memory,
                 "ready": True,
                 "unschedulable": cluster == _CW_NODE_WITH_DEADLOCK,
                 "kernel_deadlock": cluster == _CW_NODE_WITH_DEADLOCK,
@@ -387,8 +451,44 @@ def _rows(path: str, query: str) -> list[dict] | dict:
                 "pending_phase": "production-reboot" if cluster == _CW_NODE_WITH_DEADLOCK else "",
                 "deadlock_message": "watchdog: CPU stuck" if cluster == _CW_NODE_WITH_DEADLOCK else "",
             }
-            for cluster in _CW_K8S_CLUSTERS
+            for cluster, node_name, instance_type, gpu_model, gpu_count, cpu, memory in (
+                ("cw-us-east-02a", "gpu-a", "h100-8", "NVIDIA H100 80GB HBM3", 8, "96", "1Ti"),
+                ("cw-us-east-02a", "gpu-b", "h100-8", "NVIDIA H100 80GB HBM3", 8, "96", "1Ti"),
+                ("cw-us-east-02a", "gpu-c", "h100-4", "NVIDIA H100 80GB HBM3", 4, "48", "512Gi"),
+                ("cw-us-east-08a", "g8fd930", "gb200-4", "NVIDIA GB200", 4, "72", "768Gi"),
+                ("cw-rno2a", "cw-rno2a-node-1", "h100-8", "NVIDIA H100 80GB HBM3", 8, "96", "1Ti"),
+            )
         ]
+        return [row for row in rows if not selected or row["cluster"] == selected]
+    if path == "/k8s/workloads":
+        selected = parse_qs(query).get("cluster", [""])[0]
+        rows = [
+            {
+                "cluster": "cw-us-east-02a",
+                "namespace": "iris",
+                "pod": pod,
+                "node": node_name,
+                "job": job,
+                "task": task,
+                "phase": phase,
+                "ready": phase == "Running",
+                "priority_class": "iris-production",
+                "age_seconds": age,
+                "cpu_request_millicores": cpu,
+                "memory_request_bytes": memory,
+                "gpu_request_count": gpu,
+                "gpu_variant": "H100" if gpu else "",
+            }
+            for pod, node_name, job, task, phase, age, cpu, memory, gpu in (
+                ("llama-0", "gpu-a", "/alice/llama", "/alice/llama/0", "Running", 7300, 32_000, 343_597_383_680, 8),
+                ("llama-1", "gpu-b", "/alice/llama", "/alice/llama/1", "Running", 7200, 16_000, 206_158_430_208, 4),
+                ("eval-0", "gpu-b", "/bob/eval", "/bob/eval/0", "Running", 2800, 12_000, 103_079_215_104, 2),
+                ("embed-0", "gpu-c", "/carol/embed", "/carol/embed/0", "Running", 1500, 8000, 68_719_476_736, 2),
+                ("loader-0", "gpu-a", "/ops/loader", "/ops/loader/0", "Running", 600, 4000, 17_179_869_184, 0),
+                ("train-queued", "", "/dave/train", "/dave/train/0", "Pending", 420, 16_000, 137_438_953_472, 4),
+            )
+        ]
+        return [row for row in rows if not selected or row["cluster"] == selected]
     if path == "/k8s/pending":
         return [
             {

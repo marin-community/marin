@@ -42,7 +42,8 @@ GET /overview/provisioning                         latest fleet and resource-poo
 GET /k8s/control_plane | crashloops | pending     CW control-plane state, all clusters
 GET /k8s/termination_candidates | kueue | events | health
                                                     ... one response, `cluster` column
-GET /k8s/nodes                                    node inventory, topology, readiness, lifecycle state
+GET /k8s/workloads                                live Iris task placement and requested resources
+GET /k8s/nodes                                    node inventory, allocatable resources, readiness, lifecycle state
 GET /k8s/node_pools                               NodePool capacity, autoscaling policy, conditions
 GET /k8s/finelog | finelog_events                 mirror pods/PVCs and matching warnings
 GET /k8s/overview                                 explicit pending/crashloop counts
@@ -199,6 +200,7 @@ Each dashboard answers one question, and they link to each other in a fixed nav 
 | `nodes.json` | What is happening on one physical GPU node? | cluster, node |
 | `node_pools.json` | Is CoreWeave capacity at target? | cluster |
 | `jobs.json` | What is running, queued, and stuck — and why? | cluster, job |
+| `cluster_capacity.json` | What jobs and requests occupy one cluster and node? | cluster |
 | `runs.json` | How is each Levanter training run doing? | cluster, run |
 | `clusters.json` | Is the infrastructure under the jobs healthy? | cluster |
 | `pipelines.json` | How is one Zephyr execution moving? | cluster, execution |
@@ -226,6 +228,16 @@ TPU hosts report no power, so this dashboard covers the GPU clusters only.
 Power is attributed to a run by joining the node agent's `node_name` to the
 `node_name` on Levanter's resource attributes, per time bucket — the residue is
 `(idle / unattributed)`, which is the number worth driving down.
+
+`cluster_capacity.json` is the quick occupancy view for one cluster. It combines
+live `/k8s/workloads` placement and scheduler requests with `/k8s/nodes`
+allocatable CPU, memory, and GPU capacity. The custom panel rolls tasks up by
+root job and renders each GPU node as a block-packing card, with unallocated GPU
+slots left visible. Recent `iris.task` samples supply per-job CPU and working-set
+memory; `iris-node-agent` telemetry supplies host CPU/memory and aggregate GPU/HBM
+pressure. Scheduler requests and observed utilization are labeled separately
+because neither is a substitute for the other. The default cluster is
+`cw-us-east-02a`; the selector is single-valued to keep placement legible.
 
 `nodes.json` is the selected-node view. Its live row reads `/k8s/nodes`; bounded
 Finelog panels retain per-GPU utilization, SM/tensor activity, HBM, core/HBM

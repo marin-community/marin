@@ -518,6 +518,31 @@ def test_status_page_has_each_required_source():
     }
 
 
+def test_cluster_capacity_page_joins_live_placement_with_recent_resource_usage():
+    dashboard = _stitched_dashboards()["cluster_capacity.json"]
+    (panel,) = dashboard["panels"]
+    targets = {target["refId"]: target for target in panel["targets"]}
+
+    assert panel["datasource"]["uid"] == "status"
+    assert panel["options"]["view"] == "cluster"
+    assert {ref_id: target["url"] for ref_id, target in targets.items()} == {
+        "W": "/k8s/workloads",
+        "N": "/k8s/nodes",
+        "T": "/finelog/marin/query",
+        "H": "/finelog/marin/query",
+    }
+    workload_columns = {column["selector"] for column in targets["W"]["columns"]}
+    assert {"job", "task", "node", "cpu_request_millicores", "memory_request_bytes", "gpu_request_count"} <= (
+        workload_columns
+    )
+    node_columns = {column["selector"] for column in targets["N"]["columns"]}
+    assert {"cpu_allocatable", "memory_allocatable", "gpu_allocatable", "ready", "unschedulable"} <= node_columns
+    sql = "\n".join(_panel_sql(dashboard))
+    assert 'FROM "iris.task"' in sql
+    assert "node_cpu_utilization_percent" in sql
+    assert "gpu_memory_total_bytes" in sql
+
+
 def test_status_page_queries_provisioning_snapshot_and_region_history():
     dashboard = _stitched_dashboards()["infra.json"]
     (panel,) = dashboard["panels"]

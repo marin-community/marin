@@ -8,10 +8,11 @@ GETs and the CW read-role bearer token — no kubernetes client. K8sFleet fans a
 query out across every cluster and stamps a ``cluster`` column, so one response
 covers the fleet.
 
-The pod-level scans (crashloops, pending, termination candidates) cover every namespace except the
-provider-managed prefixes in PROVIDER_NAMESPACE_PREFIXES: CoreWeave's per-node
-daemons are thousands of pods of someone else's infrastructure, while the
-namespaces we operate hold about a hundred.
+The pod-level scans (crashloops, pending, workload allocations, termination
+candidates) cover every namespace except the provider-managed prefixes in
+PROVIDER_NAMESPACE_PREFIXES: CoreWeave's per-node daemons are thousands of
+pods of someone else's infrastructure, while the namespaces we operate hold
+about a hundred.
 
 Failure semantics: a cluster that cannot be queried becomes labeled rows inside
 the aggregate response — never an empty result — so healthy clusters keep
@@ -25,6 +26,7 @@ webhook rule — deliberate, because unknown admission state is exactly the
 failure class it watches.
 """
 
+import json
 import logging
 import time
 from collections.abc import Callable, Sequence
@@ -60,6 +62,9 @@ STUCK_TERMINATION_OVERDUE_SECONDS = 120
 
 _GPU_RESOURCE = "nvidia.com/gpu"
 _IRIS_TASK_ID_ENV = "IRIS_TASK_ID"
+_IRIS_TASK_RESOURCES_ENV = "IRIS_TASK_RESOURCES"
+_IRIS_MANAGED_LABEL = "iris.managed"
+_IRIS_TASK_ID_ANNOTATION = "iris.task_id"
 _TERMINAL_POD_PHASES = frozenset(("Succeeded", "Failed"))
 _FINELOG_CONTAINER = "finelog"
 _FINELOG_FALLBACK_SERVER = "finelog-mirror"
@@ -579,6 +584,43 @@ class K8sSource:
         rows.sort(key=lambda row: row["age_seconds"] or 0, reverse=True)
         return rows
 
+    def workload_allocations(self) -> list[dict]:
+        """Live Iris task placement and requested resources, one row per pod."""
+        rows = []
+        for pod in self._scan_pods("status.phase!=Succeeded,status.phase!=Failed"):
+            metadata = pod.get("metadata") or {}
+            labels = metadata.get("labels") or {}
+            if labels.get(_IRIS_MANAGED_LABEL) != "true":
+                continue
+            status = pod.get("status") or {}
+            phase = status.get("phase") or ""
+            if phase in _TERMINAL_POD_PHASES:
+                continue
+            task = (metadata.get("annotations") or {}).get(_IRIS_TASK_ID_ANNOTATION) or _iris_task_attempt(pod)
+            if not task:
+                continue
+            resources = _iris_task_resources(pod)
+            gpu = (resources.get("device") or {}).get("gpu") or {}
+            spec = pod.get("spec") or {}
+            rows.append(
+                {
+                    "namespace": metadata.get("namespace") or "",
+                    "pod": metadata.get("name") or "",
+                    "node": spec.get("nodeName") or "",
+                    "job": _root_job_id(task, labels.get("iris.job_id") or ""),
+                    "task": task,
+                    "phase": phase,
+                    "ready": _pod_condition(pod, "Ready").get("status") == "True",
+                    "priority_class": spec.get("priorityClassName") or "",
+                    "age_seconds": _age_seconds(metadata.get("creationTimestamp")) or 0,
+                    "cpu_request_millicores": int(resources.get("cpu_millicores") or 0),
+                    "memory_request_bytes": int(resources.get("memory_bytes") or 0),
+                    "gpu_request_count": int(gpu.get("count") or 0),
+                    "gpu_variant": gpu.get("variant") or "",
+                }
+            )
+        return sorted(rows, key=lambda row: (row["node"], row["job"], row["task"]))
+
     def node_architectures(self) -> dict[str, str]:
         architectures = {}
         for node in self._list("/api/v1/nodes"):
@@ -711,6 +753,7 @@ class K8sSource:
             metadata = node.get("metadata") or {}
             annotations = metadata.get("annotations") or {}
             labels = metadata.get("labels") or {}
+            allocatable = (node.get("status") or {}).get("allocatable") or {}
             conditions = {
                 condition.get("type"): condition
                 for condition in (node.get("status") or {}).get("conditions") or []
@@ -726,6 +769,9 @@ class K8sSource:
                     "compute_class": labels.get(_COMPUTE_CLASS_LABEL, ""),
                     "gpu_model": labels.get(_GPU_MODEL_LABEL, ""),
                     "gpu_capacity": _node_gpu_capacity(node),
+                    "cpu_allocatable": allocatable.get("cpu", ""),
+                    "memory_allocatable": allocatable.get("memory", ""),
+                    "gpu_allocatable": _node_gpu_allocatable(node),
                     "rack": labels.get(_RACK_LABEL, ""),
                     "rack_name": labels.get(_RACK_NAME_LABEL, ""),
                     "rack_slot": labels.get(_RACK_SLOT_LABEL, ""),
@@ -837,6 +883,14 @@ def _node_gpu_capacity(node: dict) -> int:
         raise ValueError(f"invalid {_GPU_RESOURCE} capacity quantity: {raw!r}") from err
 
 
+def _node_gpu_allocatable(node: dict) -> int:
+    raw = ((node.get("status") or {}).get("allocatable") or {}).get(_GPU_RESOURCE, 0)
+    try:
+        return int(raw)
+    except (TypeError, ValueError) as err:
+        raise ValueError(f"invalid {_GPU_RESOURCE} allocatable quantity: {raw!r}") from err
+
+
 def _node_ready(node: dict) -> bool:
     conditions = (node.get("status") or {}).get("conditions") or []
     return any(c.get("type") == "Ready" and c.get("status") == "True" for c in conditions)
@@ -930,6 +984,23 @@ def _iris_task_attempt(pod: dict) -> str:
     return ""
 
 
+def _iris_task_resources(pod: dict) -> dict:
+    for container in (pod.get("spec") or {}).get("containers") or []:
+        if container.get("name") != "task":
+            continue
+        for item in container.get("env") or []:
+            if item.get("name") == _IRIS_TASK_RESOURCES_ENV:
+                return json.loads(item.get("value") or "{}")
+    return {}
+
+
+def _root_job_id(task: str, fallback: str) -> str:
+    parts = task.removeprefix("/").split("/")
+    if task.startswith("/") and len(parts) >= 2:
+        return f"/{parts[0]}/{parts[1]}"
+    return fallback or task
+
+
 def _termination_class(pod: dict, overdue_seconds: int | None) -> TerminationClass:
     metadata = pod.get("metadata") or {}
     if overdue_seconds is None:
@@ -991,6 +1062,9 @@ class K8sFleet:
 
     def pending(self) -> list[dict]:
         return self._fan_out(lambda s: s.pending(), self._error_row)
+
+    def workload_allocations(self) -> list[dict]:
+        return self._fan_out(lambda s: s.workload_allocations(), self._error_row)
 
     def termination_candidates(self) -> list[TerminatingPodResult]:
         return self._collect(

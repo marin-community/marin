@@ -93,6 +93,16 @@
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false,
+      "title": "Cluster capacity",
+      "type": "link",
+      "url": "/d/marin-cluster-capacity"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
       "title": "Pipelines",
       "type": "link",
       "url": "/d/marin-pipelines"

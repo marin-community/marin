@@ -314,7 +314,7 @@ export function StatusPage({ frames, width, height }: Props) {
         </div>
         <nav className={css`display:flex;flex-wrap:wrap;justify-content:flex-end;gap:5px 14px;font-size:13px;`}>
           <a href="/d/marin-home">Home</a><a href="/d/marin-accel">Accelerators</a><a href="/d/marin-jobs">Jobs</a>
-          <a href="/d/marin-runs">Runs</a><a href="/d/marin-clusters">Clusters</a>
+          <a href="/d/marin-runs">Runs</a><a href="/d/marin-clusters">Clusters</a><a href="/d/marin-cluster-capacity">Capacity</a>
           <a href="https://github.com/marin-community/marin/actions" target="_blank" rel="noreferrer">GitHub Actions ↗</a>
         </nav>
       </header>

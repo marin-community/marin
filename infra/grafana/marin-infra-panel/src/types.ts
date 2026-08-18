@@ -1,4 +1,4 @@
-export type InfraPanelView = 'status' | 'nightlies' | 'commits' | 'wandb';
+export type InfraPanelView = 'status' | 'cluster' | 'nightlies' | 'commits' | 'wandb';
 
 export interface InfraPanelOptions {
   view: InfraPanelView;
@@ -80,4 +80,52 @@ export interface SeriesPoint {
   time: number;
   series: string;
   value: number;
+}
+
+export interface WorkloadAllocation {
+  cluster: string;
+  namespace: string;
+  pod: string;
+  node: string;
+  job: string;
+  task: string;
+  phase: string;
+  ready: boolean;
+  priorityClass: string;
+  ageSeconds: number;
+  cpuRequestMillicores: number;
+  memoryRequestBytes: number;
+  gpuRequestCount: number;
+  gpuVariant: string;
+}
+
+export interface ClusterNode {
+  cluster: string;
+  node: string;
+  instanceType: string;
+  nodePool: string;
+  gpuModel: string;
+  gpuCapacity: number;
+  gpuAllocatable: number;
+  cpuAllocatable: string;
+  memoryAllocatable: string;
+  ready: boolean;
+  unschedulable: boolean;
+}
+
+export interface TaskUsage {
+  cluster: string;
+  task: string;
+  pod: string;
+  cpuMillicores: number;
+  memoryBytes: number;
+  sampledAt: number;
+}
+
+export interface NodeMetric {
+  cluster: string;
+  node: string;
+  name: string;
+  value: number;
+  sampledAt: number;
 }

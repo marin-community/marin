@@ -30,6 +30,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /k8s/control_plane                       watched components + webhook endpoints, all clusters
     GET /k8s/crashloops                          containers in backoff waiting states
     GET /k8s/pending                             Pending / SchedulingGated pods with age
+    GET /k8s/workloads                           live Iris jobs, placement, and requested resources
     GET /k8s/termination_candidates             pods overdue past their deletion deadline
     GET /k8s/kueue                               unadmitted Kueue workloads per queue
     GET /k8s/events                              recent Warning events
@@ -568,6 +569,9 @@ def create_app(
     def k8s_pending(_: Request) -> JSONResponse:
         return k8s_endpoint("pending", k8s_fleet.pending)
 
+    def k8s_workloads(request: Request) -> JSONResponse:
+        return filtered_k8s_endpoint("workloads", k8s_fleet.workload_allocations, request, ("cluster", "job"))
+
     def k8s_termination_candidates(_: Request) -> JSONResponse:
         rows = k8s_cache.get_or_compute(_K8S_TERMINATION_CANDIDATES_CACHE_KEY, k8s_fleet.termination_candidates)
         return JSONResponse([asdict(row) for row in rows])
@@ -709,6 +713,7 @@ def create_app(
             Route("/k8s/control_plane", k8s_control_plane),
             Route("/k8s/crashloops", k8s_crashloops),
             Route("/k8s/pending", k8s_pending),
+            Route("/k8s/workloads", k8s_workloads),
             Route("/k8s/termination_candidates", k8s_termination_candidates),
             Route("/k8s/kueue", k8s_kueue),
             Route("/k8s/events", k8s_events),

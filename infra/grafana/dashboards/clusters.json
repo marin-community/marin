@@ -82,6 +82,16 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
+      "title": "Cluster capacity",
+      "type": "link",
+      "url": "/d/marin-cluster-capacity"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
       "title": "Accelerators",
       "type": "link",
       "url": "/d/marin-accel"
