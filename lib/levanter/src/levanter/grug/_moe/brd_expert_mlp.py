@@ -45,6 +45,10 @@ _CONFIGS: dict[tuple[int, int], "brd.TuningConfig"] = {
     (3136, 6144): _cfg(128, 12, 0, 6),  # w2 forward, 1407 TF/s
     (6144, 3200): _cfg(64, 16, 1, 6),  # dact (w2^T), 1195 TF/s
     (6272, 6144): _cfg(128, 8, 1, 6),  # dx (w13^T), 1492 TF/s
+    # 8/384 shapes (I=3072, G=6; mep-tune-brd-i3072b-20260818 sweep):
+    (6144, 6144): _cfg(128, 8, 0, 4),  # w13 forward AND dx (w13^T) share this key, 1725 TF/s
+    (3072, 6144): _cfg(128, 8, 0, 6),  # w2 forward, 1745 TF/s
+    (6144, 3072): _cfg(128, 12, 1, 4),  # dact (w2^T), 1738 TF/s
 }
 ROW_ALIGN = 2 * _CONFIG.tile_m
 # The collective config doubles the effective N tile; pad every weight's N to
