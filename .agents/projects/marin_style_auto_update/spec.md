@@ -28,6 +28,7 @@ class MarinStyleConsumer:
     name: str
     repository: str
     base_branch: str
+    revision_file: str
     pin_files: tuple[str, ...]
     required_checks: tuple[str, ...]
     lock_mode: LockMode
@@ -73,7 +74,7 @@ def generate_marin_style_update(
     """
 ```
 
-`revision` is exactly 40 lowercase hexadecimal characters. The workflow verifies it is reachable from the `marin-style` default branch; an omitted revision resolves the current head. Each direct pin file must exist, contain the same old revision at least once, and contain no conflicting `marin-style` revision. The generator replaces every old-revision occurrence and fails rather than partially updating a consumer.
+`revision` is exactly 40 lowercase hexadecimal characters. The workflow verifies it is reachable from the `marin-style` default branch; an omitted revision resolves the current head. Each direct pin file must exist and contain the same old revision at least once. The generator replaces every old-revision occurrence and fails rather than partially updating a consumer.
 
 The target package is invoked as `uvx --from git+https://github.com/marin-community/marin-style@<revision> marin-style sync --repo-root <checkout>`. Its reported installed revision must equal `revision`. `LockMode.UV` uses the workflow's pinned `uv` version to run `uv lock --upgrade-package marin-style`, verifies the resulting Git source revision and package version, and permits dependency re-resolution inside `uv.lock`; no other file becomes allowed. `AGENTS.md` references and `.claude/skills` setup must already be valid before onboarding.
 
@@ -156,6 +157,18 @@ class MergeMode(StrEnum):
     MERGE = "merge"
 
 
+class ConsumerUpdateStatus(StrEnum):
+    CURRENT = "current"
+    PUBLISHED = "published"
+    MERGED = "merged"
+
+
+@dataclass(frozen=True)
+class ConsumerUpdateResult:
+    status: ConsumerUpdateStatus
+    pull_request_url: str
+
+
 def update_consumer(
     *,
     consumer: MarinStyleConsumer,
@@ -163,14 +176,15 @@ def update_consumer(
     merge_mode: MergeMode,
     app_slug: str,
     manifest_mode: ManifestMode,
-) -> str | None:
+) -> ConsumerUpdateResult:
     """Prepare, publish, and optionally merge one consumer update.
 
-    The function returns the pull-request URL, or None for a clean no-op. It
-    constructs the dynamic pull-request policy in memory after comparing the
-    old checked-in manifest with output from the old pinned package and the
-    target installed package. The same policy object is passed to publication
-    and merge validation, so old-only paths are not lost between CLI steps.
+    CURRENT has an empty pull-request URL; PUBLISHED and MERGED carry the exact
+    URL. The function constructs the dynamic pull-request policy in memory
+    after comparing the old checked-in manifest with output from the old pinned
+    package and the target installed package. The same policy object is passed
+    to publication and merge validation, so old-only paths are not lost between
+    CLI steps.
     """
 ```
 
