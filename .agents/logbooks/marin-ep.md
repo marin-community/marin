@@ -1824,3 +1824,18 @@ Experiment ID prefix: `MEP`.
   night also crashed one coordinator and made every rank compile alone
   (~65 min, huge skew) — arm E reused the by-then-warm compile cache and
   ran end-to-end in 13 min.
+
+### 2026-08-18 10:45 - MEP-072: 8/384 cf sweep — cf 1.1 is the fidelity-matched operating point
+- mep-hero384f-cf10-50: cf 1.0, 50 steps, cumulative rate converged
+  17.6 -> 17.2 s/it (late-window steady ~16.9); drop_fraction 1.382% —
+  14.5x the cf 1.1 arm (0.095%). The waterfilling drop curve is steep in
+  [1.0, 1.1] at 6 local experts.
+- Operating points (same tqdm meter as all campaign numbers; active
+  routed params 8x3x6144x3072 = 453M/token ~ matches 4/192s 462M):
+  | config | s/it (meter) | drops | ~MFU |
+  | 4/192 cf1.1 (best) | 16.3 | 0.63% | 23.5% |
+  | 8/384 cf1.1 | 17.6 | 0.095% | ~21.8% |
+  | 8/384 cf1.0 | 17.2 | 1.38% | ~22.3% |
+- DECISION: quote 8/384 at cf 1.1 for apples-to-apples (near-dropless);
+  cf 1.0 available as a perf/fidelity tradeoff. Remaining 8/384 headroom:
+  per-leg GEMM retune at i3072 (fallback configs in use), splits retune.
