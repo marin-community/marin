@@ -9,7 +9,8 @@ before replacing the source, so a failed or interrupted task leaves the source
 intact. Reruns skip objects whose columns use zstd and have page indexes.
 
 Run the coordinator on a cluster local to the bucket. Start with a narrow glob
-and omit ``--apply`` to inventory candidates before rewriting them::
+and omit ``--apply-to-quiescent-prefix`` to inventory candidates before
+rewriting them::
 
     uv run iris --cluster=marin job run \
         --cpu 1 --memory 2GB --target-cluster cw-us-east-02a -- \
@@ -17,17 +18,20 @@ and omit ``--apply`` to inventory candidates before rewriting them::
         's3://marin-us-east-02a/marin/normalized/example/**/*.parquet' \
         --workers 16
 
-Add ``--apply`` after reviewing the dry-run counters. Do not target lifecycle
-prefixes: the command rejects ``tmp/ttl=`` paths because replacing an object
-would restart its retention clock.
+Stop all producers for the selected prefix, then add
+``--apply-to-quiescent-prefix`` after reviewing the dry-run counters. Do not
+target lifecycle prefixes: the command rejects ``tmp/ttl=`` paths because
+replacing an object would restart its retention clock.
 """
 
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
 
 import click
+import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from rigging.filesystem.atomic import atomic_rename
@@ -41,6 +45,7 @@ from zephyr.execution import ZephyrContext
 from zephyr.writers import (
     DEFAULT_PARQUET_COMPRESSION,
     DEFAULT_PARQUET_COMPRESSION_LEVEL,
+    DEFAULT_PARQUET_MAX_ROWS_PER_PAGE,
     DEFAULT_PARQUET_WRITE_PAGE_INDEX,
 )
 
@@ -48,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_WORKERS = 16
 DEFAULT_BATCH_ROWS = 8_192
+DEFAULT_ROW_GROUP_BYTES = 128 * 1024 * 1024
 DEFAULT_WORKER_CPU = 2
 DEFAULT_WORKER_RAM = "8g"
 COUNTER_PREFIX = "parquet_recompression"
@@ -68,6 +74,7 @@ class RewriteOptions:
 
     apply: bool = False
     batch_rows: int = DEFAULT_BATCH_ROWS
+    row_group_bytes: int = DEFAULT_ROW_GROUP_BYTES
     compression_level: int = DEFAULT_PARQUET_COMPRESSION_LEVEL
 
 
@@ -144,18 +151,35 @@ def _validate_rewrite(source: pq.ParquetFile, rewritten: pq.ParquetFile) -> None
         raise ValueError("rewritten Parquet is missing page indexes")
 
 
+def _row_group_tables(source: pq.ParquetFile, *, batch_rows: int, target_bytes: int) -> Iterator[pa.Table]:
+    batches: list[pa.RecordBatch] = []
+    buffered_bytes = 0
+    for batch in source.iter_batches(batch_size=batch_rows):
+        batches.append(batch)
+        buffered_bytes += batch.nbytes
+        if buffered_bytes >= target_bytes:
+            yield pa.Table.from_batches(batches, schema=source.schema_arrow)
+            batches = []
+            buffered_bytes = 0
+    if batches:
+        yield pa.Table.from_batches(batches, schema=source.schema_arrow)
+
+
 def recompress_parquet(path: str, options: RewriteOptions = RewriteOptions()) -> RewriteResult:
     """Rewrite one Parquet object to zstd with page indexes.
 
     The source is replaced only after the temporary output has the same schema
     and row count, uses zstd for every column chunk, and the source fingerprint
     still matches the value observed before reading it. Non-zstd sources are
-    preserved when the rewritten object would not be smaller.
+    preserved when the rewritten object would not be smaller. Object-store
+    callers must stop producers for the source prefix before applying rewrites.
     """
     if "/tmp/ttl=" in path:
         raise ValueError(f"refusing to reset lifecycle retention by replacing {path}")
     if options.batch_rows <= 0:
         raise ValueError(f"batch_rows must be positive, got {options.batch_rows}")
+    if options.row_group_bytes <= 0:
+        raise ValueError(f"row_group_bytes must be positive, got {options.row_group_bytes}")
 
     fs, fs_path = filesystem_for(path)
     source_fingerprint = _fingerprint(fs.info(fs_path))
@@ -170,6 +194,8 @@ def recompress_parquet(path: str, options: RewriteOptions = RewriteOptions()) ->
             return RewriteResult(path, RewriteDisposition.DRY_RUN, source_fingerprint.size, None, rows)
 
         try:
+            for abandoned_path in fs.glob(f"{fs_path}.tmp.*"):
+                fs.rm(abandoned_path)
             with atomic_rename(fs_path, filesystem=fs) as temp_path:
                 with fs.open(temp_path, "wb") as output_handle:
                     with pq.ParquetWriter(
@@ -178,9 +204,14 @@ def recompress_parquet(path: str, options: RewriteOptions = RewriteOptions()) ->
                         compression=DEFAULT_PARQUET_COMPRESSION,
                         compression_level=options.compression_level,
                         write_page_index=DEFAULT_PARQUET_WRITE_PAGE_INDEX,
+                        max_rows_per_page=DEFAULT_PARQUET_MAX_ROWS_PER_PAGE,
                     ) as writer:
-                        for batch in source.iter_batches(batch_size=options.batch_rows):
-                            writer.write_batch(batch)
+                        for table in _row_group_tables(
+                            source,
+                            batch_rows=options.batch_rows,
+                            target_bytes=options.row_group_bytes,
+                        ):
+                            writer.write_table(table, row_group_size=table.num_rows)
 
                 output_bytes = int(fs.info(temp_path)["size"])
                 if output_bytes >= source_fingerprint.size and not source_is_zstd:
@@ -266,15 +297,22 @@ def run_migration(
 @click.option("--worker-ram", default=DEFAULT_WORKER_RAM, show_default=True)
 @click.option("--batch-rows", default=DEFAULT_BATCH_ROWS, show_default=True, type=click.IntRange(min=1))
 @click.option(
+    "--row-group-bytes",
+    default=DEFAULT_ROW_GROUP_BYTES,
+    show_default=True,
+    type=click.IntRange(min=1),
+)
+@click.option(
     "--compression-level",
     default=DEFAULT_PARQUET_COMPRESSION_LEVEL,
     show_default=True,
     type=click.IntRange(min=1, max=22),
 )
 @click.option(
-    "--apply",
+    "--apply-to-quiescent-prefix",
+    "apply",
     is_flag=True,
-    help="Replace source objects after validation. Without this flag the job only reports candidates.",
+    help="Replace objects in a prefix whose producers are stopped. Without this flag the job only reports candidates.",
 )
 def main(
     source_glob: str,
@@ -282,6 +320,7 @@ def main(
     worker_cpu: int,
     worker_ram: str,
     batch_rows: int,
+    row_group_bytes: int,
     compression_level: int,
     apply: bool,
 ) -> None:
@@ -292,7 +331,12 @@ def main(
         workers=workers,
         worker_cpu=worker_cpu,
         worker_ram=worker_ram,
-        options=RewriteOptions(apply=apply, batch_rows=batch_rows, compression_level=compression_level),
+        options=RewriteOptions(
+            apply=apply,
+            batch_rows=batch_rows,
+            row_group_bytes=row_group_bytes,
+            compression_level=compression_level,
+        ),
     )
     for name, value in sorted(counters_result.items()):
         click.echo(f"{name}: {value}")
