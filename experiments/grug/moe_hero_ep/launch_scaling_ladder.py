@@ -81,7 +81,6 @@ WATCH_INTERVAL = 10
 # 791 tokens per active parameter sets the step budget: it lands the d6144 hero at 18T tokens and
 # scales every narrower rung by the same ratio.
 TOKENS_PER_ACTIVE_PARAM = 791
-SIMULATED_EPOCHING_MAX_FLOPS = 1e23
 
 
 def _ladder_model(size: str):
@@ -143,7 +142,6 @@ def build_ladder_run(
         raise ValueError(f"num_steps must be positive, got {num_steps}")
     flops_per_example, _ = _compute_flops(model_config=model)
     run_flops = flops_per_example * batch_size * num_steps
-    enable_simulated_epoching = run_flops <= SIMULATED_EPOCHING_MAX_FLOPS
 
     # The narrow rungs are short: eval every 5% of the run and keep only the forced final checkpoint.
     # The d6144 hero is long: eval every 3000 steps and keep a permanent checkpoint every 6000.
@@ -254,7 +252,7 @@ def build_ladder_run(
                 total_steps=num_steps,
                 batch_size=batch_size,
                 max_seq_len=model.max_seq_len,
-                enable_simulated_epoching=enable_simulated_epoching,
+                experiment_flops=run_flops,
                 validation=validation,
             ),
             resources=ctx.runtime_arg("train_resources"),

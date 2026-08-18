@@ -35,6 +35,10 @@ PRETRAIN_TOKENS = 15_000_000_000_000
 COOLDOWN_TOKENS = 3_750_000_000_000
 TOTAL_TOKENS = PRETRAIN_TOKENS + COOLDOWN_TOKENS
 HARRIER_MIX_2026_08_18_TAG = "harrier-mix-2026.08.18"
+# Simulated epoching stretches a short run's mixture as if it were a larger budget. Above this analytic
+# training-FLOP budget the run is expensive enough that we want maximally-real data over a simulated
+# larger run, so it trains on the raw mixture instead.
+SIMULATED_EPOCHING_MAX_FLOPS = 1e23
 
 HARRIER_MIX_2026_08_18_STORE = ArtifactStep.adopt(
     "datakit/store/harrier-all-sources-k40-q5-fuzzy-dedup",
@@ -99,10 +103,15 @@ def harrier_mix_2026_08_18_data_config(
     total_steps: int,
     batch_size: int,
     max_seq_len: int,
-    enable_simulated_epoching: bool,
+    experiment_flops: float,
     validation: Sequence[ArtifactStep[TokenizedCache]],
 ) -> LmDataConfig:
-    """Build the evaluated two-phase mixture, optionally with simulated epoching."""
+    """Build the evaluated two-phase mixture.
+
+    Simulated epoching is on by default; it is dropped once ``experiment_flops`` (the run's analytic
+    training-FLOP budget) exceeds ``SIMULATED_EPOCHING_MAX_FLOPS``, so an expensive run trains on the
+    raw mixture rather than a simulated larger budget.
+    """
     available_tokens = dict(_SPEC.available_tokens)
     phase_weights = tuple(dict(weights) for weights in _SPEC.phase_weights)
     components = {
@@ -130,7 +139,7 @@ def harrier_mix_2026_08_18_data_config(
         batch_size=batch_size,
         max_seq_len=max_seq_len,
         target_budget=TOTAL_TOKENS,
-        enable_simulated_epoching=enable_simulated_epoching,
+        enable_simulated_epoching=experiment_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
     )
 
     return _two_phase_data_config(
