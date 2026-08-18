@@ -1,11 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import threading
+
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from google.protobuf import any_pb2
 from iris.rpc import job_pb2, resource_job_pb2, resource_pb2, resource_task_pb2
+from iris.testing.journeys.backend import ScriptedObservation
 
 
 def _update(ref, request_id: str, body, *, reason: str = "") -> resource_pb2.UpdateResourceRequest:
@@ -140,3 +143,65 @@ def test_job_cancel_operation_is_idempotent_and_fenced_from_replacement(journey)
 
     assert raised.value.code == Code.FAILED_PRECONDITION
     assert journey.job(replacement).state == job_pb2.JOB_STATE_RUNNING
+
+
+def test_task_update_during_reconcile_discards_the_stale_result(journey):
+    job = journey.submit("update-during-reconcile", preemption_retries=1)
+    journey.settle()
+    task = job[0]
+    journey.backend.observe(task.wire_id, ScriptedObservation(job_pb2.TASK_STATE_RUNNING))
+    reconcile_started = threading.Event()
+    release_reconcile = threading.Event()
+    journey.backend.pause_next_reconcile(started=reconcile_started, release=release_reconcile)
+    tick_errors: list[Exception] = []
+    action_errors: list[Exception] = []
+    operations: list[resource_pb2.Operation] = []
+
+    def run_tick() -> None:
+        try:
+            journey.step()
+        except Exception as error:
+            tick_errors.append(error)
+
+    def update_task() -> None:
+        try:
+            operations.append(
+                journey.controller.update_resource(
+                    _update(
+                        resource_pb2.ResourceRef(
+                            authority_cluster_id="journey",
+                            type="iris/task",
+                            id=task.wire_id,
+                        ),
+                        "update-during-reconcile",
+                        resource_task_pb2.TaskUpdate(preempt=resource_task_pb2.PreemptAttempt()),
+                    )
+                )
+            )
+        except Exception as error:
+            action_errors.append(error)
+
+    tick = threading.Thread(target=run_tick)
+    tick.start()
+    assert reconcile_started.wait(timeout=5)
+    action = threading.Thread(target=update_task)
+    action.start()
+    action.join(timeout=1)
+    action_completed_while_reconcile_was_blocked = not action.is_alive()
+    release_reconcile.set()
+    action.join(timeout=5)
+    tick.join(timeout=5)
+
+    assert action_completed_while_reconcile_was_blocked
+    assert not action.is_alive()
+    assert not tick.is_alive()
+    assert not action_errors
+    assert not tick_errors
+    journey.settle()
+    completed = _operation(journey, operations[0].ref)
+    attempts = journey.task(task).attempts
+    assert completed.phase == resource_pb2.OPERATION_PHASE_VERIFIED
+    assert [attempt.state for attempt in attempts] == [
+        job_pb2.TASK_STATE_PREEMPTED,
+        job_pb2.TASK_STATE_RUNNING,
+    ]

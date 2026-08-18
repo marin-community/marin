@@ -418,6 +418,7 @@ class Controller:
         }
         self._last_unroutable_jobs: dict[str, str] = {}
         self._mutation_lock = threading.RLock()
+        self._mutation_generation = 0
 
         self._promotion_bucket = TokenBucket(
             capacity=DISPATCH_PROMOTION_RATE,
@@ -517,6 +518,7 @@ class Controller:
             federation=self._federation,
             wake=self.wake,
             mutation_lock=self._mutation_lock,
+            mutation_committed=self._record_mutation,
         )
         resource_registry = ResourceRegistryBuilder()
         register_workload_actions(resource_registry, self._workload_actions)
@@ -997,23 +999,30 @@ class Controller:
         force_timeout_scan: bool = False,
     ) -> None:
         with self._mutation_lock:
-            ran = self._control_tick_serialized(
-                woken=woken,
-                schedule_limiter=schedule_limiter,
-                reconcile_limiter=reconcile_limiter,
-                autoscale_limiter=autoscale_limiter,
-                force_timeout_scan=force_timeout_scan,
-            )
+            mutation_generation = self._mutation_generation
+        ran = self._control_tick_once(
+            woken=woken,
+            schedule_limiter=schedule_limiter,
+            reconcile_limiter=reconcile_limiter,
+            autoscale_limiter=autoscale_limiter,
+            force_timeout_scan=force_timeout_scan,
+            mutation_generation=mutation_generation,
+        )
         if ran:
             self._workload_actions.progress_remote()
 
-    def _control_tick_serialized(
+    def _record_mutation(self) -> None:
+        """Invalidate any control decision computed before a committed mutation."""
+        self._mutation_generation += 1
+
+    def _control_tick_once(
         self,
         *,
         woken: bool,
         schedule_limiter: RateLimiter,
         reconcile_limiter: RateLimiter,
         autoscale_limiter: RateLimiter,
+        mutation_generation: int,
         force_timeout_scan: bool = False,
     ) -> bool:
         """Run one control tick: one read snapshot, due phases per backend, one write txn.
@@ -1027,6 +1036,11 @@ class Controller:
         A wake runs a schedule-only mini-tick; autoscale always pairs with
         a fresh schedule so it provisions against this tick's residual demand.
         Execution-timeout finalization and health-driven teardown stay global.
+
+        Returns:
+            Whether the caller should advance federated operations. This is true
+            after a committed tick and after a mutation invalidates the tick's
+            computed effects; dry-run scheduling returns false.
         """
         now = Timestamp.now()
 
@@ -1093,18 +1107,23 @@ class Controller:
 
         merged_sched = self._merge_schedule_results(sched_results) if run_schedule else None
 
-        confirmed_promotions = self._commit_tick(
-            sched_result=merged_sched,
-            sched_results=sched_results,
-            backend_pins=backend_pins,
-            routing_unschedulable=routing_unschedulable,
-            recon_results=recon_results,
-            timeout_decisions=timeout_decisions,
-            auto_results=auto_results,
-            federation_promotions=federation_promotions,
-            expired_queued_federation=inputs.expired_queued_federation,
-            now=now,
-        )
+        with self._mutation_lock:
+            if mutation_generation != self._mutation_generation:
+                self._force_reconcile = True
+                self._tick_wake.set()
+                return True
+            confirmed_promotions = self._commit_tick(
+                sched_result=merged_sched,
+                sched_results=sched_results,
+                backend_pins=backend_pins,
+                routing_unschedulable=routing_unschedulable,
+                recon_results=recon_results,
+                timeout_decisions=timeout_decisions,
+                auto_results=auto_results,
+                federation_promotions=federation_promotions,
+                expired_queued_federation=inputs.expired_queued_federation,
+                now=now,
+            )
 
         # Charge the reservation ledger only for promotions whose CAS committed, so a
         # promotion raced by a cancel does not hold phantom peer capacity. The sync

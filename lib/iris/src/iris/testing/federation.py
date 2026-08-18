@@ -162,7 +162,7 @@ def attach_federation(
 def progress_resource_operations(service: ControllerServiceImpl) -> None:
     """Run the operation phase that a production controller executes after a tick."""
     assert service._workload_actions is not None
-    service._workload_actions.progress(verification_candidates={}, reconciled_backends=frozenset())
+    service._workload_actions.progress_remote()
 
 
 def cluster_pinned_request(name: str, peer: str = "cw", replicas: int = 1) -> controller_pb2.Controller.LaunchJobRequest:

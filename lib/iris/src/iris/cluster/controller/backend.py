@@ -181,6 +181,7 @@ class RuntimeReleaseTarget:
     task_id: str
     attempt_id: int
     attempt_uid: str
+    worker_id: WorkerId | None = None
 
 
 @dataclass(frozen=True)

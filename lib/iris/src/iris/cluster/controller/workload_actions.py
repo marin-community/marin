@@ -22,6 +22,7 @@ from rigging.timing import Timestamp
 from sqlalchemy import select
 
 from iris.cluster.controller import operation_store, reads, writes
+from iris.cluster.controller.auth import ADMIN_ROLE
 from iris.cluster.controller.backend import ReconcileResult, RuntimeReleaseTarget
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.operation_store import RuntimeTarget
@@ -31,7 +32,7 @@ from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKin
 from iris.cluster.controller.schema import federated_jobs_table, jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.federation.store import FederationDirection, HandoffState
-from iris.cluster.types import DEFAULT_BACKEND_ID, LOCAL_CLUSTER, JobName
+from iris.cluster.types import DEFAULT_BACKEND_ID, LOCAL_CLUSTER, JobName, WorkerId
 from iris.rpc import resource_job_pb2, resource_pb2, resource_task_pb2
 from iris.rpc.auth import DASHBOARD_ROLE, FEDERATION_PEER_ROLE, authorize_resource_owner
 from iris.rpc.resource_registry import ResourceRegistryBuilder
@@ -76,7 +77,6 @@ class FederationResourceActions(Protocol):
 @dataclass(frozen=True, slots=True)
 class _JobCoordinates:
     job_id: JobName
-    state: int
     submitted_at: Timestamp
     cluster: str
     direction: int | None
@@ -122,6 +122,7 @@ class _AttemptCoordinates:
     task: _TaskCoordinates
     attempt_id: int
     attempt_uid: str
+    worker_id: WorkerId | None
     finished_at: Timestamp | None
 
     def ref(self, local_cluster_id: str) -> resource_pb2.ResourceRef:
@@ -143,8 +144,9 @@ class WorkloadActions:
         cluster_id: str,
         auth_required: bool,
         federation: FederationResourceActions,
-        wake,
+        wake: Callable[[], None],
         mutation_lock: threading.RLock,
+        mutation_committed: Callable[[], None],
     ) -> None:
         self._db = db
         self._cluster_id = cluster_id
@@ -152,6 +154,7 @@ class WorkloadActions:
         self._federation = federation
         self._wake = wake
         self._mutation_lock = mutation_lock
+        self._mutation_committed = mutation_committed
 
     def logical_ref(self, resource_type: str, resource_id: str) -> resource_pb2.ResourceRef:
         """Return a logical-current reference for a workload resource."""
@@ -181,65 +184,69 @@ class WorkloadActions:
             raise ConnectError(Code.INVALID_ARGUMENT, "Job update requires cancel")
         packed = _pack(update)
         reason = request.mutation.reason or "Cancelled by operator"
-        with self._mutation_lock, self._db.transaction() as tx:
-            principal = self._principal()
-            duplicate = self._replay(tx, principal, request, update)
-            if duplicate is not None:
-                return duplicate
-            self._authorize_new(tx, request.ref)
+        with self._mutation_lock:
+            with self._db.transaction() as tx:
+                principal = self._principal()
+                duplicate = self._replay(tx, principal, request, update)
+                if duplicate is not None:
+                    return duplicate
+                self._authorize_new(tx, request.ref)
 
-            job = self._job(tx, JobName.from_wire(request.ref.id))
-            resolved = _ref(job.authority(self._cluster_id), JOB_TYPE, request.ref.id, job.uid(self._cluster_id))
-            _require_selector(request.ref, resolved)
-            targets = self._job_runtime_targets(tx, job)
-            sent = job.direction == int(FederationDirection.SENT)
-            queued = sent and job.handoff_state == int(HandoffState.QUEUED_HANDOFF)
-            remote = sent and not queued
-            if remote and not self._federation.supports_update(job.cluster, request.ref.type, packed.type_url):
-                raise ConnectError(
-                    Code.FAILED_PRECONDITION,
-                    f"Peer {job.cluster!r} does not support {request.ref.type} update {packed.type_url}",
-                )
-            if sent:
-                writes.bump_cancel_intent(tx, job.job_id)
-                if job.handoff_state in (
-                    int(HandoffState.QUEUED_HANDOFF),
-                    int(HandoffState.PENDING_HANDOFF),
-                ):
-                    writes.mark_federated_job_killed(
-                        tx,
-                        job.job_id,
-                        now_ms=Timestamp.now().epoch_ms(),
-                        error="Cancelled before handoff",
+                job = self._job(tx, JobName.from_wire(request.ref.id))
+                resolved = _ref(job.authority(self._cluster_id), JOB_TYPE, request.ref.id, job.uid(self._cluster_id))
+                _require_selector(request.ref, resolved)
+                targets = self._job_runtime_targets(tx, job)
+                sent = job.direction == int(FederationDirection.SENT)
+                queued = sent and job.handoff_state == int(HandoffState.QUEUED_HANDOFF)
+                remote = sent and not queued
+                if remote and not self._federation.supports_update(job.cluster, request.ref.type, packed.type_url):
+                    raise ConnectError(
+                        Code.FAILED_PRECONDITION,
+                        f"Peer {job.cluster!r} does not support {request.ref.type} update {packed.type_url}",
                     )
-            phase = (
-                operation_store.OperationPhase.ACCEPTED
-                if remote
-                else (operation_store.OperationPhase.VERIFYING if targets else operation_store.OperationPhase.VERIFIED)
-            )
-            operation_id = uuid.uuid4().hex
-            operation_store.insert_operation(
-                tx,
-                operation_id=operation_id,
-                principal_id=principal,
-                request_id=request.mutation.request_id,
-                request_hash=_request_hash(request, update),
-                requested_ref=request.ref,
-                resolved_ref=resolved,
-                update=packed,
-                reason=reason,
-                phase=phase,
-                peer_id=job.cluster if remote else "",
-                targets=targets,
-                now=Timestamp.now(),
-            )
-            if not sent:
-                job_ops.cancel(tx, job_id=job.job_id, reason=reason)
-                if job.direction == int(FederationDirection.RECEIVED):
-                    writes.record_federation_change(tx, job.job_id)
-            row = operation_store.by_id(tx, operation_id)
-            assert row is not None
-            operation = operation_store.to_proto(tx, row)
+                if sent:
+                    writes.bump_cancel_intent(tx, job.job_id)
+                    if job.handoff_state in (
+                        int(HandoffState.QUEUED_HANDOFF),
+                        int(HandoffState.PENDING_HANDOFF),
+                    ):
+                        writes.mark_federated_job_killed(
+                            tx,
+                            job.job_id,
+                            now_ms=Timestamp.now().epoch_ms(),
+                            error="Cancelled before handoff",
+                        )
+                phase = (
+                    operation_store.OperationPhase.ACCEPTED
+                    if remote
+                    else (
+                        operation_store.OperationPhase.VERIFYING if targets else operation_store.OperationPhase.VERIFIED
+                    )
+                )
+                operation_id = uuid.uuid4().hex
+                operation_store.insert_operation(
+                    tx,
+                    operation_id=operation_id,
+                    principal_id=principal,
+                    request_id=request.mutation.request_id,
+                    request_hash=_request_hash(request, update),
+                    requested_ref=request.ref,
+                    resolved_ref=resolved,
+                    update=packed,
+                    reason=reason,
+                    phase=phase,
+                    peer_id=job.cluster if remote else "",
+                    targets=targets,
+                    now=Timestamp.now(),
+                )
+                if not sent:
+                    job_ops.cancel(tx, job_id=job.job_id, reason=reason)
+                    if job.direction == int(FederationDirection.RECEIVED):
+                        writes.record_federation_change(tx, job.job_id)
+                row = operation_store.by_id(tx, operation_id)
+                assert row is not None
+                operation = operation_store.to_proto(tx, row)
+            self._mutation_committed()
         self._wake()
         return operation
 
@@ -303,6 +310,7 @@ class WorkloadActions:
                     task_id=task_id.to_wire(),
                     attempt_id=attempt_id,
                     attempt_uid=target.ref.uid,
+                    worker_id=target.worker_id,
                 )
         return tuple(targets[uid] for uid in sorted(targets))
 
@@ -349,51 +357,56 @@ class WorkloadActions:
         kind, default_reason = _terminal_intent(update.WhichOneof("intent"))
         reason = request.mutation.reason or default_reason
         packed = _pack(update)
-        with self._mutation_lock, self._db.transaction() as tx:
-            principal = self._principal()
-            duplicate = self._replay(tx, principal, request, update)
-            if duplicate is not None:
-                return duplicate
-            self._authorize_new(tx, request.ref)
+        with self._mutation_lock:
+            with self._db.transaction() as tx:
+                principal = self._principal()
+                duplicate = self._replay(tx, principal, request, update)
+                if duplicate is not None:
+                    return duplicate
+                self._authorize_new(tx, request.ref)
 
-            task, attempt, resolved = resolve(tx, request.ref)
-            if task.state not in ACTIVE_TASK_STATES or attempt.finished_at is not None:
-                raise ConnectError(Code.FAILED_PRECONDITION, "Task has no active Attempt")
-            target = RuntimeTarget(
-                ref=attempt.ref(self._cluster_id),
-                backend_id=task.backend_id or DEFAULT_BACKEND_ID,
-            )
-            remote = task.cluster != LOCAL_CLUSTER
-            if remote and not self._federation.supports_update(task.cluster, request.ref.type, packed.type_url):
-                raise ConnectError(
-                    Code.FAILED_PRECONDITION,
-                    f"Peer {task.cluster!r} does not support {request.ref.type} update {packed.type_url}",
+                task, attempt, resolved = resolve(tx, request.ref)
+                if task.state not in ACTIVE_TASK_STATES or attempt.finished_at is not None:
+                    raise ConnectError(Code.FAILED_PRECONDITION, "Task has no active Attempt")
+                target = RuntimeTarget(
+                    ref=attempt.ref(self._cluster_id),
+                    backend_id=task.backend_id or DEFAULT_BACKEND_ID,
+                    worker_id=attempt.worker_id,
                 )
-            operation_id = uuid.uuid4().hex
-            operation_store.insert_operation(
-                tx,
-                operation_id=operation_id,
-                principal_id=principal,
-                request_id=request.mutation.request_id,
-                request_hash=_request_hash(request, update),
-                requested_ref=request.ref,
-                resolved_ref=resolved,
-                update=packed,
-                reason=reason,
-                phase=(operation_store.OperationPhase.ACCEPTED if remote else operation_store.OperationPhase.VERIFYING),
-                peer_id=task.cluster if remote else "",
-                targets=(target,),
-                now=Timestamp.now(),
-            )
-            if not remote:
-                finalize(
+                remote = task.cluster != LOCAL_CLUSTER
+                if remote and not self._federation.supports_update(task.cluster, request.ref.type, packed.type_url):
+                    raise ConnectError(
+                        Code.FAILED_PRECONDITION,
+                        f"Peer {task.cluster!r} does not support {request.ref.type} update {packed.type_url}",
+                    )
+                operation_id = uuid.uuid4().hex
+                operation_store.insert_operation(
                     tx,
-                    [TerminalDecision(kind=kind, task_id=task.task_id, reason=reason)],
+                    operation_id=operation_id,
+                    principal_id=principal,
+                    request_id=request.mutation.request_id,
+                    request_hash=_request_hash(request, update),
+                    requested_ref=request.ref,
+                    resolved_ref=resolved,
+                    update=packed,
+                    reason=reason,
+                    phase=(
+                        operation_store.OperationPhase.ACCEPTED if remote else operation_store.OperationPhase.VERIFYING
+                    ),
+                    peer_id=task.cluster if remote else "",
+                    targets=(target,),
                     now=Timestamp.now(),
                 )
-            row = operation_store.by_id(tx, operation_id)
-            assert row is not None
-            operation = operation_store.to_proto(tx, row)
+                if not remote:
+                    finalize(
+                        tx,
+                        [TerminalDecision(kind=kind, task_id=task.task_id, reason=reason)],
+                        now=Timestamp.now(),
+                    )
+                row = operation_store.by_id(tx, operation_id)
+                assert row is not None
+                operation = operation_store.to_proto(tx, row)
+            self._mutation_committed()
         self._wake()
         return operation
 
@@ -461,7 +474,7 @@ class WorkloadActions:
         if not self._auth_required:
             return
         identity = require_identity()
-        if identity.role != "admin" and identity.user_id != principal_id:
+        if identity.role != ADMIN_ROLE and identity.user_id != principal_id:
             raise ConnectError(Code.PERMISSION_DENIED, "Operation belongs to another principal")
 
     def _job(self, tx: Tx, job_id: JobName) -> _JobCoordinates:
@@ -469,7 +482,6 @@ class WorkloadActions:
         row = tx.execute(
             select(
                 jobs_table.c.job_id,
-                jobs_table.c.state,
                 jobs_table.c.submitted_at_ms,
                 jobs_table.c.cluster,
                 root_federation.c.direction,
@@ -484,7 +496,6 @@ class WorkloadActions:
             raise ConnectError(Code.NOT_FOUND, f"Job {job_id} not found")
         return _JobCoordinates(
             job_id=row.job_id,
-            state=int(row.state),
             submitted_at=row.submitted_at_ms,
             cluster=str(row.cluster),
             direction=int(row.direction) if row.direction is not None else None,
@@ -525,6 +536,7 @@ class WorkloadActions:
             select(
                 task_attempts_table.c.attempt_id,
                 task_attempts_table.c.attempt_uid,
+                task_attempts_table.c.worker_id,
                 task_attempts_table.c.finished_at_ms,
             ).where(
                 task_attempts_table.c.task_id == task.task_id,
@@ -537,6 +549,7 @@ class WorkloadActions:
             task=task,
             attempt_id=int(row.attempt_id),
             attempt_uid=str(row.attempt_uid),
+            worker_id=row.worker_id,
             finished_at=row.finished_at_ms,
         )
 
@@ -552,6 +565,7 @@ class WorkloadActions:
                 task_attempts_table.c.attempt_id,
                 task_attempts_table.c.attempt_uid,
                 tasks_table.c.backend_id,
+                task_attempts_table.c.worker_id,
             )
             .select_from(
                 tasks_table.join(
@@ -576,11 +590,12 @@ class WorkloadActions:
                     str(row.attempt_uid),
                 ),
                 backend_id=str(row.backend_id) or DEFAULT_BACKEND_ID,
+                worker_id=row.worker_id,
             )
             for row in rows
         )
 
-    def _progress_remote(self, row) -> None:
+    def _progress_remote(self, row: operation_store.OperationRow) -> None:
         try:
             if row.phase == operation_store.OperationPhase.ACCEPTED:
                 remote = self._federation.update_resource(row.peer_id, operation_store.forwarded_request(row))
@@ -603,14 +618,16 @@ class WorkloadActions:
             self._record_remote_phase(row, remote)
         except ConnectError as error:
             if error.code == Code.NOT_FOUND and row.resolved_type == JOB_TYPE:
-                with self._mutation_lock, self._db.transaction() as tx:
-                    operation_store.mark_verified(tx, row.operation_id)
-                    writes.mark_federated_job_killed(
-                        tx,
-                        JobName.from_wire(row.resolved_id),
-                        now_ms=Timestamp.now().epoch_ms(),
-                        error="Cancelled (peer reported the job gone)",
-                    )
+                with self._mutation_lock:
+                    with self._db.transaction() as tx:
+                        operation_store.mark_verified(tx, row.operation_id)
+                        writes.mark_federated_job_killed(
+                            tx,
+                            JobName.from_wire(row.resolved_id),
+                            now_ms=Timestamp.now().epoch_ms(),
+                            error="Cancelled (peer reported the job gone)",
+                        )
+                    self._mutation_committed()
             elif error.code in _TERMINAL_REMOTE_CODES:
                 with self._db.transaction() as tx:
                     operation_store.mark_failed(tx, row.operation_id, code=error.code, message=error.message)
@@ -622,7 +639,7 @@ class WorkloadActions:
         except (ConnectionError, OSError) as error:
             logger.debug("Resource operation %s will retry after peer error: %s", row.operation_id, error)
 
-    def _record_remote_phase(self, row, remote: resource_pb2.Operation) -> None:
+    def _record_remote_phase(self, row: operation_store.OperationRow, remote: resource_pb2.Operation) -> None:
         with self._db.transaction() as tx:
             current = operation_store.by_id(tx, row.operation_id)
             if current is None or current.phase not in (

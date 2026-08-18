@@ -506,6 +506,7 @@ resource_operation_targets_table = Table(
     Column("resource_id", String, nullable=False),
     Column("resource_uid", String, nullable=False),
     Column("backend_id", String, nullable=False),
+    Column("worker_id", WorkerIdType),
     PrimaryKeyConstraint("operation_id", "ordinal"),
 )
 

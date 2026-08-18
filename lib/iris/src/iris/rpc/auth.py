@@ -36,8 +36,9 @@ DASHBOARD_ROLE = "dashboard"
 FEDERATION_PEER_ROLE = "federation-peer"
 
 # RPCs a federation-peer identity may call unconditionally: handoff, status sync,
-# capability discovery, generic resource access, and the temporary TerminateJob
-# compatibility route. A default-deny allowlist, like DASHBOARD_READABLE_RPCS.
+# capability discovery, and generic resource access. TerminateJob remains until
+# the two-week ControllerService protobuf window closes, then leaves with that
+# adapter. A default-deny allowlist, like DASHBOARD_READABLE_RPCS.
 FEDERATION_RPCS: frozenset[str] = frozenset(
     {
         "LaunchJob",

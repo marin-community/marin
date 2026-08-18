@@ -368,6 +368,7 @@ def make_controller_service(
         federation=mock_controller,
         wake=mock_controller.wake,
         mutation_lock=threading.RLock(),
+        mutation_committed=lambda: None,
     )
     registry = ResourceRegistryBuilder()
     register_workload_actions(registry, actions)

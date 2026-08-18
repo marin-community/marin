@@ -5,6 +5,7 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Protocol, cast
 
 from connectrpc.code import Code
 from google.protobuf import any_pb2
@@ -16,10 +17,15 @@ from iris.cluster.controller.schema import (
     resource_operation_targets_table,
     resource_operations_table,
 )
+from iris.cluster.types import WorkerId
 from iris.rpc import resource_pb2
 from iris.time_proto import timestamp_to_proto
 
 OPERATION_TYPE = "iris/operation"
+
+# Completed operations are permanent replay fences for logical-current
+# selectors. Deleting one would let a delayed retry bind to a replacement Job or
+# Task with the same name.
 
 
 class OperationPhase(StrEnum):
@@ -33,29 +39,60 @@ class OperationPhase(StrEnum):
 class RuntimeTarget:
     ref: resource_pb2.ResourceRef
     backend_id: str
+    worker_id: WorkerId | None
 
 
-def by_request(tx: Tx, principal_id: str, request_id: str):
-    return tx.execute(
+class OperationRow(Protocol):
+    operation_id: str
+    principal_id: str
+    request_id: str
+    request_hash: str
+    verb: str
+    requested_authority: str
+    requested_type: str
+    requested_id: str
+    requested_uid: str | None
+    resolved_authority: str
+    resolved_type: str
+    resolved_id: str
+    resolved_uid: str
+    update_type_url: str
+    update_payload: bytes
+    reason: str
+    phase: str
+    peer_id: str
+    remote_operation_id: str
+    error_code: int | None
+    error_message: str
+    accepted_at_ms: Timestamp
+    applied_at_ms: Timestamp | None
+    completed_at_ms: Timestamp | None
+
+
+def by_request(tx: Tx, principal_id: str, request_id: str) -> OperationRow | None:
+    row = tx.execute(
         select(resource_operations_table).where(
             resource_operations_table.c.principal_id == principal_id,
             resource_operations_table.c.request_id == request_id,
         )
     ).first()
+    return cast(OperationRow | None, row)
 
 
-def by_id(tx: Tx, operation_id: str):
-    return tx.execute(
+def by_id(tx: Tx, operation_id: str) -> OperationRow | None:
+    row = tx.execute(
         select(resource_operations_table).where(resource_operations_table.c.operation_id == operation_id)
     ).first()
+    return cast(OperationRow | None, row)
 
 
-def pending(tx: Tx):
-    return tx.execute(
+def pending(tx: Tx) -> list[OperationRow]:
+    rows = tx.execute(
         select(resource_operations_table)
         .where(resource_operations_table.c.phase.in_((OperationPhase.ACCEPTED, OperationPhase.VERIFYING)))
         .order_by(resource_operations_table.c.accepted_at_ms, resource_operations_table.c.operation_id)
     ).all()
+    return cast(list[OperationRow], rows)
 
 
 def insert_operation(
@@ -111,6 +148,7 @@ def insert_operation(
                     "resource_id": target.ref.id,
                     "resource_uid": target.ref.uid,
                     "backend_id": target.backend_id,
+                    "worker_id": target.worker_id,
                 }
                 for ordinal, target in enumerate(targets)
             ],
@@ -164,6 +202,7 @@ def verification_targets(tx: Tx) -> dict[str, tuple[RuntimeTarget, ...]]:
             resource_operation_targets_table.c.resource_id,
             resource_operation_targets_table.c.resource_uid,
             resource_operation_targets_table.c.backend_id,
+            resource_operation_targets_table.c.worker_id,
         )
         .join(
             resource_operation_targets_table,
@@ -186,12 +225,13 @@ def verification_targets(tx: Tx) -> dict[str, tuple[RuntimeTarget, ...]]:
                     uid=row.resource_uid,
                 ),
                 backend_id=row.backend_id,
+                worker_id=row.worker_id,
             )
         )
     return {operation_id: tuple(operation_targets) for operation_id, operation_targets in targets.items()}
 
 
-def to_proto(tx: Tx, row) -> resource_pb2.Operation:
+def to_proto(tx: Tx, row: OperationRow) -> resource_pb2.Operation:
     operation = resource_pb2.Operation(
         ref=resource_pb2.ResourceRef(
             authority_cluster_id=row.resolved_authority,
@@ -228,7 +268,7 @@ def to_proto(tx: Tx, row) -> resource_pb2.Operation:
     return operation
 
 
-def forwarded_request(row) -> resource_pb2.UpdateResourceRequest:
+def forwarded_request(row: OperationRow) -> resource_pb2.UpdateResourceRequest:
     return resource_pb2.UpdateResourceRequest(
         mutation=resource_pb2.MutationMetadata(request_id=row.operation_id, reason=row.reason),
         ref=resolved_ref(row),
@@ -236,7 +276,7 @@ def forwarded_request(row) -> resource_pb2.UpdateResourceRequest:
     )
 
 
-def _requested_ref(row) -> resource_pb2.ResourceRef:
+def _requested_ref(row: OperationRow) -> resource_pb2.ResourceRef:
     ref = resource_pb2.ResourceRef(
         authority_cluster_id=row.requested_authority,
         type=row.requested_type,
@@ -247,7 +287,7 @@ def _requested_ref(row) -> resource_pb2.ResourceRef:
     return ref
 
 
-def resolved_ref(row) -> resource_pb2.ResourceRef:
+def resolved_ref(row: OperationRow) -> resource_pb2.ResourceRef:
     return resource_pb2.ResourceRef(
         authority_cluster_id=row.resolved_authority,
         type=row.resolved_type,

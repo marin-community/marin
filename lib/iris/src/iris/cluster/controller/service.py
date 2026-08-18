@@ -309,6 +309,17 @@ _KICK_STATES = frozenset({job_pb2.TASK_STATE_PREEMPTED, job_pb2.TASK_STATE_FAILE
 
 
 @dataclass(frozen=True, slots=True)
+class _ResolvedKickTarget:
+    requested_target: str
+    task_id: str
+    resource_id: str
+
+    @property
+    def is_attempt(self) -> bool:
+        return self.resource_id != self.task_id
+
+
+@dataclass(frozen=True, slots=True)
 class TaskWithAttempts:
     """Task detail columns with attempt rows attached."""
 
@@ -2236,28 +2247,27 @@ class ControllerServiceImpl:
 
         reason = request.reason or f"Kicked to {task_state_friendly(request.desired_state)} by operator"
 
-        resolved: list[tuple[str, str, str]] = []
+        resolved: list[_ResolvedKickTarget] = []
         results: list[controller_pb2.Controller.KickResult] = []
         with self._db.read_snapshot() as tx:
             for target in request.targets:
                 self._resolve_legacy_kick_target(tx, target, resolved, results)
 
         resource_service, actions = self._resource_bindings()
-        for target, task_id, resource_id in resolved:
-            is_attempt = resource_id != task_id
+        for target in resolved:
             update: Message
             if request.desired_state == job_pb2.TASK_STATE_PREEMPTED:
                 intent = resource_task_pb2.PreemptAttempt()
                 update = (
                     resource_task_pb2.AttemptUpdate(preempt=intent)
-                    if is_attempt
+                    if target.is_attempt
                     else resource_task_pb2.TaskUpdate(preempt=intent)
                 )
             else:
                 intent = resource_task_pb2.FailAttempt()
                 update = (
                     resource_task_pb2.AttemptUpdate(fail=intent)
-                    if is_attempt
+                    if target.is_attempt
                     else resource_task_pb2.TaskUpdate(fail=intent)
                 )
             packed = any_pb2.Any()
@@ -2266,7 +2276,10 @@ class ControllerServiceImpl:
                 resource_service.update_resource(
                     resource_pb2.UpdateResourceRequest(
                         mutation=resource_pb2.MutationMetadata(request_id=uuid.uuid4().hex, reason=reason),
-                        ref=actions.logical_ref(ATTEMPT_TYPE if is_attempt else TASK_TYPE, resource_id),
+                        ref=actions.logical_ref(
+                            ATTEMPT_TYPE if target.is_attempt else TASK_TYPE,
+                            target.resource_id,
+                        ),
                         update=packed,
                     ),
                     ctx,
@@ -2274,21 +2287,27 @@ class ControllerServiceImpl:
             except ConnectError as error:
                 results.append(
                     controller_pb2.Controller.KickResult(
-                        target=target,
-                        task_id=task_id,
+                        target=target.requested_target,
+                        task_id=target.task_id,
                         queued=False,
                         detail=error.message,
                     )
                 )
             else:
-                results.append(controller_pb2.Controller.KickResult(target=target, task_id=task_id, queued=True))
+                results.append(
+                    controller_pb2.Controller.KickResult(
+                        target=target.requested_target,
+                        task_id=target.task_id,
+                        queued=True,
+                    )
+                )
         return controller_pb2.Controller.KickTasksResponse(results=results)
 
     def _resolve_legacy_kick_target(
         self,
         tx: Tx,
         target: str,
-        resolved: list[tuple[str, str, str]],
+        resolved: list[_ResolvedKickTarget],
         results: list[controller_pb2.Controller.KickResult],
     ) -> None:
         """Expand one legacy target without assigning mutation semantics here."""
@@ -2311,7 +2330,13 @@ class ControllerServiceImpl:
             resource_id = (
                 f"{name.to_wire()}:{task_attempt.attempt_id}" if task_attempt.attempt_id is not None else name.to_wire()
             )
-            resolved.append((target, name.to_wire(), resource_id))
+            resolved.append(
+                _ResolvedKickTarget(
+                    requested_target=target,
+                    task_id=name.to_wire(),
+                    resource_id=resource_id,
+                )
+            )
             return
 
         # Job target: expand to its active tasks.
@@ -2326,7 +2351,13 @@ class ControllerServiceImpl:
             reject("job has no tasks running on a worker", task_id=name.to_wire())
             return
         for row in active:
-            resolved.append((target, row.task_id.to_wire(), row.task_id.to_wire()))
+            resolved.append(
+                _ResolvedKickTarget(
+                    requested_target=target,
+                    task_id=row.task_id.to_wire(),
+                    resource_id=row.task_id.to_wire(),
+                )
+            )
 
     def _resource_bindings(self) -> tuple[ResourceServiceImpl, WorkloadActions]:
         if self._resource_service is None or self._workload_actions is None:

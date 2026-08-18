@@ -421,6 +421,9 @@ class TaskAttempt:
         Issues SIGTERM, waits up to ``term_timeout_ms`` for the container to
         exit, then force-kills if it is still running. A terminal attempt whose
         runtime remains live is force-stopped again.
+
+        Returns:
+            Whether a live runtime or in-progress launch was asked to stop.
         """
         if self.status not in _KILLABLE_STATES:
             if is_task_finished(self.status) and not self.runtime_released:

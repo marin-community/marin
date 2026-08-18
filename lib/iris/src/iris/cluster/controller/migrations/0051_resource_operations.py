@@ -53,6 +53,7 @@ def migrate(raw_conn) -> None:
             resource_id VARCHAR NOT NULL,
             resource_uid VARCHAR NOT NULL,
             backend_id VARCHAR NOT NULL,
+            worker_id VARCHAR,
             PRIMARY KEY (operation_id, ordinal)
         )
         """
