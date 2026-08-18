@@ -26,6 +26,7 @@ class GlobSource:
 
     patterns: tuple[str, ...]
     empty_glob_ok: bool = False
+    minimum_file_size: int = 0
 
 
 @dataclass(frozen=True)
@@ -48,7 +49,9 @@ class FileEntry:
 def resolve_glob(source: GlobSource) -> list[FileEntry]:
     """Return the unique files and sizes matched by a GlobSource."""
     entries = [
-        FileEntry(spec=InputFileSpec(path=entry.path), size=entry.size) for entry in glob_with_metadata(source.patterns)
+        FileEntry(spec=InputFileSpec(path=entry.path), size=entry.size)
+        for entry in glob_with_metadata(source.patterns)
+        if entry.size >= source.minimum_file_size
     ]
 
     if not entries and not source.empty_glob_ok:
@@ -421,9 +424,18 @@ class Dataset(Generic[T]):
     def from_file_patterns(
         patterns: Sequence[str],
         empty_glob_ok: bool = False,
+        minimum_file_size: int = 0,
     ) -> "Dataset[str]":
         """Create a dataset from unique files matched by one or more patterns."""
-        return Dataset(GlobSource(tuple(patterns), empty_glob_ok))
+        if minimum_file_size < 0:
+            raise ValueError(f"minimum_file_size must be non-negative, got {minimum_file_size}")
+        return Dataset(
+            GlobSource(
+                patterns=tuple(patterns),
+                empty_glob_ok=empty_glob_ok,
+                minimum_file_size=minimum_file_size,
+            )
+        )
 
     def map(self, fn: Callable[[T], R]) -> "Dataset[R]":
         """Map a function over the dataset.

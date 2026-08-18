@@ -321,6 +321,18 @@ def test_from_file_patterns_combines_and_deduplicates_globs(tmp_path):
     ]
 
 
+def test_from_file_patterns_filters_by_listing_size(tmp_path):
+    (tmp_path / "small.parquet").write_bytes(b"a")
+    (tmp_path / "large.parquet").write_bytes(b"abc")
+
+    dataset = Dataset.from_file_patterns(
+        (f"{tmp_path}/*.parquet",),
+        minimum_file_size=2,
+    )
+
+    assert [entry.path for entry in resolve_glob(dataset.source)] == [str(tmp_path / "large.parquet")]
+
+
 def test_from_files_nested(tmp_path):
     """Test from_files with nested directories."""
     input_dir = tmp_path / "input"

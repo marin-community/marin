@@ -257,7 +257,11 @@ def run_migration(
     if not source_globs:
         raise ValueError("source_globs must contain at least one pattern")
 
-    pipeline = Dataset.from_file_patterns(source_globs).flat_map(partial(_rewrite_for_zephyr, options=options))
+    pipeline = Dataset.from_file_patterns(
+        source_globs,
+        empty_glob_ok=True,
+        minimum_file_size=MIN_INPUT_BYTES,
+    ).flat_map(partial(_rewrite_for_zephyr, options=options))
     outcome = context.execute(pipeline, verbose=True)
     return dict(outcome.counters)
 
