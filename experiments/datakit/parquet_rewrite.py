@@ -1,12 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run an ordered, resumable train of in-place Datakit Parquet rewrites.
-
-Each directory is an :class:`ArtifactStep` whose record contains the Zephyr
-counters from that rewrite. The coordinator runs the steps one at a time, so a
-rerun skips their cached records and resumes at the first incomplete directory.
-"""
+"""Rewrite reviewed Parquet inventory rollups in place with a shared worker pool."""
 
 import logging
 from collections.abc import Sequence
@@ -15,7 +10,6 @@ from functools import partial
 
 import click
 import pyarrow.parquet as pq
-from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, lower, run
 from marin.execution.step_runner import step_is_built
@@ -24,11 +18,14 @@ from rigging.filesystem.storage_path import StoragePath
 from zephyr.execution import ZephyrContext
 
 from scripts.ops.storage.recompress_parquet import (
+    DEFAULT_COORDINATOR_CPU,
     DEFAULT_WORKER_CPU,
+    DEFAULT_WORKER_DISK,
     DEFAULT_WORKER_RAM,
     DEFAULT_WORKERS,
     RewriteMode,
     RewriteOptions,
+    create_rewrite_context,
     run_migration,
 )
 
@@ -43,13 +40,13 @@ DEFAULT_INVENTORY_MANIFEST = (
 
 
 @dataclass(frozen=True)
-class RewritePrefix:
-    """One set of quiescent directories selected for an in-place rewrite."""
+class RewriteStep:
+    """One manifest rollup selected for an in-place rewrite."""
 
     name: str
     source_globs: tuple[str, ...]
-    inventory_files: int | None = None
-    inventory_bytes: int | None = None
+    inventory_files: int
+    inventory_bytes: int
 
 
 @dataclass(frozen=True)
@@ -75,18 +72,19 @@ class RewriteWorkerPool:
     workers: int = DEFAULT_WORKERS
     worker_cpu: int = DEFAULT_WORKER_CPU
     worker_ram: str = DEFAULT_WORKER_RAM
+    worker_disk: str = DEFAULT_WORKER_DISK
+    coordinator_cpu: float = DEFAULT_COORDINATOR_CPU
 
 
 @dataclass(frozen=True)
 class RewriteConfig:
-    """Materialized inputs for one directory in the rewrite train."""
+    """Materialized inputs for one rollup in the rewrite train."""
 
     source_globs: tuple[str, ...]
-    pool: RewriteWorkerPool
 
 
 class ParquetRewriteArtifact(Artifact):
-    """Cached completion record and counters for one rewritten directory."""
+    """Cached completion record and counters for one rewritten rollup."""
 
     source_globs: tuple[str, ...]
     counters: dict[str, int | float]
@@ -106,9 +104,9 @@ def read_inventory_manifest(path: str) -> tuple[InventoryManifestRow, ...]:
     return rows
 
 
-def inventory_rewrite_prefixes(rows: Sequence[InventoryManifestRow]) -> tuple[RewritePrefix, ...]:
+def inventory_rewrite_steps(rows: Sequence[InventoryManifestRow]) -> tuple[RewriteStep, ...]:
     """Build the exact ordered steps recorded in an inventory manifest."""
-    steps: list[RewritePrefix] = []
+    steps: list[RewriteStep] = []
     current_step_index = -1
     for row in rows:
         if row.step_index == current_step_index:
@@ -117,7 +115,7 @@ def inventory_rewrite_prefixes(rows: Sequence[InventoryManifestRow]) -> tuple[Re
                 raise ValueError(f"inventory step {row.step_index} has multiple names")
             if (previous.inventory_files, previous.inventory_bytes) != (row.step_files, row.step_bytes):
                 raise ValueError(f"inconsistent totals for inventory step {row.step_name}")
-            steps[-1] = RewritePrefix(
+            steps[-1] = RewriteStep(
                 name=previous.name,
                 source_globs=(*previous.source_globs, row.source_glob),
                 inventory_files=previous.inventory_files,
@@ -128,7 +126,7 @@ def inventory_rewrite_prefixes(rows: Sequence[InventoryManifestRow]) -> tuple[Re
             raise ValueError(f"inventory step {row.step_name} is not contiguous")
         current_step_index = row.step_index
         steps.append(
-            RewritePrefix(
+            RewriteStep(
                 name=row.step_name,
                 source_globs=(row.source_glob,),
                 inventory_files=row.step_files,
@@ -138,7 +136,7 @@ def inventory_rewrite_prefixes(rows: Sequence[InventoryManifestRow]) -> tuple[Re
     return tuple(steps)
 
 
-def _rewrite_prefix(config: RewriteConfig, *, context: ZephyrContext) -> ParquetRewriteArtifact:
+def _rewrite_rollup(config: RewriteConfig, *, context: ZephyrContext) -> ParquetRewriteArtifact:
     counters = run_migration(
         config.source_globs,
         context=context,
@@ -148,29 +146,27 @@ def _rewrite_prefix(config: RewriteConfig, *, context: ZephyrContext) -> Parquet
 
 
 def rewrite_train(
-    prefixes: Sequence[RewritePrefix],
+    rewrite_steps: Sequence[RewriteStep],
     *,
     context: ZephyrContext,
-    pool: RewriteWorkerPool = RewriteWorkerPool(),
 ) -> tuple[ArtifactStep[ParquetRewriteArtifact], ...]:
-    """Build the ordered ArtifactSteps for the selected directories."""
-    if not prefixes:
-        raise ValueError("the Parquet rewrite train must contain at least one directory")
-    names = [prefix.name for prefix in prefixes]
+    """Build the ordered ArtifactSteps for the selected manifest rollups."""
+    if not rewrite_steps:
+        raise ValueError("the Parquet rewrite train must contain at least one rollup")
+    names = [rewrite_step.name for rewrite_step in rewrite_steps]
     if len(names) != len(set(names)):
-        raise ValueError("Parquet rewrite directory names must be unique")
+        raise ValueError("Parquet rewrite step names must be unique")
 
     steps: list[ArtifactStep[ParquetRewriteArtifact]] = []
-    for prefix in prefixes:
+    for rewrite_step in rewrite_steps:
         steps.append(
             ArtifactStep(
-                name=prefix.name,
+                name=rewrite_step.name,
                 version=REWRITE_VERSION,
                 artifact_type=ParquetRewriteArtifact,
-                run=partial(_rewrite_prefix, context=context),
-                build_config=lambda _ctx, prefix=prefix: RewriteConfig(
-                    source_globs=prefix.source_globs,
-                    pool=pool,
+                run=partial(_rewrite_rollup, context=context),
+                build_config=lambda _ctx, rewrite_step=rewrite_step: RewriteConfig(
+                    source_globs=rewrite_step.source_globs,
                 ),
             )
         )
@@ -178,17 +174,19 @@ def rewrite_train(
 
 
 def run_rewrite_train(
-    prefixes: Sequence[RewritePrefix],
+    rewrite_steps: Sequence[RewriteStep],
     *,
     pool: RewriteWorkerPool = RewriteWorkerPool(),
 ) -> ParquetRewriteArtifact:
     """Run the train sequentially and return the final completion artifact."""
-    context = ZephyrContext(
-        name="recompress-parquet",
-        resources=ResourceConfig(cpu=pool.worker_cpu, ram=pool.worker_ram),
-        max_workers=pool.workers,
+    context = create_rewrite_context(
+        workers=pool.workers,
+        worker_cpu=pool.worker_cpu,
+        worker_ram=pool.worker_ram,
+        worker_disk=pool.worker_disk,
+        coordinator_cpu=pool.coordinator_cpu,
     )
-    steps = rewrite_train(prefixes, context=context, pool=pool)
+    steps = rewrite_train(rewrite_steps, context=context)
     pending_steps = tuple(step for step in steps if not step_is_built(lower(step)))
     logger.info("Running %d pending Parquet rewrite steps out of %d", len(pending_steps), len(steps))
     if pending_steps:
@@ -199,19 +197,15 @@ def run_rewrite_train(
     return ParquetRewriteArtifact.raw_load(steps[-1].path())
 
 
-def _print_artifact_list(rows: Sequence[InventoryManifestRow]) -> None:
-    seen_artifacts: set[str] = set()
+def _print_manifest(rows: Sequence[InventoryManifestRow]) -> None:
     for row in rows:
-        if row.artifact_root in seen_artifacts:
-            continue
-        seen_artifacts.add(row.artifact_root)
         click.echo(
             "\t".join(
                 (
-                    str(row.artifact_files),
-                    f"{row.artifact_bytes / 1024**3:.3f}",
+                    str(row.directory_files),
+                    f"{row.directory_bytes / 1024**3:.3f}",
                     row.step_name,
-                    row.artifact_root,
+                    row.source_glob,
                 )
             )
         )
@@ -222,6 +216,13 @@ def _print_artifact_list(rows: Sequence[InventoryManifestRow]) -> None:
 @click.option("--workers", default=DEFAULT_WORKERS, show_default=True, type=click.IntRange(min=1))
 @click.option("--worker-cpu", default=DEFAULT_WORKER_CPU, show_default=True, type=click.IntRange(min=1))
 @click.option("--worker-ram", default=DEFAULT_WORKER_RAM, show_default=True)
+@click.option("--worker-disk", default=DEFAULT_WORKER_DISK, show_default=True)
+@click.option(
+    "--coordinator-cpu",
+    default=DEFAULT_COORDINATOR_CPU,
+    show_default=True,
+    type=click.FloatRange(min=0, min_open=True),
+)
 @click.option("--list-manifest", is_flag=True, help="Print the ordered directory list without running it.")
 @click.option(
     "--apply-to-quiescent-prefixes",
@@ -233,14 +234,16 @@ def main(
     workers: int,
     worker_cpu: int,
     worker_ram: str,
+    worker_disk: str,
+    coordinator_cpu: float,
     list_manifest: bool,
     apply_to_quiescent_prefixes: bool,
 ) -> None:
-    """Rewrite every directory in a reviewed manifest in order."""
+    """Rewrite each rollup in a reviewed manifest in order."""
     rows = read_inventory_manifest(inventory_manifest_path)
-    prefixes = inventory_rewrite_prefixes(rows)
+    rewrite_steps = inventory_rewrite_steps(rows)
     if list_manifest:
-        _print_artifact_list(rows)
+        _print_manifest(rows)
         return
     if not apply_to_quiescent_prefixes:
         raise click.UsageError("pass --apply-to-quiescent-prefixes after confirming that every prefix is quiescent")
@@ -249,16 +252,22 @@ def main(
     artifact_prefix = marin_temp_bucket(
         ttl_days=ARTIFACT_TTL_DAYS,
         prefix=ARTIFACT_PREFIX,
-        source_prefix=prefixes[0].source_globs[0],
+        source_prefix=rewrite_steps[0].source_globs[0],
     )
-    if marin_prefix().rstrip("/") != artifact_prefix.rstrip("/"):
+    if StoragePath(marin_prefix()) != StoragePath(artifact_prefix):
         raise click.UsageError(f"MARIN_PREFIX must be {artifact_prefix} so completion records are region-local")
     logger.info("Caching Parquet rewrite records under %s", artifact_prefix)
     result = run_rewrite_train(
-        prefixes,
-        pool=RewriteWorkerPool(workers=workers, worker_cpu=worker_cpu, worker_ram=worker_ram),
+        rewrite_steps,
+        pool=RewriteWorkerPool(
+            workers=workers,
+            worker_cpu=worker_cpu,
+            worker_ram=worker_ram,
+            worker_disk=worker_disk,
+            coordinator_cpu=coordinator_cpu,
+        ),
     )
-    click.echo(f"completed {len(prefixes)} directories; final record: {result.path}")
+    click.echo(f"completed {len(rewrite_steps)} rollups; final record: {result.path}")
 
 
 if __name__ == "__main__":

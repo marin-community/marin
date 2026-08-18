@@ -22,6 +22,7 @@ from rigging.filesystem.buckets import filesystem_for
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
+from zephyr.runners import InlineRunner
 from zephyr.writers import (
     DEFAULT_PARQUET_COMPRESSION,
     DEFAULT_PARQUET_COMPRESSION_LEVEL,
@@ -35,8 +36,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_WORKERS = 16
 DEFAULT_BATCH_ROWS = 8_192
 DEFAULT_ROW_GROUP_BYTES = 128 * 1024 * 1024
-DEFAULT_WORKER_CPU = 2
-DEFAULT_WORKER_RAM = "8g"
+DEFAULT_WORKER_CPU = 1
+DEFAULT_WORKER_RAM = "2g"
+DEFAULT_WORKER_DISK = "8g"
+DEFAULT_COORDINATOR_CPU = 0.5
+DEFAULT_COORDINATOR_RAM = "1g"
+DEFAULT_COORDINATOR_DISK = "8g"
+REWRITE_CONTEXT_NAME = "recompress-parquet"
 COUNTER_PREFIX = "parquet_recompression"
 
 
@@ -119,7 +125,10 @@ def _column_compressions(metadata: pq.FileMetaData) -> set[str]:
 def _has_page_indexes(metadata: pq.FileMetaData) -> bool:
     return all(
         metadata.row_group(row_group).column(column).num_values == 0
-        or metadata.row_group(row_group).column(column).has_offset_index
+        or (
+            metadata.row_group(row_group).column(column).has_column_index
+            and metadata.row_group(row_group).column(column).has_offset_index
+        )
         for row_group in range(metadata.num_row_groups)
         for column in range(metadata.num_columns)
     )
@@ -247,11 +256,41 @@ def run_migration(
     return dict(outcome.counters)
 
 
+def create_rewrite_context(
+    *,
+    workers: int,
+    worker_cpu: int,
+    worker_ram: str,
+    worker_disk: str,
+    coordinator_cpu: float,
+) -> ZephyrContext:
+    """Create the shared worker pool used by Parquet rewrites."""
+    return ZephyrContext(
+        name=REWRITE_CONTEXT_NAME,
+        resources=ResourceConfig(cpu=worker_cpu, ram=worker_ram, disk=worker_disk, preemptible=False),
+        coordinator_resources=ResourceConfig(
+            cpu=coordinator_cpu,
+            ram=DEFAULT_COORDINATOR_RAM,
+            disk=DEFAULT_COORDINATOR_DISK,
+            preemptible=False,
+        ),
+        max_workers=workers,
+        stage_runner_factory=InlineRunner,
+    )
+
+
 @click.command()
 @click.argument("source_glob")
 @click.option("--workers", default=DEFAULT_WORKERS, show_default=True, type=click.IntRange(min=1))
 @click.option("--worker-cpu", default=DEFAULT_WORKER_CPU, show_default=True, type=click.IntRange(min=1))
 @click.option("--worker-ram", default=DEFAULT_WORKER_RAM, show_default=True)
+@click.option("--worker-disk", default=DEFAULT_WORKER_DISK, show_default=True)
+@click.option(
+    "--coordinator-cpu",
+    default=DEFAULT_COORDINATOR_CPU,
+    show_default=True,
+    type=click.FloatRange(min=0, min_open=True),
+)
 @click.option("--batch-rows", default=DEFAULT_BATCH_ROWS, show_default=True, type=click.IntRange(min=1))
 @click.option(
     "--row-group-bytes",
@@ -276,6 +315,8 @@ def main(
     workers: int,
     worker_cpu: int,
     worker_ram: str,
+    worker_disk: str,
+    coordinator_cpu: float,
     batch_rows: int,
     row_group_bytes: int,
     compression_level: int,
@@ -283,10 +324,12 @@ def main(
 ) -> None:
     """Recompress the Parquet objects matching SOURCE_GLOB with zstd."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    context = ZephyrContext(
-        name="recompress-parquet",
-        resources=ResourceConfig(cpu=worker_cpu, ram=worker_ram),
-        max_workers=workers,
+    context = create_rewrite_context(
+        workers=workers,
+        worker_cpu=worker_cpu,
+        worker_ram=worker_ram,
+        worker_disk=worker_disk,
+        coordinator_cpu=coordinator_cpu,
     )
     counters_result = run_migration(
         (source_glob,),
