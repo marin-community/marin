@@ -9,15 +9,15 @@ pinned-host master params, the QB histogram estimator, and a dropless held-out e
 only in width and the rack count it spans. Behaviour is uniform across the ladder so a rung predicts
 the d6144 hero. ``d6144`` is the hero itself.
 
-    size   racks  batch  eval          checkpoints  tokens  active  total   FLOPs
-    d768     1     1024  every 5%      final only     45B     61M    1.6B    5.2e19
-    d1024    2     2048  every 5%      final only    122B    162M    4.0B    2.6e20
-    d1536    6     6144  every 5%      final only    361B    481M   11.5B    1.7e21
-    d2048   11    11264  every 5%      final only    878B    1.2B   27.7B    8.7e21
-    d6144   11    11264  every 3000    every 6k      17.1T    23B     535B    2.6e24
+    size   racks  batch    steps  eval        checkpoints  tokens  active  total   FLOPs
+    d768     1     1024    11420  every 5%    final only     48B     61M    1.6B    5.5e19
+    d1024    2     2048    15276  every 5%    final only    128B    162M    4.0B    2.7e20
+    d1536    6     6144    15128  every 5%    final only    381B    481M   11.5B    1.8e21
+    d2048   11    11264    20072  every 5%    final only    926B    1.2B   27.7B    9.2e21
+    d6144   11    11264   390251  every 3000  every 6k       18T     23B     535B    2.7e24
 
 Train batch is 1024 x racks (constant per-rack load); eval batch is 64 x racks (one sequence per
-device). Tokens/steps assume the default 750 tokens per active parameter; FLOPs are the levanter
+device). Tokens/steps hold 791 tokens per active parameter (18T at d6144); FLOPs are the levanter
 analytic estimate (forward+backward, including attention and the latent-MoE correction).
 """
 
@@ -73,8 +73,9 @@ from experiments.grug.moe_hero_ep.train import (
 # HERO_MODEL; the narrower rungs reuse the ablation's `_small_model` at the same hero routing geometry.
 LADDER_RACKS: dict[str, int] = {"d768": 1, "d1024": 2, "d1536": 6, "d2048": 11, "d6144": 11}
 QB_HIST_BINS = 10_000
-# 750 tokens per active parameter sets the step budget, matching the hero LR-sweep token budget.
-TOKENS_PER_ACTIVE_PARAM = 750
+# 791 tokens per active parameter sets the step budget: it lands the d6144 hero at 18T tokens and
+# scales every narrower rung by the same ratio.
+TOKENS_PER_ACTIVE_PARAM = 791
 
 
 def _ladder_model(size: str):
