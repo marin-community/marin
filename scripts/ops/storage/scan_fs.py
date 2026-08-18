@@ -19,7 +19,7 @@ Architecture:
     reporting results (object dicts + new prefixes) back.
 
 Each task adaptively probes its prefix with a flat (no-delimiter) listing: a
-subtree that exhausts within FLAT_PROBE_MAX_OBJECTS is consumed whole by that
+subtree that exhausts below FLAT_PROBE_MAX_OBJECTS is consumed whole by that
 one task, so small directories never fan out into per-prefix tasks and the task
 count stays around objects/FLAT_PROBE_MAX_OBJECTS. Only larger subtrees split
 one delimiter level into subtasks; past MAX_SPLIT_DEPTH the flat listing is
@@ -80,7 +80,7 @@ WORKER_THREADS = 16
 WORKER_STREAM_CHUNK = 5_000
 
 # Flat-probe threshold for the adaptive splitter. A task first lists its whole
-# subtree flat (no delimiter); if the listing exhausts within this many objects,
+# subtree flat (no delimiter); if the listing exhausts before this many objects,
 # the task consumes the subtree itself and creates no subtasks. Only larger
 # subtrees split, keeping the task count around objects / this value.
 FLAT_PROBE_MAX_OBJECTS = 25_000
@@ -218,7 +218,6 @@ def _truncate_staging_dir(staging_dir: str) -> None:
 
 
 def _bucket_name(url: str) -> str:
-    """The bucket name (no scheme) for a ``scheme://bucket`` URL."""
     return StoragePath(url).bucket
 
 
@@ -418,7 +417,6 @@ class _WorkerFilesystems:
 
 
 def _report_chunks(coordinator: Any, objects: list[dict]) -> None:
-    """Stream *objects* to the coordinator in RPCs of at most WORKER_STREAM_CHUNK."""
     for start in range(0, len(objects), WORKER_STREAM_CHUNK):
         coordinator.report_objects(objects[start : start + WORKER_STREAM_CHUNK])
 
@@ -430,7 +428,7 @@ def scan_one_prefix(
 ) -> list[ScanTask]:
     """Adaptively scan one prefix, streaming objects to the coordinator.
 
-    Probes the subtree with a flat listing first: one that exhausts within
+    Probes the subtree with a flat listing first: one that exhausts below
     FLAT_PROBE_MAX_OBJECTS is consumed whole here, so small directories never
     become per-prefix tasks. A larger subtree relists one delimiter level,
     discarding the probe objects to avoid double-counting, and returning the
@@ -555,11 +553,7 @@ def discover_top_level_prefixes(
     bucket_urls: Sequence[str],
     coordinator: ScanCoordinatorActor,
 ) -> list[ScanTask]:
-    """List each bucket's root level, streaming root objects and returning sub-prefix tasks.
-
-    Doing the root listing on the coordinator fans the queue out to every top-level
-    prefix immediately, so the first workers do not serialize behind one root task.
-    """
+    """List each bucket's root level, streaming root objects and returning sub-prefix tasks."""
     tasks: list[ScanTask] = []
     for url in bucket_urls:
         log.info("Discovering prefixes for %s...", url)
@@ -588,7 +582,7 @@ def run_distributed(
 ) -> None:
     """Run the scan as an Iris coordinator job.
 
-    ``buckets`` are bucket names (assumed ``gs://``) or full ``scheme://bucket`` URLs.
+    ``buckets`` are configured bucket names or full ``scheme://bucket`` URLs.
     The coordinator accumulates objects in memory and writes consolidated parquet
     segments (~100MB each) to ``staging_dir``.
     """

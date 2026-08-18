@@ -23,6 +23,7 @@ segments written by the scan stage.
 """
 
 import hashlib
+import posixpath
 import re
 import sys
 from datetime import UTC, datetime
@@ -57,7 +58,7 @@ def _download_remote_parquet(remote_dir: str, local_dir: Path) -> Path:
 
     local_dir.mkdir(parents=True, exist_ok=True)
     fs, remote_path = filesystem_for(remote_dir)
-    pattern = f"{remote_path.rstrip('/')}/*.parquet"
+    pattern = posixpath.join(remote_path, "*.parquet")
     remote_paths = fs.glob(pattern)
     remote_basenames = {Path(p).name for p in remote_paths}
 

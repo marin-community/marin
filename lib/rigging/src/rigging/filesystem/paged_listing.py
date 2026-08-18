@@ -34,7 +34,7 @@ _GCS_PAGE_SIZE = 5000
 
 
 def is_child(listed: str, name: str) -> bool:
-    """Whether *name* is below the listed path and is not the path itself.
+    """Whether *name* differs from *listed* after trimming separator markers.
 
     Object stores commonly report a zero-byte marker object for the prefix being
     listed; it carries no information and would render as an empty-named row.
@@ -119,18 +119,18 @@ class _PagedListing:
         self._listing_page = listing_page
 
     def level_pages(self, path: str) -> Iterator[tuple[list[dict[str, Any]], list[str]]]:
-        token: str | None = None
-        while True:
-            entries, token = self._listing_page(path, token, "/")
+        for entries in self._pages(path, "/"):
             yield _split_level(path, entries)
-            if token is None:
-                return
 
     def flat_pages(self, path: str) -> Iterator[list[dict[str, Any]]]:
+        for entries in self._pages(path, ""):
+            yield [entry for entry in entries if is_child(path, entry["name"])]
+
+    def _pages(self, path: str, delimiter: str) -> Iterator[list[dict[str, Any]]]:
         token: str | None = None
         while True:
-            entries, token = self._listing_page(path, token, "")
-            yield [entry for entry in entries if is_child(path, entry["name"])]
+            entries, token = self._listing_page(path, token, delimiter)
+            yield entries
             if token is None:
                 return
 
