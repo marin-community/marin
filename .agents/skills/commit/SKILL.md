@@ -126,7 +126,8 @@ Do not recursively rerun `--review` after small, targeted touch-ups made in
 response to its findings. Validate behavioral edits with the normal mechanical
 checks and relevant tests. For a formatter-only mechanical edit, rerun formatting
 and lint checks only. Rerun the advisory review only when the follow-up materially
-changes the branch's design or scope, or when the user asks for another pass.
+changes the branch's implementation approach or scope, or when the user asks for
+another pass.
 
 Each run writes the raw per-arm prompts and outputs, the combined findings, and a
 summary under `/tmp/marin-linter/<branch>/<timestamp>-<uniq>/` (the path is printed at the end) —
@@ -163,10 +164,6 @@ Fixes #1234
 **Issue linking.** If the work came from a GitHub issue, add `Fixes #NNNN`
 (auto-closes on merge) or `Part of #NNNN` (partial work). Do not invent an issue
 just to satisfy this — omit the link when none exists.
-
-**Specifications (>500 LOC only).** A genuinely large PR must link a spec in an
-issue or design doc. Name the important design decisions in the PR body and link
-the spec for module maps, code excerpts, and detailed rationale.
 
 **Inspect the payload.** Draft the body in a uniquely named temporary file and
 use `--body-file`. Re-open that file and apply the final compression pass before
