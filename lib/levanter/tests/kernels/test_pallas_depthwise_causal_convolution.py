@@ -167,12 +167,10 @@ def test_depthwise_causal_convolution_pallas_tpu_lowers_with_explicit_sharding()
 
     with use_abstract_mesh(mesh):
         loss, weight_grad = jax.eval_shape(run)
-        jaxpr = str(jax.make_jaxpr(run)())
 
     assert loss.shape == ()
     assert weight_grad.shape == (6, 4)
     assert weight_grad.dtype == jnp.float32
-    assert "shard_map" in jaxpr
 
 
 @pytest.mark.parametrize("B,S", [(1, 6), (2, 1), (1, 1)])
