@@ -38,7 +38,7 @@ from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe.launch_datakit_moe_mix import _datakit_data_config, _val_component
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
-from experiments.grug.moe_hero_ep.launch import (
+from experiments.grug.moe_hero_ep.launch_mfu_test import (
     DEFAULT_WANDB_PROJECT,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
