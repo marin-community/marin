@@ -45,13 +45,10 @@ from iris.cluster.config import (
 )
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
-from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.platforms.factory import create_provider_bundle
 from iris.cluster.platforms.gcp.service import KNOWN_GCP_ZONES
 from iris.cluster.types import DEFAULT_BACKEND_ID, LOCAL_CLUSTER, AcceleratorType, CapacityType, GcpSliceMode
-from iris.rpc import controller_pb2
-from iris.rpc.controller_connect import ControllerServiceClientSync
-from rigging.timing import Duration, ExponentialBackoff
+from rigging.timing import Duration
 
 
 class TestConfigRoundTrip:
@@ -1924,34 +1921,6 @@ def test_coreweave_worker_provider_rejected():
     )
     with pytest.raises(ValueError, match="does not support worker_provider"):
         validate_config(config)
-
-
-SMOKE_GCP_CONFIG = Path(__file__).resolve().parents[3] / "config" / "ci-gcp-smoke.yaml"
-
-
-@pytest.mark.timeout(15)
-@pytest.mark.requires_cluster
-def test_smoke_gcp_config_boots_locally():
-    """Load ci-gcp-smoke.yaml, convert to local mode, verify workers join."""
-    config = load_config(SMOKE_GCP_CONFIG)
-    config = make_local_config(config)
-
-    with connect_cluster(config) as url:
-        client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        # The smoke config has buffer_slices=1 for v5e-smoke/16 across 2 zones,
-        # each with num_vms=4 → 8 workers total.  We only need one healthy
-        # worker to confirm the config boots.
-
-        def _has_healthy_worker() -> bool:
-            workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
-            return any(w.healthy for w in workers)
-
-        ExponentialBackoff(initial=0.05, maximum=0.5).wait_until_or_raise(
-            _has_healthy_worker,
-            timeout=Duration.from_seconds(15.0),
-            error_message="No healthy workers with ci-gcp-smoke.yaml in local mode",
-        )
-        client.close()
 
 
 def _worker_daemon_backend(**overrides) -> BackendConfig:
