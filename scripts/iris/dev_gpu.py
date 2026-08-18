@@ -25,6 +25,7 @@ from iris.cluster.composer import provider_bundle
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE, gpu_gang_coscheduling_level
 from iris.cluster.types import CoschedulingConfig, Entrypoint, JobName, ResourceSpec, gpu_device
+from iris.resources.state import TERMINAL_JOB_STATES, JobState, TaskState
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -69,13 +70,7 @@ DEFAULT_CPU = 8.0
 DEFAULT_MEMORY = "64GB"
 DEFAULT_DISK = "100GB"
 
-TERMINAL_JOB_STATES = {
-    job_pb2.JOB_STATE_FAILED,
-    job_pb2.JOB_STATE_KILLED,
-    job_pb2.JOB_STATE_UNSCHEDULABLE,
-    job_pb2.JOB_STATE_WORKER_FAILED,
-}
-INACTIVE_JOB_STATES = TERMINAL_JOB_STATES | {job_pb2.JOB_STATE_SUCCEEDED}
+FAILED_JOB_STATES = TERMINAL_JOB_STATES - {JobState.SUCCEEDED}
 
 
 @dataclass(frozen=True)
@@ -268,7 +263,7 @@ def save_state(path: Path, state: DevGpuState) -> None:
 
 
 def is_job_active(client: IrisClient, job_id: str) -> bool:
-    return client.job_state(JobName.from_wire(job_id)) not in INACTIVE_JOB_STATES
+    return client.job_state(JobName.from_wire(job_id)) not in TERMINAL_JOB_STATES
 
 
 def wait_for_running_tasks(job: Job, *, node_count: int, timeout: float) -> list[str]:
@@ -280,11 +275,11 @@ def wait_for_running_tasks(job: Job, *, node_count: int, timeout: float) -> list
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         state = job.state_only()
-        if state in TERMINAL_JOB_STATES:
-            error = job.status().error or job_pb2.JobState.Name(state)
+        if state in FAILED_JOB_STATES:
+            error = job.status().error_message or state.name
             raise click.ClickException(f"Dev GPU allocation failed: {error}")
         tasks = job.tasks()
-        if len(tasks) == node_count and all(task.status().state == job_pb2.TASK_STATE_RUNNING for task in tasks):
+        if len(tasks) == node_count and all(task.status().state is TaskState.RUNNING for task in tasks):
             return [str(task.task_id) for task in sorted(tasks, key=lambda task: task.task_index)]
         time.sleep(5)
     raise click.ClickException(f"Timed out waiting for {node_count} dev GPU task(s) after {int(timeout)}s")

@@ -17,7 +17,7 @@ import marin.inference.iris as iris_module
 import pytest
 from fray.types import JobStatus, ResourceConfig, create_environment
 from iris.cluster.types import EndpointAccess
-from iris.rpc import job_pb2
+from iris.resources.state import JobState, TaskState
 from marin.execution.lazy import lower
 from marin.inference.broker import InferenceBroker
 from marin.inference.config import (
@@ -241,13 +241,13 @@ def _remote_session(job_status: JobStatus = JobStatus.RUNNING) -> RemoteInferenc
 @pytest.mark.parametrize(
     ("task_state", "endpoint_count", "expected"),
     [
-        (job_pb2.TASK_STATE_PENDING, 1, InferenceBackendState.RECOVERING),
-        (job_pb2.TASK_STATE_RUNNING, 0, InferenceBackendState.RECOVERING),
-        (job_pb2.TASK_STATE_RUNNING, 1, InferenceBackendState.READY),
+        (TaskState.PENDING, 1, InferenceBackendState.RECOVERING),
+        (TaskState.RUNNING, 0, InferenceBackendState.RECOVERING),
+        (TaskState.RUNNING, 1, InferenceBackendState.READY),
     ],
 )
 def test_direct_inference_session_reports_backend_state(
-    task_state: int,
+    task_state: TaskState,
     endpoint_count: int,
     expected: InferenceBackendState,
     monkeypatch,
@@ -257,7 +257,7 @@ def test_direct_inference_session_reports_backend_state(
         "iris_ctx",
         lambda: SimpleNamespace(
             client=SimpleNamespace(
-                status=lambda _job_id: SimpleNamespace(state=job_pb2.JOB_STATE_RUNNING),
+                status=lambda _job_id: SimpleNamespace(state=JobState.RUNNING),
                 list_tasks=lambda job_id: [SimpleNamespace(task_id=f"{job_id}/0", state=task_state)],
                 list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()] * endpoint_count,
             )
@@ -274,9 +274,7 @@ def test_inference_recovery_stops_when_job_becomes_terminal(monkeypatch) -> None
         iris_module,
         "iris_ctx",
         lambda: SimpleNamespace(
-            client=SimpleNamespace(
-                status=lambda *_args, **_kwargs: SimpleNamespace(state=job_pb2.JOB_STATE_FAILED, tasks=[])
-            )
+            client=SimpleNamespace(status=lambda *_args, **_kwargs: SimpleNamespace(state=JobState.FAILED, tasks=[]))
         ),
     )
 
@@ -290,7 +288,7 @@ def test_inference_recovery_waits_for_tasks_and_routed_endpoint(monkeypatch) -> 
 
     def list_tasks(_job_id):
         nonlocal task_pending
-        state = job_pb2.TASK_STATE_PENDING if task_pending else job_pb2.TASK_STATE_RUNNING
+        state = TaskState.PENDING if task_pending else TaskState.RUNNING
         task_pending = False
         return [SimpleNamespace(state=state)]
 
@@ -305,7 +303,7 @@ def test_inference_recovery_waits_for_tasks_and_routed_endpoint(monkeypatch) -> 
         "iris_ctx",
         lambda: SimpleNamespace(
             client=SimpleNamespace(
-                status=lambda *_args: SimpleNamespace(state=job_pb2.JOB_STATE_RUNNING),
+                status=lambda *_args: SimpleNamespace(state=JobState.RUNNING),
                 list_tasks=list_tasks,
                 list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()],
             )
@@ -340,8 +338,8 @@ def test_inference_recovery_times_out_when_routed_endpoint_stays_unhealthy(monke
         "iris_ctx",
         lambda: SimpleNamespace(
             client=SimpleNamespace(
-                status=lambda *_args: SimpleNamespace(state=job_pb2.JOB_STATE_RUNNING),
-                list_tasks=lambda _job_id: [SimpleNamespace(state=job_pb2.TASK_STATE_RUNNING)],
+                status=lambda *_args: SimpleNamespace(state=JobState.RUNNING),
+                list_tasks=lambda _job_id: [SimpleNamespace(state=TaskState.RUNNING)],
                 list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()],
             )
         ),

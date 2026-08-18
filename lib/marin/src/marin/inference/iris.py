@@ -18,8 +18,8 @@ from fray.current_client import current_client
 from fray.types import ActorConfig, CpuConfig, Entrypoint, JobRequest, JobStatus
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName, is_job_finished
-from iris.rpc import job_pb2
+from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName
+from iris.resources.state import TaskState, is_job_finished
 from rigging.connect import capability_path, proxy_path
 from rigging.log_setup import configure_logging
 from rigging.timing import Deadline, Duration
@@ -107,7 +107,7 @@ class RemoteInferenceSession:
             if is_job_finished(status.state):
                 return InferenceBackendState.FINISHED
             tasks = client.list_tasks(job_id)
-            if not tasks or any(task.state != job_pb2.TASK_STATE_RUNNING for task in tasks):
+            if not tasks or any(task.state is not TaskState.RUNNING for task in tasks):
                 state = InferenceBackendState.RECOVERING
         if state is InferenceBackendState.READY and not client.list_endpoint_instances(self.endpoint_name):
             state = InferenceBackendState.RECOVERING

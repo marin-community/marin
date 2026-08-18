@@ -28,6 +28,7 @@ from tabulate import tabulate
 
 from iris.cli.connect import iris_client_for_ctx, require_controller_url
 from iris.client.client import IrisClient, Job, JobFailedError
+from iris.client.workload import JobStatus, TaskStatus
 from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,
     Constraint,
@@ -45,7 +46,6 @@ from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_
 from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
-    TERMINAL_TASK_STATES,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
@@ -54,16 +54,14 @@ from iris.cluster.types import (
     gpu_device,
     tpu_device,
 )
+from iris.resources.state import TERMINAL_TASK_STATES, JobState
 from iris.rpc import job_pb2
 from iris.rpc.errors import format_connect_error
 from iris.rpc.proto_display import (
     CONTAINER_PROFILE_NAMES,
     PRIORITY_BAND_NAMES,
-    job_state_friendly,
     priority_band_value,
-    task_state_friendly,
 )
-from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
 
@@ -71,17 +69,6 @@ logger = logging.getLogger(__name__)
 # descending, so this fetches the most recent jobs rather than walking the whole
 # jobs table (which would hit the controller's deep-offset cap on a busy cluster).
 DEFAULT_JOB_LIST_LIMIT = 50
-
-_STATE_MAP: dict[str, job_pb2.JobState] = {
-    "pending": job_pb2.JOB_STATE_PENDING,
-    "building": job_pb2.JOB_STATE_BUILDING,
-    "running": job_pb2.JOB_STATE_RUNNING,
-    "succeeded": job_pb2.JOB_STATE_SUCCEEDED,
-    "failed": job_pb2.JOB_STATE_FAILED,
-    "killed": job_pb2.JOB_STATE_KILLED,
-    "worker_failed": job_pb2.JOB_STATE_WORKER_FAILED,
-    "unschedulable": job_pb2.JOB_STATE_UNSCHEDULABLE,
-}
 
 
 def _remote_client(ctx: click.Context) -> IrisClient:
@@ -108,7 +95,7 @@ def _terminate_jobs(
             candidates = client.list_jobs(prefix=name.to_wire(), limit=5)
             suggestion = ""
             if candidates:
-                candidate_names = ", ".join(job.job_id for job in candidates)
+                candidate_names = ", ".join(str(job.job_id) for job in candidates)
                 suggestion = f" Did you mean: {candidate_names}?"
             raise click.ClickException(f"No job named '{name}'.{suggestion}") from exc
         terminated.append(name)
@@ -832,7 +819,7 @@ def _submit_and_wait_job(
         try:
             status = job.wait(stream_logs=True, timeout=float("inf"))
             logger.info(f"Job completed with state: {status.state}")
-            return 0 if status.state == job_pb2.JOB_STATE_SUCCEEDED else 1
+            return 0 if status.state is JobState.SUCCEEDED else 1
         except JobFailedError as e:
             logger.error(f"Job failed: {e}")
             return 1
@@ -1264,18 +1251,20 @@ def list_jobs(ctx, state: str | None, prefix: str | None, limit: int) -> None:
     """
     client = _remote_client(ctx)
 
-    state_value: job_pb2.JobState | None = None
+    state_value: JobState | None = None
     if state is not None:
-        state_lower = state.lower()
-        if state_lower not in _STATE_MAP:
-            valid = ", ".join(sorted(_STATE_MAP.keys()))
-            raise click.UsageError(f"Unknown state '{state}'. Valid states: {valid}")
-        state_value = _STATE_MAP[state_lower]
+        try:
+            state_value = JobState(state.lower())
+            if state_value is JobState.UNSPECIFIED:
+                raise ValueError
+        except ValueError:
+            valid = ", ".join(candidate.value for candidate in JobState if candidate is not JobState.UNSPECIFIED)
+            raise click.UsageError(f"Unknown state '{state}'. Valid states: {valid}") from None
 
     jobs = client.list_jobs(state=state_value, prefix=prefix, limit=limit)
 
     # Sort by submitted_at descending (most recent first)
-    jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)
+    jobs.sort(key=lambda job: job.submitted_at.epoch_ms() if job.submitted_at is not None else 0, reverse=True)
 
     if not jobs:
         click.echo("No jobs found.")
@@ -1286,10 +1275,10 @@ def list_jobs(ctx, state: str | None, prefix: str | None, limit: int) -> None:
 
     for j in jobs:
         job_id = j.job_id
-        state_name = job_state_friendly(j.state)
-        submitted = timestamp_from_proto(j.submitted_at).as_formatted_date() if j.submitted_at.epoch_ms else "-"
+        state_name = j.state.value
+        submitted = j.submitted_at.as_formatted_date() if j.submitted_at is not None else "-"
 
-        reason = j.error or j.pending_reason or ""
+        reason = j.error_message or j.pending_reason or ""
         if reason:
             has_reasons = True
             reason = (reason[:60] + "...") if len(reason) > 63 else reason
@@ -1316,11 +1305,11 @@ def _task_index(task_id: str) -> str:
     return last or task_id
 
 
-def _task_duration_ms(task: job_pb2.TaskStatus) -> int | None:
-    if not task.started_at.epoch_ms:
+def _task_duration_ms(task: TaskStatus) -> int | None:
+    if task.started_at is None:
         return None
-    end_ms = task.finished_at.epoch_ms or Timestamp.now().epoch_ms()
-    return max(0, end_ms - task.started_at.epoch_ms)
+    end_ms = task.finished_at.epoch_ms() if task.finished_at is not None else Timestamp.now().epoch_ms()
+    return max(0, end_ms - task.started_at.epoch_ms())
 
 
 def _format_duration_ms(ms: int | None) -> str:
@@ -1336,8 +1325,8 @@ def _format_memory_mb(mb: int) -> str:
 
 
 def build_job_summary(
-    job_status: job_pb2.JobStatus,
-    tasks: list[job_pb2.TaskStatus],
+    job_status: JobStatus,
+    tasks: list[TaskStatus],
 ) -> dict:
     """Build a structured job/task summary for CLI rendering.
 
@@ -1346,8 +1335,8 @@ def build_job_summary(
     """
     task_summaries = []
 
-    def _sort_key(t: job_pb2.TaskStatus) -> tuple[int, str]:
-        idx = _task_index(t.task_id)
+    def _sort_key(task: TaskStatus) -> tuple[int, str]:
+        idx = _task_index(str(task.task_id))
         try:
             return (int(idx), "")
         except ValueError:
@@ -1357,35 +1346,35 @@ def build_job_summary(
         usage = t.resource_usage
         task_summaries.append(
             {
-                "task_id": t.task_id,
-                "index": _task_index(t.task_id),
-                "state": task_state_friendly(t.state),
-                # Only surface exit_code once the task is terminal. Proto scalar
+                "task_id": str(t.task_id),
+                "index": _task_index(str(t.task_id)),
+                "state": t.state.value,
+                # Only surface exit_code once the task is terminal. Wire scalar
                 # defaults mean a RUNNING/ASSIGNED/BUILDING task would otherwise
                 # report exit=0 and look like a clean success.
                 "exit_code": int(t.exit_code) if t.state in TERMINAL_TASK_STATES else None,
                 "duration_ms": _task_duration_ms(t),
-                "memory_mb": int(usage.memory_mb) if usage.memory_mb else 0,
-                "memory_peak_mb": int(usage.memory_peak_mb) if usage.memory_peak_mb else 0,
-                "cpu_millicores": int(usage.cpu_millicores) if usage.cpu_millicores else 0,
-                "disk_mb": int(usage.disk_mb) if usage.disk_mb else 0,
+                "memory_mb": usage.memory_mb if usage is not None else 0,
+                "memory_peak_mb": usage.memory_peak_mb if usage is not None else 0,
+                "cpu_millicores": usage.cpu_millicores if usage is not None else 0,
+                "disk_mb": usage.disk_mb if usage is not None else 0,
                 "worker_id": t.worker_id,
                 "status_message": t.status_message,
-                "error": t.error,
+                "error": t.error_message,
             }
         )
 
     return {
-        "job_id": job_status.job_id,
+        "job_id": str(job_status.job_id),
         "name": job_status.name,
-        "state": job_state_friendly(job_status.state),
+        "state": job_status.state.value,
         "exit_code": int(job_status.exit_code),
-        "error": job_status.error,
+        "error": job_status.error_message,
         "failure_count": int(job_status.failure_count),
         "preemption_count": int(job_status.preemption_count),
         "task_count": int(job_status.task_count),
         "completed_count": int(job_status.completed_count),
-        "task_state_counts": dict(job_status.task_state_counts),
+        "task_state_counts": {state.name.lower(): count for state, count in job_status.task_state_counts.items()},
         "tasks": task_summaries,
     }
 
@@ -1455,8 +1444,8 @@ def wait(ctx, job_id: str) -> None:
     except ConnectError as exc:
         raise click.ClickException(format_connect_error(exc)) from exc
 
-    click.echo(job_state_friendly(status.state))
-    if status.state != job_pb2.JOB_STATE_SUCCEEDED:
+    click.echo(status.state.value)
+    if status.state is not JobState.SUCCEEDED:
         raise SystemExit(1)
 
 

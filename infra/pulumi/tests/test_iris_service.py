@@ -32,6 +32,7 @@ from iac.iris.deploy import (
 from iac.iris.service import IrisServiceArgs, _parse_outputs, code_hash, wire_spec
 from iac.iris.spec import ALWAYS_ON_RETRIES, ServiceSpec
 from iris.cluster.types import JobName, ResourceSpec, tpu_device
+from iris.resources.state import JobState
 from iris.rpc import job_pb2
 
 # Mirrors IrisServiceArgs minus the component-only fields; keyword overrides per test.
@@ -178,17 +179,17 @@ class TestTerminate:
         assert not client.terminated
 
     def test_terminal_job_is_success(self):
-        client = _TerminatingClient([job_pb2.JOB_STATE_KILLED])
+        client = _TerminatingClient([JobState.KILLED])
         terminate_service(client, JobName.root("ops", "svc"))  # pyrefly: ignore
         assert not client.terminated
 
     def test_running_job_terminates_and_waits(self):
-        client = _TerminatingClient([job_pb2.JOB_STATE_RUNNING, job_pb2.JOB_STATE_KILLED])
+        client = _TerminatingClient([JobState.RUNNING, JobState.KILLED])
         terminate_service(client, JobName.root("ops", "svc"), wait=5)  # pyrefly: ignore
         assert client.terminated
 
     def test_job_vanishing_during_drain_is_success(self):
-        client = _TerminatingClient([job_pb2.JOB_STATE_RUNNING, None])
+        client = _TerminatingClient([JobState.RUNNING, None])
         terminate_service(client, JobName.root("ops", "svc"), wait=5)  # pyrefly: ignore
         assert client.terminated
 
