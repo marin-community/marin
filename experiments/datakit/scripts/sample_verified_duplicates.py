@@ -32,8 +32,14 @@ import logging
 import random
 
 import pyarrow.parquet as pq
+from marin.execution.artifact import read_artifact
+from marin.processing.tokenize.attributes import TokenizedAttrData
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+
+from experiments.datakit import hero_data
+from experiments.datakit.produce_store import FUZZY_DEDUP_EXEMPT_SOURCES
+from experiments.datakit.reference_pipeline import SPLIT
 
 logger = logging.getLogger(__name__)
 
@@ -72,12 +78,12 @@ def band(containment: float) -> str:
     return "under 0.75"
 
 
-def read_markers(markers_root: str, shards: dict, file_indices: list[int]) -> list[dict]:
+def read_markers(markers_root: str, shards: dict, file_indices: list[int], excluded: set[str]) -> list[dict]:
     """Every marker the run wrote for the given normalized shards."""
 
     def one(file_idx: int) -> list[dict]:
         shard = shards.get(file_idx)
-        if shard is None:
+        if shard is None or shard["source_key"] in excluded:
             return []
         path = prefix_join(markers_root, f"outputs/{shard['source_tag']}/{shard['basename']}")
         try:
@@ -93,7 +99,14 @@ def read_markers(markers_root: str, shards: dict, file_indices: list[int]) -> li
         return [row for batch in pool.map(one, file_indices) for row in batch]
 
 
-def harvest_file(text_path: str, shards: dict, markers_root: str, marker_shards: int, rng: random.Random) -> list[dict]:
+def harvest_file(
+    text_path: str,
+    shards: dict,
+    markers_root: str,
+    marker_shards: int,
+    rng: random.Random,
+    excluded: set[str],
+) -> list[dict]:
     """Join one grouped text file to the markers for a sample of its shards."""
     with StoragePath(text_path).open("rb") as handle:
         routing = pq.ParquetFile(handle).read(columns=["file_idx"]).column("file_idx").to_pylist()
@@ -105,7 +118,7 @@ def harvest_file(text_path: str, shards: dict, markers_root: str, marker_shards:
     ranked = sorted(counts, key=lambda idx: rng.random() ** (1.0 / counts[idx]), reverse=True)
     del routing
 
-    marker_rows = read_markers(markers_root, shards, ranked[:marker_shards])
+    marker_rows = read_markers(markers_root, shards, ranked[:marker_shards], excluded)
     if not marker_rows:
         return []
 
@@ -157,6 +170,14 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--marker-shards", type=int, default=400, help="Normalized shards sampled per file")
     parser.add_argument("--per-bucket", type=int, default=5, help="Pairs kept per content type and band")
     parser.add_argument("--seed", type=int, default=20260818)
+    parser.add_argument(
+        "--exclude-exempt",
+        action="store_true",
+        help=(
+            "Skip sources the store exempts from fuzzy dedup, so the samples show removals that "
+            "actually happen. Their markers exist in the tree but no document is dropped for them."
+        ),
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     configure_coreweave_s3()
@@ -164,6 +185,17 @@ def main(argv: list[str] | None = None) -> None:
     manifest = json.loads(StoragePath(prefix_join(args.cluster_text, "manifest.json")).read_bytes())
     shards = {shard["file_idx"]: shard for shard in manifest["shards"]}
     tag_to_key = {shard["source_tag"]: shard["source_key"] for shard in manifest["shards"]}
+
+    # The exemption is keyed by registry name and the manifest by source key,
+    # and the two differ by more than a prefix, so resolve through tokenize.
+    excluded: set[str] = set()
+    if args.exclude_exempt:
+        for name in FUZZY_DEDUP_EXEMPT_SOURCES:
+            tokenize = read_artifact(hero_data.tokenized(name).output_path, TokenizedAttrData)
+            key = tokenize.source_keys.get(SPLIT)
+            if key is not None:
+                excluded.add(key)
+        logger.info("Excluding %d exempt sources from the sample", len(excluded))
 
     rng = random.Random(args.seed)
     names = sorted(str(p).rsplit("/", 1)[-1] for p in StoragePath(f"{args.cluster_text}/text/*.parquet").glob())
@@ -174,7 +206,7 @@ def main(argv: list[str] | None = None) -> None:
     seen = 0
     for position, name in enumerate(chosen, start=1):
         path = prefix_join(f"{args.cluster_text}/text", name)
-        for pair in harvest_file(path, shards, args.markers, args.marker_shards, rng):
+        for pair in harvest_file(path, shards, args.markers, args.marker_shards, rng, excluded):
             seen += 1
             pair["deleted_source_name"] = tag_to_key.get(pair["deleted_source"], pair["deleted_source"])
             pair["kept_source_name"] = tag_to_key.get(pair["kept_source"], pair["kept_source"])
