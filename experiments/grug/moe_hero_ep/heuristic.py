@@ -23,7 +23,7 @@ from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 
 @dataclass(frozen=True)
 class MoeHeuristic:
-    """May Recipe MuonH LR-scaling refit (issue #5951, seq_len=4096 fits).
+    """Aug hero LR-sweep MuonH refit (issues #7856 / #8003, seq_len=8192, R^2=0.978).
 
     adam_lr  = lr_coeff * tokens^lr_tokens_exp * hidden_dim^lr_dim_exp * sqrt(tokens_per_batch)
     muonh_lr = muonh_ratio * adam_lr
@@ -31,9 +31,9 @@ class MoeHeuristic:
     beta2    = clip(beta2_base^(tokens_per_batch / beta2_reference_tpb), min_beta2, max_beta2)
     """
 
-    lr_coeff: float = 0.06602
-    lr_tokens_exp: float = -0.395
-    lr_dim_exp: float = -0.150
+    lr_coeff: float = 0.087571
+    lr_tokens_exp: float = -0.3461
+    lr_dim_exp: float = -0.3448
     muonh_ratio: float = 13 / 3
     epsilon_coeff: float = 9.676e-18
     beta1: float = 0.9062
@@ -93,8 +93,8 @@ HERO_MODEL = GrugModelConfig(
     global_kv_heads=6,
     head_dim=128,
     max_seq_len=4096,
-    sliding_window=512,
-    global_every=6,
+    sliding_window=2048,
+    global_every=4,
     capacity_factor=1.33,
     initializer_std=0.5 / math.sqrt(6144),
     qk_mult=1.3,
