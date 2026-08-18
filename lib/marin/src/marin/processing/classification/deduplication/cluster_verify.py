@@ -88,6 +88,14 @@ MAXIMUM_OUTPUT_SHARDS = 8192
 # already small fan-in while lengthening the expensive stage.
 DEFAULT_FILES_PER_TASK = 32
 DEFAULT_REDUCE_SHARDS = 2048
+
+# Zephyr's own default is 3. A reduce attempt here opens every mapper's chunk,
+# so the wave issues millions of object-store requests and a transient endpoint
+# outage strikes several shards at once rather than one. Three strikes aborted
+# the first production run over seven shards of 2,048 after it had written most
+# of its markers, and the scatter is deleted on abort, so the cost of giving up
+# early is the whole run.
+DEFAULT_MAX_SHARD_FAILURES = 20
 _SHARED_SHARDS_KEY = "fuzzy_cluster_verify_shards"
 
 _MARKER_SCHEMA = pa.schema(
@@ -303,6 +311,7 @@ def verify_cluster_text(
     text_file_limit: int | None = None,
     files_per_task: int = DEFAULT_FILES_PER_TASK,
     reduce_shards: int = DEFAULT_REDUCE_SHARDS,
+    max_shard_failures: int = DEFAULT_MAX_SHARD_FAILURES,
 ) -> VerifiedFuzzyDupsAttrData:
     """Solve a materialized cluster-text dataset and write duplicate markers.
 
@@ -327,6 +336,12 @@ def verify_cluster_text(
         reduce_shards: Reduce tasks. Markers are ~380 bytes and total about a
             terabyte, so a reducer holds a few hundred megabytes whatever this
             is; it exists to bound the fan-in, not to fit memory.
+        max_shard_failures: Attempts one shard gets before the pipeline aborts.
+            Zephyr defaults to 3, which is too few here: one reduce attempt
+            opens every mapper's chunk, so the wave issues millions of requests
+            and a brief object-store outage lands on several shards at once. The
+            first production run died that way with seven shards out of 2,048
+            exhausted, having already written most of its markers.
 
     Returns:
         The marker attribute tree, one directory per source key.
@@ -358,6 +373,7 @@ def verify_cluster_text(
         name="fuzzy-cluster-verify",
         resources=worker_resources,
         max_workers=max_workers or min(len(groups), MAX_IRIS_WORKER_REPLICAS),
+        max_shard_failures=max_shard_failures,
     )
     context.put(_SHARED_SHARDS_KEY, shards)
     pipeline = (

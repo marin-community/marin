@@ -24,6 +24,7 @@ from marin.processing.classification.deduplication.cluster_dedup import ClusterD
 from marin.processing.classification.deduplication.cluster_verify import (
     COUNTER_PREFIX,
     DEFAULT_FILES_PER_TASK,
+    DEFAULT_MAX_SHARD_FAILURES,
     DEFAULT_REDUCE_SHARDS,
     verify_cluster_text,
 )
@@ -44,6 +45,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--files-per-task", type=int, default=DEFAULT_FILES_PER_TASK, help="Grouped text files solved by one map task"
     )
     parser.add_argument("--reduce-shards", type=int, default=DEFAULT_REDUCE_SHARDS, help="Reduce tasks")
+    parser.add_argument(
+        "--max-shard-failures",
+        type=int,
+        default=DEFAULT_MAX_SHARD_FAILURES,
+        help="Attempts one shard gets before the pipeline aborts",
+    )
     parser.add_argument("--max-workers", type=int, default=64)
     parser.add_argument("--worker-cpu", type=float, default=32)
     parser.add_argument("--worker-ram", default="192g")
@@ -76,6 +83,7 @@ def main(argv: list[str] | None = None) -> None:
         text_file_limit=args.limit_files or None,
         files_per_task=args.files_per_task,
         reduce_shards=args.reduce_shards,
+        max_shard_failures=args.max_shard_failures,
     )
     write_artifact(result, args.out)
     logger.info("Wrote %s duplicate markers to %s", result.counters[f"{COUNTER_PREFIX}/markers"], args.out)
