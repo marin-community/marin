@@ -34,7 +34,7 @@ ARTIFACT_TTL_DAYS = 30
 ARTIFACT_PREFIX = "datakit-rewrite"
 REWRITE_VERSION = "2026.08.18.3"
 REWRITE_WORKERS = 512
-REWRITE_WORKER_RAM = "4g"
+REWRITE_WORKER_RAM = "8g"
 DEFAULT_INVENTORY_MANIFEST = (
     "s3://marin-us-east-02a/marin/ops/parquet-rewrite-manifests/storage-scan-2026-08-18-100g-cap4096.parquet"
 )
