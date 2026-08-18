@@ -12,6 +12,7 @@ use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use crate::proto::finelog::logging::{FetchLogsRequest, LogEntry, MatchScope, PushLogsRequest};
 use crate::proto::finelog::stats::ColumnType;
 use crate::server::auth::{AuthIdentity, AuthPolicy};
+use crate::server::telemetry::telemetry_schema;
 use crate::server::test_support::{
     client, disk_store, serve, serve_rejecting, serve_unavailable, stats_client, RequestStats,
     TestTransport, PRIV_A, PRIV_UNTRUSTED, PUB_A,
@@ -611,6 +612,80 @@ async fn forwarded_rows_carry_the_origin_cluster_of_the_store_that_sent_them() {
         entries, 1,
         "the row is readable only if `cluster` was stamped"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forwarded_telemetry_ignores_candidate_only_nullable_columns() {
+    let fx = Fixture::new("telemetry-schema-skew").await;
+    let namespace = "telemetry_v1";
+    for store in [Arc::clone(&fx.source), Arc::clone(fx.target_store())] {
+        tokio::task::spawn_blocking(move || {
+            store.register_table(namespace, telemetry_schema(), StoragePolicy::default())
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    }
+    let mut source_schema = fx.source.get_table_schema(namespace).unwrap();
+    source_schema
+        .columns
+        .retain(|column| column.name != IMPLICIT_SEQ_COLUMN);
+    source_schema.columns.push(Column::new(
+        "candidate",
+        ColumnType::COLUMN_TYPE_STRING,
+        true,
+    ));
+    let source = Arc::clone(&fx.source);
+    tokio::task::spawn_blocking(move || {
+        source.register_table(namespace, source_schema, StoragePolicy::default())
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let batch = RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![
+            Field::new("schema_version", DataType::Int32, false),
+            Field::new("timestamp_ms", DataType::Int64, false),
+            Field::new("batch_id", DataType::Utf8, false),
+            Field::new("record_index", DataType::Int64, false),
+            Field::new("service", DataType::Utf8, false),
+            Field::new("kind", DataType::Utf8, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("resource_attributes_json", DataType::Utf8, false),
+            Field::new("attributes_json", DataType::Utf8, false),
+            Field::new("candidate", DataType::Utf8, true),
+        ])),
+        vec![
+            Arc::new(arrow::array::Int32Array::from(vec![1])),
+            Arc::new(arrow::array::Int64Array::from(vec![1])),
+            Arc::new(StringArray::from(vec!["batch"])),
+            Arc::new(arrow::array::Int64Array::from(vec![0])),
+            Arc::new(StringArray::from(vec!["service"])),
+            Arc::new(StringArray::from(vec!["gauge"])),
+            Arc::new(StringArray::from(vec!["accepted"])),
+            Arc::new(StringArray::from(vec!["{}"])),
+            Arc::new(StringArray::from(vec!["{}"])),
+            Arc::new(StringArray::from(vec![Some("ignored")])),
+        ],
+    )
+    .unwrap();
+    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+    let (_, last_seq) = fx.source.write_rows(namespace, &ipc, None).unwrap();
+    fx.source
+        .await_persisted(namespace, last_seq, Duration::from_secs(5))
+        .await
+        .unwrap();
+    fx.forward_from_start(namespace);
+
+    fx.drain(PRIV_A, namespace).await;
+
+    let hub_schema = fx.target_store().get_table_schema(namespace).unwrap();
+    assert!(hub_schema.column("candidate").is_none());
+    assert_eq!(
+        hub_column(fx.target_store(), namespace, "name").await,
+        vec![Some("accepted".to_string())]
+    );
+    assert_eq!(fx.cursor(namespace), Some(fx.tip(namespace)));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

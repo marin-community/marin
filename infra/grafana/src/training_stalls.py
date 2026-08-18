@@ -62,7 +62,7 @@ def telemetry_query(now: datetime) -> str:
     return (
         "WITH filtered AS ("
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
-        "json_get(resource_attributes_json, 'job_id') AS job, name, value, "
+        "COALESCE(job_id, json_get(resource_attributes_json, 'job_id')) AS job, name, value, "
         "timestamp_ms, seq, to_timestamp_millis(timestamp_ms) AS ts "
         'FROM "telemetry_v1" '
         f"WHERE service = 'levanter' AND name IN ({metric_names}) "

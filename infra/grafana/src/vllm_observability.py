@@ -31,10 +31,10 @@ VLLM_OVERVIEW_SECTIONS = frozenset(
 
 
 class VllmIdentityField(StrEnum):
-    """Canonical resource attributes accepted by the dashboard query."""
+    """Structured resource dimensions accepted by the dashboard query."""
 
     JOB_ID = "job_id"
-    ROOT_RUN_UID = "root_run_uid"
+    RUN_ID = "run_id"
     EXECUTION_UID = "execution_uid"
 
 
@@ -168,7 +168,7 @@ WITH base AS (
            seq
     FROM "telemetry_v1"
     WHERE service = 'vllm'
-      AND json_get(resource_attributes_json, '{identity_field.value}') = {identity_literal}
+      AND {identity_field.value} = {identity_literal}
       AND name IN ({metric_names})
       AND timestamp_ms >= {scan_start_ms}
       AND timestamp_ms < {end_ms}

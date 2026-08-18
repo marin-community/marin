@@ -9,7 +9,8 @@ use crate::store::exact::{coalesce_runs, RowRun};
 use crate::store::index_bundle::SectionKind;
 use crate::store::segment::{segment_id, segment_row_group_rows};
 use crate::store::segment_index::{
-    parse_projection_reference, projection_path, ProjectionReference, SOURCE_ROW_OFFSET_IDENTITY,
+    parse_exact_postings_coverage, parse_projection_reference, projection_path,
+    ProjectionReference, EXACT_POSTINGS_METHOD_VERSION, SOURCE_ROW_OFFSET_IDENTITY,
 };
 use datafusion::logical_expr::{Expr, Operator};
 use datafusion::physical_plan::ExecutionPlan;
@@ -253,6 +254,9 @@ fn build_access_plans(
             continue;
         };
         let total_segment_rows = segment.row_group_rows.iter().sum::<usize>() as u64;
+        if !exact_postings_may_cover(&segment.header, constraints) {
+            continue;
+        }
         let Some(index) =
             index_cache.get_exact(parquet, &segment.header, SectionKind::ExactPostings)
         else {
@@ -309,6 +313,34 @@ fn build_access_plans(
         );
     }
     plans
+}
+
+fn exact_postings_may_cover(
+    header: &crate::store::index_bundle::BundleHeader,
+    constraints: &HashMap<String, Vec<String>>,
+) -> bool {
+    let Some(section) = header
+        .sections
+        .iter()
+        .find(|section| section.kind == SectionKind::ExactPostings)
+    else {
+        return false;
+    };
+    if section.method_version < EXACT_POSTINGS_METHOD_VERSION {
+        return true;
+    }
+    if section.method_version != EXACT_POSTINGS_METHOD_VERSION {
+        return false;
+    }
+    parse_exact_postings_coverage(&section.coverage).is_some_and(|coverage| {
+        constraints.iter().any(|(column, values)| {
+            coverage.columns.get(column).is_some_and(|covered| {
+                values
+                    .iter()
+                    .all(|value| covered.binary_search(value).is_ok())
+            })
+        })
+    })
 }
 
 fn postings_are_selective(selected_rows: u64, total_rows: u64) -> bool {

@@ -14,14 +14,12 @@ use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::schema::{Schema, IMPLICIT_SEQ_COLUMN};
 use crate::store::types::SegmentRow;
 
-/// Sort keys for both compaction's merge order: `key_column` first (so range
-/// scans on it prune row groups), then the implicit `seq`.
+/// Sort keys for compaction, including the implicit `seq` tie-breaker.
 pub fn compaction_sort_keys(schema: &Schema) -> Vec<String> {
-    if !schema.key_column.is_empty() {
-        vec![schema.key_column.clone(), IMPLICIT_SEQ_COLUMN.to_string()]
-    } else {
-        vec![IMPLICIT_SEQ_COLUMN.to_string()]
-    }
+    let mut columns = crate::store::schema::resolve_sort_columns(schema)
+        .expect("registered schema has valid sort columns");
+    columns.push(IMPLICIT_SEQ_COLUMN.to_string());
+    columns
 }
 
 /// Return the next merge job, or `None` if nothing is due.
@@ -291,6 +289,18 @@ mod tests {
             "ts",
         );
         assert_eq!(compaction_sort_keys(&with_key), vec!["ts", "seq"]);
+        let secondary = Schema::new(
+            vec![
+                Column::new("ts", ColumnType::COLUMN_TYPE_INT64, false),
+                Column::new("worker", ColumnType::COLUMN_TYPE_STRING, false),
+            ],
+            "ts",
+        )
+        .with_sort_columns(["worker", "ts"]);
+        assert_eq!(
+            compaction_sort_keys(&secondary),
+            vec!["worker", "ts", "seq"]
+        );
         let no_key = Schema::new(
             vec![Column::new("x", ColumnType::COLUMN_TYPE_INT64, false)],
             "",

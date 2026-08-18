@@ -7,6 +7,7 @@ cache's coalescing and eviction contract."""
 import threading
 from datetime import UTC, datetime, timedelta
 
+import duckdb
 import pyarrow as pa
 import pytest
 from cache import TtlCache
@@ -381,9 +382,64 @@ def test_alert_queries_use_int64_epoch_boundaries_and_project_timestamps():
         assert "AS origin_cluster" in sql
         assert "PARTITION BY origin_cluster" in sql
         assert "ORDER BY timestamp_ms DESC, seq DESC" in sql
-        assert "json_get(" in sql
         assert "json_get_string" not in sql
         assert "timestamp_ms >= TIMESTAMP" not in sql
+
+
+def test_alert_queries_keep_job_identity_across_the_schema_transition():
+    now = datetime(2026, 7, 28, 12, tzinfo=UTC)
+    database = duckdb.connect()
+    database.execute("CREATE MACRO to_timestamp_millis(value) AS make_timestamp_ms(value)")
+    database.execute("CREATE MACRO json_get(value, key) AS json_extract_string(value, key)")
+    database.execute(
+        """
+        CREATE TABLE telemetry_v1(
+            cluster VARCHAR,
+            service VARCHAR,
+            job_id VARCHAR,
+            name VARCHAR,
+            value DOUBLE,
+            timestamp_ms BIGINT,
+            seq BIGINT,
+            resource_attributes_json VARCHAR,
+            attributes_json VARCHAR
+        )
+        """
+    )
+    database.executemany(
+        "INSERT INTO telemetry_v1 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            ("marin", "levanter", None, "phase", 1.0, 1_785_239_940_000, 1, '{"job_id":"old-job"}', "{}"),
+            ("marin", "levanter", "new-job", "phase", 1.0, 1_785_239_940_001, 2, "{}", "{}"),
+            (
+                "marin",
+                "zephyr",
+                None,
+                "progress_time_seconds",
+                1_785_239_940.0,
+                1_785_239_940_002,
+                3,
+                '{"job_id":"old-zephyr-job"}',
+                '{"run":"old-execution"}',
+            ),
+            (
+                "marin",
+                "zephyr",
+                "new-zephyr-job",
+                "progress_time_seconds",
+                1_785_239_940.0,
+                1_785_239_940_003,
+                4,
+                "{}",
+                '{"run":"new-execution"}',
+            ),
+        ],
+    )
+
+    training_jobs = {row[0] for row in database.execute(f"SELECT job FROM ({telemetry_query(now)})").fetchall()}
+    zephyr_jobs = {row[0] for row in database.execute(f"SELECT job FROM ({zephyr_progress_query(now)})").fetchall()}
+    assert training_jobs == {"old-job", "new-job"}
+    assert zephyr_jobs == {"old-zephyr-job", "new-zephyr-job"}
 
 
 def test_training_stall_query_bounds_each_metric_family_to_its_detection_window():
