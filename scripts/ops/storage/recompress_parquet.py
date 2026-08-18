@@ -45,6 +45,12 @@ DEFAULT_COORDINATOR_RAM = "1g"
 DEFAULT_COORDINATOR_DISK = "8g"
 REWRITE_CONTEXT_NAME = "recompress-parquet"
 COUNTER_PREFIX = "parquet_recompression"
+SKIPPED_PATHS = frozenset(
+    {
+        "s3://marin-us-east-02a/marin/datakit/tokenize/nemotron_cc_v2_1/"
+        "medium_high_quality_synthetic_bad94a5f/train/part-00000-of-00001.parquet",
+    }
+)
 
 
 class RewriteDisposition(StrEnum):
@@ -223,6 +229,10 @@ def recompress_parquet(path: str, options: RewriteOptions = RewriteOptions()) ->
 
 def _rewrite_for_zephyr(path: str, options: RewriteOptions) -> list[dict]:
     """Record rewrite counters without emitting downstream rows."""
+    if path in SKIPPED_PATHS:
+        counters.pipeline.update_counter(f"{COUNTER_PREFIX}/files_skipped", 1)
+        logger.warning("Skipping known pathological Parquet: %s", path)
+        return []
     logger.info("Inspecting Parquet: %s", path)
     try:
         result = recompress_parquet(path, options)
