@@ -73,8 +73,8 @@ const REWRITE_BATCH_ROWS: usize = 8_192;
 /// Parquet `WriterProperties` shared by every finelog segment writer — the L0
 /// flush (`write_segment`) and the compaction output (`write_merged_segment`).
 ///
-/// Sets the row-group bounds ([`TARGET_ROW_GROUP_BYTES`] and
-/// [`MAX_ROW_GROUP_ROWS`]) and zstd level 1 (not the library default 3).
+/// Sets the row-group bounds ([`TARGET_ROW_GROUP_BYTES`] and the caller's row
+/// ceiling) and zstd level 1 (not the library default 3).
 /// Centralizing this keeps L0 and compacted segments on one consistent on-disk
 /// layout.
 ///
@@ -82,9 +82,9 @@ const REWRITE_BATCH_ROWS: usize = 8_192;
 /// 15% of each segment and pruned nothing measurable; the key-column bloom that
 /// outlived that only served exact-key lookups against unsorted L0, which is a
 /// few hundred KiB that compaction consumes within a tick or two, while its write
-/// cost fell on every flush. L1+ uses the schema's configured sort order plus
-/// `seq`, so min/max statistics prune clustered dimensions and the key band;
-/// substring queries prune from the trigram sidecar.
+/// cost fell on every flush. Multi-input compaction uses the schema's configured
+/// sort order plus `seq`; single-input promotions retain their input order.
+/// Substring queries prune from the trigram sidecar.
 pub fn segment_writer_properties_with_max_rows(
     max_row_group_rows: usize,
 ) -> Result<WriterProperties, StatsError> {

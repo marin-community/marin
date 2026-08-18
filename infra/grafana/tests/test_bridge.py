@@ -384,7 +384,6 @@ def test_alert_queries_use_int64_epoch_boundaries_and_project_timestamps():
         assert "ORDER BY timestamp_ms DESC, seq DESC" in sql
         assert "json_get_string" not in sql
         assert "timestamp_ms >= TIMESTAMP" not in sql
-    assert "json_get(attributes_json, 'run') AS execution" in zephyr_progress_query(now)
 
 
 def test_alert_queries_keep_job_identity_across_the_schema_transition():

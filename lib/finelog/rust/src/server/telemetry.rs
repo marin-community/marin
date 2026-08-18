@@ -47,6 +47,12 @@ const NORMALIZED_ROW_OVERHEAD: usize = 128;
 const TELEMETRY_MAX_ROW_GROUP_ROWS: u32 = 128 * 1024;
 const TELEMETRY_VERSION: u32 = 1;
 const ERROR_CODE_INTERNAL: &str = "internal";
+const RUN_ID_COLUMN: &str = "run_id";
+const JOB_ID_COLUMN: &str = "job_id";
+const EXECUTION_UID_COLUMN: &str = "execution_uid";
+const REGION_COLUMN: &str = "region";
+const NODE_NAME_COLUMN: &str = "node_name";
+const PROCESS_INDEX_COLUMN: &str = "process_index";
 const TRAINING_STATUS_NAMES: [&str; 3] = ["phase", "progress_time_seconds", "step"];
 const TRAINING_RUN_NAMES: [&str; 1] = ["global_step"];
 const HOST_METRIC_NAMES: [&str; 7] = [
@@ -79,7 +85,7 @@ const ACCELERATOR_METRIC_NAMES: [&str; 16] = [
 const DEVICE_METRIC_PROJECTION_COLUMNS: [&str; 7] = [
     "timestamp_ms",
     "service",
-    "node_name",
+    NODE_NAME_COLUMN,
     "name",
     "value",
     "attributes_json",
@@ -128,38 +134,34 @@ struct ResourceDimensions<'a> {
 impl Resource {
     fn dimensions(&self) -> ResourceDimensions<'_> {
         ResourceDimensions {
-            run_id: self.explicit_or_attribute(self.run_id.as_deref(), &["run_id"]),
-            job_id: self.explicit_or_attribute(self.job_id.as_deref(), &["job_id"]),
+            run_id: self.explicit_or_attribute(self.run_id.as_deref(), RUN_ID_COLUMN),
+            job_id: self.explicit_or_attribute(self.job_id.as_deref(), JOB_ID_COLUMN),
             execution_uid: self
-                .explicit_or_attribute(self.execution_uid.as_deref(), &["execution_uid"]),
-            region: self.explicit_or_attribute(self.region.as_deref(), &["region"]),
-            node_name: self.explicit_or_attribute(self.node_name.as_deref(), &["node_name"]),
+                .explicit_or_attribute(self.execution_uid.as_deref(), EXECUTION_UID_COLUMN),
+            region: self.explicit_or_attribute(self.region.as_deref(), REGION_COLUMN),
+            node_name: self.explicit_or_attribute(self.node_name.as_deref(), NODE_NAME_COLUMN),
             process_index: self
-                .explicit_or_attribute(self.process_index.as_deref(), &["process_index"]),
+                .explicit_or_attribute(self.process_index.as_deref(), PROCESS_INDEX_COLUMN),
         }
     }
 
     fn explicit_or_attribute<'a>(
         &'a self,
         explicit: Option<&'a str>,
-        attribute_names: &[&str],
+        attribute_name: &str,
     ) -> Option<&'a str> {
-        explicit.or_else(|| {
-            attribute_names
-                .iter()
-                .find_map(|name| self.attributes.get(*name).map(String::as_str))
-        })
+        explicit.or_else(|| self.attributes.get(attribute_name).map(String::as_str))
     }
 
     fn normalized_attributes(&self) -> BTreeMap<String, String> {
         let mut attributes = self.attributes.clone();
         for (name, value) in [
-            ("run_id", self.run_id.as_ref()),
-            ("job_id", self.job_id.as_ref()),
-            ("execution_uid", self.execution_uid.as_ref()),
-            ("region", self.region.as_ref()),
-            ("node_name", self.node_name.as_ref()),
-            ("process_index", self.process_index.as_ref()),
+            (RUN_ID_COLUMN, self.run_id.as_ref()),
+            (JOB_ID_COLUMN, self.job_id.as_ref()),
+            (EXECUTION_UID_COLUMN, self.execution_uid.as_ref()),
+            (REGION_COLUMN, self.region.as_ref()),
+            (NODE_NAME_COLUMN, self.node_name.as_ref()),
+            (PROCESS_INDEX_COLUMN, self.process_index.as_ref()),
         ] {
             if let Some(value) = value {
                 attributes.insert(name.to_string(), value.clone());
@@ -822,12 +824,12 @@ pub(crate) fn telemetry_schema() -> Schema {
             Column::new("batch_id", ColumnType::COLUMN_TYPE_STRING, false),
             Column::new("record_index", ColumnType::COLUMN_TYPE_INT64, false),
             Column::new("service", ColumnType::COLUMN_TYPE_STRING, false).with_value_counts(),
-            Column::new("run_id", ColumnType::COLUMN_TYPE_STRING, true),
-            Column::new("job_id", ColumnType::COLUMN_TYPE_STRING, true),
-            Column::new("execution_uid", ColumnType::COLUMN_TYPE_STRING, true),
-            Column::new("region", ColumnType::COLUMN_TYPE_STRING, true),
-            Column::new("node_name", ColumnType::COLUMN_TYPE_STRING, true),
-            Column::new("process_index", ColumnType::COLUMN_TYPE_STRING, true),
+            Column::new(RUN_ID_COLUMN, ColumnType::COLUMN_TYPE_STRING, true),
+            Column::new(JOB_ID_COLUMN, ColumnType::COLUMN_TYPE_STRING, true),
+            Column::new(EXECUTION_UID_COLUMN, ColumnType::COLUMN_TYPE_STRING, true),
+            Column::new(REGION_COLUMN, ColumnType::COLUMN_TYPE_STRING, true),
+            Column::new(NODE_NAME_COLUMN, ColumnType::COLUMN_TYPE_STRING, true),
+            Column::new(PROCESS_INDEX_COLUMN, ColumnType::COLUMN_TYPE_STRING, true),
             Column::new("kind", ColumnType::COLUMN_TYPE_STRING, false).with_value_counts(),
             // Metric names are the primary substring-search target
             // (`name LIKE '%nccl%'`), so this column carries the trigram index.
@@ -853,7 +855,7 @@ pub(crate) fn telemetry_schema() -> Schema {
         ],
         "timestamp_ms",
     )
-    .with_sort_columns(["service", "run_id", "name", "timestamp_ms"])
+    .with_sort_columns(["service", RUN_ID_COLUMN, "name", "timestamp_ms"])
     .with_max_row_group_rows(TELEMETRY_MAX_ROW_GROUP_ROWS)
     .with_covering_projection(CoveringProjection::new(
         "training-status",
@@ -863,8 +865,8 @@ pub(crate) fn telemetry_schema() -> Schema {
             "seq",
             "timestamp_ms",
             "service",
-            "run_id",
-            "job_id",
+            RUN_ID_COLUMN,
+            JOB_ID_COLUMN,
             "name",
             "value",
             "resource_attributes_json",
@@ -879,10 +881,10 @@ pub(crate) fn telemetry_schema() -> Schema {
         [
             "timestamp_ms",
             "service",
-            "run_id",
-            "job_id",
-            "node_name",
-            "process_index",
+            RUN_ID_COLUMN,
+            JOB_ID_COLUMN,
+            NODE_NAME_COLUMN,
+            PROCESS_INDEX_COLUMN,
             "name",
             "resource_attributes_json",
             "cluster",
@@ -895,7 +897,7 @@ pub(crate) fn telemetry_schema() -> Schema {
         [
             "timestamp_ms",
             "service",
-            "node_name",
+            NODE_NAME_COLUMN,
             "name",
             "value",
             "resource_attributes_json",
@@ -937,7 +939,7 @@ pub(crate) fn telemetry_schema() -> Schema {
         [
             "timestamp_ms",
             "service",
-            "node_name",
+            NODE_NAME_COLUMN,
             "name",
             "attributes_json",
             "cluster",
@@ -988,7 +990,7 @@ pub(crate) fn telemetry_schema() -> Schema {
     .with_grouped_extrema(GroupExtremaConfig::new(
         "service",
         "resource_attributes_json",
-        "job_id",
+        JOB_ID_COLUMN,
         "timestamp_ms",
     ))
 }
