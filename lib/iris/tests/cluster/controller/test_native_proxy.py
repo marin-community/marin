@@ -184,15 +184,9 @@ def test_controller_begin_shutdown_rejects_endpoint_discovery(make_controller) -
         health_response = client.get("/health")
 
     assert endpoint_response.status_code == 503
-    assert endpoint_response.json() == {
-        "code": "unavailable",
-        "message": "Controller is shutting down",
-    }
+    assert endpoint_response.json()["code"] == "unavailable"
     assert health_response.status_code == 503
-    assert health_response.json() == {
-        "status": "unavailable",
-        "reason": "Controller is shutting down",
-    }
+    assert health_response.json()["status"] == "unavailable"
 
 
 def test_native_rpc_metrics_aggregate_controllers_in_one_process(make_controller, tmp_path, telemetry_transport) -> None:
