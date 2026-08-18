@@ -13,6 +13,11 @@ Read first:
 
 @AGENTS.md
 
+After fetching the issue, inspect its requested deliverable. If it explicitly
+asks for a design doc, one-pager, or proposal, stop this workflow and invoke
+`write-design-doc`. Do not infer this handoff from issue complexity or
+implementation scope.
+
 Complete tasks in order; the task list is at the end of this document. If you
 cannot complete a task, write a Github comment with your last status and why.
 
