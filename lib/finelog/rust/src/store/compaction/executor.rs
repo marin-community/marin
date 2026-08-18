@@ -397,8 +397,7 @@ pub fn read_segment_projected(
     Ok(out)
 }
 
-/// Write `batches` to `path` via `ArrowWriter`, using the shared
-/// `segment_writer_properties_with_max_rows` with no bloom column.
+/// Write merged batches with the configured row-group ceiling.
 fn write_merged_segment(
     path: &Path,
     schema: &SchemaRef,

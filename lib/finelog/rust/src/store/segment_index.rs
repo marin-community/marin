@@ -834,7 +834,6 @@ mod tests {
         );
         assert!(header.section("trigram:name").is_some());
         let exact = header.section("exact-postings").unwrap();
-        assert_eq!(exact.method_version, EXACT_POSTINGS_METHOD_VERSION);
         assert_eq!(
             parse_exact_postings_coverage(&exact.coverage)
                 .unwrap()

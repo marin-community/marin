@@ -104,8 +104,8 @@ class Schema:
         columns: Columns in registered order. Order is preserved on disk so
             COPY projections produce stable column ordering across additive
             evolutions.
-        key_column: Explicit ordering key column name. Empty means the server
-            falls back to ``timestamp_ms``.
+        key_column: Column used for segment min/max metadata and as the default
+            compaction order. Empty means the server uses ``timestamp_ms``.
         sort_columns: Physical compaction order before the server-assigned
             ``seq`` tie-breaker. Empty retains the registered policy or uses
             key-column ordering on first registration.

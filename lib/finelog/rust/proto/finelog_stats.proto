@@ -78,9 +78,9 @@ message GroupedExtrema {
 message Schema {
   repeated Column columns = 1;
 
-  // Event/range key used for segment retention metadata and, when
-  // sort_columns is empty, compaction order. Must name an existing INT64 or
-  // TIMESTAMP_MS column. If empty, the server requires and uses timestamp_ms.
+  // Column used for segment min/max metadata and, when sort_columns is empty,
+  // compaction order. Must name an existing scalar column; MAP is unsupported.
+  // If empty, the server requires and uses timestamp_ms.
   string key_column = 2;
 
   // Independent named projections. Adding one is monotonic on re-register.

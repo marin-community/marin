@@ -29,6 +29,7 @@ use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
     ignored_forwarded_schema_columns, schema_from_proto_view, schema_to_proto_owned, Schema,
 };
+use crate::store::store::ForwardedWrite;
 use crate::store::Store;
 
 pub struct StatsServiceImpl {
@@ -190,7 +191,7 @@ impl StatsService for StatsServiceImpl {
         // caps and IPC decode live in `Store::write_rows`.
         let store = Arc::clone(&self.store);
         let ns = namespace.clone();
-        let (rows_written, last_seq, ignored_columns) = run_blocking(move || {
+        let outcome = run_blocking(move || {
             if forwarded_telemetry {
                 return store.write_forwarded_telemetry_rows(
                     &ns,
@@ -202,9 +203,18 @@ impl StatsService for StatsServiceImpl {
             }
             let (rows_written, last_seq) =
                 store.write_rows(&ns, &arrow_ipc, origin_cluster.as_deref())?;
-            Ok((rows_written, last_seq, Vec::new()))
+            Ok(ForwardedWrite {
+                rows_written,
+                last_seq,
+                ignored_columns: Vec::new(),
+            })
         })
         .await?;
+        let ForwardedWrite {
+            rows_written,
+            last_seq,
+            ignored_columns,
+        } = outcome;
         self.report_ignored_forwarded_telemetry_columns(ignored_columns);
 
         // The server does not auto-cancel on the client deadline; enforce the

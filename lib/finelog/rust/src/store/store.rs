@@ -24,12 +24,14 @@ use crate::query::index_cache::IndexCache;
 use crate::query::provider::NamespaceProvider;
 use crate::query::RegisteredProvider;
 use crate::store::catalog::{Catalog, RegisteredNamespace};
+use crate::store::ipc::decode_one_record_batch;
 use crate::store::namespace::Namespace;
 use crate::store::namespace_name::validate_namespace_name;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
-    merge_schemas, resolve_key_column, stored_form, validate_index_policies, AlignedBatch, Column,
-    Schema,
+    merge_schemas, resolve_key_column, stamp_cluster_column, stored_form, validate_and_align_batch,
+    validate_and_align_forwarded_batch, validate_index_policies, AlignedBatch, Column, Schema,
+    MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
 use crate::store::types::NamespaceStats;
 
@@ -49,6 +51,13 @@ const NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 enum WriteSchemaPolicy {
     Strict,
     IgnoreUnknownNullable,
+}
+
+/// Result of appending one schema-compatible federated batch.
+pub struct ForwardedWrite {
+    pub rows_written: i64,
+    pub last_seq: i64,
+    pub ignored_columns: Vec<String>,
 }
 
 /// Registered schema for the privileged `log` namespace; `key_column = "key"`.
@@ -443,14 +452,14 @@ impl Store {
         arrow_ipc: &[u8],
         origin_cluster: Option<&str>,
     ) -> Result<(i64, i64), StatsError> {
-        let (rows_written, last_seq, ignored_columns) = self.write_rows_with_policy(
+        let outcome = self.write_rows_with_policy(
             name,
             arrow_ipc,
             origin_cluster,
             WriteSchemaPolicy::Strict,
         )?;
-        debug_assert!(ignored_columns.is_empty());
-        Ok((rows_written, last_seq))
+        debug_assert!(outcome.ignored_columns.is_empty());
+        Ok((outcome.rows_written, outcome.last_seq))
     }
 
     /// Append telemetry forwarded by another Finelog while preserving the hub's
@@ -461,7 +470,7 @@ impl Store {
         name: &str,
         arrow_ipc: &[u8],
         origin_cluster: &str,
-    ) -> Result<(i64, i64, Vec<String>), StatsError> {
+    ) -> Result<ForwardedWrite, StatsError> {
         self.write_rows_with_policy(
             name,
             arrow_ipc,
@@ -476,13 +485,7 @@ impl Store {
         arrow_ipc: &[u8],
         origin_cluster: Option<&str>,
         schema_policy: WriteSchemaPolicy,
-    ) -> Result<(i64, i64, Vec<String>), StatsError> {
-        use crate::store::ipc::decode_one_record_batch;
-        use crate::store::schema::{
-            stamp_cluster_column, validate_and_align_batch, validate_and_align_forwarded_batch,
-            MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
-        };
-
+    ) -> Result<ForwardedWrite, StatsError> {
         if arrow_ipc.len() > MAX_WRITE_ROWS_BYTES {
             return Err(StatsError::SchemaValidation(format!(
                 "WriteRows body {} bytes exceeds {MAX_WRITE_ROWS_BYTES} limit",
@@ -511,7 +514,11 @@ impl Store {
         }
         let n = aligned.num_rows as i64;
         let last_seq = engine.append_aligned_batch(&aligned);
-        Ok((n, last_seq, ignored_columns))
+        Ok(ForwardedWrite {
+            rows_written: n,
+            last_seq,
+            ignored_columns,
+        })
     }
 
     /// Append log columns to the reserved `log` namespace, returning the last
