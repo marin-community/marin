@@ -4,7 +4,7 @@
 import logging
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TypeVar
 
 from fray.cluster import ResourceConfig
@@ -27,7 +27,7 @@ PRODUCTION_PRIORITY = priority_band_value("production")
 # given (e.g. `iris job run -e XLA_FLAGS ...`) must be re-exported explicitly.
 # JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
 # not leak onto accelerator tasks.
-_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_")
+_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "MARIN_EP_")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 
 
@@ -51,6 +51,8 @@ def dispatch_grug_training_run(
     max_retries_failure: int = 3,
     processes_per_task: int = 1,
     priority: int = INHERIT_PRIORITY,
+    worker_pip_packages: Sequence[str] = (),
+    worker_setup_scripts: Sequence[str] = (),
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.
 
@@ -63,7 +65,12 @@ def dispatch_grug_training_run(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
         resources=resources,
-        environment=create_environment(env_vars=env_vars, extras=extras_for_resources(resources)),
+        environment=create_environment(
+            env_vars=env_vars,
+            extras=extras_for_resources(resources),
+            pip_packages=worker_pip_packages,
+            setup_scripts=worker_setup_scripts,
+        ),
         max_retries_failure=max_retries_failure,
         max_task_failures=10,
         processes_per_task=processes_per_task,

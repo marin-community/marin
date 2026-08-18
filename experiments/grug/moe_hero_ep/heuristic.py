@@ -109,7 +109,6 @@ HERO_MODEL = GrugModelConfig(
     # (PR #8320). Capacity factor 1.1 is the validated marin-ep operating point
     # (0.63% drops at 4/192, 0.095% at 8/384).
     moe_implementation="marin_ep",
-    num_expert_waves=3,
     expert_chunks=1,
     report_capacity_overflow=True,
     rope_fused=True,
