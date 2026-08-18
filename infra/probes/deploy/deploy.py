@@ -23,6 +23,7 @@ import click
 logger = logging.getLogger("deploy")
 
 IMAGE_NAME = "infra-probes"
+PROJECT = "hai-gcp-models"
 RESULTS_HOST_PATH = "/var/lib/probes"
 # Build context / git repo root for `build`: this script lives in deploy/.
 PROBES_DIR = Path(__file__).resolve().parent.parent
@@ -42,7 +43,7 @@ def _service_account(project: str) -> str:
 
 
 @click.group()
-@click.option("--project", envvar="MARIN_PROBES_PROJECT", default="hai-gcp-models", show_default=True)
+@click.option("--project", envvar="MARIN_PROBES_PROJECT", default=PROJECT, show_default=True)
 @click.option("--region", envvar="MARIN_PROBES_REGION", default="us-central1", show_default=True)
 @click.option("--zone", envvar="MARIN_PROBES_ZONE", default="us-central1-b", show_default=True)
 @click.option("--vm-name", envvar="MARIN_PROBES_VM", default="infra-probes", show_default=True)
@@ -167,6 +168,8 @@ def create(cfg: dict[str, str], iris_endpoint: str, machine_type: str) -> None:
     already exist — delete them first to recreate.
     """
     project = cfg["project"]
+    if project != PROJECT:
+        raise click.ClickException(f"create requires --project={PROJECT}; bucket IAM is declared for that project")
     region = cfg["region"]
     sa = _service_account(project)
     member = f"serviceAccount:{sa}"
