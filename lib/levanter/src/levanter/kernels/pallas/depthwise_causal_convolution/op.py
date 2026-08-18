@@ -154,12 +154,12 @@ def _depthwise_causal_convolution_pallas_sharded(
     bias_spec = P(input_parts[-1])
     state_spec = P(input_parts[0], input_parts[-1], None)
 
-    x = reshard(x, input_spec)
-    W = reshard(W, weight_spec)
+    x = reshard(x, NamedSharding(sharding.mesh, input_spec))
+    W = reshard(W, NamedSharding(sharding.mesh, weight_spec))
     if b is not None:
-        b = reshard(b, bias_spec)
+        b = reshard(b, NamedSharding(sharding.mesh, bias_spec))
     if h0 is not None:
-        h0 = reshard(h0, state_spec)
+        h0 = reshard(h0, NamedSharding(sharding.mesh, state_spec))
 
     def _local(local_x, local_W, local_b, local_h0):
         return _depthwise_causal_convolution_pallas(
