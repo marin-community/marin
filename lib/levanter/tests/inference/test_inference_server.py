@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
@@ -10,8 +11,8 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from levanter.layers.attention import AttentionBackend
-from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
+from levanter.models.llama import LlamaLMHeadModel
+from levanter.testing.model_configs import llama_test_config
 from levanter.trainer import TrainerConfig
 
 try:
@@ -34,6 +35,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 TEST_MODEL_NAME = "tiny-random-llama"
+TEST_MAX_SEQ_LEN = 64
 TEST_CHAT_TEMPLATE = (
     "{% for message in messages %}{{ message['role'] }}: {{ message['content'] }}\n{% endfor %}"
     "{% if add_generation_prompt %}assistant: {% endif %}"
@@ -49,7 +51,7 @@ def trainer_config():
 def inference_server_config():
     return InferenceServerConfig(
         service=InferenceEngineConfig(
-            max_seq_len=64,
+            max_seq_len=TEST_MAX_SEQ_LEN,
             max_seqs=2,
             page_size=4,
             max_queued_tokens=32,
@@ -63,16 +65,9 @@ def inference_server_config():
 
 @pytest.fixture(scope="module")
 def llama_model_config(local_gpt2_tokenizer_path):
-    return LlamaConfig(
-        max_seq_len=64,
-        hidden_dim=32,
-        intermediate_dim=64,
-        num_layers=2,
-        num_heads=4,
-        num_kv_heads=2,
+    return dataclasses.replace(
+        llama_test_config(seq_len=TEST_MAX_SEQ_LEN, num_kv_heads=2),
         tie_word_embeddings=True,
-        gradient_checkpointing=False,
-        attn_backend=AttentionBackend.VANILLA,
         reference_checkpoint=None,
         tokenizer=local_gpt2_tokenizer_path,
     )
