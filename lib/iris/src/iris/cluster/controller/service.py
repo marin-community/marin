@@ -2047,6 +2047,31 @@ class ControllerServiceImpl:
         self._controller.wake()
         return job_pb2.Empty()
 
+    def complete_job(
+        self,
+        request: controller_pb2.Controller.CompleteJobRequest,
+        _ctx: RequestContext | None,
+    ) -> job_pb2.Empty:
+        """Complete a running job successfully and stop its unfinished tasks."""
+        job_id = JobName.from_wire(request.job_id)
+        state = _job_state(self._db, job_id)
+        if state is None:
+            raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
+
+        self._authorize_job_actor(job_id)
+
+        with self._db.read_snapshot() as snap:
+            if reads.federated_handle(snap, job_id) is not None:
+                raise ConnectError(
+                    Code.FAILED_PRECONDITION,
+                    "A federated job must be completed on the cluster running its tasks",
+                )
+
+        with self._db.transaction() as cur:
+            ops.job.complete(cur, job_id=job_id)
+        self._controller.wake()
+        return job_pb2.Empty()
+
     def _job_to_proto(
         self,
         j: Any,

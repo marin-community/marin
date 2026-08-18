@@ -1829,6 +1829,14 @@ class Controller:
         request = controller_pb2.Controller.TerminateJobRequest(job_id=job_id)
         return self._service.terminate_job(request, None)
 
+    def complete_job(
+        self,
+        job_id: str,
+    ) -> job_pb2.Empty:
+        """Complete a running job successfully."""
+        request = controller_pb2.Controller.CompleteJobRequest(job_id=job_id)
+        return self._service.complete_job(request, None)
+
     def kick_tasks(
         self,
         request: controller_pb2.Controller.KickTasksRequest,

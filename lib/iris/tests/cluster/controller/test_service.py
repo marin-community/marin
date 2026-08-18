@@ -851,11 +851,32 @@ def test_terminate_job_allowed_by_owner(service):
     assert status.job.state == job_pb2.JOB_STATE_KILLED
 
 
-def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, log_client):
-    """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
+@pytest.mark.parametrize(
+    ("rpc_request", "operation"),
+    [
+        pytest.param(
+            controller_pb2.Controller.TerminateJobRequest(job_id="/alice/my-job"),
+            ControllerServiceImpl.terminate_job,
+            id="terminate",
+        ),
+        pytest.param(
+            controller_pb2.Controller.CompleteJobRequest(job_id="/alice/my-job"),
+            ControllerServiceImpl.complete_job,
+            id="complete",
+        ),
+    ],
+)
+def test_job_finalization_rejected_for_non_owner(
+    state,
+    mock_controller,
+    tmp_path,
+    log_client,
+    rpc_request,
+    operation,
+):
     auth_service = ControllerServiceImpl(
         controller=mock_controller,
-        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_job_finalization")),
         log_client=log_client,
         db=state._db,
         auth=ControllerAuth(provider="static"),
@@ -866,14 +887,12 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, 
 
     token = _verified_identity.set(VerifiedIdentity(user_id="bob", role="user"))
     try:
-        request = controller_pb2.Controller.TerminateJobRequest(job_id="/alice/my-job")
         with pytest.raises(ConnectError) as exc_info:
-            auth_service.terminate_job(request, None)
+            operation(auth_service, rpc_request, None)
         assert exc_info.value.code == Code.PERMISSION_DENIED
     finally:
         _verified_identity.reset(token)
 
-    # Job should still be running
     status = auth_service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id="/alice/my-job"), None)
     assert status.job.state == job_pb2.JOB_STATE_PENDING
 

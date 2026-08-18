@@ -322,6 +322,10 @@ class JourneyWorld:
         self.controller.terminate_job(job.wire_id)
         self.trace.append(f"cancel {job.wire_id}")
 
+    def complete(self, job: JobRef) -> None:
+        self.controller.complete_job(job.wire_id)
+        self.trace.append(f"complete {job.wire_id}")
+
     def kick(
         self,
         task: TaskRef,

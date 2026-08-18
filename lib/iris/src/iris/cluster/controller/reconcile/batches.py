@@ -68,28 +68,55 @@ logger = logging.getLogger(__name__)
 # ``task.merge_task_termination``, and job.py is forbidden from importing task.
 
 
-def _kill_non_terminal_tasks(overlay: Overlay, job_id: JobName, reason: str, now_ms: int) -> None:
-    """Kill all non-terminal tasks for a single job and delete endpoints."""
+def _finish_non_terminal_tasks(
+    overlay: Overlay,
+    job_id: JobName,
+    *,
+    task_state: int,
+    error: str | None,
+    exit_code: int | None,
+    message: str,
+    action_reason: TaskActionReason,
+    severity: TaskEventSeverity,
+    now_ms: int,
+) -> None:
+    """Finish all non-terminal tasks for a job and stop their active attempts."""
     for row in overlay.active_tasks_for_job(job_id, states=NON_TERMINAL_TASK_STATES):
         task.merge_task_termination(
             overlay,
             row.task_id.to_wire(),
             row.current_attempt_id,
-            job_pb2.TASK_STATE_KILLED,
-            reason,
+            task_state,
+            error,
             now_ms,
             stamp_attempt_finished=False,
+            exit_code=exit_code,
         )
         overlay.emit_task_event(
             TaskActionEvent(
                 task_id=row.task_id,
                 attempt_id=row.current_attempt_id,
                 ts=Timestamp.from_ms(now_ms),
-                reason=TaskActionReason.JOB_FINALIZED_TASK_KILLED,
-                message=reason,
-                severity=TaskEventSeverity.WARNING,
+                reason=action_reason,
+                message=message,
+                severity=severity,
             )
         )
+
+
+def _kill_non_terminal_tasks(overlay: Overlay, job_id: JobName, reason: str, now_ms: int) -> None:
+    """Kill all non-terminal tasks for a single job and delete endpoints."""
+    _finish_non_terminal_tasks(
+        overlay,
+        job_id,
+        task_state=job_pb2.TASK_STATE_KILLED,
+        error=reason,
+        exit_code=None,
+        message=reason,
+        action_reason=TaskActionReason.JOB_FINALIZED_TASK_KILLED,
+        severity=TaskEventSeverity.WARNING,
+        now_ms=now_ms,
+    )
 
 
 def _cascade_to_children(
@@ -315,6 +342,36 @@ class ReconcileState:
         self.overlay.emit_log_event(
             LogEvent(action="job_cancelled", entity_id=job_id.to_wire(), details=(("reason", reason),))
         )
+        return self.overlay.effects
+
+    def complete_job(self, job_id: JobName, now: Timestamp) -> ControllerEffects:
+        """Complete a running job successfully and stop its unfinished tasks."""
+        basis = self._snapshot.job_state_basis.get(job_id)
+        if basis is None or basis.state in TERMINAL_JOB_STATES:
+            return self.overlay.effects
+
+        now_ms = now.epoch_ms()
+        reason = "Job completed successfully"
+        _finish_non_terminal_tasks(
+            self.overlay,
+            job_id,
+            task_state=job_pb2.TASK_STATE_SUCCEEDED,
+            error=None,
+            exit_code=0,
+            message=reason,
+            action_reason=TaskActionReason.JOB_COMPLETED_TASK_SUCCEEDED,
+            severity=TaskEventSeverity.NORMAL,
+            now_ms=now_ms,
+        )
+        self.overlay.merge_job_state(
+            JobRowDelta(
+                job_id=job_id,
+                state=job_pb2.JOB_STATE_SUCCEEDED,
+                finished_at=Timestamp.from_ms(now_ms),
+            )
+        )
+        _finalize_terminal_job(self.overlay, job_id, job_pb2.JOB_STATE_SUCCEEDED, now_ms)
+        self.overlay.emit_log_event(LogEvent(action="job_completed", entity_id=job_id.to_wire()))
         return self.overlay.effects
 
     # ------------------------------------------------------------------

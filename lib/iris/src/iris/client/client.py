@@ -307,6 +307,10 @@ class Job:
         """Terminate this job."""
         self._client._cluster_client.terminate_job(self._job_id)
 
+    def complete(self) -> None:
+        """Complete this job successfully and stop its unfinished tasks."""
+        self._client._cluster_client.complete_job(self._job_id)
+
 
 # =============================================================================
 # Context Management
@@ -822,6 +826,10 @@ class IrisClient:
             job_id: Job ID to terminate
         """
         self._cluster_client.terminate_job(job_id)
+
+    def complete(self, job_id: JobName) -> None:
+        """Complete a job successfully and stop its unfinished tasks."""
+        self._cluster_client.complete_job(job_id)
 
     def list_jobs(
         self,

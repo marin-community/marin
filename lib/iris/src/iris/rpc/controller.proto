@@ -179,6 +179,10 @@ message Controller {
     string job_id = 1;
   }
 
+  message CompleteJobRequest {
+    string job_id = 1;
+  }
+
   // Sort fields for job listing
   enum JobSortField {
     JOB_SORT_FIELD_UNSPECIFIED = 0;
@@ -858,6 +862,7 @@ service ControllerService {
   rpc GetJobStatus(Controller.GetJobStatusRequest) returns (Controller.GetJobStatusResponse);
   rpc GetJobState(Controller.GetJobStateRequest) returns (Controller.GetJobStateResponse);
   rpc TerminateJob(Controller.TerminateJobRequest) returns (iris.job.Empty);
+  rpc CompleteJob(Controller.CompleteJobRequest) returns (iris.job.Empty);
   rpc ListJobs(Controller.ListJobsRequest) returns (Controller.ListJobsResponse);
 
   // Task operations
