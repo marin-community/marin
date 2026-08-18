@@ -1875,3 +1875,31 @@ Experiment ID prefix: `MEP`.
   material once (a) confirms; (c) workaround experiment: run fused2 with
   command buffers / single-stream scheduling to serialize zeros against
   kernels.
+
+### 2026-08-18 12:10 - MEP-074: goal amended to incumbent parity; matched-config A/B launched
+- User amendments: (1) all comparisons at matched shape AND training config
+  with main moe_hero_ep; (2) the gate is no longer a hard 25% MFU — it is
+  PARITY with main's moe_hero_ep at equivalent config with significantly
+  lower token drops (tok/s/rack still to be maximized).
+- Config-drift audit vs origin/main found three non-CLI-overridable drifts
+  on this branch (all fork-era): sliding_window 512 vs 2048, global_every
+  6 vs 4, MoeHeuristic May fit vs Aug refit (#7856/#8003), and — found in
+  launch.py — HERO_MIXED_PRECISION params=float32 vs main's
+  params=bfloat16. Every campaign number to date (16.3 s 4/192, 17.6 s
+  8/384) was measured at the drifted config with an f32-params handicap
+  (2x FSDP all-gather bytes + weight HBM). Fixes: 3ef942a4fb (attention +
+  LR heuristic), 40c31a232c (params dtype). processes-per-task 4 vs
+  main's 1 is backend-required (fused transport needs 1 proc/GPU) and
+  stays.
+- Same-meter A/B launched on cw-us-east-08a (rack was idle, budget back
+  to INTERACTIVE): treatment mep-hero384m2-fused-25-20260818
+  (ep-marin-mgpu-fused, cf 1.1, splits 32, custom wheel, 8/384 recipe
+  incl. host-limit + arena envs); control mep-ctrl-pooled-25-20260818
+  (origin/main 954a5251a2 moe_hero_ep as-pinned: fixed_pooled_wave, cf
+  1.15/1.15, stock wheel) queued behind it from a clean main worktree.
+  First mep-hero384m arm (f32 params) killed pre-step-1 after the
+  params-dtype find.
+- Reference point pending the control: MHEP-103 (rav/ep3 campaign)
+  measured the pooled/striped incumbent at 256,818 tok/s median, 24.03%
+  MFU, 2.41% median drops at 8/384 one-rack — different meter/branch, so
+  the parity call uses our control arm, not that number.
