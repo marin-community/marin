@@ -7,6 +7,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
+from itertools import chain
 
 import click
 import pyarrow.parquet as pq
@@ -188,12 +189,12 @@ def run_rewrite_train(
         coordinator_cpu=pool.coordinator_cpu,
     )
     steps = rewrite_train(rewrite_steps, context=context)
-    pending_steps = tuple(step for step in steps if not step_is_built(lower(step)))
-    logger.info("Running %d pending Parquet rewrite steps out of %d", len(pending_steps), len(steps))
-    if pending_steps:
+    pending_steps = ((index, step) for index, step in enumerate(steps, start=1) if not step_is_built(lower(step)))
+    first_pending_step = next(pending_steps, None)
+    if first_pending_step is not None:
         with context:
-            for index, step in enumerate(pending_steps, start=1):
-                logger.info("Running pending Parquet rewrite step %d/%d: %s", index, len(pending_steps), step.name)
+            for index, step in chain((first_pending_step,), pending_steps):
+                logger.info("Running Parquet rewrite step %d/%d: %s", index, len(steps), step.name)
                 run(step, max_concurrent=1)
     return ParquetRewriteArtifact.raw_load(steps[-1].path())
 
