@@ -457,6 +457,9 @@ def test_task_update_oom_killed_is_application_failure():
     pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason="OOMKilled")
     update = _task_update_from_pod(entry, pod)
     assert update.new_state == job_pb2.TASK_STATE_FAILED
+    assert update.error == update.terminal_reason
+    assert update.error is not None
+    assert "OOMKilled" in update.error
     assert update.exit_code == 137
 
 
