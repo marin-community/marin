@@ -4,24 +4,8 @@
 
 """Rewrite Parquet objects in place with zstd compression through Zephyr.
 
-Each Zephyr task handles one object. It writes and validates a temporary sibling
-before replacing the source, so a failed or interrupted task leaves the source
-intact. Reruns skip objects whose columns use zstd and have page indexes.
-
-Run the coordinator on a cluster local to the bucket. Start with a narrow glob
-and omit ``--apply-to-quiescent-prefix`` to inventory candidates before
-rewriting them::
-
-    uv run iris --cluster=marin job run \
-        --cpu 1 --memory 2GB --target-cluster cw-us-east-02a -- \
-        python scripts/ops/storage/recompress_parquet.py \
-        's3://marin-us-east-02a/marin/normalized/example/**/*.parquet' \
-        --workers 16
-
-Stop all producers for the selected prefix, then add
-``--apply-to-quiescent-prefix`` after reviewing the dry-run counters. Do not
-target lifecycle prefixes: the command rejects ``tmp/ttl=`` paths because
-replacing an object would restart its retention clock.
+Each task validates a temporary sibling before replacing the source. Apply only
+to quiescent prefixes; lifecycle-managed paths are rejected.
 """
 
 import logging
@@ -226,7 +210,13 @@ def recompress_parquet(path: str, options: RewriteOptions = RewriteOptions()) ->
 
 def _rewrite_for_zephyr(path: str, options: RewriteOptions) -> list[dict]:
     """Record rewrite counters without emitting downstream rows."""
-    result = recompress_parquet(path, options)
+    try:
+        result = recompress_parquet(path, options)
+    except Exception:
+        counters.pipeline.update_counter(f"{COUNTER_PREFIX}/files_failed", 1)
+        logger.exception("Skipping failed Parquet rewrite: %s", path)
+        return []
+
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/files_{result.disposition}", 1)
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/input_bytes_{result.disposition}", result.input_bytes)
     if result.output_bytes is not None:
@@ -245,23 +235,14 @@ def _rewrite_for_zephyr(path: str, options: RewriteOptions) -> list[dict]:
 def run_migration(
     source_globs: Sequence[str],
     *,
-    workers: int,
-    worker_cpu: int,
-    worker_ram: str,
+    context: ZephyrContext,
     options: RewriteOptions,
 ) -> dict[str, int | float]:
     """Run the bounded recompression pipeline and return aggregate counters."""
-    if workers <= 0:
-        raise ValueError(f"workers must be positive, got {workers}")
     if not source_globs:
         raise ValueError("source_globs must contain at least one pattern")
 
     pipeline = Dataset.from_file_patterns(source_globs).flat_map(partial(_rewrite_for_zephyr, options=options))
-    context = ZephyrContext(
-        name="recompress-parquet",
-        resources=ResourceConfig(cpu=worker_cpu, ram=worker_ram),
-        max_workers=workers,
-    )
     outcome = context.execute(pipeline, verbose=True)
     return dict(outcome.counters)
 
@@ -302,11 +283,14 @@ def main(
 ) -> None:
     """Recompress the Parquet objects matching SOURCE_GLOB with zstd."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    context = ZephyrContext(
+        name="recompress-parquet",
+        resources=ResourceConfig(cpu=worker_cpu, ram=worker_ram),
+        max_workers=workers,
+    )
     counters_result = run_migration(
         (source_glob,),
-        workers=workers,
-        worker_cpu=worker_cpu,
-        worker_ram=worker_ram,
+        context=context,
         options=RewriteOptions(
             mode=RewriteMode.APPLY if apply else RewriteMode.DRY_RUN,
             batch_rows=batch_rows,

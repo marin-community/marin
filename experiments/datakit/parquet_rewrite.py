@@ -11,13 +11,17 @@ rerun skips their cached records and resumes at the first incomplete directory.
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import partial
 
 import click
 import pyarrow.parquet as pq
+from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, run
+from marin.execution.lazy import ArtifactStep, lower, run
+from marin.execution.step_runner import step_is_built
 from rigging.filesystem.cluster_config import marin_prefix, marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath
+from zephyr.execution import ZephyrContext
 
 from scripts.ops.storage.recompress_parquet import (
     DEFAULT_WORKER_CPU,
@@ -134,12 +138,10 @@ def inventory_rewrite_prefixes(rows: Sequence[InventoryManifestRow]) -> tuple[Re
     return tuple(steps)
 
 
-def _rewrite_prefix(config: RewriteConfig) -> ParquetRewriteArtifact:
+def _rewrite_prefix(config: RewriteConfig, *, context: ZephyrContext) -> ParquetRewriteArtifact:
     counters = run_migration(
         config.source_globs,
-        workers=config.pool.workers,
-        worker_cpu=config.pool.worker_cpu,
-        worker_ram=config.pool.worker_ram,
+        context=context,
         options=RewriteOptions(mode=RewriteMode.APPLY),
     )
     return ParquetRewriteArtifact(source_globs=config.source_globs, counters=counters)
@@ -148,6 +150,7 @@ def _rewrite_prefix(config: RewriteConfig) -> ParquetRewriteArtifact:
 def rewrite_train(
     prefixes: Sequence[RewritePrefix],
     *,
+    context: ZephyrContext,
     pool: RewriteWorkerPool = RewriteWorkerPool(),
 ) -> tuple[ArtifactStep[ParquetRewriteArtifact], ...]:
     """Build the ordered ArtifactSteps for the selected directories."""
@@ -164,7 +167,7 @@ def rewrite_train(
                 name=prefix.name,
                 version=REWRITE_VERSION,
                 artifact_type=ParquetRewriteArtifact,
-                run=_rewrite_prefix,
+                run=partial(_rewrite_prefix, context=context),
                 build_config=lambda _ctx, prefix=prefix: RewriteConfig(
                     source_globs=prefix.source_globs,
                     pool=pool,
@@ -180,13 +183,20 @@ def run_rewrite_train(
     pool: RewriteWorkerPool = RewriteWorkerPool(),
 ) -> ParquetRewriteArtifact:
     """Run the train sequentially and return the final completion artifact."""
-    steps = rewrite_train(prefixes, pool=pool)
-    result = None
-    for index, step in enumerate(steps, start=1):
-        logger.info("Running Parquet rewrite directory %d/%d: %s", index, len(steps), step.name)
-        result = run(step, max_concurrent=1)[0]
-    assert result is not None
-    return result
+    context = ZephyrContext(
+        name="recompress-parquet",
+        resources=ResourceConfig(cpu=pool.worker_cpu, ram=pool.worker_ram),
+        max_workers=pool.workers,
+    )
+    steps = rewrite_train(prefixes, context=context, pool=pool)
+    pending_steps = tuple(step for step in steps if not step_is_built(lower(step)))
+    logger.info("Running %d pending Parquet rewrite steps out of %d", len(pending_steps), len(steps))
+    if pending_steps:
+        with context:
+            for index, step in enumerate(pending_steps, start=1):
+                logger.info("Running pending Parquet rewrite step %d/%d: %s", index, len(pending_steps), step.name)
+                run(step, max_concurrent=1)
+    return ParquetRewriteArtifact.raw_load(steps[-1].path())
 
 
 def _print_artifact_list(rows: Sequence[InventoryManifestRow]) -> None:

@@ -1,13 +1,6 @@
-# Marin storage tooling
+# Marin GCS storage tooling
 
-Tooling for Marin's GCS and S3-compatible buckets.
-
-## Parquet recompression
-
-See the [Parquet recompression runbook] for the data-local dry-run and migration
-procedure.
-
-[Parquet recompression runbook]: ../../../docs/references/parquet-recompression.md
+Tooling for the `marin-*` GCS buckets.
 
 ## Weekly storage report
 
