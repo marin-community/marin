@@ -16,10 +16,11 @@ revision directly. There are three pin kinds:
 - Isolated uv lock (`evalchemy`, `harbor`, `MarinSkyRL`): the fork is a git
   dependency in `config/external/<fork>/uv.lock`. `uv run
   config/update-external.py <fork>` advances the lock and regenerates the pins.
-- Descriptor SHA (`vllm` TPU stack, `tpu-inference`): the fork tips live in
-  `config/external/vllm/tpu.toml`. This stack runs from an isolated `uvx`
-  environment, so its `jax`/`jaxlib`/`libtpu`/`torch` come from the forks' own
-  dependencies and there is no workspace lock change.
+- Paired release wheel (`vllm` TPU stack, `tpu-inference`):
+  `config/external/vllm/tpu.toml` selects both source revisions, while
+  `tpu_wheels.toml` pins the qualified public wheel pair used at runtime. The
+  pair runs in an isolated `uvx` environment, so there is no workspace lock
+  change.
 - Release wheel (`vllm` GPU): `config/external/vllm/gpu.toml` records a
   promoted, immutable wheel per architecture. See the GPU release pipeline below.
 
@@ -42,6 +43,12 @@ result on a `<branch>-next` branch, re-pin Marin, run the fork's declared
 end-to-end test, and on green open one draft Marin PR requesting the descriptor's
 reviewer. On an unresolved external blocker it files a "can't migrate" issue
 instead of a PR.
+
+The TPU vLLM group has one extra release boundary. A refresh selects both fork
+revisions, builds and qualifies one public wheel pair, and records that candidate
+in the same draft Marin PR. Human review happens before stable branch movement or
+release promotion. Promotion reuses the reviewed bytes and updates the same PR
+with the final release descriptor.
 
 `config/external/migration.toml` is the per-fork descriptor. It records the
 upstream repository, the pin kind, the fork branch the pin tracks, how to select a
@@ -92,16 +99,18 @@ loader validates.
 The refresh never force-moves a fork's stable branch. It stages on `<branch>-next`
 and leaves the protected stable branch at the old tip; the draft Marin PR names
 the `<branch>-next` to `<branch>` hard swap an admin performs after review. Because
-the staged tip and the eventual stable tip are the same commit, the pins need no
-change after promotion.
+the staged tip and the eventual stable tip are the same commit, source pins need
+no change after branch promotion. The TPU vLLM wheel descriptor does change from
+the qualified candidate tag to the final non-overwriting, hash-verified release
+tag after promotion; the package bytes and hashes stay fixed.
 
 ## Existing forks
 
 | Fork | Repository | Tracks upstream | Pin |
 |------|-----------|-----------------|-----|
-| vllm (TPU) | [`marin-community/vllm`](https://github.com/marin-community/vllm) | [`vllm-project/vllm`](https://github.com/vllm-project/vllm) | descriptor SHA on the `tpu` branch (`tpu.toml`) |
+| vllm (TPU) | [`marin-community/vllm`](https://github.com/marin-community/vllm) | [`vllm-project/vllm`](https://github.com/vllm-project/vllm) | member of the paired wheel release (`tpu_wheels.toml`) |
 | vllm (GPU) | [`marin-community/vllm`](https://github.com/marin-community/vllm) | [`vllm-project/vllm`](https://github.com/vllm-project/vllm) | release wheel from `main` (`gpu.toml`) |
-| tpu-inference | [`marin-community/tpu-inference`](https://github.com/marin-community/tpu-inference) | [`vllm-project/tpu-inference`](https://github.com/vllm-project/tpu-inference) | descriptor SHA (`tpu.toml`) |
+| tpu-inference | [`marin-community/tpu-inference`](https://github.com/marin-community/tpu-inference) | [`vllm-project/tpu-inference`](https://github.com/vllm-project/tpu-inference) | member of the paired wheel release (`tpu_wheels.toml`) |
 | evalchemy | [`marin-community/evalchemy`](https://github.com/marin-community/evalchemy) | [`mlfoundations/evalchemy`](https://github.com/mlfoundations/evalchemy) | isolated uv lock |
 | harbor | [`marin-community/harbor`](https://github.com/marin-community/harbor) | [`harbor-framework/harbor`](https://github.com/harbor-framework/harbor) | isolated uv lock |
 | MarinSkyRL | [`marin-community/MarinSkyRL`](https://github.com/marin-community/MarinSkyRL) | [`NovaSky-AI/SkyRL`](https://github.com/NovaSky-AI/SkyRL) | isolated uv lock |

@@ -72,7 +72,7 @@ jobs:
 
           # Launch one visible, self-reporting Weaver session for this fork unit. idempotency_key
           # keeps a rerun of the same weekly job from opening a second session.
-          goal="Use the refresh-fork skill to refresh ${FORKS} toward upstream: stage the refresh, pin Marin as the descriptor directs (a fork branch tip, or a promoted release wheel re-pinned from its manifest), run the fork's e2e, and on green open the Marin pin PR (or file the descriptor's blocker issue on a real external blocker)."
+          goal="Use the refresh-fork skill to refresh ${FORKS} toward upstream. Follow the descriptor's whole paired refresh: stage exact sources; for tpu-vllm, build and independently qualify one public wheel pair and pin its candidate descriptor without promotion; run the declared e2e; then open one draft Marin PR or file the descriptor's blocker issue."
           curl -sS --fail-with-body -X POST "${LOOM_URL}/api/runs" \
             -H "Authorization: Bearer $loom_token" \
             -H 'Content-Type: application/json' \

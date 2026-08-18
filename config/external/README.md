@@ -14,15 +14,15 @@ architecture-specific wheel URLs and SHA-256 digests. It is updated from the
 release manifest only after the H100 and GB200 publication gates pass. It is
 not a uv project and the nightly update does not advance it.
 
-`vllm/tpu.toml` records the `vllm` and `tpu-inference` fork SHAs for the
-TPU serving stack, which runs from an isolated uvx env rather than the workspace.
-It is not a uv project either; refresh it through
-`.agents/skills/refresh-fork/SKILL.md`.
+`vllm/tpu.toml` selects the `vllm` and `tpu-inference` source SHAs for the TPU
+stack. `vllm/tpu_wheels.toml` pins the qualified public wheel pair that serving
+installs into an isolated uvx env. Neither is a uv project; refresh the pair
+through `.agents/skills/refresh-fork/SKILL.md`.
 
 The packaged pin table at
 `lib/marin/src/marin/external_dependencies.py` is generated from the locks, the
-vLLM GPU release config, and the TPU serving fork descriptor. Runtime code imports
-that module instead of reading repository-relative configuration.
+vLLM GPU release config, and the TPU wheel descriptor. Runtime code imports that
+module instead of reading repository-relative configuration.
 
 Advance one project with:
 
@@ -73,8 +73,9 @@ The external configurations intentionally model only what Marin needs:
   external lock resolves its CPU-safe base for the isolated launcher. The
   launcher synchronizes the selected `fsdp` or `megatron` profile from that
   revision's frozen root lock inside the cluster's standard Iris task image.
-- `vllm` records the promoted GPU wheels (`gpu.toml`) and the TPU source
-  fork pins (`tpu.toml`). Neither is a workspace dependency.
+- `vllm` records the promoted GPU wheels (`gpu.toml`), the TPU pair's source
+  selection (`tpu.toml`), and its qualified public wheels (`tpu_wheels.toml`).
+  Neither runtime is a workspace dependency.
 
 Evaluation provenance stores the generated commit-pinned runtime requirement.
 For Evalchemy it identifies the exact Evalchemy checkout; for Harbor the one

@@ -26,10 +26,11 @@
 #                    the TPU launcher installs both pins at once and vllm's base derives from the
 #                    tpu-inference release, so a split refresh could pin a mixed, unblessed stack.
 #                    Omitted for pins that refresh alone.
-#   pin              Where the resolved pin is recorded: "isolated_project" (config/external/<name>/
-#                    uv.lock, follows the fork's main branch), "descriptor:<path>#<section>" (a SHA in a
-#                    vllm/*.toml section), or "release:<path>" (a prebuilt-wheel release: a release tag +
-#                    source commit + per-arch wheels, for a pin too expensive to build at job time).
+#   source           Optional source-selection descriptor used to build a release.
+#   pin              Where the runtime pin is recorded: "isolated_project" (config/external/<name>/
+#                    uv.lock), "descriptor:<path>#<section>" (a source SHA), "release:<path>" (one
+#                    prebuilt wheel release), or "paired_release:<path>" (one qualified two-package
+#                    release shared by every section in a group).
 #   branch           The fork branch this pin tracks. A single-pin fork tracks "main". The vllm fork
 #                    carries two pins on different upstream bases, so it splits them across two stable
 #                    branches: the GPU wheel builds from "main" and the TPU source pin lives on "tpu".
@@ -49,7 +50,8 @@
 [tpu-inference]
 upstream = "https://github.com/vllm-project/tpu-inference.git"
 group = "tpu-vllm"
-pin = "descriptor:vllm/tpu.toml#tpu-inference"
+source = "descriptor:vllm/tpu.toml#tpu-inference"
+pin = "paired_release:vllm/tpu_wheels.toml"
 branch = "main"
 base_select = "latest_release"
 e2e = "experiments/evals/served_qwen3.py::QWEN3_TPU_INFERENCE"
@@ -61,7 +63,8 @@ nuances = [
 [vllm]
 upstream = "https://github.com/vllm-project/vllm.git"
 group = "tpu-vllm"
-pin = "descriptor:vllm/tpu.toml#vllm"
+source = "descriptor:vllm/tpu.toml#vllm"
+pin = "paired_release:vllm/tpu_wheels.toml"
 branch = "tpu"
 base_select = "derived"
 derived_from = "tpu-inference:.buildkite/vllm_lkg.version"
