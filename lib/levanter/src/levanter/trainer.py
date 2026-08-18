@@ -697,10 +697,10 @@ class Trainer:
         return DataLoader(
             dataset,
             batch_size=batch_size,
-            max_buffered_batches=128,
+            max_buffered_batches=512,
             mesh=self.device_mesh,
             axis_resources=self.compute_axis_mapping,
-            prefetch_size=32,
+            prefetch_size=256,
             batch_axis_name=batch_name,
             allow_nondivisible_batch_size=self.config.allow_nondivisible_batch_size,
         )
