@@ -107,7 +107,7 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 Print the plan without a GPU run:
 
 ```bash
-python -m experiments.grug.moe_hero_ep.launch \
+python -m experiments.grug.moe_hero_ep.launch_mfu_test \
   --run-id mhep-pooled-wave \
   --num-steps 200 \
   --version 2026.08.14
@@ -123,7 +123,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
   --job-name "${run_id}-coord" \
   -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
   -e IRIS_PORT_JAX 32575 \
-  -- python -m experiments.grug.moe_hero_ep.launch \
+  -- python -m experiments.grug.moe_hero_ep.launch_mfu_test \
     --run-id "$run_id" --num-steps 200 --version 2026.08.14 --run
 ```
 
