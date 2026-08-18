@@ -174,8 +174,8 @@ for `telemetry_v1`'s 15 GiB is about four days and for `log`'s about eight. The
 rewrite keeps the filename and preserves the rows and their order, so it costs no
 remote bandwidth: the archive keys objects by basename and only uploads segments
 still marked `Local`. A rewritten segment's remote copy keeps the old layout
-while holding the same rows. The telemetry sort-policy change above does not bump
-this revision and therefore does not schedule that rewrite.
+while holding the same rows. Schema-level sort-policy changes do not bump this
+revision and therefore do not schedule that rewrite.
 
 Watch it with the `rewrote segment layout` events, which report the before and
 after byte size per segment. Confirm the era split before concluding a layout

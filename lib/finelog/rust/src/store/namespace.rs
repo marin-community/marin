@@ -1543,7 +1543,10 @@ impl Namespace {
                 break;
             };
             let started = Instant::now();
-            let (staging, size) = match stage_rewritten_segment(Path::new(&path)) {
+            let (staging, size) = match stage_rewritten_segment(
+                Path::new(&path),
+                self.max_row_group_rows,
+            ) {
                 Ok(staged) => staged,
                 Err(e) => {
                     tracing::warn!(namespace = %self.name, segment = %basename(&path), error = %e,

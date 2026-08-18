@@ -95,7 +95,7 @@ message Schema {
   // own their semantic meaning.
   repeated GroupedExtrema grouped_extrema = 4;
 
-  // Secondary compaction order. When set, Finelog sorts by these columns and
+  // Physical compaction order. When set, Finelog sorts by these columns and
   // appends the implicit seq column as a deterministic tie-breaker. Empty
   // retains a registered policy or uses key_column on first registration. The
   // key_column remains the event/range key used for retention metadata.

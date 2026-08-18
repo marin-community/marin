@@ -233,7 +233,11 @@ pub fn sort_col_indices(arrow_schema: &ArrowSchema, sort_columns: &[String]) -> 
         .expect("stored segment schema always carries the implicit seq column");
     let mut indices: Vec<usize> = sort_columns
         .iter()
-        .filter_map(|column| arrow_schema.index_of(column).ok())
+        .map(|column| {
+            arrow_schema.index_of(column).unwrap_or_else(|_| {
+                panic!("validated sort column {column:?} is missing from the stored schema")
+            })
+        })
         .filter(|&index| index != seq_idx)
         .collect();
     if !indices.contains(&seq_idx) {
@@ -487,6 +491,11 @@ mod tests {
         let s = schema();
         assert_eq!(sort_col_indices(&s, &["key".to_string()]), vec![1, 0]);
         assert_eq!(sort_col_indices(&s, &[]), vec![0]);
-        assert_eq!(sort_col_indices(&s, &["nope".to_string()]), vec![0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "validated sort column \"nope\" is missing")]
+    fn missing_configured_sort_column_is_a_programming_error() {
+        sort_col_indices(&schema(), &["nope".to_string()]);
     }
 }

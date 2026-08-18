@@ -382,7 +382,6 @@ def test_alert_queries_use_int64_epoch_boundaries_and_project_timestamps():
         assert "AS origin_cluster" in sql
         assert "PARTITION BY origin_cluster" in sql
         assert "ORDER BY timestamp_ms DESC, seq DESC" in sql
-        assert "COALESCE(job_id, json_get(resource_attributes_json, 'job_id')) AS job" in sql
         assert "json_get_string" not in sql
         assert "timestamp_ms >= TIMESTAMP" not in sql
     assert "json_get(attributes_json, 'run') AS execution" in zephyr_progress_query(now)

@@ -85,10 +85,6 @@ const REWRITE_BATCH_ROWS: usize = 8_192;
 /// cost fell on every flush. L1+ uses the schema's configured sort order plus
 /// `seq`, so min/max statistics prune clustered dimensions and the key band;
 /// substring queries prune from the trigram sidecar.
-pub fn segment_writer_properties() -> Result<WriterProperties, StatsError> {
-    segment_writer_properties_with_max_rows(MAX_ROW_GROUP_ROWS)
-}
-
 pub fn segment_writer_properties_with_max_rows(
     max_row_group_rows: usize,
 ) -> Result<WriterProperties, StatsError> {
@@ -358,7 +354,10 @@ pub fn segment_layout_is_current(path: &Path) -> bool {
 ///
 /// Streams a batch at a time rather than materializing the segment, which for a
 /// terminal-level file would be hundreds of MiB of Arrow.
-pub fn stage_rewritten_segment(path: &Path) -> Result<(PathBuf, i64), StatsError> {
+pub fn stage_rewritten_segment(
+    path: &Path,
+    max_row_group_rows: usize,
+) -> Result<(PathBuf, i64), StatsError> {
     let file = std::fs::File::open(path)
         .map_err(|e| StatsError::Internal(format!("open {}: {e}", path.display())))?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)
@@ -375,7 +374,7 @@ pub fn stage_rewritten_segment(path: &Path) -> Result<(PathBuf, i64), StatsError
         .map_err(|e| StatsError::Internal(format!("create {}: {e}", staging.display())))?;
     let opts = ArrowWriterOptions::new().with_properties(parquet_writer_properties_with_id(
         TARGET_ROW_GROUP_BYTES,
-        MAX_ROW_GROUP_ROWS,
+        max_row_group_rows,
         segment_id,
     )?);
     let mut writer = ArrowWriter::try_new_with_options(out, schema, opts)
@@ -756,7 +755,7 @@ mod tests {
         let first_id = segment_id(&first).unwrap();
         assert_ne!(first_id, segment_id(&second).unwrap());
 
-        let (staging, _) = stage_rewritten_segment(&first).unwrap();
+        let (staging, _) = stage_rewritten_segment(&first, MAX_ROW_GROUP_ROWS).unwrap();
         std::fs::rename(staging, &first).unwrap();
 
         assert_eq!(segment_id(&first), Some(first_id));
@@ -807,7 +806,8 @@ mod tests {
         let before_rows = read_all(&path);
         assert!(before_groups > 1, "fixture must have several row groups");
 
-        let (staging, size) = stage_rewritten_segment(&path).unwrap();
+        let max_row_group_rows = 32;
+        let (staging, size) = stage_rewritten_segment(&path, max_row_group_rows).unwrap();
         std::fs::rename(&staging, &path).unwrap();
 
         // Same file, same rows in the same order, now on the current layout.
@@ -819,6 +819,10 @@ mod tests {
             segment_row_group_rows(&path).unwrap().len() < before_groups,
             "the byte target should coalesce the legacy row groups"
         );
+        assert!(segment_row_group_rows(&path)
+            .unwrap()
+            .iter()
+            .all(|&rows| rows <= max_row_group_rows));
         // No stray staging file survives.
         assert!(!dir.join("seg_L1_0000000000000000001.parquet.tmp").exists());
 
