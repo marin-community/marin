@@ -10,10 +10,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Generic, Literal, TypeVar, cast, overload
 
-import fsspec
-from braceexpand import braceexpand
 from pyarrow import RecordBatch
-from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.glob import glob_with_metadata
 from rigging.filesystem.storage_path import StoragePath
 
 from zephyr.expr import Expr
@@ -26,8 +24,8 @@ logger = logging.getLogger(__name__)
 class GlobSource:
     """Lazy file source resolved at plan time via bulk list-objects calls.
 
-    Stores glob patterns and defers expansion to compute_plan(). Each expanded
-    pattern uses fsspec glob(detail=True) to return paths and sizes together.
+    Stores glob patterns and defers expansion to compute_plan(). Patterns are
+    expanded concurrently, with paths and sizes returned by the same listings.
     """
 
     patterns: tuple[str, ...]
@@ -54,20 +52,12 @@ class FileEntry:
 def resolve_glob(source: GlobSource) -> list[FileEntry]:
     """Expand a GlobSource into FileEntry objects with sizes.
 
-    Uses fsspec glob(detail=True) which returns file metadata from the same
-    list-objects API call — no extra per-file stat RPCs.
+    Listing requests are bounded by Rigging's glob worker limit. File metadata
+    comes from those requests, so expansion does not issue per-file stat RPCs.
     """
-    entries_by_path: dict[str, FileEntry] = {}
-    for source_pattern in source.patterns:
-        pattern = StoragePath.normalize(source_pattern)
-        for expanded in braceexpand(pattern):
-            fs, fs_pattern = filesystem_for(expanded)
-            protocol = fsspec.core.split_protocol(expanded)[0]
-            detail = fs.glob(fs_pattern, detail=True)
-            for path, info in detail.items():
-                full = f"{protocol}://{path}" if protocol else path
-                entries_by_path[full] = FileEntry(spec=InputFileSpec(path=full), size=info.get("size", 0))
-    entries = sorted(entries_by_path.values(), key=lambda entry: entry.path)
+    entries = [
+        FileEntry(spec=InputFileSpec(path=entry.path), size=entry.size) for entry in glob_with_metadata(source.patterns)
+    ]
 
     if not entries and not source.empty_glob_ok:
         raise FileNotFoundError(f"No files found matching patterns: {source.patterns}")

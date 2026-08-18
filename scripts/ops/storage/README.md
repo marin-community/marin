@@ -3,13 +3,6 @@
 Storage reporting for the `marin-*` GCS buckets and telemetry for CoreWeave
 object storage.
 
-## Parquet recompression
-
-See the [Parquet recompression runbook] for the data-local dry-run and migration
-procedure.
-
-[Parquet recompression runbook]: ../../../docs/references/parquet-recompression.md
-
 ## Weekly storage report
 
 `generate_report.py` is a one-command orchestrator: it opens a tunnel to the

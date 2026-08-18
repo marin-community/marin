@@ -15,17 +15,14 @@ Public API lives in those modules; helpers here are package-private.
 import json
 import logging
 import os
-import re
 import time
 from collections.abc import Iterator, Mapping, Sequence
 
-import braceexpand
-import fsspec
 import pyarrow.parquet as pq
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.text.formats import LmDatasetFormatBase, preprocessor_for_format
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
-from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.glob import glob_with_metadata
 from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
 from zephyr.dataset import Dataset, FileEntry
@@ -83,20 +80,9 @@ def drop_sidecars(files: list[FileEntry]) -> list[FileEntry]:
 def glob_with_sizes(patterns: list[str]) -> list[FileEntry]:
     """Glob patterns and return FileEntry objects (spec + size).
 
-    Uses fsspec ``glob(detail=True)`` which returns file metadata from the same
-    list-objects API call — no per-file stat RPCs needed. Works for gs://, hf://, s3://, local.
+    Pattern listings run concurrently and return sizes without per-file stat RPCs.
     """
-    results: list[FileEntry] = []
-    for pattern in patterns:
-        pattern = re.sub(r"(?<!:)//+", "/", pattern)
-        fs, _ = url_to_fs(pattern)
-        protocol = fsspec.core.split_protocol(pattern)[0]
-        for expanded in braceexpand.braceexpand(pattern):
-            detail = fs.glob(expanded, detail=True)
-            for path, info in detail.items():
-                full = f"{protocol}://{path}" if protocol else path
-                results.append(FileEntry(spec=InputFileSpec(path=full), size=info.get("size", 0)))
-    return results
+    return [FileEntry(spec=InputFileSpec(path=entry.path), size=entry.size) for entry in glob_with_metadata(patterns)]
 
 
 def expand_tokenize_paths(input_paths: list[str]) -> list[str]:
