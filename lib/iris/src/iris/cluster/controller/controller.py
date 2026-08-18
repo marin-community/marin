@@ -106,9 +106,10 @@ from iris.cluster.controller.scheduling.policy import (
 from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
-from iris.cluster.controller.service import CapabilityUrlConfig, ControllerServiceImpl, PendingKick
+from iris.cluster.controller.service import CapabilityUrlConfig, ControllerServiceImpl
 from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.worker_health import WorkerLiveness
+from iris.cluster.controller.workload_actions import WorkloadActions
 from iris.cluster.endpoints import TELEMETRY_ENDPOINT_PATH
 from iris.cluster.federation.availability import Promotion, QueuedCandidate
 from iris.cluster.federation.manager import (
@@ -127,8 +128,10 @@ from iris.cluster.types import (
     WorkerId,
 )
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, resource_job_pb2, resource_pb2, resource_task_pb2
 from iris.rpc.auth import SESSION_COOKIE
+from iris.rpc.resource_registry import ResourceRegistryBuilder
+from iris.rpc.resource_service import ResourceServiceImpl
 
 logger = logging.getLogger(__name__)
 
@@ -506,6 +509,31 @@ class Controller:
             db=self._db,
             system_endpoints={},
         )
+        self._workload_actions = WorkloadActions(
+            self._db,
+            cluster_id=config.cluster_id,
+            auth_required=bool(config.auth and config.auth.provider),
+            federation=self._federation,
+            wake=self.wake,
+        )
+        resource_registry = ResourceRegistryBuilder()
+        resource_registry.bind(
+            "/job/update",
+            self._workload_actions.update_job,
+            payload=resource_job_pb2.JobUpdate,
+        )
+        resource_registry.bind(
+            "/task/update",
+            self._workload_actions.update_task,
+            payload=resource_task_pb2.TaskUpdate,
+        )
+        resource_registry.bind(
+            "/attempt/update",
+            self._workload_actions.update_attempt,
+            payload=resource_task_pb2.AttemptUpdate,
+        )
+        resource_registry.bind("/operation/get", self._workload_actions.get_operation)
+        self._resource_service = ResourceServiceImpl(resource_registry.freeze())
         self._service = ControllerServiceImpl(
             controller=self,
             bundle_store=self._bundle_store,
@@ -519,6 +547,8 @@ class Controller:
                 local_origin=config.dashboard_url,
                 parent_origin=config.federation_public_parent,
             ),
+            resource_service=self._resource_service,
+            workload_actions=self._workload_actions,
         )
         # Forwards a /proxy request for an endpoint that lives on a federated child
         # to that peer's controller, presenting this cluster's federation bearer.
@@ -539,6 +569,7 @@ class Controller:
         self._external_auth_allows_anonymous = external_auth_policy.allows_anonymous
         self._dashboard = ControllerDashboard(
             self._service,
+            resource_service=self._resource_service,
             endpoint_service=self._endpoint_service,
             auth_provider=config.auth_provider,
             auth_policy=self._auth_policy,
@@ -560,10 +591,6 @@ class Controller:
         # request_worker_eviction / _drain_pending_evictions.
         self._pending_evictions: set[WorkerId] = set()
         self._pending_evictions_lock = threading.Lock()
-        # Task terminal-state overrides queued off the control loop for the next
-        # tick; see request_task_kicks / _drain_pending_kicks.
-        self._pending_kicks: list[PendingKick] = []
-        self._pending_kicks_lock = threading.Lock()
         self._server: uvicorn.Server | None = None
         self._native_proxy = None
         self._native_proxy_metrics: NativeProxyTelemetry | None = None
@@ -630,19 +657,6 @@ class Controller:
             return
         with self._pending_evictions_lock:
             self._pending_evictions.update(worker_ids)
-        self.wake()
-
-    def request_task_kicks(self, kicks: Sequence[PendingKick]) -> None:
-        """Queue task terminal-state overrides to apply on the next control tick.
-
-        Called off the control-loop thread by the KickTasks RPC. Queuing keeps the
-        kicks inside the tick's single write transaction so they cannot race the
-        scheduler's view of task state.
-        """
-        if not kicks:
-            return
-        with self._pending_kicks_lock:
-            self._pending_kicks.extend(kicks)
         self.wake()
 
     def _seed_backend_liveness(self) -> None:
@@ -1016,13 +1030,12 @@ class Controller:
             return
 
         self._drain_pending_evictions()
-        pending_kicks = self._drain_pending_kicks()
-
         run_autoscale = autoscale_limiter.should_run()
         run_schedule = woken or run_autoscale or schedule_limiter.should_run()
         run_reconcile = self._force_reconcile or reconcile_limiter.should_run()
         self._force_reconcile = False
         scan_timeouts = run_reconcile and (force_timeout_scan or self._timeout_rate_limiter.should_run())
+        verification_candidates = self._workload_actions.verification_candidates() if run_reconcile else {}
 
         inputs = self._build_tick_inputs(
             now=now,
@@ -1075,7 +1088,6 @@ class Controller:
             routing_unschedulable=routing_unschedulable,
             recon_results=recon_results,
             timeout_decisions=timeout_decisions,
-            pending_kicks=pending_kicks,
             auto_results=auto_results,
             federation_promotions=federation_promotions,
             expired_queued_federation=inputs.expired_queued_federation,
@@ -1093,12 +1105,6 @@ class Controller:
                 ", ".join(f"{p.job_id.to_wire()}->{p.peer_id}" for p in confirmed_promotions),
             )
 
-        # Force the next reconcile so workers are told to stop the kicked attempts
-        # promptly instead of waiting a full reconcile interval.
-        if pending_kicks:
-            self._force_reconcile = True
-            self._tick_wake.set()
-
         # Post-commit, in-memory: cache scheduling diagnostics, request a prompt
         # dispatch follow-up for fresh assignments.
         if merged_sched is not None:
@@ -1115,6 +1121,10 @@ class Controller:
         if run_reconcile:
             for backend_id in self._backend_ids:
                 self._backends[backend_id].run_teardown()
+        self._workload_actions.progress(
+            verification_candidates=verification_candidates,
+            reconciled_backends=frozenset(recon_results),
+        )
 
     def _build_tick_inputs(
         self,
@@ -1355,7 +1365,6 @@ class Controller:
         routing_unschedulable: list[tuple[PendingTask, str]],
         recon_results: dict[str, ReconcileResult],
         timeout_decisions: list[TerminalDecision],
-        pending_kicks: list[PendingKick],
         auto_results: dict[str, AutoscaleResult],
         federation_promotions: list[Promotion],
         expired_queued_federation: list[JobName],
@@ -1366,7 +1375,7 @@ class Controller:
         Order within the txn: schedule decisions (incl. backend pins + routing
         UNSCHEDULABLE), queued-handoff scheduling-timeout failures, federation queue
         promotions, each backend's reconcile effects, execution-timeout finalizations,
-        administrative kicks, per-backend autoscaler state. Each backend already authored
+        per-backend autoscaler state. Each backend already authored
         its own ``effects`` during reconcile; the controller just commits them uniformly.
         A no-op tick opens no transaction.
 
@@ -1385,13 +1394,7 @@ class Controller:
         )
         has_recon = any(not result.effects.is_empty for result in recon_results.values())
         if not (
-            has_sched
-            or has_recon
-            or timeout_decisions
-            or pending_kicks
-            or states
-            or federation_promotions
-            or expired_queued_federation
+            has_sched or has_recon or timeout_decisions or states or federation_promotions or expired_queued_federation
         ):
             return []
 
@@ -1419,13 +1422,6 @@ class Controller:
                     commit_effects(cur, result.effects)
             if timeout_decisions:
                 finalize(cur, timeout_decisions, now=now)
-            if pending_kicks:
-                # Resolve after the schedule/reconcile writes so the attempt
-                # re-check sees this tick's reassignments.
-                kick_decisions = self._resolve_pending_kicks(cur, pending_kicks)
-                if kick_decisions:
-                    finalize(cur, kick_decisions, now=now)
-                    logger.info("Admin kick: finalized %d task attempt(s)", len(kick_decisions))
             for state in states:
                 persist_autoscaler_state(cur, state)
         return confirmed
@@ -1713,36 +1709,6 @@ class Controller:
             if group:
                 self._backends[backend_id].teardown(group, reason=reason)
 
-    def _drain_pending_kicks(self) -> list[PendingKick]:
-        """Take the queued administrative kicks for this tick's commit."""
-        with self._pending_kicks_lock:
-            if not self._pending_kicks:
-                return []
-            drained = self._pending_kicks
-            self._pending_kicks = []
-        return drained
-
-    def _resolve_pending_kicks(self, cur: Tx, pending_kicks: list[PendingKick]) -> list[TerminalDecision]:
-        """Turn queued kicks into terminal decisions, dropping superseded attempts.
-
-        A kick targeting a specific attempt is dropped if that attempt is no longer
-        current (the task retried in the meantime); a kick with no attempt id takes
-        whatever attempt is current. Reads ``cur`` to see this tick's earlier writes.
-        """
-        decisions: list[TerminalDecision] = []
-        for kick in pending_kicks:
-            if kick.attempt_id is not None:
-                detail = reads.get_task_detail(cur, kick.task_id)
-                if detail is None or detail.current_attempt_id != kick.attempt_id:
-                    logger.info(
-                        "Dropping kick for %s: attempt %d is no longer current",
-                        kick.task_id.to_wire(),
-                        kick.attempt_id,
-                    )
-                    continue
-            decisions.append(TerminalDecision(kind=kick.kind, task_id=kick.task_id, reason=kick.reason))
-        return decisions
-
     def begin_checkpoint(self) -> tuple[str, CheckpointResult]:
         """Write a consistent SQLite checkpoint copy.
 
@@ -1833,8 +1799,20 @@ class Controller:
         self,
         request: controller_pb2.Controller.KickTasksRequest,
     ) -> controller_pb2.Controller.KickTasksResponse:
-        """Queue validated administrative state overrides for Tasks."""
+        """Apply legacy administrative state overrides through ResourceService."""
         return self._service.kick_tasks(request, None)
+
+    def update_resource(self, request: resource_pb2.UpdateResourceRequest) -> resource_pb2.Operation:
+        """Apply one generic resource mutation."""
+        return self._resource_service.update_resource(request, None)
+
+    def get_resource(self, request: resource_pb2.GetResourceRequest) -> resource_pb2.GetResourceResponse:
+        """Read one generic resource."""
+        return self._resource_service.get_resource(request, None)
+
+    def get_resource_service_info(self) -> resource_pb2.GetServiceInfoResponse:
+        """Return the installed generic resource capabilities."""
+        return self._resource_service.get_service_info(resource_pb2.GetServiceInfoRequest(), None)
 
     def register_endpoint(
         self,

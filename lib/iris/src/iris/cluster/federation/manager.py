@@ -1,12 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The federation manager: peer registry, handoff, delta-sync, and cancel.
+"""Peer registry, handoff, status synchronization, and resource transport.
 
 The controller composes one manager. It owns the peer registry, the submit-time
 :class:`~iris.cluster.federation.router.PeerRouter`, a capability heartbeat loop,
-and one sync loop per peer. Each sync pass delivers pending handoffs and cancels,
-then mirrors the peer's jobs into the local projection. Handoffs to one peer run
+and one sync loop per peer. Each sync pass delivers pending handoffs, then mirrors
+the peer's jobs into the local projection. Handoffs to one peer run
 with bounded concurrency. A slow LaunchJob delays only that peer's sync pass.
 Every durable mutation goes through an injected
 :class:`~iris.cluster.federation.store.FederationStore`, so the manager stays a
@@ -26,7 +26,7 @@ from typing import TypeVar
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from rigging.timing import Duration, Timestamp
+from rigging.timing import Duration
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY
@@ -41,14 +41,10 @@ from iris.cluster.federation.availability import (
 )
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitPlan
-from iris.cluster.federation.store import (
-    CancelTarget,
-    FederationStore,
-    HandoffSpec,
-)
+from iris.cluster.federation.store import FederationStore, HandoffSpec
 from iris.cluster.types import JobName
 from iris.managed_thread import ManagedThread, ThreadContainer
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, resource_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +101,7 @@ def _backend_availability(peer_id: str, backend: controller_pb2.Controller.Backe
 
 
 class FederationManager:
-    """Owns the federation peer registry, handoff, delta-sync, and cancel."""
+    """Own the federation peer registry, handoff, sync, and resource transport."""
 
     def __init__(
         self,
@@ -271,57 +267,6 @@ class FederationManager:
         for promotion in promotions:
             self._ledger.commit(promotion)
 
-    # -- cancel (parent side) ------------------------------------------------
-
-    def cancel_federated(self, local_job_id: JobName) -> None:
-        """Route a versioned cancel for a federated job to its peer.
-
-        Bumps ``cancel_intent_version`` (so a cancelled pending handoff is never
-        delivered and a retried cancel is a no-op) and routes the idempotent
-        ``TerminateJob(local_job_id)`` (the peer runs the same id). A transient
-        failure is not fatal — the sync loop re-drives the cancel until the peer acks
-        or observes the job terminal/pruned.
-        """
-        if self._store is None:
-            raise RuntimeError("federation cancel requires a store")
-        target = self._store.bump_cancel_intent(local_job_id)
-        if target is not None:
-            self._deliver_cancel(target)
-
-    def _deliver_cancel(self, target: CancelTarget) -> None:
-        """Route one ``TerminateJob`` to the peer.
-
-        A peer ``NOT_FOUND`` means the job is already gone (terminal-and-pruned),
-        which satisfies the cancel — terminalize the local mirror so the re-drive
-        stops. Any other RPC error is left for the next sync pass to retry.
-        """
-        assert self._store is not None
-        peer = self._peers.get(target.peer_id)
-        if peer is None:
-            logger.warning(
-                "Cannot cancel federated job %s: peer %s is not configured", target.local_job_id, target.peer_id
-            )
-            return
-        try:
-            peer.terminate_job(target.local_job_id)
-        except ConnectError as exc:
-            if exc.code == Code.NOT_FOUND:
-                self._store.mark_cancel_satisfied(target.local_job_id, now_ms=Timestamp.now().epoch_ms())
-                return
-            logger.warning(
-                "Routed cancel of %s to peer %s failed (will retry): %s",
-                target.local_job_id,
-                target.peer_id,
-                exc,
-            )
-        except (ConnectionError, OSError) as exc:
-            logger.warning(
-                "Routed cancel of %s to peer %s failed (will retry): %s",
-                target.local_job_id,
-                target.peer_id,
-                exc,
-            )
-
     # -- on-demand proxy (parent side) ---------------------------------------
 
     def proxy_to_peer(self, peer_id: str, call: Callable[[FederationPeer], _T]) -> _T:
@@ -334,6 +279,30 @@ class FederationManager:
         propagates back verbatim.
         """
         return call(self._require_peer(peer_id))
+
+    def update_resource(
+        self,
+        peer_id: str,
+        request: resource_pb2.UpdateResourceRequest,
+    ) -> resource_pb2.Operation:
+        """Send an exact mutation only when the peer advertises its payload."""
+        peer = self._require_peer(peer_id)
+        if not peer.supports_update(request.ref.type, request.update.type_url):
+            raise ConnectError(
+                Code.FAILED_PRECONDITION,
+                f"Peer {peer_id!r} does not support {request.ref.type} update {request.update.type_url}",
+            )
+        return peer.update_resource(request)
+
+    def supports_update(self, peer_id: str, resource_type: str, update_type_url: str) -> bool:
+        return self._require_peer(peer_id).supports_update(resource_type, update_type_url)
+
+    def get_resource(
+        self,
+        peer_id: str,
+        request: resource_pb2.GetResourceRequest,
+    ) -> resource_pb2.GetResourceResponse:
+        return self._require_peer(peer_id).get_resource(request)
 
     # -- background loops ----------------------------------------------------
 
@@ -386,9 +355,6 @@ class FederationManager:
                 futures = [executor.submit(self._deliver_handoff, spec) for spec in handoffs]
                 for future in futures:
                     future.result()
-        for target in self._store.pending_cancels():
-            if target.peer_id == peer.peer_id:
-                self._deliver_cancel(target)
         self._sync_peer(peer)
 
     def _redrive_pending_handoffs(self) -> None:

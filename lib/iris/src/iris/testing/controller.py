@@ -41,6 +41,7 @@ from iris.cluster.constraints import (
     zone_constraint,
 )
 from iris.cluster.controller import ops, reads, writes
+from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
@@ -84,6 +85,7 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthTracker,
     WorkerLiveness,
 )
+from iris.cluster.controller.workload_actions import WorkloadActions
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
@@ -99,7 +101,9 @@ from iris.cluster.types import (
     WorkerId,
 )
 from iris.managed_thread import get_thread_container
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, resource_job_pb2, resource_task_pb2
+from iris.rpc.resource_registry import ResourceRegistryBuilder
+from iris.rpc.resource_service import ResourceServiceImpl
 from iris.testing.backends import make_mock_platform
 from iris.testing.controller_state import (
     ControllerTestState,
@@ -296,7 +300,6 @@ class MockController:
     def __init__(self):
         self.wake = Mock()
         self.request_worker_eviction = Mock()
-        self.request_task_kicks = Mock()
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.last_scheduling_context = None
         self.provider = Mock()
@@ -328,12 +331,29 @@ class MockController:
     def liveness_for_worker(self, worker_id: WorkerId) -> WorkerLiveness:
         return self.all_liveness().get(worker_id, WorkerLiveness())
 
+    def update_resource(self, peer_id, request):
+        return self.federation.update_resource(peer_id, request)
+
+    def get_resource(self, peer_id, request):
+        return self.federation.get_resource(peer_id, request)
+
+    def supports_update(self, peer_id, resource_type, update_type_url):
+        return self.federation.supports_update(peer_id, resource_type, update_type_url)
+
 
 def make_mock_controller() -> MockController:
     return MockController()
 
 
-def make_controller_service(state, log_client, mock_controller, tmp_path) -> ControllerServiceImpl:
+def make_controller_service(
+    state,
+    log_client,
+    mock_controller,
+    tmp_path,
+    *,
+    auth: ControllerAuth | None = None,
+    cluster_id: str = "test",
+) -> ControllerServiceImpl:
     """Build a controller service with a fresh DB, log service, and mock controller.
 
     The service registers workers into and reads liveness through the controller's
@@ -341,12 +361,28 @@ def make_controller_service(state, log_client, mock_controller, tmp_path) -> Con
     writes and reads land on the same object the test inspects.
     """
     mock_controller.provider.health = state._health
+    actions = WorkloadActions(
+        state._db,
+        cluster_id=cluster_id,
+        auth_required=bool(auth and auth.provider),
+        federation=mock_controller,
+        wake=mock_controller.wake,
+    )
+    registry = ResourceRegistryBuilder()
+    registry.bind("/job/update", actions.update_job, payload=resource_job_pb2.JobUpdate)
+    registry.bind("/task/update", actions.update_task, payload=resource_task_pb2.TaskUpdate)
+    registry.bind("/attempt/update", actions.update_attempt, payload=resource_task_pb2.AttemptUpdate)
+    registry.bind("/operation/get", actions.get_operation)
+    resource_service = ResourceServiceImpl(registry.freeze())
     return ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
+        auth=auth,
         endpoint_service=EndpointServiceImpl(db=state._db),
+        resource_service=resource_service,
+        workload_actions=actions,
     )
 
 

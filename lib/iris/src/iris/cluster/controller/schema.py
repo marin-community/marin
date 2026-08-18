@@ -455,6 +455,64 @@ task_attempts_table = Table(
 )
 
 
+resource_operations_table = Table(
+    "resource_operations",
+    metadata,
+    Column("operation_id", String, primary_key=True),
+    Column("principal_id", String, nullable=False),
+    Column("request_id", String, nullable=False),
+    Column("request_hash", String, nullable=False),
+    Column("verb", String, nullable=False),
+    Column("requested_authority", String, nullable=False),
+    Column("requested_type", String, nullable=False),
+    Column("requested_id", String, nullable=False),
+    Column("requested_uid", String),
+    Column("resolved_authority", String, nullable=False),
+    Column("resolved_type", String, nullable=False),
+    Column("resolved_id", String, nullable=False),
+    Column("resolved_uid", String, nullable=False),
+    Column("update_type_url", String, nullable=False),
+    Column("update_payload", LargeBinary, nullable=False),
+    Column("reason", String, nullable=False, server_default=""),
+    Column("phase", String, nullable=False),
+    Column("peer_id", String, nullable=False, server_default=""),
+    Column("remote_operation_id", String, nullable=False, server_default=""),
+    Column("error_code", Integer),
+    Column("error_message", String, nullable=False, server_default=""),
+    Column("accepted_at_ms", TimestampMsType, nullable=False),
+    Column("applied_at_ms", TimestampMsType),
+    Column("completed_at_ms", TimestampMsType),
+    UniqueConstraint("principal_id", "request_id", name="resource_operations_principal_request_key"),
+    CheckConstraint(
+        "phase IN ('accepted', 'verifying', 'verified', 'failed')",
+        name="resource_operations_phase_check",
+    ),
+    Index("idx_resource_operations_phase", "phase", "accepted_at_ms"),
+)
+
+
+resource_operation_targets_table = Table(
+    "resource_operation_targets",
+    metadata,
+    Column(
+        "operation_id",
+        String,
+        ForeignKey("resource_operations.operation_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("authority_cluster_id", String, nullable=False),
+    Column("resource_type", String, nullable=False),
+    Column("resource_id", String, nullable=False),
+    Column("resource_uid", String, nullable=False),
+    Column("task_id", JobNameType, nullable=False),
+    Column("attempt_id", Integer, nullable=False),
+    Column("attempt_uid", String, nullable=False),
+    Column("backend_id", String, nullable=False),
+    PrimaryKeyConstraint("operation_id", "attempt_uid"),
+    Index("idx_resource_operation_targets_attempt", "attempt_uid"),
+)
+
+
 workers_table = Table(
     "workers",
     metadata,

@@ -38,7 +38,17 @@ FEDERATION_PEER_ROLE = "federation-peer"
 # RPCs a federation-peer identity may call unconditionally: whole-job handoff, routed
 # cancel, delta-sync, and the capability heartbeat. A default-deny allowlist, like
 # DASHBOARD_READABLE_RPCS.
-FEDERATION_RPCS: frozenset[str] = frozenset({"LaunchJob", "TerminateJob", "FederationSync", "ListBackends"})
+FEDERATION_RPCS: frozenset[str] = frozenset(
+    {
+        "LaunchJob",
+        "TerminateJob",
+        "FederationSync",
+        "ListBackends",
+        "GetResource",
+        "UpdateResource",
+        "GetServiceInfo",
+    }
+)
 
 # On-demand debug proxies a federation-peer identity may call, but only after the
 # handler confirms the target task belongs to a job that peer federated here (its
@@ -80,6 +90,8 @@ DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
         "GetTaskStatus",
         "ListTasks",
         "GetProcessStatus",
+        "GetResource",
+        "GetServiceInfo",
         # Workers, endpoints, scheduler, autoscaler
         "ListWorkers",
         "GetWorkerStatus",

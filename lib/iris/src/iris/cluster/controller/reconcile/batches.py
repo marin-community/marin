@@ -244,7 +244,7 @@ class ReconcileState:
         return self.overlay.effects
 
     def finalize_tasks(self, decisions: list[task.TerminalDecision]) -> ControllerEffects:
-        """Batched terminal-state assertions: preempt / timeout / unschedulable."""
+        """Apply a batch of controller-authored terminal decisions."""
         if not decisions:
             return self.overlay.effects
         now_ms = self._snapshot.now.epoch_ms()
@@ -257,28 +257,28 @@ class ReconcileState:
             seen_tasks.add(decision.task_id)
             ordered.append(decision)
 
-        # Batch timeout decisions together so the two-phase sibling dedup
-        # operates on the full set at once.
-        timeout_rows: list[ActiveTaskRow] = []
-        timeout_reason: str | None = None
-        for decision in ordered:
-            if decision.kind is not task.TerminalKind.TIMEOUT:
-                continue
-            row = task.active_row_from_snapshot(self._snapshot, decision.task_id)
-            if row is None:
-                continue
-            timeout_rows.append(row)
-            if timeout_reason is None:
-                timeout_reason = decision.reason
-        if timeout_rows and timeout_reason is not None:
-            self._cascade_timeouts(timeout_rows, timeout_reason, now_ms)
+        for kind, action in (
+            (task.TerminalKind.TIMEOUT, "task_timeout"),
+            (task.TerminalKind.FAIL, "task_failed_by_operator"),
+        ):
+            rows = [
+                row
+                for decision in ordered
+                if decision.kind is kind
+                if (row := task.active_row_from_snapshot(self._snapshot, decision.task_id)) is not None
+            ]
+            reason = next((decision.reason for decision in ordered if decision.kind is kind), None)
+            if rows and reason is not None:
+                self._cascade_forced_failures(rows, reason, now_ms, action=action)
 
         for decision in ordered:
             if decision.kind is task.TerminalKind.PREEMPT:
                 self._apply_preempt_decision(decision, now_ms)
+            elif decision.kind is task.TerminalKind.TERMINATE:
+                self._apply_terminate_decision(decision, now_ms)
             elif decision.kind is task.TerminalKind.UNSCHEDULABLE:
                 self._apply_unschedulable_decision(decision)
-            # TIMEOUT handled above.
+            # TIMEOUT and FAIL are handled in the grouped pass above.
 
         self._recompute_and_finalize(now_ms)
         return self.overlay.effects
@@ -607,8 +607,35 @@ class ReconcileState:
             )
         )
 
-    def _cascade_timeouts(self, rows: list[ActiveTaskRow], reason: str, now_ms: int) -> None:
-        """Two-phase timeout cascade with sibling dedup.
+    def _apply_terminate_decision(self, decision: task.TerminalDecision, now_ms: int) -> None:
+        row = task.active_row_from_snapshot(self._snapshot, decision.task_id)
+        outcome = task.terminate_one(
+            self.overlay,
+            self._snapshot,
+            decision.task_id,
+            decision.reason,
+            row=row,
+        )
+        if outcome is None:
+            return
+        self._fan_out(outcome, child_reason=decision.reason, now_ms=now_ms)
+        self.overlay.emit_log_event(
+            LogEvent(
+                action="task_terminated_by_operator",
+                entity_id=decision.task_id.to_wire(),
+                details=(("reason", decision.reason),),
+            )
+        )
+
+    def _cascade_forced_failures(
+        self,
+        rows: list[ActiveTaskRow],
+        reason: str,
+        now_ms: int,
+        *,
+        action: str,
+    ) -> None:
+        """Fail selected tasks and their coscheduled siblings with one deduped cascade.
 
         Notes touched jobs; the recompute pass finalizes any that go terminal.
         """
@@ -655,6 +682,4 @@ class ReconcileState:
             self._note(JobName.from_wire(job_id_wire))
 
         for tid in task_ids_to_log:
-            self.overlay.emit_log_event(
-                LogEvent(action="task_timeout", entity_id=tid.to_wire(), details=(("reason", reason),))
-            )
+            self.overlay.emit_log_event(LogEvent(action=action, entity_id=tid.to_wire(), details=(("reason", reason),)))

@@ -11,6 +11,7 @@ aggregated from task states.
 import json
 import logging
 import secrets
+import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -21,6 +22,8 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from google.protobuf import any_pb2
+from google.protobuf.message import Message
 from rigging.connect import capability_path, federated_capability_path
 from rigging.server_auth import ANONYMOUS_ADMIN, VerifiedIdentity, get_verified_identity, require_identity
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
@@ -61,7 +64,6 @@ from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
-from iris.cluster.controller.reconcile.task import TerminalKind
 from iris.cluster.controller.scheduling.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
     federation_changelog_table,
@@ -78,6 +80,7 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerLiveness
+from iris.cluster.controller.workload_actions import ATTEMPT_TYPE, JOB_TYPE, TASK_TYPE, WorkloadActions
 from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
@@ -109,7 +112,16 @@ from iris.cluster.types import (
     is_federated,
     is_job_finished,
 )
-from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
+from iris.rpc import (
+    controller_pb2,
+    job_pb2,
+    query_pb2,
+    resource_job_pb2,
+    resource_pb2,
+    resource_task_pb2,
+    vm_pb2,
+    worker_pb2,
+)
 from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authorize_resource_owner
 from iris.rpc.proto_display import (
     job_state_friendly,
@@ -117,6 +129,7 @@ from iris.rpc.proto_display import (
     resolve_container_profile,
     task_state_friendly,
 )
+from iris.rpc.resource_service import ResourceServiceImpl
 from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -292,12 +305,7 @@ USER_JOB_STATES = (
     job_pb2.JOB_STATE_UNSCHEDULABLE,
 )
 
-# Terminal states KickTasks can force, mapped to the reconcile kernel's
-# terminal-transition kind. PREEMPTED retries if budget remains; FAILED does not.
-_KICK_KIND_BY_STATE: dict[int, TerminalKind] = {
-    job_pb2.TASK_STATE_PREEMPTED: TerminalKind.PREEMPT,
-    job_pb2.TASK_STATE_FAILED: TerminalKind.TIMEOUT,
-}
+_KICK_STATES = frozenset({job_pb2.TASK_STATE_PREEMPTED, job_pb2.TASK_STATE_FAILED})
 
 
 @dataclass(frozen=True, slots=True)
@@ -1030,20 +1038,6 @@ def _attempts_for_worker(
 
 
 @dataclass(frozen=True, slots=True)
-class PendingKick:
-    """A queued administrative task kick.
-
-    ``attempt_id`` is the targeted attempt, or ``None`` to take whatever attempt
-    is current when the kick is applied.
-    """
-
-    task_id: JobName
-    attempt_id: int | None
-    kind: TerminalKind
-    reason: str
-
-
-@dataclass(frozen=True, slots=True)
 class CapabilityUrlConfig:
     """Origins for fully-qualifying a minted endpoint's capability URL.
 
@@ -1071,8 +1065,6 @@ class ControllerProtocol(Protocol):
     def wake(self) -> None: ...
 
     def request_worker_eviction(self, worker_ids: Sequence[WorkerId]) -> None: ...
-
-    def request_task_kicks(self, kicks: Sequence[PendingKick]) -> None: ...
 
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
 
@@ -1161,6 +1153,8 @@ class ControllerServiceImpl:
         auth: ControllerAuth | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
         capability_url_config: CapabilityUrlConfig | None = None,
+        resource_service: ResourceServiceImpl | None = None,
+        workload_actions: WorkloadActions | None = None,
     ):
         # Every cursor this DB mints carries the per-controller cache registry as
         # ``tx.caches``, so cache-touching reads/writes reach the derived-count memo
@@ -1176,6 +1170,8 @@ class ControllerServiceImpl:
         self._auth = auth or ControllerAuth()
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
         self._capability_url_config = capability_url_config or CapabilityUrlConfig()
+        self._resource_service = resource_service
+        self._workload_actions = workload_actions
         self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
         self._db.attach_task_event_table(
             self._log_client.get_table(
@@ -1265,25 +1261,6 @@ class ControllerServiceImpl:
             raise ConnectError(Code.PERMISSION_DENIED, "The federation handoff field may only be set by a trusted peer.")
         if not job_id.is_root:
             raise ConnectError(Code.INVALID_ARGUMENT, "A federation handoff must be a root job.")
-
-    def _authorize_job_actor(self, job_id: JobName) -> None:
-        """Authorize the caller to act on ``job_id`` (e.g. route a cancel).
-
-        The job owner or an admin passes, as with :meth:`_authorize_job_owner`. A
-        federation peer additionally passes for a job it federated here — its verified
-        requester matches the job's received handle — so the parent can route a cancel
-        for a handed-off job whose local owner it is not.
-        """
-        if not self._auth.provider:
-            return
-        identity = get_verified_identity()
-        if identity is not None and identity.role == FEDERATION_PEER_ROLE:
-            with self._db.read_snapshot() as snap:
-                handoff = reads.received_handoff(snap, job_id)
-                if handoff is not None and handoff.requester_id == identity.user_id:
-                    return
-            raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {job_id}")
-        authorize_resource_owner(job_id.user)
 
     def _authorize_federated_debug_target(self, root_job: JobName) -> None:
         """Scope a federation peer's on-demand debug RPC to a job it federated here.
@@ -2006,45 +1983,22 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.TerminateJobRequest,
         ctx: Any,
     ) -> job_pb2.Empty:
-        """Terminate a running job and all its children.
-
-        Cascade termination is performed depth-first: all children are
-        terminated before the parent. All tasks within each job are killed.
-        """
-        job_id = JobName.from_wire(request.job_id)
-        state = _job_state(self._db, job_id)
-        if state is None:
-            raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
-
-        # Owner, admin, or the peer that federated this job here (a routed cancel).
-        self._authorize_job_actor(job_id)
-
-        # A federated handle owns no local tasks — its subtree lives on the peer.
-        # Route a versioned, idempotent cancel there; the next sync mirrors the
-        # peer's terminal state (and eventually its tombstone) back.
-        with self._db.read_snapshot() as snap:
-            has_federated_handle = reads.federated_handle(snap, job_id) is not None
-        if has_federated_handle:
-            self._controller.federation.cancel_federated(job_id)
-            return job_pb2.Empty()
-
-        # cancel_job uses a recursive CTE to walk the full subtree in a single
-        # transaction, so there is no need to recurse manually.
-        with self._db.transaction() as cur:
-            ops.job.cancel(
-                cur,
-                job_id=job_id,
-                reason="Terminated by user",
-            )
-            # Re-report the job's state to its requester (a no-op unless this
-            # root was received via handoff). A routed cancel of an already-
-            # terminal job changes nothing, and this re-report is what converges
-            # the parent's stale mirror and stops its cancel re-drive.
-            writes.record_federation_change(cur, job_id)
-        # The next polling tick reconciles each affected worker; the
-        # cancellation appears in the desired-set diff so the worker stops
-        # the attempt within one tick rather than waiting on the next backoff.
-        self._controller.wake()
+        """Translate the compatibility RPC into a logical-current Job update."""
+        resource_service, actions = self._resource_bindings()
+        update = resource_job_pb2.JobUpdate(cancel=resource_job_pb2.CancelJob())
+        packed = any_pb2.Any()
+        packed.Pack(update)
+        resource_service.update_resource(
+            resource_pb2.UpdateResourceRequest(
+                mutation=resource_pb2.MutationMetadata(
+                    request_id=uuid.uuid4().hex,
+                    reason="Terminated by user",
+                ),
+                ref=actions.logical_ref(JOB_TYPE, request.job_id),
+                update=packed,
+            ),
+            ctx,
+        )
         return job_pb2.Empty()
 
     def _job_to_proto(
@@ -2273,45 +2227,71 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.KickTasksRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.KickTasksResponse:
-        """Force task attempts into a terminal state out-of-band (emergency override).
-
-        Validates each target against the current snapshot and queues the accepted
-        ones on the controller for the next control tick to apply. Returns one
-        ``KickResult`` per resolved task reporting whether it was queued.
-        """
-        kind = _KICK_KIND_BY_STATE.get(request.desired_state)
-        if kind is None:
-            allowed = ", ".join(task_state_friendly(state) for state in _KICK_KIND_BY_STATE)
+        """Translate the compatibility batch into independent resource updates."""
+        if request.desired_state not in _KICK_STATES:
+            allowed = ", ".join(task_state_friendly(state) for state in _KICK_STATES)
             raise ConnectError(Code.INVALID_ARGUMENT, f"desired_state must be one of: {allowed}")
         if not request.targets:
             raise ConnectError(Code.INVALID_ARGUMENT, "at least one target is required")
 
         reason = request.reason or f"Kicked to {task_state_friendly(request.desired_state)} by operator"
 
+        resolved: list[tuple[str, str, str]] = []
         results: list[controller_pb2.Controller.KickResult] = []
-        kicks: list[PendingKick] = []
         with self._db.read_snapshot() as tx:
             for target in request.targets:
-                self._resolve_kick_target(tx, target, kind, reason, kicks, results)
+                self._resolve_legacy_kick_target(tx, target, resolved, results)
 
-        self._controller.request_task_kicks(kicks)
+        resource_service, actions = self._resource_bindings()
+        for target, task_id, resource_id in resolved:
+            is_attempt = resource_id != task_id
+            update: Message
+            if request.desired_state == job_pb2.TASK_STATE_PREEMPTED:
+                intent = resource_task_pb2.PreemptAttempt()
+                update = (
+                    resource_task_pb2.AttemptUpdate(preempt=intent)
+                    if is_attempt
+                    else resource_task_pb2.TaskUpdate(preempt=intent)
+                )
+            else:
+                intent = resource_task_pb2.FailAttempt()
+                update = (
+                    resource_task_pb2.AttemptUpdate(fail=intent)
+                    if is_attempt
+                    else resource_task_pb2.TaskUpdate(fail=intent)
+                )
+            packed = any_pb2.Any()
+            packed.Pack(update)
+            try:
+                resource_service.update_resource(
+                    resource_pb2.UpdateResourceRequest(
+                        mutation=resource_pb2.MutationMetadata(request_id=uuid.uuid4().hex, reason=reason),
+                        ref=actions.logical_ref(ATTEMPT_TYPE if is_attempt else TASK_TYPE, resource_id),
+                        update=packed,
+                    ),
+                    ctx,
+                )
+            except ConnectError as error:
+                results.append(
+                    controller_pb2.Controller.KickResult(
+                        target=target,
+                        task_id=task_id,
+                        queued=False,
+                        detail=error.message,
+                    )
+                )
+            else:
+                results.append(controller_pb2.Controller.KickResult(target=target, task_id=task_id, queued=True))
         return controller_pb2.Controller.KickTasksResponse(results=results)
 
-    def _resolve_kick_target(
+    def _resolve_legacy_kick_target(
         self,
         tx: Tx,
         target: str,
-        kind: TerminalKind,
-        reason: str,
-        kicks: list[PendingKick],
+        resolved: list[tuple[str, str, str]],
         results: list[controller_pb2.Controller.KickResult],
     ) -> None:
-        """Validate one kick target, appending its queued kicks and result rows.
-
-        A task or task-attempt id targets a single task; a job id expands to the
-        job's active tasks. Only tasks running on a worker (ASSIGNED / BUILDING /
-        RUNNING) can be kicked; anything else is rejected with a reason.
-        """
+        """Expand one legacy target without assigning mutation semantics here."""
 
         def reject(detail: str, *, task_id: str = "") -> None:
             results.append(
@@ -2328,21 +2308,10 @@ class ControllerServiceImpl:
         self._authorize_job_owner(name)
 
         if name.is_task:
-            detail = reads.get_task_detail(tx, name)
-            if detail is None:
-                reject("task not found")
-                return
-            if task_attempt.attempt_id is not None and task_attempt.attempt_id != detail.current_attempt_id:
-                reject(
-                    f"attempt {task_attempt.attempt_id} is not current (current is {detail.current_attempt_id})",
-                    task_id=name.to_wire(),
-                )
-                return
-            if detail.state not in ACTIVE_TASK_STATES:
-                reject(f"task is {task_state_friendly(detail.state)}, not running on a worker", task_id=name.to_wire())
-                return
-            kicks.append(PendingKick(task_id=name, attempt_id=task_attempt.attempt_id, kind=kind, reason=reason))
-            results.append(controller_pb2.Controller.KickResult(target=target, task_id=name.to_wire(), queued=True))
+            resource_id = (
+                f"{name.to_wire()}:{task_attempt.attempt_id}" if task_attempt.attempt_id is not None else name.to_wire()
+            )
+            resolved.append((target, name.to_wire(), resource_id))
             return
 
         # Job target: expand to its active tasks.
@@ -2357,10 +2326,12 @@ class ControllerServiceImpl:
             reject("job has no tasks running on a worker", task_id=name.to_wire())
             return
         for row in active:
-            kicks.append(PendingKick(task_id=row.task_id, attempt_id=None, kind=kind, reason=reason))
-            results.append(
-                controller_pb2.Controller.KickResult(target=target, task_id=row.task_id.to_wire(), queued=True)
-            )
+            resolved.append((target, row.task_id.to_wire(), row.task_id.to_wire()))
+
+    def _resource_bindings(self) -> tuple[ResourceServiceImpl, WorkloadActions]:
+        if self._resource_service is None or self._workload_actions is None:
+            raise RuntimeError("workload resource bindings are not configured")
+        return self._resource_service, self._workload_actions
 
     # --- Worker Management ---
 

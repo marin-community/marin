@@ -1,14 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The persistence surface the federation manager drives, as a Protocol.
-
-The manager owns the *orchestration* of handoff, sync, and cancel (retry loops,
-per-peer sync ticks, race handling); every durable mutation goes through a
-:class:`FederationStore`. The controller implements it against its own tables,
-so the manager stays a self-contained module that depends only on this Protocol
-and can be exercised with a fake store.
-"""
+"""Persistence used by federated handoff and status synchronization."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -75,14 +68,6 @@ class HandoffSpec:
     handoff_nonce: str = ""
 
 
-@dataclass(frozen=True)
-class CancelTarget:
-    """What a routed cancel must address on the peer, plus the local handle it backs."""
-
-    local_job_id: JobName  # this cluster's local job id (== the peer's id), to terminalize on NOT_FOUND
-    peer_id: str
-
-
 class FederationStore(Protocol):
     """Durable operations the federation manager performs against the parent DB."""
 
@@ -113,17 +98,6 @@ class FederationStore(Protocol):
         """Every handle still in ``PENDING_HANDOFF`` (boot re-drive + retry)."""
         ...
 
-    def pending_cancels(self) -> list[CancelTarget]:
-        """Every SENT handle whose cancel intent is set but whose local mirrored job
-        is not yet terminal — the routed ``TerminateJob`` to re-drive each sync tick
-        until the peer acks or sync observes it terminal/pruned."""
-        ...
-
-    def mark_cancel_satisfied(self, local_job_id: JobName, *, now_ms: int) -> None:
-        """Terminalize the local mirrored job after a peer ``NOT_FOUND`` (the peer
-        already pruned it), so it drops out of :meth:`pending_cancels`."""
-        ...
-
     def read_cursor(self, peer_id: str) -> str:
         """The persisted sync cursor for ``peer_id`` ("" on first contact)."""
         ...
@@ -143,11 +117,6 @@ class FederationStore(Protocol):
         peer's full active set, so also set-replace: drop any local handle for
         ``peer_id`` absent from it. ``endpoints`` is the peer's full current endpoint
         set; the parent set-replaces its mirrored endpoints for ``peer_id`` from it."""
-        ...
-
-    def bump_cancel_intent(self, local_job_id: JobName) -> CancelTarget | None:
-        """Bump ``cancel_intent_version`` and return the peer to cancel, or ``None``
-        if ``local_job_id`` is not a federated handle."""
         ...
 
     def active_federated_job_count(self, peer_id: str) -> int:

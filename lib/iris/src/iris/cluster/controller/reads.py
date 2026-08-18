@@ -1992,25 +1992,6 @@ def expired_queued_handoffs(tx: Tx, now_ms: int) -> list[JobName]:
     return [r.job_id for r in rows]
 
 
-def pending_cancel_handles(tx: Tx) -> list[FederatedHandle]:
-    """SENT handles with a cancel intent set whose local mirrored job is not terminal.
-
-    These are the routed ``TerminateJob`` targets the sync loop re-drives until the
-    peer acks or sync mirrors the job terminal/pruned.
-    """
-    rows = tx.execute(
-        select(*_SENT_HANDLE_COLUMNS)
-        .select_from(federated_jobs_table.join(jobs_table, jobs_table.c.job_id == federated_jobs_table.c.job_id))
-        .where(
-            federated_jobs_table.c.direction == int(FederationDirection.SENT),
-            federated_jobs_table.c.cancel_intent_version > 0,
-            jobs_table.c.state.notin_(bindparam("terminal_states", expanding=True)),
-        ),
-        {"terminal_states": list(TERMINAL_JOB_STATES)},
-    ).all()
-    return [_sent_handle(r) for r in rows]
-
-
 def federated_sent_job(tx: Tx, peer_id: str, job_id: JobName) -> JobName | None:
     """``job_id`` iff a SENT ``federated_jobs`` handle for ``(peer_id, job_id)`` exists.
 

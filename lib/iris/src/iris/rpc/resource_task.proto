@@ -1,0 +1,31 @@
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+
+edition = "2023";
+
+package iris.resource.task;
+
+option features.field_presence = EXPLICIT;
+
+message PreemptAttempt {}
+message FailAttempt {}
+message TerminateAttempt {}
+
+// A Task update selects the Task incarnation, then binds its current Attempt in
+// the same transaction that accepts the operation.
+message TaskUpdate {
+  oneof intent {
+    PreemptAttempt preempt = 1;
+    FailAttempt fail = 2;
+    TerminateAttempt terminate = 3;
+  }
+}
+
+// An Attempt update addresses the numbered Attempt in the ResourceRef.
+message AttemptUpdate {
+  oneof intent {
+    PreemptAttempt preempt = 1;
+    FailAttempt fail = 2;
+    TerminateAttempt terminate = 3;
+  }
+}

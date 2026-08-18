@@ -274,6 +274,19 @@ class JourneyWorld:
             constraint.value.string_value = value
         response = self.controller.launch_job(request)
         ref = JobRef(response.job_id, tasks, coscheduled)
+        if ref.wire_id in self._jobs:
+            task_prefix = f"{ref.wire_id}/"
+            self._task_history = {
+                task_id: history
+                for task_id, history in self._task_history.items()
+                if not task_id.startswith(task_prefix)
+            }
+            self._terminal_tasks = {task_id for task_id in self._terminal_tasks if not task_id.startswith(task_prefix)}
+            self._prior_backend_events = [
+                event for event in self._prior_backend_events if not event.task_id.startswith(task_prefix)
+            ]
+            for backend in self.backends.values():
+                backend.events[:] = [event for event in backend.events if not event.task_id.startswith(task_prefix)]
         self._jobs[ref.wire_id] = ref
         self.trace.append(f"submit {ref.wire_id} tasks={tasks}")
         self._check_invariants()

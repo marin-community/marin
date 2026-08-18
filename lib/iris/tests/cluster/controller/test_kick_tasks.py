@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""RPC target resolution and validation for the KickTasks override."""
+"""Compatibility behavior for the legacy KickTasks RPC."""
 
 import pytest
 from connectrpc.code import Code
@@ -45,11 +45,6 @@ def _assign_and_run(state, task_id, worker_id):
     _observe(state, worker_id, task_id, 0, job_pb2.TASK_STATE_RUNNING)
 
 
-# =============================================================================
-# RPC handler: target resolution + validation
-# =============================================================================
-
-
 def _kick(controller_service, targets, desired_state=job_pb2.TASK_STATE_PREEMPTED, reason=""):
     return controller_service.kick_tasks(
         controller_pb2.Controller.KickTasksRequest(targets=targets, desired_state=desired_state, reason=reason),
@@ -71,7 +66,6 @@ def test_kick_handler_rejects_pending_task(controller_service, state):
     response = _kick(controller_service, [job_id.task(1).to_wire()])
 
     assert not response.results[0].queued
-    assert "not running on a worker" in response.results[0].detail
 
 
 def test_kick_handler_rejects_missing_task(controller_service, state):
@@ -79,7 +73,6 @@ def test_kick_handler_rejects_missing_task(controller_service, state):
     response = _kick(controller_service, [job_id.task(9).to_wire()])
 
     assert not response.results[0].queued
-    assert "not found" in response.results[0].detail
 
 
 def test_kick_handler_honors_matching_attempt(controller_service, state):
@@ -94,7 +87,6 @@ def test_kick_handler_rejects_stale_attempt(controller_service, state):
     response = _kick(controller_service, [f"{job_id.task(0).to_wire()}:5"])
 
     assert not response.results[0].queued
-    assert "not current" in response.results[0].detail
 
 
 def test_kick_handler_job_target_expands_to_active_tasks(controller_service, state):

@@ -47,11 +47,15 @@ class TerminalKind(StrEnum):
 
     - ``PREEMPT``: the task should be preempted (retried if budget remains).
     - ``TIMEOUT``: the task should fail without retry.
+    - ``FAIL``: an operator should fail the task without retry.
+    - ``TERMINATE``: an operator should kill the task without retry.
     - ``UNSCHEDULABLE``: the task can never be placed.
     """
 
     PREEMPT = "preempt"
     TIMEOUT = "timeout"
+    FAIL = "fail"
+    TERMINATE = "terminate"
     UNSCHEDULABLE = "unschedulable"
 
 
@@ -280,6 +284,36 @@ def preempt_one(
         job_id=row.job_id,
         prior_state=prior_state,
         new_task_state=new_state,
+        cascade_to_peers=row.has_coscheduling,
+    )
+
+
+def terminate_one(
+    state: Overlay,
+    snapshot: TransitionSnapshot,
+    task_id: JobName,
+    reason: str,
+    *,
+    row: ActiveTaskRow | None,
+) -> TransitionOutcome | None:
+    """Terminate one active Task without retrying its current Attempt."""
+    if row is None or row.state not in ACTIVE_TASK_STATES:
+        return None
+    now_ms = snapshot.now.epoch_ms()
+    merge_task_termination(
+        state,
+        task_id.to_wire(),
+        row.current_attempt_id,
+        job_pb2.TASK_STATE_KILLED,
+        reason,
+        now_ms,
+        stamp_attempt_finished=False,
+    )
+    return TransitionOutcome(
+        task_id=task_id,
+        job_id=row.job_id,
+        prior_state=row.state,
+        new_task_state=job_pb2.TASK_STATE_KILLED,
         cascade_to_peers=row.has_coscheduling,
     )
 

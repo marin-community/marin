@@ -11,8 +11,7 @@ from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY
 from iris.cluster.controller.controller import Controller
 from iris.cluster.federation.peer import FederationPeer
-from iris.cluster.types import JobName
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, resource_pb2
 from iris.testing.journeys.world import JobRef, JourneyWorld, TaskRef
 
 PARENT_CLUSTER_ID = "journey-parent"
@@ -54,10 +53,20 @@ class InProcessPeerConnection:
         with identity_scope(_PEER_IDENTITY):
             return self._controller.federation_sync(request)
 
-    def terminate_job(self, job_id: JobName) -> None:
+    def get_service_info(self) -> resource_pb2.GetServiceInfoResponse:
         self._require_reachable()
         with identity_scope(_PEER_IDENTITY):
-            self._controller.terminate_job(job_id.to_wire())
+            return self._controller.get_resource_service_info()
+
+    def update_resource(self, request: resource_pb2.UpdateResourceRequest) -> resource_pb2.Operation:
+        self._require_reachable()
+        with identity_scope(_PEER_IDENTITY):
+            return self._controller.update_resource(request)
+
+    def get_resource(self, request: resource_pb2.GetResourceRequest) -> resource_pb2.GetResourceResponse:
+        self._require_reachable()
+        with identity_scope(_PEER_IDENTITY):
+            return self._controller.get_resource(request)
 
     def profile_task(self, request: job_pb2.ProfileTaskRequest) -> job_pb2.ProfileTaskResponse:
         raise NotImplementedError("federation journey does not provide a process runtime")
@@ -83,6 +92,7 @@ class FederationJourney:
         self._federation_peer = FederationPeer(
             PEER_ID,
             PeerConfig(controller_address=_PEER_CONTROLLER_ADDRESS),
+            self.connection,
             self.connection,
         )
         self._federation_peer.probe()
@@ -127,6 +137,7 @@ class FederationJourney:
 
     def cancel(self, job: JobRef) -> None:
         self.parent.cancel(job)
+        self.parent.step()
 
     def parent_job(self, job: JobRef) -> job_pb2.JobStatus:
         return self.parent.job(job)
