@@ -48,12 +48,12 @@ def _cfg(tile_n: int, grid_tile_width: int, grid_minor_dim: int, max_concurrent_
     )
 
 
-def bench_ms(fn, iters: int = 8) -> float:
-    jax.block_until_ready(fn())
+def bench_ms(fn, *args, iters: int = 8) -> float:
+    jax.block_until_ready(fn(*args))
     times = []
     for _ in range(iters):
         t0 = time.perf_counter()
-        jax.block_until_ready(fn())
+        jax.block_until_ready(fn(*args))
         times.append(time.perf_counter() - t0)
     return min(times) * 1e3
 
@@ -83,9 +83,9 @@ def main() -> None:
         results = []
         for tile_n, width, minor, mcs in itertools.product(tile_ns, widths, minors, steps):
             config = _cfg(tile_n, width, minor, mcs)
-            fn = jax.jit(lambda a=a, b=b, config=config: brd.ragged_dot_kernel(a, b, gs, config=config))
+            fn = jax.jit(lambda a_, b_, g_, config=config: brd.ragged_dot_kernel(a_, b_, g_, config=config))
             try:
-                ms = bench_ms(fn)
+                ms = bench_ms(fn, a, b, gs)
             except Exception as exc:  # noqa: BLE001 - sweep must survive invalid configs
                 print(f"{name} tn={tile_n} w={width} m={minor} mcs={mcs}: FAIL {type(exc).__name__}", flush=True)
                 continue
