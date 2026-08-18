@@ -245,7 +245,7 @@ def _read_preview(fs, path: str, *, compression: str | None, full_size: int | No
 
 def total_size(url: str) -> tuple[int, int]:
     """Return ``(bytes, object_count)`` under *url*."""
-    fs, path = _listing_filesystem(url, DEFAULT_LISTING_WORKERS)
+    fs, path = listing_filesystem(url, DEFAULT_LISTING_WORKERS)
     info = fs.info(path)
     if info["type"] != DIRECTORY_TYPE:
         return info.get("size", 0) or 0, 1
@@ -261,11 +261,16 @@ def total_size(url: str) -> tuple[int, int]:
 
 def metadata_listing_pages(url: str, *, workers: int = DEFAULT_LISTING_WORKERS) -> Iterator[ListingPage]:
     """Yield independent metadata pages covering every object below *url*."""
-    fs, path = _listing_filesystem(url, workers)
+    fs, path = listing_filesystem(url, workers)
     yield from _metadata_listing_pages(fs, path, workers)
 
 
-def _listing_filesystem(url: str, workers: int) -> tuple[Any, str]:
+def listing_filesystem(url: str, workers: int) -> tuple[Any, str]:
+    """Return ``(fs, path)`` for *url*, routed by backend and tuned for *workers* concurrent lists.
+
+    S3 filesystems otherwise cap their connection pool below the listing fan-out and
+    serialize the threads' list calls; GCS ignores the setting.
+    """
     fs, path = filesystem_for(url)
     if _is_s3_filesystem(fs):
         fs.config_kwargs = {**fs.config_kwargs, "max_pool_connections": workers}

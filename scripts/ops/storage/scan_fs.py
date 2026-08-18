@@ -54,9 +54,8 @@ from iris.actor.server import ActorServer
 from iris.client.client import iris_ctx
 from iris.cluster.client import get_job_info
 from iris.cluster.types import Entrypoint, ResourceSpec
-from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
-from rigging.fsutil.listing import entry_mtime, iter_object_pages
+from rigging.fsutil.listing import entry_mtime, iter_object_pages, listing_filesystem
 
 from scripts.ops.storage.constants import (
     MARIN_BUCKETS,
@@ -126,7 +125,6 @@ class ScanTask:
 
     bucket_url: str
     path: str
-    depth: int = 0
 
 
 @dataclass
@@ -206,23 +204,6 @@ def _truncate_staging_dir(staging_dir: str) -> None:
 def _bucket_name(bucket_url: str) -> str:
     """The bucket name (no scheme) for a ``scheme://bucket`` URL."""
     return StoragePath(bucket_url).bucket
-
-
-def _routed_filesystem(bucket_url: str) -> tuple[Any, str]:
-    """Return ``(fs, root_path)`` routed for *bucket_url*, tuned for concurrent listing.
-
-    S3 filesystems otherwise cap their connection pool below WORKER_THREADS and
-    serialize the threads' list calls; GCS ignores the setting.
-    """
-    fs, root_path = filesystem_for(bucket_url)
-    if "s3" in _protocols(fs):
-        fs.config_kwargs = {**fs.config_kwargs, "max_pool_connections": WORKER_THREADS}
-    return fs, root_path
-
-
-def _protocols(fs) -> tuple[str, ...]:
-    protocol = getattr(fs, "protocol", ())
-    return (protocol,) if isinstance(protocol, str) else tuple(protocol)
 
 
 def _to_datetime(value: Any) -> datetime | None:
@@ -418,7 +399,7 @@ class _WorkerFilesystems:
 
     def get(self, bucket_url: str) -> tuple[Any, str]:
         if bucket_url not in self._filesystems:
-            self._filesystems[bucket_url] = _routed_filesystem(bucket_url)
+            self._filesystems[bucket_url] = listing_filesystem(bucket_url, WORKER_THREADS)
             self._names[bucket_url] = _bucket_name(bucket_url)
         fs, _ = self._filesystems[bucket_url]
         return fs, self._names[bucket_url]
@@ -448,7 +429,7 @@ def scan_one_prefix(
                 chunk = []
     if chunk:
         coordinator.report_objects(chunk)
-    return [ScanTask(bucket_url=task.bucket_url, path=sub, depth=task.depth + 1) for sub in subdirs]
+    return [ScanTask(bucket_url=task.bucket_url, path=sub) for sub in subdirs]
 
 
 # ---------------------------------------------------------------------------
@@ -546,7 +527,7 @@ def discover_top_level_prefixes(
     tasks: list[ScanTask] = []
     for bucket_url in bucket_urls:
         log.info("Discovering prefixes for %s...", bucket_url)
-        fs, root_path = _routed_filesystem(bucket_url)
+        fs, root_path = listing_filesystem(bucket_url, WORKER_THREADS)
         bucket_name = _bucket_name(bucket_url)
         root_objects: list[dict] = []
         subdirs: list[str] = []
@@ -555,7 +536,7 @@ def discover_top_level_prefixes(
             root_objects.extend(_entry_to_object(entry, bucket_name) for entry in files)
         if root_objects:
             coordinator.report_objects(root_objects)
-        tasks.extend(ScanTask(bucket_url=bucket_url, path=sub, depth=1) for sub in subdirs)
+        tasks.extend(ScanTask(bucket_url=bucket_url, path=sub) for sub in subdirs)
         log.info("  %s: %d top-level prefixes, %d root objects", bucket_url, len(subdirs), len(root_objects))
     return tasks
 
