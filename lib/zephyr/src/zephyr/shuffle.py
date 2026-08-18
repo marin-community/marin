@@ -93,9 +93,17 @@ class ListShard:
 _SCATTER_METADATA_FILENAME = "metadata.msgpack"
 
 # Number of parallel small-file reads (sidecars, parquet schema footers) each
-# reducer issues while building its ScatterReader. These reads are GCS
-# GET-bound, so a modest pool keeps latency low without thrashing.
-_SIDECAR_READ_CONCURRENCY = 32
+# reducer issues while building its ScatterReader. These reads are GET-bound, so
+# a pool hides their latency.
+#
+# It is per task, and a wave is thousands of tasks, so the product is what the
+# object store sees. At 32 a 2,048-reducer wave offers ~65,000 simultaneous
+# connections, and the fuzzy-verification runs died three times on
+# EndpointConnectionError and "error sending request" -- connection-level
+# failures rather than throttle responses, which is what refused connections
+# look like. Retries were added at three layers and none of them addressed the
+# offered load. 8 keeps the latency hiding and cuts the peak fourfold.
+_SIDECAR_READ_CONCURRENCY = 8
 # A reducer reads one sidecar per mapper, so a shard with thousands of mappers
 # is one bad GET away from losing the whole scan. botocore covers about 15
 # seconds on its own, and its per-client retry quota can drain while 32 readers

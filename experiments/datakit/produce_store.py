@@ -118,6 +118,21 @@ DEFAULT_REPACK_WORKER = ResourceConfig(cpu=4, ram="16g", disk="16g")
 # something outside it, and those three marks are the whole surviving set.
 FOCUS_EXPECTED_MARKS_KEPT = 3
 
+# Sources the fuzzy rule cannot judge, which keep every document they hold.
+#
+# Containment is measured on word 3-grams, so a document whose content is one
+# unbroken token contributes almost no n-grams and the comparison falls through
+# to whatever boilerplate surrounds it. A functional-regions record is a header
+# and a genome: "[DNA] [Region: coding sequence] tcctttattt...". Two unrelated
+# sequences share two of their three n-grams through that header alone, which
+# scores 0.667 and reads as a duplicate. Sampling the 0.60 markers put 8.31% of
+# this source under the rule, against 5.83% at 0.75 -- the gap is the artifact,
+# not a real difference in duplication.
+#
+# Exact dedup still applies. Byte-identical records are unambiguous whatever
+# their tokenization, and dropping them costs the corpus nothing.
+FUZZY_DEDUP_EXEMPT_SOURCES = frozenset({"dna/functional-regions"})
+
 
 @dataclass(frozen=True)
 class SourceStages:
@@ -385,6 +400,14 @@ def build_store_step(
 
     def run(output_path: str) -> ClusteredStoreData:
         loaded = _read_inputs(inputs)
+        # Fail here rather than silently deduplicating a source the list meant
+        # to protect: a renamed source would make the exemption a no-op.
+        exempt = FUZZY_DEDUP_EXEMPT_SOURCES & set(inputs.per_source)
+        unknown = sorted(FUZZY_DEDUP_EXEMPT_SOURCES - set(hero_data.source_names()))
+        if unknown:
+            raise KeyError(f"FUZZY_DEDUP_EXEMPT_SOURCES names sources that do not exist: {unknown}")
+        if exempt:
+            logger.info("exempt from fuzzy dedup, keeping every document: %s", ", ".join(sorted(exempt)))
         edges = calibration_edges_by_content_type(
             hero_data.quality_calibration(inputs.quality_model),
             expected_sha256=inputs.quality_model.calibration_sha256,
@@ -399,6 +422,7 @@ def build_store_step(
             content_type=loaded.content_type_dirs,
             exact_dedup=loaded.exact_dups,
             dedup=loaded.verified_fuzzy_dups,
+            fuzzy_dedup_exempt=exempt,
             output_path=output_path,
             cluster_view=cluster_view,
             split=SPLIT,
@@ -416,6 +440,9 @@ def build_store_step(
             "cluster_view": cluster_view,
             "split": SPLIT,
             "task_count": store.task_count,
+            # Changes which documents the store holds, so it belongs in the
+            # identity: a cache built before an exemption is not this store.
+            "fuzzy_dedup_exempt": sorted(FUZZY_DEDUP_EXEMPT_SOURCES),
             "v": STORE_VERSION,
         },
         fn=run,

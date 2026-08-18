@@ -137,6 +137,8 @@ def _per_source_shard_tuples(
     quality_dir = quality_dir.rstrip("/")
     content_dir = content_type_dir.rstrip("/") if content_type_dir else None
     exact_dedup_dir = exact_dedup_attr_dir.rstrip("/")
+    # Empty when the source is exempt from fuzzy dedup, which the shard loop
+    # reads as "no markers to apply" rather than as a missing directory.
     dedup_dir = dedup_attr_dir.rstrip("/")
     return [
         {
@@ -146,7 +148,7 @@ def _per_source_shard_tuples(
             "quality": f"{quality_dir}/{os.path.basename(tok_path)}",
             "content_type": f"{content_dir}/{os.path.basename(tok_path)}" if content_dir else "",
             "exact_dedup": f"{exact_dedup_dir}/{os.path.basename(tok_path)}",
-            "dedup": f"{dedup_dir}/{os.path.basename(tok_path)}",
+            "dedup": f"{dedup_dir}/{os.path.basename(tok_path)}" if dedup_dir else "",
             "source_name": source_name,
             "basename": os.path.basename(tok_path),
         }
@@ -226,8 +228,13 @@ def _load_quality_table(
 
 
 def _load_verified_duplicates(path: str) -> set[str]:
-    """Return IDs that the full-text verifier marked as duplicates."""
-    if not StoragePath(path).exists():
+    """Return IDs that the full-text verifier marked as duplicates.
+
+    An empty path means the source is exempt from fuzzy dedup, so nothing is
+    dropped for it. A path that is set but absent means the sparse attribute
+    tree simply has no markers for that shard.
+    """
+    if not path or not StoragePath(path).exists():
         return set()
     with StoragePath(path).open("rb") as fh:
         parquet = pq.ParquetFile(fh)
@@ -746,6 +753,7 @@ def build_clustered_store(
     content_type: dict[str, str] | None = None,
     exact_dedup: GlobalExactDedupData,
     dedup: VerifiedFuzzyDupsAttrData,
+    fuzzy_dedup_exempt: frozenset[str] = frozenset(),
     output_path: str,
     cluster_view: int = 40,
     split: str = "train",
@@ -834,12 +842,17 @@ def build_clustered_store(
 
     def resolve_source_shards(source_name: str) -> list[dict[str, str]]:
         source_key = source_keys[source_name]
-        dedup_attr_dir = _resolve_dedup_attr_dir(
-            source_name=source_name,
-            source_key=source_key,
-            sources=dedup.sources,
-            label="dedup",
-        )
+        if source_name in fuzzy_dedup_exempt:
+            # No attribute directory at all, so the shard loop never reads a
+            # fuzzy marker for this source and keeps every document it holds.
+            dedup_attr_dir = ""
+        else:
+            dedup_attr_dir = _resolve_dedup_attr_dir(
+                source_name=source_name,
+                source_key=source_key,
+                sources=dedup.sources,
+                label="dedup",
+            )
         exact_dedup_attr_dir = _resolve_dedup_attr_dir(
             source_name=source_name,
             source_key=source_key,
