@@ -1379,7 +1379,6 @@ project_grants:
   - serviceAccount:loom-dev@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-crawl-bigquery@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-data-browser@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-gcs-proxy@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/storageinsights.serviceAgent
   members:
@@ -1555,6 +1554,11 @@ secrets:
     members:
     - serviceAccount:service-748532799086@gcp-sa-devconnect.iam.gserviceaccount.com
 buckets:
+- bucket: marin-eval-metadata
+  grants:
+  - role: roles/storage.objectViewer
+    members:
+    - serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
 - bucket: marin-iac-state
   grants:
   - role: projects/hai-gcp-models/roles/marinStorageBucketIamManager
@@ -1588,6 +1592,15 @@ buckets:
   - role: roles/storage.objectViewer
     members:
     - serviceAccount:pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
+- bucket: marin-us-central1
+  grants:
+  - role: roles/storage.objectUser
+    members:
+    - serviceAccount:infra-probes@hai-gcp-models.iam.gserviceaccount.com
+    condition:
+      title: infra-probes-prefix
+      expression: resource.name.startsWith("projects/_/buckets/marin-us-central1/objects/infra/probes/")
+      description: Limit infra-probes SA object access to its rollup prefix
 artifact_repositories:
 - location: europe
   repository: pypi-mirror
