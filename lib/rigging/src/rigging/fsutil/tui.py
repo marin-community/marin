@@ -9,15 +9,17 @@ are bounded by the same preview cap the CLI uses, so opening a file is always ch
 """
 
 import curses
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from rigging.filesystem.buckets import MissingCredentials
+from rigging.filesystem.storage_path import StoragePath
 from rigging.fsutil.listing import ROOT, Entry, list_entries, parent_url, read_decompressed_preview, total_size
-from rigging.fsutil.parquet import is_parquet, parquet_lines
+from rigging.fsutil.parquet import ParquetViewSource, is_parquet
 from rigging.fsutil.render import file_lines, format_size, format_time
 
 _HELP = "[enter] open  [backspace] up  [/] filter  [s] sort  [d] size  [y] print URL  [q] quit"
-_VIEWER_HELP = "[q] close  [j/k] scroll  [g/G] top/bottom"
+_VIEWER_HELP = "[q] close  [j/k] scroll  [g/G] top/bottom  [pgup/pgdn] page"
 
 # Sort orders cycled by `s`, in cycle order.
 _SORTS = ("name", "size", "modified")
@@ -51,6 +53,18 @@ class Screen:
 def run(url: str = ROOT) -> None:
     """Open the browser at *url* and block until the user quits."""
     curses.wrapper(lambda stdscr: _loop(stdscr, url))
+
+
+def show(url: str) -> None:
+    """Open the standalone file viewer on *url* and block until the user quits."""
+
+    def _show(stdscr: "curses.window") -> None:
+        curses.curs_set(0)
+        curses.use_default_colors()
+        curses.init_pair(1, curses.COLOR_CYAN, -1)
+        _view_url(stdscr, StoragePath(url).name, url)
+
+    curses.wrapper(_show)
 
 
 def _loop(stdscr: "curses.window", url: str) -> None:
@@ -133,19 +147,23 @@ def _open(stdscr: "curses.window", screen: Screen) -> None:
         return
 
     try:
-        if is_parquet(selected.name):
-            # Parquet is read through its footer rather than from the head of the object,
-            # so it takes the URL and reports its own limits in the rendered lines.
-            lines = parquet_lines(selected.url)
-            truncated_bytes = None
-        else:
-            preview = read_decompressed_preview(selected.url)
-            lines = file_lines(selected.name, preview.data)
-            truncated_bytes = len(preview.data) if preview.truncated else None
+        _view_url(stdscr, selected.name, selected.url)
     except Exception as e:
         screen.status = f"error: {e}"
+
+
+def _view_url(stdscr: "curses.window", name: str, url: str) -> None:
+    """Open the pager on one file, paging parquet rows in on demand."""
+    if is_parquet(name):
+        # Parquet is read through its footer rather than from the head of the object;
+        # the source decodes one batch of rows per fetch as the viewer pages down.
+        with ParquetViewSource(url) as source:
+            lines = [*source.head_lines(), *source.more_lines()]
+            _view(stdscr, name, lines, None, more=source.more_lines)
         return
-    _view(stdscr, selected.name, lines, truncated_bytes)
+    preview = read_decompressed_preview(url)
+    lines = file_lines(name, preview.data)
+    _view(stdscr, name, lines, len(preview.data) if preview.truncated else None)
 
 
 def _measure(stdscr: "curses.window", screen: Screen) -> None:
@@ -191,8 +209,18 @@ def _draw(stdscr: "curses.window", screen: Screen) -> None:
     stdscr.refresh()
 
 
-def _view(stdscr: "curses.window", name: str, lines: list[str], truncated_bytes: int | None) -> None:
-    """Scrollable read-only pager for one file's rendered lines."""
+def _view(
+    stdscr: "curses.window",
+    name: str,
+    lines: list[str],
+    truncated_bytes: int | None,
+    more: Callable[[], list[str]] | None = None,
+) -> None:
+    """Scrollable read-only pager for one file's rendered lines.
+
+    Paging down past the loaded lines pulls the next batch from *more* until it comes
+    back empty, so a parquet file streams in as the user scans it.
+    """
     scroll = 0
     while True:
         stdscr.erase()
@@ -200,7 +228,7 @@ def _view(stdscr: "curses.window", name: str, lines: list[str], truncated_bytes:
         body_height = max(1, height - 3)
 
         stdscr.addnstr(0, 0, name, width - 1, curses.color_pair(1) | curses.A_BOLD)
-        subtitle = f"{len(lines)} lines"
+        subtitle = f"{len(lines)} lines" + ("  (more below)" if more is not None else "")
         if truncated_bytes is not None:
             subtitle += f"  preview truncated at {format_size(truncated_bytes)}"
         stdscr.addnstr(1, 0, subtitle, width - 1, curses.A_DIM)
@@ -210,10 +238,17 @@ def _view(stdscr: "curses.window", name: str, lines: list[str], truncated_bytes:
         stdscr.refresh()
 
         key = stdscr.getch()
-        max_scroll = max(0, len(lines) - body_height)
         if key in (ord("q"), 27, curses.KEY_BACKSPACE, 127, 8, curses.KEY_LEFT, ord("h")):
             return
-        elif key in (curses.KEY_DOWN, ord("j")):
+        if key in (curses.KEY_NPAGE, curses.KEY_DOWN, ord("j")):
+            while more is not None and len(lines) < scroll + 2 * body_height:
+                fetched = more()
+                if fetched:
+                    lines.extend(fetched)
+                else:
+                    more = None
+        max_scroll = max(0, len(lines) - body_height)
+        if key in (curses.KEY_DOWN, ord("j")):
             scroll = min(max_scroll, scroll + 1)
         elif key in (curses.KEY_UP, ord("k")):
             scroll = max(0, scroll - 1)

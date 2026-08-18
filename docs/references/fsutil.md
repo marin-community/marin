@@ -6,11 +6,13 @@ an interactive browser over all of them.
 
 ```bash
 uv run fsutil                        # interactive browser, starting at the bucket list
+uv run fsutil gs://marin-us-central2/scratch   # bare URL: browser on a directory, viewer on a file
 uv run fsutil buckets                # what is declared, and whether credentials are set
 uv run fsutil ls -l gs://marin-us-central2/scratch
 uv run fsutil ls -R gs://marin-us-central2/scratch/checkpoints
 uv run fsutil ls 's3://marin-us-east-02a/*/config.json'
 uv run fsutil cat s3://marin-us-east-02a/iris/my-job/config.json
+uv run fsutil show gs://marin-us-central2/documents/shard-00000.parquet
 uv run fsutil du s3://marin-us-east-02a/iris/my-job
 uv run fsutil usage s3://marin-us-east-02a -o usage-report.md
 uv run fsutil cp -r s3://marin-us-east-02a/iris/my-job/logs /tmp/logs
@@ -65,6 +67,7 @@ that touch its buckets; the rest keep working.
 | `hash URL ... [--hex]` | Stream complete files and print MD5 digests in base64 or hexadecimal |
 | `rm URL ... [-r] [--workers N]` | Remove one or more objects. `-r` or `-R` recursively removes every prefix; remote prefixes delete while they list and show progress |
 | `browse [URL]` | The interactive browser |
+| `show URL` | The interactive viewer on one file; page-down scans through a parquet's rows |
 
 `cp` and `mv` append each source basename when the destination is an existing directory,
 ends in `/`, receives multiple sources, or receives a glob expression. A single literal source
@@ -132,12 +135,14 @@ Formatted file previews are capped at 10 MB after decompression. `cat --raw` is 
 at 10 MB of stored bytes. Use `cp` to fetch a whole object.
 
 A `.parquet` file is read through its footer rather than from the head of the object,
-so `cat`, `head`, and the browser show its schema, its row count, and its first rows.
-`head -n` bounds the rows, not the printed lines. Parquet's smallest readable unit is a
-whole column chunk, so the rows come out of the first row group alone, and a first row
-group that decodes to more than 10 MB is reported instead of read — copy that file to
-read it. The footer itself is read whatever its size, so the 10 MB cap above bounds the
-column data rather than the whole preview.
+so `cat`, `head`, `show`, and the browser show its schema, its row count, and its rows.
+`head -n` bounds the rows, not the printed lines, and `cat` and `head` read from the
+first row group alone. `show` and the browser's viewer instead page through the whole
+file: page-down decodes the next batch of rows, row group by row group. Parquet's
+smallest readable unit is a whole column chunk, so a row group that decodes to more
+than 10 MB is reported and skipped instead of read — copy that file to read it. The
+footer itself is read whatever its size, so the 10 MB cap above bounds the column data
+rather than the whole preview.
 
 Parquet previews need pyarrow in the environment. It is not a `marin-rigging`
 dependency, because rigging sits under every other package, but the marin workspace
@@ -146,7 +151,8 @@ installs it.
 ## The browser
 
 `fsutil browse` starts at the bucket list, so descending into GCS or CoreWeave is the
-same keystroke.
+same keystroke. A bare `fsutil URL` skips the command name: a directory opens in the
+browser and anything else in the viewer.
 
 | Key | Action |
 |-----|--------|
@@ -159,6 +165,10 @@ same keystroke.
 | `y` | Show the highlighted entry's full URL |
 | `r` | Re-list |
 | `q` | Quit, or close the file viewer |
+
+Opening a file — from the browser or with `fsutil show URL` — pages with `j` / `k`,
+page-up / page-down, and `g` / `G`. Paging down a parquet file keeps decoding rows
+until the file ends; other formats show the bounded preview.
 
 ## Where the bucket list comes from
 

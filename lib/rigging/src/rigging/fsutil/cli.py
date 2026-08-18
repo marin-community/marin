@@ -5,7 +5,8 @@
 
 Every path is a full URL (``gs://``, ``s3://``, or a local path). There is no implicit
 current bucket, so the same command means the same thing from any shell, and a copy can
-name two different backends. Bare ``fsutil`` opens the interactive browser.
+name two different backends. Bare ``fsutil`` opens the interactive browser, and
+``fsutil URL`` opens the browser on a directory or the file viewer on anything else.
 """
 
 import logging
@@ -47,6 +48,7 @@ from rigging.fsutil.transfer import (
     sync_plan,
 )
 from rigging.fsutil.tui import run as run_browser
+from rigging.fsutil.tui import show as show_viewer
 from rigging.fsutil.usage import (
     DEFAULT_PREFIX_DEPTH,
     DEFAULT_USAGE_WORKERS,
@@ -92,13 +94,31 @@ class _ProgressDisplay:
             click.echo(line, err=True)
 
 
-@click.group(invoke_without_command=True)
+class _AutoOpenGroup(click.Group):
+    """A group where a URL in command position opens the browser or the file viewer.
+
+    Only tokens that read as paths — a URL scheme, a slash, or an existing local name —
+    take the fallback, so a mistyped command still fails as one.
+    """
+
+    def resolve_command(self, ctx: click.Context, args: list[str]):
+        try:
+            return super().resolve_command(ctx, args)
+        except click.UsageError:
+            name = args[0]
+            if "://" in name or "/" in name or Path(name).exists():
+                return open_command.name, open_command, args
+            raise
+
+
+@click.group(cls=_AutoOpenGroup, invoke_without_command=True)
 @click.option("-v", "--verbose", is_flag=True, help="Log fsspec/botocore activity.")
 @click.pass_context
 def cli(ctx: click.Context, verbose: bool) -> None:
     """Browse and manipulate Marin's object storage (GCS, CoreWeave, R2).
 
     Paths are full URLs: gs://bucket/key, s3://bucket/key, or a local path.
+    A bare URL opens the browser on a directory or the viewer on a file.
     """
     logging.basicConfig(level=logging.DEBUG if verbose else logging.WARNING)
     if ctx.invoked_subcommand is None:
@@ -430,6 +450,36 @@ def browse(url: str) -> None:
     run_browser(url)
 
 
+@click.command()
+@click.argument("url")
+def show(url: str) -> None:
+    """Open the interactive viewer on one file; page-down scans through a parquet's rows."""
+    fs, path = filesystem_for(url)
+    if fs.isdir(path):
+        raise click.ClickException(f"{url} is a directory; use `fsutil browse {url}`")
+    _run_viewer(url)
+
+
+@click.command("open", hidden=True)
+@click.argument("url")
+def open_command(url: str) -> None:
+    """Open the browser on a directory or the viewer on a file; `fsutil URL` lands here."""
+    fs, path = filesystem_for(url)
+    if fs.isdir(path):
+        run_browser(url)
+        return
+    _run_viewer(url)
+
+
+def _run_viewer(url: str) -> None:
+    try:
+        show_viewer(url)
+    except MissingParquetReader as error:
+        raise click.ClickException(str(error)) from error
+    except FileNotFoundError as error:
+        raise click.ClickException(f"{url}: not found") from error
+
+
 def _print_long_entries(entries: list[Entry]) -> None:
     rows = []
     for entry in entries:
@@ -486,7 +536,24 @@ def _transfer_arguments(urls: tuple[str, ...]) -> tuple[tuple[str, ...], str]:
     return urls[:-1], urls[-1]
 
 
-_COMMANDS = (buckets, list_command, cat, head, stat, du, usage, find, cp, mv, rsync, hash_command, rm, browse)
+_COMMANDS = (
+    buckets,
+    list_command,
+    cat,
+    head,
+    stat,
+    du,
+    usage,
+    find,
+    cp,
+    mv,
+    rsync,
+    hash_command,
+    rm,
+    browse,
+    show,
+    open_command,
+)
 
 for _command in _COMMANDS:
     cli.add_command(_command)
