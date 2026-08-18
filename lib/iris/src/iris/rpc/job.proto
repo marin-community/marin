@@ -68,6 +68,7 @@ message MemoryProfile {
 // Thread dump configuration
 message ThreadsProfile {
   bool locals = 1;  // Include local variables in the dump (--locals flag)
+  bool native = 2;  // Include native frames in the dump (--native flag)
 }
 
 // Profile type selector

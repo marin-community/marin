@@ -1,10 +1,12 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import atexit
 import itertools
 import logging
 import os
 import re
+import sys
 from dataclasses import dataclass
 from typing import List, Optional, Union
 
@@ -26,6 +28,13 @@ _NUM_NODES = "SLURM_STEP_NUM_NODES"
 _TASKS_PER_NODE = "SLURM_STEP_TASKS_PER_NODE"
 _VISIBLE_DEVICES = "CUDA_VISIBLE_DEVICES"
 _NODE_NAME = "SLURMD_NODENAME"
+
+
+def _shutdown_jax_distributed_after_clean_exit() -> None:
+    # Failed ranks must exit promptly so the Iris supervisor can terminate their peers.
+    if getattr(sys, "last_exc", None) is not None:
+        return
+    jax.distributed.shutdown()
 
 
 class LevanterSlurmCluster(clusters.SlurmCluster):
@@ -225,9 +234,7 @@ class DistributedConfig:
             logger.info("Detected Iris job context; initializing jax.distributed via iris.runtime.jax_init.")
             configure_megascale_from_iris()
             initialize_iris_jax()
-            return
-
-        if self._is_distributed():
+        elif self._is_distributed():
             device_ids = self.local_device_ids
             coordinator_address = self.coordinator_address
 
@@ -262,3 +269,7 @@ class DistributedConfig:
                 "Not initializing jax.distributed because no distributed config "
                 "was provided, and no cluster was detected."
             )
+            return
+
+        # Tracker exit hooks register later and therefore run before this shutdown barrier.
+        atexit.register(_shutdown_jax_distributed_after_clean_exit)

@@ -13,7 +13,8 @@ from typing import Any, Callable, Generic, Iterable, Iterator, List, Sequence, S
 import datasets
 import numpy as np
 import pyarrow.parquet as pq
-from rigging.filesystem import StoragePath, open_url
+from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import StoragePath
 
 from ._preprocessor import (
     BatchResult,

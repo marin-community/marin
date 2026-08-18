@@ -11,7 +11,7 @@ from functools import cache
 
 import requests
 from fray.types import ResourceConfig
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext

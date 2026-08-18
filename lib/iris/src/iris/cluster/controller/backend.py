@@ -534,6 +534,15 @@ class TaskBackend(Protocol):
         "nothing free"."""
         ...
 
+    def runtime_image(self, requested_image: str) -> str:
+        """Resolve the container image used for a task request.
+
+        Direct container backends can supply their configured default when the
+        request leaves the image empty. Worker-daemon backends only know an
+        explicitly requested image; their workers report build details.
+        """
+        ...
+
     def status(self) -> controller_pb2.Controller.BackendStatus:
         """Author this backend's expanded status for the dashboard Backends tab.
 

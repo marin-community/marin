@@ -30,7 +30,7 @@ from typing import (
 
 import equinox as eqx
 import haliax as hax
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 import haliax.tree_util
 import jax
 import jax.numpy as jnp
@@ -67,6 +67,8 @@ from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import Checkpointer, CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
 from levanter.config import JsonAtom
+from levanter.cutlass_kernel_cache import cutlass_kernel_cache
+from levanter.cutlass_kernel_cache import install as install_cutlass_kernel_cache
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.loader import _round_to_nearest_multiple
@@ -1069,6 +1071,10 @@ class TrainerConfig:
 
         if self.jax_compilation_cache_dir is not None:
             jax.config.update("jax_compilation_cache_dir", self.jax_compilation_cache_dir)
+
+        # Route CuTeDSL kernel compiles through the standard persistent cache; a
+        # no-op when cutlass.jax will not import (a CPU task on the GPU image).
+        install_cutlass_kernel_cache(cutlass_kernel_cache())
 
     def _maybe_set_id(self):
         # always do this so we don't get weird hangs if the id isn't set right

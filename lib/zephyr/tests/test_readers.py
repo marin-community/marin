@@ -13,9 +13,9 @@ import pyarrow.parquet as pq
 import pytest
 import zstandard as zstd
 from zephyr.expr import ColumnExpr, CompareExpr, LiteralExpr
+from zephyr.input_file import InputFileSpec
 from zephyr.readers import (
     SUPPORTED_EXTENSIONS,
-    InputFileSpec,
     compute_parquet_splits,
     load_jsonl,
     load_parquet,

@@ -100,8 +100,8 @@ committing.
 ## Development
 
 ```bash
-cd lib/finelog
-uv run --group dev pytest --tb=short tests/
+# Full safe Finelog suite
+uv run --package marin-finelog --group test pytest --tb=short lib/finelog/tests/
 ```
 
 Regenerate protos after editing `proto/logging.proto`:
@@ -109,6 +109,29 @@ Regenerate protos after editing `proto/logging.proto`:
 ```bash
 cd lib/finelog && buf generate
 ```
+
+### Benchmarks
+
+Three harnesses under `src/finelog/benchmarks/`, each driving a real
+`finelog-server` and writing a JSON result with the server build, storage
+layout, and per-query `EXPLAIN ANALYZE` metrics.
+
+- `log_query_bench` — the operator query corpus for `log`: job substring
+  scoping, task tails, first-error lookups, body search. `generate` builds a
+  corpus; `measure` runs it over a directory that already holds segments.
+- `grafana_dashboard_bench` — every query in a checked-in Grafana dashboard.
+- `telemetry_layout_bench` — the storage-layout candidates for `telemetry_v1`.
+
+Point `--log-dir` at a **disposable copy**: starting Finelog activates
+compaction, layout rewrites, and index backfill.
+
+`log_query_bench` writes to the `log` namespace the server auto-registers rather
+than registering its own, so the same corpus under two binaries measures a
+schema change. Backfill must be finished before measuring; maintenance running
+alongside the queries moves every number by 2-4x.
+
+`EXPLAIN ANALYZE` counters are decimal, `bytes_scanned` included: `1.16 B` is
+1.16 billion.
 
 ### Dashboard
 
@@ -136,6 +159,39 @@ already-running server; it does not start one. `scripts/demo.py --keep` serves a
 seeded store on the default port. Point it at a store with real segments via
 `FINELOG_BASE_URL` and `FINELOG_TEST_NAMESPACE`.
 
+## Ingest health
+
+`/health` returns 200 whenever the server is listening. It is the Kubernetes
+liveness, readiness, and startup probe, so it cannot fail on a condition that
+survives a restart; the verdict is in the body: `ok`, or `degraded:` followed by
+each namespace this process registers for itself that is not registered.
+`server/ingest_health.rs` holds that state. `/api/server`'s `ingest` block
+carries the per-namespace error, first-failure time, and attempt count, and the
+dashboard's System page renders it.
+
+The deploy paths gate on the body: the VM bootstrap loop, `_wait_health_via_ssh`
+(which is what makes `safe_deploy` auto-rollback fire), and `k8s_up` /
+`k8s_restart` via a post-rollout `kubectl exec`. A binary that cannot register
+`telemetry_v1` fails its own deploy.
+
+## Changing a server-owned schema
+
+`log` and `telemetry_v1` are registered by the server itself, and every boot
+re-merges this binary's definition against the schema that deployment's catalog
+persisted. A merge that fails wedges the namespace for as long as the image is
+deployed, so `/health` reports it (`server/ingest_health.rs`) and `safe_deploy
+rollout` rolls back on it. To decide a schema change ahead of a deploy, boot
+the candidate over a copy of that deployment's catalog with `--mode shadow` and
+read `/health`. Register through `schema::stored_form` so what you check is the
+schema `register_table` merges.
+
+`--mode shadow` is for booting a server over a copy of a real store: it serves
+reads from `--log-dir` and refuses a `gs://`/`s3://` remote or a forwarding
+target at startup. It resolves once into the store's `ServeMode`, so no
+namespace starts a maintenance task — including one registered at runtime,
+which otherwise starts its own. Use it for any local benchmark over a copied
+store, and pass the mode down rather than re-deriving it at a call site.
+
 ## Secondary indexes
 
 A segment with any configured method gets one `.fidx` bundle. The bundle is
@@ -152,14 +208,27 @@ typed enum variant, format version, validation, planner rule, and copied-shard
 benchmark; there is no free-form plugin registry.
 
 A column declared with `ColumnIndex.trigram` gets a span-granular substring
-section. That index makes `contains(col, …)` and `col LIKE '%…%'` prune instead
-of full-scan. Today it is on `log.data` and `telemetry_v1.name`.
+section. That index makes `contains(col, …)`, `col LIKE '%…%'`, and regexes with
+required literal runs prune instead of full-scan. Today it is on `log.key`,
+`log.data`, and `telemetry_v1.name`.
+
+Sorting by a column does not cover substring search of it. A log key is
+`/user/<job>-coord/<job>/<task>:<attempt>`, so the job an operator searches for
+is not a prefix and min/max statistics cannot bound it. `log.key` needs its own
+trigram section for that.
 
 A `LIKE` pattern contributes every literal run between its wildcards, all
 required: `%CUDA_ERROR%` prunes on `CUDA` and `ERROR` separately, while the
 escaped `%CUDA\_ERROR%` prunes on the single run `CUDA_ERROR`. Runs under three
 bytes carry no trigram and drop out. `NOT LIKE`, `ILIKE`, and an explicit
 `ESCAPE` never prune.
+
+`regexp_matches(col, pattern)` contributes only literals that every match must
+contain. Concatenated and mandatory repeated literals prune; optional text and
+branch-specific alternatives do not. Case-insensitive patterns without a safe
+literal scan unpruned; invalid patterns fail when the exact predicate compiles.
+The regex predicate remains in the physical plan to check surviving rows
+exactly.
 
 Enabling an index is additive and can be done on a live namespace. Maintenance
 backfills L≥1 segments a few at a time, reading all required index columns once
@@ -179,6 +248,20 @@ only when both the predicate values and every referenced query column are
 covered. Covered segments use the projection while uncovered segments retain
 source Parquet. The initial `training-status` projection covers three metric
 names and seven columns.
+
+Redefining a projection is not a conflict. `merge_schemas` supersedes the
+registered definition with the requested one, unless the registered one already
+covers it: a superset keeps its place, so an older binary re-registering a
+narrower definition against a newer catalog does not churn a namespace's derived
+state mid-rollout. Segments written under the superseded definition stay
+queryable untouched, because each `.fidx` `CoveringProjection` section describes
+its own coverage; the backfill rebuilds them at its usual few per tick and
+unlinks the superseded Parquet files. Index hints follow the same rule.
+
+A column *type* mismatch is still a hard `SchemaConflict`: the registered layout
+cannot hold the requested rows, so it fails at registration. A new column
+declared non-nullable is adopted as nullable, since every already-stored row is
+missing it.
 
 `value_counts` records a complete low-cardinality histogram. A DataFusion
 optimizer rule replaces a qualifying unfiltered one-column `GROUP BY` with

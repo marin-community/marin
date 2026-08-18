@@ -133,7 +133,7 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd(
             ),
         )
 
-    out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
+    out_dtype = jnp.dtype(dtype) if dtype is not None else jnp.float32
     loss_init = jnp.zeros((b_dim,), dtype=out_dtype)
     lse_init = jnp.zeros((b_dim,), dtype=out_dtype)
     num_b_blocks = b_dim // batch_block_size
@@ -199,7 +199,7 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd_with_argmax(
             ),
         )
 
-    out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
+    out_dtype = jnp.dtype(dtype) if dtype is not None else jnp.float32
     loss_init = jnp.zeros((b_dim,), dtype=out_dtype)
     lse_init = jnp.zeros((b_dim,), dtype=out_dtype)
     argmax_init = jnp.zeros((b_dim,), dtype=jnp.int32)

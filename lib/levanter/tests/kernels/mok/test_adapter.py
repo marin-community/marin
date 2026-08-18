@@ -14,10 +14,12 @@ from levanter.kernels.mok import MokBf16Config, MokRuntimeHandle
 import levanter.kernels.mok.ffi as mok_ffi
 import levanter.kernels.mok.runtime as mok_runtime
 from levanter.kernels.mok.ffi import (
+    _UNFUSED_SHARED_HALF_INTERMEDIATE,
     _backward_ffi_inputs,
     _pack_weights,
     _row_major_layout,
     _schedule_capacity,
+    _unfused_shared_weights,
     _unpack_weight_grads,
 )
 
@@ -45,6 +47,55 @@ def test_two_shared_experts_packed_value_matches_independent_sum():
     expected = _dense_swiglu(x, *shared[:3]) + _dense_swiglu(x, *shared[3:])
 
     np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+
+
+def test_unfused_shared_slot_packs_to_the_narrowest_legal_zero_expert():
+    # The kernel has no way to skip its fused shared expert: the packed intermediate must be
+    # positive and a multiple of 256. Zeros at that floor keep the output equal to the routed
+    # contribution alone while costing the least compute a caller can be charged for.
+    x = jnp.zeros((7, 8), dtype=jnp.bfloat16)
+    shared = _unfused_shared_weights(x)
+    routed = (
+        jnp.zeros((2, 8, 4), dtype=jnp.bfloat16),
+        jnp.zeros((2, 8, 4), dtype=jnp.bfloat16),
+        jnp.zeros((2, 4, 8), dtype=jnp.bfloat16),
+    )
+
+    packed_gate, packed_up, packed_down, *_ = _pack_weights(*shared, *routed)
+    packed_intermediate = 2 * _UNFUSED_SHARED_HALF_INTERMEDIATE
+
+    assert packed_intermediate == 256
+    assert packed_gate.shape == (packed_intermediate, 8)
+    assert packed_up.shape == (packed_intermediate, 8)
+    assert packed_down.shape == (8, packed_intermediate)
+    assert all(weight.dtype == jnp.bfloat16 for weight in shared)
+    # A zero down-projection is what makes the fused contribution vanish.
+    np.testing.assert_array_equal(np.asarray(packed_down, dtype=np.float32), 0.0)
+
+
+def test_shared_experts_must_be_passed_together_or_omitted_together():
+    x = jnp.zeros((512, 8), dtype=jnp.bfloat16)
+    present = jnp.zeros((8, 4), dtype=jnp.bfloat16)
+    routed = (
+        jnp.zeros((2, 8, 4), dtype=jnp.bfloat16),
+        jnp.zeros((2, 8, 4), dtype=jnp.bfloat16),
+        jnp.zeros((2, 4, 8), dtype=jnp.bfloat16),
+    )
+
+    with pytest.raises(ValueError, match="together"):
+        mok_ffi.mok_bf16(
+            x,
+            jnp.zeros((512, 2), dtype=jnp.int32),
+            jnp.zeros((512, 2), dtype=jnp.float32),
+            present,
+            None,
+            None,
+            None,
+            None,
+            None,
+            *routed,
+            config=MokBf16Config(),
+        )
 
 
 def test_native_weight_gradients_unpack_to_canonical_leaves():

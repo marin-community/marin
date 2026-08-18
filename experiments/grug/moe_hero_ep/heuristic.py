@@ -3,14 +3,14 @@
 
 """Compute-scaling LR heuristic and the EP64 hero config builder.
 
-``MoeHeuristic`` is the May Recipe refit (issue #5951, R^2=0.996): it sets compute-optimal MuonH /
+``MoeHeuristic`` is the Aug hero LR-sweep refit (issues #7856 / #8003, R^2=0.978): it sets compute-optimal MuonH /
 Adam learning rates, epsilon, and beta2 from the token budget and batch size. ``build_hero_configs``
 pairs it with the fixed hero model spec so a launcher gets both configs back from a single
 ``(num_train_steps, batch_size)`` call, keeping the hero self-contained.
 
-The hero model is d6144 with 48 layers, 128 routed experts at top-4, and two shared experts:
-359.6 B total parameters and 20.9 B active per token. The launcher sweeps expert count, expert
-width, routed top-k, and capacity factor from this spec.
+The hero model is d6144 with 48 layers and 384 routed experts. Each expert has width 3,072, and
+the router selects eight experts per token. The pooled transport uses three static waves. The
+receiver and sender capacity factors are both 1.15.
 """
 
 import math
@@ -22,17 +22,22 @@ from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 
 @dataclass(frozen=True)
 class MoeHeuristic:
-    """May Recipe MuonH LR-scaling refit (issue #5951, seq_len=4096 fits).
+    """Aug hero LR-sweep MuonH refit (issues #7856 / #8003, seq_len=8192, R^2=0.978).
 
     adam_lr  = lr_coeff * tokens^lr_tokens_exp * hidden_dim^lr_dim_exp * sqrt(tokens_per_batch)
     muonh_lr = muonh_ratio * adam_lr
     epsilon  = epsilon_coeff * sqrt(tokens / tokens_per_batch)
     beta2    = clip(beta2_base^(tokens_per_batch / beta2_reference_tpb), min_beta2, max_beta2)
+
+    LR exponents/coefficient are the per-cell paloma-optimal fit: muonh_lr =
+    34.35 * tokens^-0.346 * hidden^-0.345 * batch^0.5 at seq_len=8192, folded into the
+    sqrt(tokens_per_batch) form (lr_coeff = 34.35 / (muonh_ratio * sqrt(8192))). Prior
+    May-Recipe fit (#5951): lr_coeff=0.06602, lr_tokens_exp=-0.395, lr_dim_exp=-0.150.
     """
 
-    lr_coeff: float = 0.06602
-    lr_tokens_exp: float = -0.395
-    lr_dim_exp: float = -0.150
+    lr_coeff: float = 0.087571
+    lr_tokens_exp: float = -0.3461
+    lr_dim_exp: float = -0.3448
     muonh_ratio: float = 13 / 3
     epsilon_coeff: float = 9.676e-18
     beta1: float = 0.9062
@@ -77,14 +82,15 @@ class MoeHeuristic:
         )
 
 
+_HERO_HIDDEN = 6144
 HERO_MODEL = GrugModelConfig(
     vocab_size=128_256,
-    hidden_dim=6144,
-    intermediate_dim=3072,
-    shared_expert_intermediate_dim=6144 // 2,
+    hidden_dim=_HERO_HIDDEN,
+    intermediate_dim=_HERO_HIDDEN // 2,
+    shared_expert_intermediate_dim=_HERO_HIDDEN // 2,
     num_shared_experts=2,
-    num_experts=128,
-    num_experts_per_token=4,
+    num_experts=384,
+    num_experts_per_token=8,
     num_layers=48,
     num_heads=48,
     num_kv_heads=12,
@@ -92,17 +98,20 @@ HERO_MODEL = GrugModelConfig(
     global_kv_heads=6,
     head_dim=128,
     max_seq_len=4096,
-    sliding_window=512,
-    global_every=6,
-    capacity_factor=1.0,
-    initializer_std=0.5 / math.sqrt(6144),
+    sliding_window=2048,
+    global_every=4,
+    capacity_factor=1.15,
+    initializer_std=0.5 / math.sqrt(_HERO_HIDDEN),
     qk_mult=1.3,
     sconv=True,
     attention_implementation="gpu_fa4_cute",
-    moe_implementation="fixed_all_to_all",
+    moe_implementation="fixed_pooled_wave_all_to_all",
+    pooled_transport_capacity_factor=1.15,
+    num_expert_waves=3,
     expert_chunks=1,
     report_capacity_overflow=True,
     rope_fused=True,
+    latent_dim=_HERO_HIDDEN // 2,
 )
 
 

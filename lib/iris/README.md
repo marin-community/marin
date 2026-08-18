@@ -27,7 +27,7 @@ uv run iris --cluster=marin cluster stop
 ### Submit a Job
 
 ```python
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
 
 def my_task():

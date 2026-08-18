@@ -1,16 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""One-rack GB200 launcher for the EP64 MoE hero configuration."""
+"""GB200 launcher for the EP64 MoE hero configuration."""
 
 import dataclasses
 import os
+from datetime import timedelta
 
 import click
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
+from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import BlockShuffleConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -21,12 +23,17 @@ from marin.experiment.cli import build_options
 from marin.experiment.data import mixture, tokenized
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
+from rigging.filesystem.storage_path import prefix_join
 
-from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
+from experiments.datasets.paloma import paloma_datasets
+from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, build_hero_configs
 from experiments.grug.moe_hero_ep.train import (
+    GrugEvalConfig,
     GrugRunConfig,
     GrugTrainerConfig,
+    MasterParamMode,
     MoeComparisonMetadata,
+    WatchMode,
     run_grug,
 )
 from experiments.llama import llama3_tokenizer
@@ -38,17 +45,31 @@ HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
 HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
 HERO_PROCESSES_PER_TASK = 1
+# The MoK wheel drives Torch symmetric memory, which needs one rank per GPU. The pooled-wave
+# arm keeps JAX's own one-process-per-node layout.
 HERO_MOK_PROCESSES_PER_TASK = HERO_GPUS_PER_NODE
-HERO_PROFILE_NUM_STEPS = 3
-HERO_PROFILE_PROCESS_INDEX = 0
-HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 HERO_COMPARISON_ENVIRONMENT = "torch-cu130-cublas13.2"
-# The hero shape keeps its MuonH state on pinned host memory: 24.59 GiB of parameters and 27.78 GiB
-# of optimizer state per device leave too little room for the fixed all-to-all buffers otherwise.
+HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
+# Keep MuonH state on pinned host memory to leave room for the pooled all-to-all buffers.
 HERO_OFFLOAD_OPT_STATE = True
+HERO_WATCH_INTERVAL = 0
+HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 
 _SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
 _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
+
+
+# Held-out sets, added at weight 0 so they surface as tagged eval sets. The hero trains on
+# llama3-tokenized SlimPajama, so these must carry the same tokenizer.
+#
+# Paloma only, deliberately. `paloma_dataset` and `uncheatable_dataset` both hardcode a `-llama3`
+# suffix in the cache name while taking an arbitrary `tokenizer` argument, so callers asking for
+# different tokenizers collide on one cache identity and whoever materializes first wins. The
+# uncheatable caches under that name currently hold marin-tokenizer data, which fails the mixture's
+# single-tokenizer check. Paloma is also the suite the scaling-law scoring uses, so dropping
+# uncheatable costs nothing here.
+def _validation_datasets() -> list[ArtifactStep[TokenizedCache]]:
+    return list(paloma_datasets(tokenizer=llama3_tokenizer).values())
 
 
 def _slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
@@ -62,49 +83,79 @@ def _slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
 
 
 class HeroThroughputResult(Artifact):
-    """Metrics-only result of the rack-scale throughput hero run.
+    """Result of the rack-scale throughput hero run.
 
-    The run intentionally writes no checkpoint; it only mirrors its tracker metrics to the output
-    path. This artifact is a plain path ref to those metrics, so the step does not promise a
-    checkpoint it never produces.
+    The run mirrors its tracker metrics to the output path. It writes no checkpoint by default.
+    Checkpoint restore has a known memory-kind mismatch with the offloaded optimizer state.
     """
 
 
-def _build_hero_run(
+def build_hero_run(
     *,
     run_id: str,
+    dp_racks: int,
     num_steps: int,
+    schedule_steps: int | None = None,
+    seed: int = 0,
+    batch_size: int = HERO_EP_BATCH_SIZE,
     num_experts: int | None = None,
     num_experts_per_token: int | None = None,
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
+    latent_dim: int | None = None,
+    eval_every: int = 0,
+    save_checkpoints: bool = False,
+    checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
+    checkpoint_path: str | None = None,
+    watch_interval: int = HERO_WATCH_INTERVAL,
+    watch_mode: WatchMode = WatchMode.INLINE,
+    profile_steps: int = 0,
+    profile_start_step: int = 5,
     version: str | None = None,
     moe_implementation: str | None = None,
     mok_expert_placement: str | None = None,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     runtime_pip_packages: tuple[str, ...] = (),
-    profile_start_step: int | None = None,
-    profile_num_steps: int = HERO_PROFILE_NUM_STEPS,
 ) -> ArtifactStep[HeroThroughputResult]:
-    """Build the one-rack EP64 hero throughput run.
+    """Build the EP64 hero throughput run.
 
     The overrides sweep expert count, expert width, routed top-k, and routing capacity from the
     hero spec. They keep the hidden dimension, so the compute-scaled optimizer values stay
     comparable across a sweep. ``None`` keeps the hero value.
+
+    ``batch_size`` is the global batch across all data-parallel racks. It does not scale with
+    ``dp_racks``. ``batch_size`` and ``schedule_steps`` change the token budget for the heuristic.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
+    if dp_racks <= 0:
+        raise ValueError(f"dp_racks must be positive, got {dp_racks}")
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
-    if profile_start_step is not None:
-        if not 1 <= profile_start_step < num_steps:
-            raise ValueError(
-                f"profile_start_step must be in [1, num_steps), got {profile_start_step} for {num_steps} steps"
-            )
-        if profile_num_steps <= 0:
-            raise ValueError(f"profile_num_steps must be positive, got {profile_num_steps}")
-
-    model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=HERO_EP_BATCH_SIZE)
+    if checkpoint_interval <= timedelta(0):
+        raise ValueError(f"checkpoint_interval must be positive, got {checkpoint_interval}")
+    if profile_steps < 0:
+        raise ValueError(f"profile_steps must be non-negative, got {profile_steps}")
+    if profile_start_step < 0:
+        raise ValueError(f"profile_start_step must be non-negative, got {profile_start_step}")
+    if profile_steps > 0 and profile_start_step >= num_steps:
+        raise ValueError(f"profile_start_step must be less than num_steps={num_steps}, got {profile_start_step}")
+    # `schedule_steps` sets the whole learning-rate schedule; `num_steps` sets how far the run goes.
+    # Both matter, and they enter in different places. The optimizer heuristic scales learning rate,
+    # adam_lr, and epsilon from a token budget (`num_train_steps * batch * seq`), which fixes the
+    # peak. Warmup and decay are *fractions* of `TrainerConfig.num_train_steps`, so that field has to
+    # carry the schedule length too -- passing `num_steps` there warms up in `0.01 * num_steps` and
+    # decays to `min_lr_ratio` by the end of the short run, which is a whole miniature schedule
+    # rather than the head of a long one. Default keeps the two equal, which is the previous behavior.
+    if schedule_steps is not None and schedule_steps <= 0:
+        raise ValueError(f"schedule_steps must be positive, got {schedule_steps}")
+    if schedule_steps is not None and schedule_steps < num_steps:
+        raise ValueError(f"schedule_steps={schedule_steps} must be at least num_steps={num_steps}")
+    total_schedule_steps = schedule_steps if schedule_steps is not None else num_steps
+    model, optimizer = build_hero_configs(
+        num_train_steps=total_schedule_steps,
+        batch_size=batch_size,
+    )
     overrides = {
         name: value
         for name, value in (
@@ -116,6 +167,10 @@ def _build_hero_run(
         )
         if value is not None
     }
+    if latent_dim is not None:
+        # Zero removes the hero's latent projection. That is the control an arm needs to attribute
+        # a difference to the two-width routed path rather than to the shape around it.
+        overrides["latent_dim"] = latent_dim or None
     if overrides:
         model = dataclasses.replace(model, **overrides)
     if moe_implementation is not None:
@@ -123,14 +178,30 @@ def _build_hero_run(
     # A bank that does not divide the expert axis fails inside `moe_mlp`, which is after the rack is
     # already allocated and the workspace is built. Reject it here instead.
     if model.num_experts % HERO_EP_EXPERT_AXIS_SIZE != 0:
-        raise ValueError(f"num_experts={model.num_experts} must divide the expert axis {HERO_EP_EXPERT_AXIS_SIZE}")
-    if model.moe_implementation is None:
-        raise ValueError("the EP hero requires an explicit MoE implementation")
+        raise ValueError(f"num_experts={model.num_experts} must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}")
+    local_experts = model.num_experts // HERO_EP_EXPERT_AXIS_SIZE
+    if local_experts % model.num_expert_waves != 0:
+        raise ValueError(
+            f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
+        )
+    if model.moe_implementation not in ("fixed_pooled_wave_all_to_all", "mok"):
+        raise AssertionError(f"unexpected hero MoE implementation: {model.moe_implementation}")
+    if model.moe_implementation == "fixed_pooled_wave_all_to_all" and model.pooled_transport_capacity_factor is None:
+        raise AssertionError("the pooled-wave hero requires a transport capacity factor")
     backend_tag = model.moe_implementation.replace("_", "-")
     is_mok = model.moe_implementation == "mok"
     if is_mok and capacity_factor is not None:
         raise ValueError("capacity_factor does not apply to the dropless mok backend")
     routing_semantics = "dropless" if is_mok else f"capacity-{model.capacity_factor:g}"
+    routing_tags = (
+        []
+        if is_mok
+        else [
+            f"capacity-{model.capacity_factor:g}",
+            f"transport-capacity-{model.pooled_transport_capacity_factor:g}",
+            f"expert-waves-{model.num_expert_waves}",
+        ]
+    )
     size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
     process_tag = f"processes-per-task-{processes_per_task}"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
@@ -140,8 +211,12 @@ def _build_hero_run(
         ema_beta=None,
         z_loss_weight=1e-4,
         offload_opt_state=HERO_OFFLOAD_OPT_STATE,
+        master_param_mode=MasterParamMode.FP32_PINNED_HOST,
+        watch_mode=watch_mode,
+        # The default offloaded optimizer state has a known memory-kind mismatch during restore.
+        save_checkpoints=save_checkpoints,
         expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
-        replica_axis_size=1,
+        replica_axis_size=dp_racks,
         sharding_dump_path=None,
     )
     train_resources = ResourceConfig.with_gpu(
@@ -150,32 +225,27 @@ def _build_hero_run(
         cpu=120,
         ram="850g",
         disk="1t",
-        replicas=HERO_EP_NODES,
+        replicas=HERO_EP_NODES * dp_racks,
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
     slim = _slimpajama_6b_dataset()
+    validation = _validation_datasets() if eval_every > 0 else []
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
         trainer = TrainerConfig(
             id=run_id,
-            seed=0,
-            train_batch_size=HERO_EP_BATCH_SIZE,
-            num_train_steps=num_steps,
-            profiler=(
-                ProfilerConfig(enabled=False)
-                if profile_start_step is None
-                else ProfilerConfig(
-                    enabled=True,
-                    start_step=profile_start_step,
-                    num_steps=profile_num_steps,
-                    process_index=HERO_PROFILE_PROCESS_INDEX,
-                    profile_options=ProfileOptionsConfig(
-                        host_tracer_level=1,
-                        python_tracer_level=0,
-                        enable_hlo_proto=True,
-                    ),
-                )
+            seed=seed,
+            train_batch_size=batch_size,
+            num_train_steps=total_schedule_steps,
+            profiler=ProfilerConfig(
+                enabled=profile_steps > 0,
+                start_step=profile_start_step,
+                num_steps=profile_steps,
+                # One rank is enough for a step trace, and tracing all 64 multiplies the upload
+                # without adding signal.
+                process_index=0,
+                profile_options=ProfileOptionsConfig(enable_hlo_proto=True),
             ),
             mp=jmp.get_policy(HERO_MIXED_PRECISION),
             tracker=WandbConfig(
@@ -187,6 +257,7 @@ def _build_hero_run(
                     "hero",
                     "ep",
                     backend_tag,
+                    *routing_tags,
                     size_tag,
                     routing_semantics,
                     f"expert-placement-{model.mok_expert_placement}" if is_mok else "expert-placement-contiguous",
@@ -199,24 +270,40 @@ def _build_hero_run(
                 name=run_id,
                 replicate_path=ctx.output_path,
             ),
-            watch=WatchConfig(interval=0),
+            watch=WatchConfig(interval=watch_interval),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
+            # Levanter's default base path is pod-local, so a preempted run would have nothing to
+            # resume from. `checkpoint_path` overrides this for runs targeting disposable storage.
+            checkpointer=CheckpointerConfig(
+                base_path=checkpoint_path or prefix_join(ctx.output_path, "checkpoints"),
+                temporary_base_path=None,
+                save_interval=checkpoint_interval,
+                keep=None,
+                append_run_id_to_base_path=False,
+                delete_old_temp_checkpoints=True,
+                keep_last_temporary_checkpoints=1,
+            ),
         )
         return GrugRunConfig(
             model=model,
-            data=mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE),
+            data=mixture(ctx, {slim: 1.0}, validation=validation, shuffle=_SLIMPAJAMA_SHUFFLE),
             resources=ctx.runtime_arg("train_resources"),
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
-            eval=None,
+            # Off by default so a throughput run stays a throughput run. Turn it on to make a
+            # run scoreable: comparing configs needs held-out loss, not train loss.
+            eval=(
+                GrugEvalConfig(steps_per_eval=eval_every, eval_ema=False, compute_bpb=True) if eval_every > 0 else None
+            ),
+            stop_after_steps=num_steps,
             processes_per_task=processes_per_task,
             runtime_pip_packages=runtime_pip_packages,
             comparison=MoeComparisonMetadata(
                 backend=model.moe_implementation,
                 routing_semantics=routing_semantics,
-                fused_shared_experts=model.num_shared_experts if is_mok else 0,
+                fused_shared_experts=model.num_shared_experts if model.fuses_shared_experts else 0,
                 software_environment=HERO_COMPARISON_ENVIRONMENT,
                 processes_per_task=processes_per_task,
             ),
@@ -228,30 +315,8 @@ def _build_hero_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(slim,),
+        deps=(slim, *validation),
         runtime_args={"train_resources": train_resources},
-    )
-
-
-def build_hero_run(
-    *,
-    run_id: str,
-    num_steps: int,
-    num_experts: int | None = None,
-    num_experts_per_token: int | None = None,
-    intermediate_dim: int | None = None,
-    capacity_factor: float | None = None,
-    version: str | None = None,
-) -> ArtifactStep[HeroThroughputResult]:
-    """Build the existing capacity-limited fixed-all-to-all EP64 baseline."""
-    return _build_hero_run(
-        run_id=run_id,
-        num_steps=num_steps,
-        num_experts=num_experts,
-        num_experts_per_token=num_experts_per_token,
-        intermediate_dim=intermediate_dim,
-        capacity_factor=capacity_factor,
-        version=version,
     )
 
 
@@ -259,29 +324,40 @@ def build_mok_hero_run(
     *,
     run_id: str,
     num_steps: int,
+    mok_package: str,
+    schedule_steps: int | None = None,
+    seed: int = 0,
+    batch_size: int = HERO_EP_BATCH_SIZE,
     num_experts: int | None = None,
     num_experts_per_token: int | None = None,
     intermediate_dim: int | None = None,
-    mok_package: str,
+    latent_dim: int | None = None,
+    eval_every: int = 0,
     mok_expert_placement: str = "contiguous",
-    profile_start_step: int | None = None,
-    profile_num_steps: int = HERO_PROFILE_NUM_STEPS,
+    profile_steps: int = 0,
+    profile_start_step: int = 5,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the dropless MoK comparison arm with one JAX process per GB200."""
-    return _build_hero_run(
+    return build_hero_run(
         run_id=run_id,
+        dp_racks=1,
         num_steps=num_steps,
+        schedule_steps=schedule_steps,
+        seed=seed,
+        batch_size=batch_size,
         num_experts=num_experts,
         num_experts_per_token=num_experts_per_token,
         intermediate_dim=intermediate_dim,
+        latent_dim=latent_dim,
+        eval_every=eval_every,
         version=version,
         moe_implementation="mok",
         mok_expert_placement=mok_expert_placement,
         processes_per_task=HERO_MOK_PROCESSES_PER_TASK,
         runtime_pip_packages=(mok_package,),
+        profile_steps=profile_steps,
         profile_start_step=profile_start_step,
-        profile_num_steps=profile_num_steps,
     )
 
 
@@ -289,31 +365,49 @@ def build_multiprocess_hero_run(
     *,
     run_id: str,
     num_steps: int,
+    schedule_steps: int | None = None,
+    seed: int = 0,
+    batch_size: int = HERO_EP_BATCH_SIZE,
     num_experts: int | None = None,
     num_experts_per_token: int | None = None,
     intermediate_dim: int | None = None,
+    latent_dim: int | None = None,
     capacity_factor: float | None = None,
-    profile_start_step: int | None = None,
-    profile_num_steps: int = HERO_PROFILE_NUM_STEPS,
+    eval_every: int = 0,
+    profile_steps: int = 0,
+    profile_start_step: int = 5,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    """Build a four-process-per-node fixed-all-to-all control matched to MoK's topology."""
-    return _build_hero_run(
+    """Build a four-process-per-node pooled-wave control matched to MoK's process topology."""
+    return build_hero_run(
         run_id=run_id,
+        dp_racks=1,
         num_steps=num_steps,
+        schedule_steps=schedule_steps,
+        seed=seed,
+        batch_size=batch_size,
         num_experts=num_experts,
         num_experts_per_token=num_experts_per_token,
         intermediate_dim=intermediate_dim,
+        latent_dim=latent_dim,
         capacity_factor=capacity_factor,
+        eval_every=eval_every,
         version=version,
         processes_per_task=HERO_MOK_PROCESSES_PER_TASK,
+        profile_steps=profile_steps,
         profile_start_step=profile_start_step,
-        profile_num_steps=profile_num_steps,
     )
 
 
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
+@click.option(
+    "--dp-racks",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Data-parallel NVL72 rack count. --batch-size stays global across all racks.",
+)
 @click.option(
     "--num-steps",
     type=click.IntRange(min=1),
@@ -322,45 +416,163 @@ def build_multiprocess_hero_run(
     help="Number of training steps.",
 )
 @click.option(
-    "--num-experts",
+    "--schedule-steps",
     type=click.IntRange(min=1),
     default=None,
-    help=f"Override the routed expert count. Must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}.",
+    help=(
+        "Build the learning-rate schedule for this many steps instead of --num-steps. The optimizer "
+        "heuristic scales its rates from the implied token budget, so this trains the head of a long "
+        "run's schedule. Defaults to --num-steps."
+    ),
+)
+@click.option(
+    "--seed",
+    type=int,
+    default=0,
+    help="Trainer seed. Vary it across otherwise identical runs to measure run-to-run variance.",
+)
+@click.option(
+    "--num-experts",
+    type=click.IntRange(min=1),
+    default=HERO_MODEL.num_experts,
+    show_default=True,
+    help=(
+        f"Override the routed expert count. The count must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}, "
+        f"and the local expert count must support {HERO_MODEL.num_expert_waves} waves."
+    ),
 )
 @click.option(
     "--num-experts-per-token",
     type=click.IntRange(min=1),
-    default=None,
+    default=HERO_MODEL.num_experts_per_token,
+    show_default=True,
     help="Override the routed top-k. Scales both active parameters and the EP dispatch buffers.",
 )
 @click.option(
     "--intermediate-dim",
     type=click.IntRange(min=1),
-    default=None,
+    default=HERO_MODEL.intermediate_dim,
+    show_default=True,
     help="Override the routed expert width.",
+)
+@click.option(
+    "--batch-size",
+    type=click.IntRange(min=1),
+    default=HERO_EP_BATCH_SIZE,
+    show_default=True,
+    help="Global sequences per step. This value does not scale with --dp-racks.",
+)
+@click.option(
+    "--latent-dim",
+    type=click.IntRange(min=0),
+    default=None,
+    help=(
+        "LatentMoE: run routed experts at this width. Divides all-to-all traffic by hidden/latent. "
+        "Zero removes the projection entirely; omitted keeps the hero width."
+    ),
+)
+@click.option(
+    "--save-checkpoints/--no-save-checkpoints",
+    default=False,
+    show_default=True,
+    help="Write checkpoints. Restore is not supported for the pinned-host optimizer state.",
+)
+@click.option(
+    "--checkpoint-minutes",
+    type=click.FloatRange(min=0, min_open=True),
+    default=HERO_CHECKPOINT_INTERVAL.total_seconds() / 60,
+    show_default=True,
+    help="Wall-clock minutes between checkpoint writes.",
+)
+@click.option(
+    "--checkpoint-path",
+    default=None,
+    help="Checkpoint output path, e.g. a marin_temp_bucket() path. Defaults to the step output path.",
+)
+@click.option(
+    "--eval-every",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="Run the paloma suite every N steps. 0 disables eval (throughput-only run).",
+)
+@click.option(
+    "--watch-interval",
+    type=click.IntRange(min=0),
+    default=HERO_WATCH_INTERVAL,
+    show_default=True,
+    help="Steps between gradient and parameter norm logs. 0 disables norm logging.",
+)
+@click.option(
+    "--watch-mode",
+    type=click.Choice([mode.value for mode in WatchMode]),
+    default=WatchMode.INLINE.value,
+    show_default=True,
+    help="Compute norms in the training step or in a separate forward and backward diagnostic step.",
+)
+@click.option(
+    "--profile-steps",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="Steps to trace with XProf on rank 0. 0 disables the profiler.",
+)
+@click.option(
+    "--profile-start-step",
+    type=click.IntRange(min=0),
+    default=5,
+    show_default=True,
+    help="First traced step. Keep it past compile and warmup.",
 )
 @click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
-    default=None,
-    help="Override the fixed all-to-all capacity factor.",
+    default=HERO_MODEL.capacity_factor,
+    show_default=True,
+    help="Override the pooled receiver capacity factor.",
 )
 @build_options
 def main(
     run_id: str,
+    dp_racks: int,
     num_steps: int,
+    schedule_steps: int | None,
+    seed: int,
+    batch_size: int,
     num_experts: int | None,
     num_experts_per_token: int | None,
     intermediate_dim: int | None,
     capacity_factor: float | None,
+    latent_dim: int | None,
+    save_checkpoints: bool,
+    checkpoint_minutes: float,
+    checkpoint_path: str | None,
+    eval_every: int,
+    watch_interval: int,
+    watch_mode: str,
+    profile_steps: int,
+    profile_start_step: int,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
         run_id=run_id,
+        dp_racks=dp_racks,
         num_steps=num_steps,
+        schedule_steps=schedule_steps,
+        seed=seed,
+        batch_size=batch_size,
         num_experts=num_experts,
         num_experts_per_token=num_experts_per_token,
         intermediate_dim=intermediate_dim,
         capacity_factor=capacity_factor,
+        latent_dim=latent_dim,
+        save_checkpoints=save_checkpoints,
+        checkpoint_interval=timedelta(minutes=checkpoint_minutes),
+        checkpoint_path=checkpoint_path,
+        eval_every=eval_every,
+        watch_interval=watch_interval,
+        watch_mode=WatchMode(watch_mode),
+        profile_steps=profile_steps,
+        profile_start_step=profile_start_step,
     )
 
 

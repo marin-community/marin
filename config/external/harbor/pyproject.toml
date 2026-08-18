@@ -6,6 +6,8 @@ dependencies = [
     "daytona==0.200.2",
     "gcsfs",
     "harbor",
+    # LiteLLM imports this at module initialization but does not declare it.
+    "pydantic-settings",
     "s3fs",
 ]
 

@@ -3,6 +3,8 @@
 
 """Shared Kubernetes constants for Iris cluster components."""
 
+DEFAULT_TASK_CACHE_DIR = "/cache"
+
 # NVIDIA GPU nodes commonly carry this taint. Pods requesting GPUs must
 # tolerate it or they will remain Pending.
 NVIDIA_GPU_TOLERATION: dict = {

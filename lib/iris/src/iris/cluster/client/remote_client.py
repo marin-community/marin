@@ -4,6 +4,7 @@
 """RPC-based cluster client implementation."""
 
 import logging
+import re
 import time
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
@@ -85,6 +86,7 @@ class RemoteClusterClient:
         interceptors: Iterable[InterceptorSync] = (),
         use_controller_proxy: bool = True,
         extra_bundle_includes: Sequence[str] = (),
+        bundle_exclude: re.Pattern[str] | None = None,
     ):
         """Initialize RPC cluster operations.
 
@@ -106,6 +108,7 @@ class RemoteClusterClient:
         self._bundle_id = bundle_id
         self._workspace = workspace.resolve() if workspace is not None else None
         self._extra_bundle_includes = extra_bundle_includes
+        self._bundle_exclude = bundle_exclude
         self._bundle_blob: bytes | None = None
         self._timeout_ms = timeout_ms
         self._use_controller_proxy = use_controller_proxy
@@ -199,7 +202,9 @@ class RemoteClusterClient:
             request.bundle_id = self._bundle_id
         else:
             if self._bundle_blob is None and self._workspace is not None:
-                self._bundle_blob = create_workspace_zip(self._workspace, extra_includes=self._extra_bundle_includes)
+                self._bundle_blob = create_workspace_zip(
+                    self._workspace, exclude=self._bundle_exclude, extra_includes=self._extra_bundle_includes
+                )
                 logger.info(f"Workspace bundle size: {len(self._bundle_blob) / 1024 / 1024:.1f} MB")
             request.bundle_blob = self._bundle_blob or b""
 

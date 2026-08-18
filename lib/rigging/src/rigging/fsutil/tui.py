@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from rigging.filesystem.buckets import MissingCredentials
 from rigging.fsutil.listing import ROOT, Entry, list_entries, parent_url, read_decompressed_preview, total_size
+from rigging.fsutil.parquet import is_parquet, parquet_lines
 from rigging.fsutil.render import file_lines, format_size, format_time
 
 _HELP = "[enter] open  [backspace] up  [/] filter  [s] sort  [d] size  [y] print URL  [q] quit"
@@ -132,12 +133,18 @@ def _open(stdscr: "curses.window", screen: Screen) -> None:
         return
 
     try:
-        preview = read_decompressed_preview(selected.url)
-        lines = file_lines(selected.name, preview.data)
+        if is_parquet(selected.name):
+            # Parquet is read through its footer rather than from the head of the object,
+            # so it takes the URL and reports its own limits in the rendered lines.
+            lines = parquet_lines(selected.url)
+            truncated_bytes = None
+        else:
+            preview = read_decompressed_preview(selected.url)
+            lines = file_lines(selected.name, preview.data)
+            truncated_bytes = len(preview.data) if preview.truncated else None
     except Exception as e:
         screen.status = f"error: {e}"
         return
-    truncated_bytes = len(preview.data) if preview.truncated else None
     _view(stdscr, selected.name, lines, truncated_bytes)
 
 

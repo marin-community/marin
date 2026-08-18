@@ -13,7 +13,9 @@ import jax.numpy as jnp
 import numpy as np
 import tensorstore as ts
 
-from rigging.filesystem import StoragePath, is_cross_region_url, record_transfer, url_to_fs
+from rigging.filesystem.cross_region import is_cross_region_url, record_transfer
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 from levanter.tensorstore_serialization import build_kvstore_spec
 
@@ -612,7 +614,6 @@ def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
             pass
 
     # TODO: groups?
-    # TODO: set chunk sizes
     try:
         if spec.get("kvstore", {}).get("path", "").startswith("memory://"):
             raise ValueError("No kvstore specified in spec, cannot open TensorStore")
@@ -621,11 +622,6 @@ def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
             dtype=jnp.dtype(dtype).name,
             shape=[2**54, *shape[1:]],
             **open_kwargs,
-            # chunk_layout=ts.ChunkLayout(
-            #     read_chunk_shape=[DEFAULT_CHUNK_SIZE, *shape[1:]],
-            #     write_chunk_shape=[DEFAULT_WRITE_CHUNK_SIZE, *shape[1:]]
-            # ),
-            # compression={"codec": "zstd", "compression_level": 5},
             **mode_config,
         ).result()
     except ValueError as e:
@@ -650,17 +646,11 @@ async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
             pass
 
     # TODO: groups?
-    # TODO: set chunk sizes
     return await ts.open(
         spec,
         dtype=jnp.dtype(dtype).name,
         shape=[2**54, *shape[1:]],
         **open_kwargs,
-        # chunk_layout=ts.ChunkLayout(
-        #     read_chunk_shape=[DEFAULT_CHUNK_SIZE, *shape[1:]],
-        #     write_chunk_shape=[DEFAULT_WRITE_CHUNK_SIZE, *shape[1:]]
-        # ),
-        # compression={"codec": "zstd", "compression_level": 5},
         **mode_config,
     )
 

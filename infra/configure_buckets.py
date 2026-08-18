@@ -18,7 +18,7 @@ Three backends are configured:
   storage cost.
 * **Cloudflare R2** and **CoreWeave AI Object Storage** buckets, via the S3
   lifecycle API (botocore). Both are enumerated from
-  :func:`rigging.filesystem.s3_data_buckets` — the R2/CoreWeave buckets declared
+  :func:`rigging.filesystem.cluster_config.s3_data_buckets` — the R2/CoreWeave buckets declared
   in ``config/*.yaml`` by their ``store`` type — so the set lives in config, not
   here. The owned rules are ``Expiration`` rules whose ``ID`` starts with
   ``marin-ttl-``; neither backend has soft-delete to manage. CoreWeave AOS is
@@ -57,7 +57,7 @@ import botocore.session
 import click
 import rigging.filesystem.s3_compat
 from botocore.exceptions import ClientError
-from rigging.filesystem import BucketSpec, StoreType, load_cluster_config, s3_data_buckets
+from rigging.filesystem.cluster_config import BucketSpec, StoreType, load_cluster_config, s3_data_buckets
 
 logger = logging.getLogger(__name__)
 

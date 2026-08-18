@@ -50,7 +50,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import click
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.cluster.config import CoreweavePlatformConfig, IrisClusterConfig, load_config
 from iris.cluster.platforms.k8s.controller import K8sControllerProvider, _build_controller_deployment
 from iris.cluster.platforms.k8s.coreweave_topology import (

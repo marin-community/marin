@@ -27,6 +27,7 @@ def test_run_grug_applies_xla_command_buffer_default_and_keeps_override(monkeypa
         trainer=SimpleNamespace(trainer=SimpleNamespace(id="test-run")),
         resources=object(),
         processes_per_task=1,
+        run_mode=train.GrugRunMode.DEFAULT,
     )
 
     with patch.object(train, "dispatch_grug_training_run"):

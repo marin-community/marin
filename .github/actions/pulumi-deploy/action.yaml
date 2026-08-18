@@ -17,13 +17,12 @@ inputs:
   gcp-project-id:
     description: "GCP project id."
     required: true
-  uv-sync-args:
-    description: "Arguments for the venv sync (services whose program imports more than iac widen this)."
-    default: "--package marin-iac --extra deploy --frozen"
   config-map:
     description: "Optional pulumi/actions config-map JSON applied before up (e.g. a deploy_generation override)."
     default: ""
-
+  cloudflare-secret-name:
+    description: "Optional Secret Manager secret exported as CLOUDFLARE_API_TOKEN for stacks that manage DNS."
+    default: ""
 runs:
   using: composite
   steps:
@@ -43,12 +42,26 @@ runs:
       shell: bash
       run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
 
+    - name: Fetch Cloudflare DNS token
+      if: inputs.cloudflare-secret-name != ''
+      shell: bash
+      run: |
+        token="$(gcloud secrets versions access latest \
+          --secret="${{ inputs.cloudflare-secret-name }}" --project="${{ inputs.gcp-project-id }}")"
+        echo "::add-mask::$token"
+        echo "CLOUDFLARE_API_TOKEN=$token" >> "$GITHUB_ENV"
+
     - name: Set up uv
       uses: astral-sh/setup-uv@v7
 
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+
     - name: Sync the iac venv
       shell: bash
-      run: uv sync ${{ inputs.uv-sync-args }}
+      run: uv sync --all-packages --extra deploy --frozen
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v4

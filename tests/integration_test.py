@@ -41,7 +41,7 @@ from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from marin.schemas.web.convert import ResiliparseConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 configure_logging(level=logging.INFO)

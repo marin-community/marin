@@ -14,7 +14,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 from fray.types import ResourceConfig
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext

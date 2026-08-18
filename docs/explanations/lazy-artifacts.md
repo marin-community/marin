@@ -106,7 +106,7 @@ artifact**, in argument order — so the driver gets the resolved values directl
 read. `resolve(handle)` is `run` for a single handle, returning its one artifact.
 
 ```python
-from marin.execution.lazy import run
+from marin.execution.lazy import resolve
 
 checkpoint = build()                      # returns ArtifactStep[LevanterCheckpoint]; nothing runs yet
 result = resolve(checkpoint)              # materializes deps, runs training, returns LevanterCheckpoint

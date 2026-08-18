@@ -24,6 +24,13 @@ _FORWARD_TARGET = "levanter_mok_bf16_forward"
 _BACKWARD_TARGET = "levanter_mok_bf16_backward"
 _BATCH_AXIS_CANDIDATES = ("replica_dcn", "data", "expert")
 _TARGETS_REGISTERED = False
+# The kernel always fuses a shared expert into the dispatch and reads it at the same token width
+# it routes. A caller whose shared experts read a wider token than the routed path -- LatentMoE
+# compresses before dispatch -- has to run them outside this call, so the fused slot gets the
+# narrowest legal zero weights instead. The packed shared intermediate must be positive and a
+# multiple of 256, so two halves of 128 are the floor: they contribute nothing to the output and
+# cost one 256-wide SwiGLU per local token.
+_UNFUSED_SHARED_HALF_INTERMEDIATE = 128
 
 
 def _native_extension() -> Any:
@@ -398,6 +405,14 @@ def _mok_bf16_local_bwd(
 _mok_bf16_local.defvjp(_mok_bf16_local_fwd, _mok_bf16_local_bwd)
 
 
+def _unfused_shared_weights(x: jax.Array) -> tuple[jax.Array, ...]:
+    """Zero weights for the fused shared-expert slot the caller is not using."""
+    hidden_size = x.shape[1]
+    gate_up = jnp.zeros((hidden_size, _UNFUSED_SHARED_HALF_INTERMEDIATE), dtype=jnp.bfloat16)
+    down = jnp.zeros((_UNFUSED_SHARED_HALF_INTERMEDIATE, hidden_size), dtype=jnp.bfloat16)
+    return (gate_up, gate_up, down, gate_up, gate_up, down)
+
+
 def _validate_shapes(
     x: jax.Array,
     selected_experts: jax.Array,
@@ -455,12 +470,12 @@ def mok_bf16(
     x: jax.Array,
     selected_experts: jax.Array,
     router_weights: jax.Array,
-    shared0_gate: jax.Array,
-    shared0_up: jax.Array,
-    shared0_down: jax.Array,
-    shared1_gate: jax.Array,
-    shared1_up: jax.Array,
-    shared1_down: jax.Array,
+    shared0_gate: jax.Array | None,
+    shared0_up: jax.Array | None,
+    shared0_down: jax.Array | None,
+    shared1_gate: jax.Array | None,
+    shared1_up: jax.Array | None,
+    shared1_down: jax.Array | None,
     routed_gate: jax.Array,
     routed_up: jax.Array,
     routed_down: jax.Array,
@@ -473,6 +488,10 @@ def mok_bf16(
     native kernel, gives each device only its expert slice, and packs the two
     shared experts only as BF16 compute values. Gradients are unpacked back into
     the nine original leaves before they reach the optimizer.
+
+    Passing ``None`` for every shared weight leaves the fused shared slot empty, which is what a
+    caller running its shared experts at a different token width has to do. The returned array is
+    then the routed contribution alone.
     """
 
     shared_weights = (
@@ -483,6 +502,10 @@ def mok_bf16(
         shared1_up,
         shared1_down,
     )
+    if any(weight is None for weight in shared_weights):
+        if any(weight is not None for weight in shared_weights):
+            raise ValueError("shared expert weights must be passed together or omitted together")
+        shared_weights = _unfused_shared_weights(x)
     routed_weights = (routed_gate, routed_up, routed_down)
     _validate_shapes(x, selected_experts, router_weights, shared_weights, routed_weights)
     _require_bf16_inputs(x, (*shared_weights, *routed_weights))

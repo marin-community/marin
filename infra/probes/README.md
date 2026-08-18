@@ -77,7 +77,6 @@ Single COS VM `infra-probes` (us-central1-b), one container, `restart=always`.
 ```bash
 cd infra/probes
 uv run deploy/deploy.py build    # build + push :sha and :latest
-uv run deploy/deploy.py grant-iap # one-time access for the existing probe SA
 uv run deploy/deploy.py apply    # roll the VM to this HEAD's :sha image
 uv run deploy/deploy.py status   # VM state + recent logs
 ```
@@ -87,8 +86,9 @@ overridden per-command (`--project`, `--zone`, …) or via `MARIN_PROBES_*` env 
 
 ### One-time VM creation
 
-`create` provisions the service account (image pull, Cloud Logging, GCS
-roll-ups, Marin Iris IAP access), its IAM bindings, and the COS VM in one shot:
+`create` provisions the service account (image pull, Cloud Logging, and GCS
+roll-ups), its IAM bindings, and the COS VM in one shot. Marin Iris IAP access
+is declared by `provisioning.gcp.gclb` in `lib/iris/config/marin.yaml`:
 
 ```bash
 uv run deploy/deploy.py create    # --iris-endpoint / --machine-type to override

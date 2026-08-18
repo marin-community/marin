@@ -23,8 +23,6 @@ tests.
 
 - `lib/levanter/src/levanter/kernels/pallas/autotune_utils.py`: bounded config
   sweeps and result handling.
-- `lib/levanter/src/levanter/kernels/pallas/autotune_cache_utils.py`: persistent
-  autotune cache helpers.
 - `lib/levanter/src/levanter/kernels/pallas/cost_estimate_utils.py`: IO-byte
   augmentation for `pl.CostEstimate`.
 

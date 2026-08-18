@@ -27,17 +27,61 @@ RUN npm run build
 # ── Stage: iris-native-wheel ────────────────────────────────────────
 # Build the PyO3 companion once per target architecture without carrying a Rust
 # toolchain into the controller or worker images.
-FROM rust:1-bookworm AS iris-native-wheel
+FROM --platform=$BUILDPLATFORM ghcr.io/astral-sh/uv:0.10.3 AS iris-native-uv
+FROM --platform=$BUILDPLATFORM rust:1-bookworm AS iris-native-wheel
 
-COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
+COPY --from=iris-native-uv /uv /uvx /bin/
 
 WORKDIR /build/iris-native
-COPY lib/iris/rust/ ./
+
+ARG BUILDARCH
+ARG TARGETARCH
 # Direct Docker builds use release. Iris CLI builds default to fast, which
 # keeps optimized parallel codegen but skips LTO.
 ARG CARGO_PROFILE=release
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+
+# Keep rustc native to the builder. The extension uses PyO3's abi3-py312 ABI,
+# so a target-architecture Python interpreter is not needed for cross builds.
+RUN case "${TARGETARCH}" in \
+        amd64) rust_target=x86_64-unknown-linux-gnu; cross_cc=x86_64-linux-gnu-gcc; cross_package=gcc-x86-64-linux-gnu; cross_libc=libc6-dev-amd64-cross ;; \
+        arm64) rust_target=aarch64-unknown-linux-gnu; cross_cc=aarch64-linux-gnu-gcc; cross_package=gcc-aarch64-linux-gnu; cross_libc=libc6-dev-arm64-cross ;; \
+        *) echo "Unsupported Iris native target architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    printf '%s\n' "${rust_target}" > /usr/local/lib/iris-rust-target && \
+    rustup target add "${rust_target}" && \
+    if [ "${BUILDARCH}" = "${TARGETARCH}" ]; then \
+        ln -sf "$(command -v gcc)" "/usr/local/bin/${cross_cc}"; \
+    else \
+        apt-get update && \
+        apt-get install -y --no-install-recommends "${cross_package}" "${cross_libc}" && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc
+
+# Compile third-party dependencies from manifests before copying Iris source.
+# The target cache is shared by the dependency and wheel builds, while its ID
+# keeps target triples and optimization profiles isolated.
+COPY lib/iris/rust/Cargo.toml lib/iris/rust/Cargo.lock ./
+COPY lib/iris/rust/pyext/Cargo.toml ./pyext/Cargo.toml
+RUN mkdir -p src pyext/src && \
+    printf 'pub fn placeholder() {}\n' > src/lib.rs && \
+    printf 'pub fn placeholder() {}\n' > pyext/src/lib.rs
+RUN --mount=type=cache,id=iris-native-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=iris-native-target-linux-gnu-${TARGETARCH}-${CARGO_PROFILE},target=/build/iris-native/target,sharing=locked \
+    rust_target="$(cat /usr/local/lib/iris-rust-target)" && \
+    cargo build --locked --workspace --profile "${CARGO_PROFILE}" --target "${rust_target}"
+
+COPY lib/iris/rust/pyproject.toml lib/iris/rust/iris_native.pyi ./
+COPY lib/iris/rust/src/ ./src/
+COPY lib/iris/rust/pyext/src/ ./pyext/src/
+RUN --mount=type=cache,id=iris-native-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    --mount=type=cache,id=iris-native-target-linux-gnu-${TARGETARCH}-${CARGO_PROFILE},target=/build/iris-native/target,sharing=locked \
+    rust_target="$(cat /usr/local/lib/iris-rust-target)" && \
+    find src pyext/src -type f -exec touch {} + && \
     uvx --python 3.12 --from 'maturin>=1.5,<2.0' maturin build \
+        --target "${rust_target}" \
         --profile "${CARGO_PROFILE}" \
         --out /wheels
 
@@ -90,15 +134,15 @@ ENV PATH="/app/.venv/bin:$PATH"
 # Build against the committed root `uv.lock` (`--frozen`) so the image ships the
 # same pinned, tested dependency set as local dev and the rest of CI — no fresh
 # PyPI resolve that can float a transitive (e.g. protobuf) to an untested major.
-# marin-iris's closure is two workspace members built from source — marin-rigging
-# and marin-finelog (the pure-Python finelog client) — plus external/registry
+# marin-iris's closure is three workspace members built from source — marin-rigging,
+# marin-finestore, and marin-finelog (the pure-Python finelog client) — plus external/registry
 # deps (the native marin-finelog-server ships as a published wheel). It never
 # pulls the Rust-built members (marin-core, levanter, …), so `--package
 # marin-iris` never asks the toolchain-free slim base to build them.
 # uv must still discover every workspace member to map the lock, so copy each
-# member's pyproject.toml (metadata only) — but only iris+rigging+finelog install.
+# member's pyproject.toml (metadata only) — but only iris+rigging+finestore+finelog install.
 # The first sync uses `--no-install-workspace` to install just the external deps
-# (cached across source edits); the second builds iris+rigging+finelog from source.
+# (cached across source edits); the second builds iris and its workspace dependencies from source.
 # Metadata alone suffices even for marin-haliax's `dynamic = ["version"]`
 # (sourced from src/haliax/__about__.py): under --frozen, uv takes the version
 # from the lock and never invokes a non-installed member's build backend.
@@ -108,6 +152,7 @@ COPY lib/iris/rust/pyproject.toml lib/iris/rust/Cargo.toml lib/iris/rust/Cargo.l
     lib/iris/rust/iris_native.pyi ./lib/iris/rust/
 COPY lib/iris/rust/pyext/Cargo.toml ./lib/iris/rust/pyext/Cargo.toml
 COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
+COPY lib/finestore/pyproject.toml ./lib/finestore/pyproject.toml
 COPY lib/finelog/pyproject.toml ./lib/finelog/pyproject.toml
 COPY lib/fray/pyproject.toml ./lib/fray/pyproject.toml
 COPY lib/haliax/pyproject.toml ./lib/haliax/pyproject.toml
@@ -118,11 +163,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --package marin-iris --no-install-workspace \
         --no-install-package marin-iris-native
 
-# Now copy full source for rigging, finelog, and iris, then install. rigging's
+# Now copy full source for rigging, finestore, finelog, and iris, then install. rigging's
 # wheel force-includes the repo-root config/ cluster YAMLs (-> rigging/clusters)
 # and finelog's force-includes lib/finelog/config/, so copy both: the editable
 # builds read them.
 COPY lib/rigging/src/ ./lib/rigging/src/
+COPY lib/finestore/src/ ./lib/finestore/src/
 COPY config/ ./config/
 COPY lib/finelog/src/ ./lib/finelog/src/
 COPY lib/finelog/config/ ./lib/finelog/config/

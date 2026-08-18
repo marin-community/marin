@@ -17,7 +17,7 @@ import draccus
 from bs4 import BeautifulSoup
 from marin.schemas.web.convert import ExtractionConfig
 from marin.web.convert import convert_page
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 from zephyr.readers import load_jsonl

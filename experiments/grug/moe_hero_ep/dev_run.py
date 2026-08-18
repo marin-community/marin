@@ -7,14 +7,16 @@ import dataclasses
 
 import click
 from marin.execution.lazy import materialized_config
-from rigging.filesystem import marin_prefix
+from rigging.filesystem.cluster_config import marin_prefix
 
 from experiments.grug.moe_hero_ep.launch import (
-    HERO_PROFILE_NUM_STEPS,
     build_mok_hero_run,
     build_multiprocess_hero_run,
 )
 from experiments.grug.moe_hero_ep.train import _apply_hero_ep_runtime_defaults, _run_grug_local
+
+# A dev capture is a spot check, not a sweep.
+DEV_PROFILE_START_STEP = 5
 
 
 @click.command()
@@ -34,6 +36,12 @@ from experiments.grug.moe_hero_ep.train import _apply_hero_ep_runtime_defaults, 
 )
 @click.option("--backend", type=click.Choice(("mok", "fixed")), default="mok", show_default=True)
 @click.option(
+    "--latent-dim",
+    type=click.IntRange(min=0),
+    default=None,
+    help="LatentMoE routed width. Zero removes the projection; omitted keeps the hero width.",
+)
+@click.option(
     "--mok-expert-placement",
     type=click.Choice(("contiguous", "r9_profile_hot_cold")),
     default="contiguous",
@@ -41,17 +49,18 @@ from experiments.grug.moe_hero_ep.train import _apply_hero_ep_runtime_defaults, 
     help="Relabel the r9 expert bank at initialization so hot/cold pairs share an EP rank.",
 )
 @click.option(
-    "--profile-start-step",
-    type=click.IntRange(min=1),
-    default=None,
-    help="Start an XProf capture at this training step; omitted disables profiling.",
+    "--profile-steps",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="Number of training steps to capture with XProf. Zero disables profiling.",
 )
 @click.option(
-    "--profile-num-steps",
-    type=click.IntRange(min=1),
-    default=HERO_PROFILE_NUM_STEPS,
+    "--profile-start-step",
+    type=click.IntRange(min=0),
+    default=DEV_PROFILE_START_STEP,
     show_default=True,
-    help="Number of training steps to capture.",
+    help="Training step the XProf capture starts on.",
 )
 @click.option(
     "--profile-all-processes",
@@ -100,8 +109,9 @@ def main(
     stop_after_steps: int | None,
     backend: str,
     mok_expert_placement: str,
-    profile_start_step: int | None,
-    profile_num_steps: int,
+    profile_steps: int,
+    profile_start_step: int,
+    latent_dim: int | None,
     profile_all_processes: bool,
     mok_fwd_num_comm_sms: int | None,
     mok_bwd_num_comm_sms: int | None,
@@ -131,8 +141,8 @@ def main(
         raise click.UsageError(f"{option} is only valid with --backend mok")
     if stop_after_steps is not None and stop_after_steps > num_steps:
         raise click.UsageError("--stop-after-steps cannot exceed --num-steps")
-    if profile_all_processes and profile_start_step is None:
-        raise click.UsageError("--profile-all-processes requires --profile-start-step")
+    if profile_all_processes and profile_steps == 0:
+        raise click.UsageError("--profile-all-processes requires --profile-steps")
     for option, value, multiple in (
         ("--mok-fwd-num-comm-sms", mok_fwd_num_comm_sms, 2),
         ("--mok-bwd-num-comm-sms", mok_bwd_num_comm_sms, 2),
@@ -146,18 +156,20 @@ def main(
         step = build_mok_hero_run(
             run_id=run_id,
             num_steps=num_steps,
+            latent_dim=latent_dim,
             mok_package="mixture-of-kittens",
             mok_expert_placement=mok_expert_placement,
+            profile_steps=profile_steps,
             profile_start_step=profile_start_step,
-            profile_num_steps=profile_num_steps,
             version="dev",
         )
     else:
         step = build_multiprocess_hero_run(
             run_id=run_id,
             num_steps=num_steps,
+            latent_dim=latent_dim,
+            profile_steps=profile_steps,
             profile_start_step=profile_start_step,
-            profile_num_steps=profile_num_steps,
             version="dev",
         )
     config = materialized_config(step, marin_prefix())
@@ -200,7 +212,10 @@ def main(
         config,
         runtime_pip_packages=(),
     )
-    _apply_hero_ep_runtime_defaults()
+    _apply_hero_ep_runtime_defaults(
+        inline_watch_enabled=config.trainer.trainer.watch.is_enabled,
+        processes_per_task=config.processes_per_task,
+    )
     _run_grug_local(config, stop_after_steps=stop_after_steps)
 
 

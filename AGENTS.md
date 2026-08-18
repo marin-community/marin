@@ -32,26 +32,13 @@ matching skill exists** by scanning the skill descriptions in your system
 prompt. If a skill matches, invoke it via the Skill tool — do not skip it in
 favor of ad-hoc commands.
 
-## Choose the Request Mode
+## Handle Requests
 
-Choose the mode from what the user asked before selecting a skill or changing
-the repository:
-
-- **Answer mode** covers questions, explanations, walkthroughs, evaluations,
-  and review requests such as "is this reasonable?" Investigate as needed and
-  return a concise, self-contained answer in the originating conversation. Do
-  not edit files, create design/research documents, commit, open a PR, or invoke
-  a change workflow unless the user explicitly asks for a repository change.
-  Repository access provides evidence; it does not imply authorization to
-  publish work.
-- **Change mode** covers explicit requests to implement, fix, write, update, or
-  open a PR. Make the change and follow the applicable development and landing
-  workflow.
-
-If either interpretation could satisfy the wording, answer first and leave the
-change for an explicit follow-up. Do not require a follow-up when a useful,
-well-supported answer can stand on its own. Select skills only after choosing
-the mode; a change-only skill is not a match for an answer-mode request.
+If a request comes from Slack or GitHub and appears to be a simple question,
+you may answer it in the originating conversation instead of making a
+repository change. Otherwise, carry the request through the applicable change
+and landing workflow; do not stop after investigation while a safe, in-scope
+fix remains.
 
 ## Search Prior Work
 
@@ -79,13 +66,11 @@ working tree. See the `consult-echo` skill for the complete workflow.
 - Do not replace it with `uv run pre-commit ...`!
 
 # Type checking (also done by pre-commit.py)
-uv run pyrefly
-- Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
+uv run pyrefly check
+- Keep type hints passing under `uv run pyrefly check`; configuration lives in `pyproject.toml`.
 
-# Safe local test suite
-uv run pytest
-- Pytest's repository defaults exclude slow, integration, data-integration,
-  live-cluster, Docker, and manual tests. Keep those defaults for local runs.
+# Safe tests affected by the current branch and working tree
+uv run --no-project infra/ci/run_tests.py
 
 # Lint review — agentic pass over the branch diff against the infra/lint/ catalog
 ./infra/pre-commit.py --review
@@ -95,7 +80,7 @@ uv run pytest
   follow-up materially changes the design or scope.
 ```
 
-- Python >=3.12. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
+- Python >=3.12. Use `uv run` for entry points.
 - Do not replace pytest's default marker expression with a partial expression
   such as `-m "not slow"`; `-m` overrides the whole default and can select live
   cluster tests. Run excluded markers only when the user or a dedicated task
@@ -128,6 +113,9 @@ uv run pytest
 - PR monitoring is part of the `commit` skill. After opening or updating a PR,
   follow its `wait_for.py` loop through an exit condition. Do not substitute
   `gh pr checks --watch`, repeated `gh pr view` calls, or handoff at green CI.
+  Invoke `wait_for.py` once as a foreground blocking call and let it resume the
+  task when an event fires; do not poll a yielded process handle or narrate
+  unchanged state while it waits.
 - When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
 
 ## Code Style

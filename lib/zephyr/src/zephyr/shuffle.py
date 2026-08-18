@@ -46,8 +46,9 @@ import humanfriendly
 import msgspec
 import polars as pl
 from iris.env_resources import TaskResources
-from rigging.filesystem import StoragePath, open_url, url_to_fs
+from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.s3_compat import needs_virtual_host_addressing
+from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import RateLimiter, log_time
 
 from zephyr.external_sort import external_sort_merge
@@ -83,10 +84,6 @@ class ListShard:
         for ref in self.refs:
             yield from ref
 
-    def get_iterators(self) -> Iterator[Iterator]:
-        for ref in self.refs:
-            yield iter(ref)
-
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -94,9 +91,9 @@ class ListShard:
 
 _SCATTER_METADATA_FILENAME = "metadata.msgpack"
 
-# Number of parallel sidecar reads each reducer issues when building its
-# ScatterReader. Sidecars are small msgpack files (a few KB) and reads are
-# GCS GET-bound, so a modest pool keeps latency low without thrashing.
+# Number of parallel small-file reads (sidecars, parquet schema footers) each
+# reducer issues while building its ScatterReader. These reads are GCS
+# GET-bound, so a modest pool keeps latency low without thrashing.
 _SIDECAR_READ_CONCURRENCY = 32
 # Fraction of available memory available for merging.
 _SCATTER_READ_MEMORY_FRACTION = 0.4
@@ -111,6 +108,10 @@ _PROGRESS_LOG_INTERVAL_SECONDS = 60.0
 _POLARS_STREAMING_CHUNK_SIZE = 10000
 # Maximum run files that Polars merges at one time during an external sort.
 _EXTERNAL_SORT_MAX_MERGE_FAN_IN = 32
+# Bound Parquet footer size when a shuffle has thousands of target shards. One
+# row group per target gives ideal predicate pruning, but makes every reducer
+# read multi-megabyte footers from every mapper chunk before it can read data.
+_SCATTER_MAX_ROW_GROUPS_PER_CHUNK = 512
 
 # Helper column names injected by _items_to_dataframe and stripped before
 # writing to disk.  Both are internal implementation details; user schemas must
@@ -319,13 +320,14 @@ def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
     Null on an all-None batch from one shard and Int64 from another.  This also
     handles arbitrary user-column dtype drift when DataFrames are written directly.
 
-    collect_schema() reads only parquet file-footer metadata (no row data).
-    The limit(0) concat derives the supertype schema without any I/O.  Casting
-    is applied as a lazy expression, so no data is scanned here.
+    collect_schema() reads only parquet file-footer metadata (no row data), so the
+    limit(0) concat derives the supertype schema without any further I/O and casting
+    is applied as a lazy expression.
     """
     if len(frames) <= 1:
         return frames
-    schemas = [f.collect_schema() for f in frames]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
+        schemas = list(pool.map(pl.LazyFrame.collect_schema, frames))
     if all(s == schemas[0] for s in schemas[1:]):
         return frames
     unified = pl.concat([f.limit(0) for f in frames], how="diagonal_relaxed").collect_schema()
@@ -530,8 +532,9 @@ class ScatterWriter:
     keeps the interface ready for DataFrame/RecordBatch-native pipelines.
 
     Each flush writes a single ``c{chunk:04d}.parquet`` file sorted by
-    ``[_SHARD_COL, _SORT_KEY_COL]`` with row groups sized so Polars predicate
-    pushdown skips non-target row groups on the read side.
+    ``[_SHARD_COL, _SORT_KEY_COL]`` with bounded, target-local row groups so
+    Polars predicate pushdown skips most unrelated data without creating
+    unbounded Parquet footers.
 
     Flushing is estimated-size-based: when the sum of ``DataFrame.estimated_size()``
     across buffered frames exceeds ``_SCATTER_FLUSH_THRESHOLD * _ESTIMATED_SIZE_CORRECTION_FACTOR``
@@ -612,10 +615,12 @@ class ScatterWriter:
         for shard_val, nbytes in shard_sizes.iter_rows():
             self._shard_bytes[shard_val] += int(nbytes)
 
-        # Size row groups so each target shard fits in roughly one row group,
-        # enabling Polars predicate pushdown to skip non-matching groups.
+        # Keep target shards local to as few row groups as practical so Polars
+        # predicate pushdown can skip unrelated data. Cap the group count because
+        # every reducer must read every chunk footer before applying that filter.
         num_targets = buffer_sorted[_SHARD_COL].n_unique()
-        row_group_size = max(1, len(buffer_sorted) // num_targets)
+        num_row_groups = min(num_targets, _SCATTER_MAX_ROW_GROUPS_PER_CHUNK)
+        row_group_size = max(1, math.ceil(len(buffer_sorted) / num_row_groups))
         chunk_path = f"{self._data_path}c{self._n_chunks_written:04d}.parquet"
         # Ideally we'd call write_parquet directly with the GCS path, but it occationally fails with a generic error.
         buf = io.BytesIO()

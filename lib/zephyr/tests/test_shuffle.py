@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 import cloudpickle
 import polars as pl
+import pyarrow.parquet as pq
 import pytest
 from iris.env_resources import TaskResources
 from zephyr.external_sort import external_sort_merge
@@ -22,6 +23,7 @@ from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
 from zephyr.shuffle import (
     _PAYLOAD_COL,
+    _SCATTER_MAX_ROW_GROUPS_PER_CHUNK,
     _SHARD_COL,
     _SORT_KEY_COL,
     ScatterReader,
@@ -386,6 +388,32 @@ def test_scatter_byte_budget_preserves_all_items(tmp_path):
         recovered.extend(_read_shard(shard))
 
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
+
+
+def test_scatter_bounds_parquet_row_groups(tmp_path):
+    num_targets = 1024
+    data_path = f"{tmp_path}/shard-0000/scatter/"
+    frame = pl.DataFrame(
+        {
+            _PAYLOAD_COL: pl.Series(
+                [cloudpickle.dumps({"k": target}) for target in range(num_targets)],
+                dtype=pl.Binary,
+            ),
+            _SHARD_COL: pl.Series(range(num_targets), dtype=pl.Int32),
+            _SORT_KEY_COL: [
+                OrderedDict([("key", target.to_bytes(4, "big")), ("sort_value", None)]) for target in range(num_targets)
+            ],
+        }
+    )
+    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=0)
+    writer.write(frame)
+    writer.close()
+
+    parquet = pq.ParquetFile(f"{data_path}c0000.parquet")
+    assert parquet.metadata.num_row_groups <= _SCATTER_MAX_ROW_GROUPS_PER_CHUNK
+
+    reader = ScatterReader(files=[(data_path, [f"{data_path}c0000.parquet"])], target_shard=513, avg_item_bytes=1)
+    assert _read_shard(reader) == [{"k": 513}]
 
 
 def test_scatter_auto_flush_uses_task_memory_budget(tmp_path):

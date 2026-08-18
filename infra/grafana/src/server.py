@@ -36,6 +36,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /k8s/finelog                             finelog pod, probe, resource, and PVC details
     GET /k8s/finelog_events                      recent Warning events involving finelog
     GET /k8s/health | nodes                      API reachability and CoreWeave node health
+    GET /k8s/node_pools                          CoreWeave NodePool capacity and conditions
     GET /k8s/overview                            explicit workload issue counts (zeros included)
     GET /k8s/gpu_racks                           GPU nodes grouped by physical rack: trays total/ready
     GET /k8s/alerts/unreachable                  alert rows: cluster, error_class, value(0|1)
@@ -48,6 +49,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /k8s/alerts/arch_mismatch                 alert rows: cluster, node, image, value(count)
     GET /k8s/alerts/gpu_rack_trays                alert rows: cluster, rack_name, value(trays_ready)
     POST /alerts/loom                             firing Grafana groups become Loom automation runs
+    POST /alerts/slack                            Grafana groups announced in Slack, no Loom run
     GET /health                                  bridge liveness
 
 A dead controller or GitHub returns 5xx (not empty rows), and the failure is not
@@ -55,8 +57,8 @@ cached. The k8s routes aggregate every CW cluster into one response, so a dead
 cluster becomes labeled error rows while the rest render; the alert routes always
 return at least one row per cluster (explicit zeros when healthy) so Grafana
 rules never hit NoData. Handlers are sync defs; Starlette runs them in a
-threadpool. The Loom webhook is async because it exchanges tokens and creates a
-run over HTTP.
+threadpool. The two alert webhooks are async because they post to Slack, and the
+Loom one also exchanges tokens and creates a run over HTTP.
 """
 
 import json
@@ -85,7 +87,13 @@ from github_app import GithubAppAuth
 from github_source import GithubSource
 from iris_source import IrisSource
 from k8s_source import K8sFleet, K8sSource
-from loom_alerts import LoomAlertClient, LoomAlertDeliveryError, LoomAlertPayloadError
+from loom_alerts import (
+    LoomAlertClient,
+    LoomAlertDeliveryError,
+    LoomAlertPayloadError,
+    SlackAlertClient,
+    SlackAnnouncementError,
+)
 from nightly_config import NIGHTLY_LANES
 from overview import PROVISIONING_LOOKBACK_HOURS, provisioning_query, provisioning_rows
 from starlette.applications import Starlette
@@ -331,8 +339,9 @@ def create_app(
     k8s_fleet: K8sFleet,
     wandb_source: WandbSource,
     loom_alerts: LoomAlertClient | None = None,
+    slack_alerts: SlackAlertClient | None = None,
 ) -> Starlette:
-    """Build the ASGI app serving Grafana's data sources and Loom webhook."""
+    """Build the ASGI app serving Grafana's data sources and alert webhooks."""
     finelog_cache: TtlCache = TtlCache(config.cache_ttl)
     finelog_health_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
     iris_cache: TtlCache = TtlCache(config.iris_cache_ttl)
@@ -542,6 +551,14 @@ def create_app(
         # bug raises here, and Starlette turns that into a 500.
         return JSONResponse(k8s_cache.get_or_compute(key, run))
 
+    def filtered_k8s_endpoint(key: str, run, request: Request, fields: tuple[str, ...]) -> JSONResponse:
+        rows = k8s_cache.get_or_compute(key, run)
+        for field in fields:
+            selected = {value for value in request.query_params.get(field, "").split(",") if value}
+            if selected:
+                rows = [row for row in rows if field not in row or row[field] in selected]
+        return JSONResponse(rows)
+
     def k8s_control_plane(_: Request) -> JSONResponse:
         return k8s_endpoint("control_plane", k8s_fleet.control_plane)
 
@@ -579,8 +596,11 @@ def create_app(
     def k8s_health(_: Request) -> JSONResponse:
         return k8s_endpoint("health", k8s_fleet.health)
 
-    def k8s_nodes(_: Request) -> JSONResponse:
-        return k8s_endpoint("nodes", k8s_fleet.nodes)
+    def k8s_nodes(request: Request) -> JSONResponse:
+        return filtered_k8s_endpoint("nodes", k8s_fleet.nodes, request, ("cluster", "node"))
+
+    def k8s_node_pools(request: Request) -> JSONResponse:
+        return filtered_k8s_endpoint("node_pools", k8s_fleet.node_pools, request, ("cluster", "node_pool"))
 
     def k8s_overview(_: Request) -> JSONResponse:
         def compute() -> list[dict]:
@@ -648,10 +668,28 @@ def create_app(
         logger.info("Grafana alert accepted by Loom: run=%s", result.get("id", "unknown"))
         return JSONResponse({"accepted": True, "run": result}, status_code=202)
 
+    async def slack_alert(request: Request) -> JSONResponse:
+        if slack_alerts is None:
+            return JSONResponse({"error": "Slack alert announcement is not configured"}, status_code=503)
+        try:
+            payload = await request.json()
+            thread = await slack_alerts.announce(payload)
+        except (json.JSONDecodeError, LoomAlertPayloadError) as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except SlackAnnouncementError as err:
+            # This receiver posts and stops, so a failed announcement is the whole
+            # notification. Fail so Grafana retries instead of counting it sent.
+            logger.warning("Slack alert announcement failed: %s", err)
+            return JSONResponse({"error": str(err)}, status_code=502)
+        if thread is None:
+            return JSONResponse({"announced": False, "reason": "no firing alerts"}, status_code=202)
+        return JSONResponse({"announced": True}, status_code=202)
+
     return Starlette(
         routes=[
             Route("/health", health),
             Route("/alerts/loom", loom_alert, methods=["POST"]),
+            Route("/alerts/slack", slack_alert, methods=["POST"]),
             Route("/github/ferries", github_ferries),
             Route("/github/builds", github_builds),
             Route("/github/nightlies", github_nightlies),
@@ -678,6 +716,7 @@ def create_app(
             Route("/k8s/finelog_events", k8s_finelog_events),
             Route("/k8s/health", k8s_health),
             Route("/k8s/nodes", k8s_nodes),
+            Route("/k8s/node_pools", k8s_node_pools),
             Route("/k8s/overview", k8s_overview),
             Route("/k8s/gpu_racks", k8s_gpu_racks),
             Route("/k8s/arch_mismatch", k8s_arch_mismatch),
@@ -708,10 +747,13 @@ def main() -> None:
     k8s_fleet = K8sFleet([K8sSource(c, token=config.cw_read_token, timeout=config.http_timeout) for c in K8S_CLUSTERS])
     wandb_source = WandbSource(timeout=config.http_timeout)
     loom_alerts = LoomAlertClient(config.loom_alerts) if config.loom_alerts is not None else None
+    slack_alerts = SlackAlertClient(config.loom_alerts) if config.loom_alerts is not None else None
     logger.info("grafana bridge serving %s on :%d", sorted(finelog_sources), BRIDGE_PORT)
     # Loopback only: Grafana fetches from the same container.
     uvicorn.run(
-        create_app(config, finelog_sources, iris_sources, github_source, k8s_fleet, wandb_source, loom_alerts),
+        create_app(
+            config, finelog_sources, iris_sources, github_source, k8s_fleet, wandb_source, loom_alerts, slack_alerts
+        ),
         host="127.0.0.1",
         port=BRIDGE_PORT,
         access_log=False,

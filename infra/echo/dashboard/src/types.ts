@@ -72,6 +72,35 @@ export interface RepositoryIndexStatus {
   indexed_at: string | null
 }
 
+export interface WorkLogSummary {
+  id: number
+  at: string
+  author: string
+  project: string
+  title: string
+}
+
+export interface WorkLogEntry extends WorkLogSummary {
+  body: string | null
+}
+
+export interface SearchFeedbackResultGrade {
+  result_id: string
+  grade: number
+  title: string
+  url: string
+}
+
+export interface SearchFeedbackEntry {
+  id: number
+  created_at: string
+  author: string
+  query: string
+  note: string
+  execution_id: number | null
+  grades: SearchFeedbackResultGrade[]
+}
+
 // The full chunk behind an activity hit: GET /api/chunks/{id} adds the untruncated text.
 export interface ActivityDetail extends ActivityHit {
   text: string | null
@@ -91,4 +120,8 @@ export async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T
 export function formatDate(value: string | null): string {
   if (!value) return 'Date unknown'
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(value))
+}
+
+export function formatDateTime(value: string): string {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
 }

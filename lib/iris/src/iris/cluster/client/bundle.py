@@ -61,7 +61,10 @@ def _should_exclude(relative: str, exclude: re.Pattern[str]) -> bool:
 def _merge_exclude(extra: re.Pattern[str] | None) -> re.Pattern[str]:
     if extra is None:
         return DEFAULT_EXCLUDE
-    return re.compile(f"(?:{DEFAULT_EXCLUDE.pattern})|(?:{extra.pattern})", re.VERBOSE)
+    # DEFAULT_EXCLUDE is authored in verbose form; scope re.VERBOSE to it with an
+    # inline (?x:...) group so the caller's pattern keeps its literal whitespace
+    # and '#' instead of having them silently treated as formatting.
+    return re.compile(f"(?x:{DEFAULT_EXCLUDE.pattern})|(?:{extra.pattern})")
 
 
 def collect_workspace_files(

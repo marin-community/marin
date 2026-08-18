@@ -15,6 +15,7 @@ ambient service-account credentials with no login. See ``infra/echo/README.md``.
 
     uv run infra/echo/cli.py search "expert parallel MoE MFU on B200" --limit 10
     uv run infra/echo/cli.py get file:lib/iris/OPS.md
+    uv run infra/echo/cli.py feedback --query "deploy iris" --grade file:lib/iris/OPS.md=10
     uv run infra/echo/cli.py grep ragged_all_to_all --source discord
     uv run infra/echo/cli.py wiki search "grafana access" --tag ops
     uv run infra/echo/cli.py wiki add --file note.md          # OKF: frontmatter title/use_when + body
@@ -23,16 +24,20 @@ ambient service-account credentials with no login. See ``infra/echo/README.md``.
 """
 
 import argparse
+import json
 import logging
 import os
+import shlex
 import shutil
 import sys
+import time
 from pathlib import Path
 from urllib.parse import quote
 
 import okf
 import requests
 import search_config
+import search_feedback
 from rigging.auth import (
     MARIN_DESKTOP_OAUTH_CLIENT,
     IapCredentialsUnavailable,
@@ -60,6 +65,7 @@ DOMAINS = search_config.SEARCH_DOMAINS
 DEFAULT_DOMAINS = search_config.DEFAULT_SEARCH_DOMAINS
 SEARCH_DETAIL_INSTRUCTION = "Detail: uv run infra/echo/cli.py get <domain:id>"
 MISSING_EMAIL_SCOPE_WARNING = "Not all requested scopes were granted by the authorization server, missing scopes email."
+DEFAULT_REQUEST_TIMEOUT = 30
 
 
 def cached_login_provider() -> TokenProvider | None:
@@ -93,15 +99,22 @@ def bearer_token() -> str:
     return token
 
 
-def request(method: str, path: str, *, params: dict | None = None, body: dict | None = None) -> object:
-    """Call echo-api and return the decoded JSON, or exit with a message on any HTTP error."""
+def request_response(
+    method: str,
+    path: str,
+    *,
+    params: dict | None = None,
+    body: object = None,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT,
+) -> requests.Response:
+    """Call echo-api and return a successful response with headers intact."""
     response = requests.request(
         method,
         f"{API_BASE}{path}",
         params={k: v for k, v in (params or {}).items() if v is not None},
         json=body,
         headers={"Authorization": f"Bearer {bearer_token()}"},
-        timeout=30,
+        timeout=timeout,
         allow_redirects=False,
     )
     if response.status_code == 401:
@@ -113,7 +126,19 @@ def request(method: str, path: str, *, params: dict | None = None, body: dict | 
             else response.text
         )
         raise SystemExit(f"{method} {path} -> {response.status_code}: {detail}")
-    return response.json()
+    return response
+
+
+def request(
+    method: str,
+    path: str,
+    *,
+    params: dict | None = None,
+    body: object = None,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT,
+) -> object:
+    """Call echo-api and return decoded JSON."""
+    return request_response(method, path, params=params, body=body, timeout=timeout).json()
 
 
 def response_object(value: object) -> dict[str, object]:
@@ -195,15 +220,60 @@ def read_body(value: str) -> str:
 
 def cmd_search(args: argparse.Namespace) -> None:
     domains = list(dict.fromkeys(args.domain or DEFAULT_DOMAINS))
-    remote_value = response_objects(
+    started_at = time.perf_counter()
+    response = request_response(
+        "GET",
+        "/federated-search",
+        params={"q": args.query, "domain": domains, "limit": args.limit},
+    )
+    remote_value = response_objects(response.json())
+    results = [SearchResult.from_json(result) for result in remote_value]
+    elapsed = time.perf_counter() - started_at
+    noun = "result" if len(results) == 1 else "results"
+    print(f"{len(results)} {noun} in {elapsed:.2f}s")
+    print_search_results(results)
+    execution_id = response.headers.get(search_config.SEARCH_EXECUTION_HEADER)
+    execution_flag = f"--execution-id {execution_id} " if execution_id else ""
+    print(
+        "Feedback: uv run infra/echo/cli.py feedback "
+        f"--query {shlex.quote(args.query)} {execution_flag}"
+        f"--grade '<id>=<{search_feedback.MIN_GRADE}-{search_feedback.MAX_GRADE}>' "
+        "<<< 'brief overall assessment'"
+    )
+
+
+def feedback_grade(value: str) -> search_feedback.FeedbackGrade:
+    try:
+        return search_feedback.FeedbackGrade.from_spec(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def feedback_note() -> str | None:
+    if sys.stdin.isatty():
+        return None
+    return sys.stdin.read().strip() or None
+
+
+def cmd_feedback(args: argparse.Namespace) -> None:
+    note = feedback_note()
+    if note is None:
+        raise SystemExit("provide a short overall explanation on stdin")
+    body = {
+        "query": args.query,
+        "grades": [{"result_id": grade.result_id, "grade": grade.grade} for grade in args.grade],
+        "note": note,
+    }
+    if args.execution_id is not None:
+        body["execution_id"] = args.execution_id
+    entry = response_object(
         request(
-            "GET",
-            "/federated-search",
-            params={"q": args.query, "domain": domains, "limit": args.limit},
+            "POST",
+            "/feedback",
+            body=body,
         )
     )
-    results = [SearchResult.from_json(result) for result in remote_value]
-    print_search_results(results)
+    print(f"recorded feedback #{entry['id']}")
 
 
 def cmd_grep(args: argparse.Namespace) -> None:
@@ -247,6 +317,24 @@ def cmd_get(args: argparse.Namespace) -> None:
         print(subtitle)
     print(f"{url}\n")
     print(text)
+
+
+def cmd_history_export(args: argparse.Namespace) -> None:
+    after_id = args.after_id
+    while True:
+        entries = response_objects(
+            request(
+                "GET",
+                "/search-executions",
+                params={"after_id": after_id, "mode": args.mode, "limit": args.page_size},
+                timeout=180,
+            )
+        )
+        for entry in entries:
+            print(json.dumps(entry, sort_keys=True))
+        if len(entries) < args.page_size:
+            return
+        after_id = int(entries[-1]["id"])
 
 
 def chunk_domain(chunk: dict[str, object]) -> str:
@@ -316,12 +404,10 @@ def nonblank(value: str) -> str:
 
 
 def artifact_id(value: str) -> str:
-    domain, separator, detail = value.partition(":")
-    if not separator or domain not in DOMAINS or not detail:
-        raise argparse.ArgumentTypeError("must be <wiki|file|discord|pr|issue>:<id>")
-    if domain != "file" and not detail.isdecimal():
-        raise argparse.ArgumentTypeError(f"{domain} result IDs are numeric")
-    return value
+    try:
+        return search_feedback.checked_result_id(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
 
 
 def add_wiki_write_args(parser: argparse.ArgumentParser) -> None:
@@ -352,6 +438,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     search.add_argument("--limit", type=bounded_limit, default=10)
     search.set_defaults(func=cmd_search)
+    feedback = sub.add_parser("feedback", help="grade federated-search results")
+    feedback.add_argument("--query", required=True, type=nonblank, help="the exact search query")
+    feedback.add_argument(
+        "--grade",
+        action="append",
+        type=feedback_grade,
+        default=[],
+        metavar=f"<result-id>=<{search_feedback.MIN_GRADE}-{search_feedback.MAX_GRADE}>",
+        help="grade one result; repeat as needed (a short overall explanation is read from stdin)",
+    )
+    feedback.add_argument("--execution-id", type=int, help="execution ID printed by the corresponding search")
+    feedback.set_defaults(func=cmd_feedback)
 
     grep = sub.add_parser("grep", help="exact substring scan over activity, newest first")
     grep.add_argument("pattern", type=nonblank)
@@ -364,6 +462,14 @@ def build_parser() -> argparse.ArgumentParser:
     get.add_argument("id", type=artifact_id)
     get.set_defaults(func=cmd_get)
 
+    history = sub.add_parser("history", help="export durable search executions").add_subparsers(
+        dest="history_command", required=True
+    )
+    history_export = history.add_parser("export", help="write search executions as JSONL")
+    history_export.add_argument("--after-id", type=int, default=0)
+    history_export.add_argument("--mode", choices=("federated", "activity", "grep"))
+    history_export.add_argument("--page-size", type=bounded_limit, default=100)
+    history_export.set_defaults(func=cmd_history_export)
     wiki = sub.add_parser("wiki", help="search, read, add, or edit wiki notes").add_subparsers(
         dest="wiki", required=True
     )

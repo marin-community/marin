@@ -1657,6 +1657,11 @@ impl Namespace {
         self.task_handles.lock().unwrap().push(handle);
     }
 
+    /// How many background tasks this namespace is running (flush, maintenance).
+    pub fn background_task_count(&self) -> usize {
+        self.task_handles.lock().unwrap().len()
+    }
+
     /// Aggregate in-RAM accounting for the diagnostics line:
     /// `(ram_bytes, chunk_count)` under the insertion lock.
     pub fn memory_summary(&self) -> (i64, usize) {

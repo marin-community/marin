@@ -46,7 +46,11 @@ def main() -> None:
 @main.command("local")
 @click.argument("model")
 @click.option("--backend", type=click.Choice(["vllm", "levanter"]), default="vllm")
-@click.option("--launcher", type=click.Choice([item.value for item in VllmLauncherType]), default="workspace")
+@click.option(
+    "--launcher",
+    type=click.Choice([item.value for item in VllmLauncherType]),
+    default=VllmLauncherType.PREINSTALLED.value,
+)
 @click.option("--vllm-source", type=click.Choice(["upstream", "marin-fork"]), default="upstream")
 @click.option("--vllm-version", default=DEFAULT_CUDA_VLLM_VERSION)
 @click.option("--tokenizer", default=None)

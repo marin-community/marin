@@ -32,13 +32,16 @@ Your random seed is: {haiku_seed}
 
 ## Your Mission
 
-Browse `{subproject}` and find something **meaty** to improve — not cosmetic
-lint, not renaming, but a genuine code quality win. Look for things like:
+Browse `{subproject}` for a cleanup whose value is obvious from the diff. It is
+normal and preferable to report no change when there is no clear improvement.
+Eligible changes fix a concrete bug or inefficiency, delete code proven unused,
+or centralize non-trivial policy whose copies can drift. Look for things like:
 
 - Dead code: unused functions, stale TODO/FIXME (>90 days via `git blame`),
   commented-out blocks
-- Duplicated logic that should use an existing helper from elsewhere in the repo
-- Copy-paste with slight variation that should be unified
+- Duplicated non-trivial logic that should use an existing helper from elsewhere
+  in the repo
+- Copy-pasted policy or algorithms whose copies can drift
 - Overly defensive error handling (try/except that swallows exceptions,
   redundant None checks)
 - Parameter sprawl, stringly-typed code, leaky abstractions
@@ -51,8 +54,18 @@ Read `AGENTS.md` (especially its Testing section) and
 
 ## Rules of Engagement
 
-- Only make changes you are confident are correct improvements.
+- Only make changes with a concrete payoff that a reviewer can see directly in
+  the diff: corrected behavior, less work at runtime, deleted dead code, or one
+  authoritative implementation of non-trivial logic.
 - Do NOT refactor working code for style alone.
+- Do NOT extract a helper merely to replace short, linear, locally readable
+  code, even when that code is repeated. A configurable helper that takes
+  callbacks, resources, flags, or similar arguments to reconstruct a caller's
+  obvious steps is not a cleanup.
+- A refactor must reduce cognitive load at its call sites and centralize a real
+  invariant or policy. If its value needs a long explanation, report no change.
+- Do not bundle an opportunistic behavior change into a refactor. Preserve
+  behavior or make the behavior fix the explicit purpose of the change.
 - Run `./infra/pre-commit.py --all-files --fix` before committing.
 - Run relevant tests: `uv run pytest -x` on any test files you modified or
   that test modules you changed.
@@ -79,6 +92,7 @@ Then write a JSON summary to `{result_file}`:
   "subproject": "{subproject}",
   "status": "changed",
   "summary": "<one-paragraph description of what was cleaned and why>",
+  "value": "<the concrete bug, runtime cost, dead code, or non-trivial policy addressed>",
   "files_changed": ["<list of files changed>"]
 }}
 ```
@@ -95,10 +109,6 @@ If you find nothing worth changing, write:
 
 MERGE_PROMPT = """\
 You are the Nightshift Merge Agent.
-
-Your random seed is: {haiku_seed}
-Use this seed to compose a haiku about code maintenance. Include it
-as the epigraph of your PR description.
 
 ## Context
 
@@ -121,30 +131,39 @@ Code" trailer in commits, and no self-attribution in the PR description.
 
 ## Your Mission
 
-1. Cherry-pick the scout commits from each worktree that had `status: "changed"`
-   into the current branch (`nightshift/cleanup-{date}`). Skip any that conflict
-   or fail tests after merging.
+1. Inspect every scout diff independently. A `status: "changed"` result is not
+   evidence that the change is worth landing. Reject changes that wrap short,
+   obvious local code in a configurable helper, increase indirection without
+   centralizing non-trivial policy, or need a long explanation to establish
+   their value. Prefer fewer changes or no PR over speculative cleanup.
 
-2. Run `./infra/pre-commit.py --all-files --fix` and `uv run pytest -x` on all
+2. Cherry-pick only the scout commits whose concrete payoff is obvious from the
+   diff into the current branch (`nightshift/cleanup-{date}`). Skip any that
+   conflict or fail tests after merging.
+
+3. Run `./infra/pre-commit.py --all-files --fix` and `uv run pytest -x` on all
    affected test files to verify the combined changes are clean.
 
-3. Before pushing, rebase on origin/main:
+4. Before pushing, rebase on origin/main:
    ```
    git fetch origin main
    git rebase origin/main
    ```
 
-4. Open a PR:
-   - Title: `[nightshift] {date} multi-cleanup`
-   - Body: your haiku as epigraph, then a combined summary of all scout findings
+5. Open a PR:
+   - Title: an imperative sentence of at most 72 characters that names the
+     concrete outcome; do not use a date or "multi-cleanup" as the outcome
+   - Body: a compact explanation of the accepted changes and their concrete
+     payoff; omit generation metadata, epigraphs, diff inventories, and test
+     narration
    - Labels: `agent-generated`, `nightshift`
 
-5. Enable automerge:
+6. Enable automerge:
    ```
    gh pr merge --auto --squash <PR_NUMBER>
    ```
 
-6. Pick a reviewer by finding who recently touched the changed files. Use
+7. Pick a reviewer by finding who recently touched the changed files. Use
    GitHub login names (NOT emails):
    ```
    gh api '/repos/{{owner}}/{{repo}}/commits?path=<changed_file>&per_page=20' \\
@@ -223,15 +242,16 @@ def run_scout(subproject: str, worktree_path: Path) -> tuple[str, dict, str]:
     return subproject, result, str(worktree_path)
 
 
-def run_merge(date: str, haiku_seed: str, scout_results: list[dict], worktree_info: list[tuple[str, str]]) -> None:
+def run_merge(date: str, scout_results: list[dict], worktree_info: list[tuple[str, str]]) -> None:
     """Run the merge agent to combine scout results into a single PR."""
     results_text = "\n".join(
-        f"### {r['subproject']}\n- Status: {r['status']}\n- Summary: {r.get('summary', 'N/A')}" for r in scout_results
+        f"### {r['subproject']}\n- Status: {r['status']}\n- Summary: {r.get('summary', 'N/A')}\n"
+        f"- Value: {r.get('value', 'N/A')}"
+        for r in scout_results
     )
     worktree_text = "\n".join(f"- `{subproject}`: `{path}`" for subproject, path in worktree_info)
 
     prompt = MERGE_PROMPT.format(
-        haiku_seed=haiku_seed,
         scout_results=results_text,
         worktree_info=worktree_text,
         date=date,
@@ -312,9 +332,8 @@ def main() -> None:
         cleanup_worktrees(repo_root)
         return
 
-    haiku_seed = secrets.token_hex(4)
     try:
-        run_merge(date, haiku_seed, scout_results, worktree_info)
+        run_merge(date, scout_results, worktree_info)
     finally:
         cleanup_worktrees(repo_root)
 

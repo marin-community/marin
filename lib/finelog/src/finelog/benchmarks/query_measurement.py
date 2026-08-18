@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import argparse
 import concurrent.futures
 import importlib.metadata
 import io
@@ -12,6 +13,7 @@ import json
 import math
 import os
 import re
+import socket
 import statistics
 import subprocess
 import sys
@@ -40,12 +42,26 @@ from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
 
 _DURATION_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)(ns|µs|us|ms|s)")
-_SIZE_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?)(?:i?B)?")
-_FILES_RE = re.compile(r"files_ranges_pruned_statistics=([0-9.]+\s*[KMGT]?) total → ([0-9.]+\s*[KMGT]?) matched")
-_ROW_GROUPS_RE = re.compile(r"row_groups_pruned_statistics=([0-9.]+\s*[KMGT]?) total → ([0-9.]+\s*[KMGT]?) matched")
-_BYTES_RE = re.compile(r"bytes_scanned=([0-9.]+\s*[KMGT]?(?:i?B)?)")
+# Every scan metric below is a DataFusion counter, printed by
+# `human_readable_count`: decimal scaling with a bare ` K`/` M`/` B`/` T`
+# suffix. `bytes_scanned` is a counter too, so it scales by 1000.
+_COUNT = r"[0-9]+(?:\.[0-9]+)?\s*[KMBT]?"
+_COUNT_PARTS_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*([KMBT]?)")
+_FILES_RE = re.compile(rf"files_ranges_pruned_statistics=({_COUNT}) total → ({_COUNT}) matched")
+_ROW_GROUPS_RE = re.compile(rf"row_groups_pruned_statistics=({_COUNT}) total → ({_COUNT}) matched")
+_BYTES_RE = re.compile(rf"bytes_scanned=({_COUNT})")
 _METADATA_RE = re.compile(r"metadata_load_time=([0-9.]+(?:ns|µs|us|ms|s))")
 _OPEN_RE = re.compile(r"time_elapsed_opening=([0-9.]+(?:ns|µs|us|ms|s))")
+_PUSHDOWN_MATCHED_RE = re.compile(rf"pushdown_rows_matched=({_COUNT})")
+_PUSHDOWN_PRUNED_RE = re.compile(rf"pushdown_rows_pruned=({_COUNT})")
+_PUSHDOWN_TIME_RE = re.compile(r"row_pushdown_eval_time=([0-9.]+(?:ns|µs|us|ms|s))")
+_COUNT_MULTIPLIER = {"": 1, "K": 1_000, "M": 1_000_000, "B": 1_000_000_000, "T": 1_000_000_000_000}
+
+
+# Budget for a benchmark-owned server to open its store and answer /health.
+# Adoption footer-scans every segment, so a copied production log directory is
+# far slower to open than a generated one.
+SERVER_STARTUP_TIMEOUT = 300.0
 
 
 class WorkerMode(StrEnum):
@@ -54,8 +70,96 @@ class WorkerMode(StrEnum):
     EXPLAIN = "explain"
 
 
+def positive_int(raw: str) -> int:
+    value = int(raw)
+    if value <= 0:
+        raise argparse.ArgumentTypeError("must be positive")
+    return value
+
+
+def nonnegative_int(raw: str) -> int:
+    value = int(raw)
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be non-negative")
+    return value
+
+
+def unused_port() -> int:
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
+@contextmanager
+def local_server(
+    binary: Path,
+    log_dir: Path,
+    *,
+    query_timeout_ms: int,
+    extra_args: Sequence[str] = (),
+) -> Iterator[str]:
+    """Run ``finelog-server`` over ``log_dir`` and yield its base address.
+
+    The log directory must be a disposable local copy: starting Finelog activates
+    normal maintenance, including compaction, layout rewrites, and index backfill.
+    """
+    port = unused_port()
+    address = f"http://127.0.0.1:{port}"
+    log_path = log_dir / "finelog-benchmark-server.log"
+    with log_path.open("a") as log_file:
+        process = subprocess.Popen(
+            [
+                str(binary),
+                "--port",
+                str(port),
+                "--log-dir",
+                str(log_dir),
+                "--log-level",
+                "warn",
+                *extra_args,
+            ],
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            env={**os.environ, "FINELOG_QUERY_TIMEOUT_MS": str(query_timeout_ms)},
+        )
+        try:
+            deadline = time.monotonic() + SERVER_STARTUP_TIMEOUT
+            while time.monotonic() < deadline:
+                if process.poll() is not None:
+                    raise RuntimeError(log_path.read_text())
+                try:
+                    if httpx.get(f"{address}/health", timeout=1).is_success:
+                        yield address
+                        return
+                except httpx.HTTPError:
+                    pass
+                time.sleep(0.05)
+            raise TimeoutError(f"Finelog did not become healthy; see {log_path}")
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=10)
+
+
+def server_info(address: str) -> dict[str, object]:
+    """Return the server's build, store, and cache diagnostics."""
+    response = httpx.get(f"{address}/api/server", timeout=10)
+    response.raise_for_status()
+    return cast(dict[str, object], response.json())
+
+
 @dataclass(frozen=True)
 class ExplainMetrics:
+    """Scan metrics from an analyzed plan's `DataSourceExec` nodes.
+
+    The `pushdown_*` fields count rows the parquet decoder evaluated the filter
+    against. A scan can read a few hundred KiB and still evaluate the whole
+    namespace, so read them alongside `bytes_scanned`.
+    """
+
     files_total: int
     files_matched: int
     row_groups_total: int
@@ -63,6 +167,9 @@ class ExplainMetrics:
     bytes_scanned: int
     metadata_load_ms: float
     file_open_ms: float
+    pushdown_rows_matched: int
+    pushdown_rows_pruned: int
+    pushdown_eval_ms: float
 
 
 @dataclass(frozen=True)
@@ -103,12 +210,16 @@ def write_batch(
     return response.rows_written
 
 
-def force_compact(address: str, namespace: str) -> None:
-    """Force benchmark-owned local L0 files through Finelog's real compactor."""
+def maintain(address: str, namespace: str, *, force_compact_l0: bool) -> None:
+    """Run one maintenance tick on a benchmark-owned server.
+
+    A tick backfills a bounded number of index bundles. `force_compact_l0` also
+    pushes sealed L0 files through the compactor, skipping its byte thresholds.
+    """
     response = httpx.post(
         f"{address}/debug/maintain",
-        json={"namespace": namespace, "force_compact_l0": True},
-        timeout=300,
+        json={"namespace": namespace, "force_compact_l0": force_compact_l0},
+        timeout=3_600,
     )
     response.raise_for_status()
 
@@ -158,34 +269,12 @@ def measure_query(client: StatsServiceClientSync, sql: str) -> QuerySample:
     )
 
 
-def _scaled_number(raw: str) -> int:
-    match = _SIZE_RE.fullmatch(raw.strip())
+def _count(raw: str) -> int:
+    """Decode a counter metric such as `19`, `4.10 K`, or `1.16 B`."""
+    match = _COUNT_PARTS_RE.fullmatch(raw.strip())
     if match is None:
-        raise ValueError(f"invalid scaled number: {raw!r}")
-    value = float(match.group(1))
-    multiplier = {
-        "": 1,
-        "K": 1_000,
-        "M": 1_000_000,
-        "G": 1_000_000_000,
-        "T": 1_000_000_000_000,
-    }[match.group(2)]
-    return round(value * multiplier)
-
-
-def _bytes(raw: str) -> int:
-    match = _SIZE_RE.fullmatch(raw.strip())
-    if match is None:
-        raise ValueError(f"invalid byte size: {raw!r}")
-    value = float(match.group(1))
-    multiplier = {
-        "": 1,
-        "K": 1024,
-        "M": 1024**2,
-        "G": 1024**3,
-        "T": 1024**4,
-    }[match.group(2)]
-    return round(value * multiplier)
+        raise ValueError(f"invalid count: {raw!r}")
+    return round(float(match.group(1)) * _COUNT_MULTIPLIER[match.group(2)])
 
 
 def _duration_ms(raw: str) -> float:
@@ -208,13 +297,16 @@ def parse_explain_metrics(plan: str) -> ExplainMetrics:
     files = _FILES_RE.findall(plan)
     row_groups = _ROW_GROUPS_RE.findall(plan)
     return ExplainMetrics(
-        files_total=sum(_scaled_number(total) for total, _matched in files),
-        files_matched=sum(_scaled_number(matched) for _total, matched in files),
-        row_groups_total=sum(_scaled_number(total) for total, _matched in row_groups),
-        row_groups_matched=sum(_scaled_number(matched) for _total, matched in row_groups),
-        bytes_scanned=sum(_bytes(value) for value in _BYTES_RE.findall(plan)),
+        files_total=sum(_count(total) for total, _matched in files),
+        files_matched=sum(_count(matched) for _total, matched in files),
+        row_groups_total=sum(_count(total) for total, _matched in row_groups),
+        row_groups_matched=sum(_count(matched) for _total, matched in row_groups),
+        bytes_scanned=sum(_count(value) for value in _BYTES_RE.findall(plan)),
         metadata_load_ms=sum(_duration_ms(value) for value in _METADATA_RE.findall(plan)),
         file_open_ms=sum(_duration_ms(value) for value in _OPEN_RE.findall(plan)),
+        pushdown_rows_matched=sum(_count(value) for value in _PUSHDOWN_MATCHED_RE.findall(plan)),
+        pushdown_rows_pruned=sum(_count(value) for value in _PUSHDOWN_PRUNED_RE.findall(plan)),
+        pushdown_eval_ms=sum(_duration_ms(value) for value in _PUSHDOWN_TIME_RE.findall(plan)),
     )
 
 

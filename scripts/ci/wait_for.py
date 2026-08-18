@@ -38,8 +38,9 @@ automated-review wrapper whose findings arrive as separate inline comments. Only
 automation a rule names is ever suppressed, so a comment from a human — or from a bot the
 catalog does not cover — always fires. The catalog also suppresses Loom's exact
 ``Working on this in loom: <session URL>`` acknowledgement, only when the Loom bot
-authored it. Comments are keyed on content, so a placeholder a bot later edits into a
-real finding re-surfaces as new activity. Pass
+authored it. It also suppresses Loom access-control replies addressed to a bot. Comments
+are keyed on content, so a placeholder a bot later edits into a real finding re-surfaces as
+new activity. Pass
 ``--comment-filter all`` to fire on every new comment instead.
 
 `poll` is the escape hatch for anything without a built-in: compose the predicate
@@ -65,6 +66,7 @@ CI passed — read ``result.conclusion``.
 """
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -80,7 +82,7 @@ from typing import NamedTuple
 
 import click
 from connectrpc.errors import ConnectError
-from iris.client import IrisClient, Job
+from iris.client.client import IrisClient, Job
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
@@ -329,6 +331,7 @@ class Significance(StrEnum):
     PROGRESS = "progress"  # an in-progress placeholder, edited in place once the bot is done
     CLEAN = "clean"  # an explicit "nothing to address" verdict
     WRAPPER = "wrapper"  # an automated-review container; its findings arrive separately
+    HANDSHAKE = "handshake"  # an access-control reply between bots
 
 
 class CommentFilter(StrEnum):
@@ -343,6 +346,21 @@ class CommentFilter(StrEnum):
 CLAUDE_BOT = "claude[bot]"
 CODEX_BOT = "chatgpt-codex-connector[bot]"
 LOOM_BOT = "loom-oa-dev[bot]"
+_LOOM_SESSION_ENV = "LOOM_SESSION_ID"
+_INSTALLATION_TOKEN_USER_ERROR = "Resource not accessible by integration (HTTP 403)"
+
+
+def authenticated_author(*, in_loom_session: bool) -> str:
+    """Resolve the actor whose comments the current credential creates."""
+    try:
+        return authenticated_user()
+    except GhError as exc:
+        # Installation tokens cannot query /user. Loom sessions using that
+        # credential post comments as the known Loom App bot.
+        if in_loom_session and _INSTALLATION_TOKEN_USER_ERROR in str(exc):
+            return LOOM_BOT
+        raise
+
 
 # --- body shapes -------------------------------------------------------------------
 #
@@ -399,6 +417,11 @@ _WRAPPER_RE = re.compile(
     r"automated review suggestions|<summary>[^<]*About Codex|#+\s*💡?\s*Codex Review", re.IGNORECASE
 )
 _LOOM_PLACEHOLDER_RE = re.compile(r"^Working on this in loom: https://loom\.oa\.dev/s/[A-Za-z0-9_-]+/?$")
+_LOOM_ACCESS_HANDSHAKE_RE = re.compile(
+    r"^Hi @[A-Za-z0-9-]+\[bot\] — thanks for the ping\. "
+    r"You're not on this loom instance's access list yet, so I can't pick this up\. "
+    r"Ask an operator to grant you access, then tag me again and I'll jump in\.$"
+)
 
 
 def _placeholder_residue(body: str) -> str:
@@ -434,6 +457,10 @@ def is_loom_placeholder(body: str) -> bool:
     return bool(_LOOM_PLACEHOLDER_RE.fullmatch(body))
 
 
+def is_loom_access_handshake(body: str) -> bool:
+    return bool(_LOOM_ACCESS_HANDSHAKE_RE.fullmatch(body))
+
+
 @dataclass(frozen=True)
 class CommentRule:
     """One entry in the noise catalog: whose comments it judges, and which shape it suppresses."""
@@ -452,6 +479,7 @@ COMMENT_RULES: tuple[CommentRule, ...] = (
     CommentRule(CLAUDE_BOT, is_clean_verdict, Significance.CLEAN),
     CommentRule(CODEX_BOT, is_review_wrapper, Significance.WRAPPER),
     CommentRule(LOOM_BOT, is_loom_placeholder, Significance.PROGRESS),
+    CommentRule(LOOM_BOT, is_loom_access_handshake, Significance.HANDSHAKE),
 )
 
 
@@ -903,9 +931,9 @@ def _iris_job_waiter_from_job_info() -> Callable[[JobName], job_pb2.JobStatus]:
     "--comment-filter",
     type=click.Choice([f.value for f in CommentFilter]),
     default=CommentFilter.SIGNIFICANT.value,
-    help="Which new comments fire github.pr_comment/github.review: 'significant' skips the review bots' "
-    "in-progress placeholders, clean verdicts, review wrappers, and Loom's session acknowledgement; "
-    "'all' fires on every new comment.",
+    help="Which new comments fire github.pr_comment/github.review: 'significant' skips catalogued bot progress, "
+    "clean verdicts, review wrappers, session acknowledgements, and access handshakes; 'all' fires on every new "
+    "comment.",
 )
 @click.option("--quiet", is_flag=True, help="Print only the fired event kind, not the JSON payload.")
 def main(
@@ -938,7 +966,7 @@ def main(
         resolved_repo = resolve_repo(repo) if needs_github else ""
         ignored = set(ignore_authors)
         if needs_authors and not include_self:
-            ignored.add(authenticated_user())
+            ignored.add(authenticated_author(in_loom_session=bool(os.environ.get(_LOOM_SESSION_ENV))))
         iris_job_waiter = _iris_job_waiter_from_job_info() if needs_iris else None
         sources = [
             build_source(

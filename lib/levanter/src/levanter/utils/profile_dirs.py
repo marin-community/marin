@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any, Optional, Protocol
 from urllib.parse import urlparse
 
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 PROFILER_DIR_NAME = "profiler"
 WANDB_RUNS_SEGMENT = "runs"

@@ -4,8 +4,7 @@
 """Kubernetes node identity and capacity in the cluster status RPC."""
 
 from iris.cluster.platforms.k8s.types import K8sResource
-
-from .conftest import make_batch, make_kueue_provider
+from iris.testing.k8s import make_batch, make_kueue_provider
 
 _NODE_NAME = "g83d142"
 LABEL_MANAGED = "iris.managed"

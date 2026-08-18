@@ -5,7 +5,7 @@
 
 Example:
     # In job code:
-    from iris.client import iris_ctx
+    from iris.client.client import iris_ctx
 
     ctx = iris_ctx()
     print(f"Running job {ctx.job_id} in namespace {ctx.namespace}")
@@ -18,9 +18,9 @@ Example:
 """
 
 import logging
+import re
 from collections.abc import Generator, Sequence
 from contextlib import AbstractContextManager, contextmanager
-from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
@@ -31,6 +31,7 @@ from rigging.credentials import ClientCredentials
 from rigging.timing import Duration, Timestamp
 
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
+from iris.client.context_state import current_context, reset_context, set_context
 from iris.cluster.client import (
     ClusterClient,
     JobInfo,
@@ -535,6 +536,7 @@ class IrisClient:
         timeout_ms: int = 30000,
         credentials: ClientCredentials | None = None,
         extra_bundle_includes: Sequence[str] = (),
+        bundle_exclude: re.Pattern[str] | None = None,
     ) -> "IrisClient":
         """Create an IrisClient for an external client (CLI, laptop, notebook).
 
@@ -556,6 +558,10 @@ class IrisClient:
             extra_bundle_includes: Glob patterns (relative to ``workspace``) for
                 gitignored files the caller needs in the task bundle — e.g. a package's
                 built frontend ``dist``. Bundled in addition to the git-tracked files.
+            bundle_exclude: Regex matched against each candidate bundle path
+                (POSIX, relative to ``workspace``); matching paths are dropped from
+                the bundle. Trims otherwise-tracked files that a job does not need,
+                such as ``docs/`` against the bundle size cap.
 
         Returns:
             IrisClient wrapping RemoteClusterClient
@@ -568,6 +574,7 @@ class IrisClient:
             credentials=credentials,
             use_controller_proxy=True,
             extra_bundle_includes=extra_bundle_includes,
+            bundle_exclude=bundle_exclude,
         )
 
     @classmethod
@@ -608,6 +615,7 @@ class IrisClient:
         use_controller_proxy: bool,
         credentials: ClientCredentials | None = None,
         extra_bundle_includes: Sequence[str] = (),
+        bundle_exclude: re.Pattern[str] | None = None,
     ) -> "IrisClient":
         interceptors = credentials.interceptors() if credentials is not None else []
 
@@ -619,6 +627,7 @@ class IrisClient:
             interceptors=interceptors,
             use_controller_proxy=use_controller_proxy,
             extra_bundle_includes=extra_bundle_includes,
+            bundle_exclude=bundle_exclude,
         )
         return cls(cluster)
 
@@ -1166,13 +1175,6 @@ class IrisContext:
         )
 
 
-# Module-level ContextVar for the current iris context
-_iris_context: ContextVar[IrisContext | None] = ContextVar(
-    "iris_context",
-    default=None,
-)
-
-
 def iris_ctx() -> IrisContext:
     """Get the current IrisContext, raising if not in a job.
 
@@ -1197,7 +1199,7 @@ def get_iris_ctx() -> IrisContext | None:
     Returns:
         Current IrisContext or None
     """
-    ctx = _iris_context.get()
+    ctx = cast(IrisContext | None, current_context())
     if ctx is not None:
         return ctx
 
@@ -1218,7 +1220,7 @@ def get_iris_ctx() -> IrisContext | None:
         )
 
     ctx = IrisContext.from_job_info(job_info, client=client)
-    _iris_context.set(ctx)
+    set_context(ctx)
     return ctx
 
 
@@ -1237,8 +1239,8 @@ def iris_ctx_scope(ctx: IrisContext) -> Generator[IrisContext, None, None]:
         with iris_ctx_scope(ctx):
             my_job_function()
     """
-    token = _iris_context.set(ctx)
+    token = set_context(ctx)
     try:
         yield ctx
     finally:
-        _iris_context.reset(token)
+        reset_context(token)

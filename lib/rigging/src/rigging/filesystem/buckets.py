@@ -9,7 +9,7 @@ task pinned to one cluster and wrong for anything that spans backends — a brow
 listing GCS and CoreWeave side by side, or a copy from CoreWeave to GCS.
 
 :func:`filesystem_for` routes instead on the bucket's declared backend
-(``config/*.yaml`` via :func:`rigging.filesystem.data_buckets`), building each
+(``config/*.yaml`` via :func:`rigging.filesystem.cluster_config.data_buckets`), building each
 S3-compatible filesystem with explicit endpoint, signing region, and credentials
 rather than reading or writing environment variables. GCS and unregistered buckets
 fall through to the guarded factory, so cross-region metering and ``mirror://``
@@ -47,7 +47,7 @@ def filesystem_for(url: str) -> tuple[Any, str]:
     signing region, and credentials; instances are shared through s3fs's own
     kwargs-keyed cache. Everything else — GCS, local paths, ``mirror://``, and
     ``s3://`` buckets no config declares — goes through the guarded
-    :func:`rigging.filesystem.url_to_fs`, which reads the ambient environment.
+    :func:`rigging.filesystem.factory.url_to_fs`, which reads the ambient environment.
 
     Raises:
         MissingCredentials: if the routed backend has no credentials configured.

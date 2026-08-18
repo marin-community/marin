@@ -54,11 +54,15 @@ def create_provider_bundle(
     if which == "gcp":
         if not platform_config.gcp.project_id:
             raise ValueError("platform.gcp.project_id is required")
+        # The Google SDK is optional for local, manual, and Kubernetes clusters.
+        from iris.cluster.platforms.gcp.cloud import CloudGcpService  # noqa: PLC0415
+
         worker_provider = GcpWorkerProvider(
             gcp_config=platform_config.gcp,
             label_prefix=label_prefix,
             worker_port=worker_port,
             ssh_config=ssh_config,
+            gcp_service=CloudGcpService(project_id=platform_config.gcp.project_id),
         )
         return ProviderBundle(
             controller=GcpControllerProvider(

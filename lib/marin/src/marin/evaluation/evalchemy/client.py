@@ -174,6 +174,20 @@ def scored_results(local_out: str) -> bool:
     return False
 
 
+def upload_task_output(out_fs, local_out: str, dest: str) -> None:
+    """Replace ``dest`` with the task tree ``local_out`` holds.
+
+    fsspec ``put(local_out, dest, recursive=True)`` copies the tempdir's *contents* into ``dest`` only
+    while ``dest`` does not yet exist; once it does — a retried evaluation reuses the same durable
+    ``dest`` — ``put`` nests the tempdir under it as ``dest/tmp<random>/...``, leaving a second complete
+    task tree that later reads must deduplicate. Removing ``dest`` first makes every attempt write
+    exactly one tree.
+    """
+    if out_fs.exists(dest):
+        out_fs.rm(dest, recursive=True)
+    out_fs.put(local_out, dest, recursive=True)
+
+
 def main() -> None:
     config = json.loads(os.environ[CONFIG_ENV_KEY])
     tasks = config["tasks"]
@@ -205,7 +219,7 @@ def main() -> None:
             produced = os.listdir(local_out)
             scored = scored_results(local_out)
             if produced:
-                out_fs.put(local_out, dest, recursive=True)
+                upload_task_output(out_fs, local_out, dest)
                 print(f"uploaded {len(produced)} path(s) to {dest}", flush=True)
         if result.returncode != 0:
             failures.append(f"{task['name']}: evalchemy exited {result.returncode}")

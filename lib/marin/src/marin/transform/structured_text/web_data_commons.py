@@ -31,7 +31,9 @@ from marin.datakit.ingestion_manifest import (
     MaterializedOutputMetadata,
     write_ingestion_metadata_json,
 )
-from rigging.filesystem import StoragePath, atomic_rename, open_url
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
 

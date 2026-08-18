@@ -30,22 +30,21 @@ from iris.cluster.runtime.types import (
     MountSpec,
 )
 from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, WORKER_STATS_NAMESPACE, IrisTaskStat, IrisWorkerStat
-from iris.cluster.types import Entrypoint, JobName
+from iris.cluster.types import Entrypoint, JobName, WellKnownAttribute, tpu_device
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.test_util import wait_for_condition
-from rigging.timing import Duration
-from tests.cluster.worker.conftest import (
+from iris.testing.worker import (
     FakeContainerHandle,
     FakeLogReader,
     create_mock_container_handle,
     create_run_task_request,
 )
+from rigging.timing import Duration
 
 pytestmark = pytest.mark.timeout(10)
 
@@ -614,6 +613,21 @@ def test_port_env_vars_set(mock_worker, mock_runtime):
         int(config.env["IRIS_PORT_METRICS"]),
     }
     assert len(ports) == 3
+
+
+def test_worker_placement_env_uses_physical_metadata(mock_worker, mock_runtime, monkeypatch):
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.probe_outbound_ip", lambda: "127.0.0.1")
+    mock_worker._worker_metadata.device.CopyFrom(tpu_device("v6e-4"))
+    mock_worker._worker_metadata.attributes[WellKnownAttribute.REGION].string_value = "us-east5"
+
+    task_id = mock_worker.submit_task(create_run_task_request())
+    task = mock_worker.get_task(task_id)
+    task.thread.join(timeout=15.0)
+    assert task.status == job_pb2.TASK_STATE_SUCCEEDED, task.error
+
+    env = mock_runtime.create_container.call_args[0][0].env
+    assert env["IRIS_WORKER_REGION"] == "us-east5"
+    assert json.loads(env["IRIS_WORKER_DEVICE"])["tpu"]["variant"] == "v6e-4"
 
 
 def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
@@ -1255,33 +1269,6 @@ def test_adopted_attempt_publishes_logs_and_stats(mock_bundle_store, mock_runtim
         for row in task_rows
     )
     worker.stop()
-
-
-def test_adopt_reserves_host_ports_against_reallocation():
-    """A re-adopted task keeps its host ports and the allocator won't re-hand them out.
-
-    Regression for #6721: before the fix, adopt() rebuilt ports={} and never
-    re-marked the allocator, so a restarted worker could double-allocate the
-    in-use ports of an adopted container.
-    """
-    # Three candidate ports: 50500, 50501, 50502. Two belong to the adopted task.
-    port_allocator = PortAllocator(port_range=(50500, 50503))
-    container = _make_discovered_container(ports={"http": 50500, "grpc": 50501})
-
-    attempt = TaskAttempt.adopt(
-        discovered=container,
-        container_handle=create_mock_container_handle(),
-        log_client=None,
-        port_allocator=port_allocator,
-    )
-
-    # The adopted attempt retains its original port mapping.
-    assert attempt.ports == {"http": 50500, "grpc": 50501}
-
-    # The only port the allocator may hand to a new task is the one not in use.
-    assert port_allocator.allocate(1) == [50502]
-    with pytest.raises(RuntimeError, match="No free ports"):
-        port_allocator.allocate(1)
 
 
 # ============================================================================

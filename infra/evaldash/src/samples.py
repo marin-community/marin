@@ -7,6 +7,8 @@ A run's durable output is a finestore archive rooted at its ``results_path``: a 
 (one row per evaluated question, the shared :class:`EvalSample` contract) plus a ``blobs`` table that
 holds raw agent trajectories a sample references by a ``finestore://`` URI. This module discovers the
 tasks, pages the samples for one task, and resolves a trajectory reference, returning typed responses.
+EvalDash explicitly reads both transactional format v2 and listing-based format v1 while old eval
+runtime images remain deployed.
 
 Runs written before the archive existed still carry one ``samples_<task>_<ts>.parquet`` per (sub)task
 and a ``gs://`` trajectory URI; the reader falls back to that layout when a run has no archive, so a
@@ -22,18 +24,22 @@ from typing import Generic, TypeVar
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.eval import (
+from finestore.layout import FormatVersionError
+from finestore.migrations import LEGACY_READ_FORMAT_VERSION, LegacyReadView
+from finestore.reader import ReadView
+from fsspec.core import url_to_fs
+from marin.evaluation.archive import (
     ARCHIVE_SAMPLES_TABLE,
+    FILTER_COLUMN,
     SAMPLES_PREFIX,
     SAMPLES_SUFFIX,
     EvalSample,
+    primary_filter,
     primary_metric,
     sample_from_archive_row,
 )
-from finestore.reader import CompositeReader
-from fsspec.core import url_to_fs
 from pydantic import BaseModel, ConfigDict
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +96,11 @@ class SamplesResponse(BaseModel):
     task: str
     primary_metric: str | None
     metric_columns: tuple[str, ...]
+    # Every extraction filter this task stored samples under, and the one this page was drawn from.
+    # A task scored under one named filter reports that one name and selects it; only a task whose
+    # rows carry no filter at all reports an empty tuple and a null selection.
+    extraction_filters: tuple[str, ...]
+    extraction_filter: str | None
     total: int
     offset: int
     limit: int
@@ -152,6 +163,16 @@ _discovery_cache: _TtlCache[tuple[int, tuple[str, ...]]] = _TtlCache(CACHE_TTL)
 # --------------------------------------------------------------------------------------------------
 
 
+def _archive_view(results_path: str) -> ReadView | LegacyReadView:
+    """Open a v2 snapshot, or the bounded v1 compatibility view used by EvalDash."""
+    try:
+        return ReadView(results_path)
+    except FormatVersionError as exc:
+        if exc.found != LEGACY_READ_FORMAT_VERSION:
+            raise
+        return LegacyReadView(results_path)
+
+
 def _archive_discovery(results_path: str) -> tuple[int, tuple[str, ...]]:
     """The run's ``samples`` shard count and distinct task names; ``(0, ())`` means no archive.
 
@@ -162,7 +183,7 @@ def _archive_discovery(results_path: str) -> tuple[int, tuple[str, ...]]:
     cached = _discovery_cache.get(results_path)
     if cached is not None:
         return cached
-    reader = CompositeReader(results_path)
+    reader = _archive_view(results_path)
     shard_count = len(reader.list_shards(ARCHIVE_SAMPLES_TABLE))
     tasks: tuple[str, ...] = ()
     if shard_count:
@@ -180,7 +201,7 @@ def _archive_task_table(results_path: str, task: str) -> pa.Table:
     cached = _table_cache.get(key)
     if cached is not None:
         return cached
-    table = CompositeReader(results_path).scan(ARCHIVE_SAMPLES_TABLE, where=[("task", "==", task)])
+    table = _archive_view(results_path).scan(ARCHIVE_SAMPLES_TABLE, where=[("task", "==", task)])
     if table is None:
         table = pa.table({})
     _table_cache.put(key, table)
@@ -253,12 +274,44 @@ def _empty_samples(*, available: bool, error: str, task: str, offset: int, limit
         task=task,
         primary_metric=None,
         metric_columns=(),
+        extraction_filters=(),
+        extraction_filter=None,
         total=0,
         offset=offset,
         limit=limit,
         counts=SampleCounts(all=0, correct=0, incorrect=0, ungraded=0),
         rows=(),
     )
+
+
+class FilteredTask(BaseModel):
+    """One task's rows narrowed to a single extraction filter, with the choices that were available."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    rows: pa.Table
+    available: tuple[str, ...]
+    selected: str | None
+
+
+def _select_extraction_filter(table: pa.Table, requested: str | None) -> FilteredTask:
+    """Narrow a task's rows to one extraction filter, and report the choices.
+
+    A task scored under several filters holds one sample per (document, filter). Showing them all
+    would list every question once per filter and make the correctness counts disagree with the
+    headline score, so one filter is selected: the caller's if it exists, otherwise the ranked
+    default. A table with a single filter (or none, as for Harbor trials and pre-v4 archives) is
+    returned untouched.
+    """
+    if FILTER_COLUMN not in table.column_names:
+        return FilteredTask(rows=table, available=(), selected=None)
+    values = table.column(FILTER_COLUMN).to_pylist()
+    available = tuple(sorted({value for value in values if value}))
+    if len(available) <= 1:
+        return FilteredTask(rows=table, available=available, selected=available[0] if available else None)
+    selected = requested if requested in available else primary_filter(available)
+    indices = [i for i, value in enumerate(values) if value == selected]
+    return FilteredTask(rows=table.take(pa.array(indices, type=pa.int64())), available=available, selected=selected)
 
 
 def _task_table(results_path: str, task: str) -> pa.Table | None:
@@ -279,8 +332,9 @@ def fetch_samples(
     offset: int,
     limit: int,
     correct: str,
+    extraction_filter: str | None = None,
 ) -> SamplesResponse:
-    """Return one typed, correctness-filtered page of samples for a task."""
+    """Return one typed, correctness-filtered page of samples for a task under one extraction filter."""
     if not results_path:
         return _empty_samples(available=False, error="run has no results_path", task=task, offset=offset, limit=limit)
     try:
@@ -302,6 +356,8 @@ def fetch_samples(
     # ``metrics`` is a finestore ``map<string,double>`` in the archive (a struct in the legacy layout);
     # materialize map columns as dicts so a row is ``{name: value}`` either way. Non-map columns ignore
     # the flag.
+    filtered = _select_extraction_filter(table, extraction_filter)
+    table = filtered.rows
     columns = set(table.column_names)
     correct_values = table.column("correct").to_pylist() if "correct" in columns else [None] * table.num_rows
     metric_maps = (
@@ -335,6 +391,8 @@ def fetch_samples(
         task=task,
         primary_metric=primary,
         metric_columns=metric_columns,
+        extraction_filters=filtered.available,
+        extraction_filter=filtered.selected,
         total=len(indices),
         offset=offset,
         limit=limit,
@@ -374,7 +432,7 @@ def _artifact_within_results(results_path: str, uri: str) -> bool:
 def _resolve_archive_artifact(results_path: str, uri: str, max_bytes: int) -> ArtifactResponse:
     """Resolve a ``finestore://`` trajectory reference to decoded text from the run's blobs table."""
     try:
-        raw = CompositeReader(results_path).resolve(uri)
+        raw = _archive_view(results_path).resolve(uri)
     except Exception as exc:
         logger.info("archive artifact resolve failed for %s: %s", uri, exc)
         return _unavailable_artifact(uri, f"{type(exc).__name__}: {exc}"[:400])

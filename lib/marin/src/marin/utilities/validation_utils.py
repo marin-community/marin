@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
 

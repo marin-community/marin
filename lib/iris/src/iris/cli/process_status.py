@@ -133,6 +133,7 @@ def logs(ctx, target: str | None, level: str, follow: bool, max_lines: int, subs
 @click.option("--duration", "-d", default=10, help="Profiling duration in seconds")
 @click.option("--output", "-o", default=None, help="Output file path")
 @click.option("--locals", "include_locals", is_flag=True, help="Include local variables in thread dump")
+@click.option("--native", "include_native", is_flag=True, help="Include native frames in thread dump")
 @click.pass_context
 def profile(
     ctx,
@@ -141,6 +142,7 @@ def profile(
     duration: int,
     output: str | None,
     include_locals: bool,
+    include_native: bool,
 ):
     """Profile the process (threads, cpu, or mem).
 
@@ -152,7 +154,7 @@ def profile(
     label = target or "Controller"
 
     if profiler == "threads":
-        profile_type = job_pb2.ProfileType(threads=job_pb2.ThreadsProfile(locals=include_locals))
+        profile_type = job_pb2.ProfileType(threads=job_pb2.ThreadsProfile(locals=include_locals, native=include_native))
     elif profiler == "cpu":
         profile_type = job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.SPEEDSCOPE))
     elif profiler == "mem":

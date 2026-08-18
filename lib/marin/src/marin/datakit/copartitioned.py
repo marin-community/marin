@@ -8,7 +8,7 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 SOURCE_MANIFEST_FILENAME = ".source_manifest.json"
 SOURCE_MANIFEST_VERSION = "v1"

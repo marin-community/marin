@@ -154,6 +154,32 @@ checkpointer:
 This policy will save permanent checkpoints every 1,000 steps until 10,000 steps, then every 5,000 steps until 40,000 steps, then every 10,000 steps.
 The default step-based checkpoint policy is to save a checkpoint every 10,000 steps.
 
+#### Checkpoint Format
+
+A checkpoint directory contains three kinds of file:
+
+* `manifest.json`: the format declaration and the inventory of arrays, each with its shape,
+  dtype and chunk grid. Written when the save starts. A reader that meets a `format_version`
+  above its own fails. Older checkpoints have no manifest and fall back to listing.
+* `metadata.json`: step, timestamp, and whether the checkpoint is temporary. Written after
+  every process has committed, so a directory containing it is complete. Checkpoint
+  discovery keys off this file.
+* the array data itself, as a single OCDBT database of zarr3 arrays.
+
+#### Checkpoint Write Parallelism
+
+Every process writes the part of the state it holds, and arrays replicated across processes
+are split across their replicas. A save also bounds the host memory it stages: one whose
+share fits under `max_staged_host_bytes` returns while the commits drain, and a larger save
+rolls through it.
+
+| Parameter                                  | Description                                                                            | Default |
+|--------------------------------------------|----------------------------------------------------------------------------------------|---------|
+| `checkpointer.write.max_write_replicas`    | Cap on how many replicas of an array write part of it. `1` disables replica splitting. | 64      |
+| `checkpointer.write.min_replica_slice_bytes` | Do not split an array when doing so would give each replica less than this.          | 16 MiB  |
+| `checkpointer.write.max_chunk_bytes`       | Upper bound on one zarr3 chunk, which bounds a single object store write.              | 512 MiB |
+| `checkpointer.write.max_staged_host_bytes` | Cap on host memory one process stages at once during a save.                           | 16 GiB  |
+
 ### JAX Compilation Cache Configuration
 
 Levanter allows you to configure JAX's persistent compilation cache. This can significantly speed up startup times by caching compiled JAX functions.

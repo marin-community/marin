@@ -5,7 +5,7 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Literal, TypeAlias, cast, get_args
+from typing import Literal, NamedTuple, TypeAlias, cast, get_args
 
 import jax
 import jax.numpy as jnp
@@ -24,6 +24,7 @@ MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
     "fixed_all_to_all",  # Expert-parallel all-to-all with fixed sender/expert cells.
+    "fixed_pooled_wave_all_to_all",  # Destination-pooled static waves with fixed receiver buffers.
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
     "mok",  # Dropless Mixture-of-Kittens EP backend; routed + shared experts are fused at the model boundary.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
@@ -31,7 +32,14 @@ MoeImplementation: TypeAlias = Literal[
     "sonic_cute",  # Single-process QuACK SM100 (Blackwell/B200) grouped-GEMM backend.
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
-_EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "fixed_all_to_all", "deepep", "mok")
+_EP_MOE_IMPLEMENTATIONS = (
+    "ring",
+    "ragged_all_to_all",
+    "fixed_all_to_all",
+    "fixed_pooled_wave_all_to_all",
+    "deepep",
+    "mok",
+)
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (
@@ -55,6 +63,17 @@ MOE_REMAT_SAVE_NAMES = (
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_MOE_OUTPUT,
 )
+
+
+class CapacityOverflow(NamedTuple):
+    """Expert assignments dropped before and after transport."""
+
+    sender: Int[Array, ""]
+    receiver: Int[Array, ""]
+
+    @property
+    def total(self) -> Int[Array, ""]:
+        return self.sender + self.receiver
 
 
 @dataclass(frozen=True)

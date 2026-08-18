@@ -27,7 +27,8 @@ from enum import StrEnum
 from fray.types import ResourceConfig
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem import marin_temp_bucket, prefix_join
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.reference_pipeline import (

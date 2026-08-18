@@ -9,8 +9,8 @@ from marin.experiment.cli import build_options
 
 from experiments.grug.moe_hero_ep.launch import (
     DEFAULT_HERO_STEPS,
+    HERO_EP_BATCH_SIZE,
     HERO_EP_EXPERT_AXIS_SIZE,
-    HERO_PROFILE_NUM_STEPS,
     HeroThroughputResult,
     build_mok_hero_run,
 )
@@ -44,17 +44,42 @@ from experiments.grug.moe_hero_ep.launch import (
     help="Override the routed expert width.",
 )
 @click.option(
-    "--profile-start-step",
-    type=click.IntRange(min=1),
+    "--latent-dim",
+    type=click.IntRange(min=0),
     default=None,
-    help="Start an XProf capture at this training step; omitted disables profiling.",
+    help=(
+        "LatentMoE: run routed experts at this width, which is also the width MoK dispatches. "
+        "Zero removes the projection and lets the fused call keep the shared experts; omitted "
+        "keeps the hero width, which is the shape the pooled-wave arm runs."
+    ),
 )
 @click.option(
-    "--profile-num-steps",
+    "--batch-size",
     type=click.IntRange(min=1),
-    default=HERO_PROFILE_NUM_STEPS,
+    default=HERO_EP_BATCH_SIZE,
     show_default=True,
-    help="Number of training steps to capture.",
+    help="Global sequences per step.",
+)
+@click.option(
+    "--schedule-steps",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Build the learning-rate schedule for this many steps instead of --num-steps.",
+)
+@click.option("--seed", type=int, default=0, show_default=True, help="Trainer seed.")
+@click.option(
+    "--profile-steps",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="Number of training steps to capture with XProf. Zero disables profiling.",
+)
+@click.option(
+    "--profile-start-step",
+    type=click.IntRange(min=0),
+    default=5,
+    show_default=True,
+    help="Training step the XProf capture starts on.",
 )
 @click.option(
     "--mok-package",
@@ -76,21 +101,29 @@ def main(
     num_experts: int | None,
     num_experts_per_token: int | None,
     intermediate_dim: int | None,
-    profile_start_step: int | None,
-    profile_num_steps: int,
+    latent_dim: int | None,
+    batch_size: int,
+    schedule_steps: int | None,
+    seed: int,
+    profile_steps: int,
+    profile_start_step: int,
     mok_package: str,
     mok_expert_placement: str,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_mok_hero_run(
         run_id=run_id,
         num_steps=num_steps,
+        schedule_steps=schedule_steps,
+        seed=seed,
+        batch_size=batch_size,
         num_experts=num_experts,
         num_experts_per_token=num_experts_per_token,
         intermediate_dim=intermediate_dim,
+        latent_dim=latent_dim,
         mok_package=mok_package,
         mok_expert_placement=mok_expert_placement,
+        profile_steps=profile_steps,
         profile_start_step=profile_start_step,
-        profile_num_steps=profile_num_steps,
     )
 
 

@@ -1,0 +1,1255 @@
+{
+  "uid": "marin-nodes",
+  "title": "Node details",
+  "description": "Current Kubernetes state and bounded Finelog history for one physical GPU node. Select a node after choosing its cluster. Per-device panels read dcgm-exporter through iris-node-agent; host panels read node-exporter through the same stream.",
+  "tags": [
+    "marin",
+    "generated"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Home",
+      "type": "link",
+      "url": "/d/marin-home"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Accelerators",
+      "type": "link",
+      "url": "/d/marin-accel"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Node pools",
+      "type": "link",
+      "url": "/d/marin-node-pools"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Jobs",
+      "type": "link",
+      "url": "/d/marin-jobs"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Runs",
+      "type": "link",
+      "url": "/d/marin-runs"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Clusters",
+      "type": "link",
+      "url": "/d/marin-clusters"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Pipelines",
+      "type": "link",
+      "url": "/d/marin-pipelines"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Inference",
+      "type": "link",
+      "url": "/d/marin-inference"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Infra",
+      "type": "link",
+      "url": "/d/infra"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "label": "Cluster",
+        "type": "custom",
+        "description": "The clusters the bridge serves. This remains a fixed list so a silent cluster is still selectable.",
+        "query": "cw-rno2a,cw-us-east-02a,cw-us-east-08a,marin,marin-dev",
+        "options": [
+          {
+            "selected": false,
+            "text": "cw-rno2a",
+            "value": "cw-rno2a"
+          },
+          {
+            "selected": false,
+            "text": "cw-us-east-02a",
+            "value": "cw-us-east-02a"
+          },
+          {
+            "selected": false,
+            "text": "cw-us-east-08a",
+            "value": "cw-us-east-08a"
+          },
+          {
+            "selected": false,
+            "text": "marin",
+            "value": "marin"
+          },
+          {
+            "selected": false,
+            "text": "marin-dev",
+            "value": "marin-dev"
+          }
+        ],
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "includeAll": true,
+        "multi": true,
+        "hide": 0,
+        "refresh": 0
+      },
+      {
+        "name": "node",
+        "label": "Node",
+        "type": "query",
+        "description": "GPU nodes that reported inventory inside the dashboard window.",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "finelog-marin"
+        },
+        "definition": "GPU nodes reporting hardware_inventory in the selected clusters",
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable-node",
+          "infinityQuery": {
+            "refId": "variable-node",
+            "type": "json",
+            "source": "url",
+            "format": "table",
+            "parser": "backend",
+            "url": "/query",
+            "url_options": {
+              "method": "GET",
+              "params": [
+                {
+                  "key": "sql",
+                  "value": "SELECT DISTINCT json_get(attributes_json, 'node_name') AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'hardware_inventory' AND json_get(attributes_json, 'device_kind') = 'gpu' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ORDER BY 1"
+                },
+                {
+                  "key": "from",
+                  "value": "${__from}"
+                },
+                {
+                  "key": "to",
+                  "value": "${__to}"
+                }
+              ]
+            },
+            "columns": [
+              {
+                "selector": "value",
+                "text": "value",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "includeAll": false,
+        "multi": false,
+        "refresh": 2,
+        "sort": 1,
+        "regex": "",
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Current Kubernetes state",
+      "description": "Live CKS node state and physical topology for the selected node. Finelog charts below remain available when the API server is down.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ready"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "false": {
+                        "color": "red",
+                        "index": 1
+                      },
+                      "true": {
+                        "color": "green",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/nodes",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "cluster",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "node",
+                "value": "${node}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "node",
+              "text": "node",
+              "type": "string"
+            },
+            {
+              "selector": "node_pool",
+              "text": "node pool",
+              "type": "string"
+            },
+            {
+              "selector": "instance_type",
+              "text": "instance type",
+              "type": "string"
+            },
+            {
+              "selector": "gpu_model",
+              "text": "GPU model",
+              "type": "string"
+            },
+            {
+              "selector": "gpu_capacity",
+              "text": "GPUs",
+              "type": "number"
+            },
+            {
+              "selector": "ready",
+              "text": "ready",
+              "type": "boolean"
+            },
+            {
+              "selector": "unschedulable",
+              "text": "cordoned",
+              "type": "boolean"
+            },
+            {
+              "selector": "node_state",
+              "text": "state",
+              "type": "string"
+            },
+            {
+              "selector": "rack_name",
+              "text": "rack",
+              "type": "string"
+            },
+            {
+              "selector": "rack_slot",
+              "text": "slot",
+              "type": "string"
+            },
+            {
+              "selector": "ib_fabric",
+              "text": "IB fabric",
+              "type": "string"
+            },
+            {
+              "selector": "ib_speed",
+              "text": "IB speed",
+              "type": "string"
+            },
+            {
+              "selector": "gpu_driver",
+              "text": "driver",
+              "type": "string"
+            },
+            {
+              "selector": "cordon_reason",
+              "text": "cordon reason",
+              "type": "string"
+            },
+            {
+              "selector": "pending_phase",
+              "text": "pending phase",
+              "type": "string"
+            },
+            {
+              "selector": "error_class",
+              "text": "error class",
+              "type": "string"
+            },
+            {
+              "selector": "error",
+              "text": "error",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "GPU engine activity",
+      "description": "Per-GPU utilization, SM activity, and tensor-pipe activity. SM activity is the fraction of time at least one warp was active on a streaming multiprocessor; 80% is necessary but not sufficient for effective use.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "mean"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'GPU ' || json_get(attributes_json, 'gpu_index') || ' · ' || CASE name WHEN 'gpu_utilization_percent' THEN 'utilization' WHEN 'gpu_sm_active_ratio' THEN 'SM active' ELSE 'tensor active' END AS series, AVG(CASE WHEN name = 'gpu_utilization_percent' THEN value ELSE value * 100.0 END) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('gpu_utilization_percent', 'gpu_sm_active_ratio', 'gpu_tensor_active_ratio') AND json_get(attributes_json, 'node_name') IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "GPU temperatures",
+      "description": "Per-GPU core and HBM temperatures. The memory-temperature series appears only on exporters that expose DCGM_FI_DEV_MEMORY_TEMP.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'GPU ' || json_get(attributes_json, 'gpu_index') || CASE name WHEN 'gpu_memory_temperature_celsius' THEN ' · HBM' ELSE ' · core' END AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('gpu_temperature_celsius', 'gpu_memory_temperature_celsius') AND json_get(attributes_json, 'node_name') IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "GPU power",
+      "description": "Per-GPU board power. Compare GPUs on the same node for a device that is drawing power without doing comparable work.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "mean"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'GPU ' || json_get(attributes_json, 'gpu_index') AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND json_get(attributes_json, 'node_name') IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "HBM in use",
+      "description": "Used framebuffer memory divided by total framebuffer memory for each GPU.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'GPU ' || json_get(attributes_json, 'gpu_index') AS series, 100.0 * AVG(CASE WHEN name = 'gpu_memory_used_bytes' THEN value END) / NULLIF(AVG(CASE WHEN name = 'gpu_memory_total_bytes' THEN value END), 0) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('gpu_memory_used_bytes', 'gpu_memory_total_bytes') AND json_get(attributes_json, 'node_name') IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "GPU interconnect throughput",
+      "description": "Per-GPU NVLink and PCIe receive/transmit rates from DCGM profiling fields. The panels remain empty on exporters that do not enable these fields.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "mean"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'GPU ' || json_get(attributes_json, 'gpu_index') || ' · ' || CASE name WHEN 'gpu_nvlink_receive_bytes_per_second' THEN 'NVLink RX' WHEN 'gpu_nvlink_transmit_bytes_per_second' THEN 'NVLink TX' WHEN 'gpu_pcie_receive_bytes_per_second' THEN 'PCIe RX' ELSE 'PCIe TX' END AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('gpu_nvlink_receive_bytes_per_second', 'gpu_nvlink_transmit_bytes_per_second', 'gpu_pcie_receive_bytes_per_second', 'gpu_pcie_transmit_bytes_per_second') AND json_get(attributes_json, 'node_name') IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Host utilization",
+      "description": "Node CPU, memory, and local-disk utilization. Memory and disk are derived from paired used and total gauges.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 30
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "mean"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH raw AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, name, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('node_cpu_utilization_percent', 'node_memory_used_bytes', 'node_memory_total_bytes', 'node_disk_used_bytes', 'node_disk_total_bytes') AND json_get(attributes_json, 'node_name') IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ) SELECT t, 'CPU' AS series, MAX(CASE WHEN name = 'node_cpu_utilization_percent' THEN value END) AS value FROM raw GROUP BY 1 UNION ALL SELECT t, 'memory' AS series, 100.0 * MAX(CASE WHEN name = 'node_memory_used_bytes' THEN value END) / NULLIF(MAX(CASE WHEN name = 'node_memory_total_bytes' THEN value END), 0) AS value FROM raw GROUP BY 1 UNION ALL SELECT t, 'local disk' AS series, 100.0 * MAX(CASE WHEN name = 'node_disk_used_bytes' THEN value END) / NULLIF(MAX(CASE WHEN name = 'node_disk_total_bytes' THEN value END), 0) AS value FROM raw GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Host network throughput",
+      "description": "Receive and transmit rates derived from node-exporter's cumulative physical-interface counters. Counter identity prevents an agent restart from joining two boots.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 30
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "mean"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH samples AS ( SELECT timestamp_ms, name, value, LAG(value) OVER (PARTITION BY name, json_get(attributes_json, 'source_replica_uid') ORDER BY timestamp_ms) AS prior_value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('node_network_receive_bytes', 'node_network_transmit_bytes') AND json_get(attributes_json, 'node_name') IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) - ${__interval_ms} AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, CASE name WHEN 'node_network_receive_bytes' THEN 'receive' ELSE 'transmit' END AS series, SUM(CASE WHEN value >= prior_value THEN value - prior_value ELSE 0 END) * 1000.0 / ${__interval_ms} AS value FROM samples WHERE timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "GPU inventory",
+      "description": "Stable device identity and exporter freshness for each GPU on the selected node.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 38
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "lag"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 120
+                    },
+                    {
+                      "color": "red",
+                      "value": 300
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT json_get(attributes_json, 'gpu_index') AS gpu, json_get(attributes_json, 'gpu_uuid') AS uuid, json_get(attributes_json, 'pci_bus_id') AS pci_bus, MAX(json_get(attributes_json, 'gpu_model')) AS model, MAX(json_get(attributes_json, 'driver_version')) AS driver, (CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) - MAX(timestamp_ms)) / 1000.0 AS lag FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'hardware_inventory' AND json_get(attributes_json, 'device_kind') = 'gpu' AND json_get(attributes_json, 'node_name') IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "gpu",
+              "text": "GPU",
+              "type": "string"
+            },
+            {
+              "selector": "uuid",
+              "text": "UUID",
+              "type": "string"
+            },
+            {
+              "selector": "pci_bus",
+              "text": "PCI bus",
+              "type": "string"
+            },
+            {
+              "selector": "model",
+              "text": "model",
+              "type": "string"
+            },
+            {
+              "selector": "driver",
+              "text": "driver",
+              "type": "string"
+            },
+            {
+              "selector": "lag",
+              "text": "lag",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "GPU faults",
+      "description": "Per-GPU XID, row-remap, and PCIe replay signals inside the dashboard window. An empty table is healthy. Replay and remap counters are cumulative within one exporter identity.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 38
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "XID",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT json_get(attributes_json, 'gpu_index') AS gpu, MAX(CASE WHEN name = 'gpu_xid_error_code' THEN value END) AS xid, MAX(CASE WHEN name = 'gpu_row_remap_failures' THEN value END) AS remap_failures, MAX(CASE WHEN name = 'gpu_pcie_replay_errors' THEN value END) AS pcie_replays FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('gpu_xid_error_code', 'gpu_row_remap_failures', 'gpu_pcie_replay_errors') AND json_get(attributes_json, 'node_name') IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 HAVING MAX(value) > 0 ORDER BY 2 DESC, 3 DESC, 4 DESC"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "gpu",
+              "text": "GPU",
+              "type": "string"
+            },
+            {
+              "selector": "xid",
+              "text": "XID",
+              "type": "number"
+            },
+            {
+              "selector": "remap_failures",
+              "text": "remap failures",
+              "type": "number"
+            },
+            {
+              "selector": "pcie_replays",
+              "text": "PCIe replays",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

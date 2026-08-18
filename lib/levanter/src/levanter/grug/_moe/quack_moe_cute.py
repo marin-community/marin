@@ -14,7 +14,6 @@ A[M,K] @ B[E,K,2N]  -> (per expert group) -> SwiGLU -> PostAct[M,N]
 """
 from __future__ import annotations
 
-
 import jax
 import jax.numpy as jnp
 
@@ -24,6 +23,7 @@ import cutlass.jax as cjax
 from quack.gemm_act import GemmActMixin, GemmGatedSm100, act_fn_map, gate_fn_map
 from quack.gemm_act import get_max_active_clusters
 from quack.gemm_default_epi import GemmDefaultEpiMixin, GemmDefaultSm100
+from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
 from quack.gemm_tvm_ffi_utils import make_scheduler_args, make_varlen_args
 
 _ACC = cutlass.Float32
@@ -39,6 +39,7 @@ def _cute_dtype(dt):
     return _JAX_TO_CUTE[jnp.dtype(dt)]
 
 
+@cute_launcher_factory
 def _build_launcher(*, a_dtype, tile_mn, cluster_mnk, activation, max_active_clusters, max_swizzle):
     """Return a ``@cute.jit`` launcher with the cutlass_call signature.
 
@@ -113,7 +114,7 @@ def quack_gated_grouped_gemm(
     cu_spec = ts(static=False)  # [E+1] int32
     d_spec = ts(divisibility=(1, 8), static=False)  # [M,2N] n-major
     p_spec = ts(divisibility=(1, 8), static=False)  # [M,N]  n-major
-    call = cjax.cutlass_call(
+    call = cutlass_call(
         launcher,
         output_shape_dtype=(
             jax.ShapeDtypeStruct((M, N2), x_sort.dtype),
@@ -127,7 +128,10 @@ def quack_gated_grouped_gemm(
     return (preact, postact) if return_preact else postact
 
 
+@cute_launcher_factory
 def _build_plain_launcher(*, a_dtype, tile_mn, cluster_mnk, max_active_clusters, max_swizzle):
+    """Return a ``@cute.jit`` plain grouped-GEMM launcher."""
+
     @cute.jit
     def launcher(stream, mA, mB, mCuSeqlens, mD):
         gemm = GemmDefaultSm100(_ACC, a_dtype, tile_mn, cluster_mnk, gather_A=False, use_clc_persistence=False)
@@ -160,7 +164,7 @@ def quack_grouped_gemm(a, w, cu_seqlens, *, b_major="n", tile_mn=(256, 128), clu
     b_spec = ts(mode=_bmode, divisibility=(1, 1, 8), static=False)
     cu_spec = ts(static=False)
     d_spec = ts(divisibility=(1, 8), static=False)
-    call = cjax.cutlass_call(
+    call = cutlass_call(
         launcher,
         output_shape_dtype=jax.ShapeDtypeStruct((M, N), a.dtype),
         input_spec=(a_spec, b_spec, cu_spec),

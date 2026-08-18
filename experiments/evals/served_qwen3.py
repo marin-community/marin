@@ -30,7 +30,6 @@ from marin.inference.config import (
     VllmEngineConfig,
     VllmLauncherType,
 )
-from marin.training.run_environment import env_vars_for_dependency_groups
 
 from experiments.evals.lm_eval_suite import lm_eval_suite
 
@@ -71,11 +70,7 @@ def qwen3_inference_config(
             worker_resources=worker_resources,
             worker_environment=create_environment(
                 extras=worker_extras,
-                env_vars=env_vars_for_dependency_groups(
-                    worker_resources,
-                    list(worker_extras),
-                    dict(worker_env_vars),
-                ),
+                env_vars=dict(worker_env_vars),
             ),
         ),
         instances=1,
@@ -84,13 +79,13 @@ def qwen3_inference_config(
 
 
 QWEN3_TPU_INFERENCE = qwen3_inference_config(
-    engine=VllmEngineConfig(startup_timeout_seconds=_VLLM_TIMEOUT),
+    engine=VllmEngineConfig(launcher=VllmLauncherType.TPU, startup_timeout_seconds=_VLLM_TIMEOUT),
     worker_resources=ResourceConfig.with_tpu(
         ["v5litepod-4", "v4-8", "v5p-8", "v6e-4"],
         ram="96g",
         regions=[ANY_REGION],
     ),
-    worker_extras=("tpu", "vllm"),
+    worker_extras=("tpu",),
     worker_env_vars=_TPU_VLLM_WORKER_ENV_VARS,
 )
 

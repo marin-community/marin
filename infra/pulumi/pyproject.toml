@@ -13,8 +13,18 @@ dependencies = [
     # .service.CloudK8sService) when the target Iris cluster (iac.iris.service, used by
     # infra/ducky) is CoreWeave-backed.
     "marin-iris[controller]",
+    "marin-finelog",
     "marin-rigging",
     "pyyaml>=6.0",
+]
+
+[dependency-groups]
+test = [
+    # Root pytest defaults load marin.pytest_timeout_guard before collection.
+    "marin-core",
+    "pytest>=8.3.2",
+    "pytest-timeout",
+    "pytest-xdist",
 ]
 
 # The pulumi SDK is only imported when running the IaC program itself (pulumi
@@ -24,7 +34,7 @@ dependencies = [
 # from pulling the pulumi providers into jobs that never deploy.
 [project.optional-dependencies]
 deploy = [
-    "pulumi>=3.140,<4",
+    "pulumi>=3.226,<4",
     "pulumi-kubernetes>=4.18,<5",
     "pulumi-gcp>=9,<10",
     "pulumi-github>=6,<7",

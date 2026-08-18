@@ -118,10 +118,15 @@ types even in startup-polling loops.
   `@pytest.mark.requires_cluster`.
 - Docker-dependent tests must also be marked `@pytest.mark.docker`.
 - E2E tests live in `tests/e2e/`.
+- Reusable fakes, factories, and test drivers live in `src/iris/testing/` and
+  are imported through `iris.testing`. Tests do not import `conftest.py` or
+  another test module.
+- Pytest fixtures and hooks stay in `conftest.py`. Consume setup through fixture
+  parameters instead of importing fixture functions.
 - Shared fakes live in `src/iris/cluster/backends/gcp/fake.py`
   (`InMemoryGcpService`), `src/iris/cluster/backends/k8s/fake.py`
-  (`InMemoryK8sService`), or `src/iris/test_util.py`. Do not duplicate
-  fakes across files.
+  (`InMemoryK8sService`), `src/iris/test_util.py`, or `src/iris/testing/`.
+  Do not duplicate fakes across files.
 
 ## Protocols
 
@@ -194,6 +199,16 @@ Docker tests use a separate `docker_cluster` fixture and are marked `docker`.
 ```bash
 # All unit tests
 uv run --package marin-iris --group test pytest lib/iris/tests/
+
+# Manual in-process memory profiling
+uv run --package marin-iris --group test pytest \
+  -m 'manual and not slow and not docker and not requires_cluster' \
+  lib/iris/tests/cluster/runtime/test_memray_profile.py
+
+# Focused root and Iris tests in one pytest process
+uv run --package marin-iris --group test pytest \
+  tests/cluster/vllm/test_backend_parity.py \
+  lib/iris/tests/cluster/controller/test_preemption.py
 
 # E2E smoke tests (shared cluster, fast)
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster -o "addopts="

@@ -28,8 +28,7 @@ from iris.cluster.runtime.env import STANDARD_MOUNTS
 from iris.cluster.runtime.types import MountKind
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
-
-from .conftest import add_eq_constraint, common_env_from_req, make_batch, make_pod, make_run_req, pod_config
+from iris.testing.k8s import add_eq_constraint, common_env_from_req, make_batch, make_pod, make_run_req, pod_config
 
 INFRASTRUCTURE_FAILURE_REASONS = ("DeadlineExceeded", "Evicted", "Preempting")
 KUEUE_POD_GROUP_NAME = "kueue.x-k8s.io/pod-group-name"
@@ -257,6 +256,13 @@ def test_pod_name_preserves_attempt_suffix_with_long_task_id():
     assert name_0.endswith("-0")
     assert name_1.endswith("-1")
     assert name_999.endswith("-999")
+
+
+def test_pod_annotation_preserves_full_task_id_for_node_metrics():
+    task_id = "/power/" + "long-coordinator-name-" * 8 + "/workers/0"
+    manifest = _build_pod_manifest(make_run_req(task_id), pod_config())
+
+    assert manifest["metadata"]["annotations"][LABEL_TASK_ID] == task_id
 
 
 def test_pod_name_different_tasks_never_collide():
@@ -1355,22 +1361,29 @@ def test_kueue_pod_group_pod_index_from_task_ordinal():
     assert m3["metadata"]["labels"][_KUEUE_POD_GROUP_POD_INDEX] == "3"
 
 
-def test_kueue_priority_class_not_stamped_without_config():
-    """With no configured priority-class mapping, pods carry no WorkloadPriorityClass label
-    (the cluster's Kueue default applies)."""
-    req = _cosched_req("/job/task/0", num_tasks=64, priority=job_pb2.PRIORITY_BAND_BATCH)
+@pytest.mark.parametrize(
+    "device, expected_workload_priority_class",
+    [(None, "iris-cpu-batch"), ("gpu", "iris-accelerator-batch")],
+)
+def test_kueue_priority_class_orders_cpu_below_standalone_accelerator(device, expected_workload_priority_class):
+    req = make_run_req("/job/task/0", num_tasks=1, priority=job_pb2.PRIORITY_BAND_BATCH)
+    if device == "gpu":
+        req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
+
     manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
-    assert _KUEUE_PRIORITY_CLASS not in manifest["metadata"]["labels"]
+
+    assert manifest["metadata"]["labels"][_KUEUE_PRIORITY_CLASS] == expected_workload_priority_class
+    assert manifest["spec"]["priorityClassName"] == "iris-batch"
 
 
-def test_kueue_priority_class_stamped_from_config():
-    """A configured band->WorkloadPriorityClass mapping stamps the label for that band."""
+def test_kueue_coscheduled_gang_is_above_standalone_accelerator():
     req = _cosched_req("/job/task/0", num_tasks=64, priority=job_pb2.PRIORITY_BAND_BATCH)
-    manifest = _build_pod_manifest(
-        req,
-        pod_config(local_queue="iris-lq", kueue_priority_classes={job_pb2.PRIORITY_BAND_BATCH: "iris-batch"}),
-    )
-    assert manifest["metadata"]["labels"][_KUEUE_PRIORITY_CLASS] == "iris-batch"
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
+
+    manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
+
+    assert manifest["metadata"]["labels"][_KUEUE_PRIORITY_CLASS] == "iris-coscheduled-batch"
+    assert manifest["spec"]["priorityClassName"] == "iris-batch"
 
 
 def test_kueue_required_topology_for_nvlink_domain():

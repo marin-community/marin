@@ -27,6 +27,7 @@ import cutlass
 import cutlass.cute as cute
 import cutlass.jax as cjax
 from cutlass import Float32
+from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
 from quack.gemm import make_scheduler_args
 from quack.gemm_symmetric import GemmSymmetricMixin, GemmSymmetricSm100
 
@@ -63,6 +64,7 @@ def _transpose_mn(mD):
     return cute.make_tensor(mD.iterator, cute.select(mD.layout, mode=[1, 0, 2]))
 
 
+@cute_launcher_factory
 def _build_launcher(*, a_dtype, mma_tiler_mnk, cluster_mnk, mac, max_swizzle):
     @cute.jit
     def launcher(stream, mA, mB, mD):
@@ -103,7 +105,7 @@ def quack_symmetric_gemm(
     )
     ts = cjax.TensorSpec
     spec = ts(mode=(1, 2, 0), divisibility=(1, 1, 8), static=False)
-    call = cjax.cutlass_call(
+    call = cutlass_call(
         launcher,
         output_shape_dtype=(jax.ShapeDtypeStruct((L, M, M), X.dtype),),
         input_spec=(spec, spec),

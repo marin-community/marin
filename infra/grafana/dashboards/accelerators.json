@@ -82,6 +82,26 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
+      "title": "Node details",
+      "type": "link",
+      "url": "/d/marin-nodes"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Node pools",
+      "type": "link",
+      "url": "/d/marin-node-pools"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
       "title": "Jobs",
       "type": "link",
       "url": "/d/marin-jobs"
@@ -1591,6 +1611,238 @@
               {
                 "key": "sql",
                 "value": "WITH model AS ( SELECT json_get(attributes_json, 'gpu_uuid') AS gpu, MAX(json_get(attributes_json, 'gpu_model')) AS gpu_model FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'hardware_inventory' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{to}} - INTERVAL '10 minutes') * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1), power AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, json_get(attributes_json, 'gpu_uuid') AS gpu, AVG(value) AS w FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2) SELECT power.t AS t, COALESCE(model.gpu_model, 'unknown') AS series, SUM(power.w) / 1000.0 AS value FROM power LEFT JOIN model ON power.gpu = model.gpu GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 17,
+      "type": "heatmap",
+      "title": "SM utilization distribution",
+      "description": "Distribution across every reporting GPU in the selected clusters. SM activity is the fraction of time at least one warp was active on a streaming multiprocessor; 80% is necessary but not sufficient for effective use.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 46
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "calculate": true,
+        "calculation": {
+          "yBuckets": {
+            "mode": "count",
+            "value": ""
+          }
+        },
+        "cellGap": 1,
+        "color": {
+          "exponent": 0.5,
+          "fill": "red",
+          "max": 100,
+          "min": 0,
+          "mode": "scheme",
+          "reverse": false,
+          "scale": "linear",
+          "scheme": "RdYlGn",
+          "steps": 24
+        },
+        "exemplars": {
+          "color": "rgba(255,0,255,0.7)"
+        },
+        "legend": {
+          "show": false
+        },
+        "rowsFrame": {
+          "layout": "auto"
+        },
+        "tooltip": {
+          "mode": "single",
+          "showColorScale": false,
+          "yHistogram": false
+        },
+        "yAxis": {
+          "axisPlacement": "hidden",
+          "reverse": false,
+          "unit": "percent"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, json_get(attributes_json, 'node_name') || '/gpu' || json_get(attributes_json, 'gpu_index') AS series, AVG(value) * 100.0 AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_sm_active_ratio' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 18,
+      "type": "heatmap",
+      "title": "GPU temperature distribution",
+      "description": "Core-temperature distribution across every reporting GPU. A widening or upward-moving band exposes node/device outliers hidden by the fleet maximum.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 46
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "calculate": true,
+        "calculation": {
+          "yBuckets": {
+            "mode": "count",
+            "value": ""
+          }
+        },
+        "cellGap": 1,
+        "color": {
+          "exponent": 0.5,
+          "fill": "red",
+          "max": 90,
+          "min": 0,
+          "mode": "scheme",
+          "reverse": true,
+          "scale": "linear",
+          "scheme": "RdYlGn",
+          "steps": 24
+        },
+        "exemplars": {
+          "color": "rgba(255,0,255,0.7)"
+        },
+        "legend": {
+          "show": false
+        },
+        "rowsFrame": {
+          "layout": "auto"
+        },
+        "tooltip": {
+          "mode": "single",
+          "showColorScale": false,
+          "yHistogram": false
+        },
+        "yAxis": {
+          "axisPlacement": "hidden",
+          "reverse": false,
+          "unit": "celsius"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, json_get(attributes_json, 'node_name') || '/gpu' || json_get(attributes_json, 'gpu_index') AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_temperature_celsius' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",

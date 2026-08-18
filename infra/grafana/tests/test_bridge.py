@@ -16,7 +16,13 @@ from finelog.errors import QueryResultTooLargeError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from k8s_source import K8sFleet
-from loom_alerts import LoomAlertClient, LoomAlertDeliveryError
+from loom_alerts import (
+    LoomAlertClient,
+    LoomAlertDeliveryError,
+    SlackAlertClient,
+    SlackAnnouncementError,
+    SlackThread,
+)
 from server import create_app, workload_overview
 from starlette.testclient import TestClient
 from training_stalls import telemetry_query, training_stall_alert_rows
@@ -82,6 +88,7 @@ def _client(
     cache_ttl: float = 20.0,
     k8s_fleet: K8sFleet | None = None,
     loom_alerts: LoomAlertClient | None = None,
+    slack_alerts: SlackAlertClient | None = None,
 ) -> TestClient:
     github = GithubSource(auth=None, timeout=5.0)
     return TestClient(
@@ -93,6 +100,7 @@ def _client(
             k8s_fleet or K8sFleet(()),
             WandbSource(timeout=5.0),
             loom_alerts,
+            slack_alerts,
         )
     )
 
@@ -422,6 +430,49 @@ def test_loom_alert_route_returns_retryable_failure_for_delivery_errors():
     ).post("/alerts/loom", json={"alerts": [{"status": "firing"}]})
     assert resp.status_code == 502
     assert resp.json() == {"error": "loom.example returned HTTP 503"}
+
+
+class FakeSlackAlerts(SlackAlertClient):
+    def __init__(self, thread: SlackThread | None) -> None:
+        self.thread = thread
+        self.payloads: list[object] = []
+
+    async def announce(self, payload: object) -> SlackThread | None:
+        self.payloads.append(payload)
+        return self.thread
+
+
+def test_slack_alert_route_announces_without_a_run():
+    fallback = FakeSlackAlerts(SlackThread(channel="C0123ABCD", thread_ts="1700000000.000001"))
+    resp = _client(FakeSource(), slack_alerts=fallback).post("/alerts/slack", json={"alerts": []})
+
+    assert resp.status_code == 202
+    assert resp.json() == {"announced": True}
+    assert fallback.payloads == [{"alerts": []}]
+
+
+def test_slack_alert_route_is_disabled_without_a_configured_destination():
+    resp = _client(FakeSource()).post("/alerts/slack", json={"alerts": []})
+    assert resp.status_code == 503
+
+
+def test_slack_alert_route_reports_a_resolution_as_nothing_announced():
+    resp = _client(FakeSource(), slack_alerts=FakeSlackAlerts(None)).post("/alerts/slack", json={"alerts": []})
+    assert resp.status_code == 202
+    assert resp.json() == {"announced": False, "reason": "no firing alerts"}
+
+
+def test_slack_alert_route_asks_grafana_to_retry_a_refused_announcement():
+    """This receiver has no second leg, so a dropped announcement is the whole
+    notification: it must not answer 2xx."""
+
+    class RefusingSlackAlerts(FakeSlackAlerts):
+        async def announce(self, payload: object) -> SlackThread | None:
+            raise SlackAnnouncementError("Slack did not accept the alert announcement")
+
+    resp = _client(FakeSource(), slack_alerts=RefusingSlackAlerts(None)).post("/alerts/slack", json={"alerts": []})
+    assert resp.status_code == 502
+    assert resp.json() == {"error": "Slack did not accept the alert announcement"}
 
 
 def test_finelog_fleet_health_combines_the_main_hub_and_k8s_mirrors():

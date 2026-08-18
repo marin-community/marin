@@ -32,6 +32,8 @@ from contextlib import AbstractContextManager, nullcontext
 import pytest
 from iris.cluster.config import (
     ControllerVmConfig,
+    GcpControllerConfig,
+    GcpPlatformConfig,
     IrisClusterConfig,
     ManualControllerConfig,
     PlatformConfig,
@@ -150,11 +152,13 @@ class FakePlatform:
         self._existing_vms = existing_vms or []
         self._vm_to_create = vm_to_create or FakeWorkerHandle()
         self.created_vms: list[FakeWorkerHandle] = []
+        self.created_configs: list[VmConfig] = []
 
     def resolve_image(self, image: str, zone: str | None = None) -> str:
         return image
 
     def create_vm(self, config: VmConfig) -> FakeWorkerHandle:
+        self.created_configs.append(config)
         self.created_vms.append(self._vm_to_create)
         return self._vm_to_create
 
@@ -218,6 +222,23 @@ def config() -> IrisClusterConfig:
 # ============================================================================
 # start_controller
 # ============================================================================
+
+
+def test_start_gcp_controller_applies_firewall_tag() -> None:
+    config = IrisClusterConfig(
+        platform=PlatformConfig(label_prefix="marin", gcp=GcpPlatformConfig(project_id="example")),
+        controller=ControllerVmConfig(
+            image="ghcr.io/test/iris:latest",
+            gcp=GcpControllerConfig(zone="us-central1-a"),
+        ),
+    )
+    platform = FakePlatform()
+
+    start_controller(platform, config)
+
+    (vm_config,) = platform.created_configs
+    assert vm_config.gcp is not None
+    assert vm_config.gcp.network_tags == ("iris-marin-controller",)
 
 
 def test_start_controller_fresh(config):

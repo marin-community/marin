@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import draccus
 import numpy as np
 from marin.utilities.validation_utils import compute_global_mean_std, summarize_document
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 from zephyr.readers import load_jsonl

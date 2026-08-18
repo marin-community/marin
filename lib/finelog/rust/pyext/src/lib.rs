@@ -76,6 +76,7 @@ impl EmbeddedServer {
                     log_dir.map(PathBuf::from),
                     remote_log_dir,
                     finelog::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+                    finelog::store::ServeMode::Live,
                 )
                 .map_err(|e| PyRuntimeError::new_err(format!("failed to open store: {e}")))?,
             );

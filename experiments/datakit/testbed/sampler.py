@@ -40,7 +40,8 @@ from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.datakit.testbed.settings import RAW_TARGET_TOTAL_TOKENS_B
 

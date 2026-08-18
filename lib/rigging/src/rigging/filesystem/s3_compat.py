@@ -22,7 +22,7 @@ Two ways to apply that setup, for two different callers:
 
 Endpoints and credential variables are not hardcoded here: each backend declares them under
 ``data.stores`` in its cluster config (``config/*.yaml``), read through
-:func:`rigging.filesystem.store_config`. For Marin that means ``CW_KEY_ID`` / ``CW_KEY_SECRET``
+:func:`rigging.filesystem.cluster_config.store_config`. For Marin that means ``CW_KEY_ID`` / ``CW_KEY_SECRET``
 for CoreWeave and ``R2_KEY_ID`` / ``R2_KEY_SECRET`` for R2, each falling back to the generic
 ``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY`` pair. A process talking to both backends at
 once must use the namespaced pairs, since the two have distinct keys.
@@ -184,7 +184,7 @@ def configure_coreweave_s3() -> None:
 def s3_credentials(store: StoreType) -> tuple[str, str] | None:
     """The ``(key_id, secret)`` pair for *store*, or ``None`` when neither pair is complete.
 
-    Reads the variables the backend's :class:`~rigging.filesystem.StoreConfig` names, then
+    Reads the variables the backend's :class:`~rigging.filesystem.cluster_config.StoreConfig` names, then
     the generic ``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY``. Callers that cannot
     proceed without credentials raise their own error, so a browser can list the buckets it
     *can* reach instead of failing on the first unconfigured backend.

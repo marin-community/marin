@@ -10,47 +10,16 @@ import threading
 import time
 import traceback
 import warnings
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from fray.actor import ActorContext, _reset_current_actor, _set_current_actor
-from fray.iris_backend import FrayIrisClient
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
-from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
-from iris.cluster.config import load_config, make_local_config
-from iris.cluster.lifecycle import connect_cluster
-from iris.cluster.types import Entrypoint, ResourceSpec
 from rigging.timing import ExponentialBackoff
-from zephyr.coordinator import ZephyrCoordinator, _PipelineExecution
 from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
-from zephyr.stage_io import ShardTask, ZephyrTaskResources
-
-# Path to zephyr root (from tests/conftest.py -> tests -> lib/zephyr)
-ZEPHYR_ROOT = Path(__file__).resolve().parents[1]
-
-# Use Iris demo config as base
-IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "config" / "ci-test.yaml"
-
-
-@pytest.fixture(scope="module")
-def iris_cluster():
-    """Start local Iris cluster for testing - reused across tests in a module.
-
-    Module-scoped (rather than session-scoped) so that a stuck or polluted
-    cluster from one test module does not bleed into another. Tests within a
-    single module still amortize the cluster startup cost.
-    """
-
-    config = load_config(IRIS_CONFIG)
-    config = make_local_config(config)
-    with connect_cluster(config) as url:
-        yield url
-
-
-# --- Local-only fixtures (functional tests) ---
+from zephyr.testing.coordinator import make_test_coordinator
 
 
 @pytest.fixture(scope="session")
@@ -75,108 +44,9 @@ def zephyr_ctx(local_client, tmp_path_factory):
     ctx.shutdown()
 
 
-# --- Multi-backend fixtures (integration tests) ---
-
-
-def _parent_holder_entrypoint():
-    """Long-running no-op that keeps the integration-test parent job alive."""
-
-    time.sleep(3600)
-
-
-@pytest.fixture(params=["local", "iris"], scope="module")
-def integration_client(request):
-    """Parametrized fixture providing Local and Iris clients.
-
-    Module-scoped so a stuck cluster or leaked actor from one module does not
-    bleed into another. The Iris path depends on `iris_cluster` (also
-    module-scoped); pytest enforces that a fixture cannot depend on a
-    narrower-scoped fixture, so these scopes must match.
-    """
-    if request.param == "local":
-        client = LocalClient()
-        yield client
-        client.shutdown(wait=True)
-    elif request.param == "iris":
-        yield request.getfixturevalue("iris_integration_client")
-    else:
-        raise ValueError(f"Unknown backend: {request.param}")
-
-
-@pytest.fixture(scope="module")
-def iris_integration_client(iris_cluster):
-    """Fray client scoped under a live local-Iris parent job."""
-    iris_client = IrisClient.remote(iris_cluster, workspace=ZEPHYR_ROOT)
-    client = FrayIrisClient.from_iris_client(iris_client)
-
-    # Child submissions require a live parent row in the controller DB.
-    parent_job = iris_client.submit(
-        entrypoint=Entrypoint.from_callable(_parent_holder_entrypoint),
-        name="test",
-        resources=ResourceSpec(cpu=1, memory="512m"),
-    )
-    try:
-        ctx = IrisContext(job_id=parent_job.job_id, client=iris_client)
-        with iris_ctx_scope(ctx):
-            yield client
-    finally:
-        iris_client.terminate(parent_job.job_id)
-        client.shutdown(wait=True)
-
-
-@pytest.fixture(scope="module")
-def integration_ctx(integration_client, tmp_path_factory):
-    """ZephyrContext on all backends for integration tests.
-
-    Module-scoped to match `integration_client` (a fixture cannot depend on a
-    narrower-scoped fixture).
-    """
-    tmp_path = tmp_path_factory.mktemp("zephyr-integration")
-    ctx = ZephyrContext(
-        client=integration_client,
-        max_workers=2,
-        resources=ResourceConfig(cpu=1, ram="512m"),
-        chunk_storage_prefix=str(tmp_path / "chunks"),
-        name="test-integration",
-    )
-    yield ctx
-    ctx.shutdown()
-
-
-_TEST_WORKER_RAM = 1 << 30
-_TEST_TASK_COST = ZephyrTaskResources(cpu=1.0, memory=_TEST_WORKER_RAM)
-_TEST_WORKER_AVAILABLE = ZephyrTaskResources(cpu=1.0, memory=_TEST_WORKER_RAM)
-_TEST_EXECUTION_ID = "test-exec"
-
-
-def _make_test_coordinator(tmp_path, **kwargs) -> ZephyrCoordinator:
-    prefix = str(tmp_path / "chunks")
-    return ZephyrCoordinator(prefix, _TEST_WORKER_AVAILABLE, **kwargs)
-
-
-def start_test_stage(
-    coordinator: ZephyrCoordinator,
-    tasks: list[ShardTask],
-    *,
-    stage_name: str = "test",
-    is_last_stage: bool = False,
-    execution_id: str = _TEST_EXECUTION_ID,
-) -> _PipelineExecution:
-    """Register an execution on the coordinator and load one stage of tasks.
-
-    Coordinator protocol tests drive pull_task and report methods directly.
-    This mirrors the run_pipeline registration step
-    and returns the execution state for assertions.
-    """
-    run = _PipelineExecution(execution_id=execution_id, map_cost=_TEST_TASK_COST, reduce_cost=_TEST_TASK_COST)
-    coordinator._executions[execution_id] = run
-    coordinator._start_stage(run, stage_name, 0, tasks, is_last_stage=is_last_stage)
-    return run
-
-
 @pytest.fixture
 def coordinator(actor_context, tmp_path):
-    coord = _make_test_coordinator(tmp_path)
+    coord = make_test_coordinator(tmp_path)
     yield coord
     coord.shutdown()
 

@@ -36,6 +36,11 @@ class Presence(StrEnum):
     REFERENCED_MISSING = "referenced-missing"
 
 
+class Management(StrEnum):
+    EXTERNAL = "external"
+    PULUMI = "pulumi"
+
+
 class SourceKind(StrEnum):
     GCP_SECRET = "gcp-secret"
     CURRENT_ENVIRONMENT = "current-environment"
@@ -87,6 +92,7 @@ class Credential(BaseModel):
 
     name: str = Field(pattern=SECRET_NAME)
     presence: Presence
+    management: Management = Management.EXTERNAL
     source: ValueSource
     disposition: Disposition
     note: str = ""
@@ -165,6 +171,7 @@ class CredentialManifest:
 class SecretReference:
     path: str
     line: int
+    environment: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

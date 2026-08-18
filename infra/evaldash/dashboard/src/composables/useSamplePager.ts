@@ -1,10 +1,14 @@
 /**
- * Client-side pager over a run's sample rows for one (task, filter) selection.
+ * Client-side pager over a run's sample rows for one (task, correctness, extraction filter) selection.
  *
- * Fetches 25-row pages on demand and caches them by `task|filter|page`, so scrubbing back and
- * forth over already-seen rows is instant. `ensure(i)` fetches the page containing row `i` and
+ * Fetches 25-row pages on demand and caches them by `task|filter|extraction|page`, so scrubbing back
+ * and forth over already-seen rows is instant. `ensure(i)` fetches the page containing row `i` and
  * prefetches a neighboring page once `i` is within 5 rows of a page boundary, so arrow-key
- * navigation rarely blocks on a request. The cache is dropped whenever `task` or `filter` changes.
+ * navigation rarely blocks on a request. The cache is dropped whenever a selection changes.
+ *
+ * A task scored under several extraction filters holds one sample per (document, filter). The server
+ * serves one filter at a time so a question appears once; `extractionFilters` lists what the task
+ * offers and `resolvedExtractionFilter` reports which one the rows came from.
  */
 import { ref, watch, type Ref } from 'vue'
 import { apiGet } from '@/composables/useApi'
@@ -22,16 +26,25 @@ export interface SamplePager {
   total: Ref<number>
   counts: Ref<SampleCounts | null>
   primaryMetric: Ref<string | null>
+  extractionFilters: Ref<string[]>
+  resolvedExtractionFilter: Ref<string | null>
   loading: Ref<boolean>
   error: Ref<string | null>
   sample: (i: number) => SampleRow | null
   ensure: (i: number) => void
 }
 
-export function useSamplePager(runId: string, task: Ref<string>, filter: Ref<SampleFilter>): SamplePager {
+export function useSamplePager(
+  runId: string,
+  task: Ref<string>,
+  filter: Ref<SampleFilter>,
+  extractionFilter: Ref<string | null>,
+): SamplePager {
   const total = ref(0)
   const counts = ref<SampleCounts | null>(null)
   const primaryMetric = ref<string | null>(null)
+  const extractionFilters = ref<string[]>([])
+  const resolvedExtractionFilter = ref<string | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
   // Bumped on every page landing in the (plain, non-reactive) `pages` cache so `sample()` can be
@@ -43,7 +56,7 @@ export function useSamplePager(runId: string, task: Ref<string>, filter: Ref<Sam
   let generation = 0
 
   function pageKey(page: number): string {
-    return `${task.value}|${filter.value}|${page}`
+    return `${task.value}|${filter.value}|${extractionFilter.value ?? ''}|${page}`
   }
 
   function invalidate() {
@@ -55,7 +68,7 @@ export function useSamplePager(runId: string, task: Ref<string>, filter: Ref<Sam
     revision.value++
   }
 
-  watch([task, filter], invalidate)
+  watch([task, filter, extractionFilter], invalidate)
 
   async function fetchPage(page: number) {
     if (!task.value || page < 0) return
@@ -73,12 +86,15 @@ export function useSamplePager(runId: string, task: Ref<string>, filter: Ref<Sam
         limit: String(PAGE_SIZE),
         correct: filter.value,
       })
+      if (extractionFilter.value) params.set('extraction_filter', extractionFilter.value)
       const resp = await apiGet<SamplesResponse>(`api/runs/${runId}/samples?${params.toString()}`)
       if (gen !== generation) return
       pagesMap.set(key, resp.rows)
       revision.value++
       total.value = resp.total
       primaryMetric.value = resp.primary_metric
+      extractionFilters.value = resp.extraction_filters ?? []
+      resolvedExtractionFilter.value = resp.extraction_filter
       if (resp.counts) counts.value = resp.counts
       error.value = null
     } catch (e) {
@@ -108,5 +124,5 @@ export function useSamplePager(runId: string, task: Ref<string>, filter: Ref<Sam
     return rows[i - page * PAGE_SIZE] ?? null
   }
 
-  return { total, counts, primaryMetric, loading, error, sample, ensure }
+  return { total, counts, primaryMetric, extractionFilters, resolvedExtractionFilter, loading, error, sample, ensure }
 }
