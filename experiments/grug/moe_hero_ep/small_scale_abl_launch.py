@@ -34,7 +34,6 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
-from experiments.grug.moe.launch_datakit_moe_mix import _val_component
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_17_1 import (
     HARRIER_MIX_2026_08_17_1_STORE,
     HARRIER_MIX_2026_08_17_1_TAG,
@@ -430,16 +429,12 @@ def build_small_run(
                 keep_last_temporary_checkpoints=1,
             ),
         )
-        if ctx.is_fingerprint:
-            val_components = {v.name: _val_component(ctx.artifact_path(v)) for v in _VALIDATION}
-        else:
-            val_components = {v.name: ctx.resolved(v).as_component() for v in _VALIDATION}
         data = harrier_mix_2026_08_17_1_data_config(
-            store_path=ctx.artifact_path(HARRIER_MIX_2026_08_17_1_STORE),
+            ctx=ctx,
             total_steps=num_steps,
             batch_size=batch_size,
             max_seq_len=seq_len,
-            validation=val_components,
+            validation=_VALIDATION,
         )
         return GrugRunConfig(
             model=model,

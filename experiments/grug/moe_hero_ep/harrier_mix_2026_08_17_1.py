@@ -7,15 +7,22 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent, LmDataConfig
+from levanter.data.text.datasets import DatasetComponent, LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat
-from marin.execution.lazy import ArtifactStep
+from marin.execution.lazy import ArtifactStep, StepContext
+from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.grug.moe.launch_datakit_moe_mix import _phase_1_start_step, _two_phase_data_config
+from experiments.grug.moe.launch_datakit_moe_mix import (
+    _phase_1_start_step,
+    _simulated_experiment_budget,
+    _two_phase_data_config,
+    _val_component,
+)
 from experiments.marin_tokenizer import marin_tokenizer
 
 PRETRAIN_TOKENS = 15_000_000_000_000
@@ -82,11 +89,11 @@ _validate_spec(_SPEC)
 
 def harrier_mix_2026_08_17_1_data_config(
     *,
-    store_path: str,
+    ctx: StepContext,
     total_steps: int,
     batch_size: int,
     max_seq_len: int,
-    validation: dict[str, DatasetComponent | ConcatDatasetComponent],
+    validation: Sequence[ArtifactStep[TokenizedCache]],
 ) -> LmDataConfig:
     """Build the evaluated two-phase mixture for a simulated experiment budget."""
     available_tokens = dict(_SPEC.available_tokens)
@@ -95,7 +102,7 @@ def harrier_mix_2026_08_17_1_data_config(
         cell: DatasetComponent(
             source=None,
             cache_dir=prefix_join(
-                store_path,
+                ctx.artifact_path(HARRIER_MIX_2026_08_17_1_STORE),
                 f"cluster={int(cell[1:3])}/quality={int(cell[4])}",
             ),
             format=TextLmDatasetFormat(),
@@ -104,10 +111,18 @@ def harrier_mix_2026_08_17_1_data_config(
         )
         for cell in available_tokens
     }
-    collisions = components.keys() & validation.keys()
+    if ctx.is_fingerprint:
+        val_components = {item.name: _val_component(ctx.artifact_path(item)) for item in validation}
+    else:
+        val_components = {item.name: ctx.resolved(item).as_component() for item in validation}
+    collisions = components.keys() & val_components.keys()
     if collisions:
         raise ValueError(f"validation components collide with Harrier buckets: {sorted(collisions)}")
-    experiment_budget = total_steps * batch_size * max_seq_len
+    experiment_budget = _simulated_experiment_budget(
+        total_steps=total_steps,
+        batch_size=batch_size,
+        max_seq_len=max_seq_len,
+    )
     if experiment_budget > TOTAL_TOKENS:
         raise ValueError(f"experiment budget {experiment_budget} exceeds target budget {TOTAL_TOKENS}")
 
@@ -116,7 +131,7 @@ def harrier_mix_2026_08_17_1_data_config(
         components=components,
         phase_weights=phase_weights,
         phase_1_start=_phase_1_start_step(total_steps, batch_size),
-        val_components=validation,
+        val_components=val_components,
         target_budget=TOTAL_TOKENS,
         experiment_budget=experiment_budget,
     )
