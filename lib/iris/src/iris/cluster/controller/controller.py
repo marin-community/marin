@@ -106,9 +106,10 @@ from iris.cluster.controller.scheduling.policy import (
 from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
-from iris.cluster.controller.service import CapabilityUrlConfig, ControllerServiceImpl, PendingKick
+from iris.cluster.controller.service import CapabilityUrlConfig, ControllerServiceImpl
 from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.worker_health import WorkerLiveness
+from iris.cluster.controller.workload_actions import WorkloadActions, register_workload_actions
 from iris.cluster.endpoints import TELEMETRY_ENDPOINT_PATH
 from iris.cluster.federation.availability import Promotion, QueuedCandidate
 from iris.cluster.federation.manager import (
@@ -127,8 +128,10 @@ from iris.cluster.types import (
     WorkerId,
 )
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, resource_pb2
 from iris.rpc.auth import SESSION_COOKIE
+from iris.rpc.resource_registry import ResourceRegistryBuilder
+from iris.rpc.resource_service import ResourceServiceImpl
 
 logger = logging.getLogger(__name__)
 
@@ -414,6 +417,9 @@ class Controller:
             scale_group: bid for bid, cfg in backend_configs.items() for scale_group in cfg.scale_groups
         }
         self._last_unroutable_jobs: dict[str, str] = {}
+        self._mutation_lock = threading.RLock()
+        self._mutation_generation = 0
+        self._serialize_next_tick = False
 
         self._promotion_bucket = TokenBucket(
             capacity=DISPATCH_PROMOTION_RATE,
@@ -506,6 +512,18 @@ class Controller:
             db=self._db,
             system_endpoints={},
         )
+        self._workload_actions = WorkloadActions(
+            self._db,
+            cluster_id=config.cluster_id,
+            auth_required=bool(config.auth and config.auth.provider),
+            federation=self._federation,
+            wake=self.wake,
+            mutation_lock=self._mutation_lock,
+            mutation_committed=self._record_mutation,
+        )
+        resource_registry = ResourceRegistryBuilder()
+        register_workload_actions(resource_registry, self._workload_actions)
+        self._resource_service = ResourceServiceImpl(resource_registry.freeze())
         self._service = ControllerServiceImpl(
             controller=self,
             bundle_store=self._bundle_store,
@@ -519,6 +537,8 @@ class Controller:
                 local_origin=config.dashboard_url,
                 parent_origin=config.federation_public_parent,
             ),
+            resource_service=self._resource_service,
+            workload_actions=self._workload_actions,
         )
         # Forwards a /proxy request for an endpoint that lives on a federated child
         # to that peer's controller, presenting this cluster's federation bearer.
@@ -539,6 +559,7 @@ class Controller:
         self._external_auth_allows_anonymous = external_auth_policy.allows_anonymous
         self._dashboard = ControllerDashboard(
             self._service,
+            resource_service=self._resource_service,
             endpoint_service=self._endpoint_service,
             auth_provider=config.auth_provider,
             auth_policy=self._auth_policy,
@@ -560,10 +581,6 @@ class Controller:
         # request_worker_eviction / _drain_pending_evictions.
         self._pending_evictions: set[WorkerId] = set()
         self._pending_evictions_lock = threading.Lock()
-        # Task terminal-state overrides queued off the control loop for the next
-        # tick; see request_task_kicks / _drain_pending_kicks.
-        self._pending_kicks: list[PendingKick] = []
-        self._pending_kicks_lock = threading.Lock()
         self._server: uvicorn.Server | None = None
         self._native_proxy = None
         self._native_proxy_metrics: NativeProxyTelemetry | None = None
@@ -630,19 +647,6 @@ class Controller:
             return
         with self._pending_evictions_lock:
             self._pending_evictions.update(worker_ids)
-        self.wake()
-
-    def request_task_kicks(self, kicks: Sequence[PendingKick]) -> None:
-        """Queue task terminal-state overrides to apply on the next control tick.
-
-        Called off the control-loop thread by the KickTasks RPC. Queuing keeps the
-        kicks inside the tick's single write transaction so they cannot race the
-        scheduler's view of task state.
-        """
-        if not kicks:
-            return
-        with self._pending_kicks_lock:
-            self._pending_kicks.extend(kicks)
         self.wake()
 
     def _seed_backend_liveness(self) -> None:
@@ -995,6 +999,51 @@ class Controller:
         autoscale_limiter: RateLimiter,
         force_timeout_scan: bool = False,
     ) -> None:
+        # One raced tick favors mutation latency and discards its stale effects.
+        # Its successor owns the mutation lock for one pass so sustained action
+        # traffic cannot starve scheduling or reconciliation indefinitely.
+        if self._serialize_next_tick:
+            with self._mutation_lock:
+                mutation_generation = self._mutation_generation
+                ran = self._control_tick_once(
+                    woken=woken,
+                    schedule_limiter=schedule_limiter,
+                    reconcile_limiter=reconcile_limiter,
+                    autoscale_limiter=autoscale_limiter,
+                    force_timeout_scan=force_timeout_scan,
+                    mutation_generation=mutation_generation,
+                )
+                self._serialize_next_tick = False
+            if ran:
+                self._workload_actions.progress_remote()
+            return
+        with self._mutation_lock:
+            mutation_generation = self._mutation_generation
+        ran = self._control_tick_once(
+            woken=woken,
+            schedule_limiter=schedule_limiter,
+            reconcile_limiter=reconcile_limiter,
+            autoscale_limiter=autoscale_limiter,
+            force_timeout_scan=force_timeout_scan,
+            mutation_generation=mutation_generation,
+        )
+        if ran:
+            self._workload_actions.progress_remote()
+
+    def _record_mutation(self) -> None:
+        """Invalidate any control decision computed before a committed mutation."""
+        self._mutation_generation += 1
+
+    def _control_tick_once(
+        self,
+        *,
+        woken: bool,
+        schedule_limiter: RateLimiter,
+        reconcile_limiter: RateLimiter,
+        autoscale_limiter: RateLimiter,
+        mutation_generation: int,
+        force_timeout_scan: bool = False,
+    ) -> bool:
         """Run one control tick: one read snapshot, due phases per backend, one write txn.
 
         Phase order is schedule -> reconcile -> autoscale. The controller routes
@@ -1006,6 +1055,11 @@ class Controller:
         A wake runs a schedule-only mini-tick; autoscale always pairs with
         a fresh schedule so it provisions against this tick's residual demand.
         Execution-timeout finalization and health-driven teardown stay global.
+
+        Returns:
+            Whether the caller should advance federated operations. This is true
+            after a committed tick and after a mutation invalidates the tick's
+            computed effects; dry-run scheduling returns false.
         """
         now = Timestamp.now()
 
@@ -1013,16 +1067,15 @@ class Controller:
         # writes nothing; reconcile and autoscale are suppressed entirely.
         if self._config.dry_run:
             self._run_scheduling()
-            return
+            return False
 
         self._drain_pending_evictions()
-        pending_kicks = self._drain_pending_kicks()
-
         run_autoscale = autoscale_limiter.should_run()
         run_schedule = woken or run_autoscale or schedule_limiter.should_run()
         run_reconcile = self._force_reconcile or reconcile_limiter.should_run()
         self._force_reconcile = False
         scan_timeouts = run_reconcile and (force_timeout_scan or self._timeout_rate_limiter.should_run())
+        verification_candidates = self._workload_actions.verification_candidates() if run_reconcile else {}
 
         inputs = self._build_tick_inputs(
             now=now,
@@ -1055,7 +1108,12 @@ class Controller:
             for backend_id in self._backend_ids:
                 # Worker-daemon backends source their own placement (empty request);
                 # a cluster-view backend gets its dispatch drain.
-                request = inputs.reconcile_requests.get(backend_id, ReconcileRequest())
+                base_request = inputs.reconcile_requests.get(backend_id, ReconcileRequest())
+                request = ReconcileRequest(
+                    tasks_to_run=base_request.tasks_to_run,
+                    running_tasks=base_request.running_tasks,
+                    release_targets=self._workload_actions.release_targets(verification_candidates, backend_id),
+                )
                 recon_results[backend_id] = self._backends[backend_id].reconcile(request)
 
         auto_results: dict[str, AutoscaleResult] = {}
@@ -1068,19 +1126,24 @@ class Controller:
 
         merged_sched = self._merge_schedule_results(sched_results) if run_schedule else None
 
-        confirmed_promotions = self._commit_tick(
-            sched_result=merged_sched,
-            sched_results=sched_results,
-            backend_pins=backend_pins,
-            routing_unschedulable=routing_unschedulable,
-            recon_results=recon_results,
-            timeout_decisions=timeout_decisions,
-            pending_kicks=pending_kicks,
-            auto_results=auto_results,
-            federation_promotions=federation_promotions,
-            expired_queued_federation=inputs.expired_queued_federation,
-            now=now,
-        )
+        with self._mutation_lock:
+            if mutation_generation != self._mutation_generation:
+                self._force_reconcile = True
+                self._serialize_next_tick = True
+                self._tick_wake.set()
+                return True
+            confirmed_promotions = self._commit_tick(
+                sched_result=merged_sched,
+                sched_results=sched_results,
+                backend_pins=backend_pins,
+                routing_unschedulable=routing_unschedulable,
+                recon_results=recon_results,
+                timeout_decisions=timeout_decisions,
+                auto_results=auto_results,
+                federation_promotions=federation_promotions,
+                expired_queued_federation=inputs.expired_queued_federation,
+                now=now,
+            )
 
         # Charge the reservation ledger only for promotions whose CAS committed, so a
         # promotion raced by a cancel does not hold phantom peer capacity. The sync
@@ -1092,12 +1155,6 @@ class Controller:
                 len(confirmed_promotions),
                 ", ".join(f"{p.job_id.to_wire()}->{p.peer_id}" for p in confirmed_promotions),
             )
-
-        # Force the next reconcile so workers are told to stop the kicked attempts
-        # promptly instead of waiting a full reconcile interval.
-        if pending_kicks:
-            self._force_reconcile = True
-            self._tick_wake.set()
 
         # Post-commit, in-memory: cache scheduling diagnostics, request a prompt
         # dispatch follow-up for fresh assignments.
@@ -1115,6 +1172,11 @@ class Controller:
         if run_reconcile:
             for backend_id in self._backend_ids:
                 self._backends[backend_id].run_teardown()
+        self._workload_actions.verify_released(
+            verification_candidates=verification_candidates,
+            reconcile_results=recon_results,
+        )
+        return True
 
     def _build_tick_inputs(
         self,
@@ -1355,7 +1417,6 @@ class Controller:
         routing_unschedulable: list[tuple[PendingTask, str]],
         recon_results: dict[str, ReconcileResult],
         timeout_decisions: list[TerminalDecision],
-        pending_kicks: list[PendingKick],
         auto_results: dict[str, AutoscaleResult],
         federation_promotions: list[Promotion],
         expired_queued_federation: list[JobName],
@@ -1366,7 +1427,7 @@ class Controller:
         Order within the txn: schedule decisions (incl. backend pins + routing
         UNSCHEDULABLE), queued-handoff scheduling-timeout failures, federation queue
         promotions, each backend's reconcile effects, execution-timeout finalizations,
-        administrative kicks, per-backend autoscaler state. Each backend already authored
+        per-backend autoscaler state. Each backend already authored
         its own ``effects`` during reconcile; the controller just commits them uniformly.
         A no-op tick opens no transaction.
 
@@ -1385,13 +1446,7 @@ class Controller:
         )
         has_recon = any(not result.effects.is_empty for result in recon_results.values())
         if not (
-            has_sched
-            or has_recon
-            or timeout_decisions
-            or pending_kicks
-            or states
-            or federation_promotions
-            or expired_queued_federation
+            has_sched or has_recon or timeout_decisions or states or federation_promotions or expired_queued_federation
         ):
             return []
 
@@ -1419,13 +1474,6 @@ class Controller:
                     commit_effects(cur, result.effects)
             if timeout_decisions:
                 finalize(cur, timeout_decisions, now=now)
-            if pending_kicks:
-                # Resolve after the schedule/reconcile writes so the attempt
-                # re-check sees this tick's reassignments.
-                kick_decisions = self._resolve_pending_kicks(cur, pending_kicks)
-                if kick_decisions:
-                    finalize(cur, kick_decisions, now=now)
-                    logger.info("Admin kick: finalized %d task attempt(s)", len(kick_decisions))
             for state in states:
                 persist_autoscaler_state(cur, state)
         return confirmed
@@ -1713,36 +1761,6 @@ class Controller:
             if group:
                 self._backends[backend_id].teardown(group, reason=reason)
 
-    def _drain_pending_kicks(self) -> list[PendingKick]:
-        """Take the queued administrative kicks for this tick's commit."""
-        with self._pending_kicks_lock:
-            if not self._pending_kicks:
-                return []
-            drained = self._pending_kicks
-            self._pending_kicks = []
-        return drained
-
-    def _resolve_pending_kicks(self, cur: Tx, pending_kicks: list[PendingKick]) -> list[TerminalDecision]:
-        """Turn queued kicks into terminal decisions, dropping superseded attempts.
-
-        A kick targeting a specific attempt is dropped if that attempt is no longer
-        current (the task retried in the meantime); a kick with no attempt id takes
-        whatever attempt is current. Reads ``cur`` to see this tick's earlier writes.
-        """
-        decisions: list[TerminalDecision] = []
-        for kick in pending_kicks:
-            if kick.attempt_id is not None:
-                detail = reads.get_task_detail(cur, kick.task_id)
-                if detail is None or detail.current_attempt_id != kick.attempt_id:
-                    logger.info(
-                        "Dropping kick for %s: attempt %d is no longer current",
-                        kick.task_id.to_wire(),
-                        kick.attempt_id,
-                    )
-                    continue
-            decisions.append(TerminalDecision(kind=kick.kind, task_id=kick.task_id, reason=kick.reason))
-        return decisions
-
     def begin_checkpoint(self) -> tuple[str, CheckpointResult]:
         """Write a consistent SQLite checkpoint copy.
 
@@ -1833,8 +1851,20 @@ class Controller:
         self,
         request: controller_pb2.Controller.KickTasksRequest,
     ) -> controller_pb2.Controller.KickTasksResponse:
-        """Queue validated administrative state overrides for Tasks."""
+        """Force selected Task attempts to a supported terminal state."""
         return self._service.kick_tasks(request, None)
+
+    def update_resource(self, request: resource_pb2.UpdateResourceRequest) -> resource_pb2.Operation:
+        """Accept a registered resource mutation."""
+        return self._resource_service.update_resource(request, None)
+
+    def get_resource(self, request: resource_pb2.GetResourceRequest) -> resource_pb2.GetResourceResponse:
+        """Read a registered resource."""
+        return self._resource_service.get_resource(request, None)
+
+    def get_resource_service_info(self) -> resource_pb2.GetServiceInfoResponse:
+        """Return the installed generic resource capabilities."""
+        return self._resource_service.get_service_info(resource_pb2.GetServiceInfoRequest(), None)
 
     def register_endpoint(
         self,

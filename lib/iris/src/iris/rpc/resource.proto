@@ -1,0 +1,88 @@
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+
+edition = "2023";
+
+package iris.resource;
+
+import "google/protobuf/any.proto";
+import "time.proto";
+
+option features.field_presence = EXPLICIT;
+
+enum OperationPhase {
+  OPERATION_PHASE_UNSPECIFIED = 0;
+  OPERATION_PHASE_ACCEPTED = 1;
+  OPERATION_PHASE_VERIFYING = 2;
+  OPERATION_PHASE_VERIFIED = 3;
+  OPERATION_PHASE_FAILED = 4;
+}
+
+message ResourceRef {
+  string authority_cluster_id = 1;
+  string type = 2;
+  string id = 3;
+  // Absent selects the current incarnation. Present fences one exact incarnation.
+  string uid = 4;
+}
+
+message Resource {
+  ResourceRef ref = 1;
+  google.protobuf.Any body = 2;
+}
+
+message MutationMetadata {
+  string request_id = 1;
+  string reason = 2;
+}
+
+message OperationError {
+  string code = 1;
+  string message = 2;
+}
+
+message Operation {
+  ResourceRef ref = 1;
+  OperationPhase phase = 2;
+  string verb = 3;
+  ResourceRef requested_ref = 4;
+  ResourceRef resolved_ref = 5;
+  repeated ResourceRef affected = 6;
+  OperationError error = 7;
+  iris.time.Timestamp accepted_at = 8;
+  iris.time.Timestamp applied_at = 9;
+  iris.time.Timestamp completed_at = 10;
+}
+
+message GetResourceRequest {
+  ResourceRef ref = 1;
+}
+
+message GetResourceResponse {
+  Resource resource = 1;
+}
+
+message UpdateResourceRequest {
+  MutationMetadata mutation = 1;
+  ResourceRef ref = 2;
+  google.protobuf.Any update = 3;
+}
+
+message ResourceCapability {
+  string type = 1;
+  repeated string verbs = 2;
+  repeated string update_type_urls = 3;
+}
+
+message GetServiceInfoRequest {}
+
+message GetServiceInfoResponse {
+  string protocol_version = 1;
+  repeated ResourceCapability resources = 2;
+}
+
+service ResourceService {
+  rpc GetResource(GetResourceRequest) returns (GetResourceResponse);
+  rpc UpdateResource(UpdateResourceRequest) returns (Operation);
+  rpc GetServiceInfo(GetServiceInfoRequest) returns (GetServiceInfoResponse);
+}

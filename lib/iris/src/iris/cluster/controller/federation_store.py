@@ -30,7 +30,6 @@ from iris.cluster.controller.projections.endpoints import EndpointRow, Endpoints
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.federation.availability import QueuedCandidate
 from iris.cluster.federation.store import (
-    CancelTarget,
     HandoffAdmission,
     HandoffSpec,
     HandoffState,
@@ -192,48 +191,6 @@ class ControllerFederationStore:
                     )
                 )
         return pending
-
-    # -- cancel --------------------------------------------------------------
-
-    def bump_cancel_intent(self, local_job_id: JobName) -> CancelTarget | None:
-        """Bump a SENT handle's cancel intent and return the peer to cancel.
-
-        Returns ``None`` when ``local_job_id`` is not a SENT handle. A handle the
-        peer never received (still ``PENDING_HANDOFF``) is terminated locally here —
-        the re-drive now skips it, so no sync will ever mirror it terminal. A
-        delivered handle keeps its synced state: the routed cancel drives it terminal
-        on the peer and the next sync reflects it.
-        """
-        with self._db.transaction() as cur:
-            handle = reads.federated_handle(cur, local_job_id)
-            if handle is None:
-                return None
-            writes.bump_cancel_intent(cur, local_job_id)
-            # A handle the peer has not yet accepted — QUEUED_HANDOFF (before the tick
-            # promotes it) or PENDING_HANDOFF (before the peer acks) — owns no peer-side
-            # job, so it is terminated locally; the bumped intent makes the promotion CAS
-            # / re-drive skip it, so no sync ever mirrors it terminal.
-            not_yet_delivered = (int(HandoffState.QUEUED_HANDOFF), int(HandoffState.PENDING_HANDOFF))
-            if handle.handoff_state in not_yet_delivered:
-                writes.mark_federated_job_killed(
-                    cur, local_job_id, now_ms=Timestamp.now().epoch_ms(), error="Cancelled before handoff"
-                )
-            # A QUEUED handle has no peer yet (peer_id may be ""), so there is nothing to
-            # route a TerminateJob to. A PENDING or delivered handle names its peer, so a
-            # routed cancel drives it terminal on the peer as a best effort against a race.
-            if handle.handoff_state == int(HandoffState.QUEUED_HANDOFF):
-                return None
-            return CancelTarget(local_job_id=local_job_id, peer_id=handle.peer_id)
-
-    def pending_cancels(self) -> list[CancelTarget]:
-        with self._db.read_snapshot() as tx:
-            return [CancelTarget(local_job_id=h.job_id, peer_id=h.peer_id) for h in reads.pending_cancel_handles(tx)]
-
-    def mark_cancel_satisfied(self, local_job_id: JobName, *, now_ms: int) -> None:
-        with self._db.transaction() as cur:
-            writes.mark_federated_job_killed(
-                cur, local_job_id, now_ms=now_ms, error="Cancelled (peer reported the job gone)"
-            )
 
     # -- sync ----------------------------------------------------------------
 

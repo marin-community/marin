@@ -9,20 +9,23 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.server_auth import VerifiedIdentity, identity_scope
 
-from iris.cluster.bundle import BundleStore
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.cluster.controller.auth import ControllerAuth
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
-from iris.cluster.types import JobName, WellKnownAttribute
+from iris.cluster.types import WellKnownAttribute
 from iris.managed_thread import get_thread_container
-from iris.rpc import controller_pb2, job_pb2
-from iris.testing.controller import MockController, make_controller_state, make_direct_job_request
+from iris.rpc import controller_pb2, job_pb2, resource_pb2
+from iris.testing.controller import (
+    MockController,
+    make_controller_service,
+    make_controller_state,
+    make_direct_job_request,
+)
 from iris.testing.controller_state import ControllerTestState
 
 PEER_IDENTITY = VerifiedIdentity(user_id="parent-cluster", role="admin")
@@ -55,20 +58,29 @@ class InProcessPeerConnection:
         with identity_scope(PEER_IDENTITY):
             return self._service.federation_sync(request, None)
 
-    def terminate_job(self, job_id: JobName) -> None:
+    def get_service_info(self) -> resource_pb2.GetServiceInfoResponse:
         with identity_scope(PEER_IDENTITY):
-            self._service.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()), None)
+            return self._resource_service().get_service_info(resource_pb2.GetServiceInfoRequest(), WIRE_CONTEXT)
+
+    def update_resource(self, request: resource_pb2.UpdateResourceRequest) -> resource_pb2.Operation:
+        with identity_scope(PEER_IDENTITY):
+            return self._resource_service().update_resource(request, WIRE_CONTEXT)
+
+    def get_resource(self, request: resource_pb2.GetResourceRequest) -> resource_pb2.GetResourceResponse:
+        with identity_scope(PEER_IDENTITY):
+            return self._resource_service().get_resource(request, WIRE_CONTEXT)
+
+    def _resource_service(self):
+        assert self._service._resource_service is not None
+        return self._service._resource_service
 
 
 class UnreachablePeerConnection(InProcessPeerConnection):
-    """Peer connection whose launch fails and whose terminate reports not found."""
+    """Peer connection whose launch fails."""
 
     def launch_job(self, request):
         self.launch_calls += 1
         raise ConnectionError("peer unreachable")
-
-    def terminate_job(self, job_id: JobName) -> None:
-        raise ConnectError(Code.NOT_FOUND, "no such job")
 
 
 class FullGpuPeerConnection(InProcessPeerConnection):
@@ -117,23 +129,21 @@ def make_service(
     state = stack.enter_context(make_controller_state())
     mock = MockController()
     mock.provider.health = state._health
-    service = ControllerServiceImpl(
-        controller=mock,
-        bundle_store=BundleStore(storage_dir=str(tmp_path / subdir / "bundles")),
-        log_client=log_client,
-        db=state._db,
-        endpoint_service=EndpointServiceImpl(db=state._db),
-        auth=auth,
-    )
+    service = make_controller_service(state, log_client, mock, tmp_path / subdir, auth=auth, cluster_id=subdir)
     return service, state
 
 
 def attach_federation(
     parent_service: ControllerServiceImpl,
     connection: InProcessPeerConnection,
+    *,
+    resource_api: bool = True,
 ) -> FederationManager:
     """Attach a one-peer federation manager to ``parent_service``."""
-    peer = FederationPeer("cw", PeerConfig(controller_address="http://peer:10000"), connection)
+    if resource_api:
+        peer = FederationPeer("cw", PeerConfig(controller_address="http://peer:10000"), connection, connection)
+    else:
+        peer = FederationPeer("cw", PeerConfig(controller_address="http://peer:10000"), connection)
     peer.probe()
     store = ControllerFederationStore(parent_service._db)
     manager = FederationManager(
@@ -147,6 +157,12 @@ def attach_federation(
     assert isinstance(controller, MockController)
     controller.federation = manager
     return manager
+
+
+def progress_resource_operations(service: ControllerServiceImpl) -> None:
+    """Run the operation phase that a production controller executes after a tick."""
+    assert service._workload_actions is not None
+    service._workload_actions.progress_remote()
 
 
 def cluster_pinned_request(name: str, peer: str = "cw", replicas: int = 1) -> controller_pb2.Controller.LaunchJobRequest:

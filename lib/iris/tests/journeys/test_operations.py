@@ -6,7 +6,7 @@
 from iris.rpc import job_pb2
 
 
-def test_kick_preemption_is_buffered_then_retries_the_exact_attempt(journey):
+def test_kick_preemption_retries_the_selected_attempt(journey):
     job = journey.submit("operator-preempt", preemption_retries=1)
     journey.settle()
     current_attempt = journey.task(job[0]).current_attempt_id
@@ -14,8 +14,6 @@ def test_kick_preemption_is_buffered_then_retries_the_exact_attempt(journey):
     result = journey.kick(job[0], attempt_id=current_attempt)
 
     assert result.queued
-    assert journey.task(job[0]).state == job_pb2.TASK_STATE_RUNNING
-
     journey.settle()
 
     detail = journey.task(job[0])
@@ -50,7 +48,6 @@ def test_kick_for_a_superseded_attempt_cannot_change_its_replacement(journey):
     journey.settle()
 
     assert not result.queued
-    assert result.detail == "attempt 0 is not current (current is 1)"
     assert journey.task(job[0]).state == job_pb2.TASK_STATE_RUNNING
     assert [attempt.state for attempt in journey.task(job[0]).attempts] == [
         job_pb2.TASK_STATE_PREEMPTED,

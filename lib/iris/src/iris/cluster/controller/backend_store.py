@@ -85,6 +85,10 @@ class BackendWorkerStore(TransitionReader, Protocol):
         """The worker's address, or ``None`` if it has none."""
         ...
 
+    def existing_worker_ids(self, worker_ids: set[WorkerId]) -> set[WorkerId]:
+        """The supplied worker IDs that still have controller rows."""
+        ...
+
     def reap_workers(self, worker_ids: list[WorkerId], *, reason: str) -> list[WorkerId]:
         """Fail ``worker_ids``, terminate their slices and healthy siblings, and forget
         them. Returns every worker removed (the failed workers plus reaped siblings)."""
@@ -193,6 +197,10 @@ class DbBackendWorkerStore:
     def worker_address(self, worker_id: WorkerId) -> str | None:
         with self.db.control_read_snapshot() as snap:
             return reads.bulk_get_worker_addresses(snap, [worker_id]).get(worker_id)
+
+    def existing_worker_ids(self, worker_ids: set[WorkerId]) -> set[WorkerId]:
+        with self.db.control_read_snapshot() as snap:
+            return {WorkerId(worker_id) for worker_id in reads.filter_existing_workers(snap, worker_ids)}
 
     def reap_workers(self, worker_ids: list[WorkerId], *, reason: str) -> list[WorkerId]:
         """Fail ``worker_ids``, terminate their slices and healthy siblings, and forget

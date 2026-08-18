@@ -1,13 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Federated handoff, FederationSync, and routed cancel end-to-end.
+"""Federated handoff, status synchronization, and cancellation.
 
 Wires two in-process controllers — a parent and a peer — through a delegating
 ``PeerConnection`` and drives the whole federated life cycle: a ``cluster``-pinned
 job is handed off (no local tasks, a ``federated_jobs`` handle in ``HANDED_OFF``),
 the peer materializes and owns it, one sync mirrors the peer's state back onto the
-parent's handle, a routed cancel tombstones it, and the next sync drops the handle.
+parent's handle, an exact resource update cancels it, and the next sync drops the handle.
 Also covers handoff admission/idempotency, the incremental-tombstone path, and the
 full-resync set-replacement path.
 """
@@ -71,6 +71,7 @@ from iris.testing.federation import (
 from iris.testing.federation import (
     make_service as _make_service,
 )
+from iris.testing.federation import progress_resource_operations
 from iris.testing.transitions import commit_dispatch_updates
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from rigging.timing import Timestamp
@@ -714,9 +715,10 @@ def test_cancel_routes_to_peer_and_tombstone_drops_the_handle(tmp_path, log_clie
         parent_job_id = JobName.from_wire(response.job_id)
         promote_queued_federation(manager, parent_state)
 
-        # Cancel the parent handle: it routes TerminateJob to the peer, which kills
-        # the job there (the same, cluster-invariant id).
+        # The compatibility RPC creates an exact operation that kills the peer's
+        # copy of the same cluster-invariant Job.
         parent_service.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=parent_job_id.to_wire()), None)
+        progress_resource_operations(parent_service)
         assert query_job(peer_state, parent_job_id).state == job_pb2.JOB_STATE_KILLED
 
         # The peer prunes the terminal job (writing a tombstone); the next sync
@@ -727,6 +729,27 @@ def test_cancel_routes_to_peer_and_tombstone_drops_the_handle(tmp_path, log_clie
 
         assert _handle(parent_state, parent_job_id) is None
         assert query_job(parent_state, parent_job_id) is None
+
+
+def test_cancel_rejects_before_acceptance_when_peer_lacks_exact_updates(tmp_path, log_client):
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(
+            parent_service,
+            _InProcessPeerConnection(peer_service),
+            resource_api=False,
+        )
+
+        response = parent_service.launch_job(_cluster_pinned_request("legacy-peer"), None)
+        job_id = JobName.from_wire(response.job_id)
+        promote_queued_federation(manager, parent_state)
+
+        with pytest.raises(ConnectError) as raised:
+            parent_service.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()), None)
+
+        assert raised.value.code == Code.FAILED_PRECONDITION
+        assert query_job(peer_state, job_id).state == job_pb2.JOB_STATE_PENDING
 
 
 def test_full_resync_drops_a_handle_absent_from_the_peers_active_set(tmp_path, log_client):
@@ -1068,14 +1091,7 @@ def test_new_incarnation_of_a_live_job_is_a_collision(tmp_path, log_client):
 
 
 def test_routed_cancel_of_an_already_terminal_job_converges_the_parent(tmp_path, log_client):
-    """A routed cancel for a job already terminal on the peer changes nothing
-    there, but must still converge the parent: the peer re-reports the job's
-    state, the mirror terminalizes, and the cancel re-drive stops.
-
-    Regression: without the re-report, a parent whose cursor already consumed
-    the job's terminal deltas re-drives TerminateJob every sync tick forever
-    while its mirror sits in PENDING.
-    """
+    """Cancelling a terminal peer Job re-reports its state to a stale parent."""
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
@@ -1095,14 +1111,12 @@ def test_routed_cancel_of_an_already_terminal_job_converges_the_parent(tmp_path,
         manager.sync_once()
         assert query_job(parent_state, job_id).state == job_pb2.JOB_STATE_PENDING
 
-        # The user's stop: the routed cancel is a no-op on the terminal peer job,
-        # but forces a re-report that the next sync mirrors — the job terminalizes
-        # and drops out of the cancel re-drive queue.
+        # The peer's exact update is already satisfied. It still writes a changelog
+        # event so the next sync repairs the parent's stale mirror.
         parent_service.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()), None)
+        progress_resource_operations(parent_service)
         manager.sync_once()
         assert query_job(parent_state, job_id).state == job_pb2.JOB_STATE_FAILED
-        store = ControllerFederationStore(parent_state._db)
-        assert store.pending_cancels() == []
 
 
 def test_recreation_after_a_tombstone_in_one_window_reports_state_not_tombstone(tmp_path, log_client):

@@ -238,6 +238,7 @@ class LocalCluster:
             auth_verifier=auth.verifier,
             auth_provider=auth.provider,
             auth=auth,
+            cluster_id=self._config.name,
             autoscaler_evaluation_interval=self._config.defaults.autoscaler.evaluation_interval,
             # Fast worker-failure detection for local/e2e runs: reaped ~10s
             # after the last successful reconcile, vs the ~50s production grace.

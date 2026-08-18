@@ -923,6 +923,7 @@ class Worker:
                         worker_pb2.Worker.AttemptObservation(
                             attempt_uid=desired.attempt_uid,
                             state=job_pb2.TASK_STATE_MISSING,
+                            runtime_released=True,
                         )
                     )
 
@@ -1007,6 +1008,7 @@ class Worker:
             exit_code=task.exit_code or 0,
             error=task.error or "",
             container_id=task.platform_container_id or "",
+            runtime_released=task.runtime_released,
         )
         if task.status in self._TERMINAL_STATES and task.finished_at is not None:
             obs.finished_at.CopyFrom(timestamp_to_proto(task.finished_at))

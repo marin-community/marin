@@ -69,9 +69,11 @@ class ScriptedTaskBackend:
         self.backend_id = backend_id
         self._queued: dict[str, deque[ScriptedObservation]] = defaultdict(deque)
         self._desired: set[tuple[str, int]] = set()
+        self._lost_attempt_uids: set[str] = set()
         self.events: list[BackendEvent] = []
         self.calls: list[str] = []
         self._reconcile_failures = 0
+        self._reconcile_barrier: tuple[threading.Event, threading.Event] | None = None
         self.closed = False
         self.advertised: dict[str, set[str]] = {"region": {"us-central1"}}
 
@@ -93,6 +95,14 @@ class ScriptedTaskBackend:
 
     def fail_reconcile(self, *, times: int) -> None:
         self._reconcile_failures += times
+
+    def pause_next_reconcile(self, *, started: threading.Event, release: threading.Event) -> None:
+        """Pause after the next reconcile result is authored, before returning it."""
+        self._reconcile_barrier = (started, release)
+
+    def lose_runtime(self, attempt_uid: str) -> None:
+        """Report that an exact runtime disappeared before release was observed."""
+        self._lost_attempt_uids.add(attempt_uid)
 
     def advertised_attributes(self) -> dict[str, set[str]]:
         return self.advertised
@@ -144,10 +154,27 @@ class ScriptedTaskBackend:
                 updates.append(self._task_update(task_id, observed_attempt_id, queued))
 
         self._desired = desired
-        if not updates:
-            return ReconcileResult()
-        effects = apply_dispatch_updates(self._transition_reader, updates, now=Timestamp.now())
-        return ReconcileResult(effects=effects)
+        released = frozenset(
+            target.attempt_uid
+            for target in request.release_targets
+            if (target.task_id, target.attempt_id) not in desired and target.attempt_uid not in self._lost_attempt_uids
+        )
+        lost = frozenset(
+            target.attempt_uid for target in request.release_targets if target.attempt_uid in self._lost_attempt_uids
+        )
+        self._lost_attempt_uids.difference_update(lost)
+        result = ReconcileResult(released_attempt_uids=released, lost_attempt_uids=lost)
+        if updates:
+            effects = apply_dispatch_updates(self._transition_reader, updates, now=Timestamp.now())
+            result = ReconcileResult(effects=effects, released_attempt_uids=released, lost_attempt_uids=lost)
+        barrier = self._reconcile_barrier
+        self._reconcile_barrier = None
+        if barrier is not None:
+            started, release = barrier
+            started.set()
+            if not release.wait(timeout=5):
+                raise TimeoutError("timed out waiting to release scripted reconcile")
+        return result
 
     def _pop_observation(self, task_id: str) -> ScriptedObservation | None:
         queue = self._queued.get(task_id)

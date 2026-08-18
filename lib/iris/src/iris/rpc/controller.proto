@@ -919,8 +919,8 @@ service ControllerService {
   // Bulk delta-sync of handed-off jobs, called by a federation parent once per
   // tick against each of its peers. The peer reports every job this requester
   // handed off that changed since the cursor (or the full active set when the
-  // cursor is stale). Handoff itself reuses LaunchJob; a routed cancel reuses
-  // TerminateJob.
+  // cursor is stale). Handoff itself reuses LaunchJob; workload mutations use
+  // ResourceService.
   rpc FederationSync(Controller.FederationSyncRequest) returns (Controller.FederationSyncResponse);
 }
 

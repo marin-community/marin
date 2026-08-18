@@ -36,6 +36,7 @@ from iris.cluster.controller.backend import (
     ProviderError,
     ReconcileRequest,
     ReconcileResult,
+    RuntimeReleaseTarget,
     ScheduleInput,
     ScheduleRequest,
     ScheduleResult,
@@ -54,7 +55,7 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEventKind,
     WorkerHealthTracker,
 )
-from iris.cluster.types import WellKnownAttribute, WorkerId
+from iris.cluster.types import TERMINAL_TASK_STATES, WellKnownAttribute, WorkerId
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.worker_connect import WorkerServiceClient
@@ -118,6 +119,24 @@ class FleetObservation:
 
     worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]]
     transport_events: list[WorkerHealthEvent]
+    lost_attempt_uids: frozenset[str] = frozenset()
+
+
+def _released_attempt_uids(observation: FleetObservation, expected_uids: frozenset[str]) -> frozenset[str]:
+    released: set[str] = set()
+    for plan, result in observation.worker_results:
+        if result.error is not None:
+            continue
+        if result.responder_worker_id is not None and result.responder_worker_id != str(plan.worker_id):
+            continue
+        released.update(
+            item.attempt_uid
+            for item in result.observations
+            if item.attempt_uid in expected_uids
+            and item.runtime_released
+            and (item.state in TERMINAL_TASK_STATES or item.state == job_pb2.TASK_STATE_MISSING)
+        )
+    return frozenset(released)
 
 
 class WorkerStubFactory(Protocol):
@@ -326,7 +345,7 @@ class RpcTaskBackend:
             zone_capabilities,
         )
 
-    def _observe_fleet(self) -> "FleetObservation":
+    def _observe_fleet(self, release_targets: tuple[RuntimeReleaseTarget, ...] = ()) -> "FleetObservation":
         """Source this backend's placement, fan the Reconcile RPC out, classify liveness.
 
         The reconcile snapshot (worker addresses + reconcile rows + job specs) comes
@@ -348,6 +367,27 @@ class RpcTaskBackend:
         assert self._store is not None, "RpcTaskBackend.reconcile called before worker store attached"
         snapshot = self._store.reconcile_snapshot()
         plans = plans_from_snapshot(snapshot)
+        plans_by_worker = {plan.worker_id: plan for plan in plans}
+        targeted_workers = {target.worker_id for target in release_targets if target.worker_id is not None}
+        existing_workers = self._store.existing_worker_ids(targeted_workers)
+        lost_attempt_uids = frozenset(
+            target.attempt_uid
+            for target in release_targets
+            if target.worker_id is not None and target.worker_id not in existing_workers
+        )
+        for target in release_targets:
+            worker_id = target.worker_id
+            if worker_id is None:
+                continue
+            plan = plans_by_worker.get(worker_id)
+            if plan is None or any(desired.attempt_uid == target.attempt_uid for desired in plan.request.desired):
+                continue
+            plan.request.desired.append(
+                worker_pb2.Worker.DesiredAttempt(
+                    attempt_uid=target.attempt_uid,
+                    stop=worker_pb2.Worker.STOP_REASON_JOB_TERMINATED,
+                )
+            )
 
         async def _one(sem: asyncio.Semaphore, plan: WorkerReconcilePlan) -> WorkerReconcileResult:
             return await self._reconcile_one(sem, plan, snapshot.worker_addresses[plan.worker_id])
@@ -382,7 +422,11 @@ class RpcTaskBackend:
                 transport_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
             else:
                 transport_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
-        return FleetObservation(worker_results=worker_results, transport_events=transport_events)
+        return FleetObservation(
+            worker_results=worker_results,
+            transport_events=transport_events,
+            lost_attempt_uids=lost_attempt_uids,
+        )
 
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
         """Observe the fleet, resolve its observations into effects, fold liveness.
@@ -395,7 +439,7 @@ class RpcTaskBackend:
         for :meth:`run_teardown`; only the committable ``effects`` are returned.
         """
         assert self._store is not None, "RpcTaskBackend.reconcile called before worker store attached"
-        observation = self._observe_fleet()
+        observation = self._observe_fleet(request.release_targets)
 
         # Fold transport events first, then the kernel's BUILD_FAILED; both go
         # through the SAME shared tracker reached via the worker store, so the
@@ -406,7 +450,12 @@ class RpcTaskBackend:
             WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed
         ]
         self._pending_dead.extend(self.health.apply(events, now_ms=now.epoch_ms()))
-        return ReconcileResult(effects=effects)
+        expected_uids = frozenset(target.attempt_uid for target in request.release_targets)
+        return ReconcileResult(
+            effects=effects,
+            released_attempt_uids=_released_attempt_uids(observation, expected_uids),
+            lost_attempt_uids=observation.lost_attempt_uids,
+        )
 
     def run_teardown(self) -> None:
         """Tear down the workers this tick's reconcile fold reaped.

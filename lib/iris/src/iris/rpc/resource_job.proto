@@ -1,0 +1,16 @@
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+
+edition = "2023";
+
+package iris.resource.job;
+
+option features.field_presence = EXPLICIT;
+
+message CancelJob {}
+
+message JobUpdate {
+  oneof intent {
+    CancelJob cancel = 1;
+  }
+}

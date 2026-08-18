@@ -40,6 +40,7 @@ from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
 from iris.testing.controller import (
+    make_controller_service,
     make_job_request,
     make_test_entrypoint,
     make_worker_metadata,
@@ -853,13 +854,12 @@ def test_terminate_job_allowed_by_owner(service):
 
 def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, log_client):
     """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
-    auth_service = ControllerServiceImpl(
-        controller=mock_controller,
-        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
-        log_client=log_client,
-        db=state._db,
+    auth_service = make_controller_service(
+        state,
+        log_client,
+        mock_controller,
+        tmp_path,
         auth=ControllerAuth(provider="static"),
-        endpoint_service=EndpointServiceImpl(db=state._db),
     )
 
     auth_service.launch_job(make_job_request("/alice/my-job"), None)

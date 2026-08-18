@@ -65,7 +65,8 @@ _TPU_STDERR_TAIL_LINES = 200
 # sleep, runtime daemon hang) from blocking the monitor indefinitely.
 _KILL_EXIT_WAIT_TIMEOUT = Duration.from_seconds(30.0)
 
-# States from which a kill is meaningful. Killing a terminal attempt is a no-op.
+# States from which a kill changes the Task state. A terminal attempt whose
+# runtime is still live is force-stopped by the idempotent cleanup path below.
 _KILLABLE_STATES = (
     job_pb2.TASK_STATE_RUNNING,
     job_pb2.TASK_STATE_BUILDING,
@@ -389,6 +390,16 @@ class TaskAttempt:
         return None
 
     @property
+    def runtime_released(self) -> bool:
+        """Whether the execution runtime is confirmed stopped or absent."""
+        if self._container_handle is None:
+            return True
+        try:
+            return self._container_handle.status().phase == ContainerPhase.STOPPED
+        except RuntimeError:
+            return False
+
+    @property
     def platform_container_id(self) -> str | None:
         """Return the platform container ID from the handle, if available.
 
@@ -408,10 +419,19 @@ class TaskAttempt:
         """Stop this attempt, escalating to a force-kill on timeout.
 
         Issues SIGTERM, waits up to ``term_timeout_ms`` for the container to
-        exit, then force-kills if it is still running. Idempotent: returns
-        ``False`` without acting when the attempt is already terminal.
+        exit, then force-kills if it is still running. A terminal attempt whose
+        runtime remains live is force-stopped again.
+
+        Returns:
+            Whether a live runtime or in-progress launch was asked to stop.
         """
         if self.status not in _KILLABLE_STATES:
+            if is_task_finished(self.status) and not self.runtime_released:
+                try:
+                    self.stop(force=True)
+                except RuntimeError as error:
+                    logger.warning("Failed to re-stop terminal attempt %s: %s", self.task_id, error)
+                return True
             return False
         # Signal the execution thread immediately, even with no container yet:
         # this bails an in-progress BUILDING-phase bundle download.

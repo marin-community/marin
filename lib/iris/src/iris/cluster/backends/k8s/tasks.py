@@ -1742,6 +1742,11 @@ class ClusterState:
             self._workloads = new_workloads
             self._node_pools = list(node_pools)
 
+    def active_pod_names(self) -> frozenset[str]:
+        """Return pod names from the latest completed active-pod scan."""
+        with self._lock:
+            return frozenset(pod.get("metadata", {}).get("name", "") for pod in self._pods)
+
     def gpu_capacity(self, priority_class_names: dict[int, str]) -> DeviceCapacity:
         """Approximate free vs. total GPUs across the cluster, split by holder priority.
 
@@ -2223,6 +2228,7 @@ class K8sTaskProvider:
     _task_event_log: TaskEventLog | None = field(default=None, init=False, repr=False)
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
     _last_cluster_scan: float = field(default=0.0, init=False, repr=False)
+    _scan_generation: int = field(default=0, init=False, repr=False)
     _last_preempt_time: float = field(default=0.0, init=False, repr=False)
     # Terminal-resource GC runs on its own thread. _gc_lock guards the deferred-cleanup
     # hash set, the one piece of state it shares with the control loop.
@@ -2297,9 +2303,26 @@ class K8sTaskProvider:
         A cluster backend tracks no Iris workers, so it folds no liveness.
         """
         assert self.transition_reader is not None, "K8sTaskProvider.reconcile called before transition reader attached"
+        scan_generation = self._scan_generation
         updates = self.sync(request)
         effects = apply_dispatch_updates(self.transition_reader, updates, now=Timestamp.now())
-        return ReconcileResult(effects=effects)
+        released = self._released_attempt_uids(request) if self._scan_generation != scan_generation else frozenset()
+        return ReconcileResult(effects=effects, released_attempt_uids=released)
+
+    def _released_attempt_uids(self, request: ReconcileRequest) -> frozenset[str]:
+        active_pod_names = self._cluster_state.active_pod_names()
+        released: set[str] = set()
+        for target in request.release_targets:
+            task_key = (target.task_id, target.attempt_id)
+            candidates = _pod_name_candidates(
+                JobName.from_wire(target.task_id),
+                target.attempt_id,
+                target.attempt_uid,
+                allow_legacy=task_key not in self._dispatched_attempts,
+            )
+            if active_pod_names.isdisjoint(candidates):
+                released.add(target.attempt_uid)
+        return frozenset(released)
 
     def run_teardown(self) -> None:
         """No-op: a cluster backend tracks no Iris workers to reap."""
@@ -2418,6 +2441,7 @@ class K8sTaskProvider:
 
         node_pools = _fetch_node_pools(self.kubectl, self.pods.managed_label)
         self._cluster_state.update(managed_pods, nodes, workloads, node_pools)
+        self._scan_generation += 1
 
         self._start_terminal_gc()
 

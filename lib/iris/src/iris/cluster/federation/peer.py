@@ -1,14 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""One connection per federation peer, plus its capability-heartbeat state.
+"""One controller connection per federation peer and its heartbeat state.
 
 :class:`FederationPeer` holds one connection per peer (keyed by peer id) and caches
-the backends that peer last advertised. The connection speaks the generated controller
-stub directly (not the end-user ``RemoteClusterClient``): federation drives a peer only
-with the raw RPCs — ``LaunchJob`` (handoff), ``TerminateJob`` (routed cancel),
-``FederationSync``, and ``ListBackends`` (heartbeat). It presents the credentials
-resolved from the peer's cluster manifest via ``credentials_for``.
+the backends and resource updates that peer last advertised. The connection speaks the
+generated controller and resource stubs directly rather than the end-user client. It
+presents credentials resolved from the peer's cluster manifest via ``credentials_for``.
 """
 
 import logging
@@ -17,6 +15,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Protocol
 
+from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import InterceptorSync
 from rigging.auth import TokenProvider
@@ -26,9 +25,9 @@ from rigging.timing import Timestamp
 
 from iris.cluster.backends.rpc.backend import EXEC_IN_CONTAINER_MAX_TIMEOUT
 from iris.cluster.config import PeerConfig
-from iris.cluster.types import JobName
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, resource_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.resource_connect import ResourceServiceClientSync
 
 # A handoff carries a full request and a peer's cold boot can outrun the default
 # RPC deadline, so deliver LaunchJob with this floor to avoid spurious failures.
@@ -54,7 +53,7 @@ class PeerConnection(Protocol):
     """The peer-controller surface federation drives.
 
     ``list_backends`` is the capability heartbeat; ``launch_job`` delivers a handoff;
-    ``terminate_job`` routes a cancel; ``federation_sync`` runs one delta-sync round;
+    ``federation_sync`` runs one delta-sync round;
     ``profile_task``/``exec_in_container``/``get_process_status`` proxy an on-demand RPC
     against a handed-off task, which the peer resolves to its own worker or pod.
     """
@@ -64,8 +63,6 @@ class PeerConnection(Protocol):
     def launch_job(
         self, request: controller_pb2.Controller.LaunchJobRequest
     ) -> controller_pb2.Controller.LaunchJobResponse: ...
-
-    def terminate_job(self, job_id: JobName) -> None: ...
 
     def federation_sync(
         self, request: controller_pb2.Controller.FederationSyncRequest
@@ -82,6 +79,30 @@ class PeerConnection(Protocol):
     def shutdown(self) -> None: ...
 
 
+class ResourcePeerConnection(Protocol):
+    """Generic resource methods used only after capability negotiation."""
+
+    def get_service_info(self) -> resource_pb2.GetServiceInfoResponse: ...
+
+    def update_resource(self, request: resource_pb2.UpdateResourceRequest) -> resource_pb2.Operation: ...
+
+    def get_resource(self, request: resource_pb2.GetResourceRequest) -> resource_pb2.GetResourceResponse: ...
+
+
+class _UnsupportedResourcePeerConnection:
+    def get_service_info(self) -> resource_pb2.GetServiceInfoResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "peer does not expose ResourceService")
+
+    def update_resource(self, request: resource_pb2.UpdateResourceRequest) -> resource_pb2.Operation:
+        raise ConnectError(Code.UNIMPLEMENTED, "peer does not expose ResourceService")
+
+    def get_resource(self, request: resource_pb2.GetResourceRequest) -> resource_pb2.GetResourceResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "peer does not expose ResourceService")
+
+
+_UNSUPPORTED_RESOURCE_PEER = _UnsupportedResourcePeerConnection()
+
+
 PeerConnectFactory = Callable[[PeerConfig], PeerConnection]
 
 
@@ -91,6 +112,7 @@ class PeerHeartbeat:
 
     reachable: bool = False
     backends: tuple[controller_pb2.Controller.BackendSummary, ...] = ()
+    resource_info: resource_pb2.GetServiceInfoResponse | None = None
     last_contact_ms: int = 0
 
 
@@ -115,7 +137,7 @@ class _PeerRpcConnection:
     """A :class:`PeerConnection` over the generated controller stub.
 
     One instance is shared across the heartbeat thread, the sync thread, and the
-    RPC-handler threads that deliver a handoff or a routed cancel. That is safe: the
+    RPC-handler threads that deliver a handoff or resource mutation. That is safe: the
     stub's transport is a connection-pooled ``reqwest`` client built for concurrent
     use, and each call builds its request independently — there is no per-call
     mutable client state to guard.
@@ -123,6 +145,7 @@ class _PeerRpcConnection:
 
     def __init__(self, controller_address: str, interceptors: Iterable[InterceptorSync]):
         self._client = ControllerServiceClientSync(address=controller_address, interceptors=interceptors)
+        self._resource_client = ResourceServiceClientSync(address=controller_address, interceptors=interceptors)
 
     def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
         response = self._client.list_backends(controller_pb2.Controller.ListBackendsRequest())
@@ -132,9 +155,6 @@ class _PeerRpcConnection:
         self, request: controller_pb2.Controller.LaunchJobRequest
     ) -> controller_pb2.Controller.LaunchJobResponse:
         return self._client.launch_job(request, timeout_ms=_LAUNCH_JOB_TIMEOUT_FLOOR_MS)
-
-    def terminate_job(self, job_id: JobName) -> None:
-        self._client.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()))
 
     def federation_sync(
         self, request: controller_pb2.Controller.FederationSyncRequest
@@ -161,8 +181,18 @@ class _PeerRpcConnection:
     def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse:
         return self._client.get_process_status(request, timeout_ms=_PROCESS_STATUS_PROXY_TIMEOUT_MS)
 
+    def get_service_info(self) -> resource_pb2.GetServiceInfoResponse:
+        return self._resource_client.get_service_info(resource_pb2.GetServiceInfoRequest())
+
+    def update_resource(self, request: resource_pb2.UpdateResourceRequest) -> resource_pb2.Operation:
+        return self._resource_client.update_resource(request)
+
+    def get_resource(self, request: resource_pb2.GetResourceRequest) -> resource_pb2.GetResourceResponse:
+        return self._resource_client.get_resource(request)
+
     def shutdown(self) -> None:
         self._client.close()
+        self._resource_client.close()
 
 
 def connect_to_peer(peer: PeerConfig, federation_token_provider: TokenProvider | None = None) -> PeerConnection:
@@ -181,19 +211,26 @@ class FederationPeer:
     via :meth:`heartbeat`.
     """
 
-    def __init__(self, peer_id: str, config: PeerConfig, connection: PeerConnection):
+    def __init__(
+        self,
+        peer_id: str,
+        config: PeerConfig,
+        connection: PeerConnection,
+        resource_connection: ResourcePeerConnection = _UNSUPPORTED_RESOURCE_PEER,
+    ):
         self.peer_id = peer_id
         self.controller_address = config.controller_address
         self._connection = connection
+        self._resource_connection = resource_connection
         self._lock = threading.Lock()
         self._heartbeat = PeerHeartbeat()
 
     def probe(self) -> None:
-        """Refresh the peer's advertised backends via one heartbeat RPC.
+        """Refresh the peer's backends and resource capabilities.
 
-        On success, records the peer's backends, marks it reachable, and stamps the
-        contact time. On failure, marks it unreachable and keeps the last-known
-        backends — staleness is signalled by ``reachable``.
+        A peer without ResourceService remains reachable with no resource
+        capabilities. Other failures mark the combined observation unreachable
+        while retaining its last-known values.
         """
         try:
             backends = self._connection.list_backends()
@@ -202,10 +239,25 @@ class FederationPeer:
             with self._lock:
                 self._heartbeat = replace(self._heartbeat, reachable=False)
             return
+        try:
+            resource_info = self._resource_connection.get_service_info()
+        except ConnectError as exc:
+            if exc.code != Code.UNIMPLEMENTED:
+                logger.warning("Resource capability heartbeat to peer %s failed: %s", self.peer_id, exc)
+                with self._lock:
+                    self._heartbeat = replace(self._heartbeat, reachable=False)
+                return
+            resource_info = None
+        except (ConnectionError, OSError) as exc:
+            logger.warning("Resource capability heartbeat to peer %s failed: %s", self.peer_id, exc)
+            with self._lock:
+                self._heartbeat = replace(self._heartbeat, reachable=False)
+            return
         with self._lock:
             self._heartbeat = PeerHeartbeat(
                 reachable=True,
                 backends=tuple(backends),
+                resource_info=resource_info,
                 last_contact_ms=Timestamp.now().epoch_ms(),
             )
 
@@ -214,19 +266,19 @@ class FederationPeer:
         with self._lock:
             return self._heartbeat
 
+    def supports_update(self, resource_type: str, update_type_url: str) -> bool:
+        with self._lock:
+            info = self._heartbeat.resource_info
+        return info is not None and any(
+            capability.type == resource_type and update_type_url in capability.update_type_urls
+            for capability in info.resources
+        )
+
     def launch_job(
         self, request: controller_pb2.Controller.LaunchJobRequest
     ) -> controller_pb2.Controller.LaunchJobResponse:
         """Deliver a handed-off job to the peer (reuses its ``LaunchJob``)."""
         return self._connection.launch_job(request)
-
-    def terminate_job(self, job_id: JobName) -> None:
-        """Route a cancel to the peer (reuses its ``TerminateJob``).
-
-        The ``job_id`` is the cluster-invariant local id: the peer runs and
-        reports the same id the parent submitted, so there is nothing to rebase.
-        """
-        self._connection.terminate_job(job_id)
 
     def federation_sync(
         self, request: controller_pb2.Controller.FederationSyncRequest
@@ -248,6 +300,12 @@ class FederationPeer:
         """Proxy a process-status RPC for a handed-off task to the peer (reuses its ``GetProcessStatus``)."""
         return self._connection.get_process_status(request)
 
+    def update_resource(self, request: resource_pb2.UpdateResourceRequest) -> resource_pb2.Operation:
+        return self._resource_connection.update_resource(request)
+
+    def get_resource(self, request: resource_pb2.GetResourceRequest) -> resource_pb2.GetResourceResponse:
+        return self._resource_connection.get_resource(request)
+
     def close(self) -> None:
         """Release the peer connection."""
         self._connection.shutdown()
@@ -267,4 +325,9 @@ def build_peers(
     stub); the default opens a real authenticated connection to the peer's stub.
     """
     factory = connect or (lambda config: connect_to_peer(config, federation_token_provider))
-    return [FederationPeer(peer_id, config, factory(config)) for peer_id, config in sorted(peers.items())]
+    result = []
+    for peer_id, config in sorted(peers.items()):
+        connection = factory(config)
+        resource_connection = connection if connect is None else _UNSUPPORTED_RESOURCE_PEER
+        result.append(FederationPeer(peer_id, config, connection, resource_connection))
+    return result
