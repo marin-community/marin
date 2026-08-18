@@ -15,16 +15,22 @@ on:
         description: "Registered consumer name; empty selects all"
         required: false
         type: string
-      bootstrap:
-        description: "Add the first generated manifest; cannot auto-merge"
+      manifest_mode:
+        description: "Manifest handling mode"
         required: true
-        default: false
-        type: boolean
-      auto_merge:
-        description: "Merge after the registered checks pass"
+        default: "validate"
+        type: choice
+        options:
+          - validate
+          - bootstrap
+      merge_mode:
+        description: "Publication mode; bootstrap requires publish"
         required: true
-        default: false
-        type: boolean
+        default: "publish"
+        type: choice
+        options:
+          - publish
+          - merge
 
 jobs:
   discover:
@@ -67,7 +73,7 @@ jobs:
       max-parallel: 3
       matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 55
     environment: external-runtime-updater
     concurrency:
       group: marin-style-update-${{ matrix.name }}
@@ -76,14 +82,13 @@ jobs:
       contents: read
     steps:
       - uses: actions/create-github-app-token@v3
-        id: app-token
+        id: checkout-token
         with:
           client-id: ${{ vars.DEPENDENCY_UPDATER_CLIENT_ID }}
           private-key: ${{ secrets.DEPENDENCY_UPDATER_PRIVATE_KEY }}
           owner: marin-community
           repositories: ${{ matrix.repository_name }}
-          permission-contents: write
-          permission-pull-requests: write
+          permission-contents: read
       - uses: actions/checkout@v5
         with:
           path: marin
@@ -92,33 +97,41 @@ jobs:
           repository: ${{ matrix.repository }}
           ref: ${{ matrix.base_branch }}
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ steps.checkout-token.outputs.token }}
           path: consumer
       - uses: astral-sh/setup-uv@v7
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/create-github-app-token@v3
+        id: update-token
+        with:
+          client-id: ${{ vars.DEPENDENCY_UPDATER_CLIENT_ID }}
+          private-key: ${{ secrets.DEPENDENCY_UPDATER_PRIVATE_KEY }}
+          owner: marin-community
+          repositories: ${{ matrix.repository_name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
       - name: Prepare consumer update
         env:
           APP_SLUG: ${{ vars.DEPENDENCY_UPDATER_APP_SLUG }}
-          AUTO_MERGE: ${{ inputs.auto_merge }}
-          BOOTSTRAP: ${{ inputs.bootstrap }}
           CONSUMER: ${{ matrix.name }}
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.update-token.outputs.token }}
+          MANIFEST_MODE: ${{ inputs.manifest_mode }}
+          MERGE_MODE: ${{ inputs.merge_mode }}
           REVISION: ${{ needs.discover.outputs.revision }}
         run: |
-          args=(
-            run
-            --consumer "$CONSUMER"
-            --revision "$REVISION"
-            --app-slug "$APP_SLUG"
-          )
-          if [[ "$BOOTSTRAP" == "true" ]]; then
-            args+=(--bootstrap)
-          fi
-          if [[ "$AUTO_MERGE" == "true" ]]; then
-            args+=(--auto-merge)
-          fi
           cd consumer
+          if git config --local --get-all http.https://github.com/.extraheader >/dev/null; then
+            git config --local --unset-all http.https://github.com/.extraheader
+          fi
+          auth_header=$(printf "x-access-token:%s" "$GH_TOKEN" | base64 -w0)
+          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $auth_header"
           PYTHONPATH="$GITHUB_WORKSPACE/marin" uv run --no-project python \
-            -m scripts.ci.marin_style_update "${args[@]}"
+            -m scripts.ci.marin_style_update run \
+            --consumer "$CONSUMER" \
+            --revision "$REVISION" \
+            --app-slug "$APP_SLUG" \
+            --manifest-mode "$MANIFEST_MODE" \
+            --merge-mode "$MERGE_MODE"

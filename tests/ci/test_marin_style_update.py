@@ -12,11 +12,38 @@ from scripts.ci.marin_style_consumers import LEGACY_MANAGED_FILES, LockMode, Mar
 from scripts.ci.marin_style_update import (
     GeneratedManifest,
     ManifestMode,
+    MergeMode,
+    _parser,
     generate_marin_style_update,
 )
 
 OLD_REVISION = "a" * 40
 NEW_REVISION = "b" * 40
+
+
+def test_run_command_requires_explicit_modes() -> None:
+    parser = _parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["run", "--consumer", "test", "--revision", NEW_REVISION, "--app-slug", "updater"])
+
+    args = parser.parse_args(
+        [
+            "run",
+            "--consumer",
+            "test",
+            "--revision",
+            NEW_REVISION,
+            "--app-slug",
+            "updater",
+            "--manifest-mode",
+            ManifestMode.VALIDATE.value,
+            "--merge-mode",
+            MergeMode.PUBLISH.value,
+        ]
+    )
+    assert args.manifest_mode is ManifestMode.VALIDATE
+    assert args.merge_mode is MergeMode.PUBLISH
 
 
 def _git(repository: Path, *args: str) -> None:

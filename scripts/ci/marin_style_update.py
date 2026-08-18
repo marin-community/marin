@@ -352,7 +352,7 @@ def update_consumer(
             app_slug=app_slug,
             policy=update.policy,
             expected_head_sha=pull_request.head_sha,
-            timeout=3600,
+            timeout=2400,
             poll_interval=30,
         )
     status = ConsumerUpdateStatus.MERGED if merge_mode is MergeMode.MERGE else ConsumerUpdateStatus.PUBLISHED
@@ -368,8 +368,8 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--consumer", required=True)
     run.add_argument("--revision", required=True)
     run.add_argument("--app-slug", required=True)
-    run.add_argument("--auto-merge", action="store_true")
-    run.add_argument("--bootstrap", action="store_true")
+    run.add_argument("--merge-mode", type=MergeMode, choices=MergeMode, required=True)
+    run.add_argument("--manifest-mode", type=ManifestMode, choices=ManifestMode, required=True)
     return parser
 
 
@@ -381,9 +381,9 @@ def main() -> None:
     result = update_consumer(
         consumer=marin_style_consumer(args.consumer),
         revision=args.revision,
-        merge_mode=MergeMode.MERGE if args.auto_merge else MergeMode.PUBLISH,
+        merge_mode=MergeMode(args.merge_mode),
         app_slug=args.app_slug,
-        manifest_mode=ManifestMode.BOOTSTRAP if args.bootstrap else ManifestMode.VALIDATE,
+        manifest_mode=ManifestMode(args.manifest_mode),
     )
     if result.status is ConsumerUpdateStatus.CURRENT:
         print(f"{args.consumer} already pins {args.revision}")

@@ -94,8 +94,8 @@ TPU inference, vLLM, Evalchemy, Axolotl, and MarinSkyRL from one registry in
 `scripts/ci/marin_style_consumers.py`. It is manual-only. A run can select one
 consumer or all consumers, a reachable source revision, and whether this is the
 first generated-manifest update. Bootstrap updates cannot auto-merge. Remove
-the bootstrap input and `LEGACY_MANAGED_FILES` after every registered consumer's
-default branch contains a manifest.
+the bootstrap manifest mode and `LEGACY_MANAGED_FILES` after every registered
+consumer's default branch contains a manifest.
 
 Each matrix job mints an installation token limited to one consumer, replaces
 the revision only in registered pin files, regenerates the exact old/new
@@ -104,6 +104,10 @@ updater lifecycle rejects other paths, binds the PR to the expected App author
 and head SHA, and uses that consumer's fixed required-check list. The initial
 manifest revision must be reviewed into every consumer before ordinary updates
 are allowed.
+
+Checkout and publication use separate, repository-limited installation tokens.
+The publication token is minted after setup, and merge waits at most 40 minutes
+so the token remains valid through the final head-bound merge.
 
 Keep the workflow manual until an owner expands the App installation selection
 and records that each consumer grants review-only bypass in every active
