@@ -4,7 +4,7 @@
 """Hero-shape scaling ladder: one recipe, five widths.
 
 Every rung trains the *same* EP hero recipe -- 384 routed experts, top-8, hidden/2-wide experts in a
-hidden/2 latent, pooled-wave transport, the Harrier 2026.08.17.1 two-phase mixture on the Marin
+hidden/2 latent, pooled-wave transport, the Harrier 2026.08.18 two-phase mixture on the Marin
 tokenizer, offloaded MuonH state on FP32 pinned-host master params, the QB histogram estimator, and
 a dropless held-out eval -- and differs only in width and the rack count it spans. Behaviour is
 uniform across the ladder so a rung predicts the d6144 hero. ``d6144`` is the hero itself.
@@ -38,10 +38,10 @@ from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.grug.moe_hero_ep.harrier_mix_2026_08_17_1 import (
-    HARRIER_MIX_2026_08_17_1_STORE,
-    HARRIER_MIX_2026_08_17_1_TAG,
-    harrier_mix_2026_08_17_1_data_config,
+from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
+    HARRIER_MIX_2026_08_18_STORE,
+    HARRIER_MIX_2026_08_18_TAG,
+    harrier_mix_2026_08_18_data_config,
 )
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, MoeHeuristic, build_hero_configs
 from experiments.grug.moe_hero_ep.launch_mfu_test import (
@@ -210,7 +210,7 @@ def build_ladder_run(
                     f"shape-{size}",
                     f"racks-{dp_racks}",
                     "gb200",
-                    HARRIER_MIX_2026_08_17_1_TAG,
+                    HARRIER_MIX_2026_08_18_TAG,
                 ],
                 group="moe-hero-ep-scaling-ladder",
                 name=run_id,
@@ -239,7 +239,7 @@ def build_ladder_run(
         )
         return GrugRunConfig(
             model=model,
-            data=harrier_mix_2026_08_17_1_data_config(
+            data=harrier_mix_2026_08_18_data_config(
                 ctx=ctx,
                 total_steps=num_steps,
                 batch_size=batch_size,
@@ -265,7 +265,7 @@ def build_ladder_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(HARRIER_MIX_2026_08_17_1_STORE, *validation),
+        deps=(HARRIER_MIX_2026_08_18_STORE, *validation),
         runtime_args={"train_resources": train_resources},
     )
 

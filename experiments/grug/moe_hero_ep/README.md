@@ -174,7 +174,7 @@ group `moe-hero-ep-small-abl` and carry Paloma and uncheatable evaluation at `--
 
 `launch_scaling_ladder.py` trains one uniform hero recipe at five widths so a narrow rung predicts
 the `d6144` hero (which is the hero itself). Every rung shares the hero data (the Harrier
-2026.08.17.1 two-phase mixture on the Marin tokenizer, simulated against the 18.75T target budget),
+2026.08.18 two-phase mixture on the Marin tokenizer, simulated against the 18.75T target budget),
 the offloaded MuonH optimizer on FP32 pinned-host master params, the hero mixed precision, 384
 experts / top-8, pooled-wave transport, the QB histogram estimator at 10k bins, and a dropless
 held-out eval. Only the width and the rack count vary; the rack count, batch, step budget, eval
