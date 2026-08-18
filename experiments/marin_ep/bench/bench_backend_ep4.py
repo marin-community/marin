@@ -5,7 +5,7 @@
 
 Times `marin_ep_moe_local` forward and forward+backward with
 `transport="ragged"` (XLA `ragged_all_to_all` + local permutes) vs
-`transport="mgpu"` (fused Mosaic-GPU puts, direct pool layout) at a
+`transport="mgpu_fused"` (fused dispatch + arrival-gated gate/up GEMM) at a
 hero-like per-device shape scaled to 4 devices. Same waterfilling drop
 rule and same `ragged_dot` GEMMs on both arms, so the delta is transport
 + permute elimination.
@@ -81,7 +81,7 @@ def main() -> None:
     cot = put(rng.standard_normal((total, HIDDEN)), batch_spec, jnp.bfloat16)
 
     results = {}
-    for transport in ("ragged", "mgpu"):
+    for transport in ("ragged", "mgpu_fused"):
         shard_fn = shard_map(
             functools.partial(
                 marin_ep_moe_local,
@@ -113,10 +113,10 @@ def main() -> None:
             grad_fn = jax.jit(jax.grad(loss, argnums=(0, 3, 4)))
             results[transport, "fwdbwd"] = _bench(grad_fn, args, "fwd+bwd(grad x,w13,w2)")
 
-    err = np.abs(results["ragged", "y"] - results["mgpu", "y"]).max()
+    err = np.abs(results["ragged", "y"] - results["mgpu_fused", "y"]).max()
     print(f"max |ragged - mgpu| forward output diff: {err:.4f}")
     for phase in ("fwd", "fwdbwd"):
-        ragged_ms, mgpu_ms = results["ragged", phase], results["mgpu", phase]
+        ragged_ms, mgpu_ms = results["ragged", phase], results["mgpu_fused", phase]
         print(f"{phase}: ragged {ragged_ms:.3f} ms vs mgpu {mgpu_ms:.3f} ms -> {ragged_ms / mgpu_ms:.3f}x")
 
 

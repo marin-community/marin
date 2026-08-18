@@ -13,6 +13,7 @@ import pytest
 from experiments.marin_ep.oracle import expert_capacity
 from experiments.marin_ep.perfmodel.eventsim import (
     LayerProgramParams,
+    PipelineMode,
     WorkItem,
     balanced_counts,
     estimate_layer_makespan,
@@ -84,8 +85,8 @@ def test_backfill_uses_idle_window_behind_committed_item():
 
 def test_pipelined_beats_bulk_on_balanced_routing():
     counts = balanced_counts(4, 8, 1024)
-    pipelined = estimate_layer_makespan(counts, SMALL_PARAMS, GB200, backward=False, pipelined=True)
-    bulk = estimate_layer_makespan(counts, SMALL_PARAMS, GB200, backward=False, pipelined=False)
+    pipelined = estimate_layer_makespan(counts, SMALL_PARAMS, GB200, backward=False, mode=PipelineMode.FULL)
+    bulk = estimate_layer_makespan(counts, SMALL_PARAMS, GB200, backward=False, mode=PipelineMode.BULK)
     assert pipelined.makespan < bulk.makespan
 
 
@@ -96,8 +97,8 @@ def test_incast_routing_is_slower_than_balanced():
     balanced = balanced_counts(devices, num_experts, per_device)
     incast = np.zeros_like(balanced)
     incast[:, : SMALL_PARAMS.local_experts] = per_device // SMALL_PARAMS.local_experts
-    t_balanced = estimate_layer_makespan(balanced, SMALL_PARAMS, GB200, backward=False, pipelined=True)
-    t_incast = estimate_layer_makespan(incast, SMALL_PARAMS, GB200, backward=False, pipelined=True)
+    t_balanced = estimate_layer_makespan(balanced, SMALL_PARAMS, GB200, backward=False, mode=PipelineMode.FULL)
+    t_incast = estimate_layer_makespan(incast, SMALL_PARAMS, GB200, backward=False, mode=PipelineMode.FULL)
     assert t_incast.makespan > t_balanced.makespan
 
 
@@ -124,7 +125,7 @@ def test_program_builds_from_simulated_routing_counts():
     params = LayerProgramParams(
         hidden=hidden, intermediate=intermediate, local_experts=2, capacity=capacity, wire_bytes=4, tile_rows=16
     )
-    sched = estimate_layer_makespan(result.saved.routing.counts, params, GB200, backward=False, pipelined=True)
+    sched = estimate_layer_makespan(result.saved.routing.counts, params, GB200, backward=False, mode=PipelineMode.FULL)
     # Kept rows in the program equal the simulator's kept assignments: the
     # schedule's total compute busy time must be exactly rows * per-row work
     # plus per-tile overhead.

@@ -104,34 +104,13 @@ def drop_rate_grouped(counts: np.ndarray, capacity_factor: float, group_size: in
     return float((total - kept).sum() / counts.sum())
 
 
-def calibrate_alpha(
-    rng: np.random.Generator, *, target_drop: float, capacity_factor: float, num_samples: int = 8
-) -> float:
-    """Bisect alpha so per_cell drop at `capacity_factor` matches `target_drop`.
-
-    Common random numbers: the sample seeds are drawn once, so every bisection
-    step evaluates the same deterministic function of alpha and the predicate
-    stays monotone instead of resampling noise into the interval.
-    """
-    seeds = rng.integers(0, 2**63, size=num_samples)
-
-    def mean_drop(alpha: float) -> float:
-        return float(
-            np.mean(
-                [
-                    drop_rate_per_cell(
-                        sample_expert_counts(np.random.default_rng(seed), RoutingModel(alpha=alpha)),
-                        capacity_factor,
-                    )
-                    for seed in seeds
-                ]
-            )
-        )
-
+def calibrate_alpha(rng: np.random.Generator, *, target_drop: float, capacity_factor: float) -> float:
+    """Bisect alpha so per_cell drop at `capacity_factor` matches `target_drop`."""
     lo, hi = 0.05, 50.0  # smaller alpha = more skew = more drops
     for _ in range(24):
         mid = math.sqrt(lo * hi)
-        if mean_drop(mid) > target_drop:
+        counts = sample_expert_counts(rng, RoutingModel(alpha=mid))
+        if drop_rate_per_cell(counts, capacity_factor) > target_drop:
             lo = mid
         else:
             hi = mid
