@@ -66,11 +66,6 @@ def _resolve_fast_backward(requested: bool | None) -> bool:
     return _FAST_BWD_LIBRARY_DEFAULT
 
 
-def _fast_backward_default() -> bool:
-    """Backwards-compatible alias for the resolved default with no call-site request."""
-    return _resolve_fast_backward(None)
-
-
 def _materialize_cotangent(
     cotangent: jax.Array | jax.custom_derivatives.SymbolicZero, reference: jax.Array
 ) -> jax.Array:
