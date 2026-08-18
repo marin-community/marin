@@ -25,7 +25,8 @@ use arrow::row::{OwnedRow, RowConverter, Rows, SortField};
 
 /// Rows per output batch from the k-way merge. This is a batching decision only:
 /// the writer accumulates across batches and cuts row groups at its own
-/// byte-derived stride (see [`crate::store::segment::segment_writer_properties`]).
+/// byte-derived stride (see
+/// [`crate::store::segment::segment_writer_properties_with_max_rows`]).
 const MERGE_CHUNK_ROWS: usize = 16_384;
 
 /// Project `batch` onto `target_schema`, additive-null-filling any target column

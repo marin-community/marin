@@ -36,7 +36,9 @@ use crate::proto::finelog::stats::ColumnType;
 use crate::query::index_cache::IndexCache;
 use crate::store::catalog::Catalog;
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
-use crate::store::compaction::executor::{read_segment_projected, run_job, PlannedSwap};
+use crate::store::compaction::executor::{
+    read_segment_projected, run_job, CompactionLayout, PlannedSwap,
+};
 use crate::store::compaction::planner::plan;
 use crate::store::exact::{ExactIndexConfig, NAMED_PROJECTION_MARKER};
 use crate::store::policy::StoragePolicy;
@@ -890,8 +892,10 @@ impl Namespace {
             job,
             dir,
             &self.arrow_schema,
-            &self.sort_columns,
-            self.max_row_group_rows,
+            CompactionLayout {
+                sort_columns: &self.sort_columns,
+                max_row_group_rows: self.max_row_group_rows,
+            },
             &index_config,
             self.compaction_config.max_merge_arrow_bytes,
             |path| self.input_key_bounds(path),

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from pathlib import Path
 from typing import NamedTuple
 
 import duckdb
@@ -97,6 +98,19 @@ def _database(rows: list[TelemetryRow]) -> duckdb.DuckDBPyConnection:
             [(*row, seq) for seq, row in enumerate(rows)],
         )
     return database
+
+
+def test_dashboard_run_identity_variable_reads_promoted_column():
+    dashboard = json.loads((Path(__file__).parents[1] / "dashboards" / "inference.json").read_text())
+    sql = dashboard["templating"]["list"][1]["query"]["infinityQuery"]["url_options"]["params"][0]["value"]
+    sql = (
+        sql.replace("${identity_kind}", "run_id")
+        .replace("{{from}}", "TIMESTAMP '1970-01-01 00:02:00'")
+        .replace("{{to}}", "TIMESTAMP '1970-01-01 00:03:00'")
+    )
+    database = _database([_record("a", "num_requests_running", 1, 150_000, _attributes())])
+
+    assert database.execute(sql).fetchall() == [("run-1",)]
 
 
 def _query_rows(

@@ -131,7 +131,7 @@ struct ResourceDimensions<'a> {
 impl Resource {
     fn dimensions(&self) -> ResourceDimensions<'_> {
         ResourceDimensions {
-            run_id: self.explicit_or_attribute(self.run_id.as_deref(), &["run_id", "root_run_uid"]),
+            run_id: self.explicit_or_attribute(self.run_id.as_deref(), &["run_id"]),
             job_id: self.explicit_or_attribute(self.job_id.as_deref(), &["job_id"]),
             execution_uid: self
                 .explicit_or_attribute(self.execution_uid.as_deref(), &["execution_uid"]),

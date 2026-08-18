@@ -69,7 +69,7 @@
               "params": [
                 {
                   "key": "sql",
-                  "value": "SELECT DISTINCT json_get(resource_attributes_json, '${identity_kind}') AS value FROM \"telemetry_v1\" WHERE service = 'vllm' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND json_get(resource_attributes_json, '${identity_kind}') IS NOT NULL ORDER BY 1"
+                  "value": "SELECT DISTINCT CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END AS value FROM \"telemetry_v1\" WHERE service = 'vllm' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END IS NOT NULL ORDER BY 1"
                 },
                 {
                   "key": "from",

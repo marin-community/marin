@@ -130,9 +130,8 @@ training-status metric names also use an exact filtered projection.
 `telemetry_v1` exposes stable resource dimensions as nullable columns:
 `run_id`, `job_id`, `execution_uid`, `region`, `node_name`, `process_index`, and
 `alert_tag`. Producers may send them directly in the request's `resource`
-object. When omitted, Finelog infers them from same-named resource attributes;
-`run_id` also accepts the legacy `root_run_uid` attribute. An explicit field
-wins over an attribute and replaces the same key in
+object. When omitted, Finelog infers them from same-named resource attributes.
+An explicit field wins over an attribute and replaces the same key in
 `resource_attributes_json`; the JSON map is canonicalized rather than retaining
 both conflicting values. Selectors and groupings should use the structured
 columns.

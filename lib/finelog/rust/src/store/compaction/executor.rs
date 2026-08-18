@@ -72,9 +72,16 @@ pub struct PlannedSwap {
     pub input_arrow_bytes: i64,
 }
 
+#[derive(Clone, Copy)]
+pub struct CompactionLayout<'a> {
+    pub sort_columns: &'a [String],
+    pub max_row_group_rows: usize,
+}
+
 /// Resolve `job` into a `PlannedSwap`, performing the heavy read/merge/write for
 /// a multi-input job. `dir` is the namespace directory; `arrow_schema` is the
-/// store-form schema (with `seq`); `sort_columns` precede the implicit `seq`.
+/// store-form schema (with `seq`); the layout's sort columns precede the
+/// implicit `seq`.
 ///
 /// `max_merge_arrow_bytes` caps the decoded size the merge holds: inputs are
 /// read in order and the merge takes the longest prefix that fits, leaving the
@@ -87,8 +94,7 @@ pub fn run_job(
     job: &CompactionJob,
     dir: &Path,
     arrow_schema: &SchemaRef,
-    sort_columns: &[String],
-    max_row_group_rows: usize,
+    layout: CompactionLayout<'_>,
     index_config: &SegmentIndexConfig,
     max_merge_arrow_bytes: i64,
     input_key_bounds: impl Fn(&str) -> (Option<i64>, Option<i64>),
@@ -100,8 +106,7 @@ pub fn run_job(
             job,
             dir,
             arrow_schema,
-            sort_columns,
-            max_row_group_rows,
+            layout,
             index_config,
             max_merge_arrow_bytes,
             &input_key_bounds,
@@ -189,8 +194,7 @@ fn apply_merge(
     job: &CompactionJob,
     dir: &Path,
     arrow_schema: &SchemaRef,
-    sort_columns: &[String],
-    max_row_group_rows: usize,
+    layout: CompactionLayout<'_>,
     index_config: &SegmentIndexConfig,
     max_merge_arrow_bytes: i64,
     input_key_bounds: &impl Fn(&str) -> (Option<i64>, Option<i64>),
@@ -199,7 +203,7 @@ fn apply_merge(
     let merged_path = dir.join(&merged_filename);
     let staging_path = dir.join(format!("{merged_filename}.tmp"));
 
-    let sort_cols = sort_col_indices(arrow_schema, sort_columns);
+    let sort_cols = sort_col_indices(arrow_schema, layout.sort_columns);
 
     // Read each input's row-group batches, project onto the namespace schema
     // (additive null-fill), then SORT each batch and feed it to the k-way merge
@@ -291,7 +295,12 @@ fn apply_merge(
     // writes below (each input plus the output is a fully materialized,
     // uncompressed copy of the segment).
     drop(projected);
-    write_merged_segment(&staging_path, arrow_schema, &merged, max_row_group_rows)?;
+    write_merged_segment(
+        &staging_path,
+        arrow_schema,
+        &merged,
+        layout.max_row_group_rows,
+    )?;
     std::fs::rename(&staging_path, &merged_path).map_err(|e| {
         StatsError::Internal(format!(
             "rename merge output {} -> {}: {e}",
@@ -389,7 +398,7 @@ pub fn read_segment_projected(
 }
 
 /// Write `batches` to `path` via `ArrowWriter`, using the shared
-/// `segment_writer_properties` with no bloom column.
+/// `segment_writer_properties_with_max_rows` with no bloom column.
 fn write_merged_segment(
     path: &Path,
     schema: &SchemaRef,
@@ -453,6 +462,13 @@ mod tests {
             Field::new("key", DataType::Int64, false),
             Field::new("worker_id", DataType::Utf8, false),
         ]))
+    }
+
+    fn default_layout(sort_columns: &[String]) -> CompactionLayout<'_> {
+        CompactionLayout {
+            sort_columns,
+            max_row_group_rows: MAX_ROW_GROUP_ROWS,
+        }
     }
 
     /// rows: (seq, key, worker_id).
@@ -575,8 +591,7 @@ mod tests {
             &job,
             &dir,
             &schema(),
-            &["key".to_string()],
-            MAX_ROW_GROUP_ROWS,
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 std::slice::from_ref(&exact),
@@ -633,7 +648,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_uses_secondary_sort_columns_and_row_group_limit() {
+    fn merge_uses_configured_sort_columns_and_row_group_limit() {
         let dir = tempdir("secondary_sort");
         let (first, _) = write_segment_to_dir(
             &dir,
@@ -661,8 +676,10 @@ mod tests {
             &job,
             &dir,
             &schema(),
-            &["worker_id".to_string(), "key".to_string()],
-            2,
+            CompactionLayout {
+                sort_columns: &["worker_id".to_string(), "key".to_string()],
+                max_row_group_rows: 2,
+            },
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 &[],
@@ -791,8 +808,7 @@ mod tests {
             &job,
             &dir,
             &schema(),
-            &["key".to_string()],
-            MAX_ROW_GROUP_ROWS,
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 &[],
@@ -824,8 +840,7 @@ mod tests {
             &job,
             &dir,
             &schema(),
-            &["key".to_string()],
-            MAX_ROW_GROUP_ROWS,
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 &[],
@@ -865,8 +880,7 @@ mod tests {
             &job,
             &dir,
             &schema(),
-            &["key".to_string()],
-            MAX_ROW_GROUP_ROWS,
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 &[],
@@ -917,8 +931,7 @@ mod tests {
             &job,
             &dir,
             &schema(),
-            &["key".to_string()],
-            MAX_ROW_GROUP_ROWS,
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 &[],
@@ -977,8 +990,7 @@ mod tests {
             &job,
             &dir,
             &schema(),
-            &["key".to_string()],
-            MAX_ROW_GROUP_ROWS,
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 &[],
@@ -1019,8 +1031,7 @@ mod tests {
             &job,
             &dir,
             &schema(),
-            &["key".to_string()],
-            MAX_ROW_GROUP_ROWS,
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 &[],
@@ -1082,8 +1093,7 @@ mod tests {
             &job,
             &dir,
             &schema(),
-            &["key".to_string()],
-            MAX_ROW_GROUP_ROWS,
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 &[],
@@ -1132,8 +1142,7 @@ mod tests {
             &job,
             &dir,
             &schema(),
-            &["key".to_string()],
-            MAX_ROW_GROUP_ROWS,
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 &[],
@@ -1214,8 +1223,7 @@ mod tests {
             &job,
             &dir,
             &log,
-            &["key".to_string()],
-            MAX_ROW_GROUP_ROWS,
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(["data"], &[], &[], Some("key".to_string())),
             i64::MAX,
             |_| (None, None),
@@ -1337,8 +1345,7 @@ mod tests {
             &job,
             &dir,
             &wide,
-            &["key".to_string()],
-            MAX_ROW_GROUP_ROWS,
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 &[],

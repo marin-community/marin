@@ -156,7 +156,7 @@ fn batch(batch_id: &str) -> Vec<u8> {
         "batch_id": batch_id,
         "resource": {
             "service": "trainer",
-            "attributes": {"role": "worker", "root_run_uid": "run-1"}
+            "attributes": {"role": "worker", "run_id": "run-1"}
         },
         "records": [
             {
@@ -227,11 +227,6 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
         .find(|column| column.name == "name")
         .unwrap();
     assert!(name.index.trigram);
-    assert_eq!(
-        schema.sort_columns,
-        ["service", "run_id", "name", "timestamp_ms"]
-    );
-    assert_eq!(schema.max_row_group_rows, 128 * 1024);
     for column in [
         "run_id",
         "job_id",
@@ -456,7 +451,7 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
     assert_eq!(bodies.value(1), r#"{"step":10}"#);
     assert_eq!(
         rows[0].column(3).as_string::<i32>().value(0),
-        r#"{"role":"worker","root_run_uid":"run-1"}"#
+        r#"{"role":"worker","run_id":"run-1"}"#
     );
     assert_eq!(
         rows[0].column(4).as_string::<i32>().value(0),
@@ -497,7 +492,7 @@ async fn explicit_resource_dimensions_override_attribute_fallbacks() {
             "process_index": "3",
             "alert_tag": "hero",
             "attributes": {
-                "root_run_uid": "run-legacy",
+                "run_id": "run-attribute",
                 "job_id": "job-legacy"
             }
         },

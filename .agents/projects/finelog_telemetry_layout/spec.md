@@ -62,7 +62,7 @@ alert_tag
 ```
 
 For each field, explicit input wins. Otherwise Finelog reads the same key from
-`resource.attributes`; `run_id` also reads legacy `root_run_uid`. Explicit
+`resource.attributes`. Explicit
 fields are inserted under their canonical keys in the serialized
 `resource_attributes_json`, replacing a conflicting value at that key. The JSON
 column is a canonicalized attribute map, not a copy of the original conflicting
