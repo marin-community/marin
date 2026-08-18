@@ -1782,3 +1782,23 @@ Experiment ID prefix: `MEP`.
   focused bt — identifies WHICH wait (received_sem vs tile gate) and the
   deficit size, discriminating remote-erasure from local-signal loss.
   Deferred until rack contention drops (user flag + budget 411%).
+
+### 2026-08-18 07:00 - MEP-070: 8/384 apples-to-apples arms — config pinned, run blocked by S3 SlowDown
+- Per user: fidelity audit vs the incumbent found NO dtype narrowing
+  (shared combine helper + cast on both paths; f32-accumulate GEMMs both
+  sides; our swiglu f32-internal vs incumbent bf16 — stricter). fp8
+  dispatch wire RULED OUT for hero comparisons. Nothing to revert.
+- Canonical 8/384 config (main README, post-fork): d6144/48L, E384 width
+  3072, top-8 — i.e. --num-experts 384 --num-experts-per-token 8
+  --intermediate-dim 3072 on our launcher. Ladder: arm A (i6272) hit the
+  64 GB host-BFC init limit (fix: XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB=128);
+  arm B (i6272 + host fix) OOMed HBM on a 158.55 GiB train-step temp
+  (topk-8 at full width is not the target config); arm C (i3072) compiled
+  (~65 min cold at the new shapes) and entered step 1, then parked at 0%
+  GPU in the first collective: ranks starved by S3 SlowDown (GetObject
+  rate limit; the coordinator crashed on the same error; unrelated jobs
+  failing on S3 concurrently). Killed after 2.5 h.
+- Retry recipe (unchanged): hero flags + host-limit env + the three
+  overrides. Note: fused per-leg GEMM _CONFIGS miss at i3072 shapes ->
+  fallback config (correct, slightly untuned); retune keys once the
+  number matters.
