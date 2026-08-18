@@ -456,11 +456,12 @@ def test_resolve_serving_plan_accepts_compatible_tpu_alternatives():
 
 def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatch):
     registered_metadata: dict[str, str] = {}
+    model_id = "Qwen/Qwen3-0.6B"
 
     @contextmanager
     def prepared_local_inference(*_args, **_kwargs):
         yield SimpleNamespace(
-            model=RunningModel(OpenAIEndpoint("http://127.0.0.1:1/v1", "Qwen/Qwen3-0.6B")),
+            model=RunningModel(OpenAIEndpoint("http://127.0.0.1:1/v1", model_id)),
             backend_name="vllm",
             tensor_parallel_size=1,
             check_alive=lambda: None,
@@ -484,7 +485,7 @@ def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatc
     set_job_info(JobInfo(task_id=JobName.from_wire("/alice/serve/0")))
     service = IrisServiceConfig(
         model=ServedModelConfig(
-            weights="Qwen/Qwen3-0.6B",
+            weights=model_id,
             tensor_parallel_size=1,
             chat_template_content="{{ messages }}",
         ),
