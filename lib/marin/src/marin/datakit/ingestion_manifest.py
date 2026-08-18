@@ -156,6 +156,17 @@ class IngestionSourceManifest(ManifestModel):
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def verify_content_fingerprint(manifest: IngestionSourceManifest | None, content_fingerprint: str) -> None:
+    """Reject a staging config whose recorded fingerprint no longer matches its source manifest."""
+    if manifest is None or not content_fingerprint:
+        return
+    expected = manifest.fingerprint()
+    if content_fingerprint != expected:
+        raise ValueError(
+            f"content_fingerprint mismatch: config has {content_fingerprint}, source manifest has {expected}"
+        )
+
+
 class MaterializedOutputMetadata(ManifestModel):
     """Runtime output metadata for a concrete staging or extraction run."""
 

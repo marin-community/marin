@@ -250,7 +250,14 @@ class _PipelineExecution:
                 accumulated.merge(entry)
 
     def merged_counters(self, stage: str | None = None) -> dict[str, CounterEntry]:
-        """Return merged completed counters for this execution."""
+        """Return merged completed counters for this execution.
+
+        Callers wanting one stage's totals must pass ``stage`` here rather than
+        filter the result: a name recorded under several stages folds into a
+        single entry that keeps whichever stage was folded first, so a later
+        ``entry.stage`` filter would attribute every stage's total to that one
+        stage and drop the rest.
+        """
         merged, conflicted = merge_counter_entries(
             (name, entry)
             for (entry_stage, name, _), entry in self.completed_totals.items()
@@ -590,7 +597,7 @@ class ZephyrCoordinator:
                     {idx: att for idx, att in run.task_attempts.items() if att > 0},
                     run.stage_monotonic_start,
                     [
-                        CounterSnapshot(counters=run.merged_counters(), generation=0),
+                        CounterSnapshot(counters=run.merged_counters(run.stage_name), generation=0),
                         *self._worker_counters.values(),
                     ],
                 )
@@ -1042,7 +1049,7 @@ class ZephyrCoordinator:
                 return {k: e.value for k, e in snap.counters.items() if stage is None or e.stage == stage}
 
             all_snaps = [
-                CounterSnapshot(counters=run.merged_counters(), generation=0) for run in self._executions.values()
+                CounterSnapshot(counters=run.merged_counters(stage), generation=0) for run in self._executions.values()
             ]
             all_snaps.extend(self._worker_counters.values())
 
