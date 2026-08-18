@@ -257,6 +257,13 @@ def moe_mlp(
             )
         elif resolved_implementation == "deepep":
             shard_local_fn = _moe_mlp_ep_deepep_local
+        elif resolved_implementation == "marin_ep":
+            # Local import: the marin_ep backend carries Mosaic-GPU transport
+            # machinery that TPU/CPU deployments never use; keep it out of
+            # their import graph.
+            from levanter.grug._moe.ep_marin import _moe_mlp_ep_marin_local  # noqa: PLC0415
+
+            shard_local_fn = _moe_mlp_ep_marin_local
         else:
             raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
 

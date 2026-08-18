@@ -151,14 +151,10 @@ def build_hero_run(
         raise ValueError(
             f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
         )
-    if model.moe_implementation != "fixed_pooled_wave_all_to_all":
+    if model.moe_implementation != "marin_ep":
         raise AssertionError(f"unexpected hero MoE implementation: {model.moe_implementation}")
-    if model.pooled_transport_capacity_factor is None:
-        raise AssertionError("the pooled-wave hero requires a transport capacity factor")
     backend_tag = model.moe_implementation.replace("_", "-")
     capacity_tag = f"capacity-{model.capacity_factor:g}"
-    transport_capacity_tag = f"transport-capacity-{model.pooled_transport_capacity_factor:g}"
-    wave_tag = f"expert-waves-{model.num_expert_waves}"
     size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     grug_trainer = GrugTrainerConfig(
@@ -213,8 +209,6 @@ def build_hero_run(
                     "ep",
                     backend_tag,
                     capacity_tag,
-                    transport_capacity_tag,
-                    wave_tag,
                     size_tag,
                     "gb200",
                     HARRIER_MIX_2026_08_17_1_TAG,
