@@ -214,8 +214,10 @@ def build_train_loader(
     return DataLoader(
         dataset,
         batch_schedule.schedule,
+        max_buffered_batches=512,
         mesh=mesh,
         axis_resources={"__BATCH__": _BATCH_AXES},
+        prefetch_size=256,
         batch_axis_name="__BATCH__",
         allow_nondivisible_batch_size=False,
     )
@@ -946,6 +948,10 @@ def run_grug(config: GrugRunConfig) -> None:
         local_entrypoint=_run_grug_local,
         resources=config.resources,
         processes_per_task=config.processes_per_task,
+        # A hero EP run forces load_checkpoint=False, so a retry always restarts at step 0. Retrying
+        # a failure that lands late therefore discards the whole run and repeats it. Make failures
+        # terminal and keep the written checkpoint; preemption retries are a separate counter.
+        max_retries_failure=0,
     )
 
 
