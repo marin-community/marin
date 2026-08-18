@@ -20,17 +20,15 @@ from typing import Any
 
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
-from rigging.filesystem.s3_errors import is_transient_s3_error
+from rigging.filesystem.paged_listing import DIRECTORY_TYPE, is_child, s3_listing_page
 from rigging.filesystem.storage_path import StoragePath
 from rigging.fsutil.compression import compression_for
-from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 # The root of the browsable tree: the list of declared buckets rather than any one
 # filesystem. Not a URL, so it never reaches fsspec.
 ROOT = ""
 
 _SCHEME_FOR_STORE = {StoreType.GCS: "gs", StoreType.R2: "s3", StoreType.COREWEAVE: "s3"}
-DIRECTORY_TYPE = "directory"
 
 # Preview reads are bounded: browsing should never pull a multi-gigabyte shard down a home
 # connection because someone pressed enter on it. `fsutil cp` fetches whole objects.
@@ -39,8 +37,6 @@ MAX_PREVIEW_BYTES = 10 * 1024 * 1024
 # Bucket listings are network-bound.
 DEFAULT_LISTING_WORKERS = 128
 _S3_MAX_SPLIT_DEPTH = 3
-_S3_LISTING_MAX_ATTEMPTS = 4
-_S3_LISTING_BACKOFF = ExponentialBackoff(initial=0.5, maximum=5.0, factor=2.0)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -179,15 +175,6 @@ def _relative_name(name: str, root: str) -> str:
     return name[len(prefix) :]
 
 
-def is_child(listed: str, name: str) -> bool:
-    """Whether *name* is a child of the listed path rather than the path itself.
-
-    Object stores commonly report a zero-byte marker object for the prefix being
-    listed; it carries no information and would render as an empty-named row.
-    """
-    return name.strip("/") != listed.strip("/")
-
-
 def _entry(parsed: StoragePath, item: dict, *, name: str | None = None, url: str | None = None) -> Entry:
     item_name = item["name"].rstrip("/")
     name = name or item_name.rsplit("/", 1)[-1]
@@ -245,7 +232,7 @@ def _read_preview(fs, path: str, *, compression: str | None, full_size: int | No
 
 def total_size(url: str) -> tuple[int, int]:
     """Return ``(bytes, object_count)`` under *url*."""
-    fs, path = _listing_filesystem(url, DEFAULT_LISTING_WORKERS)
+    fs, path = filesystem_for(url)
     info = fs.info(path)
     if info["type"] != DIRECTORY_TYPE:
         return info.get("size", 0) or 0, 1
@@ -261,15 +248,8 @@ def total_size(url: str) -> tuple[int, int]:
 
 def metadata_listing_pages(url: str, *, workers: int = DEFAULT_LISTING_WORKERS) -> Iterator[ListingPage]:
     """Yield independent metadata pages covering every object below *url*."""
-    fs, path = _listing_filesystem(url, workers)
-    yield from _metadata_listing_pages(fs, path, workers)
-
-
-def _listing_filesystem(url: str, workers: int) -> tuple[Any, str]:
     fs, path = filesystem_for(url)
-    if _is_s3_filesystem(fs):
-        fs.config_kwargs = {**fs.config_kwargs, "max_pool_connections": workers}
-    return fs, path
+    yield from _metadata_listing_pages(fs, path, workers)
 
 
 def _is_s3_filesystem(fs) -> bool:
@@ -342,7 +322,7 @@ def _s3_listing_pages(fs, path: str, workers: int) -> Iterator[ListingPage]:
             while queued and len(pending) < workers:
                 task = queued.popleft()
                 delimiter = "/" if task.mode == _S3ListingMode.EXPAND else ""
-                future = executor.submit(_s3_listing_page, fs, task.path, task.continuation_token, delimiter)
+                future = executor.submit(s3_listing_page, fs, task.path, task.continuation_token, delimiter)
                 pending[future] = task
 
             completed, _ = wait(pending, return_when=FIRST_COMPLETED)
@@ -392,37 +372,6 @@ def _s3_listing_pages(fs, path: str, workers: int) -> Iterator[ListingPage]:
                     workers_active=len(pending) + 1,
                     workers_total=workers,
                 )
-
-
-def _s3_listing_page(
-    fs, path: str, continuation_token: str | None, delimiter: str
-) -> tuple[list[dict[str, Any]], str | None]:
-    bucket, key, _ = fs.split_path(path)
-    prefix = key if not key or key.endswith("/") else f"{key}/"
-    kwargs = {"Bucket": bucket, "Prefix": prefix, "Delimiter": delimiter}
-    if continuation_token is not None:
-        kwargs["ContinuationToken"] = continuation_token
-    response = retry_with_backoff(
-        lambda: fs.call_s3("list_objects_v2", **kwargs),
-        retryable=is_transient_s3_error,
-        max_attempts=_S3_LISTING_MAX_ATTEMPTS,
-        backoff=_S3_LISTING_BACKOFF,
-        operation=f"ListObjectsV2 {path}",
-    )
-    entries = [
-        {"name": f"{bucket}/{item['Prefix']}", "size": 0, "type": DIRECTORY_TYPE}
-        for item in response.get("CommonPrefixes", [])
-    ]
-    entries.extend(
-        {
-            "name": f"{bucket}/{item['Key']}",
-            "size": int(item.get("Size") or 0),
-            "type": "file",
-            "LastModified": item.get("LastModified"),
-        }
-        for item in response.get("Contents", [])
-    )
-    return entries, response.get("NextContinuationToken")
 
 
 def _listing_stats(listed: str, entries: list[dict[str, Any]]) -> _ListingStats:

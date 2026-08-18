@@ -283,7 +283,7 @@ class CrossRegionGuardedFS:
             process-global singleton.
     """
 
-    __slots__ = ("_budget", "_cross_region_checker", "_current_region", "_fs")
+    __slots__ = ("_budget", "_cross_region_checker", "_current_region", "_fs", "listing")
 
     def __init__(
         self,

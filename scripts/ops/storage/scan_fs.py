@@ -2,26 +2,42 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Distributed GCS object scanning via Iris actors.
+"""Distributed object-storage scanning via Iris actors, over any Marin backend.
+
+Backend-agnostic successor to the GCS-only scanner: ``filesystem_for`` attaches
+backend-aware paged listing operations at ``fs.listing``, so the same
+coordinator/worker machinery walks ``gs://`` and ``s3://`` buckets alike and
+writes the parquet segments that ``render_report.py`` rolls up.
 
 Architecture:
-  - Coordinator actor: holds a task queue of (bucket, prefix) pairs.
-    Workers pull individual items, scan objects, and return the results.
-    The coordinator accumulates objects in memory and writes consolidated
-    ~100MB parquet segments to GCS.
-  - Worker jobs: each runs WORKER_THREADS local threads. Each thread
-    loops pulling prefixes from the coordinator, scanning objects via GCS
-    API, and reporting results (object dicts + new prefixes) back.
+  - Coordinator actor: holds a task queue of (bucket_url, prefix_path) pairs.
+    Workers pull items, scan them, stream objects back, and push any split-off
+    sub-prefixes as new tasks. The coordinator accumulates objects in memory and
+    writes consolidated ~100MB parquet segments to the staging dir.
+  - Worker jobs: each runs WORKER_THREADS local threads. Each thread loops pulling
+    prefixes from the coordinator, scanning them via a bucket-routed lister, and
+    reporting results (object dicts + new prefixes) back.
+
+Each task adaptively probes its prefix with a flat (no-delimiter) listing: a
+subtree that exhausts below FLAT_PROBE_MAX_OBJECTS is consumed whole by that
+one task, so small directories never fan out into per-prefix tasks and the task
+count stays around objects/FLAT_PROBE_MAX_OBJECTS. Only larger subtrees split
+one delimiter level into subtasks; past MAX_SPLIT_DEPTH the flat listing is
+streamed to completion page by page, so worker memory stays bounded regardless
+of prefix size.
 
 Usage:
     uv run iris --cluster=marin job run \\
-        --cpu 2 --memory 30GB --enable-extra-resources -- \\
-        uv run python scripts/ops/storage/scan_gcs.py \\
-        --staging-dir gs://marin-us-central2/tmp/storage-scan \\
+        --cpu 2 --memory 30GB --enable-extra-resources \\
+        --target-cluster cw-rno2a -- \\
+        uv run python scripts/ops/storage/scan_fs.py \\
+        --staging-dir s3://marin-us-east-02a/tmp/storage-scan \\
+        --buckets s3://marin-us-east-02a \\
         --workers 128
 """
 
 import logging
+import sys
 import threading
 import time
 import uuid
@@ -29,26 +45,22 @@ from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
+from datetime import UTC, datetime
 from typing import Any
 
 import click
-import google.auth
 import pyarrow as pa
 import pyarrow.parquet as pq
-from google.cloud import storage
 from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
 from iris.client.client import iris_ctx
 from iris.cluster.client import get_job_info
 from iris.cluster.types import Entrypoint, ResourceSpec
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
+from rigging.fsutil.listing import bucket_url, entry_mtime
 
 from scripts.ops.storage.constants import (
-    ADAPTIVE_MAX_DEPTH,
-    ADAPTIVE_SPLIT_THRESHOLD,
-    BLOB_FIELDS,
-    GCS_LIST_TIMEOUT,
-    GCS_MAX_PAGE_SIZE,
     MARIN_BUCKETS,
     OBJECTS_ARROW_SCHEMA,
     STORAGE_CLASS_IDS,
@@ -63,6 +75,21 @@ log = logging.getLogger(__name__)
 
 WORKER_THREADS = 16
 
+# Worker sends this many objects per RPC during long scans.
+# Keeps worker memory bounded regardless of prefix size.
+WORKER_STREAM_CHUNK = 5_000
+
+# Flat-probe threshold for the adaptive splitter. A task first lists its whole
+# subtree flat (no delimiter); if the listing exhausts before this many objects,
+# the task consumes the subtree itself and creates no subtasks. Only larger
+# subtrees split, keeping the task count around objects / this value.
+FLAT_PROBE_MAX_OBJECTS = 25_000
+
+# Stop splitting at this depth below the top-level prefixes and stream the flat
+# listing to completion instead: deeper fan-out multiplies listing RPCs faster
+# than it adds useful parallelism.
+MAX_SPLIT_DEPTH = 2
+
 # Coordinator flushes when buffer reaches this many objects.
 # ~2M objects x ~150 bytes/row ≈ 300MB uncompressed, ~50-80MB zstd parquet.
 # Coordinator runs with 30GB so this leaves plenty of headroom.
@@ -70,7 +97,7 @@ COORDINATOR_FLUSH_THRESHOLD = 2_000_000
 
 # Abandon stragglers when the queue has been empty AND no progress has been
 # reported for this long. "Progress" means either a task completed *or* a
-# worker streamed objects to the coordinator — workers scanning a huge flat
+# worker streamed objects to the coordinator. Workers scanning a huge flat
 # prefix can take many minutes between task completions while still streaming
 # steady chunks of objects, and we don't want to abandon those mid-flight.
 # Truly hung workers (no RPCs at all) get timed out here; everything else is
@@ -85,17 +112,14 @@ MAX_SCAN_SECONDS = 90 * 60
 # (queue + active workers) and stay there for DRAIN_GRACE_SECONDS, finalize
 # instead of waiting out MAX_SCAN_SECONDS. The straggler tail is a few huge
 # flat prefixes that keep streaming objects (so the no-progress timeout never
-# fires) but contribute marginally to a directory-level report. This mirrors
-# the manual "kill the scan when <100 tasks are left" operating practice.
+# fires) but contribute marginally to a directory-level report.
 DRAIN_TASK_THRESHOLD = 100
 DRAIN_GRACE_SECONDS = 300
 
 # Lower bound on elapsed wall-clock before the drain-based early finish is even
 # considered. Early in a run the in-flight count can briefly dip to/below
-# DRAIN_TASK_THRESHOLD before adaptive splitting fans the queue back out, so
-# without a floor we could finalize prematurely and miss large swaths of the
-# namespace. Below this threshold we never take the early exit; the no-progress
-# straggler timeout and the MAX_SCAN_SECONDS cap still apply as backstops.
+# DRAIN_TASK_THRESHOLD before the queue fans back out, so without a floor we
+# could finalize prematurely and miss large swaths of the namespace.
 DRAIN_MIN_SCAN_SECONDS = 45 * 60
 
 
@@ -106,8 +130,16 @@ DRAIN_MIN_SCAN_SECONDS = 45 * 60
 
 @dataclass(frozen=True)
 class ScanTask:
-    bucket: str
-    prefix: str
+    """One prefix to scan, on the lister routed for its bucket URL.
+
+    ``path`` is the protocol-stripped ``bucket/key`` form that
+    :func:`rigging.filesystem.buckets.filesystem_for` returns. ``depth`` counts
+    delimiter splits below the top-level prefixes; at MAX_SPLIT_DEPTH the task
+    streams its subtree flat instead of splitting further.
+    """
+
+    bucket_url: str
+    path: str
     depth: int = 0
 
 
@@ -153,8 +185,8 @@ class ColumnBuffer:
         )
 
 
-def _write_parquet_to_gcs(table: pa.Table, staging_dir: str) -> str:
-    """Write an Arrow table as a zstd-compressed parquet segment to GCS."""
+def _write_parquet_segment(table: pa.Table, staging_dir: str) -> str:
+    """Write an Arrow table as a zstd-compressed parquet segment to the staging dir."""
 
     segment_id = uuid.uuid4().hex[:12]
     path = f"{staging_dir}/objects_{segment_id}.parquet"
@@ -167,8 +199,8 @@ def _truncate_staging_dir(staging_dir: str) -> None:
     """Delete all `objects_*.parquet` segments under staging_dir before a run.
 
     Segments are written under fresh UUIDs so reruns cannot overwrite prior
-    files — without this, every re-run strictly appends and the consumer
-    sees N-way duplicated (bucket, name) rows.
+    files. Otherwise, every re-run appends and the consumer sees N-way
+    duplicated (bucket, name) rows.
     """
 
     pattern = f"{staging_dir.rstrip('/')}/objects_*.parquet"
@@ -181,6 +213,50 @@ def _truncate_staging_dir(staging_dir: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Entry normalization
+# ---------------------------------------------------------------------------
+
+
+def _bucket_name(url: str) -> str:
+    return StoragePath(url).bucket
+
+
+def _to_datetime(value: Any) -> datetime | None:
+    """Coerce a backend timestamp (``datetime`` or ISO-8601 string) to UTC, else ``None``.
+
+    gcsfs reports ``ctime``/``mtime`` as datetimes but ``timeCreated``/``updated`` as
+    strings; s3fs reports ``LastModified`` as a datetime. This accepts either shape.
+    """
+    if isinstance(value, str) and value:
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    return None
+
+
+def _entry_to_object(entry: dict, bucket_name: str) -> dict:
+    """Normalize one fsspec detail dict into an object row.
+
+    ``created`` is the object's creation time where the backend reports one
+    (gcsfs ``ctime``/``timeCreated``); S3 has no distinct creation timestamp, so it
+    is left null and only ``updated`` (``LastModified``) carries a time.
+    """
+    key = entry["name"].removeprefix(f"{bucket_name}/")
+    storage_class = entry.get("storageClass") or entry.get("StorageClass") or "STANDARD"
+    return {
+        "bucket": bucket_name,
+        "name": key,
+        "size_bytes": int(entry.get("size") or 0),
+        "storage_class_id": STORAGE_CLASS_IDS.get(storage_class, STORAGE_CLASS_IDS["STANDARD"]),
+        "created": _to_datetime(entry.get("ctime") or entry.get("timeCreated")),
+        "updated": entry_mtime(entry),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Coordinator actor
 # ---------------------------------------------------------------------------
 
@@ -189,8 +265,8 @@ class ScanCoordinatorActor:
     """Task queue + object accumulator. Workers pull tasks and push results.
 
     Incoming objects are buffered in a ColumnBuffer. When the buffer exceeds
-    COORDINATOR_FLUSH_THRESHOLD, it is swapped out and written to GCS in a
-    background thread so RPC handlers aren't blocked during the upload.
+    COORDINATOR_FLUSH_THRESHOLD, it is swapped out and written to the staging dir
+    in a background thread so RPC handlers aren't blocked during the upload.
     """
 
     def __init__(self, staging_dir: str) -> None:
@@ -206,7 +282,7 @@ class ScanCoordinatorActor:
         self._active_workers = 0
         self._buf = ColumnBuffer()
         self._flush_thread: threading.Thread | None = None
-        # Wall-clock of the last forward-progress signal from any worker —
+        # Wall-clock of the last forward-progress signal from any worker:
         # either a streamed batch of objects or a task completion. Used to
         # distinguish slow-but-progressing scans from genuinely hung workers
         # in the straggler-timeout check.
@@ -262,14 +338,14 @@ class ScanCoordinatorActor:
             self._flush_thread.join()
 
     def _swap_and_flush(self) -> None:
-        """Swap buffer and write to GCS in background. Caller holds _lock."""
+        """Swap buffer and write to the staging dir in background. Caller holds _lock."""
         snapshot = self._buf
         self._buf = ColumnBuffer()
 
         # If background thread is still writing, do a synchronous flush
         if self._flush_thread is not None and self._flush_thread.is_alive():
             table = snapshot.to_arrow()
-            path = _write_parquet_to_gcs(table, self._staging_dir)
+            path = _write_parquet_segment(table, self._staging_dir)
             self._parquet_paths.append(path)
             return
 
@@ -282,7 +358,7 @@ class ScanCoordinatorActor:
 
     def _bg_write(self, buf: ColumnBuffer) -> None:
         table = buf.to_arrow()
-        path = _write_parquet_to_gcs(table, self._staging_dir)
+        path = _write_parquet_segment(table, self._staging_dir)
         with self._lock:
             self._parquet_paths.append(path)
 
@@ -292,9 +368,9 @@ class ScanCoordinatorActor:
             all_completed = queue_empty and self._active_workers == 0 and self._tasks_completed == self._tasks_total
             # Only declare stragglers timed out when the queue is empty AND
             # nothing has reported progress (objects or task completion) for
-            # STRAGGLER_GRACE_SECONDS. Workers that are still streaming a huge
-            # flat prefix keep _last_progress_at fresh via report_objects, so
-            # they won't be killed mid-scan.
+            # STRAGGLER_GRACE_SECONDS. Workers still streaming a huge flat prefix
+            # keep _last_progress_at fresh via report_objects, so they won't be
+            # killed mid-scan.
             stragglers_timed_out = (
                 queue_empty
                 and self._last_progress_at is not None
@@ -327,158 +403,66 @@ class ScanCoordinatorActor:
 # ---------------------------------------------------------------------------
 
 
-def _make_storage_client(project: str | None) -> storage.Client:
-    credentials, default_project = google.auth.default()
-    return storage.Client(project=project or default_project, credentials=credentials)
+class _WorkerFilesystems:
+    """Per-worker-thread cache of bucket-routed filesystems and bucket names."""
+
+    def __init__(self) -> None:
+        self._filesystems: dict[str, tuple[Any, str]] = {}
+
+    def get(self, url: str) -> tuple[Any, str]:
+        if url not in self._filesystems:
+            fs, _ = filesystem_for(url)
+            self._filesystems[url] = (fs, _bucket_name(url))
+        return self._filesystems[url]
 
 
-def _blob_to_dict(blob: Any, bucket_name: str) -> dict:
-    sc = blob.storage_class or "STANDARD"
-    return {
-        "bucket": bucket_name,
-        "name": blob.name,
-        "size_bytes": int(blob.size or 0),
-        "storage_class_id": STORAGE_CLASS_IDS.get(sc, STORAGE_CLASS_IDS["STANDARD"]),
-        "created": blob.time_created,
-        "updated": blob.updated,
-    }
-
-
-def _scan_with_delimiter(
-    client: storage.Client,
-    bucket_name: str,
-    prefix: str,
-) -> tuple[list[dict], list[str]]:
-    """List objects at this level + discover sub-prefixes."""
-    root_objects: list[dict] = []
-    sub_prefixes: list[str] = []
-    for page in client.list_blobs(
-        bucket_name,
-        prefix=prefix,
-        delimiter="/",
-        page_size=GCS_MAX_PAGE_SIZE,
-        fields=BLOB_FIELDS,
-        timeout=GCS_LIST_TIMEOUT,
-    ).pages:
-        for blob in page:
-            root_objects.append(_blob_to_dict(blob, bucket_name))
-        sub_prefixes.extend(page.prefixes)
-    return root_objects, sub_prefixes
-
-
-# Streaming chunk size — worker sends this many objects per RPC during long scans.
-# Keeps worker memory bounded regardless of prefix size.
-WORKER_STREAM_CHUNK = 5_000
-
-
-def _stream_pages(
-    client: storage.Client,
-    bucket_name: str,
-    prefix: str,
-    coordinator: Any,
-    initial: list[dict],
-) -> int:
-    """Stream pages of a flat prefix to the coordinator in chunks.
-
-    Returns total objects sent. Worker memory stays bounded at ~WORKER_STREAM_CHUNK
-    objects regardless of prefix size.
-    """
-    chunk = list(initial)
-    total = 0
-    for page in client.list_blobs(
-        bucket_name,
-        prefix=prefix,
-        page_size=GCS_MAX_PAGE_SIZE,
-        fields=BLOB_FIELDS,
-        timeout=GCS_LIST_TIMEOUT,
-    ).pages:
-        for blob in page:
-            chunk.append(_blob_to_dict(blob, bucket_name))
-            if len(chunk) >= WORKER_STREAM_CHUNK:
-                coordinator.report_objects(chunk)
-                total += len(chunk)
-                chunk = []
-    if chunk:
-        coordinator.report_objects(chunk)
-        total += len(chunk)
-    return total
+def _report_chunks(coordinator: Any, objects: list[dict]) -> None:
+    for start in range(0, len(objects), WORKER_STREAM_CHUNK):
+        coordinator.report_objects(objects[start : start + WORKER_STREAM_CHUNK])
 
 
 def scan_one_prefix(
-    client: storage.Client,
+    filesystems: _WorkerFilesystems,
     task: ScanTask,
     coordinator: Any,
 ) -> list[ScanTask]:
-    """Scan a single prefix, streaming objects to the coordinator.
+    """Adaptively scan one prefix, streaming objects to the coordinator.
 
-    Returns a list of new sub-prefix tasks for re-queuing (empty if leaf).
-    Workers stream object data directly to the coordinator in chunks of
-    WORKER_STREAM_CHUNK to keep memory bounded.
+    Probes the subtree with a flat listing first: one that exhausts below
+    FLAT_PROBE_MAX_OBJECTS is consumed whole here, so small directories never
+    become per-prefix tasks. A larger subtree relists one delimiter level,
+    discarding the probe objects to avoid double-counting, and returning the
+    sub-prefixes as new tasks. When there are none, the level listing covered
+    the whole subtree. At
+    MAX_SPLIT_DEPTH the flat listing streams to completion instead. Every path
+    reports page by page, keeping worker memory bounded.
+
+    Returns new sub-prefix tasks for re-queuing (empty at a leaf).
     """
-    bucket_name = task.bucket
-    prefix = task.prefix
-
-    # Root-level: always use delimiter
-    if prefix == "":
-        root_objects, sub_prefixes = _scan_with_delimiter(client, bucket_name, "")
-        if root_objects:
-            coordinator.report_objects(root_objects)
-        return [ScanTask(bucket=bucket_name, prefix=sp, depth=1) for sp in sub_prefixes]
-
-    # Probe: flat scan up to threshold
-    objects: list[dict] = []
-    iterator = client.list_blobs(
-        bucket_name,
-        prefix=prefix,
-        page_size=GCS_MAX_PAGE_SIZE,
-        fields=BLOB_FIELDS,
-        timeout=GCS_LIST_TIMEOUT,
-    )
-    pages_iter = iterator.pages
-    is_small = False
-
-    for page in pages_iter:
-        page_items = [_blob_to_dict(blob, bucket_name) for blob in page]
-        objects.extend(page_items)
-        if len(page_items) < GCS_MAX_PAGE_SIZE:
-            is_small = True
-            break
-        if len(objects) >= ADAPTIVE_SPLIT_THRESHOLD:
+    fs, bucket_name = filesystems.get(task.bucket_url)
+    pages = fs.listing.flat_pages(task.path)
+    probe: list[dict] = []
+    subtree_exhausted = True
+    for page in pages:
+        probe.extend(_entry_to_object(entry, bucket_name) for entry in page)
+        if len(probe) >= FLAT_PROBE_MAX_OBJECTS:
+            subtree_exhausted = False
             break
 
-    # Small prefix: send and done
-    if is_small:
-        if objects:
-            coordinator.report_objects(objects)
+    if subtree_exhausted:
+        _report_chunks(coordinator, probe)
         return []
 
-    # Max depth: stream remaining pages directly (no buffering of full list)
-    if task.depth >= ADAPTIVE_MAX_DEPTH:
-        # Flush probe objects, then stream the rest page-by-page
-        if objects:
-            coordinator.report_objects(objects)
-        chunk: list[dict] = []
-        for page in pages_iter:
-            for blob in page:
-                chunk.append(_blob_to_dict(blob, bucket_name))
-                if len(chunk) >= WORKER_STREAM_CHUNK:
-                    coordinator.report_objects(chunk)
-                    chunk = []
-        if chunk:
-            coordinator.report_objects(chunk)
-        return []
+    if task.depth < MAX_SPLIT_DEPTH:
+        subdirs: list[str] = []
+        for files, dirs in fs.listing.level_pages(task.path):
+            _report_chunks(coordinator, [_entry_to_object(entry, bucket_name) for entry in files])
+            subdirs.extend(dirs)
+        return [ScanTask(bucket_url=task.bucket_url, path=sub, depth=task.depth + 1) for sub in subdirs]
 
-    # Below max depth: try delimiter split
-    del objects
-    root_objects, sub_prefixes = _scan_with_delimiter(client, bucket_name, prefix)
-
-    if sub_prefixes:
-        if root_objects:
-            coordinator.report_objects(root_objects)
-        return [ScanTask(bucket=bucket_name, prefix=sp, depth=task.depth + 1) for sp in sub_prefixes]
-
-    # No sub-prefixes (rare): stream the flat directory
-    _stream_pages(client, bucket_name, prefix, coordinator, root_objects)
+    _report_chunks(coordinator, probe)
+    for page in pages:
+        _report_chunks(coordinator, [_entry_to_object(entry, bucket_name) for entry in page])
     return []
 
 
@@ -489,12 +473,11 @@ def scan_one_prefix(
 
 def _worker_thread_loop(
     coordinator: Any,  # ActorClient or ScanCoordinatorActor
-    project: str | None,
     stop_event: threading.Event,
     thread_id: str,
 ) -> None:
     """Single worker thread: pull tasks, scan, report results back."""
-    client = _make_storage_client(project)
+    filesystems = _WorkerFilesystems()
     idle_count = 0
     max_idle = 20
 
@@ -516,11 +499,11 @@ def _worker_thread_loop(
 
         idle_count = 0
         try:
-            new_prefixes = scan_one_prefix(client, task, coordinator)
+            new_prefixes = scan_one_prefix(filesystems, task, coordinator)
             coordinator.report_task_done(new_prefixes)
         except Exception as e:
-            log.exception("[%s] error scanning %s/%s", thread_id, task.bucket, task.prefix)
-            coordinator.report_error(f"{task.bucket}/{task.prefix}", str(e))
+            log.exception("[%s] error scanning %s", thread_id, task.path)
+            coordinator.report_error(task.path, str(e))
 
 
 # ---------------------------------------------------------------------------
@@ -528,14 +511,11 @@ def _worker_thread_loop(
 # ---------------------------------------------------------------------------
 
 
-def worker_job_entrypoint(
-    project: str | None,
-    coordinator_actor_name: str,
-) -> None:
+def worker_job_entrypoint(coordinator_actor_name: str) -> None:
     """Iris job entrypoint for scan workers.
 
     Discovers the coordinator actor, then runs WORKER_THREADS threads
-    that pull tasks and scan prefixes.
+    that pull tasks and list prefixes.
     """
 
     ctx = iris_ctx()
@@ -547,7 +527,7 @@ def worker_job_entrypoint(
     for i in range(WORKER_THREADS):
         t = threading.Thread(
             target=_worker_thread_loop,
-            args=(coordinator, project, stop_event, f"w{i}"),
+            args=(coordinator, stop_event, f"w{i}"),
             daemon=True,
         )
         t.start()
@@ -564,38 +544,29 @@ def worker_job_entrypoint(
 # ---------------------------------------------------------------------------
 
 
+def _bucket_url(bucket: str) -> str:
+    """Normalize a bucket identifier to a URL, routing bare names by declared backend."""
+    return bucket if "://" in bucket else bucket_url(bucket)
+
+
 def discover_top_level_prefixes(
-    buckets: Sequence[str],
-    project: str | None,
+    bucket_urls: Sequence[str],
+    coordinator: ScanCoordinatorActor,
 ) -> list[ScanTask]:
-    """Discover top-level prefixes for each bucket via delimiter listing."""
-    client = _make_storage_client(project)
+    """List each bucket's root level, streaming root objects and returning sub-prefix tasks."""
     tasks: list[ScanTask] = []
-
-    for bucket_name in buckets:
-        log.info("Discovering prefixes for %s...", bucket_name)
-        iterator = client.list_blobs(
-            bucket_name,
-            delimiter="/",
-            fields="items(name),prefixes,nextPageToken",
-            timeout=GCS_LIST_TIMEOUT,
-        )
-        has_root_objects = False
-        prefixes: list[str] = []
-        for page in iterator.pages:
-            prefixes.extend(page.prefixes)
-            if not has_root_objects:
-                for _ in page:
-                    has_root_objects = True
-                    break
-
-        if has_root_objects:
-            tasks.append(ScanTask(bucket=bucket_name, prefix="", depth=0))
-        for p in sorted(set(prefixes)):
-            tasks.append(ScanTask(bucket=bucket_name, prefix=p, depth=0))
-
-        log.info("  %s: %d top-level prefixes", bucket_name, len(prefixes) + (1 if has_root_objects else 0))
-
+    for url in bucket_urls:
+        log.info("Discovering prefixes for %s...", url)
+        fs, root_path = filesystem_for(url)
+        bucket_name = _bucket_name(url)
+        root_objects = 0
+        subdirs: list[str] = []
+        for files, dirs in fs.listing.level_pages(root_path):
+            _report_chunks(coordinator, [_entry_to_object(entry, bucket_name) for entry in files])
+            root_objects += len(files)
+            subdirs.extend(dirs)
+        tasks.extend(ScanTask(bucket_url=url, path=sub, depth=0) for sub in subdirs)
+        log.info("  %s: %d top-level prefixes, %d root objects", url, len(subdirs), root_objects)
     return tasks
 
 
@@ -607,17 +578,23 @@ def discover_top_level_prefixes(
 def run_distributed(
     buckets: Sequence[str],
     num_workers: int,
-    project: str | None,
     staging_dir: str,
 ) -> None:
     """Run the scan as an Iris coordinator job.
 
-    Coordinator accumulates objects in memory and writes consolidated
-    parquet segments (~100MB each) to staging_dir on GCS.
+    ``buckets`` are configured bucket names or full ``scheme://bucket`` URLs.
+    The coordinator accumulates objects in memory and writes consolidated parquet
+    segments (~100MB each) to ``staging_dir``.
     """
+
+    # Iris captures the coordinator's stdout as a pipe, which block-buffers by
+    # default and hides the periodic progress lines until the process exits.
+    sys.stdout.reconfigure(line_buffering=True)
 
     ctx = iris_ctx()
     client = ctx.client
+
+    bucket_urls = [_bucket_url(b) for b in buckets]
 
     _truncate_staging_dir(staging_dir)
 
@@ -634,19 +611,23 @@ def run_distributed(
     print(f"Coordinator actor registered at {address}")
 
     # Discover prefixes and load queue
-    print(f"Discovering top-level prefixes for {len(buckets)} buckets...")
-    tasks = discover_top_level_prefixes(buckets, project)
+    print(f"Discovering top-level prefixes for {len(bucket_urls)} buckets...")
+    tasks = discover_top_level_prefixes(bucket_urls, coordinator)
     coordinator.load_tasks(tasks)
     print(f"Loaded {len(tasks)} initial tasks into queue")
 
-    # Submit one worker job with N replicas
-    worker_job = client.submit(
-        entrypoint=Entrypoint.from_callable(worker_job_entrypoint, project, actor_name),
-        name="scan-workers",
-        resources=ResourceSpec(cpu=2, memory="4GB"),
-        replicas=num_workers,
-    )
-    print(f"Submitted worker job with {num_workers} replicas")
+    # Submit one worker job with N replicas. A bucket whose objects all live at
+    # the root yields no tasks because discovery already streamed those objects.
+    # In that case there is no worker job or queue to drain.
+    worker_job = None
+    if tasks:
+        worker_job = client.submit(
+            entrypoint=Entrypoint.from_callable(worker_job_entrypoint, actor_name),
+            name="scan-workers",
+            resources=ResourceSpec(cpu=2, memory="4GB"),
+            replicas=num_workers,
+        )
+        print(f"Submitted worker job with {num_workers} replicas")
 
     # Monitor progress
     start_time = time.monotonic()
@@ -654,7 +635,7 @@ def run_distributed(
     # threshold; reset whenever it climbs back above (new sub-prefixes queued).
     drained_since: float | None = None
     try:
-        while True:
+        while tasks:
             status = coordinator.get_status()
             elapsed = time.monotonic() - start_time
             remaining = status["queue_size"] + status["active_workers"]
@@ -674,8 +655,7 @@ def run_distributed(
 
             # Only consider the drain-based early finish after a minimum
             # elapsed time, so a transient early dip in the in-flight count
-            # (before adaptive splitting fans the queue back out) can't finalize
-            # the scan prematurely.
+            # can't finalize the scan prematurely.
             if elapsed >= DRAIN_MIN_SCAN_SECONDS and remaining <= DRAIN_TASK_THRESHOLD:
                 if drained_since is None:
                     drained_since = time.monotonic()
@@ -691,10 +671,11 @@ def run_distributed(
 
             time.sleep(30)
     finally:
-        try:
-            worker_job.terminate()
-        except Exception:
-            pass
+        if worker_job is not None:
+            try:
+                worker_job.terminate()
+            except Exception:
+                pass
         server.stop()
 
     # Flush remaining buffered objects
@@ -714,7 +695,7 @@ def run_distributed(
             print(f"    {e}")
 
     print(f"\nParquet output: {staging_dir}")
-    print(f"  Run report with: uv run scripts/ops/storage/cleanup.py report --parquet-dir {staging_dir}")
+    print(f"  Run report with: uv run scripts/ops/storage/render_report.py {staging_dir}")
 
 
 # ---------------------------------------------------------------------------
@@ -724,33 +705,32 @@ def run_distributed(
 
 @click.command()
 @click.option("--workers", default=4, type=int, show_default=True, help="Number of Iris worker replicas.")
-@click.option("--staging-dir", required=True, help="GCS path for parquet output.")
-@click.option("--project", help="GCP project override.")
-@click.option("--buckets", help="Comma-separated bucket names. Default: all MARIN_BUCKETS.")
+@click.option("--staging-dir", required=True, help="Object-storage path (gs:// or s3://) for parquet output.")
+@click.option("--buckets", help="Comma-separated bucket names or scheme://bucket URLs. Default: all MARIN_BUCKETS.")
 def main(
     workers: int,
     staging_dir: str,
-    project: str | None,
     buckets: str | None,
 ) -> None:
-    """Run distributed GCS object scan as an Iris coordinator job.
+    """Run a distributed object-storage scan as an Iris coordinator job.
 
-    Submit via iris job run:
+    Submit via iris job run (federate to a CoreWeave peer with --target-cluster):
 
         uv run iris --cluster=marin job run \\
-            --cpu 2 --memory 30GB --enable-extra-resources -- \\
-            uv run python scripts/ops/storage/scan_gcs.py \\
-            --staging-dir gs://marin-us-central2/tmp/storage-scan \\
+            --cpu 2 --memory 30GB --enable-extra-resources \\
+            --target-cluster cw-rno2a -- \\
+            uv run python scripts/ops/storage/scan_fs.py \\
+            --staging-dir s3://marin-us-east-02a/tmp/storage-scan \\
+            --buckets s3://marin-us-east-02a \\
             --workers 128
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
-    bucket_list = buckets.split(",") if buckets else MARIN_BUCKETS
+    bucket_list = buckets.split(",") if buckets else list(MARIN_BUCKETS)
 
     run_distributed(
         buckets=bucket_list,
         num_workers=workers,
-        project=project,
         staging_dir=staging_dir,
     )
 

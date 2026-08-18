@@ -18,11 +18,12 @@ many billions of objects the scan produced.
 Usage (standalone):
     uv run scripts/ops/storage/render_report.py PARQUET_DIR
 
-PARQUET_DIR (a local dir or gs:// path) is required; it points at the parquet
+PARQUET_DIR (a local dir or a gs:// or s3:// path) is required; it points at the parquet
 segments written by the scan stage.
 """
 
 import hashlib
+import posixpath
 import re
 import sys
 from datetime import UTC, datetime
@@ -32,7 +33,8 @@ import click
 import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
-from rigging.filesystem.factory import open_url, url_to_fs
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import StoragePath
 from tqdm import tqdm
 
@@ -44,19 +46,19 @@ from scripts.ops.storage.constants import (
 )
 
 
-def _download_gcs_parquet(gcs_dir: str, local_dir: Path) -> Path:
-    """Mirror all *.parquet files from gcs_dir to local_dir via fsspec.
+def _download_remote_parquet(remote_dir: str, local_dir: Path) -> Path:
+    """Mirror all *.parquet files from remote_dir (gs:// or s3://) to local_dir.
 
-    Deletes local parquets that no longer exist at the source — without
-    this, segments from prior scans accumulate locally and the report ends
-    up reading a stale union of every historical scan.
+    Deletes local parquets that no longer exist at the source. Otherwise,
+    segments from prior scans accumulate locally and the report reads a stale
+    union of every historical scan.
 
     Returns the local directory.
     """
 
     local_dir.mkdir(parents=True, exist_ok=True)
-    fs, _ = url_to_fs(gcs_dir)
-    pattern = f"{gcs_dir.rstrip('/')}/*.parquet"
+    fs, remote_path = filesystem_for(remote_dir)
+    pattern = posixpath.join(remote_path, "*.parquet")
     remote_paths = fs.glob(pattern)
     remote_basenames = {Path(p).name for p in remote_paths}
 
@@ -68,7 +70,7 @@ def _download_gcs_parquet(gcs_dir: str, local_dir: Path) -> Path:
     if pruned:
         print(f"  pruned {pruned} stale local parquets")
 
-    print(f"Mirroring {len(remote_paths)} parquets {gcs_dir} -> {local_dir} ...")
+    print(f"Mirroring {len(remote_paths)} parquets {remote_dir} -> {local_dir} ...")
     pbar = tqdm(remote_paths, unit="file", dynamic_ncols=True)
     for remote in pbar:
         name = Path(remote).name
@@ -119,22 +121,24 @@ def _dir_agg_sql(source: str) -> str:
 
 
 def _time_agg_sql(source: str) -> str:
+    # S3 backends report no creation timestamp (created is null there), so age and
+    # creation-trend columns fall back to last-modified, the best available proxy.
     return f"""
     SELECT
         bucket,
         storage_class_id,
-        date_trunc('month', created) AS created_month,
+        date_trunc('month', created_ts) AS created_month,
         CASE
-            WHEN created >= CURRENT_TIMESTAMP - INTERVAL  '7 days'  THEN '<7d'
-            WHEN created >= CURRENT_TIMESTAMP - INTERVAL '30 days'  THEN '7-30d'
-            WHEN created >= CURRENT_TIMESTAMP - INTERVAL '90 days'  THEN '30-90d'
-            WHEN created >= CURRENT_TIMESTAMP - INTERVAL '365 days' THEN '90-365d'
-            WHEN created IS NULL                                    THEN NULL
+            WHEN created_ts >= CURRENT_TIMESTAMP - INTERVAL  '7 days'  THEN '<7d'
+            WHEN created_ts >= CURRENT_TIMESTAMP - INTERVAL '30 days'  THEN '7-30d'
+            WHEN created_ts >= CURRENT_TIMESTAMP - INTERVAL '90 days'  THEN '30-90d'
+            WHEN created_ts >= CURRENT_TIMESTAMP - INTERVAL '365 days' THEN '90-365d'
+            WHEN created_ts IS NULL                                    THEN NULL
             ELSE '>365d'
         END AS age_bucket,
         COUNT(*) AS object_count,
         SUM(size_bytes) AS total_bytes
-    FROM {source}
+    FROM (SELECT *, COALESCE(created, updated) AS created_ts FROM {source})
     GROUP BY 1, 2, 3, 4
     """
 
@@ -212,7 +216,9 @@ def _build_summaries(
             dir_tmp.rename(dir_out)
             time_tmp.rename(time_out)
 
-        oc, tb = conn.execute(f"SELECT SUM(object_count), SUM(total_bytes) FROM read_parquet('{dir_out}')").fetchone()
+        totals = conn.execute(f"SELECT SUM(object_count), SUM(total_bytes) FROM read_parquet('{dir_out}')").fetchone()
+        assert totals is not None
+        oc, tb = totals
         total_objects += oc or 0
         total_bytes += tb or 0
         pbar.set_postfix(
@@ -261,16 +267,16 @@ def _tune_duckdb(conn: duckdb.DuckDBPyConnection, scratch: Path) -> None:
 def load_parquet_db(parquet_dir: Path | str, local_cache: Path | None = None) -> duckdb.DuckDBPyConnection:
     """Build an in-memory DuckDB with a pre-aggregated `dir_summary` table.
 
-    For gs:// paths, downloads files to local_cache (or a temp dir) first so
-    DuckDB reads from local disk — avoids the GCS auth maze.
+    For gs:// and s3:// paths, downloads files to local_cache (or a temp dir)
+    first so DuckDB reads from local disk with fsspec authentication.
     """
     dir_str = str(parquet_dir)
-    if dir_str.startswith("gs://"):
+    if "://" in dir_str:
         if local_cache is None:
             cache_root = Path("/tmp/storage-scan-cache")
-            subpath = dir_str.removeprefix("gs://").replace("/", "_")
+            subpath = dir_str.split("://", 1)[1].replace("/", "_")
             local_cache = cache_root / subpath
-        local_dir = _download_gcs_parquet(dir_str, local_cache)
+        local_dir = _download_remote_parquet(dir_str, local_cache)
     else:
         local_dir = Path(dir_str)
 
@@ -330,6 +336,7 @@ def _query_overview(conn: duckdb.DuckDBPyConnection) -> dict:
         JOIN storage_classes sc ON s.storage_class_id = sc.id
         """
     ).fetchone()
+    assert row is not None
     return {"total_objects": row[0], "total_bytes": row[1], "monthly_cost": row[2]}
 
 
@@ -969,7 +976,7 @@ def generate_report(conn: duckdb.DuckDBPyConnection, *, changes_section: str | N
 def main(parquet_dir: str, output: str | None, history_dir: str | None, change_threshold_gib: float) -> None:
     """Generate a storage usage report from parquet output of a scan.
 
-    PARQUET_DIR may be a local directory or a gs:// path (auto-downloaded
+    PARQUET_DIR may be a local directory or a gs:// or s3:// path (auto-downloaded
     to /tmp/storage-scan-cache via fsspec).
 
     Examples:

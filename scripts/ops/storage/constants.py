@@ -46,17 +46,6 @@ DISCOUNT_FACTOR = 1.0 - GCS_DISCOUNT
 NON_STANDARD_STORAGE_CLASSES = frozenset({"NEARLINE", "COLDLINE", "ARCHIVE"})
 
 # ---------------------------------------------------------------------------
-# GCS scan constants
-# ---------------------------------------------------------------------------
-
-GCS_MAX_PAGE_SIZE = 5000
-GCS_LIST_TIMEOUT = 120
-BLOB_FIELDS = "items(name,size,storageClass,timeCreated,updated),prefixes,nextPageToken"
-
-ADAPTIVE_SPLIT_THRESHOLD = 25_000
-ADAPTIVE_MAX_DEPTH = 2
-
-# ---------------------------------------------------------------------------
 # Arrow schema for objects parquet
 # ---------------------------------------------------------------------------
 

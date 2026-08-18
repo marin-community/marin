@@ -23,6 +23,7 @@ import s3fs
 
 from rigging.filesystem.cluster_config import BucketSpec, StoreType, data_buckets
 from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.paged_listing import with_listing
 from rigging.filesystem.s3_compat import (
     credentials_hint,
     fsspec_s3_conf,
@@ -48,19 +49,22 @@ def filesystem_for(url: str) -> tuple[Any, str]:
     kwargs-keyed cache. Everything else — GCS, local paths, ``mirror://``, and
     ``s3://`` buckets no config declares — goes through the guarded
     :func:`rigging.filesystem.factory.url_to_fs`, which reads the ambient environment.
+    S3 and GCS results expose paged object operations through ``fs.listing``.
 
     Raises:
         MissingCredentials: if the routed backend has no credentials configured.
     """
     parsed = StoragePath(url)
     if parsed.scheme != "s3":
-        return url_to_fs(url)
+        fs, path = url_to_fs(url)
+        return with_listing(fs), path
 
     spec = data_buckets().get(parsed.bucket)
     if spec is None or spec.store not in (StoreType.R2, StoreType.COREWEAVE):
-        return url_to_fs(url)
+        fs, path = url_to_fs(url)
+        return with_listing(fs), path
 
-    return _s3_filesystem(spec), _s3_path(parsed)
+    return with_listing(_s3_filesystem(spec)), _s3_path(parsed)
 
 
 def _s3_path(parsed: StoragePath) -> str:
