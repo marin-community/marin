@@ -47,6 +47,8 @@ pub struct NamespaceProvider {
     /// segment's typed index bundle. Empty for the typed-empty
     /// (no-segments) case.
     segment_paths: Vec<String>,
+    segment_key_column: Option<String>,
+    segment_key_bounds: BTreeMap<String, (i64, i64)>,
     index_cache: Arc<IndexCache>,
     exact_postings_policy: Option<BTreeMap<String, Vec<String>>>,
 }
@@ -103,6 +105,50 @@ impl NamespaceProvider {
         &self.index_cache
     }
 
+    fn listing_table(schema: SchemaRef, segment_paths: &[String]) -> DFResult<Arc<ListingTable>> {
+        let urls: Vec<ListingTableUrl> = segment_paths
+            .iter()
+            .map(|path| ListingTableUrl::parse(format!("file://{path}")))
+            .collect::<DFResult<Vec<_>>>()?;
+        let options =
+            ListingOptions::new(Arc::new(ParquetFormat::default())).with_file_extension(".parquet");
+        let config = ListingTableConfig::new_with_multi_paths(urls)
+            .with_listing_options(options)
+            .with_schema(schema);
+        Ok(Arc::new(ListingTable::try_new(config)?))
+    }
+
+    fn segment_paths_for_filters(&self, filters: &[Expr]) -> Vec<String> {
+        let Some(key_column) = self.segment_key_column.as_ref() else {
+            return self.segment_paths.clone();
+        };
+        let ranges = crate::query::predicate::int_column_ranges(filters);
+        let Some(range) = ranges.get(key_column) else {
+            return self.segment_paths.clone();
+        };
+        let paths = self
+            .segment_paths
+            .iter()
+            .filter(|path| {
+                self.segment_key_bounds
+                    .get(path.as_str())
+                    .is_none_or(|&(minimum, maximum)| {
+                        minimum > maximum || range.overlaps(minimum, maximum)
+                    })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if paths.len() != self.segment_paths.len() {
+            tracing::debug!(
+                key_column,
+                segments_total = self.segment_paths.len(),
+                segments_selected = paths.len(),
+                "scoped segment planning to key range"
+            );
+        }
+        paths
+    }
+
     /// Build a provider from the registered arrow `schema` and a snapshot of
     /// sealed segment file paths.
     ///
@@ -122,28 +168,35 @@ impl NamespaceProvider {
                 schema,
                 inner: Inner::Empty(Arc::new(mem)),
                 segment_paths: Vec::new(),
+                segment_key_column: None,
+                segment_key_bounds: BTreeMap::new(),
                 index_cache,
                 exact_postings_policy: None,
             });
         }
 
-        let urls: Vec<ListingTableUrl> = segment_paths
-            .iter()
-            .map(|p| ListingTableUrl::parse(format!("file://{p}")))
-            .collect::<DFResult<Vec<_>>>()?;
-        let opts =
-            ListingOptions::new(Arc::new(ParquetFormat::default())).with_file_extension(".parquet");
-        let cfg = ListingTableConfig::new_with_multi_paths(urls)
-            .with_listing_options(opts)
-            .with_schema(Arc::clone(&schema));
-        let listing = ListingTable::try_new(cfg)?;
+        let listing = Self::listing_table(Arc::clone(&schema), segment_paths)?;
         Ok(NamespaceProvider {
             schema,
-            inner: Inner::Listing(Arc::new(listing)),
+            inner: Inner::Listing(listing),
             segment_paths: segment_paths.to_vec(),
+            segment_key_column: None,
+            segment_key_bounds: BTreeMap::new(),
             index_cache,
             exact_postings_policy: None,
         })
+    }
+
+    /// Attach exact Int64 key bounds captured with the segment path snapshot.
+    /// Paths missing from `bounds` remain queryable for scan safety.
+    pub fn with_segment_key_bounds(
+        mut self,
+        key_column: impl Into<String>,
+        bounds: BTreeMap<String, (i64, i64)>,
+    ) -> Self {
+        self.segment_key_column = Some(key_column.into());
+        self.segment_key_bounds = bounds;
+        self
     }
 
     /// Supply the registered values for which segment indexes may contain exact postings.
@@ -189,10 +242,21 @@ impl TableProvider for NamespaceProvider {
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         match &self.inner {
             Inner::Listing(t) => {
+                let segment_paths = self.segment_paths_for_filters(filters);
                 // Delegate to DataFusion's parquet scan (which keeps the existing
                 // range / min-max row-group pruning), then layer bundle-backed
                 // filtered projections or access plans onto its files.
-                let plan = t.scan(state, projection, filters, limit).await?;
+                let plan = if segment_paths.len() == self.segment_paths.len() {
+                    t.scan(state, projection, filters, limit).await?
+                } else if segment_paths.is_empty() {
+                    MemTable::try_new(Arc::clone(&self.schema), vec![vec![]])?
+                        .scan(state, projection, filters, limit)
+                        .await?
+                } else {
+                    Self::listing_table(Arc::clone(&self.schema), &segment_paths)?
+                        .scan(state, projection, filters, limit)
+                        .await?
+                };
                 let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
                 let mut exact = crate::query::exact_prune::values_by_column(filters);
                 if let Some(policy) = &self.exact_postings_policy {
@@ -233,7 +297,6 @@ impl TableProvider for NamespaceProvider {
                 );
                 // Bundle + footer reads are blocking, so run pruning off the
                 // async worker.
-                let segment_paths = self.segment_paths.clone();
                 let index_cache = Arc::clone(&self.index_cache);
                 tokio::task::spawn_blocking(move || {
                     let plan = crate::query::trigram_prune::apply_with_needles(
@@ -467,6 +530,117 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first_column_strings(&batches), vec!["w-2"]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn key_range_excludes_disjoint_segments_before_projection_planning() {
+        let dir = tempdir("key_range_projection");
+        let old = worker_batch(1, vec!["w-2"], vec![10]);
+        let recent = worker_batch(2, vec!["w-2"], vec![110]);
+        let unknown = worker_batch(3, vec!["w-2"], vec![120]);
+        let (old_path, _) = write_segment_to_dir(&dir, 1, 1, &old).unwrap();
+        let (recent_path, _) = write_segment_to_dir(&dir, 1, 2, &recent).unwrap();
+        let (unknown_path, _) = write_segment_to_dir(&dir, 1, 3, &unknown).unwrap();
+        let index_config = crate::store::segment_index::SegmentIndexConfig::from_policies(
+            Vec::<String>::new(),
+            &[crate::store::exact::ExactIndexConfig {
+                column: "worker_id".to_string(),
+                exact_values: vec!["w-2".to_string()],
+                value_counts: false,
+            }],
+            &[crate::store::schema::CoveringProjection::new(
+                "workers",
+                "worker_id",
+                ["w-2"],
+                ["seq", "worker_id", "mem_bytes"],
+            )],
+            None,
+        );
+        for (path, batch) in [
+            (&old_path, &old),
+            (&recent_path, &recent),
+            (&unknown_path, &unknown),
+        ] {
+            crate::store::segment_index::write_segment_index(
+                path,
+                std::slice::from_ref(batch),
+                &index_config,
+            )
+            .unwrap();
+        }
+        let paths = [&old_path, &recent_path, &unknown_path]
+            .map(|path| path.to_string_lossy().into_owned());
+        let provider = NamespaceProvider::build(
+            worker_arrow(),
+            &paths,
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap()
+        .with_segment_key_bounds(
+            "mem_bytes",
+            BTreeMap::from([(paths[0].clone(), (10, 10)), (paths[1].clone(), (110, 110))]),
+        );
+        let filters = [
+            col("worker_id").eq(lit("w-2")),
+            col("mem_bytes").gt_eq(lit(100_i64)),
+            col("mem_bytes").lt(lit(200_i64)),
+        ];
+        let ctx = SessionContext::new();
+        let plan = provider
+            .scan(&ctx.state(), None, &filters, None)
+            .await
+            .unwrap();
+        let exec = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec");
+        let config = exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        let locations: Vec<&str> = config
+            .file_groups
+            .iter()
+            .flat_map(|group| group.files())
+            .map(|file| file.object_meta.location.as_ref())
+            .collect();
+        let old_projection = crate::store::exact::named_projection_path(&old_path, "workers");
+        let old_projection = old_projection.file_name().unwrap().to_str().unwrap();
+        assert_eq!(locations.len(), 2);
+        assert!(locations
+            .iter()
+            .all(|location| location.ends_with(".fidx.workers.parquet")));
+        assert!(locations
+            .iter()
+            .all(|location| !location.ends_with(old_projection)));
+
+        ctx.register_table("workers", Arc::new(provider)).unwrap();
+        let batches = ctx
+            .sql(
+                "SELECT mem_bytes FROM workers WHERE worker_id = 'w-2' \
+                 AND mem_bytes >= 100 AND mem_bytes < 200 ORDER BY mem_bytes",
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let values = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![110, 120]);
         std::fs::remove_dir_all(&dir).ok();
     }
 

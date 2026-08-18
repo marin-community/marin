@@ -85,14 +85,15 @@ pub fn log_registered_schema() -> Schema {
     )
 }
 
-/// One consistent view of a namespace's sealed local segments: the arrow schema to
-/// read them with, their paths, and the lowest `seq` they hold (`None` when there is
-/// no local segment). Captured under a single hold of the engine's insertion lock, so
-/// `min_seq` always describes exactly the segments in `paths`.
+/// One consistent view of a namespace's sealed local segments: the Arrow schema,
+/// resolved key and known bounds, paths, and lowest `seq`. Captured under one hold
+/// of the insertion lock so all segment metadata describes exactly the same paths.
 pub struct NamespaceSnapshot {
     pub schema: SchemaRef,
     pub exact_postings_policy: BTreeMap<String, Vec<String>>,
+    pub key_column: String,
     pub paths: Vec<String>,
+    pub key_bounds: BTreeMap<String, (i64, i64)>,
     pub min_seq: Option<i64>,
     pub index_cache: Arc<IndexCache>,
 }
@@ -579,13 +580,16 @@ impl Store {
             };
             let arrow_schema = Arc::clone(engine.arrow_schema());
             let exact_postings_policy = engine.schema().exact_postings_policy();
-            let paths = engine.query_snapshot().paths;
-            let provider =
-                NamespaceProvider::build(arrow_schema, &paths, Arc::clone(&self.index_cache))
-                    .map_err(|e| {
-                        StatsError::Internal(format!("build provider {:?}: {e}", ns.name))
-                    })?
-                    .with_exact_postings_policy(exact_postings_policy);
+            let key_column = engine.key_column().to_string();
+            let segments = engine.query_snapshot();
+            let provider = NamespaceProvider::build(
+                arrow_schema,
+                &segments.paths,
+                Arc::clone(&self.index_cache),
+            )
+            .map_err(|e| StatsError::Internal(format!("build provider {:?}: {e}", ns.name)))?
+            .with_exact_postings_policy(exact_postings_policy)
+            .with_segment_key_bounds(key_column, segments.key_bounds);
             out.push(RegisteredProvider {
                 name: ns.name,
                 provider,
@@ -604,7 +608,9 @@ impl Store {
         Ok(NamespaceSnapshot {
             schema: Arc::clone(engine.arrow_schema()),
             exact_postings_policy: engine.schema().exact_postings_policy(),
+            key_column: engine.key_column().to_string(),
             paths: segments.paths,
+            key_bounds: segments.key_bounds,
             min_seq: segments.min_seq,
             index_cache: Arc::clone(&self.index_cache),
         })

@@ -136,6 +136,12 @@ at least one exact query constraint is covered. Version 1 preserves the old
 payload-loading behavior. Missing, corrupt, or unknown-future coverage disables
 that accelerator for the segment and leaves source scanning available.
 
+Before constructing any source, projection, or postings plan, integer
+predicates on the resolved key column are compared with the immutable segment
+bounds captured in the same query snapshot as the paths. Disjoint segments are
+omitted. Missing or invalid bounds retain the segment as a scan fallback. An
+empty registered key hint resolves to the historical `timestamp_ms` key.
+
 `needs_rebuild` requires method version 2 plus parseable coverage for each
 configured exact column. The normal maintenance backfill therefore replaces
 version-1 bundles without a blocking namespace migration.

@@ -57,6 +57,13 @@ postings payload. Version-1 bundles keep their previous behavior and are queued
 for normal background rebuild. A corrupt or unknown header remains a source
 scan fallback.
 
+The query snapshot also carries each segment's immutable minimum and maximum
+key values. Integer bounds on the resolved key remove disjoint files before
+constructing the source listing table or consulting projections and postings.
+Segments with missing or invalid bounds remain candidates. Legacy schemas with
+an empty key hint resolve to the historical `timestamp_ms` default at runtime,
+so existing telemetry files participate without a catalog migration.
+
 `Schema` gains `sort_columns` and `max_row_group_rows`. The event/retention key
 remains `timestamp_ms`; the compactor orders telemetry by
 `(service, run_id, name, timestamp_ms, seq)` and limits row groups to 131,072
@@ -93,7 +100,9 @@ The production replay uses 244 copied Parquets and 232 copied index bundles:
 1,360,540,454 rows and 16.06 GB. The fixed exact-name query improved from
 8,563.6 milliseconds to 189.3 milliseconds warm p50; `EXPLAIN` improved from
 6,550.1 to 15.9 milliseconds. The separate physical-layout sample improved the
-same query from 194.8 to 15.8 milliseconds.
+same query from 194.8 to 15.8 milliseconds. The unchanged five-minute Zephyr
+selector improved from 13,275.8 to 10.5 milliseconds warm p50 after key-bound
+selection reduced candidate files from 259 to 28.
 
 The staged rollout starts at `marin-dev` with a captured image-digest rollback
 target. Gates include health-body success, zero unexpected container restarts,
@@ -111,6 +120,3 @@ rename-only.
   window, or introduce a layout revision and pay an immediate local rewrite.
   The current proposal chooses gradual adoption unless the dev and production
   canaries show a reason to force migration.
-- Catalog timestamp bounds can remove file-footer fanout before Parquet planning.
-  This remains follow-up work: a one-hour exact query reads less data but checks
-  more files when `LIMIT 100` must find nearly every recent match.

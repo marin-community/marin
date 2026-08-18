@@ -609,7 +609,8 @@ where
         let provider =
             NamespaceProvider::build(snapshot.schema, &snapshot.paths, snapshot.index_cache)
                 .map_err(|e| StatsError::Internal(format!("build provider {name:?}: {e}")))?
-                .with_exact_postings_policy(snapshot.exact_postings_policy);
+                .with_exact_postings_policy(snapshot.exact_postings_policy)
+                .with_segment_key_bounds(snapshot.key_column, snapshot.key_bounds);
 
         let table = quote_ident(name);
         let mut sql =

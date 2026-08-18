@@ -26,6 +26,13 @@ as literal characters for `=`, so the corrected query is
 the exact-pruning planner opened postings payloads before learning whether a
 value was indexed in that segment.
 
+The recurring Zephyr selector exposed a second planning boundary. Its
+five-minute predicate overlapped only 28 query-visible files, but the custom
+exact/projection path constructed a 259-file listing before DataFusion could
+apply Parquet pruning. Carrying catalog key bounds into the table provider
+reduced its warm median from 13,275.8 to 10.5 milliseconds on the same copied
+1.36-billion-row corpus.
+
 ### Internal Prior Work
 
 - [Telemetry layout benchmark](https://github.com/marin-community/marin/blob/57151a89f4/docs/reports/finelog-telemetry-layout-benchmark.md)
@@ -58,8 +65,8 @@ value was indexed in that segment.
 
 - Correcting the escaped SQL fixed semantics but left the query at 8.56 seconds
   warm in the production replay.
-- A one-hour timestamp lower bound did not reduce planning because exact
-  payloads were loaded before source row-group execution.
+- A timestamp lower bound did not reduce planning until segment bounds were
+  applied before constructing the source and secondary-index scans.
 - Combining eight source files into one time-ordered file made exact lookup
   slower.
 - Separate service/time files grew bytes by 31% and made exact lookup 9% slower.
@@ -101,18 +108,22 @@ value was indexed in that segment.
 - Confidence: high for the current deployment.
 - Action: retain local hot serving and pursue archive manifests separately.
 
+#### Claim: Catalog key bounds must filter files before secondary-index planning
+
+- Support: the unchanged five-minute Zephyr selector fell from 13,275.8 to
+  10.5 milliseconds warm p50. Plan construction fell from 13,161.6 to 11.0
+  milliseconds, with 28 candidate files instead of 259.
+- Contradiction: segments with missing or invalid bounds must remain in the
+  candidate set, so legacy or corrupt metadata weakens performance rather than
+  correctness.
+- Directness to Marin: full copied hot set and exact production alert SQL.
+- Confidence: high.
+- Action: capture key bounds with the segment-path snapshot and apply them
+  before creating the listing table, projections, or postings plans.
+
 ### Recommended Next Experiments
 
-#### 1. Segment-bound filtering before Parquet planning
-
-- Minimum experiment: use catalog timestamp bounds to omit and order files for
-  `timestamp_ms >= ... LIMIT N` before constructing the listing scan.
-- Baseline/control: implemented exact-plus-one-hour query at 214.5 ms p50.
-- Expected signal: fewer than 247 files considered and lower metadata time.
-- Falsifier: unchanged file count or less than 10% latency improvement.
-- Cost/risk: low/medium; segment selection must remain correct for missing bounds.
-
-#### 2. Archive manifest prototype
+#### 1. Archive manifest prototype
 
 - Minimum experiment: publish event-time and identity bounds for one archive
   generation and query selected objects without bucket globbing.
@@ -123,8 +134,8 @@ value was indexed in that segment.
 
 ### Hypothesis Queue Update
 
-- Promote: exact header coverage, promoted dimensions, and telemetry sort policy.
-- Add: catalog-bound file elimination before listing-table construction.
+- Promote: exact header coverage, catalog-bound file elimination, promoted
+  dimensions, and telemetry sort policy.
 - Revise: archive work starts with a manifest, not a storage-format migration.
 - Stop: physical service splitting, global name-only sorting, and raw GCS serving.
 
@@ -133,6 +144,7 @@ value was indexed in that segment.
 | Source | Type | Claim used for | Confidence | Notes |
 |---|---|---|---|---|
 | 2026-08-17 production replay | benchmark | exact planner and full-set latency | high | Copied hot set; raw JSON retained in Weaver session |
+| 2026-08-18 Zephyr replay | benchmark | bounded planner latency and file selection | high | Full copied hot set; unchanged production selector |
 | 48.1M-row layout sample | benchmark | sort/row-group choice | medium-high | Eight production terminal files |
 | Telemetry layout benchmark | Marin report | prior partition/run-catalog decisions | high | Synthetic predecessor study |
 | Echo wiki/90 | incident | trigram and projection behavior | high | Production alert workload |
@@ -144,5 +156,5 @@ value was indexed in that segment.
 
 - Open question: force an old-layout rewrite only if canary results justify its
   CPU and page-cache cost.
-- Stop reason: planner and physical-layout treatments both exceeded the 10x
-  target; remaining work concerns rollout and metadata fanout.
+- Stop reason: exact-header, segment-bound, and physical-layout treatments all
+  exceeded the 10x target; remaining work concerns rollout and archive serving.
