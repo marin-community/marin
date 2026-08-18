@@ -27,7 +27,7 @@ def migrate(raw_conn) -> None:
             phase VARCHAR NOT NULL CHECK (phase IN ('accepted', 'verifying', 'verified', 'failed')),
             peer_id VARCHAR NOT NULL DEFAULT '',
             remote_operation_id VARCHAR NOT NULL DEFAULT '',
-            error_code INTEGER,
+            error_code VARCHAR,
             error_message VARCHAR NOT NULL DEFAULT '',
             accepted_at_ms INTEGER NOT NULL,
             applied_at_ms INTEGER,

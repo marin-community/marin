@@ -205,3 +205,28 @@ def test_task_update_during_reconcile_discards_the_stale_result(journey):
         job_pb2.TASK_STATE_PREEMPTED,
         job_pb2.TASK_STATE_RUNNING,
     ]
+
+
+def test_operation_fails_when_worker_disappears_before_release_is_confirmed(journey):
+    job = journey.submit("worker-gone-during-terminate")
+    journey.settle()
+    attempt_uid = journey.task(job[0]).attempts[-1].attempt_uid
+    journey.backend.lose_runtime(attempt_uid)
+
+    accepted = journey.controller.update_resource(
+        _update(
+            resource_pb2.ResourceRef(
+                authority_cluster_id="journey",
+                type="iris/task",
+                id=job[0].wire_id,
+            ),
+            "worker-gone-during-terminate",
+            resource_task_pb2.TaskUpdate(terminate=resource_task_pb2.TerminateAttempt()),
+        )
+    )
+    journey.step()
+    completed = _operation(journey, accepted.ref)
+
+    assert completed.phase == resource_pb2.OPERATION_PHASE_FAILED
+    assert completed.error.code == Code.UNAVAILABLE.value
+    assert journey.task(job[0]).state == job_pb2.TASK_STATE_KILLED

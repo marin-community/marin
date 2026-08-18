@@ -767,6 +767,31 @@ def test_reconcile_confirms_release_only_after_terminal_worker_observation(state
     assert stub.reconcile_calls[-1].desired[0].HasField("stop")
 
 
+def test_reconcile_reports_release_unverifiable_after_worker_removal(state):
+    task_id, _attempt_id, uid = _setup_running_task(state)
+    provider, stub = _provider_with_stub()
+    _bind_provider(provider, state)
+    with state._db.transaction() as cur:
+        writes.remove_worker(cur, WorkerId(_W1), health=provider.health)
+
+    result = provider.reconcile(
+        ReconcileRequest(
+            release_targets=(
+                RuntimeReleaseTarget(
+                    task_id=task_id.to_wire(),
+                    attempt_id=0,
+                    attempt_uid=uid,
+                    worker_id=WorkerId(_W1),
+                ),
+            )
+        )
+    )
+
+    assert result.lost_attempt_uids == {uid}
+    assert not result.released_attempt_uids
+    assert not stub.reconcile_calls
+
+
 def test_reconcile_matching_responder_id_resets_unreachable_counter(state):
     """A healthy reply stamped with the targeted worker's id counts as REACHED."""
     register_worker(state, _W1, _W1_ADDR, make_worker_metadata())

@@ -62,7 +62,7 @@ class OperationRow(Protocol):
     phase: str
     peer_id: str
     remote_operation_id: str
-    error_code: int | None
+    error_code: str | None
     error_message: str
     accepted_at_ms: Timestamp
     applied_at_ms: Timestamp | None
@@ -185,7 +185,7 @@ def mark_failed(tx: Tx, operation_id: str, *, code: Code, message: str) -> None:
         .where(resource_operations_table.c.operation_id == operation_id)
         .values(
             phase=OperationPhase.FAILED,
-            error_code=int(code),
+            error_code=code.value,
             error_message=message,
             completed_at_ms=now,
         )

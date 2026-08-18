@@ -419,6 +419,7 @@ class Controller:
         self._last_unroutable_jobs: dict[str, str] = {}
         self._mutation_lock = threading.RLock()
         self._mutation_generation = 0
+        self._serialize_next_tick = False
 
         self._promotion_bucket = TokenBucket(
             capacity=DISPATCH_PROMOTION_RATE,
@@ -998,6 +999,24 @@ class Controller:
         autoscale_limiter: RateLimiter,
         force_timeout_scan: bool = False,
     ) -> None:
+        # One raced tick favors mutation latency and discards its stale effects.
+        # Its successor owns the mutation lock for one pass so sustained action
+        # traffic cannot starve scheduling or reconciliation indefinitely.
+        if self._serialize_next_tick:
+            with self._mutation_lock:
+                mutation_generation = self._mutation_generation
+                ran = self._control_tick_once(
+                    woken=woken,
+                    schedule_limiter=schedule_limiter,
+                    reconcile_limiter=reconcile_limiter,
+                    autoscale_limiter=autoscale_limiter,
+                    force_timeout_scan=force_timeout_scan,
+                    mutation_generation=mutation_generation,
+                )
+                self._serialize_next_tick = False
+            if ran:
+                self._workload_actions.progress_remote()
+            return
         with self._mutation_lock:
             mutation_generation = self._mutation_generation
         ran = self._control_tick_once(
@@ -1110,6 +1129,7 @@ class Controller:
         with self._mutation_lock:
             if mutation_generation != self._mutation_generation:
                 self._force_reconcile = True
+                self._serialize_next_tick = True
                 self._tick_wake.set()
                 return True
             confirmed_promotions = self._commit_tick(

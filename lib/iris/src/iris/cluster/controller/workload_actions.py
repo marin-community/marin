@@ -324,13 +324,31 @@ class WorkloadActions:
         with self._db.read_snapshot() as tx:
             rows = [row for row in operation_store.pending(tx) if not row.peer_id]
         for row in rows:
+            targets = verification_candidates.get(row.operation_id, ())
+            lost = [
+                target.ref.uid
+                for target in targets
+                if target.backend_id in reconcile_results
+                and target.ref.uid in reconcile_results[target.backend_id].lost_attempt_uids
+            ]
+            if lost:
+                with self._db.transaction() as tx:
+                    current = operation_store.by_id(tx, row.operation_id)
+                    if current is not None and current.phase == operation_store.OperationPhase.VERIFYING:
+                        operation_store.mark_failed(
+                            tx,
+                            row.operation_id,
+                            code=Code.UNAVAILABLE,
+                            message=f"Runtime release could not be confirmed after worker removal: {', '.join(lost)}",
+                        )
+                continue
             if (
                 row.phase == operation_store.OperationPhase.VERIFYING
                 and row.operation_id in verification_candidates
                 and all(
                     target.backend_id in reconcile_results
                     and target.ref.uid in reconcile_results[target.backend_id].released_attempt_uids
-                    for target in verification_candidates[row.operation_id]
+                    for target in targets
                 )
             ):
                 with self._db.transaction() as tx:

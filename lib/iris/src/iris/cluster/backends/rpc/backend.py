@@ -119,6 +119,7 @@ class FleetObservation:
 
     worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]]
     transport_events: list[WorkerHealthEvent]
+    lost_attempt_uids: frozenset[str] = frozenset()
 
 
 def _released_attempt_uids(observation: FleetObservation, expected_uids: frozenset[str]) -> frozenset[str]:
@@ -367,6 +368,13 @@ class RpcTaskBackend:
         snapshot = self._store.reconcile_snapshot()
         plans = plans_from_snapshot(snapshot)
         plans_by_worker = {plan.worker_id: plan for plan in plans}
+        targeted_workers = {target.worker_id for target in release_targets if target.worker_id is not None}
+        existing_workers = self._store.existing_worker_ids(targeted_workers)
+        lost_attempt_uids = frozenset(
+            target.attempt_uid
+            for target in release_targets
+            if target.worker_id is not None and target.worker_id not in existing_workers
+        )
         for target in release_targets:
             worker_id = target.worker_id
             if worker_id is None:
@@ -414,7 +422,11 @@ class RpcTaskBackend:
                 transport_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
             else:
                 transport_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
-        return FleetObservation(worker_results=worker_results, transport_events=transport_events)
+        return FleetObservation(
+            worker_results=worker_results,
+            transport_events=transport_events,
+            lost_attempt_uids=lost_attempt_uids,
+        )
 
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
         """Observe the fleet, resolve its observations into effects, fold liveness.
@@ -442,6 +454,7 @@ class RpcTaskBackend:
         return ReconcileResult(
             effects=effects,
             released_attempt_uids=_released_attempt_uids(observation, expected_uids),
+            lost_attempt_uids=observation.lost_attempt_uids,
         )
 
     def run_teardown(self) -> None:

@@ -54,9 +54,9 @@ class OperationError(_message.Message):
     __slots__ = ("code", "message")
     CODE_FIELD_NUMBER: _ClassVar[int]
     MESSAGE_FIELD_NUMBER: _ClassVar[int]
-    code: int
+    code: str
     message: str
-    def __init__(self, code: _Optional[int] = ..., message: _Optional[str] = ...) -> None: ...
+    def __init__(self, code: _Optional[str] = ..., message: _Optional[str] = ...) -> None: ...
 
 class Operation(_message.Message):
     __slots__ = ("ref", "phase", "verb", "requested_ref", "resolved_ref", "affected", "error", "accepted_at", "applied_at", "completed_at")

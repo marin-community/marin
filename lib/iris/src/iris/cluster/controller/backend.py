@@ -230,6 +230,8 @@ class ReconcileResult:
     """Task/attempt/job writes for the controller to commit (``commit_effects``)."""
     released_attempt_uids: frozenset[str] = frozenset()
     """Exact runtimes this reconcile authoritatively observed as stopped or absent."""
+    lost_attempt_uids: frozenset[str] = frozenset()
+    """Exact runtimes whose worker disappeared before release could be confirmed."""
 
 
 @dataclass(frozen=True)

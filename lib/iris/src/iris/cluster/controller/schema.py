@@ -477,7 +477,7 @@ resource_operations_table = Table(
     Column("phase", String, nullable=False),
     Column("peer_id", String, nullable=False, server_default=""),
     Column("remote_operation_id", String, nullable=False, server_default=""),
-    Column("error_code", Integer),
+    Column("error_code", String),
     Column("error_message", String, nullable=False, server_default=""),
     Column("accepted_at_ms", TimestampMsType, nullable=False),
     Column("applied_at_ms", TimestampMsType),

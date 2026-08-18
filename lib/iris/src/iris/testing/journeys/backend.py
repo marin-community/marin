@@ -69,6 +69,7 @@ class ScriptedTaskBackend:
         self.backend_id = backend_id
         self._queued: dict[str, deque[ScriptedObservation]] = defaultdict(deque)
         self._desired: set[tuple[str, int]] = set()
+        self._lost_attempt_uids: set[str] = set()
         self.events: list[BackendEvent] = []
         self.calls: list[str] = []
         self._reconcile_failures = 0
@@ -98,6 +99,10 @@ class ScriptedTaskBackend:
     def pause_next_reconcile(self, *, started: threading.Event, release: threading.Event) -> None:
         """Pause after the next reconcile result is authored, before returning it."""
         self._reconcile_barrier = (started, release)
+
+    def lose_runtime(self, attempt_uid: str) -> None:
+        """Report that an exact runtime disappeared before release was observed."""
+        self._lost_attempt_uids.add(attempt_uid)
 
     def advertised_attributes(self) -> dict[str, set[str]]:
         return self.advertised
@@ -152,12 +157,16 @@ class ScriptedTaskBackend:
         released = frozenset(
             target.attempt_uid
             for target in request.release_targets
-            if (target.task_id, target.attempt_id) not in desired
+            if (target.task_id, target.attempt_id) not in desired and target.attempt_uid not in self._lost_attempt_uids
         )
-        result = ReconcileResult(released_attempt_uids=released)
+        lost = frozenset(
+            target.attempt_uid for target in request.release_targets if target.attempt_uid in self._lost_attempt_uids
+        )
+        self._lost_attempt_uids.difference_update(lost)
+        result = ReconcileResult(released_attempt_uids=released, lost_attempt_uids=lost)
         if updates:
             effects = apply_dispatch_updates(self._transition_reader, updates, now=Timestamp.now())
-            result = ReconcileResult(effects=effects, released_attempt_uids=released)
+            result = ReconcileResult(effects=effects, released_attempt_uids=released, lost_attempt_uids=lost)
         barrier = self._reconcile_barrier
         self._reconcile_barrier = None
         if barrier is not None:
