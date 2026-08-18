@@ -214,8 +214,10 @@ def build_train_loader(
     return DataLoader(
         dataset,
         batch_schedule.schedule,
+        max_buffered_batches=512,
         mesh=mesh,
         axis_resources={"__BATCH__": _BATCH_AXES},
+        prefetch_size=256,
         batch_axis_name="__BATCH__",
         allow_nondivisible_batch_size=False,
     )
