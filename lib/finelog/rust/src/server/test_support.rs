@@ -42,6 +42,8 @@ pub type TestTransport = ServiceTransport<HyperClient<HttpConnector, ClientBody>
 pub struct RequestStats {
     total: AtomicUsize,
     zstd: AtomicUsize,
+    register_table: AtomicUsize,
+    write_rows: AtomicUsize,
     in_flight: AtomicUsize,
     max_in_flight: AtomicUsize,
 }
@@ -61,6 +63,12 @@ impl RequestStats {
         {
             self.zstd.fetch_add(1, Ordering::SeqCst);
         }
+        if request.uri().path().ends_with("/RegisterTable") {
+            self.register_table.fetch_add(1, Ordering::SeqCst);
+        }
+        if request.uri().path().ends_with("/WriteRows") {
+            self.write_rows.fetch_add(1, Ordering::SeqCst);
+        }
         let in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_in_flight.fetch_max(in_flight, Ordering::SeqCst);
         true
@@ -76,6 +84,14 @@ impl RequestStats {
 
     pub fn zstd_requests(&self) -> usize {
         self.zstd.load(Ordering::SeqCst)
+    }
+
+    pub fn register_table_requests(&self) -> usize {
+        self.register_table.load(Ordering::SeqCst)
+    }
+
+    pub fn write_rows_requests(&self) -> usize {
+        self.write_rows.load(Ordering::SeqCst)
     }
 
     pub fn max_in_flight(&self) -> usize {
@@ -154,10 +170,33 @@ pub async fn serve(store: Arc<Store>, policy: AuthPolicy) -> (SocketAddr, Arc<Re
 }
 
 /// A hub that answers every RPC with `invalid_argument`, as the real one does for a
-/// structurally malformed entry (an empty key). Retrying such a request can never
-/// succeed, so this fixture lets a test prove the forwarder skips the batch instead of
-/// livelocking on it. Returns the address and a count of the requests it served.
+/// structurally malformed entry or a batch whose columns are missing from the hub's
+/// registered schema. Returns the address and a count of the requests it served.
 pub async fn serve_rejecting() -> (SocketAddr, Arc<RequestStats>) {
+    serve_error(
+        connectrpc::ErrorCode::InvalidArgument,
+        axum::http::StatusCode::BAD_REQUEST,
+        "empty key",
+    )
+    .await
+}
+
+/// A hub that answers every RPC with `unavailable`, modeling an outage that may clear
+/// without changing the request.
+pub async fn serve_unavailable() -> (SocketAddr, Arc<RequestStats>) {
+    serve_error(
+        connectrpc::ErrorCode::Unavailable,
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        "hub unavailable",
+    )
+    .await
+}
+
+async fn serve_error(
+    code: connectrpc::ErrorCode,
+    status: axum::http::StatusCode,
+    message: &'static str,
+) -> (SocketAddr, Arc<RequestStats>) {
     let requests = Arc::new(RequestStats::default());
     let counted = Arc::clone(&requests);
     let app = axum::Router::new().fallback(axum::routing::any(
@@ -165,12 +204,9 @@ pub async fn serve_rejecting() -> (SocketAddr, Arc<RequestStats>) {
             let counted = Arc::clone(&counted);
             async move {
                 let observed = counted.begin(&request);
-                let error = connectrpc::ConnectError::new(
-                    connectrpc::ErrorCode::InvalidArgument,
-                    "empty key",
-                );
+                let error = connectrpc::ConnectError::new(code, message);
                 let response = (
-                    axum::http::StatusCode::BAD_REQUEST,
+                    status,
                     [(axum::http::header::CONTENT_TYPE, "application/json")],
                     error.to_json(),
                 );
