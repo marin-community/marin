@@ -9,10 +9,10 @@ orchestrator opens a tunnel to the named Iris cluster and submits each compute
 stage as an Iris job using the Python client (no subprocess into the iris CLI),
 then publishes the result locally.
 
-  1. Scan stage    — Iris coordinator + N worker replicas walk every GCS
+  1. Scan stage    — Iris coordinator + N worker replicas walk every bucket
                      prefix and write consolidated parquet segments to
                      STAGING_DIR (delegates to ``run_distributed`` in
-                     ``scan_gcs.py``).
+                     ``scan_fs.py``).
   2. Dedup stage   — Iris coordinator job runs a Zephyr ``group_by`` to
                      collapse the raw parquets into one row per (bucket, name)
                      under STAGING_DIR/deduped. Pipeline construction lives
@@ -69,7 +69,7 @@ from scripts.ops.storage.render_report import (
     snapshot_path,
     write_snapshot,
 )
-from scripts.ops.storage.scan_gcs import run_distributed
+from scripts.ops.storage.scan_fs import run_distributed
 
 DEFAULT_STAGING_DIR = "gs://marin-us-central2/tmp/storage-scan"
 # Stable location for week-over-week snapshots, independent of the (often
@@ -95,7 +95,6 @@ def _scan_stage(staging_dir: str, workers: int) -> None:
     run_distributed(
         buckets=MARIN_BUCKETS,
         num_workers=workers,
-        project=None,
         staging_dir=staging_dir,
     )
 

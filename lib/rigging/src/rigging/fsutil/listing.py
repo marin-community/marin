@@ -278,6 +278,41 @@ def _is_s3_filesystem(fs) -> bool:
     return "s3" in protocols
 
 
+def iter_object_pages(fs, path: str) -> Iterator[tuple[list[dict[str, Any]], list[str]]]:
+    """Yield ``(file_entries, subdir_paths)`` for one delimiter level under *path*.
+
+    A single page for backends whose ``ls`` returns the whole level at once; one page
+    per S3 continuation token otherwise, so a flat prefix with millions of objects streams
+    in bounded chunks instead of materializing at once. *path* is the protocol-stripped
+    ``bucket/key`` form (what :func:`rigging.filesystem.buckets.filesystem_for` returns);
+    each ``subdir_path`` is re-listable with this function on the same *fs*. The prefix's
+    own marker object is excluded.
+    """
+    if _is_s3_filesystem(fs):
+        continuation_token: str | None = None
+        while True:
+            entries, continuation_token = _s3_listing_page(fs, path, continuation_token, "/")
+            yield _split_level(path, entries)
+            if continuation_token is None:
+                return
+    else:
+        yield _split_level(path, fs.ls(path, detail=True))
+
+
+def _split_level(listed: str, entries: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Partition one level's entries into object detail dicts and subdirectory paths."""
+    files: list[dict[str, Any]] = []
+    subdirs: list[str] = []
+    for entry in entries:
+        if not is_child(listed, entry["name"]):
+            continue
+        if entry.get("type") == DIRECTORY_TYPE:
+            subdirs.append(entry["name"])
+        else:
+            files.append(entry)
+    return files, subdirs
+
+
 def _metadata_listing_pages(fs, path: str, workers: int) -> Iterator[ListingPage]:
     if _is_s3_filesystem(fs):
         yield from _s3_listing_pages(fs, path, workers)
