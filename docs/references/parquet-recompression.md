@@ -53,17 +53,7 @@ resumes at the first step without a successful record.
 
 The manifest is an allowlist of quiescent prefixes. Review every addition and
 confirm its producers have stopped before launching it. Run the coordinator on
-Iris in the source bucket's cluster; the first manifest contains the versioned
-SVG tokenize output:
-
-```bash
-uv run iris --cluster=marin job run \
-  --cpu 1 --memory 2GB --disk 8GB --priority batch \
-  --target-cluster cw-us-east-02a --no-wait \
-  --job-name datakit-parquet-rewrite-svg -- \
-  python -m experiments.datakit.parquet_rewrite \
-  --manifest svg --apply-to-quiescent-prefixes
-```
+Iris in the source bucket's cluster.
 
 The production inventory is computed offline from the storage-scan Parquet logs
 with DuckDB. Each leaf Parquet directory is assigned to its nearest enclosing
@@ -84,7 +74,7 @@ Inspect the exact ordered list without touching the datasets:
 
 ```bash
 python -m experiments.datakit.parquet_rewrite \
-  --manifest inventory --list-manifest
+  --list-manifest
 ```
 
 This prints one row per artifact root with its file count, GiB, assigned step,
@@ -99,9 +89,11 @@ Launch the fixed train on the Iris cluster local to the bucket:
 uv run iris --cluster=marin job run \
   --cpu 1 --memory 2GB --disk 8GB --priority batch \
   --target-cluster cw-us-east-02a --no-wait \
-  --job-name datakit-parquet-rewrite-inventory-100g -- \
+  --job-name datakit-parquet-rewrite-inventory-100g \
+  -e MARIN_PREFIX s3://marin-us-east-02a/tmp/ttl=30d/datakit-rewrite \
+  -- \
   python -m experiments.datakit.parquet_rewrite \
-  --manifest inventory --apply-to-quiescent-prefixes
+  --apply-to-quiescent-prefixes
 ```
 
 The ArtifactStep record is a resumability marker; the Parquet files remain in

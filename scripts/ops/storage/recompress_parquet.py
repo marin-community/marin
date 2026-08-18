@@ -35,9 +35,6 @@ import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.cluster_config import StoreType, data_buckets
-from rigging.filesystem.s3_compat import configure_fsspec_s3, credentials_hint, s3_credentials, s3_endpoint
-from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
@@ -159,7 +156,7 @@ def _validate_rewrite(source: pq.ParquetFile, rewritten: pq.ParquetFile) -> None
 
 
 def recompress_parquet(path: str, options: RewriteOptions = RewriteOptions()) -> RewriteResult:
-    """Rewrite one Parquet object to zstd with page indexes.
+    """Inspect or rewrite one Parquet object to zstd with page indexes.
 
     The source is replaced only after the temporary output has the same schema
     and row count, uses zstd for every column chunk, and the source fingerprint
@@ -230,6 +227,7 @@ def recompress_parquet(path: str, options: RewriteOptions = RewriteOptions()) ->
 
 
 def _rewrite_for_zephyr(path: str, options: RewriteOptions) -> list[dict]:
+    """Record rewrite counters without emitting downstream rows."""
     result = recompress_parquet(path, options)
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/files_{result.disposition}", 1)
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/input_bytes_{result.disposition}", result.input_bytes)
@@ -246,20 +244,6 @@ def _rewrite_for_zephyr(path: str, options: RewriteOptions) -> list[dict]:
     return []
 
 
-def _configure_source_filesystem(source_glob: str) -> None:
-    parsed = StoragePath(source_glob)
-    if parsed.scheme != "s3":
-        return
-    bucket = data_buckets().get(parsed.bucket)
-    if bucket is None or bucket.store not in (StoreType.COREWEAVE, StoreType.R2):
-        return
-    credentials = s3_credentials(bucket.store)
-    if credentials is None:
-        raise ValueError(f"cannot list {source_glob}: {credentials_hint(bucket.store)}")
-    key, secret = credentials
-    configure_fsspec_s3(s3_endpoint(bucket.store), key=key, secret=secret)
-
-
 def run_migration(
     source_globs: Sequence[str],
     *,
@@ -274,8 +258,6 @@ def run_migration(
     if not source_globs:
         raise ValueError("source_globs must contain at least one pattern")
 
-    for source_glob in source_globs:
-        _configure_source_filesystem(source_glob)
     pipeline = Dataset.from_file_patterns(source_globs).flat_map(partial(_rewrite_for_zephyr, options=options))
     context = ZephyrContext(
         name="recompress-parquet",

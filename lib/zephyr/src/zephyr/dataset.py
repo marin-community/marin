@@ -13,7 +13,7 @@ from typing import Any, Generic, Literal, TypeVar, cast, overload
 import fsspec
 from braceexpand import braceexpand
 from pyarrow import RecordBatch
-from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
 from zephyr.expr import Expr
@@ -24,10 +24,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class GlobSource:
-    """Lazy file source resolved at plan time via a bulk list-objects call.
+    """Lazy file source resolved at plan time via bulk list-objects calls.
 
-    Stores the glob pattern and defers expansion to compute_plan(), where
-    fsspec glob(detail=True) returns paths and sizes in a single RPC.
+    Stores glob patterns and defers expansion to compute_plan(). Each expanded
+    pattern uses fsspec glob(detail=True) to return paths and sizes together.
     """
 
     patterns: tuple[str, ...]
@@ -60,10 +60,10 @@ def resolve_glob(source: GlobSource) -> list[FileEntry]:
     entries_by_path: dict[str, FileEntry] = {}
     for source_pattern in source.patterns:
         pattern = StoragePath.normalize(source_pattern)
-        fs, _ = url_to_fs(pattern)
-        protocol = fsspec.core.split_protocol(pattern)[0]
         for expanded in braceexpand(pattern):
-            detail = fs.glob(expanded, detail=True)
+            fs, fs_pattern = filesystem_for(expanded)
+            protocol = fsspec.core.split_protocol(expanded)[0]
+            detail = fs.glob(fs_pattern, detail=True)
             for path, info in detail.items():
                 full = f"{protocol}://{path}" if protocol else path
                 entries_by_path[full] = FileEntry(spec=InputFileSpec(path=full), size=info.get("size", 0))
