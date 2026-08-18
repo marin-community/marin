@@ -11,10 +11,10 @@ Two implementations ship here:
   trusted not to corrupt the worker.
 * ``SubprocessRunner`` — runs the stage in a fresh
   ``python -m zephyr.shard_subprocess`` subprocess. Each shard gets a clean
-  Python heap, Arrow pool, and file descriptors; native crashes (SIGSEGV from
-  Arrow/JAX, OOM kill) surface as deterministic ``returncode != 0`` task errors
-  instead of bringing down the worker actor. Slower (~700ms of cold-import
-  overhead per task).
+  Python heap, Arrow pool, and file descriptors. Native child crashes surface
+  as deterministic ``returncode != 0`` task errors. An optional RSS limit lets
+  the parent kill a memory-heavy child before the worker pod reaches its cgroup
+  limit. Slower (~700ms of cold-import overhead per task).
 
 Pick the runner pipeline-wide via ``ZephyrContext(stage_runner_factory=...)``.
 
@@ -80,6 +80,7 @@ _RESOURCE_COUNTER_AGGREGATIONS = (
     (ZEPHYR_WORKER_MEM_AVERAGE_KEY, Aggregation.AVERAGE),
     (ZEPHYR_WORKER_MEM_PEAK_KEY, Aggregation.MAX),
 )
+_SUBPROCESS_MEMORY_POLL_INTERVAL = 0.1
 
 # ---------------------------------------------------------------------------
 # Shared worker context + stats wrapping (used by both runners)
@@ -362,15 +363,19 @@ class InlineRunner:
 class SubprocessRunner:
     """Run each shard in a fresh ``python -m zephyr.shard_subprocess`` subprocess.
 
-    Provides full memory and crash isolation: native crashes (Arrow/JAX
-    SIGSEGV, OOM) terminate only the child and surface as deterministic
-    ``returncode != 0`` task errors. Costs ~700ms per task in cold Python
-    imports plus pickle round-trip; reserve for stages with leak-prone or
-    crash-prone user code.
+    Native crashes in Arrow, JAX, or user code terminate the child and surface
+    as deterministic task errors. Costs ~700ms per task in cold Python imports
+    plus pickle round-trip; reserve for stages with leak-prone or crash-prone
+    user code. ``memory_limit_bytes`` optionally kills the child when its RSS
+    exceeds a caller-selected ceiling; leave headroom between this ceiling and
+    the worker container limit.
 
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, memory_limit_bytes: int | None = None) -> None:
+        if memory_limit_bytes is not None and memory_limit_bytes <= 0:
+            raise ValueError(f"memory_limit_bytes must be positive, got {memory_limit_bytes}")
+        self._memory_limit_bytes = memory_limit_bytes
         self._counter_file: str | None = None
         self._process: psutil.Process | None = None
         self._process_stats: _InProcessWorkerContext | None = None
@@ -384,7 +389,7 @@ class SubprocessRunner:
         child_env: dict[str, str],
         execution_id: str,
         stage_name: str,
-    ) -> int:
+    ) -> tuple[int, bool]:
         with sp.Popen(
             command,
             env=child_env,
@@ -402,7 +407,27 @@ class SubprocessRunner:
                 self._process_stats = process_stats
                 self._cpu_time_at_start = cpu_times_at_start.user + cpu_times_at_start.system
             try:
-                return proc.wait()
+                if self._memory_limit_bytes is None:
+                    return proc.wait(), False
+                while True:
+                    try:
+                        return proc.wait(timeout=_SUBPROCESS_MEMORY_POLL_INTERVAL), False
+                    except sp.TimeoutExpired:
+                        try:
+                            rss = process.memory_info().rss
+                        except psutil.NoSuchProcess:
+                            continue
+                        if rss <= self._memory_limit_bytes:
+                            continue
+                        logger.warning(
+                            "Killing shard subprocess %d after RSS exceeded %d bytes: %d bytes",
+                            proc.pid,
+                            self._memory_limit_bytes,
+                            rss,
+                        )
+                        with suppress(ProcessLookupError):
+                            proc.kill()
+                        return proc.wait(), True
             finally:
                 with self._state_lock:
                     self._process = None
@@ -440,13 +465,16 @@ class SubprocessRunner:
             child_env = os.environ.copy()
             child_env["POLARS_MAX_THREADS"] = str(max(1, math.ceil(task.cost.cpu)))
             with tempfile.TemporaryDirectory(prefix=f"zephyr-external-sort-{task.shard_idx:04d}-") as sort_dir:
-                returncode = self._child_returncode(
+                returncode, memory_limit_exceeded = self._child_returncode(
                     [sys.executable, "-u", "-m", "zephyr.shard_subprocess", task_file, result_file, sort_dir],
                     child_env,
                     execution_id,
                     task.stage_name,
                 )
 
+            if memory_limit_exceeded:
+                memory_limit = self._memory_limit_bytes
+                raise MemoryError(f"Subprocess for shard {task.shard_idx} exceeded its {memory_limit}-byte RSS limit.")
             if returncode != 0:
                 # Linux OOM-killer sends SIGKILL → returncode == -9. Distinguish
                 # so callers/retries can react to memory pressure specifically.

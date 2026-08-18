@@ -46,6 +46,7 @@ DEFAULT_WORKER_DISK = "8g"
 DEFAULT_COORDINATOR_CPU = 0.5
 DEFAULT_COORDINATOR_RAM = "1g"
 DEFAULT_COORDINATOR_DISK = "8g"
+REWRITE_SUBPROCESS_MEMORY_LIMIT = 5 * 1024**3
 REWRITE_CONTEXT_NAME = "recompress-parquet"
 COUNTER_PREFIX = "parquet_recompression"
 SKIPPED_PATHS = frozenset(
@@ -112,7 +113,7 @@ class _OOMSkippingSubprocessRunner:
     """Treat an OOM-killed rewrite subprocess as an empty output shard."""
 
     def __init__(self) -> None:
-        self._runner = SubprocessRunner()
+        self._runner = SubprocessRunner(memory_limit_bytes=REWRITE_SUBPROCESS_MEMORY_LIMIT)
 
     def execute(
         self,
