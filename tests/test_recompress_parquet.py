@@ -94,6 +94,49 @@ def test_recompress_parquet_adds_page_indexes_to_existing_zstd(tmp_path):
     assert pq.read_table(path).equals(expected)
 
 
+def test_recompress_parquet_accepts_null_columns_without_column_indexes(tmp_path):
+    path = tmp_path / "records.parquet"
+    expected = pa.table(
+        {
+            "value": ["compressible record payload"] * 10_000,
+            "untyped": pa.nulls(10_000),
+        }
+    )
+    pq.write_table(expected, path, compression="zstd")
+
+    result = recompress_parquet(str(path), RewriteOptions(mode=RewriteMode.APPLY))
+
+    metadata = pq.ParquetFile(path).metadata
+    value = metadata.row_group(0).column(0)
+    untyped = metadata.row_group(0).column(1)
+    assert result.disposition is RewriteDisposition.REWRITTEN
+    assert value.has_column_index and value.has_offset_index
+    assert not untyped.has_column_index and untyped.has_offset_index
+    assert pq.read_table(path).equals(expected)
+    assert (
+        recompress_parquet(str(path), RewriteOptions(mode=RewriteMode.APPLY)).disposition
+        is RewriteDisposition.ALREADY_TARGET
+    )
+
+
+def test_recompress_parquet_accepts_long_strings_without_column_indexes(tmp_path):
+    path = tmp_path / "records.parquet"
+    expected = pa.table({"text": ["x" * 5_000]})
+    pq.write_table(expected, path, compression="zstd")
+
+    result = recompress_parquet(str(path), RewriteOptions(mode=RewriteMode.APPLY))
+
+    column = pq.ParquetFile(path).metadata.row_group(0).column(0)
+    assert result.disposition is RewriteDisposition.REWRITTEN
+    assert column.statistics is not None and not column.statistics.has_min_max
+    assert not column.has_column_index and column.has_offset_index
+    assert pq.read_table(path).equals(expected)
+    assert (
+        recompress_parquet(str(path), RewriteOptions(mode=RewriteMode.APPLY)).disposition
+        is RewriteDisposition.ALREADY_TARGET
+    )
+
+
 def test_recompress_parquet_preserves_source_when_zstd_is_larger(tmp_path):
     path = tmp_path / "records.parquet"
     pq.write_table(

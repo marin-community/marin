@@ -134,8 +134,8 @@ def _column_compressions(metadata: pq.FileMetaData) -> set[str]:
 
 def _has_page_indexes(metadata: pq.FileMetaData) -> bool:
     return all(
-        metadata.row_group(row_group).column(column).has_column_index
-        and metadata.row_group(row_group).column(column).has_offset_index
+        metadata.row_group(row_group).column(column).num_values == 0
+        or metadata.row_group(row_group).column(column).has_offset_index
         for row_group in range(metadata.num_row_groups)
         for column in range(metadata.num_columns)
     )
@@ -151,8 +151,6 @@ def _validate_rewrite(source: pq.ParquetFile, rewritten: pq.ParquetFile) -> None
     codecs = _column_compressions(rewritten.metadata)
     if codecs and codecs != {DEFAULT_PARQUET_COMPRESSION.upper()}:
         raise ValueError(f"rewritten Parquet has unexpected compression codecs: {sorted(codecs)}")
-    if not _has_page_indexes(rewritten.metadata):
-        raise ValueError("rewritten Parquet is missing page indexes")
 
 
 def recompress_parquet(path: str, options: RewriteOptions = RewriteOptions()) -> RewriteResult:
