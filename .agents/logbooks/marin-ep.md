@@ -1949,3 +1949,18 @@ Experiment ID prefix: `MEP`.
 - Tuned-GEMM treatment arm (mep-hero384t, expected ~-0.5 s) queued/next.
   Remaining gap after it needs profile-driven work: fused-transport SM
   footprint vs the incumbent's stock a2a, MultiGpuBarrier cost, wgrad.
+
+### 2026-08-18 14:46 - MEP-077: tuned-GEMM arm — retune worth 0.7-0.8 s/step; gap narrows to ~1 s
+- mep-hero384t-fused-25-20260818 (matched config + 83daa1f1c1 tuned brd
+  configs): 25/25, loss 6.11 at it25 meter line (6.09 final), tqdm 17.8
+  s/it cumulative; late windows it17->25 = 17.9, it21->25 = 17.75.
+  drop_fraction 0.186% (unchanged, as expected). vs the untuned matched
+  treatment (18.0 cum / 18.6 late): the i3072 GEMM retune recovered
+  ~0.7-0.8 s/step — above the 0.5 estimate. `exploratory` (single draw).
+- Scoreboard vs control (late-window, same meter): control ~16.6-17.0,
+  tuned treatment ~17.8-17.9 -> parity gap ~0.8-1.2 s/step (~5-7%),
+  from 1.4-2.0 before the retune. Drops 0.186% vs 1.05-2.40%.
+- Launched: mep-hero384p (tuned recipe + --profile-steps 3
+  --profile-start-step 15) for the exposed-time breakdown; queued
+  mep-hero384c105 (cf 1.05) — capacity rows -4.5% vs cf 1.1, spending
+  a little of the 5-13x drop advantage on GEMM time.
