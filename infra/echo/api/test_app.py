@@ -911,6 +911,7 @@ def test_reranker_applies_stricter_wiki_quality_floor():
 
     class WeakReranker:
         def rerank(self, _query, documents, batch_size):
+            del batch_size
             return [-1.5 for _ in documents]
 
     results = echo.rerank_candidates(candidates, "how do i deploy iris", WeakReranker(), 2)

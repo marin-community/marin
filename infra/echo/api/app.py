@@ -414,6 +414,12 @@ class StoredFeedbackResult:
     url: str
 
 
+@dataclass(frozen=True)
+class StoredFeedbackGrade:
+    result: StoredFeedbackResult
+    grade: int
+
+
 class RerankerModel(Protocol):
     def rerank(self, query: str, documents: Iterable[str], batch_size: int) -> Iterable[float]: ...
 
@@ -777,6 +783,53 @@ def stored_feedback_results(conn: sqlalchemy.Connection, search_result_ids: set[
         )
         for row in rows
     }
+
+
+def resolve_feedback_grades(
+    conn: sqlalchemy.Connection,
+    grades: list[SearchFeedbackGrade],
+    execution_id: int | None,
+) -> tuple[tuple[StoredFeedbackGrade, ...], int | None]:
+    parsed = [(grade, *search_feedback.result_key_parts(grade.key)) for grade in grades]
+    stored_results = stored_feedback_results(conn, {result_id for _, _, result_id in parsed})
+    invalid_keys = [
+        grade.key
+        for grade, domain, result_id in parsed
+        if result_id not in stored_results or stored_results[result_id].domain != domain
+    ]
+    if invalid_keys:
+        raise HTTPException(422, "unknown search result keys: " + ", ".join(sorted(invalid_keys)))
+
+    resolved = tuple(StoredFeedbackGrade(stored_results[result_id], grade.grade) for grade, _, result_id in parsed)
+    graded_execution_ids = {grade.result.execution_id for grade in resolved}
+    if len(graded_execution_ids) > 1:
+        raise HTTPException(422, "graded search results must come from one execution")
+    if not graded_execution_ids:
+        return resolved, execution_id
+
+    graded_execution_id = graded_execution_ids.pop()
+    if execution_id is not None and execution_id != graded_execution_id:
+        raise HTTPException(422, "graded search results were not returned by the linked search execution")
+    return resolved, graded_execution_id
+
+
+def validate_feedback_execution(
+    conn: sqlalchemy.Connection,
+    execution_id: int | None,
+    author: str,
+    query: str,
+) -> None:
+    if execution_id is None:
+        return
+    execution = conn.execute(
+        sqlalchemy.select(schema.search_executions.c.author, schema.search_executions.c.query).where(
+            schema.search_executions.c.id == execution_id
+        )
+    ).first()
+    if execution is None:
+        raise HTTPException(422, f"no search execution {execution_id}")
+    if execution.author != author or execution.query != query:
+        raise HTTPException(422, "execution_id must identify this caller's exact query")
 
 
 def current_feedback_result_metadata(
@@ -1413,36 +1466,8 @@ def add_search_feedback(
     """Store one query's optional note and per-result relevance grades."""
     author = iap_caller(x_goog_authenticated_user_email)
     with engine.begin() as conn:
-        parsed_keys = [search_feedback.result_key_parts(grade.key) for grade in feedback.grades]
-        stored_results = stored_feedback_results(conn, {result_id for _, result_id in parsed_keys})
-        invalid_keys = [
-            grade.key
-            for grade, (domain, result_id) in zip(feedback.grades, parsed_keys, strict=True)
-            if result_id not in stored_results or stored_results[result_id].domain != domain
-        ]
-        if invalid_keys:
-            raise HTTPException(422, "unknown search result keys: " + ", ".join(sorted(invalid_keys)))
-
-        execution_id = feedback.execution_id
-        graded_execution_ids = {result.execution_id for result in stored_results.values()}
-        if len(graded_execution_ids) > 1:
-            raise HTTPException(422, "graded search results must come from one execution")
-        if graded_execution_ids:
-            graded_execution_id = graded_execution_ids.pop()
-            if execution_id is not None and execution_id != graded_execution_id:
-                raise HTTPException(422, "graded search results were not returned by the linked search execution")
-            execution_id = graded_execution_id
-
-        if execution_id is not None:
-            execution = conn.execute(
-                sqlalchemy.select(schema.search_executions.c.author, schema.search_executions.c.query).where(
-                    schema.search_executions.c.id == execution_id
-                )
-            ).first()
-            if execution is None:
-                raise HTTPException(422, f"no search execution {execution_id}")
-            if execution.author != author or execution.query != feedback.query:
-                raise HTTPException(422, "execution_id must identify this caller's exact query")
+        resolved_grades, execution_id = resolve_feedback_grades(conn, feedback.grades, feedback.execution_id)
+        validate_feedback_execution(conn, execution_id, author, feedback.query)
 
         statement = (
             schema.search_feedback.insert()
@@ -1456,17 +1481,17 @@ def add_search_feedback(
         )
         row = conn.execute(statement).first()
         assert row is not None
-        if feedback.grades:
+        if resolved_grades:
             conn.execute(
                 schema.search_feedback_grades.insert().values(
                     [
                         {
                             "feedback_id": row.id,
-                            "result_id": stored_results[result_id].source_id,
-                            "search_result_id": result_id,
+                            "result_id": grade.result.source_id,
+                            "search_result_id": grade.result.id,
                             "grade": grade.grade,
                         }
-                        for grade, (_, result_id) in zip(feedback.grades, parsed_keys, strict=True)
+                        for grade in resolved_grades
                     ]
                 )
             )
