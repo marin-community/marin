@@ -120,18 +120,70 @@ FOCUS_EXPECTED_MARKS_KEPT = 3
 
 # Sources the fuzzy rule cannot judge, which keep every document they hold.
 #
-# Containment is measured on word 3-grams, so a document whose content is one
-# unbroken token contributes almost no n-grams and the comparison falls through
-# to whatever boilerplate surrounds it. A functional-regions record is a header
-# and a genome: "[DNA] [Region: coding sequence] tcctttattt...". Two unrelated
-# sequences share two of their three n-grams through that header alone, which
-# scores 0.667 and reads as a duplicate. Sampling the 0.60 markers put 8.31% of
-# this source under the rule, against 5.83% at 0.75 -- the gap is the artifact,
-# not a real difference in duplication.
+# Containment is measured on word 3-grams, so it reads whatever a document has
+# most of. When that is a fixed template or a single unbroken token, the rule
+# scores the shared scaffolding and never sees the content that distinguishes
+# two records.
+#
+# A functional-regions record is a header and a genome: "[DNA] [Region: coding
+# sequence] tcctttattt...". The sequence is one token, so the document yields
+# about three n-grams and two of them come from the header, which scores 0.667
+# between two unrelated genomes.
+#
+# The rest are sources this corpus keeps whole, with what the 0.75 rule would
+# have taken from each. The top of the list is the same defect in template
+# form -- a generated corpus whose records share a scaffold and differ in the
+# parts the rule weighs least, so almost all of it clusters and most is then
+# read as duplicated. Lower down the measured rates are ordinary, and those
+# entries are a decision to preserve the source rather than a claim the rule
+# misjudged it:
+#
+#   biocollection/free_text_stream              36,900,548 docs,  93.8% clustered, 13.57% dropped
+#   biocollection/instruction_stream            23,588,716 docs,  91.6% clustered, 30.47% dropped
+#   biocorpus                                   21,138,120 docs,  14.7% clustered,  4.24% dropped
+#   cp/data_provenance                           3,471,035 docs,  36.2% clustered, 15.92% dropped
+#   davinci-dev/ctx-native                       4,155,216 docs,  49.9% clustered, 20.40% dropped
+#   massive_function_calling                       859,092 docs, 100.0% clustered, 94.45% dropped
+#   nemotron_legal/globalcit                        87,752 docs,  71.3% clustered, 42.89% dropped
+#   nemotron_specialized_v1_1/code_concepts     15,217,505 docs,  35.6% clustered,  9.52% dropped
+#   nemotron_specialized_v1_1/economics            337,627 docs,  84.1% clustered, 65.69% dropped
+#   nemotron_specialized_v1_1/formal_logic         489,061 docs,  85.6% clustered, 54.45% dropped
+#   nemotron_specialized_v1_1/multiple_choice    3,528,972 docs,  76.2% clustered, 32.14% dropped
+#   nemotron_specialized_v1_2/fact_seeking     567,457,058 docs,  25.2% clustered,  4.97% dropped
+#   nemotron_specialized_v1_2/generative         1,435,694 docs,  28.6% clustered, 13.56% dropped
+#   nemotron_specialized_v1_2/multiple_choice   23,665,937 docs,  41.4% clustered,  4.02% dropped
+#   swe-rebench-contree                          1,689,735 docs,  97.4% clustered, 52.56% dropped
+#
+# Names here are registry names, which are not the source keys: the normalized
+# keys carry a ``nemotron_pretraining_`` prefix the registry drops, and the legal
+# family is ``nemotron_legal`` in the registry against
+# ``nemotron_pretraining_legal_v1`` in its keys. The check in
+# ``build_store_step`` raises on a name the registry does not know, so a wrong
+# spelling fails the run rather than silently deduplicating what it meant to
+# protect.
 #
 # Exact dedup still applies. Byte-identical records are unambiguous whatever
 # their tokenization, and dropping them costs the corpus nothing.
-FUZZY_DEDUP_EXEMPT_SOURCES = frozenset({"dna/functional-regions"})
+FUZZY_DEDUP_EXEMPT_SOURCES = frozenset(
+    {
+        "biocollection/free_text_stream",
+        "biocollection/instruction_stream",
+        "biocorpus",
+        "cp/data_provenance",
+        "davinci-dev/ctx-native",
+        "dna/functional-regions",
+        "massive_function_calling",
+        "nemotron_legal/globalcit",
+        "nemotron_specialized_v1_1/code_concepts",
+        "nemotron_specialized_v1_1/economics",
+        "nemotron_specialized_v1_1/formal_logic",
+        "nemotron_specialized_v1_1/multiple_choice",
+        "nemotron_specialized_v1_2/fact_seeking",
+        "nemotron_specialized_v1_2/generative",
+        "nemotron_specialized_v1_2/multiple_choice",
+        "swe-rebench-contree",
+    }
+)
 
 
 @dataclass(frozen=True)
