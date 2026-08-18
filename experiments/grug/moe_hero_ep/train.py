@@ -354,6 +354,30 @@ def _compute_flops(
     return flops_per_example, flops_summary
 
 
+def log_device_memory(step_info) -> None:
+    """Log this process's local-device HBM peak, live bytes, and allocator limit in GiB.
+
+    The EP hero had no peak-HBM telemetry, which makes a whole class of result unreadable: XLA's
+    ``HloRematerialization`` engages only when peak crosses the allocator limit, so a config change
+    that moves peak across that boundary produces an MFU step change that has nothing to do with the
+    change itself. Issue #8054 traced its own +9.08% headline to exactly this -- 3.69 GiB of peak
+    took it under the limit and switched remat off -- and the win fell to +3.31% once one process
+    per GPU put 8.79 GiB back. Any ablation that moves activation memory needs this logged, or its
+    rungs cannot be told apart from allocator-limit crossings.
+
+    Ported from ``experiments/grug/moe_hero_fsdp/train.py``.
+    """
+    stats = jax.local_devices()[0].memory_stats()
+    levanter.tracker.log(
+        {
+            "memory/peak_gib": stats["peak_bytes_in_use"] / 1024**3,
+            "memory/in_use_gib": stats["bytes_in_use"] / 1024**3,
+            "memory/limit_gib": stats["bytes_limit"] / 1024**3,
+        },
+        step=step_info.step,
+    )
+
+
 def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: BatchSchedule):
     last_mixture_stage = -1
 
@@ -776,6 +800,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 every=1,
             )
         state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
+        state_callbacks.add_hook(log_device_memory, every=1)
         if evaluator is not None and eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
             eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None
