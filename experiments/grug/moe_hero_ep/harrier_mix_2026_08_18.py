@@ -25,7 +25,7 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.moe.launch_datakit_moe_mix import (
     _phase_1_start_step,
-    _simulated_experiment_budget,
+    _simulated_epoching_budgets,
     _two_phase_data_config,
     _val_component,
 )
@@ -125,17 +125,13 @@ def harrier_mix_2026_08_18_data_config(
     collisions = components.keys() & val_components.keys()
     if collisions:
         raise ValueError(f"validation components collide with Harrier buckets: {sorted(collisions)}")
-    target_budget = None
-    experiment_budget = None
-    if enable_simulated_epoching:
-        experiment_budget = _simulated_experiment_budget(
-            total_steps=total_steps,
-            batch_size=batch_size,
-            max_seq_len=max_seq_len,
-        )
-        if experiment_budget > TOTAL_TOKENS:
-            raise ValueError(f"experiment budget {experiment_budget} exceeds target budget {TOTAL_TOKENS}")
-        target_budget = TOTAL_TOKENS
+    target_budget, experiment_budget = _simulated_epoching_budgets(
+        total_steps=total_steps,
+        batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        target_budget=TOTAL_TOKENS,
+        enable_simulated_epoching=enable_simulated_epoching,
+    )
 
     return _two_phase_data_config(
         tokenizer=marin_tokenizer,
