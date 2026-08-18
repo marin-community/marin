@@ -34,7 +34,7 @@ from zephyr.writers import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_WORKERS = 16
-DEFAULT_BATCH_ROWS = 8_192
+DEFAULT_BATCH_ROWS = 1_024
 DEFAULT_ROW_GROUP_BYTES = 128 * 1024 * 1024
 MIN_INPUT_BYTES = 10 * 1024 * 1024
 DEFAULT_WORKER_CPU = 1
