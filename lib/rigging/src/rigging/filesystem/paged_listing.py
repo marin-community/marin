@@ -35,7 +35,7 @@ _S3_LISTING_BACKOFF = ExponentialBackoff(initial=0.5, maximum=5.0, factor=2.0)
 
 # The largest page size the GCS JSON API serves; the server returns fewer plus a
 # continuation token when a page would exceed its own limits.
-_GCS_FLAT_PAGE_SIZE = 5000
+_GCS_PAGE_SIZE = 5000
 
 
 def is_child(listed: str, name: str) -> bool:
@@ -120,33 +120,40 @@ class S3ListingFileSystem(s3fs.S3FileSystem):
 class GcsListingFileSystem(GCSFileSystem):
     """gcsfs plus paged listing methods.
 
-    gcsfs itself exposes only whole-level ``ls`` and all-at-once ``find``, so
-    ``flat_pages`` issues the raw ``objects.list`` calls page by page and
-    normalizes items the same way ``ls`` does.
+    gcsfs itself exposes only whole-level ``ls`` and all-at-once ``find``, neither
+    of which pages, so both methods issue the raw ``objects.list`` calls page by
+    page and normalize items the same way ``ls`` does.
     """
 
     def level_pages(self, path: str) -> Iterator[tuple[list[dict[str, Any]], list[str]]]:
-        entries = self.ls(path, detail=True)
-        # Drop the dircache entry so a long scan over many prefixes stays bounded.
-        self.invalidate_cache(path)
-        yield _split_level(path, entries)
-
-    def flat_pages(self, path: str) -> Iterator[list[dict[str, Any]]]:
-        bucket, key, _ = self.split_path(path)
-        prefix = key if not key or key.endswith("/") else f"{key}/"
         token: str | None = None
         while True:
-            page = self.call(
-                "GET",
-                "b/{}/o",
-                bucket,
-                prefix=prefix or None,
-                maxResults=_GCS_FLAT_PAGE_SIZE,
-                pageToken=token,
-                json_out=True,
-            )
-            entries = [self._process_object(bucket, item) for item in page.get("items", [])]
-            yield [entry for entry in entries if is_child(path, entry["name"])]
-            token = page.get("nextPageToken")
+            entries, token = self._listing_page(path, token, "/")
+            yield _split_level(path, entries)
             if token is None:
                 return
+
+    def flat_pages(self, path: str) -> Iterator[list[dict[str, Any]]]:
+        token: str | None = None
+        while True:
+            entries, token = self._listing_page(path, token, "")
+            yield [entry for entry in entries if is_child(path, entry["name"])]
+            if token is None:
+                return
+
+    def _listing_page(self, path: str, token: str | None, delimiter: str) -> tuple[list[dict[str, Any]], str | None]:
+        bucket, key, _ = self.split_path(path)
+        prefix = key if not key or key.endswith("/") else f"{key}/"
+        page = self.call(
+            "GET",
+            "b/{}/o",
+            bucket,
+            prefix=prefix or None,
+            delimiter=delimiter or None,
+            maxResults=_GCS_PAGE_SIZE,
+            pageToken=token,
+            json_out=True,
+        )
+        entries = [{"name": f"{bucket}/{item}", "size": 0, "type": DIRECTORY_TYPE} for item in page.get("prefixes", [])]
+        entries.extend(self._process_object(bucket, item) for item in page.get("items", []))
+        return entries, page.get("nextPageToken")

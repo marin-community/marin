@@ -74,19 +74,25 @@ def test_s3_flat_pages_resume_by_token_and_drop_self_marker(monkeypatch):
 
 def test_gcs_level_pages_split_files_from_subdirs_and_drop_self_marker(monkeypatch):
     fs = GcsListingFileSystem(token="anon", skip_instance_cache=True)
-    level = [
-        {"name": "bucket/root", "size": 0, "type": "directory"},  # prefix marker for the listed path
-        {"name": "bucket/root/sub", "size": 0, "type": "directory"},
-        {"name": "bucket/root/a.txt", "size": 5, "type": "file"},
-    ]
-    monkeypatch.setattr(fs, "ls", lambda path, detail: level)
+
+    def call(method, template, bucket, *, prefix, delimiter, maxResults, pageToken, json_out):
+        assert (bucket, prefix, delimiter, pageToken) == ("bucket", "root/", "/", None)
+        return {
+            "prefixes": ["root/sub/"],
+            "items": [
+                {"name": "root/", "size": "0"},  # prefix marker for the listed path
+                {"name": "root/a.txt", "size": "5"},
+            ],
+        }
+
+    monkeypatch.setattr(fs, "call", call)
 
     pages = list(fs.level_pages("bucket/root"))
 
     assert len(pages) == 1
     files, subdirs = pages[0]
     assert [f["name"] for f in files] == ["bucket/root/a.txt"]
-    assert subdirs == ["bucket/root/sub"]
+    assert subdirs == ["bucket/root/sub/"]
 
 
 def test_gcs_flat_pages_resume_by_page_token_and_normalize_like_ls(monkeypatch):
@@ -105,8 +111,8 @@ def test_gcs_flat_pages_resume_by_page_token_and_normalize_like_ls(monkeypatch):
     fs = GcsListingFileSystem(token="anon", skip_instance_cache=True)
     calls = []
 
-    def call(method, template, bucket, *, prefix, maxResults, pageToken, json_out):
-        assert (method, template, json_out) == ("GET", "b/{}/o", True)
+    def call(method, template, bucket, *, prefix, delimiter, maxResults, pageToken, json_out):
+        assert (method, template, delimiter, json_out) == ("GET", "b/{}/o", None, True)
         calls.append((bucket, prefix, pageToken))
         return responses[pageToken]
 

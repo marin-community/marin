@@ -258,16 +258,6 @@ def _entry_to_object(entry: dict, bucket_name: str) -> dict:
     }
 
 
-def _list_level(fs: Any, path: str) -> tuple[list[dict], list[str]]:
-    """One whole delimiter level under *path*: ``(file entries, sub-prefix paths)``."""
-    files: list[dict] = []
-    subdirs: list[str] = []
-    for page_files, page_dirs in fs.level_pages(path):
-        files.extend(page_files)
-        subdirs.extend(page_dirs)
-    return files, subdirs
-
-
 # ---------------------------------------------------------------------------
 # Coordinator actor
 # ---------------------------------------------------------------------------
@@ -443,11 +433,12 @@ def scan_one_prefix(
 
     Probes the subtree with a flat listing first: one that exhausts within
     FLAT_PROBE_MAX_OBJECTS is consumed whole here, so small directories never
-    become per-prefix tasks. A larger subtree splits one delimiter level into
-    subtasks — its probe objects are discarded, since the delimiter listing
-    re-yields this level's files and the subtasks cover the rest. At
-    MAX_SPLIT_DEPTH (or when there is nothing to split into) the flat listing
-    streams to completion instead, keeping worker memory bounded.
+    become per-prefix tasks. A larger subtree relists one delimiter level,
+    streaming this level's files (the probe objects are discarded rather than
+    double-counted) and returning the sub-prefixes as new tasks — when there are
+    none, that level listing already covered the whole subtree. At
+    MAX_SPLIT_DEPTH the flat listing streams to completion instead. Every path
+    reports page by page, keeping worker memory bounded.
 
     Returns new sub-prefix tasks for re-queuing (empty at a leaf).
     """
@@ -466,10 +457,11 @@ def scan_one_prefix(
         return []
 
     if task.depth < MAX_SPLIT_DEPTH:
-        files, subdirs = _list_level(fs, task.path)
-        if subdirs:
+        subdirs: list[str] = []
+        for files, dirs in fs.level_pages(task.path):
             _report_chunks(coordinator, [_entry_to_object(entry, bucket_name) for entry in files])
-            return [ScanTask(bucket_url=task.bucket_url, path=sub, depth=task.depth + 1) for sub in subdirs]
+            subdirs.extend(dirs)
+        return [ScanTask(bucket_url=task.bucket_url, path=sub, depth=task.depth + 1) for sub in subdirs]
 
     _report_chunks(coordinator, probe)
     for page in pages:
@@ -574,11 +566,14 @@ def discover_top_level_prefixes(
         log.info("Discovering prefixes for %s...", url)
         fs, root_path = filesystem_for(url)
         bucket_name = _bucket_name(url)
-        root_files, subdirs = _list_level(fs, root_path)
-        if root_files:
-            _report_chunks(coordinator, [_entry_to_object(entry, bucket_name) for entry in root_files])
+        root_objects = 0
+        subdirs: list[str] = []
+        for files, dirs in fs.level_pages(root_path):
+            _report_chunks(coordinator, [_entry_to_object(entry, bucket_name) for entry in files])
+            root_objects += len(files)
+            subdirs.extend(dirs)
         tasks.extend(ScanTask(bucket_url=url, path=sub, depth=0) for sub in subdirs)
-        log.info("  %s: %d top-level prefixes, %d root objects", url, len(subdirs), len(root_files))
+        log.info("  %s: %d top-level prefixes, %d root objects", url, len(subdirs), root_objects)
     return tasks
 
 
@@ -628,14 +623,19 @@ def run_distributed(
     coordinator.load_tasks(tasks)
     print(f"Loaded {len(tasks)} initial tasks into queue")
 
-    # Submit one worker job with N replicas
-    worker_job = client.submit(
-        entrypoint=Entrypoint.from_callable(worker_job_entrypoint, actor_name),
-        name="scan-workers",
-        resources=ResourceSpec(cpu=2, memory="4GB"),
-        replicas=num_workers,
-    )
-    print(f"Submitted worker job with {num_workers} replicas")
+    # Submit one worker job with N replicas. A bucket whose objects all live at
+    # the root yields no tasks — discovery already streamed those objects, so
+    # skip the worker gang entirely rather than waiting on a queue that can
+    # never drain.
+    worker_job = None
+    if tasks:
+        worker_job = client.submit(
+            entrypoint=Entrypoint.from_callable(worker_job_entrypoint, actor_name),
+            name="scan-workers",
+            resources=ResourceSpec(cpu=2, memory="4GB"),
+            replicas=num_workers,
+        )
+        print(f"Submitted worker job with {num_workers} replicas")
 
     # Monitor progress
     start_time = time.monotonic()
@@ -643,7 +643,7 @@ def run_distributed(
     # threshold; reset whenever it climbs back above (new sub-prefixes queued).
     drained_since: float | None = None
     try:
-        while True:
+        while tasks:
             status = coordinator.get_status()
             elapsed = time.monotonic() - start_time
             remaining = status["queue_size"] + status["active_workers"]
@@ -679,10 +679,11 @@ def run_distributed(
 
             time.sleep(30)
     finally:
-        try:
-            worker_job.terminate()
-        except Exception:
-            pass
+        if worker_job is not None:
+            try:
+                worker_job.terminate()
+            except Exception:
+                pass
         server.stop()
 
     # Flush remaining buffered objects
