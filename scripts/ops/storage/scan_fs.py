@@ -4,11 +4,11 @@
 
 """Distributed object-storage scanning via Iris actors, over any Marin backend.
 
-Backend-agnostic successor to the GCS-only scanner: object listing goes through
-``rigging.filesystem`` (fsspec/s3fs for CoreWeave and R2, gcsfs for GCS) instead
-of the ``google.cloud.storage`` client, so the same coordinator/worker machinery
-walks ``gs://`` and ``s3://`` buckets alike and writes the same parquet segments
-that ``render_report.py`` rolls up.
+Backend-agnostic successor to the GCS-only scanner: ``rigging.filesystem``
+serves filesystems that carry paged listing methods for their backend
+(``flat_pages``/``level_pages``), so the same coordinator/worker machinery walks
+``gs://`` and ``s3://`` buckets alike and writes the same parquet segments that
+``render_report.py`` rolls up.
 
 Architecture:
   - Coordinator actor: holds a task queue of (bucket_url, prefix_path) pairs.
@@ -43,29 +43,23 @@ import threading
 import time
 import uuid
 from collections import deque
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
+from datetime import UTC, datetime
 from typing import Any
 
 import click
-import google.auth
 import pyarrow as pa
 import pyarrow.parquet as pq
-from google.cloud import storage
 from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
 from iris.client.client import iris_ctx
 from iris.cluster.client import get_job_info
 from iris.cluster.types import Entrypoint, ResourceSpec
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
-from rigging.fsutil.listing import (
-    entry_mtime,
-    flat_listing_page,
-    is_s3_filesystem,
-    iter_object_pages,
-    listing_filesystem,
-)
+from rigging.fsutil.listing import bucket_url, entry_mtime
 
 from scripts.ops.storage.constants import (
     MARIN_BUCKETS,
@@ -96,11 +90,6 @@ FLAT_PROBE_MAX_OBJECTS = 25_000
 # listing to completion instead: deeper fan-out multiplies listing RPCs faster
 # than it adds useful parallelism.
 MAX_SPLIT_DEPTH = 2
-
-# google.cloud.storage paging parameters for the GCS lister.
-GCS_PAGE_SIZE = 5_000
-GCS_LIST_TIMEOUT = 120
-BLOB_FIELDS = "items(name,size,storageClass,timeCreated,updated),prefixes,nextPageToken"
 
 # Coordinator flushes when buffer reaches this many objects.
 # ~2M objects x ~150 bytes/row ≈ 300MB uncompressed, ~50-80MB zstd parquet.
@@ -225,122 +214,58 @@ def _truncate_staging_dir(staging_dir: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Bucket-routed listers
+# Entry normalization
 # ---------------------------------------------------------------------------
 
 
-def _bucket_name(bucket_url: str) -> str:
+def _bucket_name(url: str) -> str:
     """The bucket name (no scheme) for a ``scheme://bucket`` URL."""
-    return StoragePath(bucket_url).bucket
+    return StoragePath(url).bucket
+
+
+def _to_datetime(value: Any) -> datetime | None:
+    """Coerce a backend timestamp (``datetime`` or ISO-8601 string) to UTC, else ``None``.
+
+    gcsfs reports ``ctime``/``mtime`` as datetimes but ``timeCreated``/``updated`` as
+    strings; s3fs reports ``LastModified`` as a datetime. This accepts either shape.
+    """
+    if isinstance(value, str) and value:
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    return None
 
 
 def _entry_to_object(entry: dict, bucket_name: str) -> dict:
-    """Normalize one s3fs detail dict into an object row.
+    """Normalize one fsspec detail dict into an object row.
 
-    S3 reports no distinct creation timestamp, so ``created`` is null and only
-    ``updated`` (``LastModified``) carries a time. List pages carry no storage
-    class either; CoreWeave and R2 have a single class, priced as STANDARD.
+    ``created`` is the object's creation time where the backend reports one
+    (gcsfs ``ctime``/``timeCreated``); S3 has no distinct creation timestamp, so it
+    is left null and only ``updated`` (``LastModified``) carries a time.
     """
     key = entry["name"].removeprefix(f"{bucket_name}/")
+    storage_class = entry.get("storageClass") or entry.get("StorageClass") or "STANDARD"
     return {
         "bucket": bucket_name,
         "name": key,
         "size_bytes": int(entry.get("size") or 0),
-        "storage_class_id": STORAGE_CLASS_IDS["STANDARD"],
-        "created": None,
+        "storage_class_id": STORAGE_CLASS_IDS.get(storage_class, STORAGE_CLASS_IDS["STANDARD"]),
+        "created": _to_datetime(entry.get("ctime") or entry.get("timeCreated")),
         "updated": entry_mtime(entry),
     }
 
 
-class _S3Lister:
-    """Lists an S3-backed bucket through its routed s3fs filesystem."""
-
-    def __init__(self, fs: Any, bucket_name: str) -> None:
-        self._fs = fs
-        self._bucket_name = bucket_name
-
-    def flat_pages(self, path: str) -> Iterator[list[dict]]:
-        """Pages of object rows from a flat (recursive) listing of *path*."""
-        token: str | None = None
-        while True:
-            entries, token = flat_listing_page(self._fs, path, token)
-            yield [_entry_to_object(entry, self._bucket_name) for entry in entries]
-            if token is None:
-                return
-
-    def delimiter_level(self, path: str) -> tuple[list[dict], list[str]]:
-        """Object rows directly under *path* plus its immediate sub-prefix paths."""
-        files: list[dict] = []
-        subdirs: list[str] = []
-        for page_files, page_dirs in iter_object_pages(self._fs, path):
-            files.extend(_entry_to_object(entry, self._bucket_name) for entry in page_files)
-            subdirs.extend(page_dirs)
-        return files, subdirs
-
-
-class _GcsLister:
-    """Lists a GCS bucket through google.cloud.storage.
-
-    gcsfs exposes only whole-level ``ls`` and all-at-once ``find``; neither pages
-    a flat listing incrementally, so the adaptive probe would materialize entire
-    subtrees in worker memory. The native client's ``list_blobs`` iterator pages
-    both flat and delimiter listings.
-    """
-
-    def __init__(self, bucket_name: str) -> None:
-        credentials, project = google.auth.default()
-        self._client = storage.Client(project=project, credentials=credentials)
-        self._bucket_name = bucket_name
-
-    def flat_pages(self, path: str) -> Iterator[list[dict]]:
-        """Pages of object rows from a flat (recursive) listing of *path*."""
-        for page in self._list_blobs(path, delimiter=None).pages:
-            yield [self._blob_to_object(blob) for blob in page]
-
-    def delimiter_level(self, path: str) -> tuple[list[dict], list[str]]:
-        """Object rows directly under *path* plus its immediate sub-prefix paths."""
-        files: list[dict] = []
-        subdirs: list[str] = []
-        for page in self._list_blobs(path, delimiter="/").pages:
-            files.extend(self._blob_to_object(blob) for blob in page)
-            subdirs.extend(f"{self._bucket_name}/{prefix}" for prefix in page.prefixes)
-        return files, subdirs
-
-    def _list_blobs(self, path: str, delimiter: str | None):
-        key = path.removeprefix(self._bucket_name).lstrip("/")
-        if key and not key.endswith("/"):
-            key += "/"
-        return self._client.list_blobs(
-            self._bucket_name,
-            prefix=key,
-            delimiter=delimiter,
-            page_size=GCS_PAGE_SIZE,
-            fields=BLOB_FIELDS,
-            timeout=GCS_LIST_TIMEOUT,
-        )
-
-    def _blob_to_object(self, blob: Any) -> dict:
-        storage_class = blob.storage_class or "STANDARD"
-        return {
-            "bucket": self._bucket_name,
-            "name": blob.name,
-            "size_bytes": int(blob.size or 0),
-            "storage_class_id": STORAGE_CLASS_IDS.get(storage_class, STORAGE_CLASS_IDS["STANDARD"]),
-            "created": blob.time_created,
-            "updated": blob.updated,
-        }
-
-
-def make_lister(bucket_url: str) -> tuple[_S3Lister | _GcsLister, str]:
-    """Build the lister for *bucket_url*'s declared backend: ``(lister, root_path)``."""
-    fs, root_path = listing_filesystem(bucket_url, WORKER_THREADS)
-    if is_s3_filesystem(fs):
-        return _S3Lister(fs, _bucket_name(bucket_url)), root_path
-    protocol = getattr(fs, "protocol", ())
-    protocols = (protocol,) if isinstance(protocol, str) else tuple(protocol)
-    if "gs" in protocols or "gcs" in protocols:
-        return _GcsLister(_bucket_name(bucket_url)), root_path
-    raise ValueError(f"No adaptive lister for {bucket_url} (filesystem protocol {protocols})")
+def _list_level(fs: Any, path: str) -> tuple[list[dict], list[str]]:
+    """One whole delimiter level under *path*: ``(file entries, sub-prefix paths)``."""
+    files: list[dict] = []
+    subdirs: list[str] = []
+    for page_files, page_dirs in fs.level_pages(path):
+        files.extend(page_files)
+        subdirs.extend(page_dirs)
+    return files, subdirs
 
 
 # ---------------------------------------------------------------------------
@@ -490,16 +415,17 @@ class ScanCoordinatorActor:
 # ---------------------------------------------------------------------------
 
 
-class _WorkerListers:
-    """Per-worker-thread cache of bucket-routed listers."""
+class _WorkerFilesystems:
+    """Per-worker-thread cache of bucket-routed filesystems and bucket names."""
 
     def __init__(self) -> None:
-        self._listers: dict[str, _S3Lister | _GcsLister] = {}
+        self._filesystems: dict[str, tuple[Any, str]] = {}
 
-    def get(self, bucket_url: str) -> _S3Lister | _GcsLister:
-        if bucket_url not in self._listers:
-            self._listers[bucket_url], _ = make_lister(bucket_url)
-        return self._listers[bucket_url]
+    def get(self, url: str) -> tuple[Any, str]:
+        if url not in self._filesystems:
+            fs, _ = filesystem_for(url)
+            self._filesystems[url] = (fs, _bucket_name(url))
+        return self._filesystems[url]
 
 
 def _report_chunks(coordinator: Any, objects: list[dict]) -> None:
@@ -509,7 +435,7 @@ def _report_chunks(coordinator: Any, objects: list[dict]) -> None:
 
 
 def scan_one_prefix(
-    listers: _WorkerListers,
+    filesystems: _WorkerFilesystems,
     task: ScanTask,
     coordinator: Any,
 ) -> list[ScanTask]:
@@ -525,12 +451,12 @@ def scan_one_prefix(
 
     Returns new sub-prefix tasks for re-queuing (empty at a leaf).
     """
-    lister = listers.get(task.bucket_url)
-    pages = lister.flat_pages(task.path)
+    fs, bucket_name = filesystems.get(task.bucket_url)
+    pages = fs.flat_pages(task.path)
     probe: list[dict] = []
     subtree_exhausted = True
     for page in pages:
-        probe.extend(page)
+        probe.extend(_entry_to_object(entry, bucket_name) for entry in page)
         if len(probe) >= FLAT_PROBE_MAX_OBJECTS:
             subtree_exhausted = False
             break
@@ -540,14 +466,14 @@ def scan_one_prefix(
         return []
 
     if task.depth < MAX_SPLIT_DEPTH:
-        files, subdirs = lister.delimiter_level(task.path)
+        files, subdirs = _list_level(fs, task.path)
         if subdirs:
-            _report_chunks(coordinator, files)
+            _report_chunks(coordinator, [_entry_to_object(entry, bucket_name) for entry in files])
             return [ScanTask(bucket_url=task.bucket_url, path=sub, depth=task.depth + 1) for sub in subdirs]
 
     _report_chunks(coordinator, probe)
     for page in pages:
-        _report_chunks(coordinator, page)
+        _report_chunks(coordinator, [_entry_to_object(entry, bucket_name) for entry in page])
     return []
 
 
@@ -562,7 +488,7 @@ def _worker_thread_loop(
     thread_id: str,
 ) -> None:
     """Single worker thread: pull tasks, scan, report results back."""
-    listers = _WorkerListers()
+    filesystems = _WorkerFilesystems()
     idle_count = 0
     max_idle = 20
 
@@ -584,7 +510,7 @@ def _worker_thread_loop(
 
         idle_count = 0
         try:
-            new_prefixes = scan_one_prefix(listers, task, coordinator)
+            new_prefixes = scan_one_prefix(filesystems, task, coordinator)
             coordinator.report_task_done(new_prefixes)
         except Exception as e:
             log.exception("[%s] error scanning %s", thread_id, task.path)
@@ -630,8 +556,8 @@ def worker_job_entrypoint(coordinator_actor_name: str) -> None:
 
 
 def _bucket_url(bucket: str) -> str:
-    """Normalize a bucket identifier to a URL. Bare names are assumed GCS."""
-    return bucket if "://" in bucket else f"gs://{bucket}"
+    """Normalize a bucket identifier to a URL, routing bare names by declared backend."""
+    return bucket if "://" in bucket else bucket_url(bucket)
 
 
 def discover_top_level_prefixes(
@@ -644,14 +570,15 @@ def discover_top_level_prefixes(
     prefix immediately, so the first workers do not serialize behind one root task.
     """
     tasks: list[ScanTask] = []
-    for bucket_url in bucket_urls:
-        log.info("Discovering prefixes for %s...", bucket_url)
-        lister, root_path = make_lister(bucket_url)
-        root_objects, subdirs = lister.delimiter_level(root_path)
-        if root_objects:
-            _report_chunks(coordinator, root_objects)
-        tasks.extend(ScanTask(bucket_url=bucket_url, path=sub, depth=0) for sub in subdirs)
-        log.info("  %s: %d top-level prefixes, %d root objects", bucket_url, len(subdirs), len(root_objects))
+    for url in bucket_urls:
+        log.info("Discovering prefixes for %s...", url)
+        fs, root_path = filesystem_for(url)
+        bucket_name = _bucket_name(url)
+        root_files, subdirs = _list_level(fs, root_path)
+        if root_files:
+            _report_chunks(coordinator, [_entry_to_object(entry, bucket_name) for entry in root_files])
+        tasks.extend(ScanTask(bucket_url=url, path=sub, depth=0) for sub in subdirs)
+        log.info("  %s: %d top-level prefixes, %d root objects", url, len(subdirs), len(root_files))
     return tasks
 
 

@@ -9,11 +9,10 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+from rigging.filesystem.paged_listing import DIRECTORY_TYPE, is_child
 from rigging.fsutil.listing import (
     DEFAULT_LISTING_WORKERS,
-    DIRECTORY_TYPE,
     entry_mtime,
-    is_child,
     metadata_listing_pages,
 )
 from rigging.fsutil.render import format_size
