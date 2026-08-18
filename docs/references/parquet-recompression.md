@@ -42,6 +42,52 @@ retain the rewritten output even if the indexes add a small amount of metadata.
 The command rejects `tmp/ttl=Nd` inputs because replacement would restart the
 object lifecycle clock.
 
+## Ordered Datakit migrations
+
+`experiments/datakit/parquet_rewrite.py` turns a reviewed list of Datakit
+directories into an ordered sequence of `ArtifactStep`s. The coordinator runs
+one step at a time, and each step launches one Zephyr migration. Its completion
+record and aggregate counters are cached for 30 days under the region-local
+`tmp/ttl=30d/datakit-rewrite/` prefix. Rerunning the coordinator therefore
+resumes at the first directory without a successful record.
+
+The manifest is an allowlist of quiescent prefixes. Review every addition and
+confirm its producers have stopped before launching it. Run the coordinator on
+Iris in the source bucket's cluster; the first manifest contains the versioned
+SVG tokenize output:
+
+```bash
+uv run iris --cluster=marin job run \
+  --cpu 1 --memory 2GB --disk 8GB --priority batch \
+  --target-cluster cw-us-east-02a --no-wait \
+  --job-name datakit-parquet-rewrite-svg -- \
+  python -m experiments.datakit.parquet_rewrite \
+  --manifest svg --apply-to-quiescent-prefixes
+```
+
+The `hero` manifest derives its paths from
+`experiments/datakit/hero_data_paths.json`, so the rewrite list follows the
+canonical retained outputs rather than obsolete hash-addressed results. In the
+August 18 storage inventory, it selects 1,462 Parquet artifact directories and
+115.84 TiB across exact-dedup, verified fuzzy-dedup, cluster assignments,
+minhash, Harrier embeddings, and both tokenized variants. The steps run in that
+order, from the smaller metadata products to the tokenized corpora.
+
+The 76.90 TiB fuzzy-dedup root is deliberately excluded. Most of its Parquet
+storage is iterative connected-components state; decide which iterations can
+be deleted before spending I/O to recompress them. Normalized hero paths are
+also excluded because the inventory contains no Parquet objects below them.
+Before running `--manifest hero`, refresh the inventory totals and confirm that
+the canonical hero outputs are no longer being produced. Inspect the complete
+ordered list with `--manifest hero --list-manifest`; this does not read or write
+the datasets.
+
+The ArtifactStep record is a resumability marker; the Parquet files remain in
+their original directory and are still replaced in place. A record only appears
+after its Zephyr migration succeeds. If the coordinator stops between the
+rewrite and the record write, rerunning is safe because the migration skips
+objects that already use zstd and contain page indexes.
+
 ## Page-index calibration
 
 Page-index overhead depends on the number of data pages and indexed columns.
