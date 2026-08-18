@@ -9,12 +9,16 @@ pinned-host master params, the QB histogram estimator, and a dropless held-out e
 only in width and the rack count it spans. Behaviour is uniform across the ladder so a rung predicts
 the d6144 hero. ``d6144`` is the hero itself.
 
-    size    racks   train batch (1024 x racks)
-    d768      1       1024
-    d1024     2       2048
-    d1536     6       6144
-    d2048    11      11264
-    d6144    11      11264
+    size   racks  batch  eval          checkpoints  tokens  active  total   FLOPs
+    d768     1     1024  every 5%      final only     45B     61M    1.6B    5.2e19
+    d1024    2     2048  every 5%      final only    122B    162M    4.0B    2.6e20
+    d1536    6     6144  every 5%      final only    361B    481M   11.5B    1.7e21
+    d2048   11    11264  every 5%      final only    878B    1.2B   27.7B    8.7e21
+    d6144   11    11264  every 3000    every 6k      17.1T    23B     535B    2.6e24
+
+Train batch is 1024 x racks (constant per-rack load); eval batch is 64 x racks (one sequence per
+device). Tokens/steps assume the default 750 tokens per active parameter; FLOPs are the levanter
+analytic estimate (forward+backward, including attention and the latent-MoE correction).
 """
 
 import dataclasses
@@ -39,7 +43,6 @@ from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, MoeHeuristic, bui
 from experiments.grug.moe_hero_ep.launch_mfu_test import (
     _SLIMPAJAMA_SHUFFLE,
     DEFAULT_WANDB_PROJECT,
-    HERO_CHECKPOINT_INTERVAL,
     HERO_EP_BATCH_SIZE,
     HERO_EP_EXPERT_AXIS_SIZE,
     HERO_EP_NODES,
@@ -102,21 +105,19 @@ def build_ladder_run(
     run_id: str,
     size: str,
     num_steps: int | None = None,
-    steps_per_eval: int = 1000,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
 
     ``num_steps`` defaults to the steps needed to train ``TOKENS_PER_ACTIVE_PARAM`` tokens per active
-    parameter at the rung's (rack-scaled) batch. ``steps_per_eval`` sets the eval cadence; every eval
-    scores the held-out set both as-trained and dropless.
+    parameter at the rung's (rack-scaled) batch. Every eval scores the held-out set both as-trained
+    and dropless. The narrow rungs eval every 5% of the run and keep only the forced final
+    checkpoint; the d6144 hero evals every 3000 steps and keeps a permanent checkpoint every 6000.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if size not in LADDER_RACKS:
         raise ValueError(f"size must be one of {sorted(LADDER_RACKS)}, got {size!r}")
-    if steps_per_eval <= 0:
-        raise ValueError(f"steps_per_eval must be positive, got {steps_per_eval}")
 
     dp_racks = LADDER_RACKS[size]
     # Weak scaling: batch grows with racks so per-rack token load (and the pooled-wave drop dynamics)
@@ -130,6 +131,16 @@ def build_ladder_run(
         num_steps = max(1, round(TOKENS_PER_ACTIVE_PARAM * _active_params(model) / global_tokens_per_step))
     elif num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
+
+    # The narrow rungs are short: eval every 5% of the run and keep only the forced final checkpoint.
+    # The d6144 hero is long: eval every 3000 steps and keep a permanent checkpoint every 6000.
+    # `keep_permanent=None` still writes the final checkpoint; restore is not used (see run_grug).
+    if size == "d6144":
+        steps_per_eval = 3000
+        keep_permanent: list[dict[str, int]] | None = [{"every": 6000}]
+    else:
+        steps_per_eval = max(1, round(num_steps / 20))
+        keep_permanent = None
 
     # The optimizer's LR/epsilon are compute-scaled from the token budget and width; the hero builder
     # already does this at d6144, so reuse it there and the shared MoeHeuristic at the narrow rungs.
@@ -156,7 +167,7 @@ def build_ladder_run(
         offload_opt_state=True,
         master_param_mode=MasterParamMode.FP32_PINNED_HOST,
         watch_mode=WatchMode.INLINE,
-        save_checkpoints=False,
+        save_checkpoints=True,
         expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
         replica_axis_size=dp_racks,
         sharding_dump_path=None,
@@ -195,11 +206,15 @@ def build_ladder_run(
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
+            # No time-based temporary checkpoints -- an offloaded run cannot restore from one (its
+            # pinned-host master/opt state comes back device-kind and mismatches the jitted step), so
+            # they would only cost storage. Keep just the permanent step-interval checkpoints below
+            # plus the forced final one.
             checkpointer=CheckpointerConfig(
                 base_path=prefix_join(ctx.output_path, "checkpoints"),
                 temporary_base_path=None,
-                save_interval=HERO_CHECKPOINT_INTERVAL,
-                keep=None,
+                save_interval=None,
+                keep=keep_permanent,
                 append_run_id_to_base_path=False,
                 delete_old_temp_checkpoints=True,
                 keep_last_temporary_checkpoints=1,
@@ -241,16 +256,9 @@ def build_ladder_run(
     default=None,
     help="Training steps. Default trains 750 tokens per active parameter at the rung's batch.",
 )
-@click.option(
-    "--steps-per-eval",
-    type=click.IntRange(min=1),
-    default=1000,
-    show_default=True,
-    help="Steps between held-out evals (as-trained and dropless).",
-)
 @build_options
-def main(run_id: str, size: str, num_steps: int | None, steps_per_eval: int) -> ArtifactStep[HeroThroughputResult]:
-    return build_ladder_run(run_id=run_id, size=size, num_steps=num_steps, steps_per_eval=steps_per_eval)
+def main(run_id: str, size: str, num_steps: int | None) -> ArtifactStep[HeroThroughputResult]:
+    return build_ladder_run(run_id=run_id, size=size, num_steps=num_steps)
 
 
 if __name__ == "__main__":
