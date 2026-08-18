@@ -192,28 +192,32 @@ The command-line entry point is:
 
 ```text
 python -m scripts.ci.marin_style_update run \
-  --consumer <name> --revision <sha> --app-slug <slug> [--auto-merge]
+  --consumer <name> --revision <sha> --app-slug <slug> \
+  --manifest-mode <validate|bootstrap> --merge-mode <publish|merge>
 ```
 
-The workflow invokes the module once per consumer inside an environment containing the target `marin-style` revision. The command calls the reusable `prepare_update_branch`, `publish_update`, and `merge_when_green` functions directly. It obtains the old manifest with `uvx --from git+https://github.com/marin-community/marin-style@<old> marin-style managed-files`; that JSON must exactly equal the checked-in old manifest. `marin-style managed-files` emits the same deterministic JSON shape as `manifest.json` without mutating a checkout.
+The workflow invokes the module once per consumer inside an environment containing the target `marin-style` revision. The command uses one in-memory pull-request policy through branch preparation, publication, and optional merge, and returns the structured status and pull-request URL. It obtains the old manifest with `uvx --from git+https://github.com/marin-community/marin-style@<old> marin-style managed-files`; that JSON must exactly equal the checked-in old manifest. `marin-style managed-files` emits the same deterministic JSON shape as `manifest.json` without mutating a checkout.
 
 ## Workflow
 
-The bootstrap workflow is manual-only and accepts inputs:
+The workflow is manual-only and accepts inputs:
 
 - `revision`: optional full `marin-style` commit; empty resolves the default-branch head.
-- `auto_merge`: boolean, default `false`.
 - `consumer`: optional registered consumer name; empty selects all consumers.
+- `manifest_mode`: `validate` or `bootstrap`, default `validate`.
+- `merge_mode`: `publish` or `merge`, default `publish`; bootstrap requires `publish`.
 
-Each matrix job uses environment `external-runtime-updater`, requests an installation token for exactly one consumer, and grants the workflow's native token only `contents: read` in Marin. The App token performs consumer checkout, branch publication, PR upsert, and merge. Jobs do not share installation tokens. Each job's concurrency group is `marin-style-update-<consumer>` with `cancel-in-progress: false`.
+Each matrix job uses environment `external-runtime-updater`, grants the workflow's native token only `contents: read` in Marin, and requests installation tokens for exactly one consumer. A read-only token performs checkout. After setup, the job mints a fresh token with contents, workflows, and pull-request write permissions for branch publication, PR upsert, and optional merge. The job replaces checkout's persisted Git credential with the fresh token before publication. Jobs do not share installation tokens. Each job's concurrency group is `marin-style-update-<consumer>` with `cancel-in-progress: false`.
+
+The publication token expires after one hour. Merge polling is capped at 40 minutes and the matrix job at 55 minutes, leaving time for generation, publication, and final head-bound merge validation. A timeout leaves the pull request open and fails the job.
 
 If the consumer already pins `revision`, the job exits successfully only when the fixed automation branch has no open PR. An older open PR fails for inspection. A generator error, unexpected path, absent/failing check, altered PR identity, timeout, or merge failure fails that consumer's job and leaves any PR open.
 
-After the bootstrap, installation, and protection preflight pass, a separate reviewed activation change adds schedule `17 */6 * * *` and makes scheduled runs merge automatically. Manual runs retain the explicit `auto_merge` input.
+After the bootstrap, installation, and protection preflight pass, a separate reviewed activation change adds schedule `17 */6 * * *` and runs scheduled updates with manifest mode `validate` and merge mode `merge`. Manual runs retain both explicit mode inputs.
 
 ## Protection policy
 
-The updater App is installed only on Marin and the registered consumer repositories. It receives contents and pull-request write permissions. Each consumer review ruleset gives the App pull-request-only bypass. Classic required-review protection, where present, also names the App in its PR bypass allowances. Required-status-check policy does not name the App as a bypass actor.
+The updater App is installed only on Marin and the registered consumer repositories. It receives contents, workflows, and pull-request write permissions. Workflows write is necessary because exact revision pins live under `.github/workflows/`; the updater's generated allowlist constrains which workflow files may change. Each consumer review ruleset gives the App pull-request-only bypass. Classic required-review protection, where present, also names the App in its PR bypass allowances. Required-status-check policy does not name the App as a bypass actor.
 
 App installation selection and consumer protection remain owner-managed prerequisites in the first version. Before publishing, the workflow preflight confirms installation access, the existence of `agent-generated` and `dependencies` labels, and the registered base branch. The App lacks administration permission and cannot audit protection itself. Auto-merge activation requires an owner-recorded audit showing both protection layers and no App CI bypass for every consumer.
 

@@ -43,7 +43,7 @@ The initial rollout pinned PR head `5094279…`; the resulting source squash com
 
 ### External prior art
 
-GitHub's [`create-github-app-token`](https://github.com/actions/create-github-app-token/blob/main/README.md) supports installation tokens limited to an explicit owner and repository list. Tokens expire after one hour and should request only the permissions used by the workflow.
+GitHub's [`create-github-app-token`](https://github.com/actions/create-github-app-token/blob/main/README.md) supports installation tokens limited to an explicit owner and repository list. Tokens expire after one hour and should request only the permissions used by the workflow. Every consumer pins `marin-style` under `.github/workflows/`, so the publication token needs Workflows write in addition to Contents and Pull requests write.
 
 GitHub [repository rulesets](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets) support GitHub App bypass actors and a pull-request-only bypass mode. App registration and installation repository selection remain owner-managed in Marin because GitHub's selection endpoint needs user-scoped authority unsuitable for an unattended Pulumi run.
 
