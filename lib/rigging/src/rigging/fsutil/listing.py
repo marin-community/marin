@@ -20,7 +20,7 @@ from typing import Any
 
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
-from rigging.filesystem.paged_listing import DIRECTORY_TYPE, is_child, s3_listing_page
+from rigging.filesystem.paged_listing import DIRECTORY_TYPE, is_child
 from rigging.filesystem.storage_path import StoragePath
 from rigging.fsutil.compression import compression_for
 
@@ -36,7 +36,7 @@ MAX_PREVIEW_BYTES = 10 * 1024 * 1024
 
 # Bucket listings are network-bound.
 DEFAULT_LISTING_WORKERS = 128
-_S3_MAX_SPLIT_DEPTH = 3
+_MAX_SPLIT_DEPTH = 3
 
 
 @dataclasses.dataclass(frozen=True)
@@ -92,16 +92,16 @@ class _CompletedDirectoryListing:
     workers_active: int
 
 
-class _S3ListingMode(StrEnum):
+class _ListingMode(StrEnum):
     PROBE = "probe"
     EXPAND = "expand"
     FLAT = "flat"
 
 
 @dataclasses.dataclass(frozen=True)
-class _S3ListingTask:
+class _ListingTask:
     path: str
-    mode: _S3ListingMode
+    mode: _ListingMode
     depth: int = 0
     continuation_token: str | None = None
 
@@ -252,15 +252,10 @@ def metadata_listing_pages(url: str, *, workers: int = DEFAULT_LISTING_WORKERS) 
     yield from _metadata_listing_pages(fs, path, workers)
 
 
-def _is_s3_filesystem(fs) -> bool:
-    protocol = getattr(fs, "protocol", ())
-    protocols = (protocol,) if isinstance(protocol, str) else protocol
-    return "s3" in protocols
-
-
 def _metadata_listing_pages(fs, path: str, workers: int) -> Iterator[ListingPage]:
-    if _is_s3_filesystem(fs):
-        yield from _s3_listing_pages(fs, path, workers)
+    paged_listing = getattr(fs, "listing", None)
+    if paged_listing is not None:
+        yield from _paged_listing_pages(paged_listing, path, workers)
         return
 
     root_entries = fs.ls(path, detail=True)
@@ -311,8 +306,8 @@ def _directory_listing_pages(fs, directories: Iterable[str], workers: int) -> It
                 yield _CompletedDirectoryListing(directory, entries, workers_active)
 
 
-def _s3_listing_pages(fs, path: str, workers: int) -> Iterator[ListingPage]:
-    queued = deque([_S3ListingTask(path, _S3ListingMode.PROBE)])
+def _paged_listing_pages(paged_listing, path: str, workers: int) -> Iterator[ListingPage]:
+    queued = deque([_ListingTask(path, _ListingMode.PROBE)])
     scheduled_prefixes = {path}
     pages_completed = 0
     prefixes_completed = 0
@@ -321,8 +316,8 @@ def _s3_listing_pages(fs, path: str, workers: int) -> Iterator[ListingPage]:
         while queued or pending:
             while queued and len(pending) < workers:
                 task = queued.popleft()
-                delimiter = "/" if task.mode == _S3ListingMode.EXPAND else ""
-                future = executor.submit(s3_listing_page, fs, task.path, task.continuation_token, delimiter)
+                delimiter = "/" if task.mode == _ListingMode.EXPAND else ""
+                future = executor.submit(paged_listing.page, task.path, task.continuation_token, delimiter)
                 pending[future] = task
 
             completed, _ = wait(pending, return_when=FIRST_COMPLETED)
@@ -330,17 +325,17 @@ def _s3_listing_pages(fs, path: str, workers: int) -> Iterator[ListingPage]:
                 task = pending.pop(future)
                 entries, continuation_token = future.result()
                 pages_completed += 1
-                if task.mode == _S3ListingMode.PROBE:
+                if task.mode == _ListingMode.PROBE:
                     if continuation_token is None:
                         prefixes_completed += 1
-                    elif task.depth < _S3_MAX_SPLIT_DEPTH:
+                    elif task.depth < _MAX_SPLIT_DEPTH:
                         entries = []
-                        queued.appendleft(_S3ListingTask(task.path, _S3ListingMode.EXPAND, depth=task.depth))
+                        queued.appendleft(_ListingTask(task.path, _ListingMode.EXPAND, depth=task.depth))
                     else:
                         queued.appendleft(
-                            _S3ListingTask(
+                            _ListingTask(
                                 task.path,
-                                _S3ListingMode.FLAT,
+                                _ListingMode.FLAT,
                                 depth=task.depth,
                                 continuation_token=continuation_token,
                             )
@@ -350,18 +345,18 @@ def _s3_listing_pages(fs, path: str, workers: int) -> Iterator[ListingPage]:
                         prefixes_completed += 1
                     else:
                         queued.appendleft(
-                            _S3ListingTask(
+                            _ListingTask(
                                 task.path,
                                 task.mode,
                                 depth=task.depth,
                                 continuation_token=continuation_token,
                             )
                         )
-                    if task.mode == _S3ListingMode.EXPAND:
+                    if task.mode == _ListingMode.EXPAND:
                         for directory in _listing_stats(task.path, entries).directories:
                             if directory not in scheduled_prefixes:
                                 scheduled_prefixes.add(directory)
-                                queued.append(_S3ListingTask(directory, _S3ListingMode.PROBE, depth=task.depth + 1))
+                                queued.append(_ListingTask(directory, _ListingMode.PROBE, depth=task.depth + 1))
 
                 yield ListingPage(
                     path=task.path,

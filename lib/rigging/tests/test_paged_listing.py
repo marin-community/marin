@@ -75,6 +75,15 @@ def test_s3_flat_pages_resume_by_token_and_drop_self_marker(monkeypatch):
     assert calls == [("root/", None), ("root/", "page-2")]
 
 
+def test_s3_level_pages_preserve_an_empty_path_segment(monkeypatch):
+    responses = {None: {"CommonPrefixes": [{"Prefix": "root/a//"}]}}
+    fs, _ = _s3_filesystem(monkeypatch, responses, expected_delimiter="/")
+
+    pages = list(fs.listing.level_pages("bucket/root/a/"))
+
+    assert pages == [([], ["bucket/root/a//"])]
+
+
 def test_gcs_level_pages_split_files_from_subdirs_and_drop_self_marker(monkeypatch):
     fs = GCSFileSystem(token="anon", skip_instance_cache=True)
 

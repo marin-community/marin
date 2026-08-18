@@ -51,3 +51,8 @@ def is_transient_s3_error(error: BaseException) -> bool:
             return True
     message = str(error)
     return any(fragment in message for fragment in _TRANSIENT_S3_MESSAGE_FRAGMENTS)
+
+
+def is_transient_s3_error_code(code: str | None) -> bool:
+    """Return whether an S3 response error code is transient."""
+    return code in _TRANSIENT_S3_ERROR_CODES

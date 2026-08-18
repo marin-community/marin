@@ -11,19 +11,21 @@ name two different backends. Bare ``fsutil`` opens the interactive browser.
 import logging
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 
 import click
-from fsspec import AbstractFileSystem
-from gcsfs import GCSFileSystem
-from s3fs import S3FileSystem
 
 from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.s3_compat import s3_credentials, s3_endpoint
 from rigging.filesystem.storage_path import StoragePath
+from rigging.fsutil.deletion import (
+    DEFAULT_DELETE_WORKERS,
+    MAX_DELETE_WORKERS,
+    DeleteProgress,
+    delete_prefix,
+)
 from rigging.fsutil.hashing import file_md5, format_digest
 from rigging.fsutil.listing import (
     ROOT,
@@ -57,13 +59,37 @@ from rigging.fsutil.usage import (
 
 logger = logging.getLogger(__name__)
 
-_RM_WORKERS = 8
-_S3_DELETE_BATCH = 1000
-_GCS_DELETE_BATCH = 20
 _INTERACTIVE_PROGRESS_INTERVAL = 0.2
 _LOG_PROGRESS_INTERVAL = 10.0
 _ACTIVITY_BAR_WIDTH = 8
 _MAX_PROGRESS_PATH_LENGTH = 60
+
+
+class _ProgressDisplay:
+    """Throttled stderr output shared by long-running commands."""
+
+    def __init__(self) -> None:
+        self._interactive = click.get_text_stream("stderr").isatty()
+        self._last_update = time.monotonic()
+        self._rendered_width = 0
+
+    def update(self, line: str, *, complete: bool = False) -> None:
+        now = time.monotonic()
+        interval = _INTERACTIVE_PROGRESS_INTERVAL if self._interactive else _LOG_PROGRESS_INTERVAL
+        if not complete and now - self._last_update < interval:
+            return
+        if self._interactive:
+            self._rendered_width = max(self._rendered_width, len(line))
+            click.echo(f"\r{line.ljust(self._rendered_width)}", nl=False, err=True)
+        else:
+            click.echo(line, err=True)
+        self._last_update = now
+
+    def finish(self, line: str) -> None:
+        if self._interactive and self._rendered_width:
+            click.echo(f"\r{line.ljust(max(self._rendered_width, len(line)))}", err=True)
+        else:
+            click.echo(line, err=True)
 
 
 @click.group(invoke_without_command=True)
@@ -191,37 +217,21 @@ def usage(url: str, prefix_threshold: str, prefix_depth: int, workers: int, outp
         raise click.BadParameter(str(error), param_hint="--prefix-threshold") from error
 
     click.echo(f"Scanning object metadata under {url} ...", err=True)
-    last_update = time.monotonic()
-    rendered_width = 0
+    display = _ProgressDisplay()
     latest_progress: ScanProgress | None = None
-    interactive = click.get_text_stream("stderr").isatty()
 
     def show_progress(progress: ScanProgress) -> None:
-        nonlocal last_update, latest_progress, rendered_width
+        nonlocal latest_progress
         latest_progress = progress
-        now = time.monotonic()
-        interval = _INTERACTIVE_PROGRESS_INTERVAL if interactive else _LOG_PROGRESS_INTERVAL
         complete = progress.prefixes_completed == progress.prefixes_discovered
-        if not complete and now - last_update < interval:
-            return
-        line = _scan_progress_line(progress)
-        if interactive:
-            rendered_width = max(rendered_width, len(line))
-            click.echo(f"\r{line.ljust(rendered_width)}", nl=False, err=True)
-        else:
-            click.echo(line, err=True)
-        last_update = now
+        display.update(_scan_progress_line(progress), complete=complete)
 
     try:
         scan = scan_usage(url, workers=workers, prefix_depth=prefix_depth, progress=show_progress)
     except MissingCredentials as error:
         raise click.ClickException(str(error)) from error
     if latest_progress is not None:
-        line = _finished_scan_line(latest_progress)
-        if interactive:
-            click.echo(f"\r{line.ljust(max(rendered_width, len(line)))}", err=True)
-        else:
-            click.echo(line, err=True)
+        display.finish(_finished_scan_line(latest_progress))
     report = render_usage_report(scan, threshold_bytes=threshold_bytes, generated_at=datetime.now(UTC))
     if output is None:
         click.echo(report)
@@ -356,13 +366,20 @@ def hash_command(urls: tuple[str, ...], hexadecimal: bool) -> None:
 @click.command()
 @click.argument("urls", nargs=-1, required=True)
 @click.option("-r", "-R", "--recursive", is_flag=True, help="Remove a prefix and everything under it.")
-def rm(urls: tuple[str, ...], recursive: bool) -> None:
+@click.option(
+    "--workers",
+    default=DEFAULT_DELETE_WORKERS,
+    show_default=True,
+    type=click.IntRange(min=1, max=MAX_DELETE_WORKERS),
+    help="Delete requests in flight at one time.",
+)
+def rm(urls: tuple[str, ...], recursive: bool, workers: int) -> None:
     """Remove objects, or recursively remove prefixes."""
     for url in urls:
-        _remove(url, recursive)
+        _remove(url, recursive, workers)
 
 
-def _remove(url: str, recursive: bool) -> None:
+def _remove(url: str, recursive: bool, workers: int) -> None:
     fs, path = filesystem_for(url)
     is_dir = fs.isdir(path)
     if is_dir and not recursive:
@@ -379,60 +396,31 @@ def _remove(url: str, recursive: bool) -> None:
         click.echo(url)
         return
 
-    click.echo(f"Scanning {url} ...", err=True)
-    entries = fs.find(path, detail=True)
-    files = list(entries)
-    total_bytes = sum(entry.get("size", 0) or 0 for entry in entries.values())
-    batches = _delete_batches(fs, files)
-    with ThreadPoolExecutor(max_workers=_RM_WORKERS) as executor:
-        label = f"Removing {len(files)} objects ({format_size(total_bytes)})"
-        with click.progressbar(length=len(files), label=label, show_pos=True) as progress:
-            for start in range(0, len(batches), _RM_WORKERS):
-                removals = {
-                    executor.submit(_remove_batch, fs, batch): len(batch)
-                    for batch in batches[start : start + _RM_WORKERS]
-                }
-                for removal in as_completed(removals):
-                    removal.result()
-                    progress.update(removals[removal])
-    fs.invalidate_cache()
+    click.echo(f"Removing objects under {url} ...", err=True)
+    display = _ProgressDisplay()
+
+    def show_progress(progress: DeleteProgress) -> None:
+        display.update(_delete_progress_line(progress))
+
+    result = delete_prefix(url, workers=workers, progress=show_progress)
+    summary = (
+        f"Removed {result.objects_deleted:,} objects ({format_size(result.bytes_deleted)}) "
+        f"in {result.elapsed_seconds:.1f}s"
+    )
+    display.finish(summary)
     click.echo(url)
 
 
-def _delete_batches(fs: AbstractFileSystem, files: list[str]) -> list[list[str]]:
-    if isinstance(fs, S3FileSystem):
-        batch_size = _S3_DELETE_BATCH
-    elif isinstance(fs, GCSFileSystem):
-        batch_size = _GCS_DELETE_BATCH
-    else:
-        batch_size = 1
-    return [files[start : start + batch_size] for start in range(0, len(files), batch_size)]
-
-
-def _remove_batch(fs: AbstractFileSystem, files: list[str]) -> None:
-    if not isinstance(fs, S3FileSystem):
-        fs.rm(files)
-        return
-
-    objects = []
-    buckets = set()
-    for path in files:
-        bucket, key, version = fs.split_path(path)
-        buckets.add(bucket)
-        item = {"Key": key}
-        if version is not None:
-            item["VersionId"] = version
-        objects.append(item)
-    assert len(buckets) == 1
-    response = fs.call_s3(
-        "delete_objects",
-        Bucket=buckets.pop(),
-        Delete={"Objects": objects, "Quiet": True},
+def _delete_progress_line(progress: DeleteProgress) -> str:
+    rate = progress.objects_deleted / progress.elapsed_seconds if progress.elapsed_seconds else 0.0
+    filled = max(1, round(_ACTIVITY_BAR_WIDTH * progress.requests_active / progress.requests_total))
+    activity = f"[{'█' * filled}{'░' * (_ACTIVITY_BAR_WIDTH - filled)}]"
+    queued = max(0, progress.objects_listed - progress.objects_deleted)
+    return (
+        f"{activity} {progress.requests_active}/{progress.requests_total} requests | "
+        f"{progress.listing_pages:,} pages | {progress.objects_deleted:,} deleted | "
+        f"{queued:,} queued | {format_size(progress.bytes_deleted)} | {rate:,.0f} obj/s"
     )
-    errors = response.get("Errors", [])
-    if errors:
-        details = ", ".join(f"{error['Key']}: {error['Code']}" for error in errors)
-        raise RuntimeError(f"S3 bulk delete failed: {details}")
 
 
 @click.command()
