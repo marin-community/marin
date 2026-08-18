@@ -9,6 +9,7 @@ import time
 import traceback
 from collections.abc import Callable, Hashable
 from contextlib import suppress
+from dataclasses import dataclass, field
 
 from fray.actor import ActorFuture, ActorHandle, current_actor
 from rigging.timing import ExponentialBackoff, RateLimiter
@@ -22,7 +23,13 @@ from zephyr.memory_store import (
     MemoryTableStatsResult,
 )
 from zephyr.stage_io import ShardTask, StageRunner, TaskResult, ZephyrTaskResources, _stage_throughput
-from zephyr.stats import _push_iris_task_status
+from zephyr.stats import (
+    WORKER_STATS_INTERVAL,
+    ZEPHYR_WORKER_MEM_CURRENT_KEY,
+    StatsWriter,
+    ZephyrWorkerStatStatus,
+    _push_iris_task_status,
+)
 from zephyr.worker_context import CounterEntry, CounterSnapshot, merge_counter_entries
 
 logger = logging.getLogger(__name__)
@@ -33,6 +40,19 @@ logger = logging.getLogger(__name__)
 RPC_POLL_INTERVAL = 0.5
 REGISTER_WARN_AFTER = 60.0
 PULL_TASK_WARN_AFTER = 30.0
+
+
+@dataclass
+class _ActiveShard:
+    runner: StageRunner
+    task: ShardTask
+    execution_id: str
+    start_time: float
+    last_counters: dict[str, CounterEntry] = field(default_factory=dict)
+
+
+def _counter_values(counters: dict[str, CounterEntry]) -> dict[str, int | float]:
+    return {name: entry.value for name, entry in counters.items()}
 
 
 def _format_worker_status_md(active_tasks: int, stage: str) -> tuple[str, str]:
@@ -65,9 +85,7 @@ class ZephyrWorker:
         self._shutdown_event = threading.Event()
         self._counter_generation: int = 0
         self._last_reported_counters: dict[str, CounterEntry] = {}
-        # Runners and sub-IDs for currently active slots — written by _stage_manager,
-        # read (snapshotted) by heartbeat thread.
-        self._active_runners: list[StageRunner] = []
+        self._active_shards: list[_ActiveShard] = []
         self._active_task_count: int = 0
         self._current_stage_name: str = ""
 
@@ -90,10 +108,11 @@ class ZephyrWorker:
         self._worker_id = f"{self._actor_ctx.group_name}-{self._actor_ctx.index}"
         self._actor_handle = self._actor_ctx.handle
         self._memory_store = MemoryStoreService(self._actor_ctx.index)
+        self._stats_writer = StatsWriter.connect()
 
         self._heartbeat_thread = threading.Thread(
             target=self._heartbeat_loop,
-            args=(coordinator_handle,),
+            args=(coordinator_handle, WORKER_STATS_INTERVAL),
             daemon=True,
             name=f"zephyr-hb-{self._worker_id}",
         )
@@ -168,6 +187,7 @@ class ZephyrWorker:
         # Registration must land before polling: it returns the memory-table
         # registrations that tasks read through memory_store.
         if not self._register():
+            self._stats_writer.close()
             return
 
         backoff = ExponentialBackoff(initial=0.1, maximum=5.0)
@@ -225,18 +245,30 @@ class ZephyrWorker:
             backoff.reset()
             assert work is not None
 
+            runner = self._stage_runner_factory()
+            active_shard = _ActiveShard(
+                runner=runner,
+                task=work.task,
+                execution_id=work.execution_id,
+                start_time=time.monotonic(),
+            )
             with self._resources_lock:
                 self._available = self._available - work.task.cost
-
-            runner = self._stage_runner_factory()
-            with self._resources_lock:
-                self._active_runners.append(runner)
+                self._active_shards.append(active_shard)
+                self._stats_writer.emit_worker_stat(
+                    work.task.stage_name,
+                    work.task.shard_idx,
+                    work.execution_id,
+                    ZephyrWorkerStatStatus.START,
+                    active_shard.start_time,
+                    {},
+                )
             self._active_task_count += 1
             self._current_stage_name = work.task.stage_name
 
             t = threading.Thread(
                 target=self._task_thread,
-                args=(work, runner),
+                args=(work, active_shard),
                 daemon=True,
                 name=f"zephyr-task-{self._worker_id}-s{work.task.shard_idx}",
             )
@@ -246,6 +278,7 @@ class ZephyrWorker:
         # Drain in-flight tasks before deregistering.
         for t in in_flight_threads:
             t.join()
+        self._stats_writer.close()
 
         logger.info("[%s] Poll loop exiting", self._worker_id)
         with suppress(Exception):
@@ -287,13 +320,19 @@ class ZephyrWorker:
     def _task_thread(
         self,
         work: PullTask,
-        runner: StageRunner,
+        active_shard: _ActiveShard,
     ) -> None:
         """Execute one shard task, report the result, and restore task.cost to the pool."""
-        task_start = time.monotonic()
+        task_start = active_shard.start_time
         task = work.task
+        runner = active_shard.runner
         try:
-            result, task_counters = self._execute_shard(task, work.chunk_prefix, work.execution_id, runner)
+            try:
+                result, task_counters = self._execute_shard(task, work.chunk_prefix, work.execution_id, runner)
+            except Exception:
+                self._finish_active_shard(active_shard, ZephyrWorkerStatStatus.FAILED, runner.live_counters())
+                raise
+            self._finish_active_shard(active_shard, ZephyrWorkerStatStatus.END, task_counters)
             logger.info("[%s] Shard %d done in %.2fs", self._worker_id, task.shard_idx, time.monotonic() - task_start)
             # Block until coordinator records result — prevents _in_flight races.
             self._counter_generation += 1
@@ -319,10 +358,28 @@ class ZephyrWorker:
         finally:
             with self._resources_lock:
                 self._available = self._available + task.cost
-                if runner in self._active_runners:
-                    self._active_runners.remove(runner)
             self._active_task_count = max(0, self._active_task_count - 1)
             self._task_completed_event.set()
+
+    def _finish_active_shard(
+        self,
+        active_shard: _ActiveShard,
+        status: ZephyrWorkerStatStatus,
+        counters: dict[str, CounterEntry],
+    ) -> None:
+        with self._resources_lock:
+            if not counters:
+                counters = active_shard.last_counters
+            active_shard.last_counters = dict(counters)
+            self._stats_writer.emit_worker_stat(
+                active_shard.task.stage_name,
+                active_shard.task.shard_idx,
+                active_shard.execution_id,
+                status,
+                active_shard.start_time,
+                _counter_values(counters),
+            )
+            self._active_shards.remove(active_shard)
 
     def _report_worker_iris_status(self) -> None:
         """Push worker status text to Iris for UI display. Called on each heartbeat."""
@@ -340,8 +397,21 @@ class ZephyrWorker:
     def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
         """Aggregate live counters from all active runners; return None if unchanged."""
         with self._resources_lock:
-            runners = list(self._active_runners)
-        current, _ = merge_counter_entries((name, entry) for r in runners for name, entry in r.live_counters().items())
+            entries: list[tuple[str, CounterEntry]] = []
+            for active_shard in self._active_shards:
+                counters = active_shard.runner.live_counters()
+                active_shard.last_counters = dict(counters)
+                if ZEPHYR_WORKER_MEM_CURRENT_KEY in counters:
+                    self._stats_writer.emit_worker_stat(
+                        active_shard.task.stage_name,
+                        active_shard.task.shard_idx,
+                        active_shard.execution_id,
+                        ZephyrWorkerStatStatus.RUNNING,
+                        active_shard.start_time,
+                        _counter_values(counters),
+                    )
+                entries.extend(counters.items())
+        current, _ = merge_counter_entries(entries)
         if current == self._last_reported_counters:
             return None
         self._last_reported_counters = current
