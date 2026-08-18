@@ -43,11 +43,13 @@ from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
 from marin.datakit.copartitioned import write_copartitioned_source_manifest
+from marin.execution.artifact import write_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.cluster_dedup import (
     ClusterDedupParams,
     ClusterDocument,
     find_duplicates,
+    prepare,
 )
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     VerifiedFuzzyDupsAttrData,
@@ -103,6 +105,8 @@ _MARKER_SCHEMA = pa.schema(
     ]
 )
 
+DEFAULT_THRESHOLDS = (0.60, 0.65, 0.70, 0.80)
+
 _SIZE_BINS = (2, 4, 8, 16, 64, 256, 1024, 4096, 16384, 65536)
 
 
@@ -140,17 +144,21 @@ def _size_bin(size: int) -> str:
     return "999999"
 
 
-def _solve_text_shards(paths: list[str], params: ClusterDedupParams) -> Iterator[dict[str, Any]]:
+def _solve_text_shards(
+    paths: list[str], params: ClusterDedupParams, thresholds: tuple[float, ...]
+) -> Iterator[dict[str, Any]]:
     """Solve several grouped text files in one map task.
 
     Each file is solved independently, exactly as one task per file did. Only the
     shuffle sees the difference: one chunk per task instead of one per file.
     """
     for path in paths:
-        yield from solve_text_shard(path, params)
+        yield from solve_text_shard(path, params, thresholds)
 
 
-def solve_text_shard(path: str, params: ClusterDedupParams) -> Iterator[dict[str, Any]]:
+def solve_text_shard(
+    path: str, params: ClusterDedupParams, thresholds: tuple[float, ...] = DEFAULT_THRESHOLDS
+) -> Iterator[dict[str, Any]]:
     """Solve every cluster in one grouped text file.
 
     The file is written sorted by ``cluster_key``, so a cluster is a contiguous
@@ -203,6 +211,25 @@ def solve_text_shard(path: str, params: ClusterDedupParams) -> Iterator[dict[str
             yield from _solve_batch(chunk)
 
     def _solve_batch(members: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+        """Emit one record per removed document, marking every threshold that removed it.
+
+        Building the n-gram sets dominates the cost and does not depend on the
+        threshold, so the cover runs once per threshold over one ``prepare``.
+        Measured on real clusters, a cover is 15% of a single-threshold solve
+        while the n-gram build is half of it, so four thresholds cost about 45%
+        more than one against four separate passes over the same text.
+
+        The record carries a bitmask rather than being emitted once per
+        threshold, which keeps the shuffle at the size of a single threshold's
+        markers. The reduce expands the mask into one ordinary marker tree per
+        threshold, so the mask never leaves this job.
+
+        Removal is not monotonic in the threshold, so the mask cannot be
+        collapsed to the strictest threshold that fired. Lowering the bar can
+        remove a member's only representative and let the member survive: a
+        cluster was measured dropping one document at 0.50 and keeping it at
+        0.45, for exactly that reason.
+        """
         nonlocal duplicates
         if len(members) < 2:
             return
@@ -210,22 +237,33 @@ def solve_text_shard(path: str, params: ClusterDedupParams) -> Iterator[dict[str
             ClusterDocument(id=row["id"], text=row["text"], file_idx=row["file_idx"], source_tag=row["source_tag"])
             for row in members
         ]
-        for removal in find_duplicates(cluster, params):
-            member = members[removal.member_index]
-            representative = members[removal.representative_index]
-            duplicates += 1
-            yield {
-                "file_idx": member["file_idx"],
-                "id": member["id"],
-                "dup_doc": True,
-                "dup_cluster_id": member["dup_cluster_id"],
-                "dup_representative_id": representative["id"],
-                "dup_representative_source_tag": representative["source_tag"],
-                "dup_containment": removal.containment,
-                "dup_jaccard": removal.jaccard,
-                "dup_novel_tokens": removal.novel_tokens,
-                "dup_comparisons": removal.comparisons,
-            }
+        prepared = prepare(cluster, params)
+        marks: dict[int, dict[str, Any]] = {}
+        for bit, threshold in enumerate(thresholds):
+            rule = params.model_copy(update={"minimum_containment": threshold})
+            for removal in find_duplicates(cluster, rule, prepared=prepared):
+                record: dict[str, Any] | None = marks.get(removal.member_index)
+                if record is None:
+                    member = members[removal.member_index]
+                    representative = members[removal.representative_index]
+                    record = {
+                        "file_idx": member["file_idx"],
+                        "id": member["id"],
+                        "dup_doc": True,
+                        "dup_thresholds": 0,
+                        "dup_cluster_id": member["dup_cluster_id"],
+                        "dup_representative_id": representative["id"],
+                        "dup_representative_source_tag": representative["source_tag"],
+                        "dup_containment": removal.containment,
+                        "dup_jaccard": removal.jaccard,
+                        "dup_novel_tokens": removal.novel_tokens,
+                        "dup_comparisons": removal.comparisons,
+                    }
+                    marks[removal.member_index] = record
+                record["dup_thresholds"] |= 1 << bit
+                counters.pipeline.update_counter(f"{COUNTER_PREFIX}/duplicates/{threshold:.2f}", 1)
+        duplicates += len(marks)
+        yield from marks.values()
 
     # The file is written sorted by cluster_key, so a cluster is a contiguous
     # run and only one cluster is ever resident. That alone does not bound
@@ -269,25 +307,43 @@ def solve_text_shard(path: str, params: ClusterDedupParams) -> Iterator[dict[str
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/solve_seconds_milli", int((time.monotonic() - started) * 1000))
 
 
-def _write_markers(file_idx: int, records: Iterator[dict[str, Any]], output_path: str) -> dict[str, Any]:
-    """Write one shard's markers into the co-partitioned attribute tree."""
+def _write_markers(
+    file_idx: int,
+    records: Iterator[dict[str, Any]],
+    output_path: str,
+    thresholds: tuple[float, ...],
+) -> dict[str, Any]:
+    """Write this shard's markers, one ordinary attribute tree per threshold.
+
+    Each record carries the bitmask of thresholds that removed its document.
+    Expanding it here rather than in the map keeps the shuffle at one
+    threshold's size, and every tree written is the plain marker shape the store
+    already reads: rows present means drop, and ``dup_doc`` is always true.
+    """
     shards: dict[int, ClusterTextShard] = zephyr_worker_ctx().get_shared(_SHARED_SHARDS_KEY)
     shard = shards[file_idx]
-    path = prefix_join(_attr_dir(output_path, shard.source_tag), shard.basename)
-    written = 0
+    # The reducer streams its records once, and each threshold keeps a different
+    # subset, so the shard is held in memory. A shard's markers are a few tens of
+    # thousands of ~380 byte rows, well under a task budget.
+    held = list(records)
+    written: dict[str, int] = {}
+    for bit, threshold in enumerate(thresholds):
+        kept = [record for record in held if record["dup_thresholds"] & (1 << bit)]
+        path = prefix_join(_attr_dir(output_path, threshold, shard.source_tag), shard.basename)
+        rows = ({field.name: record[field.name] for field in _MARKER_SCHEMA} for record in kept)
+        write_parquet_file(rows, path, schema=_MARKER_SCHEMA)
+        written[f"{threshold:.2f}"] = len(kept)
+        counters.pipeline.update_counter(f"{COUNTER_PREFIX}/markers/{threshold:.2f}", len(kept))
+    return {"file_idx": file_idx, "markers": written}
 
-    def rows() -> Iterator[dict[str, Any]]:
-        nonlocal written
-        for record in records:
-            written += 1
-            yield {field.name: record[field.name] for field in _MARKER_SCHEMA}
 
-    result = write_parquet_file(rows(), path, schema=_MARKER_SCHEMA)
-    return {**result, "file_idx": file_idx, "markers": written}
+def threshold_directory(threshold: float) -> str:
+    """Name of the marker tree a threshold writes, as the store is pointed at it."""
+    return f"markers@{threshold:.2f}"
 
 
-def _attr_dir(output_path: str, source_tag: str) -> str:
-    return prefix_join(output_path, f"outputs/{source_tag}")
+def _attr_dir(output_path: str, threshold: float, source_tag: str) -> str:
+    return prefix_join(output_path, f"{threshold_directory(threshold)}/outputs/{source_tag}")
 
 
 def verify_cluster_text(
@@ -302,6 +358,7 @@ def verify_cluster_text(
     text_file_limit: int | None = None,
     files_per_task: int = DEFAULT_FILES_PER_TASK,
     reduce_shards: int = DEFAULT_REDUCE_SHARDS,
+    thresholds: tuple[float, ...] = DEFAULT_THRESHOLDS,
 ) -> VerifiedFuzzyDupsAttrData:
     """Solve a materialized cluster-text dataset and write duplicate markers.
 
@@ -361,10 +418,10 @@ def verify_cluster_text(
     context.put(_SHARED_SHARDS_KEY, shards)
     pipeline = (
         Dataset.from_list(groups)
-        .flat_map(lambda group: _solve_text_shards(group, params))
+        .flat_map(lambda group: _solve_text_shards(group, params, thresholds))
         .group_by(
             key=lambda record: record["file_idx"],
-            reducer=lambda file_idx, records: _write_markers(file_idx, records, output_path),
+            reducer=lambda file_idx, records: _write_markers(file_idx, records, output_path, thresholds),
             sort_by=lambda record: record["id"],
             num_output_shards=reduce_shards,
         )
@@ -376,25 +433,38 @@ def verify_cluster_text(
         reduce_task_resources=reduce_task_resources,
     )
 
-    # Consumers resolve an attribute tree through its source manifest, the same
-    # way they resolve every other co-partitioned Datakit output.
+    # Each threshold is a self-contained attribute tree: its own source manifest
+    # and its own artifact record, so pointing the store at one is repointing a
+    # path. Consumers resolve a tree through its manifest, the same way they
+    # resolve every other co-partitioned Datakit output.
     source_tags = {shard.source_key: shard.source_tag for shard in manifest.shards}
-    attr_dirs = {source_key: _attr_dir(output_path, source_tag) for source_key, source_tag in source_tags.items()}
-    write_copartitioned_source_manifest(output_path=output_path, attr_dirs=attr_dirs)
-
-    markers = sum(result["markers"] for result in outcome.results)
     output_counters: dict[str, int | float] = dict(outcome.counters)
-    output_counters[f"{COUNTER_PREFIX}/markers"] = markers
     output_counters[f"{COUNTER_PREFIX}/text_files"] = len(paths)
-    logger.info("Wrote %d duplicate markers from %d grouped text files", markers, len(paths))
-    return VerifiedFuzzyDupsAttrData(
-        rule=params,
-        sources={
-            source_key: VerifiedFuzzyDupsPerSource(attr_dir=attr_dirs[source_key], source_tag=source_tag)
-            for source_key, source_tag in source_tags.items()
-        },
-        counters=output_counters,
-    )
+    results: dict[float, VerifiedFuzzyDupsAttrData] = {}
+    for threshold in thresholds:
+        tree = prefix_join(output_path, threshold_directory(threshold))
+        attr_dirs = {key: _attr_dir(output_path, threshold, tag) for key, tag in source_tags.items()}
+        write_copartitioned_source_manifest(output_path=tree, attr_dirs=attr_dirs)
+        markers = sum(result["markers"][f"{threshold:.2f}"] for result in outcome.results)
+        counters_for_tree = dict(output_counters)
+        counters_for_tree[f"{COUNTER_PREFIX}/markers"] = markers
+        results[threshold] = VerifiedFuzzyDupsAttrData(
+            rule=params.model_copy(update={"minimum_containment": threshold}),
+            sources={
+                key: VerifiedFuzzyDupsPerSource(attr_dir=attr_dirs[key], source_tag=tag)
+                for key, tag in source_tags.items()
+            },
+            counters=counters_for_tree,
+        )
+        write_artifact(results[threshold], tree)
+        logger.info("Threshold %.2f: %d markers under %s", threshold, markers, tree)
+
+    # The caller's own threshold names the artifact this returns; the rest stand
+    # on disk for a later choice.
+    primary = params.minimum_containment
+    if primary not in results:
+        primary = thresholds[0]
+    return results[primary]
 
 
 def cluster_verify_step(
