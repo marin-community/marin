@@ -8,13 +8,14 @@ import argparse
 import json
 import subprocess
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
 from scripts.ci.dependency_update_policy import (
     DEPENDENCY_UPDATE_POLICIES,
+    REQUIRED_CHECKS,
     DependencyUpdate,
     PullRequestPolicy,
 )
@@ -183,8 +184,17 @@ def pull_request_snapshot(pr: str, repository: str) -> PullRequestSnapshot:
 
 def required_check_rows(pr: str, repository: str) -> tuple[CheckRow, ...]:
     """Read GitHub's latest rollup row for every check on a pull request."""
+    return _check_rows(pr, repository)
+
+
+def protected_check_rows(pr: str, repository: str) -> tuple[CheckRow, ...]:
+    """Read the checks required by the pull request's base branch protection."""
+    return _check_rows(pr, repository, "--required")
+
+
+def _check_rows(pr: str, repository: str, *selection: str) -> tuple[CheckRow, ...]:
     result = subprocess.run(
-        ["gh", "pr", "checks", pr, "--repo", repository, "--json", "name,bucket"],
+        ["gh", "pr", "checks", pr, "--repo", repository, *selection, "--json", "name,bucket"],
         capture_output=True,
         text=True,
     )
@@ -193,6 +203,20 @@ def required_check_rows(pr: str, repository: str) -> tuple[CheckRow, ...]:
     rows = json.loads(result.stdout)
     assert isinstance(rows, list)
     return tuple(CheckRow.from_json(row) for row in rows)
+
+
+def evaluate_protected_checks(rows: Iterable[CheckRow]) -> RequiredCheckGate:
+    """Classify the checks GitHub reports as required by branch protection."""
+    check_buckets: dict[str, str] = {}
+    for row in rows:
+        if row.name in check_buckets:
+            raise ValueError(f"GitHub returned duplicate check rows for {row.name!r}")
+        check_buckets[row.name] = row.bucket
+    if not check_buckets:
+        return RequiredCheckGate(failing=(), missing=("protected status checks",), pending=())
+    pending = tuple(name for name, bucket in check_buckets.items() if bucket == "pending")
+    failing = tuple(name for name, bucket in check_buckets.items() if bucket not in {"pass", "pending"})
+    return RequiredCheckGate(failing=failing, missing=(), pending=pending)
 
 
 def changed_worktree_files(repo_root: Path | None = None) -> tuple[str, ...]:
@@ -409,6 +433,55 @@ def merge_when_green(
     poll_interval: float,
 ) -> None:
     """Wait for the fixed required checks, then merge with the dedicated app token."""
+    _merge_when_checks_green(
+        pr=pr,
+        repository=repository,
+        app_slug=app_slug,
+        policy=policy,
+        expected_head_sha=expected_head_sha,
+        timeout=timeout,
+        poll_interval=poll_interval,
+        check_gate=lambda: evaluate_required_checks(
+            required_check_rows(pr, repository),
+            required=REQUIRED_CHECKS,
+        ),
+    )
+
+
+def merge_when_protected_checks_green(
+    *,
+    pr: str,
+    repository: str,
+    app_slug: str,
+    policy: PullRequestPolicy,
+    expected_head_sha: str,
+    timeout: float,
+    poll_interval: float,
+) -> None:
+    """Wait for GitHub's protected checks, then merge with the dedicated App token."""
+    _merge_when_checks_green(
+        pr=pr,
+        repository=repository,
+        app_slug=app_slug,
+        policy=policy,
+        expected_head_sha=expected_head_sha,
+        timeout=timeout,
+        poll_interval=poll_interval,
+        check_gate=lambda: evaluate_protected_checks(protected_check_rows(pr, repository)),
+    )
+
+
+def _merge_when_checks_green(
+    *,
+    pr: str,
+    repository: str,
+    app_slug: str,
+    policy: PullRequestPolicy,
+    expected_head_sha: str,
+    timeout: float,
+    poll_interval: float,
+    check_gate: Callable[[], RequiredCheckGate],
+) -> None:
     deadline = time.monotonic() + timeout
     while True:
         snapshot = validated_pull_request(
@@ -417,7 +490,7 @@ def merge_when_green(
             expected_app_slug=app_slug,
             expected_head_sha=expected_head_sha,
         )
-        checks = evaluate_required_checks(required_check_rows(pr, repository), required=policy.required_checks)
+        checks = check_gate()
         decision = evaluate_merge(snapshot.state, checks)
         if decision is MergeDecision.DONE:
             return

@@ -8,52 +8,23 @@ from pathlib import Path
 
 import pytest
 
-from scripts.ci.dependency_update import BranchPushMode, PublishedPullRequest, UpdateBranch
-from scripts.ci.marin_style_consumers import LEGACY_MANAGED_FILES, LockMode, MarinStyleConsumer
 from scripts.ci.marin_style_update import (
-    ConsumerUpdateStatus,
+    LEGACY_MANAGED_FILES,
     GeneratedManifest,
     ManifestMode,
-    MergeMode,
-    _parser,
     generate_marin_style_update,
-    update_consumer,
+    installed_consumer_matrix,
 )
 
 OLD_REVISION = "a" * 40
 NEW_REVISION = "b" * 40
 
 
-def test_run_command_requires_explicit_modes() -> None:
-    parser = _parser()
-
-    with pytest.raises(SystemExit):
-        parser.parse_args(["run", "--consumer", "test", "--revision", NEW_REVISION, "--app-slug", "updater"])
-
-    args = parser.parse_args(
-        [
-            "run",
-            "--consumer",
-            "test",
-            "--revision",
-            NEW_REVISION,
-            "--app-slug",
-            "updater",
-            "--manifest-mode",
-            ManifestMode.VALIDATE.value,
-            "--merge-mode",
-            MergeMode.PUBLISH.value,
-        ]
-    )
-    assert args.manifest_mode is ManifestMode.VALIDATE
-    assert args.merge_mode is MergeMode.PUBLISH
-
-
 def _git(repository: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=repository, check=True, capture_output=True)
 
 
-def _consumer_repository(tmp_path: Path) -> tuple[Path, MarinStyleConsumer]:
+def _consumer_repository(tmp_path: Path) -> Path:
     repository = tmp_path / "consumer"
     repository.mkdir()
     _git(repository, "init", "-b", "main")
@@ -66,19 +37,13 @@ def _consumer_repository(tmp_path: Path) -> tuple[Path, MarinStyleConsumer]:
     workflow = repository / ".github/workflows/marin-ci.yaml"
     workflow.parent.mkdir(parents=True)
     workflow.write_text(f"MARIN_STYLE_REV: {OLD_REVISION}\n")
+    generated = repository / ".agents/skills/consult-echo/scripts/echo.py"
+    generated.parent.mkdir(parents=True)
+    generated.write_text(f"# marin-style@{OLD_REVISION}\n")
     (repository / "README.md").write_text("consumer\n")
-    _git(repository, "add", "infra/pre-commit.py", ".github/workflows/marin-ci.yaml", "README.md")
+    _git(repository, "add", ".")
     _git(repository, "commit", "-m", "initial")
-    consumer = MarinStyleConsumer(
-        name="test",
-        repository="marin-community/test",
-        base_branch="main",
-        revision_file="infra/pre-commit.py",
-        pin_files=("infra/pre-commit.py", ".github/workflows/marin-ci.yaml"),
-        required_checks=("test",),
-        lock_mode=LockMode.NONE,
-    )
-    return repository, consumer
+    return repository
 
 
 def _install_fake_uvx(
@@ -111,59 +76,74 @@ def _install_fake_uvx(
         "    target = root / '.agents/marin-style/manifest.json'\n"
         "    target.parent.mkdir(parents=True, exist_ok=True)\n"
         "    shutil.copyfile(manifest, target)\n"
+        "    echo = root / '.agents/skills/consult-echo/scripts/echo.py'\n"
+        f"    echo.write_text('# marin-style@{revision}\\n')\n"
     )
     uvx.chmod(0o755)
     monkeypatch.setenv("FAKE_MANIFEST", str(manifest_file))
     monkeypatch.setenv("PATH", f"{binary_dir}:{os.environ['PATH']}")
 
 
-def test_bootstrap_publishes_manifest_when_consumer_already_pins_revision(
+def test_installed_consumer_matrix_uses_app_repository_selection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    repository, consumer = _consumer_repository(tmp_path)
-    _install_fake_uvx(tmp_path, monkeypatch, revision=OLD_REVISION)
-    monkeypatch.chdir(repository)
-    monkeypatch.setattr("scripts.ci.marin_style_update._preflight", lambda _consumer: None)
-    monkeypatch.setattr(
-        "scripts.ci.marin_style_update.prepare_update_branch",
-        lambda **_kwargs: UpdateBranch(
-            expected_remote_sha="",
-            pull_request_url="",
-            push_mode=BranchPushMode.CREATE,
-        ),
+    binary_dir = tmp_path / "bin"
+    binary_dir.mkdir()
+    gh = binary_dir / "gh"
+    gh.write_text(
+        "#!/usr/bin/env python3\n"
+        "print('marin-community/marin\\tmarin\\tmain')\n"
+        "print('marin-community/MarinSkyRL\\tMarinSkyRL\\tmain')\n"
+        "print('marin-community/axolotl\\taxolotl\\tmain')\n"
     )
-    monkeypatch.setattr(
-        "scripts.ci.marin_style_update.publish_update",
-        lambda **_kwargs: PublishedPullRequest(
-            head_sha="c" * 40,
-            url="https://github.com/marin-community/test/pull/1",
-        ),
-    )
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{binary_dir}:{os.environ['PATH']}")
 
-    result = update_consumer(
-        consumer=consumer,
+    matrix = json.loads(installed_consumer_matrix())
+    selected = json.loads(installed_consumer_matrix("axolotl"))
+
+    assert [row["repository"] for row in matrix["include"]] == [
+        "marin-community/MarinSkyRL",
+        "marin-community/axolotl",
+    ]
+    assert selected["include"] == [
+        {
+            "base_branch": "main",
+            "name": "axolotl",
+            "repository": "marin-community/axolotl",
+            "repository_name": "axolotl",
+        }
+    ]
+
+
+def test_bootstrap_generates_manifest_when_consumer_already_pins_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = _consumer_repository(tmp_path)
+    _install_fake_uvx(tmp_path, monkeypatch, revision=OLD_REVISION)
+
+    update = generate_marin_style_update(
+        repo_root=repository,
+        base_branch="main",
         revision=OLD_REVISION,
-        merge_mode=MergeMode.PUBLISH,
-        app_slug="updater",
         manifest_mode=ManifestMode.BOOTSTRAP,
     )
 
-    assert result.status is ConsumerUpdateStatus.PUBLISHED
-    assert result.pull_request_url == "https://github.com/marin-community/test/pull/1"
-    assert (repository / ".agents/marin-style/manifest.json").is_file()
+    assert update.changed_files == (".agents/marin-style/manifest.json",)
 
 
-def test_generate_bootstrap_updates_only_registered_and_managed_files(
+def test_generate_bootstrap_discovers_pins_and_managed_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    repository, consumer = _consumer_repository(tmp_path)
+    repository = _consumer_repository(tmp_path)
     _install_fake_uvx(tmp_path, monkeypatch)
 
     update = generate_marin_style_update(
         repo_root=repository,
-        consumer=consumer,
+        base_branch="main",
         revision=NEW_REVISION,
         manifest_mode=ManifestMode.BOOTSTRAP,
     )
@@ -172,6 +152,7 @@ def test_generate_bootstrap_updates_only_registered_and_managed_files(
     assert update.new_revision == NEW_REVISION
     assert update.changed_files == (
         ".agents/marin-style/manifest.json",
+        ".agents/skills/consult-echo/scripts/echo.py",
         ".github/workflows/marin-ci.yaml",
         "infra/pre-commit.py",
     )
@@ -180,18 +161,18 @@ def test_generate_bootstrap_updates_only_registered_and_managed_files(
     assert (repository / "README.md").read_text() == "consumer\n"
 
 
-def test_generate_rejects_unregistered_worktree_change(
+def test_generate_rejects_unowned_worktree_change(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    repository, consumer = _consumer_repository(tmp_path)
+    repository = _consumer_repository(tmp_path)
     _install_fake_uvx(tmp_path, monkeypatch)
     (repository / "README.md").write_text("unrelated\n")
 
     with pytest.raises(ValueError):
         generate_marin_style_update(
             repo_root=repository,
-            consumer=consumer,
+            base_branch="main",
             revision=NEW_REVISION,
             manifest_mode=ManifestMode.BOOTSTRAP,
         )

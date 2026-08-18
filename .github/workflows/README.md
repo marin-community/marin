@@ -89,19 +89,20 @@ wheels.
 
 ## Marin-style consumer updates
 
-`ops-marin-style-consumers.yaml` prepares exact `marin-style` bumps for Harbor,
-TPU inference, vLLM, Evalchemy, Axolotl, and MarinSkyRL from one registry in
-`scripts/ci/marin_style_consumers.py`. It is manual-only. A run can select one
-consumer or all consumers, a reachable source revision, and whether this is the
-first generated-manifest update. Bootstrap updates cannot auto-merge. Remove
-the bootstrap manifest mode and `LEGACY_MANAGED_FILES` after every registered
-consumer's default branch contains a manifest.
+`ops-marin-style-consumers.yaml` prepares exact `marin-style` bumps for every
+consumer selected in the dependency-updater App installation. It is manual-only.
+A run can select one installed repository or all consumers, a reachable source
+revision, and whether this is the first generated-manifest update. Bootstrap
+updates cannot auto-merge. Remove the bootstrap manifest mode and
+`LEGACY_MANAGED_FILES` after every installed consumer's default branch contains
+a manifest.
 
 Each matrix job mints an installation token limited to one consumer, replaces
-the revision only in registered pin files, regenerates the exact old/new
-manifest-owned files, and updates MarinSkyRL's lockfile. The shared dependency
-updater lifecycle rejects other paths, binds the PR to the expected App author
-and head SHA, and uses that consumer's fixed required-check list. The initial
+the revision in recognized workflow, pre-commit, and project pins, regenerates
+the exact old/new manifest-owned files, and updates a root lockfile when it
+contains `marin-style`. The shared dependency updater lifecycle rejects other
+paths and binds the PR to the expected App author and head SHA. Merge waits for
+the checks GitHub reports as required by the consumer's protection. The initial
 manifest revision must be reviewed into every consumer before ordinary updates
 are allowed.
 
@@ -110,9 +111,10 @@ The publication token is minted after setup, and merge waits at most 40 minutes
 so the token remains valid through the final head-bound merge.
 
 Keep the workflow manual until an owner expands the App installation selection
-and records that each consumer grants review-only bypass in every active
-protection layer while retaining required CI. Labels `agent-generated` and
-`dependencies` must already exist in each repository. A failing generator,
+to the intended `marin-style` consumers and records that each grants review-only
+bypass in every active protection layer while retaining required CI. A canonical
+pin in `infra/pre-commit.py` is the repository opt-in. Labels `agent-generated`
+and `dependencies` must already exist in each repository. A failing generator,
 policy check, or CI run leaves the PR open.
 
 ## Canonical recipe: open or update a bot PR with `git + gh`

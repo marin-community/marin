@@ -14,6 +14,7 @@ from scripts.ci.dependency_update import (
     PullRequestSnapshot,
     changed_worktree_files,
     evaluate_merge,
+    evaluate_protected_checks,
     evaluate_required_checks,
     prepare_update_branch,
     publish_update,
@@ -149,6 +150,22 @@ def test_required_check_gate_ignores_duplicate_unrelated_checks() -> None:
     )
 
     assert gate.passed
+
+
+def test_protected_check_gate_uses_github_required_rows() -> None:
+    pending = evaluate_protected_checks(
+        [
+            CheckRow(name="lint", bucket="pass"),
+            CheckRow(name="tests", bucket="pending"),
+        ]
+    )
+
+    assert pending.pending == ("tests",)
+    assert evaluate_merge("OPEN", pending) is MergeDecision.WAIT
+    assert evaluate_merge("OPEN", evaluate_protected_checks([])) is MergeDecision.WAIT
+    assert (
+        evaluate_merge("OPEN", evaluate_protected_checks([CheckRow(name="tests", bucket="fail")])) is MergeDecision.FAIL
+    )
 
 
 def test_merge_gate_only_releases_an_open_pull_request_after_all_required_checks_pass() -> None:

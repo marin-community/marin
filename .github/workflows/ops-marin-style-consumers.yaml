@@ -12,7 +12,7 @@ on:
         required: false
         type: string
       consumer:
-        description: "Registered consumer name; empty selects all"
+        description: "Installed consumer repository; empty selects all"
         required: false
         type: string
       manifest_mode:
@@ -35,12 +35,21 @@ on:
 jobs:
   discover:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: external-runtime-updater
     permissions:
       contents: read
     outputs:
       matrix: ${{ steps.config.outputs.matrix }}
       revision: ${{ steps.config.outputs.revision }}
     steps:
+      - uses: actions/create-github-app-token@v3
+        id: discovery-token
+        with:
+          client-id: ${{ vars.DEPENDENCY_UPDATER_CLIENT_ID }}
+          private-key: ${{ secrets.DEPENDENCY_UPDATER_PRIVATE_KEY }}
+          owner: marin-community
+          permission-contents: read
       - uses: actions/checkout@v5
         with:
           path: marin
@@ -56,6 +65,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - id: config
         env:
+          GH_TOKEN: ${{ steps.discovery-token.outputs.token }}
           SELECTED_CONSUMER: ${{ inputs.consumer }}
         run: |
           revision=$(git -C marin-style rev-parse HEAD)
@@ -116,10 +126,11 @@ jobs:
       - name: Prepare consumer update
         env:
           APP_SLUG: ${{ vars.DEPENDENCY_UPDATER_APP_SLUG }}
-          CONSUMER: ${{ matrix.name }}
+          BASE_BRANCH: ${{ matrix.base_branch }}
           GH_TOKEN: ${{ steps.update-token.outputs.token }}
           MANIFEST_MODE: ${{ inputs.manifest_mode }}
           MERGE_MODE: ${{ inputs.merge_mode }}
+          REPOSITORY: ${{ matrix.repository }}
           REVISION: ${{ needs.discover.outputs.revision }}
         run: |
           cd consumer
@@ -130,7 +141,8 @@ jobs:
           git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $auth_header"
           PYTHONPATH="$GITHUB_WORKSPACE/marin" uv run --no-project python \
             -m scripts.ci.marin_style_update run \
-            --consumer "$CONSUMER" \
+            --repository "$REPOSITORY" \
+            --base-branch "$BASE_BRANCH" \
             --revision "$REVISION" \
             --app-slug "$APP_SLUG" \
             --manifest-mode "$MANIFEST_MODE" \

@@ -92,11 +92,12 @@ the profile authorized by Loom.
 
 ## Dependency updater app
 
-The external-runtime and native-package dependency workflows share a private, repository-scoped
-GitHub App instead of the Nightshift app. It may write repository contents, workflows, and pull
-requests; it has no webhook, OAuth, administration, or organization permissions. Its private key is available only
-through the `external-runtime-updater` Actions environment, whose deployment policy accepts `main`
-and rejects pull-request branches.
+The dependency updater workflows share a private, repository-scoped GitHub App
+instead of the Nightshift app. It may write repository
+contents, workflows, and pull requests; it has no webhook, OAuth, administration,
+or organization permissions. Its private key is available only through the
+`external-runtime-updater` Actions environment, whose deployment policy accepts
+`main` and rejects pull-request branches.
 
 Pulumi gives the app a pull-request-only bypass of the one-review rule and no required-CI bypass.
 Organization admins retain an always-on emergency bypass on both rulesets. The CI ruleset requires
@@ -107,14 +108,15 @@ The app review bypass must exist in both the review ruleset and classic `main` b
 GitHub enforces both controls: a ruleset-only bypass can leave an updater PR with green CI still
 waiting for review. After changing either control, inspect the preview and run the live audit below.
 
-App registration and installation remain owner-managed because GitHub's repository-selection
-endpoint requires a user-scoped token unsuitable for unattended Pulumi runs. The installation
-selects `marin` and registered consumer repositories whose protection audit is recorded. To
+App registration and installation remain owner-managed because GitHub's
+repository-selection endpoint requires a user-scoped token unsuitable for unattended
+Pulumi runs. The installation selects `marin` and the audited repositories that pin
+`marin-style`; that selection is the consumer list used by the update workflow. To
 recreate or rotate the app credential:
 
 1. Verify that the app has only Contents, Workflows, and Pull requests read/write permission and is
-   installed only on `marin` and the repositories in `scripts/ci/marin_style_consumers.py`. Record
-   the app ID, client ID, and slug from its settings page.
+   installed only on `marin` and the intended `marin-style` consumers. Record the app ID, client ID,
+   and slug from its settings page.
 2. Generate a private key and seal it to the protected environment's Actions public key. `--no-store`
    prints ciphertext without creating the secret. Record the matching public-key ID:
 
