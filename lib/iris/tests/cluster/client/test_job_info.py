@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from google.protobuf import json_format
-from iris.cluster.client.job_info import JobInfo, get_job_info, resolve_job_user, set_job_info
-from iris.cluster.types import JobName, tpu_device
+from iris.cluster.client.job_info import JobInfo, resolve_job_user, set_job_info
+from iris.cluster.types import JobName
 
 
 @pytest.fixture(autouse=True)
@@ -41,31 +40,3 @@ def test_resolve_job_user_falls_back_to_root_when_os_user_lookup_fails(monkeypat
 
     monkeypatch.setattr("getpass.getuser", _raise)
     assert resolve_job_user() == "root"
-
-
-def test_worker_region_from_env(monkeypatch):
-    """IRIS_WORKER_REGION is read into JobInfo.worker_region (regression for #5541)."""
-    monkeypatch.setenv("IRIS_TASK_ID", "/test-user/my-job/0:1")
-    monkeypatch.setenv("IRIS_WORKER_REGION", "us-central1")
-    info = get_job_info()
-    assert info is not None
-    assert info.worker_region == "us-central1"
-
-
-def test_worker_region_absent_when_env_not_set(monkeypatch):
-    """worker_region is None when IRIS_WORKER_REGION is not set."""
-    monkeypatch.setenv("IRIS_TASK_ID", "/test-user/my-job/0:1")
-    monkeypatch.delenv("IRIS_WORKER_REGION", raising=False)
-    info = get_job_info()
-    assert info is not None
-    assert info.worker_region is None
-
-
-def test_worker_device_from_env(monkeypatch):
-    monkeypatch.setenv("IRIS_TASK_ID", "/test-user/my-job/0:1")
-    monkeypatch.setenv("IRIS_WORKER_DEVICE", json_format.MessageToJson(tpu_device("v6e-4")))
-
-    info = get_job_info()
-
-    assert info is not None
-    assert info.worker_device == tpu_device("v6e-4")

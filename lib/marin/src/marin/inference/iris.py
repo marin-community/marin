@@ -15,7 +15,7 @@ from typing import cast
 import requests
 from fray.client import JobHandle
 from fray.current_client import current_client
-from fray.types import ActorConfig, CpuConfig, Entrypoint, JobRequest, JobStatus
+from fray.types import ActorConfig, Entrypoint, JobRequest, JobStatus
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName
@@ -54,7 +54,6 @@ _ENDPOINT_PROBE_TIMEOUT_SECONDS = 5.0
 _METADATA_MODEL = "model"
 _METADATA_KIND = "kind"
 _METADATA_BACKEND = "backend"
-_METADATA_ACCELERATOR = "accelerator"
 _METADATA_TENSOR_PARALLEL_SIZE = "tensor_parallel_size"
 _METADATA_STREAMING = "streaming"
 _MARIN_SERVE_KIND = "marin-serve"
@@ -180,27 +179,6 @@ def _broker_config(instances: int, broker: BrokerConfig | None) -> BrokerConfig 
     return None
 
 
-def _accelerator_label(iris: IrisConfig) -> str:
-    device = iris.worker_resources.device
-    if isinstance(device, CpuConfig):
-        raise ValueError("Inference workers require an accelerator")
-    if device.kind == "gpu":
-        return f"{device.variant}x{device.chip_count()}"
-    return device.variant
-
-
-def _assigned_accelerator_label() -> str:
-    job_info = get_job_info()
-    if job_info is None or job_info.worker_device is None:
-        raise RuntimeError("Iris did not report the accelerator assigned to this serving worker")
-    device = job_info.worker_device
-    if device.HasField("gpu"):
-        return f"{device.gpu.variant}x{device.gpu.count}"
-    if device.HasField("tpu"):
-        return device.tpu.variant
-    raise RuntimeError("Iris serving worker was not assigned a GPU or TPU")
-
-
 def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedModelConfig, int]:
     # Keep model-cache and Transformers imports inside accelerator workers.
     from marin.inference.model_preparation import (  # noqa: PLC0415
@@ -247,7 +225,6 @@ def _endpoint_metadata(
     *,
     model: str,
     backend: str,
-    accelerator: str,
     tensor_parallel_size: int,
     streaming: bool,
     proxy_timeout_seconds: float,
@@ -256,7 +233,6 @@ def _endpoint_metadata(
         _METADATA_MODEL: model,
         _METADATA_KIND: _MARIN_SERVE_KIND,
         _METADATA_BACKEND: backend,
-        _METADATA_ACCELERATOR: accelerator,
         _METADATA_TENSOR_PARALLEL_SIZE: str(tensor_parallel_size),
         _METADATA_STREAMING: str(streaming).lower(),
         PROXY_TIMEOUT_METADATA_KEY: str(proxy_timeout_seconds),
@@ -300,7 +276,6 @@ def _register_dashboard(
     *,
     tensor_parallel_size: int,
     backend_name: str,
-    accelerator: str,
     streaming: bool,
 ) -> Iterator[None]:
     job_info = get_job_info()
@@ -318,7 +293,6 @@ def _register_dashboard(
         max_model_len=service.model.max_model_len,
         dtype=service.model.dtype,
         has_chat_template=has_chat_template,
-        accelerator=accelerator,
         endpoint=service.endpoint_name,
         streaming=streaming,
     )
@@ -333,7 +307,6 @@ def _register_dashboard(
         metadata = _endpoint_metadata(
             model=model.endpoint.model,
             backend=backend_name,
-            accelerator=accelerator,
             tensor_parallel_size=tensor_parallel_size,
             streaming=streaming,
             proxy_timeout_seconds=service.controller_proxy_timeout_seconds,
@@ -373,7 +346,6 @@ def run_iris_service(service: IrisServiceConfig) -> None:
                 local_session.model,
                 tensor_parallel_size=tensor_parallel_size,
                 backend_name=local_session.backend_name,
-                accelerator=_assigned_accelerator_label(),
                 streaming=True,
             ):
                 _block_until_timeout(local_session.check_alive, service.timeout_hours)
@@ -393,7 +365,6 @@ def run_iris_service(service: IrisServiceConfig) -> None:
             session.model,
             tensor_parallel_size=session.tensor_parallel_size,
             backend_name=session.backend_name,
-            accelerator=_accelerator_label(service.iris),
             streaming=session.streaming,
         ):
             _block_until_timeout(session.check_alive, service.timeout_hours)
@@ -590,7 +561,6 @@ def _expose_brokered_inference(
             _endpoint_metadata(
                 model=model.model_id,
                 backend=worker_metadata.backend_name,
-                accelerator=_accelerator_label(iris),
                 tensor_parallel_size=worker_metadata.tensor_parallel_size,
                 streaming=False,
                 proxy_timeout_seconds=proxy.request_timeout_seconds,

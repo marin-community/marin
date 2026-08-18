@@ -43,8 +43,6 @@ def _identity(job_info: JobInfo, process_index: int | None) -> dict[str, str]:
     }
     if job_info.worker_id:
         identity["worker"] = job_info.worker_id
-    if job_info.worker_region:
-        identity["region"] = job_info.worker_region
     env_process_index = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV)
     if process_index is not None:
         if isinstance(process_index, bool) or process_index < 0:

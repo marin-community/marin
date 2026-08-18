@@ -108,7 +108,6 @@ def test_configure_stamps_canonical_resource_identity(
         task_id=JobName.from_wire("/alice/train/worker/3"),
         worker_id="w-7",
         attempt_id=1,
-        worker_region="us-east5",
     )
     with _iris_metadata(info, telemetry_receiver.endpoint):
         telemetry.configure(
@@ -125,7 +124,6 @@ def test_configure_stamps_canonical_resource_identity(
             "task_id": "/alice/train/worker/3",
             "attempt": "1",
             "worker": "w-7",
-            "region": "us-east5",
             "process_index": "2",
             "node_name": "g83d142",
             "model_revision": "abc123",

@@ -6,7 +6,6 @@ export interface ServingInfo {
   max_model_len: number | null
   dtype: string
   has_chat_template: boolean
-  accelerator: string
   endpoint: string
   streaming: boolean
 }
