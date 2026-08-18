@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_WORKERS = 16
 DEFAULT_BATCH_ROWS = 8_192
 DEFAULT_ROW_GROUP_BYTES = 128 * 1024 * 1024
+MIN_INPUT_BYTES = 10 * 1024 * 1024
 DEFAULT_WORKER_CPU = 1
 DEFAULT_WORKER_RAM = "2g"
 DEFAULT_WORKER_DISK = "8g"
@@ -53,6 +54,7 @@ class RewriteDisposition(StrEnum):
     ALREADY_TARGET = "already_target"
     DRY_RUN = "dry_run"
     NOT_SMALLER = "not_smaller"
+    TOO_SMALL = "too_small"
 
 
 class RewriteMode(StrEnum):
@@ -80,7 +82,7 @@ class RewriteResult:
     disposition: RewriteDisposition
     input_bytes: int
     output_bytes: int | None
-    rows: int
+    rows: int | None
 
 
 @dataclass(frozen=True)
@@ -164,6 +166,8 @@ def recompress_parquet(path: str, options: RewriteOptions = RewriteOptions()) ->
 
     fs, fs_path = filesystem_for(path)
     source_fingerprint = _fingerprint(fs.info(fs_path))
+    if source_fingerprint.size < MIN_INPUT_BYTES:
+        return RewriteResult(path, RewriteDisposition.TOO_SMALL, source_fingerprint.size, None, None)
 
     with fs.open(fs_path, "rb") as source_handle:
         source = pq.ParquetFile(source_handle)
@@ -231,7 +235,8 @@ def _rewrite_for_zephyr(path: str, options: RewriteOptions) -> list[dict]:
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/input_bytes_{result.disposition}", result.input_bytes)
     if result.output_bytes is not None:
         counters.pipeline.update_counter(f"{COUNTER_PREFIX}/output_bytes_{result.disposition}", result.output_bytes)
-    counters.pipeline.update_counter(f"{COUNTER_PREFIX}/rows_{result.disposition}", result.rows)
+    if result.rows is not None:
+        counters.pipeline.update_counter(f"{COUNTER_PREFIX}/rows_{result.disposition}", result.rows)
     logger.info(
         "%s: %s (%d -> %s bytes)",
         result.disposition,
