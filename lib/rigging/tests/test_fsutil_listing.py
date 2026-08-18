@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the backend-agnostic delimiter-level listing primitive."""
+"""Tests for the backend-agnostic delimiter-level listing primitives."""
 
 from datetime import UTC, datetime
 
-from rigging.fsutil.listing import iter_object_pages
+from rigging.fsutil.listing import flat_listing_page, iter_object_pages
 
 
 class _GcsFileSystem:
@@ -26,8 +26,9 @@ class _PagedS3FileSystem:
 
     protocol = "s3"
 
-    def __init__(self, responses):
+    def __init__(self, responses, delimiter="/"):
         self._responses = responses
+        self._delimiter = delimiter
         self.calls = []
 
     def split_path(self, path):
@@ -36,7 +37,7 @@ class _PagedS3FileSystem:
 
     def call_s3(self, method, **kwargs):
         assert method == "list_objects_v2"
-        assert kwargs["Delimiter"] == "/"
+        assert kwargs["Delimiter"] == self._delimiter
         self.calls.append((kwargs["Prefix"], kwargs.get("ContinuationToken")))
         return self._responses[kwargs.get("ContinuationToken")]
 
@@ -83,3 +84,30 @@ def test_iter_object_pages_s3_yields_one_page_per_continuation_token():
     assert [f["name"] for f in second_files] == ["bucket/b.bin"]
     # The root key is empty, so every request carries the empty prefix and the delimiter.
     assert fs.calls == [("", None), ("", "page-2")]
+
+
+def test_flat_listing_page_resumes_by_token_and_drops_self_marker():
+    modified = datetime(2025, 1, 1, tzinfo=UTC)
+    responses = {
+        None: {
+            "Contents": [
+                {"Key": "root/", "Size": 0, "LastModified": modified},  # prefix marker for the listed path
+                {"Key": "root/a.bin", "Size": 10, "LastModified": modified},
+            ],
+            "NextContinuationToken": "page-2",
+        },
+        "page-2": {
+            "Contents": [{"Key": "root/deep/b.bin", "Size": 20, "LastModified": modified}],
+        },
+    }
+    fs = _PagedS3FileSystem(responses, delimiter="")
+
+    entries, token = flat_listing_page(fs, "bucket/root")
+    assert token == "page-2"
+    assert [e["name"] for e in entries] == ["bucket/root/a.bin"]
+
+    entries, token = flat_listing_page(fs, "bucket/root", token)
+    assert token is None
+    # The flat listing is recursive: objects below sub-prefixes appear directly.
+    assert [e["name"] for e in entries] == ["bucket/root/deep/b.bin"]
+    assert fs.calls == [("root/", None), ("root/", "page-2")]

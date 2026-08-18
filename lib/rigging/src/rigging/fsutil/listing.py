@@ -272,12 +272,13 @@ def listing_filesystem(url: str, workers: int) -> tuple[Any, str]:
     serialize the threads' list calls; GCS ignores the setting.
     """
     fs, path = filesystem_for(url)
-    if _is_s3_filesystem(fs):
+    if is_s3_filesystem(fs):
         fs.config_kwargs = {**fs.config_kwargs, "max_pool_connections": workers}
     return fs, path
 
 
-def _is_s3_filesystem(fs) -> bool:
+def is_s3_filesystem(fs) -> bool:
+    """Whether *fs* speaks the S3 protocol (and so supports :func:`flat_listing_page`)."""
     protocol = getattr(fs, "protocol", ())
     protocols = (protocol,) if isinstance(protocol, str) else protocol
     return "s3" in protocols
@@ -293,7 +294,7 @@ def iter_object_pages(fs, path: str) -> Iterator[tuple[list[dict[str, Any]], lis
     each ``subdir_path`` is re-listable with this function on the same *fs*. The prefix's
     own marker object is excluded.
     """
-    if _is_s3_filesystem(fs):
+    if is_s3_filesystem(fs):
         continuation_token: str | None = None
         while True:
             entries, continuation_token = _s3_listing_page(fs, path, continuation_token, "/")
@@ -302,6 +303,19 @@ def iter_object_pages(fs, path: str) -> Iterator[tuple[list[dict[str, Any]], lis
                 return
     else:
         yield _split_level(path, fs.ls(path, detail=True))
+
+
+def flat_listing_page(fs, path: str, continuation_token: str | None = None) -> tuple[list[dict[str, Any]], str | None]:
+    """One flat (no-delimiter) listing page under *path*: ``(object detail dicts, next token)``.
+
+    A flat listing returns every object beneath *path* recursively, so a whole subtree
+    can be measured or streamed in bounded pages without descending prefix by prefix.
+    S3 only — no other backend exposes a bounded, resumable flat listing through fsspec.
+    Pass the returned token back in to continue; ``None`` means the listing is exhausted.
+    The prefix's own marker object is excluded.
+    """
+    entries, token = _s3_listing_page(fs, path, continuation_token, "")
+    return [entry for entry in entries if is_child(path, entry["name"])], token
 
 
 def _split_level(listed: str, entries: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
@@ -319,7 +333,7 @@ def _split_level(listed: str, entries: list[dict[str, Any]]) -> tuple[list[dict[
 
 
 def _metadata_listing_pages(fs, path: str, workers: int) -> Iterator[ListingPage]:
-    if _is_s3_filesystem(fs):
+    if is_s3_filesystem(fs):
         yield from _s3_listing_pages(fs, path, workers)
         return
 
