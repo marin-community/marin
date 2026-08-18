@@ -128,8 +128,8 @@ result above 16,384 values use DataFusion.
 training-status metric names also use an exact filtered projection.
 
 `telemetry_v1` exposes stable resource dimensions as nullable columns:
-`run_id`, `job_id`, `execution_uid`, `region`, `node_name`, `process_index`, and
-`alert_tag`. Producers may send them directly in the request's `resource`
+`run_id`, `job_id`, `execution_uid`, `region`, `node_name`, and `process_index`.
+Producers may send them directly in the request's `resource`
 object. When omitted, Finelog infers them from same-named resource attributes.
 An explicit field wins over an attribute and replaces the same key in
 `resource_attributes_json`; the JSON map is canonicalized rather than retaining

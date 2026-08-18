@@ -234,7 +234,6 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
         "region",
         "node_name",
         "process_index",
-        "alert_tag",
     ] {
         let column = schema
             .columns
@@ -331,7 +330,7 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
         .columns
         .iter()
         .any(|column| column == "attributes_json"));
-    for column in ["run_id", "job_id", "alert_tag"] {
+    for column in ["run_id", "job_id"] {
         assert!(training_status.columns.iter().any(|item| item == column));
     }
     assert_eq!(schema.grouped_extrema.len(), 1);
@@ -490,7 +489,6 @@ async fn explicit_resource_dimensions_override_attribute_fallbacks() {
             "region": "us-central2",
             "node_name": "node-1",
             "process_index": "3",
-            "alert_tag": "hero",
             "attributes": {
                 "run_id": "run-attribute",
                 "job_id": "job-legacy"
@@ -522,11 +520,11 @@ async fn explicit_resource_dimensions_override_attribute_fallbacks() {
         .unwrap();
     let rows = query(
         &store,
-        "SELECT run_id, job_id, execution_uid, region, node_name, process_index, alert_tag \
+        "SELECT run_id, job_id, execution_uid, region, node_name, process_index \
          FROM telemetry_v1",
     )
     .await;
-    let values: Vec<&str> = (0..7)
+    let values: Vec<&str> = (0..6)
         .map(|column| rows[0].column(column).as_string::<i32>().value(0))
         .collect();
     assert_eq!(
@@ -538,7 +536,6 @@ async fn explicit_resource_dimensions_override_attribute_fallbacks() {
             "us-central2",
             "node-1",
             "3",
-            "hero",
         ]
     );
 }

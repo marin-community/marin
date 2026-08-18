@@ -58,7 +58,6 @@ execution_uid
 region
 node_name
 process_index
-alert_tag
 ```
 
 For each field, explicit input wins. Otherwise Finelog reads the same key from
@@ -79,7 +78,6 @@ Identity meanings are producer-independent:
 | `region` | Infrastructure region where the resource runs |
 | `node_name` | Host or Kubernetes node identity |
 | `process_index` | Producer process/rank index within the resource |
-| `alert_tag` | Explicit alert-enrollment class |
 
 Values are opaque strings. Producers own their values and must keep them stable
 for the lifetime of one telemetry resource.
@@ -90,7 +88,7 @@ The table adds nullable `COLUMN_TYPE_STRING` columns in this order after
 `service`:
 
 ```text
-run_id, job_id, execution_uid, region, node_name, process_index, alert_tag
+run_id, job_id, execution_uid, region, node_name, process_index
 ```
 
 Existing Parquets are projected onto the effective schema with nulls for these
@@ -114,7 +112,7 @@ layout. The global Parquet layout revision remains unchanged, so this policy
 does not guarantee complete convergence and does not schedule terminal files
 for an immediate rewrite.
 
-The `training-status` projection includes `run_id`, `job_id`, and `alert_tag`.
+The `training-status` projection includes `run_id` and `job_id`.
 The `training-run-attribution` projection includes `run_id`, `job_id`,
 `node_name`, and `process_index`. Accelerator and node projections used by
 first-party dashboards include `node_name` where needed.

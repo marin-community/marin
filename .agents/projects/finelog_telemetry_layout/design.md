@@ -68,7 +68,7 @@ so terminal production files are not rewritten solely for this policy; they
 leave the hot cache through normal compaction and retention.
 
 Telemetry promotes `run_id`, `job_id`, `execution_uid`, `region`, `node_name`,
-`process_index`, and `alert_tag` to nullable string columns. The HTTP resource
+and `process_index` to nullable string columns. The HTTP resource
 object accepts each explicitly. Missing values fall back to same-named resource
 attributes. Explicit values
 win and canonicalize the same key in `resource_attributes_json`. First-party

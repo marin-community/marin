@@ -112,8 +112,6 @@ struct Resource {
     #[serde(default)]
     process_index: Option<String>,
     #[serde(default)]
-    alert_tag: Option<String>,
-    #[serde(default)]
     attributes: BTreeMap<String, String>,
 }
 
@@ -125,7 +123,6 @@ struct ResourceDimensions<'a> {
     region: Option<&'a str>,
     node_name: Option<&'a str>,
     process_index: Option<&'a str>,
-    alert_tag: Option<&'a str>,
 }
 
 impl Resource {
@@ -139,7 +136,6 @@ impl Resource {
             node_name: self.explicit_or_attribute(self.node_name.as_deref(), &["node_name"]),
             process_index: self
                 .explicit_or_attribute(self.process_index.as_deref(), &["process_index"]),
-            alert_tag: self.explicit_or_attribute(self.alert_tag.as_deref(), &["alert_tag"]),
         }
     }
 
@@ -164,7 +160,6 @@ impl Resource {
             ("region", self.region.as_ref()),
             ("node_name", self.node_name.as_ref()),
             ("process_index", self.process_index.as_ref()),
-            ("alert_tag", self.alert_tag.as_ref()),
         ] {
             if let Some(value) = value {
                 attributes.insert(name.to_string(), value.clone());
@@ -617,7 +612,6 @@ fn validate_batch(batch: &TelemetryBatch) -> Result<(), ApiError> {
             "resource.process_index",
             batch.resource.process_index.as_deref(),
         ),
-        ("resource.alert_tag", batch.resource.alert_tag.as_deref()),
     ] {
         if let Some(value) = value {
             validate_string(value, field, false)?;
@@ -730,7 +724,6 @@ fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<u8>, ApiError> {
         dimensions.region,
         dimensions.node_name,
         dimensions.process_index,
-        dimensions.alert_tag,
     ]
     .into_iter()
     .flatten()
@@ -795,7 +788,6 @@ fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<u8>, ApiError> {
             Arc::new(StringArray::from(vec![dimensions.region; row_count])),
             Arc::new(StringArray::from(vec![dimensions.node_name; row_count])),
             Arc::new(StringArray::from(vec![dimensions.process_index; row_count])),
-            Arc::new(StringArray::from(vec![dimensions.alert_tag; row_count])),
             Arc::new(StringArray::from(kinds)),
             Arc::new(StringArray::from(names)),
             Arc::new(Float64Array::from(values)),
@@ -836,7 +828,6 @@ fn telemetry_schema() -> Schema {
             Column::new("region", ColumnType::COLUMN_TYPE_STRING, true),
             Column::new("node_name", ColumnType::COLUMN_TYPE_STRING, true),
             Column::new("process_index", ColumnType::COLUMN_TYPE_STRING, true),
-            Column::new("alert_tag", ColumnType::COLUMN_TYPE_STRING, true),
             Column::new("kind", ColumnType::COLUMN_TYPE_STRING, false).with_value_counts(),
             // Metric names are the primary substring-search target
             // (`name LIKE '%nccl%'`), so this column carries the trigram index.
@@ -874,7 +865,6 @@ fn telemetry_schema() -> Schema {
             "service",
             "run_id",
             "job_id",
-            "alert_tag",
             "name",
             "value",
             "resource_attributes_json",
