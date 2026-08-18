@@ -8,17 +8,15 @@ counters from that rewrite. The coordinator runs the steps one at a time, so a
 rerun skips their cached records and resumes at the first incomplete directory.
 """
 
-import contextlib
 import logging
-import os
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import click
 import pyarrow.parquet as pq
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, run
-from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.cluster_config import marin_prefix, marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath
 
 from scripts.ops.storage.recompress_parquet import (
@@ -38,7 +36,6 @@ REWRITE_VERSION = "2026.08.18.2"
 DEFAULT_INVENTORY_MANIFEST = (
     "s3://marin-us-east-02a/marin/ops/parquet-rewrite-manifests/storage-scan-2026-08-18-100g.parquet"
 )
-MANIFEST_NAMES = ("inventory", "svg")
 
 
 @dataclass(frozen=True)
@@ -91,14 +88,6 @@ class ParquetRewriteArtifact(Artifact):
     counters: dict[str, int | float]
 
 
-SVG_REWRITE_PREFIXES = (
-    RewritePrefix(
-        name="svg-tokenize-a50a1068",
-        source_globs=("s3://marin-us-east-02a/marin/datakit/tokenize/svg_a50a1068/**/*.parquet",),
-    ),
-)
-
-
 def read_inventory_manifest(path: str) -> tuple[InventoryManifestRow, ...]:
     """Read the reviewed inventory snapshot consumed by the coordinator."""
     with StoragePath(path).open("rb") as source:
@@ -145,19 +134,6 @@ def inventory_rewrite_prefixes(rows: Sequence[InventoryManifestRow]) -> tuple[Re
     return tuple(steps)
 
 
-def manifest_prefixes(
-    manifest_name: str,
-    *,
-    inventory_manifest_path: str,
-) -> tuple[RewritePrefix, ...]:
-    """Resolve a static smoke manifest or a reviewed inventory snapshot."""
-    if manifest_name == "svg":
-        return SVG_REWRITE_PREFIXES
-    if manifest_name == "inventory":
-        return inventory_rewrite_prefixes(read_inventory_manifest(inventory_manifest_path))
-    raise ValueError(f"unknown rewrite manifest: {manifest_name}")
-
-
 def _rewrite_prefix(config: RewriteConfig) -> ParquetRewriteArtifact:
     counters = run_migration(
         config.source_globs,
@@ -198,39 +174,40 @@ def rewrite_train(
     return tuple(steps)
 
 
-@contextlib.contextmanager
-def _artifact_prefix(prefix: str) -> Iterator[None]:
-    previous = os.environ.get("MARIN_PREFIX")
-    os.environ["MARIN_PREFIX"] = prefix
-    try:
-        yield
-    finally:
-        if previous is None:
-            del os.environ["MARIN_PREFIX"]
-        else:
-            os.environ["MARIN_PREFIX"] = previous
-
-
 def run_rewrite_train(
     prefixes: Sequence[RewritePrefix],
     *,
-    artifact_prefix: str,
     pool: RewriteWorkerPool = RewriteWorkerPool(),
 ) -> ParquetRewriteArtifact:
     """Run the train sequentially and return the final completion artifact."""
     steps = rewrite_train(prefixes, pool=pool)
-    logger.info("Caching Parquet rewrite records under %s", artifact_prefix)
-    with _artifact_prefix(artifact_prefix):
-        result = None
-        for index, step in enumerate(steps, start=1):
-            logger.info("Running Parquet rewrite directory %d/%d: %s", index, len(steps), step.name)
-            result = run(step, max_concurrent=1)[0]
-        assert result is not None
-        return result
+    result = None
+    for index, step in enumerate(steps, start=1):
+        logger.info("Running Parquet rewrite directory %d/%d: %s", index, len(steps), step.name)
+        result = run(step, max_concurrent=1)[0]
+    assert result is not None
+    return result
+
+
+def _print_artifact_list(rows: Sequence[InventoryManifestRow]) -> None:
+    seen_artifacts: set[str] = set()
+    for row in rows:
+        if row.artifact_root in seen_artifacts:
+            continue
+        seen_artifacts.add(row.artifact_root)
+        click.echo(
+            "\t".join(
+                (
+                    str(row.artifact_files),
+                    f"{row.artifact_bytes / 1024**3:.3f}",
+                    row.step_name,
+                    row.artifact_root,
+                )
+            )
+        )
 
 
 @click.command()
-@click.option("--manifest", "manifest_name", type=click.Choice(MANIFEST_NAMES), required=True)
 @click.option("--inventory-manifest-path", default=DEFAULT_INVENTORY_MANIFEST, show_default=True)
 @click.option("--workers", default=DEFAULT_WORKERS, show_default=True, type=click.IntRange(min=1))
 @click.option("--worker-cpu", default=DEFAULT_WORKER_CPU, show_default=True, type=click.IntRange(min=1))
@@ -242,7 +219,6 @@ def run_rewrite_train(
     help="Confirm that every directory in the selected manifest has no active producer.",
 )
 def main(
-    manifest_name: str,
     inventory_manifest_path: str,
     workers: int,
     worker_cpu: int,
@@ -251,33 +227,10 @@ def main(
     apply_to_quiescent_prefixes: bool,
 ) -> None:
     """Rewrite every directory in a reviewed manifest in order."""
-    prefixes = manifest_prefixes(
-        manifest_name,
-        inventory_manifest_path=inventory_manifest_path,
-    )
-    if not prefixes:
-        raise click.UsageError("the selected manifest contains no directories")
+    rows = read_inventory_manifest(inventory_manifest_path)
+    prefixes = inventory_rewrite_prefixes(rows)
     if list_manifest:
-        if manifest_name == "inventory":
-            seen_artifacts: set[str] = set()
-            for row in read_inventory_manifest(inventory_manifest_path):
-                if row.artifact_root in seen_artifacts:
-                    continue
-                seen_artifacts.add(row.artifact_root)
-                click.echo(
-                    "\t".join(
-                        (
-                            str(row.artifact_files),
-                            f"{row.artifact_bytes / 1024**3:.3f}",
-                            row.step_name,
-                            row.artifact_root,
-                        )
-                    )
-                )
-        else:
-            for prefix in prefixes:
-                for source_glob in prefix.source_globs:
-                    click.echo(f"\t\t{prefix.name}\t{source_glob}")
+        _print_artifact_list(rows)
         return
     if not apply_to_quiescent_prefixes:
         raise click.UsageError("pass --apply-to-quiescent-prefixes after confirming that every prefix is quiescent")
@@ -288,9 +241,11 @@ def main(
         prefix=ARTIFACT_PREFIX,
         source_prefix=prefixes[0].source_globs[0],
     )
+    if marin_prefix().rstrip("/") != artifact_prefix.rstrip("/"):
+        raise click.UsageError(f"MARIN_PREFIX must be {artifact_prefix} so completion records are region-local")
+    logger.info("Caching Parquet rewrite records under %s", artifact_prefix)
     result = run_rewrite_train(
         prefixes,
-        artifact_prefix=artifact_prefix,
         pool=RewriteWorkerPool(workers=workers, worker_cpu=worker_cpu, worker_ram=worker_ram),
     )
     click.echo(f"completed {len(prefixes)} directories; final record: {result.path}")

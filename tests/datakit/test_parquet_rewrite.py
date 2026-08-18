@@ -21,15 +21,16 @@ def test_rewrite_train_runs_in_order_and_resumes_from_artifact_records(tmp_path,
         parquet_rewrite.RewritePrefix("second", ("s3://bucket/second/*.parquet",)),
         parquet_rewrite.RewritePrefix("third", ("s3://bucket/third/*.parquet",)),
     )
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 
-    result = parquet_rewrite.run_rewrite_train(prefixes, artifact_prefix=str(tmp_path))
+    result = parquet_rewrite.run_rewrite_train(prefixes)
 
     assert completed == [prefix.source_globs for prefix in prefixes]
     assert result.source_globs == prefixes[-1].source_globs
     assert result.counters == {"files_rewritten": 1}
     assert all(read_record(f"{tmp_path}/{prefix.name}/{parquet_rewrite.REWRITE_VERSION}") for prefix in prefixes)
 
-    parquet_rewrite.run_rewrite_train(prefixes, artifact_prefix=str(tmp_path))
+    parquet_rewrite.run_rewrite_train(prefixes)
     assert completed == [prefix.source_globs for prefix in prefixes]
 
 
