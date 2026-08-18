@@ -17,6 +17,8 @@ import cloudpickle
 import polars as pl
 import pyarrow.parquet as pq
 import pytest
+import zephyr.shuffle as shuffle_module
+from botocore.exceptions import EndpointConnectionError
 from iris.env_resources import TaskResources
 from zephyr.external_sort import external_sort_merge
 from zephyr.runners import _InProcessWorkerContext
@@ -579,3 +581,50 @@ def test_external_sort_merge_across_source_shards(tmp_path):
         shard=0,
     )
     assert [r["k"] for r in rows] == [1, 2, 3]
+
+
+def test_sidecar_read_survives_a_transient_object_store_error(tmp_path):
+    """A reducer reads one sidecar per mapper, so one bad GET must not lose the scan."""
+    items = [{"k": i % 4, "v": i} for i in range(40)]
+    scatter_paths = _build_shard(tmp_path, items, num_output_shards=4)
+
+    real_url_to_fs = shuffle_module.url_to_fs
+    failures = itertools.count()
+
+    def flaky_url_to_fs(path):
+        filesystem, fs_path = real_url_to_fs(path)
+        real_cat_file = filesystem.cat_file
+
+        def cat_file(target, *args, **kwargs):
+            if next(failures) < 2:
+                raise EndpointConnectionError(endpoint_url=f"http://object-store/{target}")
+            return real_cat_file(target, *args, **kwargs)
+
+        filesystem.cat_file = cat_file
+        return filesystem, fs_path
+
+    with patch.object(shuffle_module, "url_to_fs", flaky_url_to_fs):
+        shard = ScatterReader.from_sidecars(scatter_paths, target_shard=0)
+
+    expected = sorted([x for x in items if _target(x["k"], 4) == 0], key=lambda x: x["v"])
+    assert sorted(_read_shard(shard), key=lambda x: x["v"]) == expected
+
+
+def test_sidecar_read_names_the_path_when_it_cannot_recover(tmp_path):
+    """An unrecoverable sidecar read says which sidecar failed."""
+    scatter_paths = _build_shard(tmp_path, [{"k": 1, "v": 1}], num_output_shards=2)
+
+    real_url_to_fs = shuffle_module.url_to_fs
+
+    def broken_url_to_fs(path):
+        filesystem, fs_path = real_url_to_fs(path)
+
+        def cat_file(*args, **kwargs):
+            raise ValueError("bad request")
+
+        filesystem.cat_file = cat_file
+        return filesystem, fs_path
+
+    with patch.object(shuffle_module, "url_to_fs", broken_url_to_fs):
+        with pytest.raises(OSError, match="cannot read scatter sidecar"):
+            ScatterReader.from_sidecars(scatter_paths, target_shard=0)

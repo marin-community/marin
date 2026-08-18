@@ -48,8 +48,9 @@ import polars as pl
 from iris.env_resources import TaskResources
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.s3_compat import needs_virtual_host_addressing
+from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.filesystem.storage_path import StoragePath
-from rigging.timing import RateLimiter, log_time
+from rigging.timing import ExponentialBackoff, RateLimiter, log_time, retry_with_backoff
 
 from zephyr.external_sort import external_sort_merge
 from zephyr.shard_keys import encode_key, hash_encoded_key
@@ -95,6 +96,12 @@ _SCATTER_METADATA_FILENAME = "metadata.msgpack"
 # reducer issues while building its ScatterReader. These reads are GCS
 # GET-bound, so a modest pool keeps latency low without thrashing.
 _SIDECAR_READ_CONCURRENCY = 32
+# A reducer reads one sidecar per mapper, so a shard with thousands of mappers
+# is one bad GET away from losing the whole scan. botocore covers about 15
+# seconds on its own, and its per-client retry quota can drain while 32 readers
+# all fail at once, so the sidecar read carries its own budget on top.
+_SIDECAR_READ_MAX_ATTEMPTS = 6
+_SIDECAR_READ_BACKOFF = ExponentialBackoff(initial=0.5, maximum=15.0, factor=2.0)
 # Fraction of available memory available for merging.
 _SCATTER_READ_MEMORY_FRACTION = 0.4
 
@@ -286,7 +293,17 @@ def _read_sidecar_slice(path: str, target_shard: int) -> _SidecarSlice | None:
     """
     meta_path = _scatter_meta_path(path)
     fs, fs_path = url_to_fs(meta_path)
-    meta = _sidecar_decoder().decode(fs.cat_file(fs_path))
+    try:
+        raw = retry_with_backoff(
+            lambda: fs.cat_file(fs_path),
+            retryable=is_transient_s3_error,
+            max_attempts=_SIDECAR_READ_MAX_ATTEMPTS,
+            backoff=_SIDECAR_READ_BACKOFF,
+            operation=f"read scatter sidecar {meta_path}",
+        )
+    except Exception as error:
+        raise OSError(f"cannot read scatter sidecar {meta_path}: {error}") from error
+    meta = _sidecar_decoder().decode(raw)
     files = meta.get("files", [])
     if not files:
         return None
