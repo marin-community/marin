@@ -43,7 +43,7 @@ FOUR_NODE_EP_WORKER_CPU = 16
 # Process-per-GPU creates four independent Python/JAX processes, so host-offloaded optimizer state
 # and initialization peaks are not node-shared.
 HERO_WORKER_RAM = "850g"
-HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
+HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
 # The hero shape keeps its MuonH state on pinned host memory: 24.59 GiB of parameters and 27.78 GiB
 # of optimizer state per device leave too little room for the fixed all-to-all buffers otherwise.
 HERO_OFFLOAD_OPT_STATE = True
