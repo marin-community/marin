@@ -135,8 +135,20 @@ NVCC 13.0.88 environment:
 - `launch` is the historical one-process-per-node fixed-all-to-all baseline.
 - `launch_multiprocess` is the same fixed-all-to-all backend with one JAX process per GPU, matching
   MoK's process topology.
-- `launch_mok` is the dropless MoK backend. It computes both shared experts inside the same native
-  call while keeping their six canonical parameter leaves separate for MuonH.
+- `launch_mok` is the dropless MoK backend. It keeps the shared experts' six canonical parameter
+  leaves separate for MuonH either way, but where they are *computed* depends on `--latent-dim`:
+
+  - At the hero's latent width (the default), the fused call routes and combines at `latent_dim`,
+    which is what makes its wire traffic match the all-to-all arms'. The kernel runs one token
+    width, and the shared experts read the full-width token, so they cannot ride along; they run
+    in the block, exactly as they do for every all-to-all backend. The fused shared slot cannot be
+    switched off, so it gets zero weights at the narrowest legal width (256 packed) -- a fixed cost
+    of one 256-wide SwiGLU per local token, charged to this arm only.
+  - With `--latent-dim 0` there is one token width again and the call computes both shared experts
+    itself, which is MoK's fully fused mode.
+
+  `config.model.fuses_shared_experts` is the single place that decides, and the run records the
+  outcome as `comparison/fused_shared_experts`.
 
 MoK is supplied as an immutable, prebuilt CPython 3.12 Linux wheel for the Iris worker
 architecture. Build that wheel from the matching `mark/mok_hacking` checkout against Torch
@@ -152,7 +164,19 @@ python -m experiments.grug.moe_hero_ep.launch_mok \
   --run-id mhep-mok-dropless --num-steps 25 --version dev \
   --mok-package 'https://storage.googleapis.com/BUCKET/mixture_of_kittens-0.1.0-cp312-cp312-linux_ARCH.whl' \
   --run
+
+# MoK's fully fused mode, for reading the cost of moving the shared experts out.
+python -m experiments.grug.moe_hero_ep.launch_mok \
+  --run-id mhep-mok-dropless-nolatent --num-steps 25 --version dev --latent-dim 0 \
+  --mok-package 'https://storage.googleapis.com/BUCKET/mixture_of_kittens-0.1.0-cp312-cp312-linux_ARCH.whl' \
+  --run
 ```
+
+`launch_mok` and `launch_multiprocess` resolve to the same `GrugModelConfig` in every field except
+`moe_implementation`, which is what makes their throughput comparable; `tests/test_moe_hero_ep.py`
+asserts that directly. They do not share a process topology: MoK drives Torch symmetric memory and
+needs one rank per GPU, while the pooled-wave hero runs one JAX process per node, so
+`launch_multiprocess` is the matched control rather than `launch`.
 
 The metric contract is loss, tokens/s, analytic MFU, and MoE drop fraction. MoK reports zero
 drops. The fixed-capacity arms' analytic MFU still counts all selected top-k expert FLOPs, so read
