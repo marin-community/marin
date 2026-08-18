@@ -92,16 +92,22 @@ def main() -> None:
         check_vma=False,
     )
 
-    def put_batch(a):
+    def put_batch(a, dtype=None):
         mine = a.reshape(devices, tokens, *a.shape[1:])[proc]
-        return jax.make_array_from_process_local_data(NamedSharding(mesh, batch_spec), mine, a.shape)
+        if dtype is not None:
+            mine = mine.astype(dtype)
+        return jax.make_array_from_process_local_data(
+            NamedSharding(mesh, batch_spec), mine, a.shape
+        )
 
     def put_weight(a):
-        mine = a.reshape(devices, local_experts, *a.shape[1:])[proc]
-        return jax.make_array_from_process_local_data(NamedSharding(mesh, weight_spec), mine, a.shape)
+        mine = a.reshape(devices, local_experts, *a.shape[1:])[proc].astype(jnp.bfloat16)
+        return jax.make_array_from_process_local_data(
+            NamedSharding(mesh, weight_spec), mine, a.shape
+        )
 
     args = (
-        put_batch(x),
+        put_batch(x, jnp.bfloat16),
         put_batch(experts),
         put_batch(weights),
         put_weight(w13),
