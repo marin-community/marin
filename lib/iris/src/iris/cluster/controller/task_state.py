@@ -145,3 +145,14 @@ class TaskDetailRow:
     # Federated task's peer-side worker label ("" for a local task); NULL from the
     # outer join when absent.
     peer_worker_label: str | None
+
+
+def task_is_finished_row(task: TaskDetailRow) -> bool:
+    """Whether a task-detail row is terminal with no retries left."""
+    return task_is_finished(
+        task.state,
+        task.failure_count,
+        task.max_retries_failure,
+        task.preemption_count,
+        task.max_retries_preemption,
+    )

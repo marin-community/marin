@@ -22,8 +22,7 @@ from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     EXECUTING_TASK_STATES,
     ActiveTaskRow,
-    TaskDetailRow,
-    task_is_finished,
+    task_is_finished_row,
 )
 from iris.cluster.types import (
     TERMINAL_TASK_STATES,
@@ -90,16 +89,6 @@ class TransitionOutcome:
 
 
 # ─── Snapshot lookups ───
-
-
-def task_is_finished_row(task: TaskDetailRow) -> bool:
-    return task_is_finished(
-        task.state,
-        task.failure_count,
-        task.max_retries_failure,
-        task.preemption_count,
-        task.max_retries_preemption,
-    )
 
 
 def active_row_from_snapshot(snapshot: TransitionSnapshot, task_id: JobName) -> ActiveTaskRow | None:
