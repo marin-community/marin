@@ -21,7 +21,6 @@ from scripts.ops.storage.recompress_parquet import (
     DEFAULT_COORDINATOR_CPU,
     DEFAULT_WORKER_CPU,
     DEFAULT_WORKER_DISK,
-    DEFAULT_WORKER_RAM,
     DEFAULT_WORKERS,
     RewriteMode,
     RewriteOptions,
@@ -35,6 +34,7 @@ ARTIFACT_TTL_DAYS = 30
 ARTIFACT_PREFIX = "datakit-rewrite"
 REWRITE_VERSION = "2026.08.18.2"
 REWRITE_WORKERS = 512
+REWRITE_WORKER_RAM = "4g"
 DEFAULT_INVENTORY_MANIFEST = (
     "s3://marin-us-east-02a/marin/ops/parquet-rewrite-manifests/storage-scan-2026-08-18-100g-cap4096.parquet"
 )
@@ -72,7 +72,7 @@ class RewriteWorkerPool:
 
     workers: int = DEFAULT_WORKERS
     worker_cpu: int = DEFAULT_WORKER_CPU
-    worker_ram: str = DEFAULT_WORKER_RAM
+    worker_ram: str = REWRITE_WORKER_RAM
     worker_disk: str = DEFAULT_WORKER_DISK
     coordinator_cpu: float = DEFAULT_COORDINATOR_CPU
 
