@@ -122,7 +122,7 @@ def check_sync(repo_root: Path | None = None) -> SyncResult:
     """
 ```
 
-Repositories without an old manifest are supported for the reviewed bootstrap update. Sync discovers no deletions in that case, writes the initial manifest, and otherwise preserves current behavior. Activated automation refuses a consumer without a manifest.
+Repositories without an old manifest are supported for the reviewed bootstrap update. Sync discovers no deletions in that case, writes the initial manifest, and otherwise preserves current behavior. The bootstrap publishes a manifest-only update when the consumer already pins the target revision. Activated automation refuses a consumer without a manifest.
 
 Before write mode mutates the checkout, it validates the manifest format, digest grammar, canonical relative paths, old manifest revision, and every existing stale path and hash. Managed paths are regular files beneath `.agents/marin-style/` or package-owned `.agents/skills/<name>/` paths; symlinks are rejected. When an updater invokes sync, the old manifest must equal the manifest produced by installing the old pinned package. The manifest bootstrap revision adds the manifest without removing existing managed paths.
 
