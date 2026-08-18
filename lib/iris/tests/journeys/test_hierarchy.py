@@ -28,7 +28,7 @@ def test_root_cancellation_terminates_only_live_descendants(journey):
     assert journey.job(unrelated).state == job_pb2.JOB_STATE_RUNNING
 
 
-def test_parent_failure_terminates_its_live_child(journey):
+def test_parent_failure_terminates_child_with_cumulative_failure_cause(journey):
     root = journey.submit("failed-root")
     journey.settle()
     child = journey.submit_child(root, "child")
@@ -37,8 +37,15 @@ def test_parent_failure_terminates_its_live_child(journey):
     journey.fail(root[0])
     journey.settle()
 
-    assert journey.job(root).state == job_pb2.JOB_STATE_FAILED
-    assert journey.job(child).state == job_pb2.JOB_STATE_KILLED
+    expected_error = (
+        "Cumulative failed task attempts exceeded max_task_failures: failures=1, limit=0; application failure"
+    )
+    root_status = journey.job(root)
+    child_status = journey.job(child)
+    assert root_status.state == job_pb2.JOB_STATE_FAILED
+    assert root_status.error == expected_error
+    assert child_status.state == job_pb2.JOB_STATE_KILLED
+    assert child_status.error == expected_error
 
 
 def test_child_cancellation_preserves_its_parent_and_sibling(journey):

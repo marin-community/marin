@@ -41,7 +41,7 @@ from iris.cluster.controller.reconcile.overlay import Overlay
 from iris.cluster.controller.reconcile.policy import (
     FAILURE_TASK_STATES,
     NON_TERMINAL_TASK_STATES,
-    TERMINAL_STATE_REASONS,
+    TERMINAL_STATE_FALLBACK_REASONS,
 )
 from iris.cluster.controller.reconcile.snapshot import (
     TaskUpdate,
@@ -140,9 +140,13 @@ def _cascade_to_children(
         )
 
 
+def _terminal_job_reason(overlay: Overlay, job_id: JobName, terminal_state: int) -> str:
+    return overlay.job_error(job_id) or TERMINAL_STATE_FALLBACK_REASONS.get(terminal_state, "Job finalized")
+
+
 def _finalize_terminal_job(overlay: Overlay, job_id: JobName, terminal_state: int, now_ms: int) -> None:
     """Kill remaining tasks and optionally cascade to children when a job goes terminal."""
-    reason = TERMINAL_STATE_REASONS.get(terminal_state, "Job finalized")
+    reason = _terminal_job_reason(overlay, job_id, terminal_state)
     _kill_non_terminal_tasks(overlay, job_id, reason, now_ms)
     should_cascade = True
     if terminal_state != job_pb2.JOB_STATE_SUCCEEDED:
@@ -233,11 +237,14 @@ class ReconcileState:
         if cascaded_jobs:
             self.overlay.emit_log_event(LogEvent(action="dispatch_updates_applied", entity_id="direct"))
             for job_id in cascaded_jobs:
+                basis = self.overlay.job_basis(job_id)
+                assert basis is not None
                 self.overlay.emit_log_event(
                     LogEvent(
                         action="job_terminated",
                         entity_id=job_id.to_wire(),
                         trigger="dispatch_updates_applied",
+                        details=(("reason", _terminal_job_reason(self.overlay, job_id, basis.state)),),
                     )
                 )
         return self.overlay.effects

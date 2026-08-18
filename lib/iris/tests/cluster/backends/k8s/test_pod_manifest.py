@@ -529,6 +529,7 @@ def test_task_update_kueue_termination_target_is_preempted():
     assert update.exit_code == 137
     assert update.terminal_reason is not None
     assert "WorkloadEvictedDueToPreempted" in update.terminal_reason
+    assert update.error == update.terminal_reason
 
 
 def test_task_update_oom_killed_without_disruption_target_stays_application_failure():

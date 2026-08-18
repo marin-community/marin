@@ -1155,14 +1155,15 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
     # Failed or Unknown -- distinguish infrastructure vs application failure. The
     # error field carries the failure story, so clear the waiting one-liner.
     exit_code = _extract_exit_code(pod)
+    terminal_reason = _extract_terminal_reason(pod)
     return TaskUpdate(
         task_id=task_id,
         attempt_id=attempt_id,
         new_state=_pod_failure_state(pod),
         exit_code=exit_code,
-        error=_extract_error(pod),
+        error=terminal_reason,
         status_message="",
-        terminal_reason=_extract_terminal_reason(pod),
+        terminal_reason=terminal_reason,
         **identity,
     )
 
@@ -3029,6 +3030,7 @@ class K8sTaskProvider:
                 # never observed.
                 self._pod_not_found_counts.pop(cursor_key, None)
                 disruption_reason = self._disruption_reasons.get(entry)
+                terminal_reason = disruption_reason or _POD_DELETED_TERMINAL_REASON
                 updates.append(
                     TaskUpdate(
                         task_id=entry.task_id,
@@ -3038,8 +3040,8 @@ class K8sTaskProvider:
                             if disruption_reason is not None
                             else job_pb2.TASK_STATE_WORKER_FAILED
                         ),
-                        error="Pod not found",
-                        terminal_reason=disruption_reason or _POD_DELETED_TERMINAL_REASON,
+                        error=terminal_reason,
+                        terminal_reason=terminal_reason,
                         status_message="",
                     )
                 )
