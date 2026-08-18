@@ -4,9 +4,11 @@
 """Harrier data mixture on the fuzzy-deduplicated store built 2026.08.18.
 
 The phase weights are the evaluated 2026.08.17.1 fit, reused unchanged. Only the store and its
-per-cell token counts differ: ``store_81e7e39a`` rebuilds ``store_0381a974`` with fuzzy dedup
-applied (exempting ``dna/functional-regions``), which shrinks every cell, 24.92T to 23.01T overall.
-Maximum cell exposure rises from 1.97 to 2.09 epochs, so the eight-epoch cap still holds.
+per-cell token counts differ: ``store_4d2e363d`` rebuilds ``store_81e7e39a`` with 16 sources exempt
+from fuzzy dedup instead of one (``dna/functional-regions``). The two builds are otherwise the same,
+with 40 clusters, 5 quality levels, 200 cells, and 384 tasks. Every cell keeps or increases its
+token count, 23.01T to 23.11T overall, and maximum cell exposure stays at 2.09 epochs, so the
+eight-epoch cap still holds.
 """
 
 from __future__ import annotations
@@ -37,9 +39,9 @@ TOTAL_TOKENS = PRETRAIN_TOKENS + COOLDOWN_TOKENS
 HARRIER_MIX_2026_08_18_TAG = "harrier-mix-2026.08.18"
 
 HARRIER_MIX_2026_08_18_STORE = ArtifactStep.adopt(
-    "datakit/store/harrier-all-sources-k40-q5-fuzzy-dedup",
+    "datakit/store/harrier-all-sources-k40-q5-fuzzy-dedup-exempt16",
     "2026.08.18",
-    source="s3://marin-us-east-02a/marin/datakit/store_81e7e39a",
+    source="s3://marin-us-east-02a/marin/datakit/store_4d2e363d",
 )
 
 
