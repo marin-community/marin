@@ -177,8 +177,8 @@ The workload command hierarchy is:
 
 Task actions without an attempt suffix target the current attempt. Attempt actions
 require `/user/job/task:attempt` and are accepted only while that attempt is still
-current. The deployed controller does not yet provide exact-incarnation `exec`, so
-`exec` remains a Task action.
+current. `exec` remains a Task action because its request identifies a Task rather
+than a numbered Attempt.
 
 `job logs` returns the last 1000 lines by default. A multi-rank gang emits that
 many in seconds, so a grep for anything earlier in the run comes back empty:

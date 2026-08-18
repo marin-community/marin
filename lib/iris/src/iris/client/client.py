@@ -99,12 +99,27 @@ class TaskLogEntry:
     key: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class _LogQuery:
+    start: Timestamp | None = None
+    max_lines: int = 0
+    substring: str = ""
+    min_level: str = ""
+    tail: bool = False
+
+
 def _task_id_from_key(key: str) -> JobName:
     """Extract the task JobName from a log entry key (e.g. "/user/job/0:3" -> "/user/job/0")."""
     colon = key.rfind(":")
     if colon >= 0:
         return JobName.from_wire(key[:colon])
     return JobName.from_wire(key)
+
+
+def _require_job_name(job_id: JobName) -> JobName:
+    if job_id.is_task:
+        raise ValueError(f"Expected a Job name, got Task {job_id}")
+    return job_id
 
 
 class JobFailedError(Exception):
@@ -198,12 +213,14 @@ class Attempt:
         """Fetch logs for this numbered Attempt."""
         return self._client._fetch_logs(
             self._task_name,
-            start=start,
-            max_lines=max_lines,
-            substring=substring,
+            _LogQuery(
+                start=start,
+                max_lines=max_lines,
+                substring=substring,
+                min_level=min_level,
+                tail=tail,
+            ),
             attempt_id=self._attempt_number,
-            min_level=min_level,
-            tail=tail,
         )
 
     def wait(self, timeout: float = 300.0, poll_interval: float = 30.0) -> AttemptStatus:
@@ -300,11 +317,13 @@ class Task:
         """Fetch logs across this Task's Attempts."""
         return self._client._fetch_logs(
             self._task_name,
-            start=start,
-            max_lines=max_lines,
-            substring=substring,
-            min_level=min_level,
-            tail=tail,
+            _LogQuery(
+                start=start,
+                max_lines=max_lines,
+                substring=substring,
+                min_level=min_level,
+                tail=tail,
+            ),
         )
 
     def wait(self, timeout: float = 300.0, poll_interval: float = 30.0) -> TaskStatus:
@@ -345,8 +364,7 @@ class Job:
     """
 
     def __init__(self, client: "IrisClient", job_id: JobName):
-        if job_id.is_task:
-            raise ValueError(f"Expected a Job name, got Task {job_id}")
+        _require_job_name(job_id)
         self._client = client
         self._job_id = job_id
 
@@ -400,16 +418,21 @@ class Job:
         """Fetch globally timestamp-ordered logs across this job's tasks.
 
         Args:
+            start: Only return entries after this timestamp.
             max_lines: Global maximum number of lines to return. Zero uses the server default.
+            substring: Only return entries containing this text.
+            min_level: Minimum log level to return.
             tail: Return the most recent lines instead of the earliest lines.
         """
         return self._client._fetch_logs(
             self._job_id,
-            start=start,
-            max_lines=max_lines,
-            substring=substring,
-            min_level=min_level,
-            tail=tail,
+            _LogQuery(
+                start=start,
+                max_lines=max_lines,
+                substring=substring,
+                min_level=min_level,
+                tail=tail,
+            ),
         )
 
     def wait(
@@ -805,6 +828,7 @@ class IrisClient:
 
     def job(self, job_id: JobName) -> Job:
         """Address an existing logical Job."""
+        _require_job_name(job_id)
         return Job(self, job_id)
 
     def task(self, task_id: JobName) -> Task:
@@ -974,8 +998,7 @@ class IrisClient:
 
     def job_status(self, job_id: JobName) -> JobStatus:
         """Return the current snapshot for a logical Job name."""
-        if job_id.is_task:
-            raise ValueError(f"Expected a Job name, got Task {job_id}")
+        _require_job_name(job_id)
         return job_status_from_proto(self._cluster_client.get_job_status(job_id))
 
     def job_state(self, job_id: JobName) -> JobState:
@@ -983,8 +1006,7 @@ class IrisClient:
 
         Prefer this over ``job_status(job_id).state`` for polling loops.
         """
-        if job_id.is_task:
-            raise ValueError(f"Expected a Job name, got Task {job_id}")
+        _require_job_name(job_id)
         states = self._cluster_client.get_job_states([job_id])
         wire_id = job_id.to_wire()
         if wire_id not in states:
@@ -997,8 +1019,7 @@ class IrisClient:
         Args:
             job_id: Job ID to cancel
         """
-        if job_id.is_task:
-            raise ValueError(f"Expected a Job name, got Task {job_id}")
+        _require_job_name(job_id)
         self._cluster_client.terminate_job(job_id)
 
     def list_jobs(
@@ -1104,8 +1125,7 @@ class IrisClient:
 
     def list_tasks(self, job_id: JobName) -> list[TaskStatus]:
         """Return current Task snapshots for a logical Job name."""
-        if job_id.is_task:
-            raise ValueError(f"Expected a Job name, got Task {job_id}")
+        _require_job_name(job_id)
         return [task_status_from_proto(task) for task in self._cluster_client.list_tasks(job_id)]
 
     def _change_tasks(
@@ -1144,13 +1164,9 @@ class IrisClient:
     def _fetch_logs(
         self,
         target: JobName,
+        query: _LogQuery,
         *,
-        start: Timestamp | None = None,
-        max_lines: int = 0,
-        substring: str = "",
         attempt_id: int = -1,
-        min_level: str = "",
-        tail: bool = False,
     ) -> list[TaskLogEntry]:
         """Fetch logs for a task or job.
 
@@ -1161,12 +1177,8 @@ class IrisClient:
 
         Args:
             target: Task ID or Job ID
-            start: Only return logs after this timestamp (None = from beginning)
-            max_lines: Maximum number of log lines to return (0 = server default)
-            substring: Substring filter for log content
+            query: Log filters and result limits.
             attempt_id: Filter to specific attempt (-1 = all attempts)
-            min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
-            tail: If True, return the most recent lines instead of earliest
 
         Returns:
             List of TaskLogEntry objects, sorted by timestamp
@@ -1175,11 +1187,11 @@ class IrisClient:
         response = self._cluster_client.fetch_logs(
             source,
             match_scope=match_scope,
-            since_ms=start.epoch_ms() if start else 0,
-            max_lines=max_lines,
-            substring=substring,
-            min_level=min_level,
-            tail=tail,
+            since_ms=query.start.epoch_ms() if query.start else 0,
+            max_lines=query.max_lines,
+            substring=query.substring,
+            min_level=query.min_level,
+            tail=query.tail,
         )
 
         result = [

@@ -27,6 +27,20 @@ from iris.rpc import job_pb2
 _CONTROLLER_LOG_TARGET = "/system/controller"
 
 
+def workload_profile_options(command):
+    """Apply the profile options shared by Task and Attempt commands."""
+    options = [
+        click.argument("profiler", type=click.Choice(["threads", "cpu", "mem"])),
+        click.option("--duration", "-d", default=10, help="Profiling duration in seconds."),
+        click.option("--output", "-o", default=None, help="Output file path."),
+        click.option("--locals", "include_locals", is_flag=True, help="Include local variables in a thread dump."),
+        click.option("--native", "include_native", is_flag=True, help="Include native frames in a thread dump."),
+    ]
+    for option in reversed(options):
+        command = option(command)
+    return command
+
+
 def _format_cpu_millicores(millicores: int) -> str:
     """Format CPU usage in cores with the raw millicore value."""
     return f"{millicores / 1000:g} cores ({millicores}m)"

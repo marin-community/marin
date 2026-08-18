@@ -6,14 +6,14 @@
 import click
 
 from iris.cli.connect import iris_client_for_ctx
-from iris.cli.logs import echo_log_entries, log_start
-from iris.cli.process_status import run_profile
-from iris.cli.targets import collect_resource_ids
+from iris.cli.logs import echo_log_entries, log_start, workload_log_options
+from iris.cli.process_status import run_profile, workload_profile_options
+from iris.cli.targets import collect_resource_ids, workload_action_options
 from iris.cli.task import (
     attempt_status,
-    echo_task_action_results,
     fetch_task_description,
     fetch_task_events,
+    finish_task_actions,
     render_attempt_detail_text,
     render_task_events_text,
     task_event_attempt_uids,
@@ -59,16 +59,7 @@ def attempt_events(ctx: click.Context, attempt_ref: str, limit: int) -> None:
 
 @attempt.command("logs")
 @click.argument("attempt_ref")
-@click.option("--since-ms", type=int, default=None, help="Only show logs after this epoch millisecond timestamp.")
-@click.option("--since-seconds", type=int, default=None, help="Only show logs from the last N seconds.")
-@click.option("--max-lines", type=int, default=0, help="Maximum lines to return; zero uses the server default.")
-@click.option("--tail/--no-tail", default=True, help="Return the most recent lines instead of the earliest.")
-@click.option(
-    "--level",
-    type=click.Choice(["debug", "info", "warning", "error", "critical"], case_sensitive=False),
-    default=None,
-)
-@click.option("--substring", default="", help="Only return lines containing this text.")
+@workload_log_options
 @click.pass_context
 def attempt_logs(
     ctx: click.Context,
@@ -115,9 +106,7 @@ def _attempt_targets(raw_targets: tuple[str, ...], read_stdin: bool) -> tuple[Ta
 
 @attempt.command("preempt")
 @click.argument("attempt_refs", nargs=-1)
-@click.option("--stdin", is_flag=True, help="Read additional Attempt IDs from stdin CSV rows.")
-@click.option("--reason", default="", help="Record an operator reason on the Attempts.")
-@click.option("--dry-run", is_flag=True, help="Print the Attempts that would be preempted.")
+@workload_action_options
 @click.pass_context
 def attempt_preempt(
     ctx: click.Context,
@@ -133,14 +122,12 @@ def attempt_preempt(
             click.echo(target.to_wire())
         return
     with iris_client_for_ctx(ctx, workspace=None) as client:
-        echo_task_action_results(client.preempt_tasks(targets, reason=reason), "preempted")
+        finish_task_actions(client.preempt_tasks(targets, reason=reason), "preempted")
 
 
 @attempt.command("fail")
 @click.argument("attempt_refs", nargs=-1)
-@click.option("--stdin", is_flag=True, help="Read additional Attempt IDs from stdin CSV rows.")
-@click.option("--reason", default="", help="Record an operator reason on the Attempts.")
-@click.option("--dry-run", is_flag=True, help="Print the Attempts that would be failed.")
+@workload_action_options
 @click.pass_context
 def attempt_fail(
     ctx: click.Context,
@@ -156,16 +143,12 @@ def attempt_fail(
             click.echo(target.to_wire())
         return
     with iris_client_for_ctx(ctx, workspace=None) as client:
-        echo_task_action_results(client.fail_tasks(targets, reason=reason), "failed")
+        finish_task_actions(client.fail_tasks(targets, reason=reason), "failed")
 
 
 @attempt.command("profile")
 @click.argument("attempt_ref")
-@click.argument("profiler", type=click.Choice(["threads", "cpu", "mem"]))
-@click.option("--duration", "-d", default=10, help="Profiling duration in seconds.")
-@click.option("--output", "-o", default=None, help="Output file path.")
-@click.option("--locals", "include_locals", is_flag=True, help="Include local variables in a thread dump.")
-@click.option("--native", "include_native", is_flag=True, help="Include native frames in a thread dump.")
+@workload_profile_options
 @click.pass_context
 def attempt_profile(
     ctx: click.Context,

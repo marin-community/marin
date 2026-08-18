@@ -14,8 +14,8 @@ from typing import Any
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from google.protobuf import json_format
-from iris.cli.job import build_job_description
 from iris.client.workload_codec import job_status_from_proto, task_status_from_proto
+from iris.client.workload_summary import job_summary_data
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
 from iris.cluster.types import JobName
@@ -660,7 +660,7 @@ class IrisBabysitter:
 
 
 def _job_summary_payload(job: job_pb2.JobStatus, tasks: list[job_pb2.TaskStatus]) -> dict[str, Any]:
-    summary = build_job_description(
+    summary = job_summary_data(
         job_status_from_proto(job),
         [task_status_from_proto(task) for task in tasks],
     )

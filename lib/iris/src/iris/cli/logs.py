@@ -9,6 +9,31 @@ from rigging.timing import Timestamp
 from iris.client.client import TaskLogEntry
 
 
+def workload_log_options(command):
+    """Apply the log filters shared by Job, Task, and Attempt commands."""
+    options = [
+        click.option(
+            "--since-ms",
+            type=int,
+            default=None,
+            help="Only show logs after this epoch millisecond timestamp.",
+        ),
+        click.option("--since-seconds", type=int, default=None, help="Only show logs from the last N seconds."),
+        click.option("--max-lines", type=int, default=0, help="Maximum lines to return; zero uses the server default."),
+        click.option("--tail/--no-tail", default=True, help="Return the most recent lines instead of the earliest."),
+        click.option(
+            "--level",
+            type=click.Choice(["debug", "info", "warning", "error", "critical"], case_sensitive=False),
+            default=None,
+            help="Minimum log level to return.",
+        ),
+        click.option("--substring", default="", help="Only return lines containing this text."),
+    ]
+    for option in reversed(options):
+        command = option(command)
+    return command
+
+
 def log_start(since_ms: int | None, since_seconds: int | None) -> Timestamp | None:
     if since_ms is not None and since_seconds is not None:
         raise click.UsageError("Specify only one of --since-ms or --since-seconds.")

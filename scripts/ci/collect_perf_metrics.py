@@ -30,9 +30,9 @@ from pathlib import Path
 import click
 from connectrpc.errors import ConnectError
 from iris.cli.connect import connect_controller, rpc_client
-from iris.cli.job import build_job_description
 from iris.client.client import IrisClient
 from iris.client.workload import JobStatus
+from iris.client.workload_summary import job_summary_data
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2, query_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
@@ -191,7 +191,7 @@ def fetch_job_description(client: IrisClient, job_id: str) -> dict | None:
     """Return a Job description, or None when the Iris RPC fails."""
     try:
         job_name = JobName.from_wire(job_id)
-        return build_job_description(client.job_status(job_name), client.list_tasks(job_name))
+        return job_summary_data(client.job_status(job_name), client.list_tasks(job_name))
     except ConnectError as exc:
         logger.warning("iris client Job description failed for %s: %s", job_id, exc)
         return None

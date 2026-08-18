@@ -7,7 +7,6 @@ import pytest
 from click.testing import CliRunner
 from iris.cli.job import (
     build_job_constraints,
-    build_job_description,
     build_resources,
     cancel,
     describe,
@@ -420,7 +419,12 @@ def _summary_statuses(job: _job_pb2.JobStatus, *tasks: _job_pb2.TaskStatus):
     return client.job_status(job_id), client.list_tasks(job_id)
 
 
-def test_job_description_includes_peak_memory_and_sorts_numerically():
+def _description_task_rows(output: str) -> list[list[str]]:
+    rows = [line.split() for line in output.splitlines()]
+    return [row for row in rows if row and row[0].isdigit()]
+
+
+def test_job_describe_cli_includes_peak_memory_and_sorts_numerically(monkeypatch):
     job, tasks = _summary_statuses(
         _job_pb2.JobStatus(
             job_id="/u/j",
@@ -436,21 +440,25 @@ def test_job_description_includes_peak_memory_and_sorts_numerically():
         _task(1, _job_pb2.TASK_STATE_SUCCEEDED, peak_mb=1024, cur_mb=50, exit_code=0, duration_ms=3_000),
     )
 
-    summary = build_job_description(job, tasks)
+    class FakeClient:
+        def job_status(self, _job_id):
+            return job
 
-    assert summary["job_id"] == "/u/j"
-    assert summary["state"] == "failed"
-    assert [t["index"] for t in summary["tasks"]] == ["1", "2", "10"]
-    peaks = {t["index"]: t["memory_peak_mb"] for t in summary["tasks"]}
-    assert peaks == {"1": 1024, "2": 10_240, "10": 2048}
-    oom = next(t for t in summary["tasks"] if t["index"] == "2")
-    assert oom["state"] == "failed"
-    assert oom["exit_code"] == 137
-    assert oom["error"] == "OOM"
-    assert oom["duration_ms"] == 5_000
+        def list_tasks(self, _job_id):
+            return tasks
+
+    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: FakeClient())
+    result = CliRunner().invoke(describe, ["/u/j"], obj={"controller_url": "http://controller.test"})
+
+    assert result.exit_code == 0, result.output
+    task_lines = _description_task_rows(result.output)
+    assert [line[0] for line in task_lines] == ["1", "2", "10"]
+    assert task_lines[1][1:3] == ["failed", "137"]
+    assert "10.24 GB" in result.output
+    assert "OOM" in result.output
 
 
-def test_job_description_hides_exit_code_for_non_terminal_tasks():
+def test_job_describe_cli_hides_exit_code_for_non_terminal_tasks(monkeypatch):
     # The wire scalar default for exit_code is 0 — a RUNNING/BUILDING task must
     # not be reported as a clean exit=0 in the description.
     job, tasks = _summary_statuses(
@@ -458,26 +466,6 @@ def test_job_description_hides_exit_code_for_non_terminal_tasks():
         _task(0, _job_pb2.TASK_STATE_RUNNING, peak_mb=100, cur_mb=80, exit_code=0, duration_ms=1000),
         _job_pb2.TaskStatus(task_id="/u/j/1", state=_job_pb2.TASK_STATE_BUILDING, exit_code=0),
         _task(2, _job_pb2.TASK_STATE_SUCCEEDED, peak_mb=100, cur_mb=0, exit_code=0, duration_ms=1000),
-    )
-    summary = build_job_description(job, tasks)
-    by_idx = {t["index"]: t for t in summary["tasks"]}
-    assert by_idx["0"]["exit_code"] is None
-    assert by_idx["1"]["exit_code"] is None
-    assert by_idx["2"]["exit_code"] == 0
-
-
-def test_job_describe_cli_shows_peak_memory(monkeypatch):
-    job, tasks = _summary_statuses(
-        _job_pb2.JobStatus(job_id="/u/j", state=_job_pb2.JOB_STATE_FAILED, task_count=1, completed_count=1),
-        _task(
-            0,
-            _job_pb2.TASK_STATE_FAILED,
-            peak_mb=9999,
-            cur_mb=0,
-            exit_code=137,
-            duration_ms=1000,
-            error="OOM",
-        ),
     )
 
     class FakeClient:
@@ -491,10 +479,10 @@ def test_job_describe_cli_shows_peak_memory(monkeypatch):
     result = CliRunner().invoke(describe, ["/u/j"], obj={"controller_url": "http://controller.test"})
 
     assert result.exit_code == 0, result.output
-    assert "PEAK MEM" in result.output
-    assert "10 GB" in result.output
-    assert "137" in result.output
-    assert "OOM" in result.output
+    task_lines = {row[0]: row for row in _description_task_rows(result.output)}
+    assert task_lines["0"][2] == "-"
+    assert task_lines["1"][2] == "-"
+    assert task_lines["2"][2] == "0"
 
 
 def test_job_describe_cli_shows_active_backend_status(monkeypatch):

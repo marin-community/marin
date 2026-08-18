@@ -26,7 +26,7 @@ from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
 from iris.cli.connect import iris_client_for_ctx, require_controller_url
-from iris.cli.logs import echo_log_entries, log_start
+from iris.cli.logs import echo_log_entries, log_start, workload_log_options
 from iris.cli.targets import collect_resource_ids
 from iris.client.client import IrisClient, JobFailedError
 from iris.client.workload import JobStatus, TaskStatus
@@ -1197,16 +1197,11 @@ def _format_memory_mb(mb: int) -> str:
     return humanfriendly.format_size(mb * 1_000_000)
 
 
-def build_job_description(
+def render_job_description_text(
     job_status: JobStatus,
     tasks: list[TaskStatus],
-) -> dict:
-    """Build a structured job/task summary for CLI rendering.
-
-    Returns job-level fields and per-task peak memory, final state, exit code,
-    duration, and backend diagnostic.
-    """
-    task_summaries = []
+) -> str:
+    """Render a Job and its Tasks for the terminal."""
 
     def _sort_key(task: TaskStatus) -> tuple[int, str]:
         idx = _task_index(str(task.task_id))
@@ -1215,68 +1210,35 @@ def build_job_description(
         except ValueError:
             return (2**31, idx)
 
-    for t in sorted(tasks, key=_sort_key):
-        usage = t.resource_usage
-        task_summaries.append(
-            {
-                "task_id": str(t.task_id),
-                "index": _task_index(str(t.task_id)),
-                "state": t.state.value,
-                # Only surface exit_code once the task is terminal. Wire scalar
-                # defaults mean a RUNNING/ASSIGNED/BUILDING task would otherwise
-                # report exit=0 and look like a clean success.
-                "exit_code": int(t.exit_code) if t.state in TERMINAL_TASK_STATES else None,
-                "duration_ms": _task_duration_ms(t),
-                "memory_mb": usage.memory_mb if usage is not None else 0,
-                "memory_peak_mb": usage.memory_peak_mb if usage is not None else 0,
-                "cpu_millicores": usage.cpu_millicores if usage is not None else 0,
-                "disk_mb": usage.disk_mb if usage is not None else 0,
-                "worker_id": t.worker_id,
-                "status_message": t.status_message,
-                "error": t.error_message,
-            }
-        )
-
-    return {
-        "job_id": str(job_status.job_id),
-        "name": job_status.name,
-        "state": job_status.state.value,
-        "exit_code": int(job_status.exit_code),
-        "error": job_status.error_message,
-        "failure_count": int(job_status.failure_count),
-        "preemption_count": int(job_status.preemption_count),
-        "task_count": int(job_status.task_count),
-        "completed_count": int(job_status.completed_count),
-        "task_state_counts": {state.name.lower(): count for state, count in job_status.task_state_counts.items()},
-        "tasks": task_summaries,
-    }
-
-
-def _render_job_description_text(summary: dict) -> str:
     lines = [
-        f"Job: {summary['job_id']}" + (f" ({summary['name']})" if summary["name"] else ""),
-        f"State: {summary['state']}  exit={summary['exit_code']}  "
-        f"failures={summary['failure_count']}  preemptions={summary['preemption_count']}",
-        f"Tasks: {summary['completed_count']}/{summary['task_count']} completed  "
-        + "  ".join(f"{k}={v}" for k, v in sorted(summary["task_state_counts"].items()) if v),
+        f"Job: {job_status.job_id}" + (f" ({job_status.name})" if job_status.name else ""),
+        f"State: {job_status.state.value}  exit={job_status.exit_code}  "
+        f"failures={job_status.failure_count}  preemptions={job_status.preemption_count}",
+        f"Tasks: {job_status.completed_count}/{job_status.task_count} completed  "
+        + "  ".join(
+            f"{state.name.lower()}={count}"
+            for state, count in sorted(job_status.task_state_counts.items(), key=lambda item: item[0].value)
+            if count
+        ),
     ]
-    if summary["error"]:
-        lines.append(f"Error: {summary['error']}")
+    if job_status.error_message:
+        lines.append(f"Error: {job_status.error_message}")
     lines.append("")
 
     rows = []
-    for t in summary["tasks"]:
-        diagnostic = t["status_message"] or t["error"] or ""
+    for task_status in sorted(tasks, key=_sort_key):
+        usage = task_status.resource_usage
+        diagnostic = task_status.status_message or task_status.error_message
         if len(diagnostic) > 120:
             diagnostic = diagnostic[:117] + "..."
         rows.append(
             [
-                t["index"],
-                t["state"],
-                "-" if t["exit_code"] is None else t["exit_code"],
-                _format_duration_ms(t["duration_ms"]),
-                _format_memory_mb(t["memory_peak_mb"]),
-                _format_memory_mb(t["memory_mb"]),
+                _task_index(str(task_status.task_id)),
+                task_status.state.value,
+                task_status.exit_code if task_status.state in TERMINAL_TASK_STATES else "-",
+                _format_duration_ms(_task_duration_ms(task_status)),
+                _format_memory_mb(usage.memory_peak_mb if usage is not None else 0),
+                _format_memory_mb(usage.memory_mb if usage is not None else 0),
                 diagnostic,
             ]
         )
@@ -1289,17 +1251,12 @@ def _render_job_description_text(summary: dict) -> str:
 @click.argument("job_id")
 @click.pass_context
 def describe(ctx, job_id: str) -> None:
-    """Describe a Job and its Tasks.
-
-    Works for both running and completed jobs. Data is read from the controller's
-    existing ``GetJobStatus`` / ``ListTasks`` RPCs (no checkpoint scraping).
-    """
+    """Describe a running or completed Job and its Tasks."""
     client = _remote_client(ctx)
     job_name = JobName.from_wire(job_id)
     job_status = client.job_status(job_name)
     tasks = client.list_tasks(job_name)
-    result = build_job_description(job_status, tasks)
-    click.echo(_render_job_description_text(result))
+    click.echo(render_job_description_text(job_status, tasks))
 
 
 @job.command("wait")
@@ -1324,28 +1281,8 @@ def wait(ctx, job_id: str) -> None:
 
 @job.command("logs")
 @click.argument("job_id")
-@click.option("--since-ms", type=int, default=None, help="Only show logs after this epoch millisecond timestamp.")
-@click.option(
-    "--since-seconds",
-    type=int,
-    default=None,
-    help="Only show logs from the last N seconds.",
-)
 @click.option("--follow", "-f", is_flag=True, help="Stream logs continuously.")
-@click.option(
-    "--max-lines",
-    type=int,
-    default=0,
-    help="Maximum number of log lines to return (0 = server default, currently 1000).",
-)
-@click.option("--tail/--no-tail", default=True, help="Return the most recent lines instead of the earliest.")
-@click.option(
-    "--level",
-    type=click.Choice(["debug", "info", "warning", "error", "critical"], case_sensitive=False),
-    default=None,
-    help="Minimum log level to display (e.g., --level warning).",
-)
-@click.option("--substring", default="", help="Only return lines containing this text.")
+@workload_log_options
 @click.pass_context
 def logs(
     ctx,
