@@ -211,7 +211,7 @@ def _accumulate_row_tables(
         yield pa.concat_tables(chunks, promote_options="permissive")
 
 
-def _accumulate_record_batch_tables(
+def accumulate_record_batch_tables(
     batches: Iterable,
     *,
     schema: pa.Schema | None,
@@ -263,7 +263,7 @@ def _accumulate_tables(
 
     records_with_first = itertools.chain((first,), iterator)
     if isinstance(first, pa.RecordBatch):
-        yield from _accumulate_record_batch_tables(records_with_first, schema=schema, target_bytes=target_bytes)
+        yield from accumulate_record_batch_tables(records_with_first, schema=schema, target_bytes=target_bytes)
         return
     yield from _accumulate_row_tables(records_with_first, schema=schema, target_bytes=target_bytes)
 

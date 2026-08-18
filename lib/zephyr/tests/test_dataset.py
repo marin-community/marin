@@ -300,6 +300,27 @@ def test_from_files_basic(tmp_path):
     assert all(e.size > 0 for e in entries)
 
 
+def test_from_file_patterns_combines_and_deduplicates_globs(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (first / "a.parquet").write_bytes(b"a")
+    (second / "b.parquet").write_bytes(b"b")
+
+    dataset = Dataset.from_file_patterns(
+        (
+            f"{first}/*.parquet",
+            f"{tmp_path}/**/*.parquet",
+        )
+    )
+
+    assert [entry.path for entry in resolve_glob(dataset.source)] == [
+        str(first / "a.parquet"),
+        str(second / "b.parquet"),
+    ]
+
+
 def test_from_files_nested(tmp_path):
     """Test from_files with nested directories."""
     input_dir = tmp_path / "input"

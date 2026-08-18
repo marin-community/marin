@@ -25,13 +25,12 @@ replacing an object would restart its retention clock.
 """
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
 
 import click
-import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from rigging.filesystem.atomic import atomic_rename
@@ -47,6 +46,7 @@ from zephyr.writers import (
     DEFAULT_PARQUET_COMPRESSION_LEVEL,
     DEFAULT_PARQUET_MAX_ROWS_PER_PAGE,
     DEFAULT_PARQUET_WRITE_PAGE_INDEX,
+    accumulate_record_batch_tables,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,16 +63,23 @@ class RewriteDisposition(StrEnum):
     """Outcome of inspecting or rewriting one Parquet object."""
 
     REWRITTEN = "rewritten"
-    ALREADY_ZSTD = "already_zstd"
+    ALREADY_TARGET = "already_target"
     DRY_RUN = "dry_run"
     NOT_SMALLER = "not_smaller"
+
+
+class RewriteMode(StrEnum):
+    """Whether a migration inventories candidates or replaces sources."""
+
+    DRY_RUN = "dry_run"
+    APPLY = "apply"
 
 
 @dataclass(frozen=True)
 class RewriteOptions:
     """Controls one bounded Parquet rewrite."""
 
-    apply: bool = False
+    mode: RewriteMode = RewriteMode.DRY_RUN
     batch_rows: int = DEFAULT_BATCH_ROWS
     row_group_bytes: int = DEFAULT_ROW_GROUP_BYTES
     compression_level: int = DEFAULT_PARQUET_COMPRESSION_LEVEL
@@ -151,20 +158,6 @@ def _validate_rewrite(source: pq.ParquetFile, rewritten: pq.ParquetFile) -> None
         raise ValueError("rewritten Parquet is missing page indexes")
 
 
-def _row_group_tables(source: pq.ParquetFile, *, batch_rows: int, target_bytes: int) -> Iterator[pa.Table]:
-    batches: list[pa.RecordBatch] = []
-    buffered_bytes = 0
-    for batch in source.iter_batches(batch_size=batch_rows):
-        batches.append(batch)
-        buffered_bytes += batch.nbytes
-        if buffered_bytes >= target_bytes:
-            yield pa.Table.from_batches(batches, schema=source.schema_arrow)
-            batches = []
-            buffered_bytes = 0
-    if batches:
-        yield pa.Table.from_batches(batches, schema=source.schema_arrow)
-
-
 def recompress_parquet(path: str, options: RewriteOptions = RewriteOptions()) -> RewriteResult:
     """Rewrite one Parquet object to zstd with page indexes.
 
@@ -189,8 +182,8 @@ def recompress_parquet(path: str, options: RewriteOptions = RewriteOptions()) ->
         rows = source.metadata.num_rows
         source_is_zstd = _column_compressions(source.metadata) == {DEFAULT_PARQUET_COMPRESSION.upper()}
         if source_is_zstd and _has_page_indexes(source.metadata):
-            return RewriteResult(path, RewriteDisposition.ALREADY_ZSTD, source_fingerprint.size, None, rows)
-        if not options.apply:
+            return RewriteResult(path, RewriteDisposition.ALREADY_TARGET, source_fingerprint.size, None, rows)
+        if options.mode is RewriteMode.DRY_RUN:
             return RewriteResult(path, RewriteDisposition.DRY_RUN, source_fingerprint.size, None, rows)
 
         try:
@@ -206,9 +199,9 @@ def recompress_parquet(path: str, options: RewriteOptions = RewriteOptions()) ->
                         write_page_index=DEFAULT_PARQUET_WRITE_PAGE_INDEX,
                         max_rows_per_page=DEFAULT_PARQUET_MAX_ROWS_PER_PAGE,
                     ) as writer:
-                        for table in _row_group_tables(
-                            source,
-                            batch_rows=options.batch_rows,
+                        for table in accumulate_record_batch_tables(
+                            source.iter_batches(batch_size=options.batch_rows),
+                            schema=source.schema_arrow,
                             target_bytes=options.row_group_bytes,
                         ):
                             writer.write_table(table, row_group_size=table.num_rows)
@@ -268,7 +261,7 @@ def _configure_source_filesystem(source_glob: str) -> None:
 
 
 def run_migration(
-    source_glob: str,
+    source_globs: Sequence[str],
     *,
     workers: int,
     worker_cpu: int,
@@ -278,9 +271,12 @@ def run_migration(
     """Run the bounded recompression pipeline and return aggregate counters."""
     if workers <= 0:
         raise ValueError(f"workers must be positive, got {workers}")
+    if not source_globs:
+        raise ValueError("source_globs must contain at least one pattern")
 
-    _configure_source_filesystem(source_glob)
-    pipeline = Dataset.from_files(source_glob).flat_map(partial(_rewrite_for_zephyr, options=options))
+    for source_glob in source_globs:
+        _configure_source_filesystem(source_glob)
+    pipeline = Dataset.from_file_patterns(source_globs).flat_map(partial(_rewrite_for_zephyr, options=options))
     context = ZephyrContext(
         name="recompress-parquet",
         resources=ResourceConfig(cpu=worker_cpu, ram=worker_ram),
@@ -327,12 +323,12 @@ def main(
     """Recompress the Parquet objects matching SOURCE_GLOB with zstd."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     counters_result = run_migration(
-        source_glob,
+        (source_glob,),
         workers=workers,
         worker_cpu=worker_cpu,
         worker_ram=worker_ram,
         options=RewriteOptions(
-            apply=apply,
+            mode=RewriteMode.APPLY if apply else RewriteMode.DRY_RUN,
             batch_rows=batch_rows,
             row_group_bytes=row_group_bytes,
             compression_level=compression_level,
