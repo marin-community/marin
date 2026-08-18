@@ -3,6 +3,7 @@
 
 """Snowball model identity and representative inference goldens."""
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,15 +18,31 @@ TOP_K = 25
 PROMPT_BUCKET_MAX_TOKENS = (256, 1024, 4096, 16384, 32768)
 # Shared serving-path bound; repeated-run measurements are recorded in #7354.
 MAX_PROBABILITY_ERROR = 0.075
+# Empirical v6e-8 compatibility ceilings. They are intentionally non-monotonic;
+# long-context convergence remains tracked separately in #7554 and #7555.
+TPU_VLLM_MAX_PROBABILITY_ERROR_BY_BUCKET = {
+    256: 0.04,
+    1024: 0.05,
+    4096: 0.10,
+    16384: 0.70,
+    32768: 0.50,
+}
+# Deep top-k keeps the frozen TPU golden tokens observable in long-context tails.
+TPU_VLLM_RETURNED_LOGPROBS = 4096
 
 _RESOURCES = Path(__file__).parent / "resources"
 # Frozen artifacts retain the identifiers of the June 67B training lineage.
 _REPRESENTATIVE_GOLDEN_PATH = _RESOURCES / "june_tpu_67b_a2b_step_42150_representative_eval_golden.json"
-_PROMPT_FIXTURE_SHA256 = "47863868cbfe336739c8097535f113f4d2dae4954f772eb91511c911433596e8"
+_TPU_GOLDEN_PATH = _RESOURCES / "snowball_levanter_tpu_golden.json"
+PROMPT_FIXTURE_SHA256 = "47863868cbfe336739c8097535f113f4d2dae4954f772eb91511c911433596e8"
 _PROMPT_FIXTURE_URL = (
     "https://storage.googleapis.com/marin-public/test-data/vllm/e2e/representative-eval-prompts/"
-    f"{_PROMPT_FIXTURE_SHA256}.json"
+    f"{PROMPT_FIXTURE_SHA256}.json"
 )
+TPU_PROMPT_FIXTURE_URL = (
+    "gs://marin-us-east5/test-data/vllm/e2e/representative-eval-prompts/" f"{PROMPT_FIXTURE_SHA256}.json"
+)
+TPU_REPORT_ROOT = "gs://marin-us-east5/tmp/ttl=30d/snowball-parity/reports"
 
 
 @dataclass(frozen=True)
@@ -60,6 +77,19 @@ SNOWBALL = ModelIdentity(
     export_uri="s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/d819cbc63780bd86/",
 )
 
+SNOWBALL_TPU = ModelIdentity(
+    run_root=(
+        "gs://marin-us-east5/grug/"
+        "moe_67b_a2b_d2560_ep1_rep8_bs1024_seq65536_sw2k_v4_2048_muon_cooldown_step39k-79ebf3"
+    ),
+    checkpoint_step=SNOWBALL.checkpoint_step,
+    export_sha256=SNOWBALL.export_sha256,
+    export_uri=(
+        "gs://marin-us-east5/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/"
+        "d819cbc63780bd866a942e47f9283cbd7932bbb237b52df527edd750c65be8f0"
+    ),
+)
+
 
 @dataclass(frozen=True)
 class RepresentativeGolden:
@@ -88,8 +118,8 @@ class RepresentativePromptFixture:
     batches: tuple[PromptBatch, ...]
 
 
-def read_representative_goldens() -> tuple[RepresentativeGolden, ...]:
-    payload = json.loads(_REPRESENTATIVE_GOLDEN_PATH.read_bytes())
+def _read_goldens(path: Path) -> tuple[RepresentativeGolden, ...]:
+    payload = json.loads(path.read_bytes())
     return tuple(
         RepresentativeGolden(
             id=raw_case["id"],
@@ -102,10 +132,24 @@ def read_representative_goldens() -> tuple[RepresentativeGolden, ...]:
     )
 
 
+def read_representative_goldens() -> tuple[RepresentativeGolden, ...]:
+    return _read_goldens(_REPRESENTATIVE_GOLDEN_PATH)
+
+
+def read_tpu_representative_goldens() -> tuple[RepresentativeGolden, ...]:
+    return _read_goldens(_TPU_GOLDEN_PATH)
+
+
 def read_prompt_fixture(
     expected_cases: tuple[RepresentativeGolden, ...],
+    *,
+    fixture_url: str = _PROMPT_FIXTURE_URL,
 ) -> RepresentativePromptFixture:
-    payload = json.loads(StoragePath(_PROMPT_FIXTURE_URL).read_bytes())
+    payload_bytes = StoragePath(fixture_url).read_bytes()
+    digest = hashlib.sha256(payload_bytes).hexdigest()
+    if digest != PROMPT_FIXTURE_SHA256:
+        raise ValueError(f"prompt fixture digest changed: expected {PROMPT_FIXTURE_SHA256}, got {digest}")
+    payload = json.loads(payload_bytes)
     expected_by_id = {case.id: case for case in expected_cases}
     assert {case["id"] for case in payload["cases"]} == expected_by_id.keys()
     cases = tuple(
