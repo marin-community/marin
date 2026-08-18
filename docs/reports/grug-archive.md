@@ -47,6 +47,7 @@ goes stale on the next commit.
 - Path: `experiments/grug/moe_pallas_sconv/`
 - Origin: `moe` at `1b7f389d47`
 - Introduced: 07c6833f4d
+- Last known-good: fca2870b85
 - Status: active
 - Purpose: v5p-8 integration smoke for the four-site Inkling SConv using the Pallas TPU kernel from #8331.
 - Issue: https://github.com/marin-community/marin/issues/8377

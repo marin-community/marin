@@ -9,7 +9,7 @@ author: held
 
 ## Current TL;DR
 
-The implementation and v5p-8 smoke run are in progress. No runtime result is available yet.
+`MOE-PSC-001` completed 25 d512 training steps on one v5p-8. Iris and W&B finished successfully, final loss was 9.7629, steady-state throughput was approximately 349k tokens/s, and the step-25 checkpoint was published.
 
 ## Scope
 
@@ -28,7 +28,7 @@ The implementation and v5p-8 smoke run are in progress. No runtime result is ava
 
 ### Active
 
-- `MOE-PSC-001`: the four-site Pallas SConv compiles and completes 25 d512 training steps on v5p-8 with finite loss. Next test: submit the smoke run.
+None.
 
 ### Blocked
 
@@ -40,7 +40,7 @@ None.
 
 ### Promoted
 
-None.
+- `MOE-PSC-001`: the four-site Pallas SConv compiled and completed 25 d512 training steps on v5p-8 with finite loss. The implementation is ready for a controlled quality or throughput comparison.
 
 ## Background Research Brief
 
@@ -151,3 +151,14 @@ Inkling uses short causal convolutions with kernel size 4 in the K stream, V str
 - Capacity: a pinned us-east5-a attempt could not provision a v5p-8 because the zone had no capacity. Subsequent smoke retries use us-central1-a.
 - Validation: the mixed-precision explicit-mesh regression and six targeted numerical, gradient, mask, and optimizer tests passed.
 - Next action: publish the dtype fix and resubmit in us-central1-a.
+
+### 2026-08-17 19:02 PDT - v5p-8 smoke succeeded
+
+- Commit Hash: `fca2870b85`
+- Coordinator: `/held/moe-pallas-sconv-smoke-8377-r3-central1`
+- Training child: `/held/moe-pallas-sconv-smoke-8377-r3-central1/grug-train-MOE-PSC-001-d512-v5p8-smoke`
+- W&B: https://wandb.ai/marin-community/marin_moe/runs/MOE-PSC-001-d512-v5p8-smoke
+- Result: the child completed 25 steps in 5 minutes 18 seconds with no failures or preemptions. W&B finished at logged step index 24 with loss 9.7629, throughput 349,192 tokens/s, and 6,553,600 total tokens.
+- Checkpoint: `gs://marin-us-central1/users/held/grug/moe_pallas_sconv_smoke/dev/checkpoints/step-25/metadata.json`
+- Interpretation: the four-site Pallas SConv forward and backward kernels compile and train successfully in the d512 Grug MoE recipe on v5p-8. This smoke establishes integration viability; it does not measure a quality delta against a control.
+- Next action: use this variant for a controlled quality or throughput comparison if the SConv line is promoted beyond integration testing.
