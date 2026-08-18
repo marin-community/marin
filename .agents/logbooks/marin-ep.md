@@ -1741,3 +1741,16 @@ Experiment ID prefix: `MEP`.
   should reproduce the wedge off-rack; then test the fix — decouple wg2
   from the GEMM cluster barrier (async_barrier arrival by participating
   wgs only), or bound the transport lag (periodic wg2 arrivals).
+
+### 2026-08-18 03:00 - MEP-068: slow-transport repro staged; PAUSED on Iris budget exhaustion
+- Discriminating repro built (scratchpad repro_slow_transport.py +
+  run_repro_slow.sh): EP4, hero widths (h6144/i6272, 8192 tok/dev ->
+  ~20+ nd_loop iterations per SM vs mcs=4 slack), transport slowed via
+  monkeypatched TRANSPORT_STAGE_ROWS=2 / TRANSPORT_LANE_CHUNK=1, dumps
+  armed; control arm with default constants. Prediction: control
+  completes, slow arm wedges with the EP64 warp signature.
+- Tray request queued >55 min and was released: user budget at 411%
+  (526220 spent / 128000 limit) -> effective band demoted
+  INTERACTIVE->BATCH on a saturated cluster (384 running pods). Resume
+  when the budget window resets or contention drops.
+- #8311 milestone comment posted (issuecomment-5322924677).
