@@ -37,7 +37,7 @@ The App's IAC separates review bypass from CI. [`dependency_updater.py`](https:/
 | Axolotl | `infra/pre-commit.py`, `marin-ci.yaml` | `marin-style`, `tests` | No nightly pin |
 | MarinSkyRL | `infra/pre-commit.py`, `cpu_ci.yaml`, `marin-nightly.yaml`, `pyproject.toml`, `uv.lock` | `lint`, `skyrl_gym_tests`, `skyrl_train_tests` | Run `uv lock --upgrade-package marin-style` |
 
-The generated allowlist must be narrower than `.agents/**`: several consumers have local operations, project, or skill files. The updater can allow the exact old and new `marin-style` manifests plus the explicit pin files. It must not touch `AGENTS.md`, `.claude/skills`, unrelated workflows, or TPU inference's repaired nightly test.
+The generated allowlist must be narrower than `.agents/**`: several consumers have local operations, project, or skill files. The updater can allow the exact old and new `marin-style` manifests plus tracked references in `infra/pre-commit.py`, workflow YAML, and the root `pyproject.toml`. A root `uv.lock` is generated only when it contains the pinned `marin-style` package. It must not touch `AGENTS.md`, `.claude/skills`, unrelated workflows, or TPU inference's repaired nightly test.
 
 The initial rollout pinned PR head `5094279…`; the resulting source squash commit is `67f5670…`. Their trees are equal, but future updates should resolve and pin the reachable `marin-style` default-branch SHA after merge.
 
@@ -51,6 +51,7 @@ GitHub [repository rulesets](https://docs.github.com/en/repositories/configuring
 
 - Tracking `marin-style@main` removes repository churn at the cost of reproducibility and local audit history.
 - Putting an updater workflow in every consumer duplicates credentials and policy and recreates the maintenance problem.
+- A second Marin registry for these repositories duplicates `config/external` for five forks and still needs an Axolotl exception. Pin paths and CI names then drift in two places.
 - Broadly replacing a SHA across a checkout can modify upstream-owned workflows in fork repositories.
 - Allowlisting `.agents/**` can absorb changes to consumer-owned operations, projects, and custom skills.
 - Letting the updater App bypass required CI turns a compromised generator or credential into an unchecked merge path.
@@ -61,9 +62,16 @@ GitHub [repository rulesets](https://docs.github.com/en/repositories/configuring
 #### Claim: the existing PR lifecycle is reusable
 
 - Support: the helper already validates immutable PR identity, an explicit changed-file boundary, required checks, and the merge head SHA.
-- Caveat: required checks and files are currently global to Marin.
+- Caveat: the current helper names Marin's checks explicitly.
 - Confidence: high.
-- Action: make checks part of each policy and load a consumer-specific policy.
+- Action: retain dynamic file policies and read the consumer's required rows through `gh pr checks --required`.
+
+#### Claim: no consumer registry is needed
+
+- Support: the App installation already limits repository access. Every consumer has one canonical pin in `infra/pre-commit.py`, and the remaining direct references use recognizable workflow or project syntax.
+- Caveat: App installation selection and protection audits remain owner-managed.
+- Confidence: high.
+- Action: build the matrix from installation repositories, exclude Marin itself, and reject a checkout without the canonical pin.
 
 #### Claim: exact pins should remain
 
@@ -91,4 +99,4 @@ GitHub [repository rulesets](https://docs.github.com/en/repositories/configuring
 
 ### Handoff
 
-The smallest safe implementation is a manual workflow in Marin, a typed consumer registry, a `marin-style` managed manifest, and an extension of the existing generated-PR lifecycle to accept per-consumer checks and file sets. Activation follows the reviewed manifest bootstrap, App installation expansion, and review-only bypass audit for both active protection layers.
+The smallest safe implementation is a manual workflow in Marin, installation-based consumer discovery, a `marin-style` managed manifest, and the existing generated-PR lifecycle with a dynamic file boundary. Activation follows the reviewed manifest bootstrap, App installation expansion, and review-only bypass audit for both active protection layers.

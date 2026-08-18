@@ -4,45 +4,16 @@
 
 | Path | Contract |
 | --- | --- |
-| `scripts/ci/marin_style_consumers.py` | Typed registry of consumer repositories, pin files, required checks, and lock mode |
-| `scripts/ci/marin_style_update.py` | Validate and generate one consumer update |
-| `scripts/ci/dependency_update_policy.py` | Carry required checks in each pull-request policy |
-| `scripts/ci/dependency_update.py` | Reuse the generated-PR lifecycle with a resolved consumer policy and untracked-file discovery |
+| `scripts/ci/marin_style_update.py` | Discover installed consumers, validate pins, and generate one update |
+| `scripts/ci/dependency_update.py` | Reuse the generated-PR lifecycle with untracked-file discovery and protected-check evaluation |
 | `.github/workflows/ops-marin-style-consumers.yaml` | Scheduled/manual matrix orchestration from Marin's protected updater environment |
 | `src/marin_style/vendor.py` in `marin-style` | Generated manifest and safe pruning behavior |
 
-## Consumer registry
+## Consumer discovery
 
-```python
-from dataclasses import dataclass
-from enum import StrEnum
+`installed_consumer_matrix()` lists repositories visible to the dependency-updater App installation and excludes `marin-community/marin`. Each row carries the repository name and default branch returned by GitHub. An optional selector accepts the short or `owner/name` repository name and must match exactly one installed repository.
 
-
-class LockMode(StrEnum):
-    NONE = "none"
-    UV = "uv"
-
-
-@dataclass(frozen=True)
-class MarinStyleConsumer:
-    name: str
-    repository: str
-    base_branch: str
-    revision_file: str
-    pin_files: tuple[str, ...]
-    required_checks: tuple[str, ...]
-    lock_mode: LockMode
-
-
-def marin_style_consumer(name: str) -> MarinStyleConsumer:
-    """Return one registered consumer or raise ValueError for an unknown name."""
-
-
-def marin_style_consumer_matrix() -> str:
-    """Return deterministic compact JSON for a GitHub Actions matrix."""
-```
-
-Names, repository paths, pin files, and check names are non-empty and unique. Repository paths must belong to `marin-community`. Pin files are exact repository-relative POSIX paths that receive direct revision replacement; directory, glob, and lockfile entries are invalid. `LockMode.UV` adds `uv.lock` as a generated output. `base_branch` is explicit even though all initial consumers use `main`.
+The App installation is the only central repository list. A checkout opts in by containing exactly one canonical `marin-style` URL and full revision in `infra/pre-commit.py`. The update job fails if an installed repository lacks that pin. Adding a consumer requires App installation selection, the canonical pin, labels, and reviewed branch protection; it does not require a Marin registry entry.
 
 ## Generated update
 
@@ -61,22 +32,29 @@ class GeneratedMarinStyleUpdate:
 def generate_marin_style_update(
     *,
     repo_root: Path,
-    consumer: MarinStyleConsumer,
+    base_branch: str,
     revision: str,
+    manifest_mode: ManifestMode,
 ) -> GeneratedMarinStyleUpdate:
     """Update one checkout to a full, default-branch marin-style revision.
 
-    The old revision is read from `infra/pre-commit.py`. Every registered direct
-    pin file must contain that revision. Replacement occurs only in those files.
-    Sync and optional lock generation then run from the target revision. The
-    function rejects an empty diff or any changed path outside the direct pins,
-    generated lock outputs, and exact trusted old/new generated manifests.
+    The old revision is read from `infra/pre-commit.py`. Every discovered direct
+    reference is discovered from tracked files. Replacement occurs only in
+    recognized pins. Sync and optional lock generation then run from the target
+    revision. The function rejects an empty diff or any changed path outside the
+    direct pins, generated lock output, and exact trusted old/new manifests.
     """
 ```
 
-`revision` is exactly 40 lowercase hexadecimal characters. The workflow verifies it is reachable from the `marin-style` default branch; an omitted revision resolves the current head. Each direct pin file must exist and contain the same old revision at least once. The generator replaces every old-revision occurrence and fails rather than partially updating a consumer.
+`revision` is exactly 40 lowercase hexadecimal characters. The workflow verifies it is reachable from the `marin-style` default branch; an omitted revision resolves the current head. After removing manifest-owned paths, the manifest itself, and the generated lockfile, every tracked file containing the old revision must be one of:
 
-The target package is invoked as `uvx --from git+https://github.com/marin-community/marin-style@<revision> marin-style sync --repo-root <checkout>`. Its reported installed revision must equal `revision`. `LockMode.UV` uses the workflow's pinned `uv` version to run `uv lock --upgrade-package marin-style`, verifies the resulting Git source revision and package version, and permits dependency re-resolution inside `uv.lock`; no other file becomes allowed. `AGENTS.md` references and `.claude/skills` setup must already be valid before onboarding.
+- `infra/pre-commit.py`, containing a `marin-style` reference;
+- YAML beneath `.github/workflows/`, where each matching line names `marin-style` or `MARIN_STYLE_REV`;
+- root `pyproject.toml`, where each matching line names `marin-style`.
+
+The generator replaces every old-revision occurrence in those discovered pins. Another tracked reference fails the update.
+
+The target package is invoked as `uvx --from git+https://github.com/marin-community/marin-style@<revision> marin-style sync --repo-root <checkout>`. Its reported installed revision must equal `revision`. When root `uv.lock` contains one `marin-style` Git package at the old revision, the workflow's pinned `uv` runs `uv lock --upgrade-package marin-style`, verifies the resulting source revision and package version, and permits dependency re-resolution only inside `uv.lock`. `AGENTS.md` references and `.claude/skills` setup must already be valid before onboarding.
 
 ## Generated manifest
 
@@ -137,10 +115,9 @@ class PullRequestPolicy:
     head_branch: str
     title: str
     allowed_files: frozenset[str]
-    required_checks: tuple[str, ...]
 ```
 
-Existing Marin dependency policies populate `required_checks` with Marin's current required-check tuple. A consumer policy uses branch `automation/marin-style`, title `[dependencies] Advance marin-style`, and its registry check tuple. Merge validation reads `policy.required_checks`; no global fallback exists.
+A consumer policy uses branch `automation/marin-style`, title `[dependencies] Advance marin-style`, and the generated update's dynamic file set. Merge polling calls `gh pr checks --required` for the consumer PR. No rows, pending rows, or failing rows block merge. The App has no required-CI bypass, so repository protection remains the authority for the required set.
 
 Changed-file discovery returns the union of tracked worktree changes and untracked non-ignored files. Publication stages only the validated result. PR validation permits only a non-empty subset of `allowed_files` and still binds author, base, head, title, and expected head SHA.
 
@@ -171,7 +148,8 @@ class ConsumerUpdateResult:
 
 def update_consumer(
     *,
-    consumer: MarinStyleConsumer,
+    repository: str,
+    base_branch: str,
     revision: str,
     merge_mode: MergeMode,
     app_slug: str,
@@ -192,7 +170,8 @@ The command-line entry point is:
 
 ```text
 python -m scripts.ci.marin_style_update run \
-  --consumer <name> --revision <sha> --app-slug <slug> \
+  --repository <owner/name> --base-branch <branch> \
+  --revision <sha> --app-slug <slug> \
   --manifest-mode <validate|bootstrap> --merge-mode <publish|merge>
 ```
 
@@ -203,11 +182,11 @@ The workflow invokes the module once per consumer inside an environment containi
 The workflow is manual-only and accepts inputs:
 
 - `revision`: optional full `marin-style` commit; empty resolves the default-branch head.
-- `consumer`: optional registered consumer name; empty selects all consumers.
+- `consumer`: optional installed repository name; empty selects all installed consumers except Marin.
 - `manifest_mode`: `validate` or `bootstrap`, default `validate`.
 - `merge_mode`: `publish` or `merge`, default `publish`; bootstrap requires `publish`.
 
-Each matrix job uses environment `external-runtime-updater`, grants the workflow's native token only `contents: read` in Marin, and requests installation tokens for exactly one consumer. A read-only token performs checkout. After setup, the job mints a fresh token with contents, workflows, and pull-request write permissions for branch publication, PR upsert, and optional merge. The job replaces checkout's persisted Git credential with the fresh token before publication. Jobs do not share installation tokens. Each job's concurrency group is `marin-style-update-<consumer>` with `cancel-in-progress: false`.
+The discovery job uses a read-only installation token to list the App's selected repositories. Each matrix job uses environment `external-runtime-updater`, grants the workflow's native token only `contents: read` in Marin, and requests installation tokens for exactly one consumer. A read-only token performs checkout. After setup, the job mints a fresh token with contents, workflows, and pull-request write permissions for branch publication, PR upsert, and optional merge. The job replaces checkout's persisted Git credential with the fresh token before publication. Jobs do not share installation tokens. Each job's concurrency group is `marin-style-update-<consumer>` with `cancel-in-progress: false`.
 
 The publication token expires after one hour. Merge polling is capped at 40 minutes and the matrix job at 55 minutes, leaving time for generation, publication, and final head-bound merge validation. A timeout leaves the pull request open and fails the job.
 
@@ -217,15 +196,15 @@ After the bootstrap, installation, and protection preflight pass, a separate rev
 
 ## Protection policy
 
-The updater App is installed only on Marin and the registered consumer repositories. It receives contents, workflows, and pull-request write permissions. Workflows write is necessary because exact revision pins live under `.github/workflows/`; the updater's generated allowlist constrains which workflow files may change. Each consumer review ruleset gives the App pull-request-only bypass. Classic required-review protection, where present, also names the App in its PR bypass allowances. Required-status-check policy does not name the App as a bypass actor.
+The updater App is installed only on Marin and the intended `marin-style` consumer repositories. It receives contents, workflows, and pull-request write permissions. Workflows write is necessary because exact revision pins live under `.github/workflows/`; the updater's generated allowlist constrains which workflow files may change. Each consumer review ruleset gives the App pull-request-only bypass. Classic required-review protection, where present, also names the App in its PR bypass allowances. Required-status-check policy does not name the App as a bypass actor.
 
-App installation selection and consumer protection remain owner-managed prerequisites in the first version. Before publishing, the workflow preflight confirms installation access, the existence of `agent-generated` and `dependencies` labels, and the registered base branch. The App lacks administration permission and cannot audit protection itself. Auto-merge activation requires an owner-recorded audit showing both protection layers and no App CI bypass for every consumer.
+App installation selection and consumer protection remain owner-managed prerequisites in the first version. Before publishing, the workflow preflight confirms the canonical pin, the existence of `agent-generated` and `dependencies` labels, and the discovered default branch. The App lacks administration permission and cannot audit protection itself. Auto-merge activation requires an owner-recorded audit showing both protection layers and no App CI bypass for every consumer.
 
 ## Out of scope
 
 - Mutable `marin-style@main` dependencies in consumers.
 - Updating consumer-owned `AGENTS.md`, `.claude/skills`, `.agents/ops`, `.agents/projects`, or custom skills.
 - Enabling, disabling, or editing upstream workflows in fork repositories.
-- Automatically changing the registry when consumer CI check names change.
+- Updating repositories outside the App installation selection.
 - Importing consumer branch-protection resources into Pulumi before their complete fork-specific policies are audited.
 - Renaming the existing updater GitHub App in the first rollout.
