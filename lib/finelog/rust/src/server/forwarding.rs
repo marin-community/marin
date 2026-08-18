@@ -34,17 +34,16 @@
 //!   rather than backfilling a retention window.
 //! - It materializes at most [`FORWARD_BATCH_ROWS`] rows per read, and packs them into
 //!   requests of at most [`FORWARD_BATCH_BYTES`] unless one row alone exceeds the limit.
-//! - It advances a namespace's cursor past a batch only once that batch can never be
-//!   sent again: the hub acked it, or the forwarder gave it up. A crash mid-batch
-//!   re-forwards it (at-least-once; tolerable for logs and append-only stats).
+//! - It advances a namespace's cursor only after the hub acks the batch. A crash or
+//!   rejection re-forwards it (at-least-once; tolerable for logs and append-only stats).
 //! - A backlog is only a cursor into the source's already-bounded local retention, not a
 //!   separate in-memory queue. The forwarder drains it without an age or row-count cap.
-//!   It skips only when eviction has already removed the cursor's segments or when the
-//!   hub permanently refuses a malformed batch.
+//!   It skips only when eviction has already removed the cursor's segments.
 //!
-//! A push failure backs off and retries; nothing here can take the store down.
+//! A push failure leaves the cursor in place and yields to the next namespace; nothing
+//! here can take the store down.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -116,10 +115,11 @@ const FORWARD_LAG_WARNING_SEQS: i64 = 2_000_000;
 const TOKEN_TTL: Duration = Duration::from_secs(3600);
 const TOKEN_REFRESH_MARGIN: Duration = Duration::from_secs(300);
 
-/// Deadline for one outbound request, and the retry backoff bounds.
+/// Deadline for one outbound request. Transient failures receive a few local retries
+/// before the namespace yields, bounding how long one broken target can delay others.
 const PUSH_TIMEOUT: Duration = Duration::from_secs(60);
-const BACKOFF_MIN: Duration = Duration::from_secs(1);
-const BACKOFF_MAX: Duration = Duration::from_secs(60);
+const PUSH_ATTEMPTS_PER_TURN: usize = 3;
+const PUSH_RETRY_BACKOFF: Duration = Duration::from_secs(1);
 
 /// Emit a progress line at most this often, so a healthy forwarder is observable
 /// without flooding the logs it forwards.
@@ -280,9 +280,9 @@ pub struct Forwarder<T = HttpsTransport> {
     /// Backlog size that emits a warning. It never changes the cursor.
     lag_warning_seqs: i64,
     warned_lag: Mutex<HashSet<String>>,
-    /// Namespaces already created on the hub this process, so `RegisterTable` runs at
-    /// most once each.
-    registered: Mutex<HashSet<String>>,
+    /// The last source schema registered for each namespace. A local additive schema
+    /// change must be sent to the hub before rows using its new columns are written.
+    registered: Mutex<HashMap<String, Schema>>,
 }
 
 impl Forwarder<HttpsTransport> {
@@ -315,7 +315,7 @@ where
             config,
             lag_warning_seqs: FORWARD_LAG_WARNING_SEQS,
             warned_lag: Mutex::new(HashSet::new()),
-            registered: Mutex::new(HashSet::new()),
+            registered: Mutex::new(HashMap::new()),
         }
     }
 
@@ -473,8 +473,8 @@ where
             FORWARD_CHUNK_CONCURRENCY
         };
         let pushes = chunks.into_iter().map(|(ipc, last_seq)| {
-            let mut chunk_stop = (*stop).clone();
-            async move { (last_seq, self.push(name, ipc, &mut chunk_stop).await) }
+            let chunk_stop = (*stop).clone();
+            async move { (last_seq, self.push(name, ipc, chunk_stop).await) }
         });
         // `buffered` polls several pushes at once but yields their results in input
         // order. The durable cursor therefore never advances past an earlier chunk that
@@ -487,19 +487,23 @@ where
                     tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: push interrupted");
                     return ForwardTurn::Wait;
                 }
-                // The hub refused these bytes and always will, so retrying is a
-                // livelock that strands every later row too. Skip past them and count
-                // the gap: the rows remain queryable in this store.
+                Err(PushError::Retryable(e)) => {
+                    tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: push failed; retrying next sweep");
+                    return ForwardTurn::Wait;
+                }
                 Err(PushError::Rejected(e)) => {
-                    progress.skipped_seqs += last_seq - cursor;
+                    // InvalidArgument also covers a stale hub schema. Forget the last
+                    // registration so the next sweep evolves the hub before retrying
+                    // these same rows. Namespace fairness prevents a genuine poison
+                    // batch from blocking unrelated tables.
+                    self.registered.lock().unwrap().remove(name);
                     tracing::warn!(
                         namespace = name,
                         cursor,
-                        skipped = last_seq - cursor,
-                        resume_at = last_seq,
                         error = %e,
-                        "finelog forwarder: the hub rejected this batch as malformed; skipping it"
+                        "finelog forwarder: hub rejected the batch; preserving the cursor and refreshing the schema next sweep"
                     );
+                    return ForwardTurn::Wait;
                 }
             }
             cursor = last_seq;
@@ -678,11 +682,11 @@ where
         Ok(Some((ship, seqs)))
     }
 
-    /// Create `name` on the hub if this process has not already, so a later [`WriteRows`]
-    /// resolves. The reserved `log` namespace exists on every finelog, so it is never
-    /// registered. Returns whether the hub is ready to take rows for `name`.
+    /// Create or evolve `name` on the hub when this process has not registered its
+    /// current source schema. The reserved `log` namespace exists on every finelog, so
+    /// it is never registered. Returns whether the hub is ready to take rows for `name`.
     async fn ensure_registered(&self, name: &str, schema: &Schema) -> bool {
-        if name == LOG_NAMESPACE_NAME || self.registered.lock().unwrap().contains(name) {
+        if name == LOG_NAMESPACE_NAME || self.registered.lock().unwrap().get(name) == Some(schema) {
             return true;
         }
         let bearer = match self.minter.bearer() {
@@ -708,7 +712,10 @@ where
             .await
         {
             Ok(_) => {
-                self.registered.lock().unwrap().insert(name.to_string());
+                self.registered
+                    .lock()
+                    .unwrap()
+                    .insert(name.to_string(), schema.clone());
                 true
             }
             Err(e) => {
@@ -718,63 +725,70 @@ where
         }
     }
 
-    /// Ship one encoded chunk to `name` on the hub and wait for it to durably ack,
-    /// retrying transient failures — auth failures among them — with an exponential
-    /// backoff.
+    /// Ship one encoded chunk to `name` on the hub and wait for it to durably ack.
+    /// Retry transient failures at most [`PUSH_ATTEMPTS_PER_TURN`] times, then return the
+    /// chunk still owed so the caller can give the next namespace its turn.
     ///
-    /// Returns [`PushError::Rejected`] only when the hub refuses the chunk's content, and
-    /// [`PushError::Stopping`] when `stop` latches, which also interrupts the backoff so a
-    /// SIGTERM never waits one out.
+    /// Returns [`PushError::Rejected`] only when the hub refuses the chunk's content,
+    /// [`PushError::Retryable`] for a condition that may clear, and
+    /// [`PushError::Stopping`] when `stop` latches.
     async fn push(
         &self,
         name: &str,
         arrow_ipc: Vec<u8>,
-        stop: &mut watch::Receiver<bool>,
+        mut stop: watch::Receiver<bool>,
     ) -> Result<(), PushError> {
         let request = WriteRowsRequest::default()
             .with_namespace(name)
             .with_arrow_ipc(arrow_ipc);
 
-        let mut backoff = BACKOFF_MIN;
-        loop {
-            let bearer = match self.minter.bearer() {
-                Ok(bearer) => bearer,
-                // The key parsed at startup, so this is not a config error we can resolve
-                // by skipping the batch. Back off and try again.
-                Err(e) => {
-                    tracing::warn!(error = %e, "finelog forwarder: minting a bearer failed");
-                    if wait_or_stop(backoff, stop).await {
-                        return Err(PushError::Stopping(e));
+        let mut backoff = PUSH_RETRY_BACKOFF;
+        for attempt in 1..=PUSH_ATTEMPTS_PER_TURN {
+            if *stop.borrow() {
+                return Err(PushError::Stopping("shutdown requested".to_string()));
+            }
+            let result = match self.minter.bearer() {
+                Ok(bearer) => {
+                    let options = CallOptions::default()
+                        .with_timeout(PUSH_TIMEOUT)
+                        .with_header("authorization", format!("Bearer {bearer}"));
+                    match self
+                        .client
+                        .write_rows_with_options(request.clone(), options)
+                        .await
+                    {
+                        Ok(_) => {
+                            tracing::debug!(namespace = name, "finelog forwarder: batch delivered");
+                            return Ok(());
+                        }
+                        Err(e) if is_content_rejection(&e) => {
+                            Err(PushError::Rejected(e.to_string()))
+                        }
+                        Err(e) if *stop.borrow() => Err(PushError::Stopping(e.to_string())),
+                        Err(e) => Err(PushError::Retryable(e.to_string())),
                     }
-                    backoff = (backoff * 2).min(BACKOFF_MAX);
-                    continue;
                 }
+                Err(e) => Err(PushError::Retryable(e)),
             };
-            let options = CallOptions::default()
-                .with_timeout(PUSH_TIMEOUT)
-                .with_header("authorization", format!("Bearer {bearer}"));
-            match self
-                .client
-                .write_rows_with_options(request.clone(), options)
-                .await
-            {
-                Ok(_) => {
-                    tracing::debug!(namespace = name, "finelog forwarder: batch delivered");
-                    return Ok(());
-                }
-                Err(e) if is_permanent_rejection(&e) => {
-                    return Err(PushError::Rejected(e.to_string()))
-                }
-                Err(e) if *stop.borrow() => return Err(PushError::Stopping(e.to_string())),
-                Err(e) => {
-                    tracing::warn!(namespace = name, error = %e, backoff_seconds = backoff.as_secs(), "finelog forwarder: push failed");
-                    if wait_or_stop(backoff, stop).await {
-                        return Err(PushError::Stopping(e.to_string()));
+            match result {
+                Err(PushError::Retryable(error)) if attempt < PUSH_ATTEMPTS_PER_TURN => {
+                    tracing::warn!(
+                        namespace = name,
+                        error = %error,
+                        attempt,
+                        max_attempts = PUSH_ATTEMPTS_PER_TURN,
+                        backoff_seconds = backoff.as_secs(),
+                        "finelog forwarder: push failed; retrying"
+                    );
+                    if wait_or_stop(backoff, &mut stop).await {
+                        return Err(PushError::Stopping(error));
                     }
-                    backoff = (backoff * 2).min(BACKOFF_MAX);
+                    backoff *= 2;
                 }
+                result => return result,
             }
         }
+        unreachable!("the bounded push loop always returns on its last attempt")
     }
 }
 
@@ -789,27 +803,29 @@ enum ForwardTurn {
 /// Why a push gave up.
 #[derive(Debug)]
 enum PushError {
-    /// The forwarder is shutting down mid-retry. The chunk is still owed; the cursor
-    /// stays where it is and the next process re-reads it.
+    /// The forwarder is shutting down. The chunk is still owed; the cursor stays where
+    /// it is and the next process re-reads it.
     Stopping(String),
-    /// The hub refused the chunk's *content*, so no retry of the same bytes can succeed.
-    /// The caller skips past it rather than stalling the whole stream.
+    /// The request may succeed later. The chunk is still owed, and the next namespace
+    /// must receive its turn before this one retries.
+    Retryable(String),
+    /// The hub refused the chunk's content. This may be a stale registered schema, so
+    /// the caller preserves the cursor and refreshes registration before retrying.
     Rejected(String),
 }
 
-/// Whether the hub's answer means "these bytes are unacceptable" rather than "not right
-/// now".
+/// Whether the hub rejected the request's content rather than reporting a transient
+/// service condition.
 ///
-/// Only `invalid_argument` qualifies: the hub returns it for a structurally bad batch
-/// (a schema the namespace does not accept), which is a poison pill — re-sending it
-/// forever would strand every row behind it. Everything else, auth failures included,
-/// describes a condition that can change without the chunk changing.
-fn is_permanent_rejection(error: &connectrpc::ConnectError) -> bool {
+/// `invalid_argument` includes both structurally bad batches and a batch whose columns
+/// have not reached the hub's registered schema. The caller distinguishes neither:
+/// both remain owed while other namespaces continue making progress.
+fn is_content_rejection(error: &connectrpc::ConnectError) -> bool {
     error.code == connectrpc::error::ErrorCode::InvalidArgument
 }
 
-/// Sleep for `backoff`, or wake early if `stop` latches. Returns whether it latched, so
-/// shutdown never waits out a full backoff.
+/// Sleep between transient attempts. Returns `true` when shutdown latches or its sender
+/// closes, and `false` when the delay elapses.
 async fn wait_or_stop(backoff: Duration, stop: &mut watch::Receiver<bool>) -> bool {
     tokio::select! {
         _ = stop.changed() => true,
@@ -915,8 +931,7 @@ fn chunk_by_bytes(
 struct Progress {
     /// Requests the hub accepted, across every namespace. Counted in batches, not rows.
     batches: u64,
-    /// `seq` positions the forwarder passed over and will never send — evicted before
-    /// they shipped or in a batch the hub permanently refused.
+    /// `seq` positions the forwarder passed over because local retention evicted them.
     /// An upper bound on rows lost: some positions held rows the scan would have filtered
     /// out anyway.
     skipped_seqs: i64,

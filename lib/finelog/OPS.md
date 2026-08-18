@@ -268,7 +268,9 @@ Interpret the pair as follows:
 The forwarder gives every live namespace one batch-sized turn per round and
 starts another round immediately while work remains. A large telemetry backlog
 therefore does not monopolize forwarding ahead of new log rows. Hub or network
-failures can still delay a turn because forwarding is best effort.
+failures get three attempts, then leave the affected cursor in place and yield to
+the next namespace. The same batch is retried on the next sweep; exhaustion does
+not discard it.
 
 Inspect the sender's forwarder messages without changing the deployment. Read
 the deployment name and Kubernetes connection details from
@@ -284,8 +286,10 @@ Warnings name the affected namespace. `backlog exceeds the warning threshold`
 reports pressure but does not change the forwarding cursor; the sender continues
 draining every locally retained row. `rows evicted before they were forwarded`
 means that local retention has already made source sequence positions unreadable.
-The cumulative `skipped_seqs` progress counter also includes permanently rejected
-malformed batches and does not by itself prove that `log` rows were dropped.
+`hub rejected the batch; preserving the cursor` means the sender will re-register
+the namespace's current schema on the next sweep and retry the same rows. The
+cumulative `skipped_seqs` progress counter reports only sequence positions lost to
+local retention; filtered foreign-origin rows may make it an upper bound on lost rows.
 
 To rotate a key, add the new Secret Manager version, add its public key alongside
 the old one under the same `keys[].cluster` (the hub accepts either), roll the

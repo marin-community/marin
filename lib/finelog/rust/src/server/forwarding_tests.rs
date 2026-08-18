@@ -13,8 +13,8 @@ use crate::proto::finelog::logging::{FetchLogsRequest, LogEntry, MatchScope, Pus
 use crate::proto::finelog::stats::ColumnType;
 use crate::server::auth::{AuthIdentity, AuthPolicy};
 use crate::server::test_support::{
-    client, disk_store, serve, serve_rejecting, stats_client, RequestStats, TestTransport, PRIV_A,
-    PRIV_UNTRUSTED, PUB_A,
+    client, disk_store, serve, serve_rejecting, serve_unavailable, stats_client, RequestStats,
+    TestTransport, PRIV_A, PRIV_UNTRUSTED, PUB_A,
 };
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{Column, Schema};
@@ -84,6 +84,11 @@ impl Fixture {
     /// keeps no store, so only the source and the request count are observable.
     async fn with_rejecting_hub(tag: &str) -> Self {
         let (target_addr, target_requests) = serve_rejecting().await;
+        Self::with_hub(tag, None, target_addr, target_requests).await
+    }
+
+    async fn with_unavailable_hub(tag: &str) -> Self {
+        let (target_addr, target_requests) = serve_unavailable().await;
         Self::with_hub(tag, None, target_addr, target_requests).await
     }
 
@@ -345,8 +350,8 @@ impl RunningForwarder {
         }
     }
 
-    /// Latch the stop signal and join. Bounded, so a forwarder wedged in a backoff fails
-    /// the test rather than hanging it.
+    /// Latch the stop signal and join. Bounded, so an outbound request that does not
+    /// return fails the test instead of hanging it.
     async fn finish(self) {
         self.stop.send(true).unwrap();
         tokio::time::timeout(Duration::from_secs(5), self.task)
@@ -631,25 +636,52 @@ async fn a_bearer_the_hub_does_not_trust_forwards_nothing_and_loses_nothing() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_batch_the_hub_calls_malformed_is_skipped_rather_than_retried_forever() {
-    // invalid_argument means the hub refuses these bytes and always will. Retrying would
-    // strand every row behind them, so the forwarder counts the batch as skipped and
-    // moves its cursor past it. The rows are still in the local store.
+async fn a_batch_the_hub_calls_malformed_preserves_its_cursor_for_retry() {
     let fx = Fixture::with_rejecting_hub("poison").await;
     push(&fx.source_client, "/user/job/t", &["hello"]).await;
     fx.forward_from_start(LOG_NAMESPACE_NAME);
-    let tip = fx.tip(LOG_NAMESPACE_NAME);
-    fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
+
+    let forwarder = fx.forwarder(PRIV_A);
+    let mut progress = Progress::new();
+    let (_stop_tx, mut stop) = watch::channel(false);
+    forwarder.forward_round(&mut progress, &mut stop).await;
 
     assert_eq!(
         fx.cursor(LOG_NAMESPACE_NAME),
-        Some(tip),
-        "the cursor must advance past a batch the hub will never accept"
+        Some(0),
+        "a rejected batch stays owed because a later schema registration may make it valid"
     );
     assert_eq!(
         fx.requests(),
         1,
-        "a permanently rejected batch is sent once, not retried"
+        "one namespace receives only one attempt in a forwarding sweep"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn three_retryable_push_failures_yield_to_the_next_namespace() {
+    let fx = Fixture::with_unavailable_hub("unavailable").await;
+    push(&fx.source_client, "/user/job/t", &["hello"]).await;
+    write_id_rows(&fx.source, "events", 1).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME);
+    fx.forward_from_start("events");
+
+    let forwarder = fx.forwarder(PRIV_A);
+    let mut progress = Progress::new();
+    let (_stop_tx, mut stop) = watch::channel(false);
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        forwarder.forward_round(&mut progress, &mut stop),
+    )
+    .await
+    .expect("a retryable failure must yield instead of monopolizing the sweep");
+
+    assert_eq!(fx.cursor(LOG_NAMESPACE_NAME), Some(0));
+    assert_eq!(fx.target_requests.write_rows_requests(), 3);
+    assert_eq!(
+        fx.target_requests.register_table_requests(),
+        1,
+        "the namespace after the failed log batch must receive its registration turn"
     );
 }
 
@@ -869,4 +901,64 @@ async fn a_non_log_table_is_registered_on_the_hub_and_stamped_with_its_origin() 
         ],
         "the forwarder stamps the origin cluster onto a table that never declared it"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn schema_evolution_is_registered_before_forwarding_new_rows() {
+    let fx = Fixture::new("schema-evolution").await;
+    write_id_rows(&fx.source, "events", 1).await;
+    fx.forward_from_start("events");
+
+    let forwarder = fx.forwarder(PRIV_A);
+    let mut progress = Progress::new();
+    let (_stop_tx, mut stop) = watch::channel(false);
+    forwarder.forward_round(&mut progress, &mut stop).await;
+
+    let evolved_schema = Schema::new(
+        vec![
+            Column::new("id", ColumnType::COLUMN_TYPE_STRING, false),
+            Column::new("run_id", ColumnType::COLUMN_TYPE_STRING, true),
+        ],
+        "id",
+    );
+    let source = Arc::clone(&fx.source);
+    tokio::task::spawn_blocking(move || {
+        source.register_table("events", evolved_schema, StoragePolicy::default())
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let arrow_schema = Arc::new(ArrowSchema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("run_id", DataType::Utf8, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        arrow_schema,
+        vec![
+            Arc::new(StringArray::from(vec!["1"])),
+            Arc::new(StringArray::from(vec![Some("run-1")])),
+        ],
+    )
+    .unwrap();
+    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+    let (_, last_seq) = fx.source.write_rows("events", &ipc, None).unwrap();
+    fx.source
+        .await_persisted("events", last_seq, Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    forwarder.forward_round(&mut progress, &mut stop).await;
+
+    let target_schema = fx.target_store().get_table_schema("events").unwrap();
+    assert!(target_schema.column("run_id").is_some());
+    let target_rows = fx
+        .target_store()
+        .list_namespaces_with_stats()
+        .unwrap()
+        .into_iter()
+        .find(|(name, _, _, _)| name == "events")
+        .unwrap()
+        .2
+        .row_count;
+    assert_eq!(target_rows, 2);
 }

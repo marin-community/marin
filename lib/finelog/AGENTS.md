@@ -66,9 +66,12 @@ the hub a convenience copy. A backlog is a durable cursor into the sender's boun
 local retention rather than a separate queue, so the forwarder drains it without an
 age or row-count cap. Non-log chunks from one read turn may wait for hub durability
 concurrently; log chunks stay serial to preserve line order. Rows are skipped only
-after local eviction makes them unreadable or the hub permanently rejects a malformed
-batch. A hub outage therefore cannot consume extra sender memory, but a long enough
-outage can still outlive local retention.
+after local eviction makes them unreadable. A rejected write preserves its cursor and
+invalidates the cached hub registration; the next sweep re-registers the current source
+schema and retries while other namespaces continue forwarding. Transient failures get
+three attempts before the namespace yields for the sweep, without advancing its cursor.
+A hub outage therefore cannot consume extra sender memory, but a long enough outage can
+still outlive local retention.
 
 Only the k8s backend can forward — it projects the key through a Secret. The gcp
 backend refuses, because its only channel to the server is world-readable
