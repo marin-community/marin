@@ -38,6 +38,7 @@ from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
@@ -70,6 +71,7 @@ from experiments.grug.moe_hero_ep.train import (
     WatchMode,
     run_grug,
 )
+from experiments.marin_tokenizer import marin_tokenizer
 
 # Ladder rungs, each pinned to the rack count that holds its batch. d6144 is the hero, reusing
 # HERO_MODEL; the narrower rungs reuse the ablation's `_small_model` at the same hero routing geometry.
@@ -192,7 +194,7 @@ def build_ladder_run(
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
-    validation = _validation_datasets()
+    validation = [*_validation_datasets(), *uncheatable_datasets(tokenizer=marin_tokenizer).values()]
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
