@@ -34,8 +34,10 @@ def test_recompress_parquet_replaces_snappy_with_smaller_zstd(tmp_path):
     expected = pa.table({"id": range(10_000), "text": ["compressible record payload"] * 10_000})
     pq.write_table(expected, path, compression="snappy", row_group_size=1_000)
     input_bytes = path.stat().st_size
+    abandoned_path = Path(f"{path}.tmp.abandoned")
+    abandoned_path.write_bytes(b"incomplete prior attempt")
 
-    result = recompress_parquet(str(path), RewriteOptions(apply=True, batch_rows=1_000))
+    result = recompress_parquet(str(path), RewriteOptions(apply=True, batch_rows=100))
 
     assert result.disposition is RewriteDisposition.REWRITTEN
     assert result.input_bytes == input_bytes
@@ -43,7 +45,9 @@ def test_recompress_parquet_replaces_snappy_with_smaller_zstd(tmp_path):
     assert result.output_bytes < result.input_bytes
     assert _compressions(path) == {"ZSTD"}
     assert _has_page_indexes(path)
+    assert pq.ParquetFile(path).metadata.num_row_groups == 1
     assert pq.read_table(path).equals(expected)
+    assert not abandoned_path.exists()
 
 
 def test_recompress_parquet_dry_run_preserves_source(tmp_path):

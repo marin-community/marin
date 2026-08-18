@@ -98,6 +98,7 @@ nav:
       - HBM Optimization: references/hbm-optimization.md
       - Perplexity Gap Analysis: references/perplexity-gap-analysis.md
       - Browsing Buckets with fsutil: references/fsutil.md
+      - Recompressing Parquet datasets: references/parquet-recompression.md
 
 markdown_extensions:
   - markdown.extensions.footnotes

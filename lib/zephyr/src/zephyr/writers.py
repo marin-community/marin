@@ -33,6 +33,7 @@ _WRITE_BLOCK_SIZE = 64 * 1024 * 1024
 DEFAULT_PARQUET_COMPRESSION = "zstd"
 DEFAULT_PARQUET_COMPRESSION_LEVEL = 3
 DEFAULT_PARQUET_WRITE_PAGE_INDEX = True
+DEFAULT_PARQUET_MAX_ROWS_PER_PAGE = 256
 
 # Default target buffer size for writer batching. Writers accumulate
 # micro-batches until accumulated nbytes reaches this threshold, then yield
@@ -378,6 +379,7 @@ def write_parquet_file(
                             compression=DEFAULT_PARQUET_COMPRESSION,
                             compression_level=DEFAULT_PARQUET_COMPRESSION_LEVEL,
                             write_page_index=DEFAULT_PARQUET_WRITE_PAGE_INDEX,
+                            max_rows_per_page=DEFAULT_PARQUET_MAX_ROWS_PER_PAGE,
                         )
                     writer.write_table(table)
                     count += len(table)
@@ -395,6 +397,7 @@ def write_parquet_file(
                     compression=DEFAULT_PARQUET_COMPRESSION,
                     compression_level=DEFAULT_PARQUET_COMPRESSION_LEVEL,
                     write_page_index=DEFAULT_PARQUET_WRITE_PAGE_INDEX,
+                    max_rows_per_page=DEFAULT_PARQUET_MAX_ROWS_PER_PAGE,
                 )
 
     return {"path": output_path, "count": count}
