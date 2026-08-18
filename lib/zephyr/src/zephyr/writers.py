@@ -23,6 +23,7 @@ import zstandard as zstd
 from pyarrow import fs as pa_fs
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.s3_compat import S3_RETRY_MAX_ATTEMPTS
 from rigging.filesystem.storage_path import StoragePath
 
 from zephyr import counters
@@ -270,10 +271,6 @@ def _accumulate_tables(
 # upload forever instead of failing it into a retry.
 _S3_NATIVE_CONNECT_TIMEOUT = 30
 _S3_NATIVE_REQUEST_TIMEOUT = 120
-# Matches the attempt budget ``s3_request_bounds_config_kwargs`` gives s3fs.
-# Without it the AWS C++ SDK applies its own default, which no Marin setting
-# reaches.
-_S3_NATIVE_RETRY_MAX_ATTEMPTS = 5
 
 
 def _s3_filesystem_kwargs() -> dict[str, str | bool | int]:
@@ -315,9 +312,12 @@ def _native_s3_filesystem(kwargs: tuple[tuple[str, str | bool | int], ...]) -> p
     ``EADDRNOTAVAIL`` (#8402). pyarrow filesystems are thread-safe, so one
     instance serves every writer in the process. The key is the resolved
     kwargs, so a changed endpoint still builds its own filesystem.
+
+    The retry strategy is explicit because pyarrow otherwise falls back to the
+    AWS C++ SDK default, which no Marin setting reaches.
     """
     return pa_fs.S3FileSystem(
-        retry_strategy=pa_fs.AwsStandardS3RetryStrategy(max_attempts=_S3_NATIVE_RETRY_MAX_ATTEMPTS),
+        retry_strategy=pa_fs.AwsStandardS3RetryStrategy(max_attempts=S3_RETRY_MAX_ATTEMPTS),
         **dict(kwargs),
     )
 

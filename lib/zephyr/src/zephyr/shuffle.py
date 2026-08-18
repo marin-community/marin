@@ -38,7 +38,7 @@ import os
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlparse
 
 import cloudpickle
@@ -277,7 +277,20 @@ class _SidecarSlice:
     target_bytes: int
 
 
-def _read_sidecar_slice(fs: Any, path: str, target_shard: int) -> _SidecarSlice | None:
+class _SidecarFilesystem(Protocol):
+    """The filesystem surface a sidecar read uses.
+
+    ``url_to_fs`` hands back a bare fsspec filesystem for ``s3://`` and a
+    ``CrossRegionGuardedFS`` wrapper for ``gs://``. The two share no base class,
+    so the reader names the methods it calls instead.
+    """
+
+    def _strip_protocol(self, path: str) -> str: ...
+
+    def cat_file(self, path: str) -> bytes: ...
+
+
+def _read_sidecar_slice(fs: _SidecarFilesystem, path: str, target_shard: int) -> _SidecarSlice | None:
     """Read one sidecar and return its file list plus the target shard's payload bytes.
 
     Returns ``None`` if the sidecar has no files (empty writer).
