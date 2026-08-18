@@ -1712,3 +1712,32 @@ Experiment ID prefix: `MEP`.
   slots, empty peers, block-straddling groups) to pin the exact case;
   then fix host counts (or kernel signaling) and re-run EP4 conformance
   before another hero attempt. Job killed; rack freed (high contention).
+
+### 2026-08-18 02:40 - MEP-067: static accounting exonerated; cluster-barrier circular-wait hypothesis
+- Two CPU fuzz campaigns against the MEP-066 diagnosis (scratchpad
+  fuzz_tile_signals.py, fuzz_snake.py):
+  1. expected_tile_signals vs the REAL GroupInfo.create evaluated per grid
+     slot: 1600+ draws (hero EP64 shape 3 experts/292k-row pool, EP4-like
+     control, empties-at-0, 128/256-aligned boundaries, skew) -> ZERO
+     host>kernel deficits. The host replay is exact, including the
+     lax.div round-toward-zero corner at empty-group-at-offset-0.
+  2. planar_snake linear->(m,n) bijectivity at hero grid shapes (incl. the
+     combine-leg config width 12, minor 0, n_iters 24): all bijective.
+  The "expected_tile_signals mismatch" theory of MEP-066 is FALSIFIED.
+- Revised reading of the warp evidence: the GEMM warpgroups PCs sit at
+  UCGABAR_ARV/UCGABAR_WAIT with "@P0 EXIT" AFTER the barrier — consistent
+  with a per-iteration CLUSTER barrier inside do_matmul, not the kernel
+  exit barrier. New leading hypothesis: that cluster barrier counts every
+  warpgroup in the cluster (incl. wg2), so when the transport warpgroup
+  falls behind (63-peer sends at EP64), the GEMM warpgroups stall at the
+  cluster barrier waiting for wg2, which is waiting on tile signals from
+  the very GEMM iterations the barrier is blocking — a circular wait.
+  EP4 survives because the transport never lags past the barrier slack;
+  kernel 1 survives at EP64 because its transport leg (dispatch) is
+  cheaper per iteration [verify]. Predicts: wedge probability grows with
+  send volume per gate — matches the 22-of-64 by-routing-draw split.
+- Discriminating experiment (1 tray, 4 GPUs): standalone kernel2 with an
+  artificially slowed transport warpgroup (or inflated per-segment sends)
+  should reproduce the wedge off-rack; then test the fix — decouple wg2
+  from the GEMM cluster barrier (async_barrier arrival by participating
+  wgs only), or bound the transport lag (periodic wg2 arrivals).
