@@ -12,7 +12,9 @@ from typing import List, Optional, Union
 
 import jax
 from jax._src import clusters
+from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.types import JobName
 from iris.runtime.jax_init import initialize_jax as initialize_iris_jax
 
 from levanter.megascale import configure_megascale_from_iris
@@ -30,11 +32,11 @@ _VISIBLE_DEVICES = "CUDA_VISIBLE_DEVICES"
 _NODE_NAME = "SLURMD_NODENAME"
 
 
-def _shutdown_jax_distributed_after_clean_exit() -> None:
-    # Failed ranks must exit promptly so the Iris supervisor can terminate their peers.
+def _terminate_iris_job_after_clean_exit(client: IrisClient, job_id: JobName) -> None:
+    # Preserve retries for genuine failures; the successful rank-0 exit owns completed-job teardown.
     if getattr(sys, "last_exc", None) is not None:
         return
-    jax.distributed.shutdown()
+    client.terminate(job_id)
 
 
 class LevanterSlurmCluster(clusters.SlurmCluster):
@@ -230,10 +232,17 @@ class DistributedConfig:
             logger.info("Skipping jax.distributed.initialize because initialize_jax_distributed=False.")
             return
 
-        if get_job_info() is not None:
+        job_info = get_job_info()
+        if job_info is not None:
             logger.info("Detected Iris job context; initializing jax.distributed via iris.runtime.jax_init.")
             configure_megascale_from_iris()
             initialize_iris_jax()
+            if jax.process_index() == 0:
+                ctx = iris_ctx()
+                if ctx.client is None:
+                    raise RuntimeError("Iris context has no client for terminating the current job")
+                # Tracker exit hooks register later and therefore run before job termination.
+                atexit.register(_terminate_iris_job_after_clean_exit, ctx.client, job_info.job_id)
         elif self._is_distributed():
             device_ids = self.local_device_ids
             coordinator_address = self.coordinator_address
@@ -270,6 +279,3 @@ class DistributedConfig:
                 "was provided, and no cluster was detected."
             )
             return
-
-        # Tracker exit hooks register later and therefore run before this shutdown barrier.
-        atexit.register(_shutdown_jax_distributed_after_clean_exit)
