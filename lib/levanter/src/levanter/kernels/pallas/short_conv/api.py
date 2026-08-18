@@ -11,17 +11,10 @@ from typing import Literal, TypeAlias
 
 import jax
 import jax.numpy as jnp
+from jax import shard_map
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Float, Int
-
-# `jax.shard_map` is a function on the top-level namespace, not a module: `from
-# jax.shard_map import shard_map` raises ModuleNotFoundError and silently drops you onto
-# the deprecated `jax.experimental` one, which has no `check_vma` parameter.
-if hasattr(jax, "shard_map"):
-    shard_map = jax.shard_map
-else:  # pragma: no cover - older JAX
-    from jax.experimental.shard_map import shard_map  # type: ignore[assignment]
 
 from .config import ShortConvBlockSizes
 from .pallas_gpu import (
@@ -193,6 +186,7 @@ def _short_conv_pallas_sharded(
     def _local(weight_local, x_local, segment_ids_local):
         return call(weight_local, x_local, segment_ids_local)
 
+    # pyrefly: ignore[bad-argument-count]  # jax.shard_map decorator erases _local's real signature
     return _local(weight, x, segment_ids)
 
 
@@ -224,6 +218,15 @@ def short_conv(
         single fp32 accumulator across taps -- more accurate, not bit-comparable.
       batch_axes: mesh axes the batch is sharded over.
     """
+    if weight.dtype != x.dtype:
+        # The reference promotes mixed dtypes via standard JAX rules (fp32 for fp32 weight /
+        # bf16 x) while the Pallas kernel outputs x.dtype, so mixed inputs would give
+        # backend-dependent dtypes and values. Normalise at the boundary instead.
+        raise ValueError(
+            f"short_conv requires weight and x to share a dtype; got weight={weight.dtype}, "
+            f"x={x.dtype}. Cast to a common dtype before calling."
+        )
+
     block_sizes = block_sizes or ShortConvBlockSizes.get_default()
     requested = _as_sequence(implementation)
     explicit_single = isinstance(implementation, str)

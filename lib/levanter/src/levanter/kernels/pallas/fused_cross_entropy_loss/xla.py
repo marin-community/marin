@@ -36,7 +36,13 @@ _FALSY = ("0", "false", "no", "off")
 
 
 def _fast_backward_env_override() -> bool | None:
-    """Return the env var's value, or ``None`` when it is unset/unrecognised."""
+    """Return the env var's value, or ``None`` when it is unset.
+
+    A set-but-unrecognised value raises: this variable is a kill switch for A/B
+    runs, so a typo (``fasle``) must fail loudly rather than silently fall through
+    to the call-site default -- which for the hero call site leaves the new
+    gradient algorithm enabled and invalidates the comparison.
+    """
     raw = os.environ.get(_FAST_BWD_ENV_VAR)
     if raw is None:
         return None
@@ -45,7 +51,9 @@ def _fast_backward_env_override() -> bool | None:
         return True
     if value in _FALSY:
         return False
-    return None
+    raise ValueError(
+        f"{_FAST_BWD_ENV_VAR}={raw!r} is not a recognised boolean; use one of {_TRUTHY + _FALSY} or unset it."
+    )
 
 
 def _resolve_fast_backward(requested: bool | None) -> bool:

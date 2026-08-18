@@ -2388,20 +2388,36 @@ def test_xla_fast_backward_env_var_overrides_call_site_in_both_directions(monkey
     monkeypatch.setenv(fused_xla._FAST_BWD_ENV_VAR, "0")
     assert fused_xla._resolve_fast_backward(None) is False
     assert fused_xla._resolve_fast_backward(True) is False
-    # Unrecognised values are ignored rather than silently flipping a hero run.
-    monkeypatch.setenv(fused_xla._FAST_BWD_ENV_VAR, "maybe")
-    assert fused_xla._resolve_fast_backward(True) is True
-    assert fused_xla._resolve_fast_backward(None) is False
+    # A set-but-unrecognised value raises rather than silently falling through to the
+    # call-site default -- a typo in the kill switch must not leave the hero on the new
+    # gradient path when the operator meant to disable it.
+    monkeypatch.setenv(fused_xla._FAST_BWD_ENV_VAR, "fasle")
+    with pytest.raises(ValueError, match="not a recognised boolean"):
+        fused_xla._resolve_fast_backward(True)
+    with pytest.raises(ValueError, match="not a recognised boolean"):
+        fused_xla._resolve_fast_backward(None)
 
 
-def test_xla_fast_bwd_implementation_is_registered_and_opt_in():
+def test_xla_fast_bwd_implementation_is_registered_and_opt_in(monkeypatch):
     """`xla_fast_bwd` must exist, be explicit-only, and leave `xla` untouched."""
+    monkeypatch.delenv(fused_xla._FAST_BWD_ENV_VAR, raising=False)
     assert "xla_fast_bwd" in fused_api.IMPLEMENTATIONS
-    # Never auto-selected: only an explicit implementation= picks it up.
-    assert "xla_fast_bwd" not in fused_api._DEFAULT_IMPLEMENTATION
-    assert "xla_fast_bwd" not in fused_api._CANONICAL_BACKEND_IMPLEMENTATIONS
     # The plain "xla" entry must still be the unmodified function.
     assert fused_api.IMPLEMENTATIONS["xla"] is fused_xla.linear_softmax_cross_entropy_loss_xla
+
+    # Never auto-selected: with no implementation= the default path is the old scatter
+    # backward, so the new (scatter-free) gradient is not silently in force.
+    x, w, _ = _fast_bwd_case(jnp.bfloat16, b=256, h=64, v=300, b_block=64, v_block=128)
+    labels = jnp.zeros((256,), dtype=jnp.int32)
+
+    def objective(x_arg, w_arg):
+        loss = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x_arg, labels, w_arg, reduction="mean", logsumexp_weight=None, dtype=jnp.float32
+        )
+        return jnp.sum(loss)
+
+    default_text = jax.jit(jax.grad(objective, argnums=(0, 1))).lower(x, w).as_text()
+    assert "stablehlo.scatter" in default_text
 
 
 def test_xla_fast_bwd_implementation_matches_xla_forward_and_fast_backward(monkeypatch):
@@ -2446,8 +2462,8 @@ def test_xla_fast_bwd_implementation_matches_xla_forward_and_fast_backward(monke
     assert "stablehlo.scatter" in make("xla").lower(x, w).as_text()
 
 
-def test_xla_fast_backward_emits_no_scatter_and_one_loop():
-    """Structural gate: the fast backward must not regress to a scatter or a nested loop."""
+def test_xla_fast_backward_emits_no_scatter():
+    """Structural gate: the fast backward must not regress to a scatter or upcast its GEMMs."""
     x, w, _ = _fast_bwd_case(jnp.bfloat16, b=256, h=64, v=300, b_block=64, v_block=128)
     labels = jnp.zeros((256,), dtype=jnp.int32)
 
@@ -2464,8 +2480,8 @@ def test_xla_fast_backward_emits_no_scatter_and_one_loop():
         return jnp.sum(loss)
 
     text = jax.jit(jax.grad(objective, argnums=(0, 1))).lower(x, w).as_text()
+    # The one-hot rewrite must not regress to a scatter; this is a stable semantic
+    # distinction (unlike an exact loop count, which pins the forward's lowering).
     assert "stablehlo.scatter" not in text
-    # 2 while loops for the (unchanged) forward, 1 scan for the backward.
-    assert text.count("stablehlo.while") == 3
     # Both backward GEMMs must stay on bf16 operands (tensor cores), not upcast to f32.
     assert "tensor<256x128xf32>, tensor<64x128xf32>" not in text

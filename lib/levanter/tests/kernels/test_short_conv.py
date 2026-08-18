@@ -325,3 +325,13 @@ def test_channel_axis_gate_consults_the_mesh_not_just_the_spec(model_size, shoul
         else:
             jaxpr = jax.make_jaxpr(fn)(weight, x, segment_ids)
             assert "shard_map" in str(jaxpr)
+
+
+def test_short_conv_rejects_mixed_dtypes():
+    """Mixed weight/activation dtypes are rejected at the boundary. The reference promotes
+    (fp32) while the Pallas kernel outputs ``x.dtype``, so accepting mixed inputs would make
+    the same call backend-dependent; the dtype gate runs before dispatch on every backend."""
+    weight = jnp.ones((4, 8), dtype=jnp.float32)
+    x = jnp.ones((1, 16, 8), dtype=jnp.bfloat16)
+    with pytest.raises(ValueError, match="share a dtype"):
+        short_conv(weight, x)
