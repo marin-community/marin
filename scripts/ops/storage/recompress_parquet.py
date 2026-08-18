@@ -222,6 +222,7 @@ def _rewrite_for_zephyr(path: str, options: RewriteOptions) -> list[dict]:
     try:
         result = recompress_parquet(path, options)
     except Exception:
+        # One bad object must not abort its entire inventory rollup.
         counters.pipeline.update_counter(f"{COUNTER_PREFIX}/files_failed", 1)
         logger.exception("Skipping failed Parquet rewrite: %s", path)
         return []

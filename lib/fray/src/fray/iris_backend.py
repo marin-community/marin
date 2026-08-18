@@ -783,8 +783,9 @@ class FrayIrisClient:
         retry_kwargs: dict[str, Any] = {}
         if actor_config.max_task_retries is not None:
             retry_kwargs["max_retries_failure"] = actor_config.max_task_retries
-            # Keep the cumulative group budget consistent with the per-replica
-            # retry allowance.
+        if actor_config.max_task_failures is not None:
+            retry_kwargs["max_task_failures"] = actor_config.max_task_failures
+        elif actor_config.max_task_retries is not None:
             retry_kwargs["max_task_failures"] = actor_config.max_task_retries * count
 
         job = self._iris.submit(

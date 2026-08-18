@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 ARTIFACT_TTL_DAYS = 30
 ARTIFACT_PREFIX = "datakit-rewrite"
 REWRITE_VERSION = "2026.08.18.2"
+REWRITE_WORKERS = 512
 DEFAULT_INVENTORY_MANIFEST = (
     "s3://marin-us-east-02a/marin/ops/parquet-rewrite-manifests/storage-scan-2026-08-18-100g-cap4096.parquet"
 )
@@ -91,7 +92,7 @@ class ParquetRewriteArtifact(Artifact):
 
 
 def read_inventory_manifest(path: str) -> tuple[InventoryManifestRow, ...]:
-    """Read the reviewed inventory snapshot consumed by the coordinator."""
+    """Return validated, ordered rows from an inventory manifest."""
     with StoragePath(path).open("rb") as source:
         rows = tuple(InventoryManifestRow(**row) for row in pq.read_table(source).to_pylist())
     if not rows:
@@ -213,16 +214,6 @@ def _print_manifest(rows: Sequence[InventoryManifestRow]) -> None:
 
 @click.command()
 @click.option("--inventory-manifest-path", default=DEFAULT_INVENTORY_MANIFEST, show_default=True)
-@click.option("--workers", default=DEFAULT_WORKERS, show_default=True, type=click.IntRange(min=1))
-@click.option("--worker-cpu", default=DEFAULT_WORKER_CPU, show_default=True, type=click.IntRange(min=1))
-@click.option("--worker-ram", default=DEFAULT_WORKER_RAM, show_default=True)
-@click.option("--worker-disk", default=DEFAULT_WORKER_DISK, show_default=True)
-@click.option(
-    "--coordinator-cpu",
-    default=DEFAULT_COORDINATOR_CPU,
-    show_default=True,
-    type=click.FloatRange(min=0, min_open=True),
-)
 @click.option("--list-manifest", is_flag=True, help="Print the ordered directory list without running it.")
 @click.option(
     "--apply-to-quiescent-prefixes",
@@ -231,11 +222,6 @@ def _print_manifest(rows: Sequence[InventoryManifestRow]) -> None:
 )
 def main(
     inventory_manifest_path: str,
-    workers: int,
-    worker_cpu: int,
-    worker_ram: str,
-    worker_disk: str,
-    coordinator_cpu: float,
     list_manifest: bool,
     apply_to_quiescent_prefixes: bool,
 ) -> None:
@@ -259,13 +245,7 @@ def main(
     logger.info("Caching Parquet rewrite records under %s", artifact_prefix)
     result = run_rewrite_train(
         rewrite_steps,
-        pool=RewriteWorkerPool(
-            workers=workers,
-            worker_cpu=worker_cpu,
-            worker_ram=worker_ram,
-            worker_disk=worker_disk,
-            coordinator_cpu=coordinator_cpu,
-        ),
+        pool=RewriteWorkerPool(workers=REWRITE_WORKERS),
     )
     click.echo(f"completed {len(rewrite_steps)} rollups; final record: {result.path}")
 
