@@ -21,7 +21,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
-from zephyr.memory_store import MemoryStore
+from zephyr.memory_store import MemoryStore, MemoryStoreUnavailable
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
@@ -863,7 +863,11 @@ def verify_fuzzy_dups(
             map_task_resources=map_task_resources,
             reduce_task_resources=reduce_task_resources,
         )
-        store_stats = document_store.stats()
+        try:
+            store_stats = document_store.stats()
+        except MemoryStoreUnavailable:
+            logger.warning("Memory-store stats unavailable after fuzzy verification; omitting telemetry", exc_info=True)
+            store_stats = ()
     finally:
         ctx.shutdown()
 
@@ -871,12 +875,15 @@ def verify_fuzzy_dups(
 
     verified = sum(result["verified_duplicates"] for result in outcome.results)
     output_counters = dict(outcome.counters)
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/actors"] = len(store_stats)
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/items"] = sum(stat.num_items for stat in store_stats)
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/load_cpu_time"] = sum(stat.load_cpu_time for stat in store_stats)
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/max_actor_load_elapsed"] = max(
-        stat.load_elapsed for stat in store_stats
-    )
+    if store_stats:
+        output_counters[f"{_COUNTER_PREFIX}/memory_store/actors"] = len(store_stats)
+        output_counters[f"{_COUNTER_PREFIX}/memory_store/items"] = sum(stat.num_items for stat in store_stats)
+        output_counters[f"{_COUNTER_PREFIX}/memory_store/load_cpu_time"] = sum(
+            stat.load_cpu_time for stat in store_stats
+        )
+        output_counters[f"{_COUNTER_PREFIX}/memory_store/max_actor_load_elapsed"] = max(
+            stat.load_elapsed for stat in store_stats
+        )
     logger.info(
         "Verified %d fuzzy duplicates from %d candidate members across %d shards",
         verified,

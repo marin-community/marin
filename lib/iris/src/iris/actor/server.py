@@ -164,6 +164,9 @@ class ActorServer:
 
             return actor_pb2.ActorResponse(serialized_value=cloudpickle.dumps(result))
 
+        except ConnectError as e:
+            error = actor_pb2.ActorError(error_type=e.code.value, message=e.message)
+            return actor_pb2.ActorResponse(error=error)
         except Exception as e:
             error = actor_pb2.ActorError(
                 error_type=type(e).__name__,
