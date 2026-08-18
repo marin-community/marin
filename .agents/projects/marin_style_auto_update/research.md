@@ -91,5 +91,4 @@ GitHub [repository rulesets](https://docs.github.com/en/repositories/configuring
 
 ### Handoff
 
-The smallest safe implementation is a scheduled/manual workflow in Marin, a typed consumer registry, a `marin-style` managed manifest, and an extension of the existing generated-PR lifecycle to accept per-consumer checks and file sets. Auto-merge activation has one owner step: install the existing updater App on the six consumer repositories and grant review-only bypass in both active protection layers where present.
-
+The smallest safe implementation is a manual workflow in Marin, a typed consumer registry, a `marin-style` managed manifest, and an extension of the existing generated-PR lifecycle to accept per-consumer checks and file sets. Activation follows the reviewed manifest bootstrap, App installation expansion, and review-only bypass audit for both active protection layers.
