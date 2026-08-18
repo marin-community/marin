@@ -157,7 +157,10 @@ message WriteRowsRequest {
   // Arrow schema must be a subset of (or equal to) the registered schema:
   // every column name must exist in the registry with a matching Arrow
   // type. Missing nullable columns are filled with NULL on append.
-  // Unknown column names raise SchemaValidationError.
+  // Unknown column names raise SchemaValidationError. The one federation
+  // exception is JWT-forwarded telemetry_v1: its server-owned hub schema wins,
+  // and candidate-only nullable columns are discarded while known columns are
+  // appended. Required unknown columns and known-column type conflicts still fail.
   bytes arrow_ipc = 2;
 }
 

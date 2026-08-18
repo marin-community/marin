@@ -45,6 +45,12 @@ pub const LOG_NAMESPACE_DIR: &str = "log";
 /// process-shutdown drain budget passed to [`Store::shutdown`] at SIGTERM.
 const NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[derive(Clone, Copy)]
+enum WriteSchemaPolicy {
+    Strict,
+    IgnoreUnknownNullable,
+}
+
 /// Registered schema for the privileged `log` namespace; `key_column = "key"`.
 ///
 /// The original five columns (key/source/data/epoch_ms/level) are non-nullable.
@@ -437,10 +443,44 @@ impl Store {
         arrow_ipc: &[u8],
         origin_cluster: Option<&str>,
     ) -> Result<(i64, i64), StatsError> {
+        let (rows_written, last_seq, ignored_columns) = self.write_rows_with_policy(
+            name,
+            arrow_ipc,
+            origin_cluster,
+            WriteSchemaPolicy::Strict,
+        )?;
+        debug_assert!(ignored_columns.is_empty());
+        Ok((rows_written, last_seq))
+    }
+
+    /// Append telemetry forwarded by another Finelog while preserving the hub's
+    /// server-owned schema. Unknown nullable columns are omitted and returned for
+    /// observability; all other validation remains strict.
+    pub fn write_forwarded_telemetry_rows(
+        &self,
+        name: &str,
+        arrow_ipc: &[u8],
+        origin_cluster: &str,
+    ) -> Result<(i64, i64, Vec<String>), StatsError> {
+        self.write_rows_with_policy(
+            name,
+            arrow_ipc,
+            Some(origin_cluster),
+            WriteSchemaPolicy::IgnoreUnknownNullable,
+        )
+    }
+
+    fn write_rows_with_policy(
+        &self,
+        name: &str,
+        arrow_ipc: &[u8],
+        origin_cluster: Option<&str>,
+        schema_policy: WriteSchemaPolicy,
+    ) -> Result<(i64, i64, Vec<String>), StatsError> {
         use crate::store::ipc::decode_one_record_batch;
         use crate::store::schema::{
-            stamp_cluster_column, validate_and_align_batch, MAX_WRITE_ROWS_BYTES,
-            MAX_WRITE_ROWS_ROWS,
+            stamp_cluster_column, validate_and_align_batch, validate_and_align_forwarded_batch,
+            MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
         };
 
         if arrow_ipc.len() > MAX_WRITE_ROWS_BYTES {
@@ -457,13 +497,21 @@ impl Store {
             )));
         }
         let engine = self.require_engine(name)?;
-        let mut aligned: AlignedBatch = validate_and_align_batch(&batch, engine.schema())?;
+        let (mut aligned, ignored_columns): (AlignedBatch, Vec<String>) = match schema_policy {
+            WriteSchemaPolicy::Strict => (
+                validate_and_align_batch(&batch, engine.schema())?,
+                Vec::new(),
+            ),
+            WriteSchemaPolicy::IgnoreUnknownNullable => {
+                validate_and_align_forwarded_batch(&batch, engine.schema())?
+            }
+        };
         if let Some(origin) = origin_cluster {
             stamp_cluster_column(&mut aligned, origin);
         }
         let n = aligned.num_rows as i64;
         let last_seq = engine.append_aligned_batch(&aligned);
-        Ok((n, last_seq))
+        Ok((n, last_seq, ignored_columns))
     }
 
     /// Append log columns to the reserved `log` namespace, returning the last

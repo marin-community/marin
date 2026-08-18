@@ -1049,6 +1049,41 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
     Ok(merged_schema)
 }
 
+/// Validate a forwarded schema against an existing server-owned hub schema.
+///
+/// The hub does not adopt physical layout or additional telemetry columns from a
+/// federated sender. Returning the nullable additions lets the RPC layer report what
+/// it ignored; shared columns must retain their registered type, and an unknown
+/// non-nullable column is rejected rather than acknowledged and discarded.
+pub fn ignored_forwarded_schema_columns(
+    requested: &Schema,
+    registered: &Schema,
+) -> Result<Vec<String>, StatsError> {
+    let mut ignored = Vec::new();
+    for requested_column in &requested.columns {
+        match registered.column(&requested_column.name) {
+            Some(registered_column) if registered_column.r#type != requested_column.r#type => {
+                return Err(StatsError::SchemaConflict(format!(
+                    "column {:?}: type mismatch registered={} requested={}",
+                    requested_column.name,
+                    column_type_name(registered_column.r#type),
+                    column_type_name(requested_column.r#type),
+                )));
+            }
+            Some(_) => {}
+            None if requested_column.nullable => ignored.push(requested_column.name.clone()),
+            None => {
+                return Err(StatsError::SchemaConflict(format!(
+                    "unknown required column {:?} not in registered schema",
+                    requested_column.name
+                )));
+            }
+        }
+    }
+    ignored.sort();
+    Ok(ignored)
+}
+
 // ---------------------------------------------------------------------------
 // Per-batch validation: Arrow IPC schema vs registered schema.
 //
@@ -1176,12 +1211,42 @@ pub fn validate_and_align_batch(
     batch: &RecordBatch,
     registered: &Schema,
 ) -> Result<AlignedBatch, StatsError> {
+    let (aligned, ignored_columns) =
+        validate_and_align_batch_with_policy(batch, registered, UnknownColumnPolicy::Reject)?;
+    debug_assert!(ignored_columns.is_empty());
+    Ok(aligned)
+}
+
+/// Align a batch from a federated telemetry writer to the hub's server-owned schema.
+///
+/// Unknown nullable columns are omitted so a canary producer cannot poison the known
+/// telemetry rows in the same batch. Unknown required columns remain an error: dropping
+/// one would falsely acknowledge data the sender declared essential. All registered
+/// columns retain the strict type and presence checks of [`validate_and_align_batch`].
+pub fn validate_and_align_forwarded_batch(
+    batch: &RecordBatch,
+    registered: &Schema,
+) -> Result<(AlignedBatch, Vec<String>), StatsError> {
+    validate_and_align_batch_with_policy(batch, registered, UnknownColumnPolicy::IgnoreNullable)
+}
+
+#[derive(Clone, Copy)]
+enum UnknownColumnPolicy {
+    Reject,
+    IgnoreNullable,
+}
+
+fn validate_and_align_batch_with_policy(
+    batch: &RecordBatch,
+    registered: &Schema,
+    unknown_column_policy: UnknownColumnPolicy,
+) -> Result<(AlignedBatch, Vec<String>), StatsError> {
     let decoded = decode_dictionary_columns(batch)?;
     let decoded_schema = decoded.schema();
 
     // Build name -> (field, array) map of the inbound batch, rejecting
     // duplicates and the reserved `seq` column.
-    let mut by_name_batch: std::collections::HashMap<&str, (DataType, ArrayRef)> =
+    let mut by_name_batch: std::collections::HashMap<&str, (DataType, bool, ArrayRef)> =
         std::collections::HashMap::new();
     for (i, field) in decoded_schema.fields().iter().enumerate() {
         let name = field.name().as_str();
@@ -1197,20 +1262,40 @@ pub fn validate_and_align_batch(
         }
         by_name_batch.insert(
             name,
-            (field.data_type().clone(), Arc::clone(decoded.column(i))),
+            (
+                field.data_type().clone(),
+                field.is_nullable(),
+                Arc::clone(decoded.column(i)),
+            ),
         );
     }
 
-    // Reject any inbound column not in the registered schema.
+    // A local write must exactly follow the registered schema. Federated telemetry is
+    // allowed to be one nullable column ahead of its hub: the hub keeps its canonical
+    // schema and discards only those optional values rather than the entire row batch.
     let registered_names: std::collections::HashSet<&str> =
         registered.columns.iter().map(|c| c.name.as_str()).collect();
-    for name in by_name_batch.keys() {
+    let mut ignored_columns = Vec::new();
+    for (name, (_, nullable, _)) in &by_name_batch {
         if !registered_names.contains(name) {
-            return Err(StatsError::SchemaValidation(format!(
-                "unknown column {name:?} not in registered schema"
-            )));
+            match unknown_column_policy {
+                UnknownColumnPolicy::IgnoreNullable if *nullable => {
+                    ignored_columns.push((*name).to_string());
+                }
+                UnknownColumnPolicy::IgnoreNullable => {
+                    return Err(StatsError::SchemaValidation(format!(
+                        "unknown required column {name:?} not in registered schema"
+                    )));
+                }
+                UnknownColumnPolicy::Reject => {
+                    return Err(StatsError::SchemaValidation(format!(
+                        "unknown column {name:?} not in registered schema"
+                    )));
+                }
+            }
         }
     }
+    ignored_columns.sort();
 
     let n_rows = decoded.num_rows();
     let mut aligned_arrays: Vec<ArrayRef> = Vec::new();
@@ -1223,7 +1308,7 @@ pub fn validate_and_align_batch(
         let arrow_dt =
             arrow_type_for(col.r#type).expect("registered column has a known Arrow type");
         match by_name_batch.get(col.name.as_str()) {
-            Some((actual_dt, array)) => {
+            Some((actual_dt, _, array)) => {
                 let actual_type = arrow_to_column_type(actual_dt)?;
                 if actual_type != col.r#type {
                     return Err(StatsError::SchemaValidation(format!(
@@ -1266,12 +1351,15 @@ pub fn validate_and_align_batch(
         aligned_fields.push(Field::new(&col.name, arrow_dt, col.nullable));
     }
 
-    Ok(AlignedBatch {
-        arrays: aligned_arrays,
-        fields: aligned_fields,
-        num_rows: n_rows,
-        byte_size,
-    })
+    Ok((
+        AlignedBatch {
+            arrays: aligned_arrays,
+            fields: aligned_fields,
+            num_rows: n_rows,
+            byte_size,
+        },
+        ignored_columns,
+    ))
 }
 
 /// Overwrite the aligned batch's implicit origin `cluster` column with `origin`

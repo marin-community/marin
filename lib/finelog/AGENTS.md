@@ -61,6 +61,13 @@ of a table with a `cluster` column are stamped with the origin and skipped if th
 already carry a foreign one, so a hub's own relayed rows never loop. The cursor is
 durable, so a restart resumes rather than replays.
 
+`telemetry_v1` is server-owned at both ends of federation. A JWT sender's
+`RegisterTable` cannot evolve an existing hub telemetry schema or its physical layout.
+If the sender is ahead by an optional column, the hub reports the ignored column once,
+drops that column from forwarded batches, and appends the compatible fields. Required
+unknown columns and shared-column type changes remain errors. Other namespaces retain
+ordinary additive registration.
+
 Forwarding is **best-effort by construction**: the sending store holds the record,
 the hub a convenience copy. A backlog is a durable cursor into the sender's bounded
 local retention rather than a separate queue, so the forwarder drains it without an

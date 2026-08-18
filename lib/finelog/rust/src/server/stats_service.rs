@@ -5,7 +5,8 @@
 //! result is decoded into proto messages back on the async side. The wire
 //! `effective_schema` strips the implicit `seq` column.
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
 use buffa::MessageField;
 use connectrpc::{ConnectError, RequestContext, ServiceResult};
@@ -20,21 +21,48 @@ use crate::proto::finelog::stats::{
 };
 use crate::query::{make_ctx, query_timeout, run_query_over, truncate_sql_for_log};
 use crate::server::auth::{request_identity, AuthIdentity};
+use crate::server::telemetry::TELEMETRY_NAMESPACE;
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::ipc::encode_ipc;
 use crate::store::namespace::DEFAULT_PERSIST_TIMEOUT;
 use crate::store::policy::StoragePolicy;
-use crate::store::schema::{schema_from_proto_view, schema_to_proto_owned, Schema};
+use crate::store::schema::{
+    ignored_forwarded_schema_columns, schema_from_proto_view, schema_to_proto_owned, Schema,
+};
 use crate::store::Store;
 
 pub struct StatsServiceImpl {
     store: Arc<Store>,
+    ignored_forwarded_telemetry_columns: Mutex<HashSet<String>>,
 }
 
 impl StatsServiceImpl {
     pub fn new(store: Arc<Store>) -> Self {
-        Self { store }
+        Self {
+            store,
+            ignored_forwarded_telemetry_columns: Mutex::new(HashSet::new()),
+        }
     }
+
+    fn report_ignored_forwarded_telemetry_columns(&self, columns: Vec<String>) {
+        let mut seen = self.ignored_forwarded_telemetry_columns.lock().unwrap();
+        let new_columns: Vec<String> = columns
+            .into_iter()
+            .filter(|column| seen.insert(column.clone()))
+            .collect();
+        if !new_columns.is_empty() {
+            tracing::warn!(
+                namespace = TELEMETRY_NAMESPACE,
+                columns = ?new_columns,
+                "finelog hub: ignoring candidate-only nullable telemetry columns",
+            );
+        }
+    }
+}
+
+fn is_forwarded_telemetry(ctx: &RequestContext, namespace: &str) -> bool {
+    namespace == TELEMETRY_NAMESPACE
+        && matches!(request_identity(ctx), Some(AuthIdentity::Jwt { .. }))
 }
 
 /// Run a blocking store closure on the blocking pool, mapping a JoinError to
@@ -98,7 +126,7 @@ fn map_query_error(e: DataFusionError) -> ConnectError {
 impl StatsService for StatsServiceImpl {
     async fn register_table(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         request: OwnedRegisterTableRequestView,
     ) -> ServiceResult<RegisterTableResponse> {
         let namespace = request
@@ -111,15 +139,28 @@ impl StatsService for StatsServiceImpl {
             .ok_or_else(|| ConnectError::invalid_argument("schema required"))?;
         let schema: Schema = schema_from_proto_view(schema_view)?;
         let policy = StoragePolicy::from_proto_view(request.storage_policy.as_option());
+        let forwarded_telemetry = is_forwarded_telemetry(&ctx, &namespace);
 
         let store = Arc::clone(&self.store);
         let ns = namespace.clone();
-        let (effective, effective_policy) = run_blocking(move || {
+        let (effective, effective_policy, ignored_columns) = run_blocking(move || {
+            if forwarded_telemetry {
+                match store.get_table_schema(&ns) {
+                    Ok(effective) => {
+                        let ignored = ignored_forwarded_schema_columns(&schema, &effective)?;
+                        let effective_policy = store.get_policy(&ns)?;
+                        return Ok((effective, effective_policy, ignored));
+                    }
+                    Err(StatsError::NamespaceNotFound(_)) => {}
+                    Err(error) => return Err(error),
+                }
+            }
             let effective = store.register_table(&ns, schema, policy)?;
             let effective_policy = store.get_policy(&ns)?;
-            Ok((effective, effective_policy))
+            Ok((effective, effective_policy, Vec::new()))
         })
         .await?;
+        self.report_ignored_forwarded_telemetry_columns(ignored_columns);
 
         connectrpc::Response::ok(RegisterTableResponse {
             effective_schema: MessageField::some(schema_to_proto_owned(&effective)),
@@ -143,14 +184,28 @@ impl StatsService for StatsServiceImpl {
         // Resolve the origin cluster from the credential before the blocking
         // hop so a forwarding writer's rows are stamped with its cluster.
         let origin_cluster = write_origin_cluster(&ctx)?;
+        let forwarded_telemetry = origin_cluster.is_some() && namespace == TELEMETRY_NAMESPACE;
 
         // Decode + validate + align + append on the blocking pool; the size/row
         // caps and IPC decode live in `Store::write_rows`.
         let store = Arc::clone(&self.store);
         let ns = namespace.clone();
-        let (rows_written, last_seq) =
-            run_blocking(move || store.write_rows(&ns, &arrow_ipc, origin_cluster.as_deref()))
-                .await?;
+        let (rows_written, last_seq, ignored_columns) = run_blocking(move || {
+            if forwarded_telemetry {
+                return store.write_forwarded_telemetry_rows(
+                    &ns,
+                    &arrow_ipc,
+                    origin_cluster
+                        .as_deref()
+                        .expect("forwarded telemetry has an origin cluster"),
+                );
+            }
+            let (rows_written, last_seq) =
+                store.write_rows(&ns, &arrow_ipc, origin_cluster.as_deref())?;
+            Ok((rows_written, last_seq, Vec::new()))
+        })
+        .await?;
+        self.report_ignored_forwarded_telemetry_columns(ignored_columns);
 
         // The server does not auto-cancel on the client deadline; enforce the
         // durability await ourselves, bounded by the remaining budget (falling

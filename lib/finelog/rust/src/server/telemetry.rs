@@ -36,7 +36,7 @@ use crate::store::Store;
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 8;
 pub const DEFAULT_DEDUPE_CAPACITY: usize = 10_000;
 
-const TELEMETRY_NAMESPACE: &str = "telemetry_v1";
+pub(crate) const TELEMETRY_NAMESPACE: &str = "telemetry_v1";
 const MAX_BODY_BYTES: usize = 4 << 20;
 const MAX_NORMALIZED_BYTES: usize = 16 << 20;
 const MAX_RECORDS: usize = 10_000;
@@ -814,7 +814,7 @@ fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<u8>, ApiError> {
     })
 }
 
-fn telemetry_schema() -> Schema {
+pub(crate) fn telemetry_schema() -> Schema {
     Schema::new(
         vec![
             Column::new("schema_version", ColumnType::COLUMN_TYPE_INT32, false),
