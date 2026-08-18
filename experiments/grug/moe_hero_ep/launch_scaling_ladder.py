@@ -110,6 +110,7 @@ def build_ladder_run(
     run_id: str,
     size: str,
     num_steps: int | None = None,
+    checkpoint_every: int | None = None,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
@@ -118,6 +119,8 @@ def build_ladder_run(
     parameter at the rung's (rack-scaled) batch. Every eval scores the held-out set both as-trained
     and dropless. The narrow rungs eval every 5% of the run and keep only the forced final
     checkpoint; the d6144 hero evals every 3000 steps and keeps a permanent checkpoint every 6000.
+    ``checkpoint_every`` overrides that cadence for any rung. Checkpoints are output-only: an
+    offloaded run cannot restore from one, so they serve analysis rather than crash recovery.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -146,6 +149,8 @@ def build_ladder_run(
     else:
         steps_per_eval = max(1, round(num_steps / 20))
         keep_permanent = None
+    if checkpoint_every is not None:
+        keep_permanent = [{"every": checkpoint_every}]
 
     # The optimizer's LR/epsilon are compute-scaled from the token budget and width; the hero builder
     # already does this at d6144, so reuse it there and the shared MoeHeuristic at the narrow rungs.
@@ -279,9 +284,18 @@ def build_ladder_run(
     default=None,
     help="Training steps. Default trains 791 tokens per active parameter at the rung's batch.",
 )
+@click.option(
+    "--checkpoint-every",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Keep a permanent checkpoint every N steps. Default follows the rung (6000 at d6144, "
+    "final only elsewhere). Checkpoints are output-only; an offloaded run cannot restore from one.",
+)
 @build_options
-def main(run_id: str, size: str, num_steps: int | None) -> ArtifactStep[HeroThroughputResult]:
-    return build_ladder_run(run_id=run_id, size=size, num_steps=num_steps)
+def main(
+    run_id: str, size: str, num_steps: int | None, checkpoint_every: int | None
+) -> ArtifactStep[HeroThroughputResult]:
+    return build_ladder_run(run_id=run_id, size=size, num_steps=num_steps, checkpoint_every=checkpoint_every)
 
 
 if __name__ == "__main__":
