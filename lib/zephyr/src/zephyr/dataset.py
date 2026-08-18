@@ -422,17 +422,7 @@ class Dataset(Generic[T]):
         patterns: Sequence[str],
         empty_glob_ok: bool = False,
     ) -> "Dataset[str]":
-        """Create a dataset from multiple file glob patterns.
-
-        Overlapping patterns are deduplicated after expansion.
-
-        Args:
-            patterns: Glob patterns resolved at plan time.
-            empty_glob_ok: If true, no matches produce an empty dataset.
-
-        Returns:
-            Dataset of unique input file paths.
-        """
+        """Create a dataset from unique files matched by one or more patterns."""
         return Dataset(GlobSource(tuple(patterns), empty_glob_ok))
 
     def map(self, fn: Callable[[T], R]) -> "Dataset[R]":
