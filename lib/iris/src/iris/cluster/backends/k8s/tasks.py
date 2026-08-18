@@ -1155,13 +1155,14 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
     # Failed or Unknown -- distinguish infrastructure vs application failure. The
     # error field carries the failure story, so clear the waiting one-liner.
     exit_code = _extract_exit_code(pod)
+    new_state = _pod_failure_state(pod)
     terminal_reason = _extract_terminal_reason(pod)
     return TaskUpdate(
         task_id=task_id,
         attempt_id=attempt_id,
-        new_state=_pod_failure_state(pod),
+        new_state=new_state,
         exit_code=exit_code,
-        error=terminal_reason,
+        error=terminal_reason if new_state == job_pb2.TASK_STATE_PREEMPTED else _extract_error(pod),
         status_message="",
         terminal_reason=terminal_reason,
         **identity,
@@ -1189,6 +1190,8 @@ def _extract_error(pod: dict) -> str | None:
     message = terminated.get("message", "")
     if reason == "Completed":
         return message or None
+    if message and reason and reason != "Error":
+        return f"{reason}: {message}"
     return message or reason or None
 
 
