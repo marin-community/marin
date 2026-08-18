@@ -1,18 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run the S3-backed Zephyr stages of the Datakit reference pipeline.
+"""Run the Zephyr stages of the Datakit reference pipeline on GCS or S3.
 
 The benchmark starts from an existing normalized Datakit sample, so its measured
 pipeline does not include Hugging Face corpus download time. It runs global exact
 deduplication, per-source tokenization and MinHash, then cross-source fuzzy dedup.
 Every generated stage output is routed under a seven-day temporary prefix keyed by
-the required run tag.
+the required run tag. ``--sample-prefix`` defaults to the 100B GCS sample in
+``us-central1``; pass the equivalent S3 path to run on CoreWeave.
 
 Example::
 
     python -m experiments.datakit.zephyr_benchmark \
-        --sample-prefix s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f \
         --sources all --run-tag zephyr-100b-v1 \
         --pool-workers 60 --pool-cpu 16 --pool-ram 160g --pool-disk 32g \
         --first-stage exact --last-stage fuzzy \
@@ -41,6 +41,8 @@ from experiments.datakit.reference_pipeline import (
 
 BENCHMARK_OUTPUT_TTL_DAYS = 7
 BENCHMARK_OUTPUT_PREFIX = "zephyr-benchmark"
+GCP_BENCHMARK_SAMPLE_PREFIX = "gs://marin-us-central1/datakit/sample_100b_8ae7a94f"
+COREWEAVE_BENCHMARK_SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f"
 
 
 class BenchmarkStage(StrEnum):
@@ -87,7 +89,11 @@ def _route_outputs(steps: ZephyrDatakitSteps, output_prefix: str) -> ZephyrDatak
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sample-prefix", required=True)
+    parser.add_argument(
+        "--sample-prefix",
+        default=GCP_BENCHMARK_SAMPLE_PREFIX,
+        help=f"Pre-normalized sample root (default: {GCP_BENCHMARK_SAMPLE_PREFIX}).",
+    )
     parser.add_argument("--sources", required=True, help="Comma-separated source names or 'all'.")
     parser.add_argument("--run-tag", required=True, help="Fresh identity tag that forces uncached benchmark stages.")
     parser.add_argument("--pool-workers", required=True, type=int)
