@@ -204,7 +204,11 @@ DOMAIN_ASSIGN_BATCH_SIZE = 4096
 # also hash the run id into their own steps.
 EXACT_DUPS_ID = "global_exact_dedup_af4c6c3e"
 FUZZY_DUPS_ID = "dedup_709f5997"
-VERIFIED_FUZZY_DUPS_PATH = "datakit/verify_fuzzy_dups_c757e4f0"
+# Verification against whole materialized clusters rather than a bounded set of
+# local representatives, at containment 0.60 on word 3-grams. It reads the
+# repacked candidates, so it keys all 292 sources the way normalize keys them
+# today, and it records the rule that deleted each document.
+VERIFIED_FUZZY_DUPS_PATH = "user/rav/dedup/verified/v11-c060"
 
 # The key the two candidate runs filed the focus crawl under: its jusText
 # extraction, read as a finished source before #8111 sent it through
