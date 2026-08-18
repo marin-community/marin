@@ -952,7 +952,11 @@ class MoEMLP(eqx.Module):
                 in_specs=(P(_BATCH_AXES, None),),
                 out_specs=P(),
             )(s_minus_alpha)
-            zero = jnp.zeros((), dtype=jnp.float32)
+            # The HIST branch's margins come out of a `shard_map`, so they carry an explicit
+            # replicated sharding that `scan` extends to the per-layer rank. A bare `jnp.zeros`
+            # carries none, and the stacked result keeps a rank-0 `P()` spec on a rank-1 array,
+            # which the runtime rejects on a real mesh. Reshard so both branches agree.
+            zero = reshard(jnp.zeros((), dtype=jnp.float32), P())
             router_stats["margin_min"] = zero
             router_stats["margin_max"] = zero
 

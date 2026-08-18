@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import math
 import os
 import subprocess
@@ -745,6 +746,32 @@ def test_train_step_logs_bias_stats_for_the_pending_betas():
     assert set(expected) <= set(metrics)
     for key, value in expected.items():
         assert float(metrics[key]) == pytest.approx(value)
+
+
+def test_both_qb_estimators_produce_identically_sharded_router_metrics():
+    # The HIST margins come out of a shard_map and carry an explicit replicated sharding;
+    # the TOPK branch fabricates them. When it did so with a bare jnp.zeros the stacked
+    # result kept a rank-0 P() spec on a rank-1 array, which a real mesh rejects at runtime
+    # with RuntimeProgramInputMismatch -- while single-device CPU happily ran either way.
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    tokens = jnp.ones((1, 8), dtype=jnp.int32)
+
+    def router_metrics(estimator):
+        cfg = dataclasses.replace(
+            _latent_config(), qb_estimator=estimator, qb_hist_bins=64, report_capacity_overflow=True
+        )
+        with set_mesh(mesh):
+            return jax.jit(lambda t: model.Transformer.init(cfg, key=jax.random.key(0))(t)[1])(tokens)
+
+    topk = router_metrics(model.QbEstimator.TOPK)
+    hist = router_metrics(model.QbEstimator.HIST)
+
+    assert set(topk) == set(hist)
+    for key in sorted(topk):
+        assert topk[key].shape == hist[key].shape, key
+        assert (
+            topk[key].sharding.spec == hist[key].sharding.spec
+        ), f"{key}: topk {topk[key].sharding.spec} vs hist {hist[key].sharding.spec}"
 
 
 class _TinyWatchModel(eqx.Module):
