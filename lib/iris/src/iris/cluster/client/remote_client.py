@@ -399,6 +399,10 @@ class RemoteClusterClient:
         request = controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire())
         self._client.terminate_job(request)
 
+    def complete_job(self, job_id: JobName) -> None:
+        request = controller_pb2.Controller.CompleteJobRequest(job_id=job_id.to_wire())
+        self._client.complete_job(request)
+
     def register_endpoint(
         self,
         name: str,

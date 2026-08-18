@@ -32,11 +32,11 @@ _VISIBLE_DEVICES = "CUDA_VISIBLE_DEVICES"
 _NODE_NAME = "SLURMD_NODENAME"
 
 
-def _terminate_iris_job_after_clean_exit(client: IrisClient, job_id: JobName) -> None:
+def _complete_iris_job_after_clean_exit(client: IrisClient, job_id: JobName) -> None:
     # Preserve retries for genuine failures; the successful rank-0 exit owns completed-job teardown.
     if getattr(sys, "last_exc", None) is not None:
         return
-    client.terminate(job_id)
+    client.complete(job_id)
 
 
 class LevanterSlurmCluster(clusters.SlurmCluster):
@@ -240,9 +240,9 @@ class DistributedConfig:
             if jax.process_index() == 0:
                 ctx = iris_ctx()
                 if ctx.client is None:
-                    raise RuntimeError("Iris context has no client for terminating the current job")
-                # Tracker exit hooks register later and therefore run before job termination.
-                atexit.register(_terminate_iris_job_after_clean_exit, ctx.client, job_info.job_id)
+                    raise RuntimeError("Iris context has no client for completing the current job")
+                # Tracker exit hooks register later and therefore run before job completion.
+                atexit.register(_complete_iris_job_after_clean_exit, ctx.client, job_info.job_id)
         elif self._is_distributed():
             device_ids = self.local_device_ids
             coordinator_address = self.coordinator_address

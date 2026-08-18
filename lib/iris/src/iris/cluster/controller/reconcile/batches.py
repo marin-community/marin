@@ -92,6 +92,31 @@ def _kill_non_terminal_tasks(overlay: Overlay, job_id: JobName, reason: str, now
         )
 
 
+def _complete_non_terminal_tasks(overlay: Overlay, job_id: JobName, reason: str, now_ms: int) -> None:
+    """Complete all unfinished tasks for a job and stop their active attempts."""
+    for row in overlay.active_tasks_for_job(job_id, states=NON_TERMINAL_TASK_STATES):
+        task.merge_task_termination(
+            overlay,
+            row.task_id.to_wire(),
+            row.current_attempt_id,
+            job_pb2.TASK_STATE_SUCCEEDED,
+            None,
+            now_ms,
+            stamp_attempt_finished=False,
+            exit_code=0,
+        )
+        overlay.emit_task_event(
+            TaskActionEvent(
+                task_id=row.task_id,
+                attempt_id=row.current_attempt_id,
+                ts=Timestamp.from_ms(now_ms),
+                reason=TaskActionReason.JOB_COMPLETED_TASK_SUCCEEDED,
+                message=reason,
+                severity=TaskEventSeverity.NORMAL,
+            )
+        )
+
+
 def _cascade_to_children(
     overlay: Overlay,
     job_id: JobName,
@@ -315,6 +340,26 @@ class ReconcileState:
         self.overlay.emit_log_event(
             LogEvent(action="job_cancelled", entity_id=job_id.to_wire(), details=(("reason", reason),))
         )
+        return self.overlay.effects
+
+    def complete_job(self, job_id: JobName, now: Timestamp) -> ControllerEffects:
+        """Complete a running job successfully and stop its unfinished tasks."""
+        basis = self._snapshot.job_state_basis.get(job_id)
+        if basis is None or basis.state in TERMINAL_JOB_STATES:
+            return self.overlay.effects
+
+        now_ms = now.epoch_ms()
+        reason = "Job completed successfully"
+        _complete_non_terminal_tasks(self.overlay, job_id, reason, now_ms)
+        self.overlay.merge_job_state(
+            JobRowDelta(
+                job_id=job_id,
+                state=job_pb2.JOB_STATE_SUCCEEDED,
+                finished_at=Timestamp.from_ms(now_ms),
+            )
+        )
+        _finalize_terminal_job(self.overlay, job_id, job_pb2.JOB_STATE_SUCCEEDED, now_ms)
+        self.overlay.emit_log_event(LogEvent(action="job_completed", entity_id=job_id.to_wire()))
         return self.overlay.effects
 
     # ------------------------------------------------------------------

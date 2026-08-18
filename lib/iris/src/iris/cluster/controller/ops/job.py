@@ -366,6 +366,18 @@ def cancel(
     cur.caches[EndpointsProjection].remove_by_job_ids(cur, subtree)
 
 
+def complete(cur: Tx, *, job_id: JobName) -> None:
+    """Complete ``job_id`` successfully and stop its unfinished task attempts."""
+    now = Timestamp.now()
+    snapshot = load_closed_snapshot(cur, now=now, seed_job_ids=[job_id])
+    if job_id not in snapshot.job_configs:
+        return
+    effects = ReconcileState.open(snapshot).complete_job(job_id, now)
+    commit_effects(cur, effects)
+    subtree = [job_id, *snapshot.job_descendants[job_id].descendants]
+    cur.caches[EndpointsProjection].remove_by_job_ids(cur, subtree)
+
+
 def remove_finished(
     cur: Tx,
     job_id: JobName,

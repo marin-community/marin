@@ -52,6 +52,9 @@ def main() -> None:
     except BaseException as exc:  # noqa: BLE001 - map to the exit-code contract, then re-signal
         fault_class = classify_exception(exc)
         logger.exception("trainer subprocess raised; classified as %s", fault_class)
+        # atexit cannot observe SystemExit's nonzero status, so retain the failure
+        # for Levanter's clean-exit hooks before translating it to the supervisor code.
+        sys.last_exc = exc
         if fault_class is FaultClass.STICKY:
             sys.exit(EXIT_STICKY_FAULT)
         if fault_class is FaultClass.STALL:

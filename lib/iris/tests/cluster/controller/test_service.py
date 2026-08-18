@@ -878,6 +878,30 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, 
     assert status.job.state == job_pb2.JOB_STATE_PENDING
 
 
+def test_complete_job_rejected_for_non_owner(state, mock_controller, tmp_path, log_client):
+    auth_service = ControllerServiceImpl(
+        controller=mock_controller,
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_complete_owner")),
+        log_client=log_client,
+        db=state._db,
+        auth=ControllerAuth(provider="static"),
+        endpoint_service=EndpointServiceImpl(db=state._db),
+    )
+    auth_service.launch_job(make_job_request("/alice/my-job"), None)
+
+    token = _verified_identity.set(VerifiedIdentity(user_id="bob", role="user"))
+    try:
+        request = controller_pb2.Controller.CompleteJobRequest(job_id="/alice/my-job")
+        with pytest.raises(ConnectError) as exc_info:
+            auth_service.complete_job(request, None)
+        assert exc_info.value.code == Code.PERMISSION_DENIED
+    finally:
+        _verified_identity.reset(token)
+
+    status = auth_service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id="/alice/my-job"), None)
+    assert status.job.state == job_pb2.JOB_STATE_PENDING
+
+
 def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_path, log_client):
     """Cannot submit a child job under another user's hierarchy."""
     auth_service = ControllerServiceImpl(
