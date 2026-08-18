@@ -59,10 +59,8 @@ from zephyr.stats import (
     ZEPHYR_WORKER_MEM_AVERAGE_KEY,
     ZEPHYR_WORKER_MEM_CURRENT_KEY,
     ZEPHYR_WORKER_MEM_PEAK_KEY,
-    StatsWriter,
-    ZephyrWorkerStatStatus,
 )
-from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, _worker_ctx_var
+from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, _worker_ctx_var, merge_counter_entries
 
 logger = logging.getLogger(__name__)
 
@@ -71,13 +69,17 @@ __all__ = ["InlineRunner", "StageRunner", "SubprocessRunner"]
 
 
 SUBPROCESS_STATS_INTERVAL = 5.0
-"""How often the subprocess child samples and emits its stats to finelog and
-flushes its counters.
+"""How often runners sample resource use and flush subprocess counters.
 
 Matches the parent's heartbeat cadence so each beat reads at most one stale
 snapshot before a fresh flush lands.
 """
 
+_ACCUMULATED_RESOURCE_COUNTER_KEYS = (
+    ZEPHYR_WORKER_CPU_PCT_AVERAGE_KEY,
+    ZEPHYR_WORKER_MEM_AVERAGE_KEY,
+    ZEPHYR_WORKER_MEM_PEAK_KEY,
+)
 
 # ---------------------------------------------------------------------------
 # Shared worker context + stats wrapping (used by both runners)
@@ -214,100 +216,59 @@ def _periodic_sampler(
     interval: float,
     *,
     cpu_s_at_start: float,
-    stats_writer: StatsWriter,
-    task: ShardTask,
-    execution_id: str,
-    start_time: float,
     proc: psutil.Process,
 ) -> None:
-    """Periodically sample process stats and emit RUNNING rows to finelog.
-
-    ``stats_writer.emit_worker_stat`` is itself a no-op when finelog is
-    unavailable, so no gating is needed here.
-    """
+    """Periodically sample process stats into the shard context."""
     while not stop_event.wait(timeout=interval):
         try:
             _sample_process_stats(cpu_s_at_start, proc, ctx)
-            stats_writer.emit_worker_stat(
-                task.stage_name,
-                task.shard_idx,
-                execution_id,
-                ZephyrWorkerStatStatus.RUNNING,
-                start_time,
-                ctx.get_counters(),
-            )
         except Exception:
-            logger.warning("Failed to sample/emit process stats", exc_info=True)
+            logger.warning("Failed to sample process stats", exc_info=True)
 
 
 @contextmanager
-def _shard_stats_session(
+def _shard_counter_session(
     ctx: _InProcessWorkerContext,
-    task: ShardTask,
-    execution_id: str,
-    stats_writer: StatsWriter,
     *,
-    sampler_thread_name: str,
+    sample_interval: float | None,
+    sampler_thread_name: str | None,
 ) -> Iterator[float]:
-    """Emit START/END worker stats and run the resource sampler for one shard.
-
-    Shared by ``InlineRunner.execute`` and the ``SubprocessRunner`` child: both
-    need the same lifecycle around the shard body — prime ``psutil`` so
-    ``cpu_percent`` has a baseline, record the CPU-time origin so samples are
-    per-shard deltas, emit the START row, run the periodic sampler, then take a
-    final sample and emit END (or FAILED if the body raised).
-
-    Yields the shard's monotonic start time, which callers reuse for their own
-    elapsed-time reporting.
-    """
+    """Sample shard resource counters periodically and once at completion."""
     proc = psutil.Process()
     proc.cpu_percent()  # prime so subsequent calls have a baseline
     cpu_times_at_start = proc.cpu_times()
     cpu_s_at_start = cpu_times_at_start.user + cpu_times_at_start.system
     start_time = time.monotonic()
 
-    stats_writer.emit_worker_stat(
-        task.stage_name, task.shard_idx, execution_id, ZephyrWorkerStatStatus.START, start_time, ctx.get_counters()
-    )
-
     stop_event = threading.Event()
-    sampler = threading.Thread(
-        target=_periodic_sampler,
-        kwargs={
-            "stop_event": stop_event,
-            "ctx": ctx,
-            "interval": SUBPROCESS_STATS_INTERVAL,
-            "cpu_s_at_start": cpu_s_at_start,
-            "stats_writer": stats_writer,
-            "task": task,
-            "execution_id": execution_id,
-            "start_time": start_time,
-            "proc": proc,
-        },
-        daemon=True,
-        name=sampler_thread_name,
-    )
-    sampler.start()
+    sampler: threading.Thread | None = None
+    if sample_interval is not None:
+        assert sampler_thread_name is not None
+        sampler = threading.Thread(
+            target=_periodic_sampler,
+            kwargs={
+                "stop_event": stop_event,
+                "ctx": ctx,
+                "interval": sample_interval,
+                "cpu_s_at_start": cpu_s_at_start,
+                "proc": proc,
+            },
+            daemon=True,
+            name=sampler_thread_name,
+        )
+        sampler.start()
 
-    failed = True  # cleared only when the body completes without raising
     try:
         yield start_time
-        failed = False
     finally:
         stop_event.set()
-        sampler.join(timeout=2.0)
-        if not sampler.is_alive():
-            # Final reading so the END row reflects the shard's true peak rather
-            # than the last periodic tick. Telemetry must not fail a shard that
-            # already produced its result, so a sampling error is logged only.
+        if sampler is not None:
+            sampler.join(timeout=2.0)
+        if sampler is None or not sampler.is_alive():
             try:
                 _sample_process_stats(cpu_s_at_start, proc, ctx)
             except Exception:
                 logger.warning("Failed to take final process stats sample", exc_info=True)
-        status = ZephyrWorkerStatStatus.FAILED if failed else ZephyrWorkerStatStatus.END
-        stats_writer.emit_worker_stat(
-            task.stage_name, task.shard_idx, execution_id, status, start_time, ctx.get_counters()
-        )
 
 
 def _run_stage_with_ctx(
@@ -360,6 +321,7 @@ class InlineRunner:
 
     def __init__(self) -> None:
         self._ctx: _InProcessWorkerContext | None = None
+        self._last_counters: dict[str, CounterEntry] = {}
 
     def execute(
         self,
@@ -369,23 +331,25 @@ class InlineRunner:
     ) -> tuple[TaskResult, dict[str, CounterEntry]]:
         ctx = _InProcessWorkerContext(chunk_prefix, execution_id, task.stage_name, task_memory_bytes=task.cost.memory)
         self._ctx = ctx
+        self._last_counters = {}
         worker_token = _worker_ctx_var.set(ctx)
         _set_counter_aggregations()
-        stats_writer = StatsWriter.connect()
         try:
-            with _shard_stats_session(
-                ctx, task, execution_id, stats_writer, sampler_thread_name="zephyr-inline-stats-sampler"
+            with _shard_counter_session(
+                ctx,
+                sample_interval=SUBPROCESS_STATS_INTERVAL,
+                sampler_thread_name="zephyr-inline-stats-sampler",
             ):
                 result = _run_stage_with_ctx(task, chunk_prefix, execution_id)
         finally:
-            stats_writer.close()
+            self._last_counters = dict(ctx._counters)
             _worker_ctx_var.reset(worker_token)
             self._ctx = None
         return result, dict(ctx._counters)
 
     def live_counters(self) -> dict[str, CounterEntry]:
         ctx = self._ctx
-        return dict(ctx._counters) if ctx is not None else {}
+        return dict(ctx._counters) if ctx is not None else dict(self._last_counters)
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +370,11 @@ class SubprocessRunner:
 
     def __init__(self) -> None:
         self._counter_file: str | None = None
+        self._process: psutil.Process | None = None
+        self._process_stats: _InProcessWorkerContext | None = None
+        self._cpu_s_at_start = 0.0
+        self._last_counters: dict[str, CounterEntry] = {}
+        self._state_lock = threading.Lock()
 
     def execute(
         self,
@@ -413,14 +382,14 @@ class SubprocessRunner:
         chunk_prefix: str,
         execution_id: str,
     ) -> tuple[TaskResult, dict[str, CounterEntry]]:
-        finelog_url = StatsWriter.resolve_url()  # Requires Iris context, so called here and passed to subprocess
         with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
-            cloudpickle.dump((task, chunk_prefix, execution_id, finelog_url), f)
+            cloudpickle.dump((task, chunk_prefix, execution_id), f)
             task_file = f.name
         with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
             result_file = f.name
         counter_file = f"{result_file}.counters"
         self._counter_file = counter_file
+        self._last_counters = {}
 
         try:
             # ``-u`` keeps the child's stdout/stderr unbuffered so any
@@ -429,48 +398,66 @@ class SubprocessRunner:
             child_env = os.environ.copy()
             child_env["POLARS_MAX_THREADS"] = str(max(1, math.ceil(task.cost.cpu)))
             with tempfile.TemporaryDirectory(prefix=f"zephyr-external-sort-{task.shard_idx:04d}-") as sort_dir:
-                proc = sp.run(
-                    [
-                        sys.executable,
-                        "-u",
-                        "-m",
-                        "zephyr.shard_subprocess",
-                        task_file,
-                        result_file,
-                        sort_dir,
-                    ],
+                with sp.Popen(
+                    [sys.executable, "-u", "-m", "zephyr.shard_subprocess", task_file, result_file, sort_dir],
                     env=child_env,
                     stdout=sys.stdout,
                     stderr=sys.stderr,
-                )
+                ) as proc:
+                    process = psutil.Process(proc.pid)
+                    process.cpu_percent()
+                    cpu_times_at_start = process.cpu_times()
+                    process_stats = _InProcessWorkerContext("", execution_id, task.stage_name)
+                    process_stats.set_aggregation(ZEPHYR_WORKER_CPU_PCT_AVERAGE_KEY, Aggregation.AVERAGE)
+                    process_stats.set_aggregation(ZEPHYR_WORKER_MEM_AVERAGE_KEY, Aggregation.AVERAGE)
+                    process_stats.set_aggregation(ZEPHYR_WORKER_MEM_PEAK_KEY, Aggregation.MAX)
+                    cpu_s_at_start = cpu_times_at_start.user + cpu_times_at_start.system
+                    with self._state_lock:
+                        self._process = process
+                        self._process_stats = process_stats
+                        self._cpu_s_at_start = cpu_s_at_start
+                    returncode = proc.wait()
+                    with self._state_lock:
+                        self._process = None
 
-            if proc.returncode != 0:
+            if returncode != 0:
                 # Linux OOM-killer sends SIGKILL → returncode == -9. Distinguish
                 # so callers/retries can react to memory pressure specifically.
-                if proc.returncode == -signal.SIGKILL:
+                if returncode == -signal.SIGKILL:
                     raise MemoryError(
                         f"Subprocess for shard {task.shard_idx} was killed by SIGKILL "
-                        f"(returncode {proc.returncode}); most likely OOM-killed by the kernel."
+                        f"(returncode {returncode}); most likely OOM-killed by the kernel."
                     )
                 raise RuntimeError(
-                    f"Subprocess for shard {task.shard_idx} exited with code {proc.returncode}; "
+                    f"Subprocess for shard {task.shard_idx} exited with code {returncode}; "
                     "see worker stderr above for the faulthandler traceback."
                 )
 
             with open(result_file, "rb") as f:
                 result_or_error, child_counters = cloudpickle.load(f)
 
-            # Clear counter pointer BEFORE returning so a heartbeat racing
-            # this and ``report_result`` reads {} rather than re-shipping
-            # values the caller is about to send as final.
+            with self._state_lock:
+                process_counters = dict(self._process_stats._counters) if self._process_stats is not None else {}
+            final_counters = dict(child_counters)
+            for name in _ACCUMULATED_RESOURCE_COUNTER_KEYS:
+                entries = [(name, entry) for entry in (process_counters.get(name), final_counters.get(name)) if entry]
+                if entries:
+                    merged, _ = merge_counter_entries(entries)
+                    final_counters[name] = merged[name]
+            self._last_counters = final_counters
+
+            # Switch heartbeat reads to the final snapshot before returning.
             self._counter_file = None
 
             if isinstance(result_or_error, Exception):
                 raise result_or_error
 
-            return result_or_error, dict(child_counters)
+            return result_or_error, dict(final_counters)
         finally:
             self._counter_file = None
+            with self._state_lock:
+                self._process = None
+                self._process_stats = None
             for p in (task_file, result_file, counter_file, f"{counter_file}.tmp"):
                 with suppress(FileNotFoundError):
                     os.unlink(p)
@@ -478,13 +465,23 @@ class SubprocessRunner:
     def live_counters(self) -> dict[str, CounterEntry]:
         cf = self._counter_file
         if cf is None:
-            return {}
+            return dict(self._last_counters)
+        counters: dict[str, CounterEntry] = {}
         try:
             with open(cf, "rb") as f:
-                return cloudpickle.load(f)
+                counters = cloudpickle.load(f)
         except (FileNotFoundError, EOFError):
-            # Race against atomic rename, or task already cleaned up its file.
-            return {}
+            pass
         except Exception:
             logger.warning("Failed to read counter file %s", cf, exc_info=True)
-            return {}
+
+        with self._state_lock:
+            if self._process is not None and self._process_stats is not None:
+                try:
+                    _sample_process_stats(self._cpu_s_at_start, self._process, self._process_stats)
+                except psutil.Error:
+                    pass
+                counters.update(self._process_stats._counters)
+        if counters:
+            self._last_counters = dict(counters)
+        return counters

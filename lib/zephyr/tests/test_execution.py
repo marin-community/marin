@@ -1571,7 +1571,7 @@ def test_heartbeat_failures_fail_actor_context():
     worker = ZephyrWorker.__new__(ZephyrWorker)
     worker._actor_ctx = actor_ctx
     worker._shutdown_event = threading.Event()
-    worker._active_runners = []
+    worker._active_shards = []
     worker._resources_lock = threading.Lock()
     worker._last_reported_counters = {}
     worker._counter_generation = 0

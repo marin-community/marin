@@ -13,21 +13,22 @@ import pytest
 from finelog.client import LogClient
 from finelog.embedded import EmbeddedServer
 from fray.types import ResourceConfig
-from zephyr import counters, runners
+from zephyr import counters, runners, worker
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext, ZephyrWorkerError
 from zephyr.runners import InlineRunner, SubprocessRunner
 from zephyr.stats import (
     ZEPHYR_STAGE_STATS_NAMESPACE,
+    ZEPHYR_WORKER_MEM_PEAK_KEY,
     ZEPHYR_WORKER_STATS_NAMESPACE,
     StatsWriter,
 )
 
 
-def _ctx(local_client, tmp_path, *, stage_runner_factory) -> ZephyrContext:
+def _ctx(local_client, tmp_path, *, stage_runner_factory, max_workers: int = 2) -> ZephyrContext:
     return ZephyrContext(
         client=local_client,
-        max_workers=2,
+        max_workers=max_workers,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=str(tmp_path / "chunks"),
         name=f"test-runner-{uuid.uuid4().hex[:8]}",
@@ -208,6 +209,7 @@ def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypat
 
     monkeypatch.setattr(StatsWriter, "connect", staticmethod(make_writer))
     monkeypatch.setattr(runners, "SUBPROCESS_STATS_INTERVAL", 0.01)
+    monkeypatch.setattr(worker, "HEARTBEAT_INTERVAL", 0.01)
 
     def slow_identity(x: int) -> int:
         # Keep the shard alive long enough for the background sampler to emit.
@@ -221,7 +223,7 @@ def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypat
     finally:
         ctx.shutdown()
 
-    # ctx.shutdown() closes the coordinator's writer; close any runner writers too.
+    # Close is idempotent; this also covers writers retained by the test factory.
     for w in writers:
         with suppress(Exception):
             w.close()
@@ -334,3 +336,48 @@ def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypat
     # aggregate must therefore lie within the final per-shard averages.
     assert min(end_cpu_avg_pct) <= stage["cpu_pct_avg"] <= max(end_cpu_avg_pct)
     assert min(end_mem_avg_bytes) <= stage["mem_bytes_avg"] <= max(end_mem_avg_bytes)
+
+
+def test_subprocess_finelog_stats_use_worker_connection(local_client, tmp_path, monkeypatch):
+    class RecordingStatsWriter:
+        def __init__(self) -> None:
+            self.worker_rows: list[tuple[str, dict[str, int | float]]] = []
+
+        def emit_stage_stat(self, *args, **kwargs) -> None:
+            pass
+
+        def emit_worker_stat(self, stage_name, shard_idx, execution_id, status, start_time, counters) -> None:
+            self.worker_rows.append((status, counters))
+
+        def close(self) -> None:
+            pass
+
+    writers: list[RecordingStatsWriter] = []
+
+    def make_writer() -> RecordingStatsWriter:
+        writer = RecordingStatsWriter()
+        writers.append(writer)
+        return writer
+
+    monkeypatch.setattr(StatsWriter, "connect", staticmethod(make_writer))
+    monkeypatch.setattr(worker, "HEARTBEAT_INTERVAL", 0.01)
+
+    ctx = _ctx(local_client, tmp_path, stage_runner_factory=lambda: SubprocessRunner(), max_workers=1)
+    try:
+        ctx.execute(Dataset.from_list([1, 2, 3]).map(lambda value: value + 1))
+    finally:
+        ctx.shutdown()
+
+    worker_writers = [writer for writer in writers if writer.worker_rows]
+    assert len(worker_writers) == 1
+    worker_rows = worker_writers[0].worker_rows
+    statuses = [status for status, _ in worker_rows]
+    assert statuses.count("START") == 3
+    assert statuses.count("END") == 3
+    assert statuses[0] == "START"
+    assert "RUNNING" in statuses
+    assert statuses[-1] == "END"
+    assert "FAILED" not in statuses
+    running_counters = [counters for status, counters in worker_rows if status == "RUNNING"]
+    assert any(counters[ZEPHYR_WORKER_MEM_PEAK_KEY] > 0 for counters in running_counters)
+    assert worker_rows[-1][1][ZEPHYR_WORKER_MEM_PEAK_KEY] > 0
