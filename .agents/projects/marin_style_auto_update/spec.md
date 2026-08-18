@@ -105,13 +105,19 @@ def managed_manifest() -> ManagedManifest:
     """Return the manifest for the installed package's rendered assets."""
 
 
-def sync(repo_root: Path | None = None, check: bool = False) -> SyncResult:
-    """Synchronize current assets and prune unchanged outputs from the old manifest.
+def sync(repo_root: Path | None = None) -> SyncResult:
+    """Write current assets and prune unchanged outputs from the old manifest.
 
-    Write mode creates or replaces the manifest. A stale old output is deleted
-    only when its current digest equals the old manifest digest; a mismatch
-    raises ValueError. Check mode reports current missing/drifted assets, stale
-    old outputs, and manifest drift without modifying the checkout.
+    Sync creates or replaces the manifest. A stale old output is deleted only
+    when its current digest equals the old manifest digest; a mismatch raises
+    ValueError.
+    """
+
+def check_sync(repo_root: Path | None = None) -> SyncResult:
+    """Report missing, drifted, or obsolete assets without modifying the checkout.
+
+    The result distinguishes current missing/drifted assets, stale old outputs,
+    and manifest drift.
     """
 ```
 
@@ -140,12 +146,23 @@ Changed-file discovery returns the union of tracked worktree changes and untrack
 ## Updater command
 
 ```python
+class ManifestMode(StrEnum):
+    VALIDATE = "validate"
+    BOOTSTRAP = "bootstrap"
+
+
+class MergeMode(StrEnum):
+    PUBLISH = "publish"
+    MERGE = "merge"
+
+
 def update_consumer(
     *,
     consumer: MarinStyleConsumer,
     revision: str,
-    auto_merge: bool,
+    merge_mode: MergeMode,
     app_slug: str,
+    manifest_mode: ManifestMode,
 ) -> str | None:
     """Prepare, publish, and optionally merge one consumer update.
 
