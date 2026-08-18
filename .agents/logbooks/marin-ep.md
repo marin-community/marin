@@ -1802,3 +1802,25 @@ Experiment ID prefix: `MEP`.
   overrides. Note: fused per-leg GEMM _CONFIGS miss at i3072 shapes ->
   fallback config (correct, slightly untuned); retune keys once the
   number matters.
+
+### 2026-08-18 09:40 - MEP-071: 8/384 apples-to-apples COMPLETE — 17.6 s/step, drops 0.095%
+- mep-hero384e-fused-25-20260818: canonical 8/384 config (E384, width
+  3072, top-8; d6144/48L/latent3072), flavor ep-marin-mgpu-fused, cf 1.1,
+  splits 32, custom wheel, ds-fusion off, + XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB=128
+  and MARIN_EP_COLLECTIVE_MEMORY_MB=20480 (both REQUIRED at this shape —
+  ladder below). 25/25 steps green, loss 6.01, final tqdm rate 17.6 s/it
+  (cumulative-rate trend 42 -> 24 -> 17.6 at it5/9/25; late-window
+  implies steady-state at or below 17.6; same meter as the 4/192
+  numbers). Drops 0.095% at cf 1.1 — ~6.6x LOWER than 4/192 (0.63%):
+  finer experts pool much better under group waterfilling.
+- vs 4/192@i6272 fused best 16.3 s/step: +1.3 s at untuned settings. Known
+  headroom: per-leg GEMM _CONFIGS miss at i3072 shapes (fallback config
+  used); cf/splits untuned for 6 local experts; drops suggest cf can drop
+  toward 1.0 for free capacity.
+- Blocker ladder for reproducibility: (A) host-BFC init OOM -> host-limit
+  env; (B) i6272 is the wrong shape (158.5 GiB step temp); (D) silent
+  load wedge = MEP-054 collective-arena growth OOM now hits the FUSED
+  flavor at 8/384 -> arena prealloc 20 GiB fixes it; S3 SlowDown that
+  night also crashed one coordinator and made every rank compile alone
+  (~65 min, huge skew) — arm E reused the by-then-warm compile cache and
+  ran end-to-end in 13 min.
