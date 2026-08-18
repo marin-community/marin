@@ -15,6 +15,7 @@ from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
 from scripts.ci.dependency_update import (
+    DEPENDENCY_UPDATE_LABELS,
     changed_worktree_files,
     merge_when_protected_checks_green,
     prepare_update_branch,
@@ -109,6 +110,12 @@ class GeneratedMarinStyleUpdate:
     policy: PullRequestPolicy
 
 
+@dataclass(frozen=True)
+class LockedMarinStyle:
+    version: str
+    source: str
+
+
 class ManifestMode(StrEnum):
     VALIDATE = "validate"
     BOOTSTRAP = "bootstrap"
@@ -141,7 +148,7 @@ def _run(*args: str, cwd: Path | None = None) -> str:
     ).stdout
 
 
-def installed_consumer_matrix(selected: str = "") -> str:
+def installed_consumer_matrix_json(selected: str = "") -> str:
     """Return installed repositories as a GitHub Actions matrix."""
     rows = _run(
         "gh",
@@ -215,7 +222,7 @@ def _tracked_revision_paths(repo_root: Path, revision: str) -> frozenset[str]:
     return frozenset(result.stdout.splitlines())
 
 
-def _direct_pin_path(path: str) -> bool:
+def _is_direct_pin_path(path: str) -> bool:
     if path in {CANONICAL_PIN_FILE, "pyproject.toml"}:
         return True
     relative = PurePosixPath(path)
@@ -236,7 +243,7 @@ def _direct_pin_files(
     unexpected: list[str] = []
     direct: list[str] = []
     for relative in sorted(candidates):
-        if not _direct_pin_path(relative):
+        if not _is_direct_pin_path(relative):
             unexpected.append(relative)
             continue
         lines = [line for line in (repo_root / relative).read_text().splitlines() if revision in line]
@@ -253,21 +260,23 @@ def _direct_pin_files(
     return tuple(direct)
 
 
-def _uses_uv_lock(repo_root: Path, revision: str) -> bool:
+def _locked_marin_style(repo_root: Path) -> LockedMarinStyle | None:
     lock_path = repo_root / UV_LOCK_FILE
     if not lock_path.exists():
-        return False
+        return None
     with lock_path.open("rb") as lock_file:
         payload = tomllib.load(lock_file)
     packages = [package for package in payload.get("package", []) if package.get("name") == MARIN_STYLE_PACKAGE]
     if not packages:
-        return False
+        return None
     if len(packages) != 1:
         raise ValueError("uv.lock must contain at most one marin-style package")
-    source = packages[0].get("source")
-    if not isinstance(source, dict) or revision not in str(source.get("git", "")):
-        raise ValueError("uv.lock does not contain the pinned marin-style revision")
-    return True
+    package = packages[0]
+    source = package.get("source")
+    version = package.get("version")
+    if not isinstance(source, dict) or not isinstance(source.get("git"), str) or not isinstance(version, str):
+        raise ValueError("uv.lock contains an invalid marin-style package record")
+    return LockedMarinStyle(version=version, source=source["git"])
 
 
 def _replace_pin_files(repo_root: Path, pin_files: tuple[str, ...], *, old_revision: str, new_revision: str) -> None:
@@ -282,16 +291,12 @@ def _replace_pin_files(repo_root: Path, pin_files: tuple[str, ...], *, old_revis
 
 def _update_uv_lock(repo_root: Path, *, old_revision: str, new_revision: str) -> None:
     subprocess.run(["uv", "lock", "--upgrade-package", MARIN_STYLE_PACKAGE], cwd=repo_root, check=True)
-    lock_path = repo_root / UV_LOCK_FILE
-    with lock_path.open("rb") as lock_file:
-        payload = tomllib.load(lock_file)
-    packages = [package for package in payload.get("package", []) if package.get("name") == MARIN_STYLE_PACKAGE]
-    if len(packages) != 1:
+    package = _locked_marin_style(repo_root)
+    if package is None:
         raise ValueError("uv.lock must contain exactly one marin-style package")
-    source = packages[0].get("source")
-    if not isinstance(source, dict) or new_revision not in str(source.get("git", "")):
+    if new_revision not in package.source:
         raise ValueError("uv.lock does not contain the target marin-style revision")
-    if not isinstance(packages[0].get("version"), str) or old_revision in lock_path.read_text():
+    if old_revision in (repo_root / UV_LOCK_FILE).read_text():
         raise ValueError("uv.lock contains an invalid marin-style package record")
 
 
@@ -323,7 +328,10 @@ def generate_marin_style_update(
             raise ValueError("checked-in manifest does not match the pinned marin-style revision")
         old_paths = frozenset(path for path, _ in old_manifest.files)
 
-    uses_uv_lock = _uses_uv_lock(repo_root, old_revision)
+    locked_marin_style = _locked_marin_style(repo_root)
+    if locked_marin_style is not None and old_revision not in locked_marin_style.source:
+        raise ValueError("uv.lock does not contain the pinned marin-style revision")
+    uses_uv_lock = locked_marin_style is not None
     pin_files = _direct_pin_files(
         repo_root,
         revision=old_revision,
@@ -385,7 +393,7 @@ def _preflight(repository: str, base_branch: str) -> None:
     ).strip()
     if actual_branch != base_branch:
         raise ValueError(f"unexpected default branch for {repository}: {actual_branch!r}")
-    for label in ("agent-generated", "dependencies"):
+    for label in DEPENDENCY_UPDATE_LABELS:
         _run("gh", "api", f"repos/{repository}/labels/{label}")
 
 
@@ -398,7 +406,7 @@ def update_consumer(
     app_slug: str,
     manifest_mode: ManifestMode,
 ) -> ConsumerUpdateResult:
-    """Publish one update and return its terminal status and pull-request URL."""
+    """Return whether the consumer is current, published, or merged."""
     if manifest_mode is ManifestMode.BOOTSTRAP and merge_mode is MergeMode.MERGE:
         raise ValueError("the manifest bootstrap requires human review")
     _preflight(repository, base_branch)
@@ -467,7 +475,7 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = _parser().parse_args()
     if args.command == "matrix":
-        print(installed_consumer_matrix(args.consumer))
+        print(installed_consumer_matrix_json(args.consumer))
         return
     result = update_consumer(
         repository=args.repository,

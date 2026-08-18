@@ -15,6 +15,7 @@ on:
         description: "Installed consumer repository; empty selects all"
         required: false
         type: string
+      # Owner: Marin maintainers. Remove this mode after every installed consumer has a manifest.
       manifest_mode:
         description: "Manifest handling mode"
         required: true

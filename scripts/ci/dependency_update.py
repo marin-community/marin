@@ -22,6 +22,9 @@ from scripts.ci.dependency_update_policy import (
 from scripts.ci.package_release import emit_github_output
 
 MERGED_PULL_REQUEST_STATE = "MERGED"
+PASS_CHECK_BUCKET = "pass"
+PENDING_CHECK_BUCKET = "pending"
+DEPENDENCY_UPDATE_LABELS = ("agent-generated", "dependencies")
 
 
 @dataclass(frozen=True)
@@ -127,17 +130,26 @@ def validate_changed_files(files: Iterable[str], *, policy: PullRequestPolicy) -
 def evaluate_required_checks(rows: Iterable[CheckRow], *, required: tuple[str, ...]) -> RequiredCheckGate:
     """Classify the latest required GitHub check rows."""
     required_names = frozenset(required)
+    check_buckets = _unique_check_buckets(row for row in rows if row.name in required_names)
+    return _check_gate(check_buckets, required)
+
+
+def _unique_check_buckets(rows: Iterable[CheckRow]) -> dict[str, str]:
     check_buckets: dict[str, str] = {}
     for row in rows:
-        if row.name not in required_names:
-            continue
         if row.name in check_buckets:
             raise ValueError(f"GitHub returned duplicate check rows for {row.name!r}")
         check_buckets[row.name] = row.bucket
+    return check_buckets
+
+
+def _check_gate(check_buckets: dict[str, str], required: tuple[str, ...]) -> RequiredCheckGate:
     missing = tuple(name for name in required if name not in check_buckets)
-    pending = tuple(name for name in required if check_buckets.get(name) == "pending")
+    pending = tuple(name for name in required if check_buckets.get(name) == PENDING_CHECK_BUCKET)
     failing = tuple(
-        name for name in required if name in check_buckets and check_buckets[name] not in {"pass", "pending"}
+        name
+        for name in required
+        if name in check_buckets and check_buckets[name] not in {PASS_CHECK_BUCKET, PENDING_CHECK_BUCKET}
     )
     return RequiredCheckGate(failing=failing, missing=missing, pending=pending)
 
@@ -188,7 +200,6 @@ def required_check_rows(pr: str, repository: str) -> tuple[CheckRow, ...]:
 
 
 def protected_check_rows(pr: str, repository: str) -> tuple[CheckRow, ...]:
-    """Read the checks required by the pull request's base branch protection."""
     return _check_rows(pr, repository, "--required")
 
 
@@ -207,16 +218,10 @@ def _check_rows(pr: str, repository: str, *selection: str) -> tuple[CheckRow, ..
 
 def evaluate_protected_checks(rows: Iterable[CheckRow]) -> RequiredCheckGate:
     """Classify the checks GitHub reports as required by branch protection."""
-    check_buckets: dict[str, str] = {}
-    for row in rows:
-        if row.name in check_buckets:
-            raise ValueError(f"GitHub returned duplicate check rows for {row.name!r}")
-        check_buckets[row.name] = row.bucket
+    check_buckets = _unique_check_buckets(rows)
     if not check_buckets:
         return RequiredCheckGate(failing=(), missing=("protected status checks",), pending=())
-    pending = tuple(name for name, bucket in check_buckets.items() if bucket == "pending")
-    failing = tuple(name for name, bucket in check_buckets.items() if bucket not in {"pass", "pending"})
-    return RequiredCheckGate(failing=failing, missing=(), pending=pending)
+    return _check_gate(check_buckets, tuple(check_buckets))
 
 
 def changed_worktree_files(repo_root: Path | None = None) -> tuple[str, ...]:
@@ -339,6 +344,7 @@ def upserted_pull_request_url(
 ) -> str:
     """Create or refresh the generated pull request and return its URL."""
     if pull_request_url:
+        label_args = [argument for label in DEPENDENCY_UPDATE_LABELS for argument in ("--add-label", label)]
         subprocess.run(
             [
                 "gh",
@@ -351,15 +357,13 @@ def upserted_pull_request_url(
                 policy.title,
                 "--body-file",
                 str(body_file),
-                "--add-label",
-                "agent-generated",
-                "--add-label",
-                "dependencies",
+                *label_args,
             ],
             check=True,
         )
         return pull_request_url
 
+    label_args = [argument for label in DEPENDENCY_UPDATE_LABELS for argument in ("--label", label)]
     subprocess.run(
         [
             "gh",
@@ -375,10 +379,7 @@ def upserted_pull_request_url(
             policy.title,
             "--body-file",
             str(body_file),
-            "--label",
-            "agent-generated",
-            "--label",
-            "dependencies",
+            *label_args,
         ],
         check=True,
     )

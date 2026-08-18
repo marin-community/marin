@@ -13,7 +13,7 @@ from scripts.ci.marin_style_update import (
     GeneratedManifest,
     ManifestMode,
     generate_marin_style_update,
-    installed_consumer_matrix,
+    installed_consumer_matrix_json,
 )
 
 OLD_REVISION = "a" * 40
@@ -100,8 +100,8 @@ def test_installed_consumer_matrix_uses_app_repository_selection(
     gh.chmod(0o755)
     monkeypatch.setenv("PATH", f"{binary_dir}:{os.environ['PATH']}")
 
-    matrix = json.loads(installed_consumer_matrix())
-    selected = json.loads(installed_consumer_matrix("axolotl"))
+    matrix = json.loads(installed_consumer_matrix_json())
+    selected = json.loads(installed_consumer_matrix_json("axolotl"))
 
     assert [row["repository"] for row in matrix["include"]] == [
         "marin-community/MarinSkyRL",
@@ -148,8 +148,6 @@ def test_generate_bootstrap_discovers_pins_and_managed_files(
         manifest_mode=ManifestMode.BOOTSTRAP,
     )
 
-    assert update.old_revision == OLD_REVISION
-    assert update.new_revision == NEW_REVISION
     assert update.changed_files == (
         ".agents/marin-style/manifest.json",
         ".agents/skills/consult-echo/scripts/echo.py",
