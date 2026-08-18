@@ -459,7 +459,7 @@ def allocate(
         finally:
             terminated = False
             try:
-                client.terminate(JobName.from_wire(str(job.job_id)))
+                client.cancel_job(JobName.from_wire(str(job.job_id)))
                 terminated = True
             except Exception:
                 logger.warning(
@@ -530,7 +530,7 @@ def release(ctx, force: bool) -> None:
     state = load_state(state_file)
     try:
         with controller_client(state.config_file) as client:
-            client.terminate(JobName.from_wire(state.job_id))
+            client.cancel_job(JobName.from_wire(state.job_id))
     except Exception as exc:
         # Keep the state file on failure so the job id isn't lost while the pod may
         # still be running; --force is the escape hatch for already-dead jobs.

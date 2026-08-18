@@ -283,7 +283,7 @@ class IrisJobHandle:
         return tuple(entry.data.rstrip("\n") for entry in self._job.logs(max_lines=max_lines, tail=True))
 
     def terminate(self) -> None:
-        self._job.terminate()
+        self._job.cancel()
 
 
 def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) -> None:
@@ -608,7 +608,7 @@ class IrisActorGroup:
             client = self._get_client()
             state = client.job_state(self._job_id)
             if is_job_finished(state):
-                error = client.status(self._job_id).error_message or "unknown error"
+                error = client.job_status(self._job_id).error_message or "unknown error"
                 raise RuntimeError(
                     f"Actor job {self._job_id} finished before all actors registered "
                     f"({len(self._discovered_names)}/{target} ready). "
@@ -629,7 +629,7 @@ class IrisActorGroup:
     def shutdown(self) -> None:
         """Terminate the actor job."""
         client = self._get_client()
-        client.terminate(self._job_id)
+        client.cancel_job(self._job_id)
 
 
 class FrayIrisClient:

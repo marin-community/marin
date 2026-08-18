@@ -234,7 +234,7 @@ def terminate_service(client: IrisClient, job_id: JobName, *, wait: float = TERM
     if is_job_finished(state):
         logger.info("job %s already terminal (%s)", job_id, state.name)
         return
-    client.terminate(job_id)
+    client.cancel_job(job_id)
     deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
         try:

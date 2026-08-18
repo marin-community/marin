@@ -19,21 +19,28 @@ Example:
 
 import logging
 import re
-from collections.abc import Generator, Sequence
+import time
+from collections.abc import Callable, Generator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol, TypeVar, cast
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.credentials import ClientCredentials
-from rigging.timing import Duration, Timestamp
+from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.client.context_state import current_context, reset_context, set_context
-from iris.client.workload import JobStatus, TaskStatus
-from iris.client.workload_codec import job_state_from_proto, job_status_from_proto, task_status_from_proto
+from iris.client.workload import AttemptStatus, JobStatus, TaskActionResult, TaskDescription, TaskStatus
+from iris.client.workload_codec import (
+    job_state_from_proto,
+    job_status_from_proto,
+    task_action_result_from_proto,
+    task_description_from_proto,
+    task_status_from_proto,
+)
 from iris.cluster.client import (
     ClusterClient,
     JobInfo,
@@ -58,7 +65,7 @@ from iris.cluster.types import (
     TaskAttempt,
     adjust_tpu_replicas,
 )
-from iris.resources.state import JobState, TaskState, is_job_finished
+from iris.resources.state import TERMINAL_TASK_STATES, JobState, TaskState, is_job_finished
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import timestamp_from_proto
 
@@ -71,7 +78,7 @@ class _ClusterLifecycle(Protocol):
     def close(self) -> None: ...
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class TaskLogEntry:
     """A log entry with task context.
 
@@ -120,6 +127,104 @@ class JobAlreadyExists(Exception):
         super().__init__(message)
 
 
+_Status = TypeVar("_Status")
+
+
+def _wait_for_status(
+    load: Callable[[], _Status],
+    finished: Callable[[_Status], bool],
+    *,
+    timeout: float,
+    poll_interval: float,
+    target: str,
+) -> _Status:
+    deadline = Deadline.from_seconds(timeout)
+    backoff = ExponentialBackoff(initial=0.1, maximum=max(0.1, poll_interval))
+    while True:
+        status = load()
+        if finished(status):
+            return status
+        deadline.raise_if_expired(f"{target} did not finish in {timeout}s")
+        time.sleep(min(backoff.next_interval(), deadline.remaining_seconds()))
+
+
+class Attempt:
+    """Handle for one numbered Attempt of a logical Task."""
+
+    def __init__(self, client: "IrisClient", task_name: JobName, attempt_number: int):
+        task_name.require_task()
+        if attempt_number < 0:
+            raise ValueError("attempt_number must be non-negative")
+        self._client = client
+        self._task_name = task_name
+        self._attempt_number = attempt_number
+
+    @property
+    def task_id(self) -> JobName:
+        return self._task_name
+
+    @property
+    def job_id(self) -> JobName:
+        return TaskAttempt(self._task_name).job_id
+
+    @property
+    def attempt_number(self) -> int:
+        return self._attempt_number
+
+    @property
+    def ref(self) -> TaskAttempt:
+        return TaskAttempt(self._task_name, self._attempt_number)
+
+    def status(self) -> AttemptStatus:
+        """Return this numbered Attempt from the Task's retained history."""
+        status = self._client.task_status(self._task_name)
+        match = next(
+            (attempt for attempt in status.attempts if attempt.attempt_number == self._attempt_number),
+            None,
+        )
+        if match is None:
+            raise ConnectError(Code.NOT_FOUND, f"Attempt {self.ref.to_wire()} not found")
+        return match
+
+    def logs(
+        self,
+        *,
+        start: Timestamp | None = None,
+        max_lines: int = 0,
+        substring: str = "",
+        min_level: str = "",
+        tail: bool = False,
+    ) -> list[TaskLogEntry]:
+        """Fetch logs for this numbered Attempt."""
+        return self._client._fetch_logs(
+            self._task_name,
+            start=start,
+            max_lines=max_lines,
+            substring=substring,
+            attempt_id=self._attempt_number,
+            min_level=min_level,
+            tail=tail,
+        )
+
+    def wait(self, timeout: float = 300.0, poll_interval: float = 30.0) -> AttemptStatus:
+        """Wait until this Attempt reaches a terminal state."""
+        return _wait_for_status(
+            self.status,
+            lambda status: status.state in TERMINAL_TASK_STATES,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            target=f"Attempt {self.ref.to_wire()}",
+        )
+
+    def preempt(self, *, reason: str = "") -> TaskActionResult:
+        """Preempt this Attempt if it is still current."""
+        return self._client.preempt_tasks((self.ref,), reason=reason)[0]
+
+    def fail(self, *, reason: str = "") -> TaskActionResult:
+        """Fail this Attempt without retry if it is still current."""
+        return self._client.fail_tasks((self.ref,), reason=reason)[0]
+
+
 class Task:
     """Handle for a specific task within a job.
 
@@ -136,6 +241,7 @@ class Task:
     """
 
     def __init__(self, client: "IrisClient", task_name: JobName):
+        task_name.require_task()
         self._client = client
         self._task_name = task_name
 
@@ -158,39 +264,66 @@ class Task:
         """Return the current snapshot for this logical Task."""
         return self._client.task_status(self.task_id)
 
+    def describe(self) -> TaskDescription:
+        """Return submitted resources and failure diagnostics with the Task snapshot."""
+        return self._client.describe_task(self.task_id)
+
     @property
     def state(self) -> TaskState:
         """Get current task state (shortcut for status().state)."""
         return self.status().state
 
-    def logs(self, *, start: Timestamp | None = None, max_lines: int = 0) -> list[TaskLogEntry]:
-        """Fetch logs for this task (all attempts).
+    def attempts(self) -> tuple[Attempt, ...]:
+        """Return handles for the retained Attempt history."""
+        return tuple(Attempt(self._client, self._task_name, item.attempt_number) for item in self.status().attempts)
 
-        Args:
-            start: Only return logs after this timestamp (None = from beginning)
-            max_lines: Maximum number of log lines to return (0 = unlimited)
+    def attempt(self, attempt_number: int) -> Attempt:
+        """Address one numbered Attempt."""
+        return Attempt(self._client, self._task_name, attempt_number)
 
-        Returns:
-            List of TaskLogEntry objects from the task
-        """
-        source, match_scope = build_log_source(self._task_name)
-        response = self._client._cluster_client.fetch_logs(
-            source,
-            match_scope=match_scope,
-            since_ms=start.epoch_ms() if start else 0,
+    def current_attempt(self) -> Attempt | None:
+        """Return the current Attempt, or None before the first Attempt exists."""
+        status = self.status()
+        if not any(item.attempt_number == status.current_attempt_number for item in status.attempts):
+            return None
+        return Attempt(self._client, self._task_name, status.current_attempt_number)
+
+    def logs(
+        self,
+        *,
+        start: Timestamp | None = None,
+        max_lines: int = 0,
+        substring: str = "",
+        min_level: str = "",
+        tail: bool = False,
+    ) -> list[TaskLogEntry]:
+        """Fetch logs across this Task's Attempts."""
+        return self._client._fetch_logs(
+            self._task_name,
+            start=start,
             max_lines=max_lines,
+            substring=substring,
+            min_level=min_level,
+            tail=tail,
         )
-        return [
-            TaskLogEntry(
-                timestamp=timestamp_from_proto(e.timestamp),
-                task_id=self.task_id,
-                source=e.source,
-                data=e.data,
-                attempt_id=e.attempt_id,
-                key=e.key,
-            )
-            for e in response.entries
-        ]
+
+    def wait(self, timeout: float = 300.0, poll_interval: float = 30.0) -> TaskStatus:
+        """Wait until this Task reaches a terminal state."""
+        return _wait_for_status(
+            self.status,
+            lambda status: status.state in TERMINAL_TASK_STATES,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            target=f"Task {self._task_name}",
+        )
+
+    def preempt(self, *, reason: str = "") -> TaskActionResult:
+        """Preempt the current Attempt under the Task retry policy."""
+        return self._client.preempt_tasks((TaskAttempt(self._task_name),), reason=reason)[0]
+
+    def fail(self, *, reason: str = "") -> TaskActionResult:
+        """Fail the current Attempt without retry."""
+        return self._client.fail_tasks((TaskAttempt(self._task_name),), reason=reason)[0]
 
 
 class Job:
@@ -212,6 +345,8 @@ class Job:
     """
 
     def __init__(self, client: "IrisClient", job_id: JobName):
+        if job_id.is_task:
+            raise ValueError(f"Expected a Job name, got Task {job_id}")
         self._client = client
         self._job_id = job_id
 
@@ -228,7 +363,7 @@ class Job:
 
     def status(self) -> JobStatus:
         """Return the current snapshot for this logical Job."""
-        return self._client.status(self._job_id)
+        return self._client.job_status(self._job_id)
 
     def state_only(self) -> JobState:
         """Lightweight state query that avoids loading tasks/attempts/workers."""
@@ -247,14 +382,35 @@ class Job:
         """
         return [Task(self._client, status.task_id) for status in self._client.list_tasks(self._job_id)]
 
-    def logs(self, *, max_lines: int = 0, tail: bool = False) -> list[TaskLogEntry]:
+    def task(self, task_index: int) -> Task:
+        """Address one Task by its zero-based index."""
+        if task_index < 0:
+            raise ValueError("task_index must be non-negative")
+        return Task(self._client, self._job_id.task(task_index))
+
+    def logs(
+        self,
+        *,
+        start: Timestamp | None = None,
+        max_lines: int = 0,
+        substring: str = "",
+        min_level: str = "",
+        tail: bool = False,
+    ) -> list[TaskLogEntry]:
         """Fetch globally timestamp-ordered logs across this job's tasks.
 
         Args:
             max_lines: Global maximum number of lines to return. Zero uses the server default.
             tail: Return the most recent lines instead of the earliest lines.
         """
-        return self._client.fetch_task_logs(self._job_id, max_lines=max_lines, tail=tail)
+        return self._client._fetch_logs(
+            self._job_id,
+            start=start,
+            max_lines=max_lines,
+            substring=substring,
+            min_level=min_level,
+            tail=tail,
+        )
 
     def wait(
         self,
@@ -265,6 +421,7 @@ class Job:
         stream_logs: bool = False,
         since_ms: int = 0,
         min_level: str = "",
+        substring: str = "",
     ) -> JobStatus:
         """Wait for job to complete.
 
@@ -278,6 +435,7 @@ class Job:
             stream_logs: If True, stream logs from all tasks interleaved
             since_ms: Only show logs after this epoch millisecond timestamp
             min_level: Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+            substring: Only stream log lines containing this text
 
         Returns:
             Final JobStatus
@@ -295,6 +453,7 @@ class Job:
                 poll_interval=poll_interval,
                 since_ms=since_ms,
                 min_level=min_level,
+                substring=substring,
             )
         status = job_status_from_proto(response)
 
@@ -303,9 +462,9 @@ class Job:
 
         return status
 
-    def terminate(self) -> None:
-        """Terminate this job."""
-        self._client._cluster_client.terminate_job(self._job_id)
+    def cancel(self) -> None:
+        """Cancel this Job and its descendants."""
+        self._client.cancel_job(self._job_id)
 
 
 # =============================================================================
@@ -644,6 +803,19 @@ class IrisClient:
         namespace = Namespace.from_job_id(job_id)
         return NamespacedResolver(self._cluster_client, namespace=namespace)
 
+    def job(self, job_id: JobName) -> Job:
+        """Address an existing logical Job."""
+        return Job(self, job_id)
+
+    def task(self, task_id: JobName) -> Task:
+        """Address an existing logical Task."""
+        task_id.require_task()
+        return Task(self, task_id)
+
+    def attempt(self, ref: TaskAttempt) -> Attempt:
+        """Address one numbered Attempt."""
+        return Attempt(self, ref.task_id, ref.require_attempt())
+
     def submit(
         self,
         entrypoint: Entrypoint,
@@ -800,27 +972,33 @@ class IrisClient:
 
         return Job(self, canonical_id)
 
-    def status(self, job_id: JobName) -> JobStatus:
+    def job_status(self, job_id: JobName) -> JobStatus:
         """Return the current snapshot for a logical Job name."""
+        if job_id.is_task:
+            raise ValueError(f"Expected a Job name, got Task {job_id}")
         return job_status_from_proto(self._cluster_client.get_job_status(job_id))
 
     def job_state(self, job_id: JobName) -> JobState:
         """Lightweight state query that avoids loading tasks/attempts/workers.
 
-        Prefer this over ``status(job_id).state`` for polling loops.
+        Prefer this over ``job_status(job_id).state`` for polling loops.
         """
+        if job_id.is_task:
+            raise ValueError(f"Expected a Job name, got Task {job_id}")
         states = self._cluster_client.get_job_states([job_id])
         wire_id = job_id.to_wire()
         if wire_id not in states:
             raise ConnectError(Code.NOT_FOUND, f"Job {wire_id} not found")
         return job_state_from_proto(states[wire_id])
 
-    def terminate(self, job_id: JobName) -> None:
-        """Terminate a running job.
+    def cancel_job(self, job_id: JobName) -> None:
+        """Cancel a running Job and its descendants.
 
         Args:
-            job_id: Job ID to terminate
+            job_id: Job ID to cancel
         """
+        if job_id.is_task:
+            raise ValueError(f"Expected a Job name, got Task {job_id}")
         self._cluster_client.terminate_job(job_id)
 
     def list_jobs(
@@ -869,8 +1047,8 @@ class IrisClient:
         """Return nonterminal jobs whose wire IDs start with ``prefix`` verbatim."""
         return [job.job_id for job in self.list_jobs(prefix=prefix) if not is_job_finished(job.state)]
 
-    def terminate_prefix(self, prefix: str) -> list[JobName]:
-        """Terminate all active jobs matching a prefix.
+    def cancel_jobs_with_prefix(self, prefix: str) -> list[JobName]:
+        """Cancel all active Jobs matching a prefix.
 
         Args:
             prefix: Wire-form job ID prefix to match (e.g., ``"/alice/my-experiment-"``).
@@ -880,12 +1058,18 @@ class IrisClient:
         """
         job_ids = self.active_job_names_for_prefix(prefix)
         for job_id in job_ids:
-            self.terminate(job_id)
+            self.cancel_job(job_id)
         return job_ids
 
     def task_status(self, task_name: JobName) -> TaskStatus:
         """Return the current snapshot for a logical Task name."""
+        task_name.require_task()
         return task_status_from_proto(self._cluster_client.get_task_status(task_name))
+
+    def describe_task(self, task_name: JobName) -> TaskDescription:
+        """Return a Task snapshot with submitted resources and failure diagnostics."""
+        task_name.require_task()
+        return task_description_from_proto(self._cluster_client.get_task_description(task_name))
 
     def report_task_status_text(
         self,
@@ -920,25 +1104,44 @@ class IrisClient:
 
     def list_tasks(self, job_id: JobName) -> list[TaskStatus]:
         """Return current Task snapshots for a logical Job name."""
+        if job_id.is_task:
+            raise ValueError(f"Expected a Job name, got Task {job_id}")
         return [task_status_from_proto(task) for task in self._cluster_client.list_tasks(job_id)]
 
-    def kick_tasks(
+    def _change_tasks(
         self,
-        targets: list[str],
+        targets: Sequence[TaskAttempt],
         *,
         desired_state: job_pb2.TaskState,
+        reason: str,
+    ) -> tuple[TaskActionResult, ...]:
+        for target in targets:
+            target.task_id.require_task()
+            if target.attempt_id is not None and target.attempt_id < 0:
+                raise ValueError("attempt number must be non-negative")
+        wire_targets = [target.to_wire() for target in targets]
+        results = self._cluster_client.kick_tasks(wire_targets, desired_state, reason)
+        return tuple(task_action_result_from_proto(result) for result in results)
+
+    def preempt_tasks(
+        self,
+        targets: Sequence[TaskAttempt],
+        *,
         reason: str = "",
-    ) -> list[controller_pb2.Controller.KickResult]:
-        """Force task attempts into a terminal state out-of-band (emergency override).
+    ) -> tuple[TaskActionResult, ...]:
+        """Preempt current or numbered Attempts under each Task's retry policy."""
+        return self._change_tasks(targets, desired_state=job_pb2.TASK_STATE_PREEMPTED, reason=reason)
 
-        ``targets`` are task, task-attempt, or job ids; a job id expands to its
-        active tasks. ``desired_state`` is ``TASK_STATE_PREEMPTED`` (retried if
-        budget remains) or ``TASK_STATE_FAILED`` (no retry). Returns one
-        ``KickResult`` per resolved task reporting whether it was queued.
-        """
-        return self._cluster_client.kick_tasks(targets, desired_state, reason)
+    def fail_tasks(
+        self,
+        targets: Sequence[TaskAttempt],
+        *,
+        reason: str = "",
+    ) -> tuple[TaskActionResult, ...]:
+        """Fail current or numbered Attempts without retry."""
+        return self._change_tasks(targets, desired_state=job_pb2.TASK_STATE_FAILED, reason=reason)
 
-    def fetch_task_logs(
+    def _fetch_logs(
         self,
         target: JobName,
         *,

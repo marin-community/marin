@@ -43,11 +43,12 @@ status = job.wait()
 assert status.state is JobState.SUCCEEDED
 ```
 
-`Job.status()`, `Job.wait()`, `Task.status()`, `IrisClient.list_jobs()`, and
-`IrisClient.list_tasks()` return immutable Iris values rather than generated
-protobuf messages. These reads and `Job.terminate()` address the logical job
-name on the deployed ControllerService; exact-incarnation actions require the
-resource operation API.
+`Job.status()`, `Job.wait()`, `Task.status()`, `Task.describe()`,
+`Attempt.status()`, and the IrisClient list methods return immutable Iris values
+rather than generated protobuf messages. `Job.cancel()` and Task actions address
+the logical workload on the deployed ControllerService. A numbered Attempt
+action is rejected after a newer Attempt becomes current; full incarnation
+fencing requires the resource operation protocol.
 
 For accelerator jobs, request the accelerator on the task itself with `--tpu ...` or `--gpu ...`.
 `--reserve <accel>` is a hard constraint that confines the job to a zone where `<accel>` has actually
@@ -345,9 +346,9 @@ iris --config cluster.yaml job logs /my-job --since-seconds 300
 # Wait for an existing job; prints its terminal state and exits nonzero unless it succeeded
 iris --config cluster.yaml job wait /my-job
 
-# Stop one or more jobs
-iris --config cluster.yaml job stop /my-job
-iris --config cluster.yaml job stop --prefix /my-job-prefix
+# Cancel one or more Jobs
+iris --config cluster.yaml job cancel /my-job
+iris --config cluster.yaml job cancel --prefix /my-job-prefix
 ```
 
 ## Smoke Test

@@ -580,7 +580,7 @@ def wait_for_workers(job, client: IrisClient, *, timeout: float, project: str) -
 
 
 def is_job_active(client: IrisClient, job_id: str) -> bool:
-    status = client.status(JobName.from_wire(job_id))
+    status = client.job_status(JobName.from_wire(job_id))
     return status.state not in TERMINAL_JOB_STATES
 
 
@@ -805,7 +805,7 @@ def allocate(
     finally:
         if client is not None and job is not None:
             try:
-                client.terminate(JobName.from_wire(str(job.job_id)))
+                client.cancel_job(JobName.from_wire(str(job.job_id)))
             except Exception:
                 logger.warning("Failed to terminate holder job %s", job.job_id, exc_info=True)
         if client_cm is not None:
@@ -855,7 +855,7 @@ def release(ctx) -> None:
     state = load_state(state_file)
     try:
         with controller_client(state.config_file) as client:
-            client.terminate(JobName.from_wire(state.job_id))
+            client.cancel_job(JobName.from_wire(state.job_id))
     finally:
         state_file.unlink(missing_ok=True)
 

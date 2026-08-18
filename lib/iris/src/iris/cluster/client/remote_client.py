@@ -315,6 +315,7 @@ class RemoteClusterClient:
         poll_interval: float = MAX_STATE_POLL_INTERVAL,
         since_ms: int = 0,
         min_level: str = "",
+        substring: str = "",
     ) -> job_pb2.JobStatus:
         """Wait for job completion while streaming task logs via the controller RPC.
 
@@ -357,6 +358,7 @@ class RemoteClusterClient:
                     since_ms=since_ms,
                     cursor=cursor,
                     min_level=min_level,
+                    substring=substring,
                 )
             except Exception as e:
                 msg = format_connect_error(e) if isinstance(e, ConnectError) else str(e)
@@ -519,14 +521,17 @@ class RemoteClusterClient:
         Returns:
             TaskStatus proto for the requested task
         """
+        return self.get_task_description(task_name).task
+
+    def get_task_description(self, task_name: JobName) -> controller_pb2.Controller.GetTaskStatusResponse:
+        """Get a Task snapshot with submitted resources and failure diagnostics."""
         task_name.require_task()
 
         def _call():
             request = controller_pb2.Controller.GetTaskStatusRequest(task_id=task_name.to_wire())
-            response = self._client.get_task_status(request)
-            return response.task
+            return self._client.get_task_status(request)
 
-        return call_with_retry(f"get_task_status({task_name})", _call)
+        return call_with_retry(f"get_task_description({task_name})", _call)
 
     def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
         """List all tasks for a job.

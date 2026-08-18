@@ -153,7 +153,7 @@ def _shutdown_result(
     reason = _resource_exhaustion_reason(jobs)
     if reason is None:
         return None
-    client.terminate(parent.job_id)
+    client.cancel_job(parent.job_id)
     return WaitResult(status=parent, resource_exhaustion_reason=reason)
 
 

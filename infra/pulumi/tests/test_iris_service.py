@@ -156,7 +156,7 @@ class TestSubmit:
 
 
 class _TerminatingClient:
-    """States plays back per job_state call; terminate() is recorded."""
+    """States plays back per job_state call; cancel_job() is recorded."""
 
     def __init__(self, states):
         self._states = list(states)
@@ -168,7 +168,7 @@ class _TerminatingClient:
             raise ConnectError(Code.NOT_FOUND, "not found")
         return state
 
-    def terminate(self, job_id):
+    def cancel_job(self, job_id):
         self.terminated = True
 
 

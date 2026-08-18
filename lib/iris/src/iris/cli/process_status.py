@@ -122,36 +122,18 @@ def logs(ctx, target: str | None, level: str, follow: bool, max_lines: int, subs
             time.sleep(2)
 
 
-@process_group.command()
-@click.option(
-    "--target",
-    "-t",
-    default=None,
-    help="RPC target path, e.g. /system/worker/<id> or /alice/job/0 (default: controller)",
-)
-@click.argument("profiler", type=click.Choice(["threads", "cpu", "mem"]))
-@click.option("--duration", "-d", default=10, help="Profiling duration in seconds")
-@click.option("--output", "-o", default=None, help="Output file path")
-@click.option("--locals", "include_locals", is_flag=True, help="Include local variables in thread dump")
-@click.option("--native", "include_native", is_flag=True, help="Include native frames in thread dump")
-@click.pass_context
-def profile(
-    ctx,
-    target: str | None,
+def run_profile(
+    ctx: click.Context,
+    target: str,
     profiler: str,
     duration: int,
     output: str | None,
     include_locals: bool,
     include_native: bool,
-):
-    """Profile the process (threads, cpu, or mem).
-
-    By default profiles the controller. Use --target with the full RPC path:
-    /system/worker/<id> for a worker, /alice/job/0 for a task container.
-    """
+) -> None:
+    """Capture a profile for one RPC process target."""
     url = require_controller_url(ctx)
-    rpc_target = target or SYSTEM_PROCESS_TARGET
-    label = target or "Controller"
+    label = "Controller" if target == SYSTEM_PROCESS_TARGET else target
 
     if profiler == "threads":
         profile_type = job_pb2.ProfileType(threads=job_pb2.ThreadsProfile(locals=include_locals, native=include_native))
@@ -166,7 +148,7 @@ def profile(
     with rpc_client_for_ctx(ctx, url=url) as client:
         resp = client.profile_task(
             job_pb2.ProfileTaskRequest(
-                target=rpc_target,
+                target=target,
                 duration_seconds=duration,
                 profile_type=profile_type,
             )
@@ -188,6 +170,40 @@ def profile(
         with open(default_name, "wb") as f:
             f.write(resp.profile_data)
         click.echo(f"Profile written to {default_name}")
+
+
+@process_group.command()
+@click.option(
+    "--target",
+    "-t",
+    default=None,
+    help="RPC target path, e.g. /system/worker/<id> or /alice/job/0 (default: controller)",
+)
+@click.argument("profiler", type=click.Choice(["threads", "cpu", "mem"]))
+@click.option("--duration", "-d", default=10, help="Profiling duration in seconds")
+@click.option("--output", "-o", default=None, help="Output file path")
+@click.option("--locals", "include_locals", is_flag=True, help="Include local variables in thread dump")
+@click.option("--native", "include_native", is_flag=True, help="Include native frames in thread dump")
+@click.pass_context
+def profile(
+    ctx: click.Context,
+    target: str | None,
+    profiler: str,
+    duration: int,
+    output: str | None,
+    include_locals: bool,
+    include_native: bool,
+) -> None:
+    """Profile the controller, a worker, or a Task container."""
+    run_profile(
+        ctx,
+        target or SYSTEM_PROCESS_TARGET,
+        profiler,
+        duration,
+        output,
+        include_locals,
+        include_native,
+    )
 
 
 def register_process_status_commands(iris_group: click.Group) -> None:

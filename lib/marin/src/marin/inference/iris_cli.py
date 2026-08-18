@@ -615,9 +615,9 @@ def main(
             click.echo(f"  timeout      {timeout_hours:g}h")
             click.echo(f"  req timeout  {proxy_timeout:g}s  (per-request proxy budget)")
             if controller is None and cluster:
-                click.echo(f"  stop with    iris --cluster {cluster} job stop {job}")
+                click.echo(f"  cancel with  iris --cluster {cluster} job cancel {job}")
             else:
-                click.echo(f"  stop with    iris --controller-url {controller_url} job stop {job}")
+                click.echo(f"  cancel with  iris --controller-url {controller_url} job cancel {job}")
             click.echo("")
 
             if not wait:
