@@ -22,7 +22,10 @@ from rigging.filesystem.buckets import filesystem_for
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
-from zephyr.runners import InlineRunner
+from zephyr.runners import SubprocessRunner
+from zephyr.shuffle import ListShard
+from zephyr.stage_io import ShardTask, TaskResult
+from zephyr.worker_context import CounterEntry
 from zephyr.writers import (
     DEFAULT_PARQUET_COMPRESSION,
     DEFAULT_PARQUET_COMPRESSION_LEVEL,
@@ -103,6 +106,30 @@ class ObjectFingerprint:
 
 class _OutputNotSmaller(Exception):
     pass
+
+
+class _OOMSkippingSubprocessRunner:
+    """Treat an OOM-killed rewrite subprocess as an empty output shard."""
+
+    def __init__(self) -> None:
+        self._runner = SubprocessRunner()
+
+    def execute(
+        self,
+        task: ShardTask,
+        chunk_prefix: str,
+        execution_id: str,
+    ) -> tuple[TaskResult, dict[str, CounterEntry]]:
+        try:
+            return self._runner.execute(task, chunk_prefix, execution_id)
+        except MemoryError as error:
+            logger.error("Skipping OOM-killed Parquet shard %d: %s", task.shard_idx, error)
+            task_counters = self._runner.live_counters()
+            task_counters[f"{COUNTER_PREFIX}/files_skipped_oom"] = CounterEntry(1, stage=task.stage_name)
+            return TaskResult(shard=ListShard(refs=[])), task_counters
+
+    def live_counters(self) -> dict[str, CounterEntry]:
+        return self._runner.live_counters()
 
 
 def _info_value(info: dict, *names: str) -> str | None:
@@ -296,7 +323,7 @@ def create_rewrite_context(
             preemptible=False,
         ),
         max_workers=workers,
-        stage_runner_factory=InlineRunner,
+        stage_runner_factory=_OOMSkippingSubprocessRunner,
     )
 
 
