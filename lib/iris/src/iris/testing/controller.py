@@ -85,7 +85,7 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthTracker,
     WorkerLiveness,
 )
-from iris.cluster.controller.workload_actions import WorkloadActions
+from iris.cluster.controller.workload_actions import WorkloadActions, register_workload_actions
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
@@ -101,7 +101,7 @@ from iris.cluster.types import (
     WorkerId,
 )
 from iris.managed_thread import get_thread_container
-from iris.rpc import controller_pb2, job_pb2, resource_job_pb2, resource_task_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.resource_registry import ResourceRegistryBuilder
 from iris.rpc.resource_service import ResourceServiceImpl
 from iris.testing.backends import make_mock_platform
@@ -369,10 +369,7 @@ def make_controller_service(
         wake=mock_controller.wake,
     )
     registry = ResourceRegistryBuilder()
-    registry.bind("/job/update", actions.update_job, payload=resource_job_pb2.JobUpdate)
-    registry.bind("/task/update", actions.update_task, payload=resource_task_pb2.TaskUpdate)
-    registry.bind("/attempt/update", actions.update_attempt, payload=resource_task_pb2.AttemptUpdate)
-    registry.bind("/operation/get", actions.get_operation)
+    register_workload_actions(registry, actions)
     resource_service = ResourceServiceImpl(registry.freeze())
     return ControllerServiceImpl(
         controller=mock_controller,

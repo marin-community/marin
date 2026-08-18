@@ -64,7 +64,7 @@ class ResourceRegistryBuilder:
 
 
 class ResourceRegistry:
-    """Immutable dispatch table injected into one ResourceService."""
+    """Immutable verb bindings indexed by resource type."""
 
     def __init__(self, bindings: Mapping[tuple[str, ResourceVerb], ResourceBinding]) -> None:
         self._bindings = MappingProxyType(dict(bindings))

@@ -1983,7 +1983,7 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.TerminateJobRequest,
         ctx: Any,
     ) -> job_pb2.Empty:
-        """Translate the compatibility RPC into a logical-current Job update."""
+        """Cancel the current Job incarnation and its descendants."""
         resource_service, actions = self._resource_bindings()
         update = resource_job_pb2.JobUpdate(cancel=resource_job_pb2.CancelJob())
         packed = any_pb2.Any()
@@ -2227,7 +2227,7 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.KickTasksRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.KickTasksResponse:
-        """Translate the compatibility batch into independent resource updates."""
+        """Apply a terminal disposition to each selected active Attempt."""
         if request.desired_state not in _KICK_STATES:
             allowed = ", ".join(task_state_friendly(state) for state in _KICK_STATES)
             raise ConnectError(Code.INVALID_ARGUMENT, f"desired_state must be one of: {allowed}")

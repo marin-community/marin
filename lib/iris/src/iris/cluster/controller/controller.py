@@ -109,7 +109,7 @@ from iris.cluster.controller.scheduling.scheduler import (
 from iris.cluster.controller.service import CapabilityUrlConfig, ControllerServiceImpl
 from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.worker_health import WorkerLiveness
-from iris.cluster.controller.workload_actions import WorkloadActions
+from iris.cluster.controller.workload_actions import WorkloadActions, register_workload_actions
 from iris.cluster.endpoints import TELEMETRY_ENDPOINT_PATH
 from iris.cluster.federation.availability import Promotion, QueuedCandidate
 from iris.cluster.federation.manager import (
@@ -128,7 +128,7 @@ from iris.cluster.types import (
     WorkerId,
 )
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import controller_pb2, job_pb2, resource_job_pb2, resource_pb2, resource_task_pb2
+from iris.rpc import controller_pb2, job_pb2, resource_pb2
 from iris.rpc.auth import SESSION_COOKIE
 from iris.rpc.resource_registry import ResourceRegistryBuilder
 from iris.rpc.resource_service import ResourceServiceImpl
@@ -517,22 +517,7 @@ class Controller:
             wake=self.wake,
         )
         resource_registry = ResourceRegistryBuilder()
-        resource_registry.bind(
-            "/job/update",
-            self._workload_actions.update_job,
-            payload=resource_job_pb2.JobUpdate,
-        )
-        resource_registry.bind(
-            "/task/update",
-            self._workload_actions.update_task,
-            payload=resource_task_pb2.TaskUpdate,
-        )
-        resource_registry.bind(
-            "/attempt/update",
-            self._workload_actions.update_attempt,
-            payload=resource_task_pb2.AttemptUpdate,
-        )
-        resource_registry.bind("/operation/get", self._workload_actions.get_operation)
+        register_workload_actions(resource_registry, self._workload_actions)
         self._resource_service = ResourceServiceImpl(resource_registry.freeze())
         self._service = ControllerServiceImpl(
             controller=self,
@@ -1799,15 +1784,15 @@ class Controller:
         self,
         request: controller_pb2.Controller.KickTasksRequest,
     ) -> controller_pb2.Controller.KickTasksResponse:
-        """Apply legacy administrative state overrides through ResourceService."""
+        """Force selected Task attempts to a supported terminal state."""
         return self._service.kick_tasks(request, None)
 
     def update_resource(self, request: resource_pb2.UpdateResourceRequest) -> resource_pb2.Operation:
-        """Apply one generic resource mutation."""
+        """Accept a registered resource mutation."""
         return self._resource_service.update_resource(request, None)
 
     def get_resource(self, request: resource_pb2.GetResourceRequest) -> resource_pb2.GetResourceResponse:
-        """Read one generic resource."""
+        """Read a registered resource."""
         return self._resource_service.get_resource(request, None)
 
     def get_resource_service_info(self) -> resource_pb2.GetServiceInfoResponse:

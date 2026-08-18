@@ -47,19 +47,13 @@ def migrate(raw_conn) -> None:
         CREATE TABLE IF NOT EXISTS resource_operation_targets (
             operation_id VARCHAR NOT NULL
                 REFERENCES resource_operations(operation_id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
             authority_cluster_id VARCHAR NOT NULL,
             resource_type VARCHAR NOT NULL,
             resource_id VARCHAR NOT NULL,
             resource_uid VARCHAR NOT NULL,
-            task_id VARCHAR NOT NULL,
-            attempt_id INTEGER NOT NULL,
-            attempt_uid VARCHAR NOT NULL,
             backend_id VARCHAR NOT NULL,
-            PRIMARY KEY (operation_id, attempt_uid)
+            PRIMARY KEY (operation_id, ordinal)
         )
         """
-    )
-    raw_conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_resource_operation_targets_attempt "
-        "ON resource_operation_targets (attempt_uid)"
     )

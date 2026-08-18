@@ -35,9 +35,9 @@ DASHBOARD_ROLE = "dashboard"
 # authenticated.
 FEDERATION_PEER_ROLE = "federation-peer"
 
-# RPCs a federation-peer identity may call unconditionally: whole-job handoff, routed
-# cancel, delta-sync, and the capability heartbeat. A default-deny allowlist, like
-# DASHBOARD_READABLE_RPCS.
+# RPCs a federation-peer identity may call unconditionally: handoff, status sync,
+# capability discovery, generic resource access, and the temporary TerminateJob
+# compatibility route. A default-deny allowlist, like DASHBOARD_READABLE_RPCS.
 FEDERATION_RPCS: frozenset[str] = frozenset(
     {
         "LaunchJob",

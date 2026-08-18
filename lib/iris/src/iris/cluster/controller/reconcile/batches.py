@@ -635,10 +635,7 @@ class ReconcileState:
         *,
         action: str,
     ) -> None:
-        """Fail selected tasks and their coscheduled siblings with one deduped cascade.
-
-        Notes touched jobs; the recompute pass finalizes any that go terminal.
-        """
+        """Fail selected tasks and their coscheduled siblings once per cascade."""
         if not rows:
             return
         direct_task_wires: set[str] = set()

@@ -500,16 +500,13 @@ resource_operation_targets_table = Table(
         ForeignKey("resource_operations.operation_id", ondelete="CASCADE"),
         nullable=False,
     ),
+    Column("ordinal", Integer, nullable=False),
     Column("authority_cluster_id", String, nullable=False),
     Column("resource_type", String, nullable=False),
     Column("resource_id", String, nullable=False),
     Column("resource_uid", String, nullable=False),
-    Column("task_id", JobNameType, nullable=False),
-    Column("attempt_id", Integer, nullable=False),
-    Column("attempt_uid", String, nullable=False),
     Column("backend_id", String, nullable=False),
-    PrimaryKeyConstraint("operation_id", "attempt_uid"),
-    Index("idx_resource_operation_targets_attempt", "attempt_uid"),
+    PrimaryKeyConstraint("operation_id", "ordinal"),
 )
 
 

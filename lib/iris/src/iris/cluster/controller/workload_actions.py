@@ -5,7 +5,9 @@
 
 import hashlib
 import json
+import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -30,12 +32,21 @@ from iris.cluster.federation.store import FederationDirection, HandoffState
 from iris.cluster.types import DEFAULT_BACKEND_ID, LOCAL_CLUSTER, JobName
 from iris.rpc import resource_job_pb2, resource_pb2, resource_task_pb2
 from iris.rpc.auth import DASHBOARD_ROLE, FEDERATION_PEER_ROLE, authorize_resource_owner
+from iris.rpc.resource_registry import ResourceRegistryBuilder
 
 JOB_TYPE = "iris/job"
 TASK_TYPE = "iris/task"
 ATTEMPT_TYPE = "iris/attempt"
 
 _UID_NAMESPACE = uuid.UUID("2c72b7f4-a156-5d27-8b58-7de28d5ec4cc")
+_RETRYABLE_REMOTE_CODES = frozenset(
+    {
+        Code.ABORTED,
+        Code.DEADLINE_EXCEEDED,
+        Code.RESOURCE_EXHAUSTED,
+        Code.UNAVAILABLE,
+    }
+)
 _TERMINAL_REMOTE_CODES = frozenset(
     {
         Code.INVALID_ARGUMENT,
@@ -46,6 +57,8 @@ _TERMINAL_REMOTE_CODES = frozenset(
         Code.UNIMPLEMENTED,
     }
 )
+
+logger = logging.getLogger(__name__)
 
 
 class FederationResourceActions(Protocol):
@@ -137,7 +150,7 @@ class WorkloadActions:
         self._wake = wake
 
     def logical_ref(self, resource_type: str, resource_id: str) -> resource_pb2.ResourceRef:
-        """Build the legacy adapter's logical-current selector with the right authority."""
+        """Return a logical-current reference for a workload resource."""
         with self._db.read_snapshot() as tx:
             if resource_type == JOB_TYPE:
                 job = self._job(tx, JobName.from_wire(resource_id))
@@ -195,7 +208,11 @@ class WorkloadActions:
                         now_ms=Timestamp.now().epoch_ms(),
                         error="Cancelled before handoff",
                     )
-            phase = "accepted" if remote else ("verifying" if targets else "verified")
+            phase = (
+                operation_store.OperationPhase.ACCEPTED
+                if remote
+                else (operation_store.OperationPhase.VERIFYING if targets else operation_store.OperationPhase.VERIFIED)
+            )
             operation_id = uuid.uuid4().hex
             operation_store.insert_operation(
                 tx,
@@ -230,7 +247,7 @@ class WorkloadActions:
     ) -> resource_pb2.Operation:
         if request.ref.type != TASK_TYPE:
             raise ConnectError(Code.INVALID_ARGUMENT, "Task update requires a Task ref")
-        return self._update_attempt(request, update, task_selector=True)
+        return self._accept_attempt_update(request, update, self._resolve_task_selector)
 
     def update_attempt(
         self,
@@ -240,7 +257,7 @@ class WorkloadActions:
     ) -> resource_pb2.Operation:
         if request.ref.type != ATTEMPT_TYPE:
             raise ConnectError(Code.INVALID_ARGUMENT, "Attempt update requires an Attempt ref")
-        return self._update_attempt(request, update, task_selector=False)
+        return self._accept_attempt_update(request, update, self._resolve_attempt_selector)
 
     def get_operation(
         self,
@@ -279,21 +296,23 @@ class WorkloadActions:
             if row.peer_id:
                 self._progress_remote(row)
             elif (
-                row.phase == "verifying"
+                row.phase == operation_store.OperationPhase.VERIFYING
                 and row.operation_id in verification_candidates
                 and verification_candidates[row.operation_id] <= reconciled_backends
             ):
                 with self._db.transaction() as tx:
                     current = operation_store.by_id(tx, row.operation_id)
-                    if current is not None and current.phase == "verifying":
+                    if current is not None and current.phase == operation_store.OperationPhase.VERIFYING:
                         operation_store.mark_verified(tx, row.operation_id)
 
-    def _update_attempt(
+    def _accept_attempt_update(
         self,
         request: resource_pb2.UpdateResourceRequest,
         update: resource_task_pb2.TaskUpdate | resource_task_pb2.AttemptUpdate,
-        *,
-        task_selector: bool,
+        resolve: Callable[
+            [Tx, resource_pb2.ResourceRef],
+            tuple[_TaskCoordinates, _AttemptCoordinates, resource_pb2.ResourceRef],
+        ],
     ) -> resource_pb2.Operation:
         kind, default_reason = _terminal_intent(update.WhichOneof("intent"))
         reason = request.mutation.reason or default_reason
@@ -305,27 +324,11 @@ class WorkloadActions:
                 return duplicate
             self._authorize_new(tx, request.ref)
 
-            if task_selector:
-                task = self._task(tx, JobName.from_wire(request.ref.id))
-                resolved = task.ref(self._cluster_id)
-                _require_selector(request.ref, resolved)
-                attempt = self._current_attempt(tx, task)
-            else:
-                task_id, attempt_id = _parse_attempt_id(request.ref.id)
-                task = self._task(tx, task_id)
-                attempt = self._attempt(tx, task, attempt_id)
-                resolved = attempt.ref(self._cluster_id)
-                _require_selector(request.ref, resolved)
-                if task.current_attempt_id != attempt_id:
-                    raise ConnectError(Code.FAILED_PRECONDITION, "Attempt is no longer current")
-
+            task, attempt, resolved = resolve(tx, request.ref)
             if task.state not in ACTIVE_TASK_STATES or attempt.finished_at is not None:
                 raise ConnectError(Code.FAILED_PRECONDITION, "Task has no active Attempt")
             target = RuntimeTarget(
                 ref=attempt.ref(self._cluster_id),
-                task_id=task.task_id,
-                attempt_id=attempt.attempt_id,
-                attempt_uid=attempt.attempt_uid,
                 backend_id=task.backend_id or DEFAULT_BACKEND_ID,
             )
             remote = task.cluster != LOCAL_CLUSTER
@@ -345,7 +348,7 @@ class WorkloadActions:
                 resolved_ref=resolved,
                 update=packed,
                 reason=reason,
-                phase="accepted" if remote else "verifying",
+                phase=(operation_store.OperationPhase.ACCEPTED if remote else operation_store.OperationPhase.VERIFYING),
                 peer_id=task.cluster if remote else "",
                 targets=(target,),
                 now=Timestamp.now(),
@@ -361,6 +364,30 @@ class WorkloadActions:
             operation = operation_store.to_proto(tx, row)
         self._wake()
         return operation
+
+    def _resolve_task_selector(
+        self,
+        tx: Tx,
+        requested: resource_pb2.ResourceRef,
+    ) -> tuple[_TaskCoordinates, _AttemptCoordinates, resource_pb2.ResourceRef]:
+        task = self._task(tx, JobName.from_wire(requested.id))
+        resolved = task.ref(self._cluster_id)
+        _require_selector(requested, resolved)
+        return task, self._current_attempt(tx, task), resolved
+
+    def _resolve_attempt_selector(
+        self,
+        tx: Tx,
+        requested: resource_pb2.ResourceRef,
+    ) -> tuple[_TaskCoordinates, _AttemptCoordinates, resource_pb2.ResourceRef]:
+        task_id, attempt_id = _parse_attempt_id(requested.id)
+        task = self._task(tx, task_id)
+        attempt = self._attempt(tx, task, attempt_id)
+        resolved = attempt.ref(self._cluster_id)
+        _require_selector(requested, resolved)
+        if task.current_attempt_id != attempt_id:
+            raise ConnectError(Code.FAILED_PRECONDITION, "Attempt is no longer current")
+        return task, attempt, resolved
 
     def _replay(
         self,
@@ -516,9 +543,6 @@ class WorkloadActions:
                     f"{row.task_id.to_wire()}:{row.attempt_id}",
                     str(row.attempt_uid),
                 ),
-                task_id=row.task_id,
-                attempt_id=int(row.attempt_id),
-                attempt_uid=str(row.attempt_uid),
                 backend_id=str(row.backend_id) or DEFAULT_BACKEND_ID,
             )
             for row in rows
@@ -526,7 +550,7 @@ class WorkloadActions:
 
     def _progress_remote(self, row) -> None:
         try:
-            if row.phase == "accepted":
+            if row.phase == operation_store.OperationPhase.ACCEPTED:
                 remote = self._federation.update_resource(row.peer_id, operation_store.forwarded_request(row))
                 self._record_remote_phase(row, remote)
                 return
@@ -558,13 +582,21 @@ class WorkloadActions:
             elif error.code in _TERMINAL_REMOTE_CODES:
                 with self._db.transaction() as tx:
                     operation_store.mark_failed(tx, row.operation_id, code=error.code, message=error.message)
-        except (ConnectionError, OSError):
-            return
+            elif error.code in _RETRYABLE_REMOTE_CODES:
+                logger.debug("Resource operation %s will retry after peer error: %s", row.operation_id, error)
+            else:
+                with self._db.transaction() as tx:
+                    operation_store.mark_failed(tx, row.operation_id, code=error.code, message=error.message)
+        except (ConnectionError, OSError) as error:
+            logger.debug("Resource operation %s will retry after peer error: %s", row.operation_id, error)
 
     def _record_remote_phase(self, row, remote: resource_pb2.Operation) -> None:
         with self._db.transaction() as tx:
             current = operation_store.by_id(tx, row.operation_id)
-            if current is None or current.phase not in ("accepted", "verifying"):
+            if current is None or current.phase not in (
+                operation_store.OperationPhase.ACCEPTED,
+                operation_store.OperationPhase.VERIFYING,
+            ):
                 return
             expected_target = operation_store.resolved_ref(current)
             if (
@@ -604,6 +636,14 @@ class WorkloadActions:
                     code=Code.INTERNAL,
                     message="peer returned an invalid operation phase",
                 )
+
+
+def register_workload_actions(registry: ResourceRegistryBuilder, actions: WorkloadActions) -> None:
+    """Register workload nouns and their accepted update payloads."""
+    registry.bind("/job/update", actions.update_job, payload=resource_job_pb2.JobUpdate)
+    registry.bind("/task/update", actions.update_task, payload=resource_task_pb2.TaskUpdate)
+    registry.bind("/attempt/update", actions.update_attempt, payload=resource_task_pb2.AttemptUpdate)
+    registry.bind("/operation/get", actions.get_operation)
 
 
 def _uid(resource_type: str, *parts: object) -> str:

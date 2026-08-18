@@ -4,6 +4,7 @@
 """Persistence for durable resource mutations and their runtime targets."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 from connectrpc.code import Code
 from google.protobuf import any_pb2
@@ -15,26 +16,22 @@ from iris.cluster.controller.schema import (
     resource_operation_targets_table,
     resource_operations_table,
 )
-from iris.cluster.types import JobName
 from iris.rpc import resource_pb2
 from iris.time_proto import timestamp_to_proto
 
 OPERATION_TYPE = "iris/operation"
 
-_PHASE_TO_PROTO = {
-    "accepted": resource_pb2.OPERATION_PHASE_ACCEPTED,
-    "verifying": resource_pb2.OPERATION_PHASE_VERIFYING,
-    "verified": resource_pb2.OPERATION_PHASE_VERIFIED,
-    "failed": resource_pb2.OPERATION_PHASE_FAILED,
-}
+
+class OperationPhase(StrEnum):
+    ACCEPTED = "accepted"
+    VERIFYING = "verifying"
+    VERIFIED = "verified"
+    FAILED = "failed"
 
 
 @dataclass(frozen=True, slots=True)
 class RuntimeTarget:
     ref: resource_pb2.ResourceRef
-    task_id: JobName
-    attempt_id: int
-    attempt_uid: str
     backend_id: str
 
 
@@ -56,7 +53,7 @@ def by_id(tx: Tx, operation_id: str):
 def pending(tx: Tx):
     return tx.execute(
         select(resource_operations_table)
-        .where(resource_operations_table.c.phase.in_(("accepted", "verifying")))
+        .where(resource_operations_table.c.phase.in_((OperationPhase.ACCEPTED, OperationPhase.VERIFYING)))
         .order_by(resource_operations_table.c.accepted_at_ms, resource_operations_table.c.operation_id)
     ).all()
 
@@ -72,7 +69,7 @@ def insert_operation(
     resolved_ref: resource_pb2.ResourceRef,
     update: any_pb2.Any,
     reason: str,
-    phase: str,
+    phase: OperationPhase,
     peer_id: str,
     targets: tuple[RuntimeTarget, ...],
     now: Timestamp,
@@ -98,8 +95,8 @@ def insert_operation(
             phase=phase,
             peer_id=peer_id,
             accepted_at_ms=now,
-            applied_at_ms=now if phase != "accepted" else None,
-            completed_at_ms=now if phase == "verified" else None,
+            applied_at_ms=now if phase != OperationPhase.ACCEPTED else None,
+            completed_at_ms=now if phase == OperationPhase.VERIFIED else None,
         )
     )
     if targets:
@@ -108,23 +105,21 @@ def insert_operation(
             [
                 {
                     "operation_id": operation_id,
+                    "ordinal": ordinal,
                     "authority_cluster_id": target.ref.authority_cluster_id,
                     "resource_type": target.ref.type,
                     "resource_id": target.ref.id,
                     "resource_uid": target.ref.uid,
-                    "task_id": target.task_id,
-                    "attempt_id": target.attempt_id,
-                    "attempt_uid": target.attempt_uid,
                     "backend_id": target.backend_id,
                 }
-                for target in targets
+                for ordinal, target in enumerate(targets)
             ],
         )
 
 
 def mark_verifying(tx: Tx, operation_id: str, *, remote_operation_id: str = "") -> None:
     values: dict[str, object] = {
-        "phase": "verifying",
+        "phase": OperationPhase.VERIFYING,
         "applied_at_ms": Timestamp.now(),
     }
     if remote_operation_id:
@@ -141,7 +136,7 @@ def mark_verified(tx: Tx, operation_id: str) -> None:
     tx.execute(
         update(resource_operations_table)
         .where(resource_operations_table.c.operation_id == operation_id)
-        .values(phase="verified", completed_at_ms=now)
+        .values(phase=OperationPhase.VERIFIED, completed_at_ms=now)
     )
 
 
@@ -151,7 +146,7 @@ def mark_failed(tx: Tx, operation_id: str, *, code: Code, message: str) -> None:
         update(resource_operations_table)
         .where(resource_operations_table.c.operation_id == operation_id)
         .values(
-            phase="failed",
+            phase=OperationPhase.FAILED,
             error_code=int(code),
             error_message=message,
             completed_at_ms=now,
@@ -171,7 +166,7 @@ def verification_targets(tx: Tx) -> dict[str, frozenset[str]]:
             resource_operation_targets_table.c.operation_id == resource_operations_table.c.operation_id,
         )
         .where(
-            resource_operations_table.c.phase == "verifying",
+            resource_operations_table.c.phase == OperationPhase.VERIFYING,
             resource_operations_table.c.peer_id == "",
         )
     ).all()
@@ -189,16 +184,16 @@ def to_proto(tx: Tx, row) -> resource_pb2.Operation:
             id=row.operation_id,
             uid=row.operation_id,
         ),
-        phase=_PHASE_TO_PROTO[row.phase],
+        phase=_phase_to_proto(row.phase),
         verb=row.verb,
         requested_ref=_requested_ref(row),
         resolved_ref=resolved_ref(row),
         accepted_at=timestamp_to_proto(row.accepted_at_ms),
     )
     target_rows = tx.execute(
-        select(resource_operation_targets_table).where(
-            resource_operation_targets_table.c.operation_id == row.operation_id
-        )
+        select(resource_operation_targets_table)
+        .where(resource_operation_targets_table.c.operation_id == row.operation_id)
+        .order_by(resource_operation_targets_table.c.ordinal)
     ).all()
     operation.affected.extend(
         resource_pb2.ResourceRef(
@@ -244,3 +239,16 @@ def resolved_ref(row) -> resource_pb2.ResourceRef:
         id=row.resolved_id,
         uid=row.resolved_uid,
     )
+
+
+def _phase_to_proto(phase: str) -> int:
+    match OperationPhase(phase):
+        case OperationPhase.ACCEPTED:
+            return resource_pb2.OPERATION_PHASE_ACCEPTED
+        case OperationPhase.VERIFYING:
+            return resource_pb2.OPERATION_PHASE_VERIFYING
+        case OperationPhase.VERIFIED:
+            return resource_pb2.OPERATION_PHASE_VERIFIED
+        case OperationPhase.FAILED:
+            return resource_pb2.OPERATION_PHASE_FAILED
+    raise ValueError(f"unknown operation phase: {phase!r}")

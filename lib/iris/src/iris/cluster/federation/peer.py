@@ -1,14 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""One connection per federation peer, plus its capability-heartbeat state.
+"""One controller connection per federation peer and its heartbeat state.
 
 :class:`FederationPeer` holds one connection per peer (keyed by peer id) and caches
-the backends that peer last advertised. The connection speaks the generated controller
-stub directly (not the end-user ``RemoteClusterClient``): federation drives a peer only
-with the raw RPCs — ``LaunchJob`` (handoff), ``FederationSync``, and ``ListBackends``
-(heartbeat). It presents the credentials
-resolved from the peer's cluster manifest via ``credentials_for``.
+the backends and resource updates that peer last advertised. The connection speaks the
+generated controller and resource stubs directly rather than the end-user client. It
+presents credentials resolved from the peer's cluster manifest via ``credentials_for``.
 """
 
 import logging
@@ -228,11 +226,11 @@ class FederationPeer:
         self._heartbeat = PeerHeartbeat()
 
     def probe(self) -> None:
-        """Refresh the peer's advertised backends via one heartbeat RPC.
+        """Refresh the peer's backends and resource capabilities.
 
-        On success, records the peer's backends, marks it reachable, and stamps the
-        contact time. On failure, marks it unreachable and keeps the last-known
-        backends — staleness is signalled by ``reachable``.
+        A peer without ResourceService remains reachable with no resource
+        capabilities. Other failures mark the combined observation unreachable
+        while retaining its last-known values.
         """
         try:
             backends = self._connection.list_backends()
@@ -243,8 +241,18 @@ class FederationPeer:
             return
         try:
             resource_info = self._resource_connection.get_service_info()
-        except (ConnectError, ConnectionError, OSError):
+        except ConnectError as exc:
+            if exc.code != Code.UNIMPLEMENTED:
+                logger.warning("Resource capability heartbeat to peer %s failed: %s", self.peer_id, exc)
+                with self._lock:
+                    self._heartbeat = replace(self._heartbeat, reachable=False)
+                return
             resource_info = None
+        except (ConnectionError, OSError) as exc:
+            logger.warning("Resource capability heartbeat to peer %s failed: %s", self.peer_id, exc)
+            with self._lock:
+                self._heartbeat = replace(self._heartbeat, reachable=False)
+            return
         with self._lock:
             self._heartbeat = PeerHeartbeat(
                 reachable=True,
@@ -260,7 +268,10 @@ class FederationPeer:
 
     def supports_update(self, resource_type: str, update_type_url: str) -> bool:
         with self._lock:
-            info = self._heartbeat.resource_info
+            heartbeat = self._heartbeat
+        if not heartbeat.reachable:
+            raise ConnectError(Code.UNAVAILABLE, f"Peer {self.peer_id!r} is unreachable")
+        info = heartbeat.resource_info
         return info is not None and any(
             capability.type == resource_type and update_type_url in capability.update_type_urls
             for capability in info.resources
