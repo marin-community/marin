@@ -200,8 +200,6 @@ def generate_marin_style_update(
     if REVISION.fullmatch(revision) is None:
         raise ValueError("marin-style revision must be a full lowercase commit SHA")
     old_revision = _old_revision(repo_root, consumer)
-    if old_revision == revision:
-        raise ValueError("consumer already pins the target marin-style revision")
 
     new_manifest = _manifest_for_revision(revision)
     old_manifest = _checked_in_manifest(repo_root, expected_revision=old_revision)
@@ -221,12 +219,13 @@ def generate_marin_style_update(
             raise ValueError("checked-in manifest does not match the pinned marin-style revision")
         old_paths = frozenset(path for path, _ in old_manifest.files)
 
-    _replace_pin_files(
-        repo_root,
-        consumer,
-        old_revision=old_revision,
-        new_revision=revision,
-    )
+    if old_revision != revision:
+        _replace_pin_files(
+            repo_root,
+            consumer,
+            old_revision=old_revision,
+            new_revision=revision,
+        )
     subprocess.run(
         [
             "uvx",
@@ -243,7 +242,7 @@ def generate_marin_style_update(
     if written_manifest != new_manifest:
         raise ValueError("marin-style sync wrote a manifest that differs from the installed package")
 
-    if consumer.lock_mode is LockMode.UV:
+    if consumer.lock_mode is LockMode.UV and old_revision != revision:
         _update_uv_lock(repo_root, old_revision=old_revision, new_revision=revision)
 
     new_paths = frozenset(path for path, _ in new_manifest.files)
@@ -323,7 +322,9 @@ def update_consumer(
         required_checks=consumer.required_checks,
     )
     branch = prepare_update_branch(policy=initial_policy, repository=consumer.repository)
-    if old_revision == revision:
+    if old_revision == revision and manifest_mode is ManifestMode.VALIDATE:
+        if _checked_in_manifest(repo_root, expected_revision=revision) is None:
+            raise ValueError("consumer has no marin-style manifest; run the reviewed bootstrap first")
         if branch.pull_request_url:
             raise ValueError(f"consumer is current but has an open automation PR: {branch.pull_request_url}")
         return ConsumerUpdateResult(status=ConsumerUpdateStatus.CURRENT, pull_request_url="")

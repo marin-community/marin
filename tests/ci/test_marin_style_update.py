@@ -8,13 +8,16 @@ from pathlib import Path
 
 import pytest
 
+from scripts.ci.dependency_update import BranchPushMode, PublishedPullRequest, UpdateBranch
 from scripts.ci.marin_style_consumers import LEGACY_MANAGED_FILES, LockMode, MarinStyleConsumer
 from scripts.ci.marin_style_update import (
+    ConsumerUpdateStatus,
     GeneratedManifest,
     ManifestMode,
     MergeMode,
     _parser,
     generate_marin_style_update,
+    update_consumer,
 )
 
 OLD_REVISION = "a" * 40
@@ -78,10 +81,15 @@ def _consumer_repository(tmp_path: Path) -> tuple[Path, MarinStyleConsumer]:
     return repository, consumer
 
 
-def _install_fake_uvx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _install_fake_uvx(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    revision: str = NEW_REVISION,
+) -> None:
     manifest = {
         "format": 1,
-        "revision": NEW_REVISION,
+        "revision": revision,
         "files": {path: f"sha256:{'0' * 64}" for path in sorted(LEGACY_MANAGED_FILES)},
     }
     manifest_file = tmp_path / "target-manifest.json"
@@ -107,6 +115,43 @@ def _install_fake_uvx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     uvx.chmod(0o755)
     monkeypatch.setenv("FAKE_MANIFEST", str(manifest_file))
     monkeypatch.setenv("PATH", f"{binary_dir}:{os.environ['PATH']}")
+
+
+def test_bootstrap_publishes_manifest_when_consumer_already_pins_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, consumer = _consumer_repository(tmp_path)
+    _install_fake_uvx(tmp_path, monkeypatch, revision=OLD_REVISION)
+    monkeypatch.chdir(repository)
+    monkeypatch.setattr("scripts.ci.marin_style_update._preflight", lambda _consumer: None)
+    monkeypatch.setattr(
+        "scripts.ci.marin_style_update.prepare_update_branch",
+        lambda **_kwargs: UpdateBranch(
+            expected_remote_sha="",
+            pull_request_url="",
+            push_mode=BranchPushMode.CREATE,
+        ),
+    )
+    monkeypatch.setattr(
+        "scripts.ci.marin_style_update.publish_update",
+        lambda **_kwargs: PublishedPullRequest(
+            head_sha="c" * 40,
+            url="https://github.com/marin-community/test/pull/1",
+        ),
+    )
+
+    result = update_consumer(
+        consumer=consumer,
+        revision=OLD_REVISION,
+        merge_mode=MergeMode.PUBLISH,
+        app_slug="updater",
+        manifest_mode=ManifestMode.BOOTSTRAP,
+    )
+
+    assert result.status is ConsumerUpdateStatus.PUBLISHED
+    assert result.pull_request_url == "https://github.com/marin-community/test/pull/1"
+    assert (repository / ".agents/marin-style/manifest.json").is_file()
 
 
 def test_generate_bootstrap_updates_only_registered_and_managed_files(
