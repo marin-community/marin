@@ -123,3 +123,20 @@ Inkling uses short causal convolutions with kernel size 4 in the K stream, V str
 - Result: four segmented value/gradient and optimizer tests passed; 67 XLA reference tests passed; the two Grug variant contract cases passed; the lazy experiment graph resolves with the intended shape, resources, tracker, and step count.
 - Interpretation: CPU/XLA behavior and explicit-sharding lowering are validated. TPU compilation and training remain untested until Iris submission.
 - Next action: push the snapshot and submit `MOE-PSC-001` to Iris.
+
+### 2026-08-17 18:10 PDT - Iris submission
+
+- Commit Hash: `1619d1cf90`
+- Coordinator: `/held/moe-pallas-sconv-smoke-8377`
+- Training child: `/held/moe-pallas-sconv-smoke-8377/grug-train-MOE-PSC-001-d512-v5p8-smoke`
+- W&B: https://wandb.ai/marin-community/marin_moe/runs/MOE-PSC-001-d512-v5p8-smoke
+- Status: the child acquired one v5p-8 in us-central1-a, initialized JAX across four chips, authenticated to W&B, and began loading the training cache.
+- Next action: monitor compilation, all 25 steps, final checkpoint publication, Iris success, and W&B completion.
+
+### 2026-08-17 18:12 PDT - Explicit-mesh lowering failure
+
+- Result: the first attempt failed before compilation with `AssertionError: (2, P(('replica_dcn', 'data', 'expert'), None, 'model'))`. Iris retried once after the process aborted.
+- Interpretation: the Pallas call received globally sharded arrays under an explicit mesh. Its block mapping operates on shard-local ranks and requires a manual-axis `shard_map` boundary.
+- Action: stopped the coordinator, wrapped the Pallas implementation in `shard_map`, sharded convolution channels over the model axis, and added an abstract-mesh lowering regression.
+- Validation: the lowering regression and six targeted numerical, gradient, mask, and optimizer tests passed. The full targeted kernel and variant selection also passed.
+- Next action: publish the fix snapshot and resubmit the smoke run.

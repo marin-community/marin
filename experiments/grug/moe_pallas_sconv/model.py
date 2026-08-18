@@ -280,7 +280,7 @@ class ShortConv(eqx.Module):
     @staticmethod
     def init(channels: int, kernel_size: int) -> "ShortConv":
         weight = jnp.zeros((channels, kernel_size), dtype=jnp.float32).at[:, -1].set(1.0)
-        return ShortConv(weight=reshard(weight, P(None, None)), kernel_size=kernel_size)
+        return ShortConv(weight=reshard(weight, P("model", None)), kernel_size=kernel_size)
 
     def __call__(
         self,

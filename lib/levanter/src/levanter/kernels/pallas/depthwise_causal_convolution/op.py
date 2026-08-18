@@ -11,6 +11,7 @@ from typing import Literal, TypeAlias
 
 import jax
 import jax.numpy as jnp
+from jax.sharding import NamedSharding, PartitionSpec as P, reshard
 
 from .backward_kernel import _backward_core
 from .forward_kernel import _forward_core, _pad_size
@@ -131,6 +132,53 @@ _depthwise_causal_convolution_pallas.defvjp(
 )
 
 
+def _depthwise_causal_convolution_pallas_sharded(
+    x: jax.Array,
+    W: jax.Array,
+    b: jax.Array | None,
+    h0: jax.Array | None,
+    output_state: bool,
+    activation_function: str | None,
+) -> tuple[jax.Array, jax.Array | None]:
+    sharding = jax.typeof(x).sharding
+    if not isinstance(sharding, NamedSharding):
+        return _depthwise_causal_convolution_pallas(x, W, b, h0, output_state, activation_function)
+
+    input_parts = tuple(sharding.spec) + (None,) * (x.ndim - len(sharding.spec))
+    if input_parts[1] is not None:
+        raise ValueError("pallas_tpu depthwise causal convolution requires an unsharded sequence dimension")
+
+    input_spec = P(*input_parts)
+    weight_spec = P(input_parts[-1], None)
+    bias_spec = P(input_parts[-1])
+    state_spec = P(input_parts[0], input_parts[-1], None)
+
+    x = reshard(x, input_spec)
+    W = reshard(W, weight_spec)
+    if b is not None:
+        b = reshard(b, bias_spec)
+    if h0 is not None:
+        h0 = reshard(h0, state_spec)
+
+    def _local(local_x, local_W, local_b, local_h0):
+        return _depthwise_causal_convolution_pallas(
+            local_x, local_W, local_b, local_h0, output_state, activation_function
+        )
+
+    return jax.shard_map(
+        _local,
+        mesh=sharding.mesh,
+        in_specs=(
+            input_spec,
+            weight_spec,
+            bias_spec if b is not None else None,
+            state_spec if h0 is not None else None,
+        ),
+        out_specs=(input_spec, state_spec if output_state else None),
+        check_vma=False,
+    )(x, W, b, h0)
+
+
 IMPLEMENTATIONS = {
     "pallas_tpu": _depthwise_causal_convolution_pallas,
     "xla": _depthwise_causal_convolution_reference,
@@ -210,13 +258,13 @@ def depthwise_causal_convolution(
         implementation = _default_implementation()
 
     if implementation == "pallas_tpu":
-        input, input_state = _depthwise_causal_convolution_pallas(
+        input, input_state = _depthwise_causal_convolution_pallas_sharded(
             x=input,
             W=weight,
             b=bias,
             h0=input_state,
             output_state=output_state,
-            ACTIVATION=activation_function,
+            activation_function=activation_function,
         )
     elif implementation == "xla":
         input, input_state = _depthwise_causal_convolution_reference(
