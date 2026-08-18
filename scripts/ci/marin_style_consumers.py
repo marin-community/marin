@@ -9,6 +9,8 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 from types import MappingProxyType
 
+UV_LOCK_FILE = "uv.lock"
+
 
 class LockMode(StrEnum):
     NONE = "none"
@@ -20,6 +22,7 @@ class MarinStyleConsumer:
     name: str
     repository: str
     base_branch: str
+    revision_file: str
     pin_files: tuple[str, ...]
     required_checks: tuple[str, ...]
     lock_mode: LockMode = LockMode.NONE
@@ -27,7 +30,7 @@ class MarinStyleConsumer:
     @property
     def lock_files(self) -> tuple[str, ...]:
         if self.lock_mode is LockMode.UV:
-            return ("uv.lock",)
+            return (UV_LOCK_FILE,)
         return ()
 
 
@@ -35,6 +38,7 @@ def _consumer(
     name: str,
     repository: str,
     *,
+    revision_file: str,
     pin_files: tuple[str, ...],
     required_checks: tuple[str, ...],
     lock_mode: LockMode = LockMode.NONE,
@@ -44,18 +48,21 @@ def _consumer(
         raise ValueError(f"invalid marin-style consumer: {name!r}, {repository!r}")
     if not pin_files or len(pin_files) != len(set(pin_files)):
         raise ValueError(f"consumer {name!r} must have unique pin files")
+    if revision_file not in pin_files:
+        raise ValueError(f"consumer {name!r} revision file must be a registered pin")
     for path in pin_files:
         relative = PurePosixPath(path)
         if relative.is_absolute() or relative.as_posix() != path or ".." in relative.parts or "*" in path:
             raise ValueError(f"consumer {name!r} has invalid pin file {path!r}")
-        if path == "uv.lock":
-            raise ValueError(f"consumer {name!r} must declare uv.lock through lock_mode")
+        if path == UV_LOCK_FILE:
+            raise ValueError(f"consumer {name!r} must declare {UV_LOCK_FILE} through lock_mode")
     if not required_checks or len(required_checks) != len(set(required_checks)):
         raise ValueError(f"consumer {name!r} must have unique required checks")
     return MarinStyleConsumer(
         name=name,
         repository=repository,
         base_branch="main",
+        revision_file=revision_file,
         pin_files=pin_files,
         required_checks=required_checks,
         lock_mode=lock_mode,
@@ -66,6 +73,7 @@ _CONSUMERS = (
     _consumer(
         "harbor",
         "marin-community/harbor",
+        revision_file="infra/pre-commit.py",
         pin_files=(
             ".github/workflows/marin-ci.yaml",
             ".github/workflows/marin-nightly.yaml",
@@ -76,6 +84,7 @@ _CONSUMERS = (
     _consumer(
         "tpu-inference",
         "marin-community/tpu-inference",
+        revision_file="infra/pre-commit.py",
         pin_files=(
             ".github/workflows/marin-ci.yaml",
             ".github/workflows/marin-e2e-nightly.yaml",
@@ -86,6 +95,7 @@ _CONSUMERS = (
     _consumer(
         "vllm",
         "marin-community/vllm",
+        revision_file="infra/pre-commit.py",
         pin_files=(
             ".github/workflows/marin-ci.yaml",
             ".github/workflows/marin-nightly.yaml",
@@ -96,6 +106,7 @@ _CONSUMERS = (
     _consumer(
         "evalchemy",
         "marin-community/evalchemy",
+        revision_file="infra/pre-commit.py",
         pin_files=(
             ".github/workflows/e2e-nightly.yaml",
             ".github/workflows/marin-ci.yaml",
@@ -106,12 +117,14 @@ _CONSUMERS = (
     _consumer(
         "axolotl",
         "marin-community/axolotl",
+        revision_file="infra/pre-commit.py",
         pin_files=(".github/workflows/marin-ci.yaml", "infra/pre-commit.py"),
         required_checks=("marin-style", "tests"),
     ),
     _consumer(
         "marinskyrl",
         "marin-community/MarinSkyRL",
+        revision_file="infra/pre-commit.py",
         pin_files=(
             ".github/workflows/cpu_ci.yaml",
             ".github/workflows/marin-nightly.yaml",
@@ -152,7 +165,7 @@ LEGACY_MANAGED_FILES = frozenset(
 
 
 def marin_style_consumer(name: str) -> MarinStyleConsumer:
-    """Return one registered consumer."""
+    """Return a registered consumer or raise ValueError for an unknown name."""
     try:
         return MARIN_STYLE_CONSUMERS[name]
     except KeyError as error:

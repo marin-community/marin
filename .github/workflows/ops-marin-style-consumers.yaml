@@ -1,5 +1,9 @@
 name: "Ops - Marin Style Consumer Update"
 
+env:
+  PYTHON_VERSION: "3.12"
+  UV_VERSION: "0.9.26"
+
 on:
   workflow_dispatch:
     inputs:
@@ -8,18 +12,9 @@ on:
         required: false
         type: string
       consumer:
-        description: "Consumer repository"
-        required: true
-        default: "all"
-        type: choice
-        options:
-          - all
-          - harbor
-          - tpu-inference
-          - vllm
-          - evalchemy
-          - axolotl
-          - marinskyrl
+        description: "Registered consumer name; empty selects all"
+        required: false
+        type: string
       bootstrap:
         description: "Add the first generated manifest; cannot auto-merge"
         required: true
@@ -51,8 +46,8 @@ jobs:
           path: marin-style
       - uses: astral-sh/setup-uv@v7
         with:
-          version: "0.9.26"
-          python-version: "3.12"
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
       - id: config
         env:
           SELECTED_CONSUMER: ${{ inputs.consumer }}
@@ -60,12 +55,8 @@ jobs:
           revision=$(git -C marin-style rev-parse HEAD)
           git -C marin-style fetch origin main:refs/remotes/origin/main
           git -C marin-style merge-base --is-ancestor "$revision" origin/main
-          consumer="$SELECTED_CONSUMER"
-          if [[ "$consumer" == "all" ]]; then
-            consumer=""
-          fi
           matrix=$(PYTHONPATH=marin uv run --no-project python \
-            -m scripts.ci.marin_style_update matrix --consumer "$consumer")
+            -m scripts.ci.marin_style_update matrix --consumer "$SELECTED_CONSUMER")
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
@@ -105,8 +96,8 @@ jobs:
           path: consumer
       - uses: astral-sh/setup-uv@v7
         with:
-          version: "0.9.26"
-          python-version: "3.12"
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
       - name: Prepare consumer update
         env:
           APP_SLUG: ${{ vars.DEPENDENCY_UPDATER_APP_SLUG }}

@@ -10,7 +10,6 @@ import pytest
 
 from scripts.ci.marin_style_consumers import LEGACY_MANAGED_FILES, LockMode, MarinStyleConsumer
 from scripts.ci.marin_style_update import (
-    MARIN_STYLE_MANIFEST,
     GeneratedManifest,
     ManifestMode,
     generate_marin_style_update,
@@ -44,6 +43,7 @@ def _consumer_repository(tmp_path: Path) -> tuple[Path, MarinStyleConsumer]:
         name="test",
         repository="marin-community/test",
         base_branch="main",
+        revision_file="infra/pre-commit.py",
         pin_files=("infra/pre-commit.py", ".github/workflows/marin-ci.yaml"),
         required_checks=("test",),
         lock_mode=LockMode.NONE,

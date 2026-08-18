@@ -24,6 +24,7 @@ from scripts.ci.dependency_update import (
 from scripts.ci.dependency_update_policy import PullRequestPolicy
 from scripts.ci.marin_style_consumers import (
     LEGACY_MANAGED_FILES,
+    UV_LOCK_FILE,
     LockMode,
     MarinStyleConsumer,
     marin_style_consumer,
@@ -31,19 +32,19 @@ from scripts.ci.marin_style_consumers import (
 )
 
 MARIN_STYLE_REPOSITORY = "https://github.com/marin-community/marin-style"
+MARIN_STYLE_PACKAGE = "marin-style"
 MARIN_STYLE_MANIFEST = ".agents/marin-style/manifest.json"
 MARIN_STYLE_BRANCH = "automation/marin-style"
 MARIN_STYLE_TITLE = "[dependencies] Advance marin-style"
-MARIN_STYLE_PIN = re.compile(
-    r"https://github\.com/marin-community/marin-style(?:\.git)?@([0-9a-f]{40})"
-)
+MARIN_STYLE_PIN = re.compile(r"https://github\.com/marin-community/marin-style(?:\.git)?@([0-9a-f]{40})")
 REVISION = re.compile(r"[0-9a-f]{40}")
 CONTENT_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 MANAGED_PREFIXES = (".agents/marin-style/", ".agents/skills/")
-PR_BODY = """Advance marin-style to `{revision}` and regenerate its shared agent guidance.
-
-Changed paths are restricted to registered revision pins, the generated lockfile where applicable, and files owned by the old and new marin-style manifests.
-"""
+PR_BODY = (
+    "Advance marin-style to `{revision}` and regenerate its shared agent guidance.\n\n"
+    "Changed paths are restricted to registered revision pins, the generated lockfile where applicable, "
+    "and files owned by the old and new marin-style manifests.\n"
+)
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,18 @@ class MergeMode(StrEnum):
     MERGE = "merge"
 
 
+class ConsumerUpdateStatus(StrEnum):
+    CURRENT = "current"
+    PUBLISHED = "published"
+    MERGED = "merged"
+
+
+@dataclass(frozen=True)
+class ConsumerUpdateResult:
+    status: ConsumerUpdateStatus
+    pull_request_url: str
+
+
 def _run(*args: str, cwd: Path | None = None) -> str:
     return subprocess.run(
         list(args),
@@ -127,7 +140,7 @@ def _checked_in_manifest(repo_root: Path, *, expected_revision: str) -> Generate
 
 
 def _old_revision(repo_root: Path, consumer: MarinStyleConsumer) -> str:
-    canonical = repo_root / "infra/pre-commit.py"
+    canonical = repo_root / consumer.revision_file
     matches = MARIN_STYLE_PIN.findall(canonical.read_text())
     if len(matches) != 1:
         raise ValueError(f"expected one marin-style revision in {canonical}")
@@ -158,14 +171,14 @@ def _replace_pin_files(
 
 def _update_uv_lock(repo_root: Path, *, old_revision: str, new_revision: str) -> None:
     subprocess.run(
-        ["uv", "lock", "--upgrade-package", "marin-style"],
+        ["uv", "lock", "--upgrade-package", MARIN_STYLE_PACKAGE],
         cwd=repo_root,
         check=True,
     )
-    lock_path = repo_root / "uv.lock"
+    lock_path = repo_root / UV_LOCK_FILE
     with lock_path.open("rb") as lock_file:
         payload = tomllib.load(lock_file)
-    packages = [package for package in payload.get("package", []) if package.get("name") == "marin-style"]
+    packages = [package for package in payload.get("package", []) if package.get("name") == MARIN_STYLE_PACKAGE]
     if len(packages) != 1:
         raise ValueError("uv.lock must contain exactly one marin-style package")
     package = packages[0]
@@ -295,8 +308,8 @@ def update_consumer(
     merge_mode: MergeMode,
     app_slug: str,
     manifest_mode: ManifestMode,
-) -> str | None:
-    """Prepare, publish, and optionally merge one consumer update."""
+) -> ConsumerUpdateResult:
+    """Publish one update and return its terminal status and pull-request URL."""
     if manifest_mode is ManifestMode.BOOTSTRAP and merge_mode is MergeMode.MERGE:
         raise ValueError("the manifest bootstrap requires human review")
     _preflight(consumer)
@@ -313,7 +326,7 @@ def update_consumer(
     if old_revision == revision:
         if branch.pull_request_url:
             raise ValueError(f"consumer is current but has an open automation PR: {branch.pull_request_url}")
-        return None
+        return ConsumerUpdateResult(status=ConsumerUpdateStatus.CURRENT, pull_request_url="")
 
     update = generate_marin_style_update(
         repo_root=repo_root,
@@ -342,7 +355,8 @@ def update_consumer(
             timeout=3600,
             poll_interval=30,
         )
-    return pull_request.url
+    status = ConsumerUpdateStatus.MERGED if merge_mode is MergeMode.MERGE else ConsumerUpdateStatus.PUBLISHED
+    return ConsumerUpdateResult(status=status, pull_request_url=pull_request.url)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -364,17 +378,17 @@ def main() -> None:
     if args.command == "matrix":
         print(marin_style_consumer_matrix(args.consumer))
         return
-    url = update_consumer(
+    result = update_consumer(
         consumer=marin_style_consumer(args.consumer),
         revision=args.revision,
         merge_mode=MergeMode.MERGE if args.auto_merge else MergeMode.PUBLISH,
         app_slug=args.app_slug,
         manifest_mode=ManifestMode.BOOTSTRAP if args.bootstrap else ManifestMode.VALIDATE,
     )
-    if url is None:
+    if result.status is ConsumerUpdateStatus.CURRENT:
         print(f"{args.consumer} already pins {args.revision}")
     else:
-        print(f"Updated {url}")
+        print(f"{result.status}: {result.pull_request_url}")
 
 
 if __name__ == "__main__":

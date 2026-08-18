@@ -109,8 +109,8 @@ waiting for review. After changing either control, inspect the preview and run t
 
 App registration and installation remain owner-managed because GitHub's repository-selection
 endpoint requires a user-scoped token unsuitable for unattended Pulumi runs. The installation
-selects `marin` and, after the marin-style updater activation audit, its registered consumer
-repositories. To recreate or rotate the app credential:
+selects `marin` and registered consumer repositories whose protection audit is recorded. To
+recreate or rotate the app credential:
 
 1. Verify that the app has only Contents and Pull requests read/write permission and is installed
    only on `marin` and the repositories in `scripts/ci/marin_style_consumers.py`. Record the app ID,
