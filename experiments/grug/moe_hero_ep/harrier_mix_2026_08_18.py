@@ -99,9 +99,10 @@ def harrier_mix_2026_08_18_data_config(
     total_steps: int,
     batch_size: int,
     max_seq_len: int,
+    enable_simulated_epoching: bool,
     validation: Sequence[ArtifactStep[TokenizedCache]],
 ) -> LmDataConfig:
-    """Build the evaluated two-phase mixture for a simulated experiment budget."""
+    """Build the evaluated two-phase mixture, optionally with simulated epoching."""
     available_tokens = dict(_SPEC.available_tokens)
     phase_weights = tuple(dict(weights) for weights in _SPEC.phase_weights)
     components = {
@@ -124,13 +125,17 @@ def harrier_mix_2026_08_18_data_config(
     collisions = components.keys() & val_components.keys()
     if collisions:
         raise ValueError(f"validation components collide with Harrier buckets: {sorted(collisions)}")
-    experiment_budget = _simulated_experiment_budget(
-        total_steps=total_steps,
-        batch_size=batch_size,
-        max_seq_len=max_seq_len,
-    )
-    if experiment_budget > TOTAL_TOKENS:
-        raise ValueError(f"experiment budget {experiment_budget} exceeds target budget {TOTAL_TOKENS}")
+    target_budget = None
+    experiment_budget = None
+    if enable_simulated_epoching:
+        experiment_budget = _simulated_experiment_budget(
+            total_steps=total_steps,
+            batch_size=batch_size,
+            max_seq_len=max_seq_len,
+        )
+        if experiment_budget > TOTAL_TOKENS:
+            raise ValueError(f"experiment budget {experiment_budget} exceeds target budget {TOTAL_TOKENS}")
+        target_budget = TOTAL_TOKENS
 
     return _two_phase_data_config(
         tokenizer=marin_tokenizer,
@@ -138,6 +143,6 @@ def harrier_mix_2026_08_18_data_config(
         phase_weights=phase_weights,
         phase_1_start=_phase_1_start_step(total_steps, batch_size),
         val_components=val_components,
-        target_budget=TOTAL_TOKENS,
+        target_budget=target_budget,
         experiment_budget=experiment_budget,
     )
