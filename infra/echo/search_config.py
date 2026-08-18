@@ -52,7 +52,15 @@ RERANK_MAX_CANDIDATES = 20
 RERANK_BATCH_SIZE = 4
 RERANK_BASE_WEIGHT = 0.2
 RERANK_MODEL_WEIGHT = 0.8
-MIN_RERANK_SCORE = -2.0
+MIN_RERANK_SCORE_BY_DOMAIN: Mapping[SearchDomain, float] = MappingProxyType(
+    {
+        "wiki": -1.0,
+        "file": -2.0,
+        "discord": -2.0,
+        "pr": -2.0,
+        "issue": -2.0,
+    }
+)
 PROSE_FILE_SUFFIXES = (".md", ".rst")
 IDENTIFIER_QUERY_PATTERN = re.compile(r"[/_.:]|(?:[a-z][A-Z])|(?:^|\s)--?[a-z0-9]")
 QUERY_WORD_PATTERN = re.compile(r"[a-z0-9]+")

@@ -205,13 +205,14 @@ search_executions = Table(
 search_execution_results = Table(
     "search_execution_results",
     metadata,
+    Column("id", BigInteger, Identity(always=True), primary_key=True),
     Column(
         "execution_id",
         BigInteger,
         ForeignKey("search_executions.id", ondelete="CASCADE"),
-        primary_key=True,
+        nullable=False,
     ),
-    Column("rank", SmallInteger, primary_key=True),
+    Column("rank", SmallInteger, nullable=False),
     Column("result_id", Text, nullable=False),
     Column("domain", Text, nullable=False),
     Column("title", Text),
@@ -220,6 +221,8 @@ search_execution_results = Table(
     Column("score", Float, nullable=False),
     Column("distance", Float),
     Column("lexical_score", Float),
+    Column("rerank_score", Float),
+    UniqueConstraint("execution_id", "rank", name="search_execution_results_execution_rank"),
     CheckConstraint("rank > 0", name="search_execution_results_rank_positive"),
     CheckConstraint(
         "domain IN ('wiki', 'file', 'discord', 'pr', 'issue')",
@@ -246,12 +249,19 @@ search_feedback_grades = Table(
     metadata,
     Column("feedback_id", BigInteger, ForeignKey("search_feedback.id", ondelete="CASCADE"), primary_key=True),
     Column("result_id", Text, primary_key=True),
+    Column(
+        "search_result_id",
+        BigInteger,
+        ForeignKey("search_execution_results.id", ondelete="SET NULL"),
+    ),
     Column("grade", SmallInteger, nullable=False),
     CheckConstraint(
         f"grade BETWEEN {SEARCH_FEEDBACK_MIN_GRADE} AND {SEARCH_FEEDBACK_MAX_GRADE}",
         name="search_feedback_grades_range",
     ),
     Index("idx_search_feedback_grades_result_id", "result_id"),
+    UniqueConstraint("feedback_id", "search_result_id", name="search_feedback_grades_search_result"),
+    Index("idx_search_feedback_grades_search_result_id", "search_result_id"),
 )
 
 wiki_entries = Table(
