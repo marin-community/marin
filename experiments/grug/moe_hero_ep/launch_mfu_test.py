@@ -25,10 +25,10 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.grug.moe.launch_datakit_moe_mix import _val_component
-from experiments.grug.moe_hero_ep.harrier_mix_2026_08_17 import (
-    HARRIER_MIX_2026_08_17_STORE,
-    HARRIER_MIX_2026_08_17_TAG,
-    harrier_mix_2026_08_17_data_config,
+from experiments.grug.moe_hero_ep.harrier_mix_2026_08_17_1 import (
+    HARRIER_MIX_2026_08_17_1_STORE,
+    HARRIER_MIX_2026_08_17_1_TAG,
+    harrier_mix_2026_08_17_1_data_config,
 )
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, build_hero_configs
 from experiments.grug.moe_hero_ep.train import (
@@ -218,7 +218,7 @@ def build_hero_run(
                     wave_tag,
                     size_tag,
                     "gb200",
-                    HARRIER_MIX_2026_08_17_TAG,
+                    HARRIER_MIX_2026_08_17_1_TAG,
                     "MHEP",
                 ],
                 group="moe-hero-ep",
@@ -245,8 +245,8 @@ def build_hero_run(
             val_components = {v.name: _val_component(ctx.artifact_path(v)) for v in validation}
         else:
             val_components = {v.name: ctx.resolved(v).as_component() for v in validation}
-        data = harrier_mix_2026_08_17_data_config(
-            store_path=ctx.artifact_path(HARRIER_MIX_2026_08_17_STORE),
+        data = harrier_mix_2026_08_17_1_data_config(
+            store_path=ctx.artifact_path(HARRIER_MIX_2026_08_17_1_STORE),
             total_steps=total_schedule_steps,
             batch_size=batch_size,
             max_seq_len=model.max_seq_len,
@@ -273,7 +273,7 @@ def build_hero_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(HARRIER_MIX_2026_08_17_STORE, *validation),
+        deps=(HARRIER_MIX_2026_08_17_1_STORE, *validation),
         runtime_args={"train_resources": train_resources},
     )
 
