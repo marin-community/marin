@@ -14,12 +14,12 @@ from collections.abc import Iterator
 from unittest.mock import patch
 
 import cloudpickle
+import fsspec
 import polars as pl
 import pyarrow.parquet as pq
 import pytest
 from fsspec.implementations.local import LocalFileSystem
 from iris.env_resources import TaskResources
-from rigging.filesystem.factory import url_to_fs
 from zephyr.external_sort import external_sort_merge
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
@@ -584,26 +584,47 @@ def test_external_sort_merge_across_source_shards(tmp_path):
     assert [r["k"] for r in rows] == [1, 2, 3]
 
 
-def test_sidecar_reads_share_one_filesystem(tmp_path):
-    """Concurrent sidecar reads use the caller's filesystem client (#8402).
+class _CountingFileSystem(LocalFileSystem):
+    """Local filesystem under its own protocol that counts the clients built.
+
+    Every real object-store client carries a connection pool, so the number of
+    clients a read fans out to is the quantity that decides whether a pod keeps
+    its ephemeral ports.
+    """
+
+    protocol = "counting"
+    clients_built = 0
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        type(self).clients_built += 1
+
+    @classmethod
+    def _strip_protocol(cls, path):
+        return super()._strip_protocol(str(path).removeprefix("counting://"))
+
+
+def test_sidecar_reads_build_one_client(tmp_path):
+    """Reading many sidecars concurrently builds one client (#8402).
 
     fsspec keys its instance cache on the calling thread, so a filesystem
     resolved inside a pool worker is a client -- and a connection pool -- per
     thread. Every reducer does this against thousands of sidecars, and the
     closed connections park local ports in TIME_WAIT until the pod runs out.
     """
+    fsspec.register_implementation("counting", _CountingFileSystem, clobber=True)
     paths = []
-    for shard_idx in range(4):
+    for shard_idx in range(8):
         data_path = f"{tmp_path}/shard-{shard_idx:04d}/scatter/"
-        paths.append(data_path)
         writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=shard_idx)
         writer.write(_items_to_dataframe([{"k": shard_idx}], _key, None, 1))
         writer.close()
+        paths.append(f"counting://{data_path}")
 
-    url_to_fs(paths[0])  # the instance the caller thread already holds
-    cached_clients = len(LocalFileSystem._cache)
+    _CountingFileSystem.clear_instance_cache()
+    _CountingFileSystem.clients_built = 0
 
     slices = _read_sidecar_slices_parallel(paths, target_shard=0)
 
     assert [s.path for s in slices] == paths
-    assert len(LocalFileSystem._cache) == cached_clients
+    assert _CountingFileSystem.clients_built == 1
