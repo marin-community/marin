@@ -17,6 +17,8 @@ uv pip uninstall nvidia-nccl-cu12 >> /tmp/uvsync.log 2>&1 || true
 uv pip install --no-deps --reinstall nvidia-nccl-cu13==2.30.7 >> /tmp/uvsync.log 2>&1
 uv run --no-sync python -c "import jax; print('jax', jax.__version__)" || { cat /tmp/uvsync.log | tail -20; exit 1; }
 echo SETUP_OK
+nvidia-smi -L || true
+uv run --no-sync python -c "import jax; print(jax.local_devices())" || true
 
 DUMPDIR=/tmp/gpudumps; mkdir -p $DUMPDIR
 pids=()
@@ -77,6 +79,6 @@ for t in $(seq 1 120); do
   fi
 done
 for p in "${pids[@]}"; do wait "$p" 2>/dev/null; done
-echo "--- per-rank tails"
-for i in 0 1 2 3; do echo "-- rank $i"; tail -4 /tmp/repro_$i.log; done
+echo "--- per-rank logs"
+for i in 0 1 2 3; do echo "-- rank $i"; tail -60 /tmp/repro_$i.log; done
 echo DRIVER_DONE
