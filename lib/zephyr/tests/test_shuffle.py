@@ -17,7 +17,9 @@ import cloudpickle
 import polars as pl
 import pyarrow.parquet as pq
 import pytest
+from fsspec.implementations.local import LocalFileSystem
 from iris.env_resources import TaskResources
+from rigging.filesystem.factory import url_to_fs
 from zephyr.external_sort import external_sort_merge
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
@@ -30,6 +32,7 @@ from zephyr.shuffle import (
     ScatterWriter,
     _dataframe_to_items,
     _items_to_dataframe,
+    _read_sidecar_slices_parallel,
     _write_scatter,
 )
 from zephyr.worker_context import _worker_ctx_var
@@ -579,3 +582,28 @@ def test_external_sort_merge_across_source_shards(tmp_path):
         shard=0,
     )
     assert [r["k"] for r in rows] == [1, 2, 3]
+
+
+def test_sidecar_reads_share_one_filesystem(tmp_path):
+    """Concurrent sidecar reads use the caller's filesystem client (#8402).
+
+    fsspec keys its instance cache on the calling thread, so a filesystem
+    resolved inside a pool worker is a client -- and a connection pool -- per
+    thread. Every reducer does this against thousands of sidecars, and the
+    closed connections park local ports in TIME_WAIT until the pod runs out.
+    """
+    paths = []
+    for shard_idx in range(4):
+        data_path = f"{tmp_path}/shard-{shard_idx:04d}/scatter/"
+        paths.append(data_path)
+        writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=shard_idx)
+        writer.write(_items_to_dataframe([{"k": shard_idx}], _key, None, 1))
+        writer.close()
+
+    url_to_fs(paths[0])  # the instance the caller thread already holds
+    cached_clients = len(LocalFileSystem._cache)
+
+    slices = _read_sidecar_slices_parallel(paths, target_shard=0)
+
+    assert [s.path for s in slices] == paths
+    assert len(LocalFileSystem._cache) == cached_clients

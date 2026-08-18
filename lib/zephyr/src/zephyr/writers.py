@@ -3,6 +3,7 @@
 
 """Writers for common output formats."""
 
+import functools
 import itertools
 import logging
 import os
@@ -269,6 +270,10 @@ def _accumulate_tables(
 # upload forever instead of failing it into a retry.
 _S3_NATIVE_CONNECT_TIMEOUT = 30
 _S3_NATIVE_REQUEST_TIMEOUT = 120
+# Matches the attempt budget ``s3_request_bounds_config_kwargs`` gives s3fs.
+# Without it the AWS C++ SDK applies its own default, which no Marin setting
+# reaches.
+_S3_NATIVE_RETRY_MAX_ATTEMPTS = 5
 
 
 def _s3_filesystem_kwargs() -> dict[str, str | bool | int]:
@@ -299,6 +304,34 @@ def _s3_filesystem_kwargs() -> dict[str, str | bool | int]:
     return kwargs
 
 
+@functools.cache
+def _native_s3_filesystem(kwargs: tuple[tuple[str, str | bool | int], ...]) -> pa_fs.S3FileSystem:
+    """One S3 filesystem per configuration, held for the life of the process.
+
+    Every pyarrow filesystem owns a connection pool that dies with the object,
+    so a filesystem per file reuses nothing: each closed connection parks a
+    local port in ``TIME_WAIT`` for 60 s, and a stage writing tens of files per
+    task drains its pod's ephemeral port range until ``connect()`` returns
+    ``EADDRNOTAVAIL`` (#8402). pyarrow filesystems are thread-safe, so one
+    instance serves every writer in the process. The key is the resolved
+    kwargs, so a changed endpoint still builds its own filesystem.
+    """
+    return pa_fs.S3FileSystem(
+        retry_strategy=pa_fs.AwsStandardS3RetryStrategy(max_attempts=_S3_NATIVE_RETRY_MAX_ATTEMPTS),
+        **dict(kwargs),
+    )
+
+
+@functools.cache
+def _native_gcs_filesystem() -> pa_fs.GcsFileSystem:
+    return pa_fs.GcsFileSystem()
+
+
+@functools.cache
+def _native_local_filesystem() -> pa_fs.LocalFileSystem:
+    return pa_fs.LocalFileSystem()
+
+
 def _pyarrow_filesystem(path: str) -> tuple[pa_fs.FileSystem, str] | None:
     """Resolve ``path`` to a native pyarrow ``(filesystem, path)``, or ``None``.
 
@@ -310,13 +343,13 @@ def _pyarrow_filesystem(path: str) -> tuple[pa_fs.FileSystem, str] | None:
     in tests); those fall back to an fsspec handle.
     """
     if "://" not in path:
-        return pa_fs.LocalFileSystem(), path
+        return _native_local_filesystem(), path
     if path.startswith("file://"):
-        return pa_fs.LocalFileSystem(), path[len("file://") :]
+        return _native_local_filesystem(), path[len("file://") :]
     if path.startswith("gs://"):
-        return pa_fs.GcsFileSystem(), path[len("gs://") :]
+        return _native_gcs_filesystem(), path[len("gs://") :]
     if path.startswith("s3://"):
-        return pa_fs.S3FileSystem(**_s3_filesystem_kwargs()), path[len("s3://") :]
+        return _native_s3_filesystem(tuple(sorted(_s3_filesystem_kwargs().items()))), path[len("s3://") :]
     return None
 
 

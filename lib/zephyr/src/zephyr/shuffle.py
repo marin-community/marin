@@ -93,8 +93,10 @@ _SCATTER_METADATA_FILENAME = "metadata.msgpack"
 
 # Number of parallel small-file reads (sidecars, parquet schema footers) each
 # reducer issues while building its ScatterReader. These reads are GCS
-# GET-bound, so a modest pool keeps latency low without thrashing.
-_SIDECAR_READ_CONCURRENCY = 32
+# GET-bound, so a modest pool keeps latency low without thrashing. The bound is
+# per task, and a wave multiplies it: 2,048 reducers at 32 offered ~65,000
+# simultaneous connections, more than a pod has ephemeral ports (#8402).
+_SIDECAR_READ_CONCURRENCY = 8
 # Fraction of available memory available for merging.
 _SCATTER_READ_MEMORY_FRACTION = 0.4
 
@@ -275,18 +277,21 @@ class _SidecarSlice:
     target_bytes: int
 
 
-def _read_sidecar_slice(path: str, target_shard: int) -> _SidecarSlice | None:
+def _read_sidecar_slice(fs: Any, path: str, target_shard: int) -> _SidecarSlice | None:
     """Read one sidecar and return its file list plus the target shard's payload bytes.
 
     Returns ``None`` if the sidecar has no files (empty writer).
+
+    Takes the filesystem from the caller rather than resolving one: fsspec keys
+    its instance cache on the calling thread, so a resolve inside a pool worker
+    builds a client — and a connection pool — per thread (#8402).
 
     Uses ``fs.cat_file`` rather than ``open_url`` — one direct GET returning
     bytes is ~25% faster than going through ``TextIOWrapper(BufferedFile)``
     for small sidecars, and msgpack decodes bytes directly.
     """
-    meta_path = _scatter_meta_path(path)
-    fs, fs_path = url_to_fs(meta_path)
-    meta = _sidecar_decoder().decode(fs.cat_file(fs_path))
+    meta_path = fs._strip_protocol(_scatter_meta_path(path))
+    meta = _sidecar_decoder().decode(fs.cat_file(meta_path))
     files = meta.get("files", [])
     if not files:
         return None
@@ -301,11 +306,16 @@ def _read_sidecar_slice(path: str, target_shard: int) -> _SidecarSlice | None:
 def _read_sidecar_slices_parallel(scatter_paths: list[str], target_shard: int) -> list[_SidecarSlice]:
     """Read every sidecar concurrently and return slices in input order.
 
-    Empty sidecars (no files written) are dropped from the result.
+    Empty sidecars (no files written) are dropped from the result. All sidecars
+    of one scatter live under the same root, so one filesystem resolved here
+    serves the whole pool.
     """
+    if not scatter_paths:
+        return []
     ordered: list[_SidecarSlice | None] = [None] * len(scatter_paths)
+    fs, _ = url_to_fs(_scatter_meta_path(scatter_paths[0]))
     with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
-        futures = {pool.submit(_read_sidecar_slice, p, target_shard): i for i, p in enumerate(scatter_paths)}
+        futures = {pool.submit(_read_sidecar_slice, fs, p, target_shard): i for i, p in enumerate(scatter_paths)}
         for fut in concurrent.futures.as_completed(futures):
             idx = futures[fut]
             ordered[idx] = fut.result()
