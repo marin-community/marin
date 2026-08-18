@@ -86,9 +86,13 @@ overridden per-command (`--project`, `--zone`, …) or via `MARIN_PROBES_*` env 
 
 ### One-time VM creation
 
-`create` provisions the service account (image pull, Cloud Logging, and GCS
-roll-ups), its IAM bindings, and the COS VM in one shot. Marin Iris IAP access
-is declared by `provisioning.gcp.gclb` in `lib/iris/config/marin.yaml`:
+`create` provisions the service account, its Artifact Registry and Cloud
+Logging bindings, and the COS VM. Prefix-scoped GCS roll-up access is declared
+in `infra/pulumi/src/iac/gcp/iam_data.yaml` and applied from the `marin` Pulumi
+stack. Adopt an existing bucket binding with the
+[Program-first import workflow](../pulumi/README.md#adopting-live-resources)
+before applying that stack. Marin Iris IAP access is declared by
+`provisioning.gcp.gclb` in `lib/iris/config/marin.yaml`:
 
 ```bash
 uv run deploy/deploy.py create    # --iris-endpoint / --machine-type to override

@@ -80,13 +80,11 @@ def main() -> None:
                 SecretEnv(name="CW_KEY_ID", secret="cw-object-storage-key-id"),
                 SecretEnv(name="CW_KEY_SECRET", secret="cw-object-storage-key-secret"),
             ),
-            # Read access to the eval record bucket. roles/storage.objectViewer is
-            # project-wide (the component grants project roles, not per-bucket); scope it to
-            # the bucket with a bucket IAM binding if project-wide read is later judged too
-            # broad. roles/compute.viewer lets the run-detail jobs/logs endpoints resolve the
-            # iris controller and finelog VM internal IPs through the Compute API for Direct VPC
-            # egress reads. roles/cloudsql.client comes with cloudsql_instances below.
-            service_account_roles=("roles/storage.objectViewer", "roles/compute.viewer"),
+            # roles/compute.viewer lets the run-detail jobs/logs endpoints resolve the Iris
+            # controller and Finelog VM internal IPs through the Compute API for Direct VPC
+            # egress reads. Bucket-scoped record access is declared in iam_data.yaml.
+            # roles/cloudsql.client comes with cloudsql_instances below.
+            service_account_roles=("roles/compute.viewer",),
             # Attaches the CloudSQL instance to the service so the connector can dial it.
             cloudsql_instances=(CLOUDSQL_INSTANCE,),
             iap_members=tuple(viewers),
