@@ -12,6 +12,7 @@ from scripts.ci.dependency_update import (
     CheckRow,
     MergeDecision,
     PullRequestSnapshot,
+    changed_worktree_files,
     evaluate_merge,
     evaluate_required_checks,
     prepare_update_branch,
@@ -184,6 +185,17 @@ def test_changed_files_are_sorted_and_restricted_to_the_policy() -> None:
         validate_changed_files(["uv.lock", "src/backdoor.py"], policy=EXTERNAL_RUNTIME_POLICY)
 
 
+def test_changed_worktree_files_includes_untracked_generator_outputs(monkeypatch, tmp_path: Path) -> None:
+    repository, _remote, _main_sha = _git_repository(tmp_path)
+    (repository / "uv.lock").write_text("changed\n")
+    generated = repository / ".agents/marin-style/manifest.json"
+    generated.parent.mkdir(parents=True)
+    generated.write_text("{}\n")
+    monkeypatch.chdir(repository)
+
+    assert changed_worktree_files() == (".agents/marin-style/manifest.json", "uv.lock")
+
+
 def test_prepare_update_branch_resets_main_with_a_lease_for_an_existing_branch(monkeypatch, tmp_path: Path) -> None:
     repository, _remote, main_sha = _git_repository(tmp_path)
     _git(repository, "switch", "-c", NATIVE_PACKAGE_POLICY.head_branch)
@@ -211,7 +223,7 @@ def test_publish_update_stages_the_allowlist_and_creates_an_app_pull_request(mon
     repository, remote, _main_sha = _git_repository(tmp_path)
     _git(repository, "switch", "-c", NATIVE_PACKAGE_POLICY.head_branch)
     (repository / "uv.lock").write_text("published update\n")
-    body_file = repository / "body.md"
+    body_file = tmp_path / "body.md"
     body_file.write_text("Update native packages.\n")
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()

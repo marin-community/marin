@@ -19,6 +19,10 @@ class PullRequestPolicy:
     head_branch: str
     title: str
     allowed_files: frozenset[str]
+    required_checks: tuple[str, ...]
+
+
+REQUIRED_CHECKS = ("marin-docs", "marin-integration", "marin-lint", "rust-checks", "unit-tests")
 
 
 EXTERNAL_RUNTIME_POLICY = PullRequestPolicy(
@@ -35,6 +39,7 @@ EXTERNAL_RUNTIME_POLICY = PullRequestPolicy(
             "uv.lock",
         }
     ),
+    required_checks=REQUIRED_CHECKS,
 )
 NATIVE_PACKAGE_POLICY = PullRequestPolicy(
     base_branch="main",
@@ -47,6 +52,7 @@ NATIVE_PACKAGE_POLICY = PullRequestPolicy(
             "uv.lock",
         }
     ),
+    required_checks=REQUIRED_CHECKS,
 )
 DEPENDENCY_UPDATE_POLICIES = MappingProxyType(
     {
@@ -54,6 +60,4 @@ DEPENDENCY_UPDATE_POLICIES = MappingProxyType(
         DependencyUpdate.NATIVE_PACKAGE: NATIVE_PACKAGE_POLICY,
     }
 )
-
-REQUIRED_CHECKS = ("marin-docs", "marin-integration", "marin-lint", "rust-checks", "unit-tests")
 GITHUB_ACTIONS_APP_ID = 15368

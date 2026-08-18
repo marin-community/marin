@@ -15,7 +15,6 @@ from pathlib import Path
 
 from scripts.ci.dependency_update_policy import (
     DEPENDENCY_UPDATE_POLICIES,
-    REQUIRED_CHECKS,
     DependencyUpdate,
     PullRequestPolicy,
 )
@@ -196,14 +195,22 @@ def required_check_rows(pr: str, repository: str) -> tuple[CheckRow, ...]:
     return tuple(CheckRow.from_json(row) for row in rows)
 
 
-def changed_worktree_files() -> tuple[str, ...]:
-    result = subprocess.run(
+def changed_worktree_files(repo_root: Path | None = None) -> tuple[str, ...]:
+    tracked = subprocess.run(
         ["git", "diff", "--name-only"],
+        cwd=repo_root,
         check=True,
         capture_output=True,
         text=True,
     )
-    return tuple(result.stdout.splitlines())
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return tuple(sorted({*tracked.stdout.splitlines(), *untracked.stdout.splitlines()}))
 
 
 def prepare_update_branch(*, policy: PullRequestPolicy, repository: str) -> UpdateBranch:
@@ -410,7 +417,7 @@ def merge_when_green(
             expected_app_slug=app_slug,
             expected_head_sha=expected_head_sha,
         )
-        checks = evaluate_required_checks(required_check_rows(pr, repository), required=REQUIRED_CHECKS)
+        checks = evaluate_required_checks(required_check_rows(pr, repository), required=policy.required_checks)
         decision = evaluate_merge(snapshot.state, checks)
         if decision is MergeDecision.DONE:
             return

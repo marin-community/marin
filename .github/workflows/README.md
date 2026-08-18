@@ -63,7 +63,7 @@ commit subject between the old and new revisions. It opens or refreshes one
 `automation/external-dependencies` pull request when generated state changes
 using the dedicated `marin-external-runtime-updater` GitHub App. The workflow
 checks the app author, branch, title, exact head SHA, and changed-file allowlist,
-then waits up to one hour for the four required main checks before squash
+then waits up to one hour for the five required main checks before squash
 merging. A failure or timeout leaves the pull request open and makes the
 scheduled workflow red.
 
@@ -86,6 +86,30 @@ Finelog, and Iris native versions from PyPI, advances their compatibility floors
 and `uv.lock`, and merges only after the same identity, file, SHA, and CI gates
 pass. Manual dispatch retries a failed or missed update without republishing the
 wheels.
+
+## Marin-style consumer updates
+
+`ops-marin-style-consumers.yaml` prepares exact `marin-style` bumps for Harbor,
+TPU inference, vLLM, Evalchemy, Axolotl, and MarinSkyRL from one registry in
+`scripts/ci/marin_style_consumers.py`. It is manual-only during bootstrap. A run
+can select one consumer or all consumers, a reachable source revision, and
+whether this is the first generated-manifest update. Bootstrap updates cannot
+auto-merge.
+
+Each matrix job mints an installation token limited to one consumer, replaces
+the revision only in registered pin files, regenerates the exact old/new
+manifest-owned files, and updates MarinSkyRL's lockfile. The shared dependency
+updater lifecycle rejects other paths, binds the PR to the expected App author
+and head SHA, and uses that consumer's fixed required-check list. The initial
+manifest revision must be reviewed into every consumer before ordinary updates
+are allowed.
+
+Auto-merge and the six-hour schedule are activated in a later change. Before
+activation, an owner expands the App installation selection and records that
+each consumer grants review-only bypass in every active protection layer while
+retaining required CI. Labels `agent-generated` and `dependencies` must already
+exist in each repository. A failing generator, policy check, or CI run leaves
+the PR open.
 
 ## Canonical recipe: open or update a bot PR with `git + gh`
 

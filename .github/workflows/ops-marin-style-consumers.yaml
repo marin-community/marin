@@ -1,0 +1,133 @@
+name: "Ops - Marin Style Consumer Update"
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: "Reachable marin-style commit; empty selects main"
+        required: false
+        type: string
+      consumer:
+        description: "Consumer repository"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - harbor
+          - tpu-inference
+          - vllm
+          - evalchemy
+          - axolotl
+          - marinskyrl
+      bootstrap:
+        description: "Add the first generated manifest; cannot auto-merge"
+        required: true
+        default: false
+        type: boolean
+      auto_merge:
+        description: "Merge after the registered checks pass"
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.config.outputs.matrix }}
+      revision: ${{ steps.config.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: marin
+      - uses: actions/checkout@v5
+        with:
+          repository: marin-community/marin-style
+          ref: ${{ inputs.revision || 'main' }}
+          fetch-depth: 0
+          path: marin-style
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.9.26"
+          python-version: "3.12"
+      - id: config
+        env:
+          SELECTED_CONSUMER: ${{ inputs.consumer }}
+        run: |
+          revision=$(git -C marin-style rev-parse HEAD)
+          git -C marin-style fetch origin main:refs/remotes/origin/main
+          git -C marin-style merge-base --is-ancestor "$revision" origin/main
+          consumer="$SELECTED_CONSUMER"
+          if [[ "$consumer" == "all" ]]; then
+            consumer=""
+          fi
+          matrix=$(PYTHONPATH=marin uv run --no-project python \
+            -m scripts.ci.marin_style_update matrix --consumer "$consumer")
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  update:
+    needs: [discover]
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: external-runtime-updater
+    concurrency:
+      group: marin-style-update-${{ matrix.name }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ vars.DEPENDENCY_UPDATER_CLIENT_ID }}
+          private-key: ${{ secrets.DEPENDENCY_UPDATER_PRIVATE_KEY }}
+          owner: marin-community
+          repositories: ${{ matrix.repository_name }}
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: actions/checkout@v5
+        with:
+          path: marin
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.base_branch }}
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+          path: consumer
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.9.26"
+          python-version: "3.12"
+      - name: Prepare consumer update
+        env:
+          APP_SLUG: ${{ vars.DEPENDENCY_UPDATER_APP_SLUG }}
+          AUTO_MERGE: ${{ inputs.auto_merge }}
+          BOOTSTRAP: ${{ inputs.bootstrap }}
+          CONSUMER: ${{ matrix.name }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REVISION: ${{ needs.discover.outputs.revision }}
+        run: |
+          args=(
+            run
+            --consumer "$CONSUMER"
+            --revision "$REVISION"
+            --app-slug "$APP_SLUG"
+          )
+          if [[ "$BOOTSTRAP" == "true" ]]; then
+            args+=(--bootstrap)
+          fi
+          if [[ "$AUTO_MERGE" == "true" ]]; then
+            args+=(--auto-merge)
+          fi
+          cd consumer
+          PYTHONPATH="$GITHUB_WORKSPACE/marin" uv run --no-project python \
+            -m scripts.ci.marin_style_update "${args[@]}"

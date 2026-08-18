@@ -100,19 +100,21 @@ and rejects pull-request branches.
 
 Pulumi gives the app a pull-request-only bypass of the one-review rule and no required-CI bypass.
 Organization admins retain an always-on emergency bypass on both rulesets. The CI ruleset requires
-GitHub Actions' own `marin-integration`, `marin-lint`, `rust-checks`, and `unit-tests` runs; matching
-context names from another integration do not satisfy it.
+GitHub Actions' own `marin-docs`, `marin-integration`, `marin-lint`, `rust-checks`, and `unit-tests`
+runs; matching context names from another integration do not satisfy it.
 
 The app review bypass must exist in both the review ruleset and classic `main` branch protection.
 GitHub enforces both controls: a ruleset-only bypass can leave an updater PR with green CI still
 waiting for review. After changing either control, inspect the preview and run the live audit below.
 
 App registration and installation remain owner-managed because GitHub's repository-selection
-endpoint requires a user-scoped token unsuitable for unattended Pulumi runs. The installation must
-select only `marin`. To recreate or rotate the app credential:
+endpoint requires a user-scoped token unsuitable for unattended Pulumi runs. The installation
+selects `marin` and, after the marin-style updater activation audit, its registered consumer
+repositories. To recreate or rotate the app credential:
 
-1. Verify that the app has only Contents and Pull requests read/write permission and remains
-   installed only on `marin`. Record the app ID, client ID, and slug from its settings page.
+1. Verify that the app has only Contents and Pull requests read/write permission and is installed
+   only on `marin` and the repositories in `scripts/ci/marin_style_consumers.py`. Record the app ID,
+   client ID, and slug from its settings page.
 2. Generate a private key and seal it to the protected environment's Actions public key. `--no-store`
    prints ciphertext without creating the secret. Record the matching public-key ID:
 
