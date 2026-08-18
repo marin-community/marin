@@ -209,10 +209,13 @@ def build_ladder_run(
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
-            # No time-based temporary checkpoints -- an offloaded run cannot restore from one (its
-            # pinned-host master/opt state comes back device-kind and mismatches the jitted step), so
-            # they would only cost storage. Keep just the permanent step-interval checkpoints below
-            # plus the forced final one.
+            # Checkpoints are output-only: an offloaded run cannot restore from one (its pinned-host
+            # master/opt state comes back device-kind and mismatches the jitted step). load_checkpoint
+            # is forced False so a retry after a checkpoint starts fresh instead of crashing on the
+            # broken restore. A preempted run therefore restarts at step 0.
+            load_checkpoint=False,
+            # No time-based temporary checkpoints -- they would only exist to enable that broken
+            # restore. Keep just the permanent step-interval checkpoints below plus the forced final.
             checkpointer=CheckpointerConfig(
                 base_path=prefix_join(ctx.output_path, "checkpoints"),
                 temporary_base_path=None,
