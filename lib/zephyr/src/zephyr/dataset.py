@@ -22,11 +22,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class GlobSource:
-    """Lazy file source resolved at plan time via bulk list-objects calls.
-
-    Stores glob patterns and defers expansion to compute_plan(). Patterns are
-    expanded concurrently, with paths and sizes returned by the same listings.
-    """
+    """File patterns and empty-match behavior for a lazy dataset source."""
 
     patterns: tuple[str, ...]
     empty_glob_ok: bool = False
@@ -50,11 +46,7 @@ class FileEntry:
 
 
 def resolve_glob(source: GlobSource) -> list[FileEntry]:
-    """Expand a GlobSource into FileEntry objects with sizes.
-
-    Listing requests are bounded by Rigging's glob worker limit. File metadata
-    comes from those requests, so expansion does not issue per-file stat RPCs.
-    """
+    """Return the unique files and sizes matched by a GlobSource."""
     entries = [
         FileEntry(spec=InputFileSpec(path=entry.path), size=entry.size) for entry in glob_with_metadata(source.patterns)
     ]

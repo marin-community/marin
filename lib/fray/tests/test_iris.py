@@ -26,6 +26,7 @@ from fray.iris_backend import (
 )
 from fray.types import (
     ANY_REGION,
+    ActorConfig,
     Entrypoint,
     GpuConfig,
     JobRequest,
@@ -302,6 +303,22 @@ class TestImagePlumbing:
 
         kwargs = fake_iris.submit.call_args.kwargs
         assert kwargs["task_image"] is None
+
+    def test_actor_group_failure_budget_scales_with_replicas(self):
+        fake_iris = MagicMock()
+        fake_iris.submit.return_value = MagicMock(job_id="job-123")
+        client = FrayIrisClient.from_iris_client(fake_iris)
+
+        client.create_actor_group(
+            object,
+            name="dummy",
+            count=32,
+            actor_config=ActorConfig(max_task_retries=10),
+        )
+
+        kwargs = fake_iris.submit.call_args.kwargs
+        assert kwargs["max_retries_failure"] == 10
+        assert kwargs["max_task_failures"] == 320
 
     def test_submit_job_passes_task_image_to_iris(self):
         """resources.image on a top-level job request reaches iris.submit()."""

@@ -22,11 +22,9 @@ import pyarrow.parquet as pq
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.text.formats import LmDatasetFormatBase, preprocessor_for_format
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
-from rigging.filesystem.glob import glob_with_metadata
 from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
 from zephyr.dataset import Dataset, FileEntry
-from zephyr.input_file import InputFileSpec
 from zephyr.worker_context import zephyr_worker_ctx
 
 from marin.datakit.normalize import generate_id
@@ -75,14 +73,6 @@ def drop_sidecars(files: list[FileEntry]) -> list[FileEntry]:
     """Drop dot-prefixed files — Marin metadata sidecars (``.provenance.json``,
     ``.artifact.json``, …), never training data even with a data extension."""
     return [f for f in files if not os.path.basename(f.path).startswith(".")]
-
-
-def glob_with_sizes(patterns: list[str]) -> list[FileEntry]:
-    """Glob patterns and return FileEntry objects (spec + size).
-
-    Pattern listings run concurrently and return sizes without per-file stat RPCs.
-    """
-    return [FileEntry(spec=InputFileSpec(path=entry.path), size=entry.size) for entry in glob_with_metadata(patterns)]
 
 
 def expand_tokenize_paths(input_paths: list[str]) -> list[str]:
