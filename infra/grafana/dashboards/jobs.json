@@ -190,14 +190,7 @@
       "url": "/d/marin-clusters"
     },
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": true,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Cluster capacity",
-      "type": "link",
-      "url": "/d/marin-cluster-capacity"
+      "linkRef": "cluster_capacity"
     },
     {
       "asDropdown": false,

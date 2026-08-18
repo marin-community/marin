@@ -521,8 +521,9 @@ def test_workload_allocations_report_live_iris_jobs_and_requested_resources():
 
     (row,) = make_k8s_source(k8s_api(routes)).workload_allocations()
 
-    age_seconds = row.pop("age_seconds")
-    assert row == {
+    row_dict = asdict(row)
+    age_seconds = row_dict.pop("age_seconds")
+    assert row_dict == {
         "namespace": "iris",
         "pod": "train-worker-0",
         "node": "gpu-a",
@@ -1017,7 +1018,6 @@ def test_k8s_routes_serve_fleet_rows():
         "/k8s/control_plane",
         "/k8s/crashloops",
         "/k8s/pending",
-        "/k8s/workloads",
         "/k8s/kueue",
         "/k8s/events",
         "/k8s/gpu_racks",

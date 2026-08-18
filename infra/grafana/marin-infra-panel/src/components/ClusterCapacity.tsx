@@ -3,6 +3,7 @@ import { css } from '@emotion/css';
 import { DataFrame } from '@grafana/data';
 import { useTheme2 } from '@grafana/ui';
 import { clusterNodes, frameByRefId, nodeMetrics, taskUsage, workloadAllocations } from '../data';
+import { formatBytes } from '../format';
 import { ClusterNode, NodeMetric, TaskUsage, WorkloadAllocation } from '../types';
 import { SERIES_COLORS } from './palette';
 
@@ -26,6 +27,9 @@ interface JobSummary {
 
 const REF = { workloads: 'W', nodes: 'N', tasks: 'T', host: 'H' } as const;
 const KIB = 1024;
+const MILLICORES_PER_CORE = 1000;
+const SECONDS_PER_MINUTE = 60;
+const SECONDS_PER_HOUR = 60 * SECONDS_PER_MINUTE;
 
 function frameRows<T>(frames: DataFrame[], refId: string, read: (frame: DataFrame) => T[]): T[] {
   const frame = frameByRefId(frames, refId);
@@ -33,33 +37,24 @@ function frameRows<T>(frames: DataFrame[], refId: string, read: (frame: DataFram
 }
 
 function formatCores(millicores: number): string {
-  const cores = millicores / 1000;
+  const cores = millicores / MILLICORES_PER_CORE;
   return cores >= 100 ? Math.round(cores).toString() : cores.toFixed(cores >= 10 ? 1 : 2);
 }
 
-function formatBytes(bytes: number): string {
-  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
-  let value = bytes;
-  let unit = 0;
-  while (value >= KIB && unit < units.length - 1) {
-    value /= KIB;
-    unit += 1;
-  }
-  return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
-}
-
 function formatAge(seconds: number): string {
-  if (seconds < 3600) {
-    return `${Math.max(1, Math.round(seconds / 60))}m`;
+  if (seconds < SECONDS_PER_HOUR) {
+    return `${Math.max(1, Math.round(seconds / SECONDS_PER_MINUTE))}m`;
   }
-  return `${(seconds / 3600).toFixed(1)}h`;
+  return `${(seconds / SECONDS_PER_HOUR).toFixed(1)}h`;
 }
 
 function parseCpu(quantity: string): number {
   if (!quantity) {
     return 0;
   }
-  return quantity.endsWith('m') ? Number(quantity.slice(0, -1)) : Number(quantity) * 1000;
+  return quantity.endsWith('m')
+    ? Number(quantity.slice(0, -1))
+    : Number(quantity) * MILLICORES_PER_CORE;
 }
 
 function parseMemory(quantity: string): number {
@@ -71,7 +66,7 @@ function parseMemory(quantity: string): number {
   return Number(match[1]) * KIB ** units.indexOf(match[2] ?? '');
 }
 
-function percent(value?: number): string {
+function formatPercent(value?: number): string {
   return value === undefined ? '—' : `${Math.round(value)}%`;
 }
 
@@ -138,7 +133,7 @@ function ResourceBar({ label, used, capacity, actual }: { label: string; used: n
       <div className={css`height:6px;border-radius:4px;background:${theme.colors.background.canvas};overflow:hidden;`}>
         <div className={css`width:${reserved}%;height:100%;background:${theme.colors.primary.main};`} />
       </div>
-      <span>{Math.round(reserved)}% req{actual === undefined ? '' : ` · ${percent(actual)} live`}</span>
+      <span>{Math.round(reserved)}% req{actual === undefined ? '' : ` · ${formatPercent(actual)} live`}</span>
     </div>
   );
 }
@@ -185,7 +180,7 @@ function NodeCard({ node, workloads, metrics, jobs }: {
               return <div role="listitem" aria-label={workload ? `${workload.job} GPU` : 'Unallocated GPU'} title={workload?.task ?? 'Unallocated'} key={index} className={css`height:25px;border-radius:3px;border:1px solid ${workload ? jobColor(workload.job, jobs) : theme.colors.border.weak};background:${workload ? `${jobColor(workload.job, jobs)}33` : theme.colors.background.canvas};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px;box-sizing:border-box;font-size:9px;`}>{workload ? shortJob(workload.job) : ''}</div>;
             })}
           </div>
-          <div className={css`font-size:11px;color:${theme.colors.text.secondary};margin-top:4px;`}>GPU {percent(metric('gpu_utilization_percent'))} live · HBM {percent(gpuMemoryPercent)}</div>
+          <div className={css`font-size:11px;color:${theme.colors.text.secondary};margin-top:4px;`}>GPU {formatPercent(metric('gpu_utilization_percent'))} live · HBM {formatPercent(gpuMemoryPercent)}</div>
         </div>
       )}
       <ResourceBar label="CPU" used={cpuRequested} capacity={cpuCapacity} actual={metric('node_cpu_utilization_percent')} />

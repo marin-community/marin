@@ -31,7 +31,7 @@ import logging
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TypeVar
@@ -64,7 +64,9 @@ _GPU_RESOURCE = "nvidia.com/gpu"
 _IRIS_TASK_ID_ENV = "IRIS_TASK_ID"
 _IRIS_TASK_RESOURCES_ENV = "IRIS_TASK_RESOURCES"
 _IRIS_MANAGED_LABEL = "iris.managed"
+_IRIS_JOB_ID_LABEL = "iris.job_id"
 _IRIS_TASK_ID_ANNOTATION = "iris.task_id"
+_IRIS_TASK_CONTAINER = "task"
 _TERMINAL_POD_PHASES = frozenset(("Succeeded", "Failed"))
 _FINELOG_CONTAINER = "finelog"
 _FINELOG_FALLBACK_SERVER = "finelog-mirror"
@@ -166,6 +168,25 @@ class TerminationClass(StrEnum):
     TERMINAL = "terminal"
     UNBOUND = "unbound"
     NODE_CLEANUP = "node_cleanup"
+
+
+@dataclass(frozen=True)
+class WorkloadAllocation:
+    """Current placement and resource request for one Iris task pod."""
+
+    namespace: str
+    pod: str
+    node: str
+    job: str
+    task: str
+    phase: str
+    ready: bool
+    priority_class: str
+    age_seconds: int
+    cpu_request_millicores: int
+    memory_request_bytes: int
+    gpu_request_count: int
+    gpu_variant: str
 
 
 @dataclass(frozen=True)
@@ -457,7 +478,7 @@ class K8sSource:
 
     def finelog_pods(self) -> list[FinelogPod]:
         """Report each finelog Deployment, including a Missing row when it has no pod."""
-        rows = []
+        rows: list[FinelogPod] = []
         for deployment in self._finelog_deployments():
             metadata = deployment.get("metadata") or {}
             namespace = metadata.get("namespace") or "default"
@@ -584,9 +605,9 @@ class K8sSource:
         rows.sort(key=lambda row: row["age_seconds"] or 0, reverse=True)
         return rows
 
-    def workload_allocations(self) -> list[dict]:
+    def workload_allocations(self) -> list[WorkloadAllocation]:
         """Live Iris task placement and requested resources, one row per pod."""
-        rows = []
+        rows: list[WorkloadAllocation] = []
         for pod in self._scan_pods("status.phase!=Succeeded,status.phase!=Failed"):
             metadata = pod.get("metadata") or {}
             labels = metadata.get("labels") or {}
@@ -603,23 +624,23 @@ class K8sSource:
             gpu = (resources.get("device") or {}).get("gpu") or {}
             spec = pod.get("spec") or {}
             rows.append(
-                {
-                    "namespace": metadata.get("namespace") or "",
-                    "pod": metadata.get("name") or "",
-                    "node": spec.get("nodeName") or "",
-                    "job": _root_job_id(task, labels.get("iris.job_id") or ""),
-                    "task": task,
-                    "phase": phase,
-                    "ready": _pod_condition(pod, "Ready").get("status") == "True",
-                    "priority_class": spec.get("priorityClassName") or "",
-                    "age_seconds": _age_seconds(metadata.get("creationTimestamp")) or 0,
-                    "cpu_request_millicores": int(resources.get("cpu_millicores") or 0),
-                    "memory_request_bytes": int(resources.get("memory_bytes") or 0),
-                    "gpu_request_count": int(gpu.get("count") or 0),
-                    "gpu_variant": gpu.get("variant") or "",
-                }
+                WorkloadAllocation(
+                    namespace=metadata.get("namespace") or "",
+                    pod=metadata.get("name") or "",
+                    node=spec.get("nodeName") or "",
+                    job=_root_job_id(task, labels.get(_IRIS_JOB_ID_LABEL) or ""),
+                    task=task,
+                    phase=phase,
+                    ready=_pod_condition(pod, "Ready").get("status") == "True",
+                    priority_class=spec.get("priorityClassName") or "",
+                    age_seconds=_age_seconds(metadata.get("creationTimestamp")) or 0,
+                    cpu_request_millicores=int(resources.get("cpu_millicores") or 0),
+                    memory_request_bytes=int(resources.get("memory_bytes") or 0),
+                    gpu_request_count=int(gpu.get("count") or 0),
+                    gpu_variant=gpu.get("variant") or "",
+                )
             )
-        return sorted(rows, key=lambda row: (row["node"], row["job"], row["task"]))
+        return sorted(rows, key=lambda row: (row.node, row.job, row.task))
 
     def node_architectures(self) -> dict[str, str]:
         architectures = {}
@@ -698,7 +719,7 @@ class K8sSource:
                     gpu_count=_pod_gpu_count(pod),
                     task_attempt=_iris_task_attempt(pod),
                     task_label=labels.get("iris.task_id") or "",
-                    job_label=labels.get("iris.job_id") or "",
+                    job_label=labels.get(_IRIS_JOB_ID_LABEL) or "",
                     priority_class=spec.get("priorityClassName") or "",
                     finalizers=",".join(finalizers),
                     classification=_termination_class(pod, overdue_seconds),
@@ -876,19 +897,19 @@ class K8sSource:
 
 
 def _node_gpu_capacity(node: dict) -> int:
-    raw = ((node.get("status") or {}).get("capacity") or {}).get(_GPU_RESOURCE, 0)
-    try:
-        return int(raw)
-    except (TypeError, ValueError) as err:
-        raise ValueError(f"invalid {_GPU_RESOURCE} capacity quantity: {raw!r}") from err
+    return _node_gpu_quantity(node, "capacity")
 
 
 def _node_gpu_allocatable(node: dict) -> int:
-    raw = ((node.get("status") or {}).get("allocatable") or {}).get(_GPU_RESOURCE, 0)
+    return _node_gpu_quantity(node, "allocatable")
+
+
+def _node_gpu_quantity(node: dict, field: str) -> int:
+    raw = ((node.get("status") or {}).get(field) or {}).get(_GPU_RESOURCE, 0)
     try:
         return int(raw)
     except (TypeError, ValueError) as err:
-        raise ValueError(f"invalid {_GPU_RESOURCE} allocatable quantity: {raw!r}") from err
+        raise ValueError(f"invalid {_GPU_RESOURCE} {field} quantity: {raw!r}") from err
 
 
 def _node_ready(node: dict) -> bool:
@@ -975,23 +996,21 @@ def _pod_gpu_count(pod: dict) -> int:
 
 
 def _iris_task_attempt(pod: dict) -> str:
+    return _iris_task_environment_value(pod, _IRIS_TASK_ID_ENV)
+
+
+def _iris_task_environment_value(pod: dict, variable: str) -> str:
     for container in (pod.get("spec") or {}).get("containers") or []:
-        if container.get("name") != "task":
+        if container.get("name") != _IRIS_TASK_CONTAINER:
             continue
         for item in container.get("env") or []:
-            if item.get("name") == _IRIS_TASK_ID_ENV:
+            if item.get("name") == variable:
                 return item.get("value") or ""
     return ""
 
 
 def _iris_task_resources(pod: dict) -> dict:
-    for container in (pod.get("spec") or {}).get("containers") or []:
-        if container.get("name") != "task":
-            continue
-        for item in container.get("env") or []:
-            if item.get("name") == _IRIS_TASK_RESOURCES_ENV:
-                return json.loads(item.get("value") or "{}")
-    return {}
+    return json.loads(_iris_task_environment_value(pod, _IRIS_TASK_RESOURCES_ENV) or "{}")
 
 
 def _root_job_id(task: str, fallback: str) -> str:
@@ -1064,7 +1083,7 @@ class K8sFleet:
         return self._fan_out(lambda s: s.pending(), self._error_row)
 
     def workload_allocations(self) -> list[dict]:
-        return self._fan_out(lambda s: s.workload_allocations(), self._error_row)
+        return self._fan_out(lambda source: [asdict(row) for row in source.workload_allocations()], self._error_row)
 
     def termination_candidates(self) -> list[TerminatingPodResult]:
         return self._collect(

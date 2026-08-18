@@ -3,6 +3,7 @@ import { css } from '@emotion/css';
 import { DataFrame } from '@grafana/data';
 import { useTheme2 } from '@grafana/ui';
 import { frameByRefId, provisioningRegions, provisioningStatus, seriesPoints, workerRegions } from '../data';
+import { formatBytes } from '../format';
 import { SeriesPoint } from '../types';
 import { CommitStrip } from './CommitStrip';
 import { NightlyMatrix } from './NightlyMatrix';
@@ -48,17 +49,6 @@ function one(frames: DataFrame[], refId: string): DataFrame[] {
 function formatCores(millicores: number): string {
   const cores = millicores / 1000;
   return cores >= 1000 ? `${(cores / 1000).toFixed(1)}k` : Math.round(cores).toString();
-}
-
-function formatBytes(bytes: number): string {
-  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
 
 function formatPercent(value?: number): string {
