@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fused dispatch + gate/up GEMM for the marin EP mgpu path (M7b).
+"""Fused dispatch + gate/up GEMM for the marin EP mgpu path.
 
 One persistent Warpgroup-semantics kernel runs the dispatch transport and the
 gate/up grouped GEMM together: a dedicated transport warpgroup streams this
@@ -36,13 +36,11 @@ from jax.experimental.pallas import mosaic_gpu as plgpu
 from jax.experimental.pallas.ops.gpu import blackwell_ragged_dot_mgpu as brd
 from jax.experimental.pallas.ops.gpu import ragged_dot_mgpu
 
-from levanter.grug._moe.brd_expert_mlp import _CONFIGS, _N_ALIGN, ROW_ALIGN, _cfg, _grouped
-from levanter.grug._moe.cudnn_wgrad_cute import cudnn_grouped_wgrad
+from levanter.grug._moe.brd_expert_mlp import _CONFIGS, _N_ALIGN, ROW_ALIGN, _cfg, _grouped, swiglu_mlp_cotangents
 from levanter.grug._moe.marin_ep_transport import (
     _OUT_KWARG,
     LANE,
     SegmentPlan,
-    _zero_invalid_rows,
     put_with_transpose,
 )
 
@@ -162,6 +160,9 @@ def _fused_dispatch_gemm(
 
             # Only CTA 0 of each 2-CTA cluster transports; otherwise both
             # cluster members duplicate sends and double the arrival signals.
+            # This loop mirrors `put_segments.send_entry` in
+            # marin_ep_transport.py; the two cannot share code (different
+            # kernel scaffolds), so changes to either must be applied to both.
             @pl.when((wg == 2) & (cluster_idx == 0))
             def _transport():
                 def copy_rows(src_lo, dst_ref, dst_lo, rows_shape):
@@ -371,8 +372,8 @@ def _fused_fwd(
     act = _swiglu(gu, moe_dim, sorted_x.dtype)
     y = _grouped(act, moe_w2, group_sizes)
     # `act` is recomputed from `gu` in the backward: keeping both as
-    # residuals costs ~0.45 GiB/layer at hero shape, and the fused ops sit
-    # ~1.4 GiB from the rematerialization cliff (MEP-052).
+    # residuals costs ~0.45 GiB/layer at hero shape, which pushed the EP64
+    # hero over the rematerialization cliff.
     res = (
         sorted_x,
         x_pool,
@@ -409,18 +410,7 @@ def _fused_bwd(pool_rows, assignments_per_shard, axis_name, ep_size, res, dy):
     dy = dy.astype(x_pool.dtype)
     if padded_rows != pool_rows:
         dy = jnp.pad(dy, ((0, padded_rows - pool_rows), (0, 0)))
-    dact = _grouped(dy, moe_w2.transpose(0, 2, 1), group_sizes)
-    dw2 = cudnn_grouped_wgrad(act, dy, group_sizes)
-    gate = gu[:, :moe_dim].astype(jnp.float32)
-    up = gu[:, moe_dim:].astype(jnp.float32)
-    sg = jax.nn.sigmoid(gate)
-    silu = gate * sg
-    dact_f = dact.astype(jnp.float32)
-    dgate = dact_f * up * (sg + silu * (1.0 - sg))
-    dup = dact_f * silu
-    d_gu = jnp.concatenate([dgate, dup], axis=1).astype(x_pool.dtype)
-    dx_pool = _grouped(d_gu, moe_w13.transpose(0, 2, 1), group_sizes)
-    dw13 = cudnn_grouped_wgrad(x_pool, d_gu, group_sizes)
+    dx_pool, dw13, dw2 = swiglu_mlp_cotangents(x_pool, moe_w13, moe_w2, gu, act, dy, group_sizes)
     # The dispatch cotangent is the transpose transfer: pool-frame rows back to
     # the sender's compacted buffer, rows beyond `send_rows` zeroed.
     dsorted_x = put_with_transpose(

@@ -83,10 +83,13 @@ def _fwd(x_dispatch, moe_w13, moe_w2, group_sizes):
     return y, (x_dispatch, moe_w13, moe_w2, gu, act, group_sizes)
 
 
-def _bwd(res, dy):
-    x_dispatch, moe_w13, moe_w2, gu, act, group_sizes = res
+def swiglu_mlp_cotangents(x_rows, moe_w13, moe_w2, gu, act, dy, group_sizes):
+    """Shared SwiGLU expert-MLP backward: (dx, dw13, dw2) from the down-GEMM cotangent.
+
+    ``dy`` must already be cast to the activation dtype. Used by both this
+    module's VJP and the fused dispatch kernel's (`fused_dispatch_brd`).
+    """
     moe_dim = moe_w2.shape[1]
-    dy = dy.astype(x_dispatch.dtype)
     dact = _grouped(dy, moe_w2.transpose(0, 2, 1), group_sizes)
     dw2 = cudnn_grouped_wgrad(act, dy, group_sizes)
     gate = gu[:, :moe_dim].astype(jnp.float32)
@@ -96,9 +99,16 @@ def _bwd(res, dy):
     dact_f = dact.astype(jnp.float32)
     dgate = dact_f * up * (sg + silu * (1.0 - sg))
     dup = dact_f * silu
-    d_gu = jnp.concatenate([dgate, dup], axis=1).astype(x_dispatch.dtype)
+    d_gu = jnp.concatenate([dgate, dup], axis=1).astype(dy.dtype)
     dx = _grouped(d_gu, moe_w13.transpose(0, 2, 1), group_sizes)
-    dw13 = cudnn_grouped_wgrad(x_dispatch, d_gu, group_sizes)
+    dw13 = cudnn_grouped_wgrad(x_rows, d_gu, group_sizes)
+    return dx, dw13, dw2
+
+
+def _bwd(res, dy):
+    x_dispatch, moe_w13, moe_w2, gu, act, group_sizes = res
+    dy = dy.astype(x_dispatch.dtype)
+    dx, dw13, dw2 = swiglu_mlp_cotangents(x_dispatch, moe_w13, moe_w2, gu, act, dy, group_sizes)
     gs_ct = np.zeros(group_sizes.shape, dtype=jax.dtypes.float0)
     return dx, dw13, dw2, gs_ct
 

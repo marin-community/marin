@@ -270,6 +270,9 @@ def _int_cotangents(tree):
 
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=(5, 6, 7, 8))
+# Callers reverse the transfer direction by swapping the (fwd_plan, bwd_plan)
+# pair and the matching (valid, rows) pairs — combine is dispatch with the
+# plans exchanged, so the argument order below is load-bearing.
 def put_with_transpose(
     x: Float[Array, "N H"],
     fwd_plan: SegmentPlan,
