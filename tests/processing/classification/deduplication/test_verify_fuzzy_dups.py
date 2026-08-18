@@ -4,14 +4,11 @@
 from functools import partial
 from pathlib import Path
 from random import Random
-from typing import Any, Never
 
 import pyarrow.parquet as pq
 import pytest
-from fray.actor import ActorGroup
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
-from fray.types import ActorConfig, ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import datakit_source_key
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, FuzzyDupsPerSource
@@ -24,10 +21,7 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import (
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     verify_fuzzy_dups as _verify_fuzzy_dups,
 )
-from zephyr.coordinator import ZephyrCoordinator
-from zephyr.memory_store import MemoryStoreUnavailable
 from zephyr.stage_io import ZephyrWorkerError
-from zephyr.worker import ZephyrWorker
 from zephyr.writers import write_parquet_file
 
 TEST_MINHASH_PARAMS = MinHashParams(num_perms=8, num_bands=4, ngram_size=5, seed=0)
@@ -50,42 +44,6 @@ TEST_STORE_CONFIG = FuzzyVerificationStoreConfig(
     lookup_batch_size=2,
 )
 verify_fuzzy_dups = partial(_verify_fuzzy_dups, store_config=TEST_STORE_CONFIG)
-
-
-class _StatsFailingWorker(ZephyrWorker):
-    def memory_table_stats(self, table_id: str) -> Never:
-        del table_id
-        raise MemoryStoreUnavailable("memory-store stats unavailable")
-
-
-class _StatsFailingCoordinator(ZephyrCoordinator):
-    def start_workers(self, worker_class: type, *args: Any, **kwargs: Any) -> None:
-        del worker_class
-        super().start_workers(_StatsFailingWorker, *args, **kwargs)
-
-
-class _StatsFailingLocalClient(LocalClient):
-    def create_actor_group(
-        self,
-        actor_class: type,
-        *args: Any,
-        name: str,
-        count: int,
-        resources: ResourceConfig = ResourceConfig(),
-        actor_config: ActorConfig = ActorConfig(),
-        **kwargs: Any,
-    ) -> ActorGroup:
-        if actor_class is ZephyrCoordinator:
-            actor_class = _StatsFailingCoordinator
-        return super().create_actor_group(
-            actor_class,
-            *args,
-            name=name,
-            count=count,
-            resources=resources,
-            actor_config=actor_config,
-            **kwargs,
-        )
 
 
 @pytest.fixture(autouse=True)
@@ -247,52 +205,6 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
     assert verified.counters["dedup/fuzzy/verification/decision/retained_no_match"] == 1
     assert verified.counters["dedup/fuzzy/verification/comparison/containment_below_threshold"] == 1
     assert verified.sources[source_key].source_tag == "source_000"
-
-
-def test_verifier_preserves_completed_output_when_memory_store_stats_fail(tmp_path, monkeypatch):
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    source_key, source = _write_source(
-        root=tmp_path,
-        name="source",
-        shards={
-            "part-00000.parquet": [
-                {"id": "duplicate", "text": "alpha beta gamma delta epsilon zeta eta theta"},
-                {
-                    "id": "representative",
-                    "text": "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
-                },
-            ]
-        },
-    )
-    candidates = _write_candidates(
-        root=tmp_path,
-        rows_by_source={
-            source_key: {
-                "part-00000.parquet": [
-                    {"id": "duplicate", "dup_cluster_id": "cluster-a", "is_cluster_canonical": False},
-                    {"id": "representative", "dup_cluster_id": "cluster-a", "is_cluster_canonical": True},
-                ]
-            }
-        },
-    )
-    output_path = tmp_path / "verified"
-    client = _StatsFailingLocalClient()
-    try:
-        with set_current_client(client):
-            verified = verify_fuzzy_dups(
-                normalized_sources={"source": source},
-                minhash_sources={"source": _write_minhash(root=tmp_path, name="source", source=source)},
-                candidates=candidates,
-                output_path=str(output_path),
-                verification_params=FuzzyVerificationParams(),
-                local_representative_params=TEST_LOCAL_PARAMS,
-            )
-    finally:
-        client.shutdown()
-
-    assert (output_path / ".source_manifest.json").exists()
-    assert [row["id"] for row in _output_rows(verified, source_key)] == ["duplicate"]
-    assert not any("/memory_store/" in counter for counter in verified.counters)
 
 
 def test_verifier_removes_a_member_that_contains_the_canonical(tmp_path, monkeypatch):

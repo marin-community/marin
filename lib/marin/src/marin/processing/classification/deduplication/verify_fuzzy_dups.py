@@ -55,6 +55,7 @@ _COUNTER_PREFIX = "dedup/fuzzy/verification"
 _SHARED_SHARDS_KEY = "verified_fuzzy_dups_shards"
 _LOCAL_TOKEN_SEQUENCE_REJECTION = "local_token_sequence_differs"
 _LOCAL_LINE_COUNT_REJECTION = "local_line_count_ratio_below_threshold"
+_MEMORY_STORE_STATS_TIMEOUT = 30
 # Bounds on the head scan that picks each cluster anchor. Cluster size is
 # heavily skewed - the p99 cluster holds 13 members - so a short head covers
 # effectively every cluster while a pathological one stays bounded.
@@ -864,7 +865,7 @@ def verify_fuzzy_dups(
             reduce_task_resources=reduce_task_resources,
         )
         try:
-            store_stats = document_store.stats()
+            store_stats = document_store.stats(timeout=_MEMORY_STORE_STATS_TIMEOUT)
         except MemoryStoreUnavailable:
             logger.warning("Memory-store stats unavailable after fuzzy verification; omitting telemetry", exc_info=True)
             store_stats = ()
