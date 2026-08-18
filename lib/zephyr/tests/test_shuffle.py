@@ -26,6 +26,7 @@ from zephyr.shard_keys import deterministic_hash
 from zephyr.shuffle import (
     _PAYLOAD_COL,
     _SCATTER_MAX_ROW_GROUPS_PER_CHUNK,
+    _SCATTER_SCAN_RETRIES,
     _SHARD_COL,
     _SORT_KEY_COL,
     ScatterReader,
@@ -119,8 +120,8 @@ def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
         }
     ).lazy()
 
-    def scan_parquet(scan_path, *, storage_options):
-        calls.append((scan_path, storage_options))
+    def scan_parquet(scan_path, *, retries, storage_options):
+        calls.append((scan_path, retries, storage_options))
         return frame
 
     monkeypatch.setenv("AWS_ENDPOINT_URL", "http://cwlota.com")
@@ -134,6 +135,7 @@ def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
     assert calls == [
         (
             path,
+            _SCATTER_SCAN_RETRIES,
             {
                 "aws_endpoint_url": "http://marin-us-east-02a.cwlota.com",
                 "aws_virtual_hosted_style_request": "true",
