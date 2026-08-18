@@ -77,7 +77,7 @@ uv run --no-project infra/ci/run_tests.py
 - Run this once before opening or updating a PR, and fix or respond to every
   finding it reports (see the `commit` skill). Do not rerun it after small,
   targeted touch-ups made in response to its findings. Rerun only when the
-  follow-up materially changes the design or scope.
+  follow-up materially changes the implementation approach or scope.
 ```
 
 - Python >=3.12. Use `uv run` for entry points.
@@ -108,7 +108,7 @@ uv run --no-project infra/ci/run_tests.py
   reader needs to understand the behavior and rationale, including measured
   results and caveats when they affect review. Remove headings, diff narration,
   and implementation inventories; put extended history in a linked issue,
-  design doc, logbook, or artifact. Follow the `commit` skill
+  logbook, or artifact. Follow the `commit` skill
   (`.agents/skills/commit/SKILL.md`) when committing, pushing, or opening a PR.
 - PR monitoring is part of the `commit` skill. After opening or updating a PR,
   follow its `wait_for.py` loop through an exit condition. Do not substitute
@@ -203,6 +203,9 @@ Watch for and eliminate these patterns in generated code:
 
 ## Planning
 
+- The `write-design-doc` skill owns design-doc creation and runs only when the
+  user explicitly asks for one. Diff size and implementation complexity do not
+  require a design artifact.
 - Planning applies to change-mode work. Produce a detailed plan, with code
   snippets when they clarify a concrete implementation, for non-trivial
   changes. Resolve context from the repository and prior work first; ask only
