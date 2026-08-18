@@ -1,11 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The interactive ``fsutil browse`` screen.
+"""The interactive ``fsutil browse`` and ``fsutil show`` screens.
 
 A curses browser over the whole bucket tree: the root lists every declared bucket, and
-descending crosses backends without ceremony because each listing routes itself. Reads
-are bounded by the same preview cap the CLI uses, so opening a file is always cheap.
+descending crosses backends without ceremony because each listing routes itself.
+``show`` opens the same file viewer on one URL without the browser around it. Opening a
+file reads at most the CLI's preview cap; a parquet file can page past it, but only one
+batch of rows decodes per page-down, so each read stays cheap.
 """
 
 import curses
