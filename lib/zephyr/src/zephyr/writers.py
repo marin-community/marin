@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 # 64 MB write blocks — controls S3 multipart upload part size.
 _WRITE_BLOCK_SIZE = 64 * 1024 * 1024
+DEFAULT_PARQUET_COMPRESSION = "zstd"
+DEFAULT_PARQUET_COMPRESSION_LEVEL = 3
+DEFAULT_PARQUET_WRITE_PAGE_INDEX = True
 
 # Default target buffer size for writer batching. Writers accumulate
 # micro-batches until accumulated nbytes reaches this threshold, then yield
@@ -368,7 +371,14 @@ def write_parquet_file(
             try:
                 for table in _accumulate_tables(records, schema=schema, target_bytes=target_buffer_bytes):
                     if writer is None:
-                        writer = pq.ParquetWriter(where_fd, table.schema, filesystem=native_fs)
+                        writer = pq.ParquetWriter(
+                            where_fd,
+                            table.schema,
+                            filesystem=native_fs,
+                            compression=DEFAULT_PARQUET_COMPRESSION,
+                            compression_level=DEFAULT_PARQUET_COMPRESSION_LEVEL,
+                            write_page_index=DEFAULT_PARQUET_WRITE_PAGE_INDEX,
+                        )
                     writer.write_table(table)
                     count += len(table)
                     counters.pipeline.update_counter(counters.RECORDS_OUT, len(table))
@@ -378,7 +388,14 @@ def write_parquet_file(
 
             if writer is None:
                 actual_schema = schema or pa.schema([])
-                pq.write_table(pa.Table.from_pylist([], schema=actual_schema), where_fd, filesystem=native_fs)
+                pq.write_table(
+                    pa.Table.from_pylist([], schema=actual_schema),
+                    where_fd,
+                    filesystem=native_fs,
+                    compression=DEFAULT_PARQUET_COMPRESSION,
+                    compression_level=DEFAULT_PARQUET_COMPRESSION_LEVEL,
+                    write_page_index=DEFAULT_PARQUET_WRITE_PAGE_INDEX,
+                )
 
     return {"path": output_path, "count": count}
 

@@ -38,7 +38,7 @@ ctx.execute(pipeline)
 
 **Output:**
 - `.write_jsonl(pattern)` - write JSONL (gzip if `.gz`)
-- `.write_parquet(pattern, schema)` - write to a Parquet file
+- `.write_parquet(pattern, schema)` - write a zstd-compressed Parquet file with page indexes
 - `.write_vortex(pattern)` - write to a Vortex file
 
 **Execution (`ZephyrContext`):**

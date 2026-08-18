@@ -1,6 +1,38 @@
-# Marin GCS storage tooling
+# Marin storage tooling
 
-Tooling for the `marin-*` GCS buckets.
+Tooling for Marin's GCS and S3-compatible buckets.
+
+## Parquet recompression
+
+`recompress_parquet.py` uses one Zephyr task per Parquet object to replace
+Snappy or uncompressed files with zstd level 3 and page indexes. Each task
+writes a temporary sibling, validates its schema, row count, codecs, and page
+indexes, checks that the source did not change while it was read, and only then
+replaces the source. Reruns skip zstd objects that already have page indexes,
+making an interrupted migration resumable. Outputs that are not smaller are
+discarded unless an existing zstd object still needs page indexes; page-index
+overhead is retained in that case.
+
+Run the job on a cluster local to the bucket. Omit `--apply` first to inventory
+the candidate objects and bytes. Start with one dataset prefix; bucket-wide
+globs can contain millions of objects and produce a correspondingly large
+Zephyr plan.
+
+```bash
+uv run iris --cluster=marin job run \
+  --cpu 1 --memory 2GB --disk 8GB --priority batch \
+  --target-cluster cw-us-east-02a -- \
+  python scripts/ops/storage/recompress_parquet.py \
+  's3://marin-us-east-02a/marin/normalized/example/**/*.parquet' \
+  --workers 16
+
+# After reviewing the dry-run counters, repeat with --apply.
+```
+
+The command refuses `tmp/ttl=Nd` inputs because replacement would restart the
+object's lifecycle clock. It also refuses to publish an output when the source
+fingerprint changes during the rewrite. At 16 workers, additional storage is
+bounded to approximately 16 temporary shards plus object-store copy overhead.
 
 ## Weekly storage report
 
