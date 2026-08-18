@@ -30,14 +30,16 @@ from iris.cluster.backends.k8s.tasks import (
     _sanitize_label_value,
     _task_hash,
 )
-from iris.cluster.controller.backend import ProviderError, TaskTarget
+from iris.cluster.controller.backend import ProviderError, ReconcileRequest, RuntimeReleaseTarget, TaskTarget
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
 from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError
 from iris.cluster.stats.tables import ProfileTrigger
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable, wait_for_condition
+from iris.testing.controller import make_controller_state
 from iris.testing.k8s import make_batch, make_kueue_provider, make_run_req, pod_config, populate_node, populate_pod
 from rigging.timing import Duration
 
@@ -215,6 +217,21 @@ def test_sync_deletes_pods_not_in_desired_set(provider, k8s):
 
     assert k8s.get_json(K8sResource.PODS, "iris-test-job-0-0") is None
     assert result == []
+
+
+def test_reconcile_confirms_release_on_scan_after_pod_disappears(provider, k8s):
+    task_id = "/test-job/0"
+    attempt_uid = "exact-attempt-uid"
+    provider.sync(make_batch(tasks_to_run=[make_run_req(task_id, attempt_uid=attempt_uid)]))
+    target = RuntimeReleaseTarget(task_id=task_id, attempt_id=0, attempt_uid=attempt_uid)
+    with make_controller_state() as state:
+        provider.transition_reader = DbTransitionReader(state._db)
+
+        deleting = provider.reconcile(ReconcileRequest(release_targets=(target,)))
+        deleted = provider.reconcile(ReconcileRequest(release_targets=(target,)))
+
+    assert not deleting.released_attempt_uids
+    assert deleted.released_attempt_uids == {attempt_uid}
 
 
 def test_sync_keeps_pods_in_desired_running_set(provider, k8s):

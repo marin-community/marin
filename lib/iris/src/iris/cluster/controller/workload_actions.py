@@ -6,6 +6,7 @@
 import hashlib
 import json
 import logging
+import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from rigging.timing import Timestamp
 from sqlalchemy import select
 
 from iris.cluster.controller import operation_store, reads, writes
+from iris.cluster.controller.backend import ReconcileResult, RuntimeReleaseTarget
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.operation_store import RuntimeTarget
 from iris.cluster.controller.ops import job as job_ops
@@ -142,12 +144,14 @@ class WorkloadActions:
         auth_required: bool,
         federation: FederationResourceActions,
         wake,
+        mutation_lock: threading.RLock,
     ) -> None:
         self._db = db
         self._cluster_id = cluster_id
         self._auth_required = auth_required
         self._federation = federation
         self._wake = wake
+        self._mutation_lock = mutation_lock
 
     def logical_ref(self, resource_type: str, resource_id: str) -> resource_pb2.ResourceRef:
         """Return a logical-current reference for a workload resource."""
@@ -177,7 +181,7 @@ class WorkloadActions:
             raise ConnectError(Code.INVALID_ARGUMENT, "Job update requires cancel")
         packed = _pack(update)
         reason = request.mutation.reason or "Cancelled by operator"
-        with self._db.transaction() as tx:
+        with self._mutation_lock, self._db.transaction() as tx:
             principal = self._principal()
             duplicate = self._replay(tx, principal, request, update)
             if duplicate is not None:
@@ -278,32 +282,60 @@ class WorkloadActions:
             raise ConnectError(Code.FAILED_PRECONDITION, f"Operation {request.ref.id!r} was replaced")
         return resource_pb2.GetResourceResponse(resource=resource_pb2.Resource(ref=operation.ref, body=_pack(operation)))
 
-    def verification_candidates(self) -> dict[str, frozenset[str]]:
+    def verification_candidates(self) -> dict[str, tuple[RuntimeTarget, ...]]:
         """Snapshot operations eligible for verification by the next reconcile."""
         with self._db.read_snapshot() as tx:
             return operation_store.verification_targets(tx)
 
-    def progress(
+    def release_targets(
+        self,
+        candidates: dict[str, tuple[RuntimeTarget, ...]],
+        backend_id: str,
+    ) -> tuple[RuntimeReleaseTarget, ...]:
+        """Return exact Attempt coordinates one backend must verify as absent."""
+        targets: dict[str, RuntimeReleaseTarget] = {}
+        for operation_targets in candidates.values():
+            for target in operation_targets:
+                if target.backend_id != backend_id:
+                    continue
+                task_id, attempt_id = _parse_attempt_id(target.ref.id)
+                targets[target.ref.uid] = RuntimeReleaseTarget(
+                    task_id=task_id.to_wire(),
+                    attempt_id=attempt_id,
+                    attempt_uid=target.ref.uid,
+                )
+        return tuple(targets[uid] for uid in sorted(targets))
+
+    def verify_released(
         self,
         *,
-        verification_candidates: dict[str, frozenset[str]],
-        reconciled_backends: frozenset[str],
+        verification_candidates: dict[str, tuple[RuntimeTarget, ...]],
+        reconcile_results: dict[str, ReconcileResult],
     ) -> None:
-        """Advance operations after the selected backends have reconciled."""
+        """Advance operations after every exact runtime is observed absent."""
         with self._db.read_snapshot() as tx:
-            rows = list(operation_store.pending(tx))
+            rows = [row for row in operation_store.pending(tx) if not row.peer_id]
         for row in rows:
-            if row.peer_id:
-                self._progress_remote(row)
-            elif (
+            if (
                 row.phase == operation_store.OperationPhase.VERIFYING
                 and row.operation_id in verification_candidates
-                and verification_candidates[row.operation_id] <= reconciled_backends
+                and all(
+                    target.backend_id in reconcile_results
+                    and target.ref.uid in reconcile_results[target.backend_id].released_attempt_uids
+                    for target in verification_candidates[row.operation_id]
+                )
             ):
                 with self._db.transaction() as tx:
                     current = operation_store.by_id(tx, row.operation_id)
                     if current is not None and current.phase == operation_store.OperationPhase.VERIFYING:
                         operation_store.mark_verified(tx, row.operation_id)
+
+    def progress_remote(self) -> None:
+        """Deliver and poll federated operations outside the controller tick lock."""
+        with self._db.read_snapshot() as tx:
+            rows = [row for row in operation_store.pending(tx) if row.peer_id]
+        for row in rows:
+            self._progress_remote(row)
 
     def _accept_attempt_update(
         self,
@@ -317,7 +349,7 @@ class WorkloadActions:
         kind, default_reason = _terminal_intent(update.WhichOneof("intent"))
         reason = request.mutation.reason or default_reason
         packed = _pack(update)
-        with self._db.transaction() as tx:
+        with self._mutation_lock, self._db.transaction() as tx:
             principal = self._principal()
             duplicate = self._replay(tx, principal, request, update)
             if duplicate is not None:
@@ -571,7 +603,7 @@ class WorkloadActions:
             self._record_remote_phase(row, remote)
         except ConnectError as error:
             if error.code == Code.NOT_FOUND and row.resolved_type == JOB_TYPE:
-                with self._db.transaction() as tx:
+                with self._mutation_lock, self._db.transaction() as tx:
                     operation_store.mark_verified(tx, row.operation_id)
                     writes.mark_federated_job_killed(
                         tx,

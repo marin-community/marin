@@ -154,11 +154,15 @@ def mark_failed(tx: Tx, operation_id: str, *, code: Code, message: str) -> None:
     )
 
 
-def verification_targets(tx: Tx) -> dict[str, frozenset[str]]:
-    """Return local verifying operations and the backends that must observe them."""
+def verification_targets(tx: Tx) -> dict[str, tuple[RuntimeTarget, ...]]:
+    """Return exact runtime targets for local operations awaiting verification."""
     rows = tx.execute(
         select(
             resource_operations_table.c.operation_id,
+            resource_operation_targets_table.c.authority_cluster_id,
+            resource_operation_targets_table.c.resource_type,
+            resource_operation_targets_table.c.resource_id,
+            resource_operation_targets_table.c.resource_uid,
             resource_operation_targets_table.c.backend_id,
         )
         .join(
@@ -169,11 +173,22 @@ def verification_targets(tx: Tx) -> dict[str, frozenset[str]]:
             resource_operations_table.c.phase == OperationPhase.VERIFYING,
             resource_operations_table.c.peer_id == "",
         )
+        .order_by(resource_operations_table.c.operation_id, resource_operation_targets_table.c.ordinal)
     ).all()
-    targets: dict[str, set[str]] = {}
+    targets: dict[str, list[RuntimeTarget]] = {}
     for row in rows:
-        targets.setdefault(row.operation_id, set()).add(row.backend_id)
-    return {operation_id: frozenset(backend_ids) for operation_id, backend_ids in targets.items()}
+        targets.setdefault(row.operation_id, []).append(
+            RuntimeTarget(
+                ref=resource_pb2.ResourceRef(
+                    authority_cluster_id=row.authority_cluster_id,
+                    type=row.resource_type,
+                    id=row.resource_id,
+                    uid=row.resource_uid,
+                ),
+                backend_id=row.backend_id,
+            )
+        )
+    return {operation_id: tuple(operation_targets) for operation_id, operation_targets in targets.items()}
 
 
 def to_proto(tx: Tx, row) -> resource_pb2.Operation:

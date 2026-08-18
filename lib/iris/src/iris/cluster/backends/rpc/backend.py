@@ -54,7 +54,7 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEventKind,
     WorkerHealthTracker,
 )
-from iris.cluster.types import WellKnownAttribute, WorkerId
+from iris.cluster.types import TERMINAL_TASK_STATES, WellKnownAttribute, WorkerId
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.worker_connect import WorkerServiceClient
@@ -118,6 +118,24 @@ class FleetObservation:
 
     worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]]
     transport_events: list[WorkerHealthEvent]
+
+
+def _released_attempt_uids(observation: FleetObservation) -> frozenset[str]:
+    released: set[str] = set()
+    for plan, result in observation.worker_results:
+        if result.error is not None:
+            continue
+        if result.responder_worker_id is not None and result.responder_worker_id != str(plan.worker_id):
+            continue
+        stop_uids = {desired.attempt_uid for desired in plan.request.desired if desired.WhichOneof("intent") == "stop"}
+        released.update(
+            item.attempt_uid
+            for item in result.observations
+            if item.attempt_uid in stop_uids
+            and item.runtime_released
+            and (item.state in TERMINAL_TASK_STATES or item.state == job_pb2.TASK_STATE_MISSING)
+        )
+    return frozenset(released)
 
 
 class WorkerStubFactory(Protocol):
@@ -406,7 +424,7 @@ class RpcTaskBackend:
             WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed
         ]
         self._pending_dead.extend(self.health.apply(events, now_ms=now.epoch_ms()))
-        return ReconcileResult(effects=effects)
+        return ReconcileResult(effects=effects, released_attempt_uids=_released_attempt_uids(observation))
 
     def run_teardown(self) -> None:
         """Tear down the workers this tick's reconcile fold reaped.

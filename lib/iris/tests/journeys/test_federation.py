@@ -93,6 +93,25 @@ def test_parent_cancel_terminates_job_on_peer(federation: FederationJourney) -> 
     assert federation.parent_job(job).state == job_pb2.JOB_STATE_KILLED
 
 
+def test_parent_cancel_is_durable_during_peer_outage(federation: FederationJourney) -> None:
+    job = federation.submit("cancel-during-outage")
+    federation.promote()
+    federation.sync()
+    federation.run_peer()
+
+    federation.set_peer_reachable(False)
+    federation.cancel(job)
+
+    federation.set_peer_reachable(True)
+    federation.parent.step()
+    federation.run_peer()
+    federation.parent.step()
+    federation.sync()
+
+    assert federation.peer_job(job).state == job_pb2.JOB_STATE_KILLED
+    assert federation.parent_job(job).state == job_pb2.JOB_STATE_KILLED
+
+
 def test_execution_peer_submits_a_child_and_syncs_the_subtree_to_authority_once(federation: FederationJourney) -> None:
     root = federation.submit("tree")
     federation.promote()

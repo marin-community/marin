@@ -417,6 +417,7 @@ class Controller:
             scale_group: bid for bid, cfg in backend_configs.items() for scale_group in cfg.scale_groups
         }
         self._last_unroutable_jobs: dict[str, str] = {}
+        self._mutation_lock = threading.RLock()
 
         self._promotion_bucket = TokenBucket(
             capacity=DISPATCH_PROMOTION_RATE,
@@ -515,6 +516,7 @@ class Controller:
             auth_required=bool(config.auth and config.auth.provider),
             federation=self._federation,
             wake=self.wake,
+            mutation_lock=self._mutation_lock,
         )
         resource_registry = ResourceRegistryBuilder()
         register_workload_actions(resource_registry, self._workload_actions)
@@ -994,6 +996,26 @@ class Controller:
         autoscale_limiter: RateLimiter,
         force_timeout_scan: bool = False,
     ) -> None:
+        with self._mutation_lock:
+            ran = self._control_tick_serialized(
+                woken=woken,
+                schedule_limiter=schedule_limiter,
+                reconcile_limiter=reconcile_limiter,
+                autoscale_limiter=autoscale_limiter,
+                force_timeout_scan=force_timeout_scan,
+            )
+        if ran:
+            self._workload_actions.progress_remote()
+
+    def _control_tick_serialized(
+        self,
+        *,
+        woken: bool,
+        schedule_limiter: RateLimiter,
+        reconcile_limiter: RateLimiter,
+        autoscale_limiter: RateLimiter,
+        force_timeout_scan: bool = False,
+    ) -> bool:
         """Run one control tick: one read snapshot, due phases per backend, one write txn.
 
         Phase order is schedule -> reconcile -> autoscale. The controller routes
@@ -1012,7 +1034,7 @@ class Controller:
         # writes nothing; reconcile and autoscale are suppressed entirely.
         if self._config.dry_run:
             self._run_scheduling()
-            return
+            return False
 
         self._drain_pending_evictions()
         run_autoscale = autoscale_limiter.should_run()
@@ -1053,7 +1075,12 @@ class Controller:
             for backend_id in self._backend_ids:
                 # Worker-daemon backends source their own placement (empty request);
                 # a cluster-view backend gets its dispatch drain.
-                request = inputs.reconcile_requests.get(backend_id, ReconcileRequest())
+                base_request = inputs.reconcile_requests.get(backend_id, ReconcileRequest())
+                request = ReconcileRequest(
+                    tasks_to_run=base_request.tasks_to_run,
+                    running_tasks=base_request.running_tasks,
+                    release_targets=self._workload_actions.release_targets(verification_candidates, backend_id),
+                )
                 recon_results[backend_id] = self._backends[backend_id].reconcile(request)
 
         auto_results: dict[str, AutoscaleResult] = {}
@@ -1106,10 +1133,11 @@ class Controller:
         if run_reconcile:
             for backend_id in self._backend_ids:
                 self._backends[backend_id].run_teardown()
-        self._workload_actions.progress(
+        self._workload_actions.verify_released(
             verification_candidates=verification_candidates,
-            reconciled_backends=frozenset(recon_results),
+            reconcile_results=recon_results,
         )
+        return True
 
     def _build_tick_inputs(
         self,

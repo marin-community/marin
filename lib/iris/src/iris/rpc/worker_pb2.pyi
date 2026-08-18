@@ -107,7 +107,7 @@ class Worker(_message.Message):
         request: _job_pb2.RunTaskRequest
         def __init__(self, request: _Optional[_Union[_job_pb2.RunTaskRequest, _Mapping]] = ...) -> None: ...
     class AttemptObservation(_message.Message):
-        __slots__ = ("attempt_uid", "state", "exit_code", "error", "container_id", "finished_at", "resource_usage")
+        __slots__ = ("attempt_uid", "state", "exit_code", "error", "container_id", "finished_at", "resource_usage", "runtime_released")
         ATTEMPT_UID_FIELD_NUMBER: _ClassVar[int]
         STATE_FIELD_NUMBER: _ClassVar[int]
         EXIT_CODE_FIELD_NUMBER: _ClassVar[int]
@@ -115,6 +115,7 @@ class Worker(_message.Message):
         CONTAINER_ID_FIELD_NUMBER: _ClassVar[int]
         FINISHED_AT_FIELD_NUMBER: _ClassVar[int]
         RESOURCE_USAGE_FIELD_NUMBER: _ClassVar[int]
+        RUNTIME_RELEASED_FIELD_NUMBER: _ClassVar[int]
         attempt_uid: str
         state: _job_pb2.TaskState
         exit_code: int
@@ -122,7 +123,8 @@ class Worker(_message.Message):
         container_id: str
         finished_at: _time_pb2.Timestamp
         resource_usage: _job_pb2.ResourceUsage
-        def __init__(self, attempt_uid: _Optional[str] = ..., state: _Optional[_Union[_job_pb2.TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., container_id: _Optional[str] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., resource_usage: _Optional[_Union[_job_pb2.ResourceUsage, _Mapping]] = ...) -> None: ...
+        runtime_released: bool
+        def __init__(self, attempt_uid: _Optional[str] = ..., state: _Optional[_Union[_job_pb2.TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., container_id: _Optional[str] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., resource_usage: _Optional[_Union[_job_pb2.ResourceUsage, _Mapping]] = ..., runtime_released: _Optional[bool] = ...) -> None: ...
     class WorkerHealth(_message.Message):
         __slots__ = ("healthy", "health_error", "resources")
         HEALTHY_FIELD_NUMBER: _ClassVar[int]

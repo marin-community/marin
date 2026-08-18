@@ -174,6 +174,15 @@ class TaskTarget:
     attempt_uid: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class RuntimeReleaseTarget:
+    """Exact runtime incarnation whose absence a backend must observe."""
+
+    task_id: str
+    attempt_id: int
+    attempt_uid: str
+
+
 @dataclass(frozen=True)
 class ScheduleInput:
     """The read-only state a :class:`TaskBackend` needs to make placement
@@ -218,6 +227,8 @@ class ReconcileResult:
 
     effects: ControllerEffects = field(default_factory=ControllerEffects)
     """Task/attempt/job writes for the controller to commit (``commit_effects``)."""
+    released_attempt_uids: frozenset[str] = frozenset()
+    """Exact runtimes this reconcile authoritatively observed as stopped or absent."""
 
 
 @dataclass(frozen=True)
@@ -288,6 +299,7 @@ class ReconcileRequest:
 
     tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
     running_tasks: list[RunningTaskEntry] = field(default_factory=list)
+    release_targets: tuple[RuntimeReleaseTarget, ...] = ()
 
 
 @dataclass(frozen=True)

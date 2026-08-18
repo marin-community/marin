@@ -122,10 +122,12 @@ def _obs(
     *,
     exit_code: int | None = None,
     error: str | None = None,
+    runtime_released: bool = False,
 ) -> worker_pb2.Worker.AttemptObservation:
     kwargs: dict = {
         "attempt_uid": attempt_uid,
         "state": state,
+        "runtime_released": runtime_released,
     }
     if exit_code is not None:
         kwargs["exit_code"] = exit_code
@@ -724,6 +726,35 @@ def test_reconcile_rpc_failure_marks_worker_unreachable_without_task_effects(sta
     assert result.effects.attempts == {}
     assert result.effects.jobs == {}
     assert provider.health.liveness(WorkerId(_W1)).consecutive_failures == 1
+
+
+def test_reconcile_confirms_release_only_after_terminal_worker_observation(state):
+    task_id, _attempt_id, uid = _setup_running_task(state)
+    with state._db.transaction() as cur:
+        task = query_task(state, task_id)
+        assert task is not None
+        ops.job.cancel(cur, job_id=task.job_id, reason="operator cancel")
+    stub = _FakeWorkerStub(
+        address=_W1_ADDR,
+        reconcile_response=worker_pb2.Worker.ReconcileResponse(
+            worker_id=_W1,
+            health=worker_pb2.Worker.WorkerHealth(healthy=True),
+            observed=[_obs(uid, job_pb2.TASK_STATE_RUNNING)],
+        ),
+    )
+    provider, _ = _provider_with_stub(stub)
+    _bind_provider(provider, state)
+
+    stopping = provider.reconcile(ReconcileRequest())
+    stub.reconcile_response = worker_pb2.Worker.ReconcileResponse(
+        worker_id=_W1,
+        health=worker_pb2.Worker.WorkerHealth(healthy=True),
+        observed=[_obs(uid, job_pb2.TASK_STATE_KILLED, runtime_released=True)],
+    )
+    stopped = provider.reconcile(ReconcileRequest())
+
+    assert not stopping.released_attempt_uids
+    assert stopped.released_attempt_uids == {uid}
 
 
 def test_reconcile_matching_responder_id_resets_unreachable_counter(state):

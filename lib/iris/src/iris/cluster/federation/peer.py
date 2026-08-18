@@ -268,10 +268,7 @@ class FederationPeer:
 
     def supports_update(self, resource_type: str, update_type_url: str) -> bool:
         with self._lock:
-            heartbeat = self._heartbeat
-        if not heartbeat.reachable:
-            raise ConnectError(Code.UNAVAILABLE, f"Peer {self.peer_id!r} is unreachable")
-        info = heartbeat.resource_info
+            info = self._heartbeat.resource_info
         return info is not None and any(
             capability.type == resource_type and update_type_url in capability.update_type_urls
             for capability in info.resources

@@ -144,10 +144,15 @@ class ScriptedTaskBackend:
                 updates.append(self._task_update(task_id, observed_attempt_id, queued))
 
         self._desired = desired
+        released = frozenset(
+            target.attempt_uid
+            for target in request.release_targets
+            if (target.task_id, target.attempt_id) not in desired
+        )
         if not updates:
-            return ReconcileResult()
+            return ReconcileResult(released_attempt_uids=released)
         effects = apply_dispatch_updates(self._transition_reader, updates, now=Timestamp.now())
-        return ReconcileResult(effects=effects)
+        return ReconcileResult(effects=effects, released_attempt_uids=released)
 
     def _pop_observation(self, task_id: str) -> ScriptedObservation | None:
         queue = self._queued.get(task_id)
