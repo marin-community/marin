@@ -9,7 +9,7 @@ author: held
 
 ## Current TL;DR
 
-`MOE-PSC-001` completed the 25-step integration smoke. Gate 1 launchers are validated for the fixed-budget d512 and d768 cells; the quality and effective-speedup decision is pending those runs.
+`MOE-PSC-001` completed the 25-step integration smoke. Gate 1 is submitted for the fixed-budget d512 and d768 cells; both tasks are waiting for replacement v5p-8 workers after one startup preemption each.
 
 ## Scope
 
@@ -172,3 +172,19 @@ Inkling uses short causal convolutions with kernel size 4 in the K stream, V str
 - Baseline: d512 loss 3.5422 at 433,986 tokens/s and d768 loss 3.2273 at 294,726 tokens/s. These published cells used the prior sequence-length, PKO, long-RoPE, and z-loss defaults, so the gate is a historical-recipe comparison rather than a single-variable ablation.
 - Validation: both Gate 1 and conditional Gate 2 experiment graphs resolve; 75 targeted model, optimizer, and convolution tests pass with 60 TPU-dependent cases skipped.
 - Next action: publish the snapshot, submit Gate 1 in us-central1-a, and monitor both cells through final W&B metrics and checkpoints.
+
+### 2026-08-18 12:21 PDT - Gate 1 worker recycle
+
+- Snapshot: `d668d60059`.
+- Coordinator: `/held/moe-pallas-sconv-gate1-8377`.
+- W&B: https://wandb.ai/marin-community/marin_moe/runs/MOE-PSC-101-d512-v5p8-gate1 and https://wandb.ai/marin-community/marin_moe/runs/MOE-PSC-102-d768-v5p8-gate1.
+- Result: both runs initialized W&B and loaded the training and validation caches, then their fresh us-central1-a v5p-8 workers crossed the Iris reconcile-failure threshold before the first optimizer step. Iris returned both tasks to pending with one preemption and no failure.
+- Interpretation: the task events report parent preemption rather than a TPU-init error. None of the bad-node signatures (`No accelerator found`, `FAILED_PRECONDITION`, or `Device or resource busy`) appeared, so worker deletion is not indicated; Iris is recycling capacity automatically.
+- Next action: keep both tasks queued on v5p-8. A v5p-16 would make throughput incomparable with the published v5p-8 baseline.
+
+### 2026-08-18 12:26 PDT - Standalone TPU CI fixed
+
+- Result: the TPU check exposed that ordinary TPU arrays carry a named sharding with an empty abstract mesh. The explicit-mesh wrapper attempted to reshard those arrays and made every direct Pallas test fail before kernel execution.
+- Action: bypass the wrapper for empty meshes and use explicit `NamedSharding` values when a real mesh is present. Added a lowering regression for the empty-mesh case.
+- Validation: the fresh Levanter TPU check passed all 138 selected tests. Local kernel selection passed 72 tests with 60 TPU-only cases skipped.
+- Interpretation: this was a wrapper regression introduced while adapting the kernel to Grug's explicit mesh, not a numerical failure in the Pallas convolution core.
