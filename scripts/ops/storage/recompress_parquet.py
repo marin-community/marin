@@ -223,6 +223,7 @@ def recompress_parquet(path: str, options: RewriteOptions = RewriteOptions()) ->
 
 def _rewrite_for_zephyr(path: str, options: RewriteOptions) -> list[dict]:
     """Record rewrite counters without emitting downstream rows."""
+    logger.info("Inspecting Parquet: %s", path)
     try:
         result = recompress_parquet(path, options)
     except Exception:
