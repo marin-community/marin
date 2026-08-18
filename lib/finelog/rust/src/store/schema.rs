@@ -5,6 +5,7 @@
 //! `arrow::datatypes::Schema`, and a JSON sidecar form persisted in the
 //! catalog.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arrow::array::{new_null_array, ArrayData, ArrayRef, RecordBatch, StringArray};
@@ -163,6 +164,27 @@ impl Schema {
             projections: Vec::new(),
             grouped_extrema: Vec::new(),
         }
+    }
+
+    /// Exact string values for which the current layout may write source-row postings.
+    pub fn exact_postings_policy(&self) -> BTreeMap<String, Vec<String>> {
+        let mut policy: BTreeMap<String, Vec<String>> = self
+            .columns
+            .iter()
+            .filter(|column| !column.index.exact_values.is_empty())
+            .map(|column| (column.name.clone(), column.index.exact_values.clone()))
+            .collect();
+        for projection in &self.projections {
+            policy
+                .entry(projection.predicate_column.clone())
+                .or_default()
+                .extend(projection.predicate_values.iter().cloned());
+        }
+        for values in policy.values_mut() {
+            values.sort();
+            values.dedup();
+        }
+        policy
     }
 
     /// Set the compaction order. The implicit `seq` tie-breaker is appended by
@@ -1049,12 +1071,10 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
     Ok(merged_schema)
 }
 
-/// Validate a forwarded schema against an existing server-owned hub schema.
+/// Validate a forwarded schema without evolving the receiving schema.
 ///
-/// The hub does not adopt physical layout or additional telemetry columns from a
-/// federated sender. Returning the nullable additions lets the RPC layer report what
-/// it ignored; shared columns must retain their registered type, and an unknown
-/// non-nullable column is rejected rather than acknowledged and discarded.
+/// Unknown nullable columns are returned as ignored. Shared columns must retain their
+/// registered type, and unknown non-nullable columns are rejected.
 pub fn ignored_forwarded_schema_columns(
     requested: &Schema,
     registered: &Schema,
@@ -1219,10 +1239,8 @@ pub fn validate_and_align_batch(
 
 /// Align a batch from a federated telemetry writer to the hub's server-owned schema.
 ///
-/// Unknown nullable columns are omitted so a canary producer cannot poison the known
-/// telemetry rows in the same batch. Unknown required columns remain an error: dropping
-/// one would falsely acknowledge data the sender declared essential. All registered
-/// columns retain the strict type and presence checks of [`validate_and_align_batch`].
+/// Unknown nullable columns are omitted. Unknown required columns, known-column type
+/// mismatches, and missing required registered columns are rejected.
 pub fn validate_and_align_forwarded_batch(
     batch: &RecordBatch,
     registered: &Schema,

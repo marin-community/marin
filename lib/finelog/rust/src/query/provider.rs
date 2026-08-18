@@ -17,7 +17,7 @@
 //! captured; the snapshot here is the read side of that seam.
 
 use std::any::Any;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
@@ -48,6 +48,7 @@ pub struct NamespaceProvider {
     /// (no-segments) case.
     segment_paths: Vec<String>,
     index_cache: Arc<IndexCache>,
+    exact_postings_policy: Option<BTreeMap<String, Vec<String>>>,
 }
 
 #[derive(Debug)]
@@ -122,6 +123,7 @@ impl NamespaceProvider {
                 inner: Inner::Empty(Arc::new(mem)),
                 segment_paths: Vec::new(),
                 index_cache,
+                exact_postings_policy: None,
             });
         }
 
@@ -140,7 +142,18 @@ impl NamespaceProvider {
             inner: Inner::Listing(Arc::new(listing)),
             segment_paths: segment_paths.to_vec(),
             index_cache,
+            exact_postings_policy: None,
         })
+    }
+
+    /// Supply the registered values for which segment indexes may contain exact postings.
+    pub fn with_exact_postings_policy(mut self, mut policy: BTreeMap<String, Vec<String>>) -> Self {
+        for values in policy.values_mut() {
+            values.sort();
+            values.dedup();
+        }
+        self.exact_postings_policy = Some(policy);
+        self
     }
 }
 
@@ -181,7 +194,16 @@ impl TableProvider for NamespaceProvider {
                 // filtered projections or access plans onto its files.
                 let plan = t.scan(state, projection, filters, limit).await?;
                 let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
-                let exact = crate::query::exact_prune::values_by_column(filters);
+                let mut exact = crate::query::exact_prune::values_by_column(filters);
+                if let Some(policy) = &self.exact_postings_policy {
+                    exact.retain(|column, values| {
+                        policy.get(column).is_some_and(|indexed| {
+                            values
+                                .iter()
+                                .all(|value| indexed.binary_search(value).is_ok())
+                        })
+                    });
+                }
                 if needles.is_empty() && exact.is_empty() {
                     return Ok(plan);
                 }
@@ -594,6 +616,107 @@ mod tests {
             cache.corruption_counts().sections,
             0,
             "header coverage should reject the predicate before reading the corrupt payload"
+        );
+        let exec = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec");
+        let config = exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        assert!(config
+            .file_groups
+            .iter()
+            .flat_map(|group| group.files())
+            .all(|file| file.extensions.is_none()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn registered_policy_skips_uncovered_legacy_postings_payload() {
+        let dir = tempdir("legacy_uncovered_exact_value");
+        let batch = worker_batch(1, vec!["w-1", "w-2"], vec![100, 200]);
+        let (path, _) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
+        let config = crate::store::exact::ExactIndexConfig {
+            column: "worker_id".to_string(),
+            exact_values: vec!["w-2".to_string()],
+            value_counts: false,
+        };
+        crate::store::segment_index::write_segment_index(
+            &path,
+            &[batch],
+            &crate::store::segment_index::SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[config],
+                &[],
+                None,
+            ),
+        )
+        .unwrap();
+
+        let bundle_path = crate::store::index_bundle::bundle_path(&path);
+        let header = crate::store::index_bundle::read_header(&bundle_path).unwrap();
+        let postings = header
+            .sections
+            .iter()
+            .find(|section| section.kind == crate::store::index_bundle::SectionKind::ExactPostings)
+            .unwrap();
+        let payload =
+            crate::store::index_bundle::read_section(&bundle_path, &header, postings.id.as_str())
+                .unwrap();
+        let legacy_bundle = crate::store::index_bundle::serialize(
+            &header.binding,
+            &[crate::store::index_bundle::SectionInput {
+                id: postings.id.clone(),
+                kind: postings.kind,
+                method_version: 1,
+                exactness: postings.exactness,
+                coverage: Vec::new(),
+                payload,
+            }],
+        )
+        .unwrap();
+        std::fs::write(&bundle_path, legacy_bundle).unwrap();
+        let legacy_header = crate::store::index_bundle::read_header(&bundle_path).unwrap();
+        let legacy_postings = legacy_header
+            .sections
+            .iter()
+            .find(|section| section.kind == crate::store::index_bundle::SectionKind::ExactPostings)
+            .unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&bundle_path)
+            .unwrap()
+            .write_all_at(&[0xff], legacy_postings.offset)
+            .unwrap();
+
+        let cache = crate::query::index_cache::test_index_cache();
+        let provider = NamespaceProvider::build(
+            worker_arrow(),
+            &[path.to_string_lossy().into_owned()],
+            Arc::clone(&cache),
+        )
+        .unwrap()
+        .with_exact_postings_policy(BTreeMap::from([(
+            "worker_id".to_string(),
+            vec!["w-2".to_string()],
+        )]));
+        let plan = provider
+            .scan(
+                &SessionContext::new().state(),
+                None,
+                &[col("worker_id").eq(lit("w-missing"))],
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            cache.corruption_counts().sections,
+            0,
+            "the registered policy should reject the predicate before reading legacy postings"
         );
         let exec = plan
             .as_any()

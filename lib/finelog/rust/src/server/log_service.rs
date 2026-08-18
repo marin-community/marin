@@ -260,7 +260,8 @@ impl LogService for LogServiceImpl {
         let snapshot = run_blocking(move || store.query_snapshot(LOG_NAMESPACE_NAME)).await?;
         let provider =
             NamespaceProvider::build(snapshot.schema, &snapshot.paths, snapshot.index_cache)
-                .map_err(|e| ConnectError::internal(format!("build log provider: {e}")))?;
+                .map_err(|e| ConnectError::internal(format!("build log provider: {e}")))?
+                .with_exact_postings_policy(snapshot.exact_postings_policy);
 
         // Run the read (DataFusion schedules its own CPU tasks; await directly).
         let ctx = make_ctx();

@@ -10,7 +10,7 @@
 //! - re-register with an EMPTY policy KEEPS the existing policy.
 //! - `log` is privileged and undroppable.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -91,6 +91,7 @@ pub fn log_registered_schema() -> Schema {
 /// `min_seq` always describes exactly the segments in `paths`.
 pub struct NamespaceSnapshot {
     pub schema: SchemaRef,
+    pub exact_postings_policy: BTreeMap<String, Vec<String>>,
     pub paths: Vec<String>,
     pub min_seq: Option<i64>,
     pub index_cache: Arc<IndexCache>,
@@ -577,12 +578,14 @@ impl Store {
                 None => continue,
             };
             let arrow_schema = Arc::clone(engine.arrow_schema());
+            let exact_postings_policy = engine.schema().exact_postings_policy();
             let paths = engine.query_snapshot().paths;
             let provider =
                 NamespaceProvider::build(arrow_schema, &paths, Arc::clone(&self.index_cache))
                     .map_err(|e| {
                         StatsError::Internal(format!("build provider {:?}: {e}", ns.name))
-                    })?;
+                    })?
+                    .with_exact_postings_policy(exact_postings_policy);
             out.push(RegisteredProvider {
                 name: ns.name,
                 provider,
@@ -600,6 +603,7 @@ impl Store {
         let segments = engine.query_snapshot();
         Ok(NamespaceSnapshot {
             schema: Arc::clone(engine.arrow_schema()),
+            exact_postings_policy: engine.schema().exact_postings_policy(),
             paths: segments.paths,
             min_seq: segments.min_seq,
             index_cache: Arc::clone(&self.index_cache),
