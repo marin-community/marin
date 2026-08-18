@@ -441,6 +441,7 @@ def test_dashboard_task_events_exclude_prior_incarnations(smoke_cluster, smoke_p
             storage_policy=TASK_EVENT_STORAGE_POLICY,
         )
         now = Timestamp.now()
+        event_source = "iris/controller"
         table.write(
             [
                 TaskEventRow(
@@ -451,7 +452,7 @@ def test_dashboard_task_events_exclude_prior_incarnations(smoke_cluster, smoke_p
                     type="Warning",
                     reason="PriorIncarnationEvent",
                     message="This retained event belongs to an earlier run.",
-                    source="iris/controller",
+                    source=event_source,
                     count=1,
                 ),
                 TaskEventRow(
@@ -462,7 +463,7 @@ def test_dashboard_task_events_exclude_prior_incarnations(smoke_cluster, smoke_p
                     type="Normal",
                     reason="CurrentIncarnationEvent",
                     message="This event belongs to the task shown by the controller.",
-                    source="iris/controller",
+                    source=event_source,
                     count=1,
                 ),
             ]
