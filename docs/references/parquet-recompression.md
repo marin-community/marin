@@ -59,16 +59,17 @@ The production inventory is computed offline from the storage-scan Parquet logs
 with DuckDB. Each leaf Parquet directory is assigned to its nearest enclosing
 `.artifact.json` root, or to itself when there is no artifact marker. Artifact
 roots larger than 100 GiB receive their own steps. Smaller roots are packed
-smallest-first into steps of roughly 100 GiB, with at most 256 roots per step.
+smallest-first into steps of roughly 100 GiB, with at most 4,096 roots per step.
 Every step records explicit, non-overlapping leaf globs.
 
 The reviewed August 18 snapshot is stored at
-`s3://marin-us-east-02a/marin/ops/parquet-rewrite-manifests/storage-scan-2026-08-18-100g.parquet`.
+`s3://marin-us-east-02a/marin/ops/parquet-rewrite-manifests/storage-scan-2026-08-18-100g-cap4096.parquet`.
 It covers 36,940 durable Parquet directories, 24,432 artifact roots, 6,000,433
-files, and 486.125 TiB. The 100 GiB schedule has 746 steps: 404 large-artifact
-steps and 342 rollups. It does not distinguish current, obsolete, or
-intermediate outputs. The only excluded paths contain `tmp/ttl=`, because
-replacing those objects would reset their retention clock.
+files, and 486.125 TiB. The 100 GiB schedule has 671 steps: 404 large-artifact
+steps and 267 rollups, with at most 4,096 artifact roots per rollup. It does not
+distinguish current, obsolete, or intermediate outputs. The only excluded paths
+contain `tmp/ttl=`, because replacing those objects would reset their retention
+clock.
 
 Inspect the exact ordered list without touching the datasets:
 
