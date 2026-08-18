@@ -40,8 +40,10 @@ from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
+from rigging.fsutil.transfer import copy_plan, execute_copy_plan
 
 from experiments.datakit.testbed.settings import RAW_TARGET_TOTAL_TOKENS_B
 
@@ -88,16 +90,20 @@ def _part_name(idx: int, total: int) -> str:
 
 
 def _copy_shard(src: str, dst: str) -> int:
-    """Copy a single file server-side. Both paths must share a backend."""
-    src_fs, src_path = url_to_fs(src)
-    dst_fs, dst_path = url_to_fs(dst)
-    assert (
-        src_fs.protocol == dst_fs.protocol
-    ), f"sampler: src/dst filesystem mismatch: {src_fs.protocol!r} vs {dst_fs.protocol!r}. "
-    parent = os.path.dirname(dst_path)
-    if parent:
-        StoragePath(parent).mkdirs(exist_ok=True)
-    src_fs.copy(src_path, dst_path)
+    """Copy a non-empty shard to ``dst`` and return its byte size."""
+    src_fs, src_path = filesystem_for(src)
+    dst_fs, dst_path = filesystem_for(dst)
+
+    src_backend = getattr(src_fs, "_fs", src_fs)
+    dst_backend = getattr(dst_fs, "_fs", dst_fs)
+    if src_backend is dst_backend:
+        parent = os.path.dirname(dst_path)
+        if parent:
+            dst_fs.makedirs(parent, exist_ok=True)
+        src_fs.copy(src_path, dst_path)
+    else:
+        execute_copy_plan(copy_plan((src,), dst, recursive=False, no_clobber=False))
+
     size = int(src_fs.size(src_path) or 0)
     assert size > 0, f"sampler: source shard has zero size: {src}"
     return size

@@ -78,6 +78,11 @@ branch/PR head. Add treatments only when the requester explicitly names each
 additional commit or configuration. Record a stable name plus the exact SHA and
 configuration difference for every extra arm; do not infer or invent arms.
 
+Run on GCP in `us-central1` with
+`gs://marin-us-central1/datakit/sample_100b_8ae7a94f` unless the requester
+selects another sample or backend. CoreWeave remains available for S3-local
+runs; select it explicitly with the matching S3 sample and target cluster.
+
 For a PR, read the diff and select the smallest stage range that exercises the
 changed behavior:
 
@@ -115,26 +120,25 @@ SHA or configuration explicitly requested.
 
 `experiments.datakit.zephyr_benchmark` accepts an existing normalized sample
 and routes outputs to a seven-day temporary prefix. Use an immutable,
-region-local sample. All arguments except `--run-tag` must match across the
-control and treatments.
+region-local sample. Its default input is the GCS 100B sample in `us-central1`.
+All arguments except `--run-tag` must match across the control and treatments.
 
 Set exactly one data-locality argument before launching:
 
 ```bash
-# For s3://marin-us-east-02a/...:
-COREWEAVE_CLUSTER=cw-us-east-02a
-DATA_LOCALITY_ARGS=(--target-cluster "$COREWEAVE_CLUSTER")
+# Default: GCS input and GCP compute in us-central1.
+SAMPLE_PREFIX=gs://marin-us-central1/datakit/sample_100b_8ae7a94f
+DATA_LOCALITY_ARGS=(--region us-central1)
 
-# For gs://marin-us-central2/..., replace the two lines above with:
-# GCP_REGION=us-central2
-# DATA_LOCALITY_ARGS=(--region "$GCP_REGION")
+# CoreWeave opt-in: S3 input and CoreWeave compute in cw-us-east-02a.
+# SAMPLE_PREFIX=s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f
+# DATA_LOCALITY_ARGS=(--target-cluster cw-us-east-02a)
 ```
 
-Set the cluster or region from the actual sample prefix; the values above are
-examples. If the mapping is unknown, stop before launching. The benchmark
-passes `source_prefix` to `marin_temp_bucket`, which keeps temporary outputs
-with the sample. Do not override the output location or launch compute in a
-different region.
+Set the cluster or region from the actual sample prefix. If the mapping is
+unknown, stop before launching. The benchmark passes `source_prefix` to
+`marin_temp_bucket`, which keeps temporary outputs with the sample. Do not
+override the output location or launch compute in a different region.
 
 Launch each arm from its worktree:
 
@@ -145,7 +149,7 @@ uv run iris --config=lib/iris/config/marin.yaml job run --no-wait \
   "${DATA_LOCALITY_ARGS[@]}" --memory=2G --disk=5G --cpu=1 --extra=cpu \
   --priority batch \
   -- python -m experiments.datakit.zephyr_benchmark \
-    --sample-prefix <NORMALIZED_SAMPLE_PREFIX> \
+    --sample-prefix "$SAMPLE_PREFIX" \
     --sources <COMMA_SEPARATED_SOURCES_OR_ALL> \
     --run-tag <FRESH_RUN_TAG>-<ARM> \
     --pool-workers <WORKERS> \
