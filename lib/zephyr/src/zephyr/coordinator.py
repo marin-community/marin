@@ -1504,7 +1504,7 @@ def _regroup_scatter_refs(
     input shard count.
 
     Every reducer receives the full list of scatter data-file paths and reads
-    the per-mapper ``.scatter_meta`` sidecars in parallel to build its own
+    the per-mapper ``metadata.msgpack`` sidecars in parallel to build its own
     ``ScatterReader`` — the coordinator never consolidates a manifest.
     """
     num_output = output_shard_count if output_shard_count is not None else input_shard_count

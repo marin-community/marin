@@ -391,7 +391,7 @@ class ScatterReader:
     def from_sidecars(cls, scatter_paths: list[str], target_shard: int) -> "ScatterReader":
         """Build a ScatterReader by reading per-mapper sidecars directly.
 
-        Each reducer reads every mapper's ``.scatter_meta`` sidecar in parallel
+        Each reducer reads every mapper's ``metadata.msgpack`` sidecar in parallel
         and filters for its own ``target_shard``. No coordinator-written manifest
         is needed, which eliminates a serialization bottleneck when there are
         thousands of mappers.
