@@ -140,3 +140,14 @@ Inkling uses short causal convolutions with kernel size 4 in the K stream, V str
 - Action: stopped the coordinator, wrapped the Pallas implementation in `shard_map`, sharded convolution channels over the model axis, and added an abstract-mesh lowering regression.
 - Validation: the lowering regression and six targeted numerical, gradient, mask, and optimizer tests passed. The full targeted kernel and variant selection also passed.
 - Next action: publish the fix snapshot and resubmit the smoke run.
+
+### 2026-08-17 18:40 PDT - Mixed-precision gradient failure
+
+- Commit Hash: `19488ef108`
+- Coordinator: `/held/moe-pallas-sconv-smoke-8377-r2-central1`
+- Result: the explicit-mesh fix allowed the training child to initialize W&B, load the caches, and enter the 25-step training loop. The first value-and-gradient trace then failed because the custom VJP returned an fp32 weight cotangent for a bf16 weight primal.
+- Interpretation: `ShortConv` cast its fp32 parameter to the bf16 activation dtype before calling the Pallas kernel, while the kernel accumulates parameter gradients in fp32.
+- Action: stopped the coordinator before its automatic retry, preserved fp32 convolution parameters at the call site, cast custom-VJP cotangents back to their primal dtypes, and extended the explicit-mesh regression through a mixed-precision value-and-gradient trace.
+- Capacity: a pinned us-east5-a attempt could not provision a v5p-8 because the zone had no capacity. Subsequent smoke retries use us-central1-a.
+- Validation: the mixed-precision explicit-mesh regression and six targeted numerical, gradient, mask, and optimizer tests passed.
+- Next action: publish the dtype fix and resubmit in us-central1-a.

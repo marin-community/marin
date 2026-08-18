@@ -290,7 +290,7 @@ class ShortConv(eqx.Module):
         attention_mask = None if segment_ids is None else segment_ids >= 0
         output, _ = depthwise_causal_convolution(
             input=x,
-            weight=self.weight.astype(x.dtype),
+            weight=self.weight,
             attention_mask=attention_mask,
         )
 

@@ -45,7 +45,7 @@ def _depthwise_causal_convolution_reference(
 
     x = jax.lax.conv_general_dilated(
         lhs=x,
-        rhs=W[:, None, :],
+        rhs=W.astype(x.dtype)[:, None, :],
         window_strides=(1,),
         padding=padding,
         feature_group_count=H,
@@ -54,7 +54,7 @@ def _depthwise_causal_convolution_reference(
     )
 
     if b is not None:
-        x = x + b[None, :, None]
+        x = x + b.astype(x.dtype)[None, :, None]
 
     x = jnp.transpose(x, (0, 2, 1))
     if activation_function in ["silu", "swish"]:

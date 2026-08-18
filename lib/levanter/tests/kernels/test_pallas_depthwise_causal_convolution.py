@@ -156,15 +156,22 @@ def test_depthwise_causal_convolution_pallas_tpu_lowers_with_explicit_sharding()
     )
 
     def run():
-        x = jax.sharding.reshard(jnp.zeros((4, 8, 6)), P("data", None, "model"))
-        weight = jax.sharding.reshard(jnp.zeros((6, 4)), P("model", None))
-        return depthwise_causal_convolution(x, weight, implementation="pallas_tpu")[0]
+        x = jax.sharding.reshard(jnp.zeros((4, 8, 6), dtype=jnp.bfloat16), P("data", None, "model"))
+        weight = jax.sharding.reshard(jnp.zeros((6, 4), dtype=jnp.float32), P("model", None))
+
+        def loss(weight):
+            output = depthwise_causal_convolution(x, weight, implementation="pallas_tpu")[0]
+            return output.astype(jnp.float32).sum()
+
+        return jax.value_and_grad(loss)(weight)
 
     with use_abstract_mesh(mesh):
-        output = jax.eval_shape(run)
+        loss, weight_grad = jax.eval_shape(run)
         jaxpr = str(jax.make_jaxpr(run)())
 
-    assert output.shape == (4, 8, 6)
+    assert loss.shape == ()
+    assert weight_grad.shape == (6, 4)
+    assert weight_grad.dtype == jnp.float32
     assert "shard_map" in jaxpr
 
 

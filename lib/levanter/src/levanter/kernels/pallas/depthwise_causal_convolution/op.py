@@ -104,6 +104,7 @@ def _depthwise_causal_convolution_backward(
     dy, dht = cotangents
 
     K = W.shape[-1]
+    weight_dtype = W.dtype
     W = jnp.transpose(W, (1, 0))
 
     dht = None if dht is None or not output_state else jnp.transpose(dht, (0, 2, 1))
@@ -120,9 +121,9 @@ def _depthwise_causal_convolution_backward(
         ACTIVATION=ACTIVATION,
     )
 
-    dW = jnp.transpose(dW, (1, 0))
-    db = None if b is None else db[0]
-    dh0 = None if h0 is None else jnp.transpose(dh0[:, 1 - K :, :], (0, 2, 1))
+    dW = jnp.transpose(dW, (1, 0)).astype(weight_dtype)
+    db = None if b is None else db[0].astype(b.dtype)
+    dh0 = None if h0 is None else jnp.transpose(dh0[:, 1 - K :, :], (0, 2, 1)).astype(h0.dtype)
 
     return dx, dW, db, dh0
 
