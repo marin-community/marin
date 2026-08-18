@@ -1680,3 +1680,35 @@ Experiment ID prefix: `MEP`.
   on spin detection, trigger dumps on 2-3 ranks, pull the .nvcudmp files,
   and read the stuck warp PCs to identify which wait (arrival sem, tile
   sem, received_sem) the transport/GEMM warpgroups are parked on.
+
+### 2026-08-18 01:55 - MEP-066: fused2 EP64 deadlock ROOT-CAUSED to warp level — tile-semaphore accounting, not SM exclusion
+- Debug arm mep-fused2dbg-ep64-25-20260817 (fused2e recipe + user-triggered
+  core dumps armed via the new CUDA_* env forwarding). The wedge reproduced
+  3/3 (every gang generation; restarts were cluster preemption, per user).
+  Full-coverage dump sweep (62/64 ranks read, round 2):
+  - 22 ranks: fused_gemm_combine_mosaic_gpu_kernel Active on ALL 152 SMs.
+  - 38 ranks: parked in the NEXT collective (ncclSymkDevKernel_AllGather_STMC,
+    all in one grid) waiting for the 22.
+  - No rank in kernel 1; no NCCL-internal wedge; no cross-kernel SM
+    exclusion (MEP-055 hypothesis dead for good).
+- Warp-level anatomy of a wedged rank (round-3 deep read, dump
+  core_s45sxs64_821):
+  - GEMM warpgroups (threads 0-255) parked at UCGABAR_ARV/UCGABAR_WAIT +
+    @P0 EXIT — the end-of-kernel cluster barrier. They FINISHED all tiles.
+  - Transport warpgroup (threads 256-383): lane 0 in the Mosaic semaphore
+    poll (YIELD; ISETP.GE.U32 R6,R7; branch back), inside a loop over
+    semaphores with a per-iteration 128-thread BAR.SYNC — the per-128-row
+    -block tiles_ref[b] gating loop. Other CTA of each cluster fully at
+    UCGABAR_WAIT.
+- Diagnosis: expected_tile_signals (host-side GroupInfo slot replay)
+  exceeds what the GEMM warpgroups actually signal for some block(s) at
+  EP64 routing shapes (3 local experts, many tiny/empty remote groups).
+  Same family as the MEP-050 mid-block empty-group bug; an EP64-only case
+  the CPU replay test does not cover. Per-rank wedging (22 of 64 by
+  routing draw) fits a purely local accounting mismatch — no cross-rank
+  cycle required.
+- Next (off-rack): fuzz test_mgpu_transport_metadata.py replay vs the
+  kernel signaling semantics at hero EP64 shapes (E192/64 ranks, spare
+  slots, empty peers, block-straddling groups) to pin the exact case;
+  then fix host counts (or kernel signaling) and re-run EP4 conformance
+  before another hero attempt. Job killed; rack freed (high contention).
