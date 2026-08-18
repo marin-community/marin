@@ -26,6 +26,7 @@ MoeImplementation: TypeAlias = Literal[
     "fixed_all_to_all",  # Expert-parallel all-to-all with fixed sender/expert cells.
     "fixed_pooled_wave_all_to_all",  # Destination-pooled static waves with fixed receiver buffers.
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
+    "marin_ep",  # Expert-parallel Mosaic-GPU fused transport + pooled waterfilling drops.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
     "sonic_cute",  # Single-process QuACK SM100 (Blackwell/B200) grouped-GEMM backend.
@@ -37,6 +38,7 @@ _EP_MOE_IMPLEMENTATIONS = (
     "fixed_all_to_all",
     "fixed_pooled_wave_all_to_all",
     "deepep",
+    "marin_ep",
 )
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
