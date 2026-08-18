@@ -44,6 +44,8 @@ COVERAGE = (
     / "coverage_observations.csv"
 )
 EXPLORER_DIR = REFERENCE / "starcoder_wsd80_full_pool_atomic_surface_explorer_20260811"
+PHASE_0_CACHE = EXPLORER_DIR / "phase0_atomic_metric_observations.csv"
+PHASE_0_SUFFIX = "::phase_0"
 # StarCoder is bucket 0 and the complement (Nemotron) is bucket 1; two buckets, so one free share each phase.
 BUCKETS = ("starcoder", "complement")
 
@@ -54,6 +56,7 @@ class AtomicPanel:
 
     frame: pd.DataFrame
     horizon: float
+    readout_key: str | None = None  # which metric's phase-boundary value `y0` exposes
 
     @property
     def phase_0(self) -> np.ndarray:
@@ -101,6 +104,24 @@ class AtomicPanel:
     def tied(self) -> np.ndarray:
         return np.isclose(self.phase_0, self.phase_1)
 
+    def phase_0_readout(self, key: str) -> np.ndarray:
+        """The same metric measured at the END OF PHASE 0, before any phase-1 weight is applied.
+
+        Measured on this panel to be EXACTLY deterministic given the phase-0 share -- runs that share it
+        differ only after the boundary, and their boundary readouts agree to 0.000000 at every rung. So
+        this carries no run-level noise and cannot reduce variance by absorbing any; it is a measured
+        feature of the phase-0 policy, not a control variate. What it can do is replace a modelled
+        phase-0 response with an observed one, which is worth most where that response is high
+        dimensional.
+        """
+        return self.frame[key + PHASE_0_SUFFIX].to_numpy(float)
+
+    @property
+    def y0(self) -> np.ndarray:
+        if self.readout_key is None:
+            raise ValueError("this panel was built without a readout_key, so it has no phase-0 readout")
+        return self.phase_0_readout(self.readout_key)
+
 
 def load_full_pool(refresh: bool = False) -> pd.DataFrame:
     observations = explorer.load_observations(COVERAGE, EXPLORER_DIR, refresh=refresh, workers=1)
@@ -123,7 +144,7 @@ def seed_cache(frames: dict[str, pd.DataFrame]) -> None:
 
 
 def load_all_supports(refresh: bool = False) -> dict[str, pd.DataFrame]:
-    observations = explorer.load_observations(COVERAGE, EXPLORER_DIR, refresh=refresh, workers=1)
+    observations = with_phase_0(explorer.load_observations(COVERAGE, EXPLORER_DIR, refresh=refresh, workers=1))
     return {
         support_id: group.reset_index(drop=True) for support_id, group in observations.groupby("support_id", sort=True)
     }
@@ -144,13 +165,27 @@ def load_support(support_id: str, refresh: bool = False) -> pd.DataFrame:
     if support_id in _PRELOADED:
         frame = _PRELOADED[support_id]
     else:
-        observations = explorer.load_observations(COVERAGE, EXPLORER_DIR, refresh=refresh, workers=1)
+        observations = with_phase_0(explorer.load_observations(COVERAGE, EXPLORER_DIR, refresh=refresh, workers=1))
         frame = observations.loc[observations["support_id"] == support_id].reset_index(drop=True)
     if frame.empty:
         raise ValueError(f"unknown support_id {support_id!r}")
     if support_id == "full":
         assert_no_replay(frame)
     return frame
+
+
+def with_phase_0(observations: pd.DataFrame) -> pd.DataFrame:
+    """Join the phase-boundary readouts on, suffixed, when they have been materialized."""
+    if not PHASE_0_CACHE.exists():
+        return observations
+    boundary = pd.read_csv(PHASE_0_CACHE)
+    metrics = [column for column in boundary.columns if column in set(atomic.METRIC_KEYS)]
+    # `observations` already carries its own `run_name`, so the join key is renamed rather than merged
+    # onto, which would silently produce suffixed duplicates of both.
+    boundary = boundary[["run_name", "phase0_step", "phase0_fraction", *metrics]].rename(
+        columns={"run_name": "metric_run_name", **{key: key + PHASE_0_SUFFIX for key in metrics}}
+    )
+    return observations.merge(boundary, on="metric_run_name", how="left")
 
 
 def repetition_summary(frame: pd.DataFrame) -> dict[str, float]:

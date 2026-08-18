@@ -31,6 +31,7 @@ Usage: ``uv run python ... [--mode pooled,loso] [--candidates a,b] [--workers N]
 """
 
 import argparse
+import dataclasses
 import sys
 from concurrent.futures import ProcessPoolExecutor
 from functools import cache
@@ -62,14 +63,15 @@ SUPPORTS = ("full", "m0125", "m025", "m050", "m100", "m200", "m400")
 
 @cache
 def _panel(support: str, rung: int):
-    return panel_module.panels_by_horizon(panel_module.load_support(support))[rung]
+    panel = panel_module.panels_by_horizon(panel_module.load_support(support))[rung]
+    return dataclasses.replace(panel, readout_key=fresh.PRIMARY)
 
 
 @cache
 def _pooled(rung: int, supports: tuple[str, ...]):
     """These supports at one horizon stacked into a single panel."""
     combined = pd.concat([_panel(s, rung).frame for s in supports], ignore_index=True)
-    return panel_module.AtomicPanel(combined, _panel(supports[0], rung).horizon)
+    return panel_module.AtomicPanel(combined, _panel(supports[0], rung).horizon, fresh.PRIMARY)
 
 
 def fit(rung: int, supports: tuple[str, ...], name: str, seed: int):

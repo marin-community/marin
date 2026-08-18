@@ -32,6 +32,7 @@ Usage: ``uv run python ... [--candidates a,b,c] [--workers N]``
 """
 
 import argparse
+import dataclasses
 import sys
 from concurrent.futures import ProcessPoolExecutor
 from functools import cache
@@ -96,7 +97,10 @@ def blocks() -> pd.DataFrame:
 
 @cache
 def _panels(support: str):
-    return tuple(panel_module.panels_by_horizon(panel_module.load_support(support)))
+    return tuple(
+        dataclasses.replace(panel, readout_key=PRIMARY)
+        for panel in panel_module.panels_by_horizon(panel_module.load_support(support))
+    )
 
 
 def predict_gain(support: str, rung: int, tied, untied, name: str) -> dict:

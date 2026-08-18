@@ -65,6 +65,15 @@ def exposure(panel, horizon: float) -> np.ndarray:
 
 def design(panel, name: str, theta: np.ndarray) -> np.ndarray:
     """Columns for one candidate. Column 0 is always the intercept."""
+    if name.endswith(PHASE_0_SUFFIX):
+        # The metric measured at the end of phase 0, added to whatever the base candidate already has
+        # (ATOM-020). It enters as a SIGNED PAIR because the sign is not known in advance -- the measured
+        # correlation with the endpoint runs +0.47 at the shortest horizon and -0.12 at the longest -- and
+        # the solve constrains every mechanism column to a non-negative amplitude. A column and its
+        # negation under that constraint represent exactly one free-sign coefficient, since any real beta
+        # is b_plus - b_minus with both non-negative, and the solver uses at most one of them.
+        base = design(panel, name[: -len(PHASE_0_SUFFIX)], theta)
+        return np.column_stack([base, panel.y0, -panel.y0])
     ones = np.ones(len(panel.frame))
     if name == "intercept":
         return ones[:, None]
@@ -247,7 +256,12 @@ def _hill(epochs: np.ndarray, tau: float) -> np.ndarray:
     return powered / (1.0 + powered)
 
 
+PHASE_0_SUFFIX = "-y0"
+
+
 def bounds_for(name: str) -> list[tuple[float, float]]:
+    if name.endswith(PHASE_0_SUFFIX):
+        return bounds_for(name[: -len(PHASE_0_SUFFIX)])
     if name in ("intercept", "quadratic"):
         return []
     if name in ("path-exposure", "path-tied", "path-damage"):
@@ -275,6 +289,8 @@ def bounds_for(name: str) -> list[tuple[float, float]]:
 
 
 def shrink_for(name: str, theta: np.ndarray):
+    if name.endswith(PHASE_0_SUFFIX):
+        return shrink_for(name[: -len(PHASE_0_SUFFIX)], theta)
     """Which amplitudes are shrunk together, and how hard (ATOM-015).
 
     The split-damage models generalise the unsplit ones, and the difference between the two damage
@@ -424,6 +440,12 @@ def _grid_panel(panel, flat0, flat1):
     rate_1 = float(np.max(panel.epochs_phase_1) / max(np.max(panel.phase_1), 1e-12))
     capacity = float(panel.frame["nemotron_max_total_epochs"].to_numpy(float)[0]) if len(panel.frame) else 0.0
     grid = _GridPanel(flat0, flat1, rate_0 * flat0, rate_1 * flat1, np.empty((len(flat0), 0)))
+    # The boundary readout is a function of the phase-0 share alone -- runs sharing it agree to 0.000000 --
+    # so a hypothetical policy's value is read off the panel's own measured curve rather than modelled.
+    readout = getattr(panel, "readout_key", None)
+    if readout is not None:
+        order = np.argsort(panel.phase_0)
+        grid.y0 = np.interp(flat0, panel.phase_0[order], panel.y0[order])
     grid.complement_epochs_phase_0 = explorer.PHASE_0_FRACTION * capacity * (1.0 - flat0)
     grid.complement_epochs_phase_1 = (1.0 - explorer.PHASE_0_FRACTION) * capacity * (1.0 - flat1)
     return grid
