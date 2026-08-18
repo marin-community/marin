@@ -19,11 +19,11 @@ Example:
 
 import logging
 import re
-import time
 from collections.abc import Callable, Generator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
 from typing import Protocol, TypeVar, cast
 
 from connectrpc.code import Code
@@ -108,8 +108,13 @@ class _LogQuery:
     tail: bool = False
 
 
-def _task_id_from_key(key: str) -> JobName:
+def _task_id_from_key(key: str, fallback: JobName | None = None) -> JobName:
     """Extract the task JobName from a log entry key (e.g. "/user/job/0:3" -> "/user/job/0")."""
+    if not key:
+        if fallback is None:
+            raise ValueError("Log entry omitted its task key")
+        fallback.require_task()
+        return fallback
     colon = key.rfind(":")
     if colon >= 0:
         return JobName.from_wire(key[:colon])
@@ -146,7 +151,7 @@ _Status = TypeVar("_Status")
 
 
 def _wait_for_status(
-    load: Callable[[], _Status],
+    load: Callable[[Deadline], _Status],
     finished: Callable[[_Status], bool],
     *,
     timeout: float,
@@ -156,11 +161,11 @@ def _wait_for_status(
     deadline = Deadline.from_seconds(timeout)
     backoff = ExponentialBackoff(initial=0.1, maximum=max(0.1, poll_interval))
     while True:
-        status = load()
+        status = load(deadline)
         if finished(status):
             return status
         deadline.raise_if_expired(f"{target} did not finish in {timeout}s")
-        time.sleep(min(backoff.next_interval(), deadline.remaining_seconds()))
+        Event().wait(min(backoff.next_interval(), deadline.remaining_seconds()))
 
 
 class Attempt:
@@ -190,9 +195,9 @@ class Attempt:
     def ref(self) -> TaskAttempt:
         return TaskAttempt(self._task_name, self._attempt_number)
 
-    def status(self) -> AttemptStatus:
+    def _status(self, deadline: Deadline | None) -> AttemptStatus:
         """Return this numbered Attempt from the Task's retained history."""
-        status = self._client.task_status(self._task_name)
+        status = self._client.task_status(self._task_name, deadline=deadline)
         match = next(
             (attempt for attempt in status.attempts if attempt.attempt_number == self._attempt_number),
             None,
@@ -200,6 +205,10 @@ class Attempt:
         if match is None:
             raise ConnectError(Code.NOT_FOUND, f"Attempt {self.ref.to_wire()} not found")
         return match
+
+    def status(self) -> AttemptStatus:
+        """Return this numbered Attempt from the Task's retained history."""
+        return self._status(None)
 
     def logs(
         self,
@@ -226,7 +235,7 @@ class Attempt:
     def wait(self, timeout: float = 300.0, poll_interval: float = 30.0) -> AttemptStatus:
         """Wait until this Attempt reaches a terminal state."""
         return _wait_for_status(
-            self.status,
+            self._status,
             lambda status: status.state in TERMINAL_TASK_STATES,
             timeout=timeout,
             poll_interval=poll_interval,
@@ -329,7 +338,7 @@ class Task:
     def wait(self, timeout: float = 300.0, poll_interval: float = 30.0) -> TaskStatus:
         """Wait until this Task reaches a terminal state."""
         return _wait_for_status(
-            self.status,
+            lambda deadline: self._client.task_status(self.task_id, deadline=deadline),
             lambda status: status.state in TERMINAL_TASK_STATES,
             timeout=timeout,
             poll_interval=poll_interval,
@@ -896,7 +905,7 @@ class IrisClient:
             Job handle for the submitted job
 
         Raises:
-            ValueError: If name contains '/' or replicas < 1
+            ValueError: If the name is invalid or replicas < 1.
             JobAlreadyExists: If a job with the same name already exists
         """
         if "/" in name:
@@ -912,6 +921,8 @@ class IrisClient:
         # Get parent job ID from context
         ctx = get_iris_ctx()
         parent_job_id = ctx.job_id if ctx else None
+        if parent_job_id is not None and parent_job_id.child(name).is_task:
+            raise ValueError(f"Nested Job name cannot be an integer: {name!r}")
 
         # Construct full hierarchical name
         if parent_job_id:
@@ -1082,10 +1093,10 @@ class IrisClient:
             self.cancel_job(job_id)
         return job_ids
 
-    def task_status(self, task_name: JobName) -> TaskStatus:
+    def task_status(self, task_name: JobName, *, deadline: Deadline | None = None) -> TaskStatus:
         """Return the current snapshot for a logical Task name."""
         task_name.require_task()
-        return task_status_from_proto(self._cluster_client.get_task_status(task_name))
+        return task_status_from_proto(self._cluster_client.get_task_status(task_name, deadline=deadline))
 
     def describe_task(self, task_name: JobName) -> TaskDescription:
         """Return a Task snapshot with submitted resources and failure diagnostics."""
@@ -1197,7 +1208,7 @@ class IrisClient:
         result = [
             TaskLogEntry(
                 timestamp=timestamp_from_proto(e.timestamp),
-                task_id=_task_id_from_key(e.key),
+                task_id=_task_id_from_key(e.key, target if attempt_id >= 0 else None),
                 source=e.source,
                 data=e.data,
                 attempt_id=e.attempt_id,

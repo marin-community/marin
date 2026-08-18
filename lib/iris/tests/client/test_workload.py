@@ -5,10 +5,12 @@
 
 from typing import cast
 
+import pytest
 from finelog.rpc import logging_pb2
 from iris.client import Attempt, IrisClient
+from iris.client.client import IrisContext, iris_ctx_scope
 from iris.cluster.client import ClusterClient
-from iris.cluster.types import JobName, TaskAttempt
+from iris.cluster.types import Entrypoint, JobName, ResourceSpec, TaskAttempt
 from iris.resources.state import TaskState
 from iris.rpc import controller_pb2, job_pb2
 
@@ -28,8 +30,10 @@ class _WorkloadTransport:
 
         self.log_requests: list[tuple[str, int, str]] = []
         self.actions: list[tuple[list[str], job_pb2.TaskState, str]] = []
+        self.status_deadline_remaining_ms: list[int] = []
 
-    def get_task_status(self, _task_name: JobName):
+    def get_task_status(self, _task_name: JobName, *, deadline=None):
+        self.status_deadline_remaining_ms.append(deadline.remaining_ms() if deadline is not None else -1)
         return self.description.task
 
     def get_task_description(self, _task_name: JobName):
@@ -42,7 +46,6 @@ class _WorkloadTransport:
             source="stdout",
             data="ready marker",
             attempt_id=2,
-            key="/alice/train/0:2",
         )
         return logging_pb2.FetchLogsResponse(entries=[entry])
 
@@ -81,6 +84,17 @@ def test_task_and_attempt_handles_select_current_and_historical_execution():
     ]
 
 
+def test_task_and_attempt_wait_bound_status_reads_by_their_deadline():
+    transport = _WorkloadTransport()
+    task = _client(transport).task(JobName.from_wire("/alice/train/0"))
+
+    for handle in (task, task.attempt(3)):
+        with pytest.raises(TimeoutError):
+            handle.wait(timeout=0)
+
+    assert transport.status_deadline_remaining_ms == [0, 0]
+
+
 def test_task_actions_preserve_current_or_numbered_target_and_acceptance():
     transport = _WorkloadTransport()
     client = _client(transport)
@@ -97,3 +111,11 @@ def test_task_actions_preserve_current_or_numbered_target_and_acceptance():
         (["/alice/train/0"], job_pb2.TASK_STATE_PREEMPTED, "rebalance"),
         (["/alice/train/0:2"], job_pb2.TASK_STATE_FAILED, "bad output"),
     ]
+
+
+def test_submit_rejects_numeric_child_name_before_launching():
+    client = _client(_WorkloadTransport())
+    context = IrisContext(job_id=JobName.from_wire("/alice/train"))
+
+    with iris_ctx_scope(context), pytest.raises(ValueError, match="Nested Job name cannot be an integer"):
+        client.submit(Entrypoint(command=["true"]), "123", ResourceSpec())

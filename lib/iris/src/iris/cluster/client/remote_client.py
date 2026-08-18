@@ -512,7 +512,7 @@ class RemoteClusterClient:
         self._log_client.close()
         self._client.close()
 
-    def get_task_status(self, task_name: JobName) -> job_pb2.TaskStatus:
+    def get_task_status(self, task_name: JobName, *, deadline: Deadline | None = None) -> job_pb2.TaskStatus:
         """Get status of a specific task within a job.
 
         Args:
@@ -521,17 +521,29 @@ class RemoteClusterClient:
         Returns:
             TaskStatus proto for the requested task
         """
-        return self.get_task_description(task_name).task
+        return self.get_task_description(task_name, deadline=deadline).task
 
-    def get_task_description(self, task_name: JobName) -> controller_pb2.Controller.GetTaskStatusResponse:
+    def get_task_description(
+        self,
+        task_name: JobName,
+        *,
+        deadline: Deadline | None = None,
+    ) -> controller_pb2.Controller.GetTaskStatusResponse:
         """Get a Task snapshot with submitted resources and failure diagnostics."""
         task_name.require_task()
 
         def _call():
             request = controller_pb2.Controller.GetTaskStatusRequest(task_id=task_name.to_wire())
-            return self._client.get_task_status(request)
+            timeout_ms = min(self._timeout_ms, max(1, deadline.remaining_ms())) if deadline is not None else None
+            return self._client.get_task_status(request, timeout_ms=timeout_ms)
 
-        return call_with_retry(f"get_task_description({task_name})", _call)
+        if deadline is None:
+            return call_with_retry(f"get_task_description({task_name})", _call)
+        return call_with_retry(
+            f"get_task_description({task_name})",
+            _call,
+            max_elapsed=deadline.remaining_seconds(),
+        )
 
     def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
         """List all tasks for a job.
