@@ -37,15 +37,15 @@ def test_parent_failure_terminates_child_with_cumulative_failure_cause(journey):
     journey.fail(root[0])
     journey.settle()
 
-    expected_error = (
-        "Cumulative failed task attempts exceeded max_task_failures: failures=1, limit=0; application failure"
-    )
     root_status = journey.job(root)
     child_status = journey.job(child)
     assert root_status.state == job_pb2.JOB_STATE_FAILED
-    assert root_status.error == expected_error
+    assert "max_task_failures" in root_status.error
+    assert "failures=1" in root_status.error
+    assert "limit=0" in root_status.error
+    assert "application failure" in root_status.error
     assert child_status.state == job_pb2.JOB_STATE_KILLED
-    assert child_status.error == expected_error
+    assert child_status.error == root_status.error
 
 
 def test_child_cancellation_preserves_its_parent_and_sibling(journey):

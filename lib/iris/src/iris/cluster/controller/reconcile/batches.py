@@ -358,7 +358,7 @@ class ReconcileState:
             return self.overlay.effects
 
         now_ms = now.epoch_ms()
-        reason = "Job completed successfully"
+        reason = TERMINAL_STATE_FALLBACK_REASONS[job_pb2.JOB_STATE_SUCCEEDED]
         _finish_non_terminal_tasks(
             self.overlay,
             job_id,
