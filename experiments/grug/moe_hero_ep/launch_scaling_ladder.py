@@ -257,7 +257,7 @@ def build_ladder_run(
     "--num-steps",
     type=click.IntRange(min=1),
     default=None,
-    help="Training steps. Default trains 750 tokens per active parameter at the rung's batch.",
+    help="Training steps. Default trains 791 tokens per active parameter at the rung's batch.",
 )
 @build_options
 def main(run_id: str, size: str, num_steps: int | None) -> ArtifactStep[HeroThroughputResult]:
