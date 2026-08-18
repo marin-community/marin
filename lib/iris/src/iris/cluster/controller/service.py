@@ -2050,7 +2050,7 @@ class ControllerServiceImpl:
     def complete_job(
         self,
         request: controller_pb2.Controller.CompleteJobRequest,
-        ctx: Any,
+        _ctx: RequestContext | None,
     ) -> job_pb2.Empty:
         """Complete a running job successfully and stop its unfinished tasks."""
         job_id = JobName.from_wire(request.job_id)

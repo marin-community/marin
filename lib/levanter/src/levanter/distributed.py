@@ -39,6 +39,10 @@ def _complete_iris_job_after_clean_exit(client: IrisClient, job_id: JobName) -> 
     client.complete(job_id)
 
 
+def _unregister_iris_job_completion() -> None:
+    atexit.unregister(_complete_iris_job_after_clean_exit)
+
+
 class LevanterSlurmCluster(clusters.SlurmCluster):
     """
     This class is a copy-paste and modification of the original SlurmCluster class in jax, with a few differences:

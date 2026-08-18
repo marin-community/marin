@@ -68,53 +68,55 @@ logger = logging.getLogger(__name__)
 # ``task.merge_task_termination``, and job.py is forbidden from importing task.
 
 
+def _finish_non_terminal_tasks(
+    overlay: Overlay,
+    job_id: JobName,
+    *,
+    task_state: int,
+    error: str | None,
+    exit_code: int | None,
+    message: str,
+    action_reason: TaskActionReason,
+    severity: TaskEventSeverity,
+    now_ms: int,
+) -> None:
+    """Finish all non-terminal tasks for a job and stop their active attempts."""
+    for row in overlay.active_tasks_for_job(job_id, states=NON_TERMINAL_TASK_STATES):
+        task.merge_task_termination(
+            overlay,
+            row.task_id.to_wire(),
+            row.current_attempt_id,
+            task_state,
+            error,
+            now_ms,
+            stamp_attempt_finished=False,
+            exit_code=exit_code,
+        )
+        overlay.emit_task_event(
+            TaskActionEvent(
+                task_id=row.task_id,
+                attempt_id=row.current_attempt_id,
+                ts=Timestamp.from_ms(now_ms),
+                reason=action_reason,
+                message=message,
+                severity=severity,
+            )
+        )
+
+
 def _kill_non_terminal_tasks(overlay: Overlay, job_id: JobName, reason: str, now_ms: int) -> None:
     """Kill all non-terminal tasks for a single job and delete endpoints."""
-    for row in overlay.active_tasks_for_job(job_id, states=NON_TERMINAL_TASK_STATES):
-        task.merge_task_termination(
-            overlay,
-            row.task_id.to_wire(),
-            row.current_attempt_id,
-            job_pb2.TASK_STATE_KILLED,
-            reason,
-            now_ms,
-            stamp_attempt_finished=False,
-        )
-        overlay.emit_task_event(
-            TaskActionEvent(
-                task_id=row.task_id,
-                attempt_id=row.current_attempt_id,
-                ts=Timestamp.from_ms(now_ms),
-                reason=TaskActionReason.JOB_FINALIZED_TASK_KILLED,
-                message=reason,
-                severity=TaskEventSeverity.WARNING,
-            )
-        )
-
-
-def _complete_non_terminal_tasks(overlay: Overlay, job_id: JobName, reason: str, now_ms: int) -> None:
-    """Complete all unfinished tasks for a job and stop their active attempts."""
-    for row in overlay.active_tasks_for_job(job_id, states=NON_TERMINAL_TASK_STATES):
-        task.merge_task_termination(
-            overlay,
-            row.task_id.to_wire(),
-            row.current_attempt_id,
-            job_pb2.TASK_STATE_SUCCEEDED,
-            None,
-            now_ms,
-            stamp_attempt_finished=False,
-            exit_code=0,
-        )
-        overlay.emit_task_event(
-            TaskActionEvent(
-                task_id=row.task_id,
-                attempt_id=row.current_attempt_id,
-                ts=Timestamp.from_ms(now_ms),
-                reason=TaskActionReason.JOB_COMPLETED_TASK_SUCCEEDED,
-                message=reason,
-                severity=TaskEventSeverity.NORMAL,
-            )
-        )
+    _finish_non_terminal_tasks(
+        overlay,
+        job_id,
+        task_state=job_pb2.TASK_STATE_KILLED,
+        error=reason,
+        exit_code=None,
+        message=reason,
+        action_reason=TaskActionReason.JOB_FINALIZED_TASK_KILLED,
+        severity=TaskEventSeverity.WARNING,
+        now_ms=now_ms,
+    )
 
 
 def _cascade_to_children(
@@ -350,7 +352,17 @@ class ReconcileState:
 
         now_ms = now.epoch_ms()
         reason = "Job completed successfully"
-        _complete_non_terminal_tasks(self.overlay, job_id, reason, now_ms)
+        _finish_non_terminal_tasks(
+            self.overlay,
+            job_id,
+            task_state=job_pb2.TASK_STATE_SUCCEEDED,
+            error=None,
+            exit_code=0,
+            message=reason,
+            action_reason=TaskActionReason.JOB_COMPLETED_TASK_SUCCEEDED,
+            severity=TaskEventSeverity.NORMAL,
+            now_ms=now_ms,
+        )
         self.overlay.merge_job_state(
             JobRowDelta(
                 job_id=job_id,
