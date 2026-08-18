@@ -3,6 +3,7 @@
 
 """Writers for common output formats."""
 
+import functools
 import itertools
 import logging
 import os
@@ -314,10 +315,35 @@ def _pyarrow_filesystem(path: str) -> tuple[pa_fs.FileSystem, str] | None:
     if path.startswith("file://"):
         return pa_fs.LocalFileSystem(), path[len("file://") :]
     if path.startswith("gs://"):
-        return pa_fs.GcsFileSystem(), path[len("gs://") :]
+        return _cached_gcs_filesystem(), path[len("gs://") :]
     if path.startswith("s3://"):
-        return pa_fs.S3FileSystem(**_s3_filesystem_kwargs()), path[len("s3://") :]
+        return _cached_s3_filesystem(), path[len("s3://") :]
     return None
+
+
+@functools.cache
+def _cached_s3_filesystem() -> pa_fs.S3FileSystem:
+    """One pyarrow S3 filesystem per process, so its connections are reused.
+
+    A fresh filesystem carries a fresh connection pool, and this is called once
+    per file written. A reduce task writing a few dozen shards therefore opened
+    a few dozen pools, none of which outlived their file, and every request in
+    them burned an ephemeral port that then sat in TIME_WAIT for a minute.
+    Measured on one worker mid-run: 27,612 sockets in TIME_WAIT against a
+    55,296-port range, 85% of all sockets on the box, with tcp_tw_reuse unable
+    to recycle them. Connections then fail locally with EADDRNOTAVAIL, which
+    every S3 client reports in its own dialect and none of them can retry away.
+
+    pyarrow filesystems are thread-safe, so one instance serves every task in
+    the process.
+    """
+    return pa_fs.S3FileSystem(**_s3_filesystem_kwargs())
+
+
+@functools.cache
+def _cached_gcs_filesystem() -> pa_fs.GcsFileSystem:
+    """One pyarrow GCS filesystem per process, for the same reason."""
+    return pa_fs.GcsFileSystem()
 
 
 @contextmanager
