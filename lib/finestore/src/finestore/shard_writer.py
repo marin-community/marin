@@ -23,9 +23,9 @@ import pyarrow.parquet as pq
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.storage_path import StoragePath
 
-# zstd matches finelog's segment encoding: strong ratio on the repetitive token-id / logprob / JSON
-# columns eval data is dominated by, for negligible CPU at write time.
+# Pin level 0 explicitly; PyArrow otherwise chooses its codec default (currently zstd level 1).
 _COMPRESSION = "zstd"
+_COMPRESSION_LEVEL = 0
 
 # Cap a shard's row groups at this many rows (finelog uses the same figure). A row group is the unit a
 # reader prunes on: with a filter it reads only the groups whose footer statistics can match, so a
@@ -80,14 +80,21 @@ class ShardWriter:
     :meth:`close` (or context-manager exit). Every appended table must share the writer's schema.
     """
 
-    def __init__(self, path: str, schema: pa.Schema, *, compression: str = _COMPRESSION) -> None:
+    def __init__(self, path: str, schema: pa.Schema) -> None:
         self._schema = schema
         StoragePath(path).parent.mkdirs()
         self._stack = contextlib.ExitStack()
         temp_path = self._stack.enter_context(atomic_rename(path))
         handle = self._stack.enter_context(StoragePath(temp_path).open("wb"))
         self._sink = _HashingSink(handle)
-        self._writer = self._stack.enter_context(pq.ParquetWriter(self._sink, schema, compression=compression))
+        self._writer = self._stack.enter_context(
+            pq.ParquetWriter(
+                self._sink,
+                schema,
+                compression=_COMPRESSION,
+                compression_level=_COMPRESSION_LEVEL,
+            )
+        )
         self._result: ShardWriteResult | None = None
 
     def write_table(self, table: pa.Table) -> None:
@@ -120,7 +127,7 @@ class ShardWriter:
 
 
 def write_table(path: str, table: pa.Table) -> ShardWriteResult:
-    """Write ``table`` to the shard object ``path`` atomically as one row group, compressed with zstd."""
+    """Write ``table`` atomically as one row group compressed with zstd level 0."""
     with ShardWriter(path, table.schema) as writer:
         writer.write_table(table)
     return writer.result

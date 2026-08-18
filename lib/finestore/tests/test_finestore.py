@@ -268,6 +268,28 @@ def test_large_flush_splits_into_prunable_row_groups(tmp_path, monkeypatch):
     assert metadata.num_row_groups == 4  # ceil(7 / 2)
 
 
+def test_shard_writer_uses_zstd_level_zero(tmp_path):
+    table = pa.table(
+        {
+            "id": range(1_000),
+            "payload": [f"{index:04d}-" + "abcdefghijklmnopqrstuvwxyz" * 20 for index in range(1_000)],
+        }
+    )
+    shard = tmp_path / "shard.parquet"
+    expected = tmp_path / "zstd-level-zero.parquet"
+
+    shard_writer.write_table(str(shard), table)
+    pq.write_table(
+        table,
+        expected,
+        compression="zstd",
+        compression_level=0,
+        row_group_size=shard_writer.ROW_GROUP_ROWS,
+    )
+
+    assert hashlib.sha256(shard.read_bytes()).digest() == hashlib.sha256(expected.read_bytes()).digest()
+
+
 def test_schema_evolution_null_promotes_missing_column(tmp_path):
     root = str(tmp_path / "run")
     # An "old" writer without the difficulty column.
