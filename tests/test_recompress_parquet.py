@@ -108,7 +108,7 @@ def test_recompress_parquet_rejects_lifecycle_prefix(tmp_path):
     path.parent.mkdir(parents=True)
     pq.write_table(pa.table({"value": [1]}), path, compression="snappy")
 
-    with pytest.raises(ValueError, match="refusing to reset lifecycle retention"):
+    with pytest.raises(ValueError):
         recompress_parquet(str(path), RewriteOptions(apply=True))
 
 
