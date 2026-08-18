@@ -21,7 +21,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
-from zephyr.memory_store import MemoryStore
+from zephyr.memory_store import MemoryStore, MemoryStoreUnavailable
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
@@ -55,6 +55,7 @@ _COUNTER_PREFIX = "dedup/fuzzy/verification"
 _SHARED_SHARDS_KEY = "verified_fuzzy_dups_shards"
 _LOCAL_TOKEN_SEQUENCE_REJECTION = "local_token_sequence_differs"
 _LOCAL_LINE_COUNT_REJECTION = "local_line_count_ratio_below_threshold"
+_MEMORY_STORE_STATS_TIMEOUT = 30
 # Bounds on the head scan that picks each cluster anchor. Cluster size is
 # heavily skewed - the p99 cluster holds 13 members - so a short head covers
 # effectively every cluster while a pathological one stays bounded.
@@ -863,7 +864,11 @@ def verify_fuzzy_dups(
             map_task_resources=map_task_resources,
             reduce_task_resources=reduce_task_resources,
         )
-        store_stats = document_store.stats()
+        try:
+            store_stats = document_store.stats(timeout=_MEMORY_STORE_STATS_TIMEOUT)
+        except MemoryStoreUnavailable:
+            logger.warning("Memory-store stats unavailable after fuzzy verification; omitting telemetry", exc_info=True)
+            store_stats = ()
     finally:
         ctx.shutdown()
 
@@ -871,12 +876,15 @@ def verify_fuzzy_dups(
 
     verified = sum(result["verified_duplicates"] for result in outcome.results)
     output_counters = dict(outcome.counters)
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/actors"] = len(store_stats)
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/items"] = sum(stat.num_items for stat in store_stats)
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/load_cpu_time"] = sum(stat.load_cpu_time for stat in store_stats)
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/max_actor_load_elapsed"] = max(
-        stat.load_elapsed for stat in store_stats
-    )
+    if store_stats:
+        output_counters[f"{_COUNTER_PREFIX}/memory_store/actors"] = len(store_stats)
+        output_counters[f"{_COUNTER_PREFIX}/memory_store/items"] = sum(stat.num_items for stat in store_stats)
+        output_counters[f"{_COUNTER_PREFIX}/memory_store/load_cpu_time"] = sum(
+            stat.load_cpu_time for stat in store_stats
+        )
+        output_counters[f"{_COUNTER_PREFIX}/memory_store/max_actor_load_elapsed"] = max(
+            stat.load_elapsed for stat in store_stats
+        )
     logger.info(
         "Verified %d fuzzy duplicates from %d candidate members across %d shards",
         verified,

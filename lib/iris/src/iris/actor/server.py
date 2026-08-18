@@ -43,6 +43,11 @@ ACTOR_SERVER_STARTUP_TIMEOUT = Duration.from_seconds(5.0)
 ActorId = NewType("ActorId", str)
 
 
+def _connect_error_response(error: ConnectError) -> actor_pb2.ActorResponse:
+    actor_error = actor_pb2.ActorError(error_type=error.code.value, message=error.message)
+    return actor_pb2.ActorResponse(error=actor_error)
+
+
 @dataclass
 class RegisteredActor:
     name: str
@@ -151,8 +156,7 @@ class ActorServer:
         try:
             method, args, kwargs = self._resolve_method(request)
         except ConnectError as e:
-            error = actor_pb2.ActorError(error_type=e.code.value, message=e.message)
-            return actor_pb2.ActorResponse(error=error)
+            return _connect_error_response(e)
 
         try:
             # Run the method in our dedicated thread pool to avoid blocking the event loop.
@@ -164,6 +168,8 @@ class ActorServer:
 
             return actor_pb2.ActorResponse(serialized_value=cloudpickle.dumps(result))
 
+        except ConnectError as e:
+            return _connect_error_response(e)
         except Exception as e:
             error = actor_pb2.ActorError(
                 error_type=type(e).__name__,
