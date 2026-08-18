@@ -5,9 +5,10 @@ secrets as external resources. Declarations live in
 [`Pulumi.marin-community.yaml`](Pulumi.marin-community.yaml); plaintext values do not.
 
 Most secret resources use Pulumi lookups. The stack can read their metadata, but cannot create,
-update, delete, or rotate them. The dedicated updater's environment secret is managed from
-GitHub-sealed ciphertext. The audit checks both forms against workflow references and live GitHub
-scope metadata.
+update, delete, or rotate them. Credentials with `management: sealed` are managed from ciphertext
+sealed to the destination's GitHub Actions public key. `management: pulumi` records a secret owned
+by another resource in this program, such as the dependency updater's environment secret.
+The audit checks all three forms against workflow references and live GitHub scope metadata.
 
 ```bash
 uv run --package marin-iac python infra/pulumi/github/audit.py
@@ -21,12 +22,55 @@ pulumi up
 
 The provider reads `GITHUB_TOKEN`; the stack config sets `github:owner`.
 
-To add a secret, create or rotate it through an approved external path, then add a `present`
-declaration. Record a pinned Secret Manager version when one exists; it is recovery metadata and is
-never dereferenced by this program.
+To add an externally managed secret, create or rotate it through an approved external path, then add
+a `present` declaration. Record a pinned Secret Manager version when one exists; it is recovery
+metadata and is never dereferenced by this program.
+
+Use `management: sealed` when Pulumi should restore the declared value after GitHub-side drift.
+Record `key_id` and `value_encrypted` from the same GitHub Actions public key. The ciphertext is safe
+to commit because only GitHub can decrypt it. Keep a recoverable plaintext copy in Secret Manager;
+do not put plaintext in Pulumi config, resource arguments, or state.
 
 GitHub resolves a repository secret before an organization secret with the same name. Keep each
 secret name at one scope unless a repository override has a separate owner and rotation path.
+
+## Slack alert webhook
+
+`SLACK_WEBHOOK_URL` uses a dedicated incoming webhook bound to `#marin-alerts`. Its recoverable
+plaintext is `marin-github-alerts-slack-webhook` in Secret Manager; Pulumi stores only ciphertext
+sealed to the organization Actions public key. Do not reuse `marin-grafana-slack-webhook`: that
+retired webhook is bound to `#marin-eng`.
+
+To rotate the webhook, add a Secret Manager version and seal that version to the organization
+Actions public key without writing plaintext to disk:
+
+```bash
+gh api orgs/marin-community/actions/secrets/public-key --jq .key_id
+gcloud secrets versions access <version> \
+  --project=hai-gcp-models \
+  --secret=marin-github-alerts-slack-webhook \
+  | gh secret set SLACK_WEBHOOK_URL --org marin-community --no-store
+```
+
+Update the organization credential declaration with the printed public-key ID, ciphertext, and
+pinned Secret Manager version:
+
+```yaml
+- name: SLACK_WEBHOOK_URL
+  scope: organization
+  presence: present
+  management: sealed
+  visibility: all
+  key_id: <public-key-id>
+  value_encrypted: <sealed-ciphertext>
+  source_kind: gcp-secret
+  source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-github-alerts-slack-webhook/versions/1
+  disposition: keep
+  note: Routes GitHub Actions alerts to #marin-alerts.
+```
+
+Run `pulumi preview`, `pulumi up`, and the live audit. A GitHub-side edit changes
+`remote_updated_at`; the next update reapplies the sealed value.
 
 To remove a secret, first confirm it is an unreferenced `remove-candidate` with the live audit. Delete
 it externally, then remove its declaration. For example:

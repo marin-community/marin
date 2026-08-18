@@ -62,11 +62,14 @@ config:
     - name: SLACK_WEBHOOK_URL
       scope: organization
       presence: present
+      management: sealed
       visibility: all
+      key_id: "3380204578043523366"
+      value_encrypted: Bn8tmYyhY6dqEM+JVYC6vOS6D0ZQEY5fhviyarZDViCnl/Rr82WxHfIk624aJJ02zZ3rawmDNDuUuPL37BzoDGj05e10DuLZkW78xcEqAdj3AFpa0PFAQ/01KDGKccpD/BTQD0Drts/DvGvBa7OlcPLvX0BtmhCsGTMGMCTwl04B
       source_kind: gcp-secret
-      source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-grafana-slack-webhook/versions/1
+      source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-github-alerts-slack-webhook/versions/1
       disposition: keep
-      note: Routes GitHub Actions alerts, including marin workflows, to #marin-alerts.
+      note: Routes GitHub Actions alerts to #marin-alerts.
     - name: CW_KUBECONFIG
       scope: repository
       repository: marin-community/marin
