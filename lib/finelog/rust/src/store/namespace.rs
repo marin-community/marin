@@ -43,10 +43,12 @@ use crate::store::policy::StoragePolicy;
 use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
 use crate::store::reconcile::reconcile_remote_segments;
 use crate::store::remote::{build_remote_store, RemoteStore};
-use crate::store::schema::{schema_to_arrow, AlignedBatch, Schema};
+use crate::store::schema::{resolve_sort_columns, schema_to_arrow, AlignedBatch, Schema};
+#[cfg(test)]
+use crate::store::segment::write_segment_to_dir;
 use crate::store::segment::{
     discover_segments, read_segment_footer, segment_layout_is_current, stage_rewritten_segment,
-    write_segment_to_dir,
+    write_segment_to_dir_with_max_row_group_rows, MAX_ROW_GROUP_ROWS,
 };
 use crate::store::segment_index::{
     covering_projection_paths, covering_projection_staging_paths, legacy_artifact_paths,
@@ -188,6 +190,8 @@ pub struct Namespace {
     schema: Schema,
     arrow_schema: SchemaRef,
     key_column: Option<String>,
+    sort_columns: Vec<String>,
+    max_row_group_rows: usize,
     /// `None` => in-memory mode (every append immediately persisted, no parquet).
     data_dir: Option<PathBuf>,
     catalog: Arc<Catalog>,
@@ -330,6 +334,12 @@ impl Namespace {
     ) -> Result<Arc<Namespace>, StatsError> {
         let startup_started = Instant::now();
         let arrow_schema = schema_to_arrow(&schema);
+        let sort_columns = resolve_sort_columns(&schema)?;
+        let max_row_group_rows = if schema.max_row_group_rows == 0 {
+            MAX_ROW_GROUP_ROWS
+        } else {
+            schema.max_row_group_rows as usize
+        };
         let key_column = if schema.key_column.is_empty() {
             None
         } else {
@@ -388,6 +398,8 @@ impl Namespace {
             schema,
             arrow_schema: Arc::clone(&arrow_schema),
             key_column,
+            sort_columns,
+            max_row_group_rows,
             data_dir,
             catalog: Arc::clone(&catalog),
             compaction_config: CompactionConfig::default(),
@@ -734,7 +746,13 @@ impl Namespace {
 
     /// Write the sealed buffer to disk + catalog (no `persisted_seq` advance).
     fn write_sealed(&self, dir: &std::path::Path, sealed: &SealedBuffer) -> Result<(), StatsError> {
-        let (path, size) = write_segment_to_dir(dir, 0, sealed.min_seq, &sealed.batch)?;
+        let (path, size) = write_segment_to_dir_with_max_row_group_rows(
+            dir,
+            0,
+            sealed.min_seq,
+            &sealed.batch,
+            self.max_row_group_rows,
+        )?;
         // L0 files are small and short-lived. Derived indexes are built after
         // compaction promotes them to L1+, keeping flush acknowledgement fast
         // while query plans merge indexed counts with uncovered L0 data.
@@ -872,7 +890,8 @@ impl Namespace {
             job,
             dir,
             &self.arrow_schema,
-            self.key_column.as_deref(),
+            &self.sort_columns,
+            self.max_row_group_rows,
             &index_config,
             self.compaction_config.max_merge_arrow_bytes,
             |path| self.input_key_bounds(path),

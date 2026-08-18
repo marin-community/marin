@@ -297,8 +297,10 @@ No segment carries a parquet bloom filter. Writing them for every column cost 15
 of each segment and pruned nothing measurable; the key-column bloom that outlived
 that only served exact-key lookups against unsorted L0, which is a few hundred
 KiB that compaction consumes within a tick or two, against a write cost on every
-flush. L1+ is sorted by `(key, seq)` and prunes the key band from min/max
-statistics; substring queries prune from the trigram bundle section.
+flush. L1+ is sorted by the schema's configured columns plus `seq`; schemas
+without an explicit order retain `(key, seq)`. Min/max statistics prune the
+clustered dimensions and key band, while substring queries prune from the
+trigram bundle section.
 
 A starts-with predicate — `prefix(col, P)`, `col LIKE 'P%'`, or
 `regexp_matches(col, '^P…')` — prunes only because `PrefixRangeRewrite` ANDs the

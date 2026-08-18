@@ -2,7 +2,7 @@
 //!
 //! CRITICAL: L0 is written **UNSORTED**. Rows already arrive seq-monotonic (seq
 //! is allocated under the insertion lock at append time); the explicit
-//! `ORDER BY (key, seq)` sort happens only at L0->L1 compaction, so a single
+//! configured sort plus `seq` happens only at L0->L1 compaction, so a single
 //! write's sort cost lands once in the bg compactor, not on every flush.
 //! `write_segment` therefore writes the batch verbatim.
 
@@ -82,10 +82,17 @@ const REWRITE_BATCH_ROWS: usize = 8_192;
 /// 15% of each segment and pruned nothing measurable; the key-column bloom that
 /// outlived that only served exact-key lookups against unsorted L0, which is a
 /// few hundred KiB that compaction consumes within a tick or two, while its write
-/// cost fell on every flush. L1+ is sorted by `(key, seq)`, so min/max statistics
-/// prune the key band, and substring queries prune from the trigram sidecar.
+/// cost fell on every flush. L1+ uses the schema's configured sort order plus
+/// `seq`, so min/max statistics prune clustered dimensions and the key band;
+/// substring queries prune from the trigram sidecar.
 pub fn segment_writer_properties() -> Result<WriterProperties, StatsError> {
-    parquet_writer_properties_with_id(TARGET_ROW_GROUP_BYTES, MAX_ROW_GROUP_ROWS, Uuid::new_v4())
+    segment_writer_properties_with_max_rows(MAX_ROW_GROUP_ROWS)
+}
+
+pub fn segment_writer_properties_with_max_rows(
+    max_row_group_rows: usize,
+) -> Result<WriterProperties, StatsError> {
+    parquet_writer_properties_with_id(TARGET_ROW_GROUP_BYTES, max_row_group_rows, Uuid::new_v4())
 }
 
 pub(crate) fn parquet_writer_properties(
@@ -132,7 +139,14 @@ pub struct SegmentMetadata {
 
 /// Encode `batch` to parquet bytes (UNSORTED L0, zstd-1).
 pub fn write_segment(batch: &RecordBatch) -> Result<Vec<u8>, StatsError> {
-    let props = segment_writer_properties()?;
+    write_segment_with_max_row_group_rows(batch, MAX_ROW_GROUP_ROWS)
+}
+
+pub fn write_segment_with_max_row_group_rows(
+    batch: &RecordBatch,
+    max_row_group_rows: usize,
+) -> Result<Vec<u8>, StatsError> {
+    let props = segment_writer_properties_with_max_rows(max_row_group_rows)?;
     let mut buf: Vec<u8> = Vec::new();
     let opts = ArrowWriterOptions::new().with_properties(props);
     let mut writer = ArrowWriter::try_new_with_options(&mut buf, batch.schema(), opts)
@@ -155,7 +169,17 @@ pub fn write_segment_to_dir(
     min_seq: i64,
     batch: &RecordBatch,
 ) -> Result<(PathBuf, i64), StatsError> {
-    let bytes = write_segment(batch)?;
+    write_segment_to_dir_with_max_row_group_rows(dir, level, min_seq, batch, MAX_ROW_GROUP_ROWS)
+}
+
+pub fn write_segment_to_dir_with_max_row_group_rows(
+    dir: &Path,
+    level: i32,
+    min_seq: i64,
+    batch: &RecordBatch,
+    max_row_group_rows: usize,
+) -> Result<(PathBuf, i64), StatsError> {
+    let bytes = write_segment_with_max_row_group_rows(batch, max_row_group_rows)?;
     let filename = seg_filename(level, min_seq);
     let final_path = dir.join(&filename);
     let staging_path = dir.join(format!("{filename}.tmp"));

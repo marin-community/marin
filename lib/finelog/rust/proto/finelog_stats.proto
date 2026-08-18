@@ -78,10 +78,9 @@ message GroupedExtrema {
 message Schema {
   repeated Column columns = 1;
 
-  // Column to sort by during compaction. Must name an existing column of
-  // type INT64 or TIMESTAMP_MS. If empty, the server requires a column
-  // named "timestamp_ms" of type INT64 or TIMESTAMP_MS and uses it
-  // implicitly. A schema with neither is rejected at register time.
+  // Event/range key used for segment retention metadata and, when
+  // sort_columns is empty, compaction order. Must name an existing INT64 or
+  // TIMESTAMP_MS column. If empty, the server requires and uses timestamp_ms.
   string key_column = 2;
 
   // Independent named projections. Adding one is monotonic on re-register.
@@ -95,6 +94,17 @@ message Schema {
   // re-register. Finelog interprets only the declared column roles; producers
   // own their semantic meaning.
   repeated GroupedExtrema grouped_extrema = 4;
+
+  // Secondary compaction order. When set, Finelog sorts by these columns and
+  // appends the implicit seq column as a deterministic tie-breaker. Empty
+  // retains a registered policy or uses key_column on first registration. The
+  // key_column remains the event/range key used for retention metadata.
+  repeated string sort_columns = 5;
+
+  // Maximum rows per Parquet row group. Zero retains the registered policy or
+  // uses the server default on first registration. Explicit values must be
+  // 16,384 through 1,048,576. The encoded-byte target may close a group earlier.
+  uint32 max_row_group_rows = 6;
 }
 
 // Write batches are Arrow IPC RecordBatches on the wire — columnar, with

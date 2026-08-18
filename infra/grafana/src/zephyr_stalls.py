@@ -25,7 +25,7 @@ def zephyr_progress_query(now: datetime) -> str:
     return (
         "WITH filtered AS ("
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
-        "json_get(resource_attributes_json, 'job_id') AS job, "
+        "COALESCE(job_id, json_get(resource_attributes_json, 'job_id')) AS job, "
         "json_get(attributes_json, 'run') AS execution, value AS progress_time, "
         "timestamp_ms, seq, to_timestamp_millis(timestamp_ms) AS producer_at "
         'FROM "telemetry_v1" '

@@ -21,7 +21,7 @@
         "name": "identity_kind",
         "label": "Identity kind",
         "type": "custom",
-        "query": "job_id,root_run_uid,execution_uid",
+        "query": "job_id,run_id,execution_uid",
         "current": {
           "text": "job_id",
           "value": "job_id"
@@ -34,8 +34,8 @@
           },
           {
             "selected": false,
-            "text": "root_run_uid",
-            "value": "root_run_uid"
+            "text": "run_id",
+            "value": "run_id"
           },
           {
             "selected": false,

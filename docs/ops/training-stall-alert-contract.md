@@ -11,7 +11,7 @@ The first case is labeled `optimizer_progress_stale` or `optimizer_progress_miss
 
 A job that emits `step` but no `phase` runs a producer older than both phase and progress, and reports a zero-valued `producer_missing` row instead of a warning. Enrollment keys on phase because `TelemetryTracker` publishes it as it is constructed, which marks the producer generation exactly.
 
-The bridge joins the durable streams by `(cluster, root job ID)`: `iris.task_state.root_job_id` equals `json_get(telemetry_v1.resource_attributes_json, 'job_id')`, and Finelog stamps both with their origin `cluster`. The task-state query scans the trailing hour. One telemetry scan reads phase from the trailing 15 minutes and progress from the trailing 30 minutes; the extra progress window keeps a metric observable after it crosses the 15-minute stale threshold. An older running job still has an inferred running age of at least one hour, which is sufficient for both thresholds. No task-to-node mapping or GPU-utilization condition is required.
+The bridge joins the durable streams by `(cluster, root job ID)`: `iris.task_state.root_job_id` equals `telemetry_v1.job_id`, and Finelog stamps both with their origin `cluster`. During the schema transition the query falls back to the legacy `job_id` resource attribute when the promoted column is null, which keeps pre-deploy and rollback rows attributable. The task-state query scans the trailing hour. One telemetry scan reads phase from the trailing 15 minutes and progress from the trailing 30 minutes; the extra progress window keeps a metric observable after it crosses the 15-minute stale threshold. An older running job still has an inferred running age of at least one hour, which is sufficient for both thresholds. No task-to-node mapping or GPU-utilization condition is required.
 
 The required `service=levanter` telemetry records are `step`, `progress_time_seconds`, and numeric `phase` (`initializing=0`, `training=1`, `finished=2`). `TelemetryTracker` initializes phase and progress, records wall time after its completed-step `train/loss` callback, and marks a finished run.
 
@@ -27,7 +27,7 @@ Healthy periodic samples produce communicator and rank-count summaries but no pe
 
 Iris's Kubernetes sidecar ships task logs and does not poll RAS. The Iris node-agent NVIDIA probe records host hardware separately. Leave both enabled; neither duplicates these communicator snapshots.
 
-Every row carries the collector's Iris `task_id`, attempt/execution identity, node, `process_index=0`, and `root_run_uid`. Rank rows add NCCL's `rank_host`, `process_id`, `cuda_device`, and `nvml_device`; those fields identify the process represented by a global RAS rank instead of treating the collector task as the rank owner.
+Every row carries the collector's Iris `task_id`, attempt/execution identity, node, `process_index=0`, and `root_run_uid`. Finelog promotes `root_run_uid` into the structured `run_id` column while retaining the original resource attribute. Rank rows add NCCL's `rank_host`, `process_id`, `cuda_device`, and `nvml_device`; those fields identify the process represented by a global RAS rank instead of treating the collector task as the rank owner.
 
 `ras_available=1` records a parsed response. `ras_available=0` includes an `outcome` such as `unavailable`, `client_timeout`, `deadline_exceeded`, `runner_output_limit`, `client_response_limit`, `invalid_payload`, or `invalid_client_output`. The `trigger` attribute is `periodic` or `stall`. `ras_poll_failures` and `ras_poll_timeouts` are counter deltas; sum them over the query window. `ras_poll_duration_seconds` is the client-side latency, while `ras_collection_duration_seconds` and `ras_collection_timeouts` come from NCCL's successful response.
 
@@ -37,7 +37,7 @@ Query a root run with a bounded timestamp range:
 SELECT
   cluster,
   to_timestamp_millis(timestamp_ms) AS ts,
-  json_get(resource_attributes_json, 'root_run_uid') AS root_run_uid,
+  run_id,
   json_get(resource_attributes_json, 'task_id') AS collector_task_id,
   name,
   kind,
@@ -52,7 +52,7 @@ SELECT
   json_get(attributes_json, 'record_state') AS record_state
 FROM "telemetry_v1"
 WHERE service = 'levanter'
-  AND json_get(resource_attributes_json, 'root_run_uid') = '<run-id>'
+  AND run_id = '<run-id>'
   AND name IN (
     'ras_available',
     'ras_poll_duration_seconds',

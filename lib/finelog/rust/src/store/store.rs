@@ -28,8 +28,8 @@ use crate::store::namespace::Namespace;
 use crate::store::namespace_name::validate_namespace_name;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
-    merge_schemas, resolve_key_column, stored_form, validate_index_policies, AlignedBatch, Column,
-    Schema,
+    merge_schemas, resolve_key_column, resolve_sort_columns, stored_form, validate_index_policies,
+    AlignedBatch, Column, Schema,
 };
 use crate::store::types::NamespaceStats;
 
@@ -385,6 +385,7 @@ impl Store {
         self.namespace_dir(name)?;
         validate_index_policies(&schema)?;
         resolve_key_column(&schema)?;
+        resolve_sort_columns(&schema)?;
         let stored = stored_form(schema);
 
         // `merge_schemas` (pure) raises SchemaConflict on a column-type change.

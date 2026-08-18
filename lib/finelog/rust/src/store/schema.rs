@@ -42,6 +42,13 @@ pub const MAX_WRITE_ROWS_BYTES: usize = 16 * 1024 * 1024;
 /// Max rows per RecordBatch. Exactly `1_000_000` (NOT `1 << 20`).
 pub const MAX_WRITE_ROWS_ROWS: usize = 1_000_000;
 
+/// Accepted bounds for an explicit Parquet row-group row ceiling. Smaller
+/// groups create excessive footer/index metadata; larger values weaken the
+/// existing server ceiling without improving wide-row namespaces, whose byte
+/// target binds first.
+pub const MIN_CONFIGURED_ROW_GROUP_ROWS: u32 = 16_384;
+pub const MAX_CONFIGURED_ROW_GROUP_ROWS: u32 = 1_048_576;
+
 /// User-facing column index policy. It compiles into the closed planner-facing
 /// [`crate::store::segment_index::IndexSpec`] family.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -134,11 +141,14 @@ impl Column {
 ///
 /// `columns` are in registered order (preserved on disk so projections produce
 /// stable ordering across additive evolutions). `key_column` empty means the
-/// server falls back to `timestamp_ms`.
+/// server falls back to `timestamp_ms`. `sort_columns` controls the physical
+/// compaction order independently of the event/range key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Schema {
     pub columns: Vec<Column>,
     pub key_column: String,
+    pub sort_columns: Vec<String>,
+    pub max_row_group_rows: u32,
     pub projections: Vec<CoveringProjection>,
     pub grouped_extrema: Vec<GroupExtremaConfig>,
 }
@@ -148,9 +158,27 @@ impl Schema {
         Self {
             columns,
             key_column: key_column.into(),
+            sort_columns: Vec::new(),
+            max_row_group_rows: 0,
             projections: Vec::new(),
             grouped_extrema: Vec::new(),
         }
+    }
+
+    /// Set the compaction order. The implicit `seq` tie-breaker is appended by
+    /// the compactor and must not be included here.
+    pub fn with_sort_columns(
+        mut self,
+        columns: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.sort_columns = columns.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Bound Parquet row groups by row count in addition to the encoded-byte target.
+    pub fn with_max_row_group_rows(mut self, rows: u32) -> Self {
+        self.max_row_group_rows = rows;
+        self
     }
 
     pub fn with_covering_projection(mut self, projection: CoveringProjection) -> Self {
@@ -333,6 +361,12 @@ pub fn schema_from_proto_view(view: &SchemaView) -> Result<Schema, StatsError> {
         })
         .collect();
     let mut schema = Schema::new(cols, view.key_column.unwrap_or(""));
+    schema.sort_columns = view
+        .sort_columns
+        .iter()
+        .map(|column| column.to_string())
+        .collect();
+    schema.max_row_group_rows = view.max_row_group_rows.unwrap_or(0);
     schema.projections = projections;
     schema.grouped_extrema = grouped_extrema;
     validate_index_policies(&schema)?;
@@ -384,6 +418,8 @@ pub fn schema_to_proto_owned(schema: &Schema) -> ProtoSchema {
                 ..Default::default()
             })
             .collect(),
+        sort_columns: schema.sort_columns.clone(),
+        max_row_group_rows: Some(schema.max_row_group_rows),
         ..Default::default()
     }
     .with_key_column(&schema.key_column)
@@ -418,6 +454,10 @@ struct JsonColumn {
 #[derive(Serialize, Deserialize)]
 struct JsonSchema {
     key_column: String,
+    #[serde(default)]
+    sort_columns: Vec<String>,
+    #[serde(default)]
+    max_row_group_rows: u32,
     columns: Vec<JsonColumn>,
     #[serde(default)]
     projections: Vec<CoveringProjection>,
@@ -471,6 +511,8 @@ fn column_type_from_json(name: &str) -> Result<ColumnType, StatsError> {
 pub fn schema_to_json(schema: &Schema) -> String {
     let payload = JsonSchema {
         key_column: schema.key_column.clone(),
+        sort_columns: schema.sort_columns.clone(),
+        max_row_group_rows: schema.max_row_group_rows,
         columns: schema
             .columns
             .iter()
@@ -506,6 +548,8 @@ pub fn schema_from_json(text: &str) -> Result<Schema, StatsError> {
         cols.push(column);
     }
     let mut schema = Schema::new(cols, payload.key_column);
+    schema.sort_columns = payload.sort_columns;
+    schema.max_row_group_rows = payload.max_row_group_rows;
     schema.projections = payload.projections;
     schema.grouped_extrema = payload.grouped_extrema;
     validate_index_policies(&schema)?;
@@ -532,6 +576,8 @@ pub fn with_implicit_seq(schema: Schema) -> Schema {
     Schema {
         columns,
         key_column: schema.key_column,
+        sort_columns: schema.sort_columns,
+        max_row_group_rows: schema.max_row_group_rows,
         projections: schema.projections,
         grouped_extrema: schema.grouped_extrema,
     }
@@ -550,6 +596,8 @@ pub fn with_implicit_cluster(schema: Schema) -> Schema {
     let Schema {
         mut columns,
         key_column,
+        sort_columns,
+        max_row_group_rows,
         projections,
         grouped_extrema,
     } = schema;
@@ -561,6 +609,8 @@ pub fn with_implicit_cluster(schema: Schema) -> Schema {
     Schema {
         columns,
         key_column,
+        sort_columns,
+        max_row_group_rows,
         projections,
         grouped_extrema,
     }
@@ -605,8 +655,58 @@ pub fn resolve_key_column(schema: &Schema) -> Result<String, StatsError> {
     Ok(resolved)
 }
 
+/// Resolve and validate compaction columns before the implicit `seq` tie-breaker.
+/// An empty list preserves the historical `[key_column, seq]` order.
+pub fn resolve_sort_columns(schema: &Schema) -> Result<Vec<String>, StatsError> {
+    let columns = if schema.sort_columns.is_empty() {
+        if !schema.key_column.is_empty() {
+            vec![schema.key_column.clone()]
+        } else if schema.column(IMPLICIT_KEY_COLUMN).is_some() {
+            vec![IMPLICIT_KEY_COLUMN.to_string()]
+        } else {
+            Vec::new()
+        }
+    } else {
+        schema.sort_columns.clone()
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    for column in &columns {
+        if column == IMPLICIT_SEQ_COLUMN {
+            return Err(StatsError::SchemaValidation(format!(
+                "sort_columns must not include the implicit {IMPLICIT_SEQ_COLUMN:?} column"
+            )));
+        }
+        let Some(definition) = schema.column(column) else {
+            return Err(StatsError::SchemaValidation(format!(
+                "sort column {column:?} is not present in the schema"
+            )));
+        };
+        if definition.r#type == ColumnType::COLUMN_TYPE_MAP {
+            return Err(StatsError::SchemaValidation(format!(
+                "sort column {column:?} is a MAP column, which cannot be ordered"
+            )));
+        }
+        if !seen.insert(column) {
+            return Err(StatsError::SchemaValidation(format!(
+                "duplicate sort column {column:?}"
+            )));
+        }
+    }
+    Ok(columns)
+}
+
 /// Validate index column types and named covering-projection definitions.
 pub fn validate_index_policies(schema: &Schema) -> Result<(), StatsError> {
+    resolve_sort_columns(schema)?;
+    if schema.max_row_group_rows != 0
+        && !(MIN_CONFIGURED_ROW_GROUP_ROWS..=MAX_CONFIGURED_ROW_GROUP_ROWS)
+            .contains(&schema.max_row_group_rows)
+    {
+        return Err(StatsError::SchemaValidation(format!(
+            "max_row_group_rows={} must be zero or between {} and {}",
+            schema.max_row_group_rows, MIN_CONFIGURED_ROW_GROUP_ROWS, MAX_CONFIGURED_ROW_GROUP_ROWS,
+        )));
+    }
     for column in &schema.columns {
         let has_exact_index = column.index.value_counts || !column.index.exact_values.is_empty();
         if has_exact_index && column.r#type != ColumnType::COLUMN_TYPE_STRING {
@@ -783,6 +883,23 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
     let mut enable_trigram: Vec<&str> = Vec::new();
     let mut enable_value_counts: Vec<&str> = Vec::new();
     let mut exact_values: Vec<(&str, Vec<String>)> = Vec::new();
+    let sort_columns = if requested.sort_columns.is_empty() {
+        registered.sort_columns.clone()
+    } else {
+        if registered.sort_columns != requested.sort_columns {
+            tracing::info!(
+                registered = ?registered.sort_columns,
+                requested = ?requested.sort_columns,
+                "register: updating compaction sort columns",
+            );
+        }
+        requested.sort_columns.clone()
+    };
+    let max_row_group_rows = if requested.max_row_group_rows == 0 {
+        registered.max_row_group_rows
+    } else {
+        requested.max_row_group_rows
+    };
     let grouped_extrema = requested
         .grouped_extrema
         .iter()
@@ -884,6 +1001,8 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
         && enable_trigram.is_empty()
         && enable_value_counts.is_empty()
         && exact_values.is_empty()
+        && sort_columns == registered.sort_columns
+        && max_row_group_rows == registered.max_row_group_rows
         && !projections_changed
         && grouped_extrema.is_empty()
     {
@@ -921,6 +1040,8 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
     }
     merged.extend(extras);
     let mut merged_schema = Schema::new(merged, registered.key_column.clone());
+    merged_schema.sort_columns = sort_columns;
+    merged_schema.max_row_group_rows = max_row_group_rows;
     merged_schema.projections = projections;
     merged_schema.grouped_extrema = registered.grouped_extrema.clone();
     merged_schema.grouped_extrema.extend(grouped_extrema);
@@ -1387,6 +1508,29 @@ mod tests {
     }
 
     #[test]
+    fn empty_sort_columns_use_the_resolved_implicit_key() {
+        assert_eq!(
+            resolve_sort_columns(&worker_schema()).unwrap(),
+            ["timestamp_ms"]
+        );
+    }
+
+    #[test]
+    fn configured_row_group_rows_are_bounded() {
+        for rows in [MIN_CONFIGURED_ROW_GROUP_ROWS, MAX_CONFIGURED_ROW_GROUP_ROWS] {
+            assert!(
+                validate_index_policies(&worker_schema().with_max_row_group_rows(rows)).is_ok()
+            );
+        }
+        for rows in [1, MAX_CONFIGURED_ROW_GROUP_ROWS + 1] {
+            assert!(matches!(
+                validate_index_policies(&worker_schema().with_max_row_group_rows(rows)),
+                Err(StatsError::SchemaValidation(_))
+            ));
+        }
+    }
+
+    #[test]
     fn json_round_trip_uses_proto_names_and_accepts_legacy() {
         let stored = with_implicit_seq(worker_schema());
         let json = schema_to_json(&stored);
@@ -1696,6 +1840,23 @@ mod tests {
         let req = Schema::new(reg.columns.clone(), "timestamp_ms");
         let merged = merge_schemas(&reg, &req).unwrap();
         assert_eq!(merged.key_column, reg.key_column); // kept registered (empty)
+    }
+
+    #[test]
+    fn merge_adopts_explicit_layout_policy_and_older_clients_cannot_clear_it() {
+        let registered = with_implicit_seq(worker_schema());
+        let requested = registered
+            .clone()
+            .with_sort_columns(["worker_id", "timestamp_ms"])
+            .with_max_row_group_rows(131_072);
+        let merged = merge_schemas(&registered, &requested).unwrap();
+        assert_eq!(merged.sort_columns, ["worker_id", "timestamp_ms"]);
+        assert_eq!(merged.max_row_group_rows, 131_072);
+
+        assert_eq!(
+            merge_schemas(&merged, &with_implicit_seq(worker_schema())).unwrap(),
+            merged
+        );
     }
 
     // -----------------------------------------------------------------------

@@ -243,6 +243,7 @@ impl TableProvider for NamespaceProvider {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::FileExt;
     use std::sync::Arc;
 
     use arrow::array::{Array, Int64Array, StringArray};
@@ -533,6 +534,81 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first_column_strings(&batches), vec!["w-2", "w-2"]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn uncovered_exact_value_does_not_read_postings_payload() {
+        let dir = tempdir("uncovered_exact_value");
+        let batch = worker_batch(1, vec!["w-1", "w-2"], vec![100, 200]);
+        let (path, _) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
+        let config = crate::store::exact::ExactIndexConfig {
+            column: "worker_id".to_string(),
+            exact_values: vec!["w-2".to_string()],
+            value_counts: false,
+        };
+        crate::store::segment_index::write_segment_index(
+            &path,
+            &[batch],
+            &crate::store::segment_index::SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[config],
+                &[],
+                None,
+            ),
+        )
+        .unwrap();
+
+        let bundle_path = crate::store::index_bundle::bundle_path(&path);
+        let header = crate::store::index_bundle::read_header(&bundle_path).unwrap();
+        let postings = header
+            .sections
+            .iter()
+            .find(|section| section.kind == crate::store::index_bundle::SectionKind::ExactPostings)
+            .unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&bundle_path)
+            .unwrap()
+            .write_all_at(&[0xff], postings.offset)
+            .unwrap();
+
+        let cache = crate::query::index_cache::test_index_cache();
+        let provider = NamespaceProvider::build(
+            worker_arrow(),
+            &[path.to_string_lossy().into_owned()],
+            Arc::clone(&cache),
+        )
+        .unwrap();
+        let plan = provider
+            .scan(
+                &SessionContext::new().state(),
+                None,
+                &[col("worker_id").eq(lit("w-missing"))],
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            cache.corruption_counts().sections,
+            0,
+            "header coverage should reject the predicate before reading the corrupt payload"
+        );
+        let exec = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec");
+        let config = exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        assert!(config
+            .file_groups
+            .iter()
+            .flat_map(|group| group.files())
+            .all(|file| file.extensions.is_none()));
         std::fs::remove_dir_all(&dir).ok();
     }
 
