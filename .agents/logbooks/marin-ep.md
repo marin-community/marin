@@ -1754,3 +1754,31 @@ Experiment ID prefix: `MEP`.
   INTERACTIVE->BATCH on a saturated cluster (384 running pods). Resume
   when the budget window resets or contention drops.
 - #8311 milestone comment posted (issuecomment-5322924677).
+
+### 2026-08-18 04:00 - MEP-069: zeroing-race hypothesis formed; EP4 repro attempts all NEGATIVE
+- Lifecycle discovery (pallas_call_registration.py): the GMEM scratch that
+  backs pl.get_global semaphores is an aliased input zero-initialized by
+  an XLA op per launch. fused_gemm_combine ends in
+  semaphore_wait(received_sem, (num_devices-1)*num_sms) where
+  received_sem is signalled by REMOTE ranks -> hypothesis: a fast peer
+  signals before the slow rank zeroing runs, the zeros erase the signals,
+  and the slow rank waits forever. Fits the 22-of-64 slow-rank split, the
+  GEMM warpgroups parked at the TMEM-dealloc exit barrier (they finished),
+  kernel1-green (dispatch preceded by the counts all-gather sync), and
+  the fuzz-exonerated local tile accounting.
+- Also identified: the UCGABAR in the wedge SASS is mosaic core.py
+  kernel-exit code (gpu.barrier + cluster arrive/wait before collective
+  TMEM dealloc), NOT a per-iteration pipeline barrier — the MEP-067
+  slack/circular-wait theory is retired.
+- EP4 repro attempts (1-tray production jobs mep-zrace{,2,3,4}; bf16-cast
+  fix after an f32 SMEM overflow): extreme routing skew (97% of tokens on
+  rank 0), hero widths, 13 invocations; then a 6-layer lax.scan + 120 GB
+  heap filler to chain scratch zeroing behind reuse. ALL COMPLETED — no
+  wedge in 78 layered kernel2 executions. The race window (if that is the
+  mechanism) does not open at EP4 with skew/scan/filler; the wedge needs
+  EP64-scale scheduling pressure.
+- Next (needs ~1 rack-hour): re-wedge the hero debug arm and read the
+  transport-warp spin REGISTERS (R6=current, R7=expected) plus the
+  focused bt — identifies WHICH wait (received_sem vs tile gate) and the
+  deficit size, discriminating remote-erasure from local-signal loss.
+  Deferred until rack contention drops (user flag + budget 411%).
