@@ -12,6 +12,7 @@ import jax.numpy as jnp
 import pytest
 
 from levanter.models.llama import LlamaLMHeadModel
+from levanter.testing.helpers import skip_if_no_torch
 from levanter.testing.model_configs import llama_test_config
 from levanter.trainer import TrainerConfig
 
@@ -133,6 +134,7 @@ def hf_reference_model_and_tokenizer(local_hf_checkpoint):
     return model, tokenizer
 
 
+@skip_if_no_torch
 def test_greedy_correctness_against_hf(test_client, hf_reference_model_and_tokenizer):
     """Ensure deterministic (greedy) Levanter generations match HF reference outputs."""
     (client, _server) = test_client
