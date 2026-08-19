@@ -42,26 +42,33 @@ class _RecordingIrisClient:
 
 
 @pytest.fixture
-def unmarked_run(monkeypatch):
-    """Reset the success mark, so one test cannot arm another."""
-    monkeypatch.setattr(distributed, "_run_succeeded", False)
+def iris_job(monkeypatch):
+    """Install an unmarked completion, as JAX process 0 of an Iris job does."""
+    completion = distributed._IrisJobCompletion(_RecordingIrisClient(), JobName.root("alice", "train"))
+    monkeypatch.setattr(distributed, "_iris_job_completion", completion)
+    return completion
 
 
-def test_exit_without_a_success_mark_keeps_the_iris_job_open(unmarked_run):
+def test_exit_without_a_success_mark_keeps_the_iris_job_open(iris_job):
     # A training failure exits through the Iris callable runner's `sys.exit(1)`, which
     # runs this hook. The job must stay open for Iris to fail it from the exit codes.
-    client = _RecordingIrisClient()
+    distributed._complete_iris_job_after_successful_run()
 
-    distributed._complete_iris_job_after_successful_run(client, JobName.root("alice", "train"))
-
-    assert client.completed == []
+    assert iris_job.client.completed == []
 
 
-def test_exit_after_a_success_mark_completes_the_iris_job(unmarked_run):
-    client = _RecordingIrisClient()
-    job_id = JobName.root("alice", "train")
+def test_exit_after_a_success_mark_completes_the_iris_job(iris_job):
+    distributed.mark_run_succeeded()
+    distributed._complete_iris_job_after_successful_run()
+
+    assert iris_job.client.completed == [iris_job.job_id]
+
+
+def test_success_mark_outside_an_iris_job_completes_nothing(monkeypatch):
+    # Every local run and every non-zero JAX process takes this path.
+    monkeypatch.setattr(distributed, "_iris_job_completion", None)
 
     distributed.mark_run_succeeded()
-    distributed._complete_iris_job_after_successful_run(client, job_id)
+    distributed._complete_iris_job_after_successful_run()
 
-    assert client.completed == [job_id]
+    assert distributed._iris_job_completion is None

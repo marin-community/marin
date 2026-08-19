@@ -31,12 +31,22 @@ _VISIBLE_DEVICES = "CUDA_VISIBLE_DEVICES"
 _NODE_NAME = "SLURMD_NODENAME"
 
 
-# ``mark_run_succeeded`` sets this flag. The process-exit hook reads it.
-_run_succeeded = False
+@dataclass
+class _IrisJobCompletion:
+    """The Iris job to complete at process exit, and whether the run earned it."""
+
+    client: IrisClient
+    job_id: JobName
+    run_succeeded: bool = False
 
 
-def _complete_iris_job_after_successful_run(client: IrisClient, job_id: JobName) -> None:
-    """Complete this task's Iris job at process exit, but only after an explicit success mark.
+# Only JAX process 0 of an Iris job installs the exit hook, so only that process
+# holds a completion. ``initialize`` creates it, and ``mark_run_succeeded`` arms it.
+_iris_job_completion: _IrisJobCompletion | None = None
+
+
+def _complete_iris_job_after_successful_run() -> None:
+    """Complete this task's Iris job at exit, but only after an explicit success mark.
 
     The exit state does not tell the difference between success and failure. The
     Iris callable runner changes every training exception into ``sys.exit(1)``.
@@ -44,9 +54,10 @@ def _complete_iris_job_after_successful_run(client: IrisClient, job_id: JobName)
     exit with no mark does not complete the job, and Iris sets the job state from
     the task exit codes.
     """
-    if not _run_succeeded:
+    completion = _iris_job_completion
+    if completion is None or not completion.run_succeeded:
         return
-    client.complete(job_id)
+    completion.client.complete(completion.job_id)
 
 
 def mark_run_succeeded() -> None:
@@ -58,8 +69,8 @@ def mark_run_succeeded() -> None:
     can retry a completed gang. No other process installs that hook, so the mark
     has no effect there.
     """
-    global _run_succeeded
-    _run_succeeded = True
+    if _iris_job_completion is not None:
+        _iris_job_completion.run_succeeded = True
 
 
 class LevanterSlurmCluster(clusters.SlurmCluster):
@@ -264,8 +275,10 @@ class DistributedConfig:
                 ctx = iris_ctx()
                 if ctx.client is None:
                     raise RuntimeError("Iris context has no client for completing the current job")
+                global _iris_job_completion
+                _iris_job_completion = _IrisJobCompletion(ctx.client, job_info.job_id)
                 # Tracker exit hooks register later and therefore run before job completion.
-                atexit.register(_complete_iris_job_after_successful_run, ctx.client, job_info.job_id)
+                atexit.register(_complete_iris_job_after_successful_run)
         elif self._is_distributed():
             device_ids = self.local_device_ids
             coordinator_address = self.coordinator_address
