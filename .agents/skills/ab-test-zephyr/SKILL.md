@@ -78,8 +78,8 @@ branch/PR head. Add treatments only when the requester explicitly names each
 additional commit or configuration. Record a stable name plus the exact SHA and
 configuration difference for every extra arm; do not infer or invent arms.
 
-Run on GCP in `us-central1` with
-`gs://marin-us-central1/datakit/sample_100b_8ae7a94f` unless the requester
+Run on GCP in `europe-west4` with
+`gs://marin-eu-west4/datakit/sample_100b_8ae7a94f` unless the requester
 selects another sample or backend. CoreWeave remains available for S3-local
 runs; select it explicitly with the matching S3 sample and target cluster.
 
@@ -120,15 +120,15 @@ SHA or configuration explicitly requested.
 
 `experiments.datakit.zephyr_benchmark` accepts an existing normalized sample
 and routes outputs to a seven-day temporary prefix. Use an immutable,
-region-local sample. Its default input is the GCS 100B sample in `us-central1`.
+region-local sample. Its default input is the GCS 100B sample in `europe-west4`.
 All arguments except `--run-tag` must match across the control and treatments.
 
 Set exactly one data-locality argument before launching:
 
 ```bash
-# Default: GCS input and GCP compute in us-central1.
-SAMPLE_PREFIX=gs://marin-us-central1/datakit/sample_100b_8ae7a94f
-DATA_LOCALITY_ARGS=(--region us-central1)
+# Default: GCS input and GCP compute in europe-west4.
+SAMPLE_PREFIX=gs://marin-eu-west4/datakit/sample_100b_8ae7a94f
+DATA_LOCALITY_ARGS=(--region europe-west4)
 
 # CoreWeave opt-in: S3 input and CoreWeave compute in cw-us-east-02a.
 # SAMPLE_PREFIX=s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f
