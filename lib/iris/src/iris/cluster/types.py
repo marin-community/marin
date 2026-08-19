@@ -677,7 +677,6 @@ CALLABLE_RUNNER = """\
 import cloudpickle
 import os
 import sys
-import traceback
 import logging
 
 # Reinitialize logging with the unified Iris format.
@@ -714,9 +713,12 @@ try:
     with open(os.path.join(workdir, "_callable.pkl"), "rb") as f:
         fn, args, kwargs = cloudpickle.loads(f.read())
     fn(*args, **kwargs)
-except Exception:
-    traceback.print_exc()
-    sys.exit(1)
+except BaseException as exc:
+    if not isinstance(exc, SystemExit) or exc.code not in (None, 0):
+        # The callable runner is an exception boundary. Retain the failure for
+        # atexit hooks before re-raising it with its original exit semantics.
+        sys.last_exc = exc
+    raise
 """
 
 
