@@ -40,6 +40,12 @@ async def test_read_only_open_async_does_not_create_directories(tmp_path, monkey
     np.testing.assert_array_equal(await reader.get_item_async(0), np.array([1, 2, 3], dtype=np.int32))
 
 
+@pytest.mark.asyncio
+async def test_read_only_open_async_missing_store_raises_file_not_found(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        await JaggedArrayStore.open_async(str(tmp_path / "missing"), mode="r", item_rank=1, dtype=jnp.int32)
+
+
 def test_write_open_creates_missing_parent_directories(tmp_path):
     path = tmp_path / "missing" / "nested" / "store"
 

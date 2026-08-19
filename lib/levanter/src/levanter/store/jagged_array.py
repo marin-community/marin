@@ -216,20 +216,18 @@ class JaggedArrayStore:
         path: Optional[str], *, mode="a", item_rank=1, dtype, cache_metadata: bool = False
     ) -> "JaggedArrayStore":
         offset_path = _extend_path(path, "offsets")
-        offsets = _ts_open_async(offset_path, jnp.int64, [1], mode=mode)
+        offsets = await _ts_open_async(offset_path, jnp.int64, [1], mode=mode)
 
         data_path = _extend_path(path, "data")
-        data = _ts_open_async(data_path, dtype, [0], mode=mode)
+        data = await _ts_open_async(data_path, dtype, [0], mode=mode)
 
         if item_rank > 1:
             shape_path = _extend_path(path, "shapes")
-            shapes = _ts_open_async(shape_path, jnp.int64, [0, item_rank - 1], mode=mode)
+            shapes = await _ts_open_async(shape_path, jnp.int64, [0, item_rank - 1], mode=mode)
         else:
             shapes = None
 
-        return JaggedArrayStore(
-            await offsets, await data, await shapes if shapes is not None else None, item_rank, cache_metadata
-        )
+        return JaggedArrayStore(offsets, data, shapes, item_rank, cache_metadata)
 
     @staticmethod
     def open(path: Optional[str], *, mode="a", item_rank=1, dtype, cache_metadata: bool = False) -> "JaggedArrayStore":
@@ -664,13 +662,18 @@ async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
             pass
 
     # TODO: groups?
-    return await ts.open(
-        spec,
-        dtype=jnp.dtype(dtype).name,
-        shape=[2**54, *shape[1:]],
-        **open_kwargs,
-        **mode_config,
-    )
+    try:
+        return await ts.open(
+            spec,
+            dtype=jnp.dtype(dtype).name,
+            shape=[2**54, *shape[1:]],
+            **open_kwargs,
+            **mode_config,
+        )
+    except ValueError as e:
+        if "NOT_FOUND" in str(e):
+            raise FileNotFoundError(f"File not found: {path}") from e
+        raise
 
 
 def _get_spec(path, shape):

@@ -157,8 +157,11 @@ class TreeCache(AsyncDataset[T_co]):
         self.ledger = ledger
         self._exemplar = exemplar
         self._shard_stores: Dict[str, TreeStore[T_co]] = {}
+        self._pending_shard_stores: Dict[Tuple[asyncio.AbstractEventLoop, str], "asyncio.Task[TreeStore[T_co]]"] = {}
         self._shard_row_offsets: Optional[np.ndarray] = None
         self._shard_field_stores: Dict[Tuple[str, str], Any] = {}
+        self._pending_shard_field_stores: Dict[Tuple[asyncio.AbstractEventLoop, str, str], "asyncio.Task[Any]"] = {}
+        self._shard_stores_lock = threading.Lock()
         self._shard_field_offsets: Dict[str, np.ndarray] = {}
         self._flat_field_offsets: Dict[str, np.ndarray] = {}
         self._flat_field_offset_futures: Dict[str, concurrent.futures.Future[np.ndarray]] = {}
@@ -322,39 +325,85 @@ class TreeCache(AsyncDataset[T_co]):
         return blocking_wait(self._read_sharded_flat_field_slice(field, item))
 
     def _shard_store(self, shard_name: str) -> TreeStore[T_co]:
-        store = self._shard_stores.get(shard_name)
-        if store is None:
-            store = TreeStore.open(self._exemplar, self._layout.shard(shard_name), mode="r", cache_metadata=True)
-            self._shard_stores[shard_name] = store
-        return store
+        with self._shard_stores_lock:
+            store = self._shard_stores.get(shard_name)
+        if store is not None:
+            return store
 
-    def _shard_field_store(self, shard_name: str, field: str):
-        key = (shard_name, field)
-        store = self._shard_field_stores.get(key)
-        if store is None:
-            tree_store = TreeStore.open(
-                _field_exemplar(self._exemplar, field),
-                self._layout.shard(shard_name),
-                mode="r",
-                cache_metadata=True,
+        opened = TreeStore.open(self._exemplar, self._layout.shard(shard_name), mode="r", cache_metadata=True)
+        with self._shard_stores_lock:
+            return self._shard_stores.setdefault(shard_name, opened)
+
+    async def _shard_store_async(self, shard_name: str) -> TreeStore[T_co]:
+        loop = asyncio.get_running_loop()
+        pending_key = (loop, shard_name)
+        with self._shard_stores_lock:
+            store = self._shard_stores.get(shard_name)
+            if store is not None:
+                return store
+
+            pending = self._pending_shard_stores.get(pending_key)
+            if pending is None or pending.done():
+                pending = loop.create_task(self._open_shard_store(shard_name, pending_key))
+                pending.add_done_callback(_log_task_exception)
+                self._pending_shard_stores[pending_key] = pending
+
+        return await asyncio.shield(pending)
+
+    async def _open_shard_store(
+        self, shard_name: str, pending_key: Tuple[asyncio.AbstractEventLoop, str]
+    ) -> TreeStore[T_co]:
+        try:
+            opened = await TreeStore.open_async(
+                self._exemplar, self._layout.shard(shard_name), mode="r", cache_metadata=True
             )
-            store = _tree_field(tree_store.tree, field)
-            self._shard_field_stores[key] = store
-        return store
+            with self._shard_stores_lock:
+                return self._shard_stores.setdefault(shard_name, opened)
+        finally:
+            task = asyncio.current_task()
+            with self._shard_stores_lock:
+                if self._pending_shard_stores.get(pending_key) is task:
+                    del self._pending_shard_stores[pending_key]
 
     async def _shard_field_store_async(self, shard_name: str, field: str):
         key = (shard_name, field)
-        store = self._shard_field_stores.get(key)
-        if store is None:
+        loop = asyncio.get_running_loop()
+        pending_key = (loop, shard_name, field)
+        with self._shard_stores_lock:
+            store = self._shard_field_stores.get(key)
+            if store is not None:
+                return store
+
+            pending = self._pending_shard_field_stores.get(pending_key)
+            if pending is None or pending.done():
+                pending = loop.create_task(self._open_shard_field_store(shard_name, field, pending_key))
+                pending.add_done_callback(_log_task_exception)
+                self._pending_shard_field_stores[pending_key] = pending
+
+        return await asyncio.shield(pending)
+
+    async def _open_shard_field_store(
+        self,
+        shard_name: str,
+        field: str,
+        pending_key: Tuple[asyncio.AbstractEventLoop, str, str],
+    ):
+        key = (shard_name, field)
+        try:
             tree_store = await TreeStore.open_async(
                 _field_exemplar(self._exemplar, field),
                 self._layout.shard(shard_name),
                 mode="r",
                 cache_metadata=True,
             )
-            store = _tree_field(tree_store.tree, field)
-            self._shard_field_stores[key] = store
-        return store
+            opened = _tree_field(tree_store.tree, field)
+            with self._shard_stores_lock:
+                return self._shard_field_stores.setdefault(key, opened)
+        finally:
+            task = asyncio.current_task()
+            with self._shard_stores_lock:
+                if self._pending_shard_field_stores.get(pending_key) is task:
+                    del self._pending_shard_field_stores[pending_key]
 
     async def _get_sharded_batch(self, indices: Sequence[int]) -> List[T_co]:
         if len(indices) == 0:
@@ -375,7 +424,8 @@ class TreeCache(AsyncDataset[T_co]):
 
         async def read_shard(shard_index: int, batch: List[Tuple[int, int]]) -> None:
             local_indices = [local_index for _, local_index in batch]
-            shard_batch = await self._shard_store(shard_names[shard_index]).get_batch(local_indices)
+            store = await self._shard_store_async(shard_names[shard_index])
+            shard_batch = await store.get_batch(local_indices)
             for (output_index, _), row in zip(batch, shard_batch, strict=True):
                 output[output_index] = row
 
@@ -421,7 +471,7 @@ class TreeCache(AsyncDataset[T_co]):
         shard_names, shard_offsets = self._ensure_shard_field_offsets(field)
         remaining = length
         position = offset
-        reads = []
+        slices = []
 
         while remaining > 0:
             shard_index = int(np.searchsorted(shard_offsets, position, side="right"))
@@ -432,12 +482,15 @@ class TreeCache(AsyncDataset[T_co]):
             local_start = position - shard_start
             available = int(shard_offsets[shard_index] - position)
             take = min(remaining, available)
-            field_store = self._shard_field_store(shard_names[shard_index], field)
-            reads.append(field_store.data[local_start : local_start + take].read())
+            slices.append((shard_names[shard_index], local_start, take))
             position += take
             remaining -= take
 
-        chunks = await asyncio.gather(*reads)
+        async def read_slice(shard_name: str, local_start: int, take: int) -> np.ndarray:
+            field_store = await self._shard_field_store_async(shard_name, field)
+            return await field_store.data[local_start : local_start + take].read()
+
+        chunks = await asyncio.gather(*[read_slice(*shard_slice) for shard_slice in slices])
         if len(chunks) == 1:
             return chunks[0]
         return np.concatenate(chunks)
@@ -691,6 +744,15 @@ def _validate_sharded_ledger(ledger: CacheLedger) -> None:
             "Sharded cache ledger field count mismatch: "
             f"sum(finished shard field counts)={field_counts}, field_counts={ledger.field_counts}"
         )
+
+
+def _log_task_exception(task: "asyncio.Task") -> None:
+    """Retrieve failures from shared opens whose shielded waiters were all cancelled."""
+    if task.cancelled():
+        return
+    exception = task.exception()
+    if exception is not None:
+        logger.debug("Shared shard open failed; a later reader may retry it.", exc_info=exception)
 
 
 def _tree_field(tree, field: str):
