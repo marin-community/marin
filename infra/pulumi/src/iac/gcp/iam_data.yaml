@@ -3,15 +3,14 @@
 #
 # Shared GCP IAM declaration for hai-gcp-models. Deploy-target grants live in
 # the adjacent echo.py, evaldash.py, grafana.py, and loom.py modules. The
-# `marin` stack composes every declaration and is their sole owner. Grants
-# remain additive until a separately reviewed change converts the imported
-# inventory to role-authoritative bindings. Human user principals are KMS
-# ciphertexts declared once under `principals`; grants reference their opaque
-# IDs so one principal cannot drift across roles.
+# `marin` stack composes every declaration and is their sole owner. Resources
+# use additive IAM members; changing to role-authoritative bindings requires a
+# complete live-policy audit. Human user principals are KMS ciphertexts
+# declared once under `principals`; grants reference their opaque IDs so one
+# principal cannot drift across roles.
 #
-# The owned service account and custom roles were imported from the retired
-# `marin-permissions` stack. Do not add custom roles found live unless Pulumi
-# already owns them or their adoption has been reviewed separately.
+# Add a custom role found live only after confirming Pulumi already owns it or
+# reviewing its adoption separately.
 #
 # GCP does not support resource-based IAM Conditions for iam.googleapis.com
 # permissions. Custom-role-management grants therefore remain project-wide.
