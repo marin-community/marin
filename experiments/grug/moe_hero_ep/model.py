@@ -1023,8 +1023,11 @@ class MoEMLP(eqx.Module):
                 in_specs=(P(_BATCH_AXES, None),),
                 out_specs=P(_BATCH_AXES, None),
             )(s_minus_alpha)
-            # TOPK has no histogram grid, so no live margin range to surface.
-            zero = jnp.zeros((), dtype=jnp.float32)
+            # TOPK has no histogram grid, so no live margin range to surface. Reshard the
+            # placeholder onto the run's mesh: a bare constant carries an empty-mesh sharding,
+            # and stacking that through the router stats leaves the train step's inputs placed
+            # inconsistently with the compiled executable under offloaded pinned-host state.
+            zero = reshard(jnp.zeros((), dtype=jnp.float32), P())
             router_stats["margin_min"] = zero
             router_stats["margin_max"] = zero
 
