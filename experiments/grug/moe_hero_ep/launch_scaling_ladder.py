@@ -37,7 +37,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
-from rigging.filesystem.cluster_config import marin_temp_bucket
+from marin.training.training import temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -86,10 +86,9 @@ WATCH_INTERVAL = 10
 # scales every narrower rung by the same ratio.
 TOKENS_PER_ACTIVE_PARAM = 791
 TENSORSTORE_CACHE_BYTES = 125_000_000_000
-# Rolling resume checkpoints go to region-local storage that expires after 30 days. A crash thus
-# costs at most this much training time, against a hero checkpoint that is several TB.
+# A crash costs at most this much training time. A hero checkpoint is several TB, thus a shorter
+# interval would spend a large part of the run inside a checkpoint write.
 RESUME_SAVE_INTERVAL = timedelta(minutes=30)
-RESUME_CHECKPOINT_TTL_DAYS = 30
 
 
 def _ladder_model(size: str):
@@ -237,15 +236,13 @@ def build_ladder_run(
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
-            # load_checkpoint stays None (resume from the newest checkpoint that exists), so a retry
-            # after a hardware or memory fault continues the run. Levanter 8443 made a pinned-host
-            # restore work: it deserializes each offloaded leaf onto device and then moves it to its
-            # target memory kind, one leaf at a time.
+            # load_checkpoint stays None: the trainer resumes from the newest checkpoint that
+            # exists, so a retry after a hardware or memory fault continues the run.
             checkpointer=CheckpointerConfig(
                 base_path=prefix_join(ctx.output_path, "checkpoints"),
                 # Rolling resume checkpoints go to region-local temp storage with a lifecycle TTL.
                 # The durable output root keeps only the permanent milestones and the final one.
-                temporary_base_path=ctx.runtime_arg("resume_checkpoint_path"),
+                temporary_base_path=temporary_checkpoint_base_path(ctx.output_path),
                 save_interval=RESUME_SAVE_INTERVAL,
                 keep=keep_permanent,
                 append_run_id_to_base_path=False,
@@ -285,12 +282,7 @@ def build_ladder_run(
         run=run_grug,
         build_config=build_config,
         deps=(HARRIER_MIX_2026_08_18_STORE, *validation),
-        runtime_args={
-            "train_resources": train_resources,
-            # A runtime arg, not a config field: the resolved bucket is regional, thus it would
-            # otherwise put the launching cluster into the step's fingerprint.
-            "resume_checkpoint_path": marin_temp_bucket(RESUME_CHECKPOINT_TTL_DAYS, f"grug/{run_id}/resume"),
-        },
+        runtime_args={"train_resources": train_resources},
     )
 
 

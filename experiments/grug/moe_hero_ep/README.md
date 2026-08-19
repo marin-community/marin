@@ -193,9 +193,9 @@ Train batch is 1024 × racks; eval batch is 64 × racks (one sequence per device
 
 A rung resumes from the newest checkpoint it finds. The permanent checkpoints above go to the
 durable output root, and a rolling temporary checkpoint every 30 minutes goes to region-local temp
-storage with a 30-day lifecycle TTL. One temporary checkpoint is kept. A hardware fault, a host
-out-of-memory, or a preemption thus costs at most 30 minutes of training. The training job retries
-1000 times on failure and 100 times on preemption.
+storage with the shared 14-day lifecycle TTL. One temporary checkpoint is kept. A hardware fault, a
+host out-of-memory, or a preemption thus costs at most 30 minutes of training. The training job
+retries 1000 times on failure and 100 times on preemption.
 
 ```bash
 python -m experiments.grug.moe_hero_ep.launch_scaling_ladder \
