@@ -49,14 +49,16 @@ from jax import shard_map  # noqa: E402
 from jax.sharding import AxisType, Mesh, NamedSharding  # noqa: E402
 from jax.sharding import PartitionSpec as P  # noqa: E402
 
-from levanter.grug._moe.brd_expert_mlp import brd_expert_mlp  # noqa: E402
+from levanter.grug._moe.brd_expert_mlp import ROW_ALIGN, brd_expert_mlp  # noqa: E402
 from levanter.grug._moe.ep_marin import marin_ep_moe_local  # noqa: E402
 
 TOKENS, TOPK, HIDDEN, INTER = 65536, 8, 6144, 3072
 LOCAL_EXPERTS = 6
 CF = 1.1
 ITERS = 6
-POOL_ROWS = int(TOKENS * TOPK * CF)
+# The grouped kernel tiles rows, so hold the pool at the tile boundary the
+# fused path also pads to.
+POOL_ROWS = -(-int(TOKENS * TOPK * CF) // ROW_ALIGN) * ROW_ALIGN
 
 
 def bench(fn, *args) -> float:
