@@ -85,19 +85,47 @@ def load(scale: str):
         phase_0 = np.stack([vector(x) for x in merged["phase_0_weights_json"]])
         phase_1 = np.stack([vector(x) for x in merged["phase_1_weights_json"]])
         endpoint = merged["uncheatable_bpb"].to_numpy(float)
-    else:
-        source = phase0.SIXTY / "fit_two_phase.csv" if scale == "60m" else phase0.THREE_HUNDRED
+    elif scale == "60m":
         wide = pd.concat(
             [pd.read_csv(phase0.SIXTY / f"{n}.csv") for n in ("fit_two_phase", "heldout_observations")]
-            if scale == "60m"
-            else [pd.read_csv(source)]
         ).drop_duplicates("run_name")
         wide = wide.merge(readouts.rename(columns={"heldout_id": "run_name"}), on="run_name", how="inner")
-        target = "uncheatable_bpb" if "uncheatable_bpb" in wide.columns else "uncheatable_macro_bpb"
-        merged = wide[wide[target].notna() & wide["phase0_uncheatable_bpb"].notna()].reset_index(drop=True)
+        merged = wide[wide["uncheatable_bpb"].notna() & wide["phase0_uncheatable_bpb"].notna()].reset_index(drop=True)
         phase_0 = merged[[f"phase_0_{b}" for b in fit.buckets]].to_numpy(float)
         phase_1 = merged[[f"phase_1_{b}" for b in fit.buckets]].to_numpy(float)
-        endpoint = merged[target].to_numpy(float)
+        endpoint = merged["uncheatable_bpb"].to_numpy(float)
+    else:
+        # The 300M audit supplies run names and mixtures but only per-component evaluations, and a plain
+        # mean of those reproduces the canonical macro only to 4.2e-3 -- above this target's run noise of
+        # 9.1e-4, so it is NOT the macro's definition and must not be substituted for it. The canonical
+        # panels carry the true value, and every one of their 280 two-phase rows matches an audit row on
+        # its exact weight vector, so the endpoint is JOINED rather than reconstructed.
+        audit = pd.read_csv(phase0.THREE_HUNDRED)
+        audit = audit.merge(readouts.rename(columns={"heldout_id": "run_name"}), on="run_name", how="inner")
+        columns_0 = [f"phase_0_{b}" for b in fit.buckets]
+        columns_1 = [f"phase_1_{b}" for b in fit.buckets]
+        by_weights = {
+            tuple(np.round(row, 6)): index for index, row in enumerate(audit[columns_0 + columns_1].to_numpy(float))
+        }
+        canonical = pd.concat(
+            [pd.read_csv(phase0.CANONICAL / f"300m_{name}.csv") for name in ("two_phase_fit", "heldouts")]
+        )
+        canonical_weights = np.column_stack(
+            [
+                canonical[[f"phase_0_weight::{b}" for b in fit.buckets]].to_numpy(float),
+                canonical[[f"phase_1_weight::{b}" for b in fit.buckets]].to_numpy(float),
+            ]
+        )
+        pairs = [
+            (row, by_weights[tuple(np.round(weights, 6))])
+            for row, weights in enumerate(canonical_weights)
+            if tuple(np.round(weights, 6)) in by_weights
+        ]
+        canonical_rows, audit_rows = (np.array(x) for x in zip(*pairs, strict=True))
+        merged = audit.iloc[audit_rows].reset_index(drop=True)
+        phase_0 = merged[columns_0].to_numpy(float)
+        phase_1 = merged[columns_1].to_numpy(float)
+        endpoint = canonical.iloc[canonical_rows]["uncheatable_bpb"].to_numpy(float)
 
     keep = np.isfinite(endpoint)
     phase_0, phase_1, endpoint = phase_0[keep], phase_1[keep], endpoint[keep]

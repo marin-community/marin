@@ -45,6 +45,7 @@ SIXTY = SCRIPT_DIR / "reference_outputs" / "60m_39bucket_checkpoint_audit_202607
 # The 300M canonical panel carries row ids only, but the late-boundary audit re-derived the panel with
 # `training_wandb_id` attached, covering 240 of its 520 rows.
 THREE_HUNDRED = SCRIPT_DIR / "reference_outputs" / "audit_late_boundary_300m_20260731" / "rows_uncheatable.csv"
+CANONICAL = SCRIPT_DIR / "reference_outputs" / "two_phase_surrogate_collaborator_packet_20260721" / "data" / "canonical"
 UNCHEATABLE = "eval/uncheatable_eval/bpb"
 # The phase boundary is a fixed fraction of the run in every swarm; where a panel does not record the
 # boundary step directly it is recomputed from the run's own final step.
