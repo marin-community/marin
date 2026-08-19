@@ -688,9 +688,9 @@ def _fully_replicated_sharding(mesh):
 def _device_shardings_for_load(shardings: list) -> tuple[list, list]:
     """Split target shardings into device-memory-kind loaders plus per-leaf move-back targets.
 
-    JAX materializes tensorstore shards as ``device`` buffers, then assembles them under the
-    requested sharding. When that sharding carries a non-device memory kind -- as it does for a run
-    with ``offload_opt_state``/``FP32_PINNED_HOST``, whose master and optimizer leaves live on
+    JAX reads tensorstore shards into ``device`` buffers, then assembles them under the requested
+    sharding. When that sharding carries a non-device memory kind -- as it does for a run with
+    ``offload_opt_state``/``FP32_PINNED_HOST``, whose master and optimizer leaves live on
     ``pinned_host`` -- assembly fails the memory-kind check, so a checkpoint that was written cannot
     be read back. Deserialize onto ``device`` and move each such leaf to its target afterwards.
 
@@ -711,11 +711,16 @@ def _device_shardings_for_load(shardings: list) -> tuple[list, list]:
 
 
 def _move_leaves_to_target_memory_kind(leaves: list, move_targets: list) -> list:
-    """Relocate leaves deserialized onto ``device`` to the target sharding in ``move_targets``."""
+    """Relocate leaves deserialized onto ``device`` to the non-device target in ``move_targets``.
+
+    Holding the whole offloaded state on device here is safe: the jitted step already shuttles the
+    entire ``opt_state`` and ``master_params`` onto device every update (see the training step's
+    ``_tree_to_memory_kind(..., "device")`` calls), alongside gradients and updates. Restore rebuilds
+    only that state -- no gradients, updates, or activations -- so its device footprint is strictly
+    smaller than a training step's, and the move targets are host memory rather than more HBM.
+    """
     if not any(target is not None for target in move_targets):
         return leaves
-    # Move one leaf at a time: each leaf's shards reach (pinned) host before the next is placed, so
-    # the offloaded state never has to sit whole in device memory.
     return [jax.device_put(leaf, target) if target is not None else leaf for leaf, target in zip(leaves, move_targets)]
 
 
