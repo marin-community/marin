@@ -91,6 +91,12 @@ resources until the separately reviewed authoritative-binding cutover. Before ap
 stack that has relinquished a grant, adopt or create the central resource and remove the old
 resource from the leaf stack's state without deleting the live binding.
 
+Automatic Echo, EvalDash, and Grafana rollouts are blocked in
+`scripts/ci/pulumi_rollouts.py` while their leaf states retain the transferred IAM resources.
+After adopting the central resources and detaching those leaf-state entries, remove the gate
+before resuming merge-triggered rollouts. Manual workflow dispatch remains available for the
+coordinated migration.
+
 GitHub organization and repository resources live in the independent
 [`github`](github/README.md) Pulumi project. Its stack YAML declares existing Actions secrets
 while their values remain outside Pulumi.
