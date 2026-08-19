@@ -759,12 +759,10 @@ def test_closed_foreign_loop_does_not_evict_live_pending_shard_open(tmp_path, mo
     first_open_started = threading.Event()
     second_open_started = threading.Event()
     start_second_reader = threading.Event()
-    third_reader_entered = threading.Event()
+    second_owner_reader_started = threading.Event()
     release_first_open = threading.Event()
     attempts = 0
     attempts_lock = threading.Lock()
-    readers = 0
-    readers_lock = threading.Lock()
 
     async def blocked_open_async(exemplar, path, **kwargs):
         nonlocal attempts
@@ -782,27 +780,15 @@ def test_closed_foreign_loop_does_not_evict_live_pending_shard_open(tmp_path, mo
         return await real_open_async(exemplar, path, **kwargs)
 
     monkeypatch.setattr(TreeStore, "open_async", staticmethod(blocked_open_async))
-    real_shard_field_store = cache._shard_field_store_async
-
-    async def observed_shard_field_store(shard_name: str, field: str):
-        nonlocal readers
-        with readers_lock:
-            readers += 1
-            reader = readers
-        if reader != 3:
-            return await real_shard_field_store(shard_name, field)
-
-        pending = asyncio.create_task(real_shard_field_store(shard_name, field))
-        await asyncio.sleep(0)
-        third_reader_entered.set()
-        return await pending
-
-    monkeypatch.setattr(cache, "_shard_field_store_async", observed_shard_field_store)
 
     async def read_on_owner_loop():
         first_reader = asyncio.create_task(cache.get_flat_field_batch("input_ids", [0], seq_len))
         await asyncio.to_thread(start_second_reader.wait)
         second_reader = asyncio.create_task(cache.get_flat_field_batch("input_ids", [0], seq_len))
+        # Drive the public read through its gather layers to the mocked TreeStore boundary.
+        for _ in range(4):
+            await asyncio.sleep(0)
+        second_owner_reader_started.set()
         return await asyncio.gather(first_reader, second_reader)
 
     async def cancel_foreign_reader():
@@ -818,7 +804,7 @@ def test_closed_foreign_loop_does_not_evict_live_pending_shard_open(tmp_path, mo
         foreign_reader = executor.submit(asyncio.run, cancel_foreign_reader())
         foreign_reader.result()
         start_second_reader.set()
-        third_reader_entered.wait()
+        second_owner_reader_started.wait()
         release_first_open.set()
         batches = owner_reader.result()
 
