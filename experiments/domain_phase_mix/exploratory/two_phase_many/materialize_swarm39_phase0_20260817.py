@@ -42,6 +42,9 @@ import wandb  # noqa: E402
 
 DELPHI = SCRIPT_DIR / "reference_outputs" / "delphi_3e18_append_only_heldouts_20260714"
 SIXTY = SCRIPT_DIR / "reference_outputs" / "60m_39bucket_checkpoint_audit_20260724"
+# The 300M canonical panel carries row ids only, but the late-boundary audit re-derived the panel with
+# `training_wandb_id` attached, covering 240 of its 520 rows.
+THREE_HUNDRED = SCRIPT_DIR / "reference_outputs" / "audit_late_boundary_300m_20260731" / "rows_uncheatable.csv"
 UNCHEATABLE = "eval/uncheatable_eval/bpb"
 # The phase boundary is a fixed fraction of the run in every swarm; where a panel does not record the
 # boundary step directly it is recomputed from the run's own final step.
@@ -54,6 +57,19 @@ def sources(scale: str):
         panel = pd.read_csv(DELPHI / "heldout_current.csv")
         panel = panel[panel["fit_panel_overlap"] == "coordinate_disjoint"]
         return panel, DELPHI / "phase0_readouts.csv"
+    if scale == "300m":
+        frame = pd.read_csv(THREE_HUNDRED)
+        frame = frame[frame["training_wandb_id"].notna()].copy()
+        frame["heldout_id"] = frame["run_name"]
+        frame["wandb_entity"] = "marin-community"
+        frame["wandb_project"] = "marin"
+        frame["wandb_run_id"] = frame["training_wandb_id"]
+        frame["phase_boundary_step"] = None
+        keep = ["heldout_id", "wandb_entity", "wandb_project", "wandb_run_id", "phase_boundary_step"]
+        return (
+            frame[keep].drop_duplicates("heldout_id").reset_index(drop=True),
+            THREE_HUNDRED.parent / "phase0_readouts.csv",
+        )
     frames = []
     for name in ("fit_two_phase", "heldout_observations", "all_nonfit_observations"):
         frame = pd.read_csv(SIXTY / f"{name}.csv")

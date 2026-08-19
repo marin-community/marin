@@ -64,24 +64,48 @@ ARMS = ("endpoint", "endpoint+y0", "trajectory", "scale-separated")
 
 
 def load(scale: str):
-    """Policies, endpoint, and phase-0 readout for every row that has all three."""
-    fit, _held = swarm39.load_scale(scale)
+    """Policies, endpoint, and phase-0 readout for every row that has all three.
+
+    The three swarms record mixtures differently -- delphi's heldout manifest stores them as JSON keyed by
+    bucket name, while the 60M audit and the 300M late-boundary audit use one wide column per bucket -- so
+    the shapes are normalised here rather than at every call site.
+    """
+    fit, _held = swarm39.load_scale("delphi_3e18" if scale == "delphi_3e18" else scale)
     panel, output = phase0.sources(scale)
     readouts = pd.read_csv(output)
-    merged = panel.merge(readouts, on="heldout_id", how="inner")
-    merged = merged[merged["phase0_uncheatable_bpb"].notna()].reset_index(drop=True)
 
-    def vector(payload: str) -> np.ndarray:
-        mapping = json.loads(payload)
-        return np.asarray([float(mapping.get(bucket, 0.0)) for bucket in fit.buckets], dtype=float)
+    if scale == "delphi_3e18":
+        merged = panel.merge(readouts, on="heldout_id", how="inner")
+        merged = merged[merged["phase0_uncheatable_bpb"].notna()].reset_index(drop=True)
 
-    phase_0 = np.stack([vector(x) for x in merged["phase_0_weights_json"]])
-    phase_1 = np.stack([vector(x) for x in merged["phase_1_weights_json"]])
+        def vector(payload: str) -> np.ndarray:
+            mapping = json.loads(payload)
+            return np.asarray([float(mapping.get(bucket, 0.0)) for bucket in fit.buckets], dtype=float)
+
+        phase_0 = np.stack([vector(x) for x in merged["phase_0_weights_json"]])
+        phase_1 = np.stack([vector(x) for x in merged["phase_1_weights_json"]])
+        endpoint = merged["uncheatable_bpb"].to_numpy(float)
+    else:
+        source = phase0.SIXTY / "fit_two_phase.csv" if scale == "60m" else phase0.THREE_HUNDRED
+        wide = pd.concat(
+            [pd.read_csv(phase0.SIXTY / f"{n}.csv") for n in ("fit_two_phase", "heldout_observations")]
+            if scale == "60m"
+            else [pd.read_csv(source)]
+        ).drop_duplicates("run_name")
+        wide = wide.merge(readouts.rename(columns={"heldout_id": "run_name"}), on="run_name", how="inner")
+        target = "uncheatable_bpb" if "uncheatable_bpb" in wide.columns else "uncheatable_macro_bpb"
+        merged = wide[wide[target].notna() & wide["phase0_uncheatable_bpb"].notna()].reset_index(drop=True)
+        phase_0 = merged[[f"phase_0_{b}" for b in fit.buckets]].to_numpy(float)
+        phase_1 = merged[[f"phase_1_{b}" for b in fit.buckets]].to_numpy(float)
+        endpoint = merged[target].to_numpy(float)
+
+    keep = np.isfinite(endpoint)
+    phase_0, phase_1, endpoint = phase_0[keep], phase_1[keep], endpoint[keep]
     weights = np.stack([phase_0, phase_1], axis=1)
     return (
         gen.Panel(weights, fit.c0, fit.c1, fit.family_index),
-        merged["uncheatable_bpb"].to_numpy(float),
-        merged["phase0_uncheatable_bpb"].to_numpy(float),
+        endpoint,
+        merged["phase0_uncheatable_bpb"].to_numpy(float)[keep],
         fit.alpha * phase_0 + (1.0 - fit.alpha) * phase_1,
     )
 
