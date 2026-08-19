@@ -33,6 +33,16 @@ _READ_CONTEXT_LOCK = threading.Lock()
 _READ_CACHE_SETTINGS = {"total_bytes_limit": CACHE_BYTES_LIMIT}
 
 
+def set_jagged_array_read_cache_bytes(total_bytes_limit: int) -> None:
+    """Set the shared TensorStore read cache size before opening any stores."""
+    if total_bytes_limit <= 0:
+        raise ValueError("total_bytes_limit must be positive")
+    with _READ_CONTEXT_LOCK:
+        if _READ_CONTEXT is not None:
+            raise RuntimeError("Jagged array read cache is already initialized")
+        _READ_CACHE_SETTINGS["total_bytes_limit"] = total_bytes_limit
+
+
 def _read_context() -> ts.Context:
     global _READ_CONTEXT
     with _READ_CONTEXT_LOCK:

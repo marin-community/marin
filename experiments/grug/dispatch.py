@@ -51,7 +51,6 @@ def dispatch_grug_training_run(
     max_retries_failure: int = 3,
     processes_per_task: int = 1,
     priority: int = INHERIT_PRIORITY,
-    env_vars: dict[str, str] | None = None,
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.
 
@@ -59,14 +58,12 @@ def dispatch_grug_training_run(
     not itself an Iris job -- which is the case for a launcher run from a dev box.
     """
     safe_run_id = _safe_job_suffix(run_id)
-    base_env = _forwarded_env_vars()
-    base_env.update(env_vars or {})
-    training_env = resolve_training_env(base_env=base_env, resources=resources)
+    env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
     request = JobRequest(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
         resources=resources,
-        environment=create_environment(env_vars=training_env, extras=extras_for_resources(resources)),
+        environment=create_environment(env_vars=env_vars, extras=extras_for_resources(resources)),
         max_retries_failure=max_retries_failure,
         max_task_failures=10,
         processes_per_task=processes_per_task,

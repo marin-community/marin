@@ -38,6 +38,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
+from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
 from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
@@ -644,6 +645,9 @@ def _make_train_step(
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
+    if config.tensorstore_cache_bytes is not None:
+        set_jagged_array_read_cache_bytes(config.tensorstore_cache_bytes)
+
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
@@ -938,12 +942,6 @@ def run_grug(config: GrugRunConfig) -> None:
     if trainer.id is None:
         raise ValueError("trainer.id must be set before dispatching grug training.")
 
-    env_vars: dict[str, str] = {}
-    if config.tensorstore_cache_bytes is not None:
-        if config.tensorstore_cache_bytes <= 0:
-            raise ValueError("tensorstore_cache_bytes must be positive")
-        env_vars["LEVANTER_TS_CACHE_LIMIT"] = str(config.tensorstore_cache_bytes)
-
     # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
     inline_watch_enabled = trainer.watch.is_enabled and config.trainer.watch_mode == WatchMode.INLINE
     _apply_hero_ep_runtime_defaults(
@@ -959,7 +957,6 @@ def run_grug(config: GrugRunConfig) -> None:
         # a failure that lands late therefore discards the whole run and repeats it. Make failures
         # terminal and keep the written checkpoint; preemption retries are a separate counter.
         max_retries_failure=0,
-        env_vars=env_vars,
     )
 
 
