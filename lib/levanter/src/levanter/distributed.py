@@ -6,7 +6,6 @@ import itertools
 import logging
 import os
 import re
-import sys
 from dataclasses import dataclass
 from typing import List, Optional, Union
 
@@ -32,15 +31,35 @@ _VISIBLE_DEVICES = "CUDA_VISIBLE_DEVICES"
 _NODE_NAME = "SLURMD_NODENAME"
 
 
-def _complete_iris_job_after_clean_exit(client: IrisClient, job_id: JobName) -> None:
-    # Preserve retries for genuine failures; the successful rank-0 exit owns completed-job teardown.
-    if getattr(sys, "last_exc", None) is not None:
+# ``mark_run_succeeded`` sets this flag. The process-exit hook reads it.
+_run_succeeded = False
+
+
+def _complete_iris_job_after_successful_run(client: IrisClient, job_id: JobName) -> None:
+    """Complete this task's Iris job at process exit, but only after an explicit success mark.
+
+    The exit state does not tell the difference between success and failure. The
+    Iris callable runner changes every training exception into ``sys.exit(1)``.
+    That call still runs the exit hooks, and ``sys.last_exc`` stays unset. Thus an
+    exit with no mark does not complete the job, and Iris sets the job state from
+    the task exit codes.
+    """
+    if not _run_succeeded:
         return
     client.complete(job_id)
 
 
-def _unregister_iris_job_completion() -> None:
-    atexit.unregister(_complete_iris_job_after_clean_exit)
+def mark_run_succeeded() -> None:
+    """Record that this process completed its training run and wrote every artifact.
+
+    Call this as the last statement of a training entry point. On JAX process 0 of
+    an Iris job, the process-exit hook then completes the job. Completion marks the
+    job terminal and stops the remaining tasks, before a coordinator teardown race
+    can retry a completed gang. No other process installs that hook, so the mark
+    has no effect there.
+    """
+    global _run_succeeded
+    _run_succeeded = True
 
 
 class LevanterSlurmCluster(clusters.SlurmCluster):
@@ -246,7 +265,7 @@ class DistributedConfig:
                 if ctx.client is None:
                     raise RuntimeError("Iris context has no client for completing the current job")
                 # Tracker exit hooks register later and therefore run before job completion.
-                atexit.register(_complete_iris_job_after_clean_exit, ctx.client, job_info.job_id)
+                atexit.register(_complete_iris_job_after_successful_run, ctx.client, job_info.job_id)
         elif self._is_distributed():
             device_ids = self.local_device_ids
             coordinator_address = self.coordinator_address

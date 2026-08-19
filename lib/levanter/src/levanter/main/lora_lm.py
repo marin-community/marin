@@ -18,6 +18,7 @@ from levanter import callbacks
 from levanter.callbacks._iris_status import iris_status_reporter
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.data.text.datasets import LmDataConfig
+from levanter.distributed import mark_run_succeeded
 from levanter.adaptor.lora import (
     LoraConfig,
     lora_trainable_params_filter,
@@ -175,6 +176,8 @@ def main(config: LoraLmConfig):
 
         ## OK, actually run training!
         trainer.train(state, iter_data)
+
+    mark_run_succeeded()
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ from levanter import callbacks
 from levanter.callbacks._iris_status import iris_status_reporter
 from levanter.compat.hf_checkpoints import HFCompatConfig, ModelWithHfSerializationMixin, save_hf_checkpoint_callback
 from levanter.data.audio import AudioIODatasetConfig, AudioMixtureDatasetConfig, AudioTextDataset
+from levanter.distributed import mark_run_succeeded
 from levanter.models.asr_model import ASRConfig, AudioTextExample
 from levanter.models.whisper import WhisperConfig
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -210,6 +211,8 @@ def main(config: TrainASRConfig):
 
         ## OK, actually run training!
         trainer.train(state, train_loader)
+
+    mark_run_succeeded()
 
 
 if __name__ == "__main__":

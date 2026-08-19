@@ -50,6 +50,7 @@ from levanter.dpo import (
     reference_eval_cache_metadata,
     reference_eval_cache_path,
 )
+from levanter.distributed import mark_run_succeeded
 from levanter.main.model_init import load_model_from_source, prepare_model_init_context
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
@@ -899,6 +900,8 @@ def main(config: TrainDpoConfig):
             checkpointer.wait_until_finished()
 
     trainer.tracker.finish()
+
+    mark_run_succeeded()
 
 
 if __name__ == "__main__":

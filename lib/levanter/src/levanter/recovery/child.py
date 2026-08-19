@@ -22,7 +22,6 @@ import logging
 import pickle
 import sys
 
-from levanter.distributed import _unregister_iris_job_completion
 from levanter.recovery.detection import classify_exception
 from levanter.recovery.types import EXIT_STALL, EXIT_STICKY_FAULT, ChildSpec, FaultClass
 
@@ -51,7 +50,6 @@ def main() -> None:
     try:
         entrypoint(spec.config)
     except BaseException as exc:  # noqa: BLE001 - map to the exit-code contract, then re-signal
-        _unregister_iris_job_completion()
         fault_class = classify_exception(exc)
         logger.exception("trainer subprocess raised; classified as %s", fault_class)
         if fault_class is FaultClass.STICKY:
