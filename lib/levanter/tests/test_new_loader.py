@@ -75,10 +75,12 @@ class RecordingBatchDataset(ListAsyncDataset[np.ndarray]):
 
 def test_loader_fetch_size_bounds_each_dataset_request():
     with use_test_mesh(tensor_parallelism=1) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
-        dataset = RecordingBatchDataset([np.array(i, dtype=np.int32) for i in range(8)])
+        batch_size = len(jax.devices())
+        dataset_size = batch_size * 4
+        dataset = RecordingBatchDataset([np.array(i, dtype=np.int32) for i in range(dataset_size)])
         loader = DataLoader(
             dataset,
-            batch_size=2,
+            batch_size=batch_size,
             max_buffered_batches=4,
             fetch_size=1,
             mesh=mesh,
@@ -87,8 +89,10 @@ def test_loader_fetch_size_bounds_each_dataset_request():
 
         batches = list(loader)
 
-    assert [np.asarray(batch).tolist() for batch in batches] == [[0, 1], [2, 3], [4, 5], [6, 7]]
-    assert max(dataset.request_sizes) == 2
+    assert [np.asarray(batch).tolist() for batch in batches] == [
+        list(range(start, start + batch_size)) for start in range(0, dataset_size, batch_size)
+    ]
+    assert max(dataset.request_sizes) == batch_size
 
 
 class StructuredDataset(AsyncDataset):
