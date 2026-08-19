@@ -55,13 +55,13 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
         3072,
         8,
         3072,
-        1.15,
-        1.15,
-        3,
-        "fixed_pooled_wave_all_to_all",
+        1.1,
+        None,
+        1,
+        "marin_ep",
         1024,
         4096,
-        1,
+        4,
         jnp.bfloat16,
         jnp.bfloat16,
         train.MasterParamMode.FP32_PINNED_HOST,
@@ -164,11 +164,6 @@ def test_expert_bank_override_must_be_divisible_by_the_expert_axis():
         launch.build_hero_run(run_id="bad-bank", dp_racks=1, num_steps=1, num_experts=200, version="dev")
 
 
-def test_expert_bank_override_must_support_three_waves():
-    with pytest.raises(ValueError, match="local expert count=4 must be divisible by num_expert_waves=3"):
-        launch.build_hero_run(run_id="bad-waves", dp_racks=1, num_steps=1, num_experts=256, version="dev")
-
-
 def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch):
     explicit_overlap = "--xla_gpu_experimental_parallel_collective_overlap_limit=2"
     monkeypatch.setenv("XLA_FLAGS", explicit_overlap)
@@ -181,6 +176,8 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
         ),
         resources=object(),
         processes_per_task=1,
+        worker_pip_packages=(),
+        worker_setup_scripts=(),
     )
 
     with patch.object(train, "dispatch_grug_training_run"):
@@ -211,6 +208,8 @@ def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
         ),
         resources=object(),
         processes_per_task=4,
+        worker_pip_packages=(),
+        worker_setup_scripts=(),
     )
 
     with patch.object(train, "dispatch_grug_training_run"):
@@ -235,6 +234,8 @@ def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
         ),
         resources=object(),
         processes_per_task=1,
+        worker_pip_packages=(),
+        worker_setup_scripts=(),
     )
 
     with patch.object(train, "dispatch_grug_training_run"):
@@ -263,6 +264,8 @@ def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
         ),
         resources=object(),
         processes_per_task=1,
+        worker_pip_packages=(),
+        worker_setup_scripts=(),
     )
 
     with patch.object(train, "dispatch_grug_training_run"):

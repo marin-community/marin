@@ -46,12 +46,86 @@ HERO_EP_BATCH_SIZE = 1024
 HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
 HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
-HERO_PROCESSES_PER_TASK = 1
+# marin_ep's fused transport exchanges peer buffers through NCCL collective
+# metadata, validated with one JAX process per GPU (multi-controller).
+HERO_PROCESSES_PER_TASK = HERO_GPUS_PER_NODE
 HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
 # Keep MuonH state on pinned host memory to leave room for the pooled all-to-all buffers.
 HERO_OFFLOAD_OPT_STATE = True
 HERO_WATCH_INTERVAL = 0
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
+
+# Pinned JAX nightly for the marin_ep hero (post-0.11.0 XLA: the fused transport
+# needs the collective-metadata Mosaic path, absent from jax 0.11.0). This exact
+# set ran cleanly against NCCL 2.30.7 on the cw-us-east-08a GB200 workers.
+JAX_NIGHTLY_WHEELS_20260809: tuple[str, ...] = (
+    "https://us-python.pkg.dev/ml-oss-artifacts-published/jax-public-nightly-artifacts-registry/jax/jax-0.11.1.dev20260809-py3-none-any.whl",
+    "https://us-python.pkg.dev/ml-oss-artifacts-published/jax-public-nightly-artifacts-registry/jaxlib/jaxlib-0.11.1.dev20260809-cp312-cp312-manylinux_2_27_aarch64.whl",
+    "https://us-python.pkg.dev/ml-oss-artifacts-published/jax-public-nightly-artifacts-registry/jax-cuda13-plugin/jax_cuda13_plugin-0.11.1.dev20260809-cp312-cp312-manylinux_2_27_aarch64.whl",
+    "https://us-python.pkg.dev/ml-oss-artifacts-published/jax-public-nightly-artifacts-registry/jax-cuda13-pjrt/jax_cuda13_pjrt-0.11.1.dev20260809-py3-none-manylinux_2_27_aarch64.whl",
+)
+# Patched jax-cuda13-pjrt build: kMaxPeers 32 -> 128 in the multi-GPU barrier
+# kernel (openxla/xla#47283 — the stock kernel overflows its signal region at
+# 64 ranks and crashes step 0 with CUDA_ERROR_ILLEGAL_ADDRESS), plus 4096-byte
+# buffer-assignment/BFC alignment for NCCL window registration.
+DEFAULT_PJRT_WHEEL = "s3://marin-us-east-02a/marin/research/mcwitt-ra2a/pjrt-kmax128-align4096-dev0811-20260816/"
+
+
+def _pjrt_wheel_install_script(wheel_url: str) -> str:
+    """Task setup script installing the pinned nightly with a substituted PJRT wheel.
+
+    Installs the three stock dev20260809 wheels plus the patched ``jax-cuda13-pjrt``
+    from object storage, then forces nvidia-nccl-cu13 to own ``libnccl.so.2`` — the
+    cu12/cu13 wheel collision otherwise mixes NCCL bootstrap wire formats across ranks.
+    """
+    stock_wheels = " ".join(f'"{url}"' for url in JAX_NIGHTLY_WHEELS_20260809 if "pjrt" not in url)
+    return f"""set -e
+: "${{IRIS_WORKDIR:?}}"
+: "${{IRIS_VENV:?}}"
+wheel_dir="$IRIS_WORKDIR/.marin-ep-pjrt"
+rm -rf "$wheel_dir"
+mkdir -p "$wheel_dir"
+echo 'downloading patched PJRT wheel'
+"$IRIS_VENV/bin/python" - <<'PY'
+import os
+from pathlib import Path
+
+import fsspec
+
+wheel_url = {wheel_url!r}
+wheel_dir = Path(os.environ["IRIS_WORKDIR"]) / ".marin-ep-pjrt"
+filesystem, remote_path = fsspec.core.url_to_fs(wheel_url)
+if remote_path.endswith(".whl"):
+    matches = [remote_path]
+else:
+    matches = filesystem.glob(remote_path.rstrip("/") + "/*.whl")
+if not matches:
+    raise FileNotFoundError(f"no .whl under {{wheel_url}}")
+for match in matches:
+    filesystem.get(match, str(wheel_dir / match.rsplit("/", 1)[1]))
+    print("fetched", match)
+PY
+echo 'installing pinned nightly with patched PJRT'
+uv pip install --python "$IRIS_VENV/bin/python" --no-deps --reinstall {stock_wheels} "$wheel_dir"/*.whl
+"$IRIS_VENV/bin/python" -c \
+  "from importlib.metadata import version; print('jax', version('jax'), 'pjrt', version('jax-cuda13-pjrt'))"
+echo 'forcing nvidia-nccl-cu13 to own libnccl.so.2'
+uv pip uninstall --python "$IRIS_VENV/bin/python" nvidia-nccl-cu12 || true
+uv pip install --python "$IRIS_VENV/bin/python" --no-deps --reinstall nvidia-nccl-cu13==2.30.7
+"$IRIS_VENV/bin/python" - <<'PY'
+import ctypes
+import hashlib
+import importlib
+from pathlib import Path
+
+lib_path = Path(importlib.import_module("nvidia.nccl").__path__[0]) / "lib" / "libnccl.so.2"
+lib = ctypes.CDLL(str(lib_path))
+version = ctypes.c_int()
+lib.ncclGetVersion(ctypes.byref(version))
+digest = hashlib.sha256(lib_path.read_bytes()).hexdigest()[:16]
+print(f"libnccl {{lib_path}} version_code={{version.value}} sha256={{digest}}")
+PY
+"""
 
 
 # Held-out sets are added at weight 0 so they surface as tagged eval sets.
@@ -88,6 +162,7 @@ def build_hero_run(
     watch_mode: WatchMode = WatchMode.INLINE,
     profile_steps: int = 0,
     profile_start_step: int = 5,
+    pjrt_wheel: str | None = DEFAULT_PJRT_WHEEL,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the EP64 hero throughput run.
@@ -146,19 +221,10 @@ def build_hero_run(
     # is already allocated and the workspace is built. Reject it here instead.
     if model.num_experts % HERO_EP_EXPERT_AXIS_SIZE != 0:
         raise ValueError(f"num_experts={model.num_experts} must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}")
-    local_experts = model.num_experts // HERO_EP_EXPERT_AXIS_SIZE
-    if local_experts % model.num_expert_waves != 0:
-        raise ValueError(
-            f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
-        )
-    if model.moe_implementation != "fixed_pooled_wave_all_to_all":
+    if model.moe_implementation != "marin_ep":
         raise AssertionError(f"unexpected hero MoE implementation: {model.moe_implementation}")
-    if model.pooled_transport_capacity_factor is None:
-        raise AssertionError("the pooled-wave hero requires a transport capacity factor")
     backend_tag = model.moe_implementation.replace("_", "-")
     capacity_tag = f"capacity-{model.capacity_factor:g}"
-    transport_capacity_tag = f"transport-capacity-{model.pooled_transport_capacity_factor:g}"
-    wave_tag = f"expert-waves-{model.num_expert_waves}"
     size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     grug_trainer = GrugTrainerConfig(
@@ -213,8 +279,6 @@ def build_hero_run(
                     "ep",
                     backend_tag,
                     capacity_tag,
-                    transport_capacity_tag,
-                    wave_tag,
                     size_tag,
                     "gb200",
                     HARRIER_MIX_2026_08_17_1_TAG,
@@ -260,6 +324,7 @@ def build_hero_run(
             ),
             stop_after_steps=num_steps,
             processes_per_task=HERO_PROCESSES_PER_TASK,
+            worker_setup_scripts=((_pjrt_wheel_install_script(pjrt_wheel),) if pjrt_wheel else ()),
         )
 
     return ArtifactStep(
@@ -310,10 +375,7 @@ def build_hero_run(
     type=click.IntRange(min=1),
     default=HERO_MODEL.num_experts,
     show_default=True,
-    help=(
-        f"Override the routed expert count. The count must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}, "
-        f"and the local expert count must support {HERO_MODEL.num_expert_waves} waves."
-    ),
+    help=(f"Override the routed expert count. The count must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}."),
 )
 @click.option(
     "--num-experts-per-token",
@@ -396,6 +458,12 @@ def build_hero_run(
     help="First traced step. Keep it past compile and warmup.",
 )
 @click.option(
+    "--pjrt-wheel",
+    default=DEFAULT_PJRT_WHEEL,
+    show_default=True,
+    help="Object-store path of the patched jax-cuda13-pjrt wheel; empty string runs the stock install.",
+)
+@click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
     default=HERO_MODEL.capacity_factor,
@@ -423,6 +491,7 @@ def main(
     watch_mode: str,
     profile_steps: int,
     profile_start_step: int,
+    pjrt_wheel: str,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
         run_id=run_id,
@@ -444,6 +513,7 @@ def main(
         watch_mode=WatchMode(watch_mode),
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
+        pjrt_wheel=pjrt_wheel or None,
     )
 
 

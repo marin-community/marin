@@ -58,8 +58,19 @@ HERO_EP_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "false",
     "XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB": "192",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
+    # marin_ep: bound the NCCL-symmetric-window collective arena (MiB). The
+    # growable default can fail a late 32 GiB growth after parameters fill
+    # the device at the 8/384 hero shape.
+    "MARIN_EP_COLLECTIVE_MEMORY_MB": "20480",
 }
-_XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
+_XLA_FLAG_DEFAULTS = (
+    "--xla_gpu_enable_latency_hiding_scheduler=true",
+    # marin_ep transport requirements: symmetric-memory collectives, and
+    # dynamic-slice fusion off — the pass wraps the combine put plus pool
+    # slice into a fusion, hiding the collective from stream assignment.
+    "--xla_gpu_ragged_all_to_all_mode=symmetric",
+    "--xla_gpu_enable_dynamic_slice_fusion=false",
+)
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
@@ -173,6 +184,10 @@ class GrugRunConfig:
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.hooks.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
+    # Extra pip wheels / setup scripts for the worker environment; the marin_ep
+    # launcher uses these to install the patched PJRT build.
+    worker_pip_packages: tuple[str, ...] = ()
+    worker_setup_scripts: tuple[str, ...] = ()
 
 
 def build_train_dataset(
@@ -643,6 +658,13 @@ def _make_train_step(
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
+    collective_mb = int(os.environ.get("MARIN_EP_COLLECTIVE_MEMORY_MB", "0"))
+    if collective_mb:
+        # Must precede client creation (trainer.initialize) to take effect.
+        jax.config.update(
+            "jax_pjrt_client_create_options",
+            {"collective_memory_size": collective_mb * 1024 * 1024},
+        )
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
@@ -948,6 +970,8 @@ def run_grug(config: GrugRunConfig) -> None:
         local_entrypoint=_run_grug_local,
         resources=config.resources,
         processes_per_task=config.processes_per_task,
+        worker_pip_packages=config.worker_pip_packages,
+        worker_setup_scripts=config.worker_setup_scripts,
         # A hero EP run forces load_checkpoint=False, so a retry always restarts at step 0. Retrying
         # a failure that lands late therefore discards the whole run and repeats it. Make failures
         # terminal and keep the written checkpoint; preemption retries are a separate counter.
