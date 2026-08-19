@@ -2003,3 +2003,33 @@ Experiment ID prefix: `MEP`.
   collectives busy already halved by bf16 params; small.
 - Next: inspect the hero remat policy for the marin_ep path (off-rack);
   if fixable, single arm validates.
+
+### 2026-08-18 18:40 - MEP-080: differential profile — our compute busy is +2.2 s; their a2a busy is ~3 s but overlapped
+- Profiled control mep-ctrlp-pooled-25-20260818 (main as-pinned, warm
+  cache, steps 15-18) staged through the gateway (cache
+  cbb3ffae7d286e2ad4b96dc9). Its hlo_stats table sums 4 devices/host
+  (n=576 = 48 layers x 3 steps x 4); ours (1 proc/GPU) is per-device.
+  Normalization cross-check: attention ffi totals match exactly on both
+  sides (~1.9 s/step/device).
+- Per device per step (control vs marin-ep tuned):
+  | class | control | marin-ep |
+  | custom-call (GEMMs+kernels+transport-in-kernel) | 10.02 | 12.26 |
+  | loop+input fusion | 3.16 | 3.74 |
+  | all-to-all busy | 2.92 | 0.05 |
+  | ag/rs/ar/copies | 2.31 | 2.27 |
+  | TOTAL busy | ~18.7 | ~18.6 |
+  | wall | ~16.6-17.0 | ~18.1 |
+- Reading: total busy is nearly EQUAL; the control hides ~1.7-2.1 s of
+  its a2a/collective busy under compute (static waves + NCCL streams
+  overlap), while our transport is fused INTO the compute kernels (a2a
+  busy ~0) so nothing is left to hide and wall ~= busy. Our
+  compute-class busy is +2.2-2.8 s: the transport SM time rides inside
+  the fused custom-calls, plus the remat recompute doubles it (1.5 s of
+  mosaic recompute; the control equally recomputes its a2a in remat —
+  ~1.5 s of its a2a busy sits under rematted_computation).
+- Implication for parity: the fight is SM efficiency of the fused
+  kernels, not overlap. Ranked: (1) retune TRANSPORT_STAGE_ROWS/
+  TRANSPORT_LANE_CHUNK and _FUSED_MCS at the 8/384 shapes (constants
+  were set at 4/192; 1-tray EP4 A/B is enough to screen); (2) keep
+  banking cf (1.05 = 17.5); (3) id-level mapping of the mpmd ops to
+  legs to find which leg is off its tuned TF/s.
