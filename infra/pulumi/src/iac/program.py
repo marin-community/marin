@@ -363,7 +363,6 @@ def _build_gcp(cluster: str, *, imports: ImportRegistrar) -> None:
             artifact_repositories=iam_config.artifact_repositories,
             service_accounts=iam_config.service_accounts,
             cloud_run_services=iam_config.cloud_run_services,
-            cloud_run_jobs=iam_config.cloud_run_jobs,
         ),
         gcp_provider=gcp_provider,
         imports=imports,

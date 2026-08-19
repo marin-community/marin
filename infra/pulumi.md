@@ -25,7 +25,7 @@ available to CI. Bucket-scoped GCP IAM remains in `marin`.
 
 The `marin` stack is the sole repository owner of IAM grants on
 `hai-gcp-models`, including project, service-account, Secret Manager, KMS,
-bucket, Cloud Run, and IAP grants. Declare grants in
+bucket, and Cloud Run IAP grants. Declare grants in
 `infra/pulumi/src/iac/gcp/iam_data.yaml`; application stacks and deployment
 scripts must not declare or mutate them. This central ownership is the policy
 boundary required for authoritative IAM reconciliation. The provider resources
@@ -33,10 +33,12 @@ remain additive `*IAMMember` resources during the migration; replacing them
 with authoritative bindings is a separate cutover after the live-policy audit.
 
 When a grant targets a resource owned by another stack, create that resource
-first, then adopt or create its grant in `marin` before deploying code that
-removes the old grant owner. Do not apply a leaf-stack deletion preview until
-the ownership transfer has been reviewed: deleting the old Pulumi resource can
-remove the live grant even when the central stack has an equivalent declaration.
+first, then adopt its live grant in `marin` before deploying code that removes
+the old grant owner. Omit code-declared grants that the live-policy audit cannot
+find and record them for separate review; the ownership transfer must not create
+them. Do not apply a leaf-stack deletion preview until the ownership transfer
+has been reviewed: deleting the old Pulumi resource can remove the live grant
+even when the central stack has an equivalent declaration.
 
 Resources often exist before a cluster or GCP resource is brought under Pulumi.
 Use the Program-first import command in `infra/pulumi/README.md` for a one-time

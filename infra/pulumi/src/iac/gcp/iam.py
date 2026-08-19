@@ -4,10 +4,10 @@
 """GCP IAM grants owned by the ``marin`` stack for the hai-gcp-models project.
 
 Covers every human, service account, and Google-managed service-agent binding on the project,
-the shared KMS key, every secret, every bucket, every Artifact Registry repo, Cloud Run service
-and job policies, and who can impersonate each service account. This is the sole Pulumi owner
-for GCP IAM grants. Resources use additive ``*IAMMember`` grants. Changing to role-authoritative
-bindings requires a complete live-policy audit to avoid revoking undeclared members.
+the shared KMS key, every secret, every bucket, every Artifact Registry repo, Cloud Run IAP
+policies, and who can impersonate each service account. This is the sole Pulumi owner for GCP
+IAM grants. Resources use additive ``*IAMMember`` grants. Changing to role-authoritative bindings
+requires a complete live-policy audit to avoid revoking undeclared members.
 """
 
 import base64
@@ -93,15 +93,7 @@ class GcpServiceAccountIam:
 class GcpCloudRunServiceIam:
     location: str
     service: str
-    grants: tuple[GcpRoleGrant, ...]
     iap_grants: tuple[GcpRoleGrant, ...]
-
-
-@dataclass(frozen=True)
-class GcpCloudRunJobIam:
-    location: str
-    job: str
-    grants: tuple[GcpRoleGrant, ...]
 
 
 @dataclass(frozen=True)
@@ -144,7 +136,6 @@ class GcpIamArgs:
     artifact_repositories: tuple[GcpArtifactRepositoryIam, ...]
     service_accounts: tuple[GcpServiceAccountIam, ...]
     cloud_run_services: tuple[GcpCloudRunServiceIam, ...]
-    cloud_run_jobs: tuple[GcpCloudRunJobIam, ...]
 
 
 @dataclass(frozen=True)
@@ -236,12 +227,10 @@ def _resolve_encrypted_members(args: GcpIamArgs, decrypt: _KmsMemberDecryptor) -
         cloud_run_services=tuple(
             replace(
                 service,
-                grants=_resolve_grants(service.grants, decrypt),
                 iap_grants=_resolve_grants(service.iap_grants, decrypt),
             )
             for service in args.cloud_run_services
         ),
-        cloud_run_jobs=tuple(replace(job, grants=_resolve_grants(job.grants, decrypt)) for job in args.cloud_run_jobs),
     )
 
 
@@ -404,25 +393,8 @@ def _grant_service_account_iam(context: _GcpIamContext) -> None:
                 context.register(resource, declaration.provider_id)
 
 
-def _grant_cloud_run_service_iam(context: _GcpIamContext) -> None:
+def _grant_cloud_run_iap(context: _GcpIamContext) -> None:
     for service in context.args.cloud_run_services:
-        service_id = f"projects/{context.args.project}/locations/{service.location}/services/{service.service}"
-        prefix = f"run-service-{resource_slug(service.location)}-{resource_slug(service.service)}"
-        for grant in service.grants:
-            for member in grant.members:
-                declaration = _grant_resource(prefix, service_id, grant, member)
-                resource = gcp.cloudrunv2.ServiceIamMember(
-                    declaration.logical_name,
-                    project=context.args.project,
-                    location=service.location,
-                    name=service.service,
-                    role=grant.role,
-                    member=declaration.member,
-                    condition=_condition_args(grant.condition, gcp.cloudrunv2.ServiceIamMemberConditionArgs),
-                    opts=context.options(),
-                )
-                context.register(resource, declaration.provider_id)
-
         iap_service_id = (
             f"projects/{context.args.project}/iap_web/cloud_run-{service.location}/services/{service.service}"
         )
@@ -441,26 +413,6 @@ def _grant_cloud_run_service_iam(context: _GcpIamContext) -> None:
                         grant.condition,
                         gcp.iap.WebCloudRunServiceIamMemberConditionArgs,
                     ),
-                    opts=context.options(),
-                )
-                context.register(resource, declaration.provider_id)
-
-
-def _grant_cloud_run_job_iam(context: _GcpIamContext) -> None:
-    for job in context.args.cloud_run_jobs:
-        job_id = f"projects/{context.args.project}/locations/{job.location}/jobs/{job.job}"
-        prefix = f"run-job-{resource_slug(job.location)}-{resource_slug(job.job)}"
-        for grant in job.grants:
-            for member in grant.members:
-                declaration = _grant_resource(prefix, job_id, grant, member)
-                resource = gcp.cloudrunv2.JobIamMember(
-                    declaration.logical_name,
-                    project=context.args.project,
-                    location=job.location,
-                    name=job.job,
-                    role=grant.role,
-                    member=declaration.member,
-                    condition=_condition_args(grant.condition, gcp.cloudrunv2.JobIamMemberConditionArgs),
                     opts=context.options(),
                 )
                 context.register(resource, declaration.provider_id)
@@ -512,7 +464,6 @@ class GcpIam(pulumi.ComponentResource):
         _grant_bucket_iam(grant_context)
         _grant_artifact_repository_iam(grant_context)
         _grant_service_account_iam(grant_context)
-        _grant_cloud_run_service_iam(grant_context)
-        _grant_cloud_run_job_iam(grant_context)
+        _grant_cloud_run_iap(grant_context)
 
         self.register_outputs({})

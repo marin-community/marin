@@ -82,9 +82,7 @@ def _git_context_at_revision(revision: str) -> str:
     return f"{REPOSITORY_URL}#{revision}"
 
 
-SECRET_REF = re.compile(
-    r"^projects/(?P<project>[a-z0-9-]+)/secrets/(?P<secret>[A-Za-z0-9_-]+)/versions/(?:latest|[0-9]+)$"
-)
+SECRET_REF = re.compile(r"^projects/[a-z0-9-]+/secrets/[A-Za-z0-9_-]+/versions/(?:latest|[0-9]+)$")
 
 
 @dataclass(frozen=True)
@@ -127,8 +125,7 @@ class ProfileSecretConfig:
         if not isinstance(value, dict):
             raise ValueError(f"profile {profile!r} env {name!r} must use a full secretRef")
         secret_ref = str(value.get("secretRef", "")).strip()
-        match = SECRET_REF.fullmatch(secret_ref)
-        if not match:
+        if not SECRET_REF.fullmatch(secret_ref):
             raise ValueError(f"profile {profile!r} env {name!r} must use a full secretRef")
         return cls(name, secret_ref)
 
@@ -326,7 +323,6 @@ class GitHubFederationConfig:
 def _deployment_profiles(
     profiles: tuple[ProfileConfig, ...],
 ) -> list[dict[str, Any]]:
-    """Return Loom profile manifests."""
     result: list[dict[str, Any]] = []
     for profile in sorted(profiles, key=lambda item: item.name):
         result.append({"profile": profile.manifest(), "env": [item.manifest() for item in profile.env]})
