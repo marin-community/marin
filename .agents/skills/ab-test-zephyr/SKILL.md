@@ -80,8 +80,9 @@ configuration difference for every extra arm; do not infer or invent arms.
 
 Run on GCP in `europe-west4` with
 `gs://marin-eu-west4/datakit/sample_100b_8ae7a94f` unless the requester
-selects another sample or backend. CoreWeave remains available for S3-local
-runs; select it explicitly with the matching S3 sample and target cluster.
+selects another sample or backend. The us-central1 GCS sample is available for
+us-central1 runs. CoreWeave remains available for S3-local runs; select it
+explicitly with the matching S3 sample and target cluster.
 
 For a PR, read the diff and select the smallest stage range that exercises the
 changed behavior:
@@ -129,6 +130,10 @@ Set exactly one data-locality argument before launching:
 # Default: GCS input and GCP compute in europe-west4.
 SAMPLE_PREFIX=gs://marin-eu-west4/datakit/sample_100b_8ae7a94f
 DATA_LOCALITY_ARGS=(--region europe-west4)
+
+# GCP opt-in: use the existing us-central1 sample with us-central1 compute.
+# SAMPLE_PREFIX=gs://marin-us-central1/datakit/sample_100b_8ae7a94f
+# DATA_LOCALITY_ARGS=(--region us-central1)
 
 # CoreWeave opt-in: S3 input and CoreWeave compute in cw-us-east-02a.
 # SAMPLE_PREFIX=s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f

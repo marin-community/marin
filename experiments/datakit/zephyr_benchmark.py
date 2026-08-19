@@ -8,7 +8,8 @@ pipeline does not include Hugging Face corpus download time. It runs global exac
 deduplication, per-source tokenization and MinHash, then cross-source fuzzy dedup.
 Every generated stage output is routed under a seven-day temporary prefix keyed by
 the required run tag. ``--sample-prefix`` defaults to the 100B GCS sample in
-``europe-west4``; pass the equivalent S3 path to run on CoreWeave.
+``europe-west4``; select the us-central1 GCS sample for a us-central1 run or
+the equivalent S3 path to run on CoreWeave.
 
 Example::
 

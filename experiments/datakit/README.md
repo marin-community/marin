@@ -149,11 +149,13 @@ Each testbed sample is a tree of already-normalized sources named
 `sample_<tokens>_<hash>`. Pass its full root as `--sample-prefix`; the bucket
 prefix is not prepended.
 
-`zephyr_benchmark.py` defaults to this GCP-local copy:
+`zephyr_benchmark.py` defaults to the Europe sample. The us-central1 copy is
+also available for benchmarks that run in us-central1:
 
 | `--sample-prefix` | Approx. size | Region |
 | --- | --- | --- |
-| `gs://marin-eu-west4/datakit/sample_100b_8ae7a94f` | ~100B tokens | GCP `europe-west4` |
+| `gs://marin-eu-west4/datakit/sample_100b_8ae7a94f` | ~100B tokens | GCP `europe-west4` (default) |
+| `gs://marin-us-central1/datakit/sample_100b_8ae7a94f` | ~100B tokens | GCP `us-central1` |
 
 ### Create a regional sample
 
@@ -165,9 +167,9 @@ part of the A/B benchmark workflow.
 Copying preserves the normalized Parquet payloads and writes destination-local
 `NormalizedData` artifacts. Run the job in the destination region, keep
 concurrency bounded, and confirm transfer charges before a cross-region copy.
-Use 24 GiB of memory: the 100B copy previously OOMed at the lower 8 GiB
-request. For a GCS-to-GCS copy, use GCP credentials that can read the source
-bucket. Do not use Storage Transfer Service.
+Use a 24 GiB memory request with `--enable-extra-resources`. For a GCS-to-GCS
+copy, use GCP credentials that can read the source bucket. Do not use Storage
+Transfer Service.
 
 ```bash
 uv run iris --cluster=marin job run --no-wait \
