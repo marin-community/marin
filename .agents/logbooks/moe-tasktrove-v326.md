@@ -133,3 +133,13 @@ The 564-run campaign is in smoke validation. Harbor PR #83 supplies the Pi hoste
 - Result: Qwen/Pi and Gemma/Pi each completed one scoreable trial. Both model servers started successfully under the sixth attempts. Terminus-2 requests sent through controller ingress returned HTTP 401, while the same capability routes worked for Pi. A corrected direct-endpoint Gemma run reached HTTP 200 locally, then its old run directory rejected the changed runtime lock; the replacement `mdq-smk7-*` identities avoid that stale invalid-smoke state.
 - Interpretation: no additional Harbor change is required. The 401 was a harness-routing error, and the subsequent lock mismatch came from reusing an invalid smoke identity across a semantic endpoint change.
 - Next action: require one scoreable result from each fresh Terminus-2 smoke, then open eight full-grid jobs.
+
+### 2026-08-19 15:48 UTC - Pass the four-way smoke gate and open the grid
+
+- Hypothesis: Gemma 4 base can serve Terminus-2 conversations with the canonical instruction-model chat template supplied explicitly, without a Harbor code change.
+- Commit Hash: OpenThoughts-Agent `79a560b4` on pushed branch `penfever/working`; Harbor `41f4320c0471`.
+- Command: launched `/benjaminfeuer/mdq-smk10-gemma4-t2-001-nl2bash-tasks-cleaned-oracle`, then ran `artifacts/campaign_loop.py --interval 30` after all four smoke records became scoreable.
+- Config: `google/gemma-4-26B-A4B` uses the canonical `google/gemma-4-26B-A4B-it` chat template at `/app/eval/configs/gemma4_chat_template.jinja`. The requested base-model weights, 32,768-token context, 16,384-token output allowance, TP1×DP8 topology, and all rollout settings remain unchanged.
+- Result: Qwen/Terminus-2, Qwen/Pi, Gemma/Terminus-2, and Gemma/Pi each completed one scoreable trial. The corrected Gemma/Terminus-2 endpoint loaded all eight data-parallel engines, returned HTTP 200, and completed with a numeric verifier result. The supervisor then submitted exactly eight full cells: dataset rows 1 and 2 across both models and both harnesses.
+- Interpretation: the smoke gate passed with no Harbor code change. The earlier Gemma failure was missing tokenizer presentation metadata in the requested base checkpoint, resolved in OTA model configuration.
+- Next action: keep at most eight full cells active, resume infrastructure failures in place, and require at least 271 numeric verifier outcomes before marking each cell complete.
