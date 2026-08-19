@@ -272,7 +272,7 @@ Every successful search response includes `X-Echo-Search-Execution-ID` and is st
 with its returned result snapshot. `GET /api/search-executions` returns stable ID-ordered
 pages of at most 500 records for evaluation exports.
 
-`POST /api/feedback` accepts an exact query, up to 20 unique `{key, grade}` records from
+`POST /api/feedback` accepts an exact query, up to 24 unique `{key, grade}` records from
 0 through 10, and a required overall explanation of at most 2,000 characters. Grades may be empty
 when the search returns no useful results. The API attributes feedback to the
 IAP-authenticated caller and optionally links it to a matching search execution.
