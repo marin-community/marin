@@ -100,7 +100,6 @@ class CloudRunServiceArgs:
 
 
 def resource_slug(identifier: str) -> str:
-    """Return a stable Pulumi resource-name-safe identifier."""
     return re.sub(r"[^a-z0-9]+", "-", identifier.lower()).strip("-")
 
 
@@ -111,7 +110,7 @@ def runtime_service_account(
     project: str,
     opts: pulumi.ResourceOptions,
 ) -> gcp.serviceaccount.Account:
-    """Create the runtime service account shared by Cloud Run services and jobs."""
+    """Create a runtime service account without declaring access grants."""
     return gcp.serviceaccount.Account(
         "sa",
         account_id=account_id,
