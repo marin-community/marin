@@ -73,3 +73,13 @@ The 564-run campaign is in integration. Harbor PR #83 supplies the Pi hosted-vLL
 - Result: Harbor's Pi unit suite passed 22/22. The mirror worker had shown OTA's previous lock resolving pre-PR commit `772e20f7`; the new pushed OTA revision removes that drift before any eval launch.
 - Interpretation: smoke workers built from `30aec355` will contain the hosted-vLLM Pi endpoint implementation. The already-running mirror job is unaffected because it does not execute Harbor.
 - Next action: wait for `/benjaminfeuer/mdq-tasktrove-v326-model-mirrors`, confirm both regional cache hits, then launch the four smokes from OTA `30aec355`.
+
+### 2026-08-19 14:40 UTC - Repair worker ingress argument wiring
+
+- Hypothesis: the four smoke workers exited before vLLM because the outer Iris launcher forwarded controller-ingress arguments that the local eval parser did not register.
+- Commit Hash: OpenThoughts-Agent `37131ce1` on pushed branch `penfever/working`.
+- Command: `uv run pytest -q tests/eval/test_local_ingress_args.py tests/hpc/test_ingress_wiring.py`.
+- Config: `EvalRunner.create_parser()` now registers the shared `record_literal`, `ingress_mode`, and `ingress_host` argument group already consumed by `LocalHarborRunner`.
+- Result: the new regression test failed before the fix on `--ingress_mode controller --ingress_host https://iris.oa.dev`; the focused parser and ingress suites pass 33/33 after the fix. The original four smoke tasks used OTA `30aec355` and reached `run_eval.py`, where they exited on the unknown arguments before vLLM startup.
+- Interpretation: the failure is an OTA launcher/worker interface mismatch, not a model, topology, CoreWeave, or Harbor endpoint failure. The original smoke attempts are invalid and must be replaced using the same job names from `37131ce1`.
+- Next action: stop the retrying invalid smoke jobs, mark them `RETRY REQUIRED`, and relaunch all four from OTA `37131ce1`.
