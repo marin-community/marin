@@ -602,7 +602,7 @@ def _ts_open_kwargs(mode: str) -> dict:
 def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
     mode_config = _mode_to_open_mode(mode)
     if path is not None and mode != "r":
-        StoragePath(os.path.dirname(path)).mkdirs()
+        StoragePath(path).parent.mkdirs()
 
     spec = _get_spec(path, shape)
     open_kwargs = _ts_open_kwargs(mode)
@@ -637,7 +637,7 @@ def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
 async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
     mode_config = _mode_to_open_mode(mode)
     if path is not None and mode != "r":
-        StoragePath(os.path.dirname(path)).mkdirs()
+        StoragePath(path).parent.mkdirs()
 
     spec = _get_spec(path, shape)
     open_kwargs = _ts_open_kwargs(mode)

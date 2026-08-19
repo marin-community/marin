@@ -13,7 +13,7 @@ from rigging.filesystem.storage_path import StoragePath
 from levanter.store.jagged_array import JaggedArrayStore, PreparedBatch
 
 
-def _reject_mkdirs(self, *, exist_ok: bool = True) -> None:
+def _reject_mkdirs(self) -> None:
     raise AssertionError(f"read-only open attempted to create {self}")
 
 
