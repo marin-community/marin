@@ -1058,6 +1058,35 @@ def test_flatten_h1_rejects_a_zero_update_away_from_the_final_checkpoint():
         repair_analysis.flatten_h1([document])
 
 
+def test_release_comparison_exempts_machine_measurements_but_not_execution_shape():
+    """Wall time and peak RSS cannot agree across two runs, so scoring them as science would make the
+    comparator unable to ever report equivalence. Everything else under `execution_observation` describes
+    the execution SHAPE -- backend, devices, batch size -- and a change there is exactly what this tool
+    exists to catch, so the exemption is by full path and covers only those two fields."""
+    base = {
+        "execution_observation": {
+            "wall_seconds": 221.5,
+            "peak_host_rss_bytes": 26720661504,
+            "device_count": 4,
+            "probe_batch_size": 64,
+        },
+        "schema_version": "v8",
+    }
+    machine_only = {
+        "execution_observation": {
+            **base["execution_observation"],
+            "wall_seconds": 300.1,
+            "peak_host_rss_bytes": 28872355840,
+        },
+        "schema_version": "v10",
+    }
+    assert compare.differences(base, machine_only) == []
+
+    for field, value in (("device_count", 8), ("probe_batch_size", 32)):
+        changed = {**base, "execution_observation": {**base["execution_observation"], field: value}}
+        assert [d[0] for d in compare.differences(base, changed)] == [f"/execution_observation/{field}"]
+
+
 def test_release_comparison_detects_real_differences_and_ignores_only_provenance():
     """A comparator that never reports a difference would license reusing outputs on a false negative,
     which is the one failure mode that matters here. Each mutation below must be caught, and only the

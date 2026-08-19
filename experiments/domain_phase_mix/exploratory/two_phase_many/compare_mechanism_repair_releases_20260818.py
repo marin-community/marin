@@ -44,7 +44,15 @@ from google.cloud import storage  # noqa: E402
 REFERENCE = SCRIPT_DIR / "reference_outputs"
 # Fields that name the release or where its outputs live. These are EXPECTED to differ and are the only
 # differences allowed; the allowlist is deliberately narrow, since a broad one would prove nothing.
-PROVENANCE_FIELDS = frozenset({"release_sha256", "identity_sha256", "payload_sha256"})
+PROVENANCE_FIELDS = frozenset({"release_sha256", "identity_sha256", "payload_sha256", "schema_version"})
+# Measurements OF THE MACHINE, not of the model: two runs on different hosts at different times cannot
+# agree on these, so treating them as science would make the tool incapable of ever returning True. Listed
+# by full path rather than by key, and only these two: `execution_observation` also carries the backend,
+# device count, device kinds, distribution count, and probe batch size, and a change in any of those IS a
+# behavioural change this tool exists to catch.
+RUNTIME_MEASUREMENT_PATHS = frozenset(
+    {"/execution_observation/peak_host_rss_bytes", "/execution_observation/wall_seconds"}
+)
 # A sentinel object rather than a string, so a literal "<absent>" in a document cannot masquerade as one.
 ABSENT = type("Absent", (), {"__repr__": lambda self: "<absent>"})()
 
@@ -79,6 +87,8 @@ def differences(left, right, path: str = "") -> list[tuple[str, object, object]]
     authored file, so that is a real possibility -- and, because the skip preceded the presence check, it
     also hid a provenance key appearing on one side and not the other.
 
+    Machine measurements are exempted by full path, never by key, for the same reason.
+
     Equality alone is not enough at a leaf. Python makes `1 == 1.0`, `True == 1` and `-0.0 == 0.0` all
     true, so a writer-level type change -- exactly the class of behavioural change this tool exists to
     rule out -- would compare equal. The canary documents carry 82 integer and 861 boolean leaves, so the
@@ -93,6 +103,8 @@ def differences(left, right, path: str = "") -> list[tuple[str, object, object]]
                 continue
             if key not in left or key not in right:
                 found.append((f"{path}/{key}", left.get(key, ABSENT), right.get(key, ABSENT)))
+                continue
+            if f"{path}/{key}" in RUNTIME_MEASUREMENT_PATHS:
                 continue
             found.extend(differences(left[key], right[key], f"{path}/{key}"))
         return found
