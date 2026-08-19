@@ -881,13 +881,12 @@ defineExpose({ selectedAttemptId })
               @click="loadContext(row.seq)"
             >⋯</button>
             <span v-else class="shrink-0 w-4 select-none" />
-            <!-- Fixed width, right-aligned: task indices vary in digit count, and a
-                 column that sizes to its content ragged-edges every row after it. -->
             <template v-if="showTaskLinks">
               <RouterLink
                 v-if="row.taskRef && props.taskId"
                 :to="`/job/${encodeURIComponent(props.taskId)}/task/${encodeURIComponent(row.taskRef.taskId)}`"
-                class="shrink-0 w-12 select-none text-right tabular-nums text-accent hover:underline"
+                class="shrink-0 w-12 overflow-hidden select-none text-right tabular-nums
+                       text-accent hover:underline"
                 :title="row.taskRef.taskId"
               >T{{ row.taskRef.taskIndex }}</RouterLink>
               <span v-else class="shrink-0 w-12 select-none" />
@@ -907,9 +906,8 @@ defineExpose({ selectedAttemptId })
                 @click="setStartTime(row.entry)"
               >▶</button>
             </span>
-            <!-- Every gutter item above is a flex item, so a browser copies each of
-                 them onto its own line. Marking them select-none keeps a drag
-                 selection to the messages alone: one clean line per log line. -->
+            <!-- The gutter is select-none: each item is a flex item, so a browser
+                 would otherwise copy every one of them onto its own line. -->
             <span
               :class="wrap ? 'whitespace-pre-wrap break-words flex-1' : 'whitespace-pre'"
             ><template
