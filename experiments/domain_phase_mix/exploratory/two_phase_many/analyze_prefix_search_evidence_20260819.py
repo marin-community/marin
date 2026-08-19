@@ -114,6 +114,12 @@ def matched_contrasts(geo, values):
 
     Holding the aggregate fixed is what isolates ORDER from dose: two policies in a cell differ only in
     how the same aggregate mixture is split across the phases.
+
+    Returns the tied-row count per contrast as well, because it sets that contrast's noise. Subtracting a
+    mean of `k` tied rows inflates single-run noise by sqrt(1 + 1/k), and `k` is NOT constant here: 192
+    contrasts come from cells with a single tied row (inflation sqrt2) and 667 from cells with 26
+    (inflation 1.019). Dividing every contrast by the single-run noise, as an earlier version did,
+    overstates the effect sizes by up to sqrt2 exactly where the strongest rows are.
     """
     cells = collections.defaultdict(list)
     for index, row in enumerate(np.round(geo["aggregate"], 6)):
@@ -129,10 +135,14 @@ def matched_contrasts(geo, values):
         if len(tied) == 0:
             continue
         for index in members[untied[members]]:
-            rows.append((values[index] - values[tied].mean(), index))
+            rows.append((values[index] - values[tied].mean(), index, len(tied)))
     if not rows:
-        return np.array([]), np.array([], dtype=int)
-    return np.array([r[0] for r in rows]), np.array([r[1] for r in rows], dtype=int)
+        return np.array([]), np.array([], dtype=int), np.array([], dtype=int)
+    return (
+        np.array([r[0] for r in rows]),
+        np.array([r[1] for r in rows], dtype=int),
+        np.array([r[2] for r in rows], dtype=int),
+    )
 
 
 def run_noise(frame, geo, column):
@@ -188,7 +198,7 @@ def claim_ordering_channel(frame, geo) -> None:
     components = sorted(c for c in frame.columns if c.startswith("eval/uncheatable_eval/") and c.endswith("/bpb"))
     columns = ["table9_macro_bpb", "uncheatable_bpb", *components]
     for column in columns:
-        contrast, index = matched_contrasts(geo, frame[column].to_numpy(float))
+        contrast, index, _tied_counts = matched_contrasts(geo, frame[column].to_numpy(float))
         if len(contrast) < 50:
             continue
         signed, separation = geo["code_late"][index], geo["separation"][index]
@@ -209,7 +219,7 @@ def claim_selection_value(frame, geo) -> None:
     print("\n=== 2. SELECTION VALUE: actual score of the top-10 policies chosen out-of-fold ===")
     families = geo["fit"].family_index
     for column, noise_column in (("table9_macro_bpb", "table9_macro_bpb"), ("uncheatable_bpb", "uncheatable_bpb")):
-        contrast, index = matched_contrasts(geo, frame[column].to_numpy(float))
+        contrast, index, tied_counts = matched_contrasts(geo, frame[column].to_numpy(float))
         noise = run_noise(frame, geo, noise_column)
         delta, separation = geo["delta"][index], geo["separation"][index]
         print(f"  --- {column} (n={len(contrast)}, run noise {noise:.5f})")
@@ -222,7 +232,12 @@ def claim_selection_value(frame, geo) -> None:
             design = np.column_stack([np.ones(len(contrast)), block, separation**2])
             predicted = out_of_fold(design, contrast)
             top = np.argsort(predicted)[:10]
-            print(f"      {name:22s} {contrast[top].mean():+.5f} = {contrast[top].mean() / noise:+.1f} sigma")
+            # Each selected contrast carries sqrt(1 + 1/k) times the single-run noise, with its own k.
+            scale = noise * float(np.sqrt(np.mean(1.0 + 1.0 / tied_counts[top])))
+            print(
+                f"      {name:22s} {contrast[top].mean():+.5f} = {contrast[top].mean() / scale:+.1f} sigma"
+                f"   (tied rows per selected cell: {sorted(set(tied_counts[top].tolist()))})"
+            )
         print(f"      {'random policy':22s} {contrast.mean():+.5f}")
 
 
@@ -231,8 +246,11 @@ def claim_oracle_is_not_a_ceiling(frame, geo, draws: int = 4000) -> None:
     print("\n=== 3. THE ORACLE IS NOT A CEILING: best observed, corrected for selection on noise ===")
     generator = np.random.default_rng(0)
     for column in ("table9_macro_bpb", "uncheatable_bpb"):
-        contrast, _index = matched_contrasts(geo, frame[column].to_numpy(float))
-        noise = run_noise(frame, geo, column) * np.sqrt(1.5)  # a contrast subtracts a tied mean
+        contrast, _index, tied_counts = matched_contrasts(geo, frame[column].to_numpy(float))
+        # Per-contrast noise, not one constant: sqrt(1 + 1/k) with this panel's real k of 1 or 26. A
+        # single sqrt(1.5) assumes every cell has exactly two tied rows, which no cell here does, and it
+        # makes the best-of-10 of pure noise look more extreme than the panel could actually produce.
+        noise = run_noise(frame, geo, column) * np.sqrt(1.0 + 1.0 / tied_counts)
         pure = np.sort(generator.normal(0.0, noise, size=(draws, len(contrast))), axis=1)[:, :10].mean(axis=1)
         print(
             f"  {column:22s} observed {np.sort(contrast)[:10].mean():+.5f}  "

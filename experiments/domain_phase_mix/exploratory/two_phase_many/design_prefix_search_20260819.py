@@ -17,13 +17,13 @@ WHAT EACH PART IS FOR
 
 Sixteen FULL PREFIXES, each trained to the phase boundary (0.8 of a run) and then branched. Six sampled to
 span the pre-boundary readout terciles, because whether a continuation preference transfers across prefix
-QUALITY is the open question. Three drawn from independent fits of the endpoint surrogate -- probes, not
-bets: that argmin moves 0.20 to 0.60 total variation across fold seeds and three independent swarms agree
+QUALITY is the open question. Three taken from the surrogate's own argmin under independent fold and search
+seeds -- probes, not bets: that argmin is a region rather than a point, and three independent swarms agree
 on it at chance. Two references: the token-proportional policy, and the best one-phase policy by endpoint
 so that "does two-phase beat one-phase" is a paired within-design comparison rather than two separately
 fitted surfaces compared after the fact. One exploratory prefix in the high-separation region the argmin
-keeps recommending and the archive barely covers. Four replicates of sampled prefixes, retrained under
-different data seeds, to separate prefix-level from branch-level noise.
+keeps recommending and the archive barely covers. Two replicates -- one sampled prefix and one predicted
+one -- retrained under different data seeds, to separate prefix-level from branch-level noise.
 
 Per full prefix, twenty-six BRANCHES (0.2 of a run each):
 
@@ -318,9 +318,7 @@ def prefixes(fit, frame, geo) -> list[dict]:
         {
             "prefix_id": "exploratory_high_separation",
             "role": "exploratory",
-            "weights": shift_to_separation(
-                fit.proportional, family_direction(fit, evidence.CODE_FAMILY, +1.0), 0.45
-            ),
+            "weights": shift_to_separation(fit.proportional, family_direction(fit, evidence.CODE_FAMILY, +1.0), 0.45),
             "source_row": -1,
         }
     )
