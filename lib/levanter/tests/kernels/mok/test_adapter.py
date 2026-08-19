@@ -210,7 +210,7 @@ def test_backward_ffi_wire_signature_omits_selected_experts():
         jnp.zeros((6,), jnp.float32),
         jnp.zeros((8, 6), jnp.bfloat16),
     )
-    forward_context = tuple(jnp.zeros((1,), jnp.bfloat16) for _ in range(14))
+    forward_context = tuple(jnp.zeros((1,), jnp.bfloat16) for _ in range(mok_ffi._NUM_FORWARD_RESIDUALS))
 
     inputs = _backward_ffi_inputs(
         grad_y,
@@ -218,8 +218,8 @@ def test_backward_ffi_wire_signature_omits_selected_experts():
         forward_context,
     )
 
-    # 12 operands then the 14 forward residuals: A0..A25.
-    assert len(inputs) == 26
+    # 12 operands then the forward residuals: A0..A25.
+    assert len(inputs) == 12 + mok_ffi._NUM_FORWARD_RESIDUALS == 26
     assert inputs[1] is x
     assert inputs[2] is router_weights
     assert inputs[9:12] == packed_weights[6:]
@@ -338,6 +338,156 @@ def test_custom_vjp_traces_through_checkpoint_without_ffi_effect(monkeypatch, la
         assert call_args[1] == hidden_size
         assert call_args[2] == latent_size
         assert call_args[3] == topk
+
+
+class _CapturedFfiCalls:
+    """Stands in for ``jax.ffi.ffi_call`` and records the result avals each handler was declared with."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[jax.ShapeDtypeStruct, ...], tuple, dict]] = []
+
+    def __call__(self, target, output_metadata, **options):
+        def invoke(*operands, **attributes):
+            self.calls.append((target, tuple(output_metadata), operands, attributes))
+            return tuple(jnp.zeros(aval.shape, aval.dtype) for aval in output_metadata)
+
+        return invoke
+
+
+_ATTRIBUTE_KEYS = (
+    "workspace_id",
+    "fwd_num_comm_sms",
+    "bwd_num_comm_sms",
+    "minibatch_size",
+    "macrobatch_size",
+    "schedule_capacity_multiplier",
+    "all_gather_top_experts_chunk_bytes",
+    "latent_size",
+    "latent_norm_eps",
+)
+
+
+def _native_operands(tokens, hidden_size, latent_size, routed_intermediate, shared_intermediate, num_experts, topk):
+    """The 12 operands exactly as ``_pack_weights`` hands them over, A0..A11."""
+
+    routed_width = latent_size or hidden_size
+    return (
+        jnp.zeros((tokens, hidden_size), jnp.bfloat16),
+        jnp.zeros((tokens, topk), jnp.int32),
+        jnp.zeros((tokens, topk), jnp.float32),
+        jnp.zeros((shared_intermediate, hidden_size), jnp.bfloat16),
+        jnp.zeros((shared_intermediate, hidden_size), jnp.bfloat16),
+        jnp.zeros((hidden_size, shared_intermediate), jnp.bfloat16),
+        jnp.zeros((num_experts, routed_intermediate, routed_width), jnp.bfloat16),
+        jnp.zeros((num_experts, routed_intermediate, routed_width), jnp.bfloat16),
+        jnp.zeros((num_experts, routed_width, routed_intermediate), jnp.bfloat16),
+        # The latent axis is the zeroed one, in each leaf's own position.
+        jnp.zeros((latent_size, hidden_size), jnp.bfloat16),
+        jnp.zeros((latent_size,), jnp.float32),
+        jnp.zeros((hidden_size, latent_size), jnp.bfloat16),
+    )
+
+
+@pytest.mark.parametrize("latent_size", (0, 512))
+def test_forward_ffi_declares_shared_and_routed_result_widths_independently(monkeypatch, latent_size):
+    """Result 0 is (tokens, H); result 1 is (macrobatch, L). They used to be one ``hidden_size``.
+
+    XLA allocates from these avals and the native handler validates them, so declaring result 1 at
+    the shared width traces cleanly, produces a plausible jaxpr, and fails only when the real
+    handler runs on a GB200. The intermediate widths are the second, independent pair: the shared
+    activations are (tokens, is) and the routed ones (macrobatch, ir).
+    """
+    calls = _CapturedFfiCalls()
+    monkeypatch.setattr(mok_ffi, "_native_extension", lambda: _ScratchQueries)
+    monkeypatch.setattr(mok_ffi, "register_ffi_targets", lambda: None)
+    monkeypatch.setattr(jax.ffi, "ffi_call", calls)
+    tokens, hidden_size, num_experts, topk, ep_size = 512, 1024, 4, 2, 4
+    routed_intermediate, shared_intermediate = 256, 512
+    routed_width = latent_size or hidden_size
+    config = MokBf16Config(minibatch_size=256, macrobatch_size=1024, latent_size=latent_size)
+    operands = _native_operands(
+        tokens, hidden_size, latent_size, routed_intermediate, shared_intermediate, num_experts, topk
+    )
+
+    mok_ffi._forward_ffi(*operands, ep_size=ep_size, config=config)
+
+    assert len(calls.calls) == 1
+    target, metadata, sent, attributes = calls.calls[0]
+    assert target == "levanter_mok_bf16_forward"
+    assert len(metadata) == mok_ffi._NUM_FORWARD_RESULTS == 16
+    capacity = _schedule_capacity(
+        tokens=tokens, topk=topk, ep_size=ep_size, multiplier=config.schedule_capacity_multiplier
+    )
+    latent_rows = tokens if latent_size else 0
+    assert [(aval.shape, aval.dtype) for aval in metadata] == [
+        ((tokens, hidden_size), jnp.bfloat16),  # R0  y, SHARED width
+        ((config.macrobatch_size, routed_width), jnp.bfloat16),  # R1  x_routed, ROUTED width
+        ((tokens, shared_intermediate), jnp.bfloat16),  # R2  gate_shared
+        ((config.macrobatch_size, routed_intermediate), jnp.bfloat16),  # R3  gate_routed
+        ((tokens, shared_intermediate), jnp.bfloat16),  # R4  up_shared
+        ((config.macrobatch_size, routed_intermediate), jnp.bfloat16),  # R5  up_routed
+        ((tokens, shared_intermediate), jnp.bfloat16),  # R6  hidden_shared
+        ((config.macrobatch_size, routed_intermediate), jnp.bfloat16),  # R7  hidden_routed
+        ((capacity,), jnp.int32),  # R8  schedule_peer_rank
+        ((capacity,), jnp.int32),  # R9  schedule_peer_token_idx
+        ((1,), jnp.int32),  # R10 num_tokens
+        ((num_experts,), jnp.int32),  # R11 tokens_per_expert
+        ((tokens, latent_size), jnp.bfloat16),  # R12 latent_projected
+        ((latent_rows,), jnp.float32),  # R13 latent_rstd
+        ((tokens, latent_size), jnp.bfloat16),  # R14 latent_combined
+        ((0,), jnp.uint8),  # R15 scratch (the stub query reports 0)
+    ]
+    assert len(sent) == 12
+    assert all(operand.shape == expected.shape for operand, expected in zip(sent, operands, strict=True))
+    assert tuple(attributes) == _ATTRIBUTE_KEYS
+    assert attributes["latent_size"] == latent_size
+    assert attributes["latent_size"].dtype == np.int64
+    assert attributes["latent_norm_eps"].dtype == np.float32
+    assert attributes["schedule_capacity_multiplier"].dtype == np.float32
+
+
+@pytest.mark.parametrize("latent_size", (0, 512))
+def test_backward_ffi_declares_latent_gradients_in_the_packed_orientation(monkeypatch, latent_size):
+    """``d_latent_down`` is (L, H) and ``d_latent_up`` is (H, L) -- the packed orientation, not Marin's.
+
+    They are shaped from the packed primals, so if ``_pack_weights`` ever stopped transposing they
+    would silently invert together with it; at L != H the shapes here are what catches that.
+    """
+    calls = _CapturedFfiCalls()
+    monkeypatch.setattr(mok_ffi, "_native_extension", lambda: _ScratchQueries)
+    monkeypatch.setattr(mok_ffi, "register_ffi_targets", lambda: None)
+    monkeypatch.setattr(jax.ffi, "ffi_call", calls)
+    tokens, hidden_size, num_experts, topk, ep_size = 512, 1024, 4, 2, 4
+    routed_intermediate, shared_intermediate = 256, 512
+    routed_width = latent_size or hidden_size
+    config = MokBf16Config(minibatch_size=256, macrobatch_size=1024, latent_size=latent_size)
+    primals = _native_operands(
+        tokens, hidden_size, latent_size, routed_intermediate, shared_intermediate, num_experts, topk
+    )
+    grad_y = jnp.zeros((tokens, hidden_size), jnp.bfloat16)
+    forward_context = tuple(jnp.zeros((1,), jnp.bfloat16) for _ in range(mok_ffi._NUM_FORWARD_RESIDUALS))
+
+    mok_ffi._backward_ffi(grad_y, primals, forward_context, ep_size=ep_size, config=config)
+
+    assert len(calls.calls) == 1
+    target, metadata, sent, attributes = calls.calls[0]
+    assert target == "levanter_mok_bf16_backward"
+    assert [(aval.shape, aval.dtype) for aval in metadata] == [
+        ((tokens, hidden_size), jnp.bfloat16),  # R0  d_x, SHARED width
+        ((tokens, topk), jnp.float32),  # R1  d_router
+        ((shared_intermediate, hidden_size), jnp.bfloat16),  # R2  d_shared_gate
+        ((shared_intermediate, hidden_size), jnp.bfloat16),  # R3  d_shared_up
+        ((hidden_size, shared_intermediate), jnp.bfloat16),  # R4  d_shared_down
+        ((num_experts, routed_intermediate, routed_width), jnp.bfloat16),  # R5  d_routed_gate
+        ((num_experts, routed_intermediate, routed_width), jnp.bfloat16),  # R6  d_routed_up
+        ((num_experts, routed_width, routed_intermediate), jnp.bfloat16),  # R7  d_routed_down
+        ((latent_size, hidden_size), jnp.bfloat16),  # R8  d_latent_down (L, H)
+        ((latent_size,), jnp.float32),  # R9  d_latent_norm_gain
+        ((hidden_size, latent_size), jnp.bfloat16),  # R10 d_latent_up (H, L)
+        ((0,), jnp.uint8),  # R11 scratch (stub query)
+    ]
+    assert len(sent) == 12 + mok_ffi._NUM_FORWARD_RESIDUALS == 26
+    assert tuple(attributes) == _ATTRIBUTE_KEYS
 
 
 def test_reference_matches_a_hand_rolled_latent_moe_composition():
