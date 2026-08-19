@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import copy
 import csv
 import json
 import math
@@ -27,6 +28,9 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (
     audit_starcoder_wsd80_gradient_probe_canary_20260816 as canary_audit,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many import (
+    compare_mechanism_repair_releases_20260818 as compare,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (
     freeze_starcoder_wsd80_gradient_mechanism_repair_20260818 as repair_freeze,
@@ -1004,3 +1008,41 @@ def test_flatten_h1_records_an_undefined_cosine_as_missing_rather_than_zero():
     )
     with pytest.raises(RuntimeError, match="Undefined H1 cosine"):
         repair_analysis.flatten_h1([document])
+
+
+def test_release_comparison_detects_real_differences_and_ignores_only_provenance():
+    """A comparator that never reports a difference would license reusing outputs on a false negative,
+    which is the one failure mode that matters here. Each mutation below must be caught, and only the
+    fields that name the release or its payload may be waved through."""
+    base = {
+        "release_sha256": "aaa",
+        "identity_sha256": "bbb",
+        "payload_sha256": "ccc",
+        "row": {"row_id": "r0", "checkpoint_label": "final"},
+        "source_pair_statistics": {"p": {"raw": {"trunk": {"cosine": 0.5, "left_norm": 1.0}}}},
+        "targets": [{"x": 1}, {"x": 2}],
+    }
+    assert compare.differences(base, dict(base)) == []
+
+    provenance_only = {**base, "release_sha256": "zzz", "identity_sha256": "yyy", "payload_sha256": "xxx"}
+    assert compare.differences(base, provenance_only) == []
+
+    changed_float = copy.deepcopy(base)
+    changed_float["source_pair_statistics"]["p"]["raw"]["trunk"]["cosine"] = 0.5000001
+    assert [d[0] for d in compare.differences(base, changed_float)] == ["/source_pair_statistics/p/raw/trunk/cosine"]
+
+    missing = copy.deepcopy(base)
+    del missing["source_pair_statistics"]["p"]["raw"]["trunk"]["left_norm"]
+    assert compare.differences(base, missing)
+
+    extra = copy.deepcopy(base)
+    extra["source_pair_statistics"]["p"]["raw"]["trunk"]["surprise"] = 1.0
+    assert compare.differences(base, extra)
+
+    shorter = copy.deepcopy(base)
+    shorter["targets"] = shorter["targets"][:1]
+    assert compare.differences(base, shorter) == [("/targets[len]", 2, 1)]
+
+    relabelled = copy.deepcopy(base)
+    relabelled["row"]["checkpoint_label"] = "decay_onset"
+    assert compare.differences(base, relabelled) == [("/row/checkpoint_label", "final", "decay_onset")]
