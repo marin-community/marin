@@ -30,12 +30,16 @@ GEN_COLUMN = "_gen"
 COMMIT_COLUMN = "_commit"
 RESERVED_COLUMNS = frozenset({SEQ_COLUMN, WRITER_COLUMN, GEN_COLUMN, COMMIT_COLUMN})
 
-SUPPORTED_MANIFEST_FEATURES: frozenset[str] = frozenset()
-
 URI_SCHEME = "finestore"
 BLOBS_TABLE = "blobs"
 BLOB_NAME_COLUMN = "name"
 BLOB_DATA_COLUMN = "data"
+BLOB_PART_COUNT_COLUMN = "parts"
+BLOB_PART_COLUMN = "part"
+BLOB_PARTS_TABLE = "_finestore_blob_parts"
+CHUNKED_BLOBS_FEATURE = "chunked-blobs-v1"
+
+SUPPORTED_MANIFEST_FEATURES: frozenset[str] = frozenset({CHUNKED_BLOBS_FEATURE})
 
 
 class FormatVersionError(ValueError):

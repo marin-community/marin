@@ -23,7 +23,11 @@ from finestore.compaction import compact as compact_table
 from finestore.layout import (
     BLOB_DATA_COLUMN,
     BLOB_NAME_COLUMN,
+    BLOB_PART_COLUMN,
+    BLOB_PART_COUNT_COLUMN,
+    BLOB_PARTS_TABLE,
     BLOBS_TABLE,
+    CHUNKED_BLOBS_FEATURE,
     RESERVED_COLUMNS,
     SEQ_COLUMN,
     WRITER_COLUMN,
@@ -37,13 +41,37 @@ from finestore.layout import (
 )
 from finestore.migrations import migrate_for_write
 from finestore.reader import ReadView
-from finestore.shard_writer import write_table
+from finestore.shard_writer import (
+    ROW_GROUP_TARGET_BYTES,
+    ShardWriter,
+    estimate_bytes,
+    row_groups,
+    write_table,
+)
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_FLUSH_INTERVAL = 5.0
-DEFAULT_MAX_BUFFER_BYTES = 100 * 1024 * 1024
+DEFAULT_MAX_BUFFER_BYTES = ROW_GROUP_TARGET_BYTES
 DEFAULT_COMPACTION_SHARDS = 8
+OBJECT_PART_BYTES = 8 * 1024 * 1024
+
+_BLOB_SCHEMA = pa.schema(
+    [
+        pa.field(BLOB_NAME_COLUMN, pa.string()),
+        pa.field("size", pa.int64()),
+        pa.field("metadata_json", pa.string()),
+        pa.field(BLOB_DATA_COLUMN, pa.binary()),
+        pa.field(BLOB_PART_COUNT_COLUMN, pa.int64()),
+    ]
+)
+_BLOB_PART_SCHEMA = pa.schema(
+    [
+        pa.field(BLOB_NAME_COLUMN, pa.string()),
+        pa.field(BLOB_PART_COLUMN, pa.int64()),
+        pa.field(BLOB_DATA_COLUMN, pa.binary()),
+    ]
+)
 
 
 def _default_writer_id() -> str:
@@ -73,16 +101,6 @@ def _drop_empty_struct_keys(rows: list[dict]) -> list[dict]:
         if dicts and not any(dicts):
             drop.add(key)
     return rows if not drop else [{key: value for key, value in row.items() if key not in drop} for row in rows]
-
-
-def _estimate_bytes(value: object) -> int:
-    if isinstance(value, (bytes, str)):
-        return len(value)
-    if isinstance(value, dict):
-        return sum(len(str(key)) + _estimate_bytes(item) for key, item in value.items())
-    if isinstance(value, (list, tuple)):
-        return sum(_estimate_bytes(item) for item in value)
-    return 8
 
 
 def _with_stamp_columns(schema: pa.Schema) -> pa.Schema:
@@ -205,27 +223,57 @@ class DataStore:
 
     def write_object(self, name: str, data: bytes, metadata: Mapping[str, object] | None = None) -> str:
         """Buffer one named byte object and return its ``finestore://`` URI."""
-        self._blob_table().append(self._blob_row(name, data, metadata))
+        descriptor, parts = self._blob_rows(name, data, metadata)
+        blob_table = self._blob_table()
+        part_table = self._blob_part_table() if parts else None
+        with self._commit_lock:
+            if part_table is not None:
+                part_table.extend(parts)
+            blob_table.append(descriptor)
         return build_uri(BLOBS_TABLE, name)
 
     def _blob_table(self) -> DataTable:
         return self._tables.get(BLOBS_TABLE) or self.table(
-            BLOBS_TABLE, primary_key=(BLOB_NAME_COLUMN,), on_conflict=OnConflict.SUPERSEDE
+            BLOBS_TABLE,
+            primary_key=(BLOB_NAME_COLUMN,),
+            schema=_BLOB_SCHEMA,
+            on_conflict=OnConflict.SUPERSEDE,
+        )
+
+    def _blob_part_table(self) -> DataTable:
+        return self._tables.get(BLOB_PARTS_TABLE) or self.table(
+            BLOB_PARTS_TABLE,
+            primary_key=(BLOB_NAME_COLUMN, BLOB_PART_COLUMN),
+            schema=_BLOB_PART_SCHEMA,
+            on_conflict=OnConflict.SUPERSEDE,
         )
 
     @staticmethod
-    def _blob_row(name: str, data: bytes, metadata: Mapping[str, object] | None) -> dict:
-        return {
+    def _blob_rows(name: str, data: bytes, metadata: Mapping[str, object] | None) -> tuple[dict, list[dict]]:
+        descriptor: dict[str, object] = {
             BLOB_NAME_COLUMN: name,
             "size": len(data),
             "metadata_json": json.dumps(dict(metadata or {})),
-            BLOB_DATA_COLUMN: data,
         }
+        if len(data) <= OBJECT_PART_BYTES:
+            descriptor[BLOB_DATA_COLUMN] = data
+            return descriptor, []
+        parts = [
+            {
+                BLOB_NAME_COLUMN: name,
+                BLOB_PART_COLUMN: index,
+                BLOB_DATA_COLUMN: memoryview(data)[offset : offset + OBJECT_PART_BYTES],
+            }
+            for index, offset in enumerate(range(0, len(data), OBJECT_PART_BYTES))
+        ]
+        descriptor[BLOB_PART_COUNT_COLUMN] = len(parts)
+        return descriptor, parts
 
     @staticmethod
     def estimate_object_bytes(name: str, data: bytes, metadata: Mapping[str, object] | None = None) -> int:
         """Return the transaction byte estimate for one named object."""
-        return _estimate_bytes(DataStore._blob_row(name, data, metadata))
+        descriptor, parts = DataStore._blob_rows(name, data, metadata)
+        return estimate_bytes(descriptor) + sum(estimate_bytes(part) for part in parts)
 
     def read_view(self) -> ReadView:
         """Pin a snapshot using one HEAD read."""
@@ -247,6 +295,11 @@ class DataStore:
     def flush_table(self, table: DataTable) -> CommitToken | None:
         """Commit only ``table``'s current buffer."""
         self.raise_if_failed()
+        if table.name in (BLOBS_TABLE, BLOB_PARTS_TABLE):
+            tables = [
+                related for name in (BLOB_PARTS_TABLE, BLOBS_TABLE) if (related := self._tables.get(name)) is not None
+            ]
+            return self._flush_tables(tables)
         return self._flush_tables([table])
 
     def _flush_tables(self, tables: Sequence[DataTable]) -> CommitToken | None:
@@ -260,7 +313,14 @@ class DataStore:
                     table.name: TableAddition(metadata_path=table.metadata_path, shards=(table._write(pending),))
                     for table, pending in claimed.items()
                 }
-                return self._commits.commit(CommitDelta(additions=additions, seal_update=ClearSeal()))
+                required_features = frozenset({CHUNKED_BLOBS_FEATURE}) if BLOB_PARTS_TABLE in additions else frozenset()
+                return self._commits.commit(
+                    CommitDelta(
+                        additions=additions,
+                        required_features=required_features,
+                        seal_update=ClearSeal(),
+                    )
+                )
             except BaseException:
                 for table, pending in claimed.items():
                     table._restore(pending)
@@ -274,14 +334,21 @@ class DataStore:
                 if table is None:
                     raise KeyError(f"table {name!r} must be registered before the transaction")
                 stamped = table._stamp(pending_rows)
-                pending = PendingRows(tuple(stamped), sum(_estimate_bytes(row) for row in pending_rows))
+                pending = PendingRows(tuple(stamped), sum(estimate_bytes(row) for row in pending_rows))
                 additions[name] = TableAddition(metadata_path=table.metadata_path, shards=(table._write(pending),))
             if not additions:
                 snapshot = self._commits.snapshot()
                 if snapshot.token is None:
                     return self._commits.commit(CommitDelta())
                 return snapshot.token
-            return self._commits.commit(CommitDelta(additions=additions, seal_update=ClearSeal()))
+            required_features = frozenset({CHUNKED_BLOBS_FEATURE}) if BLOB_PARTS_TABLE in additions else frozenset()
+            return self._commits.commit(
+                CommitDelta(
+                    additions=additions,
+                    required_features=required_features,
+                    seal_update=ClearSeal(),
+                )
+            )
 
     def compact(self, table: str) -> CompactionResult:
         """Logically compact one table against the current manifest."""
@@ -379,21 +446,30 @@ class Transaction:
         return TransactionTable(self, name)
 
     def _add(self, name: str, row: dict) -> None:
+        self._add_rows({name: [row]})
+
+    def _add_rows(self, rows: dict[str, list[dict]]) -> None:
         if self._closed:
             raise RuntimeError("transaction is closed")
-        copied = dict(row)
-        estimated_bytes = _estimate_bytes(copied)
+        copied = {name: [dict(row) for row in table_rows] for name, table_rows in rows.items()}
+        estimated_bytes = sum(estimate_bytes(row) for table_rows in copied.values() for row in table_rows)
         if self._estimated_bytes + estimated_bytes > self._max_bytes:
             raise TransactionTooLarge(f"transaction payload exceeds {self._max_bytes} bytes; commit a smaller batch")
         self._estimated_bytes += estimated_bytes
-        self._rows.setdefault(name, []).append(copied)
+        for name, table_rows in copied.items():
+            self._rows.setdefault(name, []).extend(table_rows)
 
     def write_object(self, name: str, data: bytes, metadata: Mapping[str, object] | None = None) -> str:
         """Buffer one named byte object and return its ``finestore://`` URI."""
         if self._closed:
             raise RuntimeError("transaction is closed")
         self._store._blob_table()
-        self._add(BLOBS_TABLE, self._store._blob_row(name, data, metadata))
+        descriptor, parts = self._store._blob_rows(name, data, metadata)
+        rows = {BLOBS_TABLE: [descriptor]}
+        if parts:
+            self._store._blob_part_table()
+            rows[BLOB_PARTS_TABLE] = parts
+        self._add_rows(rows)
         self._objects[name] = data
         return build_uri(BLOBS_TABLE, name)
 
@@ -499,7 +575,7 @@ class DataTable:
         stamped = self._stamp(rows)
         with self._lock:
             self._pending.extend(stamped)
-            self._pending_bytes += sum(_estimate_bytes(row) for row in rows)
+            self._pending_bytes += sum(estimate_bytes(row) for row in rows)
             over_cap = self._pending_bytes >= self._max_buffer_bytes
         if over_cap:
             self._scheduler.request_flush()
@@ -519,16 +595,23 @@ class DataTable:
             self._pending_bytes += pending.estimated_bytes
 
     def _write(self, pending: PendingRows) -> Shard:
-        rows = list(pending.rows)
-        table = pa.Table.from_pylist(_drop_empty_struct_keys(rows), schema=self._schema)
-        sort_columns = [(name, "ascending") for name in self.primary_key if name in table.column_names]
-        primary_key_sorted = len(sort_columns) == len(self.primary_key)
+        rows = _drop_empty_struct_keys(list(pending.rows))
+        primary_key_sorted = all(name in row for row in rows for name in self.primary_key)
         if primary_key_sorted:
-            table = table.sort_by(sort_columns)
+            rows.sort(key=lambda row: tuple((row.get(name) is None, row.get(name)) for name in self.primary_key))
         min_seq = min(row[SEQ_COLUMN] for row in rows)
         max_seq = max(row[SEQ_COLUMN] for row in rows)
         path = self._layout.shard_path(self.name, self._writer_id, 0, min_seq, uuid.uuid4().hex[:8])
-        written = write_table(path, table)
+        if self._schema is None:
+            table = pa.Table.from_pylist(rows)
+            if primary_key_sorted:
+                table = table.sort_by([(name, "ascending") for name in self.primary_key])
+            written = write_table(path, table)
+        else:
+            with ShardWriter(path, self._schema) as writer:
+                for group in row_groups(rows):
+                    writer.write_table(pa.Table.from_pylist(group, schema=self._schema))
+            written = writer.result
         return Shard(
             path=path,
             writer=self._writer_id,

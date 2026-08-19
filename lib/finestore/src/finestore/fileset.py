@@ -12,7 +12,7 @@ import threading
 
 from rigging.filesystem.atomic import atomic_rename
 
-from finestore.layout import BLOB_DATA_COLUMN, BLOB_NAME_COLUMN, BLOBS_TABLE
+from finestore.layout import BLOB_DATA_COLUMN, BLOB_NAME_COLUMN, BLOB_PART_COUNT_COLUMN, BLOBS_TABLE
 from finestore.reader import ReadView
 from finestore.store import DataStore
 
@@ -35,12 +35,22 @@ def fetch_file_set(root: str, local: str) -> set[str]:
     destination = pathlib.Path(local)
     destination.mkdir(parents=True, exist_ok=True)
     fetched = set()
-    for row in ReadView(root).iter_rows(BLOBS_TABLE, columns=[BLOB_NAME_COLUMN, BLOB_DATA_COLUMN]):
+    view = ReadView(root)
+    for row in view.iter_rows(
+        BLOBS_TABLE,
+        columns=[BLOB_NAME_COLUMN, BLOB_DATA_COLUMN, BLOB_PART_COUNT_COLUMN],
+    ):
         relative = _safe_relative(row[BLOB_NAME_COLUMN])
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         with atomic_rename(str(target)) as staged:
-            pathlib.Path(staged).write_bytes(bytes(row[BLOB_DATA_COLUMN]))
+            with pathlib.Path(staged).open("wb") as output:
+                data = row.get(BLOB_DATA_COLUMN)
+                if data is not None:
+                    output.write(data)
+                else:
+                    for part in view.iter_blob_parts(row[BLOB_NAME_COLUMN]):
+                        output.write(part)
         fetched.add(relative.as_posix())
     return fetched
 
@@ -73,7 +83,7 @@ class FineStoreDirectory:
         atexit.register(self.close)
 
     def flush(self) -> None:
-        """Publish files added since the last successful sync in bounded transactions."""
+        """Publish files added since the last sync in target-bounded multi-file transactions."""
         with self._flush_lock:
             present = {path.relative_to(self._local).as_posix() for path in self._local.rglob("*") if path.is_file()}
             pending = sorted(present - self._known)
@@ -115,6 +125,7 @@ class FineStoreDirectory:
                 logger.warning("FineStore directory synchronization failed: %s", exc)
 
     def _commit(self, files: list[tuple[str, bytes]]) -> None:
-        with self._store.transaction(max_bytes=self._max_transaction_bytes) as transaction:
+        estimated_bytes = sum(DataStore.estimate_object_bytes(name, data) for name, data in files)
+        with self._store.transaction(max_bytes=max(self._max_transaction_bytes, estimated_bytes)) as transaction:
             for relative, data in files:
                 transaction.write_object(relative, data)

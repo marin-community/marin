@@ -73,6 +73,7 @@ class CommitDelta:
     replacements: dict[str, TableReplacement] = field(default_factory=dict)
     metadata_updates: dict[str, str] = field(default_factory=dict)
     removals: frozenset[str] = frozenset()
+    required_features: frozenset[str] = frozenset()
     seal_update: SealMarker | ClearSeal | None = None
 
 
@@ -207,6 +208,7 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
             "commit_id": uuid.uuid4().hex,
             "parent_commit_id": None if base.commit_id == _ROOT_COMMIT_ID else base.commit_id,
             "sequence": sequence,
+            "required_features": tuple(sorted(set(base.required_features) | delta.required_features)),
             "tables": tables,
             "sealed": sealed,
         }

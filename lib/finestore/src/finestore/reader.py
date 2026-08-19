@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import heapq
+import io
 import itertools
 from collections import defaultdict
 from collections.abc import Iterator, Sequence
@@ -24,6 +25,9 @@ from finestore.commit import ArchiveSnapshot, read_snapshot, validate_archive
 from finestore.layout import (
     BLOB_DATA_COLUMN,
     BLOB_NAME_COLUMN,
+    BLOB_PART_COLUMN,
+    BLOB_PART_COUNT_COLUMN,
+    BLOB_PARTS_TABLE,
     BLOBS_TABLE,
     COMMIT_COLUMN,
     GEN_COLUMN,
@@ -57,6 +61,10 @@ class MergedRow:
 
     row: dict
     superseded: int
+
+
+class BlobCorruptionError(ValueError):
+    """A committed chunked blob is missing or has inconsistent part metadata."""
 
 
 class _ReadableShard(Protocol):
@@ -319,8 +327,56 @@ class _ReadOperations:
         row = self.point(BLOBS_TABLE, **{BLOB_NAME_COLUMN: name})
         if row is None:
             return None
-        data = row.get(BLOB_DATA_COLUMN)
-        return bytes(data) if data is not None else None
+        output = io.BytesIO()
+        for part in self._blob_parts(name, row):
+            output.write(part)
+        return output.getvalue()
+
+    def iter_blob_parts(self, name: str) -> Iterator[bytes]:
+        """Yield one inline value or the ordered parts of a chunked blob."""
+        row = self.point(BLOBS_TABLE, **{BLOB_NAME_COLUMN: name})
+        if row is None:
+            return
+        yield from self._blob_parts(name, row)
+
+    def _blob_parts(self, name: str, descriptor: dict) -> Iterator[bytes]:
+        part_count = descriptor.get(BLOB_PART_COUNT_COLUMN)
+        if part_count is None:
+            data = descriptor.get(BLOB_DATA_COLUMN)
+            if data is None:
+                raise BlobCorruptionError(f"blob {name!r} has neither inline data nor parts")
+            value = bytes(data)
+            size = descriptor.get("size")
+            if size is not None and len(value) != size:
+                raise BlobCorruptionError(f"blob {name!r} declares {size} bytes but stores {len(value)}")
+            yield value
+            return
+        if not isinstance(part_count, int) or part_count <= 0:
+            raise BlobCorruptionError(f"blob {name!r} has invalid part count {part_count!r}")
+        expected_part = 0
+        total_bytes = 0
+        for row in self.iter_rows(
+            BLOB_PARTS_TABLE,
+            columns=[BLOB_PART_COLUMN, BLOB_DATA_COLUMN],
+            where=[(BLOB_NAME_COLUMN, "==", name)],
+        ):
+            part = row.get(BLOB_PART_COLUMN)
+            if part is not None and part >= part_count:
+                break
+            if part != expected_part:
+                raise BlobCorruptionError(f"blob {name!r} is missing part {expected_part}")
+            data = row.get(BLOB_DATA_COLUMN)
+            if data is None:
+                raise BlobCorruptionError(f"blob {name!r} part {part} has no data")
+            value = bytes(data)
+            total_bytes += len(value)
+            expected_part += 1
+            yield value
+        if expected_part != part_count:
+            raise BlobCorruptionError(f"blob {name!r} has {expected_part} of {part_count} parts")
+        size = descriptor.get("size")
+        if size is not None and total_bytes != size:
+            raise BlobCorruptionError(f"blob {name!r} declares {size} bytes but stores {total_bytes}")
 
     def resolve(self, uri: str) -> bytes | None:
         """Resolve a blob URI, returning ``None`` when absent and rejecting unsupported references."""

@@ -11,10 +11,13 @@ import json
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore import compaction, shard_writer
-from finestore.commit import CommitConflict, CommitCoordinator
+from finestore import shard_writer
+from finestore.commit import CommitConflict, CommitCoordinator, CommitDelta
 from finestore.compaction import compact
 from finestore.layout import (
+    BLOB_PARTS_TABLE,
+    BLOBS_TABLE,
+    CHUNKED_BLOBS_FEATURE,
     FORMAT_VERSION,
     RESERVED_COLUMNS,
     ArchiveMetadata,
@@ -23,7 +26,7 @@ from finestore.layout import (
     OnConflict,
 )
 from finestore.migrations import LegacyReadView, migrate
-from finestore.reader import ReadView
+from finestore.reader import BlobCorruptionError, ReadView
 from finestore.store import DataStore, DataTable, PrimaryKeyConflict, TransactionTooLarge
 from rigging.filesystem.storage_path import StoragePath
 
@@ -308,6 +311,94 @@ def test_blob_write_and_resolve(tmp_path):
     assert ReadView(root).read_blob("missing") is None
 
 
+def test_large_blob_uses_bounded_parts_without_migrating_inline_blobs(tmp_path):
+    root = str(tmp_path / "run")
+    inline = b"legacy"
+    with DataStore.open(root, writer_id="old") as store:
+        store.write_object("old", inline)
+        inline_token = store.flush()
+    assert inline_token is not None
+    inline_manifest = json.loads(StoragePath(inline_token.manifest_path).read_text())
+    assert inline_manifest["required_features"] == []
+
+    payload = bytes(range(256)) * (32_769)
+    with DataStore.open(root, writer_id="new") as store:
+        store.write_object("large", payload)
+        token = store.flush()
+    assert token is not None
+
+    view = ReadView(root)
+    assert view.read_blob("old") == inline
+    assert view.read_blob("large") == payload
+    parts = view.scan(BLOB_PARTS_TABLE, columns=["name", "part", "data"])
+    assert parts is not None
+    assert [(row["name"], row["part"], len(row["data"])) for row in parts.to_pylist()] == [
+        ("large", 0, 8 * 1024 * 1024),
+        ("large", 1, 256),
+    ]
+
+    archive = ArchiveMetadata.model_validate_json(StoragePath(FineStoreLayout(root).archive_path).read_bytes())
+    manifest = json.loads(StoragePath(token.manifest_path).read_text())
+    assert archive.format_version == FORMAT_VERSION
+    assert manifest["required_features"] == [CHUNKED_BLOBS_FEATURE]
+
+
+def test_chunked_blob_with_missing_parts_fails_as_corruption(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        store.write_object("large", b"x" * (8 * 1024 * 1024 + 1))
+        token = store.flush()
+    assert token is not None
+
+    manifest_path = StoragePath(token.manifest_path)
+    manifest = json.loads(manifest_path.read_text())
+    del manifest["tables"][BLOB_PARTS_TABLE]
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(BlobCorruptionError, match="0 of 2 parts"):
+        ReadView(root).read_blob("large")
+
+
+def test_chunked_blob_rewrite_uses_latest_descriptor_part_count(tmp_path):
+    root = str(tmp_path / "run")
+    first = b"a" * (16 * 1024 * 1024 + 1)
+    second = b"b" * (8 * 1024 * 1024 + 1)
+    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+        store.write_object("archive.log", first)
+        store.flush()
+        store.write_object("archive.log", second)
+        store.seal()
+
+    view = ReadView(root)
+    assert view.read_blob("archive.log") == second
+    parts = view.scan(BLOB_PARTS_TABLE, columns=["name", "part"])
+    assert parts is not None
+    assert parts.to_pylist() == [
+        {"name": "archive.log", "part": 0},
+        {"name": "archive.log", "part": 1},
+        {"name": "archive.log", "part": 2},
+    ]
+
+    with DataStore.open(root, writer_id="w2") as store:
+        store.write_object("archive.log", b"inline")
+        store.flush()
+    assert ReadView(root).read_blob("archive.log") == b"inline"
+
+
+def test_later_writer_chunked_blob_supersedes_descriptor_and_parts(tmp_path):
+    root = str(tmp_path / "run")
+    first_payload = b"a" * (8 * 1024 * 1024 + 1)
+    second_payload = b"b" * (8 * 1024 * 1024 + 1)
+    with DataStore.open(root, writer_id="first", flush_interval=3600) as first:
+        with DataStore.open(root, writer_id="second", flush_interval=3600) as second:
+            first.write_object("shared", first_payload)
+            second.write_object("shared", second_payload)
+            first.flush()
+            second.flush()
+
+    assert ReadView(root).read_blob("shared") == second_payload
+
+
 def test_blob_rewrite_supersedes_by_name(tmp_path):
     # Blobs are a table keyed by name, so re-writing a name buffers a higher-_seq row that the reader's
     # dedup keeps -- the latest payload wins, like any other primary-key collision.
@@ -409,7 +500,7 @@ def test_compaction_streams_multiple_row_groups(tmp_path, monkeypatch):
     # A tiny output row group forces a compacted shard to span several groups; re-compacting it with a
     # fresh level-0 shard must stream those groups in primary-key order and merge correctly, proving the
     # merge never materializes the whole table.
-    monkeypatch.setattr(compaction, "_COMPACT_BATCH_ROWS", 2)
+    monkeypatch.setattr(shard_writer, "ROW_GROUP_ROWS", 2)
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"))
@@ -482,6 +573,27 @@ def test_reader_refuses_unknown_required_manifest_feature(tmp_path):
 
     with pytest.raises(ValueError, match="deletion-vectors"):
         ReadView(root)
+
+
+def test_required_feature_survives_commit_rebase(tmp_path):
+    root = str(tmp_path / "run")
+    coordinator = CommitCoordinator(FineStoreLayout(root))
+    with DataStore.open(root, writer_id="initializer", flush_interval=3600):
+        stale = coordinator.snapshot()
+        with DataStore.open(root, writer_id="writer") as store:
+            store.table("samples", primary_key=("doc_id",)).append({"doc_id": "1"})
+            store.flush()
+
+        coordinator.commit(
+            CommitDelta(required_features=frozenset({CHUNKED_BLOBS_FEATURE})),
+            base=stale,
+        )
+
+    view = ReadView(root)
+    assert view.point("samples", doc_id="1") is not None
+    assert view.token is not None
+    manifest = json.loads(StoragePath(view.token.manifest_path).read_text())
+    assert manifest["required_features"] == [CHUNKED_BLOBS_FEATURE]
 
 
 def test_commit_preserves_unknown_optional_manifest_fields(tmp_path):
@@ -649,6 +761,24 @@ def test_transaction_publishes_tables_and_objects_with_one_token(tmp_path):
         assert after.resolve(uri) == b"paid"
 
 
+def test_transaction_publishes_chunked_object_with_related_table(tmp_path):
+    root = str(tmp_path / "run")
+    payload = b"x" * (8 * 1024 * 1024 + 1)
+    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+        store.table("purchases", primary_key=("order_id",))
+        with store.transaction() as transaction:
+            transaction.table("purchases").add({"order_id": "o1"})
+            uri = transaction.write_object("receipts/o1", payload)
+
+        view = ReadView(root)
+        assert view.token == transaction.token
+        assert view.point("purchases", order_id="o1") is not None
+        assert view.resolve(uri) == payload
+        parts = view.scan("_finestore_blob_parts")
+        assert parts is not None
+        assert parts.num_rows == 2
+
+
 def test_transaction_exception_publishes_nothing(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
@@ -674,6 +804,18 @@ def test_transaction_rejects_payload_above_its_bound(tmp_path):
         assert ReadView(root).read_blob("receipt") is None
 
 
+def test_transaction_counts_chunk_memoryviews_toward_payload_bound(tmp_path):
+    root = str(tmp_path / "run")
+    payload = b"x" * (8 * 1024 * 1024 + 1)
+    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+        with pytest.raises(TransactionTooLarge, match="smaller batch"):
+            with store.transaction(max_bytes=1024 * 1024) as transaction:
+                transaction.write_object("large", payload)
+
+        assert ReadView(root).read_blob("large") is None
+        assert ReadView(root).scan(BLOB_PARTS_TABLE) is None
+
+
 def test_transaction_lookup_is_pinned_to_its_starting_commit(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="first", flush_interval=3600) as first:
@@ -687,31 +829,36 @@ def test_transaction_lookup_is_pinned_to_its_starting_commit(tmp_path):
 
 def test_failed_multi_table_flush_restores_every_buffer(tmp_path, monkeypatch):
     root = str(tmp_path / "run")
+    payload = b"x" * (8 * 1024 * 1024 + 1)
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
         store.table("purchases", primary_key=("order_id",)).append({"order_id": "o1"})
         store.table("refunds", primary_key=("refund_id",)).append({"refund_id": "r1"})
+        store.write_object("receipt", payload)
 
-        real_write = shard_writer.write_table
-        writes = 0
+        real_write = DataTable._write
+        failed = False
 
-        def fail_second_write(path, table):
-            nonlocal writes
-            writes += 1
-            if writes == 2:
+        def fail_blob_write(table, pending):
+            nonlocal failed
+            if table.name == BLOBS_TABLE and not failed:
+                failed = True
                 raise OSError("injected shard failure")
-            return real_write(path, table)
+            return real_write(table, pending)
 
-        monkeypatch.setattr("finestore.store.write_table", fail_second_write)
+        monkeypatch.setattr(DataTable, "_write", fail_blob_write)
         with pytest.raises(OSError, match="injected"):
             store.flush()
         assert ReadView(root).scan("purchases") is None
         assert ReadView(root).scan("refunds") is None
+        assert ReadView(root).read_blob("receipt") is None
+        assert ReadView(root).scan(BLOB_PARTS_TABLE) is None
 
-        monkeypatch.setattr("finestore.store.write_table", real_write)
+        monkeypatch.setattr(DataTable, "_write", real_write)
         token = store.flush()
         assert token is not None
         assert ReadView(root).point("purchases", order_id="o1") is not None
         assert ReadView(root).point("refunds", refund_id="r1") is not None
+        assert ReadView(root).read_blob("receipt") == payload
 
 
 def test_maintenance_compacts_after_shard_threshold(tmp_path):

@@ -4,9 +4,9 @@
 """Shard write primitive: stream Arrow batches to one immutable, atomically-published Parquet object.
 
 :class:`ShardWriter` is the single write path shared by a store flush (buffered rows) and a
-compaction merge (a k-way-merged stream). Each :meth:`ShardWriter.write_table` call appends its rows
-as row groups capped at :data:`ROW_GROUP_ROWS`, so a large flush still splits into prunable groups
-and a caller streaming a merge holds only one bounded batch at a time rather than the whole table.
+compaction merge (a k-way-merged stream). Callers group fixed-schema rows under both
+:data:`ROW_GROUP_ROWS` and :data:`ROW_GROUP_TARGET_BYTES` before appending them, keeping wide binary
+columns bounded as well as row counts.
 The shard is written to a temp sibling key and renamed into place on close, so its manifest commit
 can never expose a half-written object.
 """
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import BinaryIO
 
@@ -32,6 +33,36 @@ _COMPRESSION_LEVEL = 0
 # large flush that wrote one giant group would defeat the pruning. Bounding the group keeps a
 # ``name ==`` blob lookup or a ``task ==`` sample scan reading a fraction of a big shard.
 ROW_GROUP_ROWS = 16_384
+ROW_GROUP_TARGET_BYTES = 100 * 1024 * 1024
+
+
+def estimate_bytes(value: object) -> int:
+    """Estimate the in-memory payload bytes represented by a row value."""
+    if isinstance(value, memoryview):
+        return value.nbytes
+    if isinstance(value, (bytes, bytearray, str)):
+        return len(value)
+    if isinstance(value, Mapping):
+        return sum(len(str(key)) + estimate_bytes(item) for key, item in value.items())
+    if isinstance(value, (list, tuple)):
+        return sum(estimate_bytes(item) for item in value)
+    return 8
+
+
+def row_groups(rows: Iterable[dict]) -> Iterator[list[dict]]:
+    """Group rows under both the row-count and estimated-byte Parquet targets."""
+    group: list[dict] = []
+    group_bytes = 0
+    for row in rows:
+        row_bytes = estimate_bytes(row)
+        if group and (len(group) >= ROW_GROUP_ROWS or group_bytes + row_bytes > ROW_GROUP_TARGET_BYTES):
+            yield group
+            group = []
+            group_bytes = 0
+        group.append(row)
+        group_bytes += row_bytes
+    if group:
+        yield group
 
 
 @dataclass(frozen=True)

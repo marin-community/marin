@@ -9,6 +9,7 @@ import logging
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
+from itertools import chain
 from typing import Protocol
 
 import pyarrow as pa
@@ -19,12 +20,11 @@ from pyarrow.fs import FSSpecHandler, PyFileSystem
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
 from finestore.layout import COMMIT_COLUMN, SEQ_COLUMN, CommitToken, FineStoreLayout, Shard
 from finestore.reader import ReadView, iter_shard_rows, merge_deduplicated_rows
-from finestore.shard_writer import ROW_GROUP_ROWS, ShardWriter
+from finestore.shard_writer import ShardWriter, row_groups
 
 logger = logging.getLogger(__name__)
 
 _COMPACTOR = "compactor"
-_COMPACT_BATCH_ROWS = ROW_GROUP_ROWS
 
 
 class CompactionCoordinator(Protocol):
@@ -92,13 +92,7 @@ def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None 
             max_seq = max(sequences) if max_seq is None else max(max_seq, *sequences)
             written += len(rows)
 
-        batch = [first]
-        for row in survivors:
-            batch.append(row)
-            if len(batch) >= _COMPACT_BATCH_ROWS:
-                write_batch(batch)
-                batch = []
-        if batch:
+        for batch in row_groups(chain([first], survivors)):
             write_batch(batch)
 
     assert min_seq is not None and max_seq is not None
