@@ -1977,3 +1977,29 @@ Experiment ID prefix: `MEP`.
   credentials headers work from the dev box).
 - Both arms ran at interactive priority per user instruction; one
   preemption cycle (~2 h queued) before the gates lifted.
+
+### 2026-08-18 18:30 - MEP-079: matched-config profile read — step is busy-bound; remat recompute of the MoE kernels is the standout
+- hlo_stats via the hosted xprof gateway (staging + data-plugin API now
+  scripted from the dev box: scratchpad xprof_poll.py / xprof_hlo_stats.py;
+  run_path cache 04b19c46a861053bf41d4f16, steps 15-18 of mep-hero384p2).
+- Device self-time sums to ~18.6 s/step vs 18.1 s wall -> essentially NO
+  exposed/idle time; the parity gap is busy-work cost, not overlap (echoes
+  #8317's SM-contention conclusion for ragged).
+- Breakdown (one device): custom-call 65.9% (mosaic fused dispatch/GEMMs,
+  brd, cudnn wgrad, fa4), loop+input fusion 20.1% (~3.7 s/step), FSDP
+  collectives ~10% busy (ag 1.0 + rs 0.55 + ar 0.48 s/step).
+- Top per-step items: attention bwd ffi 0.90; fwd fused dispatch+GEMM
+  mpmd 0.855 (n=2/layer); REMAT RECOMPUTE of MoE mosaic kernels 1.5-1.6
+  (mpmd_map.69/.70/.71 under rematted_computation — the fused forward
+  runs AGAIN in backward despite the custom_vjp saving residuals); bwd
+  MoE mpmd 2.05 across .72/.74/.75/.73; cudnn wgrads 0.91
+  (ffi_190/191); MoE unpermute fusions 0.45.
+- LEADS (ranked): (1) stop rematting the fused MoE forward — if
+  MOE_REMAT_SAVE_NAMES/checkpoint policy can save the custom_vjp
+  boundary, up to ~1.5 s/step is on the table, likely the whole parity
+  gap; check what the pooled-wave control remats for a fair delta. (2)
+  fusion mass 3.7 s/step is shared with the incumbent (same template) —
+  differential profile vs MHEP-101 needed before spending here. (3)
+  collectives busy already halved by bf16 params; small.
+- Next: inspect the hero remat policy for the marin_ep path (off-rack);
+  if fixable, single arm validates.
