@@ -11,6 +11,7 @@ WORKDIR /app
 COPY schema.py .
 COPY search_config.py .
 COPY repository_files.py .
+COPY repository_identity.py .
 COPY sync/github_repository.py .
 COPY sync/main.py .
 

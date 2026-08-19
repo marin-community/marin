@@ -69,8 +69,19 @@ def test_evaluation_measures_ranked_relevance_and_no_answer_suppression(tmp_path
             "domains": ["file"],
             "intent": "how_to",
             "split": "dev",
-            "source": {"kind": "repository", "path": "lib/iris/OPS.md"},
-            "relevant": [{"domain": "file", "target": "lib/iris/OPS.md", "grade": 3}],
+            "source": {
+                "kind": "repository",
+                "repository": "marin-community/marin",
+                "branch": "main",
+                "path": "lib/iris/OPS.md",
+            },
+            "relevant": [
+                {
+                    "domain": "file",
+                    "target": "file:marin-community/marin@main:lib/iris/OPS.md",
+                    "grade": 3,
+                }
+            ],
         },
         {
             "id": "unanswerable",
@@ -88,7 +99,7 @@ def test_evaluation_measures_ranked_relevance_and_no_answer_suppression(tmp_path
             "latency_ms": 20,
             "results": [
                 {
-                    "id": "file:lib/iris/OPS.md",
+                    "id": "file:marin-community/marin@main:lib/iris/OPS.md",
                     "domain": "file",
                     "title": "Iris Operations",
                     "subtitle": "lib/iris/OPS.md:68",
@@ -132,3 +143,24 @@ def test_load_benchmark_rejects_duplicate_ids(tmp_path):
 
     with pytest.raises(ValueError, match="duplicate benchmark id"):
         search_benchmark.load_benchmark(benchmark_path)
+
+
+def test_file_judgments_require_repository_qualified_targets():
+    with pytest.raises(ValueError, match="must start with file"):
+        search_benchmark.benchmark_case(
+            {
+                "id": "ambiguous-readme",
+                "query": "README",
+                "domains": ["file"],
+                "intent": "navigation",
+                "split": "dev",
+                "relevant": [{"domain": "file", "target": "README.md", "grade": 3}],
+            }
+        )
+
+
+def test_same_path_file_judgments_are_distinct():
+    marin = search_benchmark.RelevanceJudgment("file", "file:marin-community/marin@main:README.md", 3)
+    vllm = search_benchmark.RelevanceJudgment("file", "file:marin-community/vllm@main:README.md", 3)
+
+    assert search_benchmark.judgment_key(marin) != search_benchmark.judgment_key(vllm)

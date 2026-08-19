@@ -14,7 +14,7 @@ under ``~/.config/marin/credentials``) and this reuses that token; agents and CI
 ambient service-account credentials with no login. See ``infra/echo/README.md``.
 
     uv run infra/echo/cli.py search "expert parallel MoE MFU on B200" --limit 10
-    uv run infra/echo/cli.py get file:lib/iris/OPS.md
+    uv run infra/echo/cli.py get file:marin-community/marin@main:lib/iris/OPS.md
     uv run infra/echo/cli.py feedback --query "deploy iris" --grade file:731=10
     uv run infra/echo/cli.py grep ragged_all_to_all --source discord
     uv run infra/echo/cli.py wiki search "grafana access" --tag ops
@@ -35,6 +35,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import okf
+import repository_identity
 import requests
 import search_config
 import search_feedback
@@ -299,7 +300,8 @@ def cmd_get(args: argparse.Namespace) -> None:
         url = wiki_link(int(value))
         text = entry["body"]
     elif domain == "file":
-        file = response_object(request("GET", f"/repository-files/{quote(value, safe='/')}"))
+        reference = repository_identity.parse_repository_file_id(args.id)
+        file = response_object(request("GET", f"/repository-files/{quote(reference.route_value, safe='/@:')}"))
         title, subtitle, url, text = file["title"], file["subtitle"], file["url"], file["text"]
     else:
         chunk = response_object(request("GET", f"/chunks/{value}"))
@@ -412,6 +414,16 @@ def artifact_id(value: str) -> str:
         raise argparse.ArgumentTypeError(str(error)) from error
 
 
+def detail_artifact_id(value: str) -> str:
+    checked = artifact_id(value)
+    if checked.startswith("file:"):
+        try:
+            repository_identity.parse_repository_file_id(checked)
+        except ValueError as error:
+            raise argparse.ArgumentTypeError(str(error)) from error
+    return checked
+
+
 def add_wiki_write_args(parser: argparse.ArgumentParser) -> None:
     # Either an OKF document (--file) or the three fields as flags.
     parser.add_argument("--file", help="OKF markdown file (frontmatter title/use_when + body), or - for stdin")
@@ -461,7 +473,7 @@ def build_parser() -> argparse.ArgumentParser:
     grep.set_defaults(func=cmd_grep)
 
     get = sub.add_parser("get", help="print full detail for a federated-search result ID")
-    get.add_argument("id", type=artifact_id)
+    get.add_argument("id", type=detail_artifact_id)
     get.set_defaults(func=cmd_get)
 
     history = sub.add_parser("history", help="export durable search executions").add_subparsers(

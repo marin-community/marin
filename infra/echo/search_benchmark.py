@@ -18,6 +18,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 import cli as echo_cli
+import repository_identity
 import search_config
 from search_result import SearchResult
 
@@ -91,13 +92,11 @@ def benchmark_case(value: object) -> BenchmarkCase:
         grade = item.get("grade")
         if not isinstance(grade, int) or not 1 <= grade <= 3:
             raise ValueError(f"relevance grade must be an integer from 1 through 3, got {grade!r}")
-        relevant.append(
-            RelevanceJudgment(
-                domain=checked_domain(item.get("domain")),
-                target=checked_string(item.get("target"), "relevance target"),
-                grade=grade,
-            )
-        )
+        domain = checked_domain(item.get("domain"))
+        target = checked_string(item.get("target"), "relevance target")
+        if domain == "file":
+            repository_identity.parse_repository_file_id(target)
+        relevant.append(RelevanceJudgment(domain=domain, target=target, grade=grade))
     return BenchmarkCase(
         id=checked_string(value.get("id"), "id"),
         query=checked_string(value.get("query"), "query"),
@@ -174,7 +173,7 @@ def github_artifact(url: str) -> str | None:
 def judgment_key(judgment: RelevanceJudgment) -> str:
     target = judgment.target
     if judgment.domain == "file":
-        return f"file:{target.removeprefix('file:')}"
+        return repository_identity.parse_repository_file_id(target).result_id
     if judgment.domain == "wiki":
         if target.startswith("wiki:"):
             return target

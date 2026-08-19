@@ -22,7 +22,6 @@ import pulumi
 import pulumi_cloudflare as cloudflare
 import pulumi_command as command
 import pulumi_gcp as gcp
-import search_config
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
 from iac.gcp.cloud_run_job import ScheduledCloudRunJob, ScheduledCloudRunJobArgs
 
@@ -135,15 +134,13 @@ def main() -> None:
             job_name="echo-sync",
             build_context=".",
             dockerfile="sync/Dockerfile",
-            # Activity checks retain their ten-minute cadence. The repository phase uses its
-            # database watermark to query GitHub no more than once per hour.
+            # Activity checks retain their ten-minute cadence. The repository phase advances
+            # one durable turn; in steady state, the six targets rotate about once per hour.
             schedule="*/10 * * * *",
             env={
                 "CLOUDSQL_CONNECTION": CONNECTION_NAME,
                 "PGDATABASE": DATABASE,
                 "PGUSER": SYNC_DB_USER,
-                "GITHUB_REPOSITORY": search_config.INDEXED_REPOSITORY,
-                "GITHUB_BRANCH": search_config.INDEXED_BRANCH,
             },
             secrets=(SecretEnv(name="MARINMIRROR_TOKEN", secret=MARINMIRROR_TOKEN_SECRET, wait_for=(mirror_token,)),),
             cloudsql_instances=(CONNECTION_NAME,),
@@ -151,6 +148,12 @@ def main() -> None:
             # attempt; incremental hourly refreshes normally embed only changed files.
             cpu="4",
             memory="4Gi",
+            # A scheduled attempt is one durable repository turn; Cloud Run must not replay it.
+            max_retries=0,
+            # Manually cold-start or resume one target with a longer attempt:
+            # gcloud run jobs execute echo-sync --project hai-gcp-models --region us-central1
+            #   --tasks=1 --task-timeout=21600s
+            #   --update-env-vars=ECHO_REPOSITORY_TARGET=marin-community/vllm --wait
             timeout=7200,
         ),
         gcp_provider=gcp_provider,
@@ -168,8 +171,6 @@ def main() -> None:
                 "CLOUDSQL_CONNECTION": CONNECTION_NAME,
                 "PGDATABASE": DATABASE,
                 "PGUSER": API_DB_USER,
-                "GITHUB_REPOSITORY": search_config.INDEXED_REPOSITORY,
-                "GITHUB_BRANCH": search_config.INDEXED_BRANCH,
             },
             # Keep one instance warm. Four concurrent embedding/reranking requests peak
             # around 2.7 GiB; bound concurrency and leave headroom for the DB pool.

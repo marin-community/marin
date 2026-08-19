@@ -287,6 +287,55 @@ def test_add_search_feedback_persists_authenticated_replayable_judgments(client_
     }
 
 
+def test_feedback_preserves_same_path_repository_identities(client_with):
+    feedback = make_row(
+        id=19,
+        created_at=datetime(2026, 8, 19, tzinfo=UTC),
+        author="agent@openathena.ai",
+        query="README.md",
+        note="Both repository roots were useful.",
+        execution_id=992,
+    )
+    stored_results = [
+        make_row(
+            id=731 + index,
+            execution_id=992,
+            result_id=f"file:{repository}@main:README.md",
+            domain="file",
+            title="README.md",
+            url=f"https://github.com/{repository}/blob/{commit}/README.md",
+        )
+        for index, (repository, commit) in enumerate(
+            (("marin-community/marin", "a" * 40), ("marin-community/vllm", "b" * 40))
+        )
+    ]
+    execution = make_row(author="agent@openathena.ai", query="README.md")
+    harness = client_with([feedback], responses=[stored_results, [execution]])
+
+    response = harness.client.post(
+        "/api/feedback",
+        json={
+            "query": "README.md",
+            "execution_id": 992,
+            "grades": [{"key": "file:731", "grade": 10}, {"key": "file:732", "grade": 9}],
+            "note": "Both repository roots were useful.",
+        },
+        headers={"X-Goog-Authenticated-User-Email": "accounts.google.com:agent@openathena.ai"},
+    )
+
+    assert response.status_code == 201
+    grade_insert = next(
+        statement
+        for statement in harness.engine.executions
+        if getattr(statement, "is_insert", False) and statement.table.name == "search_feedback_grades"
+    )
+    params = grade_insert.compile().params
+    assert [params["result_id_m0"], params["result_id_m1"]] == [
+        "file:marin-community/marin@main:README.md",
+        "file:marin-community/vllm@main:README.md",
+    ]
+
+
 def test_search_feedback_links_matching_execution(client_with):
     execution = make_row(author="agent@openathena.ai", query="how do I deploy Iris?")
     feedback = make_row(
@@ -432,7 +481,7 @@ def test_search_feedback_rejects_grade_absent_from_linked_execution(client_with)
     )
 
 
-def test_search_execution_export_preserves_result_rank(client_with):
+def test_legacy_path_only_search_history_exports_stored_metadata_unchanged(client_with):
     execution = make_row(
         id=41,
         created_at=datetime(2026, 8, 12, tzinfo=UTC),
@@ -488,6 +537,8 @@ def test_search_execution_export_preserves_result_rank(client_with):
         (2, "wiki:12"),
     ]
     assert [(result.id, result.rerank_score) for result in entries[0].results] == [(731, 4.2), (732, -0.5)]
+    assert entries[0].repository_commit == "abcdef1234567890"
+    assert entries[0].results[0].url == "https://example.com/OPS.md"
 
 
 def test_search_feedback_rejects_out_of_range_grade(client_with):
@@ -679,6 +730,8 @@ def test_federated_search_classifies_github_comment_domain(client_with):
 
 def test_federated_file_result_names_exact_indexed_head(client_with):
     state = make_row(
+        repository="marin-community/marin",
+        branch="main",
         commit_sha="abcdef1234567890",
         indexed_at=datetime(2026, 7, 29, 20, tzinfo=UTC),
         completed_files=None,
@@ -687,6 +740,8 @@ def test_federated_file_result_names_exact_indexed_head(client_with):
     )
     file = make_row(
         id=9,
+        repository="marin-community/marin",
+        branch="main",
         path="lib/iris/src/iris/scheduler.py",
         title="scheduler.py",
         start_line=40,
@@ -707,16 +762,19 @@ def test_federated_file_result_names_exact_indexed_head(client_with):
     assert response.json() == [
         {
             "key": "file:1001",
-            "id": "file:lib/iris/src/iris/scheduler.py",
+            "id": "file:marin-community/marin@main:lib/iris/src/iris/scheduler.py",
             "domain": "file",
             "title": "scheduler.py",
-            "subtitle": "lib/iris/src/iris/scheduler.py:41 · main@abcdef123456 · " "indexed 2026-07-29T20:00:00+00:00",
+            "subtitle": (
+                "marin-community/marin · lib/iris/src/iris/scheduler.py:41 · "
+                "main@abcdef123456 · indexed 2026-07-29T20:00:00+00:00"
+            ),
             "url": (
                 "https://github.com/marin-community/marin/blob/abcdef1234567890/" "lib/iris/src/iris/scheduler.py#L41"
             ),
             "snippet": (
-                "lib/iris/src/iris/scheduler.py:41 raise FAILED_PRECONDITION · "
-                "lib/iris/src/iris/scheduler.py:40 def place_gang():"
+                "marin-community/marin:lib/iris/src/iris/scheduler.py:41 raise FAILED_PRECONDITION · "
+                "marin-community/marin:lib/iris/src/iris/scheduler.py:40 def place_gang():"
             ),
             "score": 0.01639344262295082,
             "distance": 0.1,
@@ -752,15 +810,115 @@ def test_federated_file_result_names_exact_indexed_head(client_with):
     assert execution_params["mode"] == "federated"
     assert execution_params["domains"] == ["file"]
     assert execution_params["returned_count"] == 1
-    assert execution_params["repository_commit"] == "abcdef1234567890"
+    assert execution_params["repository_commit"] is None
     result_insert = next(
         statement
         for statement in harness.engine.executions
         if getattr(statement, "is_insert", False) and statement.table.name == "search_execution_results"
     )
-    assert result_insert.compile().params["result_id_m0"] == "file:lib/iris/src/iris/scheduler.py"
+    assert (
+        result_insert.compile().params["result_id_m0"]
+        == "file:marin-community/marin@main:lib/iris/src/iris/scheduler.py"
+    )
     assert result_insert.compile().params["rank_m0"] == 1
     assert result_insert.compile().params["rerank_score_m0"] == 0.0
+
+
+def test_same_path_search_results_and_new_history_keep_repository_identity(client_with):
+    indexed_at = datetime(2026, 8, 19, tzinfo=UTC)
+    states = [
+        make_row(
+            repository="marin-community/marin",
+            branch="main",
+            commit_sha="a" * 40,
+            indexed_at=indexed_at,
+            completed_files=None,
+            total_files=None,
+            started_at=None,
+        ),
+        make_row(
+            repository="marin-community/vllm",
+            branch="main",
+            commit_sha="b" * 40,
+            indexed_at=indexed_at,
+            completed_files=None,
+            total_files=None,
+            started_at=None,
+        ),
+    ]
+    files = [
+        make_row(
+            id=9,
+            repository=repository,
+            branch="main",
+            path="README.md",
+            title="README.md",
+            start_line=1,
+            text=text,
+            score=0.05,
+            distance=0.1,
+            lexical_score=4.0,
+        )
+        for repository, text in (
+            ("marin-community/marin", "Marin is an open foundation-model research effort."),
+            ("marin-community/vllm", "vLLM is a fast and easy-to-use inference engine."),
+        )
+    ]
+    harness = client_with([], responses=[[], states, [files[0]], [files[1]]])
+
+    response = harness.client.get(
+        "/api/federated-search",
+        params={"q": "README.md", "domain": "file"},
+    )
+
+    assert response.status_code == 200
+    assert [(result["id"], result["url"].split("#", 1)[0]) for result in response.json()] == [
+        (
+            "file:marin-community/marin@main:README.md",
+            f"https://github.com/marin-community/marin/blob/{'a' * 40}/README.md",
+        ),
+        (
+            "file:marin-community/vllm@main:README.md",
+            f"https://github.com/marin-community/vllm/blob/{'b' * 40}/README.md",
+        ),
+    ]
+    execution_insert = next(
+        statement
+        for statement in harness.engine.executions
+        if getattr(statement, "is_insert", False) and statement.table.name == "search_executions"
+    )
+    assert execution_insert.compile().params["repository_commit"] is None
+    result_insert = next(
+        statement
+        for statement in harness.engine.executions
+        if getattr(statement, "is_insert", False) and statement.table.name == "search_execution_results"
+    )
+    params = result_insert.compile().params
+    assert [params["result_id_m0"], params["result_id_m1"]] == [
+        "file:marin-community/marin@main:README.md",
+        "file:marin-community/vllm@main:README.md",
+    ]
+    assert [params["url_m0"].split("#", 1)[0], params["url_m1"].split("#", 1)[0]] == [
+        f"https://github.com/marin-community/marin/blob/{'a' * 40}/README.md",
+        f"https://github.com/marin-community/vllm/blob/{'b' * 40}/README.md",
+    ]
+    assert len(harness.reranker.documents) == 1
+    assert harness.reranker.documents[0] == [
+        (
+            "marin-community/marin:README.md:1 Marin is an open foundation-model research effort.\n\n"
+            "README.md\nREADME.md\n\nMarin is an open foundation-model research effort."
+        ),
+        (
+            "marin-community/vllm:README.md:1 vLLM is a fast and easy-to-use inference engine.\n\n"
+            "README.md\nREADME.md\n\nvLLM is a fast and easy-to-use inference engine."
+        ),
+    ]
+    file_searches = [
+        statement
+        for statement in harness.engine.executions
+        if isinstance(statement, sqlalchemy.sql.elements.TextClause) and "repository_file_chunks" in statement.text
+    ]
+    assert len(file_searches) == 2
 
 
 def test_file_summary_skips_license_boilerplate_for_filename_match():
@@ -919,44 +1077,59 @@ def test_reranker_applies_stricter_wiki_quality_floor():
     assert [result.domain for result in results] == ["file"]
 
 
-def test_file_artifact_reconstructs_overlapping_indexed_chunks(client_with):
+@pytest.mark.parametrize(
+    ("repository", "commit_sha"),
+    [
+        ("marin-community/marin", "a" * 40),
+        ("marin-community/vllm", "b" * 40),
+    ],
+)
+def test_same_path_file_detail_uses_qualified_repository_and_commit(client_with, repository, commit_sha):
     state = make_row(
-        commit_sha="abcdef1234567890",
+        repository=repository,
+        branch="main",
+        commit_sha=commit_sha,
         indexed_at=datetime(2026, 7, 29, 20, tzinfo=UTC),
         completed_files=None,
         total_files=None,
         started_at=None,
     )
     first = make_row(
-        path="lib/iris/OPS.md",
-        title="Iris Operations",
+        path="README.md",
+        title="README.md",
         chunk_index=0,
         start_line=1,
-        text="# Iris Operations\n\nDeploy Iris.",
+        text="# Project\n\nShared path, repository-specific contents.",
     )
     second = make_row(
-        path="lib/iris/OPS.md",
-        title="Iris Operations",
+        path="README.md",
+        title="README.md",
         chunk_index=1,
         start_line=3,
-        text="Deploy Iris.\nThen verify health.",
+        text="Shared path, repository-specific contents.\nThen verify provenance.",
     )
     harness = client_with([], responses=[[state], [first, second]])
 
-    response = harness.client.get("/api/repository-files/lib/iris/OPS.md")
+    response = harness.client.get(f"/api/repository-files/{repository}@main:README.md")
 
     assert response.status_code == 200
     assert response.json() == {
-        "id": "file:lib/iris/OPS.md",
-        "title": "Iris Operations",
-        "subtitle": "lib/iris/OPS.md · main@abcdef123456 · indexed 2026-07-29T20:00:00+00:00",
-        "url": "https://github.com/marin-community/marin/blob/abcdef1234567890/lib/iris/OPS.md",
-        "text": "# Iris Operations\n\nDeploy Iris.\nThen verify health.",
+        "id": f"file:{repository}@main:README.md",
+        "title": "README.md",
+        "subtitle": f"{repository} · README.md · main@{commit_sha[:12]} · indexed 2026-07-29T20:00:00+00:00",
+        "url": f"https://github.com/{repository}/blob/{commit_sha}/README.md",
+        "text": "# Project\n\nShared path, repository-specific contents.\nThen verify provenance.",
     }
+    detail_params = harness.engine.executions[1].compile().params.values()
+    assert repository in detail_params
+    assert "main" in detail_params
+    assert "README.md" in detail_params
 
 
 def test_repository_index_reports_searchable_partial_build(client_with):
     state = make_row(
+        repository="marin-community/vllm",
+        branch="main",
         commit_sha="fedcba9876543210",
         indexed_at=datetime(2026, 7, 28, 20, tzinfo=UTC),
         completed_files=70,
@@ -968,8 +1141,27 @@ def test_repository_index_reports_searchable_partial_build(client_with):
     response = harness.client.get("/api/repository-index")
 
     assert response.status_code == 200
-    assert response.json() == {
+    statuses = response.json()
+    assert [status["repository"] for status in statuses] == [
+        "marin-community/marin",
+        "marin-community/vllm",
+        "marin-community/tpu-inference",
+        "marin-community/evalchemy",
+        "marin-community/harbor",
+        "marin-community/MarinSkyRL",
+    ]
+    assert statuses[0] == {
         "repository": "marin-community/marin",
+        "branch": "main",
+        "status": "empty",
+        "commit_sha": None,
+        "completed_files": None,
+        "total_files": None,
+        "started_at": None,
+        "indexed_at": None,
+    }
+    assert statuses[1] == {
+        "repository": "marin-community/vllm",
         "branch": "main",
         "status": "building",
         "commit_sha": "fedcba9876543210",
@@ -978,6 +1170,7 @@ def test_repository_index_reports_searchable_partial_build(client_with):
         "started_at": "2026-07-29T20:00:00Z",
         "indexed_at": "2026-07-28T20:00:00Z",
     }
+    assert all(status["status"] == "empty" for status in statuses[2:])
 
 
 def test_add_wiki_embeds_applicability_hint_and_body_as_passage(client_with):

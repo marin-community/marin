@@ -8,6 +8,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 
 import cli
+import pytest
 import requests
 
 
@@ -22,7 +23,7 @@ def json_response(value, headers=None):
 def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys):
     remote_result = {
         "key": "file:731",
-        "id": "file:lib/iris/src/iris/scheduler.py",
+        "id": "file:marin-community/marin@main:lib/iris/src/iris/scheduler.py",
         "domain": "file",
         "title": "scheduler.py",
         "subtitle": "lib/iris/src/iris/scheduler.py:42 · main@abc1234 · indexed 2026-07-29T20:00:00+00:00",
@@ -107,22 +108,28 @@ def test_bearer_token_quiets_only_the_known_missing_email_scope_warning(monkeypa
 
 def test_get_fetches_full_detail_by_search_result_id(monkeypatch):
     calls = []
+    result_id = "file:marin-community/marin@main:lib/iris/OPS.md"
 
     def fake_request(method, path, **options):
         calls.append((method, path, options))
         return {
-            "id": "file:lib/iris/OPS.md",
+            "id": result_id,
             "title": "Iris Operations",
-            "subtitle": "lib/iris/OPS.md · main@abc123",
+            "subtitle": "marin-community/marin · lib/iris/OPS.md · main@abc123",
             "url": "https://github.com/marin-community/marin/blob/abc123/lib/iris/OPS.md",
             "text": "# Iris Operations\n\nDeploy with the restart command.",
         }
 
     monkeypatch.setattr(cli, "request", fake_request)
-    args = cli.build_parser().parse_args(["get", "file:lib/iris/OPS.md"])
+    args = cli.build_parser().parse_args(["get", result_id])
     args.func(args)
 
-    assert calls == [("GET", "/repository-files/lib/iris/OPS.md", {})]
+    assert calls == [("GET", "/repository-files/marin-community/marin@main:lib/iris/OPS.md", {})]
+
+
+def test_get_rejects_legacy_path_only_file_id():
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["get", "file:lib/iris/OPS.md"])
 
 
 def test_feedback_submits_replayable_grades_and_stdin_note(monkeypatch, capsys):
