@@ -50,7 +50,7 @@ def estimate_bytes(value: object) -> int:
 
 
 def row_groups(rows: Iterable[dict]) -> Iterator[list[dict]]:
-    """Group rows under both the row-count and estimated-byte Parquet targets."""
+    """Group rows toward row-count and byte targets, isolating an oversized row."""
     group: list[dict] = []
     group_bytes = 0
     for row in rows:

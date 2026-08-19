@@ -28,6 +28,7 @@ from finestore.layout import (
     BLOB_PART_COLUMN,
     BLOB_PART_COUNT_COLUMN,
     BLOB_PARTS_TABLE,
+    BLOB_SIZE_COLUMN,
     BLOBS_TABLE,
     COMMIT_COLUMN,
     GEN_COLUMN,
@@ -346,7 +347,7 @@ class _ReadOperations:
             if data is None:
                 raise BlobCorruptionError(f"blob {name!r} has neither inline data nor parts")
             value = bytes(data)
-            size = descriptor.get("size")
+            size = descriptor.get(BLOB_SIZE_COLUMN)
             if size is not None and len(value) != size:
                 raise BlobCorruptionError(f"blob {name!r} declares {size} bytes but stores {len(value)}")
             yield value
@@ -374,7 +375,7 @@ class _ReadOperations:
             yield value
         if expected_part != part_count:
             raise BlobCorruptionError(f"blob {name!r} has {expected_part} of {part_count} parts")
-        size = descriptor.get("size")
+        size = descriptor.get(BLOB_SIZE_COLUMN)
         if size is not None and total_bytes != size:
             raise BlobCorruptionError(f"blob {name!r} declares {size} bytes but stores {total_bytes}")
 

@@ -22,10 +22,12 @@ from finestore.compaction import CompactionResult
 from finestore.compaction import compact as compact_table
 from finestore.layout import (
     BLOB_DATA_COLUMN,
+    BLOB_METADATA_COLUMN,
     BLOB_NAME_COLUMN,
     BLOB_PART_COLUMN,
     BLOB_PART_COUNT_COLUMN,
     BLOB_PARTS_TABLE,
+    BLOB_SIZE_COLUMN,
     BLOBS_TABLE,
     CHUNKED_BLOBS_FEATURE,
     RESERVED_COLUMNS,
@@ -59,8 +61,8 @@ OBJECT_PART_BYTES = 8 * 1024 * 1024
 _BLOB_SCHEMA = pa.schema(
     [
         pa.field(BLOB_NAME_COLUMN, pa.string()),
-        pa.field("size", pa.int64()),
-        pa.field("metadata_json", pa.string()),
+        pa.field(BLOB_SIZE_COLUMN, pa.int64()),
+        pa.field(BLOB_METADATA_COLUMN, pa.string()),
         pa.field(BLOB_DATA_COLUMN, pa.binary()),
         pa.field(BLOB_PART_COUNT_COLUMN, pa.int64()),
     ]
@@ -119,6 +121,11 @@ def _reject_reserved_columns(columns: Iterable[str]) -> None:
     if reserved:
         names = ", ".join(sorted(reserved))
         raise ValueError(f"row uses reserved FineStore column: {names}")
+
+
+def _addition_delta(additions: dict[str, TableAddition]) -> CommitDelta:
+    required_features = frozenset({CHUNKED_BLOBS_FEATURE}) if BLOB_PARTS_TABLE in additions else frozenset()
+    return CommitDelta(additions=additions, required_features=required_features, seal_update=ClearSeal())
 
 
 @dataclass(frozen=True)
@@ -252,8 +259,8 @@ class DataStore:
     def _blob_rows(name: str, data: bytes, metadata: Mapping[str, object] | None) -> tuple[dict, list[dict]]:
         descriptor: dict[str, object] = {
             BLOB_NAME_COLUMN: name,
-            "size": len(data),
-            "metadata_json": json.dumps(dict(metadata or {})),
+            BLOB_SIZE_COLUMN: len(data),
+            BLOB_METADATA_COLUMN: json.dumps(dict(metadata or {})),
         }
         if len(data) <= OBJECT_PART_BYTES:
             descriptor[BLOB_DATA_COLUMN] = data
@@ -313,14 +320,7 @@ class DataStore:
                     table.name: TableAddition(metadata_path=table.metadata_path, shards=(table._write(pending),))
                     for table, pending in claimed.items()
                 }
-                required_features = frozenset({CHUNKED_BLOBS_FEATURE}) if BLOB_PARTS_TABLE in additions else frozenset()
-                return self._commits.commit(
-                    CommitDelta(
-                        additions=additions,
-                        required_features=required_features,
-                        seal_update=ClearSeal(),
-                    )
-                )
+                return self._commits.commit(_addition_delta(additions))
             except BaseException:
                 for table, pending in claimed.items():
                     table._restore(pending)
@@ -341,14 +341,7 @@ class DataStore:
                 if snapshot.token is None:
                     return self._commits.commit(CommitDelta())
                 return snapshot.token
-            required_features = frozenset({CHUNKED_BLOBS_FEATURE}) if BLOB_PARTS_TABLE in additions else frozenset()
-            return self._commits.commit(
-                CommitDelta(
-                    additions=additions,
-                    required_features=required_features,
-                    seal_update=ClearSeal(),
-                )
-            )
+            return self._commits.commit(_addition_delta(additions))
 
     def compact(self, table: str) -> CompactionResult:
         """Logically compact one table against the current manifest."""
@@ -420,7 +413,7 @@ class TransactionTable:
         self._name = name
 
     def add(self, row: dict) -> None:
-        self._transaction._add(self._name, row)
+        self._transaction._add_rows({self._name: [row]})
 
     def extend(self, rows: Iterable[dict]) -> None:
         for row in rows:
@@ -444,9 +437,6 @@ class Transaction:
         if name not in self._store._tables:
             raise KeyError(f"table {name!r} must be registered before the transaction")
         return TransactionTable(self, name)
-
-    def _add(self, name: str, row: dict) -> None:
-        self._add_rows({name: [row]})
 
     def _add_rows(self, rows: dict[str, list[dict]]) -> None:
         if self._closed:

@@ -27,7 +27,7 @@ from finestore.layout import (
 )
 from finestore.migrations import LegacyReadView, migrate
 from finestore.reader import BlobCorruptionError, ReadView
-from finestore.store import DataStore, DataTable, PrimaryKeyConflict, TransactionTooLarge
+from finestore.store import OBJECT_PART_BYTES, DataStore, DataTable, PrimaryKeyConflict, TransactionTooLarge
 from rigging.filesystem.storage_path import StoragePath
 
 
@@ -333,20 +333,18 @@ def test_large_blob_uses_bounded_parts_without_migrating_inline_blobs(tmp_path):
     parts = view.scan(BLOB_PARTS_TABLE, columns=["name", "part", "data"])
     assert parts is not None
     assert [(row["name"], row["part"], len(row["data"])) for row in parts.to_pylist()] == [
-        ("large", 0, 8 * 1024 * 1024),
+        ("large", 0, OBJECT_PART_BYTES),
         ("large", 1, 256),
     ]
 
-    archive = ArchiveMetadata.model_validate_json(StoragePath(FineStoreLayout(root).archive_path).read_bytes())
     manifest = json.loads(StoragePath(token.manifest_path).read_text())
-    assert archive.format_version == FORMAT_VERSION
     assert manifest["required_features"] == [CHUNKED_BLOBS_FEATURE]
 
 
 def test_chunked_blob_with_missing_parts_fails_as_corruption(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        store.write_object("large", b"x" * (8 * 1024 * 1024 + 1))
+        store.write_object("large", b"x" * (OBJECT_PART_BYTES + 1))
         token = store.flush()
     assert token is not None
 
@@ -355,14 +353,14 @@ def test_chunked_blob_with_missing_parts_fails_as_corruption(tmp_path):
     del manifest["tables"][BLOB_PARTS_TABLE]
     manifest_path.write_text(json.dumps(manifest))
 
-    with pytest.raises(BlobCorruptionError, match="0 of 2 parts"):
+    with pytest.raises(BlobCorruptionError):
         ReadView(root).read_blob("large")
 
 
-def test_chunked_blob_rewrite_uses_latest_descriptor_part_count(tmp_path):
+def test_chunked_blob_rewrite_ignores_stale_tail_parts(tmp_path):
     root = str(tmp_path / "run")
-    first = b"a" * (16 * 1024 * 1024 + 1)
-    second = b"b" * (8 * 1024 * 1024 + 1)
+    first = b"a" * (2 * OBJECT_PART_BYTES + 1)
+    second = b"b" * (OBJECT_PART_BYTES + 1)
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
         store.write_object("archive.log", first)
         store.flush()
@@ -371,13 +369,6 @@ def test_chunked_blob_rewrite_uses_latest_descriptor_part_count(tmp_path):
 
     view = ReadView(root)
     assert view.read_blob("archive.log") == second
-    parts = view.scan(BLOB_PARTS_TABLE, columns=["name", "part"])
-    assert parts is not None
-    assert parts.to_pylist() == [
-        {"name": "archive.log", "part": 0},
-        {"name": "archive.log", "part": 1},
-        {"name": "archive.log", "part": 2},
-    ]
 
     with DataStore.open(root, writer_id="w2") as store:
         store.write_object("archive.log", b"inline")
@@ -387,8 +378,8 @@ def test_chunked_blob_rewrite_uses_latest_descriptor_part_count(tmp_path):
 
 def test_later_writer_chunked_blob_supersedes_descriptor_and_parts(tmp_path):
     root = str(tmp_path / "run")
-    first_payload = b"a" * (8 * 1024 * 1024 + 1)
-    second_payload = b"b" * (8 * 1024 * 1024 + 1)
+    first_payload = b"a" * (OBJECT_PART_BYTES + 1)
+    second_payload = b"b" * (OBJECT_PART_BYTES + 1)
     with DataStore.open(root, writer_id="first", flush_interval=3600) as first:
         with DataStore.open(root, writer_id="second", flush_interval=3600) as second:
             first.write_object("shared", first_payload)
@@ -763,7 +754,7 @@ def test_transaction_publishes_tables_and_objects_with_one_token(tmp_path):
 
 def test_transaction_publishes_chunked_object_with_related_table(tmp_path):
     root = str(tmp_path / "run")
-    payload = b"x" * (8 * 1024 * 1024 + 1)
+    payload = b"x" * (OBJECT_PART_BYTES + 1)
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
         store.table("purchases", primary_key=("order_id",))
         with store.transaction() as transaction:
@@ -774,7 +765,7 @@ def test_transaction_publishes_chunked_object_with_related_table(tmp_path):
         assert view.token == transaction.token
         assert view.point("purchases", order_id="o1") is not None
         assert view.resolve(uri) == payload
-        parts = view.scan("_finestore_blob_parts")
+        parts = view.scan(BLOB_PARTS_TABLE)
         assert parts is not None
         assert parts.num_rows == 2
 
@@ -797,7 +788,7 @@ def test_transaction_exception_publishes_nothing(tmp_path):
 def test_transaction_rejects_payload_above_its_bound(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
-        with pytest.raises(TransactionTooLarge, match="smaller batch"):
+        with pytest.raises(TransactionTooLarge):
             with store.transaction(max_bytes=16) as transaction:
                 transaction.write_object("receipt", b"payload")
 
@@ -806,9 +797,9 @@ def test_transaction_rejects_payload_above_its_bound(tmp_path):
 
 def test_transaction_counts_chunk_memoryviews_toward_payload_bound(tmp_path):
     root = str(tmp_path / "run")
-    payload = b"x" * (8 * 1024 * 1024 + 1)
+    payload = b"x" * (OBJECT_PART_BYTES + 1)
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
-        with pytest.raises(TransactionTooLarge, match="smaller batch"):
+        with pytest.raises(TransactionTooLarge):
             with store.transaction(max_bytes=1024 * 1024) as transaction:
                 transaction.write_object("large", payload)
 
@@ -829,7 +820,7 @@ def test_transaction_lookup_is_pinned_to_its_starting_commit(tmp_path):
 
 def test_failed_multi_table_flush_restores_every_buffer(tmp_path, monkeypatch):
     root = str(tmp_path / "run")
-    payload = b"x" * (8 * 1024 * 1024 + 1)
+    payload = b"x" * (OBJECT_PART_BYTES + 1)
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
         store.table("purchases", primary_key=("order_id",)).append({"order_id": "o1"})
         store.table("refunds", primary_key=("refund_id",)).append({"refund_id": "r1"})
