@@ -23,6 +23,7 @@ analytic estimate (forward+backward, including attention and the latent-MoE corr
 
 import dataclasses
 import os
+from datetime import timedelta
 
 import click
 import jmp
@@ -36,6 +37,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
+from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -84,6 +86,10 @@ WATCH_INTERVAL = 10
 # scales every narrower rung by the same ratio.
 TOKENS_PER_ACTIVE_PARAM = 791
 TENSORSTORE_CACHE_BYTES = 125_000_000_000
+# Rolling resume checkpoints go to region-local storage that expires after 30 days. A crash thus
+# costs at most this much training time, against a hero checkpoint that is several TB.
+RESUME_SAVE_INTERVAL = timedelta(minutes=30)
+RESUME_CHECKPOINT_TTL_DAYS = 30
 
 
 def _ladder_model(size: str):
@@ -231,17 +237,16 @@ def build_ladder_run(
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
-            # Checkpoints are output-only: an offloaded run cannot restore from one (its pinned-host
-            # master/opt state comes back device-kind and mismatches the jitted step). load_checkpoint
-            # is forced False so a retry after a checkpoint starts fresh instead of crashing on the
-            # broken restore. A preempted run therefore restarts at step 0.
-            load_checkpoint=False,
-            # No time-based temporary checkpoints -- they would only exist to enable that broken
-            # restore. Keep just the permanent step-interval checkpoints below plus the forced final.
+            # load_checkpoint stays None (resume from the newest checkpoint that exists), so a retry
+            # after a hardware or memory fault continues the run. Levanter 8443 made a pinned-host
+            # restore work: it deserializes each offloaded leaf onto device and then moves it to its
+            # target memory kind, one leaf at a time.
             checkpointer=CheckpointerConfig(
                 base_path=prefix_join(ctx.output_path, "checkpoints"),
-                temporary_base_path=None,
-                save_interval=None,
+                # Rolling resume checkpoints go to region-local temp storage with a lifecycle TTL.
+                # The durable output root keeps only the permanent milestones and the final one.
+                temporary_base_path=ctx.runtime_arg("resume_checkpoint_path"),
+                save_interval=RESUME_SAVE_INTERVAL,
                 keep=keep_permanent,
                 append_run_id_to_base_path=False,
                 delete_old_temp_checkpoints=True,
@@ -280,7 +285,12 @@ def build_ladder_run(
         run=run_grug,
         build_config=build_config,
         deps=(HARRIER_MIX_2026_08_18_STORE, *validation),
-        runtime_args={"train_resources": train_resources},
+        runtime_args={
+            "train_resources": train_resources,
+            # A runtime arg, not a config field: the resolved bucket is regional, thus it would
+            # otherwise put the launching cluster into the step's fingerprint.
+            "resume_checkpoint_path": marin_temp_bucket(RESUME_CHECKPOINT_TTL_DAYS, f"grug/{run_id}/resume"),
+        },
     )
 
 

@@ -953,10 +953,13 @@ def run_grug(config: GrugRunConfig) -> None:
         local_entrypoint=_run_grug_local,
         resources=config.resources,
         processes_per_task=config.processes_per_task,
-        # A hero EP run forces load_checkpoint=False, so a retry always restarts at step 0. Retrying
-        # a failure that lands late therefore discards the whole run and repeats it. Make failures
-        # terminal and keep the written checkpoint; preemption retries are a separate counter.
-        max_retries_failure=0,
+        # A hero run spans hundreds of GPU-days across hundreds of tasks, where a hardware fault or
+        # a host out-of-memory on one task is routine. Retry deeply so one bad task does not end the
+        # run. Both counters are raised together, because the cumulative one caps the per-task one.
+        # A retry restarts from the newest checkpoint, thus a deep budget only pays off while
+        # load_checkpoint is on; with restore off, every retry repeats the run from step 0.
+        max_retries_failure=1000,
+        max_task_failures=1000,
     )
 
 
