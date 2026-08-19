@@ -9,7 +9,7 @@ author: benjaminfeuer
 
 ## Current TL;DR
 
-The 564-run campaign is in integration. Harbor PR #83 supplies the Pi hosted-vLLM endpoint path. No evaluation job has been submitted. Four one-task smokes must validate both models with Terminus-2 and Pi before the eight-job queue opens.
+The 564-run campaign is in smoke validation. Harbor PR #83 supplies the Pi hosted-vLLM endpoint path. Four one-task smokes are being iterated until both models produce scored Terminus-2 and Pi output; the eight-job campaign queue remains closed.
 
 ## Scope
 
@@ -103,3 +103,13 @@ The 564-run campaign is in integration. Harbor PR #83 supplies the Pi hosted-vLL
 - Result: Transformers recognizes `Qwen/Qwen3.6-35B-A3B` as `Qwen3_5MoeConfig` and `google/gemma-4-26B-A4B` as `Gemma4Config`; focused tests pass 33/33. The third smoke attempts failed before weight load because the older runtime did not recognize either architecture.
 - Interpretation: a serving runtime upgrade is required for both requested models; this is not a Harbor code change. The next smoke attempts will provide the first evidence about weight loading and TP/DP viability.
 - Next action: stop the old health-check loops, mark all four smokes for retry, and relaunch from OTA `ffe7ba3b`.
+
+### 2026-08-19 14:55 UTC - Remove retired vLLM swap option
+
+- Hypothesis: vLLM 0.19.1 recognizes both requested architectures but removed the `--swap-space` CLI option still supplied by the two new model profiles and datagen configs.
+- Commit Hash: OpenThoughts-Agent `a08b0368` on pushed branch `penfever/working`.
+- Command: regenerated `eval/configs/model_configs.yaml`; ran `uv run pytest -q tests/eval/test_model_registry_resolve.py tests/eval/test_local_ingress_args.py tests/eval/test_per_model_agent_kwargs.py`; dry-ran Qwen/Terminus-2 and Gemma/Pi launch paths.
+- Config: removed `swap_space` only from the Qwen3.6 and Gemma 4 H100 eval profiles and campaign datagen configs. The Qwen GH200 variant remains unchanged. All rollout, topology, memory-utilization, context, output, and sampling settings remain unchanged.
+- Result: the fourth smoke attempts reached the vLLM 0.19.1 parser and failed uniformly on `api_server.py: error: unrecognized arguments: --swap-space`, before weight loading. The focused suites pass 15/15, generated registry matches the canonical profiles, and dry-run transparency output no longer includes `swap_space`. All four invalid health-check loops were stopped.
+- Interpretation: the runtime upgrade is active and resolved the architecture blocker. This failure is another OTA serving-profile mismatch, not a Harbor change or model/harness result.
+- Next action: relaunch the four smokes from `a08b0368`, then require successful model health checks and numeric Harbor results before opening the campaign queue.
