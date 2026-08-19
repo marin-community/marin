@@ -342,7 +342,7 @@ def plot_hero_by_percentile(data):
 def plot_comparison(data):
     """Overlay our 100% ladder fit with the prior May-Recipe and 67B-A2B scaling laws."""
     _, fits, hero, *_ = _fit_and_hero(data)
-    a, alpha, *_ = fits[1.0]
+    a, alpha, cs_ours, ls_ours = fits[1.0]  # our four rung anchors at 100% (d2048 is pinned-corrected)
     c_hero = hero[1.0][0]
     laws = [
         ("ours (535B-A23B ladder)", ASYMPTOTE, a, alpha, "#C44E52"),
@@ -361,6 +361,17 @@ def plot_comparison(data):
             label=f"{label}:  L = {asymptote} + {aa:.3g}·C$^{{-{al:.4f}}}$",
         )
         ax.plot(c_hero, asymptote + aa * c_hero ** (-al), "o", color=color, ms=9, mec="white", mew=1, zorder=5)
+    ax.plot(
+        cs_ours,
+        ls_ours,
+        "o",
+        color="#C44E52",
+        ms=8,
+        mec="white",
+        mew=0.9,
+        zorder=6,
+        label="our fit points (4 rungs @100%)",
+    )
     ax.axvline(c_hero, color="0.4", ls=":", lw=1.3)
     ax.annotate(
         f"hero compute\n{c_hero:.1e} FLOPs",
