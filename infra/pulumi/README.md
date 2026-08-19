@@ -85,9 +85,11 @@ key ("Backend").
 The `marin` stack is the sole repository owner of grants on `hai-gcp-models`. This ownership
 boundary is the prerequisite for authoritative reconciliation: application stacks and deploy
 scripts must not create or mutate IAM policy. The resources remain additive `*IAMMember`
-resources until the separately reviewed authoritative-binding cutover. Before applying a leaf
-stack that has relinquished a grant, adopt or create the central resource and remove the old
-resource from the leaf stack's state without deleting the live binding.
+resources until the separately reviewed authoritative-binding cutover. Import only grants
+confirmed by the live-policy audit. Record code-declared grants that are absent live for a
+separate policy review instead of creating them during the transfer. Before applying a leaf
+stack that has relinquished a live grant, adopt the central resource and remove the old resource
+from the leaf stack's state without deleting the live binding.
 
 Automatic Echo, EvalDash, and Grafana rollouts are blocked in
 `scripts/ci/pulumi_rollouts.py` while their leaf states retain the transferred IAM resources.

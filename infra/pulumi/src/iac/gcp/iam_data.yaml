@@ -1382,6 +1382,7 @@ project_grants:
   - serviceAccount:loom-dev@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-crawl-bigquery@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-data-browser@hai-gcp-models.iam.gserviceaccount.com
+  - serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-gcs-proxy@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/storageinsights.serviceAgent
   members:
@@ -1451,11 +1452,6 @@ secrets:
   - role: roles/secretmanager.secretAccessor
     members:
     - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
-    - serviceAccount:pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
-- secret: cloudflare-r2-pulumi-read-token
-  grants:
-  - role: roles/secretmanager.secretAccessor
-    members:
     - serviceAccount:pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
 - secret: cloudsql-pulumi-admin-password
   grants:
@@ -1534,11 +1530,6 @@ secrets:
   - role: roles/secretmanager.secretAccessor
     members:
     - serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com
-- secret: marin-grafana-smtp-credentials
-  grants:
-  - role: roles/secretmanager.secretAccessor
-    members:
-    - serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com
 - secret: marinmirror-token
   grants:
   - role: projects/hai-gcp-models/roles/marinSecretIamManager
@@ -1563,11 +1554,6 @@ secrets:
     members:
     - serviceAccount:service-748532799086@gcp-sa-devconnect.iam.gserviceaccount.com
 buckets:
-- bucket: marin-eval-metadata
-  grants:
-  - role: roles/storage.objectViewer
-    members:
-    - serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
 - bucket: marin-iac-state
   grants:
   - role: projects/hai-gcp-models/roles/marinStorageBucketIamManager
@@ -2082,10 +2068,7 @@ service_accounts:
 cloud_run_services:
 - location: us-central1
   service: echo-api
-  grants:
-  - role: roles/run.invoker
-    members:
-    - serviceAccount:service-748532799086@gcp-sa-iap.iam.gserviceaccount.com
+  grants: []
   iap_grants:
   - role: roles/iap.httpsResourceAccessor
     members:
@@ -2093,10 +2076,7 @@ cloud_run_services:
     - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
 - location: us-central1
   service: marin-evaldash
-  grants:
-  - role: roles/run.invoker
-    members:
-    - serviceAccount:service-748532799086@gcp-sa-iap.iam.gserviceaccount.com
+  grants: []
   iap_grants:
   - role: roles/iap.httpsResourceAccessor
     members:
@@ -2105,10 +2085,7 @@ cloud_run_services:
     - principal: human-012
 - location: us-central1
   service: marin-grafana
-  grants:
-  - role: roles/run.invoker
-    members:
-    - serviceAccount:service-748532799086@gcp-sa-iap.iam.gserviceaccount.com
+  grants: []
   iap_grants:
   - role: roles/iap.httpsResourceAccessor
     members:
@@ -2116,10 +2093,4 @@ cloud_run_services:
     - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
     - principal: human-012
     - principal: human-071
-cloud_run_jobs:
-- location: us-central1
-  job: echo-sync
-  grants:
-  - role: roles/run.invoker
-    members:
-    - serviceAccount:echo-sync@hai-gcp-models.iam.gserviceaccount.com
+cloud_run_jobs: []
