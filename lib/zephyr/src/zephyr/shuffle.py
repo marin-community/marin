@@ -48,8 +48,9 @@ import polars as pl
 from iris.env_resources import TaskResources
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.s3_compat import needs_virtual_host_addressing
+from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.filesystem.storage_path import StoragePath
-from rigging.timing import RateLimiter, log_time
+from rigging.timing import ExponentialBackoff, RateLimiter, log_time, retry_with_backoff
 
 from zephyr.external_sort import external_sort_merge
 from zephyr.shard_keys import encode_key, hash_encoded_key
@@ -92,9 +93,30 @@ class ListShard:
 _SCATTER_METADATA_FILENAME = "metadata.msgpack"
 
 # Number of parallel small-file reads (sidecars, parquet schema footers) each
-# reducer issues while building its ScatterReader. These reads are GCS
-# GET-bound, so a modest pool keeps latency low without thrashing.
-_SIDECAR_READ_CONCURRENCY = 32
+# reducer issues while building its ScatterReader. These reads are GET-bound, so
+# a pool hides their latency.
+#
+# It is per task, and a wave is thousands of tasks, so the product is what the
+# object store sees. At 32 a 2,048-reducer wave offers ~65,000 simultaneous
+# connections, and the fuzzy-verification runs died three times on
+# EndpointConnectionError and "error sending request" -- connection-level
+# failures rather than throttle responses, which is what refused connections
+# look like. Retries were added at three layers and none of them addressed the
+# offered load. 8 keeps the latency hiding and cuts the peak fourfold.
+_SIDECAR_READ_CONCURRENCY = 8
+# A reducer reads one sidecar per mapper, so a shard with thousands of mappers
+# is one bad GET away from losing the whole scan. botocore covers about 15
+# seconds on its own, and its per-client retry quota can drain while 32 readers
+# all fail at once, so the sidecar read carries its own budget on top.
+_SIDECAR_READ_MAX_ATTEMPTS = 6
+_SIDECAR_READ_BACKOFF = ExponentialBackoff(initial=0.5, maximum=15.0, factor=2.0)
+# Polars scans s3:// through Rust object_store, not botocore, so none of the
+# rigging S3 settings reach it. Its own default is two retries inside a ten
+# second window, which gave up 275 ms into an outage and lost a reduce shard
+# that had already written 92% of its markers. This covers every read the scan
+# makes, including the row-group GETs during the merge that no application-level
+# wrapper can reach.
+_SCATTER_SCAN_RETRIES = 10
 # Fraction of available memory available for merging.
 _SCATTER_READ_MEMORY_FRACTION = 0.4
 
@@ -286,7 +308,17 @@ def _read_sidecar_slice(path: str, target_shard: int) -> _SidecarSlice | None:
     """
     meta_path = _scatter_meta_path(path)
     fs, fs_path = url_to_fs(meta_path)
-    meta = _sidecar_decoder().decode(fs.cat_file(fs_path))
+    try:
+        raw = retry_with_backoff(
+            lambda: fs.cat_file(fs_path),
+            retryable=is_transient_s3_error,
+            max_attempts=_SIDECAR_READ_MAX_ATTEMPTS,
+            backoff=_SIDECAR_READ_BACKOFF,
+            operation=f"read scatter sidecar {meta_path}",
+        )
+    except Exception as error:
+        raise OSError(f"cannot read scatter sidecar {meta_path}: {error}") from error
+    meta = _sidecar_decoder().decode(raw)
     files = meta.get("files", [])
     if not files:
         return None
@@ -326,8 +358,21 @@ def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
     """
     if len(frames) <= 1:
         return frames
+
+    def collect_schema(frame: pl.LazyFrame) -> pl.Schema:
+        # One footer HEAD per mapper, so the same arithmetic as the sidecar scan:
+        # thousands of reads, any one of which loses the shard. Polars raises the
+        # transport failure as a plain OSError, so match on the message.
+        return retry_with_backoff(
+            frame.collect_schema,
+            retryable=is_transient_s3_error,
+            max_attempts=_SIDECAR_READ_MAX_ATTEMPTS,
+            backoff=_SIDECAR_READ_BACKOFF,
+            operation="collect scatter chunk schema",
+        )
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
-        schemas = list(pool.map(pl.LazyFrame.collect_schema, frames))
+        schemas = list(pool.map(collect_schema, frames))
     if all(s == schemas[0] for s in schemas[1:]):
         return frames
     unified = pl.concat([f.limit(0) for f in frames], how="diagonal_relaxed").collect_schema()
@@ -338,7 +383,7 @@ def _scan_scatter_parquet(path: str) -> pl.LazyFrame:
     """Scan a scatter chunk with the addressing required by CoreWeave object storage."""
     endpoint = os.environ.get("AWS_ENDPOINT_URL_S3") or os.environ.get("AWS_ENDPOINT_URL")
     if not path.startswith("s3://") or not endpoint or not needs_virtual_host_addressing(endpoint):
-        return pl.scan_parquet(path)
+        return pl.scan_parquet(path, retries=_SCATTER_SCAN_RETRIES)
 
     bucket = urlparse(path).netloc
     parsed_endpoint = urlparse(endpoint)
@@ -352,6 +397,7 @@ def _scan_scatter_parquet(path: str) -> pl.LazyFrame:
     # so the bucket must be part of the endpoint host.
     return pl.scan_parquet(
         path,
+        retries=_SCATTER_SCAN_RETRIES,
         storage_options={
             "aws_endpoint_url": endpoint,
             "aws_virtual_hosted_style_request": "true",

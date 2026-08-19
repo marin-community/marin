@@ -134,7 +134,7 @@ from experiments.datakit.cluster.domain.v0.assign import (
 )
 from experiments.datakit.cluster.domain.v0.sample import sample_centroid_inputs
 from experiments.datakit.cluster.domain.v0.train import train_centroids
-from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
+from experiments.datakit.cluster.quality.fast_transformer.artifact import DEFAULT_CALIBRATION_KEY, QualityScores
 from experiments.datakit.cluster.quality.fast_transformer.score import score_normalized
 from experiments.datakit.decontam.config import (
     GLOBAL_DF_COMMON_MIN_ABS,
@@ -282,16 +282,32 @@ class MinhashConfig:
 class StoreConfig:
     """Execution shape for the final map-only clustered store.
 
-    Production uses 192 task-local partitions, which is about 104B tokens per
-    task for a 20T-token corpus. The dedicated worker shape keeps the store's
-    large RAM and local-disk request out of the shared upstream worker pool.
+    ``disk`` is the only dimension that binds, and it binds hard: a task spills
+    every surviving token of every shard it owns to ``/tmp``, which on Kubernetes
+    is a disk-backed ``emptyDir`` under the pod's ephemeral-storage limit.
+    Exceeding it is a kubelet eviction, and enough evictions trip
+    ``max_task_failures`` and take the whole gang down rather than one task.
+
+    Measured over the registered corpus from the tokenize footers: 26.1 T tokens,
+    95.1 TiB of int32 spill across 162,535 shards. Split 384 ways that averages
+    254 GiB per task, so 1200 GiB is roughly 4.7x the mean.
+
+    The headroom is for skew, not for the mean. Shards are dealt round robin but
+    sources are wildly uneven -- ``stack-v3`` alone is 13.5 TiB and
+    ``finetranslations`` 10.3 TiB -- so a task drawing from the dense end runs
+    well above average, and the spill estimate excludes the per-run length files.
+
+    Raising ``task_count`` is the other way to cut spill per task, but it is not
+    free: every task writes its own cache per populated bucket before the ledgers
+    merge, so leaf caches grow with it. A 3-source run at 128 tasks wrote 25,432
+    caches for 200 final buckets.
     """
 
-    task_count: int | None = 192
+    task_count: int | None = 384
     partition_processes: int = 32
     max_parallel_bucket_writes: int = DEFAULT_PARALLEL_BUCKET_WRITES
     worker: ResourceConfig = field(
-        default_factory=lambda: ResourceConfig(cpu=96, ram="700g", disk="900g", preemptible=False)
+        default_factory=lambda: ResourceConfig(cpu=96, ram="700g", disk="1200g", preemptible=False)
     )
 
 
@@ -849,13 +865,21 @@ def reference_datakit_steps(
 
     # ---- Final store: attribute join + per-bucket Levanter cache ---------------
     def _store_fn(output_path: str) -> ClusteredStoreData:
+        scores = {n: read_artifact(s["quality"].output_path, QualityScores) for n, s in per_source.items()}
+        edges = {tuple(q.bucket_edges) for q in scores.values()}
+        if len(edges) != 1:
+            raise ValueError(f"sources span multiple quality calibrations: {sorted(edges)}")
         return build_clustered_store(
             tokenize={n: read_artifact(s["tokenize"].output_path, TokenizedAttrData) for n, s in per_source.items()},
             decontam={n: read_artifact(s["decontam"].output_path, DeconAttributes) for n, s in per_source.items()},
             cluster_assign={
                 n: read_artifact(s["assign"].output_path, AssignmentAttrData) for n, s in per_source.items()
             },
-            quality={n: read_artifact(s["quality"].output_path, QualityScores) for n, s in per_source.items()},
+            quality={n: q.main_output_dir for n, q in scores.items()},
+            # This DAG has no content-type stage, so every document is cut at the
+            # content-blind calibration. ``produce_store`` is the path that reads
+            # the per-type cutpoints.
+            bucket_edges={DEFAULT_CALIBRATION_KEY: next(iter(edges))},
             exact_dedup=read_artifact(exact_dedup.output_path, GlobalExactDedupData),
             dedup=read_artifact(verified_dedup.output_path, VerifiedFuzzyDupsAttrData),
             output_path=output_path,

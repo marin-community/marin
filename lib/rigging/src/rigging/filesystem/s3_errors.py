@@ -31,12 +31,20 @@ _TRANSIENT_S3_ERROR_CODES = frozenset(
 
 # s3fs may translate a botocore ClientError into an OSError, discarding the
 # structured response while preserving the service error in the message.
+#
+# The last three come from Rust object_store, which Polars uses instead of
+# botocore when it scans an s3:// path directly. It raises a plain OSError with
+# no structured response, so its transport failures are only visible in the
+# message. All three are connection-level, never a bad request.
 _TRANSIENT_S3_MESSAGE_FRAGMENTS = (
     "specified parts could not be found",
     "InternalError",
     "ServiceUnavailable",
     "SlowDown",
     "RequestTimeout",
+    "error sending request",
+    "connection closed before message completed",
+    "operation timed out",
 )
 
 

@@ -31,7 +31,7 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import (
 from marin.processing.tokenize.attributes import TokenizedAttrData
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
-from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
+from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES, DEFAULT_CALIBRATION_KEY
 from experiments.datakit.global_exact_dedup import ExactDupsPerSource, GlobalExactDedupData
 from experiments.datakit.store.bucket_writer import BucketSpillRun, write_bucket_cache, write_bucket_cache_from_spills
 from experiments.datakit.store.datakit_store import (
@@ -44,9 +44,21 @@ CLUSTER_VIEW = 2  # cluster column "cluster_2", clusters {0, 1}
 SPLIT = "train"
 EXEMPLAR = {"input_ids": np.array([0], dtype=np.int32)}
 
+
+def _score_in_bucket(bucket: int) -> float:
+    """A score that :data:`BUCKET_EDGES` cuts into ``bucket``.
+
+    The midpoint of the band, so a rounding difference in the cut cannot move a
+    fixture doc between buckets and turn a real regression into a near-miss.
+    """
+    low = BUCKET_EDGES[bucket - 1] if bucket else 0.0
+    high = BUCKET_EDGES[bucket] if bucket < len(BUCKET_EDGES) else 1.0
+    return (low + high) / 2
+
+
 # One doc = (id, cluster, quality_bucket, contaminated, verified duplicate, token value, length).
-# ``quality_bucket`` is the precomputed calibrated bucket the scorer writes as a
-# column (consumed as-is by the store -- no score->bucket mapping).
+# ``quality_bucket`` is the bucket the store must derive by cutting the doc's
+# score at ``BUCKET_EDGES``; the fixture writes the score, not the bucket.
 # ``verified duplicate``: True -> dropped; False or None -> absent from the sparse attrs.
 # Each surviving doc's tokens are a run of its unique ``token`` value so we can
 # recover identity from the cache and confirm dropped docs never appear.
@@ -128,15 +140,15 @@ def _write_shard(dirs: dict[str, str], basename: str, docs: list[_Doc]) -> None:
         f"{dirs['cluster']}/{basename}",
         pa.table({"id": ids, f"cluster_{CLUSTER_VIEW}": pa.array([d[1] for d in docs], type=pa.int32())}),
     )
-    # Quality parquet: flat {id, score, quality_bucket}; the store reads the
-    # precomputed quality_bucket column (score is carried for schema fidelity).
+    # Quality parquet: flat {id, score}; the store cuts the score itself. Each
+    # doc's score is placed in the middle of the band BUCKET_EDGES gives its
+    # intended bucket, so the expectations below read as bucket ids.
     _write_parquet(
         f"{dirs['quality']}/{basename}",
         pa.table(
             {
                 "id": ids,
-                "score": pa.array([float(d[2]) for d in docs], type=pa.float64()),
-                "quality_bucket": pa.array([d[2] for d in docs], type=pa.int32()),
+                "score": pa.array([_score_in_bucket(d[2]) for d in docs], type=pa.float64()),
             }
         ),
     )
@@ -208,16 +220,7 @@ def _build_inputs(tmp_path):
             k_views=[],
         )
     }
-    quality = {
-        "src": QualityScores(
-            main_output_dir=dirs["quality"],
-            samples_output_dir="",
-            model_dir="model",
-            calib_file="calib.json",
-            bucket_edges=[0.2, 0.4, 0.6, 0.8],
-            counters={},
-        )
-    }
+    quality = {"src": dirs["quality"]}
     dedup = VerifiedFuzzyDupsAttrData(
         verification=FuzzyVerificationParams(),
         local_representatives=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
@@ -250,6 +253,7 @@ def test_store_filters_routes_and_roundtrips(tmp_path, monkeypatch):
         decontam=decontam,
         cluster_assign=cluster_assign,
         quality=quality,
+        bucket_edges={DEFAULT_CALIBRATION_KEY: BUCKET_EDGES},
         exact_dedup=exact_dedup,
         dedup=dedup,
         output_path=output_path,
@@ -302,6 +306,7 @@ def test_store_batches_input_shards_into_one_leaf_per_bucket(tmp_path, monkeypat
         decontam=decontam,
         cluster_assign=cluster_assign,
         quality=quality,
+        bucket_edges={DEFAULT_CALIBRATION_KEY: BUCKET_EDGES},
         exact_dedup=exact_dedup,
         dedup=dedup,
         output_path=output_path,
@@ -374,6 +379,7 @@ def test_store_ignores_orphans_and_resumes_completed_tasks(tmp_path, monkeypatch
         decontam=decontam,
         cluster_assign=cluster_assign,
         quality=quality,
+        bucket_edges={DEFAULT_CALIBRATION_KEY: BUCKET_EDGES},
         exact_dedup=exact_dedup,
         dedup=dedup,
         output_path=output_path,
@@ -409,6 +415,7 @@ def test_store_rejects_dedup_source_set_mismatch(tmp_path, monkeypatch, label):
             decontam=decontam,
             cluster_assign=cluster_assign,
             quality=quality,
+            bucket_edges={DEFAULT_CALIBRATION_KEY: BUCKET_EDGES},
             exact_dedup=exact_dedup,
             dedup=dedup,
             output_path=str(tmp_path / "store"),
@@ -432,6 +439,7 @@ def test_store_rejects_reordered_tokenize_documents(tmp_path, monkeypatch):
             decontam=decontam,
             cluster_assign=cluster_assign,
             quality=quality,
+            bucket_edges={DEFAULT_CALIBRATION_KEY: BUCKET_EDGES},
             exact_dedup=exact_dedup,
             dedup=dedup,
             output_path=str(tmp_path / "store"),
@@ -501,3 +509,98 @@ def test_tokenized_shard_without_chunk_index_is_rejected(tmp_path):
 
     with pytest.raises(RuntimeError, match="no chunk_index column"):
         list(_iter_tokenized_documents(path))
+
+
+# One doc = (id, content_type). Two of these types have their own calibration in
+# the fixture below; "other" has none and must fall back to the default.
+CONTENT_TYPES = {
+    "d0": "code",
+    "d1": "code",
+    "d2": "prose",
+    "d3": "other",
+    "d4": "prose",
+    "d5": "other",
+    "d6": "code",
+    "d7": "other",
+    "d8": "code",
+}
+
+
+def test_content_type_counters_survive_the_subprocess_boundary(tmp_path, monkeypatch):
+    """Shards are joined in a spawned process, whose counter writes are not shared.
+
+    The per-type counts have to travel back as data. If they are emitted where
+    they are computed they vanish, and the fallback to the default calibration
+    becomes exactly the silent thing the counter exists to prevent.
+    """
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path)
+
+    content_dir = str(tmp_path / "content_type")
+    os.makedirs(content_dir, exist_ok=True)
+    for basename, docs in (("part-00000-of-00002.parquet", SHARD0), ("part-00001-of-00002.parquet", SHARD1)):
+        ids = [d[0] for d in docs]
+        _write_parquet(
+            f"{content_dir}/{basename}",
+            pa.table({"id": ids, "content_type": [CONTENT_TYPES[i] for i in ids]}),
+        )
+
+    artifact = build_clustered_store(
+        tokenize=tokenize,
+        decontam=decontam,
+        cluster_assign=cluster_assign,
+        quality=quality,
+        bucket_edges={DEFAULT_CALIBRATION_KEY: BUCKET_EDGES, "code": BUCKET_EDGES, "prose": BUCKET_EDGES},
+        content_type={"src": content_dir},
+        exact_dedup=exact_dedup,
+        dedup=dedup,
+        output_path=str(tmp_path / "store"),
+        cluster_view=CLUSTER_VIEW,
+        split=SPLIT,
+    )
+
+    counts = {
+        t: sum(1 for i in [d[0] for d in SHARD0 + SHARD1] if CONTENT_TYPES[i] == t) for t in ("code", "prose", "other")
+    }
+    for content_type, expected in counts.items():
+        assert artifact.counters[f"datakit_store/content_type/{content_type}"] == expected, content_type
+    # "other" has no calibration of its own, so exactly its rows fall back.
+    assert artifact.counters["datakit_store/content_type_without_calibration"] == counts["other"]
+    assert sum(counts.values()) == artifact.counters["datakit_store/records_in"]
+
+
+def test_per_source_stats_reach_the_artifact(tmp_path, monkeypatch):
+    """Corpus totals cannot say whether each source contributed what it should.
+
+    The fixture is one source, so the per-source block must reconcile exactly
+    with the corpus counters -- which is the property that makes the block worth
+    reading when there are 292 of them and the totals no longer pin anything.
+    """
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path)
+
+    artifact = build_clustered_store(
+        tokenize=tokenize,
+        decontam=decontam,
+        cluster_assign=cluster_assign,
+        quality=quality,
+        bucket_edges={DEFAULT_CALIBRATION_KEY: BUCKET_EDGES},
+        exact_dedup=exact_dedup,
+        dedup=dedup,
+        output_path=str(tmp_path / "store"),
+        cluster_view=CLUSTER_VIEW,
+        split=SPLIT,
+    )
+
+    assert [s.source_name for s in artifact.sources] == ["src"]
+    stat = artifact.sources[0]
+    assert stat.records_in == artifact.counters["datakit_store/records_in"]
+    assert stat.records_out == artifact.counters["datakit_store/records_out"]
+    assert stat.tokens_out == artifact.counters["datakit_store/tokens_out"]
+    assert stat.contaminated_dropped == artifact.counters["datakit_store/contaminated_dropped"]
+    assert stat.exact_duplicate_dropped == artifact.counters["datakit_store/exact_duplicate_dropped"]
+    assert stat.fuzzy_duplicate_dropped == artifact.counters["datakit_store/fuzzy_duplicate_dropped"]
+    # The accounting identity, now per source rather than only corpus-wide.
+    dropped = stat.contaminated_dropped + stat.exact_duplicate_dropped + stat.fuzzy_duplicate_dropped
+    assert stat.records_in - dropped == stat.records_out
+    assert stat.records_out == sum(b.total_elements for b in artifact.buckets)

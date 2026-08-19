@@ -230,7 +230,10 @@ uv run fsutil ls s3://marin-us-east-02a/marin/datakit/
 | `reference_pipeline.py` | The DAG builder + CLI (`--mode full\|sample`, `--pool-*`, `--sources`, `--quality-model`) |
 | `zephyr_benchmark.py` | GCP-default A/B benchmark over a pre-normalized sample |
 | `materialize_zephyr_benchmark_sample.py` | One-time benchmark sample copy or regeneration tool |
+| `hero_data.py` | Fixed references to the hero run's built stages, by source name |
+| `produce_store.py` | Builds only the final store, over the stages `hero_data` names (`--preflight`, `--pending`) |
 | `global_exact_dedup.py` | Sparse co-partitioned exact-duplicate attributes by normalized record ID |
+| `repack_exact_dups.py` | Moves one source's exact-duplicate marks onto a normalize that has since replaced its layout |
 | `cluster/quality/fast_transformer/` | Quality classifier: per-source scoring step + training/calibration |
 | `cluster/domain/v0/` | Domain clustering: centroid sampling/training + per-source assignment |
 | `embeddings/luxical/` | Luxical-one document embeddings feeding the domain stage |
@@ -244,3 +247,10 @@ uv run fsutil ls s3://marin-us-east-02a/marin/datakit/
 
 Submission commands (full and sample mode) live in the `reference_pipeline.py`
 module docstring.
+
+To build the hero store over stages that already exist, rather than walking the
+whole DAG, use `produce_store.py`. It gives `StepRunner` one terminal and reads
+its inputs through `hero_data`, so no upstream stage is rebuilt. Its own
+docstring carries the submission command; `--pending` reports which stages are
+still waiting on their producing job, and `--preflight` checks the inputs line
+up before any of it costs cluster time.

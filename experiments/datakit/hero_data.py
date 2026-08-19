@@ -16,18 +16,27 @@ or use it as a dependency of a step you do intend to run::
     from marin.execution.artifact import read_artifact
     from marin.processing.tokenize.attributes import TokenizedAttrData
 
-    step = hero_data.tokenized("stack-v3", hero_data.NEMOTRON_TOKENIZER)
+    step = hero_data.tokenized("stack-v3")
     data = read_artifact(step.output_path, TokenizedAttrData)
 
 :func:`harrier` returns a path string. It reads the fixed source-to-path
 map in ``hero_data_emb_paths.json`` and adds the active Marin prefix.
 
+The corpus has one tokenization: the Marin tokenizer, applied to the whole
+registry in a single fleet run. :func:`tokenized` returns it.
+
 :func:`normalized` and :func:`minhash` follow current code, so they track main
 as the registry moves. :func:`tokenized` pins the artifact version instead,
-because the tokenize hash includes one and it has changed under the runs that
-produced this data: each tokenizer was applied to the whole registry in a single
-fleet run, and each of those runs wrote a different version. The dedup stages
-and domain cluster assignment are pinned to specific runs outright.
+because the tokenize hash includes one and it has moved since the run that
+produced this data. The dedup stages and domain cluster assignment are pinned to
+specific runs outright. :func:`decontam` is pinned per source, like
+:func:`harrier`, because its step folds in an eval bloom and a drop-set stage
+that have both moved since the run.
+
+A stage whose producing job has not finished raises :class:`PendingRegistration`
+when something asks for it. :func:`experiments.datakit.produce_store.pending`
+collects those into one list, so the store entry point can say everything it is
+waiting on at once instead of failing on the first one.
 
 All paths resolve against ``MARIN_PREFIX``. CoreWeave Datakit has one storage
 root, ``s3://marin-us-east-02a/marin``; use it regardless of worker placement.
@@ -73,6 +82,77 @@ def harrier_paths() -> dict[str, str]:
     return json.loads(harrier_paths_path().read_text())
 
 
+@cache
+def content_type_paths_path() -> pathlib.Path:
+    """Return the path to the per-source content-type path map."""
+    return pathlib.Path(__file__).with_name("hero_data_content_type_paths.json")
+
+
+@cache
+def decon_paths_path() -> pathlib.Path:
+    """Return the path to the per-source decontamination path map."""
+    return pathlib.Path(__file__).with_name("hero_data_decon_paths.json")
+
+
+class PendingRegistration(LookupError):
+    """A hero stage the run needs, whose producing job has not been registered yet.
+
+    Raised at the point of use rather than at import, so a caller that does not
+    touch the stage still works, and one that does gets told what to do about it
+    instead of a path that resolves to nothing.
+    """
+
+    def __init__(self, stage: str, remedy: str) -> None:
+        super().__init__(f"{stage} is not registered in hero_data yet: {remedy}")
+        self.stage = stage
+        self.remedy = remedy
+
+
+@cache
+def decon_paths() -> dict[str, str]:
+    """Load the per-source decontamination path map."""
+    path = decon_paths_path()
+    if not path.exists():
+        raise PendingRegistration(
+            "decontamination",
+            f"check in {path.name}, mapping each source name to its decon output relative to "
+            f"{MANIFEST_PREFIX}. The run that produces the data records its own paths, the way "
+            "the Harrier map was recorded",
+        )
+    return json.loads(path.read_text())
+
+
+@cache
+def content_type_paths() -> dict[str, str]:
+    """Load the per-source content-type path map."""
+    path = content_type_paths_path()
+    if not path.exists():
+        raise PendingRegistration(
+            "content type",
+            f"check in {path.name}, mapping each source name to its content-type output "
+            f"relative to {MANIFEST_PREFIX}",
+        )
+    return json.loads(path.read_text())
+
+
+def content_type(source: str) -> StepSpec:
+    """Return the per-document content type for ``source``.
+
+    The quality bucket depends on it. One score means different things in code
+    and in prose, and the calibration carries a fitted set of cutpoints per
+    content type; without this the store cuts everything at the content-blind
+    ``default``, which on this corpus moves 36% of math and 24% of code
+    documents into a higher bucket than their own calibration gives them.
+    """
+    paths = content_type_paths()
+    if source not in paths:
+        raise PendingRegistration(
+            f"content type for {source!r}",
+            f"the map in {content_type_paths_path().name} covers {len(paths)} sources but not this one",
+        )
+    return _frozen_step(f"hero/content_type/{source}", paths[source])
+
+
 # The manifest records paths relative to the sole CoreWeave Datakit root.
 # Regeneration pins this prefix because some step hashes include resolved paths.
 MANIFEST_PREFIX = "s3://marin-us-east-02a/marin"
@@ -85,21 +165,29 @@ class TokenizerPin:
     name: str
     """HuggingFace tokenizer name."""
 
-    revision: str
-    """Immutable HF commit. Identity-only -- ``load_tokenizer`` takes no revision."""
+    revision: str | None
+    """Immutable HF commit. Identity-only -- ``load_tokenizer`` takes no revision.
+    ``None`` leaves ``tokenizer_revision`` out of the hash, which is how the run
+    that produced the Marin tokenization addressed it."""
 
     artifact_version: int
     """``TOKENIZED_ATTR_DATA_VERSION`` as of that run. Part of the tokenize hash."""
 
 
-MARIN_TOKENIZER = TokenizerPin("marin-community/marin-tokenizer", "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2", 2)
-NEMOTRON_TOKENIZER = TokenizerPin(
+MARIN_TOKENIZER = TokenizerPin("marin-community/marin-tokenizer", None, 4)
+
+# Historical, and deliberately private: the tokenization NEMOTRON_88K scored,
+# not a tokenization this corpus reads. The quality scores live at a path whose
+# hash folds in this step's ``name_with_hash``, so naming it here is what keeps
+# :func:`quality` pointed at the bytes that exist. Scores join by document id,
+# so they still apply to a corpus tokenized any other way.
+_QUALITY_TOKENIZATION = TokenizerPin(
     "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16", "624ba927cfbef0427354998700de3d51173c8c04", 3
 )
 
-# The Focus Crawl was normalized (#8111) and tokenized after both fleet runs, by
-# which point #8100 had bumped TOKENIZED_ATTR_DATA_VERSION to 4. It is the only
-# source whose outputs sit at the current version, under either tokenizer.
+# The Focus Crawl was normalized (#8111) and tokenized after the quality run, by
+# which point #8100 had bumped TOKENIZED_ATTR_DATA_VERSION to 4. That is where
+# every Marin leaf now sits, so this only still bites the quality tokenization.
 _ARTIFACT_VERSION_OVERRIDES = {"common-crawl-focus-2026-22": 4}
 
 DOMAIN_CLUSTER_ASSIGNMENT_PATH = "datakit/cluster/domain/v1/harrier-all-sources-10m/train_fe81b456"
@@ -116,7 +204,71 @@ DOMAIN_ASSIGN_BATCH_SIZE = 4096
 # also hash the run id into their own steps.
 EXACT_DUPS_ID = "global_exact_dedup_af4c6c3e"
 FUZZY_DUPS_ID = "dedup_709f5997"
-VERIFIED_FUZZY_DUPS_PATH = "datakit/verify_fuzzy_dups_c757e4f0"
+# Verification against whole materialized clusters rather than a bounded set of
+# local representatives, at containment 0.75 on word 3-grams. It reads the
+# repacked candidates, so it keys all 292 sources the way normalize keys them
+# today, and it records the rule that deleted each document.
+VERIFIED_FUZZY_DUPS_PATH = "user/rav/dedup/verified/v11-c075-restored"
+
+# The key the two candidate runs filed the focus crawl under: its jusText
+# extraction, read as a finished source before #8111 sent it through
+# normalize_step. Fuzzy verification already repacked its half (#8237) and keys
+# all 292 sources the way normalize keys them today; the exact marks still carry
+# this key, and :mod:`experiments.datakit.repack_exact_dups` moves them.
+FOCUS_SOURCE_NAME = "common-crawl-focus-2026-22"
+LEGACY_FOCUS_SOURCE_KEY = "data/datakit/normalized/common_crawl_focus_2026_22_ed4b8bc9/outputs/main"
+
+
+@dataclass(frozen=True)
+class QualityPin:
+    """A quality scorer's identity: the bytes it reads and the tokens it eats."""
+
+    name: str
+    """Value written into the score rows' ``model`` column."""
+
+    model_sha256: str
+    """Digest over the deployed model directory, as
+    ``score_corpus.model_dir_sha256`` computes it: every file under the root,
+    addressed relative to it, folded in bytewise path order. Scoring refuses to
+    write from a directory that digests to anything else, so the path's claim
+    about which model produced the scores under it is checked, not asserted."""
+
+    calibration_sha256: str
+    """Plain SHA-256 of the calibration file's bytes, not the folded recipe above.
+    The file sits inside the model directory, so ``model_sha256`` already covers
+    it; this names it on its own, because the cutpoints it carries decide every
+    document's bucket and the store reads them separately from the model."""
+
+    tokenizer: TokenizerPin
+    """Which tokenization the scorer read. Folded in structurally: :func:`quality`
+    makes that tokenize step a dependency rather than naming its leaf. It is not
+    the corpus tokenization -- see :data:`_QUALITY_TOKENIZATION`."""
+
+    version: int
+    """Bump to rescore the corpus under an unchanged model and calibration."""
+
+
+NEMOTRON_88K = QualityPin(
+    name="nemotron88k_v1",
+    model_sha256="e1be09c903bf7a926046bac97d40db050ca399fbb336c7541df42dc8cf6eda10",
+    calibration_sha256="1a1dcfd31c20d9f3879878d617f0f8fb0b6898c4445885ffae29ebea63738fd8",
+    tokenizer=_QUALITY_TOKENIZATION,
+    version=1,
+)
+
+# Where NEMOTRON_88K's deployed bytes sit. Held as a path beside the pin rather
+# than inside it: the digests are what make the claim checkable, and scoring
+# refuses to run against a directory that digests to anything else, so this only
+# has to say where to look.
+QUALITY_MODEL_DIR = "user/muchanem/quality_scores_run/model/nemotron_88k_folded"
+QUALITY_CALIBRATION_FILE = "calib_bme.json"
+
+
+def quality_calibration(quality_model: QualityPin = NEMOTRON_88K) -> str:
+    """Return the calibration file whose knots cut ``quality_model``'s scores."""
+    if quality_model != NEMOTRON_88K:
+        raise KeyError(f"no calibration path recorded for {quality_model.name!r}")
+    return prefix_join(marin_prefix(), f"{QUALITY_MODEL_DIR}/{QUALITY_CALIBRATION_FILE}")
 
 
 def _refuse_to_run(output_path: str) -> NoReturn:
@@ -160,8 +312,7 @@ def normalized(source: str) -> StepSpec:
     return _read_only(_normalize_step(source))
 
 
-def tokenized(source: str, tokenizer: TokenizerPin = NEMOTRON_TOKENIZER) -> StepSpec:
-    """Return the tokenized attributes for ``source`` under ``tokenizer``."""
+def _tokenize_step(source: str, tokenizer: TokenizerPin) -> StepSpec:
     step = tokenize_attributes_step(
         name=f"datakit/tokenize/{source}",
         train_normalize=_normalize_step(source),
@@ -173,10 +324,53 @@ def tokenized(source: str, tokenizer: TokenizerPin = NEMOTRON_TOKENIZER) -> Step
     return _read_only(replace(step, hash_attrs={**step.hash_attrs, "artifact_version": version}))
 
 
+def tokenized(source: str) -> StepSpec:
+    """Return the tokenized attributes for ``source``."""
+    return _tokenize_step(source, MARIN_TOKENIZER)
+
+
+def quality_tokenization(source: str, quality_model: QualityPin = NEMOTRON_88K) -> StepSpec:
+    """Return the tokenization ``quality_model`` reads, which is not :func:`tokenized`.
+
+    Only the scorer needs this. Everything downstream of the scores joins them to
+    the corpus by document id, so it reads :func:`tokenized` instead.
+    """
+    return _tokenize_step(source, quality_model.tokenizer)
+
+
 def minhash(source: str) -> StepSpec:
     """Return the MinHash signatures for ``source``, keyed off its normalized output."""
     steps = zephyr_datakit_steps({source: _normalize_step(source)})
     return _read_only(steps.minhash[source])
+
+
+def quality(source: str, quality_model: QualityPin = NEMOTRON_88K) -> StepSpec:
+    """Return the quality scores for ``source`` under ``quality_model``.
+
+    Unlike the other accessors this one takes no pinned path: its output sits at
+    ``name_with_hash`` like any ordinary step, so the scorer is *in* the path.
+    The scorer's identity reaches the hash two ways, and it needs both. The model
+    and calibration digests go in ``hash_attrs``, which covers the bytes the
+    scorer reads; the tokenization goes in as a dependency, so ``hash_id`` folds
+    it through ``dep_names`` rather than through string surgery on a leaf name.
+
+    The earlier layout derived the score path from the tokenize leaf alone, which
+    left the scorer invisible: two pins over one tokenization resolved to the same
+    directory, so a step could claim one model and read another's bytes. Here two
+    pins that differ anywhere -- model, calibration, tokenizer or version -- differ
+    in ``hash_id``, and so cannot collide.
+    """
+    return StepSpec(
+        name=f"datakit/quality/{source}",
+        deps=[quality_tokenization(source, quality_model)],
+        hash_attrs={
+            "model": quality_model.name,
+            "model_sha256": quality_model.model_sha256,
+            "calibration_sha256": quality_model.calibration_sha256,
+            "version": quality_model.version,
+        },
+        fn=_refuse_to_run,
+    )
 
 
 def exact_dups() -> StepSpec:
@@ -185,13 +379,33 @@ def exact_dups() -> StepSpec:
 
 
 def fuzzy_dups() -> StepSpec:
-    """Return the pinned fuzzy-duplicate attributes covering every source."""
+    """Return the pinned fuzzy-duplicate *candidate* attributes covering every source."""
     return _frozen_step("hero/fuzzy_dups", f"datakit/{FUZZY_DUPS_ID}")
 
 
 def verified_fuzzy_dups() -> StepSpec:
     """Return the pinned verified fuzzy-duplicate attributes covering every source."""
     return _frozen_step("hero/verified_fuzzy_dups", VERIFIED_FUZZY_DUPS_PATH)
+
+
+def decontam(source: str) -> StepSpec:
+    """Return the decontamination marks for ``source``.
+
+    Recorded rather than recomputed, like :func:`harrier`. The decon step folds
+    the eval bloom and the cross-source drop sets into its identity through its
+    dependencies, and both have moved since the run that produced this data, so
+    rebuilding the step from current code addresses a directory that does not
+    exist. The map is checked in by whoever runs decontamination, from the step
+    paths their own pipeline resolves -- nothing searches storage for it.
+    """
+    paths = decon_paths()
+    if source not in paths:
+        raise PendingRegistration(
+            f"decontamination for {source!r}",
+            f"the map in {decon_paths_path().name} covers {len(paths)} sources but not this one; "
+            "it must name every source the store builds over",
+        )
+    return _frozen_step(f"hero/decontam/{source}", paths[source])
 
 
 def domain_cluster_assignment() -> StepSpec:
@@ -244,8 +458,7 @@ def all_paths() -> dict[str, str]:
     for source in sorted(sources):
         paths[f"normalized/{source}"] = _read_only(sources[source]).output_path
         paths[f"minhash/{source}"] = _read_only(minhash_steps[source]).output_path
-        paths[f"tokenize.marin/{source}"] = tokenized(source, MARIN_TOKENIZER).output_path
-        paths[f"tokenize.nemotron/{source}"] = tokenized(source, NEMOTRON_TOKENIZER).output_path
+        paths[f"tokenize/{source}"] = tokenized(source).output_path
         paths[f"harrier/{source}"] = harrier(source)
         paths[f"cluster_assign/{source}"] = assigned_clusters(source).output_path
     return paths

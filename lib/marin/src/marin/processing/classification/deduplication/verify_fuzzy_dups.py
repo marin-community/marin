@@ -34,6 +34,7 @@ from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
+from marin.processing.classification.deduplication.cluster_dedup import ClusterDedupParams
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData
 from marin.processing.classification.deduplication.fuzzy_verification import (
@@ -112,13 +113,34 @@ class VerifiedFuzzyDupsPerSource(BaseModel):
 
 
 class VerifiedFuzzyDupsAttrData(BaseModel):
-    """Sparse, co-partitioned markers for verified fuzzy duplicates."""
+    """Sparse, co-partitioned markers for verified fuzzy duplicates.
+
+    Two rules write this shape. The pipeline verifier compares each member with
+    a bounded set of local representatives and records ``verification`` plus
+    ``local_representatives``. The cluster-text verifier solves a whole
+    materialized cluster at once and records ``rule``. Consumers read only
+    ``sources`` and the markers themselves, so either producer serves them --
+    but exactly one description must be present, because an artifact that does
+    not say which rule deleted a document cannot be audited later.
+    """
 
     version: str = f"v{VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION}"
-    verification: FuzzyVerificationParams
-    local_representatives: LocalRepresentativeParams
+    verification: FuzzyVerificationParams | None = None
+    local_representatives: LocalRepresentativeParams | None = None
+    rule: ClusterDedupParams | None = None
     sources: dict[str, VerifiedFuzzyDupsPerSource]
     counters: dict[str, int | float]
+
+    @model_validator(mode="after")
+    def _exactly_one_rule_description(self) -> "VerifiedFuzzyDupsAttrData":
+        pipeline_rule = self.verification is not None or self.local_representatives is not None
+        if pipeline_rule and self.rule is not None:
+            raise ValueError("Set either verification/local_representatives or rule, not both")
+        if not pipeline_rule and self.rule is None:
+            raise ValueError("Set verification and local_representatives, or set rule")
+        if pipeline_rule and (self.verification is None or self.local_representatives is None):
+            raise ValueError("The pipeline verifier records verification and local_representatives together")
+        return self
 
     def attr_dir_for_source(self, source_path: str) -> str:
         """Return the attribute directory for a materialized source path."""

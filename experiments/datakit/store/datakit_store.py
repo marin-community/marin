@@ -22,7 +22,7 @@ import tempfile
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from functools import partial
 from typing import TypedDict
@@ -55,7 +55,7 @@ from zephyr.dataset import Dataset, format_shard_path
 from zephyr.execution import ZephyrContext
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
-from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
+from experiments.datakit.cluster.quality.fast_transformer.artifact import DEFAULT_CALIBRATION_KEY
 from experiments.datakit.global_exact_dedup import ExactDupsPerSource, GlobalExactDedupData
 from experiments.datakit.store.bucket_writer import BucketSpillRun, write_bucket_cache_from_spills
 
@@ -73,6 +73,24 @@ class BucketCacheStats(BaseModel):
     n_shards: int
 
 
+class SourceStats(BaseModel):
+    """What one source contributed, and what each filter took from it.
+
+    Every counter the store emits is a corpus-wide total, which over hundreds of
+    sources cannot answer the question worth asking: did each one contribute what
+    it should. A source that joined to nothing, or to far too much, disappears
+    into the aggregate. These are the same numbers, kept per source.
+    """
+
+    source_name: str
+    records_in: int
+    records_out: int
+    tokens_out: int
+    contaminated_dropped: int
+    exact_duplicate_dropped: int
+    fuzzy_duplicate_dropped: int
+
+
 class ClusteredStoreData(BaseModel):
     """One Levanter cache per populated (cluster, quality) bucket.
 
@@ -80,12 +98,15 @@ class ClusteredStoreData(BaseModel):
     ``read_artifact(output_path, ClusteredStoreData)``.
     """
 
-    version: str = "v4"
+    version: str = "v5"
     cache_path: DatakitArtifactPath
     cluster_view: int
-    bucket_edges: list[float]
+    bucket_edges: dict[str, list[float]]
+    """Score cutpoints per content type, including the ``default`` fallback."""
+
     split: str
     buckets: list[BucketCacheStats]
+    sources: list[SourceStats]
     source_names: list[str]
     tokenizer: str
     counters: dict[str, int | float]
@@ -97,7 +118,8 @@ def _per_source_shard_tuples(
     tokenize: TokenizedAttrData,
     decontam: DeconAttributes,
     cluster_assign: AssignmentAttrData,
-    quality: QualityScores,
+    quality_dir: str,
+    content_type_dir: str | None,
     exact_dedup_attr_dir: str,
     dedup_attr_dir: str,
     split: str,
@@ -112,8 +134,11 @@ def _per_source_shard_tuples(
 
     decon_dir = decontam.main_output_dir.rstrip("/")
     cluster_dir = cluster_assign.output_dir.rstrip("/")
-    quality_dir = quality.main_output_dir.rstrip("/")
+    quality_dir = quality_dir.rstrip("/")
+    content_dir = content_type_dir.rstrip("/") if content_type_dir else None
     exact_dedup_dir = exact_dedup_attr_dir.rstrip("/")
+    # Empty when the source is exempt from fuzzy dedup, which the shard loop
+    # reads as "no markers to apply" rather than as a missing directory.
     dedup_dir = dedup_attr_dir.rstrip("/")
     return [
         {
@@ -121,8 +146,9 @@ def _per_source_shard_tuples(
             "decontam": f"{decon_dir}/{os.path.basename(tok_path)}",
             "cluster": f"{cluster_dir}/{os.path.basename(tok_path)}",
             "quality": f"{quality_dir}/{os.path.basename(tok_path)}",
+            "content_type": f"{content_dir}/{os.path.basename(tok_path)}" if content_dir else "",
             "exact_dedup": f"{exact_dedup_dir}/{os.path.basename(tok_path)}",
-            "dedup": f"{dedup_dir}/{os.path.basename(tok_path)}",
+            "dedup": f"{dedup_dir}/{os.path.basename(tok_path)}" if dedup_dir else "",
             "source_name": source_name,
             "basename": os.path.basename(tok_path),
         }
@@ -148,14 +174,67 @@ def _load_cluster_table(path: str, cluster_col: str) -> tuple[pa.Array, np.ndarr
     return table.column("id").combine_chunks(), np.asarray(table.column(cluster_col), dtype=np.int32)
 
 
-def _load_quality_table(path: str) -> tuple[pa.Array, np.ndarray]:
-    table = _read_columns(path, ["id", "quality_bucket"])
-    return table.column("id").combine_chunks(), np.asarray(table.column("quality_bucket"), dtype=np.int32)
+def _load_quality_table(
+    path: str,
+    content_type_path: str,
+    edges_by_type: Mapping[str, np.ndarray],
+) -> tuple[pa.Array, np.ndarray, pa.Array | None, dict[str, int], int]:
+    """Read a score shard and cut it into buckets, per content type.
+
+    The scorer stores the score, not the bucket: the cutpoints are a calibration
+    decision, and holding them here means changing them is a store rebuild rather
+    than a rescore of every document.
+
+    Which cutpoints apply depends on what the document is. One score means
+    different things in code and in prose, and the calibration carries a fitted
+    set per content type for exactly that reason. Rows whose type has no
+    calibration of its own -- ``other``, and anything the classifier emits later
+    -- fall to ``default``, which is the content-blind fit.
+
+    Returns the content-type column too, so the caller can check it lines up with
+    the other dense tables rather than trusting the basename, plus the rows seen
+    per type and how many of those had no calibration of their own.
+    """
+    table = _read_columns(path, ["id", "score"])
+    ids = table.column("id").combine_chunks()
+    scores = np.asarray(table.column("score"), dtype=np.float64)
+    if not content_type_path:
+        buckets = np.digitize(scores, edges_by_type[DEFAULT_CALIBRATION_KEY]).astype(np.int32)
+        return ids, buckets, None, {DEFAULT_CALIBRATION_KEY: len(scores)}, 0
+
+    content = _read_columns(content_type_path, ["id", "content_type"])
+    types = content.column("content_type").to_pylist()
+    if len(types) != len(scores):
+        raise RuntimeError(
+            f"{content_type_path}: {len(types)} content-type rows against {len(scores)} score rows "
+            "-- co-partitioning broken"
+        )
+    buckets = np.empty(len(scores), dtype=np.int32)
+    seen: dict[str, int] = {}
+    uncalibrated = 0
+    # One digitize per distinct type rather than per row: a shard carries a
+    # handful of types over hundreds of thousands of documents.
+    type_array = np.asarray(types, dtype=object)
+    for content_type in set(types):
+        selector = type_array == content_type
+        rows = int(selector.sum())
+        edges = edges_by_type.get(content_type)
+        if edges is None:
+            edges = edges_by_type[DEFAULT_CALIBRATION_KEY]
+            uncalibrated += rows
+        buckets[selector] = np.digitize(scores[selector], edges)
+        seen[content_type] = rows
+    return ids, buckets, content.column("id").combine_chunks(), seen, uncalibrated
 
 
 def _load_verified_duplicates(path: str) -> set[str]:
-    """Return IDs that the full-text verifier marked as duplicates."""
-    if not StoragePath(path).exists():
+    """Return IDs that the full-text verifier marked as duplicates.
+
+    An empty path means the source is exempt from fuzzy dedup, so nothing is
+    dropped for it. A path that is set but absent means the sparse attribute
+    tree simply has no markers for that shard.
+    """
+    if not path or not StoragePath(path).exists():
         return set()
     with StoragePath(path).open("rb") as fh:
         parquet = pq.ParquetFile(fh)
@@ -231,6 +310,8 @@ class _TaskCompletion:
 
     buckets: list[_TaskBucketStat]
     counters: dict[str, int | float]
+    sources: dict[str, dict[str, int]] = dataclasses.field(default_factory=dict)
+    """Per-source totals for this task, merged across tasks by the driver."""
 
 
 @dataclasses.dataclass
@@ -240,14 +321,27 @@ class _FilterStats:
     exact_duplicate_dropped: int = 0
     fuzzy_duplicate_dropped: int = 0
     records_out: int = 0
+    content_type_rows: dict[str, int] = dataclasses.field(default_factory=dict)
+    """Rows read per content type, and how many fell back to ``default``.
+
+    Carried here rather than emitted where it is counted. Shards are joined in a
+    spawned subprocess, whose ``counters.pipeline`` writes never reach the parent,
+    so anything that must survive the process boundary travels as data and is
+    re-emitted by :func:`_partition_and_write_task`.
+    """
+
+    content_type_without_calibration: int = 0
 
     def counters(self) -> dict[str, int]:
+        per_type = {f"datakit_store/content_type/{name}": n for name, n in self.content_type_rows.items()}
         return {
             "datakit_store/records_in": self.records_in,
             "datakit_store/contaminated_dropped": self.contaminated_dropped,
             "datakit_store/exact_duplicate_dropped": self.exact_duplicate_dropped,
             "datakit_store/fuzzy_duplicate_dropped": self.fuzzy_duplicate_dropped,
             "datakit_store/records_out": self.records_out,
+            "datakit_store/content_type_without_calibration": self.content_type_without_calibration,
+            **per_type,
         }
 
 
@@ -282,6 +376,7 @@ class _SpillShardResult:
     buckets: list[_SpillBucketRun]
     stats: _FilterStats
     tokens: int
+    source_name: str
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +436,7 @@ def _iter_tokenized_documents(path: str) -> Iterator[tuple[str, np.ndarray]]:
 def _iter_surviving_docs(
     spec: dict[str, str],
     cluster_col: str,
+    edges_by_type: Mapping[str, np.ndarray],
     *,
     stats: _FilterStats,
 ) -> Iterator[_SurvivingDocument]:
@@ -352,9 +448,12 @@ def _iter_surviving_docs(
     """
     decon_ids, contaminated = _load_decon_table(spec["decontam"])
     cluster_ids, cluster_vals = _load_cluster_table(spec["cluster"], cluster_col)
-    # Quality parquets carry a precomputed, calibrated ``quality_bucket`` column
-    # (fast-transformer scorer), consumed as-is -- no score->bucket mapping here.
-    quality_ids, quality_buckets = _load_quality_table(spec["quality"])
+    quality_ids, quality_buckets, content_ids, content_rows, uncalibrated = _load_quality_table(
+        spec["quality"], spec.get("content_type", ""), edges_by_type
+    )
+    for name, rows in content_rows.items():
+        stats.content_type_rows[name] = stats.content_type_rows.get(name, 0) + rows
+    stats.content_type_without_calibration += uncalibrated
     n_decon, n_cluster, n_quality = len(decon_ids), len(cluster_ids), len(quality_ids)
     if not (n_decon == n_cluster == n_quality):
         raise RuntimeError(
@@ -368,8 +467,13 @@ def _iter_surviving_docs(
         raise RuntimeError(f"{where}: decon/cluster id mismatch -- co-partitioning broken")
     if not pc.all(pc.equal(decon_ids, quality_ids)).as_py():
         raise RuntimeError(f"{where}: decon/quality id mismatch -- co-partitioning broken")
+    # The content type decides which cutpoints a row is scored against, so a
+    # misaligned type column silently buckets documents under another kind of
+    # content rather than failing.
+    if content_ids is not None and not pc.all(pc.equal(decon_ids, content_ids)).as_py():
+        raise RuntimeError(f"{where}: decon/content-type id mismatch -- co-partitioning broken")
     expected_ids = decon_ids.to_pylist()
-    del decon_ids, cluster_ids, quality_ids
+    del decon_ids, cluster_ids, quality_ids, content_ids
     exact_duplicates = _load_exact_duplicates(spec["exact_dedup"])
     verified_duplicates = _load_verified_duplicates(spec["dedup"])
 
@@ -412,6 +516,7 @@ def _iter_surviving_docs(
 def _spill_source_shard(
     spec: dict[str, str],
     cluster_col: str,
+    edges_by_type: Mapping[str, np.ndarray],
     scratch_dir: str,
     shard_index: int,
 ) -> _SpillShardResult:
@@ -420,7 +525,7 @@ def _spill_source_shard(
     os.makedirs(shard_dir)
     buckets: dict[tuple[int, int], list[np.ndarray]] = defaultdict(list)
     stats = _FilterStats()
-    for document in _iter_surviving_docs(spec, cluster_col, stats=stats):
+    for document in _iter_surviving_docs(spec, cluster_col, edges_by_type, stats=stats):
         buckets[(document.cluster, document.quality)].append(np.asarray(document.input_ids, dtype=np.int32))
 
     results: list[_SpillBucketRun] = []
@@ -448,7 +553,7 @@ def _spill_source_shard(
                 ),
             )
         )
-    return _SpillShardResult(buckets=results, stats=stats, tokens=total_tokens)
+    return _SpillShardResult(buckets=results, stats=stats, tokens=total_tokens, source_name=spec["source_name"])
 
 
 def _task_sidecar_path(output_path: str, task: int, total_tasks: int) -> str:
@@ -467,6 +572,7 @@ def _load_task_sidecar(path: str) -> _TaskCompletion:
     return _TaskCompletion(
         buckets=[_TaskBucketStat(**item) for item in payload["buckets"]],
         counters=payload["counters"],
+        sources=payload.get("sources", {}),
     )
 
 
@@ -474,6 +580,7 @@ def _partition_and_write_task(
     task_input: _StoreTask,
     *,
     cluster_col: str,
+    edges_by_type: Mapping[str, np.ndarray],
     output_path: str,
     max_parallel_bucket_writes: int,
     partition_processes: int,
@@ -501,13 +608,27 @@ def _partition_and_write_task(
                 _spill_source_shard,
                 batch_specs,
                 [cluster_col] * len(batch_specs),
+                [edges_by_type] * len(batch_specs),
                 [scratch_dir] * len(batch_specs),
                 range(len(batch_specs)),
             )
+            per_source: dict[str, dict[str, int]] = {}
             for result in results:
                 n_tokens += result.tokens
                 for name, value in result.stats.counters().items():
                     counters.pipeline.update_counter(name, value)
+                # Same numbers, kept per source. A shard belongs to exactly one
+                # source, so this is a roll-up rather than a second measurement.
+                totals = per_source.setdefault(result.source_name, {})
+                for key in (
+                    "records_in",
+                    "records_out",
+                    "contaminated_dropped",
+                    "exact_duplicate_dropped",
+                    "fuzzy_duplicate_dropped",
+                ):
+                    totals[key] = totals.get(key, 0) + getattr(result.stats, key)
+                totals["tokens_out"] = totals.get("tokens_out", 0) + result.tokens
                 for bucket in result.buckets:
                     key = (bucket.cluster, bucket.quality)
                     spill_runs[key].append(bucket.run)
@@ -557,7 +678,7 @@ def _partition_and_write_task(
         if name.startswith("datakit_store/") and value != initial_counters.get(name, 0)
     }
     bucket_stats.sort(key=lambda stat: (stat.cluster, stat.quality))
-    _write_task_sidecar(sidecar_path, _TaskCompletion(buckets=bucket_stats, counters=task_counters))
+    _write_task_sidecar(sidecar_path, _TaskCompletion(buckets=bucket_stats, counters=task_counters, sources=per_source))
     return {"sidecar_path": sidecar_path, "task": task, "resumed": 0}
 
 
@@ -627,9 +748,12 @@ def build_clustered_store(
     tokenize: dict[str, TokenizedAttrData],
     decontam: dict[str, DeconAttributes],
     cluster_assign: dict[str, AssignmentAttrData],
-    quality: dict[str, QualityScores],
+    quality: dict[str, str],
+    bucket_edges: Mapping[str, Sequence[float]],
+    content_type: dict[str, str] | None = None,
     exact_dedup: GlobalExactDedupData,
     dedup: VerifiedFuzzyDupsAttrData,
+    fuzzy_dedup_exempt: frozenset[str] = frozenset(),
     output_path: str,
     cluster_view: int = 40,
     split: str = "train",
@@ -642,6 +766,18 @@ def build_clustered_store(
     """Build materialized caches for each populated ``(cluster, quality)`` bucket.
 
     Args:
+        quality: Per source, the directory of ``id``/``score`` shards, named by
+            the same basenames as that source's tokenize shards.
+        bucket_edges: Cutpoints applied to ``score``, keyed by content type, each
+            in ascending order. Must carry a ``default`` entry, which is what a
+            document gets when its type has no calibration of its own. One
+            mapping for the whole corpus: bucket ids are only comparable across
+            sources if every source was cut the same way, and the caller owns
+            that because it is the one that knows the scorer.
+        content_type: Per source, the directory of ``id``/``content_type`` shards
+            co-partitioned with tokenize. Omit to cut every document at
+            ``default``, which reads a corpus spanning code, math and prose
+            through one lens and measurably promotes the first two.
         task_count: Split input shards round-robin across this many tasks. When
             omitted, each input shard becomes one task.
         max_parallel_bucket_writes: Bucket caches finalized concurrently per
@@ -663,11 +799,20 @@ def build_clustered_store(
     if partition_processes < 1:
         raise ValueError(f"partition_processes must be >= 1, got {partition_processes}")
 
-    # Every source must share one quality model so bucket IDs are comparable.
-    models = {(q.model_dir, q.calib_file, tuple(q.bucket_edges)) for q in quality.values()}
-    if len(models) != 1:
-        raise ValueError(f"build_clustered_store: sources span multiple quality models: {sorted(models)}")
-    bucket_edges = next(iter(quality.values())).bucket_edges
+    if DEFAULT_CALIBRATION_KEY not in bucket_edges:
+        raise ValueError(f"bucket_edges needs a {DEFAULT_CALIBRATION_KEY!r} entry, got {sorted(bucket_edges)}")
+    edges_by_type: dict[str, np.ndarray] = {}
+    for content_key, values in bucket_edges.items():
+        edges = np.asarray(values, dtype=np.float64)
+        if edges.size == 0 or not np.all(np.diff(edges) > 0):
+            raise ValueError(f"bucket_edges[{content_key!r}] must be non-empty and ascending, got {list(values)}")
+        edges_by_type[content_key] = edges
+    widths = {len(v) for v in edges_by_type.values()}
+    if len(widths) != 1:
+        raise ValueError(f"every content type must cut into the same number of buckets, got widths {sorted(widths)}")
+    if content_type is not None and set(content_type) != set(tokenize):
+        missing = sorted(set(tokenize) - set(content_type))
+        raise ValueError(f"content_type source set must equal tokenize: missing={missing!r}")
 
     cluster_col = _validate_cluster_view(cluster_assign, cluster_view)
 
@@ -697,12 +842,17 @@ def build_clustered_store(
 
     def resolve_source_shards(source_name: str) -> list[dict[str, str]]:
         source_key = source_keys[source_name]
-        dedup_attr_dir = _resolve_dedup_attr_dir(
-            source_name=source_name,
-            source_key=source_key,
-            sources=dedup.sources,
-            label="dedup",
-        )
+        if source_name in fuzzy_dedup_exempt:
+            # No attribute directory at all, so the shard loop never reads a
+            # fuzzy marker for this source and keeps every document it holds.
+            dedup_attr_dir = ""
+        else:
+            dedup_attr_dir = _resolve_dedup_attr_dir(
+                source_name=source_name,
+                source_key=source_key,
+                sources=dedup.sources,
+                label="dedup",
+            )
         exact_dedup_attr_dir = _resolve_dedup_attr_dir(
             source_name=source_name,
             source_key=source_key,
@@ -714,7 +864,8 @@ def build_clustered_store(
             tokenize=tokenize[source_name],
             decontam=decontam[source_name],
             cluster_assign=cluster_assign[source_name],
-            quality=quality[source_name],
+            quality_dir=quality[source_name],
+            content_type_dir=content_type[source_name] if content_type else None,
             exact_dedup_attr_dir=exact_dedup_attr_dir,
             dedup_attr_dir=dedup_attr_dir,
             split=split,
@@ -751,6 +902,7 @@ def build_clustered_store(
     write_task = partial(
         _partition_and_write_task,
         cluster_col=cluster_col,
+        edges_by_type=edges_by_type,
         output_path=output_path,
         max_parallel_bucket_writes=max_parallel_bucket_writes,
         partition_processes=partition_processes,
@@ -775,6 +927,43 @@ def build_clustered_store(
     sidecar_paths = [str(result["sidecar_path"]) for result in confirmations]
     with ThreadPoolExecutor(max_workers=min(64, len(sidecar_paths))) as executor:
         completions = list(executor.map(_load_task_sidecar, sidecar_paths))
+    merged_sources: dict[str, dict[str, int]] = {}
+    for completion in completions:
+        for source, totals in completion.sources.items():
+            into = merged_sources.setdefault(source, {})
+            for key, value in totals.items():
+                into[key] = into.get(key, 0) + value
+    source_stats = [
+        SourceStats(
+            source_name=source,
+            records_in=totals.get("records_in", 0),
+            records_out=totals.get("records_out", 0),
+            tokens_out=totals.get("tokens_out", 0),
+            contaminated_dropped=totals.get("contaminated_dropped", 0),
+            exact_duplicate_dropped=totals.get("exact_duplicate_dropped", 0),
+            fuzzy_duplicate_dropped=totals.get("fuzzy_duplicate_dropped", 0),
+        )
+        for source, totals in sorted(merged_sources.items())
+    ]
+    # Only meaningful when every task reported per-source totals. A run resumed
+    # across this change reads sidecars written before it, whose sources are
+    # absent because they were never recorded rather than because nothing joined,
+    # and failing on that would make the upgrade break exactly the retry path the
+    # sidecars exist for.
+    if all(completion.sources for completion in completions):
+        missing = sorted(set(tokenize) - {stat.source_name for stat in source_stats})
+        if missing:
+            raise RuntimeError(
+                f"no documents reached the store from {len(missing)} sources, e.g. {missing[:5]}. "
+                "A source that joins to nothing is indistinguishable from one that was never read."
+            )
+    elif source_stats:
+        logger.warning(
+            "per-source totals cover %d of %d sources; the rest ran before the store recorded them",
+            len(source_stats),
+            len(tokenize),
+        )
+
     task_bucket_stats = [stat for completion in completions for stat in completion.buckets]
     buckets = _merge_per_bucket_ledgers(task_bucket_stats=task_bucket_stats, output_path=output_path)
 
@@ -792,9 +981,10 @@ def build_clustered_store(
     artifact = ClusteredStoreData(
         cache_path=output_path,
         cluster_view=cluster_view,
-        bucket_edges=bucket_edges,
+        bucket_edges={k: v.tolist() for k, v in edges_by_type.items()},
         split=split,
         buckets=buckets,
+        sources=source_stats,
         source_names=sorted(tokenize),
         tokenizer=tokenizer,
         counters=artifact_counters,

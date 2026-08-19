@@ -39,7 +39,9 @@ from typing import Any, TypeVar
 
 import cloudpickle
 import psutil
+from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from zephyr import counters
 from zephyr.plan import Scatter, StageContext, run_stage
@@ -64,6 +66,12 @@ from zephyr.stats import (
 from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, _worker_ctx_var, merge_counter_entries
 
 logger = logging.getLogger(__name__)
+
+# A whole wave reads one shared-data key at startup, so the herd is as wide as
+# the stage. Spread the retries wider than a normal read: every task that
+# backs off is also load the next attempt no longer has to fight.
+_SHARED_DATA_MAX_ATTEMPTS = 8
+_SHARED_DATA_BACKOFF = ExponentialBackoff(initial=1.0, maximum=30.0, factor=2.0)
 
 
 __all__ = ["InlineRunner", "StageRunner", "SubprocessRunner"]
@@ -108,7 +116,20 @@ class _InProcessWorkerContext:
         if name not in self._shared_data_cache:
             path = _shared_data_path(self._chunk_prefix, self._execution_id, name)
             logger.info("Loading shared data '%s' from %s", name, path)
-            self._shared_data_cache[name] = cloudpickle.loads(StoragePath(path).read_bytes())
+            # Every task in a wave reads this same key at startup, so a stage
+            # that fans out to thousands of tasks hot-spots one object -- the
+            # fuzzy verification asked 2,048 tasks for the same 17 MiB pickle at
+            # once and lost tasks to EndpointConnectionError. This read had no
+            # retry at all, so one refused connection killed the task and the
+            # coordinator requeued it into the same herd.
+            raw = retry_with_backoff(
+                lambda: StoragePath(path).read_bytes(),
+                retryable=is_transient_s3_error,
+                max_attempts=_SHARED_DATA_MAX_ATTEMPTS,
+                backoff=_SHARED_DATA_BACKOFF,
+                operation=f"read shared data {path}",
+            )
+            self._shared_data_cache[name] = cloudpickle.loads(raw)
         return self._shared_data_cache[name]
 
     def set_counter(self, name: str, value: int | float, stage: str | None = None) -> None:
