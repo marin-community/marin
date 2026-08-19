@@ -83,3 +83,13 @@ The 564-run campaign is in integration. Harbor PR #83 supplies the Pi hosted-vLL
 - Result: the new regression test failed before the fix on `--ingress_mode controller --ingress_host https://iris.oa.dev`; the focused parser and ingress suites pass 33/33 after the fix. The original four smoke tasks used OTA `30aec355` and reached `run_eval.py`, where they exited on the unknown arguments before vLLM startup.
 - Interpretation: the failure is an OTA launcher/worker interface mismatch, not a model, topology, CoreWeave, or Harbor endpoint failure. The original smoke attempts are invalid and must be replaced using the same job names from `37131ce1`.
 - Next action: stop the retrying invalid smoke jobs, mark them `RETRY REQUIRED`, and relaunch all four from OTA `37131ce1`.
+
+### 2026-08-19 14:44 UTC - Remove unsupported vLLM text-only flag
+
+- Hypothesis: after repairing the worker parser, vLLM 0.16 failed before model load because `--language-model-only` is not available in that installed release.
+- Commit Hash: OpenThoughts-Agent `775ce0a0` on pushed branch `penfever/working`.
+- Command: parsed both campaign datagen configs with `parse_datagen_config`; reran `uv run pytest -q tests/eval/test_local_ingress_args.py tests/hpc/test_ingress_wiring.py`.
+- Config: removed only `--language-model-only`; `limit_mm_per_prompt={"image":0,"video":0}` remains in the model registry, and every context, output, sampling, topology, and harness setting is unchanged.
+- Result: both model configs parse with their intended TP/DP layouts and supported vLLM arguments; focused tests pass 33/33. The second smoke attempts reached `api_server.py` and failed on the unsupported flag before model loading.
+- Interpretation: these attempts also contain no model or harness evidence. Removing the optional text-only optimization is the smallest compatible change for vLLM 0.16.
+- Next action: stop the health-check loops from OTA `37131ce1`, mark all four smokes for retry, and relaunch from `775ce0a0`.
