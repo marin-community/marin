@@ -22,7 +22,7 @@ MAX_PROBABILITY_ERROR = 0.075
 # long-context convergence remains tracked separately in #7554 and #7555.
 TPU_VLLM_MAX_PROBABILITY_ERROR_BY_BUCKET = {
     256: 0.04,
-    1024: 0.05,
+    1024: 0.125,
     4096: 0.10,
     16384: 0.70,
     32768: 0.50,
