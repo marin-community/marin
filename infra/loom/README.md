@@ -63,6 +63,53 @@ startup unit stores Docker state on the persistent root disk, reads one numbered
 `docker compose up -d`, applies the configured Loom deployment policy, and
 checks readiness. It does not clone a repository or build images on the VM.
 
+## Shared session-home files
+
+Machine-wide files required by every trusted interactive session belong in the
+stack's `homeFiles` map. Each entry maps a path relative to `/home/app` to a
+numbered Secret Manager version and an explicit restrictive file mode:
+
+```yaml
+config:
+  marin-loom:homeFiles:
+    .kube/coreweave-iris:
+      secretRef: projects/hai-gcp-models/secrets/loom-coreweave-iris-kubeconfig/versions/1
+      mode: "0600"
+```
+
+The secret reference and target path appear in Pulumi state and VM metadata;
+the payload does not. The startup unit fetches all declared versions before
+changing the shared `loom_loom_home` volume, stops the Loom and Caddy Compose
+services, replaces each file atomically, and starts the services with the new
+state. A failure leaves those serving containers stopped instead of continuing
+with stale credentials. Detached sessions remain running and see an atomic
+rename: open file descriptors retain the old payload while later opens see the
+new one. Removing a declaration removes that managed file on the next
+activation without pruning user-created files. Paths must be relative, Secret
+Manager versions must be numeric, and every declaration must set `0400` or
+`0600` explicitly.
+
+The managed-path ledger lives under root-owned `/var/lib/loom/home-files`, not
+in the session-writable volume. This prevents a session from adding arbitrary
+paths to the next activation's deletion set. Managed paths also cannot overlap;
+activation safely removes a stale managed file when a later declaration needs
+that path to become a directory, or vice versa, but stops if unmanaged content
+blocks the transition.
+
+This mechanism is intentionally deployment-wide. The Loom control plane and
+ordinary session containers share `/home/app`, so every session using that
+volume can read files permitted to the `app` user. Do not use `homeFiles` for a
+credential that should be limited to one profile or one user. Put user identity
+credentials in Loom Settings → Access and profile-scoped secrets in the profile's
+write-only environment instead.
+
+Migrate a manually installed CoreWeave kubeconfig in a separate deployment
+change: create a dedicated Secret Manager secret, upload the reviewed file as a
+new version, add the pinned reference above, preview, and deploy. Do not remove
+the current file until the deployed version has been exercised from a new
+session. Never add a `homeFiles` declaration before its referenced secret
+version exists.
+
 ## Update secrets
 
 Do not put secret values in Pulumi configuration or state. Upload a reviewed

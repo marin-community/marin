@@ -41,6 +41,7 @@ SSH_FIREWALL_TAG = "loom-ssh"
 FIREWALL_PRIORITY = 1000
 GIT_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 STARTUP_SCRIPT = (ROOT / "startup-script.sh").read_text()
+HOME_FILE_MATERIALIZER = (ROOT / "materialize_home_files.py").read_text()
 DOCKER_DAEMON_CONFIG = (
     json.dumps(
         {
@@ -93,8 +94,10 @@ def _git_context_at_revision(revision: str) -> str:
 
 
 SECRET_REF = re.compile(
-    r"^projects/(?P<project>[a-z0-9-]+)/secrets/(?P<secret>[A-Za-z0-9_-]+)/versions/(?:latest|[0-9]+)$"
+    r"^projects/(?P<project>[a-z0-9-]+)/secrets/(?P<secret>[A-Za-z0-9_-]+)/versions/(?P<version>latest|[0-9]+)$"
 )
+HOME_FILE_PATH = re.compile(r"(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+")
+HOME_FILE_MODES = frozenset({"0400", "0600"})
 
 
 @dataclass(frozen=True)
@@ -146,6 +149,53 @@ class ProfileSecretConfig:
 
     def manifest(self) -> dict[str, str]:
         return {"name": self.name, "secret_ref": self.secret_ref}
+
+
+@dataclass(frozen=True)
+class HomeFileConfig:
+    path: str
+    project: str
+    secret: str
+    version: str
+    mode: str
+
+    @classmethod
+    def parse(cls, path: str, value: object) -> HomeFileConfig:
+        if not HOME_FILE_PATH.fullmatch(path) or any(part in {".", ".."} for part in path.split("/")):
+            raise ValueError(f"homeFiles has invalid relative path {path!r}")
+        if not isinstance(value, dict):
+            raise ValueError(f"homeFiles entry {path!r} must use a full secretRef")
+        secret_ref = str(value.get("secretRef", "")).strip()
+        match = SECRET_REF.fullmatch(secret_ref)
+        if not match or match.group("version") == "latest":
+            raise ValueError(f"homeFiles entry {path!r} must use a numbered full secretRef")
+        mode = value.get("mode")
+        if not isinstance(mode, str) or mode not in HOME_FILE_MODES:
+            raise ValueError(f"homeFiles entry {path!r} mode must be 0400 or 0600")
+        return cls(path, match.group("project"), match.group("secret"), match.group("version"), mode)
+
+    def manifest(self) -> dict[str, str]:
+        return {
+            "path": self.path,
+            "project": self.project,
+            "secret": self.secret,
+            "version": self.version,
+            "mode": self.mode,
+        }
+
+    @property
+    def secret_target(self) -> tuple[str, str]:
+        return self.project, self.secret
+
+
+def _validate_home_file_paths(home_files: tuple[HomeFileConfig, ...]) -> None:
+    paths: set[str] = set()
+    for home_file in home_files:
+        if home_file.path in paths or any(
+            home_file.path.startswith(f"{path}/") or path.startswith(f"{home_file.path}/") for path in paths
+        ):
+            raise ValueError(f"homeFiles has duplicate or overlapping path {home_file.path!r}")
+        paths.add(home_file.path)
 
 
 def _string_tuple(value: object, field: str, profile: str) -> tuple[str, ...]:
@@ -396,6 +446,7 @@ class DeploymentConfig:
     prune_deployment: bool = False
     settings: tuple[tuple[str, str | int | bool], ...] = ()
     profiles: tuple[ProfileConfig, ...] = ()
+    home_files: tuple[HomeFileConfig, ...] = ()
     workloads: tuple[WorkloadIdentityConfig, ...] = ()
     github_federations: tuple[GitHubFederationConfig, ...] = ()
     vm_project_roles: tuple[str, ...] = ()
@@ -413,6 +464,7 @@ class DeploymentConfig:
             _positive_config_int(value, name)
         _validated_string_tuple(list(self.vm_project_roles), "vmProjectRoles", IAM_ROLE)
         _validated_string_tuple(list(self.vm_pulumi_kms_keys), "vmPulumiKmsKeys", KMS_CRYPTO_KEY)
+        _validate_home_file_paths(self.home_files)
         profile_names = {profile.name for profile in self.profiles}
         workload_names: set[str] = set()
         for workload in self.workloads:
@@ -453,6 +505,10 @@ class DeploymentConfig:
             if not isinstance(key, str) or not key.strip() or not isinstance(value, (str, int, bool)):
                 raise ValueError("settings must map non-empty string keys to string, integer, or boolean values")
             settings.append((key, value))
+        raw_home_files = config.get_object("homeFiles") or {}
+        if not isinstance(raw_home_files, dict):
+            raise ValueError("homeFiles must be an object")
+        home_files = tuple(HomeFileConfig.parse(str(path), value) for path, value in sorted(raw_home_files.items()))
         raw_workloads = config.get_object("workloads") or []
         if not isinstance(raw_workloads, list):
             raise ValueError("workloads must be a list")
@@ -500,6 +556,7 @@ class DeploymentConfig:
             prune_deployment=config.get_bool("pruneDeployment") or False,
             settings=tuple(settings),
             profiles=tuple(profiles),
+            home_files=home_files,
             workloads=tuple(workloads),
             github_federations=tuple(github_federations),
             vm_project_roles=vm_project_roles,
@@ -689,6 +746,14 @@ class RuntimePolicyResources:
     profile_secret_refs: list[tuple[str, str]]
 
 
+def _home_files_manifest(home_files: tuple[HomeFileConfig, ...]) -> str:
+    return json.dumps(
+        [home_file.manifest() for home_file in home_files],
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _workload_service_account(
     config: DeploymentConfig,
     workload: WorkloadIdentityConfig,
@@ -776,7 +841,7 @@ def _create_runtime_policy(
 class SecretResources:
     secret: gcp.secretmanager.Secret
     vm_reader: gcp.secretmanager.SecretIamMember
-    profile_readers: list[gcp.secretmanager.SecretIamMember]
+    runtime_readers: list[gcp.secretmanager.SecretIamMember]
 
 
 def _create_secrets(
@@ -784,7 +849,7 @@ def _create_secrets(
     apis: list[gcp.projects.Service],
     api_options: pulumi.ResourceOptions,
     vm_account: gcp.serviceaccount.Account,
-    profile_secret_refs: list[tuple[str, str]],
+    runtime_secret_refs: list[tuple[str, str]],
 ) -> SecretResources:
     secret = gcp.secretmanager.Secret(
         "loom-dotenv",
@@ -800,10 +865,10 @@ def _create_secrets(
         role=SECRET_ACCESSOR_ROLE,
         member=pulumi.Output.format(SERVICE_ACCOUNT_MEMBER, vm_account.email),
     )
-    profile_readers = []
-    for secret_project, secret_name in sorted(set(profile_secret_refs)):
+    runtime_readers = []
+    for secret_project, secret_name in sorted(set(runtime_secret_refs)):
         suffix = hashlib.sha256(f"{secret_project}/{secret_name}".encode()).hexdigest()[:RESOURCE_HASH_LENGTH]
-        profile_readers.append(
+        runtime_readers.append(
             gcp.secretmanager.SecretIamMember(
                 f"loom-profile-secret-{suffix}",
                 project=secret_project,
@@ -813,7 +878,7 @@ def _create_secrets(
                 opts=api_options,
             )
         )
-    return SecretResources(secret, vm_reader, profile_readers)
+    return SecretResources(secret, vm_reader, runtime_readers)
 
 
 @dataclass(frozen=True)
@@ -840,6 +905,8 @@ def _create_instance(
         "dotenv-secret-id": DOTENV_SECRET_ID,
         "loom-port": str(LOOM_PORT),
         "loom-deployment": runtime_policy.manifest,
+        "loom-home-files": _home_files_manifest(config.home_files),
+        "loom-home-file-materializer": HOME_FILE_MATERIALIZER,
         "docker-daemon-config": DOCKER_DAEMON_CONFIG,
         "loom-compose": RUNTIME_COMPOSE,
         "loom-caddyfile": RUNTIME_CADDYFILE,
@@ -855,7 +922,7 @@ def _create_instance(
         image.vm_reader,
         vm_log_writer,
         *vm_permissions,
-        *secrets.profile_readers,
+        *secrets.runtime_readers,
     ]
     instance = gcp.compute.Instance(
         "loom",
@@ -1002,7 +1069,10 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
     image = _create_image(config, apis, vm_account)
     network = _create_network(config, apis)
     root_disk = _create_root_disk(config, apis)
-    secrets = _create_secrets(config, apis, api_options, vm_account, runtime_policy.profile_secret_refs)
+    runtime_secret_refs = runtime_policy.profile_secret_refs + [
+        home_file.secret_target for home_file in config.home_files
+    ]
+    secrets = _create_secrets(config, apis, api_options, vm_account, runtime_secret_refs)
     instance = _create_instance(
         config,
         vm_account,
