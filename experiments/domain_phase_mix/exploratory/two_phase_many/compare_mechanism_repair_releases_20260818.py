@@ -45,6 +45,8 @@ REFERENCE = SCRIPT_DIR / "reference_outputs"
 # Fields that name the release or where its outputs live. These are EXPECTED to differ and are the only
 # differences allowed; the allowlist is deliberately narrow, since a broad one would prove nothing.
 PROVENANCE_FIELDS = frozenset({"release_sha256", "identity_sha256", "payload_sha256"})
+# A sentinel object rather than a string, so a literal "<absent>" in a document cannot masquerade as one.
+ABSENT = type("Absent", (), {"__repr__": lambda self: "<absent>"})()
 
 
 def _client() -> storage.Client:
@@ -68,14 +70,29 @@ def _row_blob(client: storage.Client, result_root: str, scope: str, row_id: str)
 
 
 def differences(left, right, path: str = "") -> list[tuple[str, object, object]]:
-    """Every leaf where the two documents disagree, with the path that reaches it."""
+    """Every leaf where the two documents disagree, with the path that reaches it.
+
+    Two subtleties, both found by review and both in the direction that would UNDER-report:
+
+    The allowlist applies only at the TOP LEVEL. Applied at every depth it would exempt a nested field
+    that merely shares a name with a provenance key -- `checkpoint_metadata` is parsed from an externally
+    authored file, so that is a real possibility -- and, because the skip preceded the presence check, it
+    also hid a provenance key appearing on one side and not the other.
+
+    Equality alone is not enough at a leaf. Python makes `1 == 1.0`, `True == 1` and `-0.0 == 0.0` all
+    true, so a writer-level type change -- exactly the class of behavioural change this tool exists to
+    rule out -- would compare equal. The canary documents carry 82 integer and 861 boolean leaves, so the
+    surface is not hypothetical. Types must match, and signed zero counts as a difference.
+    """
     if isinstance(left, dict) and isinstance(right, dict):
         found = []
         for key in sorted(set(left) | set(right)):
-            if key in PROVENANCE_FIELDS:
+            # Exempt only a provenance key that is present on BOTH sides: its VALUE may legitimately
+            # differ between releases, but its disappearance is a schema change and must be reported.
+            if path == "" and key in PROVENANCE_FIELDS and key in left and key in right:
                 continue
             if key not in left or key not in right:
-                found.append((f"{path}/{key}", left.get(key, "<absent>"), right.get(key, "<absent>")))
+                found.append((f"{path}/{key}", left.get(key, ABSENT), right.get(key, ABSENT)))
                 continue
             found.extend(differences(left[key], right[key], f"{path}/{key}"))
         return found
@@ -83,8 +100,12 @@ def differences(left, right, path: str = "") -> list[tuple[str, object, object]]
         if len(left) != len(right):
             return [(f"{path}[len]", len(left), len(right))]
         return [d for i, (a, b) in enumerate(zip(left, right, strict=True)) for d in differences(a, b, f"{path}[{i}]")]
-    if isinstance(left, float) and isinstance(right, float):
-        if left == right or (math.isnan(left) and math.isnan(right)):
+    if type(left) is not type(right):
+        return [(path, f"{left!r} ({type(left).__name__})", f"{right!r} ({type(right).__name__})")]
+    if isinstance(left, float):
+        if math.isnan(left) and math.isnan(right):
+            return []
+        if left == right and math.copysign(1.0, left) == math.copysign(1.0, right):
             return []
         return [(path, left, right)]
     return [] if left == right else [(path, left, right)]

@@ -1046,3 +1046,26 @@ def test_release_comparison_detects_real_differences_and_ignores_only_provenance
     relabelled = copy.deepcopy(base)
     relabelled["row"]["checkpoint_label"] = "decay_onset"
     assert compare.differences(base, relabelled) == [("/row/checkpoint_label", "final", "decay_onset")]
+
+
+def test_comparator_reports_type_changes_that_compare_equal():
+    """Python makes 1 == 1.0, True == 1 and -0.0 == 0.0 true, so equality alone would hide a writer-level
+    type change -- the exact class of behavioural change this comparator exists to rule out. The canary
+    documents carry dozens of integer and hundreds of boolean leaves, so the surface is real."""
+    assert compare.differences({"step": 15543}, {"step": 15543.0})
+    assert compare.differences({"passed": True}, {"passed": 1})
+    assert compare.differences({"passed": False}, {"passed": 0.0})
+    assert compare.differences({"x": [1]}, {"x": [1.0]})
+    assert compare.differences({"x": -0.0}, {"x": 0.0})
+    assert compare.differences({"step": 1}, {"step": 1}) == []
+    assert compare.differences({"x": float("nan")}, {"x": float("nan")}) == []
+
+
+def test_comparator_exempts_provenance_only_at_the_top_level_and_only_when_present_on_both_sides():
+    """Applied at every depth the allowlist would exempt a nested field that merely shares a name with a
+    provenance key, and `checkpoint_metadata` is parsed from an externally authored file. A provenance key
+    vanishing is a schema change rather than a value change, so it is reported."""
+    assert compare.differences({"release_sha256": "a", "k": 1}, {"release_sha256": "b", "k": 1}) == []
+    assert compare.differences({"s": [{"identity_sha256": "a"}]}, {"s": [{"identity_sha256": "b"}]})
+    assert compare.differences({"meta": {"release_sha256": "a"}}, {"meta": {"release_sha256": "b"}})
+    assert compare.differences({"payload_sha256": "x"}, {})
