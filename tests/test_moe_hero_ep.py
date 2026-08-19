@@ -17,11 +17,13 @@ import jmp
 import numpy as np
 import optax
 import pytest
+from fray.cluster import ResourceConfig
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from marin.execution.lazy import StepContext
 
+from experiments.grug import dispatch as grug_dispatch
 from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
 from experiments.grug.moe_hero_ep import launch_mfu_test as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
@@ -174,17 +176,24 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     monkeypatch.setenv("XLA_FLAGS", explicit_overlap)
     for name in train.HERO_EP_RUNTIME_ENV:
         monkeypatch.delenv(name, raising=False)
+    requests = []
+
+    class Client:
+        def submit(self, request):
+            requests.append(request)
+            return SimpleNamespace(wait=lambda **_kwargs: None)
+
     config = SimpleNamespace(
         tensorstore_cache_bytes=10_000_000_000,
         trainer=SimpleNamespace(
             trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
             watch_mode=train.WatchMode.INLINE,
         ),
-        resources=object(),
+        resources=ResourceConfig.with_cpu(),
         processes_per_task=1,
     )
 
-    with patch.object(train, "dispatch_grug_training_run") as dispatch:
+    with patch.object(grug_dispatch, "current_client", return_value=Client()):
         train.run_grug(config)
 
     flags = os.environ["XLA_FLAGS"].split()
@@ -195,7 +204,7 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     assert os.environ["JAX_ENABLE_PGLE"] == "false"
     assert os.environ["XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB"] == "192"
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "cuda_async"
-    assert dispatch.call_args.kwargs["env_vars"] == {"LEVANTER_TS_CACHE_LIMIT": "10000000000"}
+    assert requests[0].environment.env_vars["LEVANTER_TS_CACHE_LIMIT"] == "10000000000"
 
 
 def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
