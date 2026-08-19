@@ -36,33 +36,46 @@ ROW_GROUP_ROWS = 16_384
 ROW_GROUP_TARGET_BYTES = 100 * 1024 * 1024
 
 
-def estimate_bytes(value: object) -> int:
-    """Estimate the in-memory payload bytes represented by a row value."""
+def estimate_python_bytes(value: object) -> int:
+    """Estimate a Python value's payload size before Arrow conversion."""
     if isinstance(value, memoryview):
         return value.nbytes
     if isinstance(value, (bytes, bytearray, str)):
         return len(value)
     if isinstance(value, Mapping):
-        return sum(len(str(key)) + estimate_bytes(item) for key, item in value.items())
+        return sum(len(str(key)) + estimate_python_bytes(item) for key, item in value.items())
     if isinstance(value, (list, tuple)):
-        return sum(estimate_bytes(item) for item in value)
+        return sum(estimate_python_bytes(item) for item in value)
     return 8
 
 
-def row_groups(rows: Iterable[dict]) -> Iterator[list[dict]]:
-    """Group rows toward row-count and byte targets, isolating an oversized row."""
-    group: list[dict] = []
+def _table_groups(row_tables: Iterable[pa.Table]) -> Iterator[pa.Table]:
+    group: list[pa.Table] = []
+    group_rows = 0
     group_bytes = 0
-    for row in rows:
-        row_bytes = estimate_bytes(row)
-        if group and (len(group) >= ROW_GROUP_ROWS or group_bytes + row_bytes > ROW_GROUP_TARGET_BYTES):
-            yield group
+    for table in row_tables:
+        if group and (
+            group_rows + table.num_rows > ROW_GROUP_ROWS or group_bytes + table.nbytes > ROW_GROUP_TARGET_BYTES
+        ):
+            yield pa.concat_tables(group)
             group = []
+            group_rows = 0
             group_bytes = 0
-        group.append(row)
-        group_bytes += row_bytes
+        group.append(table)
+        group_rows += table.num_rows
+        group_bytes += table.nbytes
     if group:
-        yield group
+        yield pa.concat_tables(group)
+
+
+def row_groups(rows: Iterable[dict], schema: pa.Schema) -> Iterator[pa.Table]:
+    """Convert rows once and group their Arrow buffers by row count and actual byte size."""
+    yield from _table_groups(pa.Table.from_pylist([row], schema=schema) for row in rows)
+
+
+def table_row_groups(table: pa.Table) -> Iterator[pa.Table]:
+    """Split an existing Arrow table into bounded row groups without converting its values."""
+    yield from _table_groups(table.slice(offset, 1) for offset in range(table.num_rows))
 
 
 @dataclass(frozen=True)
@@ -158,7 +171,8 @@ class ShardWriter:
 
 
 def write_table(path: str, table: pa.Table) -> ShardWriteResult:
-    """Write ``table`` atomically as one row group compressed with zstd level 0."""
+    """Write ``table`` atomically in row groups bounded by actual Arrow buffer size."""
     with ShardWriter(path, table.schema) as writer:
-        writer.write_table(table)
+        for group in table_row_groups(table):
+            writer.write_table(group)
     return writer.result

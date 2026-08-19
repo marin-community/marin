@@ -83,17 +83,12 @@ def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None 
     min_seq: int | None = None
     max_seq: int | None = None
     with ShardWriter(output_path, unified) as writer:
-
-        def write_batch(rows: list[dict]) -> None:
-            nonlocal written, min_seq, max_seq
-            writer.write_table(pa.Table.from_pylist(rows, schema=unified))
-            sequences = [row.get(SEQ_COLUMN) or 0 for row in rows]
+        for batch in row_groups(chain([first], survivors), unified):
+            writer.write_table(batch)
+            sequences = [sequence or 0 for sequence in batch[SEQ_COLUMN].to_pylist()]
             min_seq = min(sequences) if min_seq is None else min(min_seq, *sequences)
             max_seq = max(sequences) if max_seq is None else max(max_seq, *sequences)
-            written += len(rows)
-
-        for batch in row_groups(chain([first], survivors)):
-            write_batch(batch)
+            written += batch.num_rows
 
     assert min_seq is not None and max_seq is not None
     shard_result = writer.result

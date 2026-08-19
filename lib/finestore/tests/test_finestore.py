@@ -271,6 +271,24 @@ def test_large_flush_splits_into_prunable_row_groups(tmp_path, monkeypatch):
     assert metadata.num_row_groups == 4  # ceil(7 / 2)
 
 
+@pytest.mark.parametrize("explicit_schema", [False, True])
+def test_row_groups_use_arrow_buffer_bytes(tmp_path, monkeypatch, explicit_schema):
+    # Each stamped row occupies 76 Arrow bytes. The target fits two actual rows, while the previous
+    # Python-value estimate counted 88 bytes per row and produced three groups.
+    monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", 160)
+    root = str(tmp_path / "run")
+    schema = pa.schema([("id", pa.int64()), ("payload", pa.binary())]) if explicit_schema else None
+    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+        table = store.table("samples", primary_key=("id",), schema=schema)
+        table.extend([{"id": index, "payload": bytes([index]) * 50} for index in range(3)])
+        store.flush()
+
+    shard = ReadView(root).list_shards("samples")[0].path
+    metadata = pq.ParquetFile(shard).metadata
+    assert metadata.num_rows == 3
+    assert metadata.num_row_groups == 2
+
+
 def test_schema_evolution_null_promotes_missing_column(tmp_path):
     root = str(tmp_path / "run")
     # An "old" writer without the difficulty column.

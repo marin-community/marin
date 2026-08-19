@@ -46,7 +46,7 @@ from finestore.reader import ReadView
 from finestore.shard_writer import (
     ROW_GROUP_TARGET_BYTES,
     ShardWriter,
-    estimate_bytes,
+    estimate_python_bytes,
     row_groups,
     write_table,
 )
@@ -280,7 +280,7 @@ class DataStore:
     def estimate_object_bytes(name: str, data: bytes, metadata: Mapping[str, object] | None = None) -> int:
         """Return the transaction byte estimate for one named object."""
         descriptor, parts = DataStore._blob_rows(name, data, metadata)
-        return estimate_bytes(descriptor) + sum(estimate_bytes(part) for part in parts)
+        return estimate_python_bytes(descriptor) + sum(estimate_python_bytes(part) for part in parts)
 
     def read_view(self) -> ReadView:
         """Pin a snapshot using one HEAD read."""
@@ -334,7 +334,7 @@ class DataStore:
                 if table is None:
                     raise KeyError(f"table {name!r} must be registered before the transaction")
                 stamped = table._stamp(pending_rows)
-                pending = PendingRows(tuple(stamped), sum(estimate_bytes(row) for row in pending_rows))
+                pending = PendingRows(tuple(stamped), sum(estimate_python_bytes(row) for row in pending_rows))
                 additions[name] = TableAddition(metadata_path=table.metadata_path, shards=(table._write(pending),))
             if not additions:
                 snapshot = self._commits.snapshot()
@@ -442,7 +442,7 @@ class Transaction:
         if self._closed:
             raise RuntimeError("transaction is closed")
         copied = {name: [dict(row) for row in table_rows] for name, table_rows in rows.items()}
-        estimated_bytes = sum(estimate_bytes(row) for table_rows in copied.values() for row in table_rows)
+        estimated_bytes = sum(estimate_python_bytes(row) for table_rows in copied.values() for row in table_rows)
         if self._estimated_bytes + estimated_bytes > self._max_bytes:
             raise TransactionTooLarge(f"transaction payload exceeds {self._max_bytes} bytes; commit a smaller batch")
         self._estimated_bytes += estimated_bytes
@@ -565,7 +565,7 @@ class DataTable:
         stamped = self._stamp(rows)
         with self._lock:
             self._pending.extend(stamped)
-            self._pending_bytes += sum(estimate_bytes(row) for row in rows)
+            self._pending_bytes += sum(estimate_python_bytes(row) for row in rows)
             over_cap = self._pending_bytes >= self._max_buffer_bytes
         if over_cap:
             self._scheduler.request_flush()
@@ -599,8 +599,8 @@ class DataTable:
             written = write_table(path, table)
         else:
             with ShardWriter(path, self._schema) as writer:
-                for group in row_groups(rows):
-                    writer.write_table(pa.Table.from_pylist(group, schema=self._schema))
+                for group in row_groups(rows, self._schema):
+                    writer.write_table(group)
             written = writer.result
         return Shard(
             path=path,
