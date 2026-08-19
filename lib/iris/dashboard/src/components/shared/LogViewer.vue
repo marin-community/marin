@@ -874,22 +874,22 @@ defineExpose({ selectedAttemptId })
           >
             <button
               v-if="row.seq > 0"
-              class="shrink-0 w-4 text-text-muted opacity-0 group-hover:opacity-100
+              class="shrink-0 w-4 select-none text-text-muted opacity-0 group-hover:opacity-100
                      focus-visible:opacity-100 hover:text-accent disabled:opacity-40"
               :title="`Show the ${CONTEXT_LINES} lines either side of this one, unfiltered`"
               :disabled="contextPending"
               @click="loadContext(row.seq)"
             >⋯</button>
-            <span v-else class="shrink-0 w-4" />
+            <span v-else class="shrink-0 w-4 select-none" />
             <RouterLink
               v-if="row.taskRef && props.taskId"
               :to="`/job/${encodeURIComponent(props.taskId)}/task/${encodeURIComponent(row.taskRef.taskId)}`"
-              class="shrink-0 text-accent hover:underline"
+              class="shrink-0 select-none text-accent hover:underline"
               :title="row.taskRef.taskId"
             >
               T{{ row.taskRef.taskIndex }}
             </RouterLink>
-            <span class="shrink-0 inline-flex items-center gap-1">
+            <span class="shrink-0 select-none inline-flex items-center gap-1">
               <button
                 data-log-permalink
                 class="text-text-muted tabular-nums hover:text-accent hover:underline"
@@ -904,6 +904,9 @@ defineExpose({ selectedAttemptId })
                 @click="setStartTime(row.entry)"
               >▶</button>
             </span>
+            <!-- Every gutter item above is a flex item, so a browser copies each of
+                 them onto its own line. Marking them select-none keeps a drag
+                 selection to the messages alone: one clean line per log line. -->
             <span
               :class="wrap ? 'whitespace-pre-wrap break-words flex-1' : 'whitespace-pre'"
             ><template
