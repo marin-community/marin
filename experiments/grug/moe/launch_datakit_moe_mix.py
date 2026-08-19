@@ -313,6 +313,26 @@ def _simulated_experiment_budget(*, total_steps: int, batch_size: int, max_seq_l
     return total_steps * batch_size * max_seq_len
 
 
+def _simulated_epoching_budgets(
+    *,
+    total_steps: int,
+    batch_size: int,
+    max_seq_len: int,
+    target_budget: int,
+    enable_simulated_epoching: bool,
+) -> tuple[int | None, int | None]:
+    if not enable_simulated_epoching:
+        return None, None
+    experiment_budget = _simulated_experiment_budget(
+        total_steps=total_steps,
+        batch_size=batch_size,
+        max_seq_len=max_seq_len,
+    )
+    if experiment_budget > target_budget:
+        raise ValueError(f"experiment_budget {experiment_budget} exceeds target_budget {target_budget}")
+    return target_budget, experiment_budget
+
+
 def _two_phase_data_config(
     *,
     tokenizer: str,
@@ -351,17 +371,13 @@ def _datakit_data_config(
     val_components: dict[str, DatasetComponent | ConcatDatasetComponent],
 ) -> LmDataConfig:
     phase_1_start = _phase_1_start_step(total_steps, batch_size)
-    target_budget = None
-    experiment_budget = None
-    if enable_simulated_epoching:
-        experiment_budget = _simulated_experiment_budget(
-            total_steps=total_steps,
-            batch_size=batch_size,
-            max_seq_len=max_seq_len,
-        )
-        if experiment_budget > _TARGET_BUDGET_TOKENS:
-            raise ValueError(f"experiment_budget {experiment_budget} exceeds target_budget {_TARGET_BUDGET_TOKENS}")
-        target_budget = _TARGET_BUDGET_TOKENS
+    target_budget, experiment_budget = _simulated_epoching_budgets(
+        total_steps=total_steps,
+        batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        target_budget=_TARGET_BUDGET_TOKENS,
+        enable_simulated_epoching=enable_simulated_epoching,
+    )
 
     return _two_phase_data_config(
         tokenizer=marin_tokenizer,

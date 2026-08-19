@@ -69,6 +69,7 @@ from experiments.grug.moe_hero_ep.train import (
     GrugTrainerConfig,
     MasterParamMode,
     WatchMode,
+    _compute_flops,
     run_grug,
 )
 from experiments.marin_tokenizer import marin_tokenizer
@@ -141,6 +142,8 @@ def build_ladder_run(
         num_steps = max(1, round(TOKENS_PER_ACTIVE_PARAM * _active_params(model) / global_tokens_per_step))
     elif num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
+    flops_per_example, _ = _compute_flops(model_config=model)
+    run_flops = flops_per_example * batch_size * num_steps
 
     # The narrow rungs are short: eval every 5% of the run and keep only the forced final checkpoint.
     # The d6144 hero is long: eval every 3000 steps and keep a permanent checkpoint every 6000.
@@ -251,6 +254,7 @@ def build_ladder_run(
                 total_steps=num_steps,
                 batch_size=batch_size,
                 max_seq_len=model.max_seq_len,
+                experiment_flops=run_flops,
                 validation=validation,
             ),
             resources=ctx.runtime_arg("train_resources"),
