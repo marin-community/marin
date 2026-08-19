@@ -881,14 +881,17 @@ defineExpose({ selectedAttemptId })
               @click="loadContext(row.seq)"
             >⋯</button>
             <span v-else class="shrink-0 w-4 select-none" />
-            <RouterLink
-              v-if="row.taskRef && props.taskId"
-              :to="`/job/${encodeURIComponent(props.taskId)}/task/${encodeURIComponent(row.taskRef.taskId)}`"
-              class="shrink-0 select-none text-accent hover:underline"
-              :title="row.taskRef.taskId"
-            >
-              T{{ row.taskRef.taskIndex }}
-            </RouterLink>
+            <!-- Fixed width, right-aligned: task indices vary in digit count, and a
+                 column that sizes to its content ragged-edges every row after it. -->
+            <template v-if="showTaskLinks">
+              <RouterLink
+                v-if="row.taskRef && props.taskId"
+                :to="`/job/${encodeURIComponent(props.taskId)}/task/${encodeURIComponent(row.taskRef.taskId)}`"
+                class="shrink-0 w-12 select-none text-right tabular-nums text-accent hover:underline"
+                :title="row.taskRef.taskId"
+              >T{{ row.taskRef.taskIndex }}</RouterLink>
+              <span v-else class="shrink-0 w-12 select-none" />
+            </template>
             <span class="shrink-0 select-none inline-flex items-center gap-1">
               <button
                 data-log-permalink
