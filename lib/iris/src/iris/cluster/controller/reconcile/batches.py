@@ -157,7 +157,7 @@ def _cascade_to_children(
 
 
 def _terminal_job_reason(overlay: Overlay, job_id: JobName, terminal_state: int) -> str:
-    return overlay.job_error(job_id) or TERMINAL_STATE_FALLBACK_REASONS.get(terminal_state, "Job finalized")
+    return overlay.job_delta_error(job_id) or TERMINAL_STATE_FALLBACK_REASONS.get(terminal_state, "Job finalized")
 
 
 def _finalize_terminal_job(overlay: Overlay, job_id: JobName, terminal_state: int, now_ms: int) -> None:
