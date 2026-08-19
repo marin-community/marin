@@ -305,16 +305,10 @@ def _s3_filesystem_kwargs() -> dict[str, str | bool | int]:
 def _native_s3_filesystem(kwargs: tuple[tuple[str, str | bool | int], ...]) -> pa_fs.S3FileSystem:
     """One S3 filesystem per configuration, held for the life of the process.
 
-    Every pyarrow filesystem owns a connection pool that dies with the object,
-    so a filesystem per file reuses nothing: each closed connection parks a
-    local port in ``TIME_WAIT`` for 60 s, and a stage writing tens of files per
-    task drains its pod's ephemeral port range until ``connect()`` returns
-    ``EADDRNOTAVAIL`` (#8402). pyarrow filesystems are thread-safe, so one
-    instance serves every writer in the process. The key is the resolved
-    kwargs, so a changed endpoint still builds its own filesystem.
-
-    The retry strategy is explicit because pyarrow otherwise falls back to the
-    AWS C++ SDK default, which no Marin setting reaches.
+    Each filesystem owns a connection pool that dies with it, so one per file
+    exhausts the pod's ephemeral ports via ``TIME_WAIT`` (#8402). The retry
+    strategy is explicit because pyarrow otherwise uses the AWS C++ SDK
+    default.
     """
     return pa_fs.S3FileSystem(
         retry_strategy=pa_fs.AwsStandardS3RetryStrategy(max_attempts=S3_RETRY_MAX_ATTEMPTS),

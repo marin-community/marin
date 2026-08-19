@@ -278,12 +278,9 @@ class _SidecarSlice:
 
 
 class _SidecarFilesystem(Protocol):
-    """The filesystem surface a sidecar read uses.
-
-    ``url_to_fs`` hands back a bare fsspec filesystem for ``s3://`` and a
-    ``CrossRegionGuardedFS`` wrapper for ``gs://``. The two share no base class,
-    so the reader names the methods it calls instead.
-    """
+    """A protocol because ``url_to_fs`` returns a bare fsspec filesystem for
+    ``s3://`` and a ``CrossRegionGuardedFS`` wrapper for ``gs://``, which share
+    no base class."""
 
     def _strip_protocol(self, path: str) -> str: ...
 
@@ -291,17 +288,12 @@ class _SidecarFilesystem(Protocol):
 
 
 def _read_sidecar_slice(fs: _SidecarFilesystem, path: str, target_shard: int) -> _SidecarSlice | None:
-    """Read one sidecar and return its file list plus the target shard's payload bytes.
+    """Read one sidecar and return its file list plus the target shard's payload
+    bytes, or ``None`` if the writer wrote no files.
 
-    Returns ``None`` if the sidecar has no files (empty writer).
-
-    Takes the filesystem from the caller rather than resolving one: fsspec keys
-    its instance cache on the calling thread, so a resolve inside a pool worker
-    builds a client — and a connection pool — per thread (#8402).
-
-    Uses ``fs.cat_file`` rather than ``open_url`` — one direct GET returning
-    bytes is ~25% faster than going through ``TextIOWrapper(BufferedFile)``
-    for small sidecars, and msgpack decodes bytes directly.
+    ``fs`` comes from the caller because fsspec keys its instance cache on the
+    calling thread, so resolving here builds a client per pool worker (#8402).
+    ``cat_file`` beats ``open_url`` by ~25% on small sidecars.
     """
     meta_path = fs._strip_protocol(_scatter_meta_path(path))
     meta = _sidecar_decoder().decode(fs.cat_file(meta_path))

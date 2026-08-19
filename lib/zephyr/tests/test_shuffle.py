@@ -585,12 +585,7 @@ def test_external_sort_merge_across_source_shards(tmp_path):
 
 
 class _CountingFileSystem(LocalFileSystem):
-    """Local filesystem under its own protocol that counts the clients built.
-
-    Every real object-store client carries a connection pool, so the number of
-    clients a read fans out to is the quantity that decides whether a pod keeps
-    its ephemeral ports.
-    """
+    """Counts how many filesystem instances a read builds."""
 
     protocol = "counting"
     clients_built = 0
@@ -607,10 +602,8 @@ class _CountingFileSystem(LocalFileSystem):
 def test_sidecar_reads_build_one_client(tmp_path):
     """Reading many sidecars concurrently builds one client (#8402).
 
-    fsspec keys its instance cache on the calling thread, so a filesystem
-    resolved inside a pool worker is a client -- and a connection pool -- per
-    thread. Every reducer does this against thousands of sidecars, and the
-    closed connections park local ports in TIME_WAIT until the pod runs out.
+    fsspec keys its instance cache on the calling thread, so resolving inside
+    a pool worker builds a client, and a connection pool, per thread.
     """
     fsspec.register_implementation("counting", _CountingFileSystem, clobber=True)
     paths = []
