@@ -56,7 +56,6 @@ logger = logging.getLogger(__name__)
 
 HERO_EP_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "false",
-    "LEVANTER_TS_CACHE_LIMIT": "10000000000",
     "XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB": "192",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
@@ -164,6 +163,7 @@ class GrugRunConfig:
     model: GrugModelConfig
     data: LmDataConfig
     resources: ResourceConfig
+    tensorstore_cache_bytes: int | None = None
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
@@ -937,6 +937,11 @@ def run_grug(config: GrugRunConfig) -> None:
     trainer = config.trainer.trainer
     if trainer.id is None:
         raise ValueError("trainer.id must be set before dispatching grug training.")
+
+    if config.tensorstore_cache_bytes is not None:
+        if config.tensorstore_cache_bytes <= 0:
+            raise ValueError("tensorstore_cache_bytes must be positive")
+        os.environ["LEVANTER_TS_CACHE_LIMIT"] = str(config.tensorstore_cache_bytes)
 
     # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
     inline_watch_enabled = trainer.watch.is_enabled and config.trainer.watch_mode == WatchMode.INLINE

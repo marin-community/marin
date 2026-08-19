@@ -175,6 +175,7 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     for name in train.HERO_EP_RUNTIME_ENV:
         monkeypatch.delenv(name, raising=False)
     config = SimpleNamespace(
+        tensorstore_cache_bytes=10_000_000_000,
         trainer=SimpleNamespace(
             trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
             watch_mode=train.WatchMode.INLINE,
@@ -206,6 +207,7 @@ def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv("XLA_FLAGS", raising=False)
     config = SimpleNamespace(
+        tensorstore_cache_bytes=None,
         trainer=SimpleNamespace(
             trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
             watch_mode=train.WatchMode.INLINE,
@@ -230,6 +232,7 @@ def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
     monkeypatch.setenv("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
     monkeypatch.delenv("XLA_FLAGS", raising=False)
     config = SimpleNamespace(
+        tensorstore_cache_bytes=None,
         trainer=SimpleNamespace(
             trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
             watch_mode=train.WatchMode.INLINE,
@@ -258,6 +261,7 @@ def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
 ):
     monkeypatch.delenv("XLA_FLAGS", raising=False)
     config = SimpleNamespace(
+        tensorstore_cache_bytes=None,
         trainer=SimpleNamespace(
             trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
             watch_mode=watch_mode,

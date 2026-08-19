@@ -83,6 +83,7 @@ WATCH_INTERVAL = 10
 # 791 tokens per active parameter sets the step budget: it lands the d6144 hero at 18T tokens and
 # scales every narrower rung by the same ratio.
 TOKENS_PER_ACTIVE_PARAM = 791
+TENSORSTORE_CACHE_BYTES = 10_000_000_000
 
 
 def _ladder_model(size: str):
@@ -258,6 +259,7 @@ def build_ladder_run(
                 validation=validation,
             ),
             resources=ctx.runtime_arg("train_resources"),
+            tensorstore_cache_bytes=TENSORSTORE_CACHE_BYTES,
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
             eval=GrugEvalConfig(
