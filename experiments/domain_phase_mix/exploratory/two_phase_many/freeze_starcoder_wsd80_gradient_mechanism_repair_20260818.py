@@ -21,7 +21,7 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-OUTPUT_DIR = Path(__file__).with_name("reference_outputs") / "starcoder_wsd80_gradient_mechanism_repair_v8_20260818"
+OUTPUT_DIR = Path(__file__).with_name("reference_outputs") / "starcoder_wsd80_gradient_mechanism_repair_v9_20260818"
 RUNTIME_PATH = REPO_ROOT / "experiments/domain_phase_mix/starcoder_wsd80_gradient_mechanism_repair.py"
 ANALYZER_PATH = (
     REPO_ROOT / "experiments/domain_phase_mix/exploratory/two_phase_many/"
@@ -41,9 +41,9 @@ RELEASE_PATH = OUTPUT_DIR / "release.json"
 MARIN_PREFIX = "gs://marin-us-central1"
 RESULT_ROOT = (
     "gs://marin-us-central1/analysis/pinlin_calvin_xu/data_mixture/"
-    "starcoder_wsd80_gradient_mechanism_repair_v8_20260818"
+    "starcoder_wsd80_gradient_mechanism_repair_v9_20260818"
 )
-RELEASE_VERSION = "2026-08-18-gradient-mechanism-repair-v8"
+RELEASE_VERSION = "2026-08-18-gradient-mechanism-repair-v9"
 PARENT_ARTIFACT_VERSION = "2026.08.16.6"
 SCIENTIFIC_STATUS = "post_outcome_development_mechanism_repair_not_untouched_confirmation"
 
@@ -80,7 +80,7 @@ EXECUTION_ACCEPTANCE = {
 }
 
 ANALYSIS_CONTRACT: dict[str, Any] = {
-    "contract_version": "2026-08-18-gradient-mechanism-repair-analysis-v8",
+    "contract_version": "2026-08-18-gradient-mechanism-repair-analysis-v9",
     "scientific_status": SCIENTIFIC_STATUS,
     "outcomes_inspected_before_contract": True,
     "purpose": (
@@ -107,6 +107,15 @@ ANALYSIS_CONTRACT: dict[str, Any] = {
             "statistic": (
                 "projected raw-gradient cosine between global-heldout StarCoder and Nemotron, plus projected "
                 "optimizer-update cosine between the same global-heldout StarCoder and Nemotron probe batches"
+            ),
+            "optimizer_update_undefined_at_final": (
+                "At the `final` checkpoint the schedule has decayed the learning rate to zero, so the "
+                "corrected optimizer update data_update - no_data_update is identically zero and its cosine "
+                "is undefined rather than zero. v8 treated that as an audit failure and rejected the rows; "
+                "v9 accepts it only when both norms are exactly zero, reports it as missing, and never "
+                "imputes a value, since a cosine between zero vectors carries no alignment. The raw-gradient "
+                "half of H1 stays defined at `final` -- measured at -0.1406 on the first repaired row -- so "
+                "the state keeps its content rather than being dropped."
             ),
         },
         "h2": {

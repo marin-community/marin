@@ -150,6 +150,16 @@ def flatten_utilities(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _is_zero_vector_statistic(statistics: Mapping[str, Any]) -> bool:
+    """Undefined because one side is the zero vector -- see the repair module's copy for the reasoning."""
+    if statistics.get("cosine") is not None or statistics.get("cosine_defined") is not False:
+        return False
+    norms = [statistics.get("left_norm"), statistics.get("right_norm")]
+    if any(norm is None for norm in norms):
+        return False
+    return min(float(norm) for norm in norms) == 0.0
+
+
 def flatten_h1(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for document in documents:
@@ -158,7 +168,8 @@ def flatten_h1(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
             for statistic_name in ("gradient", "optimizer_update"):
                 for geometry in ("raw", "projected"):
                     for component, statistics in pair[statistic_name][geometry].items():
-                        if statistics.get("cosine_defined") is not True or statistics.get("cosine") is None:
+                        defined = statistics.get("cosine_defined") is True and statistics.get("cosine") is not None
+                        if not defined and not _is_zero_vector_statistic(statistics):
                             raise RuntimeError(
                                 f"Undefined H1 cosine for {metadata['row_id']}/{statistic_name}/{geometry}/{component}"
                             )
@@ -174,7 +185,10 @@ def flatten_h1(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
                                 "statistic": statistic_name,
                                 "geometry": geometry,
                                 "component": component,
-                                "cosine": float(statistics["cosine"]),
+                                # Missing rather than imputed: a cosine between zero vectors has no
+                                # value, and pandas skips NaN in the summary so it cannot be averaged in.
+                                "cosine": float(statistics["cosine"]) if defined else float("nan"),
+                                "cosine_defined": defined,
                                 "dot": float(statistics["dot"]),
                                 "left_norm": float(statistics["left_norm"]),
                                 "right_norm": float(statistics["right_norm"]),
@@ -577,13 +591,12 @@ def write_report(
     support_separation_summary: pd.DataFrame,
 ) -> None:
     h1_primary = h1[h1["geometry"].eq("projected") & h1["component"].eq("trunk")]
-    h1_summary = (
-        h1_primary.groupby(
-            ["analysis_role", "policy_role", "support_id", "checkpoint_label", "statistic"], as_index=False
-        )["cosine"]
-        .agg(["mean", "std", "count"])
-        .reset_index()
-    )
+    keys = ["analysis_role", "policy_role", "support_id", "checkpoint_label", "statistic"]
+    h1_summary = h1_primary.groupby(keys, as_index=False)["cosine"].agg(["mean", "std", "count"]).reset_index()
+    # `count` skips NaN, so a group whose cosine is undefined throughout would otherwise appear as an empty
+    # row with no explanation. Carrying the row total alongside it states the zero explicitly.
+    totals = h1_primary.groupby(keys, as_index=False)["cosine_defined"].agg(rows="size", defined="sum")
+    h1_summary = h1_summary.merge(totals, on=keys, how="left")
     report = f"""# StarCoder WSD80 gradient-mechanism repair
 
 This is a **post-outcome development repair**, not untouched confirmation. It recomputes cross-statistics omitted by
