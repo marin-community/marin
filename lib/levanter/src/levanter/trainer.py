@@ -700,7 +700,7 @@ class Trainer:
             max_buffered_batches=128,
             mesh=self.device_mesh,
             axis_resources=self.compute_axis_mapping,
-            prefetch_size=32,
+            fetch_size=32,
             batch_axis_name=batch_name,
             allow_nondivisible_batch_size=self.config.allow_nondivisible_batch_size,
         )

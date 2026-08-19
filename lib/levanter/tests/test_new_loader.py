@@ -63,6 +63,34 @@ def test_loader_rejects_empty_finite_dataset():
             DataLoader(dataset, 1, max_buffered_batches=0, mesh=mesh, axis_resources=None)
 
 
+class RecordingBatchDataset(ListAsyncDataset[np.ndarray]):
+    def __init__(self, data: list[np.ndarray]):
+        super().__init__(data)
+        self.request_sizes: list[int] = []
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[np.ndarray]:
+        self.request_sizes.append(len(indices))
+        return await super().get_batch(indices)
+
+
+def test_loader_fetch_size_bounds_each_dataset_request():
+    with use_test_mesh(tensor_parallelism=1) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
+        dataset = RecordingBatchDataset([np.array(i, dtype=np.int32) for i in range(8)])
+        loader = DataLoader(
+            dataset,
+            batch_size=2,
+            max_buffered_batches=4,
+            fetch_size=1,
+            mesh=mesh,
+            axis_resources=None,
+        )
+
+        batches = list(loader)
+
+    assert [np.asarray(batch).tolist() for batch in batches] == [[0, 1], [2, 3], [4, 5], [6, 7]]
+    assert max(dataset.request_sizes) == 2
+
+
 class StructuredDataset(AsyncDataset):
     def __init__(self, seq_len):
         super().__init__()
