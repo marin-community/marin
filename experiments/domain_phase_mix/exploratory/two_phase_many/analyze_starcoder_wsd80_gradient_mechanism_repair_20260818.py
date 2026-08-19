@@ -150,8 +150,15 @@ def flatten_utilities(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _is_zero_vector_statistic(statistics: Mapping[str, Any]) -> bool:
-    """Undefined because one side is the zero vector -- see the repair module's copy for the reasoning."""
+def _is_zero_vector_statistic(statistics: Mapping[str, Any], *, checkpoint_label: str) -> bool:
+    """Undefined because one side is the zero vector, AT `final` -- see the repair module for the reasoning.
+
+    Scoped to `final` for the same reason the audit is: a zero update where the learning rate is still
+    positive has no benign explanation, and accepting it on the norms alone would silently admit the
+    fault this check exists to catch.
+    """
+    if checkpoint_label != "final":
+        return False
     if statistics.get("cosine") is not None or statistics.get("cosine_defined") is not False:
         return False
     norms = [statistics.get("left_norm"), statistics.get("right_norm")]
@@ -169,9 +176,11 @@ def flatten_h1(documents: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
                 for geometry in ("raw", "projected"):
                     for component, statistics in pair[statistic_name][geometry].items():
                         defined = statistics.get("cosine_defined") is True and statistics.get("cosine") is not None
-                        if not defined and not _is_zero_vector_statistic(statistics):
+                        checkpoint_label = str(metadata["checkpoint_label"])
+                        if not defined and not _is_zero_vector_statistic(statistics, checkpoint_label=checkpoint_label):
                             raise RuntimeError(
-                                f"Undefined H1 cosine for {metadata['row_id']}/{statistic_name}/{geometry}/{component}"
+                                f"Undefined H1 cosine for {metadata['row_id']}/{statistic_name}/"
+                                f"{geometry}/{component} at {checkpoint_label}"
                             )
                         rows.append(
                             {

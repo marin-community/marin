@@ -31,8 +31,8 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (
     freeze_starcoder_wsd80_gradient_mechanism_repair_20260818 as freeze,
 )
 
-SCHEMA_VERSION = "2026-08-18-gradient-mechanism-repair-v8"
-ARTIFACT_VERSION = "2026.08.18.8"
+SCHEMA_VERSION = "2026-08-18-gradient-mechanism-repair-v10"
+ARTIFACT_VERSION = "2026.08.18.10"
 TPU_TYPE = "v5p-8"
 TPU_REGION = "us-central1"
 TPU_ZONE = "us-central1-a"
@@ -1046,18 +1046,24 @@ def _contains_nonfinite(value: Any) -> bool:
     return False
 
 
-def _is_zero_vector_statistic(trunk: Mapping[str, Any]) -> bool:
-    """Is this cosine undefined because one side is the zero vector, rather than because of a fault?
+def _is_zero_vector_statistic(trunk: Mapping[str, Any], *, checkpoint_label: str) -> bool:
+    """Is this cosine undefined because one side is the zero vector, for the one reason we accept?
 
     The probe defines the cosine exactly when `left_norm * right_norm > 0`, so an undefined cosine means
-    one of the two vectors has no direction at all. That happens for a real, expected reason at the
-    `final` checkpoint: the schedule has decayed the learning rate to zero by then, so the corrected
-    optimizer update `data_update - no_data_update` is identically zero and there is nothing to compare.
-    A cosine between zero vectors is undefined, NOT zero, so it is recorded as missing rather than
-    imputed -- coding it as zero would inject a fabricated alignment into a descriptive statistic.
+    one of the two vectors has no direction at all. There is exactly one state where that is expected: at
+    the `final` checkpoint the schedule has decayed the learning rate to zero, so the corrected optimizer
+    update `data_update - no_data_update` is identically zero and there is nothing to compare. A cosine
+    between zero vectors is undefined, NOT zero, so it is recorded as missing rather than imputed --
+    coding it as zero would inject a fabricated alignment into a descriptive statistic.
 
-    The norms are required as evidence, so an undefined cosine arising any other way still fails closed.
+    Both the checkpoint AND the recorded norms are required. The norms alone are not enough: a zero
+    update at a checkpoint where the learning rate is still positive has no benign explanation and is
+    evidence of a fault, so accepting it on the norms alone would let exactly the failure this audit
+    exists to catch pass as a real result. The canary manifest contains no `final` checkpoint at all,
+    which makes the canary a genuine test of this: under the norms-only rule it could not fail.
     """
+    if checkpoint_label != "final":
+        return False
     if trunk.get("cosine") is not None or trunk.get("cosine_defined") is not False:
         return False
     norms = [trunk.get("left_norm"), trunk.get("right_norm")]
@@ -1066,7 +1072,7 @@ def _is_zero_vector_statistic(trunk: Mapping[str, Any]) -> bool:
     return min(float(norm) for norm in norms) == 0.0
 
 
-def _assert_defined_statistic(statistic: Mapping[str, Any], *, label: str) -> None:
+def _assert_defined_statistic(statistic: Mapping[str, Any], *, label: str, checkpoint_label: str) -> None:
     for geometry in ("raw", "projected"):
         if "trunk" not in statistic.get(geometry, {}):
             raise RuntimeError(f"Repair output omits {label} {geometry}/trunk")
@@ -1075,8 +1081,8 @@ def _assert_defined_statistic(statistic: Mapping[str, Any], *, label: str) -> No
             raise RuntimeError(f"Repair output has non-finite {label} {geometry}/trunk statistic")
         if trunk.get("cosine_defined") is True and trunk.get("cosine") is not None:
             continue
-        if not _is_zero_vector_statistic(trunk):
-            raise RuntimeError(f"Repair output has undefined {label} {geometry}/trunk cosine")
+        if not _is_zero_vector_statistic(trunk, checkpoint_label=checkpoint_label):
+            raise RuntimeError(f"Repair output has undefined {label} {geometry}/trunk cosine at {checkpoint_label}")
 
 
 def _assert_close(observed: Any, expected: Any, *, label: str) -> None:
@@ -1196,8 +1202,9 @@ def _validate_scientific_document(
     pair = document.get("source_pair_statistics", {}).get("starcoder__vs__nemotron")
     if pair is None:
         raise RuntimeError("Repair row omits H1 StarCoder-Nemotron geometry")
-    _assert_defined_statistic(pair["gradient"], label="H1 gradient")
-    _assert_defined_statistic(pair["optimizer_update"], label="H1 optimizer update")
+    checkpoint_label = str(row["checkpoint_label"])
+    _assert_defined_statistic(pair["gradient"], label="H1 gradient", checkpoint_label=checkpoint_label)
+    _assert_defined_statistic(pair["optimizer_update"], label="H1 optimizer update", checkpoint_label=checkpoint_label)
     targets = _json_names(row, "target_distribution_ids_json")
     sources = _json_names(row, "source_distribution_ids_json")
     expected_contrasts = {f"{freeze.GLOBAL_STARCODER}__minus__{freeze.NEMOTRON}"}
@@ -1214,6 +1221,7 @@ def _validate_scientific_document(
             _assert_defined_statistic(
                 target_contrasts[target][contrast]["statistic"],
                 label=f"{target}/{contrast}",
+                checkpoint_label=checkpoint_label,
             )
     gradient_statistics = document.get("target_source_gradient_statistics", {})
     if set(gradient_statistics) != set(targets):

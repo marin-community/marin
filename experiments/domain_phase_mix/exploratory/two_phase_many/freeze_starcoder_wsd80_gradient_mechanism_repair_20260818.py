@@ -21,7 +21,7 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-OUTPUT_DIR = Path(__file__).with_name("reference_outputs") / "starcoder_wsd80_gradient_mechanism_repair_v9_20260818"
+OUTPUT_DIR = Path(__file__).with_name("reference_outputs") / "starcoder_wsd80_gradient_mechanism_repair_v10_20260818"
 RUNTIME_PATH = REPO_ROOT / "experiments/domain_phase_mix/starcoder_wsd80_gradient_mechanism_repair.py"
 ANALYZER_PATH = (
     REPO_ROOT / "experiments/domain_phase_mix/exploratory/two_phase_many/"
@@ -41,9 +41,9 @@ RELEASE_PATH = OUTPUT_DIR / "release.json"
 MARIN_PREFIX = "gs://marin-us-central1"
 RESULT_ROOT = (
     "gs://marin-us-central1/analysis/pinlin_calvin_xu/data_mixture/"
-    "starcoder_wsd80_gradient_mechanism_repair_v9_20260818"
+    "starcoder_wsd80_gradient_mechanism_repair_v10_20260818"
 )
-RELEASE_VERSION = "2026-08-18-gradient-mechanism-repair-v9"
+RELEASE_VERSION = "2026-08-18-gradient-mechanism-repair-v10"
 PARENT_ARTIFACT_VERSION = "2026.08.16.6"
 SCIENTIFIC_STATUS = "post_outcome_development_mechanism_repair_not_untouched_confirmation"
 

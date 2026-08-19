@@ -954,24 +954,47 @@ def test_audit_accepts_an_undefined_cosine_only_when_a_norm_is_actually_zero():
     """At `final` the schedule has decayed the learning rate to zero, so the corrected optimizer update is
     identically zero and its cosine is undefined rather than faulty. That case must pass; an undefined
     cosine arising any other way must still fail closed, or the audit stops protecting anything."""
-    repair._assert_defined_statistic(_statistic(_trunk(None, False, 0.0, 0.0)), label="zero update")
-    repair._assert_defined_statistic(_statistic(_trunk(None, False, 0.0, 3.5)), label="one side zero")
+    repair._assert_defined_statistic(
+        _statistic(_trunk(None, False, 0.0, 0.0)), label="zero update", checkpoint_label="final"
+    )
+    repair._assert_defined_statistic(
+        _statistic(_trunk(None, False, 0.0, 3.5)), label="one side zero", checkpoint_label="final"
+    )
 
     with pytest.raises(RuntimeError, match="undefined"):
-        repair._assert_defined_statistic(_statistic(_trunk(None, False, 2.0, 3.0)), label="unjustified")
+        repair._assert_defined_statistic(
+            _statistic(_trunk(None, False, 2.0, 3.0)), label="unjustified", checkpoint_label="final"
+        )
     with pytest.raises(RuntimeError, match="undefined"):
         repair._assert_defined_statistic(
             {"raw": {"trunk": {"cosine": None, "cosine_defined": False, "dot": 0.0}}, "projected": {"trunk": {}}},
             label="norms missing",
+            checkpoint_label="final",
+        )
+
+
+@pytest.mark.parametrize("checkpoint_label", ["decay_onset", "fraction_0p90", "decay_plus_256"])
+def test_audit_rejects_a_zero_update_away_from_the_final_checkpoint(checkpoint_label):
+    """The zero update is only explicable where the learning rate has decayed to zero. Anywhere else a
+    zero corrected update is a fault, and accepting it on the norms alone would let exactly the failure
+    this audit exists to catch pass as a real result. The canary manifest carries no `final` checkpoint,
+    so without this scoping the canary could not exercise the rule at all."""
+    with pytest.raises(RuntimeError, match=rf"undefined.*{checkpoint_label}"):
+        repair._assert_defined_statistic(
+            _statistic(_trunk(None, False, 0.0, 0.0)), label="zero update", checkpoint_label=checkpoint_label
         )
 
 
 def test_audit_still_rejects_non_finite_statistics():
     """The relaxation must not open a path for NaN to be waved through as a zero update."""
     with pytest.raises(RuntimeError, match="non-finite"):
-        repair._assert_defined_statistic(_statistic(_trunk(None, False, 0.0, float("nan"))), label="nan norm")
+        repair._assert_defined_statistic(
+            _statistic(_trunk(None, False, 0.0, float("nan"))), label="nan norm", checkpoint_label="final"
+        )
     with pytest.raises(RuntimeError, match="non-finite"):
-        repair._assert_defined_statistic(_statistic(_trunk(float("nan"), True, 1.0, 1.0)), label="nan cosine")
+        repair._assert_defined_statistic(
+            _statistic(_trunk(float("nan"), True, 1.0, 1.0)), label="nan cosine", checkpoint_label="final"
+        )
 
 
 def test_flatten_h1_records_an_undefined_cosine_as_missing_rather_than_zero():
@@ -1007,6 +1030,31 @@ def test_flatten_h1_records_an_undefined_cosine_as_missing_rather_than_zero():
         _trunk(None, False, 2.0, 3.0)
     )
     with pytest.raises(RuntimeError, match="Undefined H1 cosine"):
+        repair_analysis.flatten_h1([document])
+
+
+def test_flatten_h1_rejects_a_zero_update_away_from_the_final_checkpoint():
+    """The analyzer and the audit must scope the exemption identically, or a row the audit rejects would
+    still be flattened into the descriptive statistics on a rerun."""
+    document = {
+        "row": {
+            "row_id": "r0",
+            "trajectory_id": "t0",
+            "training_seed": 1,
+            "support_id": "full",
+            "policy_role": "tied",
+            "analysis_role": "h1_trajectory_extension",
+            "checkpoint_label": "decay_onset",
+        },
+        "source_uri": "gs://example/row.json",
+        "source_pair_statistics": {
+            "starcoder__vs__nemotron": {
+                "gradient": _statistic(_trunk(0.25, True, 1.0, 1.0, dot=0.25)),
+                "optimizer_update": _statistic(_trunk(None, False, 0.0, 0.0)),
+            }
+        },
+    }
+    with pytest.raises(RuntimeError, match=r"Undefined H1 cosine.*decay_onset"):
         repair_analysis.flatten_h1([document])
 
 
