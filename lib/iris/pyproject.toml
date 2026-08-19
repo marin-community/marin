@@ -92,6 +92,11 @@ dev = [
     { include-group = "test" },
 ]
 
+[tool.hatch.build.hooks.custom]
+# hatch_build.py stamps iris/_build_info.py into wheels and sdists so an
+# installed marin-iris can report the revision it was built from.
+path = "hatch_build.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/iris"]
 
