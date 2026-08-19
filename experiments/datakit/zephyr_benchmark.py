@@ -8,7 +8,8 @@ pipeline does not include Hugging Face corpus download time. It runs global exac
 deduplication, per-source tokenization and MinHash, then cross-source fuzzy dedup.
 Every generated stage output is routed under a seven-day temporary prefix keyed by
 the required run tag. ``--sample-prefix`` defaults to the 100B GCS sample in
-``us-central1``; pass the equivalent S3 path to run on CoreWeave.
+``europe-west4``; select the us-central1 GCS sample for a us-central1 run or
+the equivalent S3 path to run on CoreWeave.
 
 Example::
 
@@ -41,7 +42,7 @@ from experiments.datakit.reference_pipeline import (
 
 BENCHMARK_OUTPUT_TTL_DAYS = 7
 BENCHMARK_OUTPUT_PREFIX = "zephyr-benchmark"
-GCP_BENCHMARK_SAMPLE_PREFIX = "gs://marin-us-central1/datakit/sample_100b_8ae7a94f"
+GCP_BENCHMARK_SAMPLE_PREFIX = "gs://marin-eu-west4/datakit/sample_100b_8ae7a94f"
 COREWEAVE_BENCHMARK_SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f"
 
 

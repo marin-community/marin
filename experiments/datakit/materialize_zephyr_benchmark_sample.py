@@ -57,8 +57,11 @@ def _sample_main_output_step(
     source_path = source.output_path
 
     def sample(output_path: str) -> NormalizedData:
+        source_data = read_artifact(source_path, NormalizedData).model_copy(
+            update={"main_output_dir": prefix_join(source_path, "outputs/main")}
+        )
         sampled = sample_normalized_shards(
-            source=read_artifact(source_path, NormalizedData),
+            source=source_data,
             output_path=output_path,
             sample_fraction=sample_fraction,
         )

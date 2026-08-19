@@ -149,10 +149,12 @@ Each testbed sample is a tree of already-normalized sources named
 `sample_<tokens>_<hash>`. Pass its full root as `--sample-prefix`; the bucket
 prefix is not prepended.
 
-`zephyr_benchmark.py` defaults to this GCP-local copy:
+`zephyr_benchmark.py` defaults to the Europe sample. The us-central1 copy is
+also available for benchmarks that run in us-central1:
 
 | `--sample-prefix` | Approx. size | Region |
 | --- | --- | --- |
+| `gs://marin-eu-west4/datakit/sample_100b_8ae7a94f` | ~100B tokens | GCP `europe-west4` (default) |
 | `gs://marin-us-central1/datakit/sample_100b_8ae7a94f` | ~100B tokens | GCP `us-central1` |
 
 ### Create a regional sample
@@ -165,24 +167,24 @@ part of the A/B benchmark workflow.
 Copying preserves the normalized Parquet payloads and writes destination-local
 `NormalizedData` artifacts. Run the job in the destination region, keep
 concurrency bounded, and confirm transfer charges before a cross-region copy.
-For the CoreWeave source, pass its credentials; for a GCS-to-GCS copy, omit
-them and use GCP credentials that can read the source bucket. Do not use Storage
+Use a 24 GiB memory request with `--enable-extra-resources`. For a GCS-to-GCS
+copy, use GCP credentials that can read the source bucket. Do not use Storage
 Transfer Service.
 
 ```bash
 uv run iris --cluster=marin job run --no-wait \
-  --region <DESTINATION_REGION> --memory=8G --disk=5G --cpu=4 --extra=cpu \
+  --region europe-west4 --memory=24G --disk=5G --cpu=4 --extra=cpu --enable-extra-resources \
   --priority batch \
-  -e CW_KEY_ID "$CW_KEY_ID" -e CW_KEY_SECRET "$CW_KEY_SECRET" \
   -- python -m experiments.datakit.materialize_zephyr_benchmark_sample \
     --mode copy \
-    --source-prefix s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f \
-    --destination-prefix gs://<DESTINATION_BUCKET>/datakit/sample_100b_8ae7a94f \
+    --source-prefix gs://marin-us-central1/datakit/sample_100b_8ae7a94f \
+    --destination-prefix gs://marin-eu-west4/datakit/sample_100b_8ae7a94f \
     --max-concurrent 4
 ```
 
-The same command supports GCS-to-GCS copies by passing a `gs://` source prefix
-and removing the two CoreWeave credential arguments.
+To copy from the legacy CoreWeave S3 sample instead, replace `--source-prefix`
+with `s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f` and add
+`-e CW_KEY_ID "$CW_KEY_ID" -e CW_KEY_SECRET "$CW_KEY_SECRET"` before `--`.
 
 Regeneration reads the source names from `--source-prefix`, then runs the source
 registry's Hugging Face download and normalization steps before sampling 100B
@@ -194,14 +196,14 @@ bytes as source revisions or normalization code change.
 
 ```bash
 uv run iris --cluster=marin job run --no-wait \
-  --region <DESTINATION_REGION> --memory=8G --disk=5G --cpu=4 --extra=cpu \
+  --region europe-west4 --memory=24G --disk=5G --cpu=4 --extra=cpu --enable-extra-resources \
   --priority batch \
   -e CW_KEY_ID "$CW_KEY_ID" -e CW_KEY_SECRET "$CW_KEY_SECRET" \
   -- python -m experiments.datakit.materialize_zephyr_benchmark_sample \
     --mode regenerate \
     --source-prefix s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f \
-    --data-prefix gs://<DESTINATION_BUCKET> \
-    --destination-prefix gs://<DESTINATION_BUCKET>/datakit/sample_100b_8ae7a94f \
+    --data-prefix gs://marin-eu-west4 \
+    --destination-prefix gs://marin-eu-west4/datakit/sample_100b_8ae7a94f \
     --target-total-tokens-b 100 \
     --max-concurrent 4
 ```
