@@ -86,7 +86,7 @@ def main() -> None:
             fn = jax.jit(lambda a_, b_, g_, config=config: brd.ragged_dot_kernel(a_, b_, g_, config=config))
             try:
                 ms = bench_ms(fn, a, b, gs)
-            except Exception as exc:  # noqa: BLE001 - sweep must survive invalid configs
+            except Exception as exc:
                 print(f"{name} tn={tile_n} w={width} m={minor} mcs={mcs}: FAIL {type(exc).__name__}", flush=True)
                 continue
             tf = flops / (ms * 1e-3) / 1e12
