@@ -195,6 +195,20 @@ The metric contract is loss, tokens/s, analytic MFU, and MoE drop fraction. MoK 
 drops. Do not put credentials or signed query parameters in `--mok-package`, because the package
 spec is part of the recorded run configuration.
 
+#### Where the kernel source lives
+
+`mixture-of-kittens/` is a submodule tracking `mark/mok_hacking` on
+[muchanem/mixture-of-kittens](https://github.com/muchanem/mixture-of-kittens), a fork of
+[cursor/mixture-of-kittens](https://github.com/cursor/mixture-of-kittens). The bundled wheel is
+built from the pinned commit; upstream carries none of the changes the hero shape needs. Clone with
+`git submodule update --init experiments/grug/moe_hero_ep/mixture-of-kittens`.
+
+The fork's own history is the readable account of what changed. In dependency order: the routed and
+shared paths are given separate token widths, the epilogue gains a routed-only mode, the LatentMoE
+projections become fused kernels in `csrc/latent.cuh`, and the XLA FFI adapter in
+`csrc/ffi_adapter.cuh` -- the only surface this repo calls -- is widened to carry both. Nothing is
+pushed upstream.
+
 #### Reading the metrics across a dropless and a fixed-capacity arm
 
 `_compute_flops` prices the routed term at exactly the selected top-k assignments for every

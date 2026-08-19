@@ -1,0 +1,4 @@
+[submodule "experiments/grug/moe_hero_ep/mixture-of-kittens"]
+	path = experiments/grug/moe_hero_ep/mixture-of-kittens
+	url = git@github.com:muchanem/mixture-of-kittens.git
+	branch = mark/mok_hacking
