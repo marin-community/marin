@@ -38,6 +38,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
+from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
 from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
@@ -163,6 +164,7 @@ class GrugRunConfig:
     model: GrugModelConfig
     data: LmDataConfig
     resources: ResourceConfig
+    tensorstore_cache_bytes: int | None = None
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
@@ -643,6 +645,9 @@ def _make_train_step(
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
+    if config.tensorstore_cache_bytes is not None:
+        set_jagged_array_read_cache_bytes(config.tensorstore_cache_bytes)
+
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
