@@ -46,8 +46,11 @@ KVSTORE_DRIVER = "ocdbt"
 _HOST_MEMORY_KIND = "pinned_host"
 # JAX's default memory kind: buffers live in device (HBM) memory.
 _DEVICE_MEMORY_KIND = "device"
-# Chunks a save stages at once. Four processes at 32 GiB each exhausted a GB200 node.
-_DEFAULT_STAGED_CHUNKS = 32
+# Chunks a save stages at once. The budget is per process, so a node holds it once per local
+# process. Four processes at 32 GiB each exhausted a GB200 node, and 16 GiB each still did: a
+# process carries about four times its budget in flight (_STAGED_BYTE_OVERHEAD) on top of its
+# resident shard of the offloaded state.
+_DEFAULT_STAGED_CHUNKS = 8
 # Host memory a staged byte occupies while its write is in flight, for reporting only.
 _STAGED_BYTE_OVERHEAD = 4
 
