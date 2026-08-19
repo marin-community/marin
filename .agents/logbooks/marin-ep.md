@@ -2081,3 +2081,63 @@ Experiment ID prefix: `MEP`.
   structurally absent); the remaining 3% is intrinsic fused-kernel SM
   cost — M7-class kernel work (transport warpgroup efficiency, TMA
   multicast, or a fused2 revival) is the only path further.
+
+### 2026-08-19 12:20 - MEP-083: stream-level trace reopens the gap; keep-mask scatter-add is a 24 ms/layer bug
+- MEP-080's "equal busy, nothing to overlap" read came from hlo_stats
+  category sums. The trace-level union (scratchpad trace_gpu.py, merging
+  per-stream intervals) tells a different story per step per device:
+  | | compute stream busy | comm streams busy | comm hidden | idle | wall |
+  | control | 11.99 | 4.84 | 2.34 | 0.89 | 16.18 |
+  | marin-ep | 16.20 | 2.09 | 0.62 | 0.04 | 17.90 |
+  We carry +4.2 s of compute-stream work (transport lives inside the
+  fused kernels) and hide almost nothing; the control hides half of its
+  much larger comm. Both arms ran identical scheduler flags
+  (LHS=true, overlap limit 4) — the earlier "flags differ" suspicion is
+  wrong, the asymmetry is structural.
+- kernel_stats attribution (per step per device, ours):
+  | kernel | ms |
+  | fused_dispatch_gemm (fwd + remat) | 1633 |
+  | ragged_dot (down + dact) | 1530 |
+  | kernel_body (combine put) | 1193 |
+  | cudnn grouped wgrad | 906 |
+  | **MultiGpuBarrierWithNcclKernel (6/layer)** | **798** |
+  | input_scatter_fusion_3 (combine take-VJP) | 288 |
+  XLA emits a device-wide barrier before every multi-device Mosaic
+  custom-call; the pre-combine ones dominate (7.6 ms each in backward,
+  0.85 ms for the pre-dispatch one), so most of the 798 ms is
+  cross-rank skew absorbed in a kernel that cannot overlap anything.
+  The control has no such barrier and runs its a2a as 32-block
+  ncclDevKernel_SendRecv — 22% of the SMs — which is why it overlaps.
+- New one-tray cost-split bench (experiments/marin_ep/bench/moe_cost_split.py,
+  318d871317) at the hero's per-device 8/384 workload. It reproduces the
+  rack: fused 199.98 ms/layer vs the hero's 202 ms/layer/step of MoE
+  device time, so the whole design space is now iterable on 1 GB200 tray.
+  | case | ms/layer fwd+bwd |
+  | fused (mgpu_fused) | 199.98 |
+  | gemm only (brd_expert_mlp, no transport) | 141.46 |
+  | dense einsum, same rows (incumbent's form) | 128.03 |
+  Transport + plan + permute = 58.5 ms/layer (2.81 s/step) — the same
+  order as the control's 2.92 s/step of a2a busy, but fully exposed. Our
+  grouped ragged GEMMs are 10% slower than dense batched einsums at
+  equal rows (+0.64 s/step).
+- FIX (1912d25067): `_expand_from_keep_mask` used a bare `jnp.take`, whose
+  transpose is a scatter-add over assignments x hidden (3.1M blocks of
+  atomics). The gather index is injective on kept rows, so the transpose
+  is a gather; added a custom_vjp that does exactly that.
+  | case | before | after |
+  | fused | 199.98 | 175.43 |
+  | gemm | 141.46 | 139.20 |
+  | dense | 128.03 | 129.09 |
+  -24.5 ms/layer, ~12x the 6 ms/layer the profile attributed to the
+  scatter kernel itself (removing the atomics evidently unblocks more
+  than its own self-time). gemm/dense move within noise, so the delta is
+  the fix. `exploratory` until the rack arm lands.
+- Also measured: unfused-put 177.80 (the fusion is worth only 2.4
+  ms/layer over the standalone put kernel); ragged-a2a 3317 ms at EP4 —
+  pathological, unrelated to the hero path.
+- Rack arm mep-hero384c105e-fused-25-20260819 launched (matched config,
+  cf 1.05, same command as the c105r replication draw plus the fix).
+- Next levers, now quantified: (1) MultiGpuBarrier 0.80 s/step — needs
+  fewer multi-device Mosaic launches per layer (the shelved fused2 arc)
+  or a persistent-semaphore protocol that lets JAX drop the barrier;
+  (2) grouped-vs-dense GEMM gap 0.64 s/step; (3) fp8 dispatch wire.
