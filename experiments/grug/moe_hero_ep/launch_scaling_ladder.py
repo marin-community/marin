@@ -268,6 +268,7 @@ def build_ladder_run(
                 dropless_eval=True,
             ),
             stop_after_steps=num_steps,
+            processes_per_task=HERO_GPUS_PER_NODE,
         )
 
     return ArtifactStep(
