@@ -339,7 +339,7 @@ def test_large_blob_uses_bounded_parts_without_migrating_inline_blobs(tmp_path):
     inline_manifest = json.loads(StoragePath(inline_token.manifest_path).read_text())
     assert inline_manifest["required_features"] == []
 
-    payload = bytes(range(256)) * (32_769)
+    payload = b"x" * (OBJECT_PART_BYTES + 1)
     with DataStore.open(root, writer_id="new") as store:
         store.write_object("large", payload)
         token = store.flush()
@@ -352,7 +352,7 @@ def test_large_blob_uses_bounded_parts_without_migrating_inline_blobs(tmp_path):
     assert parts is not None
     assert [(row["name"], row["part"], len(row["data"])) for row in parts.to_pylist()] == [
         ("large", 0, OBJECT_PART_BYTES),
-        ("large", 1, 256),
+        ("large", 1, 1),
     ]
 
     manifest = json.loads(StoragePath(token.manifest_path).read_text())

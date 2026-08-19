@@ -300,7 +300,7 @@ class DataStore:
         return self._flush_tables(list(self._tables.values()))
 
     def flush_table(self, table: DataTable) -> CommitToken | None:
-        """Commit only ``table``'s current buffer."""
+        """Commit ``table``'s buffer, pairing blob descriptor and part buffers when needed."""
         self.raise_if_failed()
         if table.name in (BLOBS_TABLE, BLOB_PARTS_TABLE):
             tables = [

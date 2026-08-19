@@ -4,9 +4,9 @@
 """Shard write primitive: stream Arrow batches to one immutable, atomically-published Parquet object.
 
 :class:`ShardWriter` is the single write path shared by a store flush (buffered rows) and a
-compaction merge (a k-way-merged stream). Callers group fixed-schema rows under both
-:data:`ROW_GROUP_ROWS` and :data:`ROW_GROUP_TARGET_BYTES` before appending them, keeping wide binary
-columns bounded as well as row counts.
+compaction merge (a k-way-merged stream). Callers group fixed-schema rows toward
+:data:`ROW_GROUP_ROWS` and :data:`ROW_GROUP_TARGET_BYTES`, isolating a row that exceeds either
+target. Chunked objects bound each binary value separately.
 The shard is written to a temp sibling key and renamed into place on close, so its manifest commit
 can never expose a half-written object.
 """

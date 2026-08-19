@@ -5,7 +5,7 @@ import pytest
 from finestore.fileset import FineStoreDirectory, fetch_file_set
 from finestore.layout import BLOBS_TABLE
 from finestore.reader import ReadView
-from finestore.store import DataStore
+from finestore.store import OBJECT_PART_BYTES, DataStore
 
 
 def test_file_set_round_trips_nested_files_in_one_level_zero(tmp_path):
@@ -29,7 +29,7 @@ def test_file_set_round_trips_nested_files_in_one_level_zero(tmp_path):
 def test_file_set_materializes_chunked_file(tmp_path):
     root = str(tmp_path / "remote")
     local = tmp_path / "local"
-    payload = bytes(range(256)) * 32_769
+    payload = b"x" * (OBJECT_PART_BYTES + 1)
     writer = FineStoreDirectory(root, str(local), flush_interval=3600, max_transaction_bytes=1024 * 1024)
     path = local / "logs" / "archive.bin"
     path.parent.mkdir(parents=True)
