@@ -200,7 +200,7 @@ def build_train_dataset(
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
-_TRAIN_LOADER_BUFFER_SIZE = 512
+_TRAIN_LOADER_BUFFER_SIZE = 128
 # The Harrier mixture fans each request across up to 200 stores. Refill the deep queue one batch at a time so
 # source reads and host batchification are spread across steps instead of arriving in one periodic burst.
 _TRAIN_LOADER_FETCH_SIZE = 1
