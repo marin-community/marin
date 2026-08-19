@@ -36,15 +36,8 @@ config:
       prelude: weaver
       instructionsFile: profiles/user/AGENTS.md
       githubRepositories: &interactiveGithubRepositories
-        - Open-Athena/marinmirror
-        - Open-Athena/mumwelt
-        - marin-community/MarinSkyRL
-        - marin-community/evalchemy
-        - marin-community/harbor
-        - marin-community/loom
-        - marin-community/marin
-        - marin-community/marin-style
-        - marin-community/vllm
+        - Open-Athena/*
+        - marin-community/*
       mcpAccess:
         mode: all
         groups: []
