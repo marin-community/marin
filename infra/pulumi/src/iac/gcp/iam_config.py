@@ -47,14 +47,13 @@ _YAML_HEADER = """\
 # SPDX-License-Identifier: Apache-2.0
 #
 # Canonical GCP IAM declaration for hai-gcp-models. The `marin` stack is the
-# sole owner of these grants. They remain additive until the final drift review
-# permits a separate cutover to role-authoritative bindings. Human user
-# principals are KMS ciphertexts declared once under `principals`; grants
-# reference their opaque IDs so one principal cannot drift across roles.
+# sole owner of these grants. Resources use additive IAM members; changing to
+# role-authoritative bindings requires a complete live-policy audit. Human user
+# principals are KMS ciphertexts declared once under `principals`; grants reference
+# their opaque IDs so one principal cannot drift across roles.
 #
-# The owned service account and custom roles came from the retired
-# infra/permissions project. Do not add custom roles found live unless Pulumi
-# already owns them or their adoption has been reviewed separately.
+# Add a custom role found live only after confirming Pulumi already owns it or
+# reviewing its adoption separately.
 #
 # GCP does not support resource-based IAM Conditions for iam.googleapis.com
 # permissions. Custom-role-management grants therefore remain project-wide.

@@ -5,13 +5,9 @@
 
 Covers every human, service account, and Google-managed service-agent binding on the project,
 the shared KMS key, every secret, every bucket, every Artifact Registry repo, Cloud Run IAP
-policies, and who can impersonate each service account. This is the sole Pulumi owner
-for GCP IAM grants. The current resources remain additive ``*IAMMember`` grants until the
-inventory has passed its final drift review and is converted to role-authoritative bindings.
-
-Replaces infra/permissions's `GcpDeployPermissions`, which covered only additive deploy-account
-grants; those accounts' grants are folded into `project_grants`/`kms_grants`/etc. here rather
-than kept as a separate component.
+policies, and who can impersonate each service account. This is the sole Pulumi owner for GCP
+IAM grants. Resources use additive ``*IAMMember`` grants. Changing to role-authoritative bindings
+requires a complete live-policy audit to avoid revoking undeclared members.
 """
 
 import base64
