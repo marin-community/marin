@@ -93,3 +93,13 @@ The 564-run campaign is in integration. Harbor PR #83 supplies the Pi hosted-vLL
 - Result: both model configs parse with their intended TP/DP layouts and supported vLLM arguments; focused tests pass 33/33. The second smoke attempts reached `api_server.py` and failed on the unsupported flag before model loading.
 - Interpretation: these attempts also contain no model or harness evidence. Removing the optional text-only optimization is the smallest compatible change for vLLM 0.16.
 - Next action: stop the health-check loops from OTA `37131ce1`, mark all four smokes for retry, and relaunch from `775ce0a0`.
+
+### 2026-08-19 14:48 UTC - Upgrade model-serving runtime
+
+- Hypothesis: Qwen3.6 and Gemma 4 both require a newer model architecture registry than vLLM 0.16 with Transformers 4.57.3.
+- Commit Hash: OpenThoughts-Agent `ffe7ba3b` on pushed branch `penfever/working`.
+- Command: `uv lock --upgrade-package vllm --upgrade-package transformers`; `uv run --extra datagen` config-only `AutoConfig.from_pretrained` validation for both exact model IDs; focused ingress tests.
+- Config: GPU datagen now resolves vLLM 0.19.1 and Transformers 5.15.1. Official Qwen3.6 guidance recommends vLLM >=0.19. All rollout and model topology settings remain unchanged.
+- Result: Transformers recognizes `Qwen/Qwen3.6-35B-A3B` as `Qwen3_5MoeConfig` and `google/gemma-4-26B-A4B` as `Gemma4Config`; focused tests pass 33/33. The third smoke attempts failed before weight load because the older runtime did not recognize either architecture.
+- Interpretation: a serving runtime upgrade is required for both requested models; this is not a Harbor code change. The next smoke attempts will provide the first evidence about weight loading and TP/DP viability.
+- Next action: stop the old health-check loops, mark all four smokes for retry, and relaunch from OTA `ffe7ba3b`.
