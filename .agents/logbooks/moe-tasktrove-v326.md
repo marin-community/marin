@@ -113,3 +113,13 @@ The 564-run campaign is in smoke validation. Harbor PR #83 supplies the Pi hoste
 - Result: the fourth smoke attempts reached the vLLM 0.19.1 parser and failed uniformly on `api_server.py: error: unrecognized arguments: --swap-space`, before weight loading. The focused suites pass 15/15, generated registry matches the canonical profiles, and dry-run transparency output no longer includes `swap_space`. All four invalid health-check loops were stopped.
 - Interpretation: the runtime upgrade is active and resolved the architecture blocker. This failure is another OTA serving-profile mismatch, not a Harbor change or model/harness result.
 - Next action: relaunch the four smokes from `a08b0368`, then require successful model health checks and numeric Harbor results before opening the campaign queue.
+
+### 2026-08-19 15:02 UTC - Align GPU runtime and controller ingress dependencies
+
+- Hypothesis: vLLM 0.19.1 expects the Transformers 5.5 generation, while OTA's open lower bound admitted Transformers 5.15.1; the GPU datagen extra also omitted the Iris client needed after a controller endpoint becomes healthy.
+- Commit Hash: OpenThoughts-Agent `71586e0b` on pushed branch `penfever/working`.
+- Command: resolved the GPU datagen lock with Transformers `5.5.3`; imported `iris.cluster.client.endpoint_client.EndpointClient` from `uv run --extra datagen`; loaded both exact HF configs; parsed the Qwen campaign datagen config; ran the focused 15-test eval suite.
+- Config: GPU datagen now bounds Transformers at `5.5.3`, includes the already-pinned Marin Iris client, and uses the Triton GDN prefill backend for Qwen because the runtime image has no `nvcc` for FlashInfer JIT warmup. All rollout and topology settings are unchanged.
+- Result: the fifth Gemma attempts failed before weight loading with `AmbiguousGlobalPerLayerAttributeError` on heterogeneous `head_dim` under Transformers 5.15.1. Transformers 5.5.3 recognizes both exact models and reads Gemma's 256/512 local/global head dimensions. Qwen TP2×DP4 loaded all 26 shards on every DP rank, used 9.93 GiB per GPU, completed compilation, and returned HTTP 200 from `/v1/models`; the run then failed while registering controller ingress because `iris` was absent. FlashInfer GDN warmup also reported missing `/usr/local/cuda/bin/nvcc`, so the explicit Triton backend avoids first-request autotuning risk.
+- Interpretation: both model-serving paths have passed architecture parsing, and Qwen has passed full endpoint startup. The remaining failures are OTA environment composition, not Harbor code or model capacity.
+- Next action: relaunch all four smokes from `71586e0b` and require scored results from the consistent runtime before opening the campaign queue.
