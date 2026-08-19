@@ -8,8 +8,45 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from rigging.filesystem.storage_path import StoragePath
 
 from levanter.store.jagged_array import JaggedArrayStore, PreparedBatch
+
+
+def _reject_mkdirs(self, *, exist_ok: bool = True) -> None:
+    raise AssertionError(f"read-only open attempted to create {self}")
+
+
+def test_read_only_open_does_not_create_directories(tmp_path, monkeypatch):
+    path = str(tmp_path / "store")
+    writer = JaggedArrayStore.open(path, mode="w", item_rank=1, dtype=jnp.int32)
+    writer.append(np.array([1, 2, 3], dtype=np.int32))
+
+    monkeypatch.setattr(StoragePath, "mkdirs", _reject_mkdirs)
+    reader = JaggedArrayStore.open(path, mode="r", item_rank=1, dtype=jnp.int32)
+
+    np.testing.assert_array_equal(reader[0], np.array([1, 2, 3], dtype=np.int32))
+
+
+@pytest.mark.asyncio
+async def test_read_only_open_async_does_not_create_directories(tmp_path, monkeypatch):
+    path = str(tmp_path / "store")
+    writer = JaggedArrayStore.open(path, mode="w", item_rank=1, dtype=jnp.int32)
+    writer.append(np.array([1, 2, 3], dtype=np.int32))
+
+    monkeypatch.setattr(StoragePath, "mkdirs", _reject_mkdirs)
+    reader = await JaggedArrayStore.open_async(path, mode="r", item_rank=1, dtype=jnp.int32)
+
+    np.testing.assert_array_equal(await reader.get_item_async(0), np.array([1, 2, 3], dtype=np.int32))
+
+
+def test_write_open_creates_missing_parent_directories(tmp_path):
+    path = tmp_path / "missing" / "nested" / "store"
+
+    writer = JaggedArrayStore.open(str(path), mode="w", item_rank=1, dtype=jnp.int32)
+    writer.append(np.array([1, 2, 3], dtype=np.int32))
+
+    np.testing.assert_array_equal(writer[0], np.array([1, 2, 3], dtype=np.int32))
 
 
 @pytest.mark.parametrize("cache_metadata", [True, False])
