@@ -7,8 +7,8 @@
 # principals are KMS ciphertexts declared once under `principals`; grants
 # reference their opaque IDs so one principal cannot drift across roles.
 #
-# The owned service account and custom roles came from the retired
-# infra/permissions project. Do not add custom roles found live unless Pulumi
+# The owned service account and custom roles were imported from the retired
+# `marin-permissions` stack. Do not add custom roles found live unless Pulumi
 # already owns them or their adoption has been reviewed separately.
 #
 # GCP does not support resource-based IAM Conditions for iam.googleapis.com

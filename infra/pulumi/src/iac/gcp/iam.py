@@ -9,9 +9,8 @@ and job policies, and who can impersonate each service account. This is the sole
 for GCP IAM grants. The current resources remain additive ``*IAMMember`` grants until the
 inventory has passed its final drift review and is converted to role-authoritative bindings.
 
-Replaces infra/permissions's `GcpDeployPermissions`, which covered only additive deploy-account
-grants; those accounts' grants are folded into `project_grants`/`kms_grants`/etc. here rather
-than kept as a separate component.
+The retired `GcpDeployPermissions` component covered only additive deploy-account grants. Those
+accounts' grants are folded into `project_grants`/`kms_grants`/etc. here.
 """
 
 import base64

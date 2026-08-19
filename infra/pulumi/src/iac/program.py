@@ -9,9 +9,8 @@ typed `provisioning:` section, and declares that cluster's resources. One stack 
 which resources: CoreWeave declares the controller RBAC, reserved NodePools, Kueue objects,
 the Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs; GCP declares
 the reserved federation-egress static IPs, Artifact Registry pull-through mirrors, the shared
-GCLB/IAP ingress, and every IAM grant on the project
-(`iac.gcp.iam.GcpIam`, replacing `infra/permissions`). Components not yet implemented are
-tracked in README.md's "Future work".
+GCLB/IAP ingress, and every IAM grant on the project (`iac.gcp.iam.GcpIam`). Components not yet
+implemented are tracked in README.md's "Future work".
 """
 
 import os
