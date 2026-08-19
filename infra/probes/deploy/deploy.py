@@ -24,6 +24,8 @@ logger = logging.getLogger("deploy")
 
 IMAGE_NAME = "infra-probes"
 PROJECT = "hai-gcp-models"
+REGION = "us-central1"
+REPOSITORY = "marin"
 RESULTS_HOST_PATH = "/var/lib/probes"
 # Build context / git repo root for `build`: this script lives in deploy/.
 PROBES_DIR = Path(__file__).resolve().parent.parent
@@ -44,10 +46,10 @@ def _service_account(project: str) -> str:
 
 @click.group()
 @click.option("--project", envvar="MARIN_PROBES_PROJECT", default=PROJECT, show_default=True)
-@click.option("--region", envvar="MARIN_PROBES_REGION", default="us-central1", show_default=True)
+@click.option("--region", envvar="MARIN_PROBES_REGION", default=REGION, show_default=True)
 @click.option("--zone", envvar="MARIN_PROBES_ZONE", default="us-central1-b", show_default=True)
 @click.option("--vm-name", envvar="MARIN_PROBES_VM", default="infra-probes", show_default=True)
-@click.option("--repo", envvar="MARIN_PROBES_REPO", default="marin", show_default=True)
+@click.option("--repo", envvar="MARIN_PROBES_REPO", default=REPOSITORY, show_default=True)
 @click.pass_context
 def cli(ctx: click.Context, project: str, region: str, zone: str, vm_name: str, repo: str) -> None:
     ctx.obj = {
@@ -163,8 +165,10 @@ def status(cfg: dict[str, str]) -> None:
 def create(cfg: dict[str, str], iris_endpoint: str, machine_type: str) -> None:
     """One-time: create the service account and COS VM."""
     project = cfg["project"]
-    if project != PROJECT:
-        raise click.ClickException(f"create requires --project={PROJECT}; IAM is declared for that project")
+    if project != PROJECT or cfg["registry"] != _artifact_registry(REGION, PROJECT, REPOSITORY):
+        raise click.ClickException(
+            f"create requires --project={PROJECT} --region={REGION} --repo={REPOSITORY}; IAM is declared for that target"
+        )
     sa = _service_account(project)
 
     logger.info("Creating service account %s", sa)

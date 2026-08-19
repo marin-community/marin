@@ -81,15 +81,18 @@ uv run deploy/deploy.py apply    # roll the VM to this HEAD's :sha image
 uv run deploy/deploy.py status   # VM state + recent logs
 ```
 
-Project, region, zone, VM name, and repo default to the prod values and can be
-overridden per-command (`--project`, `--zone`, …) or via `MARIN_PROBES_*` env vars.
+Project, region, zone, VM name, and repo default to the production values. Build, apply, and
+status accept per-command overrides (`--project`, `--zone`, and related `MARIN_PROBES_*`
+variables).
 
 ### One-time VM creation
 
 `create` provisions the service account and COS VM. Its Artifact Registry, Cloud Logging, and
 prefix-scoped GCS roll-up grants are declared in `infra/pulumi/src/iac/gcp/iam_data.yaml` and
 applied from the `marin` Pulumi stack. Apply those grants before creating the VM. The `create`
-command therefore requires the `hai-gcp-models` project.
+command requires the `hai-gcp-models` project, `us-central1` region, and `marin` repository;
+its zone and VM settings remain configurable.
+
 Marin Iris IAP access is declared by `provisioning.gcp.gclb` in
 `lib/iris/config/marin.yaml`:
 

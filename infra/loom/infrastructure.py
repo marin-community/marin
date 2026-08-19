@@ -119,8 +119,6 @@ class WorkloadIdentityConfig:
 class ProfileSecretConfig:
     name: str
     secret_ref: str
-    project: str
-    secret: str
 
     @classmethod
     def parse(cls, name: str, value: object, profile: str) -> ProfileSecretConfig:
@@ -132,7 +130,7 @@ class ProfileSecretConfig:
         match = SECRET_REF.fullmatch(secret_ref)
         if not match:
             raise ValueError(f"profile {profile!r} env {name!r} must use a full secretRef")
-        return cls(name, secret_ref, match.group("project"), match.group("secret"))
+        return cls(name, secret_ref)
 
     def manifest(self) -> dict[str, str]:
         return {"name": self.name, "secret_ref": self.secret_ref}
@@ -731,19 +729,6 @@ def _create_runtime_policy(
     return RuntimePolicyResources(audience, manifest, workload_clients)
 
 
-def _create_secrets(
-    config: DeploymentConfig,
-    apis: list[gcp.projects.Service],
-) -> gcp.secretmanager.Secret:
-    return gcp.secretmanager.Secret(
-        "loom-dotenv",
-        project=config.project,
-        secret_id=DOTENV_SECRET_ID,
-        replication={"auto": {}},
-        opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
-    )
-
-
 @dataclass(frozen=True)
 class InstanceResources:
     instance: gcp.compute.Instance
@@ -883,7 +868,13 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
     image = _create_image(config, apis)
     network = _create_network(config, apis)
     root_disk = _create_root_disk(config, apis)
-    dotenv_secret = _create_secrets(config, apis)
+    dotenv_secret = gcp.secretmanager.Secret(
+        "loom-dotenv",
+        project=config.project,
+        secret_id=DOTENV_SECRET_ID,
+        replication={"auto": {}},
+        opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
+    )
     instance = _create_instance(
         config,
         vm_account,

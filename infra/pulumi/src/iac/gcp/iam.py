@@ -255,13 +255,7 @@ def _grant_resource(
     grant: GcpRoleGrant,
     member: str | GcpEncryptedMember,
 ) -> _GrantDeclaration:
-    """The logical name, principal, and provider ID for one IAM member grant.
-    Asserts `member` is already resolved to `str` — every call site runs after
-    `_resolve_encrypted_members`, so this is a safety net, not the resolution step, and narrows
-    the type for callers that would otherwise still see `str | GcpEncryptedMember` from the
-    grant's declared type. Each `_grant_*_iam` function still owns its own resource constructor
-    call directly, since the nine `gcp.*.*Member` types take different kwargs and have no common
-    base."""
+    """Build the logical name and provider import ID for one resolved grant."""
     assert isinstance(member, str), f"unresolved encrypted member reached _grant_resource: {member!r}"
     name = _grant_name(name_prefix, grant.role, member, grant.condition)
     import_id = f"{resource_ref} {grant.role} {member}{_condition_suffix(grant.condition)}"
