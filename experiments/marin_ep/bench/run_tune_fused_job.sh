@@ -16,22 +16,22 @@ uv run --no-sync python -c "import jax; print('jax', jax.__version__)" || { tail
 echo SETUP_OK
 
 export XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async
-export MARIN_EP_COLLECTIVE_MEMORY_MB=20480
+export MARIN_EP_COLLECTIVE_MEMORY_MB=61440
 export XLA_FLAGS="--xla_gpu_ragged_all_to_all_mode=symmetric --xla_gpu_enable_dynamic_slice_fusion=false"
 
-pids=()
-for i in 0 1 2 3; do
-  MARIN_EP_COORD=127.0.0.1:9973 MARIN_EP_NUM_PROCS=4 MARIN_EP_PROC_ID=$i \
-  CUDA_VISIBLE_DEVICES=$i \
-    timeout 9000 uv run --no-sync python experiments/marin_ep/bench/tune_fused_constants.py \
-    > /tmp/tune_$i.log 2>&1 &
-  pids+=($!)
+port=9973
+for cfg in 8,6,4 4,6,4 16,6,4 8,4,4 8,12,4 4,12,4 8,6,3 8,6,5; do
+  port=$((port + 1))
+  pids=()
+  for i in 0 1 2 3; do
+    MARIN_EP_TUNE_CFG=$cfg \
+    MARIN_EP_COORD=127.0.0.1:$port MARIN_EP_NUM_PROCS=4 MARIN_EP_PROC_ID=$i \
+    CUDA_VISIBLE_DEVICES=$i \
+      timeout 1500 uv run --no-sync python experiments/marin_ep/bench/tune_fused_constants.py \
+      > /tmp/tune_${cfg//,/}_$i.log 2>&1 &
+    pids+=($!)
+  done
+  for p in "${pids[@]}"; do wait "$p" || true; done
+  grep -hE "sr=|FAIL" /tmp/tune_${cfg//,/}_0.log | head -2
 done
-rc=0
-for p in "${pids[@]}"; do wait "$p" || rc=$?; done
-echo "==== rank0 output ===="
-cat /tmp/tune_0.log
-for i in 1 2 3; do
-  grep -m1 -E "FAIL|Error" /tmp/tune_$i.log && { echo "---- rank $i tail ----"; tail -5 /tmp/tune_$i.log; }
-done
-exit $rc
+echo SWEEP_COMPLETED

@@ -16,7 +16,6 @@ Run one process per GPU (the zeroing-race driver pattern):
   CUDA_VISIBLE_DEVICES=<i> python .../tune_fused_constants.py
 """
 
-import itertools
 import os
 import sys
 import time
@@ -48,20 +47,10 @@ LOCAL_EXPERTS = 6
 CF = 1.1
 ITERS = 6
 
-# (stage_rows, lane_chunk, mcs); the first entry is the shipped default.
-GRID = [
-    (8, 6, 4),
-    (4, 6, 4),
-    (16, 6, 4),
-    (8, 4, 4),
-    (8, 12, 4),
-    (4, 12, 4),
-    (16, 4, 4),
-    (8, 6, 3),
-    (8, 6, 5),
-    (4, 4, 5),
-    (16, 12, 3),
-]
+# One (stage_rows, lane_chunk, mcs) config per process invocation, from
+# MARIN_EP_TUNE_CFG="sr,lc,mcs"; a failed config must not pollute the next
+# one's collective arena.
+CFG = tuple(int(v) for v in os.environ["MARIN_EP_TUNE_CFG"].split(","))
 
 
 def main() -> None:
@@ -105,7 +94,7 @@ def main() -> None:
     w2b = put_weight(w2)
 
     results = []
-    for stage_rows, lane_chunk, mcs in GRID:
+    for stage_rows, lane_chunk, mcs in [CFG]:
         fused_dispatch_brd.TRANSPORT_STAGE_ROWS = stage_rows
         fused_dispatch_brd.TRANSPORT_LANE_CHUNK = lane_chunk
         fused_dispatch_brd._FUSED_MCS = mcs
@@ -151,12 +140,8 @@ def main() -> None:
         if proc == 0:
             print(f"sr={stage_rows} lc={lane_chunk} mcs={mcs}: {ms:.2f} ms fwd+bwd", flush=True)
 
-    if proc == 0 and results:
-        results.sort()
-        ms, sr, lc, mcs = results[0]
-        base = next((r for r in results if r[1:] == (8, 6, 4)), None)
-        print(f"BEST sr={sr} lc={lc} mcs={mcs}: {ms:.2f} ms" + (f" (default {base[0]:.2f} ms)" if base else ""))
-        print("SWEEP_COMPLETED", flush=True)
+    if proc == 0:
+        print("CFG_COMPLETED", flush=True)
     sys.exit(0)
 
 
