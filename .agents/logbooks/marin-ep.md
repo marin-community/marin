@@ -2059,3 +2059,25 @@ Experiment ID prefix: `MEP`.
   cf-1.0 tuned arm (~17.2 est, ~1.4% drops) would be ~17.44 —
   drop-adjusted parity is plausibly in reach while raw parity still
   needs ~3%.
+
+### 2026-08-18 21:55 - MEP-082: replication complete — gap 0.5-0.6 s replicated; cf 1.0 DOMINATED
+- Fresh budget window, three 25-step arms same night, same cluster:
+  | arm | s/it | drops (final) | loss |
+  | control repeat (main as-pinned) | 16.9 | 1.0% | 6.10 |
+  | cf 1.05 tuned repeat | 17.5 | 0.80% | 6.07 |
+  | cf 1.0 tuned | 17.3 | 2.37% | 6.10 |
+- cf 1.05 replicates 17.5 exactly (2 draws); control replicates 16.9-17.0.
+  The 0.5-0.6 s/it (~3.4%) gap is REAL, not placement noise. `replicated`.
+- cf 1.0 is DOMINATED at matched config: drops jump to 2.37% (the
+  incumbent's level — fails the "significantly lower drops" gate) while
+  drop-adjusted throughput (17.3/(1-0.0237) = 17.72 effective) is WORSE
+  than cf 1.05 (17.5/0.992 = 17.64). The matched-config drop curve is
+  much steeper below 1.05 than the drifted-config curve suggested.
+  Operating point stays cf 1.05.
+- GATE STATUS (replicated): drops significantly lower — MET (0.7-0.8%
+  vs 1.0-2.4%, and >10x mid-run); raw throughput parity — NOT met, gap
+  3.4%. Drop-adjusted gap ~0.4-0.6 s. All shallow levers are now
+  exhausted (GEMM configs banked, cf swept, constants dead, overlap
+  structurally absent); the remaining 3% is intrinsic fused-kernel SM
+  cost — M7-class kernel work (transport warpgroup efficiency, TMA
+  multicast, or a fused2 revival) is the only path further.
