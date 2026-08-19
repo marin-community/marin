@@ -653,6 +653,38 @@ def test_cat_reports_full_size_when_uncompressed_preview_is_truncated(tmp_path, 
     assert result.stderr == "[truncated: read 4 B of 6 B]\n"
 
 
+def test_bare_url_opens_browser_for_directories_and_viewer_for_files(tree, monkeypatch):
+    """A URL in command position needs no command name: directories open in the
+    browser and files in the viewer."""
+    opened = []
+    monkeypatch.setattr(cli_module, "run_browser", lambda url: opened.append(("browse", url)))
+    monkeypatch.setattr(cli_module, "show_viewer", lambda url: opened.append(("show", url)))
+
+    assert CliRunner().invoke(cli, [str(tree)]).exit_code == 0
+    assert CliRunner().invoke(cli, [str(tree / "b.txt")]).exit_code == 0
+    assert opened == [("browse", str(tree)), ("show", str(tree / "b.txt"))]
+
+
+def test_command_typos_still_fail_as_commands(tmp_path, monkeypatch):
+    """Only path-shaped tokens take the URL fallback, so a mistyped command name is
+    reported rather than opened as a missing file."""
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(cli, ["catt"])
+
+    assert result.exit_code != 0
+    assert "No such command" in result.output
+
+
+def test_show_rejects_directories(tree):
+    """The viewer holds one file; a directory belongs to the browser, and saying so
+    beats opening curses on an unreadable path."""
+    result = CliRunner().invoke(cli, ["show", str(tree)])
+
+    assert result.exit_code != 0
+    assert "use `fsutil browse" in result.output
+
+
 def test_ls_long_renders_local_directory(tree):
     result = CliRunner().invoke(cli, ["ls", "-l", str(tree)])
 
