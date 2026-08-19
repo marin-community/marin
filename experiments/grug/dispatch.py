@@ -27,7 +27,7 @@ PRODUCTION_PRIORITY = priority_band_value("production")
 # given (e.g. `iris job run -e XLA_FLAGS ...`) must be re-exported explicitly.
 # JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
 # not leak onto accelerator tasks.
-_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "LEVANTER_")
+_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 
 
@@ -51,6 +51,7 @@ def dispatch_grug_training_run(
     max_retries_failure: int = 3,
     processes_per_task: int = 1,
     priority: int = INHERIT_PRIORITY,
+    env_vars: dict[str, str] | None = None,
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.
 
@@ -58,12 +59,14 @@ def dispatch_grug_training_run(
     not itself an Iris job -- which is the case for a launcher run from a dev box.
     """
     safe_run_id = _safe_job_suffix(run_id)
-    env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
+    base_env = _forwarded_env_vars()
+    base_env.update(env_vars or {})
+    training_env = resolve_training_env(base_env=base_env, resources=resources)
     request = JobRequest(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
         resources=resources,
-        environment=create_environment(env_vars=env_vars, extras=extras_for_resources(resources)),
+        environment=create_environment(env_vars=training_env, extras=extras_for_resources(resources)),
         max_retries_failure=max_retries_failure,
         max_task_failures=10,
         processes_per_task=processes_per_task,
