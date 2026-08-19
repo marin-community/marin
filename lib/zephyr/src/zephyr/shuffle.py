@@ -49,7 +49,7 @@ from iris.env_resources import TaskResources
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.s3_compat import needs_virtual_host_addressing
 from rigging.filesystem.storage_path import StoragePath
-from rigging.timing import RateLimiter, log_time
+from rigging.timing import ExponentialBackoff, RateLimiter, log_time, retry_with_backoff
 
 from zephyr.external_sort import external_sort_merge
 from zephyr.shard_keys import encode_key, hash_encoded_key
@@ -95,6 +95,10 @@ _SCATTER_METADATA_FILENAME = "metadata.msgpack"
 # reducer issues while building its ScatterReader. These reads are GCS
 # GET-bound, so a modest pool keeps latency low without thrashing.
 _SIDECAR_READ_CONCURRENCY = 32
+# Concurrent reads can return transient invalid footer bytes for valid Parquet files (#8265).
+_SCHEMA_READ_MAX_ATTEMPTS = 4
+_SCHEMA_READ_BACKOFF = ExponentialBackoff(initial=0.1, maximum=1.0, factor=2.0, jitter=0.25)
+_PARQUET_FILE_SPECIFICATION_ERROR = "parquet: File out of specification"
 # Fraction of available memory available for merging.
 _SCATTER_READ_MEMORY_FRACTION = 0.4
 
@@ -312,6 +316,20 @@ def _read_sidecar_slices_parallel(scatter_paths: list[str], target_shard: int) -
     return [s for s in ordered if s is not None]
 
 
+def _is_retryable_schema_error(error: Exception) -> bool:
+    return isinstance(error, pl.exceptions.ComputeError) and _PARQUET_FILE_SPECIFICATION_ERROR in str(error)
+
+
+def _collect_frame_schema(frame: pl.LazyFrame) -> pl.Schema:
+    return retry_with_backoff(
+        frame.collect_schema,
+        retryable=_is_retryable_schema_error,
+        max_attempts=_SCHEMA_READ_MAX_ATTEMPTS,
+        backoff=_SCHEMA_READ_BACKOFF,
+        operation="Parquet schema read",
+    )
+
+
 def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
     """Cast frames to a common supertype schema so pl.merge_sorted doesn't fail.
 
@@ -327,10 +345,10 @@ def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
     if len(frames) <= 1:
         return frames
     with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
-        schemas = list(pool.map(pl.LazyFrame.collect_schema, frames))
+        schemas = list(pool.map(_collect_frame_schema, frames))
     if all(s == schemas[0] for s in schemas[1:]):
         return frames
-    unified = pl.concat([f.limit(0) for f in frames], how="diagonal_relaxed").collect_schema()
+    unified = _collect_frame_schema(pl.concat([f.limit(0) for f in frames], how="diagonal_relaxed"))
     return [f.cast(dict(unified)) for f in frames]
 
 
