@@ -874,22 +874,24 @@ defineExpose({ selectedAttemptId })
           >
             <button
               v-if="row.seq > 0"
-              class="shrink-0 w-4 text-text-muted opacity-0 group-hover:opacity-100
+              class="shrink-0 w-4 select-none text-text-muted opacity-0 group-hover:opacity-100
                      focus-visible:opacity-100 hover:text-accent disabled:opacity-40"
               :title="`Show the ${CONTEXT_LINES} lines either side of this one, unfiltered`"
               :disabled="contextPending"
               @click="loadContext(row.seq)"
             >⋯</button>
-            <span v-else class="shrink-0 w-4" />
-            <RouterLink
-              v-if="row.taskRef && props.taskId"
-              :to="`/job/${encodeURIComponent(props.taskId)}/task/${encodeURIComponent(row.taskRef.taskId)}`"
-              class="shrink-0 text-accent hover:underline"
-              :title="row.taskRef.taskId"
-            >
-              T{{ row.taskRef.taskIndex }}
-            </RouterLink>
-            <span class="shrink-0 inline-flex items-center gap-1">
+            <span v-else class="shrink-0 w-4 select-none" />
+            <template v-if="showTaskLinks">
+              <RouterLink
+                v-if="row.taskRef && props.taskId"
+                :to="`/job/${encodeURIComponent(props.taskId)}/task/${encodeURIComponent(row.taskRef.taskId)}`"
+                class="shrink-0 w-12 overflow-hidden select-none text-right tabular-nums
+                       text-accent hover:underline"
+                :title="row.taskRef.taskId"
+              >T{{ row.taskRef.taskIndex }}</RouterLink>
+              <span v-else class="shrink-0 w-12 select-none" />
+            </template>
+            <span class="shrink-0 select-none inline-flex items-center gap-1">
               <button
                 data-log-permalink
                 class="text-text-muted tabular-nums hover:text-accent hover:underline"
@@ -904,6 +906,8 @@ defineExpose({ selectedAttemptId })
                 @click="setStartTime(row.entry)"
               >▶</button>
             </span>
+            <!-- The gutter is select-none: each item is a flex item, so a browser
+                 would otherwise copy every one of them onto its own line. -->
             <span
               :class="wrap ? 'whitespace-pre-wrap break-words flex-1' : 'whitespace-pre'"
             ><template
