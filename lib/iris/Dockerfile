@@ -193,6 +193,11 @@ ARG IRIS_GIT_HASH=unknown
 ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
 ARG IRIS_PROVENANCE={}
 ENV IRIS_PROVENANCE=${IRIS_PROVENANCE}
+# ISO date of the last commit touching lib/iris in the tree this image was built
+# from, resolved by `iris.cli.build` because the image carries no `.git`. The
+# controller compares client submissions against it; empty disables that gate.
+ARG IRIS_REVISION_DATE=
+ENV IRIS_REVISION_DATE=${IRIS_REVISION_DATE}
 
 
 # ── Stage: docker-cli ────────────────────────────────────────────────
@@ -287,6 +292,8 @@ ARG IRIS_GIT_HASH=unknown
 ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
 ARG IRIS_PROVENANCE={}
 ENV IRIS_PROVENANCE=${IRIS_PROVENANCE}
+ARG IRIS_REVISION_DATE=
+ENV IRIS_REVISION_DATE=${IRIS_REVISION_DATE}
 
 # Nsight Systems CLI, extracted from NVIDIA's deb (the target binary is
 # self-contained; apt-installing it pulls the whole Qt/GUI chain). Arch-aware:
