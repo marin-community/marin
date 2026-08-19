@@ -56,6 +56,7 @@ logger = logging.getLogger(__name__)
 
 HERO_EP_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "false",
+    "LEVANTER_TS_CACHE_LIMIT": "10000000000",
     "XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB": "192",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
@@ -214,10 +215,10 @@ def build_train_loader(
     return DataLoader(
         dataset,
         batch_schedule.schedule,
-        max_buffered_batches=512,
+        max_buffered_batches=128,
         mesh=mesh,
         axis_resources={"__BATCH__": _BATCH_AXES},
-        prefetch_size=256,
+        prefetch_size=32,
         batch_axis_name="__BATCH__",
         allow_nondivisible_batch_size=False,
     )

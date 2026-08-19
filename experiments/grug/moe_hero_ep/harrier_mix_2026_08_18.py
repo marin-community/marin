@@ -13,13 +13,14 @@ eight-epoch cap still holds.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from levanter.data.text.datasets import DatasetComponent, LmDataConfig
+from levanter.data.text.datasets import BlockShuffleConfig, DatasetComponent, LmDataConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.processing.tokenize.tokenize import TokenizedCache
@@ -41,6 +42,7 @@ HARRIER_MIX_2026_08_18_TAG = "harrier-mix-2026.08.18"
 # training-FLOP budget the run is expensive enough that we want maximally-real data over a simulated
 # larger run, so it trains on the raw mixture instead.
 SIMULATED_EPOCHING_MAX_FLOPS = 1e23
+_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=8, perm_type="feistel")
 
 HARRIER_MIX_2026_08_18_STORE = ArtifactStep.adopt(
     "datakit/store/harrier-all-sources-k40-q5-fuzzy-dedup-exempt16",
@@ -144,12 +146,15 @@ def harrier_mix_2026_08_18_data_config(
         enable_simulated_epoching=experiment_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
     )
 
-    return _two_phase_data_config(
-        tokenizer=marin_tokenizer,
-        components=components,
-        phase_weights=phase_weights,
-        phase_1_start=_phase_1_start_step(total_steps, batch_size),
-        val_components=val_components,
-        target_budget=target_budget,
-        experiment_budget=experiment_budget,
+    return dataclasses.replace(
+        _two_phase_data_config(
+            tokenizer=marin_tokenizer,
+            components=components,
+            phase_weights=phase_weights,
+            phase_1_start=_phase_1_start_step(total_steps, batch_size),
+            val_components=val_components,
+            target_budget=target_budget,
+            experiment_budget=experiment_budget,
+        ),
+        shuffle=_SHUFFLE,
     )
