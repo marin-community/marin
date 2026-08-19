@@ -3,7 +3,7 @@
 
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["gcsfs>=2025.5.1", "numpy>=2.0", "pandas>=2.2"]
+# dependencies = ["gcsfs>=2025.5.1", "numpy>=2.0", "pandas>=2.2", "scipy>=1.14"]
 # ///
 """Score the H4 multi-target rollouts against the ATOM-031 gates.
 
@@ -35,6 +35,7 @@ from pathlib import Path
 import gcsfs
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_UTILITY = SCRIPT_DIR / "reference_outputs" / "starcoder_wsd80_gradient_probe_full_results_20260818"
@@ -118,9 +119,17 @@ def curves(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def gate_a(cell_curves: pd.DataFrame) -> dict:
-    """Does an interior optimum exist behaviourally? Scored before any mapping is fitted."""
+    """Does an interior optimum exist behaviourally? Scored before any mapping is fitted.
+
+    Interior means interior to the q GRID -- the argmin is not at q=0 or q=1 -- because that is what
+    decides whether a utility has anything to get right. Scoring it against the spread of the observed
+    argmins instead would call a unanimous interior optimum "0% interior", which is the opposite of the
+    truth and is what a first version of this function did.
+    """
     argmins = np.array([row.q[int(np.argmin(row.bpb))] for row in cell_curves.itertuples()])
-    interior = (argmins > argmins.min()) & (argmins < argmins.max())
+    grid = np.concatenate([row.q for row in cell_curves.itertuples()])
+    low, high = float(grid.min()), float(grid.max())
+    interior = (argmins > low) & (argmins < high)
     return {
         "cells": len(argmins),
         "interior_fraction": float(interior.mean()),
@@ -234,6 +243,15 @@ def main() -> None:
         chooser = utility_chooser(slope)
         print(f"GATE B frozen slope {slope:+.4f} fitted on {CALIBRATION_ROLE} only")
         validation = merged[merged["analysis_role"].eq(VALIDATION_ROLE)]
+        # Correlation is reported but is NOT the gate, because a utility can track the shape of the curve
+        # closely and still put its optimum in the wrong place -- and only the place is used to select.
+        # The original H4 analysis reported R2 0.825 on a curve whose argmin selection was worthless.
+        pearson = stats.pearsonr(validation["delta_utility"], validation["delta_bpb"])
+        spearman = stats.spearmanr(validation["delta_utility"], validation["delta_bpb"])
+        print(
+            f"  shape agreement (not the gate): Pearson {pearson.statistic:+.3f} "
+            f"(p={pearson.pvalue:.1g}), Spearman {spearman.statistic:+.3f}, n={len(validation)}"
+        )
         results = {"utility (frozen mapping)": selection_regret(validation, chooser)}
         results["null: always q=1.0"] = selection_regret(validation, lambda g: 1.0)
         results[f"null: always q={GRID_CENTRE}"] = selection_regret(validation, lambda g: GRID_CENTRE)
