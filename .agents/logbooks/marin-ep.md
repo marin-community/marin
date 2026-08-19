@@ -2033,3 +2033,29 @@ Experiment ID prefix: `MEP`.
   were set at 4/192; 1-tray EP4 A/B is enough to screen); (2) keep
   banking cf (1.05 = 17.5); (3) id-level mapping of the mpmd ops to
   legs to find which leg is off its tuned TF/s.
+
+### 2026-08-18 20:20 - MEP-081: transport constants are a DEAD LEVER at 8/384; budget pause
+- mep-tune-fused-consts-d (1 tray, one config per process gang, 60 GiB
+  arena + cuda_async + symmetric/ds-fusion-off env — all three were
+  required; the naive bench hit closure-capture, window-VA, and
+  arena-OOM failures in turn): fwd+bwd layer time at the full 8/384
+  per-device workload (576k pool rows, 6 local experts, EP4):
+  | sr,lc,mcs | ms |
+  | 8,4,4 | 203.33 |
+  | 8,6,4 (shipped) | 204.01 |
+  | 8,12,4 | 205.87 |
+  | 8,6,3 | 206.76 |
+  | 8,6,5 | 207.50 |
+  sr=4 and sr=16 configs died without printing (likely kernel-constraint
+  violations). CONCLUSION: the shipped (8,6,4) is optimal within +-1.7%;
+  the fused kernel's SM cost is intrinsic to the design, not mis-tuning.
+  Dead-lever ledger grows: constants, overlap (MEP-080: busy-bound).
+- Budget check: 341% (BATCH band) after the day's campaign —
+  replication arms deferred to the next window. Queued next: (1) repeat
+  pair (tuned cf-1.05 treatment + control, same rack day) to replicate
+  the ~0.5 s gap; (2) tuned cf-1.0 arm to complete the curve.
+- Drop-adjusted framing for the gate: control 17.0 s/it at 1.5-2.4%
+  drops ~= 17.35 s per effective it; ours 17.5 at 0.67% ~= 17.62; a
+  cf-1.0 tuned arm (~17.2 est, ~1.4% drops) would be ~17.44 —
+  drop-adjusted parity is plausibly in reach while raw parity still
+  needs ~3%.
