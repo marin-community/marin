@@ -28,7 +28,7 @@ other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run` (IAP-gate
 used by `infra/echo`, `infra/evaldash`, and `infra/grafana`) and `iac.iris` (always-on Iris
 service jobs via a `local.Command` around the `iac.iris.deploy` CLI, used by `infra/ducky` and
 `infra/xprof`). The service components create runtime resources; the `marin` stack owns their
-service-account, Secret Manager, Cloud Run, and IAP grants. The shared Marin desktop OAuth
+service-account, Secret Manager, and Cloud Run IAP grants. The shared Marin desktop OAuth
 client remains a component-owned IAP setting.
 
 ### Cloud Run IAP access
