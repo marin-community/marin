@@ -24,6 +24,11 @@ class MokBf16Config:
     macrobatch_size: int = 131_072
     schedule_capacity_multiplier: float = 0.5
     all_gather_top_experts_chunk_bytes: int = 2048
+    # LatentMoE compresses before dispatch, so the routed path runs at ``latent_size`` while the
+    # fused shared experts stay at the caller's hidden width. Zero disables both projections and
+    # the pre-dispatch RMSNorm, collapsing the routed width back onto the hidden width.
+    latent_size: int = 0
+    latent_norm_eps: float = 1e-5
 
     def __post_init__(self) -> None:
         if self.workspace_id < 0:
@@ -40,6 +45,10 @@ class MokBf16Config:
             raise ValueError("schedule_capacity_multiplier must be positive and finite")
         if self.all_gather_top_experts_chunk_bytes <= 0 or self.all_gather_top_experts_chunk_bytes % 16:
             raise ValueError("all_gather_top_experts_chunk_bytes must be positive and 16-byte aligned")
+        if self.latent_size < 0 or self.latent_size % 256:
+            raise ValueError("latent_size must be non-negative and divisible by 256 (0 disables the latent path)")
+        if self.latent_size and not (math.isfinite(self.latent_norm_eps) and self.latent_norm_eps > 0):
+            raise ValueError("latent_norm_eps must be positive and finite when latent_size is non-zero")
 
 
 @dataclass
@@ -87,10 +96,17 @@ def initialize_mok_runtime(
     num_local_tokens: int,
     hidden_size: int,
     topk: int,
+    latent_size: int | None = None,
     process_group: Any | None = None,
     device_index: int | None = None,
 ) -> MokRuntimeHandle:
     """Create and register one caller-owned symmetric-memory workspace.
+
+    ``hidden_size`` is the caller's full token width, the one the fused shared experts read.
+    ``latent_size`` is the routed width LatentMoE dispatches; ``None`` (or zero) means the routed
+    width equals ``hidden_size``. The symmetric dispatch and combine buffers are sized at the
+    routed width, which is what makes the latent hero shape fit, so passing the latent width as
+    ``hidden_size`` -- as this call used to require -- is now rejected by the native handlers.
 
     Torch distributed must already be initialized with one process per GPU.
     Initialization is collective over ``process_group`` and must run on every
@@ -128,6 +144,7 @@ def initialize_mok_runtime(
         num_local_tokens=num_local_tokens,
         hidden_size=hidden_size,
         topk=topk,
+        latent_size=latent_size or None,
     )
     # Workspace construction and symmetric-memory rendezvous run on Torch's current stream.
     # Complete them before XLA first consumes the registered pointers on its own stream.

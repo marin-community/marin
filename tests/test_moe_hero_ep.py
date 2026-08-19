@@ -24,6 +24,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.callbacks import profiler as profiler_lib
 from levanter.callbacks.profiler import XprofUploadConfig
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.kernels.mok import reference as mok_reference
 from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep import dev_run, grugmuon_hero, launch, launch_mok, model, train
@@ -535,7 +536,7 @@ def test_mok_fuses_routed_and_two_shared_experts_in_one_dropless_call(monkeypatc
 
     def fake_mok(x, selected_experts, router_weights, *weights, **config):
         calls.append((selected_experts, router_weights, weights, config))
-        return jnp.ones_like(x) * sum(weight.mean() for weight in weights)
+        return jnp.ones_like(x) * sum(weight.mean() for weight in weights if weight is not None)
 
     monkeypatch.setattr(model, "_mok_bf16", fake_mok)
     mesh = Mesh(
@@ -550,7 +551,10 @@ def test_mok_fuses_routed_and_two_shared_experts_in_one_dropless_call(monkeypatc
     assert int(router_stats["capacity_overflow"]) == 0
     assert len(calls) == 1
     _selected, router_weights, weights, adapter_config = calls[0]
-    assert len(weights) == 9
+    # Six shared, three routed, three latent -- the latent slots are empty without a latent_dim.
+    assert len(weights) == 12
+    assert weights[9:] == (None, None, None)
+    assert adapter_config["latent_size"] == 0
     assert router_weights.dtype == jnp.float32
     assert not np.array_equal(
         np.asarray(router_weights),
@@ -560,11 +564,11 @@ def test_mok_fuses_routed_and_two_shared_experts_in_one_dropless_call(monkeypatc
     assert adapter_config["macrobatch_size"] == 256
 
 
-def test_mok_with_latent_dispatches_the_compressed_token_and_leaves_shared_experts_to_the_block(monkeypatch):
-    # The kernel routes and runs its fused shared experts at one token width. The hero's shared
-    # experts read the full-width token, so with a latent projection they cannot ride along: the
-    # call has to carry routed traffic only, at the latent width, and the block adds the shared
-    # experts the same way it does for every all-to-all backend.
+def test_mok_with_latent_fuses_both_projections_and_both_shared_experts(monkeypatch):
+    # The kernel now runs two token widths in one call: the shared experts read the full-width
+    # token that goes in, the routed experts read the latent-width row it produces internally,
+    # and the up-projection lands back at the full width. So nothing about LatentMoE is left for
+    # the block or for JAX -- the call takes `x_flat` and the canonical latent leaves.
     hidden_dim, latent_dim, intermediate_dim = 512, 256, 3
     cfg = model.GrugModelConfig(
         vocab_size=32,
@@ -584,7 +588,8 @@ def test_mok_with_latent_dispatches_the_compressed_token_and_leaves_shared_exper
         mok_minibatch_size=256,
         mok_macrobatch_size=256,
     )
-    assert not cfg.fuses_shared_experts
+    # A latent projection no longer pushes the shared experts back out to the block.
+    assert cfg.fuses_shared_experts
 
     expert_mlp = model.MoEExpertMlp(
         w_gate=jnp.ones((4, latent_dim, intermediate_dim), dtype=jnp.bfloat16),
@@ -595,13 +600,15 @@ def test_mok_with_latent_dispatches_the_compressed_token_and_leaves_shared_exper
         capacity_factor=1.0,
         expert_chunks=1,
     )
+    w_latent_down = jnp.ones((hidden_dim, latent_dim), dtype=jnp.bfloat16)
+    w_latent_up = jnp.full((latent_dim, hidden_dim), 2.0, dtype=jnp.bfloat16)
     mlp = model.MoEMLP(
         router=jnp.zeros((hidden_dim, 4), dtype=jnp.float32),
         router_bias=jnp.zeros(4),
         expert_mlp=expert_mlp,
-        w_latent_down=jnp.ones((hidden_dim, latent_dim), dtype=jnp.bfloat16),
+        w_latent_down=w_latent_down,
         latent_norm=model.RMSNorm.init(latent_dim, cfg.layer_norm_eps),
-        w_latent_up=jnp.full((latent_dim, hidden_dim), 2.0, dtype=jnp.bfloat16),
+        w_latent_up=w_latent_up,
         cfg=cfg,
     )
     shared = (
@@ -616,6 +623,7 @@ def test_mok_with_latent_dispatches_the_compressed_token_and_leaves_shared_exper
     def fake_mok(x, selected_experts, router_weights, *weights, **config):
         captured["x"] = x
         captured["weights"] = weights
+        captured["config"] = config
         return jnp.ones_like(x)
 
     monkeypatch.setattr(model, "_mok_bf16", fake_mok)
@@ -627,14 +635,91 @@ def test_mok_with_latent_dispatches_the_compressed_token_and_leaves_shared_exper
     with jax.set_mesh(mesh):
         actual, _router_stats = mlp(jnp.ones((1, 2, hidden_dim), dtype=jnp.bfloat16), shared_experts=shared)
 
-    # Dispatch carries the compressed row, not the full-width token.
-    assert captured["x"].shape == (2, latent_dim)
-    # The fused shared slot is empty, and the routed weights still arrive.
-    assert captured["weights"][:6] == (None,) * 6
-    assert all(weight is not None for weight in captured["weights"][6:])
-    # The combine is expanded back to hidden width before it leaves the layer.
+    # The call takes the full-width token; the compression happens inside it.
+    assert captured["x"].shape == (2, hidden_dim)
+    weights = captured["weights"]
+    assert len(weights) == 12
+    # The two real shared experts ride along at the hidden width -- no zeroed dummy.
+    assert all(weight is not None for weight in weights)
+    assert weights[0].shape == (hidden_dim, intermediate_dim)
+    assert weights[2].shape == (intermediate_dim, hidden_dim)
+    # Routed weights stay at the latent width.
+    assert weights[6].shape == (4, latent_dim, intermediate_dim)
+    # Canonical Marin orientation for the latent leaves; the FFI boundary owns the transposes.
+    assert weights[9] is w_latent_down
+    assert weights[10].shape == (latent_dim,) and weights[10].dtype == jnp.float32
+    assert weights[11] is w_latent_up
+    assert captured["config"]["latent_size"] == latent_dim
+    assert captured["config"]["latent_norm_eps"] == cfg.layer_norm_eps
+    # The kernel already expanded back to hidden width, so the layer does not do it again.
     assert actual.shape == (1, 2, hidden_dim)
-    np.testing.assert_allclose(np.asarray(actual, dtype=np.float32), 2.0 * latent_dim, rtol=1e-2)
+    np.testing.assert_allclose(np.asarray(actual, dtype=np.float32), 1.0, rtol=1e-2)
+
+
+def test_latent_reference_math_stays_runnable_for_the_fused_path(monkeypatch):
+    # Requirement: the JAX-side LatentMoE math the fused call absorbed must remain callable, so
+    # the kernel can be checked against it. `latent_project` / `latent_expand` are that math, and
+    # they are still what every non-mok backend runs.
+    hidden_dim, latent_dim = 512, 256
+    cfg = model.GrugModelConfig(
+        vocab_size=32,
+        hidden_dim=hidden_dim,
+        intermediate_dim=3,
+        shared_expert_intermediate_dim=3,
+        num_shared_experts=2,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_layers=1,
+        num_heads=1,
+        num_kv_heads=1,
+        max_seq_len=2,
+        sliding_window=2,
+        latent_dim=latent_dim,
+        moe_implementation="mok",
+    )
+    key = jax.random.key(0)
+    k_x, k_down, k_up = jax.random.split(key, 3)
+    x_flat = jax.random.normal(k_x, (4, hidden_dim), dtype=jnp.float32)
+    w_latent_down = jax.random.normal(k_down, (hidden_dim, latent_dim), dtype=jnp.float32) * 0.05
+    w_latent_up = jax.random.normal(k_up, (latent_dim, hidden_dim), dtype=jnp.float32) * 0.05
+    mlp = model.MoEMLP(
+        router=jnp.zeros((hidden_dim, 4), dtype=jnp.float32),
+        router_bias=jnp.zeros(4),
+        expert_mlp=model.MoEExpertMlp(
+            w_gate=jnp.ones((4, latent_dim, 3)),
+            w_up=jnp.ones((4, latent_dim, 3)),
+            w_down=jnp.ones((4, 3, latent_dim)),
+            implementation="mok",
+            activation=model.ActivationFunctionEnum.silu,
+            capacity_factor=1.0,
+            expert_chunks=1,
+        ),
+        w_latent_down=w_latent_down,
+        latent_norm=model.RMSNorm.init(latent_dim, cfg.layer_norm_eps),
+        w_latent_up=w_latent_up,
+        cfg=cfg,
+    )
+    mesh = Mesh(
+        np.asarray(jax.devices()).reshape((1, 1, 1, 1)),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    with jax.set_mesh(mesh):
+        projected = mlp.latent_project(x_flat)
+        expanded = mlp.latent_expand(projected)
+
+    expected_projected = mok_reference.rmsnorm_reference(
+        x_flat @ w_latent_down,
+        mlp.latent_norm.weight,
+        cfg.layer_norm_eps,
+    )
+    np.testing.assert_allclose(np.asarray(projected), np.asarray(expected_projected), rtol=1e-4, atol=1e-4)
+    np.testing.assert_allclose(
+        np.asarray(expanded),
+        np.asarray(expected_projected @ w_latent_up),
+        rtol=1e-4,
+        atol=1e-4,
+    )
 
 
 def test_mok_hero_arm_carries_the_hero_latent_width():
@@ -648,8 +733,10 @@ def test_mok_hero_arm_carries_the_hero_latent_width():
 
     assert config.model.moe_implementation == "mok"
     assert config.model.latent_dim == launch.HERO_MODEL.latent_dim
-    assert not config.model.fuses_shared_experts
-    assert config.comparison.fused_shared_experts == 0
+    # The fused call runs the shared path at the hidden width and the routed path at the latent
+    # width, so a latent projection no longer forces the shared experts out to the block.
+    assert config.model.fuses_shared_experts
+    assert config.comparison.fused_shared_experts == config.model.num_shared_experts
 
 
 def test_mok_hero_arm_without_latent_keeps_the_shared_experts_fused():

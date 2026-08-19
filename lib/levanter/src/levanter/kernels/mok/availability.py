@@ -14,12 +14,14 @@ from dataclasses import dataclass
 
 _REQUIRED_TORCH_VERSION = (2, 11)
 _REQUIRED_TORCH_CUDA = (13, 0)
+# ABI 2 splits the single token width into the shared (hidden) and routed (latent) widths.
+_REQUIRED_ABI_VERSION = 2
 _NATIVE_SYMBOLS = (
     "levanter_mok_ffi_abi_version",
     "levanter_mok_bf16_forward",
     "levanter_mok_bf16_backward",
-    "levanter_mok_bf16_forward_scratch_bytes_v1",
-    "levanter_mok_bf16_backward_scratch_bytes_v1",
+    "levanter_mok_bf16_forward_scratch_bytes_v2",
+    "levanter_mok_bf16_backward_scratch_bytes_v2",
     "levanter_mok_register_workspace_v1",
     "levanter_mok_close_workspace_v1",
 )
@@ -119,8 +121,11 @@ def mok_preflight_status() -> MokPreflightStatus:
             errors.append("the MoK native extension is missing the Levanter ABI: " + ", ".join(missing_symbols))
         else:
             abi_version = int(native.levanter_mok_ffi_abi_version())
-            if abi_version != 1:
-                errors.append(f"the MoK native extension has FFI ABI {abi_version}; Levanter requires ABI 1")
+            if abi_version != _REQUIRED_ABI_VERSION:
+                errors.append(
+                    f"the MoK native extension has FFI ABI {abi_version}; "
+                    f"Levanter requires ABI {_REQUIRED_ABI_VERSION}"
+                )
             else:
                 native_extension_loaded = True
 

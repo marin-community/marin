@@ -136,19 +136,23 @@ NVCC 13.0.88 environment:
 - `launch_multiprocess` is the same fixed-all-to-all backend with one JAX process per GPU, matching
   MoK's process topology.
 - `launch_mok` is the dropless MoK backend. It keeps the shared experts' six canonical parameter
-  leaves separate for MuonH either way, but where they are *computed* depends on `--latent-dim`:
+  leaves -- and LatentMoE's two projections and norm gain -- separate for MuonH, but all of them
+  are *computed* inside the fused call:
 
-  - At the hero's latent width (the default), the fused call routes and combines at `latent_dim`,
-    which is what makes its wire traffic match the all-to-all arms'. The kernel runs one token
-    width, and the shared experts read the full-width token, so they cannot ride along; they run
-    in the block, exactly as they do for every all-to-all backend. The fused shared slot cannot be
-    switched off, so it gets zero weights at the narrowest legal width (256 packed) -- a fixed cost
-    of one 256-wide SwiGLU per local token, charged to this arm only.
-  - With `--latent-dim 0` there is one token width again and the call computes both shared experts
-    itself, which is MoK's fully fused mode.
+  - At the hero's latent width (the default), the call takes the full-width token, down-projects
+    and RMSNorms it internally, routes and combines at `latent_dim` -- which is what makes its
+    wire traffic match the all-to-all arms' -- runs both shared experts at the full width, and
+    up-projects the combined routed result back before returning. Nothing is left for the block
+    or for JAX.
+  - With `--latent-dim 0` the two widths coincide, the projections and the norm are skipped, and
+    the three latent operands are passed with a zero-length latent axis. Both shared experts are
+    still fused.
 
-  `config.model.fuses_shared_experts` is the single place that decides, and the run records the
-  outcome as `comparison/fused_shared_experts`.
+  `config.model.fuses_shared_experts` is therefore true for MoK in both arms and false for every
+  all-to-all backend, and the run records the outcome as `comparison/fused_shared_experts`. Note
+  that the latent arm used to pay for a zeroed 256-wide dummy shared expert plus JAX-side
+  projections; that overhead is gone, so the MoK arm's MFU improves for reasons `_compute_flops`
+  does not model. Attribute that part of any delta to the removed overhead, not to the kernel.
 
 MoK is supplied as an immutable, prebuilt CPython 3.12 Linux wheel for the Iris worker
 architecture. Build that wheel from the matching `mark/mok_hacking` checkout against Torch

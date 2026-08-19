@@ -101,15 +101,18 @@ def _mok_bf16(
     x: jax.Array,
     selected_experts: jax.Array,
     router_weights: jax.Array,
-    shared0_gate: jax.Array | None,
-    shared0_up: jax.Array | None,
-    shared0_down: jax.Array | None,
-    shared1_gate: jax.Array | None,
-    shared1_up: jax.Array | None,
-    shared1_down: jax.Array | None,
+    shared0_gate: jax.Array,
+    shared0_up: jax.Array,
+    shared0_down: jax.Array,
+    shared1_gate: jax.Array,
+    shared1_up: jax.Array,
+    shared1_down: jax.Array,
     routed_gate: jax.Array,
     routed_up: jax.Array,
     routed_down: jax.Array,
+    latent_down: jax.Array | None,
+    latent_norm_weight: jax.Array | None,
+    latent_up: jax.Array | None,
     *,
     workspace_id: int,
     fwd_num_comm_sms: int,
@@ -118,13 +121,20 @@ def _mok_bf16(
     macrobatch_size: int,
     schedule_capacity_multiplier: float,
     all_gather_top_experts_chunk_bytes: int,
+    latent_size: int,
+    latent_norm_eps: float,
 ) -> jax.Array:
     """Lazy boundary to the optional MoK runtime.
 
     Keeping this import out of module initialization lets ordinary CPU tooling, checkpoint
     inspection, and the existing FSDP/EP backends run without loading CUDA or PyTorch. The adapter
-    accepts Marin's canonical parameter leaves; any compute-only packing belongs behind this
-    boundary so Muon continues to see the original matrices.
+    accepts Marin's canonical parameter leaves -- including ``latent_down`` as ``(hidden, latent)``
+    and ``latent_up`` as ``(latent, hidden)`` -- so any compute-only packing or transposition
+    belongs behind this boundary and Muon continues to see the original matrices.
+
+    ``x`` is the full-width token. With ``latent_size`` non-zero the call owns both LatentMoE
+    projections and the pre-dispatch RMSNorm; with zero it runs at a single width and the three
+    latent operands are ``None``.
     """
     from levanter.kernels.mok import MokBf16Config, mok_bf16  # noqa: PLC0415
 
@@ -141,6 +151,9 @@ def _mok_bf16(
         routed_gate,
         routed_up,
         routed_down,
+        latent_down,
+        latent_norm_weight,
+        latent_up,
         config=MokBf16Config(
             workspace_id=workspace_id,
             fwd_num_comm_sms=fwd_num_comm_sms,
@@ -149,6 +162,8 @@ def _mok_bf16(
             macrobatch_size=macrobatch_size,
             schedule_capacity_multiplier=schedule_capacity_multiplier,
             all_gather_top_experts_chunk_bytes=all_gather_top_experts_chunk_bytes,
+            latent_size=latent_size,
+            latent_norm_eps=latent_norm_eps,
         ),
     )
 
@@ -331,10 +346,13 @@ class GrugModelConfig:
     def fuses_shared_experts(self) -> bool:
         """Whether the MoE call returns the block's shared-expert contribution as well.
 
-        Only MoK fuses them, and only when it dispatches the full-width token: its shared experts
-        read whatever it routes, so a latent projection moves them back out to the block.
+        Only MoK fuses them. It runs the shared path at the token width it is handed and the
+        routed path at the latent width, so a LatentMoE projection no longer forces the shared
+        experts back out to the block: the fused call owns both widths, and both projections.
+        Every all-to-all backend still runs its shared experts in the block, which is what this
+        property tells :class:`Block` to skip.
         """
-        return resolve_moe_implementation(self.moe_implementation) == "mok" and self.latent_dim is None
+        return resolve_moe_implementation(self.moe_implementation) == "mok"
 
     @property
     def Embed(self) -> Axis:
@@ -990,6 +1008,35 @@ class MoEMLP(eqx.Module):
             cfg=cfg,
         )
 
+    def latent_project(self, x_flat: Float[Array, "T D"]) -> Float[Array, "T L"]:
+        """LatentMoE's pre-dispatch compression: ``rmsnorm(x @ W_down)``.
+
+        Every backend except MoK calls this on the way into the expert MLP; MoK runs the identical
+        math inside its fused call. Keeping it as a method means the fused path has a runnable
+        reference on the JAX side (see ``levanter.kernels.mok.reference``).
+        """
+
+        assert self.w_latent_down is not None and self.latent_norm is not None
+        projected = jnp.einsum(
+            "td,dl->tl",
+            x_flat,
+            self.w_latent_down.astype(x_flat.dtype),
+            out_sharding=_batch_spec(),
+        )
+        # Keep the expert input scale independent of the down-projection initialization.
+        return self.latent_norm(projected)
+
+    def latent_expand(self, routed_flat: Float[Array, "T L"]) -> Float[Array, "T D"]:
+        """LatentMoE's post-combine expansion, ``combined @ W_up``. MoK fuses this too."""
+
+        assert self.w_latent_up is not None
+        return jnp.einsum(
+            "tl,ld->td",
+            routed_flat,
+            self.w_latent_up.astype(routed_flat.dtype),
+            out_sharding=_batch_spec(),
+        )
+
     @named_call
     def __call__(
         self,
@@ -1053,45 +1100,37 @@ class MoEMLP(eqx.Module):
 
         # LatentMoE: compress before dispatch so the expert-parallel all-to-all carries
         # `latent_dim`-wide rows in both directions. The router above already read the full-width
-        # token, and the shared experts in the enclosing block never see this path.
+        # token. MoK fuses both projections and the norm into its own call, so this JAX path runs
+        # for every other backend only; `latent_project` / `latent_expand` keep it runnable, which
+        # is how the fused path gets checked numerically.
+        fuses_latent = self.cfg.moe_implementation == "mok"
         routed_input = x_flat
-        if self.w_latent_down is not None and self.latent_norm is not None:
-            routed_input = jnp.einsum(
-                "td,dl->tl",
-                x_flat,
-                self.w_latent_down.astype(x_flat.dtype),
-                out_sharding=_batch_spec(),
-            )
-            # Keep the expert input scale independent of the down-projection initialization.
-            routed_input = self.latent_norm(routed_input)
+        if not fuses_latent and self.w_latent_down is not None and self.latent_norm is not None:
+            routed_input = self.latent_project(x_flat)
 
         if self.cfg.moe_implementation == "mok":
             if shared_experts is None or len(shared_experts) != 2:
                 raise ValueError("the mok backend requires the block's two shared experts")
-            # The fused kernel runs one token width: it dispatches its input, and its fused shared
-            # experts read that same input. The hero's shared experts read the full-width token, so
-            # the two coexist only when there is no latent projection. With one, the shared experts
-            # stay in the enclosing block -- which is where every all-to-all backend already runs
-            # them, so the arms stay matched -- and the fused call carries routed traffic alone.
-            fused_shared: tuple[jax.Array | None, ...] = (None,) * 6
-            if self.cfg.fuses_shared_experts:
-                shared0, shared1 = shared_experts
-                fused_shared = (
-                    shared0.w_gate,
-                    shared0.w_up,
-                    shared0.w_down,
-                    shared1.w_gate,
-                    shared1.w_up,
-                    shared1.w_down,
-                )
+            # One call, two token widths: the shared experts read the full-width token that goes
+            # in, the routed experts read the latent-width row the call produces internally, and
+            # the latent up-projection lands back at the full width before the result comes out.
+            shared0, shared1 = shared_experts
             routed_flat = _mok_bf16(
-                routed_input,
+                x_flat,
                 selected_experts.astype(jnp.int32),
                 combine_weights_f,
-                *fused_shared,
+                shared0.w_gate,
+                shared0.w_up,
+                shared0.w_down,
+                shared1.w_gate,
+                shared1.w_up,
+                shared1.w_down,
                 self.expert_mlp.w_gate,
                 self.expert_mlp.w_up,
                 self.expert_mlp.w_down,
+                self.w_latent_down,
+                None if self.latent_norm is None else self.latent_norm.weight.astype(jnp.float32),
+                self.w_latent_up,
                 workspace_id=self.cfg.mok_workspace_id,
                 fwd_num_comm_sms=self.cfg.mok_fwd_num_comm_sms,
                 bwd_num_comm_sms=self.cfg.mok_bwd_num_comm_sms,
@@ -1099,6 +1138,8 @@ class MoEMLP(eqx.Module):
                 macrobatch_size=self.cfg.mok_macrobatch_size,
                 schedule_capacity_multiplier=self.cfg.mok_schedule_capacity_multiplier,
                 all_gather_top_experts_chunk_bytes=self.cfg.mok_all_gather_top_experts_chunk_bytes,
+                latent_size=self.cfg.latent_dim or 0,
+                latent_norm_eps=self.cfg.layer_norm_eps,
             )
             # MoK dispatch is dropless: capacity_factor is deliberately not part of this call.
             dropped_assignments = _zero_dropped_assignments()
@@ -1127,14 +1168,10 @@ class MoEMLP(eqx.Module):
         router_stats["receiver_capacity_overflow"] = receiver_dropped_assignments
 
         # Expand after the combine: `expert_mlp` already returns the weight-summed expert output,
-        # which is the vector the paper's W_up acts on.
-        if self.w_latent_up is not None:
-            routed_flat = jnp.einsum(
-                "tl,ld->td",
-                routed_flat,
-                self.w_latent_up.astype(routed_flat.dtype),
-                out_sharding=_batch_spec(),
-            )
+        # which is the vector the paper's W_up acts on. MoK has already done this inside the call,
+        # and hands back a full-width row.
+        if not fuses_latent and self.w_latent_up is not None:
+            routed_flat = self.latent_expand(routed_flat)
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())

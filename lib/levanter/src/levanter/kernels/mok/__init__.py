@@ -9,6 +9,7 @@ from levanter.kernels.mok.availability import (
     require_mok_available as require_mok_available,
 )
 from levanter.kernels.mok.ffi import mok_bf16 as mok_bf16
+from levanter.kernels.mok.reference import mok_bf16_reference as mok_bf16_reference
 from levanter.kernels.mok.runtime import (
     MokBf16Config as MokBf16Config,
     MokRuntimeHandle as MokRuntimeHandle,

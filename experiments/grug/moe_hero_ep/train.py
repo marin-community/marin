@@ -645,6 +645,8 @@ def _mok_config(config: GrugModelConfig):
         macrobatch_size=config.mok_macrobatch_size,
         schedule_capacity_multiplier=config.mok_schedule_capacity_multiplier,
         all_gather_top_experts_chunk_bytes=config.mok_all_gather_top_experts_chunk_bytes,
+        latent_size=config.latent_dim or 0,
+        latent_norm_eps=config.layer_norm_eps,
     )
 
 
@@ -708,9 +710,12 @@ def _initialize_mok_process_runtime(config: GrugRunConfig):
             config=_mok_config(config.model),
             process_group=process_group,
             num_local_tokens=local_tokens,
-            # The workspace sizes the dispatch and combine buffers, and LatentMoE dispatches the
-            # compressed token, not the full-width one.
-            hidden_size=config.model.latent_dim or config.model.hidden_dim,
+            # The workspace carries both widths: `hidden_size` is what the fused shared experts
+            # read, `latent_size` is what LatentMoE dispatches, and the symmetric dispatch and
+            # combine buffers are sized at the latter. Registering the latent width as
+            # `hidden_size` -- which this used to do -- is rejected by the native handlers.
+            hidden_size=config.model.hidden_dim,
+            latent_size=config.model.latent_dim,
             topk=config.model.num_experts_per_token,
         )
     except BaseException:
