@@ -44,6 +44,8 @@ ARRAY_DRIVER = "zarr3"
 KVSTORE_DRIVER = "ocdbt"
 # JAX's memory kind for host memory a device can address. Offloaded optimizer state lives here.
 _HOST_MEMORY_KIND = "pinned_host"
+# JAX's default memory kind: buffers live in device (HBM) memory.
+_DEVICE_MEMORY_KIND = "device"
 # Chunks a save stages at once. Four processes at 32 GiB each exhausted a GB200 node.
 _DEFAULT_STAGED_CHUNKS = 32
 # Host memory a staged byte occupies while its write is in flight, for reporting only.
@@ -699,10 +701,8 @@ def _device_shardings_for_load(shardings: list) -> tuple[list, list]:
     device_shardings = []
     move_targets: list = []
     for sharding in shardings:
-        memory_kind = getattr(sharding, "memory_kind", None)
-        with_memory_kind = getattr(sharding, "with_memory_kind", None)
-        if memory_kind is not None and memory_kind != "device" and with_memory_kind is not None:
-            device_shardings.append(with_memory_kind("device"))
+        if sharding.memory_kind not in (None, _DEVICE_MEMORY_KIND):
+            device_shardings.append(sharding.with_memory_kind(_DEVICE_MEMORY_KIND))
             move_targets.append(sharding)
         else:
             device_shardings.append(sharding)
@@ -711,14 +711,11 @@ def _device_shardings_for_load(shardings: list) -> tuple[list, list]:
 
 
 def _move_leaves_to_target_memory_kind(leaves: list, move_targets: list) -> list:
-    """Relocate leaves deserialized onto ``device`` back to a non-device target memory kind.
-
-    Done per leaf so the sharded state never has to sit whole in device memory at once -- the shards
-    for a leaf move to (pinned) host before the next leaf is placed, matching why the state was
-    offloaded in the first place.
-    """
+    """Relocate leaves deserialized onto ``device`` to the target sharding in ``move_targets``."""
     if not any(target is not None for target in move_targets):
         return leaves
+    # Move one leaf at a time: each leaf's shards reach (pinned) host before the next is placed, so
+    # the offloaded state never has to sit whole in device memory.
     return [jax.device_put(leaf, target) if target is not None else leaf for leaf, target in zip(leaves, move_targets)]
 
 
