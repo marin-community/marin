@@ -5,12 +5,13 @@
 
 The scaling ladder (``launch_scaling_ladder.py``) trains one uniform hero EP recipe at five widths.
 Four rungs finished (the d2048 rung crashed at ~81%); this script pulls their W&B histories and the
-d6144 hero's compute budget, then writes four figures to ``scaling_ladder_figs/``:
+d6144 hero's compute budget, then writes five figures to ``scaling_ladder_figs/``:
 
 * ``ladder_train_ce_fullres.png``       -- full-granularity training cross-entropy vs run progress.
 * ``ladder_extrapolation_60_80.png``    -- per-rung 60-80% linear extrapolation vs the actual final.
 * ``ladder_scaling_laws.png``           -- per-5% power-law fits ``L = 1.5 + A*C^-a`` (log-log).
 * ``hero_prediction_by_percentile.png`` -- rung curves + the d6144 hero prediction at every 5%.
+* ``scaling_law_comparison.png``        -- our 100% fit vs the May-Recipe and 67B-A2B scaling laws.
 
 Run:  uv run python experiments/grug/moe_hero_ep/plot_scaling_ladder.py
 Requires W&B read access to ``marin-community/marin_moe`` plus matplotlib.
@@ -66,6 +67,10 @@ FLOPS = {
 }
 DROPLESS_MACRO = "eval_dropless/paloma/macro_loss"
 TRAIN_CE = "train/cross_entropy_loss"
+
+# Prior paloma-macro-loss scaling laws for comparison, each (asymptote, A, alpha).
+MAY_RECIPE_LAW = (1.6, 88.32, 0.0941)  # agent.md baseline (May Recipe, drop-1e18 fit)
+RUN_67B_LAW = (1.4, 84.74, 0.0862)  # 67B-A2B 10T preregistered fit (issue #6044)
 
 
 def _footer(fig):
@@ -334,14 +339,59 @@ def plot_hero_by_percentile(data):
     return hero[1.0][1]
 
 
+def plot_comparison(data):
+    """Overlay our 100% ladder fit with the prior May-Recipe and 67B-A2B scaling laws."""
+    _, fits, hero, *_ = _fit_and_hero(data)
+    a, alpha, *_ = fits[1.0]
+    c_hero = hero[1.0][0]
+    laws = [
+        ("ours (535B-A23B ladder)", ASYMPTOTE, a, alpha, "#C44E52"),
+        ("May Recipe baseline (agent.md)", *MAY_RECIPE_LAW, "#4C72B0"),
+        ("67B-A2B 10T (preregistered)", *RUN_67B_LAW, "#55A868"),
+    ]
+    fig, ax = plt.subplots(figsize=(11, 7))
+    xline = np.geomspace(1e17, 3e24, 300)
+    for label, asymptote, aa, al, color in laws:
+        ax.plot(
+            xline,
+            asymptote + aa * xline ** (-al),
+            "-",
+            color=color,
+            lw=2.4,
+            label=f"{label}:  L = {asymptote} + {aa:.3g}·C$^{{-{al:.4f}}}$",
+        )
+        ax.plot(c_hero, asymptote + aa * c_hero ** (-al), "o", color=color, ms=9, mec="white", mew=1, zorder=5)
+    ax.axvline(c_hero, color="0.4", ls=":", lw=1.3)
+    ax.annotate(
+        f"hero compute\n{c_hero:.1e} FLOPs",
+        xy=(c_hero, 2.05),
+        xytext=(c_hero * 0.06, 2.4),
+        fontsize=10,
+        color="0.25",
+        arrowprops=dict(arrowstyle="->", color="0.4", lw=1.2),
+    )
+    ax.set_xscale("log")
+    ax.set_xlim(1e17, 3e24)
+    ax.set_ylim(1.9, 4.0)
+    ax.set_xlabel("training compute  C  (FLOPs)")
+    ax.set_ylabel("paloma macro-loss")
+    ax.set_title("Scaling-law comparison: 535B-A23B ladder vs prior fits")
+    ax.grid(alpha=0.25, which="both")
+    ax.legend(fontsize=10, loc="upper right")
+    _footer(fig)
+    fig.tight_layout(rect=[0, 0.02, 1, 1])
+    fig.savefig(os.path.join(FIG_DIR, "scaling_law_comparison.png"), dpi=130)
+
+
 def main():
     os.makedirs(FIG_DIR, exist_ok=True)
     data = fetch_wandb()
     plot_train_ce(data)
     plot_extrapolation(data)
     plot_scaling_laws(data)
+    plot_comparison(data)
     hero_final = plot_hero_by_percentile(data)
-    print(f"wrote 4 figures to {FIG_DIR}; predicted d6144 hero dropless paloma macro-loss @100% = {hero_final:.4f}")
+    print(f"wrote 5 figures to {FIG_DIR}; predicted d6144 hero dropless paloma macro-loss @100% = {hero_final:.4f}")
     print(json.dumps({r: {"nts": data[r]["nts"], "evals": len(data[r]["grid"])} for r in RUNS}))
 
 
