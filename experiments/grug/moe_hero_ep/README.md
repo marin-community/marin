@@ -178,15 +178,98 @@ python -m experiments.grug.moe_hero_ep.launch_mok \
 
 `launch_mok` and `launch_multiprocess` resolve to the same `GrugModelConfig` in every field except
 `moe_implementation`, which is what makes their throughput comparable; `tests/test_moe_hero_ep.py`
-asserts that directly. They do not share a process topology: MoK drives Torch symmetric memory and
-needs one rank per GPU, while the pooled-wave hero runs one JAX process per node, so
-`launch_multiprocess` is the matched control rather than `launch`.
+asserts that directly. They do not share a process topology with `launch`: MoK drives Torch
+symmetric memory and needs one rank per GPU, while the pooled-wave hero's recorded rack-scale
+results were all measured at one JAX process per node. `launch_multiprocess` is therefore the
+topology-matched control, and `launch` is the pooled-wave arm's own native configuration.
+
+**Run both pooled-wave topologies and score MoK against the better of the two.** One process per
+GPU is not exotic for this backend -- `moe_hero_fsdp/launch.py` and the pooled-wave
+`small_scale_abl_launch.py` ladder both run one process per GPU -- but there is no *rack-scale*
+pooled-wave number at four processes per node, so the sign and size of the topology effect are
+unmeasured. Taking `launch_multiprocess` alone as the baseline silently accepts an unmeasured
+handicap; taking `launch` alone reintroduces a topology confound. Running both costs one extra
+gang and removes the question. See "Fairness controls" below for the ordering.
 
 The metric contract is loss, tokens/s, analytic MFU, and MoE drop fraction. MoK reports zero
-drops. The fixed-capacity arms' analytic MFU still counts all selected top-k expert FLOPs, so read
-their MFU together with `moe/drop_fraction`; throughput remains the direct whole-system measure.
-Do not put credentials or signed query parameters in `--mok-package`, because the package spec is
-part of the recorded run configuration.
+drops. Do not put credentials or signed query parameters in `--mok-package`, because the package
+spec is part of the recorded run configuration.
+
+#### Reading the metrics across a dropless and a fixed-capacity arm
+
+`_compute_flops` prices the routed term at exactly the selected top-k assignments for every
+backend, and the resulting `flops_per_token` is identical in both arms. Analytic MFU is therefore a
+fixed multiple of tokens/s, and **ranking the arms by MFU is the same as ranking them by tokens/s**:
+the analytic model cannot bias the head-to-head. What it does bias is the reading of either arm's
+absolute MFU, and the two backends are biased in opposite directions:
+
+- `fixed_pooled_wave_all_to_all` sizes its receiver buffers as
+  `ceil(capacity_factor * assignments_per_shard / (local_experts * num_expert_waves))` and runs
+  every slot, filled or not
+  (`lib/levanter/src/levanter/grug/_moe/ep_fixed_pooled_wave_all_to_all.py`). Its executed routed
+  FLOPs are `capacity_factor` times the analytic count and its all-to-all payload is
+  `pooled_transport_capacity_factor` times the analytic rows, **independent of how many
+  assignments it drops**. A capacity drop removes useful output; it does not save work or traffic.
+  So dropping does *not* flatter the arm's throughput, and its analytic MFU *understates* its
+  hardware utilization while *overstating* its useful work.
+- MoK is dropless and executes the analytic count up to minibatch padding, so all three readings
+  coincide for it.
+
+The run logs the terms needed to reconcile them, as W&B summaries:
+`throughput/routed_flops_fraction_analytic` (0.4356 at the hero shape),
+`throughput/routed_capacity_multiplier_nominal`, and
+`throughput/routed_transport_multiplier_nominal`. With `f` the routed share and `d` the measured
+`moe/drop_fraction`:
+
+    utilization MFU  ~= analytic MFU * (1 + f * (capacity_multiplier - 1))
+    useful-work MFU  ~= analytic MFU * (1 - f * d)
+
+At the hero shape and the README's measured 19.33% drop rate those are about +6.5% and -8.4%
+against the analytic number -- both larger than the differences this comparison is trying to
+resolve. Discounting only by the drop fraction, or only by capacity, is wrong in opposite
+directions. Report tokens/s as the head-to-head result and carry `moe/drop_fraction` beside it.
+
+The 25-step losses are **not** a head-to-head quality result. MoK computes 100% of the selected
+top-8 assignments; the pooled-wave arm resolves roughly 80% of them at this gate. The loss column
+is biased against the pooled-wave arm by an amount this run does not measure. Use the drop-free
+re-eval route (see the EP ablation ladder above) for a quality claim.
+
+#### Fairness controls and known biases
+
+The user-level rule for this comparison is that the pooled-wave baseline is never handicapped to
+flatter MoK. The audited state:
+
+1. **Process topology (mitigated by a third arm).** Run three arms, not two:
+   `launch_mok` (four processes per node, forced by Torch symmetric memory),
+   `launch_multiprocess` (four processes per node, topology-matched control), and
+   `launch` (one process per node, the pooled-wave arm's native and only rack-validated
+   topology). Report MoK against `max(tokens/s)` over the two pooled-wave arms. The difference
+   between the two pooled-wave arms is itself the measurement of the topology cost, which no
+   recorded run currently provides.
+2. **Capacity drops are not a throughput advantage.** See the metric section above. The pooled-wave
+   arm executes ~`capacity_factor` times the analytic routed FLOPs whether or not it drops. Its
+   25-step loss *is* biased against it; its throughput is not biased in its favor.
+3. **The overflow counters are one-sided, and stay on.** `model.report_capacity_overflow=True` in
+   every arm, but only the fixed-capacity path computes anything: the MoK branch in `model.py`
+   short-circuits to `_zero_dropped_assignments()`. The pooled-wave arms therefore pay a per-layer
+   `sum` over the assignment mask plus a two-element `psum` across the batch axes, 48 layers per
+   step, that MoK does not. This is a real one-sided cost against the baseline. It stays on
+   anyway: turning it off would delete `moe/drop_fraction`, which the metric contract needs, and
+   would add a seventh key to the arm diff. Record it; do not silently remove it.
+4. **Two concurrent arms land on two different racks.** A 16-node gang is bound to one NVLink
+   domain and an NVL72 rack holds 18 nodes, so two concurrent gangs cannot share a rack. Rack-run
+   variability is ~0.6-1% (`MOK_TREATMENT_BENCHMARKS.md`), the same order as some of the effects
+   being measured. The confound is symmetric. If the measured delta lands under ~2%, re-run with
+   the arms swapped between racks, or run the arms sequentially on one rack.
+5. **Two concurrent 16-node gangs exceed the interactive budget.** With
+   `resource_value = 1000 * accelerators + RAM_GB + 5 * CPU_cores`
+   (`lib/iris/src/iris/cluster/controller/budget.py`), one training task at
+   `GB200 x4 / 850g / 120 cpu` is worth 5,450 and a 16-node arm is worth ~87,200. The interactive
+   budget for this user on `cw-us-east-08a` is 128,000 (`lib/iris/config/cw-us-east-08a.yaml`), so
+   two arms at once total ~174,400 and any task scheduled after that point is downgraded to the
+   BATCH band. The training tasks are `preemptible=True`, so a BATCH-banded retry after a
+   preemption is exposed. Running the arms sequentially keeps spend under the limit and removes
+   confound 4 at the same time; running them concurrently buys wall clock and accepts both.
 
 A four-GPU node is enough for the reduced MoK distributed correctness tests and a sliced kernel
 benchmark. It cannot run this exact 359.6B HERO shape: EP4 would hold 32 routed experts per device

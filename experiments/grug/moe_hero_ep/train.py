@@ -363,9 +363,50 @@ def _compute_flops(
 
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
 
+    # The routed-expert share of the analytic count, and how far the backend's *executed* routed
+    # work sits from it. These make the two MoE arms' MFU columns reconcilable, which the raw
+    # analytic number does not: `lm_flops_per_token` prices the routed term at exactly the selected
+    # top-k assignments for every backend, but no fixed-capacity backend executes that number.
+    #
+    # `fixed_pooled_wave_all_to_all` sizes its receiver buffers as
+    # `ceil(capacity_factor * assignments_per_shard / (local_experts * num_expert_waves))` and runs
+    # every slot, filled or not, so it executes ~`capacity_factor` times the analytic routed FLOPs
+    # and transports ~`pooled_transport_capacity_factor` times the analytic routed rows *regardless
+    # of how many assignments it drops*. Capacity drops remove useful output, not work. MoK is
+    # dropless and executes the analytic count (up to minibatch padding).
+    #
+    # So: utilization-MFU = analytic MFU * routed_capacity_multiplier_nominal-weighted share, and
+    # useful-work MFU = analytic MFU * (1 - routed_flops_fraction_analytic * moe/drop_fraction).
+    # Discounting only by the drop fraction, or only by capacity, is wrong in opposite directions.
+    routed_width = model_config.latent_dim if model_config.latent_dim is not None else model_config.hidden_dim
+    routed_flops_per_token = (
+        model_config.num_layers
+        * 2
+        * 3
+        * routed_width
+        * model_config.intermediate_dim
+        * model_config.num_experts_per_token
+    )
+    # Only the fixed-capacity EP backends pad to a static buffer. Everything else -- MoK and the
+    # dropless local backends -- executes the analytic routed count.
+    fixed_capacity_backends = ("fixed_all_to_all", "fixed_pooled_wave_all_to_all", "ring", "ragged_all_to_all")
+    is_fixed_capacity = model_config.moe_implementation in fixed_capacity_backends
+    routed_capacity_multiplier = float(model_config.capacity_factor) if is_fixed_capacity else 1.0
+    transport_capacity_multiplier = (
+        float(model_config.pooled_transport_capacity_factor)
+        if is_fixed_capacity and model_config.pooled_transport_capacity_factor is not None
+        else routed_capacity_multiplier
+    )
+
     flops_summary: dict[str, float] = {
         "throughput/flops_per_token_analytic": flops_per_token,
         "throughput/flops_per_example_analytic": flops_per_example,
+        "throughput/routed_flops_per_token_analytic": routed_flops_per_token,
+        "throughput/routed_flops_fraction_analytic": routed_flops_per_token / flops_per_token,
+        # Nominal: the backend rounds capacity up per expert per wave, so the executed multiplier is
+        # this value or slightly above it, never below.
+        "throughput/routed_capacity_multiplier_nominal": routed_capacity_multiplier,
+        "throughput/routed_transport_multiplier_nominal": transport_capacity_multiplier,
     }
 
     return flops_per_example, flops_summary
