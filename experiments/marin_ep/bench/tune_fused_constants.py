@@ -23,6 +23,11 @@ import time
 
 import jax
 
+collective_mb = int(os.environ.get("MARIN_EP_COLLECTIVE_MEMORY_MB", "0"))
+if collective_mb:
+    # Bound the NCCL-window collective arena; must precede client creation.
+    jax.config.update("jax_pjrt_client_create_options", {"collective_memory_size": collective_mb * 1024 * 1024})
+
 jax.distributed.initialize(
     coordinator_address=os.environ["MARIN_EP_COORD"],
     num_processes=int(os.environ["MARIN_EP_NUM_PROCS"]),

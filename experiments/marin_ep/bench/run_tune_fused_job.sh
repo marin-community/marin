@@ -15,6 +15,10 @@ uv pip install --no-deps --reinstall nvidia-nccl-cu13==2.30.7 >> /tmp/uvsync.log
 uv run --no-sync python -c "import jax; print('jax', jax.__version__)" || { tail -20 /tmp/uvsync.log; exit 1; }
 echo SETUP_OK
 
+export XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async
+export MARIN_EP_COLLECTIVE_MEMORY_MB=20480
+export XLA_FLAGS="--xla_gpu_ragged_all_to_all_mode=symmetric --xla_gpu_enable_dynamic_slice_fusion=false"
+
 pids=()
 for i in 0 1 2 3; do
   MARIN_EP_COORD=127.0.0.1:9973 MARIN_EP_NUM_PROCS=4 MARIN_EP_PROC_ID=$i \
