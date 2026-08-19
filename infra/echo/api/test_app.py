@@ -49,7 +49,8 @@ class FakeConn:
             ranks = sorted(value for key, value in statement.compile().params.items() if key.startswith("rank_m"))
             return FakeResult([make_row(id=1000 + rank, rank=rank) for rank in ranks])
         if self._responses:
-            return FakeResult(self._responses.pop(0))
+            response = self._responses.pop(0)
+            return FakeResult(response(statement, *args) if callable(response) else response)
         return FakeResult(self._rows)
 
     @contextlib.contextmanager
@@ -333,6 +334,59 @@ def test_feedback_preserves_same_path_repository_identities(client_with):
     assert [params["result_id_m0"], params["result_id_m1"]] == [
         "file:marin-community/marin@main:README.md",
         "file:marin-community/vllm@main:README.md",
+    ]
+
+
+def test_feedback_list_returns_same_path_repository_identities(client_with):
+    feedback = make_row(
+        id=19,
+        created_at=datetime(2026, 8, 19, tzinfo=UTC),
+        author="agent@openathena.ai",
+        query="README.md",
+        note="Both repository roots were useful.",
+        execution_id=992,
+    )
+    grade_rows = [
+        make_row(
+            feedback_id=19,
+            result_id=f"file:{repository}@main:README.md",
+            search_result_id=731 + index,
+            grade=10 - index,
+        )
+        for index, repository in enumerate(("marin-community/marin", "marin-community/vllm"))
+    ]
+    stored_results = [
+        make_row(
+            id=731 + index,
+            execution_id=992,
+            result_id=grade.result_id,
+            domain="file",
+            title="README.md",
+            url=f"https://github.com/{repository}/blob/{commit}/README.md",
+        )
+        for index, (grade, repository, commit) in enumerate(
+            zip(
+                grade_rows,
+                ("marin-community/marin", "marin-community/vllm"),
+                ("a" * 40, "b" * 40),
+                strict=True,
+            )
+        )
+    ]
+    harness = client_with([], responses=[[feedback], grade_rows, stored_results])
+
+    response = harness.client.get("/api/feedback", params={"days": 30, "limit": 20})
+
+    assert response.status_code == 200
+    assert [(grade["source_id"], grade["url"]) for grade in response.json()[0]["grades"]] == [
+        (
+            "file:marin-community/marin@main:README.md",
+            f"https://github.com/marin-community/marin/blob/{'a' * 40}/README.md",
+        ),
+        (
+            "file:marin-community/vllm@main:README.md",
+            f"https://github.com/marin-community/vllm/blob/{'b' * 40}/README.md",
+        ),
     ]
 
 
@@ -864,7 +918,15 @@ def test_same_path_search_results_and_new_history_keep_repository_identity(clien
             ("marin-community/vllm", "vLLM is a fast and easy-to-use inference engine."),
         )
     ]
-    harness = client_with([], responses=[[], states, [files[0]], [files[1]]])
+
+    def rows_matching_repository(statement, *args):
+        bound_params = statement.compile().params
+        execution_params = args[0] if args else bound_params
+        repositories = {execution_params[key] for key in bound_params if key.startswith("repository_")}
+        branches = {execution_params[key] for key in bound_params if key.startswith("branch_")}
+        return [row for row in files if row.repository in repositories and row.branch in branches]
+
+    harness = client_with([], responses=[[], states, rows_matching_repository, rows_matching_repository])
 
     response = harness.client.get(
         "/api/federated-search",
@@ -1078,37 +1140,54 @@ def test_reranker_applies_stricter_wiki_quality_floor():
 
 
 @pytest.mark.parametrize(
-    ("repository", "commit_sha"),
+    ("repository", "commit_sha", "project"),
     [
-        ("marin-community/marin", "a" * 40),
-        ("marin-community/vllm", "b" * 40),
+        ("marin-community/marin", "a" * 40, "Marin"),
+        ("marin-community/vllm", "b" * 40, "vLLM"),
     ],
 )
-def test_same_path_file_detail_uses_qualified_repository_and_commit(client_with, repository, commit_sha):
-    state = make_row(
-        repository=repository,
-        branch="main",
-        commit_sha=commit_sha,
-        indexed_at=datetime(2026, 7, 29, 20, tzinfo=UTC),
-        completed_files=None,
-        total_files=None,
-        started_at=None,
-    )
-    first = make_row(
-        path="README.md",
-        title="README.md",
-        chunk_index=0,
-        start_line=1,
-        text="# Project\n\nShared path, repository-specific contents.",
-    )
-    second = make_row(
-        path="README.md",
-        title="README.md",
-        chunk_index=1,
-        start_line=3,
-        text="Shared path, repository-specific contents.\nThen verify provenance.",
-    )
-    harness = client_with([], responses=[[state], [first, second]])
+def test_same_path_file_detail_uses_qualified_repository_and_commit(client_with, repository, commit_sha, project):
+    states = [
+        make_row(
+            repository=target_repository,
+            branch="main",
+            commit_sha=target_commit,
+            indexed_at=datetime(2026, 7, 29, 20, tzinfo=UTC),
+            completed_files=None,
+            total_files=None,
+            started_at=None,
+        )
+        for target_repository, target_commit in (
+            ("marin-community/marin", "a" * 40),
+            ("marin-community/vllm", "b" * 40),
+        )
+    ]
+    chunks = [
+        make_row(
+            repository=target_repository,
+            branch="main",
+            path="README.md",
+            title="README.md",
+            chunk_index=chunk_index,
+            start_line=1 if chunk_index == 0 else 3,
+            text=(
+                f"# {target_project}\n\nShared path, repository-specific contents."
+                if chunk_index == 0
+                else "Shared path, repository-specific contents.\nThen verify provenance."
+            ),
+        )
+        for target_repository, target_project in (
+            ("marin-community/marin", "Marin"),
+            ("marin-community/vllm", "vLLM"),
+        )
+        for chunk_index in range(2)
+    ]
+
+    def rows_matching_file(statement, *_args):
+        values = set(statement.compile().params.values())
+        return [row for row in chunks if row.repository in values and row.branch in values and row.path in values]
+
+    harness = client_with([], responses=[states, rows_matching_file])
 
     response = harness.client.get(f"/api/repository-files/{repository}@main:README.md")
 
@@ -1118,12 +1197,8 @@ def test_same_path_file_detail_uses_qualified_repository_and_commit(client_with,
         "title": "README.md",
         "subtitle": f"{repository} · README.md · main@{commit_sha[:12]} · indexed 2026-07-29T20:00:00+00:00",
         "url": f"https://github.com/{repository}/blob/{commit_sha}/README.md",
-        "text": "# Project\n\nShared path, repository-specific contents.\nThen verify provenance.",
+        "text": f"# {project}\n\nShared path, repository-specific contents.\nThen verify provenance.",
     }
-    detail_params = harness.engine.executions[1].compile().params.values()
-    assert repository in detail_params
-    assert "main" in detail_params
-    assert "README.md" in detail_params
 
 
 def test_repository_index_reports_searchable_partial_build(client_with):

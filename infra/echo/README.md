@@ -103,7 +103,7 @@ empirical relevance floors, not calibrated probabilities. The wiki cutoff retain
 of graded results scoring at least 4 while removing 22% of results below 4 in the 155
 execution-linked wiki grades available on 2026-08-18. Raw reranker scores are retained
 with new result snapshots so other domain cutoffs can use stable data. A search can
-return fewer than the requested limit and returns at most 20 results. `grep` remains a
+return fewer than the requested limit and returns at most 24 results. `grep` remains a
 case-insensitive literal substring scan over activity, newest first.
 
 CLI search prints one table with an execution-specific grading key, source ID, title,
