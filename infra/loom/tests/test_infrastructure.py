@@ -71,10 +71,6 @@ def deployment_config() -> DeploymentConfig:
         boot_disk_throughput=140,
         boot_disk_snapshot="loom-pre-c4d-hyperdisk-20260816",
         dotenv_secret_version=3,
-        vm_project_roles=("roles/cloudsql.client", "roles/cloudsql.instanceUser"),
-        vm_pulumi_kms_keys=(
-            "projects/example/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key",
-        ),
         prune_deployment=True,
         profiles=(
             ProfileConfig.parse(
@@ -128,19 +124,6 @@ def test_domain_is_a_canonical_hostname() -> None:
         replace(deployment_config(), domain="https://loom.example.com/")
 
 
-def test_vm_permissions_require_canonical_unique_resource_names() -> None:
-    with pytest.raises(ValueError, match="vmProjectRoles"):
-        replace(deployment_config(), vm_project_roles=("cloudsql.client",))
-    with pytest.raises(ValueError, match="vmPulumiKmsKeys"):
-        replace(
-            deployment_config(),
-            vm_pulumi_kms_keys=(
-                "projects/example/locations/us-central1/keyRings/key/cryptoKeys/key",
-                "projects/example/locations/us-central1/keyRings/key/cryptoKeys/key",
-            ),
-        )
-
-
 def test_github_federations_require_unique_names_and_known_profiles() -> None:
     base = deployment_config()
     unknown = GitHubFederationConfig.parse(
@@ -172,7 +155,7 @@ def test_release_reference_must_be_the_expected_registry_digest() -> None:
 
 
 def test_profile_manifest_renders_github_repositories_and_secret_references() -> None:
-    profiles, references = _deployment_profiles(
+    profiles = _deployment_profiles(
         (
             ProfileConfig.parse(
                 "ops",
@@ -191,7 +174,6 @@ def test_profile_manifest_renders_github_repositories_and_secret_references() ->
     ]
     assert profiles[0]["profile"]["mcp_access"] == {"mode": "all", "groups": []}
     assert profiles[0]["env"] == [{"name": "OPS_TOKEN", "secret_ref": "projects/example/secrets/ops-token/versions/7"}]
-    assert references == [("example", "ops-token")]
     with pytest.raises(ValueError, match="exactly one of value or secretRef"):
         ProfileConfig.parse("ops", {"agent": "codex", "env": {"OPS_TOKEN": "plaintext"}})
 
@@ -199,7 +181,7 @@ def test_profile_manifest_renders_github_repositories_and_secret_references() ->
 def test_deployment_manifest_preserves_unicode_profile_instructions() -> None:
     profile = ProfileConfig.parse("github", {"agent": "codex", "instructions": "Prefix comments with 🤖"})
     config = replace(deployment_config(), profiles=(profile,), workloads=(), github_federations=())
-    profiles, _ = _deployment_profiles(config.profiles)
+    profiles = _deployment_profiles(config.profiles)
     manifest = _deployment_manifest(config, profiles, [])
     assert "🤖" in manifest
     assert json.loads(manifest)["profiles"][0]["profile"]["instructions"] == "Prefix comments with 🤖"
@@ -283,20 +265,13 @@ def test_deployment_models_durable_resources_without_secret_payloads():
         assert "metadata_startup_script" not in vm.inputs
         assert field(vm.inputs, "allow_stopping_for_update", "allowStoppingForUpdate") is False
 
-        secret_reader = by_name(mocks, "loom-vm-secret-reader")
-        assert secret_reader.inputs["role"] == "roles/secretmanager.secretAccessor"
-        log_writer = by_name(mocks, "loom-vm-log-writer")
-        assert log_writer.inputs["role"] == "roles/logging.logWriter"
-        assert log_writer.inputs["member"] == "serviceAccount:loom-vm@example.iam.gserviceaccount.com"
-        project_roles = {
-            resource.inputs["role"] for resource in mocks.resources if resource.name.startswith("loom-vm-project-role-")
+        iam_resource_types = {
+            "gcp:artifactregistry/repositoryIamMember:RepositoryIamMember",
+            "gcp:kms/cryptoKeyIAMMember:CryptoKeyIAMMember",
+            "gcp:projects/iAMMember:IAMMember",
+            "gcp:secretmanager/secretIamMember:SecretIamMember",
         }
-        assert project_roles == {"roles/cloudsql.client", "roles/cloudsql.instanceUser"}
-        kms_grant = next(resource for resource in mocks.resources if resource.name.startswith("loom-vm-pulumi-kms-"))
-        assert kms_grant.inputs["role"] == "roles/cloudkms.cryptoKeyEncrypterDecrypter"
-        assert field(kms_grant.inputs, "crypto_key_id", "cryptoKeyId") == (
-            "projects/example/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key"
-        )
+        assert iam_resource_types.isdisjoint(resource.typ for resource in mocks.resources)
 
     return infrastructure.activation.id.apply(check)
 

@@ -6,8 +6,7 @@
 Deploys this directory as an IAP-gated Cloud Run service through the reusable
 ``iac.gcp.cloud_run.CloudRunService`` component. The service's fixed shape — project,
 region, one warm instance for the background ingest loop, the CloudSQL connection, and
-the record bucket — lives here. The shared component owns the common IAP access policy;
-additional members are stack config (``marin-evaldash:viewers``).
+the record bucket — lives here. GCP IAM grants live in the ``marin`` infrastructure stack.
 
 The image build context is the repo root (the runtime image copies the eval record/DB
 modules from ``lib/marin``), so ``build_context`` points there and ``dockerfile`` is the
@@ -49,10 +48,6 @@ DOCKERFILE = "infra/evaldash/Dockerfile"
 
 def main() -> None:
     config = pulumi.Config()
-    # Additional IAM members admitted through IAP, e.g. group:marin@…; set with
-    #   pulumi config set --path 'viewers[0]' group:someone@example.com
-    viewers = config.get_object("viewers") or []
-
     provider = gcp.Provider("gcp", project=PROJECT)
     service = CloudRunService(
         "evaldash",
@@ -80,14 +75,8 @@ def main() -> None:
                 SecretEnv(name="CW_KEY_ID", secret="cw-object-storage-key-id"),
                 SecretEnv(name="CW_KEY_SECRET", secret="cw-object-storage-key-secret"),
             ),
-            # roles/compute.viewer lets the run-detail jobs/logs endpoints resolve the Iris
-            # controller and Finelog VM internal IPs through the Compute API for Direct VPC
-            # egress reads. Bucket-scoped record access is declared in iam_data.yaml.
-            # roles/cloudsql.client comes with cloudsql_instances below.
-            service_account_roles=("roles/compute.viewer",),
             # Attaches the CloudSQL instance to the service so the connector can dial it.
             cloudsql_instances=(CLOUDSQL_INSTANCE,),
-            iap_members=tuple(viewers),
         ),
         gcp_provider=provider,
     )

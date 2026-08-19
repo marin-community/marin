@@ -7,11 +7,9 @@ The generic shape behind Marin's periodic batch work: build the image from a Doc
 push it digest-pinned to a per-job Artifact Registry repo, run it as a Cloud Run v2 job,
 and trigger it on a cron schedule through Cloud Scheduler.
 
-The component owns everything a deploy needs: the runtime service account and its grants,
-the Artifact Registry repo and image, the job, and the Scheduler trigger (which invokes the
-Cloud Run Admin API as the job's own service account via an OAuth token). Secret Manager
-secrets are referenced, never created — the component grants the service account accessor
-on each and mounts them as env vars.
+The component owns the runtime service account, Artifact Registry repo and image, job, and
+Scheduler trigger. The ``marin`` infrastructure stack owns every IAM grant for the job and
+runtime account. Secret Manager secrets are referenced and mounted without entering state.
 """
 
 from dataclasses import dataclass, field
@@ -49,12 +47,10 @@ class ScheduledCloudRunJobArgs:
     timeout: int = 1800
     max_retries: int = 1
 
-    # Secret Manager secrets mounted as container env vars. Each grants the runtime service
-    # account roles/secretmanager.secretAccessor on its secret.
+    # Secret Manager secrets mounted as container env vars. IAM access is declared centrally.
     secrets: tuple[SecretEnv, ...] = ()
-    # Cloud SQL connection names (project:region:instance) to attach. When non-empty the
-    # job mounts the connector socket at /cloudsql and the runtime service account gets
-    # roles/cloudsql.client on the project.
+    # Cloud SQL connection names (project:region:instance) to attach. The job mounts the
+    # connector socket at /cloudsql; its centrally declared IAM includes cloudsql.client.
     cloudsql_instances: tuple[str, ...] = ()
 
 
@@ -78,16 +74,12 @@ class ScheduledCloudRunJob(pulumi.ComponentResource):
         super().__init__("marin:gcp:ScheduledCloudRunJob", name, None, opts)
         child = pulumi.ResourceOptions(parent=self, provider=gcp_provider)
 
-        service_account, sa_grants = runtime_service_account(
+        service_account = runtime_service_account(
             account_id=args.job_name,
             display_name=f"{args.job_name} (Cloud Run job)",
             project=args.project,
-            roles=(),
-            secrets=args.secrets,
-            cloudsql_instances=args.cloudsql_instances,
             opts=child,
         )
-        member = service_account.email.apply(lambda email: f"serviceAccount:{email}")
         image = dockerfile_image(
             image_name=args.job_name,
             description=f"Images for the {args.job_name} Cloud Run job.",
@@ -157,25 +149,14 @@ class ScheduledCloudRunJob(pulumi.ComponentResource):
                     ],
                 ),
             ),
-            # Cloud Run validates secret access and version existence at job creation, so
-            # the grants and any stack-created secrets must exist before the job.
+            # Cloud Run validates secret access and version existence at job creation. IAM
+            # comes from the marin stack; wait here for secrets created by this stack.
             opts=pulumi.ResourceOptions.merge(
                 child,
-                pulumi.ResourceOptions(depends_on=sa_grants + [r for s in args.secrets for r in s.wait_for]),
+                pulumi.ResourceOptions(depends_on=[r for secret in args.secrets for r in secret.wait_for]),
             ),
         )
 
-        # Scheduler runs the job as the job's own service account, which therefore needs
-        # run.invoker on the job (jobs.run permission).
-        invoker = gcp.cloudrunv2.JobIamMember(
-            "sa-invoker",
-            project=args.project,
-            location=args.region,
-            name=job.name,
-            role="roles/run.invoker",
-            member=member,
-            opts=child,
-        )
         gcp.cloudscheduler.Job(
             "trigger",
             name=f"{args.job_name}-trigger",
@@ -190,8 +171,8 @@ class ScheduledCloudRunJob(pulumi.ComponentResource):
                     service_account_email=service_account.email,
                 ),
             ),
-            # The invoker grant must exist before the first tick, or it 403s.
-            opts=pulumi.ResourceOptions(parent=self, provider=gcp_provider, depends_on=[job, invoker]),
+            # The centrally managed invoker grant must exist before the first tick.
+            opts=pulumi.ResourceOptions(parent=self, provider=gcp_provider, depends_on=[job]),
         )
 
         self.job_name = job.name
