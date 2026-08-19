@@ -157,6 +157,27 @@ def test_schedule_steps_do_not_extend_the_run():
     assert config.stop_after_steps == 5
 
 
+def test_synthetic_training_data_builds_a_reusable_global_batch():
+    device_count = len(jax.devices())
+    mesh = Mesh(
+        np.asarray(jax.devices()).reshape(1, device_count, 1, 1),
+        ("replica_dcn", "data", "expert", "model"),
+    )
+    batch = train._make_synthetic_batch(
+        batch_size=device_count,
+        max_seq_len=8,
+        vocab_size=11,
+        seed=3,
+        mesh=mesh,
+    )
+
+    expected_tokens = (np.arange(device_count * 8).reshape(device_count, 8) + 3) % 11
+    np.testing.assert_array_equal(batch.tokens, expected_tokens)
+    np.testing.assert_array_equal(batch.loss_weight[:, :-1], 1)
+    np.testing.assert_array_equal(batch.loss_weight[:, -1], 0)
+    assert batch.tokens.sharding == NamedSharding(mesh, P(train._BATCH_AXES, None))
+
+
 def test_expert_bank_override_must_be_divisible_by_the_expert_axis():
     # `moe_mlp` raises on an indivisible bank only once the 16-node gang is already allocated and
     # its workspace is built, so the launcher has to reject it while it is still free to do so.
