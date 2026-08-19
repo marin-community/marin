@@ -53,3 +53,13 @@ The 564-run campaign is in integration. Harbor PR #83 supplies the Pi hosted-vLL
 - Result: Harbor PR #83 merged and local Harbor advanced to `41f4320c0471`. TaskTrove advanced from the tracker's older v3.26 pin `a9c9bd35cb4f` to `6ac7c547ee2a`; the tracker and manifest must be regenerated before launch.
 - Interpretation: the prior Harbor blocker is resolved. Model registration, durable campaign artifacts, and four smokes remain.
 - Next action: register Gemma serving, create the harness configs and v3.26 manifest, then dry-run and submit one-task smokes.
+
+### 2026-08-19 14:08 UTC - Pin launch configuration and build manifest
+
+- Hypothesis: Qwen TP2×DP4 and Gemma TP1×DP8 will use all eight H100s while preserving the prior 32k/16k rollout contract; four one-task smokes will determine whether either topology or 32-way Harbor concurrency needs adjustment.
+- Commit Hash: OpenThoughts-Agent `6b57e1a31c` on pushed branch `penfever/working`; Harbor `41f4320c0471`.
+- Command: dry-ran `artifacts/launch_cell.py <qwen36|gemma4> <terminus-2|pi> 1 --smoke --dry-run` for all four combinations. Planned mirror command: `/Users/benjaminfeuer/miniconda3/envs/otagent/bin/python -m scripts.iris.launch_mirror hf-to-gcs --cluster marin --tpu v6e-4 --priority interactive --no-wait --output-mode gcs --gcs-output-dir gs://marin-us-central2/tmp/ttl=14d/ot-agent/model-mirrors/benjaminfeuer --secrets-env <filtered-secrets> --repo Qwen/Qwen3.6-35B-A3B --repo google/gemma-4-26B-A4B --gcs-prefix gs://marin-models-us/ot-agent/models --job_name mdq-tasktrove-v326-model-mirrors`.
+- Config: Terminus-2 and Pi share 32 concurrent trials, one attempt, 7,200-second agent timeout, 14,400-second verifier timeout, Daytona 2 CPU/4 GiB/4 GiB, and 32,768 input/16,384 output limits. Pi is pinned to 0.73.1 with model-specific `qwen-chat-template` or `chat-template` thinking format. Qwen uses TP2×DP4; Gemma uses TP1×DP8. Both retain the prior Qwen3-Coder server sampling defaults (temperature 0.7, top-p 0.8, top-k 20, repetition penalty 1.05).
+- Result: all four dry runs resolved controller ingress and exact pinned TaskTrove selectors. The manifest contains 141 datasets, 564 grid cells, and 169,200 attempts; seven datasets require deterministic round-robin expansion. Both models are absent from `gs://marin-models-us/ot-agent/models`.
+- Interpretation: no further Harbor changes are required. Model mirroring is the only launch prerequisite remaining before the four smoke jobs.
+- Next action: mirror both model repositories once, verify cache hits, then submit and monitor all four smoke jobs.
