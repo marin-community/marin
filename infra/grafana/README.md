@@ -595,8 +595,9 @@ curl -s http://localhost:3000/api/dashboards/uid/marin-accel
 
 ## Deploy
 
-Pulumi owns the deploy: the runtime service account and its `compute.viewer` grant, the
-Artifact Registry repo and image, the Cloud Run service, and the IAP wiring. The service
+Pulumi owns the deploy: the runtime service account, Artifact Registry repo and image, the
+Cloud Run service, and the IAP settings. The `marin` infrastructure stack separately owns the
+runtime account's project and secret grants plus the Cloud Run and IAP grants. The service
 and its image build come from the reusable `iac.gcp.cloud_run.CloudRunService` component
 (`infra/pulumi`); this directory is its own Pulumi project. It runs on the shared repo venv
 and shares `infra/pulumi`'s state backend.
@@ -609,13 +610,8 @@ uv run --all-packages --extra deploy marin-deploy grafana rollout
 The deploy command loads the Cloudflare provider token from Secret Manager and
 Pulumi previews the update before asking for confirmation.
 
-Extra viewers beyond the shared Cloud Run IAP baseline are durable stack config. A
-viewer may be a bare email, a `*@domain` wildcard, or a qualified IAM member. Change
-the config before deploying when a grant needs to be updated:
-
-```bash
-pulumi -C infra/grafana config set --stack marin-grafana --path 'viewers[0]' you@example.com
-```
+Add IAP viewers through `infra/pulumi/src/iac/gcp/iam_data.yaml` and apply the `marin` stack.
+The Grafana stack does not own IAM grants.
 
 Production reads the `grafana-alerts` URL and profile from the `marin-loom`
 stack. Apply that stack before rolling a Grafana revision with
@@ -664,10 +660,9 @@ so they have no identity claim and remain Grafana `Viewer`. A sign-in link to
 the email header and become `Editor`.
 
 The OAuth consent screen is project-level and shared across the project's IAP services. The
-shared Cloud Run component admits the OpenAthena Workspace domain and the Loom VM service
-account on every internal site, and registers the Marin desktop OAuth client as a programmatic
-audience. The `viewers` stack config contains additional IAP accounts or groups; the name refers
-to IAP admission, not their Grafana organization role.
+central IAM config admits the OpenAthena Workspace domain, Loom VM service account, and
+service-specific viewers. The Cloud Run component registers the Marin desktop OAuth client as
+a programmatic audience. IAP admission is independent of the Grafana organization role.
 
 The ferry, build, and nightly panels read the GitHub API, which gates the GraphQL
 build query behind auth even for public repos. The bridge authenticates as the

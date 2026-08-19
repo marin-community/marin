@@ -8,11 +8,9 @@ from a Dockerfile, push it digest-pinned to a per-service Artifact Registry repo
 it on Cloud Run v2 with Direct VPC egress so it reaches cluster-internal IPs, gated by
 Identity-Aware Proxy.
 
-The component owns everything a deploy needs: the runtime service account and its
-project roles, the Artifact Registry repo and image, the service, and the IAP wiring
-(the service is invokable only by the IAP service agent; people reach it through IAP's
-``httpsResourceAccessor``). The one project-level prerequisite it does not own is the
-OAuth consent screen, which is shared across a project's IAP services.
+The component owns the runtime service account, Artifact Registry repo and image, service,
+and IAP settings. The ``marin`` infrastructure stack owns every IAM grant for the service
+and runtime account. The project-level OAuth consent screen remains external.
 """
 
 import re
@@ -23,13 +21,6 @@ import pulumi_docker_build as docker_build
 import pulumi_gcp as gcp
 from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT
 
-# Cloud Run terminates the browser session as the IAP service agent, so that agent —
-# not the end user — is what invokes the service. People are admitted separately, through
-# IAP's httpsResourceAccessor role.
-IAP_SERVICE_AGENT = "serviceAccount:service-{project_number}@gcp-sa-iap.iam.gserviceaccount.com"
-OPENATHENA_IAP_MEMBER = "domain:openathena.ai"
-LOOM_VM_IAP_MEMBER = "serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com"
-MARIN_INTERNAL_IAP_MEMBERS = (OPENATHENA_IAP_MEMBER, LOOM_VM_IAP_MEMBER)
 BUILD_CACHE_TAG = "buildcache"
 BUILD_CACHE_COMPRESSION_LEVEL = 3
 
@@ -40,13 +31,12 @@ class SecretEnv:
 
     ``name`` is the variable the container reads; ``secret`` is the Secret Manager secret id
     in the service's project; ``version`` is the version to mount ("latest" or a number). The
-    component grants the runtime service account roles/secretmanager.secretAccessor on the
-    secret — it references the secret, and never creates it or holds its value.
+    ``iam_data.yaml`` grants the runtime service account access. This component references the
+    secret and never creates it or holds its value.
 
     When the same stack creates the secret (or its version), pass those resources in
-    ``wait_for``: the string id carries no dependency edge, so without it the accessor
-    grant and the service/job that mounts the secret can race its creation on a fresh
-    deploy (Cloud Run validates secret access and version existence at deploy time).
+    ``wait_for``: the string id carries no dependency edge, so the service/job that mounts
+    the secret can race its creation on a fresh deploy.
     """
 
     name: str
@@ -96,59 +86,21 @@ class CloudRunServiceArgs:
     # created under a different name pins that name here rather than orphaning it.
     service_account_id: str | None = None
 
-    # Project roles granted to the runtime service account (e.g. roles/compute.viewer for
-    # a service that lists VM internal IPs).
-    service_account_roles: tuple[str, ...] = ()
-    # Secret Manager secrets mounted as container env vars. Each grants the runtime service
-    # account roles/secretmanager.secretAccessor on its secret; the component references the
-    # secret and never creates it or holds its value.
+    # Secret Manager secrets mounted as container env vars. IAM access is declared centrally;
+    # the component references each secret and never creates it or holds its value.
     secrets: tuple[SecretEnv, ...] = ()
-    # Additional people admitted through IAP beyond the shared OpenAthena domain and Loom VM
-    # grants. Each entry is a bare email ("alice@x.com"), a domain wildcard
-    # ("*@example.com"), or an already-qualified IAM member ("group:eng@example.com"). Each
-    # grant is its own resource, so re-running with a changed list updates only the
-    # added/removed grants — never the service.
-    iap_members: tuple[str, ...] = ()
     # Additional OAuth client IDs IAP accepts as programmatic-token audiences beyond the
     # shared Marin desktop client. This lets a CLI or agent reach the service with a
     # Google-signed ID token instead of an interactive browser session. Each id must be an
     # OAuth client that already exists.
     iap_programmatic_clients: tuple[str, ...] = ()
-    # Cloud SQL connection names (project:region:instance) to attach. When non-empty the
-    # service mounts the connector socket at /cloudsql and the runtime service account gets
-    # roles/cloudsql.client on the project.
+    # Cloud SQL connection names (project:region:instance) to attach. The service mounts the
+    # connector socket at /cloudsql; its centrally declared IAM includes cloudsql.client.
     cloudsql_instances: tuple[str, ...] = ()
 
 
-IAM_MEMBER_PREFIXES = ("user:", "group:", "domain:", "serviceAccount:")
-IAM_SPECIAL_MEMBERS = ("allUsers", "allAuthenticatedUsers")
-
-
-def normalize_iap_member(entry: str) -> str:
-    """Map a friendly IAP access entry to an IAM member.
-
-    Passes an already-qualified member ("group:eng@x.com") or special token
-    ("allAuthenticatedUsers") through unchanged; maps "*@domain" to "domain:domain" and a
-    bare email to "user:email".
-    """
-    entry = entry.strip()
-    if entry in IAM_SPECIAL_MEMBERS or entry.startswith(IAM_MEMBER_PREFIXES):
-        return entry
-    if entry.startswith("*@"):
-        return f"domain:{entry[2:]}"
-    if "@" in entry:
-        return f"user:{entry}"
-    raise ValueError(f"cannot read IAP access entry {entry!r}: use an email, *@domain, or a prefixed IAM member")
-
-
-def _role_slug(role: str) -> str:
-    """Pulumi resource-name-safe slug for an IAM role id (roles/compute.viewer -> compute-viewer)."""
-    return role.removeprefix("roles/").replace(".", "-").replace("/", "-")
-
-
 def resource_slug(identifier: str) -> str:
-    """Stable resource-name-safe slug for an identifier (IAM member, secret id), so each
-    grant is its own resource."""
+    """Return a stable Pulumi resource-name-safe identifier."""
     return re.sub(r"[^a-z0-9]+", "-", identifier.lower()).strip("-")
 
 
@@ -157,60 +109,16 @@ def runtime_service_account(
     account_id: str,
     display_name: str,
     project: str,
-    roles: tuple[str, ...],
-    secrets: tuple[SecretEnv, ...],
-    cloudsql_instances: tuple[str, ...],
     opts: pulumi.ResourceOptions,
-) -> tuple[gcp.serviceaccount.Account, list[pulumi.Resource]]:
-    """Runtime service account with its project roles, cloudsql.client, and secret accessor grants.
-
-    Returns the account and its IAM grant resources: Cloud Run validates secret access at
-    deploy time, so the service/job resource must depends_on the grants or a fresh deploy
-    can race them. Shared between the Cloud Run service and job components; child resource
-    names ("sa", "sa-<role>", "sa-cloudsql-client", "secret-<slug>") are part of existing
-    stacks' state, so they must stay stable.
-    """
-    service_account = gcp.serviceaccount.Account(
+) -> gcp.serviceaccount.Account:
+    """Create the runtime service account shared by Cloud Run services and jobs."""
+    return gcp.serviceaccount.Account(
         "sa",
         account_id=account_id,
         project=project,
         display_name=display_name,
         opts=opts,
     )
-    member = service_account.email.apply(lambda email: f"serviceAccount:{email}")
-    grants: list[pulumi.Resource] = []
-    for role in roles:
-        grants.append(
-            gcp.projects.IAMMember(
-                f"sa-{_role_slug(role)}",
-                project=project,
-                role=role,
-                member=member,
-                opts=opts,
-            )
-        )
-    if cloudsql_instances:
-        grants.append(
-            gcp.projects.IAMMember(
-                "sa-cloudsql-client",
-                project=project,
-                role="roles/cloudsql.client",
-                member=member,
-                opts=opts,
-            )
-        )
-    for secret_env in secrets:
-        grants.append(
-            gcp.secretmanager.SecretIamMember(
-                f"secret-{resource_slug(secret_env.secret)}",
-                project=project,
-                secret_id=secret_env.secret,
-                role="roles/secretmanager.secretAccessor",
-                member=member,
-                opts=pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(depends_on=list(secret_env.wait_for))),
-            )
-        )
-    return service_account, grants
 
 
 def dockerfile_image(
@@ -295,13 +203,10 @@ class CloudRunService(pulumi.ComponentResource):
         super().__init__("marin:gcp:CloudRunService", name, None, opts)
         child = pulumi.ResourceOptions(parent=self, provider=gcp_provider)
 
-        service_account, sa_grants = runtime_service_account(
+        service_account = runtime_service_account(
             account_id=args.service_account_id or args.service_name,
             display_name=f"{args.service_name} (Cloud Run)",
             project=args.project,
-            roles=args.service_account_roles,
-            secrets=args.secrets,
-            cloudsql_instances=args.cloudsql_instances,
             opts=child,
         )
         image = dockerfile_image(
@@ -390,45 +295,17 @@ class CloudRunService(pulumi.ComponentResource):
                     )
                 ],
             ),
-            # Cloud Run validates secret access and version existence at deploy, so the
-            # grants and any stack-created secrets must exist before the service.
+            # Cloud Run validates secret access and version existence at deploy. IAM access
+            # comes from the marin stack; wait here for secrets created by this stack.
             opts=pulumi.ResourceOptions.merge(
                 child,
-                pulumi.ResourceOptions(depends_on=sa_grants + [r for s in args.secrets for r in s.wait_for]),
+                pulumi.ResourceOptions(depends_on=[r for secret in args.secrets for r in secret.wait_for]),
             ),
         )
 
-        # IAP invokes the service as its own service agent; only that agent gets run.invoker.
-        # People are admitted separately through IAP (httpsResourceAccessor). The shared
-        # human and automation grants keep every internal site consistent; `iap_members`
-        # adds only service-specific exceptions.
         project_number = gcp.organizations.get_project(
             project_id=args.project, opts=pulumi.InvokeOptions(provider=gcp_provider)
         ).number
-        gcp.cloudrunv2.ServiceIamMember(
-            "iap-invoker",
-            project=args.project,
-            location=args.region,
-            name=service.name,
-            role="roles/run.invoker",
-            member=IAP_SERVICE_AGENT.format(project_number=project_number),
-            opts=child,
-        )
-        iap_members = (
-            *MARIN_INTERNAL_IAP_MEMBERS,
-            *(normalize_iap_member(member) for member in args.iap_members),
-        )
-        for member in dict.fromkeys(iap_members):
-            gcp.iap.WebCloudRunServiceIamMember(
-                f"iap-access-{resource_slug(member)}",
-                project=args.project,
-                location=args.region,
-                cloud_run_service_name=service.name,
-                role="roles/iap.httpsResourceAccessor",
-                member=member,
-                opts=child,
-            )
-
         # Register programmatic-token audiences on the service's IAP resource. IAP then admits
         # an ID token whose `aud` is one of these client ids and attributes the caller by its
         # email claim — the path a CLI or agent uses instead of the interactive browser sign-in.
