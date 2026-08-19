@@ -38,7 +38,7 @@ The 564-run campaign is in smoke validation. Harbor PR #83 supplies the Pi hoste
 
 - `MDQ-001`: use the latest v3.26 TaskTrove commit, including the duplicate `verifier.env` repairs recorded at https://echo.oa.dev/wiki/182.
 - `MDQ-002`: keep the prior 16,384-token output allowance. A smaller allowance confounded the historical Qwen3.6 comparison.
-- `MDQ-003`: run both harnesses through CoreWeave controller ingress so Pi reaches the co-located vLLM endpoint.
+- `MDQ-003`: run Pi through CoreWeave controller ingress because its installed CLI executes inside Daytona; keep Terminus-2 on the worker-local vLLM endpoint.
 - `MDQ-004`: require decode-rate and timeout evidence from smokes before fixing per-harness concurrency.
 - `MDQ-005`: keep no more than eight campaign jobs in Iris states PENDING, BUILDING, or RUNNING.
 
@@ -123,3 +123,13 @@ The 564-run campaign is in smoke validation. Harbor PR #83 supplies the Pi hoste
 - Result: the fifth Gemma attempts failed before weight loading with `AmbiguousGlobalPerLayerAttributeError` on heterogeneous `head_dim` under Transformers 5.15.1. Transformers 5.5.3 recognizes both exact models and reads Gemma's 256/512 local/global head dimensions. Qwen TP2×DP4 loaded all 26 shards on every DP rank, used 9.93 GiB per GPU, completed compilation, and returned HTTP 200 from `/v1/models`; the run then failed while registering controller ingress because `iris` was absent. FlashInfer GDN warmup also reported missing `/usr/local/cuda/bin/nvcc`, so the explicit Triton backend avoids first-request autotuning risk.
 - Interpretation: both model-serving paths have passed architecture parsing, and Qwen has passed full endpoint startup. The remaining failures are OTA environment composition, not Harbor code or model capacity.
 - Next action: relaunch all four smokes from `71586e0b` and require scored results from the consistent runtime before opening the campaign queue.
+
+### 2026-08-19 15:20 UTC - Split harness routing after valid Pi smokes
+
+- Hypothesis: Pi needs controller ingress from its Daytona-hosted CLI, while Terminus-2 should use the direct co-located vLLM endpoint because its LLM client runs in the Iris worker process.
+- Commit Hash: OpenThoughts-Agent `71586e0b`; experiment launcher changed locally without an OTA code change.
+- Command: refreshed `artifacts/supervise.py`, stopped the two invalid Terminus-2 smoke jobs, and relaunched them under fresh `mdq-smk7-*` identities after removing controller-ingress arguments only from the Terminus-2 launch path.
+- Config: Pi retains `--ingress_mode controller --ingress_host https://iris.oa.dev`; Terminus-2 receives the worker-local `http://127.0.0.1:8000/v1` endpoint metadata. Model, sampling, context, output, Daytona, topology, and concurrency settings are unchanged.
+- Result: Qwen/Pi and Gemma/Pi each completed one scoreable trial. Both model servers started successfully under the sixth attempts. Terminus-2 requests sent through controller ingress returned HTTP 401, while the same capability routes worked for Pi. A corrected direct-endpoint Gemma run reached HTTP 200 locally, then its old run directory rejected the changed runtime lock; the replacement `mdq-smk7-*` identities avoid that stale invalid-smoke state.
+- Interpretation: no additional Harbor change is required. The 401 was a harness-routing error, and the subsequent lock mismatch came from reusing an invalid smoke identity across a semantic endpoint change.
+- Next action: require one scoreable result from each fresh Terminus-2 smoke, then open eight full-grid jobs.
