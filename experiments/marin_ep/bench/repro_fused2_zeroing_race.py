@@ -38,7 +38,6 @@ import numpy as np  # noqa: E402
 from jax import shard_map  # noqa: E402
 from jax.sharding import AxisType, Mesh, NamedSharding  # noqa: E402
 from jax.sharding import PartitionSpec as P  # noqa: E402
-
 from levanter.grug._moe.ep_marin import marin_ep_moe_local  # noqa: E402
 
 
@@ -96,15 +95,11 @@ def main() -> None:
         mine = a.reshape(devices, tokens, *a.shape[1:])[proc]
         if dtype is not None:
             mine = mine.astype(dtype)
-        return jax.make_array_from_process_local_data(
-            NamedSharding(mesh, batch_spec), mine, a.shape
-        )
+        return jax.make_array_from_process_local_data(NamedSharding(mesh, batch_spec), mine, a.shape)
 
     def put_weight(a):
         mine = a.reshape(devices, local_experts, *a.shape[1:])[proc].astype(jnp.bfloat16)
-        return jax.make_array_from_process_local_data(
-            NamedSharding(mesh, weight_spec), mine, a.shape
-        )
+        return jax.make_array_from_process_local_data(NamedSharding(mesh, weight_spec), mine, a.shape)
 
     args = (
         put_batch(x, jnp.bfloat16),
@@ -131,7 +126,7 @@ def main() -> None:
     with jax.set_mesh(mesh):
         fn = jax.jit(layers)
         t0 = time.time()
-        y, dropped = jax.block_until_ready(fn(*args))
+        _y, dropped = jax.block_until_ready(fn(*args))
         print(f"[{proc}] warmup ok {time.time() - t0:.1f}s dropped={int(dropped)}", flush=True)
         for it in range(iters):
             t1 = time.time()

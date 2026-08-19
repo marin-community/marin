@@ -12,13 +12,15 @@ rack.
 This bench measures three costs at that same geometry so the 204 ms can be
 attributed:
 
-* ``fused``  -- ``marin_ep_moe_local`` with the fused Mosaic-GPU transport.
-* ``gemm``   -- ``brd_expert_mlp`` alone on an already-local pool of the same
-  row count, so no puts, no combine, no plan. The difference against ``fused``
-  is what the transport and the permute bookkeeping cost.
-* ``dense``  -- the incumbent's formulation: a capacity-padded ``erh,ehi->eri``
-  batched einsum over the same rows, to price grouped ragged GEMMs against
-  dense ones at this shape.
+* ``fused``       -- ``marin_ep_moe_local`` with the fused Mosaic-GPU transport.
+* ``unfused-put`` -- the same layer with the standalone put kernel.
+* ``ragged-a2a``  -- the same layer over ``jax.lax.ragged_all_to_all``.
+* ``gemm``        -- ``brd_expert_mlp`` alone on an already-local pool of the
+  same row count, so no puts, no combine, no plan. The difference against a
+  transport case is what that transport and the permute bookkeeping cost.
+* ``dense``       -- the incumbent's formulation: a capacity-padded
+  ``erh,ehi->eri`` batched einsum over the same rows, to price grouped ragged
+  GEMMs against dense ones at this shape.
 
 Run one process per GPU:
 
@@ -48,8 +50,7 @@ import numpy as np  # noqa: E402
 from jax import shard_map  # noqa: E402
 from jax.sharding import AxisType, Mesh, NamedSharding  # noqa: E402
 from jax.sharding import PartitionSpec as P  # noqa: E402
-
-from levanter.grug._moe.brd_expert_mlp import ROW_ALIGN, brd_expert_mlp  # noqa: E402
+from levanter.grug._moe.brd_expert_mlp import ROW_ALIGN, brd_expert_mlp, brd_expert_mlp_padded  # noqa: E402
 from levanter.grug._moe.ep_marin import marin_ep_moe_local  # noqa: E402
 
 TOKENS, TOPK, HIDDEN, INTER = 65536, 8, 6144, 3072
@@ -77,7 +78,7 @@ def report(label: str, ms: float) -> None:
         print(f"{label}: {ms:.2f} ms fwd+bwd", flush=True)
 
 
-def bench_fused(mesh, rng) -> None:
+def bench_transport(mesh, rng, transport: str, label: str) -> None:
     proc = jax.process_index()
     devices = jax.device_count()
     num_experts = devices * LOCAL_EXPERTS
@@ -116,7 +117,8 @@ def bench_fused(mesh, rng) -> None:
             num_experts=num_experts,
             capacity_factor=CF,
             pool_group_size=LOCAL_EXPERTS,
-            transport="mgpu_fused",
+            transport=transport,
+            expert_mlp=brd_expert_mlp_padded,
         ),
         mesh=mesh,
         in_specs=(batch_spec, batch_spec, batch_spec, weight_spec, weight_spec),
@@ -130,7 +132,7 @@ def bench_fused(mesh, rng) -> None:
 
     with jax.set_mesh(mesh):
         step = jax.jit(jax.grad(loss, argnums=(0, 4, 5)))
-        report("fused", bench(step, xb, eb, wb, cb, w13b, w2b))
+        report(label, bench(step, xb, eb, wb, cb, w13b, w2b))
 
 
 def local_pool(rng):
@@ -187,7 +189,9 @@ def main() -> None:
     )
     if jax.process_index() == 0:
         print(f"pool_rows={POOL_ROWS} hidden={HIDDEN} inter={INTER} local_experts={LOCAL_EXPERTS}", flush=True)
-    bench_fused(mesh, np.random.default_rng(seed=7))
+    bench_transport(mesh, np.random.default_rng(seed=7), "mgpu_fused", "fused")
+    bench_transport(mesh, np.random.default_rng(seed=7), "mgpu", "unfused-put")
+    bench_transport(mesh, np.random.default_rng(seed=7), "ragged", "ragged-a2a")
     bench_gemm(np.random.default_rng(seed=11))
     bench_dense(np.random.default_rng(seed=13))
     if jax.process_index() == 0:

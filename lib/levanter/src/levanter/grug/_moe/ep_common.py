@@ -210,5 +210,36 @@ def _compact_by_keep_mask(inputs: Float[Array, "N *tail"], keep_mask: Bool[Array
 def _expand_from_keep_mask(compacted: Float[Array, "N *tail"], keep_mask: Bool[Array, "N"]) -> Float[Array, "N *tail"]:
     keep_i32 = keep_mask.astype(jnp.int32)
     compact_index = jnp.cumsum(keep_i32, dtype=jnp.int32) - 1
-    gathered = jnp.take(compacted, jnp.maximum(compact_index, 0), axis=0)
-    return jnp.where(keep_mask[:, None], gathered, 0)
+    return _expand_rows(compacted, jnp.where(keep_mask, compact_index, -1))
+
+
+@jax.custom_vjp
+def _expand_rows(compacted: Float[Array, "N *tail"], gather_index: Int[Array, "N"]) -> Float[Array, "N *tail"]:
+    """Row gather with -1 meaning "emit zeros", differentiated as a gather.
+
+    ``gather_index`` is injective on its non-negative entries, so the transpose
+    of this gather is another gather rather than the scatter-add XLA infers for
+    a bare ``jnp.take``. At hero shapes the scatter-add ran at a third of
+    bandwidth because of the atomics.
+    """
+    rows = jnp.take(compacted, jnp.maximum(gather_index, 0), axis=0)
+    return jnp.where((gather_index >= 0)[:, None], rows, 0)
+
+
+def _expand_rows_fwd(compacted, gather_index):
+    return _expand_rows(compacted, gather_index), (gather_index, compacted.shape[0])
+
+
+def _expand_rows_bwd(residuals, grads):
+    gather_index, rows = residuals
+    scatter_into = jnp.where(gather_index >= 0, gather_index, rows)
+    source = (
+        jnp.full((rows,), -1, dtype=jnp.int32)
+        .at[scatter_into]
+        .set(jnp.arange(gather_index.shape[0], dtype=jnp.int32), mode="drop")
+    )
+    gathered = jnp.take(grads, jnp.maximum(source, 0), axis=0)
+    return jnp.where((source >= 0)[:, None], gathered, 0), None
+
+
+_expand_rows.defvjp(_expand_rows_fwd, _expand_rows_bwd)

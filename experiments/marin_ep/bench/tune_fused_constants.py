@@ -38,7 +38,6 @@ import numpy as np  # noqa: E402
 from jax import shard_map  # noqa: E402
 from jax.sharding import AxisType, Mesh, NamedSharding  # noqa: E402
 from jax.sharding import PartitionSpec as P  # noqa: E402
-
 from levanter.grug._moe import fused_dispatch_brd  # noqa: E402
 from levanter.grug._moe.ep_marin import marin_ep_moe_local  # noqa: E402
 
@@ -131,7 +130,7 @@ def main() -> None:
                     t0 = time.perf_counter()
                     jax.block_until_ready(step(xb, eb, wb, cb, w13b, w2b))
                     times.append(time.perf_counter() - t0)
-            except Exception as exc:  # noqa: BLE001 - sweep must survive invalid configs
+            except Exception as exc:
                 if proc == 0:
                     print(f"sr={stage_rows} lc={lane_chunk} mcs={mcs}: FAIL {type(exc).__name__}: {exc}", flush=True)
                 continue

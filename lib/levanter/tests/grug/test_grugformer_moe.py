@@ -970,6 +970,22 @@ def test_compact_and_expand_from_keep_mask_roundtrip():
     )
 
 
+def test_expand_from_keep_mask_routes_cotangents_back_to_compacted_rows():
+    keep_mask = jnp.array([True, False, True, True, False])
+    compacted = jnp.arange(10.0, dtype=jnp.float32).reshape(5, 2)
+    cotangent = jnp.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0], [9.0, 10.0]], dtype=jnp.float32)
+
+    grad = jax.grad(lambda c: jnp.sum(_expand_from_keep_mask(c, keep_mask) * cotangent))(compacted)
+
+    # Kept positions 0, 2, 3 feed compacted rows 0, 1, 2; the rest get nothing.
+    np.testing.assert_allclose(
+        np.asarray(grad),
+        np.asarray([[1.0, 2.0], [5.0, 6.0], [7.0, 8.0], [0.0, 0.0], [0.0, 0.0]]),
+        rtol=0,
+        atol=0,
+    )
+
+
 def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
