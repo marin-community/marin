@@ -28,9 +28,9 @@ CLOUD_RUN_SOURCE_ROOTS = (
     "lib/rigging/src/rigging/auth.py",
 )
 IRIS_SOURCE_ROOTS = ("infra/pulumi/src/iac/iris",)
-# These stacks still track IAM resources transferred to the ``marin`` stack by #8455. A merge
-# rollout would delete the live grants. Manual dispatch remains available after an operator
-# imports the central resources and detaches the leaf-stack state.
+# Infra owns this gate. Remove it after the ``marin`` stack imports the live grants and the Echo,
+# EvalDash, and Grafana IAM resources are detached from their leaf states. Track the transfer at
+# https://github.com/marin-community/marin/issues/8455. Manual dispatch remains available.
 IAM_STATE_TRANSFER_BLOCKED_ROLLOUTS = frozenset({"echo", "evaldash", "grafana"})
 
 
@@ -104,7 +104,6 @@ def rollouts_for_paths(paths: Iterable[str]) -> tuple[Rollout, ...]:
 
 
 def automatic_rollouts_for_paths(paths: Iterable[str]) -> tuple[Rollout, ...]:
-    """Return affected rollouts that are safe for merge-triggered deployment."""
     return tuple(
         rollout for rollout in rollouts_for_paths(paths) if rollout.name not in IAM_STATE_TRANSFER_BLOCKED_ROLLOUTS
     )

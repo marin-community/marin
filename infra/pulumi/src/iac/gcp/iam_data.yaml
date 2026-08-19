@@ -2055,7 +2055,6 @@ service_accounts:
 cloud_run_services:
 - location: us-central1
   service: echo-api
-  grants: []
   iap_grants:
   - role: roles/iap.httpsResourceAccessor
     members:
@@ -2063,7 +2062,6 @@ cloud_run_services:
     - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
 - location: us-central1
   service: marin-evaldash
-  grants: []
   iap_grants:
   - role: roles/iap.httpsResourceAccessor
     members:
@@ -2072,7 +2070,6 @@ cloud_run_services:
     - principal: human-012
 - location: us-central1
   service: marin-grafana
-  grants: []
   iap_grants:
   - role: roles/iap.httpsResourceAccessor
     members:
@@ -2080,4 +2077,3 @@ cloud_run_services:
     - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
     - principal: human-012
     - principal: human-071
-cloud_run_jobs: []

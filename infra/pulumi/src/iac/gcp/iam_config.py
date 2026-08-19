@@ -15,7 +15,6 @@ from yaml.resolver import BaseResolver
 from iac.gcp.iam import (
     GcpArtifactRepositoryIam,
     GcpBucketIam,
-    GcpCloudRunJobIam,
     GcpCloudRunServiceIam,
     GcpCustomRole,
     GcpEncryptedMember,
@@ -108,7 +107,6 @@ class GcpIamConfig:
     artifact_repositories: tuple[GcpArtifactRepositoryIam, ...]
     service_accounts: tuple[GcpServiceAccountIam, ...]
     cloud_run_services: tuple[GcpCloudRunServiceIam, ...]
-    cloud_run_jobs: tuple[GcpCloudRunJobIam, ...]
 
 
 @dataclass(frozen=True)
@@ -348,32 +346,16 @@ def _parse_cloud_run_services(
         fields = _fields(
             raw_service,
             path,
-            required=frozenset({"location", "service", "grants", "iap_grants"}),
+            required=frozenset({"location", "service", "iap_grants"}),
         )
         services.append(
             GcpCloudRunServiceIam(
                 location=_string(fields["location"], f"{path}.location"),
                 service=_string(fields["service"], f"{path}.service"),
-                grants=_parse_grants(fields["grants"], f"{path}.grants", principals),
                 iap_grants=_parse_grants(fields["iap_grants"], f"{path}.iap_grants", principals),
             )
         )
     return tuple(services)
-
-
-def _parse_cloud_run_jobs(value: object, principals: dict[str, GcpEncryptedMember]) -> tuple[GcpCloudRunJobIam, ...]:
-    jobs = []
-    for index, raw_job in enumerate(_sequence(value, "cloud_run_jobs")):
-        path = f"cloud_run_jobs[{index}]"
-        fields = _fields(raw_job, path, required=frozenset({"location", "job", "grants"}))
-        jobs.append(
-            GcpCloudRunJobIam(
-                location=_string(fields["location"], f"{path}.location"),
-                job=_string(fields["job"], f"{path}.job"),
-                grants=_parse_grants(fields["grants"], f"{path}.grants", principals),
-            )
-        )
-    return tuple(jobs)
 
 
 def load_iam_config(path: Path = IAM_DATA_PATH) -> GcpIamConfig:
@@ -396,7 +378,6 @@ def load_iam_config(path: Path = IAM_DATA_PATH) -> GcpIamConfig:
                 "artifact_repositories",
                 "service_accounts",
                 "cloud_run_services",
-                "cloud_run_jobs",
             }
         ),
     )
@@ -424,7 +405,6 @@ def load_iam_config(path: Path = IAM_DATA_PATH) -> GcpIamConfig:
         artifact_repositories=_parse_artifact_repositories(fields["artifact_repositories"], principals),
         service_accounts=_parse_service_accounts(fields["service_accounts"], principals),
         cloud_run_services=_parse_cloud_run_services(fields["cloud_run_services"], principals),
-        cloud_run_jobs=_parse_cloud_run_jobs(fields["cloud_run_jobs"], principals),
     )
 
 
@@ -520,18 +500,9 @@ def iam_config_data(config: GcpIamConfig) -> dict[str, object]:
             {
                 "location": service.location,
                 "service": service.service,
-                "grants": _grants_data(service.grants, principal_ids),
                 "iap_grants": _grants_data(service.iap_grants, principal_ids),
             }
             for service in config.cloud_run_services
-        ],
-        "cloud_run_jobs": [
-            {
-                "location": job.location,
-                "job": job.job,
-                "grants": _grants_data(job.grants, principal_ids),
-            }
-            for job in config.cloud_run_jobs
         ],
     }
 
@@ -605,13 +576,9 @@ def replace_principals(config: GcpIamConfig, principals: tuple[GcpPrincipal, ...
         cloud_run_services=tuple(
             replace(
                 service,
-                grants=_replace_principal_grants(service.grants, replacements),
                 iap_grants=_replace_principal_grants(service.iap_grants, replacements),
             )
             for service in config.cloud_run_services
-        ),
-        cloud_run_jobs=tuple(
-            replace(job, grants=_replace_principal_grants(job.grants, replacements)) for job in config.cloud_run_jobs
         ),
     )
 

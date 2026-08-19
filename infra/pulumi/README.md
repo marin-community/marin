@@ -30,7 +30,7 @@ service jobs via a `local.Command` around the `iac.iris.deploy` CLI, used by `in
 `infra/xprof`), and `iac.kubernetes.finelog` (a custom image plus stateful Kubernetes resources,
 used by [`infra/finelog`](../finelog/README.md)). The service components create runtime
 resources; the `marin` stack owns their
-service-account, Secret Manager, Cloud Run, and IAP grants. The shared Marin desktop OAuth
+service-account, Secret Manager, and Cloud Run IAP grants. The shared Marin desktop OAuth
 client remains a component-owned IAP setting.
 
 ### Cloud Run IAP access
