@@ -752,37 +752,75 @@ def test_shard_field_open_retries_after_owner_loop_closes(tmp_path, monkeypatch)
     assert attempts == 2
 
 
-def test_concurrent_event_loops_keep_independent_pending_shard_opens(tmp_path, monkeypatch):
+def test_closed_foreign_loop_does_not_evict_live_pending_shard_open(tmp_path, monkeypatch):
     seq_len = 16
     cache = _build_sharded_cache(tmp_path, num_shards=1, rows_per_shard=4, seq_len=seq_len)
     real_open_async = TreeStore.open_async
-    opens_started = threading.Barrier(3)
-    release_opens = threading.Event()
+    first_open_started = threading.Event()
+    second_open_started = threading.Event()
+    start_second_reader = threading.Event()
+    third_reader_entered = threading.Event()
+    release_first_open = threading.Event()
     attempts = 0
     attempts_lock = threading.Lock()
+    readers = 0
+    readers_lock = threading.Lock()
 
     async def blocked_open_async(exemplar, path, **kwargs):
         nonlocal attempts
         with attempts_lock:
             attempts += 1
-        opens_started.wait()
-        await asyncio.to_thread(release_opens.wait)
+            attempt = attempts
+        if attempt == 1:
+            first_open_started.set()
+            await asyncio.to_thread(release_first_open.wait)
+        elif attempt == 2:
+            second_open_started.set()
+            await asyncio.Future()
+        else:
+            await asyncio.to_thread(release_first_open.wait)
         return await real_open_async(exemplar, path, **kwargs)
 
     monkeypatch.setattr(TreeStore, "open_async", staticmethod(blocked_open_async))
+    real_shard_field_store = cache._shard_field_store_async
 
-    def read_one_batch():
-        return asyncio.run(cache.get_flat_field_batch("input_ids", [0], seq_len))
+    async def observed_shard_field_store(shard_name: str, field: str):
+        nonlocal readers
+        with readers_lock:
+            readers += 1
+            reader = readers
+        if reader != 3:
+            return await real_shard_field_store(shard_name, field)
+
+        pending = asyncio.create_task(real_shard_field_store(shard_name, field))
+        await asyncio.sleep(0)
+        third_reader_entered.set()
+        return await pending
+
+    monkeypatch.setattr(cache, "_shard_field_store_async", observed_shard_field_store)
+
+    async def read_on_owner_loop():
+        first_reader = asyncio.create_task(cache.get_flat_field_batch("input_ids", [0], seq_len))
+        await asyncio.to_thread(start_second_reader.wait)
+        second_reader = asyncio.create_task(cache.get_flat_field_batch("input_ids", [0], seq_len))
+        return await asyncio.gather(first_reader, second_reader)
+
+    async def cancel_foreign_reader():
+        reader = asyncio.create_task(cache.get_flat_field_batch("input_ids", [0], seq_len))
+        await asyncio.to_thread(second_open_started.wait)
+        reader.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await reader
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        readers = [executor.submit(read_one_batch) for _ in range(2)]
-        opens_started.wait()
-        try:
-            with cache._shard_stores_lock:
-                assert len(cache._pending_shard_field_stores) == 2
-        finally:
-            release_opens.set()
-        batches = [reader.result() for reader in readers]
+        owner_reader = executor.submit(asyncio.run, read_on_owner_loop())
+        first_open_started.wait()
+        foreign_reader = executor.submit(asyncio.run, cancel_foreign_reader())
+        foreign_reader.result()
+        start_second_reader.set()
+        third_reader_entered.wait()
+        release_first_open.set()
+        batches = owner_reader.result()
 
     for batch in batches:
         np.testing.assert_array_equal(batch[0], np.zeros(seq_len, dtype=np.int32))

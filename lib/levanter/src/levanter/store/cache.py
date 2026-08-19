@@ -11,7 +11,7 @@ import operator
 import os
 import threading
 import time
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Hashable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, Generic, List, Optional, Protocol, Sequence, Tuple, TypeVar, Union, cast
 
@@ -46,6 +46,8 @@ from .tree_store import TreeStore, heuristic_is_leaf
 T = TypeVar("T")
 U = TypeVar("U")
 T_co = TypeVar("T_co", covariant=True)
+_OpenKey = TypeVar("_OpenKey", bound=Hashable)
+_OpenValue = TypeVar("_OpenValue")
 
 logger = pylogging.getLogger(__name__)
 
@@ -159,8 +161,10 @@ class TreeCache(AsyncDataset[T_co]):
         self._shard_stores: Dict[str, TreeStore[T_co]] = {}
         self._pending_shard_stores: Dict[Tuple[asyncio.AbstractEventLoop, str], "asyncio.Task[TreeStore[T_co]]"] = {}
         self._shard_row_offsets: Optional[np.ndarray] = None
-        self._shard_field_stores: Dict[Tuple[str, str], Any] = {}
-        self._pending_shard_field_stores: Dict[Tuple[asyncio.AbstractEventLoop, str, str], "asyncio.Task[Any]"] = {}
+        self._shard_field_stores: Dict[Tuple[str, str], JaggedArrayStore] = {}
+        self._pending_shard_field_stores: Dict[
+            Tuple[asyncio.AbstractEventLoop, Tuple[str, str]], "asyncio.Task[JaggedArrayStore]"
+        ] = {}
         self._shard_stores_lock = threading.Lock()
         self._shard_field_offsets: Dict[str, np.ndarray] = {}
         self._flat_field_offsets: Dict[str, np.ndarray] = {}
@@ -335,75 +339,35 @@ class TreeCache(AsyncDataset[T_co]):
             return self._shard_stores.setdefault(shard_name, opened)
 
     async def _shard_store_async(self, shard_name: str) -> TreeStore[T_co]:
-        loop = asyncio.get_running_loop()
-        pending_key = (loop, shard_name)
-        with self._shard_stores_lock:
-            store = self._shard_stores.get(shard_name)
-            if store is not None:
-                return store
-
-            pending = self._pending_shard_stores.get(pending_key)
-            if pending is None or pending.done():
-                pending = loop.create_task(self._open_shard_store(shard_name, pending_key))
-                pending.add_done_callback(_log_task_exception)
-                self._pending_shard_stores[pending_key] = pending
-
-        return await asyncio.shield(pending)
-
-    async def _open_shard_store(
-        self, shard_name: str, pending_key: Tuple[asyncio.AbstractEventLoop, str]
-    ) -> TreeStore[T_co]:
-        try:
-            opened = await TreeStore.open_async(
+        return await _await_shared_open(
+            self._shard_stores,
+            self._pending_shard_stores,
+            self._shard_stores_lock,
+            shard_name,
+            lambda: TreeStore.open_async(
                 self._exemplar, self._layout.shard(shard_name), mode="r", cache_metadata=True
-            )
-            with self._shard_stores_lock:
-                return self._shard_stores.setdefault(shard_name, opened)
-        finally:
-            task = asyncio.current_task()
-            with self._shard_stores_lock:
-                if self._pending_shard_stores.get(pending_key) is task:
-                    del self._pending_shard_stores[pending_key]
+            ),
+        )
 
-    async def _shard_field_store_async(self, shard_name: str, field: str):
+    async def _shard_field_store_async(self, shard_name: str, field: str) -> JaggedArrayStore:
         key = (shard_name, field)
-        loop = asyncio.get_running_loop()
-        pending_key = (loop, shard_name, field)
-        with self._shard_stores_lock:
-            store = self._shard_field_stores.get(key)
-            if store is not None:
-                return store
 
-            pending = self._pending_shard_field_stores.get(pending_key)
-            if pending is None or pending.done():
-                pending = loop.create_task(self._open_shard_field_store(shard_name, field, pending_key))
-                pending.add_done_callback(_log_task_exception)
-                self._pending_shard_field_stores[pending_key] = pending
-
-        return await asyncio.shield(pending)
-
-    async def _open_shard_field_store(
-        self,
-        shard_name: str,
-        field: str,
-        pending_key: Tuple[asyncio.AbstractEventLoop, str, str],
-    ):
-        key = (shard_name, field)
-        try:
+        async def open_field_store() -> JaggedArrayStore:
             tree_store = await TreeStore.open_async(
                 _field_exemplar(self._exemplar, field),
                 self._layout.shard(shard_name),
                 mode="r",
                 cache_metadata=True,
             )
-            opened = _tree_field(tree_store.tree, field)
-            with self._shard_stores_lock:
-                return self._shard_field_stores.setdefault(key, opened)
-        finally:
-            task = asyncio.current_task()
-            with self._shard_stores_lock:
-                if self._pending_shard_field_stores.get(pending_key) is task:
-                    del self._pending_shard_field_stores[pending_key]
+            return cast(JaggedArrayStore, _tree_field(tree_store.tree, field))
+
+        return await _await_shared_open(
+            self._shard_field_stores,
+            self._pending_shard_field_stores,
+            self._shard_stores_lock,
+            key,
+            open_field_store,
+        )
 
     async def _get_sharded_batch(self, indices: Sequence[int]) -> List[T_co]:
         if len(indices) == 0:
@@ -744,6 +708,41 @@ def _validate_sharded_ledger(ledger: CacheLedger) -> None:
             "Sharded cache ledger field count mismatch: "
             f"sum(finished shard field counts)={field_counts}, field_counts={ledger.field_counts}"
         )
+
+
+async def _await_shared_open(
+    resolved: Dict[_OpenKey, _OpenValue],
+    pending: Dict[Tuple[asyncio.AbstractEventLoop, _OpenKey], "asyncio.Task[_OpenValue]"],
+    lock: threading.Lock,
+    key: _OpenKey,
+    open_value: Callable[[], Awaitable[_OpenValue]],
+) -> _OpenValue:
+    loop = asyncio.get_running_loop()
+    pending_key = (loop, key)
+
+    async def open_and_publish() -> _OpenValue:
+        try:
+            opened = await open_value()
+            with lock:
+                return resolved.setdefault(key, opened)
+        finally:
+            task = asyncio.current_task()
+            with lock:
+                if pending.get(pending_key) is task:
+                    del pending[pending_key]
+
+    with lock:
+        value = resolved.get(key)
+        if value is not None:
+            return value
+
+        task = pending.get(pending_key)
+        if task is None or task.done():
+            task = loop.create_task(open_and_publish())
+            task.add_done_callback(_log_task_exception)
+            pending[pending_key] = task
+
+    return await asyncio.shield(task)
 
 
 def _log_task_exception(task: "asyncio.Task") -> None:
