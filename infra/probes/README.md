@@ -86,10 +86,10 @@ overridden per-command (`--project`, `--zone`, …) or via `MARIN_PROBES_*` env 
 
 ### One-time VM creation
 
-`create` provisions the service account, its Artifact Registry and Cloud
-Logging bindings, and the COS VM. Prefix-scoped GCS roll-up access is declared
-in `infra/pulumi/src/iac/gcp/iam_data.yaml` and applied from the `marin` Pulumi
-stack. The `create` command therefore requires the `hai-gcp-models` project.
+`create` provisions the service account and COS VM. Its Artifact Registry, Cloud Logging, and
+prefix-scoped GCS roll-up grants are declared in `infra/pulumi/src/iac/gcp/iam_data.yaml` and
+applied from the `marin` Pulumi stack. Apply those grants before creating the VM. The `create`
+command therefore requires the `hai-gcp-models` project.
 Marin Iris IAP access is declared by `provisioning.gcp.gclb` in
 `lib/iris/config/marin.yaml`:
 

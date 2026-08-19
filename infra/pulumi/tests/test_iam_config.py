@@ -1,11 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import yaml
-from iac.gcp.iam import GcpEncryptedMember, GcpRoleGrant
+from iac.gcp.iam import GcpCloudRunJobIam, GcpCloudRunServiceIam, GcpEncryptedMember, GcpRoleGrant
 from iac.gcp.iam_config import (
     IAM_DATA_PATH,
     GcpIamConfig,
@@ -36,6 +37,8 @@ def _config(*, principals: tuple[GcpPrincipal, ...] = ()) -> GcpIamConfig:
         buckets=(),
         artifact_repositories=(),
         service_accounts=(),
+        cloud_run_services=(),
+        cloud_run_jobs=(),
     )
 
 
@@ -104,6 +107,37 @@ def test_replace_principals_preserves_grant_references(tmp_path: Path) -> None:
 
     assert loaded.principals == rotated.principals
     assert loaded.project_grants[0].members[-1] == GcpEncryptedMember("new-ciphertext")
+
+
+def test_cloud_run_grants_round_trip_encrypted_members(tmp_path: Path) -> None:
+    encrypted_member = GcpEncryptedMember("ciphertext")
+    config = replace(
+        _config(principals=(GcpPrincipal(principal_id="human-001", ciphertext="ciphertext"),)),
+        cloud_run_services=(
+            GcpCloudRunServiceIam(
+                location="us-central1",
+                service="dashboard",
+                grants=(GcpRoleGrant(role="roles/run.invoker", members=("serviceAccount:iap@example.com",)),),
+                iap_grants=(GcpRoleGrant(role="roles/iap.httpsResourceAccessor", members=(encrypted_member,)),),
+            ),
+        ),
+        cloud_run_jobs=(
+            GcpCloudRunJobIam(
+                location="us-central1",
+                job="sync",
+                grants=(GcpRoleGrant(role="roles/run.invoker", members=("serviceAccount:sync@example.com",)),),
+            ),
+        ),
+    )
+    output_path = tmp_path / "iam_data.yaml"
+
+    rotated = replace_principals(
+        config,
+        (GcpPrincipal(principal_id="human-001", ciphertext="rotated-ciphertext"),),
+    )
+    write_iam_config(rotated, output_path)
+
+    assert load_iam_config(output_path) == rotated
 
 
 def test_load_iam_config_rejects_dangling_principal_reference(tmp_path: Path) -> None:

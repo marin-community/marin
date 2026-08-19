@@ -15,6 +15,8 @@ from yaml.resolver import BaseResolver
 from iac.gcp.iam import (
     GcpArtifactRepositoryIam,
     GcpBucketIam,
+    GcpCloudRunJobIam,
+    GcpCloudRunServiceIam,
     GcpCustomRole,
     GcpEncryptedMember,
     GcpIamCondition,
@@ -29,7 +31,7 @@ PRINCIPAL_ID_PREFIX = "human-"
 PRINCIPAL_ID_PATTERN = rf"{PRINCIPAL_ID_PREFIX}\d{{3,}}"
 
 _PRINCIPAL_ID_RE = re.compile(PRINCIPAL_ID_PATTERN)
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _PLAIN_MEMBER_PREFIXES = (
     "domain:",
     "group:",
@@ -45,8 +47,10 @@ _YAML_HEADER = """\
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Canonical non-authoritative GCP IAM declaration for hai-gcp-models. Human
-# user principals are KMS ciphertexts declared once under `principals`; grants
+# Canonical GCP IAM declaration for hai-gcp-models. The `marin` stack is the
+# sole owner of these grants. They remain additive until the final drift review
+# permits a separate cutover to role-authoritative bindings. Human user
+# principals are KMS ciphertexts declared once under `principals`; grants
 # reference their opaque IDs so one principal cannot drift across roles.
 #
 # The owned service account and custom roles came from the retired
@@ -103,6 +107,8 @@ class GcpIamConfig:
     buckets: tuple[GcpBucketIam, ...]
     artifact_repositories: tuple[GcpArtifactRepositoryIam, ...]
     service_accounts: tuple[GcpServiceAccountIam, ...]
+    cloud_run_services: tuple[GcpCloudRunServiceIam, ...]
+    cloud_run_jobs: tuple[GcpCloudRunJobIam, ...]
 
 
 @dataclass(frozen=True)
@@ -333,6 +339,43 @@ def _parse_service_accounts(
     return tuple(accounts)
 
 
+def _parse_cloud_run_services(
+    value: object, principals: dict[str, GcpEncryptedMember]
+) -> tuple[GcpCloudRunServiceIam, ...]:
+    services = []
+    for index, raw_service in enumerate(_sequence(value, "cloud_run_services")):
+        path = f"cloud_run_services[{index}]"
+        fields = _fields(
+            raw_service,
+            path,
+            required=frozenset({"location", "service", "grants", "iap_grants"}),
+        )
+        services.append(
+            GcpCloudRunServiceIam(
+                location=_string(fields["location"], f"{path}.location"),
+                service=_string(fields["service"], f"{path}.service"),
+                grants=_parse_grants(fields["grants"], f"{path}.grants", principals),
+                iap_grants=_parse_grants(fields["iap_grants"], f"{path}.iap_grants", principals),
+            )
+        )
+    return tuple(services)
+
+
+def _parse_cloud_run_jobs(value: object, principals: dict[str, GcpEncryptedMember]) -> tuple[GcpCloudRunJobIam, ...]:
+    jobs = []
+    for index, raw_job in enumerate(_sequence(value, "cloud_run_jobs")):
+        path = f"cloud_run_jobs[{index}]"
+        fields = _fields(raw_job, path, required=frozenset({"location", "job", "grants"}))
+        jobs.append(
+            GcpCloudRunJobIam(
+                location=_string(fields["location"], f"{path}.location"),
+                job=_string(fields["job"], f"{path}.job"),
+                grants=_parse_grants(fields["grants"], f"{path}.grants", principals),
+            )
+        )
+    return tuple(jobs)
+
+
 def load_iam_config(path: Path = IAM_DATA_PATH) -> GcpIamConfig:
     """Load and validate the complete IAM declaration."""
     raw = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)
@@ -352,6 +395,8 @@ def load_iam_config(path: Path = IAM_DATA_PATH) -> GcpIamConfig:
                 "buckets",
                 "artifact_repositories",
                 "service_accounts",
+                "cloud_run_services",
+                "cloud_run_jobs",
             }
         ),
     )
@@ -378,6 +423,8 @@ def load_iam_config(path: Path = IAM_DATA_PATH) -> GcpIamConfig:
         buckets=_parse_buckets(fields["buckets"], principals),
         artifact_repositories=_parse_artifact_repositories(fields["artifact_repositories"], principals),
         service_accounts=_parse_service_accounts(fields["service_accounts"], principals),
+        cloud_run_services=_parse_cloud_run_services(fields["cloud_run_services"], principals),
+        cloud_run_jobs=_parse_cloud_run_jobs(fields["cloud_run_jobs"], principals),
     )
 
 
@@ -469,6 +516,23 @@ def iam_config_data(config: GcpIamConfig) -> dict[str, object]:
             }
             for account in config.service_accounts
         ],
+        "cloud_run_services": [
+            {
+                "location": service.location,
+                "service": service.service,
+                "grants": _grants_data(service.grants, principal_ids),
+                "iap_grants": _grants_data(service.iap_grants, principal_ids),
+            }
+            for service in config.cloud_run_services
+        ],
+        "cloud_run_jobs": [
+            {
+                "location": job.location,
+                "job": job.job,
+                "grants": _grants_data(job.grants, principal_ids),
+            }
+            for job in config.cloud_run_jobs
+        ],
     }
 
 
@@ -537,6 +601,17 @@ def replace_principals(config: GcpIamConfig, principals: tuple[GcpPrincipal, ...
                 grants=_replace_principal_grants(account.grants, replacements),
             )
             for account in config.service_accounts
+        ),
+        cloud_run_services=tuple(
+            replace(
+                service,
+                grants=_replace_principal_grants(service.grants, replacements),
+                iap_grants=_replace_principal_grants(service.iap_grants, replacements),
+            )
+            for service in config.cloud_run_services
+        ),
+        cloud_run_jobs=tuple(
+            replace(job, grants=_replace_principal_grants(job.grants, replacements)) for job in config.cloud_run_jobs
         ),
     )
 

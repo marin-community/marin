@@ -9,6 +9,8 @@ from iac.gcp import iam as iam_module
 from iac.gcp.iam import (
     GcpArtifactRepositoryIam,
     GcpBucketIam,
+    GcpCloudRunJobIam,
+    GcpCloudRunServiceIam,
     GcpCustomRole,
     GcpIam,
     GcpIamArgs,
@@ -30,6 +32,9 @@ PROJECT_IAM_MEMBER_TYPE = "gcp:projects/iAMMember:IAMMember"
 SECRET_IAM_MEMBER_TYPE = "gcp:secretmanager/secretIamMember:SecretIamMember"
 SERVICE_ACCOUNT_IAM_MEMBER_TYPE = "gcp:serviceaccount/iAMMember:IAMMember"
 BUCKET_IAM_MEMBER_TYPE = "gcp:storage/bucketIAMMember:BucketIAMMember"
+CLOUD_RUN_JOB_IAM_MEMBER_TYPE = "gcp:cloudrunv2/jobIamMember:JobIamMember"
+CLOUD_RUN_SERVICE_IAM_MEMBER_TYPE = "gcp:cloudrunv2/serviceIamMember:ServiceIamMember"
+IAP_CLOUD_RUN_SERVICE_IAM_MEMBER_TYPE = "gcp:iap/webCloudRunServiceIamMember:WebCloudRunServiceIamMember"
 IAM_MEMBER_TYPES = frozenset(
     {
         ARTIFACT_REPOSITORY_IAM_MEMBER_TYPE,
@@ -38,6 +43,9 @@ IAM_MEMBER_TYPES = frozenset(
         SECRET_IAM_MEMBER_TYPE,
         SERVICE_ACCOUNT_IAM_MEMBER_TYPE,
         BUCKET_IAM_MEMBER_TYPE,
+        CLOUD_RUN_JOB_IAM_MEMBER_TYPE,
+        CLOUD_RUN_SERVICE_IAM_MEMBER_TYPE,
+        IAP_CLOUD_RUN_SERVICE_IAM_MEMBER_TYPE,
     }
 )
 
@@ -69,6 +77,15 @@ def _args() -> GcpIamArgs:
             GcpArtifactRepositoryIam(location="us-central1", repository="test-repository", grants=(_grant(),)),
         ),
         service_accounts=(GcpServiceAccountIam(email="target@example.iam.gserviceaccount.com", grants=(_grant(),)),),
+        cloud_run_services=(
+            GcpCloudRunServiceIam(
+                location="us-central1",
+                service="test-service",
+                grants=(_grant(),),
+                iap_grants=(_grant(),),
+            ),
+        ),
+        cloud_run_jobs=(GcpCloudRunJobIam(location="us-central1", job="test-job", grants=(_grant(),)),),
     )
 
 
@@ -76,11 +93,11 @@ def _resource_recorder(
     resource_type: str,
     options_by_type: dict[str, pulumi.ResourceOptions],
 ) -> Callable[..., pulumi.Resource]:
-    def record(name: str, **kwargs) -> pulumi.Resource:
+    def record(logical_name: str, **kwargs) -> pulumi.Resource:
         options_by_type[resource_type] = kwargs["opts"]
         resource = object.__new__(pulumi.Resource)
         resource._type = resource_type
-        resource._name = name
+        resource._name = logical_name
         return resource
 
     return record
@@ -101,6 +118,9 @@ def test_gcp_iam_catalogs_provider_ids_without_in_program_imports(monkeypatch):
         (iam_module.gcp.storage, "BucketIAMMember", BUCKET_IAM_MEMBER_TYPE),
         (iam_module.gcp.projects, "IAMCustomRole", CUSTOM_ROLE_TYPE),
         (iam_module.gcp.serviceaccount, "Account", OWNED_SERVICE_ACCOUNT_TYPE),
+        (iam_module.gcp.cloudrunv2, "ServiceIamMember", CLOUD_RUN_SERVICE_IAM_MEMBER_TYPE),
+        (iam_module.gcp.cloudrunv2, "JobIamMember", CLOUD_RUN_JOB_IAM_MEMBER_TYPE),
+        (iam_module.gcp.iap, "WebCloudRunServiceIamMember", IAP_CLOUD_RUN_SERVICE_IAM_MEMBER_TYPE),
     )
     for namespace, name, resource_type in constructors:
         monkeypatch.setattr(namespace, name, _resource_recorder(resource_type, options_by_type))
@@ -135,6 +155,18 @@ def test_gcp_iam_catalogs_provider_ids_without_in_program_imports(monkeypatch):
         ),
         SERVICE_ACCOUNT_IAM_MEMBER_TYPE: (
             f"projects/{TEST_PROJECT}/serviceAccounts/target@example.iam.gserviceaccount.com "
+            "roles/viewer serviceAccount:reader@example.com"
+        ),
+        CLOUD_RUN_SERVICE_IAM_MEMBER_TYPE: (
+            f"projects/{TEST_PROJECT}/locations/us-central1/services/test-service "
+            "roles/viewer serviceAccount:reader@example.com"
+        ),
+        IAP_CLOUD_RUN_SERVICE_IAM_MEMBER_TYPE: (
+            f"projects/{TEST_PROJECT}/iap_web/cloud_run-us-central1/services/test-service "
+            "roles/viewer serviceAccount:reader@example.com"
+        ),
+        CLOUD_RUN_JOB_IAM_MEMBER_TYPE: (
+            f"projects/{TEST_PROJECT}/locations/us-central1/jobs/test-job "
             "roles/viewer serviceAccount:reader@example.com"
         ),
         CUSTOM_ROLE_TYPE: f"projects/{TEST_PROJECT}/roles/{CUSTOM_ROLE_ID}",

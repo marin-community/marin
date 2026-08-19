@@ -18,7 +18,7 @@ Stacks: one per cluster, each a `Pulumi.<cluster>.yaml` pointer to the cluster n
 `cw-us-west-04a`, `cw-us-east-02a`, `cw-rno2a`, `cw-us-east-08a` (GB200), all adopted into
 `gs://marin-iac-state/`. GCP — `marin`, which declares the reserved federation-egress static
 IPs (`GcpStaticAddresses`), shared GCE load-balancer ingress (`GcpGclbIap`), and every
-non-authoritative GCP IAM grant on `hai-gcp-models` (`GcpIam`, driven by
+repository-managed GCP IAM grant on `hai-gcp-models` (`GcpIam`, driven by
 `src/iac/gcp/iam_data.yaml`; see "User grants" below). The manually operated
 [`infra/buckets`](../buckets/README.md) project owns the shared GCS, CoreWeave AI Object
 Storage, and Cloudflare R2 buckets.
@@ -27,14 +27,14 @@ Beyond cluster prerequisites, the `iac` package also carries the reusable *servi
 other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run` (IAP-gated Cloud Run,
 used by `infra/echo`, `infra/evaldash`, and `infra/grafana`) and `iac.iris` (always-on Iris
 service jobs via a `local.Command` around the `iac.iris.deploy` CLI, used by `infra/ducky` and
-`infra/xprof`). Every `CloudRunService` grants `roles/iap.httpsResourceAccessor` to the
-OpenAthena Workspace domain and the Loom VM service account. It also registers the shared Marin
-desktop OAuth client as a programmatic audience. The `iap_members` and
-`iap_programmatic_clients` arguments are only for service-specific exceptions.
+`infra/xprof`). The service components create runtime resources; the `marin` stack owns their
+service-account, Secret Manager, Cloud Run, and IAP grants. The shared Marin desktop OAuth
+client remains a component-owned IAP setting.
 
 ### Cloud Run IAP access
 
-For an access report on a component-managed service, compare the live IAP policy and settings:
+For an access report, compare the live IAP policy and settings with the service entry in
+`src/iac/gcp/iam_data.yaml`:
 
 ```bash
 gcloud iap web get-iam-policy \
@@ -63,9 +63,9 @@ redirect trace and follow [Google's IAP troubleshooting guide](https://cloud.goo
 
 ### User grants
 
-A user grant is either a GCP IAM binding in `src/iac/gcp/iam_data.yaml` (applied by the `marin`
-stack) or an IAP `viewers` entry in a service's `infra/<service>/Pulumi.marin-<service>.yaml`
-(plaintext, applied by that service's own stack). The IAM YAML declares each human principal's
+A GCP user grant belongs in `src/iac/gcp/iam_data.yaml` and is applied by the `marin` stack.
+This includes IAP access to application stacks; service stack config must not contain IAM
+members. The IAM YAML declares each human principal's
 KMS ciphertext once under an opaque `human-NNN` ID; grants reference that ID so one person's
 ciphertext cannot drift across roles. Two agent skills drive the flow so no personal email
 lands in this public repo unencrypted:
@@ -75,12 +75,19 @@ lands in this public repo unencrypted:
 - **`review-grant`** — decrypt a grant PR's changed principals into the real emails and grants,
   confirm with a human, then approve, merge, and run `pulumi up`.
 
-For project roles, `iam_principal.py grant <email> --project-role <role>` finds and reuses an
-existing encrypted principal or creates one, then updates every requested role in one
-deterministic YAML edit. `iam_principal.py decrypt --diff` resolves changed opaque IDs for
+`iam_principal.py grant` finds and reuses an existing encrypted principal or creates one, then
+updates the requested target in one deterministic YAML edit. `iam_principal.py decrypt --diff`
+resolves changed opaque IDs for
 review. `iam_audit.py` bulk-rotates the principals declared in `iam_data.yaml`. Granting,
 decrypting, or applying needs `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the marin-iac
 key ("Backend").
+
+The `marin` stack is the sole repository owner of grants on `hai-gcp-models`. This ownership
+boundary is the prerequisite for authoritative reconciliation: application stacks and deploy
+scripts must not create or mutate IAM policy. The resources remain additive `*IAMMember`
+resources until the separately reviewed authoritative-binding cutover. Before applying a leaf
+stack that has relinquished a grant, adopt or create the central resource and remove the old
+resource from the leaf stack's state without deleting the live binding.
 
 GitHub organization and repository resources live in the independent
 [`github`](github/README.md) Pulumi project. Its stack YAML declares existing Actions secrets
@@ -188,7 +195,7 @@ Once the preview is clean, `pulumi up`.
 Marin follows Pulumi's Program-first bulk-import workflow. The normal program never attaches
 `import_` options, so adding one live resource cannot put unrelated resources into import mode.
 Each component instead records the provider ID beside the resource declaration. This includes
-all six GCP `*IAMMember` types, custom roles, service accounts, and the existing CoreWeave
+all nine GCP `*IAMMember` types, custom roles, service accounts, and the existing CoreWeave
 resource types.
 
 Declare the resource in code first and review its ordinary `create` preview in the PR. After the
@@ -251,14 +258,8 @@ already provisioned:
   `gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key`.
   Access is asymmetric, not a shared passphrase: preview-only CI holds
   `roles/cloudkms.cryptoKeyDecrypter`; operators who run `pulumi up` need
-  `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the key (see
-  [`infra/permissions`](../permissions/README.md)):
-  ```bash
-  gcloud kms keys add-iam-policy-binding marin-iac-key \
-    --keyring=marin-iac-keyring --location=us-central1 --project=hai-gcp-models \
-    --member="user:<operator email>" \
-    --role="roles/cloudkms.cryptoKeyEncrypterDecrypter"
-  ```
+  `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the key. Request this through the central
+  `iam_data.yaml` grant workflow; do not mutate the key policy with `gcloud`.
 
 ## CI preview
 

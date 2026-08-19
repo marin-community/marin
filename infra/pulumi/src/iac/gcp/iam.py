@@ -1,13 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Non-authoritative GCP IAM grants for the hai-gcp-models project.
+"""GCP IAM grants owned by the ``marin`` stack for the hai-gcp-models project.
 
 Covers every human, service account, and Google-managed service-agent binding on the project,
-the shared KMS key, every secret, every bucket, every Artifact Registry repo, and who can
-impersonate each service account (the flip side of what an account can access). Every resource
-here is a non-authoritative `*IAMMember` grant, never `*IAMBinding`/`*IAMPolicy`: a partial or
-mistaken authoritative binding would revoke access for members not yet captured here.
+the shared KMS key, every secret, every bucket, every Artifact Registry repo, Cloud Run service
+and job policies, and who can impersonate each service account. This is the sole Pulumi owner
+for GCP IAM grants. The current resources remain additive ``*IAMMember`` grants until the
+inventory has passed its final drift review and is converted to role-authoritative bindings.
 
 Replaces infra/permissions's `GcpDeployPermissions`, which covered only additive deploy-account
 grants; those accounts' grants are folded into `project_grants`/`kms_grants`/etc. here rather
@@ -94,6 +94,21 @@ class GcpServiceAccountIam:
 
 
 @dataclass(frozen=True)
+class GcpCloudRunServiceIam:
+    location: str
+    service: str
+    grants: tuple[GcpRoleGrant, ...]
+    iap_grants: tuple[GcpRoleGrant, ...]
+
+
+@dataclass(frozen=True)
+class GcpCloudRunJobIam:
+    location: str
+    job: str
+    grants: tuple[GcpRoleGrant, ...]
+
+
+@dataclass(frozen=True)
 class GcpOwnedServiceAccount:
     """A service account this stack creates and owns end-to-end, as opposed to
     `GcpServiceAccountIam`, which only grants IAM on an account created out-of-band. Protected
@@ -132,6 +147,8 @@ class GcpIamArgs:
     buckets: tuple[GcpBucketIam, ...]
     artifact_repositories: tuple[GcpArtifactRepositoryIam, ...]
     service_accounts: tuple[GcpServiceAccountIam, ...]
+    cloud_run_services: tuple[GcpCloudRunServiceIam, ...]
+    cloud_run_jobs: tuple[GcpCloudRunJobIam, ...]
 
 
 @dataclass(frozen=True)
@@ -220,6 +237,15 @@ def _resolve_encrypted_members(args: GcpIamArgs, decrypt: _KmsMemberDecryptor) -
             replace(r, grants=_resolve_grants(r.grants, decrypt)) for r in args.artifact_repositories
         ),
         service_accounts=tuple(replace(a, grants=_resolve_grants(a.grants, decrypt)) for a in args.service_accounts),
+        cloud_run_services=tuple(
+            replace(
+                service,
+                grants=_resolve_grants(service.grants, decrypt),
+                iap_grants=_resolve_grants(service.iap_grants, decrypt),
+            )
+            for service in args.cloud_run_services
+        ),
+        cloud_run_jobs=tuple(replace(job, grants=_resolve_grants(job.grants, decrypt)) for job in args.cloud_run_jobs),
     )
 
 
@@ -234,7 +260,7 @@ def _grant_resource(
     `_resolve_encrypted_members`, so this is a safety net, not the resolution step, and narrows
     the type for callers that would otherwise still see `str | GcpEncryptedMember` from the
     grant's declared type. Each `_grant_*_iam` function still owns its own resource constructor
-    call directly, since the six `gcp.*.*Member` types take different kwargs and have no common
+    call directly, since the nine `gcp.*.*Member` types take different kwargs and have no common
     base."""
     assert isinstance(member, str), f"unresolved encrypted member reached _grant_resource: {member!r}"
     name = _grant_name(name_prefix, grant.role, member, grant.condition)
@@ -388,6 +414,68 @@ def _grant_service_account_iam(context: _GcpIamContext) -> None:
                 context.register(resource, declaration.provider_id)
 
 
+def _grant_cloud_run_service_iam(context: _GcpIamContext) -> None:
+    for service in context.args.cloud_run_services:
+        service_id = f"projects/{context.args.project}/locations/{service.location}/services/{service.service}"
+        prefix = f"run-service-{resource_slug(service.location)}-{resource_slug(service.service)}"
+        for grant in service.grants:
+            for member in grant.members:
+                declaration = _grant_resource(prefix, service_id, grant, member)
+                resource = gcp.cloudrunv2.ServiceIamMember(
+                    declaration.logical_name,
+                    project=context.args.project,
+                    location=service.location,
+                    name=service.service,
+                    role=grant.role,
+                    member=declaration.member,
+                    condition=_condition_args(grant.condition, gcp.cloudrunv2.ServiceIamMemberConditionArgs),
+                    opts=context.options(),
+                )
+                context.register(resource, declaration.provider_id)
+
+        iap_service_id = (
+            f"projects/{context.args.project}/iap_web/cloud_run-{service.location}/services/{service.service}"
+        )
+        iap_prefix = f"iap-run-service-{resource_slug(service.location)}-{resource_slug(service.service)}"
+        for grant in service.iap_grants:
+            for member in grant.members:
+                declaration = _grant_resource(iap_prefix, iap_service_id, grant, member)
+                resource = gcp.iap.WebCloudRunServiceIamMember(
+                    declaration.logical_name,
+                    project=context.args.project,
+                    location=service.location,
+                    cloud_run_service_name=service.service,
+                    role=grant.role,
+                    member=declaration.member,
+                    condition=_condition_args(
+                        grant.condition,
+                        gcp.iap.WebCloudRunServiceIamMemberConditionArgs,
+                    ),
+                    opts=context.options(),
+                )
+                context.register(resource, declaration.provider_id)
+
+
+def _grant_cloud_run_job_iam(context: _GcpIamContext) -> None:
+    for job in context.args.cloud_run_jobs:
+        job_id = f"projects/{context.args.project}/locations/{job.location}/jobs/{job.job}"
+        prefix = f"run-job-{resource_slug(job.location)}-{resource_slug(job.job)}"
+        for grant in job.grants:
+            for member in grant.members:
+                declaration = _grant_resource(prefix, job_id, grant, member)
+                resource = gcp.cloudrunv2.JobIamMember(
+                    declaration.logical_name,
+                    project=context.args.project,
+                    location=job.location,
+                    name=job.job,
+                    role=grant.role,
+                    member=declaration.member,
+                    condition=_condition_args(grant.condition, gcp.cloudrunv2.JobIamMemberConditionArgs),
+                    opts=context.options(),
+                )
+                context.register(resource, declaration.provider_id)
+
+
 def _condition_args(
     condition: GcpIamCondition | None, args_cls: _ConditionArgsFactory[_ConditionArgsT]
 ) -> _ConditionArgsT | None:
@@ -397,7 +485,7 @@ def _condition_args(
 
 
 class GcpIam(pulumi.ComponentResource):
-    """Every non-authoritative IAM grant on the hai-gcp-models project.
+    """Every GCP IAM grant owned by the ``marin`` stack.
 
     Deliberately unprotected (unlike `GcpDeployPermissions`'s core deploy-auth resources):
     revoking an overbroad or stale grant found here is meant to be a plain code deletion plus
@@ -434,5 +522,7 @@ class GcpIam(pulumi.ComponentResource):
         _grant_bucket_iam(grant_context)
         _grant_artifact_repository_iam(grant_context)
         _grant_service_account_iam(grant_context)
+        _grant_cloud_run_service_iam(grant_context)
+        _grant_cloud_run_job_iam(grant_context)
 
         self.register_outputs({})

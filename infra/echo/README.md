@@ -273,8 +273,10 @@ printed by `wiki add` or `wiki edit` from the associated PR or issue.
 ## Infrastructure
 
 The `marin-echo` Pulumi stack creates the database, IAM database users, Cloud Run
-service, and scheduled sync job. The job mirrors activity every ten minutes and gates
-its GitHub repository check to once per hour. Database migrations in
+service, and scheduled sync job. GCP IAM grants for those resources live in
+`infra/pulumi/src/iac/gcp/iam_data.yaml` and are applied by the `marin` infrastructure stack;
+the Echo stack still owns Cloud SQL users and PostgreSQL grants. The job mirrors activity every
+ten minutes and gates its GitHub repository check to once per hour. Database migrations in
 `infra/echo/migrations/` create tables and apply PostgreSQL grants.
 `infra/echo/migrate.py` records applied migrations in `schema_migrations`.
 

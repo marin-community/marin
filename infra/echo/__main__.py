@@ -12,7 +12,7 @@ and appends to the logbook, and the sync job's service account writes
 `chunks`/`sync_state`. The API owns wiki writes and serves the compiled Vue dashboard.
 Every principal authenticates through the Cloud SQL connector with a short-lived OAuth
 token, so no database password exists. Table grants are applied by migrate.py (see
-README.md); this program owns the users and their login IAM roles.
+README.md); the ``marin`` infrastructure stack owns their GCP login roles.
 """
 
 import hashlib
@@ -57,14 +57,6 @@ LOOM_VM_DB_USER = LOOM_VM_SA.removesuffix(".gserviceaccount.com")
 # marinmirror bearer token: a GitHub PAT (read:org) of an Open-Athena member.
 MARINMIRROR_TOKEN_SECRET = "marinmirror-token"
 
-# Login roles for Cloud SQL IAM auth: instanceUser carries the cloudsql.instances.login
-# permission, client lets the connector reach the instance.
-LOGIN_ROLES = ("roles/cloudsql.instanceUser", "roles/cloudsql.client")
-
-
-def role_slug(role: str) -> str:
-    return role.removeprefix("roles/").replace(".", "-")
-
 
 def main() -> None:
     config = pulumi.Config("marin-iac")
@@ -101,24 +93,6 @@ def main() -> None:
             pulumi.ResourceOptions(import_=f"{PROJECT}/{INSTANCE}//{OPENATHENA_GROUP}" if adopt else None),
         ),
     )
-    login_grants: list[pulumi.Resource] = []
-    for member, roles in (
-        (f"group:{OPENATHENA_GROUP}", LOGIN_ROLES),
-        (f"serviceAccount:{SYNC_SA}", ("roles/cloudsql.instanceUser",)),
-        (f"serviceAccount:{API_SA}", ("roles/cloudsql.instanceUser",)),
-        (f"serviceAccount:{LOOM_VM_SA}", LOGIN_ROLES),
-    ):
-        for role in roles:
-            login_grants.append(
-                gcp.projects.IAMMember(
-                    f"login-{role_slug(member.split(':', 1)[1])}-{role_slug(role)}",
-                    project=PROJECT,
-                    role=role,
-                    member=member,
-                    opts=child,
-                )
-            )
-
     mirror_token = gcp.secretmanager.Secret(
         "marinmirror-token",
         secret_id=MARINMIRROR_TOKEN_SECRET,
@@ -210,10 +184,7 @@ def main() -> None:
             instance=INSTANCE,
             project=PROJECT,
             type="CLOUD_IAM_SERVICE_ACCOUNT",
-            opts=pulumi.ResourceOptions.merge(
-                child,
-                pulumi.ResourceOptions(depends_on=login_grants),
-            ),
+            opts=child,
         )
     )
 

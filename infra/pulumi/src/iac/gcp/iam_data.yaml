@@ -1,8 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Canonical non-authoritative GCP IAM declaration for hai-gcp-models. Human
-# user principals are KMS ciphertexts declared once under `principals`; grants
+# Canonical GCP IAM declaration for hai-gcp-models. The `marin` stack is the
+# sole owner of these grants. They remain additive until the final drift review
+# permits a separate cutover to role-authoritative bindings. Human user
+# principals are KMS ciphertexts declared once under `principals`; grants
 # reference their opaque IDs so one principal cannot drift across roles.
 #
 # The owned service account and custom roles came from the retired
@@ -11,7 +13,7 @@
 #
 # GCP does not support resource-based IAM Conditions for iam.googleapis.com
 # permissions. Custom-role-management grants therefore remain project-wide.
-schema_version: 1
+schema_version: 2
 kms:
   location: us-central1
   key_ring: marin-iac-keyring
@@ -87,6 +89,7 @@ principals:
   human-068: CiQAKk3j6fESA88C+xRWoe8LAv9OCNAepDhmfDlfIqc1J4QFCWcSPACdtF6iPH8Op2kYyy4oecwgl8Pj3b6VJwK3y4vS04A4AIr1gLAUjzcE7h8UZy9TdmV7Q2QfGXIWkzs28Q==
   human-069: CiQAKk3j6fZzTtHYIlJ9bvnupvzX042gQyAyC1VrsgIdfU9YMaASPQCdtF6iaHzI0Go083JD8qDnOWtdQ2IpJJa/jB1/BzJbQNIZxIdUpIlCcPmTbiY60SMC2v1rNnO9PCTZNUs=
   human-070: CiQAKk3j6fgMf61FVEtp0V9YlyIoV1cTlbQfsX3SUjkVvhqAlp8SOQCdtF6iWgYGtbPiXHphalp6BT4zzVcGCml7SGl/0WrrOv4xvqyA/cWaE4XCV9ShI1mROr681jsQEg==
+  human-071: CiQAKk3j6cD5Sn3yMtL/TWv5wzcr/lNOmiC5fJKYNkU6t3ovHcUSTgCdtF6i2hQWfJcp+NOEds/fZ7CgpqViU7mgNXSd9TgLlzLJTO3eQO+gddA9WkKSbpFY++pbI0MfTUcoA4H/0Z0SL1IyltZRilV6h0mcuQ==
 custom_roles:
 - role_id: marinGcpResourcePreviewer
   title: Marin GCP Resource Previewer
@@ -1426,6 +1429,7 @@ kms_grants:
 - role: roles/cloudkms.cryptoKeyEncrypterDecrypter
   members:
   - serviceAccount:iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
+  - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com
   - principal: human-032
@@ -2070,3 +2074,47 @@ service_accounts:
     members:
     - principal://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/subject/repo:marin-community/marin:pull_request
     - principal://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/subject/repo:marin-community/marin:ref:refs/heads/main
+cloud_run_services:
+- location: us-central1
+  service: echo-api
+  grants:
+  - role: roles/run.invoker
+    members:
+    - serviceAccount:service-748532799086@gcp-sa-iap.iam.gserviceaccount.com
+  iap_grants:
+  - role: roles/iap.httpsResourceAccessor
+    members:
+    - domain:openathena.ai
+    - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
+- location: us-central1
+  service: marin-evaldash
+  grants:
+  - role: roles/run.invoker
+    members:
+    - serviceAccount:service-748532799086@gcp-sa-iap.iam.gserviceaccount.com
+  iap_grants:
+  - role: roles/iap.httpsResourceAccessor
+    members:
+    - domain:openathena.ai
+    - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
+    - principal: human-012
+- location: us-central1
+  service: marin-grafana
+  grants:
+  - role: roles/run.invoker
+    members:
+    - serviceAccount:service-748532799086@gcp-sa-iap.iam.gserviceaccount.com
+  iap_grants:
+  - role: roles/iap.httpsResourceAccessor
+    members:
+    - domain:openathena.ai
+    - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
+    - principal: human-012
+    - principal: human-071
+cloud_run_jobs:
+- location: us-central1
+  job: echo-sync
+  grants:
+  - role: roles/run.invoker
+    members:
+    - serviceAccount:echo-sync@hai-gcp-models.iam.gserviceaccount.com
