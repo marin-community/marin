@@ -124,18 +124,18 @@ def main() -> None:
             check_vma=False,
         )
 
-        def loss(x_, w13_, w2_, shard_fn=shard_fn):
-            y, _ = shard_fn(x_, eb, wb, w13_, w2_)
-            return jnp.sum(y * cb)
+        def loss(x_, e_, w_, c_, w13_, w2_, shard_fn=shard_fn):
+            y, _ = shard_fn(x_, e_, w_, w13_, w2_)
+            return jnp.sum(y * c_)
 
         with jax.set_mesh(mesh):
-            step = jax.jit(jax.grad(loss, argnums=(0, 1, 2)))
+            step = jax.jit(jax.grad(loss, argnums=(0, 4, 5)))
             try:
-                jax.block_until_ready(step(xb, w13b, w2b))
+                jax.block_until_ready(step(xb, eb, wb, cb, w13b, w2b))
                 times = []
                 for _ in range(ITERS):
                     t0 = time.perf_counter()
-                    jax.block_until_ready(step(xb, w13b, w2b))
+                    jax.block_until_ready(step(xb, eb, wb, cb, w13b, w2b))
                     times.append(time.perf_counter() - t0)
             except Exception as exc:  # noqa: BLE001 - sweep must survive invalid configs
                 if proc == 0:
