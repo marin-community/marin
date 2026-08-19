@@ -114,6 +114,7 @@ def build_hero_run(
     version: str | None = None,
     moe_implementation: str | None = None,
     mok_expert_placement: str | None = None,
+    mok_minibatch_size: int | None = None,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     runtime_pip_packages: tuple[str, ...] = (),
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -164,6 +165,7 @@ def build_hero_run(
             ("intermediate_dim", intermediate_dim),
             ("capacity_factor", capacity_factor),
             ("mok_expert_placement", mok_expert_placement),
+            ("mok_minibatch_size", mok_minibatch_size),
         )
         if value is not None
     }
@@ -334,6 +336,7 @@ def build_mok_hero_run(
     latent_dim: int | None = None,
     eval_every: int = 0,
     mok_expert_placement: str = "contiguous",
+    mok_minibatch_size: int | None = None,
     profile_steps: int = 0,
     profile_start_step: int = 5,
     version: str | None = None,
@@ -354,6 +357,7 @@ def build_mok_hero_run(
         version=version,
         moe_implementation="mok",
         mok_expert_placement=mok_expert_placement,
+        mok_minibatch_size=mok_minibatch_size,
         processes_per_task=HERO_MOK_PROCESSES_PER_TASK,
         runtime_pip_packages=(mok_package,),
         profile_steps=profile_steps,

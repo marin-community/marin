@@ -94,6 +94,12 @@ from experiments.grug.moe_hero_ep.launch import (
     show_default=True,
     help="Relabel the r9 expert bank at initialization so hot/cold pairs share an EP rank.",
 )
+@click.option(
+    "--mok-minibatch-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Override MoK's minibatch size in tokens; must be divisible by 256 and divide the macrobatch.",
+)
 @build_options
 def main(
     run_id: str,
@@ -109,6 +115,7 @@ def main(
     profile_start_step: int,
     mok_package: str,
     mok_expert_placement: str,
+    mok_minibatch_size: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_mok_hero_run(
         run_id=run_id,
@@ -122,6 +129,7 @@ def main(
         latent_dim=latent_dim,
         mok_package=mok_package,
         mok_expert_placement=mok_expert_placement,
+        mok_minibatch_size=mok_minibatch_size,
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
     )
