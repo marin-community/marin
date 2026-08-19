@@ -72,3 +72,5 @@ TERMINAL_STATE_FALLBACK_REASONS: dict[int, str] = {
     job_pb2.JOB_STATE_UNSCHEDULABLE: "Job could not be scheduled.",
     job_pb2.JOB_STATE_WORKER_FAILED: "Preemption budget exhausted",
 }
+
+PARENT_JOB_TERMINATED_REASON = "Parent job terminated"
