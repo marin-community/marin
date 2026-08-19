@@ -1964,3 +1964,16 @@ Experiment ID prefix: `MEP`.
   --profile-start-step 15) for the exposed-time breakdown; queued
   mep-hero384c105 (cf 1.05) — capacity rows -4.5% vs cf 1.1, spending
   a little of the 5-13x drop advantage on GEMM time.
+
+### 2026-08-18 18:00 - MEP-078: cf 1.05 gains 0.3 s/step; profile captured at matched config
+- mep-hero384c105b (tuned matched config, cf 1.05, interactive priority):
+  25/25, tqdm 17.5 s/it, drop_fraction 0.674%, loss 6.08. vs cf 1.1 tuned
+  (17.8, 0.186%): -0.3 s/step for drops still 3.6x below the incumbent's
+  2.4%. Scoreboard vs control (17.0): gap now ~0.5 s/step at cf 1.05.
+- mep-hero384p2 (tuned cf 1.1 + --profile-steps 3 @15): 25/25 at 18.1
+  s/it, xprof at s3://marin-us-east-02a/tmp/ttl=30d/xprof/
+  mep-hero384p2-fused-25-20260818 (steps 15-18). Staging into the hosted
+  viewer via /open + /progress polling (gateway API mapped; rigging
+  credentials headers work from the dev box).
+- Both arms ran at interactive priority per user instruction; one
+  preemption cycle (~2 h queued) before the gates lifted.
