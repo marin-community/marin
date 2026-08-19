@@ -26,6 +26,7 @@ Usage: ``uv run python ... [--limit N] [--workers 16]``
 """
 
 import argparse
+import math
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -39,21 +40,47 @@ for entry in (str(SCRIPT_DIR), str(REPO_ROOT)):
 import pandas as pd  # noqa: E402
 import wandb  # noqa: E402
 
-HELDOUTS = SCRIPT_DIR / "reference_outputs" / "delphi_3e18_append_only_heldouts_20260714" / "heldout_current.csv"
-OUTPUT = SCRIPT_DIR / "reference_outputs" / "delphi_3e18_append_only_heldouts_20260714" / "phase0_readouts.csv"
+DELPHI = SCRIPT_DIR / "reference_outputs" / "delphi_3e18_append_only_heldouts_20260714"
+SIXTY = SCRIPT_DIR / "reference_outputs" / "60m_39bucket_checkpoint_audit_20260724"
 UNCHEATABLE = "eval/uncheatable_eval/bpb"
+# The phase boundary is a fixed fraction of the run in every swarm; where a panel does not record the
+# boundary step directly it is recomputed from the run's own final step.
+SCALE_ALPHA = {"delphi_3e18": 0.7981376787495837, "60m": 0.80, "300m": 0.80}
 
 
-def readout(api, row) -> dict:
+def sources(scale: str):
+    """(rows with wandb ids, output path). Each row needs `heldout_id`, entity, project and run id."""
+    if scale == "delphi_3e18":
+        panel = pd.read_csv(DELPHI / "heldout_current.csv")
+        panel = panel[panel["fit_panel_overlap"] == "coordinate_disjoint"]
+        return panel, DELPHI / "phase0_readouts.csv"
+    frames = []
+    for name in ("fit_two_phase", "heldout_observations", "all_nonfit_observations"):
+        frame = pd.read_csv(SIXTY / f"{name}.csv")
+        frame = frame[frame["wandb_run_id"].notna()].copy()
+        frame["heldout_id"] = frame["run_name"]
+        frame["wandb_entity"] = "marin-community"
+        frame["wandb_project"] = "marin"
+        frame["phase_boundary_step"] = None
+        frames.append(frame[["heldout_id", "wandb_entity", "wandb_project", "wandb_run_id", "phase_boundary_step"]])
+    return pd.concat(frames).drop_duplicates("heldout_id").reset_index(drop=True), SIXTY / "phase0_readouts.csv"
+
+
+def readout(api, row, alpha: float) -> dict:
     """The last eval at or before the phase boundary for one run."""
     identifier = f"{row.wandb_entity}/{row.wandb_project}/{row.wandb_run_id}"
     try:
         run = api.run(identifier)
-        events = [
+        history = [
             event
             for event in run.scan_history(keys=["_step", UNCHEATABLE], page_size=2000)
-            if event.get(UNCHEATABLE) is not None and event["_step"] <= row.phase_boundary_step
+            if event.get(UNCHEATABLE) is not None
         ]
+        boundary = row.phase_boundary_step
+        if boundary is None or (isinstance(boundary, float) and math.isnan(boundary)):
+            # The 60M audit files do not record it, so it is recomputed from the run's own final step.
+            boundary = alpha * max(event["_step"] for event in history)
+        events = [event for event in history if event["_step"] <= boundary]
     except Exception as error:
         return {"heldout_id": row.heldout_id, "phase0_uncheatable_bpb": None, "error": type(error).__name__}
     if not events:
@@ -62,7 +89,7 @@ def readout(api, row) -> dict:
     return {
         "heldout_id": row.heldout_id,
         "phase0_step": int(chosen["_step"]),
-        "phase0_fraction": float(chosen["_step"]) / float(row.phase_boundary_step),
+        "phase0_fraction": float(chosen["_step"]) / float(boundary),
         "phase0_uncheatable_bpb": float(chosen[UNCHEATABLE]),
         "error": None,
     }
@@ -70,13 +97,13 @@ def readout(api, row) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--scale", default="delphi_3e18", choices=sorted(SCALE_ALPHA))
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--workers", type=int, default=16)
     args = parser.parse_args()
 
-    panel = pd.read_csv(HELDOUTS)
-    panel = panel[panel["fit_panel_overlap"] == "coordinate_disjoint"].reset_index(drop=True)
-    done = pd.read_csv(OUTPUT) if OUTPUT.exists() else pd.DataFrame(columns=["heldout_id"])
+    panel, output = sources(args.scale)
+    done = pd.read_csv(output) if output.exists() else pd.DataFrame(columns=["heldout_id"])
     pending = panel[~panel["heldout_id"].isin(set(done["heldout_id"]))]
     if args.limit:
         pending = pending.head(args.limit)
@@ -85,9 +112,9 @@ def main() -> None:
     if len(pending):
         api = wandb.Api(timeout=60)
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
-            rows = list(pool.map(lambda row: readout(api, row), pending.itertuples()))
+            rows = list(pool.map(lambda row: readout(api, row, SCALE_ALPHA[args.scale]), pending.itertuples()))
         done = pd.concat([done, pd.DataFrame(rows)], ignore_index=True)
-        done.to_csv(OUTPUT, index=False)
+        done.to_csv(output, index=False)
 
     have = done["phase0_uncheatable_bpb"].notna()
     print(f"phase-0 readout present for {int(have.sum())}/{len(done)}")
