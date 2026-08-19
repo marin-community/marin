@@ -63,3 +63,13 @@ The 564-run campaign is in integration. Harbor PR #83 supplies the Pi hosted-vLL
 - Result: all four dry runs resolved controller ingress and exact pinned TaskTrove selectors. The manifest contains 141 datasets, 564 grid cells, and 169,200 attempts; seven datasets require deterministic round-robin expansion. Both models are absent from `gs://marin-models-us/ot-agent/models`.
 - Interpretation: no further Harbor changes are required. Model mirroring is the only launch prerequisite remaining before the four smoke jobs.
 - Next action: mirror both model repositories once, verify cache hits, then submit and monitor all four smoke jobs.
+
+### 2026-08-19 14:07 UTC - Advance OTA Harbor runtime pin
+
+- Hypothesis: the merged Harbor source alone is insufficient unless OTA's frozen worker environment and baked images resolve the same commit.
+- Commit Hash: OpenThoughts-Agent `30aec355` on pushed branch `penfever/working`; Harbor `41f4320c0471`.
+- Command: `uv lock --upgrade-package harbor`; `uv run pytest -q tests/unit/agents/installed/test_pi.py` in the Harbor checkout.
+- Config: `uv.lock` and every `docker/Dockerfile.*` `HARBOR_COMMIT` pin now resolve `41f4320c0471ea3362a6d3160df8b6c75f0126f7`.
+- Result: Harbor's Pi unit suite passed 22/22. The mirror worker had shown OTA's previous lock resolving pre-PR commit `772e20f7`; the new pushed OTA revision removes that drift before any eval launch.
+- Interpretation: smoke workers built from `30aec355` will contain the hosted-vLLM Pi endpoint implementation. The already-running mirror job is unaffected because it does not execute Harbor.
+- Next action: wait for `/benjaminfeuer/mdq-tasktrove-v326-model-mirrors`, confirm both regional cache hits, then launch the four smokes from OTA `30aec355`.
