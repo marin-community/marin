@@ -659,7 +659,9 @@ def _sharding_from_leaf(leaf, axis_mapping, mesh) -> Optional[jax.sharding.Shard
                 concrete_mesh = get_concrete_mesh()
 
             if concrete_mesh is not None and not concrete_mesh.empty:
-                return jax.sharding.NamedSharding(concrete_mesh, sharding.spec)
+                # Preserve memory_kind: an offloaded run's leaves carry `pinned_host`, and dropping it
+                # here would silently reload the state into device memory.
+                return jax.sharding.NamedSharding(concrete_mesh, sharding.spec, memory_kind=sharding.memory_kind)
         return sharding
 
     if is_named_array(leaf):
@@ -679,6 +681,45 @@ def _sharding_from_leaf(leaf, axis_mapping, mesh) -> Optional[jax.sharding.Shard
 
 def _fully_replicated_sharding(mesh):
     return hax.partitioning.sharding_for_axis((), {}, mesh)
+
+
+def _device_shardings_for_load(shardings: list) -> tuple[list, list]:
+    """Split target shardings into device-memory-kind loaders plus per-leaf move-back targets.
+
+    JAX materializes tensorstore shards as ``device`` buffers, then assembles them under the
+    requested sharding. When that sharding carries a non-device memory kind -- as it does for a run
+    with ``offload_opt_state``/``FP32_PINNED_HOST``, whose master and optimizer leaves live on
+    ``pinned_host`` -- assembly fails the memory-kind check, so a checkpoint that was written cannot
+    be read back. Deserialize onto ``device`` and move each such leaf to its target afterwards.
+
+    Returns ``(device_shardings, move_targets)`` where ``move_targets[i]`` is the original sharding
+    for a leaf that must be relocated after deserialization, or ``None`` when it already loads in the
+    right place.
+    """
+    device_shardings = []
+    move_targets: list = []
+    for sharding in shardings:
+        memory_kind = getattr(sharding, "memory_kind", None)
+        with_memory_kind = getattr(sharding, "with_memory_kind", None)
+        if memory_kind is not None and memory_kind != "device" and with_memory_kind is not None:
+            device_shardings.append(with_memory_kind("device"))
+            move_targets.append(sharding)
+        else:
+            device_shardings.append(sharding)
+            move_targets.append(None)
+    return device_shardings, move_targets
+
+
+def _move_leaves_to_target_memory_kind(leaves: list, move_targets: list) -> list:
+    """Relocate leaves deserialized onto ``device`` back to a non-device target memory kind.
+
+    Done per leaf so the sharded state never has to sit whole in device memory at once -- the shards
+    for a leaf move to (pinned) host before the next leaf is placed, matching why the state was
+    offloaded in the first place.
+    """
+    if not any(target is not None for target in move_targets):
+        return leaves
+    return [jax.device_put(leaf, target) if target is not None else leaf for leaf, target in zip(leaves, move_targets)]
 
 
 def _restore_ocdbt(
@@ -736,7 +777,9 @@ def _restore_ocdbt(
         spec = _create_ocdbt_spec(checkpoint_root, path)
         tspecs_to_load.append(spec)
 
-    deser_leaves = manager.deserialize(shardings=shardings_to_load, tensorstore_specs=tspecs_to_load)
+    device_shardings, move_targets = _device_shardings_for_load(shardings_to_load)
+    deser_leaves = manager.deserialize(shardings=device_shardings, tensorstore_specs=tspecs_to_load)
+    deser_leaves = _move_leaves_to_target_memory_kind(deser_leaves, move_targets)
     return deser_leaves, indices_to_load
 
 
@@ -782,7 +825,9 @@ def _restore_old_ts(
                 to_log += f"\n  - {leaf_paths[i]}"
             logger.warning(to_log)
 
-    deser_leaves = manager.deserialize_with_paths(shardings=shardings_to_load, paths=paths_to_load, concurrent_gb=300)
+    device_shardings, move_targets = _device_shardings_for_load(shardings_to_load)
+    deser_leaves = manager.deserialize_with_paths(shardings=device_shardings, paths=paths_to_load, concurrent_gb=300)
+    deser_leaves = _move_leaves_to_target_memory_kind(deser_leaves, move_targets)
     return deser_leaves, indices_to_load
 
 

@@ -90,6 +90,27 @@ def test_tensorstore_checkpoint_eval_shape_concretizes_named_sharding_mesh():
             assert jnp.allclose(restored["x"], arr)
 
 
+def test_tensorstore_checkpoint_restores_pinned_host_memory_kind():
+    # Regression for #8441. A run with offload_opt_state/FP32_PINNED_HOST holds its master and
+    # optimizer leaves on `pinned_host`, so the restore template (produced by eval_shape, hence an
+    # abstract mesh) carries that memory kind. Passing it straight to tensorstore materializes device
+    # buffers and fails the memory-kind check on assembly, so the checkpoint could not be read back.
+    with use_test_mesh() as mesh:
+        arr = jax.random.normal(jax.random.PRNGKey(0), (8,), dtype=jnp.float32)
+        abs_mesh = jax.sharding.get_abstract_mesh()
+        for spec in (P(), P("data")):
+            pinned = NamedSharding(abs_mesh, spec).with_memory_kind("pinned_host")
+            template = jax.ShapeDtypeStruct(arr.shape, arr.dtype, sharding=pinned)
+            with TemporaryDirectory() as tmpdir:
+                tree_serialize_leaves_tensorstore(tmpdir, {"x": arr})
+                restored = tree_deserialize_leaves_tensorstore(tmpdir, {"x": template})["x"]
+
+            assert restored.sharding.memory_kind == "pinned_host"
+            # allclose refuses to compare across memory spaces, so pull the host copy to device first.
+            on_device = jax.device_put(restored, NamedSharding(mesh, P()))
+            assert jnp.allclose(on_device, arr)
+
+
 def test_checkpoint_steps():
     with use_test_mesh():
         key0 = jax.random.PRNGKey(0)
