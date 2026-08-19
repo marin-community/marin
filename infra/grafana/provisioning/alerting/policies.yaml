@@ -19,6 +19,10 @@ policies:
       - receiver: ops-slack
         object_matchers:
           - ["notification", "=", "slack"]
+      - receiver: ops-critical
+        group_by: ["alertname", "cluster", "job"]
+        object_matchers:
+          - ["notification", "=", "hero-run"]
       - receiver: ops-slack
         object_matchers:
           - ["severity", "=", "warning"]

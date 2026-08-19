@@ -115,7 +115,9 @@ class ThreadLog:
     def mark_posted(self, key: str) -> None:
         tracked = self._threads.get(key)
         if tracked is not None:
-            tracked.posted_at = time.monotonic()
+            now = time.monotonic()
+            tracked.posted_at = now
+            tracked.expires_at = now + self._ttl
 
     def mark_linked(self, key: str, session_id: str) -> None:
         tracked = self._threads.get(key)

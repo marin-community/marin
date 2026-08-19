@@ -317,6 +317,25 @@ def test_zephyr_stall_alert_is_a_warning_after_five_minutes():
     assert rule["data"][0]["model"]["url"] == "/alerts/zephyr_stalls"
 
 
+def test_training_stall_alert_pages_each_hero_run_after_five_minutes():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "training-progress-stalled"]
+    assert rule["for"] == "5m"
+    assert "isPaused" not in rule
+    assert rule["labels"] == {"severity": "critical", "notification": "hero-run"}
+    assert rule["data"][0]["model"]["url"] == "/alerts/training_stalls"
+
+    (policy,) = _load(ALERTING / "policies.yaml")["policies"]
+    route = next(
+        route
+        for route in policy["routes"]
+        if all(
+            operator == "=" and rule["labels"].get(label) == value for label, operator, value in route["object_matchers"]
+        )
+    )
+    assert route["receiver"] == "ops-critical"
+    assert route["group_by"] == ["alertname", "cluster", "job"]
+
+
 def test_clusters_dashboard_shows_finelog_fleet_health():
     (panel,) = [
         panel

@@ -136,6 +136,24 @@ def alert_payload(status: str = "firing") -> dict:
     }
 
 
+def hero_stall_payload(status: str = "firing") -> dict:
+    payload = alert_payload(status)
+    labels = {
+        "alertname": "TrainingProgressStalled",
+        "cluster": "cw-a",
+        "job": "/root/hero-run",
+        "reason": "training_stalled",
+        "severity": "critical",
+    }
+    payload["groupKey"] = '{}:{alertname="TrainingProgressStalled", cluster="cw-a", job="/root/hero-run"}'
+    payload["commonLabels"] = labels
+    payload["commonAnnotations"] = {"summary": "cw-a: /root/hero-run has training_stalled"}
+    payload["alerts"][0]["labels"] = labels
+    payload["alerts"][0]["annotations"]["summary"] = "cw-a: /root/hero-run has training_stalled"
+    payload["alerts"][0]["fingerprint"] = "hero123"
+    return payload
+
+
 def test_firing_alert_is_announced_then_delivered_on_that_thread():
     """The announcement comes first, and its thread is what the run carries."""
     runs: list[dict] = []
@@ -226,6 +244,26 @@ def test_a_resolution_is_noted_on_the_alert_thread_and_creates_no_run():
 
     assert len(slack.roots) == 1, "a resolution joins the alert's thread"
     assert any("Resolved" in text for text in slack.reply_texts)
+
+
+def test_hero_stall_repeats_keep_one_thread_until_resolution(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(loom_alerts.time, "monotonic", lambda: clock[0])
+    slack = FakeSlack()
+    client = client_for(slack)
+
+    asyncio.run(client.submit(hero_stall_payload()))
+    clock[0] = 4 * 60 * 60 + 1
+    asyncio.run(client.submit(hero_stall_payload()))
+    clock[0] = 7 * 60 * 60
+    assert asyncio.run(client.submit(hero_stall_payload(status="resolved"))) is None
+
+    assert len(slack.roots) == 1
+    assert "TrainingProgressStalled on cw-a" in slack.roots[0]["text"]
+    assert "/root/hero-run" in slack.roots[0]["text"]
+    assert len(slack.replies) == 3
+    assert any("Resolved" in text for text in slack.reply_texts)
+    assert all(reply["thread_ts"] == "1700000000.000001" for reply in slack.replies)
 
 
 def test_a_resolution_for_an_unannounced_alert_says_nothing():
