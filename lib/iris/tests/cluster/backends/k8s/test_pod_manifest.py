@@ -454,9 +454,11 @@ def test_task_update_infrastructure_failure_is_worker_failed(reason):
 def test_task_update_oom_killed_is_application_failure():
     """OOMKilled is a misconfiguration, not infrastructure — should be FAILED."""
     entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
-    pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason="OOMKilled")
+    pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason="OOMKilled", message="process output")
     update = _task_update_from_pod(entry, pod)
     assert update.new_state == job_pb2.TASK_STATE_FAILED
+    assert update.error == update.terminal_reason
+    assert update.error == "OOMKilled: process output"
     assert update.exit_code == 137
 
 
@@ -476,15 +478,19 @@ def test_task_update_error_prefers_termination_message_over_bare_reason():
     non-empty message over the generic "Error" reason, so the actual crash
     (traceback, fatal-error banner, ...) reaches the task/job error instead."""
     entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    message = "RuntimeError: CUDA error: an illegal memory access was encountered\n" * 20
     pod = make_pod(
         "iris-job-0-0",
         "Failed",
         exit_code=1,
         reason="Error",
-        message="RuntimeError: CUDA error: an illegal memory access was encountered",
+        message=message,
     )
     update = _task_update_from_pod(entry, pod)
-    assert update.error == "RuntimeError: CUDA error: an illegal memory access was encountered"
+    assert update.error == message
+    assert update.terminal_reason is not None
+    assert len(update.terminal_reason) == 500
+    assert update.error.startswith(update.terminal_reason)
 
 
 def test_pod_level_eviction_reason_is_worker_failed():
@@ -529,6 +535,7 @@ def test_task_update_kueue_termination_target_is_preempted():
     assert update.exit_code == 137
     assert update.terminal_reason is not None
     assert "WorkloadEvictedDueToPreempted" in update.terminal_reason
+    assert update.error == update.terminal_reason
 
 
 def test_task_update_oom_killed_without_disruption_target_stays_application_failure():
