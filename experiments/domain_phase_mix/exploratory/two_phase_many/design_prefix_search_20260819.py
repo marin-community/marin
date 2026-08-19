@@ -75,6 +75,12 @@ import swarm39_harness_20260725 as swarm39  # noqa: E402
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     analyze_prefix_search_evidence_20260819 as evidence,
 )
+from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
+    audit_swarm39_optimum_degeneracy_20260817 as degeneracy,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
+    fit_swarm39_split_damage_20260817 as split_damage,
+)
 
 DEFAULT_OUT = SCRIPT_DIR / "reference_outputs" / "prefix_search_design_20260819"
 # The ladder is expressed in CODE-FAMILY SHARE, not in an abstract step along a direction. Two reasons.
@@ -82,7 +88,13 @@ DEFAULT_OUT = SCRIPT_DIR / "reference_outputs" / "prefix_search_design_20260819"
 # saturate: an earlier version stepped along a normalised direction and silently produced duplicate
 # mixtures, because the code family holds only 5.3% of the proportional policy, so "move code out" caps at
 # 0.053 total variation and every rung below it collapses onto the same point.
-CODE_SHARE_LADDER = (0.0, 0.02, 0.0531, 0.10, 0.20, 0.35, 0.55, 0.80, 1.0)
+# `None` is the proportional policy's own code share, substituted exactly at build time. Writing the
+# rounded 0.0531 instead leaves it 1.5e-5 total variation from the proportional reference prefix, which
+# is not a distinguishable policy but IS a distinct manifest row -- so that prefix would train its tied
+# anchor and this rung as two near-identical runs under the same seed, which is pure waste. Exact
+# equality instead makes the pair a genuine duplicate that `_assert_no_duplicate_runs` reseeds into a
+# free branch-noise cell.
+CODE_SHARE_LADDER = (0.0, 0.02, None, 0.10, 0.20, 0.35, 0.55, 0.80, 1.0)
 ORTHOGONAL_SEPARATIONS = (0.10, 0.20, 0.30, 0.40)
 LOCAL_SEPARATION = 0.15
 # Gate zero replicates a mid-ladder rung: far enough from the prefix that any real branch effect is
@@ -190,6 +202,8 @@ def shift_to_separation(base: np.ndarray, direction: np.ndarray, separation: flo
 def common_continuations(fit) -> list[dict]:
     """The continuations run from EVERY prefix: a code-share ladder plus orthogonal coverage."""
     base = fit.proportional
+    proportional_share = float(base[fit.family_index == list(fit.family_names).index(evidence.CODE_FAMILY)].sum())
+    ladder = [proportional_share if share is None else share for share in CODE_SHARE_LADDER]
     rows = [
         {
             "continuation_id": f"code_share_{round(share * 1000):04d}",
@@ -197,7 +211,7 @@ def common_continuations(fit) -> list[dict]:
             "requested": share,
             "weights": set_family_share(fit, base, evidence.CODE_FAMILY, share),
         }
-        for share in CODE_SHARE_LADDER
+        for share in ladder
     ]
     code = family_direction(fit, evidence.CODE_FAMILY, +1.0)
     for index, direction in enumerate(orthogonal_directions(fit, code, 2, stable_seed("common"))):
@@ -221,6 +235,29 @@ def _assert_distinct(weights: list[np.ndarray], label: str) -> None:
     keys = {tuple(np.round(row, 6)) for row in weights}
     if len(keys) != len(weights):
         raise ValueError(f"{label}: {len(weights) - len(keys)} duplicate mixtures; the ladder saturated")
+
+
+def predicted_optima(count: int) -> list[np.ndarray]:
+    """Phase-0 halves of the surrogate's own argmin, under `count` independent fold and search seeds.
+
+    Taken from real fits rather than from a hand-built direction, for two reasons. The doc's rationale for
+    these prefixes is that the predicted optimum is a REGION -- the argmin moves 0.20 to 0.60 total
+    variation across seeds -- and only actual refits exhibit that spread. And a hand-built "less code"
+    direction cannot reach the region at all: the code family holds 5.3% of the proportional policy, so
+    moving code out saturates at 0.053 total variation, which is the same saturation that once collapsed
+    the continuation ladder. An earlier revision did exactly that and placed all three of these prefixes
+    within 0.04 of the proportional policy and within 0.02 of each other -- three near-duplicate runs
+    standing in for the region they were supposed to span.
+    """
+    panel, response, reference = degeneracy.pooled_panel("delphi_3e18", swarm39.UNCHEATABLE)
+    start = np.repeat(reference.proportional[None, :], 2, axis=0)
+    optima = []
+    for seed in range(count):
+        _vector, shape, offsets, amplitudes = split_damage.fit_variant(panel, response, "split", seed)
+        policy, _loss = degeneracy.find_optimum(panel, shape, amplitudes, offsets, "split", start)
+        optima.append(policy[0])
+    _assert_distinct(optima, "predicted optima")
+    return optima
 
 
 def prefixes(fit, frame, geo) -> list[dict]:
@@ -248,15 +285,12 @@ def prefixes(fit, frame, geo) -> list[dict]:
                 }
             )
 
-    # Three draws along the direction the fits keep pointing, at three distances, because the predicted
-    # optimum is a region rather than a point: the argmin moves 0.20 to 0.60 across fold seeds.
-    code = family_direction(fit, evidence.CODE_FAMILY, +1.0)
-    for draw in range(3):
+    for draw, weights in enumerate(predicted_optima(3)):
         chosen.append(
             {
                 "prefix_id": f"predicted_{draw}",
                 "role": "predicted_optimum",
-                "weights": shift_to_separation(fit.proportional, -code, 0.02 + 0.01 * draw),
+                "weights": weights,
                 "source_row": -1,
             }
         )
@@ -284,7 +318,9 @@ def prefixes(fit, frame, geo) -> list[dict]:
         {
             "prefix_id": "exploratory_high_separation",
             "role": "exploratory",
-            "weights": shift_to_separation(fit.proportional, code, 0.45),
+            "weights": shift_to_separation(
+                fit.proportional, family_direction(fit, evidence.CODE_FAMILY, +1.0), 0.45
+            ),
             "source_row": -1,
         }
     )
