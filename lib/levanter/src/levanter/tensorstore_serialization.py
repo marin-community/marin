@@ -136,7 +136,7 @@ async def _transfer_shard_to_pageable_host(shard, local_slice: tuple[int, int, i
 class TensorStoreWriteConfig:
     """How a checkpoint save divides work across the processes that hold the state."""
 
-    max_write_replicas: int = 64
+    max_write_replicas: int = 1024
     """Cap on how many replicas of an array write part of it. 1 disables replica splitting."""
 
     min_replica_slice_bytes: int = 16 * 1024**2
