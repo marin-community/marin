@@ -12,7 +12,7 @@ import threading
 import typing
 import warnings
 from dataclasses import dataclass
-from typing import Any, List, Optional, Union
+from typing import Any, List, Optional, TypedDict, Union
 
 import fsspec
 import jax
@@ -38,6 +38,14 @@ WandbRun = Union["wandb.sdk.wandb_run.Run", "wandb.sdk.lib.disabled.RunDisabled"
 
 _WANDB_ARTIFACT_NAME_MAX_LENGTH = 128
 _WANDB_INIT_ERROR_KEY = "error"
+_WANDB_INIT_METADATA_KEY = "metadata"
+_WANDB_INIT_PROCESS_INDEX_KEY = "process_index"
+
+
+class _WandbInitStatus(TypedDict):
+    process_index: int
+    error: str | None
+    metadata: dict[str, Any] | None
 
 
 def _teardown_wandb_service_bounded(timeout: float) -> None:
@@ -404,14 +412,7 @@ class WandbConfig(TrackerConfig):
             hparams_to_save["git_commit"] = git_settings["git_commit"]
 
         process_count = jax.process_count()
-        metadata_to_share = None
-        if process_count > 1 and not is_primary_process:
-            metadata_to_share = jax_utils.multihost_broadcast_sync({_WANDB_INIT_ERROR_KEY: None}, is_source=False)
-            if metadata_to_share[_WANDB_INIT_ERROR_KEY] is not None:
-                raise RuntimeError(
-                    f"W&B initialization failed on process 0: {metadata_to_share[_WANDB_INIT_ERROR_KEY]}"
-                )
-
+        initialization_error = None
         try:
             r = wandb.init(
                 entity=self.entity,
@@ -429,32 +430,58 @@ class WandbConfig(TrackerConfig):
             if r is None:
                 raise RuntimeError("W&B initialization returned no run")
         except Exception as e:
-            if process_count > 1 and is_primary_process:
-                jax_utils.multihost_broadcast_sync(
-                    {_WANDB_INIT_ERROR_KEY: f"{type(e).__name__}: {e}"},
-                    is_source=True,
-                )
-            raise
+            initialization_error = e
+            r = None
+
+        metadata: dict[str, Any] | None = None
+        if r is not None and is_primary_process:
+            metadata = {
+                # entity=r.entity,
+                "project": r.project,
+                "name": r.name,
+                "tags": r.tags,
+                "id": r.id,
+                "group": r.group,
+                "minimum_log_step": int(r.step),
+            }
+
+        initialization_status: _WandbInitStatus = {
+            _WANDB_INIT_PROCESS_INDEX_KEY: jax.process_index(),
+            _WANDB_INIT_ERROR_KEY: (
+                f"{type(initialization_error).__name__}: {initialization_error}"
+                if initialization_error is not None
+                else None
+            ),
+            _WANDB_INIT_METADATA_KEY: metadata,
+        }
+        if process_count > 1:
+            try:
+                initialization_statuses = jax_utils.multihost_allgather_sync(initialization_status)
+            except Exception as coordination_error:
+                if initialization_error is not None:
+                    raise initialization_error from coordination_error
+                raise
+        else:
+            initialization_statuses = [initialization_status]
+
+        failed_statuses = [status for status in initialization_statuses if status[_WANDB_INIT_ERROR_KEY] is not None]
+        if failed_statuses:
+            if initialization_error is not None:
+                raise initialization_error
+            failures = "; ".join(
+                f"process {status[_WANDB_INIT_PROCESS_INDEX_KEY]}: {status[_WANDB_INIT_ERROR_KEY]}"
+                for status in failed_statuses
+            )
+            raise RuntimeError(f"W&B initialization failed on {failures}")
+
+        assert r is not None
 
         if r.step != 0:
             logger.info("Resuming wandb run. Attempting to mitigate issues.")
 
         minimum_log_step = int(r.step)
         if process_count > 1:
-            # we need to share wandb run information across all hosts, because we use it for checkpoint paths and things
-            if is_primary_process:
-                metadata_to_share = {
-                    _WANDB_INIT_ERROR_KEY: None,
-                    # entity=r.entity,
-                    "project": r.project,
-                    "name": r.name,
-                    "tags": r.tags,
-                    "id": r.id,
-                    "group": r.group,
-                    "minimum_log_step": minimum_log_step,
-                }
-                metadata_to_share = jax_utils.multihost_broadcast_sync(metadata_to_share, is_source=True)
-
+            metadata_to_share = initialization_statuses[0][_WANDB_INIT_METADATA_KEY]
             assert metadata_to_share is not None
             minimum_log_step = int(metadata_to_share["minimum_log_step"])
 
