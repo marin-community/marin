@@ -158,6 +158,29 @@ def multihost_broadcast_sync(obj: X, is_source: Optional[bool] = None, timeout: 
     return obj
 
 
+def multihost_allgather_sync(obj: X, timeout: float = 200.0) -> list[X]:
+    """Exchange a JSON-serializable value among all JAX processes."""
+    global _sync_counter
+    process_count = jax.process_count()
+    if process_count == 1:
+        return [obj]
+
+    client = jax_distributed.global_state.client
+    if client is None:
+        raise RuntimeError("multihost_allgather_sync requires jax distributed client to be initialized")
+
+    key = f"LEVANTER_MULTIHOST_ALLGATHER_SYNC{_sync_counter}"
+    client.key_value_set(f"{key}/{jax.process_index()}", json.dumps(obj))
+    client.wait_at_barrier(f"multihost_allgather_sync{_sync_counter}", timeout_in_ms=int(timeout * 1000.0))
+
+    gathered = [
+        json.loads(client.blocking_key_value_get(f"{key}/{process_index}", timeout_in_ms=int(timeout * 1000.0)))
+        for process_index in range(process_count)
+    ]
+    _sync_counter += 1
+    return gathered
+
+
 def barrier_sync(timeout: float = 200):
     """
     Uses jax's unpublished distributed api to wait for all processes to reach a barrier. This is useful for ensuring
