@@ -960,6 +960,46 @@ def test_shard_a2a_params_uses_sender_side_output_offsets():
     np.testing.assert_array_equal(np.asarray(output_offsets), np.array([1, 7, 2], dtype=np.int32))
 
 
+def test_split_peer_transfers_partition_the_same_rows():
+    shard_counts = jnp.array(
+        [
+            [1, 7, 2],
+            [3, 5, 4],
+            [6, 8, 9],
+        ],
+        dtype=jnp.int32,
+    )
+
+    input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(
+        shard_counts, jnp.array(1, dtype=jnp.int32), 2
+    )
+
+    # Sender row 1 is [3, 5, 4]; two splits per peer divide it with the remainder on the
+    # earlier split of each pair, and the reads stay contiguous over the same source rows.
+    np.testing.assert_array_equal(np.asarray(send_sizes), np.array([2, 1, 3, 2, 2, 2], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(input_offsets), np.array([0, 2, 3, 6, 8, 10], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(recv_sizes), np.array([4, 3, 3, 2, 4, 4], dtype=np.int32))
+    # Each pair starts at the unsplit destination offset [1, 7, 2] and advances by the first split.
+    np.testing.assert_array_equal(np.asarray(output_offsets), np.array([1, 3, 7, 10, 2, 4], dtype=np.int32))
+
+
+def test_split_peer_transfers_are_rejected_outside_the_ragged_backend():
+    with pytest.raises(ValueError, match="only applies to the ragged all-to-all"):
+        moe_mlp(
+            *_make_inputs(
+                key=jax.random.key(0),
+                tokens=8,
+                hidden_dim=8,
+                intermediate_dim=8,
+                num_experts=4,
+                topk=2,
+            ),
+            implementation="ring",
+            mesh=None,
+            ragged_all_to_all_splits_per_peer=2,
+        )
+
+
 @pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
 def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(implementation: MoeImplementation):
     mesh = _make_ep_mesh_or_none()
