@@ -128,6 +128,9 @@ def _call_with_retry(
             return fn()
         except Exception as e:
             last_exception = e
+            if attempt + 1 >= max_retries:
+                break
+
             error_type = type(e).__name__
             error_msg = str(e)
 
