@@ -8,9 +8,9 @@ more compute-optimal scales, then combines quality and throughput into an
 effective wall-clock speedup. Variants that survive the small-scale gate can be
 tested at larger scales and projected with a scaling-law fit.
 
-This page summarizes the 78 `Agent MoE Experiment:` sub-issues attached to
+This page summarizes the 80 `Agent MoE Experiment:` sub-issues attached to
 [the April MoE tracker](https://github.com/marin-community/marin/issues/4281)
-as of 2026-08-11. The
+as of 2026-08-20. The
 [Agent MoE playbook](https://github.com/marin-community/marin/blob/main/experiments/grug/moe/agent.md)
 and [baseline table](https://github.com/marin-community/marin/blob/main/experiments/grug/moe/README.md)
 define the gates and reference runs. The
@@ -24,16 +24,16 @@ than copied from an issue table; `—` means the issue does not support the spli
 
 ## TL;DR
 
-The clearest architecture wins came from partial RoPE and partial key offset (PKO), cached attention, block attention residuals, and their combined recipe. The combined recipe reached 1.21–1.52x measured effective speedup across four scales. MuonH improved measured speed by 1.19–1.33x, but its four-point fit was slightly worse at the longest projection. Router modifications were mostly negative: frozen and nonlinear routers failed, while restricting router z-loss to selected or non-selected experts was promising but only tested at two scales.
+The clearest architecture wins came from partial RoPE and partial key offset (PKO), attention reuse, block attention residuals, and their combined recipe. Midpoint K/V reuse reached 1.025–1.121x measured effective speedup across three scales, though its projected prefill benefit lacks a latency benchmark. Pallas SConv passed matched Gate 1 at 1.131–1.242x across two scales. MuonH improved measured speed by 1.19–1.33x, but its four-point fit was slightly worse at the longest projection. Router modifications were mostly negative: frozen and nonlinear routers failed, while restricting router z-loss to selected or non-selected experts was promising but only tested at two scales.
 
 | Outcome | Count | Meaning |
 |---|---:|---|
-| Worked | 14 | Met the recorded effective-speedup gate or the experiment's narrower success criterion. |
+| Worked | 16 | Met the recorded effective-speedup gate or the experiment's narrower success criterion. |
 | Promising | 9 | Positive evidence, but missing a larger-scale anchor or clean isolation. |
 | Mixed | 13 | The answer changed by scale or metric, or a strict projection failed. |
 | Did not work | 32 | A completed comparison showed no net benefit. |
-| Not evaluated | 5 | No usable comparison was recorded, often because the work was superseded. |
-| In progress | 5 | The issue remains active without a final verdict. |
+| Not evaluated | 6 | No usable comparison was recorded, often because the work was superseded. |
+| In progress | 4 | The issue remains active without a final verdict. |
 
 Issue state is not used as an outcome: several closed issues contain positive
 results, and several open issues already have useful measurements.
@@ -82,7 +82,7 @@ results, and several open issues already have useful measurements.
 | [#5399 Routed output scale and expert LR](https://github.com/marin-community/marin/issues/5399) | Stronger routed outputs and tuned expert learning rates could improve specialization. | Not evaluated | — | — | Closed without measurements after the planned sweep was superseded. |
 | [#5409 Null experts](https://github.com/marin-community/marin/issues/5409) | Null experts let easy tokens skip expert computation they do not need. | Did not work | ≈1.01–1.04x | 0.74–0.91x | Null experts recovered some of the cost of picking five experts, but all tested variants remained below the simpler pick-four baseline. |
 | [#5515 Pick five with a smaller shared expert](https://github.com/marin-community/marin/issues/5515) | Extra routed capacity, cheaper shared compute, and no z-loss could improve efficiency. | Did not work | ≈1.00x | 0.993–1.011x | Rebalancing shared and routed capacity made pick-five viable, but speedup moved from 1.011x at d512 to 0.993x at d768. |
-| [#6443 Alternating dense and MoE blocks](https://github.com/marin-community/marin/issues/6443) | Dense blocks provide universal processing while concentrated MoE blocks maximize specialization. | Not evaluated | — | — | The open issue contains no usable experimental comparison yet. |
+| [#6443 Alternating dense and MoE blocks](https://github.com/marin-community/marin/issues/6443) | Dense blocks provide universal processing while concentrated MoE blocks maximize specialization. | Not evaluated | — | — | The closed issue contains no usable experimental comparison. |
 
 ### Router behavior and regularization
 
@@ -113,7 +113,7 @@ results, and several open issues already have useful measurements.
 | [#6388 MuonH magnitude-direction decoupling](https://github.com/marin-community/marin/issues/6388) | Separating normalized directions from learned gains could improve conditioning and LR transfer. | In progress | >1x | Best ≈0.99x | Loss improved at both gate-1 scales, but roughly 6.5% throughput overhead kept the best first-pass speedup just below 1x. |
 | [#8131 Factorized row-norm linears](https://github.com/marin-community/marin/issues/8131) | Separating output scale from direction could improve conditioning under norm-preserving updates. | Did not work | 0.915x | 0.897x | Factorized row-norm linears regressed the corrected paired d512 control by 0.0167 loss and 2.0% throughput, yielding 0.897x; d768 was not launched. |
 | [#6404 Newton–Schulz coefficient ablation](https://github.com/marin-community/marin/issues/6404) | Alternative coefficients could produce better orthogonalized Muon updates in five iterations. | Not evaluated | — | — | The open issue has no recorded result yet. |
-| [#6505 Bfloat16 Newton–Schulz](https://github.com/marin-community/marin/issues/6505) | bf16 Newton-Schulz halves matrix traffic, reducing optimizer time while retaining fp32 momentum. | In progress | — | — | The experiment is set up to isolate bandwidth savings inside Newton–Schulz; no final two-scale verdict is recorded. |
+| [#6505 Bfloat16 Newton–Schulz](https://github.com/marin-community/marin/issues/6505) | bf16 Newton-Schulz halves matrix traffic, reducing optimizer time while retaining fp32 momentum. | Not evaluated | — | — | The closed issue records launch setup but no usable two-scale comparison. |
 
 ### AdamH and training heuristics
 
@@ -144,9 +144,16 @@ results, and several open issues already have useful measurements.
 | [#4905 Pseudogram residual](https://github.com/marin-community/marin/issues/4905) | A cheap engram-like feature may add useful token-dependent residual capacity. | Did not work | <1x | <1x | The per-position sigmoid residual failed gate 1. |
 | [#4906 Backout residual](https://github.com/marin-community/marin/issues/4906) | Subtracting midpoint activations may isolate later refinements from stale features. | Did not work | <1x | <1x | Subtracting a cached midpoint activation failed gate 1. |
 | [#4987 Cached attention](https://github.com/marin-community/marin/issues/4987) | Late layers may reuse stable attention features while MLPs continue refining. | Worked | ≈1.02–1.09x | 1.02–1.10x | Reusing the attention input in the last three layers was effectively free and reached 1.02–1.10x across four scales. |
+| [#8196 Reuse midpoint activations for K/V](https://github.com/marin-community/marin/issues/8196) | A shared midpoint source could build upper-layer K/V caches in parallel without materializing upper-layer prompt states. | Worked | 1.033–1.129x | 1.025–1.121x | Passed at d512–d1024 with 1.025–1.121x effective speedup despite a 0.6–0.7% training-throughput loss; the projected 1.94–2.64x prefill benefit lacks a latency benchmark. |
 | [#5110 Block attention residuals](https://github.com/marin-community/marin/issues/5110) | Adaptive mixing across completed blocks improves information routing and gradient flow. | Worked | ≈1.13–1.20x | 1.06–1.12x | Grouping representations in blocks of four passed gate 2 at 1.06–1.12x despite a 4–7% throughput cost. |
 | [#5113 Full attention residuals](https://github.com/marin-community/marin/issues/5113) | Fine-grained mixing can preserve useful sublayer outputs across network depth. | Did not work | >1x | <1x | Giving every sub-operation its own residual entry improved loss but cost 9–14% throughput; the block form was better. |
 | [#7409 Identity Hyper-Connections](https://github.com/marin-community/marin/issues/7409) | Token-dependent residual routing improves information flow while identity mixing stabilizes optimization. | Worked | 1.127–1.130x | 1.0205–1.0515x | The open issue has a completed gate-1 pass: 1.0515x at d512 and 1.0205x at d768 after charging 7–10% throughput overhead. |
+
+### Convolutional mixing
+
+| Experiment | Why it might help | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
+|---|---|---|---:|---:|---|
+| [#8377 Pallas SConv scaling gates](https://github.com/marin-community/marin/issues/8377) | Causal depthwise convolutions could add local token mixing that improves loss more than their compute cost. | Worked | 1.199–1.319x | 1.131–1.242x | Passed matched Gate 1 at d512 and d768 with 1.131–1.242x effective speedup: better loss outweighed a 5.7% throughput cost; Gate 2 remains unlaunched. |
 
 ### Depth and block structure
 
