@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import dataclasses
+import io
 import json
 import subprocess
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import cast
@@ -36,6 +38,7 @@ from marin.rl.skyrl import (
     run_skyrl,
     skyrl_step,
 )
+from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.training.training import LevanterCheckpoint
 
 from experiments.evaluation.pipeline import eval_step
@@ -56,6 +59,27 @@ def _data_step() -> ArtifactStep[Artifact]:
         "2026.08.01",
         "s3://test/iceball-gsm8k",
     )
+
+
+class _FakeLauncherProcess:
+    """A launcher subprocess that writes to stderr and exits non-zero without a JSON response."""
+
+    def __init__(self, *, stdout: str, stderr: str = "", returncode: int = 1) -> None:
+        self.stdout = io.StringIO(stdout)
+        self.stderr = io.StringIO(stderr)
+        self.returncode = returncode
+
+    def wait(self) -> int:
+        return self.returncode
+
+    def kill(self) -> None:
+        return None
+
+    def __enter__(self) -> _FakeLauncherProcess:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
 
 
 def _role_plan() -> SkyRLRolePlan:
@@ -301,12 +325,12 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
 
     launch_envelopes = []
 
-    def fake_run(command, **_kwargs) -> subprocess.CompletedProcess[str]:
+    def fake_popen(command, **_kwargs) -> _FakeLauncherProcess:
         request_path = command[command.index("--request") + 1]
         launch_envelopes.append(json.loads(Path(request_path).read_text()))
-        return subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(response))
+        return _FakeLauncherProcess(stdout=json.dumps(response), returncode=0)
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
 
     model = run_skyrl(
         SkyRLRunConfig(
@@ -324,3 +348,53 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
         "profile": SkyRLRuntimeProfile.FSDP.value,
     }
     assert launch_envelopes[0]["execution"]["job_name"] == "checkpoints-iceball-rl-2026.08.01-attempt-1"
+
+
+def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A launcher that dies before printing its terminal response must still say why."""
+
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda command, **_kwargs: _FakeLauncherProcess(stdout="", stderr="entrypoint must be a registered name\n"),
+    )
+    step = skyrl_step(_spec(), _execution())
+    config = step.build_config(
+        StepContext.for_run(
+            output_path="s3://durable/users/alice/tests/iceball-rl/2026.08.01",
+            prefix="s3://durable",
+            runtime_args=step.runtime_args,
+            deps=step.deps,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="entrypoint must be a registered name"):
+        run_skyrl(config)
+
+
+def test_launcher_logs_reach_stderr_while_the_run_is_live(capfd: pytest.CaptureFixture[str]) -> None:
+    """The launcher's log stream must keep flowing, not be swallowed into the failure message.
+
+    Capturing stderr instead of forwarding it would silence a multi-hour run, so this asserts the
+    line reached this process's stderr as well as the retained diagnostic.
+    """
+    completed = run_launcher_for_test(
+        [sys.executable, "-c", "import sys; sys.stderr.write('launcher line\\n'); sys.exit(3)"]
+    )
+
+    assert "launcher line" in capfd.readouterr().err
+    assert "launcher line" in completed.stderr
+    assert completed.returncode == 3
+
+
+def test_launcher_survives_undecodable_bytes_on_stderr() -> None:
+    """A non-UTF-8 byte must not kill the drain thread and wedge the run.
+
+    An abandoned stderr pipe blocks the launcher once its buffer fills, which would hang the read of
+    stdout forever. Native CUDA and NCCL layers can emit such bytes.
+    """
+    completed = run_launcher_for_test(
+        [sys.executable, "-c", "import sys; sys.stderr.buffer.write(b'\\xff bad\\n'); sys.exit(4)"]
+    )
+
+    assert completed.returncode == 4
