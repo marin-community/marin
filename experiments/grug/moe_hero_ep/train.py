@@ -3,6 +3,7 @@
 
 import dataclasses
 import functools
+import itertools
 import logging
 import os
 import time
@@ -92,6 +93,13 @@ class MasterParamMode(StrEnum):
     FP32_PINNED_HOST = "fp32_pinned_host"
 
 
+class TrainingDataMode(StrEnum):
+    """Source of training batches."""
+
+    MIXTURE = "mixture"
+    SYNTHETIC = "synthetic"
+
+
 def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per_task: int = 1) -> None:
     env_defaults = dict(HERO_EP_RUNTIME_ENV)
     if processes_per_task > 1:
@@ -126,6 +134,7 @@ class GrugTrainerConfig:
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
     master_param_mode: MasterParamMode = MasterParamMode.DISABLED
+    training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE
     # Inline watch computes statistics on every step and uses the watch interval only for logging.
     # This keeps one training executable resident. A diagnostic watch repeats forward and backward
     # in a separate executable, which costs compute but shortens gradient liveness.
@@ -218,6 +227,44 @@ def build_train_dataset(
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+
+
+def _make_synthetic_batch(
+    *,
+    batch_size: int,
+    max_seq_len: int,
+    vocab_size: int,
+    seed: int,
+    mesh: Mesh,
+) -> GrugLmExample:
+    """Build one deterministic batch directly on the global batch sharding."""
+    sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
+
+    def tokens_for_slice(index):
+        batch_slice, position_slice = index
+        batch_start, batch_stop, batch_stride = batch_slice.indices(batch_size)
+        position_start, position_stop, position_stride = position_slice.indices(max_seq_len)
+        if batch_stride != 1 or position_stride != 1:
+            raise ValueError("synthetic batch sharding requires contiguous slices")
+        batch_indices = np.arange(batch_start, batch_stop, dtype=np.int64)[:, None]
+        position_indices = np.arange(position_start, position_stop, dtype=np.int64)[None, :]
+        return ((batch_indices * max_seq_len + position_indices + seed) % vocab_size).astype(np.int32)
+
+    def loss_weight_for_slice(index):
+        batch_slice, position_slice = index
+        batch_start, batch_stop, batch_stride = batch_slice.indices(batch_size)
+        position_start, position_stop, position_stride = position_slice.indices(max_seq_len)
+        if batch_stride != 1 or position_stride != 1:
+            raise ValueError("synthetic batch sharding requires contiguous slices")
+        loss_weight = np.ones((batch_stop - batch_start, position_stop - position_start), dtype=np.float32)
+        if position_start <= max_seq_len - 1 < position_stop:
+            loss_weight[:, max_seq_len - 1 - position_start] = 0
+        return loss_weight
+
+    shape = (batch_size, max_seq_len)
+    tokens = jax.make_array_from_callback(shape, sharding, tokens_for_slice)
+    loss_weight = jax.make_array_from_callback(shape, sharding, loss_weight_for_slice)
+    return GrugLmExample(tokens=tokens, loss_weight=loss_weight)
 
 
 def build_train_loader(
@@ -727,17 +774,20 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     with set_mesh(mesh):
         batch_schedule = trainer.batch_schedule
 
-        train_dataset = build_train_dataset(
-            config.data,
-            max_seq_len=config.model.max_seq_len,
-            batch_schedule=batch_schedule,
-            key=data_key,
-        )
-        train_loader = build_train_loader(
-            train_dataset,
-            batch_schedule=batch_schedule,
-            mesh=mesh,
-        )
+        train_dataset = None
+        train_loader = None
+        if config.trainer.training_data_mode == TrainingDataMode.MIXTURE:
+            train_dataset = build_train_dataset(
+                config.data,
+                max_seq_len=config.model.max_seq_len,
+                batch_schedule=batch_schedule,
+                key=data_key,
+            )
+            train_loader = build_train_loader(
+                train_dataset,
+                batch_schedule=batch_schedule,
+                mesh=mesh,
+            )
 
         @jax.jit
         def _init_state(model_rng):
@@ -818,7 +868,19 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         profiler_enabled = profiler_cfg.is_enabled and profiler_num_steps > 0
 
         log_every = max(1, config.trainer.log_every)
-        iterator = LoadingTimeTrackerIterator(train_loader.iter_from_step(int(state.step)))
+        if config.trainer.training_data_mode == TrainingDataMode.SYNTHETIC:
+            synthetic_batch = _make_synthetic_batch(
+                batch_size=batch_schedule.batch_size_at_step(int(state.step)),
+                max_seq_len=config.model.max_seq_len,
+                vocab_size=config.model.vocab_size,
+                seed=trainer.seed + 1 if config.trainer.data_seed is None else config.trainer.data_seed,
+                mesh=mesh,
+            )
+            batch_source = itertools.repeat(synthetic_batch)
+        else:
+            assert train_loader is not None
+            batch_source = train_loader.iter_from_step(int(state.step))
+        iterator = LoadingTimeTrackerIterator(batch_source)
 
         state_callbacks = StateCallbackRunner[GrugTrainState](
             step_getter=lambda s: s.step,
@@ -841,7 +903,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 ),
                 every=1,
             )
-        state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
+        if train_dataset is not None:
+            state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
         state_callbacks.add_hook(log_device_memory, every=1)
         if evaluator is not None and eval_cfg is not None:
             interval = eval_cfg.steps_per_eval

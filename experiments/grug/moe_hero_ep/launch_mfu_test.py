@@ -35,6 +35,7 @@ from experiments.grug.moe_hero_ep.train import (
     GrugRunConfig,
     GrugTrainerConfig,
     MasterParamMode,
+    TrainingDataMode,
     WatchMode,
     run_grug,
 )
@@ -88,6 +89,7 @@ def build_hero_run(
     watch_mode: WatchMode = WatchMode.INLINE,
     profile_steps: int = 0,
     profile_start_step: int = 5,
+    training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the EP64 hero throughput run.
@@ -168,6 +170,7 @@ def build_hero_run(
         z_loss_weight=1e-4,
         offload_opt_state=HERO_OFFLOAD_OPT_STATE,
         master_param_mode=MasterParamMode.FP32_PINNED_HOST,
+        training_data_mode=training_data_mode,
         watch_mode=watch_mode,
         # The default offloaded optimizer state has a known memory-kind mismatch during restore.
         save_checkpoints=save_checkpoints,
@@ -396,6 +399,13 @@ def build_hero_run(
     help="First traced step. Keep it past compile and warmup.",
 )
 @click.option(
+    "--training-data",
+    type=click.Choice([mode.value for mode in TrainingDataMode]),
+    default=TrainingDataMode.MIXTURE.value,
+    show_default=True,
+    help="Use the configured mixture or reuse a deterministic synthetic batch without opening TensorStore.",
+)
+@click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
     default=HERO_MODEL.capacity_factor,
@@ -423,6 +433,7 @@ def main(
     watch_mode: str,
     profile_steps: int,
     profile_start_step: int,
+    training_data: str,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
         run_id=run_id,
@@ -444,6 +455,7 @@ def main(
         watch_mode=WatchMode(watch_mode),
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
+        training_data_mode=TrainingDataMode(training_data),
     )
 
 
