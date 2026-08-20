@@ -270,7 +270,9 @@ comment there; omit it for a drift check against the selected ref with no commen
 After a same-repository PR matching the preview paths merges, the workflow previews the merge
 commit after 30 minutes. If changes remain, it mentions the merger in a sticky PR comment and
 checks twice more after 60 and 120 minutes. Preview errors also trigger a retry; a successful
-retry replaces the warning with the clean result.
+retry replaces the warning with the clean result. A historical diff is ignored when that stack
+has a successful update newer than the PR merge, since a later update from `main` includes the
+earlier merged change.
 
 **CI never runs `pulumi up`** — see `spec.md §9`. It authenticates as
 `pulumi-ci@hai-gcp-models.iam.gserviceaccount.com`, granted preview-only (decrypt/read, never

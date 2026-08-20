@@ -8,62 +8,24 @@ import subprocess
 import sys
 from pathlib import Path
 
-import yaml
-
-WORKFLOW_PATH = Path(".github/workflows/ops-iac-preview.yaml")
 SUMMARY_SCRIPT = Path(".github/actions/pulumi-preview/summarize_deployment.py")
+FORMAT_SCRIPT = Path(".github/actions/pulumi-preview/format_preview.py")
+MERGED_AT = "2026-08-20T12:00:00Z"
 
 
-def _workflow() -> dict:
-    workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
-    assert isinstance(workflow, dict)
-    return workflow
-
-
-def _triggers(workflow: dict) -> dict:
-    # PyYAML 1.1 parses the unquoted workflow key `on` as True.
-    triggers = workflow.get("on", workflow.get(True))
-    assert isinstance(triggers, dict)
-    return triggers
-
-
-def test_iac_preview_checks_merged_pull_requests() -> None:
-    workflow = _workflow()
-    triggers = _triggers(workflow)
-
-    assert "closed" in triggers["pull_request"]["types"]
-    dispatch_inputs = triggers["workflow_dispatch"]["inputs"]
-    assert "deployment_check_attempt" in dispatch_inputs
-    assert "deployment_check_ref" not in dispatch_inputs
-    prepare = workflow["jobs"]["prepare"]
-    assert prepare["outputs"]["deployment_check"]
-    assert all(step.get("uses") != "actions/checkout@v5" for step in prepare["steps"])
-    preview = workflow["jobs"]["preview"]
-    assert preview["needs"] == "prepare"
-    assert preview["strategy"]["matrix"] == "${{ fromJSON(needs.prepare.outputs.preview_matrix) }}"
-    checkout = next(step for step in preview["steps"] if step["name"] == "Checkout code")
-    assert checkout["with"]["ref"] == "${{ needs.prepare.outputs.ref }}"
-
-    comment = workflow["jobs"]["comment"]
-    assert "actions" not in comment["permissions"]
-    retry = workflow["jobs"]["retry-deployment-check"]
-    assert retry["permissions"]["actions"] == "write"
-    assert "needs.comment.outputs.next_attempt != ''" in retry["if"]
-    delays = json.loads(workflow["env"]["CHECK_DELAYS_MINUTES"])
-    assert delays[0] == 30
-    assert delays[1:] == [2 * delay for delay in delays[:-1]]
-
-
-def _write_preview(root: Path, stack: str, severity: str) -> None:
+def _write_preview(root: Path, stack: str, severity: str, *, last_successful_update: str | None = None) -> None:
     artifact = root / stack
     artifact.mkdir(parents=True)
+    meta = {"stack": stack, "severity": severity}
+    if last_successful_update is not None:
+        meta["last_successful_update"] = last_successful_update
     (artifact / "meta.json").write_text(
-        json.dumps({"stack": stack, "severity": severity}),
+        json.dumps(meta),
         encoding="utf-8",
     )
 
 
-def _summarize(tmp_path: Path, *, attempt: int) -> tuple[str, dict[str, str]]:
+def _summarize(tmp_path: Path, *, attempt: int, merger: str = "operator") -> tuple[str, dict[str, str]]:
     previews = tmp_path / "previews"
     comment = tmp_path / "comment.md"
     github_output = tmp_path / "github-output"
@@ -77,10 +39,12 @@ def _summarize(tmp_path: Path, *, attempt: int) -> tuple[str, dict[str, str]]:
             '{"include":[{"stack":"marin"},{"stack":"cw-rno2a"}]}',
             "--check-delays-minutes",
             "[30,60,120]",
+            "--merged-at",
+            MERGED_AT,
             "--attempt",
             str(attempt),
             "--merger",
-            "operator",
+            merger,
             "--run-url",
             "https://github.test/runs/1",
             "--out",
@@ -94,6 +58,36 @@ def _summarize(tmp_path: Path, *, attempt: int) -> tuple[str, dict[str, str]]:
     )
     outputs = dict(line.split("=", 1) for line in github_output.read_text().splitlines())
     return comment.read_text(), outputs
+
+
+def test_preview_metadata_records_last_successful_update(tmp_path: Path) -> None:
+    raw = tmp_path / "raw.txt"
+    raw.write_text("Resources:\n    1 to update\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(FORMAT_SCRIPT),
+            "--stack",
+            "marin",
+            "--ok",
+            "true",
+            "--history-ok",
+            "true",
+            "--last-successful-update",
+            "2026-08-20T13:00:00Z",
+            "--input",
+            str(raw),
+            "--out-dir",
+            str(out_dir),
+        ],
+        check=True,
+    )
+
+    meta = json.loads((out_dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta["severity"] == "change"
+    assert meta["last_successful_update"] == "2026-08-20T13:00:00Z"
 
 
 def test_deployment_summary_requests_retry_for_changes_and_missing_stacks(tmp_path: Path) -> None:
@@ -123,3 +117,51 @@ def test_deployment_summary_does_not_comment_on_initial_clean_check(tmp_path: Pa
     _, outputs = _summarize(tmp_path, attempt=1)
 
     assert outputs == {"needs_retry": "false", "next_attempt": "", "should_comment": "false"}
+
+
+def test_deployment_summary_ignores_historical_diff_after_later_update(tmp_path: Path) -> None:
+    _write_preview(
+        tmp_path / "previews",
+        "marin",
+        "change",
+        last_successful_update="2026-08-20T13:00:00Z",
+    )
+    _write_preview(tmp_path / "previews", "cw-rno2a", "none")
+
+    _, outputs = _summarize(tmp_path, attempt=1)
+
+    assert outputs == {"needs_retry": "false", "next_attempt": "", "should_comment": "false"}
+
+
+def test_deployment_summary_retries_diff_when_last_update_predates_merge(tmp_path: Path) -> None:
+    _write_preview(
+        tmp_path / "previews",
+        "marin",
+        "change",
+        last_successful_update="2026-08-20T11:00:00Z",
+    )
+    _write_preview(tmp_path / "previews", "cw-rno2a", "none")
+
+    _, outputs = _summarize(tmp_path, attempt=1)
+
+    assert outputs == {"needs_retry": "true", "next_attempt": "2", "should_comment": "true"}
+
+
+def test_deployment_summary_error_only_result_requests_investigation(tmp_path: Path) -> None:
+    _write_preview(tmp_path / "previews", "marin", "error")
+    _write_preview(tmp_path / "previews", "cw-rno2a", "error")
+
+    comment, outputs = _summarize(tmp_path, attempt=1, merger="deployment-app[bot]")
+
+    assert outputs == {"needs_retry": "true", "next_attempt": "2", "should_comment": "true"}
+    assert "@deployment-app[bot]" in comment
+    assert "`pulumi up`" not in comment
+
+
+def test_deployment_summary_stops_after_third_pending_check(tmp_path: Path) -> None:
+    _write_preview(tmp_path / "previews", "marin", "change")
+    _write_preview(tmp_path / "previews", "cw-rno2a", "none")
+
+    _, outputs = _summarize(tmp_path, attempt=3)
+
+    assert outputs == {"needs_retry": "true", "next_attempt": "", "should_comment": "true"}

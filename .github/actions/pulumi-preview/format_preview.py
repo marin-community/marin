@@ -136,11 +136,18 @@ def main() -> None:
         choices=("true", "false"),
         help="Whether the pulumi preview step succeeded.",
     )
+    parser.add_argument(
+        "--history-ok",
+        default="true",
+        choices=("true", "false"),
+        help="Whether deployment-history lookup succeeded when requested.",
+    )
+    parser.add_argument("--last-successful-update", default=None)
     parser.add_argument("--input", type=Path, required=True, help="Raw preview text.")
     parser.add_argument("--out-dir", type=Path, required=True)
     args = parser.parse_args()
 
-    ok = args.ok == "true"
+    ok = args.ok == "true" and args.history_ok == "true"
     raw = strip_ansi(args.input.read_text(encoding="utf-8", errors="replace"))
     raw = redact_user_emails(raw)
     counts = parse_counts(raw)
@@ -162,6 +169,8 @@ def main() -> None:
         "severity": sev,
         **counts.as_meta(),
     }
+    if args.last_successful_update:
+        meta["last_successful_update"] = args.last_successful_update
     (args.out_dir / "meta.json").write_text(
         json.dumps(meta, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

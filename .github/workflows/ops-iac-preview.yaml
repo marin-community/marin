@@ -60,6 +60,7 @@ jobs:
       attempt: ${{ steps.context.outputs.attempt }}
       deployment_check: ${{ steps.context.outputs.deployment_check }}
       merger: ${{ steps.context.outputs.merger }}
+      merged_at: ${{ steps.context.outputs.merged_at }}
       preview_matrix: ${{ steps.context.outputs.preview_matrix }}
       pr_number: ${{ steps.context.outputs.pr_number }}
       ref: ${{ steps.context.outputs.ref }}
@@ -75,6 +76,7 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PR_MERGED_AT: ${{ github.event.pull_request.merged_at }}
           PR_MERGER: ${{ github.event.pull_request.merged_by.login }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           RUN_SHA: ${{ github.sha }}
@@ -83,6 +85,7 @@ jobs:
           deployment_check=false
           attempt=0
           merger=""
+          merged_at=""
 
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
             pr_number="$PR_NUMBER"
@@ -91,6 +94,7 @@ jobs:
               deployment_check=true
               attempt=1
               merger="$PR_MERGER"
+              merged_at="$PR_MERGED_AT"
               ref="$PR_MERGE_SHA"
             fi
           elif [[ -n "$INPUT_ATTEMPT" && "$INPUT_ATTEMPT" != "0" ]]; then
@@ -114,14 +118,17 @@ jobs:
                 'select(.merged_at != null and .base.ref == $branch) | .merge_commit_sha' \
                 <<<"$pull_request")
               merger=$(jq -er '.merged_by.login' <<<"$pull_request")
+              merged_at=$(jq -er '.merged_at' <<<"$pull_request")
             fi
-            [[ "$merger" =~ ^[A-Za-z0-9-]+$ ]]
+            [[ -n "$merger" ]]
+            [[ -n "$merged_at" ]]
             [[ "$ref" =~ ^[0-9a-f]{40}$ ]]
           fi
 
           echo "attempt=$attempt" >> "$GITHUB_OUTPUT"
           echo "deployment_check=$deployment_check" >> "$GITHUB_OUTPUT"
           echo "merger=$merger" >> "$GITHUB_OUTPUT"
+          echo "merged_at=$merged_at" >> "$GITHUB_OUTPUT"
           {
             echo "preview_matrix<<EOF"
             echo "$PREVIEW_MATRIX"
@@ -187,6 +194,8 @@ jobs:
           work-dir: infra/pulumi
           service-account: ${{ env.PULUMI_CI_SERVICE_ACCOUNT }}
           gcp-project-id: ${{ env.PULUMI_CI_PROJECT }}
+          update-history: >-
+            ${{ needs.prepare.outputs.deployment_check == 'true' && 'last-successful' || 'skip' }}
 
   comment:
     if: >-
@@ -231,12 +240,14 @@ jobs:
           ATTEMPT: ${{ needs.prepare.outputs.attempt }}
           CHECK_DELAYS_MINUTES: ${{ env.CHECK_DELAYS_MINUTES }}
           MERGER: ${{ needs.prepare.outputs.merger }}
+          MERGED_AT: ${{ needs.prepare.outputs.merged_at }}
           PREVIEW_MATRIX: ${{ needs.prepare.outputs.preview_matrix }}
         run: |
           python3 .github/actions/pulumi-preview/summarize_deployment.py \
             --previews-dir iac-previews \
             --preview-matrix "$PREVIEW_MATRIX" \
             --check-delays-minutes "$CHECK_DELAYS_MINUTES" \
+            --merged-at "$MERGED_AT" \
             --attempt "$ATTEMPT" \
             --merger "$MERGER" \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \

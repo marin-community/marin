@@ -29,6 +29,7 @@ class StackPreview:
     stack: str
     severity: str
     diff: str
+    last_successful_update: str | None = None
 
 
 def load_stacks(previews_dir: Path) -> list[StackPreview]:
@@ -42,6 +43,7 @@ def load_stacks(previews_dir: Path) -> list[StackPreview]:
                 stack=meta["stack"],
                 severity=meta.get("severity", "error"),
                 diff=diff.strip(),
+                last_successful_update=meta.get("last_successful_update"),
             )
         )
     stacks.sort(key=lambda item: item.stack)

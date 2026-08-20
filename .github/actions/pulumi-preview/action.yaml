@@ -23,6 +23,9 @@ inputs:
   config-map:
     description: 'Optional config to apply before preview, as JSON: {"key": {"value": "v", "secret": false}}.'
     default: ""
+  update-history:
+    description: "Update history metadata to include: skip or last-successful."
+    default: "skip"
 runs:
   using: composite
   steps:
@@ -104,11 +107,35 @@ runs:
           echo "ok=false" >>"$GITHUB_OUTPUT"
         fi
 
+    - name: Read last successful update
+      if: inputs.update-history == 'last-successful'
+      id: history
+      shell: bash
+      env:
+        OUT_DIR: ${{ github.workspace }}/iac-preview-out
+        STACK: ${{ inputs.stack }}
+        WORK_DIR: ${{ inputs.work-dir }}
+      run: |
+        set -uo pipefail
+        history_ok=false
+        last_successful_update=""
+        if history=$(pulumi -C "$WORK_DIR" stack history \
+          --stack "$STACK" --json --page-size 100 2>"$OUT_DIR/history-error.txt") \
+          && last_successful_update=$(jq -r \
+            '[.[] | select(.kind == "update" and .result == "succeeded")] | first | .endTime // ""' \
+            <<<"$history"); then
+          history_ok=true
+        fi
+        echo "ok=$history_ok" >>"$GITHUB_OUTPUT"
+        echo "last_successful_update=$last_successful_update" >>"$GITHUB_OUTPUT"
+
     - name: Format preview artifact
       if: always()
       shell: bash
       env:
         PREVIEW_OK: ${{ steps.preview.outputs.ok }}
+        HISTORY_OK: ${{ steps.history.outputs.ok || 'true' }}
+        LAST_SUCCESSFUL_UPDATE: ${{ steps.history.outputs.last_successful_update }}
         STACK: ${{ inputs.stack }}
         OUT_DIR: ${{ github.workspace }}/iac-preview-out
         ACTION_PATH: ${{ github.action_path }}
@@ -117,6 +144,8 @@ runs:
         python3 "$ACTION_PATH/format_preview.py" \
           --stack "$STACK" \
           --ok "$PREVIEW_OK" \
+          --history-ok "$HISTORY_OK" \
+          --last-successful-update "$LAST_SUCCESSFUL_UPDATE" \
           --input "$OUT_DIR/raw.txt" \
           --out-dir "$OUT_DIR"
 
@@ -130,9 +159,11 @@ runs:
           ${{ github.workspace }}/iac-preview-out/diff.txt
         if-no-files-found: error
 
-    - name: Fail if preview failed
-      if: steps.preview.outputs.ok == 'false'
+    - name: Fail if preview or update history failed
+      if: >-
+        steps.preview.outputs.ok == 'false'
+        || (inputs.update-history == 'last-successful' && steps.history.outputs.ok != 'true')
       shell: bash
       run: |
-        echo "pulumi preview failed for stack ${{ inputs.stack }}" >&2
+        echo "pulumi deployment check failed for stack ${{ inputs.stack }}" >&2
         exit 1

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from assemble_comment import StackPreview, load_stacks
@@ -24,7 +25,16 @@ class DeploymentStatus:
         return bool(self.pending_stacks or self.error_stacks)
 
 
-def deployment_status(stacks: list[StackPreview], expected_stacks: set[str]) -> DeploymentStatus:
+def _timestamp(value: str) -> datetime:
+    timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if timestamp.tzinfo is None:
+        raise ValueError(f"timestamp lacks timezone: {value}")
+    return timestamp
+
+
+def deployment_status(
+    stacks: list[StackPreview], expected_stacks: set[str], merged_at: datetime
+) -> DeploymentStatus:
     previews = {stack.stack: stack for stack in stacks}
     if len(previews) != len(stacks):
         raise ValueError("duplicate stack preview artifacts")
@@ -35,11 +45,22 @@ def deployment_status(stacks: list[StackPreview], expected_stacks: set[str]) -> 
 
     missing = expected_stacks - previews.keys()
     errors = missing | {stack.stack for stack in stacks if stack.severity == "error"}
-    pending = {
-        stack.stack
-        for stack in stacks
-        if stack.severity not in {"none", "error"}
-    }
+    pending: set[str] = set()
+    for stack in stacks:
+        if stack.severity in {"none", "error"}:
+            continue
+        if stack.last_successful_update is None:
+            pending.add(stack.stack)
+            continue
+        try:
+            updated_at = _timestamp(stack.last_successful_update)
+        except ValueError:
+            errors.add(stack.stack)
+            continue
+        # A later full-stack update from main includes this earlier merge. Its
+        # historical preview may now describe rollback of the later update.
+        if updated_at <= merged_at:
+            pending.add(stack.stack)
     return DeploymentStatus(
         pending_stacks=tuple(sorted(pending)),
         error_stacks=tuple(sorted(errors)),
@@ -63,11 +84,13 @@ def render_comment(
     if not status.needs_retry:
         lines.append(f"✅ Pulumi reports no pending changes after check {attempt} of {max_attempts}.")
     else:
-        lines.append(f"@{merger}, run `pulumi up` from `main` for the changes merged by this PR.")
         if status.pending_stacks:
+            lines.append(f"@{merger}, run `pulumi up` from `main` for the changes merged by this PR.")
             lines.append(f"Pending changes: {_stack_list(status.pending_stacks)}.")
         if status.error_stacks:
-            lines.append(f"Preview errors prevented verification: {_stack_list(status.error_stacks)}.")
+            if not status.pending_stacks:
+                lines.append(f"@{merger}, investigate the failed Pulumi deployment check for this PR.")
+            lines.append(f"Verification errors: {_stack_list(status.error_stacks)}.")
 
     lines.extend(["", f"Check {attempt} of {max_attempts}: [workflow run]({run_url})."])
     if status.needs_retry and attempt < max_attempts:
@@ -91,6 +114,7 @@ def main() -> None:
     parser.add_argument("--previews-dir", type=Path, required=True)
     parser.add_argument("--preview-matrix", required=True)
     parser.add_argument("--check-delays-minutes", required=True)
+    parser.add_argument("--merged-at", required=True)
     parser.add_argument("--attempt", type=int, required=True)
     parser.add_argument("--merger", required=True)
     parser.add_argument("--run-url", required=True)
@@ -105,7 +129,7 @@ def main() -> None:
         raise ValueError(f"attempt {args.attempt} is outside the retry policy")
     if not check_delays_minutes or any(delay <= 0 for delay in check_delays_minutes):
         raise ValueError("check delays must be positive")
-    status = deployment_status(load_stacks(args.previews_dir), expected_stacks)
+    status = deployment_status(load_stacks(args.previews_dir), expected_stacks, _timestamp(args.merged_at))
     args.out.write_text(
         render_comment(
             status,
