@@ -588,6 +588,45 @@ groups:
       # threads under the message it already sent.
       - uid: training-loss-spike
         title: TrainingLossSpike
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+          notification: hero-run
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.run }} training loss is {{ $labels.reason }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/training-loss-spike-alert.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/loss_spikes
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: job, text: job, type: string }
+                - { selector: run, text: run, type: string }
+                - { selector: reason, text: reason, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
   # This warning finds a reporting RL run whose last rollout or policy step is 30
   # minutes old. Stall detection in this repo is per-producer and opt-in: the
   # training-stall rule covers Levanter runs that opt in by job name, and this one
