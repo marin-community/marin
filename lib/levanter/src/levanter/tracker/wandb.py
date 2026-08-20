@@ -37,6 +37,7 @@ WandbRun = Union["wandb.sdk.wandb_run.Run", "wandb.sdk.lib.disabled.RunDisabled"
 
 
 _WANDB_ARTIFACT_NAME_MAX_LENGTH = 128
+_WANDB_INIT_ERROR_KEY = "error"
 
 
 def _teardown_wandb_service_bounded(timeout: float) -> None:
@@ -405,9 +406,11 @@ class WandbConfig(TrackerConfig):
         process_count = jax.process_count()
         metadata_to_share = None
         if process_count > 1 and not is_primary_process:
-            metadata_to_share = jax_utils.multihost_broadcast_sync({"error": None}, is_source=False)
-            if metadata_to_share["error"] is not None:
-                raise RuntimeError(f"W&B initialization failed on process 0: {metadata_to_share['error']}")
+            metadata_to_share = jax_utils.multihost_broadcast_sync({_WANDB_INIT_ERROR_KEY: None}, is_source=False)
+            if metadata_to_share[_WANDB_INIT_ERROR_KEY] is not None:
+                raise RuntimeError(
+                    f"W&B initialization failed on process 0: {metadata_to_share[_WANDB_INIT_ERROR_KEY]}"
+                )
 
         try:
             r = wandb.init(
@@ -428,7 +431,7 @@ class WandbConfig(TrackerConfig):
         except Exception as e:
             if process_count > 1 and is_primary_process:
                 jax_utils.multihost_broadcast_sync(
-                    {"error": f"{type(e).__name__}: {e}"},
+                    {_WANDB_INIT_ERROR_KEY: f"{type(e).__name__}: {e}"},
                     is_source=True,
                 )
             raise
@@ -440,16 +443,16 @@ class WandbConfig(TrackerConfig):
         if process_count > 1:
             # we need to share wandb run information across all hosts, because we use it for checkpoint paths and things
             if is_primary_process:
-                metadata_to_share = dict(
-                    error=None,
+                metadata_to_share = {
+                    _WANDB_INIT_ERROR_KEY: None,
                     # entity=r.entity,
-                    project=r.project,
-                    name=r.name,
-                    tags=r.tags,
-                    id=r.id,
-                    group=r.group,
-                    minimum_log_step=minimum_log_step,
-                )
+                    "project": r.project,
+                    "name": r.name,
+                    "tags": r.tags,
+                    "id": r.id,
+                    "group": r.group,
+                    "minimum_log_step": minimum_log_step,
+                }
                 metadata_to_share = jax_utils.multihost_broadcast_sync(metadata_to_share, is_source=True)
 
             assert metadata_to_share is not None
