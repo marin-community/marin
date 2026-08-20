@@ -103,7 +103,12 @@ def _run_rows() -> list[tuple]:
                     role="trainer",
                 )
             )
-        for phase, seconds in (("rollout_or_inference_wait", 44.0), ("train_step", 6.0)):
+        for phase, seconds, outcome in (
+            ("rollout_or_inference_wait", 44.0, "success"),
+            ("train_step", 6.0, "success"),
+            # A step that raised partway through. Its duration is a different quantity.
+            ("train_step", 0.5, "failure"),
+        ):
             rows.append(
                 _row(
                     service="marinskyrl",
@@ -115,7 +120,7 @@ def _run_rows() -> list[tuple]:
                     job_id=JOB_ID,
                     node_name=NODES[0],
                     role="trainer",
-                    attributes={"phase": phase, "clock_domain": "critical_path", "outcome": "success"},
+                    attributes={"phase": phase, "clock_domain": "critical_path", "outcome": outcome},
                 )
             )
         for work_kind, count in (("rollout", 64.0), ("sample", 512.0), ("generated_token", 131072.0)):
@@ -333,9 +338,13 @@ def test_three_producers_answer_under_one_run_id(store) -> None:
 
 
 def test_the_trainer_panels_render_for_that_run(store) -> None:
-    (phases,) = store.execute(_panel_sql("Critical-path phase duration")).fetchall()[:1]
-    assert phases[1] == pytest.approx(44.0)
-    assert phases[2] == pytest.approx(6.0)
+    # A failed step ran 0.5s before raising; a successful one takes 6s. Blending them would
+    # report 3.25s, which describes neither.
+    phases = store.execute(_panel_sql("Critical-path phase duration")).fetchall()
+    by_series = {row[1]: row[2] for row in phases}
+    assert by_series["rollout_or_inference_wait · success"] == pytest.approx(44.0)
+    assert by_series["train_step · success"] == pytest.approx(6.0)
+    assert by_series["train_step · failure"] == pytest.approx(0.5)
 
     work = store.execute(_panel_sql("Work completed")).fetchall()
     assert [row[1] for row in work] == [64.0] * 6

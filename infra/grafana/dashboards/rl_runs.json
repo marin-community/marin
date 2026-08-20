@@ -247,7 +247,7 @@
       "id": 2,
       "type": "timeseries",
       "title": "Critical-path phase duration",
-      "description": "Seconds the trainer spent waiting on rollouts or inference against seconds it spent in the optimizer step, both measured on the exclusive critical path. Rollout wait dominating is the trainer starved for generation, not slow at training.",
+      "description": "Seconds the trainer spent waiting on rollouts or inference against seconds in the optimizer step, on the exclusive critical path. Rollout wait dominating is the trainer starved for generation rather than slow at training. Outcome is part of the series because a phase that raised recorded how long it ran before failing, which is not how long the phase takes.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -297,7 +297,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN json_get(attributes_json, 'phase') = 'rollout_or_inference_wait' THEN value END) AS rollout_wait, AVG(CASE WHEN json_get(attributes_json, 'phase') = 'train_step' THEN value END) AS train_step FROM \"telemetry_v1\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND json_get(attributes_json, 'clock_domain') = 'critical_path' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, json_get(attributes_json, 'phase') || ' · ' || json_get(attributes_json, 'outcome') AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND json_get(attributes_json, 'clock_domain') = 'critical_path' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -316,13 +316,13 @@
               "type": "timestamp_epoch"
             },
             {
-              "selector": "rollout_wait",
-              "text": "rollout_wait",
-              "type": "number"
+              "selector": "series",
+              "text": "series",
+              "type": "string"
             },
             {
-              "selector": "train_step",
-              "text": "train_step",
+              "selector": "value",
+              "text": "value",
               "type": "number"
             }
           ]
