@@ -82,6 +82,7 @@ def build_hero_run(
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
     moe_implementation: str | None = None,
+    ragged_all_to_all_splits_per_peer: int = 1,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
     save_checkpoints: bool = False,
@@ -147,6 +148,7 @@ def build_hero_run(
     }
     if overrides:
         model = dataclasses.replace(model, **overrides)
+    model = dataclasses.replace(model, ragged_all_to_all_splits_per_peer=ragged_all_to_all_splits_per_peer)
     # A bank that is not divisible by the expert axis fails inside `moe_mlp`, which is after the rack
     # is already allocated and the workspace is built. Reject it here instead.
     if model.num_experts % HERO_EP_EXPERT_AXIS_SIZE != 0:
@@ -162,9 +164,7 @@ def build_hero_run(
     backend_tag = model.moe_implementation.replace("_", "-")
     capacity_tag = f"capacity-{model.capacity_factor:g}"
     # Only the pooled transport has a receiver capacity of its own to report.
-    transport_capacity_tags = (
-        (f"transport-capacity-{model.pooled_transport_capacity_factor:g}",) if pooled else ()
-    )
+    transport_capacity_tags = (f"transport-capacity-{model.pooled_transport_capacity_factor:g}",) if pooled else ()
     wave_tag = f"expert-waves-{model.num_expert_waves}"
     size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
@@ -422,6 +422,13 @@ def build_hero_run(
     help="Override the MoE backend, e.g. ragged_all_to_all. Defaults to the hero spec.",
 )
 @click.option(
+    "--ragged-all-to-all-splits-per-peer",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Split each peer transfer into this many ragged updates. Ragged backend only.",
+)
+@click.option(
     "--processes-per-task",
     type=click.IntRange(min=1),
     default=HERO_PROCESSES_PER_TASK,
@@ -451,6 +458,7 @@ def main(
     profile_start_step: int,
     training_data: str,
     moe_implementation: str | None,
+    ragged_all_to_all_splits_per_peer: int,
     processes_per_task: int,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
@@ -475,6 +483,7 @@ def main(
         profile_start_step=profile_start_step,
         training_data_mode=TrainingDataMode(training_data),
         moe_implementation=moe_implementation,
+        ragged_all_to_all_splits_per_peer=ragged_all_to_all_splits_per_peer,
         processes_per_task=processes_per_task,
     )
 
