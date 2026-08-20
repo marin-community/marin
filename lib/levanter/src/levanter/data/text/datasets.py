@@ -966,7 +966,7 @@ class LmDataConfig:
                 entry = catalog.entry(split, name)
                 if entry is None:
                     if split == "train":
-                        raise ValueError(f"Cache catalog {self.cache_catalog} has no entry for {split}/{name}")
+                        raise KeyError(f"Cache catalog {self.cache_catalog} has no entry for {split}/{name}")
                     logger.warning(
                         "Cache catalog %s has no entry for %s/%s; skipping", self.cache_catalog, split, name
                     )
