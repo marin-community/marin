@@ -3,7 +3,7 @@
 
 """Iris client APIs."""
 
-from iris.client.client import IrisClient, Job, JobAlreadyExists, JobFailedError, Task
+from iris.client.client import Attempt, IrisClient, Job, JobAlreadyExists, JobFailedError, Task, TaskLogEntry
 from iris.client.workload import (
     AttemptStatus,
     BuildMetrics,
@@ -12,6 +12,8 @@ from iris.client.workload import (
     JobStatus,
     ResourceRequest,
     ResourceUsage,
+    TaskActionResult,
+    TaskDescription,
     TaskStatus,
 )
 from iris.resources.state import FederationState, JobState, TaskState

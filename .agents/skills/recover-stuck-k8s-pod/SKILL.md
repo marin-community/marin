@@ -19,7 +19,7 @@ GPU allocation is gone.
   proof of reboot completion first.
 - Extract the canonical Iris attempt from the `task` container's
   `IRIS_TASK_ID`. Labels are sanitized or truncated display identifiers; never
-  use them as targets for `iris job kick`.
+  use them as targets for an Iris Attempt action.
 - Do not use a broad `kubectl drain --force`. Inventory sibling pods, owners,
   disruption budgets, volumes, and local storage before approving collateral.
 - Record whether the node was already cordoned. Uncordon only a node this
@@ -84,15 +84,15 @@ unmanaged pods. Split `<attempt>` (for example `/user/job/0:3`) at the task
 suffix and check current Iris state:
 
 ```bash
-uv run iris --cluster=<cluster> job summary <job>
+uv run iris --cluster=<cluster> job describe <job>
 ```
 
 Before node recovery, choose an explicit retry policy with the operator:
 
-- Stop the parent job with `iris job stop <job>` when all work must remain
+- Cancel the parent job with `iris job cancel <job>` when all work must remain
   quiescent.
 - Mark only the canonical attempt preempted with
-  `iris job kick <attempt> --state preempted` when the operator accepts Iris
+  `iris attempt preempt <attempt>` when the operator accepts Iris
   scheduling its retry within the job's preemption budget.
 
 Do not kick by pod label, and do not permit an immediate retry onto a node that

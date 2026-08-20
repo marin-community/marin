@@ -48,7 +48,7 @@ The command prints a job ID on success. Note it for monitoring.
 
 Always ask the user before stopping. Stopping kills all child jobs (coordinators, workers).
 ```bash
-uv run iris --config lib/iris/config/marin.yaml job stop <JOB_ID>
+uv run iris --config lib/iris/config/marin.yaml job cancel <JOB_ID>
 ```
 
 ## Monitoring

@@ -276,7 +276,7 @@ Before interpreting deltas:
    fraction of a percent. Explain and normalize any accepted mismatch.
 3. Confirm the control and treatment completed the same execution and stage
    set.
-4. Inspect `iris job summary <IRIS_JOB_ID>` for OOMs and peak task memory.
+4. Inspect `iris job describe <IRIS_JOB_ID>` for OOMs and peak task memory.
 5. Check job logs for retries, preemptions, hardware faults, and stragglers.
 6. Run the change's semantic validation separately. Matching item counts do not
    prove output equivalence.

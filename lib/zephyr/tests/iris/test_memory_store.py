@@ -9,8 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import cloudpickle
 import pytest
-from iris.cluster.types import JobName
-from iris.rpc import job_pb2
+from iris.cluster.types import JobName, TaskAttempt
 from iris.test_util import SentinelFile
 from rigging.timing import Duration, ExponentialBackoff
 from zephyr.dataset import Dataset
@@ -83,18 +82,17 @@ def test_memory_store_recovers_partition_after_iris_preemption(iris_integration_
             recovery_timeout=15,
         )
         task_id = _worker_task_id(context, 0)
-        initial_attempt = iris_integration_client._iris.task_status(task_id).current_attempt_id
+        initial_attempt = iris_integration_client._iris.task_status(task_id).current_attempt_number
         gate_reload.signal()
 
-        (kick_result,) = iris_integration_client._iris.kick_tasks(
-            [task_id.to_wire()],
-            desired_state=job_pb2.TASK_STATE_PREEMPTED,
+        (kick_result,) = iris_integration_client._iris.preempt_tasks(
+            [TaskAttempt(task_id)],
             reason="memory-store recovery test",
         )
-        assert kick_result.queued
+        assert kick_result.accepted
 
         restarted = ExponentialBackoff(initial=0.1, maximum=1).wait_until(
-            lambda: iris_integration_client._iris.task_status(task_id).current_attempt_id > initial_attempt,
+            lambda: iris_integration_client._iris.task_status(task_id).current_attempt_number > initial_attempt,
             timeout=Duration.from_seconds(15),
         )
         assert restarted

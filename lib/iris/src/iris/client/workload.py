@@ -105,6 +105,25 @@ class TaskStatus:
 
 
 @dataclass(frozen=True, slots=True)
+class TaskDescription:
+    """Task snapshot with submitted resources and failure diagnostics."""
+
+    status: TaskStatus
+    resources: ResourceRequest
+    root_cause_highlights: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TaskActionResult:
+    """Controller acceptance result for one requested Task or Attempt action."""
+
+    target: str
+    task_id: JobName | None
+    accepted: bool
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
 class JobStatus:
     """Current snapshot of a logical Job name.
 

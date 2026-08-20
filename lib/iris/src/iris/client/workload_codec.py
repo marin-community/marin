@@ -13,11 +13,13 @@ from iris.client.workload import (
     JobStatus,
     ResourceRequest,
     ResourceUsage,
+    TaskActionResult,
+    TaskDescription,
     TaskStatus,
 )
 from iris.cluster.types import JobName
 from iris.resources.state import FederationState, JobState, TaskState
-from iris.rpc import job_pb2, time_pb2
+from iris.rpc import controller_pb2, job_pb2, time_pb2
 from iris.time_proto import timestamp_from_proto
 
 
@@ -125,6 +127,23 @@ def task_status_from_proto(value: job_pb2.TaskStatus) -> TaskStatus:
         backend_id=value.backend_id,
         execution_cluster_id=value.cluster,
         status_message=value.status_message,
+    )
+
+
+def task_description_from_proto(value: controller_pb2.Controller.GetTaskStatusResponse) -> TaskDescription:
+    return TaskDescription(
+        status=task_status_from_proto(value.task),
+        resources=_resources(value.job_resources),
+        root_cause_highlights=tuple(value.root_cause_highlights),
+    )
+
+
+def task_action_result_from_proto(value: controller_pb2.Controller.KickResult) -> TaskActionResult:
+    return TaskActionResult(
+        target=value.target,
+        task_id=JobName.from_wire(value.task_id) if value.task_id else None,
+        accepted=value.queued,
+        message=value.detail,
     )
 
 

@@ -159,15 +159,32 @@ curl -sf http://localhost:10000/health && echo " controller healthy"
 ## Job Management
 
 ```bash
-iris job run -- python train.py         # submit + stream logs
-iris job list --state running           # filter by state
-iris job logs /user/job-name -f         # follow job + child logs
-iris job stop /user/job-name            # exact job name + its children
-iris job stop --prefix /user/job-prefix # all jobs with this ID prefix
-iris job summary /user/job-name         # per-task state, exit, duration, peak memory
+iris job run -- python train.py           # submit + stream logs
+iris job list --state running             # filter by state
+iris job logs /user/job-name -f           # follow job + child logs
+iris job cancel /user/job-name            # exact job name + its children
+iris job complete /user/job-name          # mark unfinished descendants successful, then stop them
+iris job cancel --prefix /user/job-prefix # all jobs with this ID prefix
+iris job describe /user/job-name          # per-task state, exit, duration, peak memory
 ```
 
-The subcommands are `list` and `summary`. There is no `job ls` and no `job info`.
+The workload command hierarchy is:
+
+| Resource | Inspection | Actions |
+| --- | --- | --- |
+| Job | `list`, `describe`, `logs`, `wait` | `run`, `cancel`, `complete` |
+| Task | `list`, `describe`, `events`, `logs`, `wait` | `exec`, `profile`, `preempt`, `fail` |
+| Attempt | `describe`, `events`, `logs`, `wait` | `profile`, `preempt`, `fail` |
+
+All three workload `logs` commands accept the same filters and `--follow`. Use
+`job logs` for the aggregate, `task logs` across a Task's Attempts, and
+`attempt logs` for one numbered Attempt. `process logs` is reserved for
+controller, worker, and task-runtime diagnostics.
+
+Task actions without an attempt suffix target the current attempt. Attempt actions
+require `/user/job/task:attempt` and are accepted only while that attempt is still
+current. `exec` remains a Task action because its request identifies a Task rather
+than a numbered Attempt.
 
 `job logs` returns the last 1000 lines by default. A multi-rank gang emits that
 many in seconds, so a grep for anything earlier in the run comes back empty:
@@ -293,27 +310,32 @@ the task produced no matching logs.
 The dashboard's find box searches only the lines loaded in the browser. Use the
 full-log filter when the target may be outside that segment; use find for visible lines.
 
-### Kicking a wedged task (emergency override)
+### Acting on a wedged Task or Attempt
 
 When a scheduling bug or stuck node strands a task on a machine, force its
 current attempt terminal without touching the rest of the job:
 
 ```bash
-iris job kick /user/job/0                       # preempt task 0 (reschedules if budget remains)
-iris job kick /user/job/0 --state failed        # fail task 0 with no retry
-iris job kick /user/job/0:3                      # only if attempt 3 is still current (guards against a race)
-iris job kick /user/job --reason "stuck node"   # kick every active task in the job
+iris task preempt /user/job/0                   # current attempt; reschedules if budget remains
+iris task fail /user/job/0                      # current attempt; no retry
+iris attempt preempt /user/job/0:3              # accepted only if attempt 3 is still current
+iris attempt fail /user/job/0:3 --reason "bad output"
 ```
 
-The kick is queued on the controller and applied on the next control tick
+The action is queued on the controller and applied on the next control tick
 through the same finalization path the scheduler's preemptions use, so it shares
 one write transaction with the scheduler instead of racing it. Only tasks
-running on a worker (ASSIGNED / BUILDING / RUNNING) can be kicked; pending or
+running on a worker (ASSIGNED / BUILDING / RUNNING) can be changed; pending or
 already-terminal tasks are rejected with a reason. `preempted` charges the
 preemption budget; `failed` is terminal with no retry.
 
-`kick`, `stop`, and `kill` also read ids from **stdin** (`--stdin`, or a literal
-`-` target) and take `--dry-run`. This is the query→act bridge: select the
+Use `job complete` only when the workload should be recorded as successful. It
+marks the Job and every unfinished Task and Attempt `SUCCEEDED`, then stops
+their runtimes. `job cancel` records the Job as `KILLED` instead.
+
+`task preempt`, `task fail`, and `job cancel` also read IDs from **stdin**
+(`--stdin`, or a literal `-` target) and take `--dry-run`. This is the
+query→act bridge: select the
 targets with SQL, preview, then fire. See "Bulk actions: query → act" below.
 
 ### Recovering a stuck terminating Kubernetes pod
@@ -442,8 +464,8 @@ Full table list: `iris query "SELECT name FROM sqlite_master WHERE type='table'"
 ### Bulk actions: query → act
 
 `iris query` is admin-only and read-only, so it is the safe surface for *finding*
-the exact set of tasks/jobs you want to act on. `iris job kick`, `iris job stop`,
-and `iris job kill` read ids from **stdin** (`--stdin`, or a literal `-`), so a
+the exact set of tasks/jobs you want to act on. `iris task preempt`, `iris task fail`,
+and `iris job cancel` read IDs from **stdin** (`--stdin`, or a literal `-`), so a
 query pipes straight into an action — no hand-copying ids. Stdin parsing is
 CSV-tolerant: it takes the first field of each line and keeps only ids (leading
 `/`), so a `-f csv` header row and trailing columns are dropped automatically.
@@ -456,14 +478,13 @@ SLICE=marin-tpu-v4-reserved-2048-us-central2-b-...
 SEL="SELECT t.task_id FROM tasks t JOIN workers w ON t.current_worker_id=w.worker_id
      WHERE w.slice_id='$SLICE' AND t.state IN (2,3,9) AND t.job_id NOT LIKE '/larry/%'"
 
-iris query -f csv "$SEL" | iris job kick --stdin --dry-run          # preview
-iris query -f csv "$SEL" | iris job kick --stdin --reason "drain slice for /larry"
+iris query -f csv "$SEL" | iris task preempt --stdin --dry-run          # preview
+iris query -f csv "$SEL" | iris task preempt --stdin --reason "drain slice for /larry"
 ```
 
-`--state preempted` (default) reschedules the kicked tasks elsewhere; `--state
-failed` does not retry. Prefer kicking **tasks** (`t.task_id`, task index kept)
-over whole jobs when you only need to clear specific workers — a job target
-kicks *all* its active tasks, including ones on other slices.
+`task preempt` reschedules under the Task's preemption budget; `task fail` does
+not retry. Select Task IDs (`t.task_id`, task index kept) when you only need to
+clear specific workers. Canceling the Job would stop all of its Tasks.
 
 Canonical joins (the schema doesn't pre-wire these, so keep them here):
 
@@ -487,7 +508,7 @@ WHERE w.worker_id IN (
 ```
 
 To *dump* rather than act, feed the same selection to `iris job logs` /
-`iris job summary` per id, or read the task rows directly with a wider `SELECT`.
+`iris job describe` per ID, or read the task rows directly with a wider `SELECT`.
 
 ### Offline checkpoint analysis
 
@@ -619,8 +640,8 @@ subpath and does not reach the controller's finelog server.
 | Job stuck PENDING | `iris rpc controller get-scheduler-state` for constraints. Check quota: `iris query "SELECT name, consecutive_failures, quota_reason FROM scaling_groups WHERE quota_reason != ''"` |
 | Workers not joining (GCP) | `iris cluster vm status` for slice lifecycle. SSH to VM, check bootstrap logs. |
 | Autoscaler not scaling | `iris rpc controller get-autoscaler-status` — check `backoff_until_ms`, `consecutive_failures`. |
-| Task retrying | `iris job summary /user/job` — per-task state and exit codes; `iris job logs /user/job` for the per-attempt errors. |
-| Task failed with exit 137 / suspected OOM | `iris job summary /user/job` — per-task peak memory + exit code. If most shards peak near the container memory limit, raise `--memory` on resubmit. |
+| Task retrying | `iris job describe /user/job` — per-task state and exit codes; `iris job logs /user/job` for the per-attempt errors. |
+| Task failed with exit 137 / suspected OOM | `iris job describe /user/job` — per-task peak memory + exit code. If most shards peak near the container memory limit, raise `--memory` on resubmit. |
 | Dashboard unreachable | Verify tunnel is alive. `curl -sf http://localhost:10000/health`. |
 | `ArchMismatchImageExecuted` alert, or tasks die instantly with exit 255 | See [Image architecture mismatch](#image-architecture-mismatch). |
 

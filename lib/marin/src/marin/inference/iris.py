@@ -102,7 +102,7 @@ class RemoteInferenceSession:
         client = iris_ctx().client
         for job in self.jobs:
             job_id = JobName.from_string(str(job.job_id))
-            status = client.status(job_id)
+            status = client.job_status(job_id)
             if is_job_finished(status.state):
                 return InferenceBackendState.FINISHED
             tasks = client.list_tasks(job_id)

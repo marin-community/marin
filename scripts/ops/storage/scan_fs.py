@@ -673,9 +673,9 @@ def run_distributed(
     finally:
         if worker_job is not None:
             try:
-                worker_job.terminate()
+                worker_job.cancel()
             except Exception:
-                pass
+                log.exception("Failed to cancel storage scan worker job %s", worker_job.job_id)
         server.stop()
 
     # Flush remaining buffered objects
