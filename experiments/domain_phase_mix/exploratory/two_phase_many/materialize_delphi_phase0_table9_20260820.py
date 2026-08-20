@@ -50,6 +50,7 @@ from marin.evaluation.olmo_base_eval.metrics import (
 )
 
 EXPERIMENT_ROOT = "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "delphi_3e18_phase0_prefix_replay_20260820"
+RESULT_ROOT = "gs://marin-us-east5/evaluation/olmo_base_eval_table9"
 DEFAULT_OUTPUT_DIR = f"{EXPERIMENT_ROOT}/materialized_table9"
 EXPECTED_ROWS = 280
 EXPECTED_PREFIX_TRAIN_STEPS = 2400
@@ -225,6 +226,11 @@ def _result_source_name(result: Mapping[str, Any], path: str) -> str:
     if not isinstance(provenance, dict) or not provenance.get("source_run_name"):
         raise ValueError(f"Result {path} has no provenance.source_run_name")
     return str(provenance["source_run_name"])
+
+
+def _is_target_result(result: Mapping[str, Any]) -> bool:
+    provenance = result.get("provenance")
+    return isinstance(provenance, dict) and provenance.get("panel") == EXPECTED_PANEL
 
 
 def _fit_component_column(component: str) -> str:
@@ -426,6 +432,7 @@ def write_tables(tables: MaterializedTables, output_dir: str) -> dict[str, str]:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--experiment-root", default=EXPERIMENT_ROOT)
+    parser.add_argument("--result-root", default=RESULT_ROOT)
     parser.add_argument("--source-manifest", help="Explicit full source_run_specs.json; otherwise discover it")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--allow-incomplete", action="store_true")
@@ -438,12 +445,18 @@ def main() -> None:
         manifest_path, source_specs, manifest_sha256 = _load_full_manifest(args.source_manifest, EXPECTED_ROWS)
     else:
         manifest_path, source_specs, manifest_sha256 = _select_full_manifest(args.experiment_root, EXPECTED_ROWS)
-    result_paths = _glob_urls(f"{args.experiment_root.rstrip('/')}/**/olmo_base_eval_table9_results.json")
+    discovered_result_paths = _glob_urls(
+        f"{args.result_root.rstrip('/')}/t9_boundary_*/olmo_base_eval_table9_results.json"
+    )
+    result_paths = []
     result_records = []
-    for path in result_paths:
+    for path in discovered_result_paths:
         value, _ = _read_json(path)
         if not isinstance(value, dict):
             raise ValueError(f"Result {path} is not an object")
+        if not _is_target_result(value):
+            continue
+        result_paths.append(path)
         result_records.append(value)
     tables = materialize_tables(
         source_specs,
@@ -454,6 +467,8 @@ def main() -> None:
         source_manifest_path=manifest_path,
         source_manifest_sha256=manifest_sha256,
     )
+    tables.coverage["result_root"] = args.result_root
+    tables.coverage["discovered_target_results"] = len(result_records)
     written = write_tables(tables, args.output_dir)
     print(
         json.dumps(

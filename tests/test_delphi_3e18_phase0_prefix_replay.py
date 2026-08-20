@@ -82,6 +82,16 @@ def _result(source_spec: dict, value: float) -> dict:
     }
 
 
+def test_materializer_filters_evaluator_root_to_the_frozen_panel() -> None:
+    target = _result(_source_spec(0), 1.0)
+    unrelated = _result(_source_spec(0), 1.0)
+    unrelated["provenance"]["panel"] = "another_panel"
+
+    assert materialize._is_target_result(target)
+    assert not materialize._is_target_result(unrelated)
+    assert not materialize._is_target_result({"provenance": "malformed"})
+
+
 def test_materialize_phase0_table9_emits_fit_compatible_component_targets() -> None:
     specs = [_source_spec(0), _source_spec(1)]
     results = [_result(specs[0], 1.0), _result(specs[1], 2.0)]
