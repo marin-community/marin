@@ -21,8 +21,8 @@ from finelog.embedded import require_embedded_server
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client.local_client import make_local_client
 from iris.cluster.controller.auth import NativeProxyAuthConfig, NativeProxyAuthMode
-from iris.cluster.types import JobName
 from iris.managed_thread import thread_container_scope
+from iris.resources.names import JobName
 from iris.test_util import SentinelFile
 from iris.testing.config import make_controller_only_config
 from rigging.timing import Duration, ExponentialBackoff

@@ -3,7 +3,7 @@
 
 """Local in-process cluster for testing.
 
-Runs Controller + Autoscaler(GcpWorkerProvider + InMemoryGcpService(LOCAL)) in the current process.
+Runs ControllerRuntime + Autoscaler(GcpWorkerProvider + InMemoryGcpService(LOCAL)) in the current process.
 Workers are threads, not VMs. No Docker, no GCS, no SSH.
 
 This module lives inside providers/local/ to co-locate it with the provider
@@ -15,7 +15,6 @@ Provides:
 - make_local_cluster_config: Build a fully-configured IrisClusterConfig for local execution
 """
 
-import secrets
 import tempfile
 import threading
 from pathlib import Path
@@ -24,7 +23,7 @@ from finelog.client.log_client import Table
 from rigging.credential_store import CredentialRecord, save_credentials
 from rigging.timing import Duration
 
-from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
+from iris.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.config import (
     GcpPlatformConfig,
     IrisClusterConfig,
@@ -34,27 +33,32 @@ from iris.cluster.config import (
     make_local_config,
 )
 from iris.cluster.constraints import worker_attributes_from_resources
-from iris.cluster.controller.auth import SESSION_TOKEN_TTL_SECONDS, create_controller_auth
+from iris.cluster.controller.auth import create_controller_auth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.scaling_group import (
     DEFAULT_SCALE_DOWN_RATE_LIMIT,
     DEFAULT_SCALE_UP_RATE_LIMIT,
     ScalingGroup,
 )
-from iris.cluster.controller.controller import (
-    Controller,
+from iris.cluster.controller.composition import compose_controller_process
+from iris.cluster.controller.log_stack import build_log_stack
+from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.process import ControllerProcess
+from iris.cluster.controller.runtime import (
     ControllerConfig,
 )
-from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.types import find_free_port
 from iris.cluster.platforms.vm_lifecycle import ControllerStatus
 from iris.cluster.service_mode import ServiceMode
-from iris.cluster.types import DEFAULT_BACKEND_ID, AcceleratorType
+from iris.cluster.types import (
+    DEFAULT_BACKEND_ID,
+    AcceleratorType,
+)
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
+from iris.rpc.worker_client import RpcWorkerClient, RpcWorkerStubFactory
 
 
 def create_local_autoscaler(
@@ -163,7 +167,7 @@ def create_local_autoscaler(
 class LocalCluster:
     """In-process cluster for local testing.
 
-    Runs Controller + Autoscaler(GcpWorkerProvider + InMemoryGcpService(LOCAL)) in the
+    Runs ControllerRuntime + Autoscaler(GcpWorkerProvider + InMemoryGcpService(LOCAL)) in the
     current process. Workers are threads, not VMs. No Docker, no GCS, no SSH.
 
     A single instance can be stopped and restarted via restart(). The controller
@@ -178,12 +182,11 @@ class LocalCluster:
     ):
         self._config = config
         self._threads = threads or ThreadContainer("local-cluster")
-        self._controller: Controller | None = None
+        self._controller: ControllerProcess | None = None
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._autoscaler: Autoscaler | None = None
         self._autoscaler_temp_dir: tempfile.TemporaryDirectory | None = None
         self._stopped = threading.Event()
-        self._auto_login_token: str | None = None
         # Persistent across stop()/start() so checkpoints survive restart().
         self._db_dir = tempfile.TemporaryDirectory(prefix="iris_local_controller_db_")
 
@@ -214,7 +217,7 @@ class LocalCluster:
         autoscaler_threads = controller_threads.create_child("autoscaler") if controller_threads else None
 
         # The log stack is built before the autoscaler so its provisioning table
-        # is a constructor arg; the Controller owns it and tears it down at stop().
+        # is a constructor arg; the ControllerRuntime owns it and tears it down at stop().
         log_stack = build_log_stack(
             log_service_address="",
             local_log_dir=Path(self._db_dir.name) / "log-server",
@@ -231,6 +234,7 @@ class LocalCluster:
         )
 
         controller_config = ControllerConfig(
+            cluster_id=self._config.name,
             host="127.0.0.1",
             port=port,
             remote_state_dir=self._config.storage.remote_state_dir or f"file://{state_dir}",
@@ -249,12 +253,12 @@ class LocalCluster:
         # drives the autoscaler via backend.autoscale and persists the returned
         # state each tick.
         provider = RpcTaskBackend(
-            stub_factory=RpcWorkerStubFactory(),
+            worker_client=RpcWorkerClient(RpcWorkerStubFactory()),
             unreachable_grace=controller_config.worker_unreachable_grace,
             autoscaler=self._autoscaler,
         )
 
-        self._controller = Controller(
+        self._controller = compose_controller_process(
             config=controller_config,
             backends={DEFAULT_BACKEND_ID: provider},
             log_stack=log_stack,
@@ -263,27 +267,11 @@ class LocalCluster:
         )
         self._controller.start()
 
-        # Auto-login: mint an in-process admin JWT so the local dashboard can open a
-        # browser session (the `?session_token=` link). Raw tokens won't work since
-        # the verifier only accepts JWTs; the CLI itself authenticates by loopback
-        # trust (the controller binds 127.0.0.1) and needs no cached token.
         url = self._controller.url
-        # jti is for log correlation only — the local session token is stateless
-        # (nothing persisted, never revocable), like every other iris token. The
-        # admin role is config-derived (RolePolicy), so no user row is created.
-        key_id = f"iris_s_local_{secrets.token_hex(8)}"
-        assert auth.jwt_manager is not None  # create_controller_auth always builds one
-        jwt_token = auth.jwt_manager.create_token("local-admin", "admin", key_id, ttl_seconds=SESSION_TOKEN_TTL_SECONDS)
-
         cluster_name = self._config.name or "local"
         save_credentials(CredentialRecord(cluster=cluster_name, endpoint=url))
-        self._auto_login_token = jwt_token
 
         return url
-
-    @property
-    def auto_login_token(self) -> str | None:
-        return self._auto_login_token
 
     def stop(self) -> None:
         self._stopped.set()
@@ -344,6 +332,6 @@ def make_local_cluster_config(max_workers: int) -> IrisClusterConfig:
             device_type=AcceleratorType.CPU,
         ),
     )
-    base_config = IrisClusterConfig(scale_groups={"local-cpu": sg})
+    base_config = IrisClusterConfig(name="local", scale_groups={"local-cpu": sg})
 
     return make_local_config(base_config)

@@ -37,7 +37,7 @@ from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 import numpy as np
-from iris.cluster.client.job_info import get_job_info
+from iris.client.job_info import get_job_info
 from iris.runtime.jax_init import initialize_jax
 from jax.experimental import multihost_utils
 from jax.sharding import Mesh, NamedSharding

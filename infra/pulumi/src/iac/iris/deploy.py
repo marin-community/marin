@@ -29,9 +29,11 @@ from google.protobuf import json_format
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient, Job
 from iris.cluster.constraints import region_constraint
-from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
+from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.resources.names import JobName
 from iris.resources.state import is_job_finished
 from iris.rpc import job_pb2
+from iris.rpc.legacy.job_codec import resource_spec_from_proto
 from rigging.connect import proxy_path
 from rigging.credentials import ClientCredentials
 from rigging.secrets import resolve_secret_spec
@@ -101,12 +103,7 @@ def resolve_env(spec: ServiceSpec) -> dict[str, str]:
 
 def resources_from_spec(spec: ServiceSpec) -> ResourceSpec:
     proto = json_format.ParseDict(spec.resources, job_pb2.ResourceSpecProto())
-    return ResourceSpec(
-        cpu=proto.cpu_millicores / 1000.0,
-        memory=proto.memory_bytes,
-        disk=proto.disk_bytes,
-        device=proto.device if proto.HasField("device") else None,
-    )
+    return resource_spec_from_proto(proto)
 
 
 def submit_service(client: IrisClient, spec: ServiceSpec, env_vars: dict[str, str]) -> Job:

@@ -134,10 +134,11 @@ class Provenance:
             # built_by feeds per-user namespacing; a non-string is a malformed payload,
             # not an identity.
             raise TypeError(f"built_by must be a string or null, got {type(built_by).__name__}")
+        tree_hash = str(d.get("tree_hash", ""))
         return cls(
-            tree_hash=d["tree_hash"],
-            base_commit=d["base_commit"],
-            dirty=bool(d["dirty"]),
+            tree_hash=tree_hash,
+            base_commit=str(d.get("base_commit", "")) or tree_hash,
+            dirty=bool(d.get("dirty", False)),
             branch=d.get("branch"),
             built_by=built_by,
             git_remote=d.get("git_remote"),

@@ -17,18 +17,18 @@ from iris.client.workload import (
     TaskDescription,
     TaskStatus,
 )
-from iris.cluster.types import JobName
+from iris.resources.names import JobName
 from iris.resources.state import FederationState, JobState, TaskState
 from iris.rpc import controller_pb2, job_pb2, time_pb2
 from iris.time_proto import timestamp_from_proto
 
 
 def job_state_from_proto(value: int) -> JobState:
-    return JobState(job_pb2.JobState.Name(value).removeprefix("JOB_STATE_").lower())
+    return JobState(value)
 
 
 def _task_state_from_proto(value: int) -> TaskState:
-    return TaskState(job_pb2.TaskState.Name(value).removeprefix("TASK_STATE_").lower())
+    return TaskState(value)
 
 
 def _federation_state_from_proto(value: int) -> FederationState:

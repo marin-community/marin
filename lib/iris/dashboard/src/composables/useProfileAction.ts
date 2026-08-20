@@ -6,7 +6,9 @@
  * and thread dumps render in a new window.
  */
 import { ref } from 'vue'
+import { createResource, RESOURCE_MESSAGES, RESOURCE_TYPES } from '@/composables/useResources'
 import { openSpeedscopeWindow } from '@/utils/speedscope'
+import type { ResourceAttemptIdentity } from '@/types/rpc'
 
 type RpcCall = (method: string, body?: Record<string, unknown>) => Promise<{ profileData?: string; error?: string }>
 
@@ -99,6 +101,61 @@ export function useProfileAction(rpcCall: RpcCall, target: string | (() => strin
     } catch (e) {
       pending?.cancel()
       alert(`${profilerType.toUpperCase()} profile failed: ${e instanceof Error ? e.message : e}`)
+    } finally {
+      profiling.value = false
+    }
+  }
+
+  return { profiling, profile }
+}
+
+/** Profile one exact resource Attempt through ResourceService. */
+export function useAttemptProfileAction(
+  attempt: () => ResourceAttemptIdentity | undefined,
+  label: () => string,
+) {
+  const profiling = ref(false)
+
+  async function profile(profilerType: ProfilerType) {
+    const current = attempt()
+    if (!current) return
+    const currentLabel = label()
+    profiling.value = true
+    const pending = profilerType === 'cpu' ? openSpeedscopeWindow() : null
+    try {
+      const operation = await createResource<{ profileData?: string; errorMessage?: string }>(
+        RESOURCE_TYPES.profileCapture,
+        {
+          authorityClusterId: current.task.clusterId,
+          type: RESOURCE_TYPES.attempt,
+          id: `${current.task.resourceId}:${current.attemptNumber}`,
+          uid: current.attemptUid,
+        },
+        RESOURCE_MESSAGES.profileAttemptRequest,
+        {
+          attempt: current,
+          profile: buildProfileType(profilerType),
+          duration: { milliseconds: '10000' },
+        },
+      )
+      const response = operation.result ?? {}
+      if (response.errorMessage) {
+        pending?.cancel()
+        alert(`${profilerType.toUpperCase()} profile failed: ${response.errorMessage}`)
+        return
+      }
+      if (!response.profileData) {
+        pending?.cancel()
+        return
+      }
+      if (pending) {
+        pending.show(base64ToBytes(response.profileData), currentLabel)
+      } else {
+        handleProfileResult(response.profileData, profilerType, currentLabel)
+      }
+    } catch (error) {
+      pending?.cancel()
+      alert(`${profilerType.toUpperCase()} profile failed: ${error instanceof Error ? error.message : error}`)
     } finally {
       profiling.value = false
     }

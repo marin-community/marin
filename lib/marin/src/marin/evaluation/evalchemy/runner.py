@@ -13,8 +13,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from iris.client.client import Job, JobFailedError, iris_ctx
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.client import Job, JobFailedError, iris_ctx
+from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
@@ -124,7 +124,7 @@ class EvalchemyOutcome:
 def _apply_recovered_metrics(
     metrics: dict[str, dict[str, float]], recovered_metrics: Mapping[str, dict[str, float]]
 ) -> None:
-    """Replace affected leaf metrics and drop lm-eval group aggregates built from failed rows."""
+    """Replace affected leaf metrics and discard aggregates built from failed rows."""
     group_children = {aggregate: {task for task in metrics if task.startswith(f"{aggregate}_")} for aggregate in metrics}
     for task, recovered in recovered_metrics.items():
         if recovered:
@@ -133,8 +133,6 @@ def _apply_recovered_metrics(
             metrics.pop(task, None)
     for aggregate, children in group_children.items():
         if children & recovered_metrics.keys():
-            # The aggregate came from the original lm-eval result, which includes failed requests.
-            # Recovered leaves contain successful samples for the measurement adapter to roll up.
             metrics.pop(aggregate, None)
 
 

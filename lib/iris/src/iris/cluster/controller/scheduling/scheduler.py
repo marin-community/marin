@@ -32,7 +32,14 @@ from iris.cluster.constraints import (
     soft_constraint_score,
     split_hard_soft,
 )
-from iris.cluster.types import JobName, PendingTask, UserBudgetDefaults, WorkerId
+from iris.cluster.types import (
+    PendingTask,
+    UserBudgetDefaults,
+)
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
 
 logger = logging.getLogger(__name__)
 

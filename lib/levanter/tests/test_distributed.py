@@ -8,8 +8,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from iris.cluster.client.job_info import JobInfo
-from iris.cluster.types import Entrypoint, JobName
+from iris.client.job_info import JobInfo
+from iris.resources.execution import Entrypoint
+from iris.resources.names import JobName
 
 from levanter import distributed
 from levanter.distributed import _square_brace_expand

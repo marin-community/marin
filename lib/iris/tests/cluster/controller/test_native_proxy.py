@@ -17,7 +17,7 @@ from iris.cluster.controller.auth import (
     NativeProxyAuthMode,
     create_controller_auth,
 )
-from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
+from iris.cluster.controller.endpoint_registry import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.native_proxy import PROXY_DECISION_PATH, NativeProxy
 from iris.cluster.controller.native_proxy_metrics import NativeProxyTelemetry, flush_native_proxy_metrics
 from iris.managed_thread import ThreadContainer
@@ -125,12 +125,12 @@ def _start_upstream(threads: ThreadContainer) -> tuple[str, list[bytes]]:
 
 
 def test_native_listener_preserves_public_routes_and_streams_to_endpoint(
-    make_controller,
+    make_controller_process,
 ) -> None:
     threads = ThreadContainer()
     try:
         upstream, received_bodies = _start_upstream(threads)
-        controller = make_controller(
+        controller = make_controller_process(
             host="127.0.0.1",
             port=0,
             endpoints={_ENDPOINT_NAME: upstream},
@@ -171,27 +171,32 @@ def test_native_listener_preserves_public_routes_and_streams_to_endpoint(
         threads.stop()
 
 
-def test_controller_begin_shutdown_rejects_endpoint_discovery(make_controller) -> None:
-    controller = make_controller(host="127.0.0.1", port=0)
+def test_controller_begin_shutdown_rejects_endpoint_discovery(make_controller_process) -> None:
+    controller = make_controller_process(host="127.0.0.1", port=0)
     controller.start()
 
-    with httpx.Client(base_url=controller.url, trust_env=False) as client:
-        assert client.post("/iris.cluster.EndpointService/ListEndpoints", json={}).status_code == 200
+    try:
+        with httpx.Client(base_url=controller.url, trust_env=False) as client:
+            assert client.post("/iris.cluster.EndpointService/ListEndpoints", json={}).status_code == 200
 
-        controller.begin_shutdown()
+            controller.begin_shutdown()
 
-        endpoint_response = client.post("/iris.cluster.EndpointService/ListEndpoints", json={})
-        health_response = client.get("/health")
+            endpoint_response = client.post("/iris.cluster.EndpointService/ListEndpoints", json={})
+            health_response = client.get("/health")
 
-    assert endpoint_response.status_code == 503
-    assert endpoint_response.json()["code"] == "unavailable"
-    assert health_response.status_code == 503
-    assert health_response.json()["status"] == "unavailable"
+        assert endpoint_response.status_code == 503
+        assert endpoint_response.json()["code"] == "unavailable"
+        assert health_response.status_code == 503
+        assert health_response.json()["status"] == "unavailable"
+    finally:
+        controller.stop()
 
 
-def test_native_rpc_metrics_aggregate_controllers_in_one_process(make_controller, tmp_path, telemetry_transport) -> None:
+def test_native_rpc_metrics_aggregate_controllers_in_one_process(
+    make_controller_process, tmp_path, telemetry_transport
+) -> None:
     controllers = [
-        make_controller(
+        make_controller_process(
             host="127.0.0.1",
             port=0,
             local_state_dir=tmp_path / name,
@@ -371,14 +376,14 @@ def test_native_metrics_concurrent_detach_and_reattach_publishes_new_proxy_snaps
         publisher.detach(proxy)
 
 
-def test_native_proxy_transport_metrics_count_forwarded_bytes(make_controller, telemetry_transport) -> None:
+def test_native_proxy_transport_metrics_count_forwarded_bytes(make_controller_process, telemetry_transport) -> None:
     """A forwarded endpoint request emits byte-exact `proxy_*` telemetry, while a
     controller RPC does not. This also pins the Rust snapshot JSON to the publisher's
     contract: a shape drift would raise when the publisher unpacks the snapshot."""
     threads = ThreadContainer()
     try:
         upstream, _ = _start_upstream(threads)
-        controller = make_controller(
+        controller = make_controller_process(
             host="127.0.0.1",
             port=0,
             endpoints={_ENDPOINT_NAME: upstream},
@@ -422,7 +427,7 @@ def test_native_proxy_transport_metrics_count_forwarded_bytes(make_controller, t
         threads.stop()
 
 
-def test_native_listener_caches_verified_jwt(make_controller) -> None:
+def test_native_listener_caches_verified_jwt(make_controller_process) -> None:
     threads = ThreadContainer()
     try:
         upstream, _ = _start_upstream(threads)
@@ -430,7 +435,7 @@ def test_native_listener_caches_verified_jwt(make_controller) -> None:
         assert auth.jwt_manager is not None
         token = auth.jwt_manager.create_token("test-user", "user", "native-test", ttl_seconds=300)
         endpoint_token = auth.jwt_manager.create_endpoint_token(_ENDPOINT_NAME, "native-endpoint-test")
-        controller = make_controller(
+        controller = make_controller_process(
             host="127.0.0.1",
             port=0,
             endpoints={_ENDPOINT_NAME: upstream},
@@ -456,13 +461,13 @@ def test_native_listener_caches_verified_jwt(make_controller) -> None:
 
 
 def test_native_listener_preserves_direct_controller_auth_without_trusting_forwarded_request(
-    make_controller,
+    make_controller_process,
 ) -> None:
     auth = create_controller_auth(
         AuthConfig(trusted_cidrs=["10.0.0.0/8"]),
         cluster_name="native-controller-auth-test",
     )
-    controller = make_controller(
+    controller = make_controller_process(
         host="127.0.0.1",
         port=0,
         auth=auth,
@@ -471,27 +476,22 @@ def test_native_listener_preserves_direct_controller_auth_without_trusting_forwa
     assert auth.jwt_manager is not None
     token = auth.jwt_manager.create_token("alice", "user", "controller-handoff", ttl_seconds=60)
 
-    auth_config = httpx.get(
-        f"{controller.url}/auth/config",
-        headers={"x-forwarded-for": "203.0.113.10"},
-    )
-    authenticated_auth_config = httpx.get(
-        f"{controller.url}/auth/config",
-        headers={
-            "authorization": f"Bearer {token}",
-            "x-forwarded-for": "203.0.113.10",
-        },
-    )
     direct = httpx.post(
         f"{controller.url}/iris.cluster.ControllerService/ListJobs",
         json={},
         headers={"content-type": "application/json"},
     )
-    forwarded = httpx.post(
+    direct_with_stale_browser_cookie = httpx.post(
+        f"{controller.url}/iris.cluster.ControllerService/ListJobs",
+        json={},
+        headers={"content-type": "application/json", "cookie": "iris_session=stale-token"},
+    )
+    forwarded_with_retired_cookie = httpx.post(
         f"{controller.url}/iris.cluster.ControllerService/ListJobs",
         json={},
         headers={
             "content-type": "application/json",
+            "cookie": f"iris_session={token}",
             "x-forwarded-for": "203.0.113.10",
         },
     )
@@ -514,10 +514,9 @@ def test_native_listener_preserves_direct_controller_auth_without_trusting_forwa
         },
     )
 
-    assert auth_config.json()["authenticated"] is False
-    assert authenticated_auth_config.json()["authenticated"] is True
     assert direct.status_code == 200
-    assert forwarded.status_code == 401
+    assert direct_with_stale_browser_cookie.status_code == 200
+    assert forwarded_with_retired_cookie.status_code == 401
     assert authenticated.status_code == 200
     assert spoofed.status_code == 401
 
@@ -679,7 +678,7 @@ def test_native_listener_owns_endpoint_access_policy() -> None:
         threads.stop()
 
 
-def test_native_listener_handles_subdomains_and_response_safety(make_controller) -> None:
+def test_native_listener_handles_subdomains_and_response_safety(make_controller_process) -> None:
     threads = ThreadContainer()
     try:
         upstream, _ = _start_upstream(threads)
@@ -687,7 +686,7 @@ def test_native_listener_handles_subdomains_and_response_safety(make_controller)
             AuthConfig(trusted_cidrs=["10.0.0.0/8"]),
             cluster_name="native-loopback-test",
         )
-        controller = make_controller(
+        controller = make_controller_process(
             host="127.0.0.1",
             port=0,
             endpoints={_ENDPOINT_NAME: upstream},

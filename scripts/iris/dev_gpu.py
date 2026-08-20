@@ -24,7 +24,9 @@ from iris.cluster.backends.k8s.tasks import _LABEL_TASK_ID, _sanitize_label_valu
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE, gpu_gang_coscheduling_level
-from iris.cluster.types import CoschedulingConfig, Entrypoint, JobName, ResourceSpec, gpu_device
+from iris.resources.execution import Entrypoint, ResourceSpec, gpu_device
+from iris.resources.job import CoschedulingConfig
+from iris.resources.names import JobName
 from iris.resources.state import TERMINAL_JOB_STATES, JobState, TaskState
 from iris.rpc import job_pb2
 

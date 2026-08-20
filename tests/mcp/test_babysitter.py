@@ -2,8 +2,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import marin.mcp.babysitter as babysitter
-from iris.rpc import job_pb2, time_pb2
+import pytest
+from iris.resources.attempt import AttemptSummary
+from iris.resources.endpoint import ProfileResult
+from iris.resources.execution import ResourceSpec
+from iris.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
+from iris.resources.job import JobDetail
+from iris.resources.source import Page
+from iris.resources.state import JobState, TaskState
+from iris.resources.task import TaskDetail, TaskSummary
+from iris.rpc import job_pb2
+from iris.testing.resources import (
+    make_attempt_summary,
+    make_job_detail,
+    make_job_summary,
+    make_task_detail,
+    make_task_summary,
+)
 from marin.mcp.babysitter import (
+    IrisBabysitter,
+    IrisConnectionConfig,
     _token_provider,
     classify_diagnosis,
     parse_zephyr_progress,
@@ -11,108 +29,208 @@ from marin.mcp.babysitter import (
     task_status_to_json,
 )
 from rigging.credentials import MARIN_CLUSTER_TOKEN_ENV
+from rigging.timing import Timestamp
+
+_NOW = Timestamp(1_000)
 
 
-def _timestamp(epoch_ms: int):
-    return time_pb2.Timestamp(epoch_ms=epoch_ms)
+def _job_identity() -> JobIdentity:
+    return JobIdentity(ResourceKey("prod", ResourceKind.JOB, "/alice/train"), "job-uid")
 
 
-def test_task_status_json_includes_attempts_timestamps_and_usage():
-    task = job_pb2.TaskStatus(
-        task_id="/alice/train/0",
-        state=job_pb2.TASK_STATE_FAILED,
-        worker_id="worker-a",
-        worker_address="worker-a:1234",
-        exit_code=137,
-        error="OOMKilled",
-        started_at=_timestamp(1_000),
-        finished_at=_timestamp(2_500),
-        current_attempt_id=1,
-        pending_reason="",
-        can_be_scheduled=True,
-        resource_usage=job_pb2.ResourceUsage(
-            memory_mb=2048,
-            memory_peak_mb=4096,
-            cpu_millicores=1500,
-            disk_mb=512,
-            process_count=4,
-        ),
-        attempts=[
-            job_pb2.TaskAttempt(
-                attempt_id=0,
-                worker_id="worker-old",
-                state=job_pb2.TASK_STATE_PREEMPTED,
-                exit_code=143,
-                error="preempted",
-                started_at=_timestamp(100),
-                finished_at=_timestamp(900),
-                is_worker_failure=True,
-            ),
-            job_pb2.TaskAttempt(
-                attempt_id=1,
-                worker_id="worker-a",
-                state=job_pb2.TASK_STATE_FAILED,
-                exit_code=137,
-                error="OOMKilled",
-                started_at=_timestamp(1_000),
-                finished_at=_timestamp(2_500),
-            ),
-        ],
+def _task_identity() -> TaskIdentity:
+    return TaskIdentity(ResourceKey("prod", ResourceKind.TASK, "/alice/train/0"), "task-uid")
+
+
+def _attempt(
+    attempt_number: int,
+    attempt_uid: str,
+    *,
+    state: TaskState = TaskState.RUNNING,
+    finished_at: Timestamp | None = None,
+    exit_code: int | None = None,
+    error_message: str = "",
+) -> AttemptSummary:
+    return make_attempt_summary(
+        _task_identity(),
+        attempt_number,
+        attempt_uid=attempt_uid,
+        state=state,
+        started_at=_NOW,
+        finished_at=finished_at,
+        exit_code=exit_code,
+        error_message=error_message,
+        terminal_reason="application" if error_message else "",
     )
+
+
+def _running_task_detail() -> TaskDetail:
+    first = _attempt(1, "attempt-one")
+    second = _attempt(2, "attempt-two")
+    summary = make_task_summary(
+        _job_identity(),
+        0,
+        task_uid="task-uid",
+        current_attempt=second.identity,
+        failure_count=1,
+        started_at=_NOW,
+        status_message="running",
+    )
+    return make_task_detail(summary, (first, second))
+
+
+def _job_detail() -> JobDetail:
+    summary = make_job_summary(
+        _job_identity().key.resource_id,
+        cluster_id="prod",
+        owner_id="alice",
+        state=JobState.RUNNING,
+        submitted_at=_NOW,
+        started_at=_NOW,
+    )
+    return make_job_detail(summary, name="train", resources=ResourceSpec(cpu=1, memory=1024, disk=2048))
+
+
+class _Closeable:
+    def close(self) -> None:
+        pass
+
+
+def _service(monkeypatch, resources, controller=None) -> IrisBabysitter:
+    monkeypatch.setattr(babysitter, "ResourceRpcClient", lambda *_args, **_kwargs: resources)
+    monkeypatch.setattr(babysitter, "ControllerServiceClientSync", lambda *_args, **_kwargs: controller or _Closeable())
+    monkeypatch.setattr(babysitter, "LogServiceClientSync", lambda *_args, **_kwargs: _Closeable())
+    return IrisBabysitter(IrisConnectionConfig("http://controller.test", cluster="prod"))
+
+
+def test_task_status_json_preserves_exact_identity_and_attempt_history():
+    task_identity = _task_identity()
+    attempt_identity = AttemptIdentity(task_identity.key, 1, "attempt-uid")
+    attempt = _attempt(
+        1,
+        "attempt-uid",
+        state=TaskState.FAILED,
+        finished_at=Timestamp(2_500),
+        exit_code=137,
+        error_message="OOMKilled",
+    )
+    summary = make_task_summary(
+        _job_identity(),
+        0,
+        task_uid=task_identity.task_uid,
+        state=TaskState.FAILED,
+        current_attempt=attempt_identity,
+        failure_count=1,
+        started_at=_NOW,
+        finished_at=Timestamp(2_500),
+        error_message="OOMKilled",
+    )
+    task = make_task_detail(summary, (attempt,), root_cause_highlights=("container exited 137",))
 
     payload = task_status_to_json(task)
 
     assert payload["task_id"] == "/alice/train/0"
+    assert payload["task_uid"] == "task-uid"
     assert payload["state"] == "failed"
-    assert payload["exit_code"] == 137
     assert payload["started_at_ms"] == 1_000
     assert payload["finished_at_ms"] == 2_500
     assert payload["duration_ms"] == 1_500
-    assert payload["resource_usage"]["memory_peak_mb"] == 4096
-    assert payload["attempts"][0]["state"] == "preempted"
-    assert payload["attempts"][0]["is_worker_failure"] is True
-    assert payload["attempts"][1]["exit_code"] == 137
+    assert payload["attempts"][0]["attempt_uid"] == "attempt-uid"
+    assert payload["attempts"][0]["exit_code"] == 137
+    assert payload["root_cause_highlights"] == ["container exited 137"]
 
 
 def test_job_summary_payload_preserves_summary_task_fields():
-    job = job_pb2.JobStatus(
-        job_id="/alice/train",
-        name="train",
-        state=job_pb2.JOB_STATE_RUNNING,
-        task_count=1,
-    )
-    running_task = job_pb2.TaskStatus(
-        task_id="/alice/train/0",
-        state=job_pb2.TASK_STATE_RUNNING,
-        exit_code=0,
+    running_task = make_task_summary(
+        _job_identity(),
+        0,
+        task_uid="task-uid",
+        state=TaskState.RUNNING,
+        started_at=_NOW,
+        status_message="running",
     )
 
-    payload = babysitter._job_summary_payload(job, [running_task])
+    payload = babysitter._job_summary_payload(_job_detail(), [running_task])
 
     assert payload["tasks"][0]["index"] == "0"
-    assert payload["tasks"][0]["exit_code"] is None
-    assert "resource_usage" not in payload
+    assert payload["job_uid"] == "job-uid"
+    assert payload["tasks"][0]["task_uid"] == "task-uid"
     assert "resource_requests" in payload
     assert "resource_usage" not in payload
 
 
-def test_job_summary_payload_does_not_require_full_job_serialization(monkeypatch):
-    job = job_pb2.JobStatus(
-        job_id="/alice/train",
-        name="train",
-        state=job_pb2.JOB_STATE_RUNNING,
-        task_count=1,
-    )
+def test_job_summary_returns_the_selected_job(monkeypatch):
+    class Resources:
+        def describe_job(self, key: ResourceKey) -> JobDetail:
+            if key != ResourceKey("prod", ResourceKind.JOB, "/alice/train"):
+                raise AssertionError(f"unexpected Job key: {key}")
+            return _job_detail()
 
-    def fail_full_job_serialization(_job):
-        raise AttributeError("resource_usage")
+        def list_tasks(self, _query) -> Page[TaskSummary]:
+            return Page((), None, ())
 
-    monkeypatch.setattr(babysitter, "job_status_to_json", fail_full_job_serialization)
+        def close(self) -> None:
+            pass
 
-    payload = babysitter._job_summary_payload(job, [])
+    service = _service(monkeypatch, Resources())
 
-    assert payload["job_id"] == "/alice/train"
-    assert "resource_requests" in payload
+    payload = service.job_summary("/alice/train")
+
+    assert payload["data"]["job_id"] == "/alice/train"
+
+
+@pytest.mark.parametrize(
+    ("target", "expected_text"),
+    [
+        ("/alice/train/0", "attempt-two"),
+        ("/alice/train/0:1", "attempt-one"),
+    ],
+)
+def test_task_profile_targets_the_exact_resource_attempt(monkeypatch, target, expected_text):
+    class Resources:
+        def describe_task(self, _key: ResourceKey) -> TaskDetail:
+            return _running_task_detail()
+
+        def profile_attempt(self, identity, *, profile, duration) -> ProfileResult:
+            return ProfileResult(identity.attempt_uid.encode(), "")
+
+        def close(self) -> None:
+            pass
+
+    class LegacyController:
+        def profile_task(self, _request):
+            return job_pb2.ProfileTaskResponse(profile_data=b"legacy-task-profile")
+
+        def close(self) -> None:
+            pass
+
+    service = _service(monkeypatch, Resources(), LegacyController())
+
+    payload = service.profile_task(target=target)
+
+    assert payload["data"] == {"text": expected_text, "encoding": "utf-8"}
+
+
+def test_system_profile_stays_on_the_process_control_boundary(monkeypatch):
+    class Resources:
+        def describe_task(self, _key: ResourceKey) -> TaskDetail:
+            raise AssertionError("system profiling must not resolve a Task")
+
+        def close(self) -> None:
+            pass
+
+    class LegacyController:
+        def profile_task(self, _request):
+            return job_pb2.ProfileTaskResponse(profile_data=b"controller-profile")
+
+        def close(self) -> None:
+            pass
+
+    service = _service(monkeypatch, Resources(), LegacyController())
+
+    payload = service.profile_task(target="/system/process")
+
+    assert payload["data"] == {"text": "controller-profile", "encoding": "utf-8"}
 
 
 def test_token_provider_uses_env_override(monkeypatch):

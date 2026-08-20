@@ -46,15 +46,17 @@ from iris.cluster.constraints import (
 from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
 from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.tpu_topology import get_tpu_topology
-from iris.cluster.types import (
-    CoschedulingConfig,
+from iris.resources.execution import (
     Entrypoint,
     EnvironmentSpec,
-    JobName,
+    GpuDevice,
     ResourceSpec,
+    TpuDevice,
     gpu_device,
     tpu_device,
 )
+from iris.resources.job import CoschedulingConfig
+from iris.resources.names import JobName
 from iris.resources.state import TERMINAL_TASK_STATES, JobState
 from iris.rpc import job_pb2
 from iris.rpc.errors import format_connect_error
@@ -305,16 +307,15 @@ def build_resources(
     so the caller can attach a ``device_variant_constraint`` accepting any of
     them. All variants must have the same ``vm_count``.
     """
-    spec = ResourceSpec(cpu=cpu, memory=memory, disk=disk)
-
+    device = None
     if tpu:
         primary, _ = _parse_tpu_alternatives(tpu)
-        spec.device = tpu_device(primary)
+        device = tpu_device(primary)
     elif gpu:
         variant, count = parse_gpu_spec(gpu)
-        spec.device = gpu_device(variant, count)
+        device = gpu_device(variant, count)
 
-    return spec
+    return ResourceSpec(cpu=cpu, memory=memory, disk=disk, device=device)
 
 
 def _parse_tpu_alternatives(tpu_arg: str) -> tuple[str, list[str]]:
@@ -517,7 +518,7 @@ def resolve_multinode_defaults(
 
 
 def build_job_constraints(
-    resources_proto: job_pb2.ResourceSpecProto,
+    resources: ResourceSpec,
     tpu_variants: list[str],
     replicas: int,
     regions: tuple[str, ...] | None = None,
@@ -551,7 +552,7 @@ def build_job_constraints(
     # CPU ≤ 0.5 cores, RAM ≤ 4 GiB) are auto-tagged as non-preemptible so
     # coordinators survive spot reclamation. Skipped when the user supplied
     # --preemptible / --no-preemptible.
-    inferred = infer_preemptible_constraint(resources_proto, replicas, constraints)
+    inferred = infer_preemptible_constraint(resources, replicas, constraints)
     if inferred is not None:
         constraints.append(inferred)
         logger.info("Executor heuristic: auto-tagging job as non-preemptible")
@@ -626,9 +627,8 @@ def run_iris_job(
 
     replicas, coscheduling = resolve_multinode_defaults(primary_tpu, gpu, replicas)
 
-    resources_proto = resources.to_proto()
     constraints = build_job_constraints(
-        resources_proto=resources_proto,
+        resources=resources,
         tpu_variants=tpu_variants,
         replicas=replicas,
         regions=regions,
@@ -647,14 +647,13 @@ def run_iris_job(
     logger.info(f"Submitting job: {job_name}")
     logger.info(f"Command: {' '.join(command)}")
     logger.info(f"Resources: cpu={resources.cpu:g}, memory={resources.memory}, disk={resources.disk}")
-    if resources.device and resources.device.HasField("tpu"):
+    if isinstance(resources.device, TpuDevice):
         if len(tpu_variants) > 1:
-            logger.info(f"TPU: {resources.device.tpu.variant} (alternatives: {', '.join(tpu_variants[1:])})")
+            logger.info(f"TPU: {resources.device.variant} (alternatives: {', '.join(tpu_variants[1:])})")
         else:
-            logger.info(f"TPU: {resources.device.tpu.variant}")
-    if resources.device and resources.device.HasField("gpu"):
-        gpu_dev = resources.device.gpu
-        logger.info(f"GPU: {gpu_dev.count}x {gpu_dev.variant or 'any'}")
+            logger.info(f"TPU: {resources.device.variant}")
+    if isinstance(resources.device, GpuDevice):
+        logger.info(f"GPU: {resources.device.count}x {resources.device.variant or 'any'}")
     if replicas > 1:
         logger.info(f"Replicas: {replicas}")
     if coscheduling:
@@ -1137,11 +1136,11 @@ def list_jobs(ctx, state: str | None, prefix: str | None, limit: int) -> None:
     state_value: JobState | None = None
     if state is not None:
         try:
-            state_value = JobState(state.lower())
+            state_value = JobState[state.upper()]
             if state_value is JobState.UNSPECIFIED:
-                raise ValueError
-        except ValueError:
-            valid = ", ".join(candidate.value for candidate in JobState if candidate is not JobState.UNSPECIFIED)
+                raise KeyError
+        except KeyError:
+            valid = ", ".join(candidate.name.lower() for candidate in JobState if candidate is not JobState.UNSPECIFIED)
             raise click.UsageError(f"Unknown state '{state}'. Valid states: {valid}") from None
 
     jobs = client.list_jobs(state=state_value, prefix=prefix, limit=limit)
@@ -1158,7 +1157,7 @@ def list_jobs(ctx, state: str | None, prefix: str | None, limit: int) -> None:
 
     for j in jobs:
         job_id = j.job_id
-        state_name = j.state.value
+        state_name = j.state.name.lower()
         submitted = j.submitted_at.as_formatted_date() if j.submitted_at is not None else "-"
 
         reason = j.error_message or j.pending_reason or ""
@@ -1222,7 +1221,7 @@ def render_job_description_text(
 
     lines = [
         f"Job: {job_status.job_id}" + (f" ({job_status.name})" if job_status.name else ""),
-        f"State: {job_status.state.value}  exit={job_status.exit_code}  "
+        f"State: {job_status.state.name.lower()}  exit={job_status.exit_code}  "
         f"failures={job_status.failure_count}  preemptions={job_status.preemption_count}",
         f"Tasks: {job_status.completed_count}/{job_status.task_count} completed  "
         + "  ".join(
@@ -1244,7 +1243,7 @@ def render_job_description_text(
         rows.append(
             [
                 _task_index(str(task_status.task_id)),
-                task_status.state.value,
+                task_status.state.name.lower(),
                 task_status.exit_code if task_status.state in TERMINAL_TASK_STATES else "-",
                 _format_duration_ms(_task_duration_ms(task_status)),
                 _format_memory_mb(usage.memory_peak_mb if usage is not None else 0),
@@ -1284,7 +1283,7 @@ def wait(ctx, job_id: str) -> None:
     except ConnectError as exc:
         raise click.ClickException(format_connect_error(exc)) from exc
 
-    click.echo(status.state.value)
+    click.echo(status.state.name.lower())
     if status.state is not JobState.SUCCEEDED:
         raise SystemExit(1)
 

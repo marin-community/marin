@@ -27,11 +27,12 @@ write a Slack summary. Diagnosis and reporting only — no code changes, no PRs.
 
 The cluster is still live. Collect signal now — it will be torn down after you.
 
-- Iris job state via `.venv/bin/iris --config=$IRIS_CONFIG job list`
+- Exact Iris Job state via `.venv/bin/iris --config="$IRIS_CONFIG" job describe "$CANARY_JOB_ID"`
 - **GPU lane:** you have kubectl at `~/.kube/coreweave-iris`, namespace `$IRIS_NAMESPACE` (defaults to `iris-ci` — the canary shares this namespace with PR CI).
   Get pod status, controller logs, task pod logs, warning events, pod describe.
   **Filter by `iris.job_id=<CANARY_JOB_ID with '/' replaced by '.'>`** so you only see this canary's pods, not co-tenant CI pods. Example: `kubectl -n iris-ci get pods -l iris.job_id=runner.iris-run-job-abc123`.
-- **TPU lane:** use `iris process logs` and `iris job list`.
+- **TPU lane:** use `iris process logs`, `iris job describe`, and
+  `iris task list --job "$CANARY_JOB_ID"`.
 - Re-run `scripts/ci/validate_canary_metrics.py` if you need the validation output.
 
 ### 2. Identify root cause

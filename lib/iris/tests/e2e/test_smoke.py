@@ -8,17 +8,16 @@ submits its own jobs and is independently runnable. In local mode the cluster
 has workers across CPU, TPU coscheduling, and multi-region scale groups.
 """
 
-import contextlib
 import logging
 import os
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from finelog.client import FlushResult, LogClient
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
-from iris.client.client import IrisClient, iris_ctx
+from iris.client.client import IrisClient
 from iris.cluster.config import (
     IrisClusterConfig,
     LocalSliceConfig,
@@ -31,8 +30,11 @@ from iris.cluster.config import (
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.lifecycle import connect_cluster
-from iris.cluster.stats.tables import TASK_EVENT_NAMESPACE, TASK_EVENT_STORAGE_POLICY, TaskEventRow
-from iris.cluster.types import AcceleratorType, CapacityType, Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.cluster.types import (
+    AcceleratorType,
+    CapacityType,
+)
+from iris.resources.execution import Entrypoint, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.testing.e2e import (
@@ -48,7 +50,7 @@ from iris.testing.e2e import (
 )
 from iris.testing.e2e_helpers import TestJobs
 from rigging.connect import proxy_path
-from rigging.timing import Duration, ExponentialBackoff, Timestamp
+from rigging.timing import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -218,26 +220,22 @@ def _await_stable_screenshot(page, check: str, *, arg=None) -> None:
     page.wait_for_function(check, arg=arg, timeout=5000)
 
 
-def _wait_for_worker_detail_screenshot_ready(page, worker_id: str) -> None:
-    # WorkerDetail.vue uniquely nulls `data` in its workerId watch, so a late
-    # re-fire can flip the page back to the "Loading worker..." overlay after a
-    # naive wait passes. Anchor on h3 sections that only render in the
-    # v-else-if="data" branch, then settle + re-verify to catch the transient.
+def _wait_for_node_detail_screenshot_ready(page, node_id: str) -> None:
     check = """
-        (workerId) => {
+        (nodeId) => {
             const text = document.body.textContent || "";
-            const routeReady = decodeURIComponent(window.location.hash) === `#/worker/${workerId}`;
+            const routeReady = decodeURIComponent(window.location.hash).startsWith("#/node/");
             const headings = Array.from(document.querySelectorAll("h3"))
                 .map((heading) => (heading.textContent || "").trim().toLowerCase());
             return routeReady
-                && !text.includes("Loading worker...")
-                && text.includes(workerId)
-                && text.includes("Healthy")
-                && headings.includes("identity")
-                && headings.includes("task history");
+                && !text.includes("Loading node…")
+                && text.includes(nodeId)
+                && headings.includes("capacity")
+                && headings.includes("attributes")
+                && headings.includes("recent attempts");
         }
     """
-    _await_stable_screenshot(page, check, arg=worker_id)
+    _await_stable_screenshot(page, check, arg=node_id)
 
 
 def _wait_for_job_detail_screenshot_ready(page, job_id: str) -> None:
@@ -246,24 +244,38 @@ def _wait_for_job_detail_screenshot_ready(page, job_id: str) -> None:
         (jobId) => {
             const text = document.body.textContent || "";
             const [routePath] = decodeURIComponent(window.location.hash).split("?");
-            const routeReady = routePath === `#/job/${jobId}`;
+            const routeReady = routePath.startsWith("#/job/") && routePath.endsWith(jobId);
             const headings = Array.from(document.querySelectorAll("h3"))
                 .map((heading) => (heading.textContent || "").trim().toLowerCase());
-            const taskRowReady = Array.from(document.querySelectorAll("table tbody tr"))
-                .some((row) => (row.textContent || "").includes("Succeeded"));
-            const pageHeight = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
             return routeReady
-                && !text.includes("Loading...")
-                && text.includes("Job Status")
-                && text.includes("Task Summary")
-                && headings.includes("tasks")
-                && headings.includes("job logs")
-                && taskRowReady
-                && pageHeight > window.innerHeight;
+                && !text.includes("Loading job…")
+                && text.includes(jobId)
+                && headings.includes("tasks");
         }
         """,
         arg=job_id,
         timeout=10000,
+    )
+
+
+def _open_job_detail(page, cluster_url: str, job_id: str) -> None:
+    dashboard_goto(page, f"{cluster_url}/#/?all=1")
+    wait_for_dashboard_ready(page)
+    page.get_by_placeholder("Job ID prefix").fill("")
+    page.get_by_role("button", name="Filter").click()
+    page.get_by_role("link", name=job_id, exact=True).click()
+    _wait_for_job_detail_screenshot_ready(page, job_id)
+
+
+def _open_task_detail(page, cluster_url: str, job_id: str, task_id: str) -> None:
+    _open_job_detail(page, cluster_url, job_id)
+    page.get_by_role("link", name=task_id, exact=True).click()
+    page.wait_for_function(
+        "(taskId) => decodeURIComponent(location.hash).startsWith('#/task/') "
+        "&& document.body.textContent.includes(taskId) "
+        "&& document.body.textContent.includes('Attempts')",
+        arg=task_id,
+        timeout=10_000,
     )
 
 
@@ -287,8 +299,8 @@ def capabilities(smoke_cluster) -> ClusterCapabilities:
 # ============================================================================
 
 
-def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
-    """Landing page groups jobs by owner; drilling into the owner shows states."""
+def test_dashboard_opens_a_user_job_list_and_job(smoke_cluster, smoke_page, smoke_screenshot):
+    """The Job page scopes by owner and drills into that owner's Jobs."""
     quick = smoke_cluster.submit(TestJobs.quick, "smoke-simple")
     failed = smoke_cluster.submit(TestJobs.fail, "smoke-failed")
     running = smoke_cluster.submit(TestJobs.sleep, "smoke-running", 300)
@@ -299,119 +311,75 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
 
     user = quick.job_id.user
 
-    # Landing page is the per-owner overview, not a flat job list.
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
-    wait_for_dashboard_ready(smoke_page)
-    assert_visible(smoke_page, f"text={user}")
-
-    # Drill into this owner to see their individual jobs and states.
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/#/?user={user}")
     wait_for_dashboard_ready(smoke_page)
     for name in ["smoke-simple", "smoke-failed", "smoke-running"]:
         assert_visible(smoke_page, f"text={name}")
-    # The Cluster column is always rendered, blank for local jobs — a
-    # single-cluster smoke deployment shows the header with only "—" cells and
-    # never a peer annotation.
-    assert_visible(smoke_page, "th:has-text('Cluster')")
+    assert_visible(smoke_page, "th:has-text('Backend')")
     smoke_screenshot(
         "jobs-tab",
         f"Jobs for user {user}: smoke-simple (succeeded), smoke-failed (failed), and smoke-running (running)",
     )
 
-    # The job detail breadcrumb returns to the same user-scoped list.
-    smoke_page.locator("tr", has_text="smoke-simple").get_by_role("link", name="smoke-simple").click()
+    smoke_page.get_by_role("link", name=quick.job_id.to_wire(), exact=True).click()
     _wait_for_job_detail_screenshot_ready(smoke_page, quick.job_id.to_wire())
     smoke_page.get_by_role("link", name="Jobs").click()
     wait_for_dashboard_ready(smoke_page)
-    assert smoke_page.url.endswith(f"/#/?user={user}")
+    smoke_page.get_by_role("heading", name=f"{user}'s jobs", exact=True).wait_for()
+    smoke_page.get_by_role("link", name=quick.job_id.to_wire(), exact=True).wait_for()
 
     smoke_cluster.kill(running)
 
 
-def _parent_with_two_children():
-    """Parent callable that submits two child jobs and waits for both."""
-
-    ctx = iris_ctx()
-    res = ResourceSpec(cpu=1, memory="1g")
-    env = EnvironmentSpec()
-
-    job_a = ctx.client.submit(
-        Entrypoint.from_command("sh", "-c", "echo CHILD_A"),
-        "child-a",
-        res,
-        environment=env,
-    )
-    job_b = ctx.client.submit(
-        Entrypoint.from_command("sh", "-c", "echo CHILD_B"),
-        "child-b",
-        res,
-        environment=env,
-    )
-    job_a.wait(timeout=30, raise_on_failure=True)
-    job_b.wait(timeout=30, raise_on_failure=True)
-
-
-def test_dashboard_job_expand(smoke_cluster, smoke_page, smoke_screenshot):
-    """Expanding a parent job in the jobs tab shows its children."""
-    parent = smoke_cluster.submit(_parent_with_two_children, "smoke-expand-parent")
-    smoke_cluster.wait(parent, timeout=smoke_cluster.job_timeout)
-
-    # Route through the owner overview first so the subsequent drill-in is a
-    # genuine hash change (the smoke page is shared module-scope and may already
-    # be parked on this owner's view from an earlier test).
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
-    wait_for_dashboard_ready(smoke_page)
-    # Open the owner's scoped job list (the landing page groups by owner).
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/#/?user={parent.job_id.user}")
-    wait_for_dashboard_ready(smoke_page)
-    assert_visible(smoke_page, "text=smoke-expand-parent")
-
-    # The parent row exposes a keyboard-accessible expand toggle.
-    row = smoke_page.locator("tr", has_text="smoke-expand-parent")
-    expand_btn = row.get_by_role("button", name="Expand children")
-    expand_btn.click()
-
-    # After clicking, children should appear (wait for the child names to render)
-    smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('child-a') && " "document.body.textContent.includes('child-b')",
-        timeout=10000,
-    )
-
-    # Once expanded, the toggle flips to a collapse affordance.
-    row.get_by_role("button", name="Collapse children").wait_for(timeout=5000)
-
-    smoke_screenshot("job-expand", "Jobs tab with expanded parent showing child-a and child-b indented beneath")
-
-
 def test_dashboard_job_detail(smoke_cluster, smoke_page, smoke_screenshot):
-    """SUCCEEDED job detail page."""
+    """Job detail keeps status, request, task diagnostics, and logs together."""
     job = smoke_cluster.submit(TestJobs.quick, "smoke-detail")
     smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
 
     job_id = job.job_id.to_wire()
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}")
-    wait_for_dashboard_ready(smoke_page)
+    _open_job_detail(smoke_page, smoke_cluster.url, job_id)
     _wait_for_job_detail_screenshot_ready(smoke_page, job_id)
+    for heading in ["Job Status", "Task Summary", "Resources (per task)", "Tasks", "Job Logs"]:
+        smoke_page.get_by_role("heading", name=heading, exact=True).wait_for()
+    smoke_page.get_by_text(f"{job_id}/0", exact=True).wait_for()
+    smoke_screenshot("job-detail", "Typed Job detail with state, placement, and Task links")
+
+
+def test_dashboard_task_detail_selects_an_exact_attempt(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
+    """Task detail keeps status, placement, attempts, endpoints, and logs together."""
+    task_status = smoke_cluster.task_status(verbose_job)
+    task_id = task_status.task_id
+    job_id = verbose_job.job_id.to_wire()
+
+    _open_task_detail(smoke_page, smoke_cluster.url, job_id, task_id)
+    smoke_page.wait_for_function(
+        """() => {
+            const headings = Array.from(document.querySelectorAll('h3'))
+                .map((heading) => (heading.textContent || '').trim());
+            return document.body.textContent.includes('Attempt 0')
+                && ['Status', 'Placement', 'History', 'Attempts', 'Logs']
+                    .every((heading) => headings.includes(heading));
+        }""",
+        timeout=10_000,
+    )
     smoke_screenshot(
-        "job-detail", "Job detail page for succeeded job with state badge, task table, and job-level log viewer"
+        "task-detail",
+        "Task detail with exact Attempt identity, placement, history, diagnostics, and logs",
     )
 
 
 def _wait_for_task_log_marker(
     cluster: IrisTestCluster, task_id: str, attempt_id: int, marker: str, *, timeout: float = 60.0
 ) -> None:
-    """Poll the log server until the task attempt's EXACT-source logs contain ``marker``.
-
-    Log shipping is asynchronous: a worker flushes buffered lines after the task
-    exits, so a just-completed task's logs are not immediately queryable. This
-    mirrors the LogViewer's own EXACT ``{task}:{attempt}`` query so a dashboard test
-    can wait for the logs to land before asserting on a single page load.
-    """
+    """Wait for an Attempt's asynchronously shipped logs to become queryable."""
     source = f"{task_id}:{attempt_id}"
 
     def marker_is_available() -> bool:
         request = logging_pb2.FetchLogsRequest(
-            source=source, match_scope=logging_pb2.MATCH_SCOPE_EXACT, tail=True, max_lines=1000
+            source=source,
+            match_scope=logging_pb2.MATCH_SCOPE_EXACT,
+            tail=True,
+            max_lines=1000,
         )
         return any(marker in entry.data for entry in cluster.log_client.fetch_logs(request).entries)
 
@@ -422,88 +390,22 @@ def _wait_for_task_log_marker(
     )
 
 
-def test_dashboard_task_events_exclude_prior_incarnations(smoke_cluster, smoke_page):
-    """The task timeline excludes retained events from a prior run with reused IDs."""
-    job = smoke_cluster.submit(TestJobs.quick, "smoke-event-incarnation")
-    smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
-    task_status = smoke_cluster.task_status(job)
-    task_id = task_status.task_id
-    job_id = job.job_id.to_wire()
-    current_attempt = next(
-        attempt for attempt in task_status.attempts if attempt.attempt_id == task_status.current_attempt_id
-    )
-
-    log_server_url = f"{smoke_cluster.url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}"
-    with contextlib.closing(LogClient.connect(log_server_url)) as log_client:
-        table = log_client.get_table(
-            TASK_EVENT_NAMESPACE,
-            TaskEventRow,
-            storage_policy=TASK_EVENT_STORAGE_POLICY,
-        )
-        now = Timestamp.now()
-        event_source = "iris/controller"
-        table.write(
-            [
-                TaskEventRow(
-                    task_id=task_id,
-                    attempt_id=current_attempt.attempt_id,
-                    attempt_uid="prior-incarnation",
-                    ts=now.add_ms(-1_000).as_naive_utc(),
-                    type="Warning",
-                    reason="PriorIncarnationEvent",
-                    message="This retained event belongs to an earlier run.",
-                    source=event_source,
-                    count=1,
-                ),
-                TaskEventRow(
-                    task_id=task_id,
-                    attempt_id=current_attempt.attempt_id,
-                    attempt_uid=current_attempt.attempt_uid,
-                    ts=now.as_naive_utc(),
-                    type="Normal",
-                    reason="CurrentIncarnationEvent",
-                    message="This event belongs to the task shown by the controller.",
-                    source=event_source,
-                    count=1,
-                ),
-            ]
-        )
-        assert table.flush(timeout=5) == FlushResult.SUCCEEDED
-
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}/task/{task_id}")
-    wait_for_dashboard_ready(smoke_page)
-    smoke_page.get_by_text("CurrentIncarnationEvent", exact=True).wait_for(timeout=10_000)
-
-    assert smoke_page.get_by_text("PriorIncarnationEvent", exact=True).count() == 0
-
-
 def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
-    """Task logs show search, filter, permalink, and time-bound controls."""
+    """Task logs preserve local search, server regex filtering, and time controls."""
     task_status = smoke_cluster.task_status(verbose_job)
     task_id = task_status.task_id
     job_id = verbose_job.job_id.to_wire()
 
-    # The LogViewer issues a single EXACT {task}:{attempt} fetch on mount and only
-    # re-polls every 30s, so its first fetch must not race the worker's asynchronous
-    # post-completion log flush. Wait for the attempt's logs to be queryable first
-    # (as test_log_levels_populated does) so the page renders them on load.
     _wait_for_task_log_marker(smoke_cluster, task_id, task_status.current_attempt_id, "DONE: all lines emitted")
-
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}/task/{task_id}")
-    wait_for_dashboard_ready(smoke_page)
+    _open_task_detail(smoke_page, smoke_cluster.url, job_id, task_id)
     smoke_page.wait_for_function(
         "() => document.body.textContent.includes('DONE: all lines emitted')",
-        timeout=10000,
+        timeout=10_000,
     )
     smoke_screenshot(
         "task-logs-default",
-        "Task detail page with a log viewer panel displaying log output lines. "
-        "Should have structural elements like a status card and resource info.",
+        "Exact Attempt logs with search, filtering, permalink, and time controls",
     )
-
-    # This job logs plenty of ERROR-level lines but never crashes. Exception
-    # navigation keys off tracebacks and fatal banners, not severity, so it must
-    # find nothing here.
     assert_visible(smoke_page, "text=No exceptions")
 
     # Search marks matching lines in place. "validation failed" only appears in
@@ -530,8 +432,8 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
     smoke_page.fill(filter_input, "validation failed")
     smoke_page.press(filter_input, "Enter")
     smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('validation failed') && "
-        "!document.body.textContent.includes('processing data batch')",
+        "() => { const rows = Array.from(document.querySelectorAll('[data-row]')); "
+        "return rows.length > 0 && rows.every(row => row.textContent.includes('validation failed')); }",
         timeout=5000,
     )
     smoke_screenshot(
@@ -543,7 +445,10 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
     # exact start time. The start time stays set after the string filter clears.
     filtered_row = smoke_page.locator("[data-row]").filter(has_text="validation failed").first
     filtered_row.locator("[data-log-permalink]").click()
-    smoke_page.wait_for_function("() => location.hash.includes('logSeq=')", timeout=5000)
+    smoke_page.wait_for_function(
+        "() => location.hash.includes('logSeq=') && location.hash.includes('attempt=0')",
+        timeout=5000,
+    )
 
     selected_message = filtered_row.locator(":scope > span").last.inner_text()
     filtered_row.locator("[data-log-start]").click()
@@ -565,35 +470,28 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
     assert smoke_page.input_value(since_input) == locked_since
 
 
-def test_dashboard_jump_to_exception(smoke_cluster, smoke_page, smoke_screenshot):
-    """A crashed task's log viewer finds and steps to the traceback."""
+def test_dashboard_failed_task_retains_terminal_attempt(smoke_cluster, smoke_page, smoke_screenshot):
+    """A failed Task keeps its terminal Attempt visible and locates its traceback."""
     failed = smoke_cluster.submit(TestJobs.fail, "smoke-exception")
     smoke_cluster.wait(failed, timeout=smoke_cluster.job_timeout)
 
     task_status = smoke_cluster.task_status(failed)
     _wait_for_task_log_marker(smoke_cluster, task_status.task_id, task_status.current_attempt_id, "Traceback")
-
-    dashboard_goto(
-        smoke_page,
-        f"{smoke_cluster.url}/job/{failed.job_id.to_wire()}/task/{task_status.task_id}",
-    )
-    wait_for_dashboard_ready(smoke_page)
-
-    # The control counts failures, not ERROR-level lines, and a whole traceback
-    # collapses to a single stop.
+    _open_task_detail(smoke_page, smoke_cluster.url, failed.job_id.to_wire(), task_status.task_id)
+    assert_visible(smoke_page, "text=Failed")
+    assert_visible(smoke_page, f"text=Attempt {task_status.current_attempt_id}")
     jump = smoke_page.locator("button", has_text="Jump to exception")
-    jump.wait_for(timeout=10000)
+    jump.wait_for(timeout=10_000)
     jump.click()
     assert_visible(smoke_page, "text=/Exception 1 \\/ \\d+/")
     smoke_screenshot(
-        "task-logs-exception",
-        "Task detail page for a failed task; the log viewer's exception control reads 'Exception 1 / N' "
-        "and a highlighted traceback line is visible in the log output.",
+        "failed-task",
+        "Failed Task retaining the exact terminal Attempt and highlighted traceback",
     )
 
 
 def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
-    """Constraint chips rendered on job detail."""
+    """Retained placement constraints render in the Job scheduling section."""
     # Use soft constraints to avoid submit-time routing feasibility rejection;
     # the test only checks that constraint chips render on the dashboard.
     constraints = [
@@ -613,42 +511,27 @@ def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
     with smoke_cluster.launched_job(TestJobs.quick, "smoke-constraints", constraints=constraints) as job:
         smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
 
-        dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
-        wait_for_dashboard_ready(smoke_page)
-
-        # Placement constraints live in the collapsible "Scheduling" pane, which
-        # stays collapsed unless the job has pending tasks. Open it to inspect the chips.
-        smoke_page.wait_for_function(
-            "() => document.body.textContent.includes('Scheduling')",
-            timeout=5000,
-        )
-        smoke_page.evaluate(
-            "() => [...document.querySelectorAll('details')]"
-            ".filter(d => d.querySelector('summary')?.textContent.includes('Scheduling'))"
-            ".forEach(d => { d.open = true })"
-        )
+        _open_job_detail(smoke_page, smoke_cluster.url, job.job_id.to_wire())
+        smoke_page.locator("summary").filter(has_text="Scheduling").click()
         assert_visible(smoke_page, "text=region")
-        smoke_screenshot(
-            "constraints", "Job detail Scheduling pane showing constraint chips for region, env-tag, and device-variant"
-        )
+        smoke_screenshot("constraints", "Job scheduling section showing retained placement constraints")
 
 
-def test_dashboard_workers_tab(smoke_cluster, smoke_page, smoke_screenshot, capabilities):
-    """Workers tab shows healthy workers."""
+def test_dashboard_nodes_tab(smoke_cluster, smoke_page, smoke_screenshot, capabilities):
+    """The provider-neutral Node inventory shows healthy RPC Nodes."""
     if not capabilities.has_workers:
         pytest.skip("No persistent workers")
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/fleet")
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/nodes")
     wait_for_dashboard_ready(smoke_page)
     smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('Healthy')",
+        "() => document.body.textContent.includes('Ready')",
         timeout=10000,
     )
-    smoke_screenshot("workers-tab", "Fleet tab showing worker list with health status badges")
+    smoke_screenshot("nodes-tab", "Global Node inventory with health, backend, capacity, and running Tasks")
 
 
-def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, capabilities):
-    """Worker detail page shows info, task history, metric cards, and links each
-    task id to its task-detail page."""
+def test_dashboard_node_detail(smoke_cluster, smoke_page, smoke_screenshot, capabilities):
+    """Node detail resolves one exact Node incarnation from the inventory."""
     if not capabilities.has_workers:
         pytest.skip("No persistent workers")
     job = smoke_cluster.submit(TestJobs.quick, "smoke-worker-detail")
@@ -658,56 +541,44 @@ def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, ca
     worker_id = task_status.worker_id
     assert worker_id
 
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/worker/{worker_id}")
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/nodes")
     wait_for_dashboard_ready(smoke_page)
-    _wait_for_worker_detail_screenshot_ready(smoke_page, worker_id)
-
-    # The Task History task id links to the task-detail route — the
-    # "links to tasks" contract for this page.
-    smoke_page.wait_for_selector("a[href*='/task/']", timeout=10000)
-    href = smoke_page.locator("a[href*='/task/']").first.get_attribute("href")
-    assert href is not None and "/job/" in href and "/task/" in href
+    smoke_page.get_by_role("link", name=worker_id, exact=True).click()
+    _wait_for_node_detail_screenshot_ready(smoke_page, worker_id)
+    for heading in ["Capacity", "Placement", "Attributes", "Recent Attempts"]:
+        smoke_page.get_by_role("heading", name=heading, exact=True).wait_for()
 
     smoke_screenshot(
-        "worker-detail",
-        "Worker detail page with identity info, health badge, metric sparklines, "
-        "and task history with per-task resource columns and task-id links",
+        "node-detail",
+        "Exact Node detail with capacity, typed attributes, and recent Attempts",
     )
 
 
 def _wait_for_capacity_screenshot_ready(page) -> None:
-    # CapacityTab.vue shows only a "Loading capacity & scheduling…" spinner until its
-    # first RPC resolves. Route components are lazy-imported, so during the SPA swap
-    # the previously-viewed page (e.g. worker detail, which renders "Scale Group" +
-    # the "local-cpu" group name) is still mounted while the capacity chunk loads.
-    # A body-text wait keyed on those strings false-positives on that stale DOM, so
-    # the screenshot then catches the spinner. Anchor on the route hash plus section
-    # headings that only render in the loaded (v-else) branch so the match can't be
-    # satisfied by another page. Substring-match the headings (not exact) so dynamic
-    # counts (e.g. "Pending Jobs (3)") and unicode dashes don't break the wait.
     check = """
         () => {
             const text = document.body.textContent || "";
             const routeReady = decodeURIComponent(window.location.hash) === "#/capacity";
-            const headings = Array.from(document.querySelectorAll("h3"))
-                .map((heading) => (heading.textContent || "").trim().toLowerCase());
-            const has = (needle) => headings.some((heading) => heading.includes(needle));
             return routeReady
-                && !text.includes("Loading capacity & scheduling")
-                && has("pools")
-                && has("pending jobs")
-                && has("users & quotas");
+                && text.includes("Backend-owned pools, slice inventory, routing decisions, and demand")
+                && text.includes("Execution Targets")
+                && text.includes("Pools — Capacity & Routing")
+                && text.includes("Pending Jobs")
+                && text.includes("Users");
         }
     """
     _await_stable_screenshot(page, check)
 
 
 def test_dashboard_capacity_tab(smoke_cluster, smoke_page, smoke_screenshot):
-    """Capacity & Scheduling tab shows scale groups, pending jobs, and user quotas."""
+    """Capacity combines execution targets, routing, demand, and Slices."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/capacity")
     wait_for_dashboard_ready(smoke_page)
     _wait_for_capacity_screenshot_ready(smoke_page)
-    smoke_screenshot("capacity-tab", "Capacity & Scheduling tab: pools, demand, pending jobs, quotas")
+    from playwright.sync_api import expect  # noqa: PLC0415  # optional dep: playwright
+
+    expect(smoke_page.get_by_text("Federation peer", exact=False)).to_have_count(0)
+    smoke_screenshot("capacity-tab", "Capacity and scheduling demand with observed infrastructure")
 
 
 def test_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screenshot):
@@ -721,136 +592,80 @@ def test_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screenshot):
     smoke_screenshot("status-tab", "Status tab showing controller process info")
 
 
-def _wait_for_backends_tab_ready(page) -> None:
-    # The combined execution-targets tab renders backend (and peer) cards only
-    # after ListBackends resolves. Anchor on the route hash plus the "N backend(s)"
-    # count subtitle in the tab's h2 — that subtitle renders only once the RPC
-    # resolves, unlike the persistent "Backends"/"Workers" nav links, so it marks
-    # the tab content (not just the shell) as loaded.
-    check = """
-        () => {
-            const routeReady = decodeURIComponent(window.location.hash) === "#/backends";
-            const heading = Array.from(document.querySelectorAll("h2"))
-                .find((h) => (h.textContent || "").trim().startsWith("Backends"));
-            const loaded = !!heading && /\\d+\\s+backend/.test(heading.textContent || "");
-            return routeReady && loaded;
-        }
-    """
-    _await_stable_screenshot(page, check)
+def test_dashboard_capacity_with_peer(smoke_cluster, smoke_page, smoke_screenshot):
+    """A configured peer renders beside local backends in Capacity.
 
-
-def test_dashboard_backends_tab(smoke_cluster, smoke_page, smoke_screenshot):
-    """Combined execution-targets tab renders local backends; no peers configured.
-
-    The smoke cluster has no federation peers, so this asserts graceful-empty
-    rendering: backend cards/rows show and no peer card ("peer" tag) appears.
-    """
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/backends")
-    wait_for_dashboard_ready(smoke_page)
-    # The readiness gate requires the "N backend(s)" subtitle, so reaching here
-    # already proves the backend cards rendered. With no peers configured, the
-    # roster is empty: no peer tag.
-    _wait_for_backends_tab_ready(smoke_page)
-    from playwright.sync_api import expect  # noqa: PLC0415  # optional dep: playwright
-
-    expect(smoke_page.get_by_text("peer", exact=True)).to_have_count(0)
-    smoke_screenshot(
-        "backends-tab",
-        "Execution-targets tab: local backend cards, no federation peers configured",
-    )
-
-
-def test_dashboard_backends_tab_with_peer(smoke_cluster, smoke_page, smoke_screenshot):
-    """A configured peer renders as a card alongside backends (route-mocked ListPeers).
-
-    The smoke cluster has no real peers, so ListPeers is stubbed at the browser to
+    The smoke cluster has no real peers, so GetCapacityStatus is extended at the browser to
     prove the peer card renders: health dot, "peer" tag, aggregated device caps,
     worker/task counts, and an inward link to the parent's cluster-filtered jobs
     (never an outbound link to the peer's own dashboard).
     """
-    import json  # noqa: PLC0415
+    peer = {
+        "peerId": "cw-smoke-peer",
+        "controllerAddress": "https://cw.example:8443",
+        "reachable": True,
+        "lastContactMs": "1720000000000",
+        "activeFederatedJobs": 2,
+        "backends": [
+            {
+                "backendId": "cw-h100",
+                "name": "cw-h100",
+                "kind": "kubernetes",
+                "capabilities": ["gpu"],
+                "advertisedAttributes": {"accelerator": {"values": ["H100"]}},
+                "scalingGroups": [],
+                "workerCount": 4,
+                "pendingTaskCount": 1,
+                "runningTaskCount": 3,
+                "hasAutoscaler": True,
+                "capacityHealth": {},
+            }
+        ],
+    }
 
-    peer_body = json.dumps(
-        {
-            "peers": [
-                {
-                    "peerId": "cw-smoke-peer",
-                    "controllerAddress": "https://cw.example:8443",
-                    "reachable": True,
-                    "lastContactMs": "1720000000000",
-                    "activeFederatedJobs": 2,
-                    "backends": [
-                        {
-                            "backendId": "cw-h100",
-                            "name": "cw-h100",
-                            "kind": "kubernetes",
-                            "capabilities": ["gpu"],
-                            "advertisedAttributes": {"accelerator": {"values": ["H100"]}},
-                            "scaleGroups": [],
-                            "workerCount": 4,
-                            "pendingTaskCount": 1,
-                            "runningTaskCount": 3,
-                            "hasAutoscaler": True,
-                            "capacityHealth": {},
-                        }
-                    ],
-                }
-            ]
-        }
-    )
+    def _fulfill_capacity(route):
+        request = route.request.post_data_json
+        if request.get("ref", {}).get("type") != "iris/capacity":
+            route.continue_()
+            return
+        response = route.fetch()
+        body = response.json()
+        body["resource"]["body"]["peers"] = [peer]
+        route.fulfill(response=response, json=body)
 
-    def _fulfill_peers(route):
-        route.fulfill(status=200, content_type="application/json", body=peer_body)
-
-    smoke_page.route("**/ListPeers", _fulfill_peers)
+    smoke_page.route("**/GetResource", _fulfill_capacity)
     try:
-        dashboard_goto(smoke_page, f"{smoke_cluster.url}/backends")
-        # The prior test already sits on #/backends, and a same-hash goto does not
-        # reload — the tab would keep its peerless roster and never re-issue
-        # ListPeers under the mock. Reload to force a fresh mount + refetch.
+        dashboard_goto(smoke_page, f"{smoke_cluster.url}/capacity")
         smoke_page.reload()
         wait_for_dashboard_ready(smoke_page)
-        _wait_for_backends_tab_ready(smoke_page)
+        _wait_for_capacity_screenshot_ready(smoke_page)
         smoke_page.wait_for_function(
             "() => document.body.textContent.includes('cw-smoke-peer')",
             timeout=10000,
         )
-        # Target the peer card heading, not the peer's (hidden) <option> in the
-        # scope <select>, which also carries the peer id.
-        assert_visible(smoke_page, "h3:has-text('cw-smoke-peer')")
-        # The peer links inward to the parent's cluster-filtered jobs, not out to
-        # the peer's own dashboard (which users can't reach).
         assert_visible(smoke_page, "a[href*='cluster=cw-smoke-peer']")
         smoke_screenshot(
-            "backends-tab-peer",
-            "Execution-targets tab with a federation peer card: health dot, peer tag, "
-            "aggregated caps, worker/task counts, and an inward link to the parent's "
-            "cluster-filtered jobs",
+            "capacity-peer",
+            "Capacity with a federation execution target and inward Jobs link",
         )
     finally:
-        smoke_page.unroute("**/ListPeers", _fulfill_peers)
+        smoke_page.unroute("**/GetResource", _fulfill_capacity)
 
 
-def test_dashboard_job_detail_with_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
-    """Job detail page shows combined log viewer for all tasks."""
-    job_id = verbose_job.job_id.to_wire()
-    # Same asynchronous-log-shipping race as test_dashboard_task_logs: wait for the
-    # task's logs to land before the single page-load fetch (EXACT is a superset of
-    # the job view's PREFIX query).
-    task_status = smoke_cluster.task_status(verbose_job)
-    _wait_for_task_log_marker(
-        smoke_cluster, task_status.task_id, task_status.current_attempt_id, "DONE: all lines emitted"
-    )
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}")
-    wait_for_dashboard_ready(smoke_page)
-    _wait_for_job_detail_screenshot_ready(smoke_page, job_id)
+def test_dashboard_cancel_job_returns_a_durable_action(smoke_cluster, smoke_page, smoke_screenshot):
+    """Job cancel crosses the typed resource boundary and renders its receipt."""
+    job = smoke_cluster.submit(TestJobs.sleep, "smoke-cancel-action", 300)
+    smoke_cluster.wait_for_state(job, job_pb2.JOB_STATE_RUNNING, timeout=smoke_cluster.job_timeout)
+    _open_job_detail(smoke_page, smoke_cluster.url, job.job_id.to_wire())
+    smoke_page.get_by_role("button", name="Cancel job").click()
     smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('DONE: all lines emitted')",
-        timeout=10000,
+        "() => document.body.textContent.includes('Action') "
+        "&& document.body.textContent.includes('ACTION_STATE_SUCCEEDED')",
+        timeout=10_000,
     )
     smoke_screenshot(
-        "job-detail-logs",
-        "Job detail page showing task table and combined job-level log viewer with log lines",
+        "job-cancel-action",
+        "Typed Job cancellation showing its durable action receipt",
     )
 
 
@@ -859,12 +674,25 @@ def test_dashboard_job_detail_with_logs(smoke_cluster, verbose_job, smoke_page, 
 # ============================================================================
 
 
-def test_endpoint_registration(smoke_cluster):
-    """Endpoint registered from inside job via RPC."""
+def test_endpoint_registration(smoke_cluster, smoke_page, smoke_screenshot):
+    """A registered Endpoint is discoverable, navigable, and inspectable."""
     prefix = f"smoke-ep-{uuid.uuid4().hex[:8]}"
+    endpoint_name = f"{prefix}/actor1"
     job = smoke_cluster.submit(TestJobs.register_endpoint, "smoke-endpoint", prefix)
     status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
+
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/endpoints")
+    wait_for_dashboard_ready(smoke_page)
+    smoke_page.get_by_placeholder("Name prefix").fill(prefix)
+    smoke_page.get_by_role("button", name="Filter", exact=True).click()
+    endpoint_link = smoke_page.get_by_role("link", name=endpoint_name, exact=True)
+    endpoint_link.wait_for()
+    endpoint_link.locator("xpath=ancestor::tr").get_by_role("button", name="Details", exact=True).click()
+    smoke_page.get_by_text("localhost:5000", exact=True).wait_for()
+    smoke_page.get_by_text("actor", exact=True).wait_for()
+    smoke_page.get_by_role("link", name=job.job_id.task(0).to_wire(), exact=True).wait_for()
+    smoke_screenshot("endpoints-tab", "Endpoint inventory with proxy, Task, Job, lease, and metadata links")
 
 
 def test_port_allocation(smoke_cluster, capabilities):
@@ -1082,7 +910,10 @@ OFFLOAD_FILE_SIZE = 32 * 1024  # 32KB — exceeds the 10KB offload threshold
 def test_workdir_file_offload(smoke_cluster):
     """A job with a workdir file above the offload threshold succeeds after blob-store offloading."""
     entrypoint = Entrypoint.from_callable(TestJobs.verify_workdir_file, "large_payload.bin", OFFLOAD_FILE_SIZE)
-    entrypoint.workdir_files["large_payload.bin"] = b"\xab" * OFFLOAD_FILE_SIZE
+    entrypoint = replace(
+        entrypoint,
+        workdir_files={**entrypoint.workdir_files, "large_payload.bin": b"\xab" * OFFLOAD_FILE_SIZE},
+    )
     job = smoke_cluster.client.submit(
         entrypoint=entrypoint,
         name=f"smoke-offload-{uuid.uuid4().hex[:8]}",

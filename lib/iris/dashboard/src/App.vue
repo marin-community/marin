@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import DashboardLegend from '@/components/shared/DashboardLegend.vue'
 import TabNav, { type Tab } from '@/components/layout/TabNav.vue'
@@ -9,84 +9,60 @@ import { useDarkMode } from '@/composables/useDarkMode'
 import { useBackends } from '@/composables/useBackends'
 
 const route = useRoute()
-const router = useRouter()
 const { isDark, toggle: toggleDark } = useDarkMode()
-const { capabilities, backends, peers, fetchConfig, ensurePeers } = useBackends()
+const { backends, peers, fetchConfig, ensurePeers } = useBackends()
 
 // Show the scope selector once there is more than one execution target to pick
 // between — counting backends and federation peers, so a 1-backend + N-peer
 // deployment still gets the selector.
 const showScope = computed(() => backends.value.length + peers.value.length > 1)
 
-const authEnabled = ref(false)
-// Login provider from /auth/config. On an IAP cluster a 401 is an edge-session
-// lapse, recovered by reloading (not by the bearer-token page); see onAuthRequired.
+// On an IAP cluster a 401 is an edge-session lapse recovered by a full-page
+// reload through the edge. Direct loopback access has no browser login flow.
 const authProvider = ref<string | null>(null)
 const legendOpen = ref(false)
 
-// sessionStorage key holding the epoch-ms of the last IAP re-auth reload, so a
-// genuinely persistent 401 falls through to /login instead of reload-looping.
+// sessionStorage key holding the epoch-ms of the last IAP re-auth reload.
 const IAP_REAUTH_RELOAD_KEY = 'iris-iap-reauth-reload-ms'
 // A second 401 within this window of a reload means the reload did not re-auth.
 const IAP_REAUTH_RELOAD_WINDOW_MS = 15_000
-// Set once we schedule a reload, so concurrent 401s (many polls in flight) don't
-// briefly route to /login before the reload navigation replaces the document.
+// Set once we schedule a reload so concurrent polls cannot trigger several reloads.
 let reloadingForAuth = false
 
-// Tabs always shown have no `requires`; conditional tabs name the capability
-// the backend must advertise (see backend_descriptor in backend.py). The
-// always-on Backends tab subsumes the per-backend Kubernetes cluster view in its
-// detail panels, so there is no separate Cluster tab.
-const ALL_TABS = computed<(Tab & { requires?: string })[]>(() => [
+const TABS: Tab[] = [
   { key: 'jobs', label: 'Jobs', to: '/' },
-  { key: 'capacity', label: 'Capacity & Scheduling', to: '/capacity' },
-  { key: 'fleet', label: 'Workers', to: '/fleet', requires: 'workers' },
-  { key: 'backends', label: 'Backends', to: '/backends' },
+  { key: 'nodes', label: 'Nodes', to: '/nodes' },
+  { key: 'capacity', label: 'Capacity', to: '/capacity' },
   { key: 'endpoints', label: 'Endpoints', to: '/endpoints' },
   { key: 'logs', label: 'Logs', to: '/logs' },
   { key: 'account', label: 'Account', to: '/account' },
   { key: 'status', label: 'Status', to: '/status' },
-])
+]
 
-const TABS = computed<Tab[]>(() =>
-  ALL_TABS.value.filter(t => !t.requires || capabilities.value.includes(t.requires))
-)
-
-const PATH_TO_TAB: Record<string, string> = {
-  '/': 'jobs',
-  '/capacity': 'capacity',
-  '/fleet': 'fleet',
-  '/backends': 'backends',
-  '/endpoints': 'endpoints',
-  '/logs': 'logs',
-  '/account': 'account',
-  '/status': 'status',
-}
+const PATH_TO_TAB = Object.fromEntries(TABS.map(tab => [tab.to, tab.key])) as Record<string, string>
 
 const activeTab = computed(() => {
   const path = route.path
   if (PATH_TO_TAB[path]) return PATH_TO_TAB[path]
   if (path.startsWith('/job')) return 'jobs'
-  if (path.startsWith('/worker')) return 'fleet'
+  if (path.startsWith('/task')) return 'jobs'
+  if (path.startsWith('/node')) return 'nodes'
   return 'jobs'
 })
 
 // Detail pages hide the tab nav to show breadcrumb navigation instead
 const isDetailPage = computed(() => {
-  return route.path.includes('/job/') || route.path.includes('/worker/') || route.path.startsWith('/system/')
+  return route.path.startsWith('/job/') || route.path.startsWith('/task/') || route.path.startsWith('/node/') || route.path.startsWith('/system/')
 })
-
-const isLoginPage = computed(() => route.path === '/login')
 
 function onAuthRequired() {
   // A 401 reached the SPA. On an IAP-fronted cluster this is almost always the
   // browser's IAP EDGE session lapsing: IAP answers a background XHR/POST (the
   // RPC polls, the 30s log-viewer FetchLogs) with 401 rather than the 302 it gives
   // a GET navigation, so iris never sees the request. The remedy is a full-page
-  // reload — a GET that IAP redirects through its edge re-auth — not the
-  // bearer-token LoginPage, which does not apply to IAP. Reload at most once per
-  // window so a persistent 401 (revoked access, or a genuine iris challenge) still
-  // lands on /login instead of looping.
+  // reload — a GET that IAP redirects through its edge re-auth. Reload at most
+  // once per window so revoked access or a persistent controller rejection does
+  // not cause a loop.
   if (reloadingForAuth) return
   if (authProvider.value === 'iap') {
     const last = Number(sessionStorage.getItem(IAP_REAUTH_RELOAD_KEY) ?? '0')
@@ -97,36 +73,18 @@ function onAuthRequired() {
       return
     }
   }
-  router.push('/login')
-}
-
-async function logout() {
-  await fetch('/auth/logout', { method: 'POST' })
-  router.push('/login')
 }
 
 onMounted(async () => {
   window.addEventListener('iris-auth-required', onAuthRequired)
 
   try {
-    // fetchConfig fetches /auth/config once, populates capabilities + backends,
-    // and returns auth-related fields for login redirection.
-    const { authEnabled: ae, authenticated, authOptional, provider } = await fetchConfig()
-    authEnabled.value = ae
+    // The provider selects IAP-specific 401 recovery; auth itself happens at
+    // the edge or through direct loopback trust.
+    const { provider } = await fetchConfig()
     authProvider.value = provider
-    // This config load reached us authenticated (a GET, which IAP re-auths at the
-    // edge), so the session is healthy again — clear the reload guard so a later,
-    // unrelated lapse can reload once more.
-    if (authenticated) sessionStorage.removeItem(IAP_REAUTH_RELOAD_KEY)
-    // Only send the browser to the login page when auth is required and this
-    // request is not already authenticated. Behind IAP the caller is
-    // authenticated at the edge (no session cookie), so `authenticated` is true
-    // and the bearer-token login page is skipped.
-    if (ae && !authOptional && !authenticated && route.path !== '/login') {
-      router.push('/login')
-    }
   } catch {
-    // Auth config endpoint unavailable — assume no auth
+    // Config endpoint unavailable — RPC views surface their own errors.
   }
 
   // Load the peer roster so the scope selector can count peers; inert (empty)
@@ -140,10 +98,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div v-if="isLoginPage">
-    <router-view />
-  </div>
-  <div v-else class="min-h-screen bg-surface-raised overflow-x-clip">
+  <div class="min-h-screen bg-surface-raised overflow-x-clip">
     <AppHeader title="Iris Controller Dashboard">
       <button
         class="flex items-center justify-center w-7 h-7 rounded-full border border-surface-border
@@ -167,13 +122,6 @@ onUnmounted(() => {
         @click="legendOpen = true"
       >
         ?
-      </button>
-      <button
-        v-if="authEnabled"
-        class="text-sm text-text-muted hover:text-text transition-colors"
-        @click="logout"
-      >
-        Logout
       </button>
     </AppHeader>
     <DashboardLegend v-if="legendOpen" @close="legendOpen = false" />

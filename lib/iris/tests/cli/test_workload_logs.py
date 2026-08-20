@@ -12,8 +12,8 @@ from iris.cli.attempt import attempt_logs
 from iris.cli.job import logs as job_logs
 from iris.cli.task import task_logs
 from iris.client import IrisClient
-from iris.cluster.client import ClusterClient
-from iris.cluster.types import JobName
+from iris.cluster.client.protocol import ClusterClient
+from iris.resources.names import JobName
 from iris.rpc import job_pb2
 
 

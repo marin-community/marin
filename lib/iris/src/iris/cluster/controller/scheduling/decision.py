@@ -1,12 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Scheduling-decision passes shared by the Iris scheduling pipeline.
+"""Scheduling-decision records and passes shared by the Iris scheduling pipeline.
 
 Pure scheduling-layer helpers: they consume only ``scheduling.policy`` /
 ``scheduling.scheduler`` types (plus protos) and return plain data, so they
 carry no edge back to the controller's ops/reconcile/schema layer.
 """
+
+from dataclasses import dataclass
 
 from iris.cluster.controller.scheduling.policy import (
     PreemptionCandidate,
@@ -20,8 +22,20 @@ from iris.cluster.controller.scheduling.scheduler import (
     Scheduler,
     SchedulingContext,
 )
-from iris.cluster.types import JobName, WorkerId
-from iris.rpc import job_pb2
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
+from iris.resources.state import PriorityBand
+
+
+@dataclass(frozen=True)
+class Assignment:
+    """A task-to-worker placement and its effective priority band."""
+
+    task_id: JobName
+    worker_id: WorkerId
+    priority_band: int | None = None
 
 
 def apply_preemptions(
@@ -38,7 +52,7 @@ def apply_preemptions(
         PreemptionCandidate(
             job_name=tid,
             requirements=jobs[tid.parent],
-            band=order.task_band_map.get(tid, job_pb2.PRIORITY_BAND_INTERACTIVE),
+            band=order.task_band_map.get(tid, PriorityBand.INTERACTIVE),
         )
         for tid in order.ordered_task_ids
         if tid not in assigned_ids and tid.parent is not None and tid.parent in jobs

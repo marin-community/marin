@@ -54,8 +54,8 @@ import pyarrow.parquet as pq
 from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
 from iris.client.client import iris_ctx
-from iris.cluster.client import get_job_info
-from iris.cluster.types import Entrypoint, ResourceSpec
+from iris.client.job_info import get_job_info
+from iris.resources.execution import Entrypoint, ResourceSpec
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 from rigging.fsutil.listing import bucket_url, entry_mtime

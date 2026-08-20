@@ -11,11 +11,11 @@ from typing import ClassVar
 from finelog.rpc import logging_pb2
 from rigging.timing import Timestamp
 
-from iris.cluster.controller.backend import (
+from iris.backends.protocol import (
     AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
-    BackendRuntime,
+    BackendWorkerStore,
     DeviceCapacity,
     ProviderUnsupportedError,
     ReconcileRequest,
@@ -24,13 +24,20 @@ from iris.cluster.controller.backend import (
     ScheduleResult,
     TaskTarget,
 )
-from iris.cluster.controller.ops.task import apply_dispatch_updates
-from iris.cluster.controller.reconcile.loader import TransitionReader
+from iris.backends.status import AutoscalerStatus, BackendStatus, KubernetesStatus
+from iris.cluster.controller.reconcile.apply import apply_dispatch_updates
+from iris.cluster.controller.reconcile.reader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import job_scheduling_deadline
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId
-from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
+from iris.cluster.types import DEFAULT_BACKEND_ID
+from iris.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
+from iris.resources.system import ProcessInfo
+from iris.rpc import job_pb2
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,8 +79,10 @@ class ScriptedTaskBackend:
         self.events: list[BackendEvent] = []
         self.calls: list[str] = []
         self._reconcile_failures = 0
+        self._status_failures = 0
         self.closed = False
         self.advertised: dict[str, set[str]] = {"region": {"us-central1"}}
+        self._reported_status = BackendStatus(kubernetes=KubernetesStatus())
 
     @property
     def has_pending_observations(self) -> bool:
@@ -94,6 +103,9 @@ class ScriptedTaskBackend:
     def fail_reconcile(self, *, times: int) -> None:
         self._reconcile_failures += times
 
+    def fail_status(self, *, times: int) -> None:
+        self._status_failures += times
+
     def advertised_attributes(self) -> dict[str, set[str]]:
         return self.advertised
 
@@ -106,11 +118,16 @@ class ScriptedTaskBackend:
     def runtime_image(self, requested_image: str) -> str:
         return requested_image
 
-    def status(self) -> controller_pb2.Controller.BackendStatus:
-        return controller_pb2.Controller.BackendStatus()
+    def status(self) -> BackendStatus:
+        if self._status_failures:
+            self._status_failures -= 1
+            raise ConnectionError(f"backend {self.backend_id} resource source is unavailable")
+        return self._reported_status
 
-    def autoscaler_status(self) -> vm_pb2.AutoscalerStatus:
-        return vm_pb2.AutoscalerStatus()
+    def autoscaler_status(self) -> AutoscalerStatus:
+        if self._reported_status.worker is not None:
+            return self._reported_status.worker.autoscaler
+        return AutoscalerStatus()
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         self.calls.append("schedule")
@@ -121,14 +138,14 @@ class ScriptedTaskBackend:
         if self._reconcile_failures:
             self._reconcile_failures -= 1
             raise ConnectionError("scripted backend is unavailable")
-        desired = {(run.task_id, run.attempt_id) for run in request.tasks_to_run} | {
+        desired = {(run.task_id.to_wire(), run.attempt_id) for run in request.tasks_to_run} | {
             (entry.task_id.to_wire(), entry.attempt_id) for entry in request.running_tasks
         }
         for task_id, attempt_id in sorted(self._desired - desired):
             self.events.append(BackendEvent("stopped", task_id, attempt_id, backend_id=self.backend_id))
 
         updates: list[TaskUpdate] = []
-        newly_launched = {(run.task_id, run.attempt_id) for run in request.tasks_to_run}
+        newly_launched = {(run.task_id.to_wire(), run.attempt_id) for run in request.tasks_to_run}
         for task_id, attempt_id in sorted(newly_launched - self._desired):
             self.events.append(BackendEvent("launched", task_id, attempt_id, backend_id=self.backend_id))
             queued = self._pop_observation(task_id)
@@ -181,33 +198,27 @@ class ScriptedTaskBackend:
         self.calls.append("autoscale")
         return AutoscaleResult()
 
-    def bind_runtime(self, runtime: BackendRuntime) -> None:
+    def attach_worker_store(self, backend_id: str, store: BackendWorkerStore) -> None:
         return None
 
     def seed_liveness(self) -> None:
         return None
 
-    def get_process_status(
-        self,
-        target: TaskTarget,
-        request: job_pb2.GetProcessStatusRequest,
-    ) -> job_pb2.GetProcessStatusResponse:
+    def get_process_status(self, target: TaskTarget) -> ProcessInfo:
         raise ProviderUnsupportedError("journey backend has no process runtime")
 
     def profile_task(
         self,
         target: TaskTarget,
-        request: job_pb2.ProfileTaskRequest,
-        timeout_ms: int,
-    ) -> job_pb2.ProfileTaskResponse:
+        request: ProfileRequest,
+    ) -> ProfileResult:
         raise ProviderUnsupportedError("journey backend has no profiler")
 
     def exec_in_container(
         self,
         target: TaskTarget,
-        request: worker_pb2.Worker.ExecInContainerRequest,
-        timeout_seconds: int = 60,
-    ) -> worker_pb2.Worker.ExecInContainerResponse:
+        request: ExecRequest,
+    ) -> ExecResult:
         raise ProviderUnsupportedError("journey backend has no container runtime")
 
     def fetch_live_logs(
@@ -227,6 +238,10 @@ class UnavailableTaskBackend(ScriptedTaskBackend):
     """Worker-style backend that advertises a route but has no capacity."""
 
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset({BackendCapability.WORKER_DAEMON})
+
+    def __init__(self, transition_reader: TransitionReader, *, backend_id: str = DEFAULT_BACKEND_ID) -> None:
+        super().__init__(transition_reader, backend_id=backend_id)
+        self.health = WorkerHealthTracker()
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         self.calls.append("schedule")

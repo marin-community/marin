@@ -17,7 +17,8 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthTracker,
     WorkerLiveness,
 )
-from iris.cluster.types import WorkerId, WorkerUsability
+from iris.cluster.types import WorkerUsability
+from iris.resources.names import WorkerId
 from rigging.timing import Duration
 
 # Grace used by the fixture tracker. Workers register at now_ms=0, so a failure

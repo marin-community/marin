@@ -6,7 +6,7 @@
 from pathlib import Path
 
 import pytest
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.persistence.database import ControllerDB
 from sqlalchemy import text
 
 

@@ -123,8 +123,8 @@ types even in startup-polling loops.
   another test module.
 - Pytest fixtures and hooks stay in `conftest.py`. Consume setup through fixture
   parameters instead of importing fixture functions.
-- Shared fakes live in `src/iris/cluster/backends/gcp/fake.py`
-  (`InMemoryGcpService`), `src/iris/cluster/backends/k8s/fake.py`
+- Shared fakes live in `src/iris/cluster/platforms/gcp/fake.py`
+  (`InMemoryGcpService`), `src/iris/cluster/platforms/k8s/fake.py`
   (`InMemoryK8sService`), `src/iris/test_util.py`, or `src/iris/testing/`.
   Do not duplicate fakes across files.
 

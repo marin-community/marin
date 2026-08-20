@@ -179,7 +179,7 @@ uv run iris --cluster=marin job run \
 
 See [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)
 for the full `iris job run` reference, including `--no-wait` for detached submission and
-`iris job logs -f` for log streaming.
+`iris job logs --tail` for log streaming.
 
 ## Monitoring training
 

@@ -24,12 +24,11 @@ from iris.cluster.controller.task_state import (
     ActiveTaskRow,
     task_is_finished_row,
 )
-from iris.cluster.types import (
-    TERMINAL_TASK_STATES,
+from iris.resources.names import (
     JobName,
     WorkerId,
 )
-from iris.rpc import job_pb2
+from iris.resources.state import TERMINAL_TASK_STATES, TaskState
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +44,13 @@ class TerminalKind(StrEnum):
     """Which terminal transition a :class:`TerminalDecision` requests.
 
     - ``PREEMPT``: the task should be preempted (retried if budget remains).
+    - ``TERMINATE``: an operator ends the task without automatic retry.
     - ``TIMEOUT``: the task should fail without retry.
     - ``UNSCHEDULABLE``: the task can never be placed.
     """
 
     PREEMPT = "preempt"
+    TERMINATE = "terminate"
     TIMEOUT = "timeout"
     UNSCHEDULABLE = "unschedulable"
 
@@ -146,7 +147,7 @@ def merge_task_termination(
 
     No retry counter is carried: both the failure and preemption counts derive
     from the attempt rows this records (see
-    ``iris.cluster.controller.attempt_counts``).
+    ``iris.resources.attempt``).
 
     An already-terminal attempt is left untouched: killing a PENDING task (a
     cancel or a job-failure cascade) must not overwrite the historical outcome of
@@ -155,7 +156,7 @@ def merge_task_termination(
     miscount that terminal as a preemption instead of the failure it was.
     """
     now = Timestamp.from_ms(now_ms)
-    task_finished_at = None if task_state in ACTIVE_TASK_STATES or task_state == job_pb2.TASK_STATE_PENDING else now
+    task_finished_at = None if task_state in ACTIVE_TASK_STATES or task_state == TaskState.PENDING else now
     effective_attempt_state = attempt_state if attempt_state is not None else task_state
     task_name = JobName.from_wire(task_id)
 
@@ -199,10 +200,10 @@ def resolve_task_failure_state(
     budget remains (this attempt would be the ``preemption_count + 1``-th),
     otherwise go to the given terminal state.
     """
-    if prior_state == job_pb2.TASK_STATE_ASSIGNED:
-        return job_pb2.TASK_STATE_PENDING
+    if prior_state == TaskState.ASSIGNED:
+        return TaskState.PENDING
     if prior_state in EXECUTING_TASK_STATES and preemption_count + 1 <= max_preemptions:
-        return job_pb2.TASK_STATE_PENDING
+        return TaskState.PENDING
     return terminal_state
 
 
@@ -227,7 +228,7 @@ def unschedulable_one(
         state,
         task_id.to_wire(),
         None,
-        job_pb2.TASK_STATE_UNSCHEDULABLE,
+        TaskState.UNSCHEDULABLE,
         reason,
         now_ms,
         stamp_attempt_finished=True,
@@ -255,7 +256,7 @@ def preempt_one(
         prior_state,
         row.preemption_count,
         row.max_retries_preemption,
-        job_pb2.TASK_STATE_PREEMPTED,
+        TaskState.PREEMPTED,
     )
     merge_task_termination(
         state,
@@ -265,13 +266,42 @@ def preempt_one(
         reason,
         now_ms,
         stamp_attempt_finished=False,
-        attempt_state=job_pb2.TASK_STATE_PREEMPTED,
+        attempt_state=TaskState.PREEMPTED,
     )
     return TransitionOutcome(
         task_id=task_id,
         job_id=row.job_id,
         prior_state=prior_state,
         new_task_state=new_state,
+        cascade_to_peers=row.has_coscheduling,
+    )
+
+
+def terminate_one(
+    state: Overlay,
+    snapshot: TransitionSnapshot,
+    task_id: JobName,
+    reason: str,
+    *,
+    row: ActiveTaskRow | None,
+) -> TransitionOutcome | None:
+    """Terminate one exact active Attempt without permitting a retry."""
+    if row is None or row.state not in ACTIVE_TASK_STATES:
+        return None
+    merge_task_termination(
+        state,
+        task_id.to_wire(),
+        row.current_attempt_id,
+        TaskState.KILLED,
+        reason,
+        snapshot.now.epoch_ms(),
+        stamp_attempt_finished=False,
+    )
+    return TransitionOutcome(
+        task_id=task_id,
+        job_id=row.job_id,
+        prior_state=row.state,
+        new_task_state=TaskState.KILLED,
         cascade_to_peers=row.has_coscheduling,
     )
 
@@ -319,8 +349,8 @@ def apply_one_transition(
         return None
 
     if task_is_finished_row(task) or update.new_state in (
-        job_pb2.TASK_STATE_UNSPECIFIED,
-        job_pb2.TASK_STATE_PENDING,
+        TaskState.UNSPECIFIED,
+        TaskState.PENDING,
     ):
         # Stranded-attempt finalization: producer transitions move the task
         # to a terminal state but leave the attempt's ``finished_at_ms`` NULL,
@@ -403,29 +433,29 @@ def apply_one_transition(
     preemption_count = task.preemption_count
     charge_worker_build_failures = source is TransitionSource.WORKER_RECONCILE
 
-    if update.new_state == job_pb2.TASK_STATE_RUNNING:
+    if update.new_state == TaskState.RUNNING:
         started_ms = now_ms
-        task_state = job_pb2.TASK_STATE_RUNNING
-    elif update.new_state == job_pb2.TASK_STATE_BUILDING:
+        task_state = TaskState.RUNNING
+    elif update.new_state == TaskState.BUILDING:
         # Worker BUILDING runs setup, so start its clock to catch wedged builds
         # (#6077). K8s BUILDING includes pre-admission waits, so its clock starts
         # at RUNNING instead (#7431).
         if source is TransitionSource.WORKER_RECONCILE:
             started_ms = now_ms
-        task_state = job_pb2.TASK_STATE_BUILDING
+        task_state = TaskState.BUILDING
     elif update.new_state in (
-        job_pb2.TASK_STATE_FAILED,
-        job_pb2.TASK_STATE_WORKER_FAILED,
-        job_pb2.TASK_STATE_KILLED,
-        job_pb2.TASK_STATE_PREEMPTED,
-        job_pb2.TASK_STATE_UNSCHEDULABLE,
-        job_pb2.TASK_STATE_SUCCEEDED,
+        TaskState.FAILED,
+        TaskState.WORKER_FAILED,
+        TaskState.KILLED,
+        TaskState.PREEMPTED,
+        TaskState.UNSCHEDULABLE,
+        TaskState.SUCCEEDED,
     ):
         terminal_ms = now_ms
         task_state = update.new_state
-        if update.new_state == job_pb2.TASK_STATE_SUCCEEDED and task_exit is None:
+        if update.new_state == TaskState.SUCCEEDED and task_exit is None:
             task_exit = 0
-        if update.new_state == job_pb2.TASK_STATE_UNSCHEDULABLE and task_error is None:
+        if update.new_state == TaskState.UNSCHEDULABLE and task_error is None:
             task_error = "Scheduling timeout exceeded"
 
         # Charge the host build-failure reaper when a worker failed to bring the
@@ -437,22 +467,21 @@ def apply_one_transition(
         # providers manage their own hosts, so this is gated on
         # charge_worker_build_failures (worker path only).
         launch_or_build_failure = (
-            update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
-            and prior_state in (job_pb2.TASK_STATE_ASSIGNED, job_pb2.TASK_STATE_BUILDING)
-        ) or (update.new_state == job_pb2.TASK_STATE_FAILED and prior_state == job_pb2.TASK_STATE_BUILDING)
+            update.new_state == TaskState.WORKER_FAILED and prior_state in (TaskState.ASSIGNED, TaskState.BUILDING)
+        ) or (update.new_state == TaskState.FAILED and prior_state == TaskState.BUILDING)
         if charge_worker_build_failures and launch_or_build_failure and attempt_worker_id is not None:
             state.emit_worker_build_failed(WorkerId(str(attempt_worker_id)))
 
-        if update.new_state == job_pb2.TASK_STATE_FAILED:
+        if update.new_state == TaskState.FAILED:
             # Application failure (non-zero exit / setup error): failure budget.
             failure_count += 1
             if failure_count <= task.max_retries_failure:
-                task_state = job_pb2.TASK_STATE_PENDING
+                task_state = TaskState.PENDING
                 terminal_ms = None
         elif update.new_state in (
-            job_pb2.TASK_STATE_WORKER_FAILED,
-            job_pb2.TASK_STATE_KILLED,
-            job_pb2.TASK_STATE_PREEMPTED,
+            TaskState.WORKER_FAILED,
+            TaskState.KILLED,
+            TaskState.PREEMPTED,
         ):
             # Worker loss / infra (WORKER_FAILED), a backend-observed preemption
             # (PREEMPTED: a cluster backend's control plane evicted the attempt),
@@ -473,18 +502,14 @@ def apply_one_transition(
             # observer-side), so we don't double-count here.
             # A KILLED keeps the WORKER_FAILED terminal so the task's terminal
             # state stays inside the preemption-budget predicate.
-            terminal_state = (
-                job_pb2.TASK_STATE_PREEMPTED
-                if update.new_state == job_pb2.TASK_STATE_PREEMPTED
-                else job_pb2.TASK_STATE_WORKER_FAILED
-            )
+            terminal_state = TaskState.PREEMPTED if update.new_state == TaskState.PREEMPTED else TaskState.WORKER_FAILED
             task_state = resolve_task_failure_state(
                 prior_state,
                 preemption_count,
                 task.max_retries_preemption,
                 terminal_state=terminal_state,
             )
-            if task_state == job_pb2.TASK_STATE_PENDING:
+            if task_state == TaskState.PENDING:
                 terminal_ms = None
 
     # An attempt is terminal whenever the update itself is terminal, even
@@ -548,7 +573,7 @@ def timeout_one(
         state,
         row.task_id.to_wire(),
         row.current_attempt_id,
-        job_pb2.TASK_STATE_FAILED,
+        TaskState.FAILED,
         reason,
         now_ms,
         stamp_attempt_finished=False,

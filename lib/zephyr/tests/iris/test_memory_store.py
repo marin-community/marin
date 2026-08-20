@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import cloudpickle
 import pytest
-from iris.cluster.types import JobName, TaskAttempt
+from iris.resources.names import JobName, TaskAttempt
 from iris.test_util import SentinelFile
 from rigging.timing import Duration, ExponentialBackoff
 from zephyr.dataset import Dataset

@@ -27,8 +27,12 @@ from iris.cluster.controller.reconcile.snapshot import (
     pick_earliest_task_error,
 )
 from iris.cluster.controller.task_state import ActiveTaskRow
-from iris.cluster.types import TERMINAL_JOB_STATES, JobName, WorkerId
-from iris.rpc import job_pb2
+from iris.resources.job import JobPreemptionPolicy
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
+from iris.resources.state import TERMINAL_JOB_STATES, JobState, TaskState
 
 _T = TypeVar("_T")
 
@@ -150,7 +154,7 @@ class Overlay:
         if self._failed_attempt_deltas_by_job is None:
             tally: dict[JobName, int] = {}
             for (task_id, _), delta in self._effects.attempts.items():
-                if delta.state == job_pb2.TASK_STATE_FAILED:
+                if delta.state == TaskState.FAILED:
                     parent = task_id.parent
                     if parent is not None:
                         tally[parent] = tally.get(parent, 0) + 1
@@ -178,7 +182,7 @@ class Overlay:
         if delta is not None and delta.finished_at is not None:
             return delta.finished_at.epoch_ms()
         row = self._snapshot.attempts.get((task_id, attempt_id))
-        return row.finished_at_ms if row is not None else None
+        return row.finished_at_ms.epoch_ms() if row is not None and row.finished_at_ms is not None else None
 
     def active_tasks_for_job(
         self,
@@ -227,13 +231,13 @@ class Overlay:
         """
         cfg = self._snapshot.job_configs.get(job_id)
         if cfg is None:
-            return job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN
+            return JobPreemptionPolicy.TERMINATE_CHILDREN
         policy = cfg.preemption_policy
-        if policy != job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED:
+        if policy != JobPreemptionPolicy.UNSPECIFIED:
             return policy
         if cfg.num_tasks <= 1:
-            return job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN
-        return job_pb2.JOB_PREEMPTION_POLICY_PRESERVE_CHILDREN
+            return JobPreemptionPolicy.TERMINATE_CHILDREN
+        return JobPreemptionPolicy.PRESERVE_CHILDREN
 
     # ------------------------------------------------------------------
     # Accumulator merge entry points
@@ -290,7 +294,7 @@ class Overlay:
         # The job-wide failure budget counts FAILED attempt deltas (job_basis); a
         # newly-FAILED attempt invalidates the cached per-job tally so the next
         # job_basis read rebuilds it.
-        if merged.state == job_pb2.TASK_STATE_FAILED:
+        if merged.state == TaskState.FAILED:
             self._failed_attempt_deltas_by_job = None
 
     def merge_job_state(self, delta: JobRowDelta) -> None:
@@ -335,7 +339,7 @@ class Overlay:
         prior_finished = old.finished_at if old is not None else None
         self._effects.jobs[delta.job_id] = JobRowDelta(
             job_id=delta.job_id,
-            state=job_pb2.JOB_STATE_KILLED,
+            state=JobState.KILLED,
             started_at=old.started_at if old is not None else None,
             finished_at=_first(prior_finished, delta.finished_at),
             error=delta.error,

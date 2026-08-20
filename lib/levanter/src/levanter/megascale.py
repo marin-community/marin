@@ -12,7 +12,7 @@ import os
 from rigging.timing import Duration, ExponentialBackoff
 
 from iris.client.client import iris_ctx
-from iris.cluster.client.job_info import JobInfo, get_job_info
+from iris.client.job_info import JobInfo, get_job_info
 
 logger = logging.getLogger(__name__)
 

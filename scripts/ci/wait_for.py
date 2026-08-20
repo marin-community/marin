@@ -38,9 +38,8 @@ automated-review wrapper whose findings arrive as separate inline comments. Only
 automation a rule names is ever suppressed, so a comment from a human — or from a bot the
 catalog does not cover — always fires. The catalog also suppresses Loom's exact
 ``Working on this in loom: <session URL>`` acknowledgement, only when the Loom bot
-authored it. It also suppresses Loom access-control replies addressed to a bot. Comments
-are keyed on content, so a placeholder a bot later edits into a real finding re-surfaces as
-new activity. Pass
+authored it. Comments are keyed on content, so a placeholder a bot later edits into a
+real finding re-surfaces as new activity. Pass
 ``--comment-filter all`` to fire on every new comment instead.
 
 `poll` is the escape hatch for anything without a built-in: compose the predicate
@@ -82,11 +81,12 @@ from typing import NamedTuple
 
 import click
 from connectrpc.errors import ConnectError
-from iris.client.client import IrisClient, Job
-from iris.client.workload import JobStatus
-from iris.cluster.client.job_info import get_job_info
-from iris.cluster.types import JobName
+from iris.client import IrisClient
+from iris.client.job_info import get_job_info
+from iris.resources.job import JobSummary
+from iris.resources.names import JobName
 from iris.rpc.errors import format_connect_error
+from iris.rpc.proto_display import job_state_friendly
 from rigging.timing import ExponentialBackoff
 
 # `gh` calls are quick metadata reads; bound them so a hung call cannot wedge the
@@ -354,8 +354,6 @@ def authenticated_author(*, in_loom_session: bool) -> str:
     try:
         return authenticated_user()
     except GhError as exc:
-        # Installation tokens cannot query /user. Loom sessions using that
-        # credential post comments as the known Loom App bot.
         if in_loom_session and _INSTALLATION_TOKEN_USER_ERROR in str(exc):
             return LOOM_BOT
         raise
@@ -704,14 +702,14 @@ class ReviewSource(PrActivitySource):
 class IrisJobSource(Source):
     """Fires when an Iris job reaches a terminal state."""
 
-    def __init__(self, spec: EventSpec, wait_for_job: Callable[[JobName], JobStatus]):
+    def __init__(self, spec: EventSpec, wait_for_job: Callable[[JobName], JobSummary]):
         super().__init__(spec)
         try:
             self.job_id = JobName.from_wire(spec.arg)
         except ValueError:
             raise click.BadParameter(f"expected an Iris job ID, got {spec.arg!r}") from None
         self._wait_for_job = wait_for_job
-        self._result: Future[JobStatus] = Future()
+        self._result: Future[JobSummary] = Future()
         self._wakeup: Event | None = None
         # The selector is a command-line process and exits after any arm fires.
         # A daemon worker lets that exit proceed without joining an Iris wait
@@ -741,7 +739,7 @@ class IrisJobSource(Source):
             self.last_status = "waiting"
             return None
         status = self._result.result()
-        state_name = status.state.value
+        state_name = job_state_friendly(status.state)
         self.last_status = state_name
         return {"state": state_name}
 
@@ -775,7 +773,7 @@ def build_source(
     ignore_authors: set[str],
     poll_timeout: float,
     comment_filter: CommentFilter,
-    iris_job_waiter: Callable[[JobName], JobStatus] | None,
+    iris_job_waiter: Callable[[JobName], JobSummary] | None,
 ) -> Source:
     if spec.kind is EventKind.GITHUB_CI:
         return CiSource(spec, repo)
@@ -895,12 +893,12 @@ def _wait_for_iris_job(
     controller_address: str,
     bundle_id: str | None,
     job_id: JobName,
-) -> JobStatus:
+) -> JobSummary:
     with IrisClient.in_cluster(controller_address, bundle_id=bundle_id) as client:
-        return Job(client, job_id).wait(timeout=float("inf"), raise_on_failure=False)
+        return client.current_job(job_id).wait(timeout=float("inf"), raise_on_failure=False)
 
 
-def _iris_job_waiter_from_job_info() -> Callable[[JobName], JobStatus]:
+def _iris_job_waiter_from_job_info() -> Callable[[JobName], JobSummary]:
     info = get_job_info()
     if info is None:
         raise click.ClickException("iris.job requires wait_for.py to run inside an Iris job")
@@ -930,9 +928,9 @@ def _iris_job_waiter_from_job_info() -> Callable[[JobName], JobStatus]:
     "--comment-filter",
     type=click.Choice([f.value for f in CommentFilter]),
     default=CommentFilter.SIGNIFICANT.value,
-    help="Which new comments fire github.pr_comment/github.review: 'significant' skips catalogued bot progress, "
-    "clean verdicts, review wrappers, session acknowledgements, and access handshakes; 'all' fires on every new "
-    "comment.",
+    help="Which new comments fire github.pr_comment/github.review: 'significant' skips the review bots' "
+    "in-progress placeholders, clean verdicts, review wrappers, and Loom's session acknowledgement; "
+    "'all' fires on every new comment.",
 )
 @click.option("--quiet", is_flag=True, help="Print only the fired event kind, not the JSON payload.")
 def main(

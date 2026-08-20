@@ -11,7 +11,7 @@ def test_dry_run_keeps_work_pending_without_reconcile_or_autoscale(dry_run_journ
 
     dry_run_journey.step()
 
-    assert dry_run_journey.task(job[0]).state == job_pb2.TASK_STATE_PENDING
+    assert dry_run_journey.task(job[0]).summary.state == job_pb2.TASK_STATE_PENDING
     assert dry_run_journey.backend_calls(kind="reconcile") == []
     assert dry_run_journey.backend_calls(kind="autoscale") == []
     assert dry_run_journey.backend_events() == []

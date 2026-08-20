@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, useSlots } from 'vue'
+import { useSlots } from 'vue'
 
 export interface Column {
   key: string
@@ -16,43 +16,23 @@ const props = withDefaults(defineProps<{
   loading?: boolean
   sortKey?: string
   sortDir?: 'asc' | 'desc'
-  pageSize?: number
   emptyMessage?: string
 }>(), {
   loading: false,
   sortDir: 'asc',
-  pageSize: 25,
   emptyMessage: 'No data',
 })
 
 const emit = defineEmits<{
   sort: [key: string, dir: 'asc' | 'desc']
-  page: [offset: number]
 }>()
 
 const slots = useSlots()
-
-const currentPage = ref(0)
-
-const totalPages = computed(() =>
-  Math.max(1, Math.ceil(props.rows.length / props.pageSize))
-)
-
-const paginatedRows = computed(() => {
-  const start = currentPage.value * props.pageSize
-  return props.rows.slice(start, start + props.pageSize)
-})
 
 function handleSort(col: Column) {
   if (!col.sortable) return
   const nextDir = props.sortKey === col.key && props.sortDir === 'asc' ? 'desc' : 'asc'
   emit('sort', col.key, nextDir)
-}
-
-function goToPage(page: number) {
-  if (page < 0 || page >= totalPages.value) return
-  currentPage.value = page
-  emit('page', page * props.pageSize)
 }
 
 function cellValue(row: unknown, key: string): unknown {
@@ -110,7 +90,7 @@ function hasSlot(name: string): boolean {
           </tr>
         </thead>
         <tbody>
-          <template v-for="(row, rowIdx) in paginatedRows" :key="rowIdx">
+          <template v-for="(row, rowIdx) in rows" :key="rowIdx">
             <!-- Full row override slot -->
             <tr v-if="hasSlot('row')" class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors">
               <slot name="row" :row="row" :index="rowIdx" />
@@ -140,31 +120,6 @@ function hasSlot(name: string): boolean {
           </template>
         </tbody>
       </table>
-
-      <!-- Pagination -->
-      <div v-if="totalPages > 1" class="flex items-center justify-between px-3 py-2 text-xs text-text-secondary border-t border-surface-border">
-        <span>
-          {{ currentPage * pageSize + 1 }}–{{ Math.min((currentPage + 1) * pageSize, rows.length) }}
-          of {{ rows.length }}
-        </span>
-        <div class="flex items-center gap-1">
-          <button
-            :disabled="currentPage === 0"
-            class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
-            @click="goToPage(currentPage - 1)"
-          >
-            ← Prev
-          </button>
-          <span class="px-2 font-mono">{{ currentPage + 1 }} / {{ totalPages }}</span>
-          <button
-            :disabled="currentPage >= totalPages - 1"
-            class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
-            @click="goToPage(currentPage + 1)"
-          >
-            Next →
-          </button>
-        </div>
-      </div>
     </div>
 
     <!-- Empty state -->

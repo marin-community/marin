@@ -16,8 +16,8 @@ import threading
 from pathlib import Path
 
 import pytest
-from iris.client.client import IrisClient
-from iris.cluster.types import Entrypoint, ResourceSpec
+from iris.client import IrisClient
+from iris.resources.execution import Entrypoint, ResourceSpec
 from iris.rpc import job_pb2
 
 pytestmark = pytest.mark.requires_cluster

@@ -417,11 +417,11 @@ CLUSTER=cw-rno2a
 TASK=/<user>/<job>/0
 
 uv run iris --cluster="$CLUSTER" task describe "$TASK"
-uv run iris --cluster="$CLUSTER" task events "$TASK"
+uv run iris --cluster="$CLUSTER" task activity "$TASK"
 uv run iris --cluster="$CLUSTER" rpc controller list-backends
 ```
 
-`task events` records `ImagePullBackOff` and `CrashLoopBackOff` warnings. Pair it
+`task activity` records `ImagePullBackOff` and `CrashLoopBackOff` warnings. Pair it
 with `iris job logs /<user>/<job>` for task output. An `Evicted` task can
 indicate ephemeral-storage pressure. Raise the task's `disk` request only when
 its `/app`, `/tmp`, or writable container layer is full; escalate node
@@ -452,7 +452,7 @@ editing the live objects. Pulumi owns NodePools and cluster-scoped Kueue
 resources.
 
 For actor-level Kubernetes API history after ordinary Events expire, use the
-Kubernetes Audit Logs dashboard in CoreWeave Observe. `iris task events` is the
+Kubernetes Audit Logs dashboard in CoreWeave Observe. `iris task activity` is the
 Iris-side record of backend observations and controller decisions; it is not an
 API audit log.
 
@@ -496,7 +496,7 @@ guide](../../../infra/pulumi/README.md) for infrastructure, and
 
 ## Source map
 
-- [`backends/k8s/tasks.py`](../src/iris/cluster/backends/k8s/tasks.py) — task Pod
+- [`backends/k8s/tasks.py`](../src/iris/backends/k8s/tasks.py) — task Pod
   manifests, Kueue status, profiling, and cleanup.
 - [`platforms/k8s/controller.py`](../src/iris/cluster/platforms/k8s/controller.py)
   — controller resources, prerequisite checks, and Secret projection.

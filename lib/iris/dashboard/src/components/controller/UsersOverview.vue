@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
-import { useControllerRpc } from '@/composables/useRpc'
+import { RESOURCE_MESSAGES, RESOURCE_TYPES, useListResources } from '@/composables/useResources'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
-import type { ListUsersResponse, UserSummary } from '@/types/rpc'
+import type { ResourceUserSummary } from '@/types/rpc'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import LoadingSpinner from '@/components/shared/LoadingSpinner.vue'
 
@@ -17,7 +17,12 @@ const MAX_STARRED_USERS = 10
 
 const TERMINAL_JOB_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed', 'preempted'])
 
-const { data, loading, error, refresh } = useControllerRpc<ListUsersResponse>('ListUsers')
+const { data, loading, error, refresh } = useListResources<ResourceUserSummary>(
+  RESOURCE_TYPES.userSummary,
+  RESOURCE_MESSAGES.listUsersRequest,
+  {},
+  'BASIC',
+)
 
 onMounted(refresh)
 useAutoRefresh(refresh, DEFAULT_REFRESH_MS)
@@ -70,28 +75,28 @@ interface UserRow {
   starred: boolean
 }
 
-function toRow(summary: UserSummary): UserRow {
+function toRow(summary: ResourceUserSummary): UserRow {
   const jobCounts = summary.jobStateCounts ?? {}
   const taskCounts = summary.taskStateCounts ?? {}
   const activeJobs = Object.entries(jobCounts)
     .filter(([state]) => !TERMINAL_JOB_STATES.has(state))
     .reduce((acc, [, count]) => acc + count, 0)
   return {
-    user: summary.user,
+    user: summary.userId,
     role: summary.role ?? '',
     activeJobs,
     runningJobs: jobCounts['running'] ?? 0,
     pendingJobs: (jobCounts['pending'] ?? 0) + (jobCounts['unschedulable'] ?? 0),
     runningTasks: taskCounts['running'] ?? 0,
     totalTasks: Object.values(taskCounts).reduce((a, b) => a + b, 0),
-    starred: starredUsers.value.has(summary.user),
+    starred: starredUsers.value.has(summary.userId),
   }
 }
 
 // Alphabetical by user id, with starred users pinned to the top.
 const rows = computed<UserRow[]>(() => {
   const term = search.value.trim().toLowerCase()
-  return (data.value?.users ?? [])
+  return (data.value?.items ?? [])
     .map(toRow)
     .filter(r => !term || r.user.toLowerCase().includes(term))
     .sort((a, b) =>

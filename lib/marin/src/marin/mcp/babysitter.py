@@ -14,20 +14,33 @@ from typing import Any
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from google.protobuf import json_format
-from iris.client.workload_codec import job_status_from_proto, task_status_from_proto
-from iris.client.workload_summary import job_summary_data
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
-from iris.cluster.types import JobName
+from iris.resources.attempt import AttemptSummary
+from iris.resources.endpoint import (
+    CpuProfileConfiguration,
+    CpuProfileFormat,
+    MemoryProfileConfiguration,
+    MemoryProfileFormat,
+    ProfileConfiguration,
+    ThreadsProfileConfiguration,
+)
+from iris.resources.execution import CpuDevice, GpuDevice, ResourceSpec, TpuDevice
+from iris.resources.identity import ResourceKey, ResourceKind
+from iris.resources.job import JobDetail, JobQuery, JobSummary
+from iris.resources.log import LogMatchScope
+from iris.resources.names import JobName, TaskAttempt
+from iris.resources.state import TERMINAL_TASK_STATES, JobState
+from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.proto_display import job_state_friendly, task_state_friendly
+from iris.rpc.resource_client import ResourceRpcClient
 from mcp.server.fastmcp import FastMCP
 from rigging.auth import BearerTokenInjector, StaticTokenProvider, TokenProvider
 from rigging.credential_store import cluster_name_from_url
 from rigging.credentials import MARIN_CLUSTER_TOKEN_ENV
-from rigging.timing import Timestamp
+from rigging.timing import Duration, Timestamp
 
 DEFAULT_LOG_LINES = 200
 DEFAULT_ZEPHYR_LOG_LINES = 5_000
@@ -74,6 +87,12 @@ def _timestamp_ms(timestamp) -> int | None:
     return int(timestamp.epoch_ms)
 
 
+def _native_timestamp_ms(timestamp: Timestamp | None) -> int | None:
+    if timestamp is None:
+        return None
+    return timestamp.epoch_ms()
+
+
 def _duration_ms(start, end) -> int | None:
     start_ms = _timestamp_ms(start)
     end_ms = _timestamp_ms(end)
@@ -81,6 +100,15 @@ def _duration_ms(start, end) -> int | None:
         return None
     if end_ms is None:
         end_ms = _now_ms()
+    return max(0, end_ms - start_ms)
+
+
+def _native_duration_ms(start: Timestamp | None, end: Timestamp | None) -> int | None:
+    start_ms = _native_timestamp_ms(start)
+    if start_ms is None:
+        return None
+    end_ms = _native_timestamp_ms(end) if end is not None else _now_ms()
+    assert end_ms is not None
     return max(0, end_ms - start_ms)
 
 
@@ -94,12 +122,26 @@ def _resource_usage_to_json(usage: job_pb2.ResourceUsage) -> dict[str, int]:
     }
 
 
-def _resource_spec_to_json(resources: job_pb2.ResourceSpecProto) -> dict[str, Any]:
+def _resource_spec_to_json(resources: ResourceSpec) -> dict[str, Any]:
+    device = resources.device
+    if isinstance(device, GpuDevice):
+        device_data = {"type": "gpu", "variant": device.variant, "count": device.count}
+    elif isinstance(device, TpuDevice):
+        device_data = {
+            "type": "tpu",
+            "variant": device.variant,
+            "topology": device.topology,
+            "count": device.count,
+        }
+    elif isinstance(device, CpuDevice):
+        device_data = {"type": "cpu", "variant": device.variant}
+    else:
+        device_data = _cpu_device_json()
     return {
-        "cpu_millicores": int(resources.cpu_millicores),
-        "memory_bytes": int(resources.memory_bytes),
-        "disk_bytes": int(resources.disk_bytes),
-        "device": _device_config_to_json(resources.device) if resources.HasField("device") else _cpu_device_json(),
+        "cpu_millicores": resources.cpu_millicores,
+        "memory_bytes": resources.memory,
+        "disk_bytes": resources.disk,
+        "device": device_data,
     }
 
 
@@ -127,68 +169,65 @@ def _cpu_device_json() -> dict[str, str]:
     return {"type": "cpu", "variant": ""}
 
 
-def _attempt_to_json(attempt: job_pb2.TaskAttempt) -> dict[str, Any]:
+def _attempt_to_json(attempt: AttemptSummary) -> dict[str, Any]:
     return {
-        "attempt_id": int(attempt.attempt_id),
-        "worker_id": attempt.worker_id,
-        "state": task_state_friendly(attempt.state),
-        "exit_code": int(attempt.exit_code),
-        "error": attempt.error,
-        "started_at_ms": _timestamp_ms(attempt.started_at),
-        "finished_at_ms": _timestamp_ms(attempt.finished_at),
-        "duration_ms": _duration_ms(attempt.started_at, attempt.finished_at),
-        "is_worker_failure": bool(attempt.is_worker_failure),
+        "attempt_id": attempt.identity.attempt_number,
+        "attempt_uid": attempt.identity.attempt_uid,
+        "worker_id": attempt.node.key.resource_id if attempt.node else "",
+        "state": attempt.state.name.lower(),
+        "exit_code": attempt.exit_code,
+        "error": attempt.error_message,
+        "started_at_ms": _native_timestamp_ms(attempt.started_at),
+        "finished_at_ms": _native_timestamp_ms(attempt.finished_at),
+        "duration_ms": _native_duration_ms(attempt.started_at, attempt.finished_at),
+        "is_worker_failure": attempt.state.name == "WORKER_FAILED",
+        "terminal_reason": attempt.terminal_reason,
     }
 
 
-def task_status_to_json(task: job_pb2.TaskStatus) -> dict[str, Any]:
+def task_status_to_json(task: TaskDetail) -> dict[str, Any]:
     """Serialize Iris task status into stable JSON."""
+    summary = task.summary
+    current = next(
+        (attempt for attempt in task.attempts if attempt.identity == summary.current_attempt),
+        None,
+    )
     return {
-        "task_id": task.task_id,
-        "state": task_state_friendly(task.state),
-        "worker_id": task.worker_id,
-        "worker_address": task.worker_address,
-        "exit_code": int(task.exit_code),
-        "error": task.error,
-        "started_at_ms": _timestamp_ms(task.started_at),
-        "finished_at_ms": _timestamp_ms(task.finished_at),
-        "duration_ms": _duration_ms(task.started_at, task.finished_at),
-        "current_attempt_id": int(task.current_attempt_id),
-        "pending_reason": task.pending_reason,
-        "can_be_scheduled": bool(task.can_be_scheduled),
-        "container_id": task.container_id,
-        "ports": dict(task.ports),
-        "resource_usage": _resource_usage_to_json(task.resource_usage),
+        "task_id": summary.identity.key.resource_id,
+        "task_uid": summary.identity.task_uid,
+        "state": summary.state.name.lower(),
+        "worker_id": summary.current_node.key.resource_id if summary.current_node else "",
+        "exit_code": current.exit_code if current else None,
+        "error": summary.error_message,
+        "status_message": summary.status_message,
+        "started_at_ms": _native_timestamp_ms(summary.started_at),
+        "finished_at_ms": _native_timestamp_ms(summary.finished_at),
+        "duration_ms": _native_duration_ms(summary.started_at, summary.finished_at),
+        "current_attempt_id": summary.current_attempt.attempt_number if summary.current_attempt else None,
         "attempts": [_attempt_to_json(attempt) for attempt in task.attempts],
+        "root_cause_highlights": list(task.root_cause_highlights),
+        "failure_count": summary.failure_count,
+        "preemption_count": summary.preemption_count,
     }
 
 
-def job_status_to_json(job: job_pb2.JobStatus, tasks: Iterable[job_pb2.TaskStatus] = ()) -> dict[str, Any]:
-    """Serialize Iris job status into stable JSON.
-
-    Callers that need per-job ``resources`` / ``ports`` / ``tasks`` /
-    ``status_message`` should hit ``GetJobStatus`` and use
-    :func:`_job_summary_payload`.
-    """
-    task_payloads = [task_status_to_json(task) for task in tasks]
+def job_status_to_json(job: JobSummary) -> dict[str, Any]:
+    """Serialize an Iris Job summary into stable JSON."""
     return {
-        "job_id": job.job_id,
-        "name": job.name,
-        "state": job_state_friendly(job.state),
-        "exit_code": int(job.exit_code),
-        "error": job.error,
-        "submitted_at_ms": _timestamp_ms(job.submitted_at),
-        "started_at_ms": _timestamp_ms(job.started_at),
-        "finished_at_ms": _timestamp_ms(job.finished_at),
-        "duration_ms": _duration_ms(job.started_at, job.finished_at),
+        "job_id": job.identity.key.resource_id,
+        "job_uid": job.identity.job_uid,
+        "name": JobName.from_wire(job.identity.key.resource_id).name,
+        "state": job.state.name.lower(),
+        "exit_code": job.exit_code,
+        "error": job.error_message,
+        "submitted_at_ms": _native_timestamp_ms(job.submitted_at),
+        "started_at_ms": _native_timestamp_ms(job.started_at),
+        "finished_at_ms": _native_timestamp_ms(job.finished_at),
+        "duration_ms": _native_duration_ms(job.started_at, job.finished_at),
         "pending_reason": job.pending_reason,
-        "failure_count": int(job.failure_count),
-        "preemption_count": int(job.preemption_count),
-        "task_count": int(job.task_count),
-        "completed_count": int(job.completed_count),
-        "task_state_counts": dict(job.task_state_counts),
-        "has_children": bool(job.has_children),
-        "tasks": task_payloads,
+        "task_count": job.num_tasks,
+        "execution_cluster_id": job.execution_cluster_id,
+        "backend_id": job.backend_id,
     }
 
 
@@ -412,6 +451,11 @@ class IrisBabysitter:
             accept_compression=IRIS_RPC_COMPRESSIONS,
             send_compression=IRIS_RPC_COMPRESSIONS[0],
         )
+        self.resources = ResourceRpcClient(
+            config.controller_url,
+            timeout_ms=config.timeout_ms,
+            interceptors=interceptors,
+        )
         self.logs = LogServiceClientSync(
             config.controller_url,
             timeout_ms=config.timeout_ms,
@@ -420,6 +464,7 @@ class IrisBabysitter:
 
     def close(self) -> None:
         self.logs.close()
+        self.resources.close()
         self.controller.close()
 
     def envelope(self, data: Any, *, warnings: list[str] | None = None, auth_ok: bool = True) -> dict[str, Any]:
@@ -434,41 +479,44 @@ class IrisBabysitter:
         limit: int = DEFAULT_LIST_JOBS_LIMIT,
     ) -> dict[str, Any]:
         state_filter = _normalize_state_filter(state)
+        states = frozenset({JobState[state_filter.upper()]}) if state_filter else frozenset()
         jobs: list[dict[str, Any]] = []
-        offset = 0
+        page_token: str | None = None
         capped_limit = max(1, limit)
         while len(jobs) < capped_limit:
-            query = controller_pb2.Controller.JobQuery(
-                state_filter=state_filter,
-                name_filter=name_filter,
-                job_id_prefix=prefix,
-                sort_field=controller_pb2.Controller.JOB_SORT_FIELD_DATE,
-                sort_direction=controller_pb2.Controller.SORT_DIRECTION_DESC,
-                offset=offset,
-                limit=MAX_LIST_JOBS_PAGE_SIZE,
+            page = self.resources.list_jobs(
+                JobQuery(
+                    job_id_prefix=prefix,
+                    states=states,
+                    page_size=min(MAX_LIST_JOBS_PAGE_SIZE, capped_limit - len(jobs)),
+                    page_token=page_token,
+                )
             )
-            response = self.controller.list_jobs(controller_pb2.Controller.ListJobsRequest(query=query))
-            for job in response.jobs:
+            for job in page.items:
+                if name_filter and name_filter not in JobName.from_wire(job.identity.key.resource_id).name:
+                    continue
                 jobs.append(job_status_to_json(job))
                 if len(jobs) >= capped_limit:
                     break
-            if not response.has_more:
+            page_token = page.next_page_token
+            if page_token is None:
                 break
-            offset += len(response.jobs)
         return self.envelope({"jobs": jobs, "count": len(jobs)})
 
     def job_summary(self, job_id: str) -> dict[str, Any]:
-        job_response = self.controller.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=job_id))
-        tasks_response = self.controller.list_tasks(controller_pb2.Controller.ListTasksRequest(job_id=job_id))
-        return self.envelope(_job_summary_payload(job_response.job, list(tasks_response.tasks)))
+        key = ResourceKey(self.config.cluster, ResourceKind.JOB, JobName.from_wire(job_id).to_wire())
+        job = self.resources.describe_job(key)
+        tasks = self._tasks_for_job(job.summary)
+        return self.envelope(_job_summary_payload(job, tasks))
 
     def job_tree(self, job_id: str) -> dict[str, Any]:
         root = JobName.from_wire(job_id)
         child_jobs = self._jobs_with_prefix(job_id)
         nodes: dict[str, dict[str, Any]] = {}
         for job in child_jobs:
-            nodes[job.job_id] = job_status_to_json(job)
-            nodes[job.job_id]["children"] = []
+            resource_id = job.identity.key.resource_id
+            nodes[resource_id] = job_status_to_json(job)
+            nodes[resource_id]["children"] = []
 
         for node_id in nodes:
             parent = JobName.from_wire(node_id).parent
@@ -480,9 +528,13 @@ class IrisBabysitter:
         return self.envelope({"root": job_id, "nodes": nodes})
 
     def task_summary(self, task_id: str) -> dict[str, Any]:
-        response = self.controller.get_task_status(controller_pb2.Controller.GetTaskStatusRequest(task_id=task_id))
-        payload = task_status_to_json(response.task)
-        payload["job_resources"] = _resource_spec_to_json(response.job_resources)
+        task_name = JobName.from_wire(task_id)
+        task = self.resources.describe_task(ResourceKey(self.config.cluster, ResourceKind.TASK, task_name.to_wire()))
+        payload = task_status_to_json(task)
+        parent = task_name.parent
+        if parent is not None:
+            job = self.resources.describe_job(ResourceKey(self.config.cluster, ResourceKind.JOB, parent.to_wire()))
+            payload["job_resources"] = _resource_spec_to_json(job.spec.resources)
         return self.envelope(payload)
 
     def tail_logs(
@@ -579,19 +631,47 @@ class IrisBabysitter:
         duration_seconds: int = DEFAULT_PROFILE_SECONDS,
         include_locals: bool = False,
     ) -> dict[str, Any]:
-        request = job_pb2.ProfileTaskRequest(
-            target=target,
-            duration_seconds=duration_seconds,
-            profile_type=_profile_type(profile_type, include_locals=include_locals),
-        )
-        response = self.controller.profile_task(request)
-        if response.error:
-            return self.envelope({"error": response.error}, warnings=[response.error], auth_ok=True)
+        if target == SYSTEM_PROCESS_TARGET:
+            request = job_pb2.ProfileTaskRequest(
+                target=target,
+                duration_seconds=duration_seconds,
+                profile_type=_profile_type(profile_type, include_locals=include_locals),
+            )
+            response = self.controller.profile_task(request)
+            profile_data = response.profile_data
+            error = response.error
+        else:
+            target_ref = TaskAttempt.from_wire(target)
+            detail = self.resources.describe_task(
+                ResourceKey(self.config.cluster, ResourceKind.TASK, target_ref.task_id.to_wire())
+            )
+            if target_ref.attempt_id is None:
+                identity = detail.summary.current_attempt
+            else:
+                identity = next(
+                    (
+                        attempt.identity
+                        for attempt in detail.attempts
+                        if attempt.identity.attempt_number == target_ref.attempt_id
+                    ),
+                    None,
+                )
+            if identity is None:
+                raise ValueError(f"Task {target_ref.task_id} has no selected Attempt")
+            result = self.resources.profile_attempt(
+                identity,
+                profile=_profile_configuration(profile_type, include_locals=include_locals),
+                duration=Duration.from_seconds(duration_seconds),
+            )
+            profile_data = result.profile_data
+            error = result.error_message
+        if error:
+            return self.envelope({"error": error}, warnings=[error], auth_ok=True)
         if profile_type == "threads":
-            data = {"text": response.profile_data.decode("utf-8", errors="replace"), "encoding": "utf-8"}
+            data = {"text": profile_data.decode("utf-8", errors="replace"), "encoding": "utf-8"}
         else:
             data = {
-                "data_base64": base64.b64encode(response.profile_data).decode("ascii"),
+                "data_base64": base64.b64encode(profile_data).decode("ascii"),
                 "encoding": "base64",
                 "profile_type": profile_type,
             }
@@ -641,42 +721,64 @@ class IrisBabysitter:
         signals = classify_diagnosis(job=summary, logs=logs, workers=workers, thread_dump="")
         return self.envelope({"signals": signals, "job_id": job_id})
 
-    def _jobs_with_prefix(self, prefix: str) -> list[job_pb2.JobStatus]:
-        jobs: list[job_pb2.JobStatus] = []
-        offset = 0
+    def _jobs_with_prefix(self, prefix: str) -> list[JobSummary]:
+        jobs: list[JobSummary] = []
+        page_token: str | None = None
         while True:
-            query = controller_pb2.Controller.JobQuery(
-                job_id_prefix=prefix,
-                sort_field=controller_pb2.Controller.JOB_SORT_FIELD_DATE,
-                sort_direction=controller_pb2.Controller.SORT_DIRECTION_DESC,
-                offset=offset,
-                limit=MAX_LIST_JOBS_PAGE_SIZE,
+            page = self.resources.list_jobs(
+                JobQuery(
+                    job_id_prefix=prefix,
+                    page_size=MAX_LIST_JOBS_PAGE_SIZE,
+                    page_token=page_token,
+                )
             )
-            response = self.controller.list_jobs(controller_pb2.Controller.ListJobsRequest(query=query))
-            jobs.extend(response.jobs)
-            if not response.has_more:
+            jobs.extend(page.items)
+            page_token = page.next_page_token
+            if page_token is None:
                 return jobs
-            offset += len(response.jobs)
+
+    def _tasks_for_job(self, job: JobSummary) -> list[TaskSummary]:
+        tasks: list[TaskSummary] = []
+        page_token: str | None = None
+        while True:
+            page = self.resources.list_tasks(
+                TaskQuery(job=job.identity.key, page_size=MAX_LIST_JOBS_PAGE_SIZE, page_token=page_token)
+            )
+            tasks.extend(page.items)
+            page_token = page.next_page_token
+            if page_token is None:
+                return tasks
 
 
-def _job_summary_payload(job: job_pb2.JobStatus, tasks: list[job_pb2.TaskStatus]) -> dict[str, Any]:
-    summary = job_summary_data(
-        job_status_from_proto(job),
-        [task_status_from_proto(task) for task in tasks],
+def _job_summary_payload(job: JobDetail, tasks: list[TaskSummary]) -> dict[str, Any]:
+    summary = job_status_to_json(job.summary)
+    state_counts: dict[str, int] = {}
+    task_payloads = []
+    for task in tasks:
+        state = task.state.name.lower()
+        state_counts[state] = state_counts.get(state, 0) + 1
+        task_payloads.append(
+            {
+                "index": str(task.task_index),
+                "task_id": task.identity.key.resource_id,
+                "task_uid": task.identity.task_uid,
+                "state": state,
+                "status_message": task.status_message,
+                "error": task.error_message,
+            }
+        )
+    summary.update(
+        {
+            "name": job.spec.name,
+            "failure_count": sum(task.failure_count for task in tasks),
+            "preemption_count": sum(task.preemption_count for task in tasks),
+            "completed_count": sum(task.state in TERMINAL_TASK_STATES for task in tasks),
+            "task_state_counts": state_counts,
+            "tasks": task_payloads,
+            "resource_requests": _resource_spec_to_json(job.spec.resources),
+            "ports": list(job.spec.ports),
+        }
     )
-    extra_fields = {
-        "submitted_at_ms": _timestamp_ms(job.submitted_at),
-        "started_at_ms": _timestamp_ms(job.started_at),
-        "finished_at_ms": _timestamp_ms(job.finished_at),
-        "duration_ms": _duration_ms(job.started_at, job.finished_at),
-        "status_message": job.status_message,
-        "pending_reason": job.pending_reason,
-        "has_children": bool(job.has_children),
-        "resource_requests": _resource_spec_to_json(job.resources),
-        "ports": dict(job.ports),
-    }
-    for key, value in extra_fields.items():
-        summary.setdefault(key, value)
     return summary
 
 
@@ -699,9 +801,9 @@ def _normalize_state_filter(state: str) -> str:
     return normalized
 
 
-def _log_source(target: str, attempt_id: int) -> tuple[str, "logging_pb2.MatchScope"]:
+def _log_source(target: str, attempt_id: int) -> tuple[str, LogMatchScope]:
     if target.startswith("/system/"):
-        return target, logging_pb2.MATCH_SCOPE_EXACT
+        return target, LogMatchScope.EXACT
     return build_log_source(JobName.from_wire(target), attempt_id)
 
 
@@ -712,6 +814,16 @@ def _profile_type(profile_type: str, *, include_locals: bool) -> job_pb2.Profile
         return job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.SPEEDSCOPE))
     if profile_type == "mem":
         return job_pb2.ProfileType(memory=job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.FLAMEGRAPH))
+    raise ValueError(f"Unknown profile_type: {profile_type}")
+
+
+def _profile_configuration(profile_type: str, *, include_locals: bool) -> ProfileConfiguration:
+    if profile_type == "threads":
+        return ThreadsProfileConfiguration(include_locals=include_locals)
+    if profile_type == "cpu":
+        return CpuProfileConfiguration(format=CpuProfileFormat.SPEEDSCOPE, rate_hz=0, native=None)
+    if profile_type == "mem":
+        return MemoryProfileConfiguration(format=MemoryProfileFormat.FLAMEGRAPH, leaks=False)
     raise ValueError(f"Unknown profile_type: {profile_type}")
 
 

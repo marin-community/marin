@@ -88,7 +88,7 @@ leave it.
 
 **Bad example:**
 ```python
-class ControllerServiceImpl:  # 45 methods: RPC handlers + DB transactions +
+class LegacyControllerService:  # 45 methods: RPC handlers + DB transactions +
     # TPU validation + a drain state machine — four collaborators in one class.
     ...
 ```

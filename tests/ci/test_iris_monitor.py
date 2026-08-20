@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 from iris.client import IrisClient
-from iris.cluster.types import JobName
+from iris.resources.names import JobName
 from iris.rpc import job_pb2
 from rigging.redaction import REDACTED_VALUE
 

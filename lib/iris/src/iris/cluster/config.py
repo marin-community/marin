@@ -35,17 +35,15 @@ from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topolog
 from iris.cluster.types import (
     AUTO_DEVICE_VARIANT,
     DEFAULT_BACKEND_ID,
-    DEFAULT_USER_BUDGET_LIMIT,
-    DEFAULT_USER_BUDGET_MAX_BAND,
     LOCAL_CLUSTER,
     AcceleratorType,
     CapacityType,
     GcpSliceMode,
     WellKnownAttribute,
-    parse_memory_string,
 )
 from iris.cluster.worker.port_allocator import DEFAULT_TASK_PORT_RANGE
-from iris.rpc import job_pb2
+from iris.resources.execution import parse_memory_string
+from iris.resources.job import PriorityBand
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +52,8 @@ DEFAULT_SSH_CONNECT_TIMEOUT = Duration.from_seconds(30)
 DEFAULT_PRIORITY = 100
 DOCKER_WORKER_RUNTIME = "docker"
 KUBERNETES_WORKER_RUNTIME = "kubernetes"
+DEFAULT_USER_BUDGET_LIMIT = 1000
+DEFAULT_USER_BUDGET_MAX_BAND = PriorityBand.INTERACTIVE
 
 _COREWEAVE_TOPOLOGY_LABEL_PREFIXES = (
     "backend.coreweave.cloud/",
@@ -106,8 +106,8 @@ def _coerce_priority_band(value: Any) -> int:
     if isinstance(value, int):
         return value
     if isinstance(value, str):
-        name = value if value.startswith("PRIORITY_BAND_") else f"PRIORITY_BAND_{value.upper()}"
-        return job_pb2.PriorityBand.Value(name)
+        name = value.removeprefix("PRIORITY_BAND_").upper()
+        return int(PriorityBand[name])
     raise ValueError(f"cannot parse priority band from {value!r}")
 
 

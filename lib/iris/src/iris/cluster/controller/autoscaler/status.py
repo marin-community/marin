@@ -5,14 +5,26 @@
 
 from collections import Counter, defaultdict
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
+from iris.backends.status import (
+    AutoscalerStatus,
+    DemandEntryStatus,
+    GroupRoutingStatus,
+    ResourceStatus,
+    RoutingStatus,
+    UnmetDemandStatus,
+)
 from iris.cluster.controller.autoscaler.models import DemandEntry, RoutingDecision
 from iris.cluster.controller.autoscaler.routing import format_variants
 from iris.cluster.controller.autoscaler.scaling_group import SliceLifecycleState
-from iris.cluster.types import JobName, WorkerId, WorkerUsability, get_gpu_count, get_tpu_count
-from iris.rpc import job_pb2, vm_pb2
+from iris.cluster.types import WorkerUsability
+from iris.resources.execution import ResourceSpec, get_gpu_count, get_tpu_count
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
 
 
 @dataclass(frozen=True)
@@ -58,93 +70,109 @@ def slice_capacity_status(
 
 
 def overlay_worker_usability(
-    status: vm_pb2.AutoscalerStatus,
+    status: AutoscalerStatus,
     usability_by_id: dict[str, WorkerUsability],
     running: dict[WorkerId, set[JobName]],
-) -> None:
-    """Overlay per-VM usability and stamp each ready slice's capacity status in place.
+) -> AutoscalerStatus:
+    """Return status with current worker usability and slice capacity overlaid.
 
     worker_id/running_task_count are always set; usability/worker_healthy only when
     the worker is in the liveness roster (else left empty rather than mislabelled).
     Per ready slice we derive a slice-granular ``capacity_status`` from host health
     and occupancy, plus ``degraded_slot_count`` for detail.
     """
+    groups = []
     for group in status.groups:
+        slices = []
         for slice_info in group.slices:
             healthy_hosts = 0
             degraded_hosts = 0
             running_tasks = 0
+            vms = []
             for vm in slice_info.vms:
-                vm.worker_id = vm.vm_id
-                vm.running_task_count = len(running.get(WorkerId(vm.vm_id), set()))
-                running_tasks += vm.running_task_count
+                running_task_count = len(running.get(WorkerId(vm.vm_id), set()))
+                running_tasks += running_task_count
                 usability = usability_by_id.get(vm.vm_id)
                 if usability is None:
+                    vms.append(replace(vm, worker_id=vm.vm_id, running_task_count=running_task_count))
                     continue
-                vm.usability = str(usability)
-                vm.worker_healthy = usability is not WorkerUsability.DEAD
                 if usability is WorkerUsability.HEALTHY:
                     healthy_hosts += 1
                 elif usability is WorkerUsability.DEGRADED:
                     degraded_hosts += 1
-            slice_info.degraded_slot_count = degraded_hosts
-            slice_info.capacity_status = slice_capacity_status(
-                is_ready=slice_info.state == SliceLifecycleState.READY,
-                host_count=len(slice_info.vms),
-                healthy_hosts=healthy_hosts,
-                running_tasks=running_tasks,
-                idle=slice_info.idle,
+                vms.append(
+                    replace(
+                        vm,
+                        worker_id=vm.vm_id,
+                        running_task_count=running_task_count,
+                        usability=str(usability),
+                        worker_healthy=usability is not WorkerUsability.DEAD,
+                    )
+                )
+            slices.append(
+                replace(
+                    slice_info,
+                    vms=tuple(vms),
+                    degraded_slot_count=degraded_hosts,
+                    capacity_status=slice_capacity_status(
+                        is_ready=slice_info.state == SliceLifecycleState.READY,
+                        host_count=len(slice_info.vms),
+                        healthy_hosts=healthy_hosts,
+                        running_tasks=running_tasks,
+                        idle=slice_info.idle,
+                    ),
+                )
             )
+        groups.append(replace(group, slices=tuple(slices)))
+    return replace(status, groups=tuple(groups))
 
 
-def _resource_spec_proto(resources: job_pb2.ResourceSpecProto) -> vm_pb2.ResourceSpec:
-    return vm_pb2.ResourceSpec(
+def _resource_status(resources: ResourceSpec) -> ResourceStatus:
+    return ResourceStatus(
         cpu_millicores=resources.cpu_millicores,
-        memory_bytes=resources.memory_bytes,
-        disk_bytes=resources.disk_bytes,
-        gpu_count=get_gpu_count(resources.device),
-        tpu_count=get_tpu_count(resources.device),
+        memory_bytes=resources.memory,
+        disk_bytes=resources.disk,
+        gpu_count=get_gpu_count(resources.device) if resources.device else 0,
+        tpu_count=get_tpu_count(resources.device) if resources.device else 0,
     )
 
 
-def _entry_to_proto(entry: DemandEntry) -> vm_pb2.DemandEntryStatus:
+def _entry_to_status(entry: DemandEntry) -> DemandEntryStatus:
     normalized = entry.normalized
-    return vm_pb2.DemandEntryStatus(
-        task_ids=entry.task_ids,
+    return DemandEntryStatus(
+        task_ids=tuple(entry.task_ids),
         coschedule_group_id=entry.coschedule_group_id or "",
         device_type=normalized.device_type.value if normalized.device_type else "",
         device_variant=format_variants(normalized.device_variants),
         preemptible=bool(normalized.preemptible),
-        resources=_resource_spec_proto(entry.resources),
+        resources=_resource_status(entry.resources),
     )
 
 
-def routing_decision_to_proto(
+def routing_decision_to_status(
     decision: RoutingDecision,
     group_to_launch: Mapping[str, int],
-) -> vm_pb2.RoutingDecision:
-    """Convert an internal routing decision into the status proto.
+) -> RoutingStatus:
+    """Project an internal routing decision into native status.
 
     The ``group_to_launch`` argument is the capacity/rate-clamped launch count and
-    overrides ``decision.group_to_launch`` (the raw demand-derived count) in the proto.
+    overrides ``decision.group_to_launch`` (the raw demand-derived count).
     """
-
-    routed_entries = {
-        name: vm_pb2.DemandEntryStatusList(entries=[_entry_to_proto(entry) for entry in entries])
-        for name, entries in decision.routed_entries.items()
-    }
-    unmet_entries = [
-        vm_pb2.UnmetDemand(entry=_entry_to_proto(unmet.entry), reason=unmet.reason) for unmet in decision.unmet_entries
-    ]
     launch_counts = dict(group_to_launch)
 
-    return vm_pb2.RoutingDecision(
+    return RoutingStatus(
         group_to_launch=launch_counts,
-        group_reasons=decision.group_reasons,
-        routed_entries=routed_entries,
-        unmet_entries=unmet_entries,
-        group_statuses=[
-            vm_pb2.GroupRoutingStatus(
+        group_reasons=dict(decision.group_reasons),
+        routed_entries={
+            name: tuple(_entry_to_status(entry) for entry in entries)
+            for name, entries in decision.routed_entries.items()
+        },
+        unmet_entries=tuple(
+            UnmetDemandStatus(entry=_entry_to_status(unmet.entry), reason=unmet.reason)
+            for unmet in decision.unmet_entries
+        ),
+        group_statuses=tuple(
+            GroupRoutingStatus(
                 group=status.group,
                 priority=status.priority,
                 assigned=status.assigned,
@@ -153,7 +181,7 @@ def routing_decision_to_proto(
                 reason=status.reason,
             )
             for status in decision.group_statuses
-        ],
+        ),
     )
 
 
@@ -170,7 +198,7 @@ def _task_id_to_job_id(task_id: str) -> str | None:
     return parent.to_wire()
 
 
-def _group_status_detail(routing: vm_pb2.RoutingDecision, group_name: str) -> str:
+def _group_status_detail(routing: RoutingStatus, group_name: str) -> str:
     """Extract decision and reason for a given group from routing status."""
 
     for group_status in routing.group_statuses:
@@ -182,7 +210,7 @@ def _group_status_detail(routing: vm_pb2.RoutingDecision, group_name: str) -> st
     return ""
 
 
-def build_job_pending_hints(routing: vm_pb2.RoutingDecision | None) -> dict[str, PendingHint]:
+def build_job_pending_hints(routing: RoutingStatus | None) -> dict[str, PendingHint]:
     """Build autoscaler pending hints keyed by job id."""
 
     if routing is None:
@@ -192,7 +220,7 @@ def build_job_pending_hints(routing: vm_pb2.RoutingDecision | None) -> dict[str,
     unmet_reasons_by_job: dict[str, Counter[str]] = defaultdict(Counter)
 
     for group_name, entry_list in routing.routed_entries.items():
-        for entry in entry_list.entries:
+        for entry in entry_list:
             for task_id in entry.task_ids:
                 job_id = _task_id_to_job_id(task_id)
                 if job_id is not None:

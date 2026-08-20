@@ -10,42 +10,83 @@ from pathlib import Path
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from rigging.server_auth import VerifiedIdentity, identity_scope
-from rigging.timing import Timestamp
+from rigging.timing import Duration, Timestamp
 
 from iris.cluster.config import PeerConfig
-from iris.cluster.controller.checkpoint import CheckpointResult, download_checkpoint_to_local
-from iris.cluster.controller.controller import Controller, ControllerConfig
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.constraints import Constraint, ConstraintOp
+from iris.cluster.controller.composition import compose_controller_process
 from iris.cluster.controller.log_stack import build_log_stack
-from iris.cluster.controller.transition_reader import DbTransitionReader
+from iris.cluster.controller.persistence.checkpoint import CheckpointResult, download_checkpoint_to_local
+from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.persistence.transition_reader import DbTransitionReader
+from iris.cluster.controller.process import ControllerProcess
+from iris.cluster.controller.runtime import ControllerConfig
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.log_keys import task_log_key
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, TaskAttempt
+from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.managed_thread import ThreadContainer
-from iris.rpc import controller_pb2, job_pb2
-from iris.testing.journeys.backend import (
-    BackendEvent,
-    ScriptedObservation,
-    ScriptedTaskBackend,
-    UnavailableTaskBackend,
+from iris.resources.action import ActionReceipt, ActionState
+from iris.resources.attempt import AttemptDetail
+from iris.resources.endpoint import EndpointDetail, EndpointQuery
+from iris.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
+from iris.resources.identity import (
+    AttemptIdentity,
+    AttemptLocator,
+    JobIdentity,
+    ResourceKey,
+    ResourceKind,
+    TaskIdentity,
 )
+from iris.resources.job import (
+    ContainerProfile,
+    CoschedulingConfig,
+    ExistingJobPolicy,
+    JobDetail,
+    JobPreemptionPolicy,
+    JobQuery,
+    JobSpec,
+    JobSummary,
+    PriorityBand,
+)
+from iris.resources.names import (
+    JobName,
+    TaskAttempt,
+)
+from iris.resources.source import Page
+from iris.resources.state import JobState, TaskState
+from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
+from iris.rpc import controller_pb2, job_pb2
+from iris.testing.journeys.backend import BackendEvent, ScriptedObservation, ScriptedTaskBackend, UnavailableTaskBackend
+
+_JOB_STATE_BY_NAME = {
+    "pending": JobState.PENDING,
+    "succeeded": JobState.SUCCEEDED,
+    "failed": JobState.FAILED,
+    "killed": JobState.KILLED,
+    "unschedulable": JobState.UNSCHEDULABLE,
+}
 
 
 @dataclass(frozen=True, slots=True)
 class TaskRef:
     wire_id: str
+    authority_cluster_id: str
 
 
 @dataclass(frozen=True, slots=True)
 class JobRef:
     wire_id: str
     tasks: int
+    authority_cluster_id: str
     coscheduled: bool = False
 
     def __getitem__(self, task_index: int) -> TaskRef:
         if task_index < 0 or task_index >= self.tasks:
             raise IndexError(task_index)
-        return TaskRef(JobName.from_wire(self.wire_id).task(task_index).to_wire())
+        return TaskRef(
+            JobName.from_wire(self.wire_id).task(task_index).to_wire(),
+            self.authority_cluster_id,
+        )
 
 
 @dataclass(slots=True)
@@ -90,18 +131,22 @@ class JourneyWorld:
         self._unavailable_backend_ids = unavailable_backend_ids or set()
         self._jobs: dict[str, JobRef] = {}
         self._checkpoint_jobs: dict[str, frozenset[str]] = {}
-        self._task_history: dict[str, tuple[tuple[int, int], ...]] = {}
-        self._terminal_tasks: set[str] = set()
+        self._task_history: dict[tuple[str, str], tuple[tuple[int, int], ...]] = {}
+        self._terminal_tasks: set[tuple[str, str]] = set()
+        self._task_uids: dict[str, str] = {}
+        self._seen_launches: set[tuple[str, int]] = set()
+        self._checked_launch_event_count = 0
         self._prior_backend_events: list[BackendEvent] = []
         self._prior_backend_calls: list[tuple[str, str]] = []
         self.trace: list[str] = []
 
         db = ControllerDB(db_dir=self._db_dir)
+        self.database = db
         monkeypatch.setattr(Timestamp, "now", classmethod(lambda cls: self.clock.now()))
         self.controller, self.backends = self._build_controller(db)
         self.backend = next(iter(self.backends.values()))
 
-    def _build_controller(self, db: ControllerDB) -> tuple[Controller, dict[str, ScriptedTaskBackend]]:
+    def _build_controller(self, db: ControllerDB) -> tuple[ControllerProcess, dict[str, ScriptedTaskBackend]]:
         self._incarnation += 1
         state_dir = self.root / f"controller-{self._incarnation}"
         config = ControllerConfig(
@@ -131,7 +176,7 @@ class JourneyWorld:
             worker_token=None,
         )
         self.log_stack = log_stack
-        controller = Controller(
+        controller = compose_controller_process(
             config=config,
             backends=backends,
             log_stack=log_stack,
@@ -150,12 +195,13 @@ class JourneyWorld:
         self._remember_backend_activity()
         self.controller.stop()
         db = ControllerDB(db_dir=self._db_dir)
+        self.database = db
         self.controller, self.backends = self._build_controller(db)
         self.backend = next(iter(self.backends.values()))
         self._check_invariants()
 
     def checkpoint(self) -> tuple[str, CheckpointResult]:
-        path, result = self.controller.begin_checkpoint()
+        path, result = self.controller.runtime.begin_checkpoint()
         self._checkpoint_jobs[path] = frozenset(self._jobs)
         self.trace.append(f"checkpoint {path}")
         return path, result
@@ -175,14 +221,17 @@ class JourneyWorld:
         retained = self._checkpoint_jobs[checkpoint]
         self._jobs = {job_id: job for job_id, job in self._jobs.items() if job_id in retained}
         self._task_history = {
-            task_id: history
-            for task_id, history in self._task_history.items()
-            if any(task_id.startswith(f"{job_id}/") for job_id in retained)
+            task_key: history
+            for task_key, history in self._task_history.items()
+            if any(task_key[0].startswith(f"{job_id}/") for job_id in retained)
         }
         self._terminal_tasks = {
-            task_id for task_id in self._terminal_tasks if any(task_id.startswith(f"{job_id}/") for job_id in retained)
+            task_key
+            for task_key in self._terminal_tasks
+            if any(task_key[0].startswith(f"{job_id}/") for job_id in retained)
         }
         db = ControllerDB(db_dir=self._db_dir)
+        self.database = db
         self.controller, self.backends = self._build_controller(db)
         self.backend = next(iter(self.backends.values()))
         self._check_invariants()
@@ -247,40 +296,45 @@ class JourneyWorld:
         required_attributes: dict[str, str] | None = None,
         include_resources: bool = True,
     ) -> JobRef:
-        entrypoint = job_pb2.RuntimeEntrypoint()
-        entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-        request = controller_pb2.Controller.LaunchJobRequest(
+        entrypoint = RuntimeEntrypoint((), CommandEntrypoint(("python", "-c", "pass")), {}, {})
+        constraints = tuple(
+            Constraint.create(key=key, op=ConstraintOp.EQ, value=value)
+            for key, value in (required_attributes or {}).items()
+        )
+        spec = JobSpec(
+            version=1,
             name=job_name.to_wire(),
             entrypoint=entrypoint,
-            environment=job_pb2.EnvironmentConfig(),
-            replicas=tasks,
+            resources=ResourceSpec(cpu=1, memory=1024**3) if include_resources else ResourceSpec(),
+            environment=Environment({}, ()),
+            bundle_id="",
+            scheduling_timeout=Duration.from_seconds(scheduling_timeout) if scheduling_timeout is not None else None,
+            ports=(),
+            max_task_failures=failure_retries if max_task_failures is None else max_task_failures,
             max_retries_failure=failure_retries,
             max_retries_preemption=preemption_retries,
-            # The public journey vocabulary counts retries. Unless a journey is
-            # specifically about the job-wide budget, allow those retries at
-            # the aggregate level too.
-            max_task_failures=failure_retries if max_task_failures is None else max_task_failures,
+            constraints=constraints,
+            coscheduling=CoschedulingConfig(group_by="journey.group") if coscheduled else None,
+            replicas=tasks,
+            timeout=Duration.from_seconds(execution_timeout) if execution_timeout is not None else None,
+            fail_if_exists=False,
+            preemption_policy=JobPreemptionPolicy.UNSPECIFIED,
+            existing_job_policy=ExistingJobPolicy.UNSPECIFIED,
+            priority_band=PriorityBand.INHERIT,
+            task_image="",
+            submit_argv=(),
+            client_revision_date="",
+            container_profile=ContainerProfile.UNSPECIFIED,
         )
-        if include_resources:
-            request.resources.CopyFrom(job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3))
-        if coscheduled:
-            request.coscheduling.group_by = "journey.group"
-        if scheduling_timeout is not None:
-            request.scheduling_timeout.milliseconds = int(scheduling_timeout * 1000)
-        if execution_timeout is not None:
-            request.timeout.milliseconds = int(execution_timeout * 1000)
-        for key, value in (required_attributes or {}).items():
-            constraint = request.constraints.add(key=key, op=job_pb2.CONSTRAINT_OP_EQ)
-            constraint.value.string_value = value
-        response = self.controller.launch_job(request)
-        ref = JobRef(response.job_id, tasks, coscheduled)
+        identity = self.controller.controller.submit_job(spec, enforce_client_freshness=False)
+        ref = JobRef(identity.key.resource_id, tasks, identity.key.cluster_id, coscheduled)
         self._jobs[ref.wire_id] = ref
         self.trace.append(f"submit {ref.wire_id} tasks={tasks}")
         self._check_invariants()
         return ref
 
     def succeed(self, task: TaskRef, *, attempt_id: int | None = None) -> None:
-        self._observe(task, job_pb2.TASK_STATE_SUCCEEDED, attempt_id=attempt_id)
+        self._observe(task, TaskState.SUCCEEDED, attempt_id=attempt_id)
 
     def succeed_all(self, job: JobRef) -> None:
         for task_index in range(job.tasks):
@@ -294,18 +348,18 @@ class JourneyWorld:
         exit_code: int = 1,
         attempt_id: int | None = None,
     ) -> None:
-        self._observe(task, job_pb2.TASK_STATE_FAILED, error=error, exit_code=exit_code, attempt_id=attempt_id)
+        self._observe(task, TaskState.FAILED, error=error, exit_code=exit_code, attempt_id=attempt_id)
 
     def lose_runtime(self, task: TaskRef, *, error: str = "runtime disappeared") -> None:
-        self._observe(task, job_pb2.TASK_STATE_WORKER_FAILED, error=error)
+        self._observe(task, TaskState.WORKER_FAILED, error=error)
 
     def preempt(self, task: TaskRef, *, error: str = "preempted") -> None:
-        self._observe(task, job_pb2.TASK_STATE_PREEMPTED, error=error)
+        self._observe(task, TaskState.PREEMPTED, error=error)
 
     def _observe(
         self,
         task: TaskRef,
-        state: int,
+        state: TaskState,
         *,
         error: str = "",
         exit_code: int | None = None,
@@ -316,57 +370,43 @@ class JourneyWorld:
             task.wire_id,
             ScriptedObservation(state, error=error, exit_code=exit_code, attempt_id=attempt_id),
         )
-        self.trace.append(f"observe {task.wire_id} {job_pb2.TaskState.Name(state)}")
+        self.trace.append(f"observe {task.wire_id} {state.name}")
 
     def cancel(self, job: JobRef) -> None:
-        self.controller.terminate_job(job.wire_id)
+        self.controller.controller.cancel_job(
+            self.job(job).summary.identity,
+            idempotency_key=f"journey-cancel:{job.wire_id}",
+        )
         self.trace.append(f"cancel {job.wire_id}")
 
     def complete(self, job: JobRef) -> None:
-        self.controller.complete_job(job.wire_id)
+        self.controller.controller.complete_job(self.job(job).summary.identity)
         self.trace.append(f"complete {job.wire_id}")
 
-    def kick(
-        self,
-        task: TaskRef,
-        *,
-        desired_state: int = job_pb2.TASK_STATE_PREEMPTED,
-        reason: str = "journey operator override",
-        attempt_id: int | None = None,
-    ) -> controller_pb2.Controller.KickResult:
-        """Queue one public administrative override for a Task or exact Attempt."""
-        target = task.wire_id if attempt_id is None else f"{task.wire_id}:{attempt_id}"
-        response = self.controller.kick_tasks(
-            controller_pb2.Controller.KickTasksRequest(
-                targets=[target],
-                desired_state=desired_state,
-                reason=reason,
-            )
-        )
-        (result,) = response.results
-        self.trace.append(f"kick {target} {job_pb2.TaskState.Name(desired_state)} queued={result.queued}")
-        return result
-
-    def jobs(self, *, state: str = "") -> list[job_pb2.JobStatus]:
-        """List public Jobs, optionally filtered by friendly state name."""
-        request = controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(state_filter=state))
-        return list(self.controller.list_jobs(request).jobs)
+    def jobs(self, *, state: str = "") -> list[JobSummary]:
+        """List Jobs, optionally filtered by their stable state name."""
+        states = frozenset({_JOB_STATE_BY_NAME[state]}) if state else frozenset()
+        return list(self.controller.controller.list_jobs(JobQuery(states=states, page_size=500)).items)
 
     def set_budget(self, user: str, *, limit: int = 10_000) -> None:
         """Create or replace one budget row through the public service."""
         with identity_scope(VerifiedIdentity(user_id="journey-admin", role="admin")):
-            self.controller.set_user_budget(
+            self.controller.controller_service.set_user_budget(
                 controller_pb2.Controller.SetUserBudgetRequest(
                     user_id=user,
                     budget_limit=limit,
                     max_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
-                )
+                ),
+                None,
             )
 
     def budget_spent(self, user: str) -> int:
         """Return public current spend for a configured user budget."""
         with identity_scope(VerifiedIdentity(user_id=user, role="user")):
-            return self.controller.get_user_budget(user).budget_spent
+            return self.controller.controller_service.get_user_budget(
+                controller_pb2.Controller.GetUserBudgetRequest(user_id=user),
+                None,
+            ).budget_spent
 
     def register_endpoint(
         self,
@@ -378,22 +418,30 @@ class JourneyWorld:
         attempt_id: int | None = None,
     ) -> str:
         """Register one endpoint against the Task's current public Attempt."""
-        current_attempt_id = self.task(task).current_attempt_id if attempt_id is None else attempt_id
-        response = self.controller.register_endpoint(
+        current = self.task(task).summary.current_attempt
+        current_attempt_id = current.attempt_number if attempt_id is None and current is not None else attempt_id
+        if current_attempt_id is None:
+            raise AssertionError(f"{task.wire_id} has no current Attempt")
+        response = self.controller.controller_service.endpoint_service.register_endpoint(
             controller_pb2.Controller.RegisterEndpointRequest(
                 name=name,
                 address=address,
                 task_id=task.wire_id,
                 attempt_id=current_attempt_id,
                 endpoint_id=endpoint_id,
-            )
+            ),
+            None,
         )
         self.trace.append(f"endpoint {name} {endpoint_id} attempt={current_attempt_id}")
         return response.endpoint_id
 
-    def endpoints(self, *, name: str = "") -> list[controller_pb2.Controller.Endpoint]:
-        request = controller_pb2.Controller.ListEndpointsRequest(prefix=name, exact=bool(name))
-        return list(self.controller.list_endpoints(request).endpoints)
+    def endpoints(self, *, name: str = "") -> list[EndpointDetail]:
+        items = self.controller.controller.list_endpoints(EndpointQuery(name_prefix=name, page_size=500)).items
+        return [
+            self.controller.controller.describe_endpoint(endpoint.key)
+            for endpoint in items
+            if not name or endpoint.name == name
+        ]
 
     def backend_outage(self, *, ticks: int) -> None:
         if len(self.backends) != 1:
@@ -401,11 +449,16 @@ class JourneyWorld:
         self.backend.fail_reconcile(times=ticks)
         self.trace.append(f"backend unavailable ticks={ticks}")
 
+    def resource_source_outage(self, backend_id: str, *, reads: int = 1) -> None:
+        """Make one backend's public resource-status boundary unavailable."""
+        self.backends[backend_id].fail_status(times=reads)
+        self.trace.append(f"resource source unavailable backend={backend_id} reads={reads}")
+
     def wait_through_outage(self, *, ticks: int) -> None:
         """Run ticks that must fail at the scripted backend boundary."""
         for _ in range(ticks):
             try:
-                self.controller.run_control_tick()
+                self.controller.runtime.run_control_tick()
             except ConnectionError:
                 self.trace.append("tick backend-unavailable")
                 self._check_invariants()
@@ -413,7 +466,7 @@ class JourneyWorld:
                 raise AssertionError(f"backend unexpectedly reconciled: {self.timeline}")
 
     def step(self) -> None:
-        self.controller.run_control_tick()
+        self.controller.runtime.run_control_tick()
         self.trace.append("tick")
         self._check_invariants()
 
@@ -434,18 +487,90 @@ class JourneyWorld:
     def timeline(self) -> str:
         return " -> ".join(self.trace)
 
-    def job(self, job: JobRef) -> job_pb2.JobStatus:
-        return self.controller.get_job_status(job.wire_id).job
+    def job(self, job: JobRef) -> JobDetail:
+        return self.controller.controller.describe_job(
+            self._resource_key(ResourceKind.JOB, job.wire_id, job.authority_cluster_id)
+        )
 
-    def tasks(self, job: JobRef) -> list[job_pb2.TaskStatus]:
-        return list(self.controller.list_tasks(job.wire_id).tasks)
+    def tasks(self, job: JobRef) -> list[TaskSummary]:
+        return list(
+            self.controller.controller.list_tasks(
+                TaskQuery(job=self._resource_key(ResourceKind.JOB, job.wire_id, job.authority_cluster_id))
+            ).items
+        )
 
-    def task(self, task: TaskRef) -> job_pb2.TaskStatus:
-        return self.controller.get_task_status(task.wire_id).task
+    def task(self, task: TaskRef) -> TaskDetail:
+        return self.controller.controller.describe_task(
+            self._resource_key(ResourceKind.TASK, task.wire_id, task.authority_cluster_id)
+        )
 
-    def task_detail(self, task: TaskRef) -> controller_pb2.Controller.GetTaskStatusResponse:
-        """Read one Task plus public Attempt-derived diagnostics."""
-        return self.controller.get_task_status(task.wire_id)
+    def attempt(self, task: TaskRef, attempt_number: int | None = None) -> AttemptDetail:
+        return self.controller.controller.describe_attempt(
+            AttemptLocator(
+                self._resource_key(ResourceKind.TASK, task.wire_id, task.authority_cluster_id),
+                attempt_number,
+            )
+        )
+
+    def task_page(
+        self,
+        *,
+        job: JobRef | None = None,
+        backend_id: str | None = None,
+    ) -> Page[TaskSummary]:
+        """Read the global Task inventory."""
+        job_key = (
+            self._resource_key(ResourceKind.JOB, job.wire_id, job.authority_cluster_id) if job is not None else None
+        )
+        return self.controller.controller.list_tasks(TaskQuery(job=job_key, backend_id=backend_id))
+
+    def cancel_job(self, identity: JobIdentity, *, idempotency_key: str) -> ActionReceipt:
+        return self.controller.controller.cancel_job(
+            identity,
+            idempotency_key=idempotency_key,
+            principal_id=JobName.from_wire(identity.key.resource_id).user,
+        )
+
+    def retry_task(
+        self,
+        identity: TaskIdentity,
+        *,
+        expected_attempt_uid: str,
+        idempotency_key: str,
+    ) -> ActionReceipt:
+        return self.controller.controller.retry_task(
+            identity,
+            expected_attempt_uid=expected_attempt_uid,
+            idempotency_key=idempotency_key,
+            principal_id=JobName.from_wire(identity.key.resource_id).user,
+        )
+
+    def terminate_attempt(
+        self,
+        identity: AttemptIdentity,
+        *,
+        idempotency_key: str,
+    ) -> ActionReceipt:
+        return self.controller.controller.terminate_attempt(
+            identity,
+            idempotency_key=idempotency_key,
+            principal_id=JobName.from_wire(identity.task.resource_id).user,
+        )
+
+    def action_receipt(self, action_id: str) -> ActionReceipt:
+        return self.controller.controller.get_action_receipt(action_id)
+
+    def settle_action(self, receipt: ActionReceipt, *, max_ticks: int = 20) -> ActionReceipt:
+        for _ in range(max_ticks):
+            current = self.action_receipt(receipt.action_id)
+            if current.state in {ActionState.SUCCEEDED, ActionState.FAILED}:
+                return current
+            self.step()
+        raise AssertionError(f"action {receipt.action_id} did not converge after {max_ticks} ticks: {self.timeline}")
+
+    @staticmethod
+    def _resource_key(kind: ResourceKind, resource_id: str, authority_cluster_id: str) -> ResourceKey:
+        return ResourceKey(authority_cluster_id, kind, resource_id)
 
     def push_task_logs(self, task: TaskRef, lines: list[str], *, attempt_id: int = 0) -> None:
         """Publish Task logs through the real finelog RPC boundary."""
@@ -487,7 +612,7 @@ class JourneyWorld:
         return tuple(sorted(task_id for backend in self.backends.values() for task_id in backend.pending_task_ids))
 
     def _backend_for_task(self, task: TaskRef) -> ScriptedTaskBackend:
-        backend_id = self.task(task).backend_id
+        backend_id = self.task(task).summary.backend_id
         if backend_id in self.backends:
             return self.backends[backend_id]
         if len(self.backends) == 1:
@@ -510,15 +635,18 @@ class JourneyWorld:
         return tuple(
             (
                 job.wire_id,
-                self.job(job).state,
+                self.job(job).summary.state,
                 tuple(
                     (
-                        task.task_id,
+                        task.identity.key.resource_id,
                         task.state,
                         task.backend_id,
-                        task.current_attempt_id,
+                        task.current_attempt.attempt_number if task.current_attempt is not None else None,
                         tuple(
-                            (attempt.attempt_id, attempt.state) for attempt in self.task(TaskRef(task.task_id)).attempts
+                            (attempt.identity.attempt_number, attempt.state)
+                            for attempt in self.task(
+                                TaskRef(task.identity.key.resource_id, task.identity.key.cluster_id)
+                            ).attempts
                         ),
                     )
                     for task in self.tasks(job)
@@ -529,64 +657,65 @@ class JourneyWorld:
 
     def _check_invariants(self) -> None:
         active_states = {
-            job_pb2.TASK_STATE_ASSIGNED,
-            job_pb2.TASK_STATE_BUILDING,
-            job_pb2.TASK_STATE_RUNNING,
+            TaskState.ASSIGNED,
+            TaskState.BUILDING,
+            TaskState.RUNNING,
         }
         terminal_states = {
-            job_pb2.TASK_STATE_SUCCEEDED,
-            job_pb2.TASK_STATE_FAILED,
-            job_pb2.TASK_STATE_KILLED,
-            job_pb2.TASK_STATE_UNSCHEDULABLE,
-            job_pb2.TASK_STATE_COSCHED_FAILED,
+            TaskState.SUCCEEDED,
+            TaskState.FAILED,
+            TaskState.KILLED,
+            TaskState.UNSCHEDULABLE,
+            TaskState.COSCHED_FAILED,
         }
         for job in self._jobs.values():
             listed = self.tasks(job)
-            status = self.job(job)
-            counts: dict[str, int] = {}
             listed_states = {task.state for task in listed}
-            if job.coscheduled and listed_states & active_states and job_pb2.TASK_STATE_PENDING in listed_states:
+            if job.coscheduled and listed_states & active_states and TaskState.PENDING in listed_states:
                 raise AssertionError(f"coscheduled Job split between active and pending Tasks: {self.timeline}")
             for task in listed:
-                detail = self.task(TaskRef(task.task_id))
-                attempts = tuple((attempt.attempt_id, attempt.state) for attempt in detail.attempts)
-                previous = self._task_history.get(task.task_id, ())
+                task_id = task.identity.key.resource_id
+                task_key = (task_id, task.identity.task_uid)
+                previous_task_uid = self._task_uids.get(task_id)
+                if previous_task_uid is not None and previous_task_uid != task.identity.task_uid:
+                    self._seen_launches = {launch for launch in self._seen_launches if launch[0] != task_id}
+                self._task_uids[task_id] = task.identity.task_uid
+                detail = self.task(TaskRef(task_id, task.identity.key.cluster_id))
+                attempts = tuple((attempt.identity.attempt_number, attempt.state) for attempt in detail.attempts)
+                previous = self._task_history.get(task_key, ())
                 if tuple(attempt_id for attempt_id, _ in attempts[: len(previous)]) != tuple(
                     attempt_id for attempt_id, _ in previous
                 ):
-                    raise AssertionError(f"Attempt history was rewritten for {task.task_id}: {self.timeline}")
+                    raise AssertionError(f"Attempt history was rewritten for {task_id}: {self.timeline}")
                 terminal_attempt_states = {
-                    job_pb2.TASK_STATE_SUCCEEDED,
-                    job_pb2.TASK_STATE_FAILED,
-                    job_pb2.TASK_STATE_KILLED,
-                    job_pb2.TASK_STATE_PREEMPTED,
-                    job_pb2.TASK_STATE_WORKER_FAILED,
-                    job_pb2.TASK_STATE_UNSCHEDULABLE,
-                    job_pb2.TASK_STATE_COSCHED_FAILED,
+                    TaskState.SUCCEEDED,
+                    TaskState.FAILED,
+                    TaskState.KILLED,
+                    TaskState.PREEMPTED,
+                    TaskState.WORKER_FAILED,
+                    TaskState.UNSCHEDULABLE,
+                    TaskState.COSCHED_FAILED,
                 }
                 for (_, previous_state), (_, current_state) in zip(previous, attempts, strict=False):
                     if previous_state in terminal_attempt_states and current_state != previous_state:
-                        raise AssertionError(f"terminal Attempt changed for {task.task_id}: {self.timeline}")
-                self._task_history[task.task_id] = attempts
+                        raise AssertionError(f"terminal Attempt changed for {task_id}: {self.timeline}")
+                self._task_history[task_key] = attempts
                 if sum(attempt.state in active_states for attempt in detail.attempts) > 1:
-                    raise AssertionError(f"multiple live Attempts for {task.task_id}: {self.timeline}")
+                    raise AssertionError(f"multiple live Attempts for {task_id}: {self.timeline}")
                 if task.state in terminal_states and any(attempt.state in active_states for attempt in detail.attempts):
-                    raise AssertionError(f"terminal Task retained a live Attempt: {task.task_id}: {self.timeline}")
-                if task.task_id in self._terminal_tasks and task.state not in terminal_states:
-                    raise AssertionError(f"terminal Task revived: {task.task_id}: {self.timeline}")
+                    raise AssertionError(f"terminal Task retained a live Attempt: {task_id}: {self.timeline}")
+                if task_key in self._terminal_tasks and task.state not in terminal_states:
+                    raise AssertionError(f"terminal Task revived: {task_id}: {self.timeline}")
                 if task.state in terminal_states:
-                    self._terminal_tasks.add(task.task_id)
-                state_name = job_pb2.TaskState.Name(task.state).removeprefix("TASK_STATE_").lower()
-                counts[state_name] = counts.get(state_name, 0) + 1
-            if dict(status.task_state_counts) != counts:
-                raise AssertionError(
-                    f"Job fold disagrees for {job.wire_id}: public={dict(status.task_state_counts)} tasks={counts}: "
-                    f"{self.timeline}"
-                )
+                    self._terminal_tasks.add(task_key)
 
-        launches = [(event.task_id, event.attempt_id) for event in self.backend_events(kind="launched")]
-        if len(launches) != len(set(launches)):
-            raise AssertionError(f"duplicate backend launch: {self.timeline}")
+        launch_events = self.backend_events(kind="launched")
+        for event in launch_events[self._checked_launch_event_count :]:
+            launch = (event.task_id, event.attempt_id)
+            if launch in self._seen_launches:
+                raise AssertionError(f"duplicate backend launch: {self.timeline}")
+            self._seen_launches.add(launch)
+        self._checked_launch_event_count = len(launch_events)
 
 
 @contextlib.contextmanager

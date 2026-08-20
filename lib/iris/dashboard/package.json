@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "rsbuild dev",
     "build": "rsbuild build",
-    "build:check": "vue-tsc --noEmit && rsbuild build",
+    "test": "node --test tests/*.test.ts",
+    "build:check": "npm test && vue-tsc --noEmit && rsbuild build",
     "preview": "rsbuild preview"
   },
   "dependencies": {

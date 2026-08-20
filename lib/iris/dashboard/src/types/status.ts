@@ -4,9 +4,18 @@
  * Proto enums serialize as strings like "JOB_STATE_RUNNING" or "TASK_STATE_PENDING".
  * The dashboard normalizes these to lowercase names ("running", "pending") via stateToName().
  */
-import type { SliceStatus } from '@/utils/slices'
-
 // -- Normalized state values (lowercase, prefix-stripped) --
+
+export type SliceStatus =
+  | 'requesting'
+  | 'booting'
+  | 'initializing'
+  | 'ready'
+  | 'failed'
+  | 'available'
+  | 'in_use'
+  | 'idle'
+  | 'degraded'
 
 export type JobState =
   | 'unspecified'
@@ -52,7 +61,7 @@ const STATE_INT_MAP: Record<number, string> = {
 }
 
 /**
- * Strip the proto enum prefix (JOB_STATE_ or TASK_STATE_) and lowercase.
+ * Strip the public resource enum prefix and lowercase.
  * Also handles integer state values from the database.
  */
 export function stateToName(protoState: string | number | null | undefined): string {
@@ -60,7 +69,9 @@ export function stateToName(protoState: string | number | null | undefined): str
   if (protoState === '') return 'unknown'
   if (typeof protoState === 'number') return STATE_INT_MAP[protoState] ?? 'unknown'
 
-  return protoState.replace(/^(JOB_STATE_|TASK_STATE_)/, '').toLowerCase()
+  return protoState
+    .replace(/^(JOB_STATE_|TASK_STATE_|NODE_HEALTH_|SLICE_LIFECYCLE_|MEMBERSHIP_STATE_|ACTION_STATE_)/, '')
+    .toLowerCase()
 }
 
 /** Human-readable display name for a normalized state. */
@@ -92,6 +103,12 @@ const STATE_DISPLAY_NAMES: Record<string, string> = {
   preempted: 'Preempted',
   cosched_failed: 'Cosched Failed',
   unknown: 'Unknown',
+  ready: 'Ready',
+  degraded: 'Degraded',
+  unavailable: 'Unavailable',
+  retired: 'Retired',
+  creating: 'Creating',
+  deleting: 'Deleting',
 }
 
 // -- Tailwind color class mappings --
@@ -104,6 +121,24 @@ export interface StatusColorClasses {
 }
 
 const STATUS_COLORS: Record<string, StatusColorClasses> = {
+  ready: {
+    text: 'text-status-success',
+    bg: 'bg-status-success-bg',
+    border: 'border-status-success-border',
+    dot: 'bg-status-success',
+  },
+  degraded: {
+    text: 'text-status-warning',
+    bg: 'bg-status-warning-bg',
+    border: 'border-status-warning-border',
+    dot: 'bg-status-warning',
+  },
+  unavailable: {
+    text: 'text-status-danger',
+    bg: 'bg-status-danger-bg',
+    border: 'border-status-danger-border',
+    dot: 'bg-status-danger',
+  },
   running: {
     text: 'text-accent',
     bg: 'bg-accent-subtle',

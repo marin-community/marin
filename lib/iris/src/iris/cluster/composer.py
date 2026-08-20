@@ -19,13 +19,14 @@ import logging
 from finelog.client.log_client import Table
 from rigging.timing import Duration
 
-from iris.cluster.backends.k8s.tasks import (
+from iris.backends.k8s.tasks import (
     _CW_DEFAULT_TOPOLOGIES,
     _DEFAULT_PRIORITY_CLASS_NAMES,
     K8sTaskProvider,
     PodConfig,
 )
-from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
+from iris.backends.protocol import TaskBackend
+from iris.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.config import (
     BackendConfig,
     IrisClusterConfig,
@@ -36,26 +37,26 @@ from iris.cluster.config import (
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
-from iris.cluster.controller.backend import TaskBackend
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import LogStack
-from iris.cluster.controller.reconcile.loader import TransitionReader
-from iris.cluster.controller.transition_reader import DbTransitionReader
+from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.persistence.transition_reader import DbTransitionReader
+from iris.cluster.controller.reconcile.reader import TransitionReader
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, projects_task_env_secret
 from iris.cluster.platforms.factory import ProviderBundle, create_provider_bundle
 from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.coreweave_topology import KueueTopologyBinding
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.types import local_queue_name
-from iris.rpc import job_pb2
+from iris.resources.state import PriorityBand
+from iris.rpc.worker_client import RpcWorkerClient, RpcWorkerStubFactory
 
 logger = logging.getLogger(__name__)
 
-# Maps kubernetes_provider.priority_classes keys to the PriorityBand enum stamped on Pods.
+# Maps kubernetes_provider.priority_classes keys to the PriorityBand stamped on Pods.
 _PRIORITY_BANDS = {
-    "production": job_pb2.PRIORITY_BAND_PRODUCTION,
-    "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
-    "batch": job_pb2.PRIORITY_BAND_BATCH,
+    "production": PriorityBand.PRODUCTION,
+    "interactive": PriorityBand.INTERACTIVE,
+    "batch": PriorityBand.BATCH,
 }
 
 
@@ -143,7 +144,7 @@ def make_task_backend(
         )
     if which == "worker_provider":
         return RpcTaskBackend(
-            stub_factory=RpcWorkerStubFactory(),
+            worker_client=RpcWorkerClient(RpcWorkerStubFactory()),
             unreachable_grace=unreachable_grace,
             autoscaler=autoscaler,
         )

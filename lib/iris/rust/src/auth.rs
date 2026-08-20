@@ -43,7 +43,6 @@ pub struct NativeAuthConfig {
     pub proxy_audience: String,
     pub proxy_scope: String,
     pub federation_audience: String,
-    pub session_cookie: String,
     pub iap_public_keys_url: String,
     pub iap_issuer: String,
     #[serde(default)]
@@ -222,8 +221,7 @@ impl NativeVerifier {
     ) -> VerifyOutcome {
         let token = explicit_token
             .map(str::to_string)
-            .or_else(|| bearer_token(headers))
-            .or_else(|| session_cookie(headers, &self.config.session_cookie));
+            .or_else(|| bearer_token(headers));
         if let Some(token) = token {
             return self.verify_cached(&token, || self.verify_token(&token));
         }
@@ -415,14 +413,6 @@ fn bearer_token(headers: &HeaderMap) -> Option<String> {
     let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     let (scheme, token) = value.split_once(' ')?;
     (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then(|| token.to_string())
-}
-
-fn session_cookie(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
-    let cookies = headers.get(header::COOKIE)?.to_str().ok()?;
-    cookies.split(';').find_map(|cookie| {
-        let (name, value) = cookie.trim().split_once('=')?;
-        (name == cookie_name).then(|| value.to_string())
-    })
 }
 
 fn unix_time() -> u64 {

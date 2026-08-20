@@ -14,25 +14,31 @@ projections through ``Controller`` constructor arguments.
 """
 
 from dataclasses import dataclass
+from typing import cast
 
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, select
 from sqlalchemy import update as sa_update
 
-from iris.cluster.controller import ops, reads, writes
-from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
-from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.schema import (
+from iris.cluster.controller.persistence import operations as ops
+from iris.cluster.controller.persistence import reads, writes
+from iris.cluster.controller.persistence.database import ControllerDB, Tx
+from iris.cluster.controller.persistence.projections.attempt_counts import AttemptCountsProjection
+from iris.cluster.controller.persistence.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.persistence.projections.run_templates import RunTemplatesProjection
+from iris.cluster.controller.persistence.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.persistence.schema import (
     tasks_table,
     workers_table,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import JobName, WorkerId
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.legacy.job_service_codec import job_spec_from_legacy_request
 
 
 @dataclass
@@ -71,6 +77,11 @@ class ControllerTestState:
     def _endpoints(self) -> EndpointsProjection:
         """The endpoints projection, looked up from the DB cache registry."""
         return self._db.caches[EndpointsProjection]
+
+    @property
+    def database(self) -> ControllerDB:
+        """Database owned by this test harness."""
+        return self._db
 
 
 def set_worker_health_for_test(ctrl: ControllerTestState, worker_id: WorkerId, healthy: bool) -> None:
@@ -131,7 +142,7 @@ def resolve_band_for_test(cur: Tx, job_id: JobName, requested_band: int) -> job_
     inherited_band: int | None = None
     if requested_band == job_pb2.PRIORITY_BAND_INHERIT and job_id.parent is not None:
         inherited_band = reads.get_priority_bands(cur, [job_id.parent])[job_id.parent]
-    return ops.job.resolve_priority_band(requested_band, inherited_band)
+    return cast(job_pb2.PriorityBand, ops.job.resolve_priority_band(requested_band, inherited_band))
 
 
 def submit_job_in_tx(
@@ -150,7 +161,7 @@ def submit_job_in_tx(
     ops.job.submit(
         cur,
         job_id=job_id,
-        request=request,
+        spec=job_spec_from_legacy_request(request),
         ts=ts if ts is not None else Timestamp.now(),
         priority_band=band,
         submitting_user=submitting_user,

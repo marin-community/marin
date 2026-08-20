@@ -18,7 +18,7 @@ from iris.cli.task import (
     render_task_events_text,
     task_event_attempt_uids,
 )
-from iris.cluster.types import TaskAttempt
+from iris.resources.names import TaskAttempt
 from iris.resources.state import TaskState
 
 
@@ -95,7 +95,7 @@ def attempt_wait(ctx: click.Context, attempt_ref: str) -> None:
     ref = _attempt_ref(attempt_ref)
     with iris_client_for_ctx(ctx, workspace=None) as client:
         status = client.attempt(ref).wait(timeout=float("inf"))
-    click.echo(status.state.value)
+    click.echo(status.state.name.lower())
     if status.state is not TaskState.SUCCEEDED:
         raise SystemExit(1)
 

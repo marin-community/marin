@@ -7,16 +7,17 @@ import { useIndexCursor } from '@/composables/useIndexCursor'
 import { useLogSearch } from '@/composables/useLogSearch'
 import { useCopyToClipboard } from '@/composables/useCopyToClipboard'
 import { CUSTOM_PRESET, SINCE_PRESETS, type TimeZoneName, useTimeWindow } from '@/composables/useTimeWindow'
-import { isFederated, type FetchLogsResponse, type LogEntry, type TaskAttempt } from '@/types/rpc'
+import { isFederated, type FetchLogsResponse, type LogEntry } from '@/types/rpc'
 import { timestampMs, logLevelName, formatLogTime } from '@/utils/formatting'
 import { parseLogLinks } from '@/utils/logLinks'
+import { useBackends } from '@/composables/useBackends'
 import { groupNearbyIndices, highlightSegments, isExceptionEntry, type HighlightedSegment } from '@/utils/logSearch'
 
 const props = withDefaults(defineProps<{
   taskId?: string
   workerId?: string
   maxHeight?: string
-  attempts?: TaskAttempt[]
+  attempts?: { attemptId: number }[]
   currentAttemptId?: number
   // Cluster-wide explorer with no fixed context: default the source to a
   // match-everything prefix instead of the local process stream.
@@ -26,6 +27,9 @@ const props = withDefaults(defineProps<{
   // we pass `cluster` through as a FetchLogs filter (see baseRequest). A local
   // row (or a context with no cluster) sends no filter and reads its own rows.
   cluster?: string
+  // Resource authority used when log text mentions another Task. This is
+  // independent of `cluster`, which selects the execution source in finelog.
+  authorityCluster?: string
 }>(), {
   maxHeight: '60vh',
 })
@@ -55,6 +59,8 @@ const FOLLOW_TAIL_SLACK_PX = 40
 
 const route = useRoute()
 const router = useRouter()
+const { clusterId } = useBackends()
+const linkClusterId = computed(() => props.authorityCluster || clusterId.value || undefined)
 
 type MatchScope = 'EXACT' | 'PREFIX' | 'REGEX'
 type WireMatchScope = 'MATCH_SCOPE_EXACT' | 'MATCH_SCOPE_PREFIX' | 'MATCH_SCOPE_REGEX'
@@ -209,7 +215,7 @@ const linkedRows = computed(() =>
     taskRef: showTaskLinks.value ? parseTaskFromKey(entry.key) : null,
     // proto3-JSON omits default scalars, so an empty log line arrives with
     // `data` absent (undefined); coalesce so matchAll() doesn't throw.
-    segments: parseLogLinks(entry.data ?? ''),
+    segments: parseLogLinks(entry.data ?? '', linkClusterId.value),
   })),
 )
 
@@ -262,10 +268,20 @@ function requestSinceMs(): number | undefined {
   return Math.max(0, ms - 1)
 }
 
+function serverFilterRequest(): { substring?: string; regex?: string } {
+  if (!filter.value) return {}
+  // Finelog's regex match is unanchored, so a pattern without regex syntax is
+  // exactly a literal substring query. Use that cheaper, long-standing wire
+  // operation and reserve the regex field for patterns that need it.
+  return /[.*+?^${}()|[\]\\]/.test(filter.value)
+    ? { regex: filter.value }
+    : { substring: filter.value }
+}
+
 function baseRequest() {
   return {
     ...sourceRequest(),
-    regex: filter.value || undefined,
+    ...serverFilterRequest(),
     minLevel: level.value ? level.value.toUpperCase() : undefined,
     sinceMs: requestSinceMs(),
   }
@@ -455,7 +471,7 @@ watch(
   },
 )
 watch(() => props.workerId, applyDefaults)
-// The owning row's cluster arrives async (after GetJob/TaskStatus resolves) and
+// The owning resource row's cluster arrives asynchronously and
 // only changes the FetchLogs filter, not the source key — re-query in place.
 watch(() => props.cluster, resetAndFetch)
 
@@ -517,12 +533,17 @@ function gotoException(delta: number) {
   focusRow(exceptionCursor.step(delta))
 }
 
-/** Pin a row and make the address bar a link back to it. */
-function selectRow(seq: number) {
+/** Pin a row and make the address bar a link back to its exact Task Attempt. */
+function selectRow(seq: number, attemptId?: number) {
   if (seq <= 0) return
   selectedSeq.value = seq
   followTail.value = false
-  router.replace({ query: { ...route.query, logSeq: String(seq) } })
+  const query = {
+    ...route.query,
+    logSeq: String(seq),
+    ...(isTask.value && attemptId !== undefined ? { attempt: String(attemptId) } : {}),
+  }
+  router.replace({ query })
 }
 
 /** Set the log time bound to this row. */
@@ -896,7 +917,7 @@ defineExpose({ selectedAttemptId })
                 data-log-permalink
                 class="text-text-muted tabular-nums hover:text-accent hover:underline"
                 :title="`${isoTimestamp(row.entry)} — click to pin and link to this line`"
-                @click="selectRow(row.seq)"
+                @click="selectRow(row.seq, row.entry.attemptId)"
               >{{ formatLogTime(timestampMs(row.entry.timestamp), timeZone === 'utc') }}</button>
               <button
                 data-log-start

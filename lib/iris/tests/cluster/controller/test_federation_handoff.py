@@ -19,20 +19,37 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import content_id
-from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import ControllerAuth
-from iris.cluster.controller.federation_store import ControllerFederationStore
-from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
+from iris.cluster.controller.job import WORKDIR_FILE_OFFLOAD_THRESHOLD
+from iris.cluster.controller.persistence import reads, writes
+from iris.cluster.controller.persistence.federation import ControllerFederationStore
+from iris.cluster.controller.persistence.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.service import (
-    WORKDIR_FILE_OFFLOAD_THRESHOLD,
-    ControllerServiceImpl,
-    _peer_status,
+from iris.cluster.federation.protocol import (
+    FederationJobDelta,
+    HandoffAdmission,
+    HandoffSpec,
+    HandoffState,
+    PeerErrorCode,
+    SyncedAttempt,
+    SyncedJob,
+    SyncedTask,
 )
-from iris.cluster.federation.store import HandoffAdmission, HandoffSpec, HandoffState
-from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, AttemptUid, JobName
+from iris.cluster.types import (
+    DEFAULT_BACKEND_ID,
+    LOCAL_ADMIN_SUBMITTER,
+    LOCAL_CLUSTER,
+)
+from iris.resources.execution import ResourceSpec
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+)
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
+from iris.rpc.federation_client import federation_batch_from_legacy
+from iris.rpc.legacy.controller_service import LegacyControllerService
+from iris.rpc.legacy.job_service_codec import job_spec_from_legacy_request
 from iris.testing.controller import (
     assign_task,
     dispatch_task,
@@ -98,17 +115,23 @@ def _handle(state: ControllerTestState, job_id: JobName):
         return reads.federated_handle(tx, job_id)
 
 
-def _peer_status_of(service: ControllerServiceImpl, job_id: JobName) -> int:
+def _peer_status_of(service: LegacyControllerService, job_id: JobName) -> int:
     """The ``peer_status`` GetJobStatus reports for ``job_id``."""
     return service.get_job_status(
         controller_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire()), None
     ).job.peer_status
 
 
+def _stamp_peer_backend(state: ControllerTestState, job_id: JobName) -> None:
+    with state._db.transaction() as tx:
+        writes.stamp_backend(tx, [(job_id, DEFAULT_BACKEND_ID)])
+
+
 def _run_peer_task_to_success(peer_state: ControllerTestState, job_id: JobName) -> None:
     """Register a worker on the peer and drive the handed-off job's task to SUCCEEDED."""
     worker = register_worker(peer_state, "w1", "w1:8080", job_pb2.WorkerMetadata(hostname="w1"))
     (task,) = query_tasks_for_job(peer_state, job_id)
+    _stamp_peer_backend(peer_state, job_id)
     dispatch_task(peer_state, task, worker)
     transition_task(peer_state, task.task_id, job_pb2.TASK_STATE_SUCCEEDED)
 
@@ -117,6 +140,7 @@ def _run_peer_task_to_failure(peer_state: ControllerTestState, job_id: JobName) 
     """Register a worker on the peer and drive the handed-off job's task to FAILED."""
     worker = register_worker(peer_state, "w1", "w1:8080", job_pb2.WorkerMetadata(hostname="w1"))
     (task,) = query_tasks_for_job(peer_state, job_id)
+    _stamp_peer_backend(peer_state, job_id)
     dispatch_task(peer_state, task, worker)
     transition_task(peer_state, task.task_id, job_pb2.TASK_STATE_FAILED, error="boom", exit_code=1)
 
@@ -133,7 +157,7 @@ def test_a_federated_job_carries_its_workspace_bundle_to_the_peer(tmp_path, log_
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
 
         request = _cluster_pinned_request("fed-bundle")
         request.bundle_blob = blob
@@ -151,7 +175,7 @@ def test_a_federated_job_carries_its_externalized_workdir_files_to_the_peer(tmp_
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
 
         request = _cluster_pinned_request("fed-workdir")
         request.entrypoint.workdir_files["big.bin"] = big
@@ -175,7 +199,7 @@ def test_a_federated_job_carries_its_inline_workdir_files_to_the_peer(tmp_path, 
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
 
         request = _cluster_pinned_request("fed-inline-workdir")
         request.entrypoint.workdir_files["_callable_runner.py"] = runner
@@ -201,7 +225,7 @@ def test_a_federated_job_carries_its_container_profile_to_the_peer(tmp_path, log
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
 
         request = _cluster_pinned_request("fed-profile")
         request.container_profile = job_pb2.CONTAINER_PROFILE_PRIVILEGED
@@ -281,9 +305,9 @@ def test_enforcing_parent_refuses_to_federate_a_local_admin_submission(tmp_path,
     with a clear message — even to a peer whose policy would admit it — because a
     federated job must carry an authenticated user."""
     with ExitStack() as stack:
-        parent_service, _ = _make_service(stack, "parent", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client, auth=_ENFORCING_AUTH)
         peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
-        _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
         # No identity scope: an unauthenticated (CIDR/loopback) caller resolves to local_admin.
         with pytest.raises(ConnectError) as exc:
             parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
@@ -298,10 +322,10 @@ def test_a_child_job_a_peer_could_host_is_refused_as_unfederatable(tmp_path, log
     identity gate (PERMISSION_DENIED) that gates a root submission, and reaches no peer.
     """
     with ExitStack() as stack:
-        parent_service, _ = _make_service(stack, "parent", tmp_path, log_client, auth=_ENFORCING_AUTH)
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client, auth=_ENFORCING_AUTH)
         peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
         connection = _InProcessPeerConnection(peer_service)
-        _attach_federation(parent_service, connection)
+        _attach_federation(parent_service, parent_state, connection)
 
         root = JobName.root(_USER, "root-job")
         with identity_scope(VerifiedIdentity(_USER, "admin")):
@@ -363,15 +387,12 @@ def test_federation_sync_rejects_an_ordinary_user(tmp_path, log_client):
 # ---------------------------------------------------------------------------
 
 
-def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client):
-    """After sync-back the parent renders a federated task natively: the peer's
-    attempt history is mirrored and the peer-side worker identity is surfaced (as
-    display text — there is no local worker row), and the mirrored attempt stays
-    off the worker-routing fold (its namespaced uid never resolves)."""
+def test_sync_mirrors_attempts_without_fabricating_a_local_node(tmp_path, log_client):
+    """Sync retains attempt history without making a peer Node look local."""
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
 
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
         job_id = JobName.from_wire(response.job_id)
@@ -385,10 +406,11 @@ def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client
             controller_pb2.Controller.GetTaskStatusRequest(task_id=mirrored.task_id.to_wire()), None
         ).task
 
-        # The peer's attempt renders natively, and the worker identity is surfaced
-        # from the peer (the task has no local worker row, so it is display-only).
+        # The peer Node has no identity in the parent's Node collection, so the
+        # retired TaskStatus wrapper leaves both local worker labels empty.
         assert task.cluster == "cw"
-        assert task.worker_id == "w1"
+        assert task.backend_id == DEFAULT_BACKEND_ID
+        assert task.worker_id == ""
         assert len(task.attempts) == 1
         assert task.attempts[0].state == job_pb2.TASK_STATE_SUCCEEDED
         assert task.attempts[0].worker_id == ""  # no local worker FK for a mirrored attempt
@@ -399,11 +421,98 @@ def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client
         # act on a federated attempt.
         with peer_state._db.read_snapshot() as tx:
             (peer_attempt,) = reads.all_attempts_for_tasks(tx, [job_id.task(0)])[job_id.task(0)]
+        assert query_job(parent_state, job_id).backend_id == DEFAULT_BACKEND_ID
+        assert mirrored.backend_id == DEFAULT_BACKEND_ID
         with parent_state._db.read_snapshot() as tx:
             (attempt_row,) = reads.all_attempts_for_tasks(tx, [mirrored.task_id])[mirrored.task_id]
             assert attempt_row.attempt_uid == peer_attempt.attempt_uid
             assert "~" not in attempt_row.attempt_uid
             assert reads.resolve_attempt_uids(tx, [AttemptUid(attempt_row.attempt_uid)]) == {}
+
+
+def test_first_federated_backend_observation_fills_every_retained_task_and_attempt(tmp_path, log_client):
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
+        response = parent_service.launch_job(_cluster_pinned_request("backend-adoption", replicas=2), None)
+        job_id = JobName.from_wire(response.job_id)
+        promote_queued_federation(manager, parent_state)
+        store = ControllerFederationStore(parent_state._db)
+        observed = Timestamp.from_ms(10)
+
+        def task(index: int, backend_id: str) -> SyncedTask:
+            task_id = job_id.task(index)
+            return SyncedTask(
+                task_id=task_id,
+                state=job_pb2.TASK_STATE_RUNNING,
+                error_message="",
+                exit_code=None,
+                submitted_at=observed,
+                started_at=observed,
+                finished_at=None,
+                current_attempt_id=0,
+                worker_address=f"worker-{index}:8080",
+                worker_label=f"worker-{index}",
+                status_message="",
+                backend_id=backend_id,
+                attempts=(
+                    SyncedAttempt(
+                        attempt_id=0,
+                        state=job_pb2.TASK_STATE_RUNNING,
+                        exit_code=None,
+                        error_message="",
+                        attempt_uid=f"attempt-{index}",
+                        started_at=observed,
+                        finished_at=None,
+                    ),
+                ),
+            )
+
+        def summary(backend_id: str) -> SyncedJob:
+            return SyncedJob(
+                job_id=job_id,
+                state=job_pb2.JOB_STATE_RUNNING,
+                error_message="",
+                exit_code=None,
+                submitted_at=observed,
+                started_at=observed,
+                finished_at=None,
+                task_count=2,
+                backend_id=backend_id,
+                resources=ResourceSpec(cpu=1, memory=1024**3),
+            )
+
+        store.apply_sync_batch(
+            "cw",
+            (FederationJobDelta(job_id, summary(""), (task(0, ""), task(1, "")), False),),
+            next_cursor="blank",
+            cursor_stale=False,
+        )
+        store.apply_sync_batch(
+            "cw",
+            (FederationJobDelta(job_id, summary(DEFAULT_BACKEND_ID), (task(0, DEFAULT_BACKEND_ID),), False),),
+            next_cursor="adopted",
+            cursor_stale=False,
+        )
+
+        assert query_job(parent_state, job_id).backend_id == DEFAULT_BACKEND_ID
+        retained_tasks = query_tasks_for_job(parent_state, job_id)
+        assert [row.backend_id for row in retained_tasks] == [DEFAULT_BACKEND_ID, DEFAULT_BACKEND_ID]
+        with parent_state._db.read_snapshot() as tx:
+            attempts = reads.all_attempts_for_tasks(tx, [row.task_id for row in retained_tasks])
+        assert {attempt.backend_id for rows in attempts.values() for attempt in rows} == {DEFAULT_BACKEND_ID}
+
+        before = [(row.task_id, row.state, row.backend_id) for row in retained_tasks]
+        with pytest.raises(ValueError, match="conflicting backend coordinates"):
+            store.apply_sync_batch(
+                "cw",
+                (FederationJobDelta(job_id, summary(DEFAULT_BACKEND_ID), (task(0, "other"),), False),),
+                next_cursor="conflict",
+                cursor_stale=False,
+            )
+        assert [(row.task_id, row.state, row.backend_id) for row in query_tasks_for_job(parent_state, job_id)] == before
+        assert store.read_cursor("cw") == "adopted"
 
 
 def _dispatch_building(peer_state, task_id: JobName, attempt_id: int, status_message: str | None) -> None:
@@ -436,7 +545,7 @@ def test_sync_mirrors_status_message_on_a_same_state_building_tick(tmp_path, log
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
 
         response = parent_service.launch_job(_cluster_pinned_request("fed-stuck"), None)
         job_id = JobName.from_wire(response.job_id)
@@ -445,6 +554,7 @@ def test_sync_mirrors_status_message_on_a_same_state_building_tick(tmp_path, log
         # Peer drives the task to BUILDING with no message, and the parent mirrors it.
         worker = register_worker(peer_state, "w1", "w1:8080", job_pb2.WorkerMetadata(hostname="w1"))
         (peer_task,) = query_tasks_for_job(peer_state, job_id)
+        _stamp_peer_backend(peer_state, job_id)
         assign_task(peer_state, peer_task, worker)
         (peer_task,) = query_tasks_for_job(peer_state, job_id)
         _dispatch_building(peer_state, peer_task.task_id, peer_task.current_attempt_id, None)
@@ -475,7 +585,7 @@ def test_sync_mirrors_submit_time_and_preemptions_faithfully(tmp_path, log_clien
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
 
         request = _cluster_pinned_request("fed-timing")
         request.max_retries_preemption = 1
@@ -495,6 +605,7 @@ def test_sync_mirrors_submit_time_and_preemptions_faithfully(tmp_path, log_clien
         # One preemption (worker failure with budget to retry), then success, on
         # the peer; the mirrored row carries the peer's real counter, not 0.
         worker = register_worker(peer_state, "w1", "w1:8080", job_pb2.WorkerMetadata(hostname="w1"))
+        _stamp_peer_backend(peer_state, job_id)
         dispatch_task(peer_state, peer_task, worker)
         transition_task(peer_state, peer_task.task_id, job_pb2.TASK_STATE_WORKER_FAILED)
         (peer_task,) = query_tasks_for_job(peer_state, job_id)
@@ -517,7 +628,7 @@ def test_dashboard_reads_expose_cluster_and_filter_by_it(tmp_path, log_client):
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
 
         fed = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
         local = parent_service.launch_job(make_direct_job_request("local-job", replicas=1), None)
@@ -569,7 +680,7 @@ def test_federated_pending_reason_distinguishes_queued_from_delivered(tmp_path, 
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _UnreachablePeerConnection(peer_service))
+        manager = _attach_federation(parent_service, parent_state, _UnreachablePeerConnection(peer_service))
 
         response = parent_service.launch_job(_cluster_pinned_request("awaiting-ack", replicas=3), None)
         job_id = JobName.from_wire(response.job_id)
@@ -615,10 +726,10 @@ def test_a_job_the_peer_has_no_room_for_waits_in_the_queue_unassigned(tmp_path, 
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
         connection = _FullGpuPeerConnection(peer_service)
-        manager = _attach_federation(parent_service, connection)
+        manager = _attach_federation(parent_service, parent_state, connection)
         # No local backend can host an H100 job, so the unpinned job classifies as QUEUE
         # (a locally feasible job would just run here).
-        parent_service._controller.provider.autoscaler = Mock(job_feasibility=Mock(return_value="no local GPU backend"))
+        parent_service._runtime.provider.autoscaler = Mock(job_feasibility=Mock(return_value="no local GPU backend"))
 
         request = make_direct_job_request("no-room", replicas=1)
         request.resources.device.CopyFrom(job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="h100", count=8)))
@@ -660,8 +771,8 @@ def test_a_peer_with_no_free_gpus_receives_only_work_that_outranks_the_holder(
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
         connection = _BatchOccupiedGpuPeerConnection(peer_service)
-        manager = _attach_federation(parent_service, connection)
-        parent_service._controller.provider.autoscaler = Mock(job_feasibility=Mock(return_value="no local GPU backend"))
+        manager = _attach_federation(parent_service, parent_state, connection)
+        parent_service._runtime.provider.autoscaler = Mock(job_feasibility=Mock(return_value="no local GPU backend"))
 
         request = make_direct_job_request("held-by-batch", replicas=1)
         request.priority_band = band
@@ -676,39 +787,11 @@ def test_a_peer_with_no_free_gpus_receives_only_work_that_outranks_the_holder(
         assert connection.launch_calls == launch_calls
 
 
-@pytest.mark.parametrize(
-    ("cluster", "handoff_state", "has_reported_tasks", "expected"),
-    [
-        # A local job is never a peer job, whatever the other inputs.
-        (LOCAL_CLUSTER, None, False, job_pb2.PEER_STATUS_NONE),
-        (LOCAL_CLUSTER, None, True, job_pb2.PEER_STATUS_NONE),
-        # Handed off, peer has not acked yet, nothing mirrored.
-        ("cw", int(HandoffState.PENDING_HANDOFF), False, job_pb2.PEER_STATUS_PENDING_SCHEDULING),
-        # Peer acked, but no task set mirrored back yet.
-        ("cw", int(HandoffState.HANDED_OFF), False, job_pb2.PEER_STATUS_ASSIGNED),
-        # Peer acked and its task set is mirrored.
-        ("cw", int(HandoffState.HANDED_OFF), True, job_pb2.PEER_STATUS_SYNCED),
-        # Mirrored tasks win over a stale PENDING_HANDOFF handle: the sync loop can
-        # mirror a job's state before a transient RPC failure lets mark_handed_off
-        # run, so tasks-present is the more current signal (never "awaiting peer").
-        ("cw", int(HandoffState.PENDING_HANDOFF), True, job_pb2.PEER_STATUS_SYNCED),
-        # Peer rejected the handoff (id collision); terminal.
-        ("cw", int(HandoffState.HANDOFF_REJECTED), False, job_pb2.PEER_STATUS_REJECTED),
-        # A missing handle (can't-happen for a live federated job) reads as handed off.
-        ("cw", None, False, job_pb2.PEER_STATUS_ASSIGNED),
-    ],
-)
-def test_peer_status_derivation(cluster, handoff_state, has_reported_tasks, expected):
-    """The full truth table of the PeerStatus derivation, including REJECTED and
-    the mirrored-tasks-beat-a-stale-PENDING_HANDOFF ordering."""
-    assert _peer_status(cluster, handoff_state, has_reported_tasks) == expected
-
-
 def test_cancel_routes_to_peer_and_tombstone_drops_the_handle(tmp_path, log_client):
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
 
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
         parent_job_id = JobName.from_wire(response.job_id)
@@ -733,7 +816,7 @@ def test_full_resync_drops_a_handle_absent_from_the_peers_active_set(tmp_path, l
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
 
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
         parent_job_id = JobName.from_wire(response.job_id)
@@ -760,7 +843,7 @@ def test_cancel_while_queued_is_never_promoted_or_delivered(tmp_path, log_client
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _peer_state = _make_service(stack, "peer", tmp_path, log_client)
         connection = _InProcessPeerConnection(peer_service)
-        manager = _attach_federation(parent_service, connection)
+        manager = _attach_federation(parent_service, parent_state, connection)
 
         # Submitting queues the job on the parent; nothing is delivered yet.
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
@@ -782,7 +865,7 @@ def test_a_queued_job_past_its_scheduling_deadline_fails_unschedulable(tmp_path,
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _peer_state = _make_service(stack, "peer", tmp_path, log_client)
         connection = _InProcessPeerConnection(peer_service)
-        manager = _attach_federation(parent_service, connection)
+        manager = _attach_federation(parent_service, parent_state, connection)
 
         # A queued handoff owns no task rows, so the task-level scheduling-timeout scan
         # never sees it; the tick's own expiry pass must fail it once its deadline lapses.
@@ -809,7 +892,7 @@ def test_a_queued_job_without_a_deadline_is_never_swept_as_expired(tmp_path, log
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
 
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
         parent_job_id = JobName.from_wire(response.job_id)
@@ -825,7 +908,7 @@ def test_redrive_of_a_handle_the_peer_already_has_is_idempotent(tmp_path, log_cl
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
         connection = _InProcessPeerConnection(peer_service)
-        manager = _attach_federation(parent_service, connection)
+        manager = _attach_federation(parent_service, parent_state, connection)
 
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
         parent_job_id = JobName.from_wire(response.job_id)
@@ -845,13 +928,13 @@ def test_redrive_of_a_handle_the_peer_already_has_is_idempotent(tmp_path, log_cl
         assert len(query_tasks_for_job(peer_state, parent_job_id)) == 1  # idempotent re-drive — no duplicate
 
 
-@pytest.mark.parametrize("code", [Code.PERMISSION_DENIED, Code.INVALID_ARGUMENT])
+@pytest.mark.parametrize("code", [PeerErrorCode.PERMISSION_DENIED, PeerErrorCode.INVALID_ARGUMENT])
 def test_a_handoff_the_peer_refuses_is_rejected_at_delivery_and_stops_the_redrive(code, tmp_path, log_client):
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _peer_state = _make_service(stack, "peer", tmp_path, log_client)
         connection = _RefusingPeerConnection(peer_service, code, "submitter not in allowlist")
-        manager = _attach_federation(parent_service, connection)
+        manager = _attach_federation(parent_service, parent_state, connection)
 
         # Submit queues the job (it no longer picks a peer synchronously), so the peer's
         # refusal is discovered at delivery, not at submit — the submission succeeds.
@@ -878,15 +961,15 @@ def test_a_refused_handoff_does_not_propagate_out_of_the_redrive(tmp_path, log_c
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        connection = _RefusingPeerConnection(peer_service, Code.UNAVAILABLE, "peer is booting")
-        manager = _attach_federation(parent_service, connection)
+        connection = _RefusingPeerConnection(peer_service, PeerErrorCode.UNAVAILABLE, "peer is booting")
+        manager = _attach_federation(parent_service, parent_state, connection)
 
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
         parent_job_id = JobName.from_wire(response.job_id)
         promote_queued_federation(manager, parent_state)  # promoted; a transient UNAVAILABLE leaves it pending
         assert _handle(parent_state, parent_job_id).handoff_state == int(HandoffState.PENDING_HANDOFF)
 
-        connection.code = Code.PERMISSION_DENIED
+        connection.code = PeerErrorCode.PERMISSION_DENIED
         manager.sync_once()
 
         assert _handle(parent_state, parent_job_id).handoff_state == int(HandoffState.HANDOFF_REJECTED)
@@ -900,8 +983,8 @@ def test_a_handoff_the_peer_could_not_authenticate_stays_pending(tmp_path, log_c
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        connection = _RefusingPeerConnection(peer_service, Code.UNAUTHENTICATED, "bad token")
-        manager = _attach_federation(parent_service, connection)
+        connection = _RefusingPeerConnection(peer_service, PeerErrorCode.UNAUTHENTICATED, "bad token")
+        manager = _attach_federation(parent_service, parent_state, connection)
 
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
         parent_job_id = JobName.from_wire(response.job_id)
@@ -911,6 +994,20 @@ def test_a_handoff_the_peer_could_not_authenticate_stays_pending(tmp_path, log_c
         manager.sync_once()
         assert connection.launch_calls == 2  # re-driven, still pending
         assert _handle(parent_state, parent_job_id).handoff_state == int(HandoffState.PENDING_HANDOFF)
+
+
+def test_federation_sync_with_present_empty_device_decodes_device_less_job():
+    response = controller_pb2.Controller.FederationSyncResponse(next_cursor="7")
+    delta = response.deltas.add(job_id=JobName.root(_USER, "cpu-job").to_wire())
+    delta.summary.state = job_pb2.JOB_STATE_RUNNING
+    delta.summary.resources.cpu_millicores = 8_000
+    delta.summary.resources.device.SetInParent()
+
+    batch = federation_batch_from_legacy(response)
+    summary = batch.deltas[0].summary
+
+    assert summary is not None
+    assert summary.resources == ResourceSpec(cpu=8.0)
 
 
 # ---------------------------------------------------------------------------
@@ -928,7 +1025,13 @@ def test_admit_persists_a_queued_handle_and_is_idempotent(tmp_path, log_client):
             peer_id="cw",
             owner_principal=_USER,
             submitting_user=_USER,
-            request=make_direct_job_request("fed-job", replicas=1, priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE),
+            spec=job_spec_from_legacy_request(
+                make_direct_job_request(
+                    "fed-job",
+                    replicas=1,
+                    priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+                )
+            ),
         )
 
         # Admission parks the job in the controller-side queue; the control tick promotes
@@ -992,7 +1095,7 @@ def test_resubmit_of_a_failed_federated_job_replaces_and_reruns_on_the_peer(tmp_
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
 
         # First incarnation: handed off, fails on the peer, failure mirrors back.
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
@@ -1079,7 +1182,7 @@ def test_routed_cancel_of_an_already_terminal_job_converges_the_parent(tmp_path,
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
 
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
         job_id = JobName.from_wire(response.job_id)
@@ -1112,7 +1215,7 @@ def test_recreation_after_a_tombstone_in_one_window_reports_state_not_tombstone(
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
 
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
         job_id = JobName.from_wire(response.job_id)
@@ -1140,7 +1243,7 @@ def test_incremental_sync_delivers_a_tombstone_and_drops_the_handle(tmp_path, lo
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
 
         response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
         parent_job_id = JobName.from_wire(response.job_id)
@@ -1158,7 +1261,7 @@ def test_incremental_sync_delivers_a_tombstone_and_drops_the_handle(tmp_path, lo
         assert query_job(parent_state, parent_job_id) is None
 
 
-def _spawn_child_on_peer(peer_service: ControllerServiceImpl, root: JobName, name: str) -> JobName:
+def _spawn_child_on_peer(peer_service: LegacyControllerService, root: JobName, name: str) -> JobName:
     """Submit ``name`` as a child of a received root, the way a coordinator job on
     the peer spawns its trainer sub-job against its own local controller."""
     request = make_direct_job_request(name, replicas=1)
@@ -1175,7 +1278,7 @@ def test_sync_mirrors_a_childs_resources_from_the_peer(tmp_path, log_client):
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
 
         response = parent_service.launch_job(_cluster_pinned_request("coord"), None)
         root = JobName.from_wire(response.job_id)
@@ -1203,7 +1306,7 @@ def test_full_resync_reports_the_whole_subtree_under_a_received_root(tmp_path, l
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
 
         response = parent_service.launch_job(_cluster_pinned_request("coord"), None)
         root = JobName.from_wire(response.job_id)

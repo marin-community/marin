@@ -3,14 +3,14 @@
 
 """Integration tests for priority bands, per-user fairness, and scheduling caps."""
 
-from iris.cluster.controller import reads
 from iris.cluster.controller.budget import (
     compute_user_spend,
 )
+from iris.cluster.controller.persistence import reads
 from iris.cluster.controller.scheduling.policy import (
     _sort_pending_tasks_by_resolved_band,
 )
-from iris.cluster.types import JobName
+from iris.resources.names import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.testing.controller import (
     make_controller_state,

@@ -31,7 +31,8 @@ from iac.iris.deploy import (
 )
 from iac.iris.service import IrisServiceArgs, _parse_outputs, code_hash, wire_spec
 from iac.iris.spec import ALWAYS_ON_RETRIES, ServiceSpec
-from iris.cluster.types import JobName, ResourceSpec, tpu_device
+from iris.resources.execution import ResourceSpec, tpu_device
+from iris.resources.names import JobName
 from iris.resources.state import JobState
 from iris.rpc import job_pb2
 
@@ -107,14 +108,14 @@ class TestResources:
         # what the committed stack declared.
         resources = ResourceSpec(cpu=180.0, memory="690GB", device=tpu_device("v6e-4"))
         spec = dataclasses.replace(_spec(), resources=wire_spec(_args(resources)).resources)
-        assert resources_from_spec(spec).to_proto() == resources.to_proto()
+        assert resources_from_spec(spec) == resources
 
     def test_cpu_only_round_trip(self):
         resources = ResourceSpec(cpu=4.0, memory="8GB")
         spec = dataclasses.replace(_spec(), resources=wire_spec(_args(resources)).resources)
         reconstructed = resources_from_spec(spec)
         assert reconstructed.device is None
-        assert reconstructed.to_proto() == resources.to_proto()
+        assert reconstructed == resources
 
 
 class _CapturingClient:

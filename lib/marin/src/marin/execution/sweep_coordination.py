@@ -32,7 +32,7 @@ from typing import Protocol
 from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
 from iris.client.client import iris_ctx
-from iris.cluster.client.job_info import get_job_info
+from iris.client.job_info import get_job_info
 
 logger = logging.getLogger(__name__)
 

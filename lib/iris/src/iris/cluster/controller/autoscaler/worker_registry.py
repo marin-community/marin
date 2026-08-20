@@ -8,13 +8,13 @@ from dataclasses import dataclass, field
 
 from rigging.timing import Duration
 
+from iris.backends.status import VmState, VmStatus
 from iris.cluster.platforms.types import (
     CloudWorkerState,
     CommandResult,
     RemoteWorkerHandle,
     WorkerStatus,
 )
-from iris.rpc import vm_pb2
 
 
 class _RestoredWorkerHandle:
@@ -113,7 +113,7 @@ class WorkerRegistry:
 
         self.workers.update(workers)
 
-    def vm_info(self, vm_id: str) -> vm_pb2.VmInfo | None:
+    def vm_status(self, vm_id: str) -> VmStatus | None:
         """Build VM status for a tracked worker."""
 
         tracked = self.workers.get(vm_id)
@@ -122,15 +122,15 @@ class WorkerRegistry:
 
         worker_status = tracked.handle.status()
         if worker_status.state == CloudWorkerState.RUNNING:
-            iris_state = vm_pb2.VM_STATE_READY
+            iris_state = VmState.READY
         elif worker_status.state == CloudWorkerState.STOPPED:
-            iris_state = vm_pb2.VM_STATE_FAILED
+            iris_state = VmState.FAILED
         elif worker_status.state == CloudWorkerState.TERMINATED:
-            iris_state = vm_pb2.VM_STATE_TERMINATED
+            iris_state = VmState.TERMINATED
         else:
-            iris_state = vm_pb2.VM_STATE_BOOTING
+            iris_state = VmState.BOOTING
 
-        return vm_pb2.VmInfo(
+        return VmStatus(
             vm_id=tracked.worker_id,
             state=iris_state,
             address=tracked.handle.internal_address,

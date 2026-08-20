@@ -150,11 +150,14 @@ Do this loop for one cluster. After a passed final gate, start the next cluster.
    build, pass `--prebuilt-tag <tag>`; the command requires amd64 and arm64
    manifests for both images and pins their resolved manifest digests before it
    stops the old controller.
-4. **Start the smoke.** `smoke --cluster <name>` submits one `echo hello world`
-   job at interactive priority and waits for it. Start it **as a background task,
-   right after the restart**, so the watch runs while it waits. A cluster with no
-   idle worker must scale one up first, and that dominates: on `marin-dev` (0
-   workers, TPU-backed) a smoke takes 15-20 minutes. In series it costs 20-25.
+4. **Start the smoke.** `smoke --cluster <name>` submits three minimal Jobs at
+   interactive priority. It waits for a successful Job and reads its Job and Task
+   logs, cancels a live Job and waits for both the durable action receipt and
+   `KILLED` state, then runs a follow-up Job to prove capacity is reusable. Start
+   it **as a background task, right after the restart**, so the watch runs while
+   it waits. A cluster with no idle worker must scale one up first, and that
+   dominates: on `marin-dev` (0 workers, TPU-backed) a smoke takes 15-20 minutes.
+   In series it costs 20-25.
 5. **Watch.** `verify --cluster <name> --baseline <name>-before.json` samples the
    controller every 30s for 5 minutes, then compares against the baseline. It
    fails on an unreachable controller, a tree hash that is not the one the
@@ -220,6 +223,9 @@ Rollback"). Never recreate the controller VM.
 - `iris cluster controller serve --dry-run` is not a pre-restart gate. It boots a
   local controller that serves until killed, for interactive state inspection.
   The unit suite and CI on the tree are the gate.
+- `smoke-local` runs the same resource lifecycle checks on an in-process scratch
+  cluster. It validates the script before a rollout; it does not replace the
+  post-restart smoke on each deployed cluster.
 - CoreWeave controllers restart over the Kubernetes API and need no SSH. The
   kubeconfig is `~/.kube/coreweave-iris`, with the context pinned per cluster
   config.

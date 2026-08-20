@@ -13,8 +13,8 @@ from typing import List, Optional, Union
 import jax
 from jax._src import clusters
 from iris.client.client import IrisClient, iris_ctx
-from iris.cluster.client.job_info import get_job_info
-from iris.cluster.types import JobName
+from iris.client.job_info import get_job_info
+from iris.resources.names import JobName
 from iris.runtime.jax_init import initialize_jax as initialize_iris_jax
 
 from levanter.megascale import configure_megascale_from_iris

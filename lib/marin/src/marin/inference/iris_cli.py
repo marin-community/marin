@@ -45,17 +45,22 @@ from pathlib import Path
 import click
 import requests
 from click.core import ParameterSource
-from fray.iris_backend import convert_constraints, convert_resources
 from fray.types import ANY_REGION, ResourceConfig, create_environment
 from iris.cli.connect import connect_controller
 from iris.cli.job import build_tpu_alternatives, parse_gpu_spec
-from iris.client.client import IrisClient, Job
-from iris.cluster.tpu_topology import get_tpu_topology
-from iris.cluster.types import (
-    Entrypoint,
-    EnvironmentSpec,
-    is_job_finished,
+from iris.client import IrisClient, Job
+from iris.cluster.constraints import (
+    CLUSTER_CONSTRAINT_KEY,
+    Constraint,
+    ConstraintOp,
+    device_variant_constraint,
+    preemptible_constraint,
+    region_constraint,
+    validate_tpu_request,
 )
+from iris.cluster.tpu_topology import get_tpu_topology
+from iris.resources.execution import Device, Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device, tpu_device
+from iris.resources.state import is_job_finished
 from rigging.config_discovery import find_project_root
 from rigging.connect import capability_path, proxy_path
 from rigging.timing import Duration
@@ -113,6 +118,7 @@ class ServingPlan:
     """How to serve on this slice: which backend, on what device, in which worker environment."""
 
     engine: VllmEngineConfig | LevanterEngineConfig
+    device: Device
     worker_extras: tuple[str, ...]
     tpu_types: tuple[str, ...] = ()
     gpu_type: str | None = None
@@ -152,23 +158,22 @@ def _resolve_serving_plan(
             gpu_type, gpu_count = parse_gpu_spec(gpu)
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
+        device = gpu_device(gpu_type, gpu_count)
         if backend == "levanter":
-            return ServingPlan(levanter, (*_LEVANTER_GPU_EXTRAS, *extras), gpu_type=gpu_type, gpu_count=gpu_count)
+            return ServingPlan(
+                levanter, device, (*_LEVANTER_GPU_EXTRAS, *extras), gpu_type=gpu_type, gpu_count=gpu_count
+            )
         # Provision CUDA vLLM in an isolated uv-tool env unless the operator brought a prebuilt
         # --task-image, which is expected to ship its own vLLM on PATH.
         if task_image is None:
             source = vllm_source
             version = cuda_vllm_version if source is VllmSource.UPSTREAM else None
             vllm = replace(vllm, launcher=VllmLauncherType.CUDA, source=source, version=version)
-        return ServingPlan(vllm, (*_GPU_WORKER_EXTRAS, *extras), gpu_type=gpu_type, gpu_count=gpu_count)
+        return ServingPlan(vllm, device, (*_GPU_WORKER_EXTRAS, *extras), gpu_type=gpu_type, gpu_count=gpu_count)
 
     tpu_types = tuple(build_tpu_alternatives(tpu))
     if not tpu_types:
         raise click.ClickException("--tpu must specify at least one TPU variant.")
-    try:
-        ResourceConfig.with_tpu(tpu_types)
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
     for tpu_type in tpu_types:
         topology = get_tpu_topology(tpu_type)
         if topology.vm_count != 1:
@@ -176,16 +181,19 @@ def _resolve_serving_plan(
                 f"{tpu_type!r} is a multi-host slice (vm_count={topology.vm_count}); marin-serve iris supports "
                 f"single-host slices only (e.g. v6e-8, v5litepod-8)."
             )
+    device = tpu_device(tpu_types[0])
+    validation_error = validate_tpu_request(
+        ResourceSpec(device=device),
+        (device_variant_constraint(tpu_types),),
+    )
+    if validation_error:
+        raise click.ClickException(validation_error)
     if backend == "levanter":
-        return ServingPlan(
-            levanter,
-            (*_LEVANTER_TPU_EXTRAS, *extras),
-            tpu_types=tpu_types,
-        )
+        return ServingPlan(levanter, device, (*_LEVANTER_TPU_EXTRAS, *extras), tpu_types=tpu_types)
     # The forked TPU vLLM always runs from an isolated uvx env (it is not in the workspace lock),
     # so the worker venv only needs the `tpu` extra for the serving glue's jax/libtpu.
     vllm = replace(vllm, launcher=VllmLauncherType.TPU)
-    return ServingPlan(vllm, ("tpu", *extras), tpu_types=tpu_types)
+    return ServingPlan(vllm, device, ("tpu", *extras), tpu_types=tpu_types)
 
 
 def _default_job_name(model: str) -> str:
@@ -238,7 +246,7 @@ def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout
             )
         # The registry probe is the authenticated path to readiness; the controller
         # proxy itself is auth-gated and not pollable with a plain HTTP client.
-        endpoints = client.list_endpoint_instances(endpoint_name)
+        endpoints = client.resolve_endpoints(endpoint_name)
         if endpoints:
             return endpoints[0].address
         time.sleep(_ENDPOINT_READY_POLL_SECONDS)
@@ -259,8 +267,12 @@ def _mint_and_print_capability_url(
     authorizes only this endpoint and expires after ``ttl_hours`` (clamped to the
     controller's maximum).
     """
-    resp = client.mint_endpoint_token(endpoint, ttl=Duration.from_hours(ttl_hours))
-    hours_left = max(0.0, (resp.expires_at.epoch_ms - int(time.time() * 1000)) / 3_600_000)
+    endpoints = client.resolve_endpoints(endpoint)
+    if not endpoints:
+        raise click.ClickException(f"Endpoint {endpoint!r} is not registered")
+    resp = client.mint_endpoint_token(endpoints[0].summary.key, ttl=Duration.from_hours(ttl_hours))
+    expires_at_ms = int(resp.expires_at.epoch_seconds() * 1_000)
+    hours_left = max(0.0, (expires_at_ms - int(time.time() * 1000)) / 3_600_000)
     # The controller assembles the origin (a cluster-tagged parent URL when it has a
     # public parent, else its local origin); fall back to a passed dashboard origin.
     origin_url = resp.capability_url or (
@@ -295,10 +307,7 @@ def _mint_and_print_capability_url(
 @click.option(
     "--tpu",
     default="v6e-8",
-    help=(
-        "Single-host TPU slice type. Pass compatible comma-separated variants "
-        "(e.g. v6e-8,v5litepod-8) to use whichever has capacity."
-    ),
+    help="Single-host TPU slice type; comma-separated compatible variants use whichever has capacity.",
 )
 @click.option(
     "--gpu",
@@ -554,27 +563,20 @@ def main(
     else:
         environment = EnvironmentSpec(extras=() if brokered else plan.worker_extras)
 
+    constraints: list[Constraint] = []
     # Broker workers carry their own device constraints. Leaving the lightweight broker job
     # region-free prevents Iris from implicitly pinning its child workers to a region that may not
     # have the requested accelerator slice. Direct serves still place the server in --region.
-    submission_regions = None
     if region and not brokered:
-        submission_regions = [r.strip() for r in region.split(",") if r.strip()] or None
+        regions = [r.strip() for r in region.split(",") if r.strip()]
+        if regions:
+            constraints.append(region_constraint(regions))
+    if target_cluster:
+        constraints.append(Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=target_cluster))
+    if not brokered and len(plan.tpu_types) > 1:
+        constraints.append(device_variant_constraint(plan.tpu_types))
     if brokered:
-        submission_resources = ResourceConfig.with_cpu(
-            cpu=2,
-            ram="8g",
-            disk="20g",
-            preemptible=False,
-            target_cluster=target_cluster,
-        )
-    else:
-        submission_resources = replace(
-            worker_resources,
-            regions=submission_regions,
-            target_cluster=target_cluster,
-        )
-    constraints = convert_constraints(submission_resources)
+        constraints.append(preemptible_constraint(False))
 
     endpoint_cluster = cluster if controller is None else None
     with connect_controller(cluster_name=endpoint_cluster, controller_url=controller) as endpoint_info:
@@ -585,7 +587,11 @@ def main(
             job = client.submit(
                 entrypoint=Entrypoint.from_callable(run_iris_service, service),
                 name=job_name,
-                resources=convert_resources(submission_resources),
+                resources=(
+                    ResourceSpec(cpu=2, memory="8g", disk="20g")
+                    if brokered
+                    else ResourceSpec(cpu=cpu, memory=memory, disk=disk, device=plan.device)
+                ),
                 environment=environment,
                 ports=["http"],
                 constraints=constraints or None,

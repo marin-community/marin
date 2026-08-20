@@ -16,18 +16,24 @@ from datetime import date
 import pytest
 from finelog.rpc import logging_pb2
 from iris.cluster.constraints import DeviceType, WellKnownAttribute
-from iris.cluster.controller import ops, reads, writes
-from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.ops.task import Assignment, finalize
-from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointQuery, EndpointRow
-from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
-from iris.cluster.controller.pruner import PruneResult, prune_old_data
-from iris.cluster.controller.reads import WorkerResourceUsage
+from iris.cluster.controller.persistence import operations as ops
+from iris.cluster.controller.persistence import reads, writes
+from iris.cluster.controller.persistence.json_codec import (
+    constraints_from_json,
+    device_counts_from_json,
+    device_variant_from_json,
+)
+from iris.cluster.controller.persistence.operations.task import finalize
+from iris.cluster.controller.persistence.projections.endpoints import AddEndpointOutcome, EndpointQuery, EndpointRow
+from iris.cluster.controller.persistence.projections.run_templates import RunTemplatesProjection
+from iris.cluster.controller.persistence.pruning import PruneResult, prune_old_data
+from iris.cluster.controller.persistence.reads import WorkerResourceUsage
 
 # =============================================================================
 # Test Helpers
 # =============================================================================
-from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.persistence.reconcile import dispatch
+from iris.cluster.controller.persistence.schema import jobs_table, slices_table, task_attempts_table, tasks_table
 from iris.cluster.controller.reconcile.effects import JobRowDelta
 from iris.cluster.controller.reconcile.job import recompute_state
 from iris.cluster.controller.reconcile.overlay import Overlay
@@ -41,6 +47,7 @@ from iris.cluster.controller.reconcile.snapshot import (
     pick_earliest_task_error,
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
+from iris.cluster.controller.scheduling.decision import Assignment
 from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
 from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
@@ -49,9 +56,16 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.schema import jobs_table, slices_table, task_attempts_table, tasks_table
 from iris.cluster.log_keys import task_log_key
-from iris.cluster.types import TERMINAL_TASK_STATES, JobName, TaskAttempt, UserBudgetDefaults, WorkerId
+from iris.cluster.types import (
+    UserBudgetDefaults,
+)
+from iris.resources.names import (
+    JobName,
+    TaskAttempt,
+    WorkerId,
+)
+from iris.resources.state import TERMINAL_TASK_STATES
 from iris.rpc import controller_pb2, job_pb2
 from iris.test_util import FakeStatsTable
 from iris.testing.controller import (
@@ -3445,7 +3459,7 @@ def test_drain_pending_creates_attempt_rows(state):
         batch = dispatch.drain_for_dispatch(cur)
 
     assert len(batch.tasks_to_run) == 1
-    assert batch.tasks_to_run[0].task_id == task_id.to_wire()
+    assert batch.tasks_to_run[0].task_id == task_id
     assert batch.tasks_to_run[0].attempt_id == 0
     assert _task_state_direct(state, task_id) == job_pb2.TASK_STATE_ASSIGNED
 
@@ -3490,7 +3504,7 @@ def test_drain_redrives_assigned_until_executing(state):
     with state._db.transaction() as cur:
         batch2 = dispatch.drain_for_dispatch(cur)
     assert len(batch2.tasks_to_run) == 1
-    assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
+    assert batch2.tasks_to_run[0].task_id == task_id
     assert batch2.tasks_to_run[0].attempt_id == 0
     assert [(e.task_id, e.attempt_id) for e in batch2.running_tasks] == [(task_id, 0)]
 

@@ -35,7 +35,7 @@ from iris.cluster.constraints import (
     backend_directive,
     is_cpu_device_type_constraint,
 )
-from iris.cluster.types import JobName
+from iris.resources.names import JobName
 
 logger = logging.getLogger(__name__)
 

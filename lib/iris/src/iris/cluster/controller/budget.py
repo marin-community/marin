@@ -12,11 +12,11 @@ from typing import Generic, TypeVar
 from rigging.timing import Timestamp
 
 from iris.cluster.config import UserBudgetTier
-from iris.cluster.controller import reads, writes
-from iris.cluster.controller.codec import device_counts_from_json
-from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.persistence import reads, writes
+from iris.cluster.controller.persistence.database import ControllerDB, Tx
+from iris.cluster.controller.persistence.json_codec import device_counts_from_json
 from iris.cluster.types import UserBudgetDefaults
-from iris.rpc import job_pb2
+from iris.resources.state import PriorityBand
 
 logger = logging.getLogger(__name__)
 
@@ -76,13 +76,13 @@ def compute_effective_band(
     row fall back to ``defaults.budget_limit``; a limit of 0 means unlimited.
 
     ``task_band`` is a real band: ``LaunchJob`` resolves INHERIT once at ingestion (see
-    :func:`iris.cluster.controller.ops.job.resolve_priority_band`).
+    :func:`iris.cluster.controller.persistence.operations.job.resolve_priority_band`).
     """
-    if task_band == job_pb2.PRIORITY_BAND_PRODUCTION:
+    if task_band == PriorityBand.PRODUCTION:
         return task_band
     limit = user_budgets.get(user_id, defaults.budget_limit)
     if limit > 0 and user_spend.get(user_id, 0) > limit:
-        return max(task_band, job_pb2.PRIORITY_BAND_BATCH)
+        return max(task_band, PriorityBand.BATCH)
     return task_band
 
 
@@ -125,9 +125,9 @@ def interleave_by_user(
 # silently granting BATCH; callers must pick a real band.
 _VALID_TIER_BANDS = frozenset(
     (
-        job_pb2.PRIORITY_BAND_PRODUCTION,
-        job_pb2.PRIORITY_BAND_INTERACTIVE,
-        job_pb2.PRIORITY_BAND_BATCH,
+        PriorityBand.PRODUCTION,
+        PriorityBand.INTERACTIVE,
+        PriorityBand.BATCH,
     )
 )
 

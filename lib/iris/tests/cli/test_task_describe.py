@@ -7,8 +7,8 @@ from typing import cast
 
 from iris.cli.task import attempt_status, render_attempt_detail_text, render_task_description_text
 from iris.client import IrisClient
-from iris.cluster.client import ClusterClient
-from iris.cluster.types import JobName
+from iris.cluster.client.protocol import ClusterClient
+from iris.resources.names import JobName
 from iris.rpc import controller_pb2, job_pb2
 
 _INIT_FAILURE = "Init:Error stage-workdir: Bundle fetch abc failed: HTTP Error 404"

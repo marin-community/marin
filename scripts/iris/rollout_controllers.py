@@ -27,13 +27,14 @@ import click
 import yaml
 from iris.cli.build import get_git_sha
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, connect_controller, rpc_client
-from iris.client.client import IrisClient
-from iris.client.workload import JobStatus
+from iris.client import IrisClient, LocalClientConfig
 from iris.cluster.config import IrisClusterConfig, load_config
-from iris.cluster.provenance import provenance_from_proto
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
-from iris.resources.state import JobState
+from iris.cluster.local_cluster import LocalCluster, make_local_cluster_config
+from iris.resources.job import JobQuery
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.resource_client import ResourceRpcClient
+from iris.rpc.worker_codec import provenance_from_proto
+from iris.testing.rollout_smoke import SmokeSuiteResult, run_smoke_suite
 from rigging.config_discovery import list_cluster_configs, resolve_cluster_config
 from rigging.filesystem.cluster_config import StoreType, store_config
 from rigging.provenance import Provenance
@@ -62,13 +63,6 @@ PROBE_TIMEOUT = 30.0
 # unset. A cluster config may name a context without a file and still deploy.
 DEFAULT_KUBECONFIG = "~/.kube/config"
 
-# `iris job run` defaults. A smoke job asks for nothing more than a real user job's
-# floor, so it schedules on any cluster without competing with real work.
-SMOKE_CPU = 0.1
-SMOKE_MEMORY = "1GB"
-SMOKE_DISK = "5GB"
-SMOKE_COMMAND = ("bash", "-c", "echo hello world")
-
 # A cluster with no idle worker must scale one up before the smoke job can run. On
 # marin-dev, which sits at 0 workers and is TPU-backed, that takes 15-20 minutes, so
 # the wait covers a scale-up rather than only the dispatch of an already-idle worker.
@@ -93,9 +87,9 @@ JOB_PENDING = "pending"
 JOB_BUILDING = "building"
 
 WATCHED_JOB_STATES = (
-    (JOB_RUNNING, JobState.RUNNING),
-    (JOB_PENDING, JobState.PENDING),
-    (JOB_BUILDING, JobState.BUILDING),
+    (JOB_RUNNING, job_pb2.JOB_STATE_RUNNING),
+    (JOB_PENDING, job_pb2.JOB_STATE_PENDING),
+    (JOB_BUILDING, job_pb2.JOB_STATE_BUILDING),
 )
 
 
@@ -626,7 +620,8 @@ def take_snapshot(cluster: str) -> Snapshot:
                 provenance = provenance_from_proto(info.provenance)
             with IrisClient.remote(endpoint.url, credentials=endpoint.credentials) as iris:
                 jobs = {
-                    name: len(iris.list_jobs(state=state, limit=JOB_COUNT_LIMIT)) for name, state in WATCHED_JOB_STATES
+                    name: len(iris.list_jobs(JobQuery(states=frozenset({state}), page_size=JOB_COUNT_LIMIT)).items)
+                    for name, state in WATCHED_JOB_STATES
                 }
         return Snapshot(
             cluster=cluster,
@@ -643,32 +638,17 @@ def take_snapshot(cluster: str) -> Snapshot:
         return Snapshot(cluster=cluster, captured_at=_now(), reachable=False, error=f"{type(exc).__name__}: {exc}")
 
 
-def run_smoke_job(cluster: str, *, workspace: Path, timeout: float) -> JobStatus:
-    """Submit one throwaway `echo hello world` job and wait for it to finish.
-
-    ``setup_scripts=[]`` skips the default workspace ``uv sync`` so the job tests
-    the control plane (submit, schedule, dispatch, container start, logs) instead
-    of the Python environment build.
-
-    On a cluster with no idle worker the job waits for an autoscaler scale-up, which
-    dominates the runtime. Submit it as early as the rollout permits.
-    """
-    name = f"deploy-smoke-{int(time.time())}"
+def run_smoke_suite_on_cluster(cluster: str, *, timeout: float) -> SmokeSuiteResult:
+    """Connect to one configured cluster and run the rollout smoke suite."""
     with connect_controller(cluster_name=cluster) as endpoint:
-        with IrisClient.remote(endpoint.url, credentials=endpoint.credentials, workspace=workspace) as client:
-            job = client.submit(
-                entrypoint=Entrypoint.from_command(*SMOKE_COMMAND),
-                name=name,
-                resources=ResourceSpec(cpu=SMOKE_CPU, memory=SMOKE_MEMORY, disk=SMOKE_DISK),
-                environment=EnvironmentSpec(setup_scripts=[]),
-                priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
-            )
-            click.echo(f"Submitted {job.job_id}")
-            click.echo(f"Waiting up to {timeout:.0f}s — a cluster at 0 workers must scale one up first.")
-            status = job.wait(timeout=timeout, poll_interval=10, raise_on_failure=False)
-            for entry in job.logs(max_lines=20):
-                click.echo(f"  {entry.data.rstrip()}")
-            return status
+        # These are command-only Jobs with no setup scripts or Python entrypoint.
+        # Supplying a workspace would upload the whole checkout before the first
+        # submit without changing what the smoke executes.
+        with (
+            IrisClient.remote(endpoint.url, credentials=endpoint.credentials) as client,
+            ResourceRpcClient(endpoint.url, interceptors=endpoint.credentials.interceptors()) as resources,
+        ):
+            return run_smoke_suite(client, resources, timeout=timeout, progress=click.echo)
 
 
 @functools.cache
@@ -823,20 +803,25 @@ def verify(cluster: str, baseline: Path, duration: int, interval: int, expect_tr
 @cli.command("smoke")
 @click.option("--cluster", required=True, help="Cluster to run the smoke job on.")
 @click.option("--timeout", default=SMOKE_TIMEOUT, show_default=True, help="Seconds to wait for the job to finish.")
-@click.option(
-    "--workspace",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-    default=Path.cwd(),
-    show_default="current directory",
-    help="Workspace root to bundle for the job.",
-)
-def smoke(cluster: str, timeout: int, workspace: Path) -> None:
-    """Run one `echo hello world` job end to end through the restarted controller."""
-    status = run_smoke_job(cluster, workspace=workspace, timeout=timeout)
-    state = status.state.name
-    click.echo(f"Smoke job finished: {state}")
-    if status.state is not JobState.SUCCEEDED:
-        raise click.ClickException(f"Smoke job ended {state}: {status.error_message or 'no error text'}")
+def smoke(cluster: str, timeout: int) -> None:
+    """Run the resource lifecycle smoke suite through one configured cluster."""
+    result = run_smoke_suite_on_cluster(cluster, timeout=timeout)
+    click.echo(f"Smoke suite passed: {result.summary()}")
+
+
+@cli.command("smoke-local")
+@click.option("--timeout", default=120, show_default=True, help="Seconds to wait for each Job.")
+def smoke_local(timeout: int) -> None:
+    """Run the resource lifecycle smoke suite on a scratch local cluster."""
+    config = LocalClientConfig(max_workers=1)
+    cluster = LocalCluster(make_local_cluster_config(config.max_workers))
+    address = cluster.start()
+    try:
+        with IrisClient.remote(address) as client, ResourceRpcClient(address) as resources:
+            result = run_smoke_suite(client, resources, timeout=timeout, progress=click.echo)
+    finally:
+        cluster.close()
+    click.echo(f"Local smoke suite passed: {result.summary()}")
 
 
 def main() -> None:

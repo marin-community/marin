@@ -33,6 +33,7 @@ from iris.cli.build import (
     DEFAULT_CARGO_PROFILE,
     _image_repository,
     _versioned_tag,
+    build_dashboard_assets,
     build_image,
     find_marin_root,
     get_git_provenance,
@@ -48,7 +49,6 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     build_worker_config_for_group,
     prepare_slice_config,
 )
-from iris.cluster.controller.dashboard import ProxyControllerDashboard
 from iris.cluster.controller.main import controller_serve_options, run_controller_serve
 from iris.cluster.controller.rollout import (
     ROLLOUT_RECORD_FILENAME,
@@ -64,9 +64,11 @@ from iris.cluster.platforms.factory import ProviderBundle
 from iris.cluster.platforms.gcp.worker_bootstrap import build_worker_bootstrap_script
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.types import Labels
-from iris.cluster.provenance import is_same_image_provenance, provenance_from_proto
+from iris.cluster.provenance import is_same_image_provenance
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
+from iris.rpc.dashboard import ProxyControllerDashboard
 from iris.rpc.proto_display import format_accelerator_display, vm_state_name
+from iris.rpc.worker_codec import provenance_from_proto
 from iris.time_proto import timestamp_from_proto
 
 AMD64_IMAGE_PLATFORM = "linux/amd64"
@@ -701,11 +703,7 @@ def cluster_start(ctx, local: bool, fresh: bool, task_image_platforms: str | Non
             cluster = LocalCluster(config)
             address = cluster.start()
             click.echo(f"Controller started at {address}")
-            token = cluster.auto_login_token
-            if token:
-                click.echo(f"Dashboard: {address}?session_token={token}")
-            else:
-                click.echo(f"Dashboard: {address}")
+            click.echo(f"Dashboard: {address}")
             click.echo("\nController is running with integrated autoscaler.")
             click.echo("Press Ctrl+C to stop.")
             if threading.current_thread() is threading.main_thread():
@@ -1171,6 +1169,10 @@ def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for controller serve")
+
+    dashboard_dir = VUE_DIST_DIR.parent
+    if dry_run and (dashboard_dir / "package.json").is_file():
+        build_dashboard_assets(dashboard_dir)
 
     run_controller_serve(
         config,

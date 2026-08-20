@@ -36,7 +36,7 @@ from iris.client.workload import (
 )
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.stats.tables import TASK_EVENT_NAMESPACE
-from iris.cluster.types import JobName, TaskAttempt
+from iris.resources.names import JobName, TaskAttempt
 from iris.resources.state import TERMINAL_TASK_STATES, TaskState
 from iris.rpc import controller_pb2
 from iris.rpc.proto_display import signal_name
@@ -86,7 +86,7 @@ def attempt_status(description: TaskDescription, attempt_number: int) -> Attempt
 
 def render_task_description_text(description: TaskDescription) -> str:
     status = description.status
-    state_line = f"State: {status.state.value}"
+    state_line = f"State: {status.state.name.lower()}"
     if status.state in TERMINAL_TASK_STATES:
         state_line += f"  exit={_format_exit(status.exit_code)}"
     if status.backend_id:
@@ -114,7 +114,7 @@ def render_task_description_text(description: TaskDescription) -> str:
         [
             attempt.attempt_number,
             attempt.attempt_uid[:12],
-            attempt.state.value + (" (worker)" if attempt.is_worker_failure else ""),
+            attempt.state.name.lower() + (" (worker)" if attempt.is_worker_failure else ""),
             "-" if attempt.state not in TERMINAL_TASK_STATES else _format_exit(attempt.exit_code),
             attempt.worker_id or "-",
             _truncate(attempt.terminal_reason or attempt.error_message, 60),
@@ -134,7 +134,7 @@ def render_attempt_detail_text(description: TaskDescription, attempt: AttemptSta
     header = f"Attempt: {description.status.task_id}:{attempt.attempt_number}"
     if is_current:
         header += "  (current)"
-    state_line = f"State: {attempt.state.value}"
+    state_line = f"State: {attempt.state.name.lower()}"
     if attempt.is_worker_failure:
         state_line += "  (worker failure)"
     if attempt.state in TERMINAL_TASK_STATES:
@@ -352,7 +352,7 @@ def task_list(ctx: click.Context, job_id: str) -> None:
     rows = [
         [
             status.task_id.require_task()[1],
-            status.state.value,
+            status.state.name.lower(),
             status.backend_id or "-",
             status.current_attempt_number if status.attempts else "-",
             status.status_message or status.error_message,
@@ -404,7 +404,7 @@ def task_wait(ctx: click.Context, task_id: str) -> None:
         raise click.UsageError("task wait accepts a Task ID; use `iris attempt wait` for one Attempt")
     with iris_client_for_ctx(ctx, workspace=None) as client:
         status = client.task(target.task_id).wait(timeout=float("inf"))
-    click.echo(status.state.value)
+    click.echo(status.state.name.lower())
     if status.state is not TaskState.SUCCEEDED:
         raise SystemExit(1)
 

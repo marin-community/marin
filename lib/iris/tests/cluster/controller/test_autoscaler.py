@@ -32,7 +32,10 @@ from iris.cluster.platforms.types import (
     RemoteWorkerHandle,
     SliceStatus,
 )
-from iris.cluster.types import AcceleratorType, WorkerStatus
+from iris.cluster.types import (
+    AcceleratorType,
+    WorkerStatus,
+)
 from iris.rpc import vm_pb2
 from iris.testing.backends import (
     FakeSliceHandle,
@@ -678,7 +681,7 @@ class TestAutoscalerStatusReporting:
         autoscaler.evaluate(make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8"))
         status = autoscaler.get_status()
 
-        assert status.HasField("last_routing_decision")
+        assert status.last_routing_decision is not None
         assert "test-group" in status.last_routing_decision.routed_entries
 
 
@@ -889,7 +892,8 @@ class TestAutoscalerActionLogging:
         assert status.current_demand["test-group"] == 1
         assert len(status.recent_actions) >= 1
         assert status.recent_actions[0].action_type == "scale_up"
-        assert status.last_evaluation.epoch_ms > 0
+        assert status.last_evaluation is not None
+        assert status.last_evaluation.epoch_ms() > 0
         assert status.groups[0].availability_status != ""
 
     def test_action_log_includes_timestamp(self, empty_autoscaler: Autoscaler):
@@ -901,7 +905,8 @@ class TestAutoscalerActionLogging:
 
         status = empty_autoscaler.get_status()
         action = status.recent_actions[0]
-        assert before <= action.timestamp.epoch_ms <= after
+        assert action.timestamp is not None
+        assert before <= action.timestamp.epoch_ms() <= after
 
 
 class TestScalingGroupRequestingState:
