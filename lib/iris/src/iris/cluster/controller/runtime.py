@@ -685,14 +685,7 @@ class ControllerRuntime:
     # =========================================================================
 
     def _run_control_loop(self, stop_event: threading.Event) -> None:
-        """Single driver: schedule -> reconcile -> autoscale as phases of one tick.
-
-        Each iteration builds one read snapshot, runs the phases that are due (or,
-        on a wake, a schedule-only mini-tick), folds backend-observed health, and
-        commits through a single end-of-tick write transaction. Wakes every
-        ``poll_interval`` (the reconcile cadence) or sooner on a submit/wake, so
-        the per-phase cadences match the legacy three-loop structure.
-        """
+        """Run scheduled, reconciliation, and autoscaling ticks until stopped."""
         base_interval = self._config.poll_interval.to_seconds()
         schedule_limiter = RateLimiter(interval_seconds=self._config.scheduler_min_interval.to_seconds())
         reconcile_limiter = RateLimiter(interval_seconds=self._config.poll_interval.to_seconds())
@@ -721,18 +714,7 @@ class ControllerRuntime:
         autoscale_limiter: RateLimiter,
         force_timeout_scan: bool = False,
     ) -> None:
-        """Run one control tick: one read snapshot, due phases per backend, one write txn.
-
-        Phase order is schedule -> reconcile -> autoscale. The controller routes
-        pending tasks to each backend (by ``backend_id``) and threads the per-user
-        budget; each backend sources its own workers and runs its
-        ``schedule``/``reconcile``/``autoscale`` over them, and the per-backend
-        results merge into one end-of-tick write transaction. With a single backend
-        every job routes to it, so behavior matches the single-backend path exactly.
-        A wake runs a schedule-only mini-tick; autoscale always pairs with
-        a fresh schedule so it provisions against this tick's residual demand.
-        Execution-timeout finalization and health-driven teardown stay global.
-        """
+        """Apply the phases due in one control tick."""
         now = Timestamp.now()
 
         # Dry-run: the schedule phase computes and logs intended assignments but
@@ -840,14 +822,7 @@ class ControllerRuntime:
         run_reconcile: bool,
         scan_timeouts: bool,
     ) -> _TickInputs:
-        """Assemble the due phases' controller-owned inputs.
-
-        A placement-owning (``CLUSTER_VIEW``) backend's reconcile request comes
-        from its own dispatch drain (a write), built first. The controller then
-        reads only its own state in one read snapshot — the routing inputs
-        (pending tasks + budgets) for scheduling and the execution-timeout rows;
-        each backend reads its own workers, so nothing here is partitioned.
-        """
+        """Read the controller-owned inputs for the phases due this tick."""
         inputs = _TickInputs()
 
         # Placement-owning backends each drain their own pending dispatch first.

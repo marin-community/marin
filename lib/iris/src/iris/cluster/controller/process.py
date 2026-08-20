@@ -190,6 +190,7 @@ class ControllerProcess:
             return
         self.begin_shutdown()
         self._stopped = True
+        self._endpoint_registry.unsubscribe_proxy_updates(self._publish_native_proxy_update)
         if self._native_proxy_metrics is not None and self._native_proxy is not None:
             uninstall_native_proxy_metrics(self._native_proxy)
             self._native_proxy_metrics = None
@@ -206,7 +207,7 @@ class ControllerProcess:
         self._dashboard.begin_shutdown()
 
     def _publish_native_proxy_update(self, update: ProxyMappingDelta | ProxyRegistryReset) -> None:
-        if self._native_proxy is None:
+        if self._stopped or self._native_proxy is None:
             return
         if isinstance(update, ProxyRegistryReset):
             self._recover_native_proxy_registry()

@@ -111,7 +111,6 @@ def tpu_device(variant: str, count: int | None = None) -> TpuDevice:
 
 
 def gpu_device(variant: str, count: int = 1) -> GpuDevice:
-    """Create a GPU device."""
     return GpuDevice(variant=variant, count=count)
 
 

@@ -20,7 +20,6 @@ from iris.cluster.controller.pagination import (
     _stored_cluster,
 )
 from iris.cluster.controller.persistence import reads
-from iris.cluster.controller.persistence.database import Tx
 from iris.cluster.controller.resource_identity import (
     _authority_cluster,
     _execution_cluster,
@@ -114,7 +113,7 @@ class TaskResources:
                 (row.task_id, int(row.current_attempt_id)) for row in page_rows if int(row.current_attempt_id) >= 0
             ]
             current_attempts = reads.bulk_get_attempts(tx, attempt_keys)
-            jobs = self._job_rows(tx, {row.job_id for row in page_rows})
+            jobs = reads.job_coordinates(tx, {row.job_id for row in page_rows})
         items = tuple(
             self._task_summary(
                 row,
@@ -165,7 +164,7 @@ class TaskResources:
             rows_by_id = reads.bulk_get_task_detail(tx, task_ids)
             rows = list(rows_by_id.values())
             attempts_by_task = reads.all_attempts_for_tasks(tx, task_ids)
-            jobs = self._job_rows(tx, {row.job_id for row in rows})
+            jobs = reads.job_coordinates(tx, {row.job_id for row in rows})
         source_statuses = resource_source_statuses(self._dependencies)
         details = []
         for key, task_id in zip(keys, task_ids, strict=True):
@@ -312,6 +311,3 @@ class TaskResources:
         if execution_cluster_id != self._dependencies.cluster_id:
             return stored
         return self._dependencies.require_backend_id(stored)
-
-    def _job_rows(self, tx: Tx, job_ids: set[JobName]) -> dict[JobName, reads.JobCoordinates]:
-        return reads.job_coordinates(tx, job_ids)

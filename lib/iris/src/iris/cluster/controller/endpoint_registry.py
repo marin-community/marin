@@ -135,6 +135,10 @@ class EndpointRegistry:
         with self._proxy_lock:
             self._proxy_listeners.append(listener)
 
+    def unsubscribe_proxy_updates(self, listener: Callable[[ProxyMappingDelta | ProxyRegistryReset], None]) -> None:
+        with self._proxy_lock:
+            self._proxy_listeners.remove(listener)
+
     def proxy_registry_snapshot(self) -> ProxyRegistrySnapshot:
         with self._proxy_lock:
             generation = self._proxy_generation

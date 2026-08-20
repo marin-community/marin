@@ -48,7 +48,6 @@ from iris.resources.identity import (
     SliceIdentity,
 )
 from iris.resources.names import (
-    JobName,
     WorkerId,
 )
 from iris.resources.node import (
@@ -349,7 +348,7 @@ class NodeResources:
                 return ()
             task_ids = {attempt.task_id for attempt in attempts}
             tasks = reads.bulk_get_task_detail(tx, task_ids)
-            jobs = self._job_rows(tx, {task.job_id for task in tasks.values()})
+            jobs = reads.job_coordinates(tx, {task.job_id for task in tasks.values()})
         return tuple(
             self._attempt_summary(tasks[attempt.task_id], attempt, jobs[tasks[attempt.task_id].job_id])
             for attempt in attempts
@@ -556,9 +555,6 @@ class NodeResources:
         if backend is None or BackendCapability.WORKER_DAEMON not in backend.capabilities:
             return None
         return NodeIdentity(ResourceKey(execution, ResourceKind.NODE, node_id), backend_id, node_id)
-
-    def _job_rows(self, tx: Tx, job_ids: set[JobName]) -> dict[JobName, reads.JobCoordinates]:
-        return reads.job_coordinates(tx, job_ids)
 
 
 def _node_summary_key(node: NodeSummary) -> tuple[str, str, str]:

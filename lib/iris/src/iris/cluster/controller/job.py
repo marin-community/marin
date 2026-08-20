@@ -641,7 +641,7 @@ class JobService:
         job_id = JobName.from_wire(key.resource_id)
         with self._dependencies.db.read_snapshot() as tx:
             row = reads.get_job_detail(tx, job_id)
-            coordinates = self._job_rows(tx, {job_id}).get(job_id)
+            coordinates = reads.job_coordinates(tx, {job_id}).get(job_id)
             workdir_files = reads.get_workdir_files(tx, job_id) if row is not None else {}
             parent_coordinates = self._job_coordinates_in_snapshot(
                 tx,
@@ -826,7 +826,7 @@ class JobService:
             row = reads.get_job_detail(tx, JobName.from_wire(identity.key.resource_id))
             if row is None:
                 raise ResourceNotFound(identity.key.resource_id)
-            coordinates = self._job_rows(tx, {row.job_id})[row.job_id]
+            coordinates = reads.job_coordinates(tx, {row.job_id})[row.job_id]
             authority = _authority_cluster(self._dependencies.cluster_id, coordinates)
             expected = _job_identity(self._dependencies.cluster_id, coordinates)
             if identity.key.cluster_id != authority or identity.job_uid != expected.job_uid:
@@ -861,7 +861,7 @@ class JobService:
             row = reads.get_job_detail(tx, JobName.from_wire(identity.key.resource_id))
             if row is None:
                 raise ResourceNotFound(identity.key.resource_id)
-            coordinates = self._job_rows(tx, {row.job_id})[row.job_id]
+            coordinates = reads.job_coordinates(tx, {row.job_id})[row.job_id]
             authority = _authority_cluster(self._dependencies.cluster_id, coordinates)
             expected = _job_identity(self._dependencies.cluster_id, coordinates).job_uid
             if identity.key.cluster_id != authority or identity.job_uid != expected:
@@ -1001,15 +1001,12 @@ class JobService:
             return next(iter(self._dependencies.backends))
         return ""
 
-    def _job_rows(self, tx: Tx, job_ids: set[JobName]) -> dict[JobName, reads.JobCoordinates]:
-        return reads.job_coordinates(tx, job_ids)
-
     def _job_authorities(self, job_ids: Iterable[JobName]) -> dict[JobName, str]:
         ids = set(job_ids)
         with self._dependencies.db.read_snapshot() as tx:
             return {
                 job_id: _authority_cluster(self._dependencies.cluster_id, row)
-                for job_id, row in self._job_rows(tx, ids).items()
+                for job_id, row in reads.job_coordinates(tx, ids).items()
             }
 
     @staticmethod

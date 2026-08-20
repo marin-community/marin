@@ -22,7 +22,6 @@ from iris.cluster.controller.pagination import (
     _require_kind,
 )
 from iris.cluster.controller.persistence import reads
-from iris.cluster.controller.persistence.database import Tx
 from iris.cluster.controller.persistence.projections.endpoints import (
     EndpointQuery as ProjectionEndpointQuery,
 )
@@ -227,7 +226,7 @@ class EndpointResources:
             return {}
         roots = {row.task_id.root_job for row in rows}
         with self._dependencies.db.read_snapshot() as tx:
-            jobs = self._job_rows(tx, roots)
+            jobs = reads.job_coordinates(tx, roots)
         coordinates: dict[str, tuple[str, str]] = {}
         for row in rows:
             job = jobs.get(row.task_id.root_job)
@@ -238,6 +237,3 @@ class EndpointResources:
                 row.peer_id or self._dependencies.cluster_id,
             )
         return coordinates
-
-    def _job_rows(self, tx: Tx, job_ids: set[JobName]) -> dict[JobName, reads.JobCoordinates]:
-        return reads.job_coordinates(tx, job_ids)

@@ -18,7 +18,6 @@ from iris.cluster.controller.action import (
 from iris.cluster.controller.dependencies import ResourceDependencies
 from iris.cluster.controller.persistence import action as action_persistence
 from iris.cluster.controller.persistence import reads
-from iris.cluster.controller.persistence.database import Tx
 from iris.cluster.controller.persistence.operations.task import finalize
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.resource_identity import (
@@ -267,7 +266,7 @@ class AttemptResources:
             row = reads.get_task_detail(tx, task_id)
             if row is None:
                 raise ResourceNotFound(identity.key.resource_id)
-            job = self._job_rows(tx, {row.job_id})[row.job_id]
+            job = reads.job_coordinates(tx, {row.job_id})[row.job_id]
             authority = _authority_cluster(self._dependencies.cluster_id, job)
             current_identity = _task_uid(_job_identity(self._dependencies.cluster_id, job).job_uid, row.task_id)
             if identity.key.cluster_id != authority or identity.task_uid != current_identity:
@@ -408,6 +407,3 @@ class AttemptResources:
             container_id=container_id,
             observed_at=observed_at,
         )
-
-    def _job_rows(self, tx: Tx, job_ids: set[JobName]) -> dict[JobName, reads.JobCoordinates]:
-        return reads.job_coordinates(tx, job_ids)
