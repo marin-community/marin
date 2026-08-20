@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import BinaryIO
 
@@ -36,20 +36,8 @@ ROW_GROUP_ROWS = 16_384
 ROW_GROUP_TARGET_BYTES = 100 * 1024 * 1024
 
 
-def estimate_python_bytes(value: object) -> int:
-    """Estimate a Python value's payload size before Arrow conversion."""
-    if isinstance(value, memoryview):
-        return value.nbytes
-    if isinstance(value, (bytes, bytearray, str)):
-        return len(value)
-    if isinstance(value, Mapping):
-        return sum(len(str(key)) + estimate_python_bytes(item) for key, item in value.items())
-    if isinstance(value, (list, tuple)):
-        return sum(estimate_python_bytes(item) for item in value)
-    return 8
-
-
-def _table_groups(row_tables: Iterable[pa.Table]) -> Iterator[pa.Table]:
+def row_groups(row_tables: Iterable[pa.Table]) -> Iterator[pa.Table]:
+    """Group retained Arrow rows by row count and actual buffer size."""
     group: list[pa.Table] = []
     group_rows = 0
     group_bytes = 0
@@ -66,16 +54,6 @@ def _table_groups(row_tables: Iterable[pa.Table]) -> Iterator[pa.Table]:
         group_bytes += table.nbytes
     if group:
         yield pa.concat_tables(group)
-
-
-def row_groups(rows: Iterable[dict], schema: pa.Schema) -> Iterator[pa.Table]:
-    """Convert rows once and group their Arrow buffers by row count and actual byte size."""
-    yield from _table_groups(pa.Table.from_pylist([row], schema=schema) for row in rows)
-
-
-def table_row_groups(table: pa.Table) -> Iterator[pa.Table]:
-    """Split an existing Arrow table into bounded row groups without converting its values."""
-    yield from _table_groups(table.slice(offset, 1) for offset in range(table.num_rows))
 
 
 @dataclass(frozen=True)
@@ -168,11 +146,3 @@ class ShardWriter:
             self.close()
             return
         self._stack.__exit__(exc_type, exc_val, exc_tb)
-
-
-def write_table(path: str, table: pa.Table) -> ShardWriteResult:
-    """Write ``table`` atomically in row groups bounded by actual Arrow buffer size."""
-    with ShardWriter(path, table.schema) as writer:
-        for group in table_row_groups(table):
-            writer.write_table(group)
-    return writer.result

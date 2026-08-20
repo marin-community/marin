@@ -30,7 +30,7 @@ def test_file_set_materializes_chunked_file(tmp_path):
     root = str(tmp_path / "remote")
     local = tmp_path / "local"
     payload = b"x" * (OBJECT_PART_BYTES + 1)
-    writer = FineStoreDirectory(root, str(local), flush_interval=3600, max_transaction_bytes=1024 * 1024)
+    writer = FineStoreDirectory(root, str(local), flush_interval=3600, max_batch_data_bytes=1024 * 1024)
     path = local / "logs" / "archive.bin"
     path.parent.mkdir(parents=True)
     path.write_bytes(payload)

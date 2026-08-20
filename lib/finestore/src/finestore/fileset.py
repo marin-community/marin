@@ -19,8 +19,8 @@ from finestore.store import DataStore
 logger = logging.getLogger(__name__)
 
 DEFAULT_SYNC_INTERVAL = 120.0
-DEFAULT_TRANSACTION_BYTES = 100 * 1024 * 1024
-DEFAULT_TRANSACTION_FILES = 65_536
+DEFAULT_BATCH_DATA_BYTES = 100 * 1024 * 1024
+DEFAULT_BATCH_FILES = 65_536
 
 
 def _safe_relative(name: str) -> pathlib.PurePosixPath:
@@ -49,7 +49,7 @@ def fetch_file_set(root: str, local: str) -> set[str]:
                 if data is not None:
                     output.write(data)
                 else:
-                    for part in view.iter_blob_parts(row[BLOB_NAME_COLUMN]):
+                    for part in view.blob_parts(row[BLOB_NAME_COLUMN], row):
                         output.write(part)
         fetched.add(relative.as_posix())
     return fetched
@@ -64,8 +64,8 @@ class FineStoreDirectory:
         local: str,
         *,
         flush_interval: float = DEFAULT_SYNC_INTERVAL,
-        max_transaction_bytes: int = DEFAULT_TRANSACTION_BYTES,
-        max_transaction_files: int = DEFAULT_TRANSACTION_FILES,
+        max_batch_data_bytes: int = DEFAULT_BATCH_DATA_BYTES,
+        max_batch_files: int = DEFAULT_BATCH_FILES,
     ) -> None:
         self._root = root
         self._local = pathlib.Path(local)
@@ -73,8 +73,8 @@ class FineStoreDirectory:
         self._known = fetch_file_set(self._root, local)
         self._store = DataStore.open(self._root)
         self._flush_interval = flush_interval
-        self._max_transaction_bytes = max_transaction_bytes
-        self._max_transaction_files = max_transaction_files
+        self._max_batch_data_bytes = max_batch_data_bytes
+        self._max_batch_files = max_batch_files
         self._flush_lock = threading.Lock()
         self._stop = threading.Event()
         self._closed = False
@@ -94,7 +94,7 @@ class FineStoreDirectory:
             for relative in pending:
                 data = (self._local / relative).read_bytes()
                 if batch and (
-                    batch_bytes + len(data) > self._max_transaction_bytes or len(batch) >= self._max_transaction_files
+                    batch_bytes + len(data) > self._max_batch_data_bytes or len(batch) >= self._max_batch_files
                 ):
                     self._commit(batch)
                     self._known.update(name for name, _data in batch)
@@ -125,7 +125,6 @@ class FineStoreDirectory:
                 logger.warning("FineStore directory synchronization failed: %s", exc)
 
     def _commit(self, files: list[tuple[str, bytes]]) -> None:
-        estimated_bytes = sum(DataStore.estimate_object_bytes(name, data) for name, data in files)
-        with self._store.transaction(max_bytes=max(self._max_transaction_bytes, estimated_bytes)) as transaction:
+        with self._store.unbounded_transaction() as transaction:
             for relative, data in files:
                 transaction.write_object(relative, data)

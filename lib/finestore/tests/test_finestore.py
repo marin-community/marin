@@ -221,10 +221,9 @@ def test_keys_lists_deduped_primary_keys(tmp_path):
     assert reader.keys("does-not-exist") == set()
 
 
-def test_byte_cap_requests_an_early_flush(tmp_path):
-    # The buffer flushes early when its estimated payload crosses the byte cap, whatever the row count:
-    # one large blob trips a small cap that a same-count batch of tiny rows would not. DataTable drives
-    # a flush through a narrow scheduler protocol, so a fake one records exactly when the cap fires.
+def test_arrow_byte_cap_requests_an_early_flush(tmp_path):
+    # Each stamped row occupies 76 Arrow bytes. A 160-byte cap holds two retained row tables and asks
+    # the scheduler to flush when the third arrives.
     class RecordingScheduler:
         def __init__(self):
             self.flushes = 0
@@ -240,19 +239,21 @@ def test_byte_cap_requests_an_early_flush(tmp_path):
 
     scheduler = RecordingScheduler()
     table = DataTable(
-        "blobs",
+        "samples",
         writer_id="w1",
         layout=FineStoreLayout(str(tmp_path / "run")),
         metadata_path=str(tmp_path / "schema.json"),
-        max_buffer_bytes=1024,
+        max_buffer_bytes=160,
         scheduler=scheduler,
-        primary_key=("name",),
-        schema=None,
+        primary_key=("id",),
+        schema=pa.schema([("id", pa.int64()), ("payload", pa.binary())]),
         schema_version=1,
     )
-    table.append({"name": "a", "data": b"x" * 100})  # 100 bytes: under the 1 KiB cap
+    table.append({"id": 0, "payload": b"x" * 50})
     assert scheduler.flushes == 0
-    table.append({"name": "b", "data": b"y" * 2000})  # one row crosses the cap on its own
+    table.append({"id": 1, "payload": b"y" * 50})
+    assert scheduler.flushes == 0
+    table.append({"id": 2, "payload": b"z" * 50})
     assert scheduler.flushes == 1
 
 
@@ -273,8 +274,7 @@ def test_large_flush_splits_into_prunable_row_groups(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("explicit_schema", [False, True])
 def test_row_groups_use_arrow_buffer_bytes(tmp_path, monkeypatch, explicit_schema):
-    # Each stamped row occupies 76 Arrow bytes. The target fits two actual rows, while the previous
-    # Python-value estimate counted 88 bytes per row and produced three groups.
+    # Each stamped row occupies 76 Arrow bytes, so the target fits two rows per group.
     monkeypatch.setattr(shard_writer, "ROW_GROUP_TARGET_BYTES", 160)
     root = str(tmp_path / "run")
     schema = pa.schema([("id", pa.int64()), ("payload", pa.binary())]) if explicit_schema else None
@@ -803,17 +803,24 @@ def test_transaction_exception_publishes_nothing(tmp_path):
         assert view.read_blob("receipts/o1") is None
 
 
-def test_transaction_rejects_payload_above_its_bound(tmp_path):
+def test_transaction_limit_uses_arrow_buffer_bytes(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+        store.table(
+            "samples",
+            primary_key=("id",),
+            schema=pa.schema([("id", pa.int64()), ("payload", pa.binary())]),
+        )
+        transaction = store.transaction(max_bytes=150)
+        transaction.table("samples").add({"id": 0, "payload": b"x" * 50})
         with pytest.raises(TransactionTooLarge):
-            with store.transaction(max_bytes=16) as transaction:
-                transaction.write_object("receipt", b"payload")
+            transaction.table("samples").add({"id": 1, "payload": b"y" * 50})
+        transaction.commit()
 
-        assert ReadView(root).read_blob("receipt") is None
+        assert ReadView(root).scan("samples", columns=["id"]).to_pylist() == [{"id": 0}]
 
 
-def test_transaction_counts_chunk_memoryviews_toward_payload_bound(tmp_path):
+def test_transaction_counts_chunk_arrow_buffers_toward_payload_bound(tmp_path):
     root = str(tmp_path / "run")
     payload = b"x" * (OBJECT_PART_BYTES + 1)
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:

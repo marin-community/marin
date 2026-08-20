@@ -43,13 +43,7 @@ from finestore.layout import (
 )
 from finestore.migrations import migrate_for_write
 from finestore.reader import ReadView
-from finestore.shard_writer import (
-    ROW_GROUP_TARGET_BYTES,
-    ShardWriter,
-    estimate_python_bytes,
-    row_groups,
-    write_table,
-)
+from finestore.shard_writer import ROW_GROUP_TARGET_BYTES, ShardWriter, row_groups
 
 logger = logging.getLogger(__name__)
 
@@ -93,16 +87,16 @@ def _row_digest(row: Mapping[str, object]) -> bytes:
     return hashlib.blake2b(json.dumps(payload, sort_keys=True, default=repr).encode(), digest_size=16).digest()
 
 
-def _drop_empty_struct_keys(rows: list[dict]) -> list[dict]:
-    if not rows:
-        return rows
-    keys = set().union(*(row.keys() for row in rows))
-    drop = set()
-    for key in keys:
-        dicts = [row.get(key) for row in rows if isinstance(row.get(key), dict)]
-        if dicts and not any(dicts):
-            drop.add(key)
-    return rows if not drop else [{key: value for key, value in row.items() if key not in drop} for row in rows]
+def _drop_empty_struct_fields(schema: pa.Schema) -> pa.Schema:
+    fields = [field for field in schema if not (pa.types.is_struct(field.type) and field.type.num_fields == 0)]
+    return pa.schema(fields, metadata=schema.metadata)
+
+
+def _align_arrow_row(table: pa.Table, schema: pa.Schema) -> pa.Table:
+    if table.schema == schema:
+        return table
+    aligned = pa.concat_tables([schema.empty_table(), table], promote_options="permissive")
+    return aligned.select(schema.names)
 
 
 def _with_stamp_columns(schema: pa.Schema) -> pa.Schema:
@@ -129,11 +123,22 @@ def _addition_delta(additions: dict[str, TableAddition]) -> CommitDelta:
 
 
 @dataclass(frozen=True)
+class ArrowRow:
+    """One logical row and its retained Arrow buffers."""
+
+    table: pa.Table
+    key: tuple
+    sort_key: tuple | None
+    digest: bytes | None
+    sequence: int | None = None
+
+
+@dataclass(frozen=True)
 class PendingRows:
     """Rows exclusively claimed from a table buffer for one commit attempt."""
 
-    rows: tuple[dict, ...]
-    estimated_bytes: int
+    rows: tuple[ArrowRow, ...]
+    nbytes: int
 
 
 class FlushScheduler(Protocol):
@@ -276,23 +281,22 @@ class DataStore:
         descriptor[BLOB_PART_COUNT_COLUMN] = len(parts)
         return descriptor, parts
 
-    @staticmethod
-    def estimate_object_bytes(name: str, data: bytes, metadata: Mapping[str, object] | None = None) -> int:
-        """Return the transaction byte estimate for one named object."""
-        descriptor, parts = DataStore._blob_rows(name, data, metadata)
-        return estimate_python_bytes(descriptor) + sum(estimate_python_bytes(part) for part in parts)
-
     def read_view(self) -> ReadView:
         """Pin a snapshot using one HEAD read."""
         return ReadView(self.root)
 
     def transaction(self, *, max_bytes: int | None = None) -> Transaction:
-        """Create a transaction bounded by ``max_bytes`` of estimated payload data."""
+        """Create a transaction bounded by actual Arrow buffer bytes."""
         self.raise_if_failed()
         transaction_limit = self._max_buffer_bytes if max_bytes is None else max_bytes
         if transaction_limit <= 0:
             raise ValueError("max_bytes must be positive")
         return Transaction(self, max_bytes=transaction_limit)
+
+    def unbounded_transaction(self) -> Transaction:
+        """Create a transaction without an Arrow buffer byte limit."""
+        self.raise_if_failed()
+        return Transaction(self, max_bytes=None)
 
     def flush(self) -> CommitToken | None:
         """Commit all buffers with one HEAD update, or return ``None`` when empty."""
@@ -326,15 +330,15 @@ class DataStore:
                     table._restore(pending)
                 raise
 
-    def _commit_transaction(self, rows: dict[str, list[dict]]) -> CommitToken:
+    def _commit_transaction(self, rows: dict[str, list[ArrowRow]]) -> CommitToken:
         with self._commit_lock:
             additions = {}
             for name, pending_rows in rows.items():
                 table = self._tables.get(name)
                 if table is None:
                     raise KeyError(f"table {name!r} must be registered before the transaction")
-                stamped = table._stamp(pending_rows)
-                pending = PendingRows(tuple(stamped), sum(estimate_python_bytes(row) for row in pending_rows))
+                stamped = table._stamp_arrow_rows(pending_rows)
+                pending = PendingRows(tuple(stamped), sum(row.table.nbytes for row in stamped))
                 additions[name] = TableAddition(metadata_path=table.metadata_path, shards=(table._write(pending),))
             if not additions:
                 snapshot = self._commits.snapshot()
@@ -421,15 +425,15 @@ class TransactionTable:
 
 
 class Transaction:
-    """A bounded set of rows and objects published through one commit token."""
+    """A set of retained Arrow rows and objects published through one commit token."""
 
-    def __init__(self, store: DataStore, *, max_bytes: int) -> None:
+    def __init__(self, store: DataStore, *, max_bytes: int | None) -> None:
         self._store = store
         self._base = store.read_view()
-        self._rows: dict[str, list[dict]] = {}
+        self._rows: dict[str, list[ArrowRow]] = {}
         self._objects: dict[str, bytes] = {}
         self._max_bytes = max_bytes
-        self._estimated_bytes = 0
+        self._buffer_bytes = 0
         self._closed = False
         self.token: CommitToken | None = None
 
@@ -441,24 +445,29 @@ class Transaction:
     def _add_rows(self, rows: dict[str, list[dict]]) -> None:
         if self._closed:
             raise RuntimeError("transaction is closed")
-        copied = {name: [dict(row) for row in table_rows] for name, table_rows in rows.items()}
-        estimated_bytes = sum(estimate_python_bytes(row) for table_rows in copied.values() for row in table_rows)
-        if self._estimated_bytes + estimated_bytes > self._max_bytes:
+        buffered = {}
+        for name, table_rows in rows.items():
+            table = self._store._tables.get(name)
+            if table is None:
+                raise KeyError(f"table {name!r} must be registered before the transaction")
+            buffered[name] = table._arrow_rows(table_rows)
+        added_bytes = sum(row.table.nbytes for table_rows in buffered.values() for row in table_rows)
+        if self._max_bytes is not None and self._buffer_bytes + added_bytes > self._max_bytes:
             raise TransactionTooLarge(f"transaction payload exceeds {self._max_bytes} bytes; commit a smaller batch")
-        self._estimated_bytes += estimated_bytes
-        for name, table_rows in copied.items():
+        self._buffer_bytes += added_bytes
+        for name, table_rows in buffered.items():
             self._rows.setdefault(name, []).extend(table_rows)
 
     def write_object(self, name: str, data: bytes, metadata: Mapping[str, object] | None = None) -> str:
         """Buffer one named byte object and return its ``finestore://`` URI."""
         if self._closed:
             raise RuntimeError("transaction is closed")
-        self._store._blob_table()
+        blob_table = self._store._blob_table()
         descriptor, parts = self._store._blob_rows(name, data, metadata)
-        rows = {BLOBS_TABLE: [descriptor]}
+        rows = {blob_table.name: [descriptor]}
         if parts:
-            self._store._blob_part_table()
-            rows[BLOB_PARTS_TABLE] = parts
+            part_table = self._store._blob_part_table()
+            rows[part_table.name] = parts
         self._add_rows(rows)
         self._objects[name] = data
         return build_uri(BLOBS_TABLE, name)
@@ -521,7 +530,7 @@ class DataTable:
         self._max_buffer_bytes = max_buffer_bytes
         self._scheduler = scheduler
         self._schema = _with_stamp_columns(schema) if schema is not None else None
-        self._pending: list[dict] = []
+        self._pending: list[ArrowRow] = []
         self._pending_bytes = 0
         self._next_seq = start_seq
         self._lock = threading.Lock()
@@ -530,42 +539,59 @@ class DataTable:
     def append(self, row: dict) -> None:
         self.extend([row])
 
-    def _check_conflict(self, row: dict) -> None:
+    def _check_conflict(self, row: ArrowRow) -> None:
         if self._digests is None:
             return
-        key = tuple(row.get(name) for name in self.primary_key)
-        digest = _row_digest(row)
-        previous = self._digests.get(key)
+        assert row.digest is not None
+        previous = self._digests.get(row.key)
         if previous is None:
-            self._digests[key] = digest
+            self._digests[row.key] = row.digest
             return
-        if previous != digest:
-            pairs = ", ".join(f"{name}={row.get(name)!r}" for name in self.primary_key)
+        if previous != row.digest:
+            pairs = ", ".join(f"{name}={value!r}" for name, value in zip(self.primary_key, row.key, strict=True))
             raise PrimaryKeyConflict(
                 f"table {self.name!r} already holds a different row for primary key ({pairs}); "
                 "declare on_conflict=SUPERSEDE when replacement is intended"
             )
 
-    def _stamp(self, rows: Iterable[dict]) -> list[dict]:
-        stamped_rows = []
+    def _arrow_rows(self, rows: Iterable[dict]) -> list[ArrowRow]:
+        buffered = []
+        for row in rows:
+            _reject_reserved_columns(row)
+            key = tuple(row.get(name) for name in self.primary_key)
+            sort_key = (
+                tuple((value is None, value) for value in key) if all(name in row for name in self.primary_key) else None
+            )
+            digest = _row_digest(row) if self._digests is not None else None
+            placeholder = dict(row)
+            placeholder[SEQ_COLUMN] = 0
+            placeholder[WRITER_COLUMN] = self._writer_id
+            table = pa.Table.from_pylist([placeholder], schema=self._schema)
+            buffered.append(ArrowRow(table, key, sort_key, digest))
+        return buffered
+
+    def _stamp_arrow_rows(self, rows: Iterable[ArrowRow]) -> list[ArrowRow]:
+        stamped = []
         with self._lock:
             for row in rows:
-                _reject_reserved_columns(row)
                 self._check_conflict(row)
-                stamped = dict(row)
-                stamped[SEQ_COLUMN] = self._next_seq
-                stamped[WRITER_COLUMN] = self._writer_id
+                sequence = self._next_seq
                 self._next_seq += 1
-                stamped_rows.append(stamped)
-        return stamped_rows
+                index = row.table.schema.get_field_index(SEQ_COLUMN)
+                table = row.table.set_column(
+                    index,
+                    pa.field(SEQ_COLUMN, pa.int64()),
+                    pa.array([sequence], type=pa.int64()),
+                )
+                stamped.append(ArrowRow(table, row.key, row.sort_key, row.digest, sequence))
+        return stamped
 
     def extend(self, rows: Iterable[dict]) -> None:
         self._scheduler.raise_if_failed()
-        rows = list(rows)
-        stamped = self._stamp(rows)
+        buffered = self._stamp_arrow_rows(self._arrow_rows(rows))
         with self._lock:
-            self._pending.extend(stamped)
-            self._pending_bytes += sum(estimate_python_bytes(row) for row in rows)
+            self._pending.extend(buffered)
+            self._pending_bytes += sum(row.table.nbytes for row in buffered)
             over_cap = self._pending_bytes >= self._max_buffer_bytes
         if over_cap:
             self._scheduler.request_flush()
@@ -582,26 +608,24 @@ class DataTable:
     def _restore(self, pending: PendingRows) -> None:
         with self._lock:
             self._pending = list(pending.rows) + self._pending
-            self._pending_bytes += pending.estimated_bytes
+            self._pending_bytes += pending.nbytes
 
     def _write(self, pending: PendingRows) -> Shard:
-        rows = _drop_empty_struct_keys(list(pending.rows))
-        primary_key_sorted = all(name in row for row in rows for name in self.primary_key)
+        rows = list(pending.rows)
+        primary_key_sorted = all(row.sort_key is not None for row in rows)
         if primary_key_sorted:
-            rows.sort(key=lambda row: tuple((row.get(name) is None, row.get(name)) for name in self.primary_key))
-        min_seq = min(row[SEQ_COLUMN] for row in rows)
-        max_seq = max(row[SEQ_COLUMN] for row in rows)
+            rows.sort(key=lambda row: row.sort_key or ())
+        assert all(row.sequence is not None for row in rows)
+        min_seq = min(row.sequence for row in rows if row.sequence is not None)
+        max_seq = max(row.sequence for row in rows if row.sequence is not None)
         path = self._layout.shard_path(self.name, self._writer_id, 0, min_seq, uuid.uuid4().hex[:8])
-        if self._schema is None:
-            table = pa.Table.from_pylist(rows)
-            if primary_key_sorted:
-                table = table.sort_by([(name, "ascending") for name in self.primary_key])
-            written = write_table(path, table)
-        else:
-            with ShardWriter(path, self._schema) as writer:
-                for group in row_groups(rows, self._schema):
-                    writer.write_table(group)
-            written = writer.result
+        schema = self._schema or pa.unify_schemas([row.table.schema for row in rows], promote_options="permissive")
+        schema = _drop_empty_struct_fields(schema)
+        arrow_rows = (_align_arrow_row(row.table, schema) for row in rows)
+        with ShardWriter(path, schema) as writer:
+            for group in row_groups(arrow_rows):
+                writer.write_table(group)
+        written = writer.result
         return Shard(
             path=path,
             writer=self._writer_id,

@@ -100,11 +100,11 @@ def test_prefix_cache_uses_region_local_fine_store(tmp_path, monkeypatch):
     assert PersistentKvCache.for_prefix("cutlass-kernels").load("kernel") == b"value"
 
 
-def test_remote_cache_accounts_for_named_object_overhead(tmp_path, monkeypatch):
+def test_remote_cache_can_commit_object_larger_than_store_buffer(tmp_path, monkeypatch):
     root = str(tmp_path / "cache")
     open_store = DataStore.open
     monkeypatch.setattr(StoragePath, "is_remote", property(lambda _self: True))
-    monkeypatch.setattr(cache_module, "_MAX_TRANSACTION_BYTES", 64)
+    monkeypatch.setattr(cache_module, "_MAX_BATCH_DATA_BYTES", 64)
     monkeypatch.setattr(
         cache_module.DataStore,
         "open",

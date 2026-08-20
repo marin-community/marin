@@ -65,7 +65,7 @@ class MergedRow:
 
 
 class BlobCorruptionError(ValueError):
-    """A committed chunked blob is missing or has inconsistent part metadata."""
+    """A committed blob is missing data or has inconsistent size metadata."""
 
 
 class _ReadableShard(Protocol):
@@ -329,18 +329,12 @@ class _ReadOperations:
         if row is None:
             return None
         output = io.BytesIO()
-        for part in self._blob_parts(name, row):
+        for part in self.blob_parts(name, row):
             output.write(part)
         return output.getvalue()
 
-    def iter_blob_parts(self, name: str) -> Iterator[bytes]:
-        """Yield one inline value or the ordered parts of a chunked blob."""
-        row = self.point(BLOBS_TABLE, **{BLOB_NAME_COLUMN: name})
-        if row is None:
-            return
-        yield from self._blob_parts(name, row)
-
-    def _blob_parts(self, name: str, descriptor: dict) -> Iterator[bytes]:
+    def blob_parts(self, name: str, descriptor: dict) -> Iterator[bytes]:
+        """Yield a pinned descriptor's inline value or ordered chunked parts."""
         part_count = descriptor.get(BLOB_PART_COUNT_COLUMN)
         if part_count is None:
             data = descriptor.get(BLOB_DATA_COLUMN)

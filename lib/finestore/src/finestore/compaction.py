@@ -83,7 +83,8 @@ def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None 
     min_seq: int | None = None
     max_seq: int | None = None
     with ShardWriter(output_path, unified) as writer:
-        for batch in row_groups(chain([first], survivors), unified):
+        arrow_rows = (pa.Table.from_pylist([row], schema=unified) for row in chain([first], survivors))
+        for batch in row_groups(arrow_rows):
             writer.write_table(batch)
             sequences = [sequence or 0 for sequence in batch[SEQ_COLUMN].to_pylist()]
             min_seq = min(sequences) if min_seq is None else min(min_seq, *sequences)
