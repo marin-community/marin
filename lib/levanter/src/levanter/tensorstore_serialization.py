@@ -50,7 +50,7 @@ _DEVICE_MEMORY_KIND = "device"
 # process. Four processes at 32 GiB each exhausted a GB200 node, and 16 GiB each still did: a
 # process carries about four times its budget in flight (_STAGED_BYTE_OVERHEAD) on top of its
 # resident shard of the offloaded state.
-_DEFAULT_STAGED_CHUNKS = 8
+_DEFAULT_STAGED_CHUNKS = 16
 # Host memory a staged byte occupies while its write is in flight, for reporting only.
 _STAGED_BYTE_OVERHEAD = 4
 
@@ -151,12 +151,28 @@ class TensorStoreWriteConfig:
     A save whose share fits returns while the commits drain. A larger save rolls through.
     """
 
+    cache_pool_bytes: int = 1024**3
+    """Soft limit for each TensorStore write cache."""
+
+    data_copy_concurrency: int = 16
+    """Maximum CPU concurrency TensorStore uses to copy and encode checkpoint data."""
+
     def __post_init__(self) -> None:
         if self.max_write_replicas < 1:
             raise ValueError(f"max_write_replicas must be at least 1, got {self.max_write_replicas}")
-        for name in ("min_replica_slice_bytes", "max_chunk_bytes", "max_staged_host_bytes"):
+        for name in ("min_replica_slice_bytes", "max_chunk_bytes", "max_staged_host_bytes", "data_copy_concurrency"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive, got {getattr(self, name)}")
+        if self.cache_pool_bytes < 0:
+            raise ValueError(f"cache_pool_bytes must be non-negative, got {self.cache_pool_bytes}")
+
+
+def _tensorstore_write_context(config: TensorStoreWriteConfig) -> ts.Context:
+    spec = ts_impl._TS_CONTEXT.spec.to_json()
+    spec["cache_pool"] = {"total_bytes_limit": config.cache_pool_bytes}
+    spec["cache_pool#remote"] = {"total_bytes_limit": config.cache_pool_bytes}
+    spec["data_copy_concurrency"] = {"limit": config.data_copy_concurrency}
+    return ts.Context(spec)
 
 
 @dataclass(frozen=True)
@@ -586,9 +602,9 @@ def _serialize_arrays(
     """
     manager.wait_until_finished()
 
-    # JAX's process-lifetime ts.Context accumulates caches across saves, since each save
-    # writes a new OCDBT database (#6785). Cloning the spec keeps its pools and limits.
-    context = ts.Context(ts_impl._TS_CONTEXT.spec)
+    # JAX's process-lifetime context accumulates caches across saves, since each save writes a
+    # new OCDBT database (#6785). Give each save bounded caches and copy concurrency of its own.
+    context = _tensorstore_write_context(config)
     gate = _HostStagingGate(config.max_staged_host_bytes)
     commit_futures: list[ts.Future] = []
 
