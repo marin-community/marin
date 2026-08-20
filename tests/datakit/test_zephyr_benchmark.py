@@ -11,6 +11,7 @@ bucket-qualified, scheme-stripped keys.
 import pytest
 
 from experiments.datakit import zephyr_benchmark
+from experiments.datakit.reference_pipeline import SOURCE_DISCOVERY_DEPTHS
 from experiments.datakit.zephyr_benchmark import (
     SourceShardStats,
     _resolve_sources,
@@ -77,6 +78,18 @@ def test_source_shard_stats_rejects_parquet_outside_source_output_dirs(monkeypat
 def test_source_shard_stats_requires_object_store_prefix():
     with pytest.raises(ValueError, match="gs:// or s3://"):
         _source_shard_stats("/tmp/local-sample")
+
+
+def test_source_shard_stats_rejects_source_deeper_than_discovery_depth(monkeypatch):
+    # sample_sources() only discovers a source's .artifact.json up to
+    # len(SOURCE_DISCOVERY_DEPTHS) path segments; a deeper source would parse
+    # fine here but be unfindable there, so --source-fraction could select a
+    # name sample_sources() later rejects with KeyError.
+    too_deep = "/".join(["a"] * (len(SOURCE_DISCOVERY_DEPTHS) + 1))
+    _patch_store(monkeypatch, {f"{_ROOT_KEY}/{too_deep}/outputs/main/shard-0000.parquet": 100})
+
+    with pytest.raises(ValueError, match="deeper than the"):
+        _source_shard_stats(_SAMPLE_PREFIX)
 
 
 def test_select_source_fraction_prefers_shard_dense_sources():
