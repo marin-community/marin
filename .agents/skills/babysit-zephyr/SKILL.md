@@ -56,7 +56,7 @@ pull_task, Started operation, report_result, registered, and tasks completed
 entries:
 
 ~~~bash
-uv run iris --config <CONFIG> rpc controller get-task-logs \\
+uv run iris --config <CONFIG> rpc controller get-task-logs \
   --id <COORD_JOB_ID> --max-total-lines 5000 --attempt-id -1 --tail
 ~~~
 
@@ -74,7 +74,7 @@ Progress must show shards completing and stages advancing. A useful thread dump
 when logs are noisy is:
 
 ~~~bash
-uv run iris --config <CONFIG> rpc controller profile-task \\
+uv run iris --config <CONFIG> rpc controller profile-task \
   --json '{"target":"<COORD_JOB_ID>/0","durationSeconds":1,"profileType":{"threads":{}}}'
 ~~~
 

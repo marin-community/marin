@@ -72,6 +72,8 @@ These infra/lint findings anchor on lines not in the PR diff, so they could not
 be attached inline.
 
 - <path>:<line>: ml-<code> (<confidence>) <message>
+
+<!-- marin-lint-review -->
 ~~~
 
 Use gh for GitHub; the review covers the branch diff against the merge base with

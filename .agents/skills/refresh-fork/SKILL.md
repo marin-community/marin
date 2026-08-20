@@ -152,6 +152,11 @@ Then run the descriptor e2e before creating promotion tags or the Marin PR:
     -m cluster -o addopts= --import-mode=importlib -vv -s
   ```
 
+  Also run a bounded Qwen3 0.6B GPU serve-and-eval through
+  `QWEN3_GPU_INFERENCE` on the Marin federation hub. Require successful broker
+  and proxy startup, served completions, metrics, and sample output; Snowball
+  parity alone does not validate the consuming serving path.
+
 - `evalchemy` / `harbor`: bounded live evals using their respective config:
 
   ```sh
