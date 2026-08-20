@@ -135,6 +135,8 @@ def make_task_backend(
                 local_queue=local_queue,
                 kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
                 priority_class_names=pod_priority_classes,
+                production_priority_policy=kp.kueue.production_priority.policy,
+                production_priority_max_gpu_count=kp.kueue.production_priority.max_gpu_count,
             ),
             preempt_namespaces=list(kp.preempt_namespaces),
             task_event_table=task_event_table,
