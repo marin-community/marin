@@ -155,9 +155,12 @@ class GrugEvalConfig:
     # expert-collapsed mesh, logging a separate `eval_dropless` macro loss alongside the
     # as-trained (with-drop) eval. No-op when the mesh has no expert parallelism.
     dropless_eval: bool = False
-    # Eval the initialized model once before the first optimization step, for a step-0 baseline on
-    # the loss curve. The periodic cadence never covers step 0 (its dispatch gates on next_step > 0).
-    eval_at_step_0: bool = False
+    # Run one early baseline eval right after this step (0 disables), for a point on the loss curve
+    # before the periodic cadence's first eval (which lands at steps_per_eval). Running it a few
+    # steps in -- rather than before the loop -- keeps the train executable compiled and the offloaded
+    # optimizer state on host, so the eval stays in the periodic-eval HBM regime instead of colliding
+    # with the first train-step compile; a small value (e.g. 10) is past any first-step warmup.
+    baseline_eval_step: int = 0
 
 
 @dataclass(frozen=True)
@@ -852,22 +855,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                     state_callbacks.add_hook(dropless_eval_hook, every=interval)
 
-        # Baseline eval on the initialized model, before the first optimization step. The periodic
-        # eval hooks never fire at step 0 -- their dispatch gates on `next_step > 0`, and the loop
-        # only runs hooks after a step -- so a fresh run gets no step-0 point without this. It runs
-        # only at step 0, so a resumed run (nonzero step) skips it. Mirrors the hook bodies above:
-        # the as-trained eval plus, for expert-parallel runs, the dropless eval on the collapsed mesh.
-        step0_eval = eval_cfg is not None and eval_cfg.eval_at_step_0 and eval_cfg.eval_current
-        if step0_eval and evaluator is not None and int(state.step) == 0:
-            levanter.tracker.log(eval_model(evaluator, state.params, prefix=eval_cfg.prefix), step=0)
-            if dropless_evaluator is not None and dropless_eval_mesh is not None:
-                with set_mesh(dropless_eval_mesh):
-                    step0_model = _reshard_tree_to_mesh(state.params, dropless_eval_mesh)
-                    with jax_config.enable_pgle(False):
-                        step0_dropless = eval_model(
-                            dropless_evaluator, step0_model, prefix=f"{eval_cfg.prefix}_dropless"
-                        )
-                levanter.tracker.log(step0_dropless, step=0)
+        # Early baseline eval a few steps into the run (see the loop body). Only on a fresh run -- a
+        # resume starts at a nonzero step and already has earlier points -- and only when there is an
+        # evaluator to run.
+        baseline_eval_pending = (
+            eval_cfg is not None
+            and eval_cfg.baseline_eval_step > 0
+            and eval_cfg.eval_current
+            and evaluator is not None
+            and int(state.step) == 0
+        )
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
@@ -931,6 +928,24 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
+
+                # One-shot early baseline eval once the run reaches baseline_eval_step. Runs in the
+                # same post-step context as the periodic eval hooks (train executable compiled,
+                # offloaded state on host), so it does not collide with the first train-step compile
+                # the way a pre-loop eval would. Mirrors the hook bodies: as-trained plus the dropless.
+                if baseline_eval_pending and int(state.step) == eval_cfg.baseline_eval_step:
+                    baseline_eval_pending = False
+                    levanter.tracker.log(
+                        eval_model(evaluator, state.params, prefix=eval_cfg.prefix), step=int(state.step)
+                    )
+                    if dropless_evaluator is not None and dropless_eval_mesh is not None:
+                        with set_mesh(dropless_eval_mesh):
+                            baseline_model = _reshard_tree_to_mesh(state.params, dropless_eval_mesh)
+                            with jax_config.enable_pgle(False):
+                                baseline_dropless = eval_model(
+                                    dropless_evaluator, baseline_model, prefix=f"{eval_cfg.prefix}_dropless"
+                                )
+                        levanter.tracker.log(baseline_dropless, step=int(state.step))
 
                 if checkpointer is not None:
                     with callbacks.progress_event_scope(
