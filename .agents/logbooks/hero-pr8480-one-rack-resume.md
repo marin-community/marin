@@ -9,7 +9,7 @@ author: rav
 
 ## Current TL;DR
 
-The cold GPU child completed five steps and committed the step-5 checkpoint. Its coordinator then failed as planned. The restore-to-15 phase is pending at production priority. Both successful phases run from `891d7d8c60`, which descends from the #8480 merge commit. The reference production run remains read-only.
+The cold GPU child completed five synthetic steps, committed the step-5 checkpoint, and then its coordinator failed as planned. The resume loaded that checkpoint, completed ten additional steps, and committed step 15; all 16 GPU tasks succeeded without failures or preemptions. Peak task memory was 782,855 MiB (764.5 GiB) in the cold phase and 835,306 MiB (815.7 GiB) while writing the post-restore checkpoint. Both phases ran from `891d7d8c60`, which descends from the #8480 merge commit. The isolated output prefix was deleted after validation, and the production run remained read-only. [#8499](https://github.com/marin-community/marin/pull/8499) raised the production hero request from 850 to 890 GiB and merged as `95271cd079`.
 
 ## Run Contract
 
@@ -18,8 +18,8 @@ The cold GPU child completed five steps and committed the step-5 checkpoint. Its
 - Stop or escalation criteria: Stop on OOM, non-finite loss, incomplete checkpoint metadata, wrong restore lineage, unexpected access to the production output, task retry, or repeated infrastructure failure. Do not mutate the Iris cluster.
 - Issue: [#8492](https://github.com/marin-community/marin/issues/8492).
 - W&B: Disabled after the first cold attempt exposed missing cluster credentials during tracker initialization. Iris and checkpoint telemetry are the sources of record.
-- Output root: `s3://marin-us-east-02a/tmp/ttl=1d/users/rav/hero-checkpoint-restore/hero-pr8480-1rack-resume-20260820-1914`.
-- Resume checkpoint root / retention / projected bytes: `<output root>/checkpoints`; two complete checkpoints at steps 5 and 15; about 4,993 GiB each and 9.75 TiB total, estimated from the matching production shape's save report. Bucket lifecycle removes them after one day.
+- Output root: `s3://marin-us-east-02a/tmp/ttl=1d/users/rav/hero-checkpoint-restore/hero-pr8480-1rack-resume-20260820-1914`; deleted at 19:55 UTC after validation.
+- Resume checkpoint root / retention / projected bytes: `<output root>/checkpoints`; the complete step-5 and step-15 checkpoints totaled 9.8 TB with the other run artifacts. The exact output prefix was explicitly removed after validation rather than waiting for its one-day lifecycle.
 - Canonical export: None. This diagnostic has no durable model export.
 - Raw trace / rendezvous / Ray spill: XProf disabled; tracker mirror and all run artifacts stay below the output root; Grug uses no Ray spill path.
 - Final step: Phase 1 stops at 5 and intentionally aborts its coordinator after the checkpoint commits. Phase 2 restores step 5 and stops at 15.
@@ -32,6 +32,7 @@ The cold GPU child completed five steps and committed the step-5 checkpoint. Its
 - Cancelled cold coordinator: [`/rav/hero-pr8480-1rack-resume-20260820-1914-cold`](https://iris.oa.dev/#/job/%2Frav%2Fhero-pr8480-1rack-resume-20260820-1914-cold), submitted at 2026-08-20 19:18 UTC with production priority.
 - Successful cold coordinator: [`/rav/hero-pr8480-1rack-resume-20260820-1914-cold-nowandb`](https://iris.oa.dev/#/job/%2Frav%2Fhero-pr8480-1rack-resume-20260820-1914-cold-nowandb), submitted at 2026-08-20 19:23 UTC with production priority.
 - Restore coordinator: [`/rav/hero-pr8480-1rack-resume-20260820-1914-resume`](https://iris.oa.dev/#/job/%2Frav%2Fhero-pr8480-1rack-resume-20260820-1914-resume), submitted at 2026-08-20 19:36 UTC with production priority.
+- Cleanup job: [`/app/hero-pr8480-1rack-resume-20260820-1914-cleanup`](https://iris.oa.dev/#/job/%2Fapp%2Fhero-pr8480-1rack-resume-20260820-1914-cleanup), submitted at 2026-08-20 19:54 UTC with production priority.
 
 ## Event Log
 
@@ -71,3 +72,18 @@ The cold GPU child completed five steps and committed the step-5 checkpoint. Its
 - Contract: Load the latest complete checkpoint from the same isolated prefix, start at step 5, run ten more synthetic steps, and stop at step 15.
 - Isolation: New coordinator job and JAX port 32649; W&B remains disabled.
 - Next: Verify the step-5 load, finite progress through step 15, final checkpoint commit, terminal success, and peak task memory.
+
+### 2026-08-20 19:53 UTC - Restore phase completed
+
+- Status: The coordinator and all 16 GPU tasks succeeded with zero failures or preemptions.
+- Restore: All 64 ranks logged a successful load from `<output root>/checkpoints/step-5` at 19:44:27 UTC.
+- Training: Ten additional synthetic steps completed with finite loss, reaching step 15.
+- Checkpoint: Rank 0 logged `Saved checkpoint` for `<output root>/checkpoints/step-15` at 19:52:33 UTC.
+- Memory: Finelog recorded 821,444 to 835,306 MiB across the 16 tasks. The 815.7 GiB maximum occurred while writing the final checkpoint, leaving 34.3 GiB below the 850 GiB request.
+- Follow-up: [#8499](https://github.com/marin-community/marin/pull/8499) changed the production launcher request to 890 GiB, raising observed headroom to 74.3 GiB while leaving 70 GiB of the 960 GiB node outside pod allocation. It merged at 19:51 UTC as `95271cd079`.
+
+### 2026-08-20 19:55 UTC - Temporary output deleted
+
+- Status: The cleanup job succeeded after both training phases were terminal.
+- Scope: Only the exact diagnostic prefix under `tmp/ttl=1d/users/rav/hero-checkpoint-restore/hero-pr8480-1rack-resume-20260820-1914` was removed.
+- Result: `fsutil rm -R` deleted 13,592 objects totaling 9.8 TB in 5.7 seconds. No checkpoint or output artifact was retained.
