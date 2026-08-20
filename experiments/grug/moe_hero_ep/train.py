@@ -271,12 +271,10 @@ def _first_step_only(hook: Callable[..., None]) -> Callable[..., None]:
     ``StateCallbackRunner`` dispatches on ``next_step % every``, thus ``every=1`` is the only
     interval that covers the first step. The gate makes that registration one-shot. A resumed run
     starts above step 1 and never fires it.
-
-    ``functools.wraps`` keeps the wrapped hook's signature, which ``LambdaCallback`` reads to decide
-    whether to pass ``force``. Without it the ``**kwargs`` here advertises a ``force`` parameter that
-    the wrapped hook can lack.
     """
 
+    # `LambdaCallback` reads the signature to decide whether to pass `force`, and the `**kwargs`
+    # below would otherwise advertise a `force` parameter that the wrapped hook can lack.
     @functools.wraps(hook)
     def gated(step, *args, **kwargs):
         if step.next_step != 1:
