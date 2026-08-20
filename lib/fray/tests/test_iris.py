@@ -322,6 +322,20 @@ class TestImagePlumbing:
         kwargs = fake_iris.submit.call_args.kwargs
         assert kwargs["task_image"] == "custom/swetrace:dev"
 
+    def test_submit_job_passes_named_ports_to_iris(self):
+        fake_iris = MagicMock()
+        fake_iris.submit.return_value = MagicMock(job_id="job-ports")
+        client = FrayIrisClient.from_iris_client(fake_iris)
+
+        request = JobRequest(
+            name="test-job",
+            entrypoint=Entrypoint.from_callable(lambda: None),
+            ports=("training_control",),
+        )
+        client.submit(request)
+
+        assert fake_iris.submit.call_args.kwargs["ports"] == ["training_control"]
+
 
 class TestActorGroupEnvironment:
     """Verify create_actor_group passes device-appropriate env vars to Iris."""

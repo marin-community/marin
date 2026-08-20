@@ -17,8 +17,10 @@ import json
 import math
 from pathlib import Path
 
+import marin.experiment.train as train_module
 import pytest
 from fray.cluster import ResourceConfig
+from fray.current_client import set_current_client
 from levanter.models.llama import LlamaConfig
 from levanter.optim.config import AdamConfig
 from marin.execution.artifact import ArtifactRecord, write_record
@@ -26,6 +28,7 @@ from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.experiment.data import tokenized
 from marin.experiment.train import EvalSuite, train_lm
 from marin.processing.tokenize.tokenize import TokenizedCache
+from marin.training.training import TrainLmOnPodConfig
 
 from experiments.evals.task_configs import CORE_TASKS
 
@@ -35,6 +38,31 @@ _MODEL = LlamaConfig(max_seq_len=128, hidden_dim=64, intermediate_dim=128, num_h
 _OPTIMIZER = AdamConfig(learning_rate=1e-3, weight_decay=0.1, warmup=10, min_lr_ratio=0.1)
 _RESOURCES = ResourceConfig.with_tpu("v4-8")
 _TOKENIZED_CACHE = f"{TokenizedCache.__module__}.{TokenizedCache.__qualname__}"
+
+
+class _FinishedJob:
+    def wait(self, *, raise_on_failure: bool = True):
+        return None
+
+
+class _SubmitCapture:
+    def __init__(self):
+        self.request = None
+
+    def submit(self, request, adopt_existing: bool = True):
+        self.request = request
+        return _FinishedJob()
+
+
+def test_training_job_requests_control_port():
+    client = _SubmitCapture()
+    pod = TrainLmOnPodConfig(train_config=object(), resources=ResourceConfig.with_cpu())
+
+    with set_current_client(client):
+        train_module._train_job(pod)
+
+    assert client.request is not None
+    assert client.request.ports == (train_module.TRAINING_CONTROL_PORT,)
 
 
 def _seed_caches(train: ArtifactStep, prefix: str) -> None:

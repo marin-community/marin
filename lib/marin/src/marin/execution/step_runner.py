@@ -482,6 +482,7 @@ def _submit_iris_job(
     *,
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
+    ports: tuple[str, ...] = (),
 ) -> None:
     """Submit ``raw_fn(output_path)`` as a Fray job and block until completion.
 
@@ -505,6 +506,7 @@ def _submit_iris_job(
             extras=dependency_groups,
             env_vars=env_vars,
         ),
+        ports=ports,
     )
     handle = current_client().submit(request)
     handle.wait(raise_on_failure=True)
@@ -537,4 +539,5 @@ def _run_remote_step(step: StepSpec, output_path: str) -> None:
         step.fn.resources,
         env_vars=step.fn.env_vars,
         pip_dependency_groups=step.fn.pip_dependency_groups,
+        ports=step.fn.ports,
     )
