@@ -3,6 +3,8 @@
 
 import csv
 import io
+from dataclasses import dataclass
+from typing import cast
 
 import pytest
 from marin.evaluation.olmo_base_eval.components import scored_tasks
@@ -41,6 +43,25 @@ def test_replay_commit_rejects_local_head_mismatch() -> None:
 def test_replay_commit_requires_full_lowercase_sha(requested_commit: str) -> None:
     with pytest.raises(ValueError, match="full lowercase Git SHA"):
         replay.validate_replay_code_commit(requested_commit, None)
+
+
+@dataclass(frozen=True)
+class _ManifestSpec:
+    run_order: int
+
+
+def test_manifest_identity_separates_canary_and_full_panels() -> None:
+    canary_specs = cast(list[replay.base.DelphiSwarmRunSpec], [_ManifestSpec(run_order=0)])
+    full_specs = cast(
+        list[replay.base.DelphiSwarmRunSpec],
+        [_ManifestSpec(run_order=index) for index in range(280)],
+    )
+    changed_canary_specs = cast(list[replay.base.DelphiSwarmRunSpec], [_ManifestSpec(run_order=1)])
+
+    assert replay._manifest_identity(canary_specs).startswith("manifest_001_")
+    assert replay._manifest_identity(full_specs).startswith("manifest_280_")
+    assert replay._manifest_identity(canary_specs) != replay._manifest_identity(full_specs)
+    assert replay._manifest_identity(canary_specs) != replay._manifest_identity(changed_canary_specs)
 
 
 def _source_spec(run_order: int) -> dict:

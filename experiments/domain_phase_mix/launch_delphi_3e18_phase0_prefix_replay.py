@@ -146,6 +146,11 @@ def _source_coordinate_hash(run_specs: list[base.DelphiSwarmRunSpec]) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
+def _manifest_identity(run_specs: list[base.DelphiSwarmRunSpec]) -> str:
+    payload = json.dumps([asdict(spec) for spec in run_specs], sort_keys=True).encode()
+    return f"manifest_{len(run_specs):03d}_{hashlib.sha256(payload).hexdigest()[:12]}"
+
+
 def load_replay_specs(
     *,
     source_panel: str,
@@ -458,7 +463,7 @@ def build_launch_artifacts(
         )
 
     manifest_step = ExecutorStep(
-        name=f"{EXPERIMENT_NAME}/manifest",
+        name=f"{EXPERIMENT_NAME}/{_manifest_identity(run_specs)}",
         fn=save_prefix_manifest,
         config=SavePrefixManifestConfig(
             output_path=this_output_path(),
