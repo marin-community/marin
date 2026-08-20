@@ -134,8 +134,9 @@ def build_ladder_run(
     parameter at the rung's (rack-scaled) batch. Every eval scores the held-out set both as-trained
     and dropless. The narrow rungs eval every 5% of the run and keep only the forced final
     checkpoint; the d6144 hero evals every 3000 steps and keeps a permanent checkpoint every 6000.
-    ``checkpoint_every`` overrides that cadence for any rung. Checkpoints are output-only: an
-    offloaded run cannot restore from one, so they serve analysis rather than crash recovery.
+    ``checkpoint_every`` overrides that cadence for any rung. A rolling temporary checkpoint every
+    ``RESUME_SAVE_INTERVAL`` on region-local storage covers a crash or a preemption, and a rung
+    resumes from the newest checkpoint it finds.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -307,8 +308,9 @@ def build_ladder_run(
     "--checkpoint-every",
     type=click.IntRange(min=1),
     default=None,
-    help="Keep a permanent checkpoint every N steps. Default follows the rung (6000 at d6144, "
-    "final only elsewhere). Checkpoints are output-only; an offloaded run cannot restore from one.",
+    help="Keep a permanent checkpoint every N steps on the durable output root. Default follows "
+    "the rung (6000 at d6144, final only elsewhere). Resume uses the rolling temporary checkpoint "
+    "and is not affected by this option.",
 )
 @build_options
 def main(
