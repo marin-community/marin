@@ -48,6 +48,7 @@ from rigging.log_setup import configure_logging
 
 from experiments.datakit.reference_pipeline import (
     SMOKE_SCALE,
+    SOURCE_DISCOVERY_DEPTHS,
     PoolConfig,
     ZephyrDatakitSteps,
     sample_sources,
@@ -106,12 +107,16 @@ def _source_shard_stats(sample_prefix: str) -> dict[str, SourceShardStats]:
     Reads object metadata only (no shard contents), grouping every
     ``<source>/outputs/main/*.parquet`` file by its source name. Parquet found
     anywhere else in the sample tree means an unexpected layout, so it's an error
-    rather than a bogus source entry.
+    rather than a bogus source entry. A source name deeper than
+    ``SOURCE_DISCOVERY_DEPTHS`` allows is also an error: :func:`sample_sources`
+    can't discover it, so a selection here could otherwise pick a name it later
+    rejects.
     """
     root = StoragePath(sample_prefix.rstrip("/"))
     if root.scheme not in ("gs", "s3") or not root.bucket:
         raise ValueError(f"sample prefix must be a gs:// or s3:// URL: {sample_prefix}")
     fs, root_key = url_to_fs(str(root))
+    max_segments = len(SOURCE_DISCOVERY_DEPTHS)
     stats: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     for path, info in fs.find(root_key, detail=True).items():
         if not path.endswith(".parquet"):
@@ -122,6 +127,12 @@ def _source_shard_stats(sample_prefix: str) -> dict[str, SourceShardStats]:
             raise ValueError(
                 f"{path} is not under '<source>/outputs/main/'; the sample tree holds "
                 "parquet shards only inside each source's outputs/main directory"
+            )
+        if source_name.count("/") + 1 > max_segments:
+            raise ValueError(
+                f"source {source_name!r} is deeper than the {max_segments} segments "
+                "sample_sources() discovers; widen SOURCE_DISCOVERY_DEPTHS in "
+                "reference_pipeline.py before adding a source this deep"
             )
         stats[source_name][0] += info["size"]
         stats[source_name][1] += 1

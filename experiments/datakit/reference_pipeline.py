@@ -962,6 +962,14 @@ def reference_datakit_steps(
 
 SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_0.1b_7d7d8fd7"
 
+SOURCE_DISCOVERY_DEPTHS = ("*", "*/*", "*/*/*")
+"""Glob depths :func:`sample_sources` searches for a source's ``.artifact.json``.
+
+A source name has at most ``len(SOURCE_DISCOVERY_DEPTHS)`` path segments; a caller
+that derives source names some other way (e.g. from shard paths) must respect the
+same bound or risk selecting a name :func:`sample_sources` cannot find.
+"""
+
 QUALITY_MODEL = "datakit/models/quality/pooled_junkgate2"
 """Pooled fast-transformer scorer directory, relative to ``MARIN_PREFIX``."""
 
@@ -1010,7 +1018,7 @@ def sample_sources(sample_prefix: str, names: list[str] | None = None, run_tag: 
     sample_id = posixpath.basename(prefix)
     discovered = [
         str(m)[len(prefix) + 1 : -len("/.artifact.json")]
-        for depth in ("*", "*/*", "*/*/*")
+        for depth in SOURCE_DISCOVERY_DEPTHS
         for m in StoragePath(f"{prefix}/{depth}/.artifact.json").glob()
     ]
     if names is None:
