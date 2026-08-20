@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import json
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -27,6 +28,7 @@ from levanter.store.cache import (
     consolidate_shard_cache_ledgers,
     write_levanter_cache,
 )
+from levanter.store.jagged_array import BloscCodec, JaggedArrayStore
 
 
 class TestProcessor(BatchProcessor[Sequence[int], dict[str, np.ndarray]]):
@@ -571,10 +573,33 @@ def test_write_levanter_cache_end_to_end():
         assert result["exemplar"] == records[0]
         assert Path(output_path, ".success").exists()
 
+        zarr_metadata = json.loads(Path(output_path, "input_ids", "data", "zarr.json").read_text())
+        inner_codecs = zarr_metadata["codecs"][0]["configuration"]["codecs"]
+        blosc_codec = next(codec for codec in inner_codecs if codec["name"] == "blosc")
+        assert blosc_codec["configuration"]["cname"] == "zstd"
+        assert blosc_codec["configuration"]["clevel"] == 1
+
         store = TreeStore.open(records[0], output_path, mode="r", cache_metadata=False)
         assert len(store) == len(records)
         assert store[0]["input_ids"].tolist() == records[0]["input_ids"]
         assert store[len(records) - 1]["input_ids"].tolist() == records[len(records) - 1]["input_ids"]
+
+
+def test_jagged_array_store_reads_codec_from_persisted_metadata(tmp_path):
+    output_path = str(tmp_path / "cache")
+    expected = np.arange(16, dtype=np.int32)
+    writer = JaggedArrayStore.open(
+        output_path,
+        mode="w",
+        item_rank=1,
+        dtype=np.int32,
+        write_codec=BloscCodec("lz4", 5),
+    )
+    writer.extend([expected])
+
+    reader = JaggedArrayStore.open(output_path, mode="r", item_rank=1, dtype=np.int32)
+
+    np.testing.assert_array_equal(reader[0], expected)
 
 
 def _build_sharded_cache(root: Path, num_shards: int, rows_per_shard: int, seq_len: int) -> TreeCache:
