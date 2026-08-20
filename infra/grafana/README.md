@@ -317,6 +317,16 @@ window to its floor is what separates a divergence from the single excursion
 skip-step already absorbs. It takes the `notification=hero-run` route as well: a
 hero run diverging unwatched costs more than a false page, which a silence
 answers. Both hero rules share one enrolment query per cache interval.
+A warning-only RL rule reads fresh `progress_time_seconds` rows
+from `service=marinskyrl` telemetry and waits 30 minutes, a threshold set above the hero
+rule's 15 because generation dominates an RL step and a single rollout phase can
+legitimately run for minutes. It keys on the promoted `run_id` column and the execution
+UID, so concurrent attempts of one run stay separate. Note what this implies: stall
+detection here is **per producer and opt-in**, not a fleet-wide service. The hero rules
+cover Levanter runs that opt in by job name and nothing else — an RL run would not have
+been covered by them even if MarinSkyRL adopted Levanter's entire metric vocabulary,
+because `hero_runs.task_state_query` selects candidates from `iris.task_state` by name
+before any metric is read. A new producer that wants alerting adds a reader.
 A warning-only Zephyr rule reads fresh
 `progress_time_seconds` rows from `service=zephyr` telemetry. It waits 45 minutes after a
 stage start or shard completion, then remains pending for five minutes. The
