@@ -3,11 +3,13 @@ name: "Ops - IaC preview"
 # Runs `pulumi preview` for each infra/pulumi (marin-iac) stack in parallel and
 # posts one aggregated PR comment. workflow_dispatch can take an optional PR
 # number to preview that PR's head and comment there; omit it for a drift check
-# against the selected ref with no comment.
+# against the selected ref with no comment. Merged PRs are checked against their
+# merge commit after 30 minutes, then retried after 60 and 120 minutes while
+# changes remain.
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, closed]
     paths:
       - "config/**"
       - "infra/pulumi/**"
@@ -20,6 +22,18 @@ on:
         description: "PR number to preview and comment on (leave empty for drift check only)"
         required: false
         type: string
+      deployment_check_attempt:
+        description: "Internal: post-merge deployment check attempt"
+        required: false
+        type: number
+      deployment_check_ref:
+        description: "Internal: merge commit checked for deployment"
+        required: false
+        type: string
+      deployment_check_merger:
+        description: "Internal: GitHub login to remind"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -29,10 +43,95 @@ env:
   PULUMI_CI_PROJECT: hai-gcp-models
 
 jobs:
+  prepare:
+    # Fork PRs cannot reach the preview credentials. Retry dispatches and manual
+    # previews are limited to repository collaborators by GitHub.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository
+          && (github.event.action != 'closed' || github.event.pull_request.merged == true))
+    runs-on: ubuntu-latest
+    timeout-minutes: 125
+    outputs:
+      attempt: ${{ steps.context.outputs.attempt }}
+      deployment_check: ${{ steps.context.outputs.deployment_check }}
+      merger: ${{ steps.context.outputs.merger }}
+      pr_number: ${{ steps.context.outputs.pr_number }}
+      ref: ${{ steps.context.outputs.ref }}
+    steps:
+      - name: Resolve preview context
+        id: context
+        env:
+          EVENT_ACTION: ${{ github.event.action }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_ATTEMPT: ${{ inputs.deployment_check_attempt }}
+          INPUT_MERGER: ${{ inputs.deployment_check_merger }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+          INPUT_REF: ${{ inputs.deployment_check_ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PR_MERGER: ${{ github.event.pull_request.merged_by.login }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          deployment_check=false
+          attempt=0
+          merger=""
+
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            pr_number="$PR_NUMBER"
+            ref="$PR_HEAD_SHA"
+            if [[ "$EVENT_ACTION" == "closed" ]]; then
+              deployment_check=true
+              attempt=1
+              merger="$PR_MERGER"
+              ref="$PR_MERGE_SHA"
+            fi
+          elif [[ -n "$INPUT_ATTEMPT" && "$INPUT_ATTEMPT" != "0" ]]; then
+            deployment_check=true
+            attempt="$INPUT_ATTEMPT"
+            merger="$INPUT_MERGER"
+            pr_number="$INPUT_PR_NUMBER"
+            ref="$INPUT_REF"
+          else
+            pr_number="$INPUT_PR_NUMBER"
+            if [[ -n "$pr_number" ]]; then
+              ref="refs/pull/$pr_number/head"
+            else
+              ref="$RUN_SHA"
+            fi
+          fi
+
+          if [[ "$deployment_check" == "true" ]]; then
+            [[ "$attempt" =~ ^[1-3]$ ]]
+            [[ "$merger" =~ ^[A-Za-z0-9-]+$ ]]
+            [[ "$pr_number" =~ ^[1-9][0-9]*$ ]]
+            [[ "$ref" =~ ^[0-9a-f]{40}$ ]]
+          fi
+
+          echo "attempt=$attempt" >> "$GITHUB_OUTPUT"
+          echo "deployment_check=$deployment_check" >> "$GITHUB_OUTPUT"
+          echo "merger=$merger" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Wait before deployment check
+        if: steps.context.outputs.deployment_check == 'true'
+        env:
+          ATTEMPT: ${{ steps.context.outputs.attempt }}
+        run: |
+          case "$ATTEMPT" in
+            1) delay=30m ;;
+            2) delay=60m ;;
+            3) delay=120m ;;
+            *) exit 1 ;;
+          esac
+          sleep "$delay"
+
   preview-coreweave:
-    # Fork PRs can't reach repo secrets (WIF, kubeconfig); skip rather than fail.
-    # Manual dispatch has no PR to check and is already gated to repo collaborators by GitHub.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -50,7 +149,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha || (inputs.pr_number != '' && format('refs/pull/{0}/head', inputs.pr_number)) || github.sha }}
+          ref: ${{ needs.prepare.outputs.ref }}
 
       - name: Write kubeconfig
         run: |
@@ -78,7 +177,7 @@ jobs:
           gcp-project-id: ${{ env.PULUMI_CI_PROJECT }}
 
   preview-gcp:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -91,7 +190,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha || (inputs.pr_number != '' && format('refs/pull/{0}/head', inputs.pr_number)) || github.sha }}
+          ref: ${{ needs.prepare.outputs.ref }}
 
       - name: Preview marin
         uses: ./.github/actions/pulumi-preview
@@ -104,28 +203,31 @@ jobs:
   comment:
     if: >-
       always()
-      && (github.event_name == 'pull_request' || inputs.pr_number != '')
-      && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    needs: [preview-coreweave, preview-gcp]
+      && needs.prepare.result == 'success'
+      && needs.prepare.outputs.pr_number != ''
+    needs: [prepare, preview-coreweave, preview-gcp]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      actions: write
       contents: read
       pull-requests: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha || (inputs.pr_number != '' && format('refs/pull/{0}/head', inputs.pr_number)) || github.sha }}
+          ref: ${{ needs.prepare.outputs.ref }}
 
       - name: Download preview artifacts
         uses: actions/download-artifact@v8
+        continue-on-error: ${{ needs.prepare.outputs.deployment_check == 'true' }}
         with:
           pattern: iac-preview-*
           path: iac-previews
           merge-multiple: false
 
       - name: Assemble comment body
+        if: needs.prepare.outputs.deployment_check != 'true'
         run: |
           python3 .github/actions/pulumi-preview/assemble_comment.py \
             --previews-dir iac-previews \
@@ -133,9 +235,10 @@ jobs:
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
       - name: Upsert sticky PR comment
+        if: needs.prepare.outputs.deployment_check != 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
         with:
           script: |
             const fs = require('fs');
@@ -171,3 +274,78 @@ jobs:
                 body,
               });
             }
+
+      - name: Summarize deployment check
+        if: needs.prepare.outputs.deployment_check == 'true'
+        id: deployment
+        env:
+          ATTEMPT: ${{ needs.prepare.outputs.attempt }}
+          MERGER: ${{ needs.prepare.outputs.merger }}
+        run: |
+          python3 .github/actions/pulumi-preview/summarize_deployment.py \
+            --previews-dir iac-previews \
+            --expected-stack cw-rno2a \
+            --expected-stack cw-us-east-02a \
+            --expected-stack cw-us-east-08a \
+            --expected-stack cw-us-west-04a \
+            --expected-stack marin \
+            --attempt "$ATTEMPT" \
+            --merger "$MERGER" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --out iac-deployment-comment.md \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Upsert deployment check comment
+        if: steps.deployment.outputs.should_comment == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        env:
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('iac-deployment-comment.md', 'utf8');
+            const marker = body.split('\n', 1)[0];
+            const { owner, repo } = context.repo;
+            const issue_number = Number(process.env.PR_NUMBER);
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) => comment.body && comment.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Schedule next deployment check
+        if: >-
+          always()
+          && steps.deployment.outputs.needs_retry == 'true'
+          && needs.prepare.outputs.attempt != '3'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        env:
+          ATTEMPT: ${{ needs.prepare.outputs.attempt }}
+          MERGER: ${{ needs.prepare.outputs.merger }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+          REF: ${{ needs.prepare.outputs.ref }}
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              ...context.repo,
+              workflow_id: 'ops-iac-preview.yaml',
+              ref: context.payload.repository.default_branch,
+              inputs: {
+                deployment_check_attempt: String(Number(process.env.ATTEMPT) + 1),
+                deployment_check_merger: process.env.MERGER,
+                deployment_check_ref: process.env.REF,
+                pr_number: process.env.PR_NUMBER,
+              },
+            });

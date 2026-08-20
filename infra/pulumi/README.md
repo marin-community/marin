@@ -266,6 +266,12 @@ already provisioned:
 posts one aggregated PR comment (status list plus per-stack diffs). Manual
 `workflow_dispatch` accepts an optional `pr_number` to preview that PR's head and
 comment there; omit it for a drift check against the selected ref with no comment.
+
+After a same-repository PR matching the preview paths merges, the workflow previews the merge
+commit after 30 minutes. If changes remain, it mentions the merger in a sticky PR comment and
+checks twice more after 60 and 120 minutes. Preview errors also trigger a retry; a successful
+retry replaces the warning with the clean result.
+
 **CI never runs `pulumi up`** — see `spec.md §9`. It authenticates as
 `pulumi-ci@hai-gcp-models.iam.gserviceaccount.com`, granted preview-only (decrypt/read, never
 write) access in [`iam_data.yaml`](src/iac/gcp/iam_data.yaml). Shared data buckets are excluded
