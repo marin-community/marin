@@ -15,7 +15,7 @@ import logging
 import os
 
 from fray.types import ResourceConfig
-from marin.datakit.normalize import NormalizedData, normalize_step
+from marin.datakit.normalize import NormalizedData, normalize_to_parquet
 from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
@@ -47,6 +47,7 @@ from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from rigging.timing import log_time
+from zephyr.execution import ZephyrContext
 
 from infra.ci.run_status import run_status
 
@@ -63,6 +64,9 @@ FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
     ready_timeout=1_800,
     lookup_batch_size=128,
 )
+FERRY_MAX_WORKERS = 64
+FUZZY_VERIFICATION_MAX_WORKERS = 40
+FUZZY_MAX_PARALLELISM = 1_000
 
 
 def _verify_nemotron_quality_present(output_path: str) -> None:
@@ -85,30 +89,57 @@ def _verify_nemotron_quality_present(output_path: str) -> None:
     logger.info("Nemotron-CC %s confirmed at %s (e.g. %s)", NEMOTRON_QUALITY_DIR, quality_dir, sample[0])
 
 
+def _compute_fuzzy_dups(inputs: list[MinHashAttrData], output_path: str) -> FuzzyDupsAttrData:
+    resources = ResourceConfig(cpu=16, ram="160g", disk="32g")
+    with ZephyrContext(
+        name="datakit-nemotron-fuzzy-dups",
+        resources=resources,
+        max_workers=FERRY_MAX_WORKERS,
+    ) as zephyr_context:
+        return compute_fuzzy_dups_attrs(
+            inputs=inputs,
+            output_path=output_path,
+            cc_max_iterations=3,
+            max_parallelism=FUZZY_MAX_PARALLELISM,
+            worker_resources=resources,
+            map_task_resources=resources.scale(1 / 16),
+            reduce_task_resources=resources.scale(3 / 16),
+            zephyr_context=zephyr_context,
+        )
+
+
 def build_steps(base: str) -> list[StepSpec]:
     base_path = StoragePath(base)
 
     # Verify-only raw step. Uses an absolute override so it points at the
     # pre-staged dump regardless of MARIN_PREFIX.
-    download = StepSpec(
+    # StepRunner stores status and artifact records under a step's output, so
+    # the read-only source check must itself have a TTL output.
+    source_check = StepSpec(
         name="datakit-nemotron-smoke/download",
-        fn=_verify_nemotron_quality_present,
-        override_output_path=NEMOTRON_RAW_PATH,
+        fn=lambda _output_path: _verify_nemotron_quality_present(NEMOTRON_RAW_PATH),
+        hash_attrs={"quality": NEMOTRON_QUALITY_DIR},
+        override_output_path=str(base_path / "source-check"),
     )
 
     # Sizes mirror validate_normalize_phase1.py, which ran successfully on
-    # nemotron_v1 in eu-west4. 512 workers across all fan-out stages.
+    # nemotron_v1 in eu-west4. A bounded pool multiplexes each fan-out stage
+    # without reducing the 1,000-way fuzzy partitioning.
     # The yaml sets FERRY_TEST_MAX_FILES=1000 to cap the input shard count
     # (quality=high has ~2,755 shards / ~960 GB; 1000 keeps the run inside
     # the GH 6h cap). Read at execution time by `_discover_files`.
-    normalized = normalize_step(
+    normalized = StepSpec(
         name="datakit-nemotron-smoke/normalize",
-        download=download,
-        text_field="text",
-        id_field="id",
-        relative_input_path=f"{NEMOTRON_DATA_SUBDIR}/{NEMOTRON_QUALITY_DIR}",
-        worker_resources=ResourceConfig(cpu=2, ram="16g", disk="5g"),
-        max_workers=512,
+        deps=[source_check],
+        hash_attrs={"quality": NEMOTRON_QUALITY_DIR, "text_field": "text", "id_field": "id"},
+        fn=lambda output_path: normalize_to_parquet(
+            input_path=f"{NEMOTRON_RAW_PATH}/{NEMOTRON_DATA_SUBDIR}/{NEMOTRON_QUALITY_DIR}",
+            output_path=output_path,
+            text_field="text",
+            id_field="id",
+            worker_resources=ResourceConfig(cpu=2, ram="16g", disk="5g"),
+            max_workers=FERRY_MAX_WORKERS,
+        ),
         override_output_path=str(base_path / "normalize"),
     )  # ~1,380 output shards
 
@@ -121,6 +152,7 @@ def build_steps(base: str) -> list[StepSpec]:
             worker_resources=(resources := ResourceConfig(cpu=16, ram="64g", disk="32g")),
             map_task_resources=resources.scale(1 / 16),
             reduce_task_resources=resources.scale(3 / 16),
+            max_workers=FERRY_MAX_WORKERS,
         ),
         override_output_path=str(base_path / "minhash"),
     )  # ~1,380 output shards
@@ -129,13 +161,9 @@ def build_steps(base: str) -> list[StepSpec]:
         name="datakit-nemotron-smoke/fuzzy_dups",
         deps=[minhash],
         hash_attrs={"artifact_version": FUZZY_DUPS_ATTR_DATA_VERSION, "cc_max_iterations": 3},
-        fn=lambda output_path: compute_fuzzy_dups_attrs(
-            inputs=[read_artifact(minhash.output_path, MinHashAttrData)],
-            output_path=output_path,
-            cc_max_iterations=3,
-            worker_resources=(resources := ResourceConfig(cpu=16, ram="160g", disk="32g")),
-            map_task_resources=resources.scale(1 / 16),
-            reduce_task_resources=resources.scale(3 / 16),
+        fn=lambda output_path: _compute_fuzzy_dups(
+            [read_artifact(minhash.output_path, MinHashAttrData)],
+            output_path,
         ),
         override_output_path=str(base_path / "fuzzy_dups"),
     )  # ~1,380 output shards
@@ -157,6 +185,7 @@ def build_steps(base: str) -> list[StepSpec]:
             verification_params=verification_params,
             local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
             store_config=FUZZY_VERIFICATION_STORE_CONFIG,
+            max_workers=FUZZY_VERIFICATION_MAX_WORKERS,
             worker_resources=(resources := ResourceConfig(cpu=16, ram="160g", disk="32g")),
             map_task_resources=resources.scale(1 / 16),
             reduce_task_resources=resources.scale(3 / 16),
@@ -205,13 +234,17 @@ def build_steps(base: str) -> list[StepSpec]:
         override_output_path=str(base_path / "tokens"),
     )  # ~1,380 output shards
 
-    return [download, normalized, minhash, candidates, verified, consolidated, tokenized]
+    return [source_check, normalized, minhash, candidates, verified, consolidated, tokenized]
 
 
 def main() -> None:
     configure_logging()
     run_id = os.environ["SMOKE_RUN_ID"]
-    output_prefix = marin_temp_bucket(ttl_days=1, prefix=f"datakit-nemotron-smoke/{run_id}")
+    output_prefix = marin_temp_bucket(
+        ttl_days=1,
+        prefix=f"datakit-nemotron-smoke/{run_id}",
+        source_prefix=NEMOTRON_RAW_PATH,
+    )
     logger.info("Output prefix: %s", output_prefix)
 
     # Guard against accidental cross-region reads of the multi-TB raw dump.

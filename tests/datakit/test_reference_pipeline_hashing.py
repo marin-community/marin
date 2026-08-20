@@ -24,7 +24,6 @@ from experiments.datakit.reference_pipeline import (
     reference_datakit_steps,
     zephyr_datakit_steps,
 )
-from experiments.datakit.zephyr_benchmark import _route_outputs
 
 
 @pytest.fixture(autouse=True)
@@ -66,12 +65,27 @@ def test_global_exact_dedup_filters_only_the_store():
     assert _depends_on(steps["datakit/store"], exact_dedup)
 
 
-def test_benchmark_routes_every_stage_under_one_prefix():
-    routed = _route_outputs(reference_pipeline.zephyr_datakit_steps(_sources()), "gs://temp/benchmark")
+def test_benchmark_routes_every_stage_under_one_prefix(monkeypatch):
+    routed = reference_pipeline.zephyr_datakit_steps(
+        _sources(),
+        output_path_prefix="gs://temp/benchmark",
+    )
     steps = [routed.exact_dedup, *routed.tokenize.values(), *routed.minhash.values(), routed.fuzzy_dedup]
 
     assert all(step.output_path.startswith("gs://temp/benchmark/") for step in steps)
     assert routed.fuzzy_dedup.deps == list(routed.minhash.values())
+
+    read_paths = []
+    monkeypatch.setattr(
+        reference_pipeline,
+        "read_artifact",
+        lambda path, _artifact_type: read_paths.append(path) or object(),
+    )
+    monkeypatch.setattr(reference_pipeline, "compute_fuzzy_dups_attrs", lambda **_kwargs: None)
+    assert routed.fuzzy_dedup.fn is not None
+    routed.fuzzy_dedup.fn(routed.fuzzy_dedup.output_path)
+
+    assert read_paths == [step.output_path for step in routed.minhash.values()]
 
 
 def test_no_region_path_in_hash_attrs_except_known_bloom_gap():

@@ -38,6 +38,7 @@ import gc
 import io
 import logging
 import math
+import os
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
@@ -60,6 +61,12 @@ from zephyr.worker_context import _worker_ctx_var
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
+
+
+def _process_rss_bytes() -> int:
+    with open("/proc/self/statm", encoding="ascii") as process_memory:
+        resident_pages = int(process_memory.read().split()[1])
+    return resident_pages * os.sysconf("SC_PAGE_SIZE")
 
 
 # ---------------------------------------------------------------------------
@@ -388,8 +395,8 @@ def _merge_sorted_frames(
     """
     if len(frames) == 0:
         return
-    if fan_in < 2:
-        raise ValueError(f"fan_in must be at least 2, got {fan_in}")
+    if fan_in < memory_budget.MIN_MERGE_FAN_IN:
+        raise ValueError(f"fan_in must be at least {memory_budget.MIN_MERGE_FAN_IN}, got {fan_in}")
 
     # Created lazily, on the first actual spill, so a shard that fits within
     # fan_in never pays for a filesystem round trip to external_sort_dir.
@@ -546,17 +553,31 @@ class ScatterReader:
 
             if self.total_chunks == 0:
                 return
+            if self.shard_payload_bytes == 0:
+                return
 
             frames = self.get_frames()
             memory_bytes = _task_memory_bytes()
-            fan_in = memory_budget.read_merge_fan_in(memory_bytes, self.avg_item_bytes)
+            baseline_rss_bytes = _process_rss_bytes()
+            polars_threads = pl.thread_pool_size()
+            fan_in = memory_budget.read_merge_fan_in(
+                memory_bytes,
+                baseline_rss_bytes,
+                self.avg_item_bytes,
+                self.total_chunks,
+                self.shard_payload_bytes,
+                polars_threads,
+            )
             logger.info(
-                "[shard %d] Merging %d chunks with fan_in=%d (shard_payload_bytes=%s, avg_item_bytes=%.1f)",
+                "[shard %d] Merging %d chunks with fan_in=%d "
+                "(baseline_rss=%s, shard_payload_bytes=%s, avg_item_bytes=%.1f, polars_threads=%d)",
                 self._target_shard,
                 self.total_chunks,
                 fan_in,
+                humanfriendly.format_size(baseline_rss_bytes, binary=True),
                 humanfriendly.format_size(self.shard_payload_bytes, binary=True),
                 self.avg_item_bytes,
+                polars_threads,
             )
 
             batches = _merge_sorted_frames(
@@ -621,7 +642,7 @@ class ScatterWriter:
         self._source_shard = source_shard
         self._combiner_fn = combiner_fn
         self._memory_available_bytes = _task_memory_bytes()
-        self._flush_threshold_bytes = memory_budget.write_flush_threshold_bytes(self._memory_available_bytes)
+        self._flush_threshold_bytes: int | None = None
 
         # Buffered DataFrames, combined into one file per flush. Buffering
         # frames (not Python items) keeps the writer format-agnostic: a future
@@ -716,6 +737,18 @@ class ScatterWriter:
         """
         if len(df) == 0:
             return
+
+        if self._flush_threshold_bytes is None:
+            baseline_rss_bytes = _process_rss_bytes()
+            self._flush_threshold_bytes = memory_budget.write_flush_threshold_bytes(
+                self._memory_available_bytes, baseline_rss_bytes
+            )
+            logger.info(
+                "[shard %d] Scatter memory baseline %s; flush threshold %s",
+                self._source_shard,
+                humanfriendly.format_size(baseline_rss_bytes, binary=True),
+                humanfriendly.format_size(self._flush_threshold_bytes, binary=True),
+            )
 
         self._frames.append(df)
         self._buffer_estimated_bytes += int(df.estimated_size())
