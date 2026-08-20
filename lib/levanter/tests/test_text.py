@@ -966,5 +966,5 @@ def test_build_caches_rejects_required_component_missing_from_catalog(tmp_path):
         vocab_size=16,
     )
 
-    with pytest.raises(ValueError):
+    with pytest.raises(KeyError):
         config.build_caches("train")
