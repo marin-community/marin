@@ -10,16 +10,18 @@ The dataset is hosted at ``ravwojdyla/datakit-tier2-skewed-v2`` on HuggingFace
 [128, 256] MB band — designed to stress the long-doc paths that the FineWeb-Edu
 smoke ferry doesn't cover.
 
-The raw step is verification-only: it reads a pinned region-local copy and
-refuses to download or modify the source. Pipeline outputs go to absolute TTL
-paths under ``marin_temp_bucket(ttl_days=1)``.
+The download step uses ``download_hf_step`` so it cache-hits on a region-local
+staged copy when one exists at ``$MARIN_PREFIX/raw/<...>``, and falls back to a
+fresh HuggingFace download otherwise. Iris supplies the region-local stable
+prefix; pipeline outputs use absolute one-day TTL paths.
 """
 
 import logging
 import os
 
 from fray.types import ResourceConfig
-from marin.datakit.normalize import NormalizedData, normalize_to_parquet
+from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.normalize import NormalizedData, normalize_step
 from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
@@ -47,7 +49,6 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import (
 )
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from rigging.filesystem.cluster_config import marin_prefix, marin_temp_bucket
-from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 from rigging.timing import log_time
@@ -66,51 +67,26 @@ FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
     ready_timeout=1_800,
     lookup_batch_size=64,
 )
-TIER2_EXPECTED_FILES = 98
-FERRY_MAX_WORKERS = 64
-
-
-def _verify_tier2_present(output_path: str) -> None:
-    data_path = f"{output_path}/data"
-    fs, fs_path = url_to_fs(data_path)
-    files = fs.glob(f"{fs_path}/*.parquet")
-    if len(files) != TIER2_EXPECTED_FILES:
-        raise RuntimeError(
-            f"Expected {TIER2_EXPECTED_FILES} staged tier2 Parquet files under {data_path}, found {len(files)}. "
-            "The tier2 ferry refuses to download or replace the pinned raw source."
-        )
-    logger.info("Confirmed %d staged tier2 Parquet files under %s", len(files), data_path)
 
 
 def build_steps(run_id: str) -> list[StepSpec]:
-    raw_path = f"{marin_prefix()}/raw/datakit-tier2-skewed-v2-{HF_REVISION_SHORT}"
-    ttl_base = marin_temp_bucket(
-        ttl_days=1,
-        prefix=f"datakit-tier2-skewed-smoke/{run_id}",
-        source_prefix=raw_path,
+    ttl_base = marin_temp_bucket(ttl_days=1, prefix=f"datakit-tier2-skewed-smoke/{run_id}")
+
+    download = download_hf_step(
+        "datakit-tier2-skewed-smoke/download",
+        hf_dataset_id=HF_DATASET_ID,
+        revision=HF_REVISION,
+        hf_urls_glob=["data/*.parquet"],
+        override_output_path=f"raw/datakit-tier2-skewed-v2-{HF_REVISION_SHORT}",
     )
 
-    # StepRunner stores status and artifact records under a step's output, so
-    # the read-only source check must itself have a TTL output.
-    source_check = StepSpec(
-        name="datakit-tier2-skewed-smoke/download",
-        fn=lambda _output_path: _verify_tier2_present(raw_path),
-        hash_attrs={"source_revision": HF_REVISION},
-        override_output_path=f"{ttl_base}/source-check",
-    )
-
-    normalized = StepSpec(
+    normalized = normalize_step(
         name="datakit-tier2-skewed-smoke/normalize",
-        deps=[source_check],
-        hash_attrs={"source_revision": HF_REVISION, "text_field": "content", "id_field": "id"},
-        fn=lambda output_path: normalize_to_parquet(
-            input_path=f"{raw_path}/data",
-            output_path=output_path,
-            text_field="content",
-            id_field="id",
-            file_extensions=(".parquet",),
-            max_workers=FERRY_MAX_WORKERS,
-        ),
+        download=download,
+        text_field="content",
+        id_field="id",
+        relative_input_path="data",
+        file_extensions=(".parquet",),
         override_output_path=f"{ttl_base}/normalize",
     )
 
@@ -120,7 +96,6 @@ def build_steps(run_id: str) -> list[StepSpec]:
         fn=lambda output_path: compute_minhash_attrs(
             source=read_artifact(normalized.output_path, NormalizedData),
             output_path=output_path,
-            max_workers=FERRY_MAX_WORKERS,
         ),
         override_output_path=f"{ttl_base}/minhash",
     )
@@ -133,7 +108,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(minhash.output_path, MinHashAttrData)],
             output_path=output_path,
-            max_parallelism=FERRY_MAX_WORKERS,
+            max_parallelism=64,
             cc_max_iterations=3,
         ),
         override_output_path=f"{ttl_base}/fuzzy_dups",
@@ -156,7 +131,6 @@ def build_steps(run_id: str) -> list[StepSpec]:
             verification_params=verification_params,
             local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
             store_config=FUZZY_VERIFICATION_STORE_CONFIG,
-            max_workers=FERRY_MAX_WORKERS,
             worker_resources=ResourceConfig(cpu=2, ram="16g", disk="64g"),
         ),
         override_output_path=prefix_join(ttl_base, "verify_fuzzy_dups"),
@@ -199,7 +173,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         override_output_path=f"{ttl_base}/tokens",
     )
 
-    return [source_check, normalized, minhash, candidates, verified, consolidated, tokenized]
+    return [download, normalized, minhash, candidates, verified, consolidated, tokenized]
 
 
 def main() -> None:
