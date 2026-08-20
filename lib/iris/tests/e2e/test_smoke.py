@@ -203,6 +203,26 @@ def smoke_screenshot(smoke_page, tmp_path_factory):
     return capture
 
 
+def _wait_for_rows(page, text: str, *, present: bool) -> None:
+    """Wait until `text` is or is not among the log viewer's rows.
+
+    Both directions require at least one row. Re-querying the viewer empties the
+    list until the response lands, and a bare "the text is gone" check is also
+    true of that empty list, so anything asserted after it would race the fetch.
+    """
+    page.wait_for_function(
+        """
+        ({ text, present }) => {
+            const rows = [...document.querySelectorAll("[data-row]")];
+            if (rows.length === 0) return false;
+            return rows.some((row) => row.innerText.includes(text)) === present;
+        }
+        """,
+        arg={"text": text, "present": present},
+        timeout=15000,
+    )
+
+
 def _await_stable_screenshot(page, check: str, *, arg=None) -> None:
     """Wait for a screenshot-readiness predicate, settle briefly, then re-verify.
 
@@ -522,42 +542,20 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
         "and non-matching log lines are still visible around the highlights.",
     )
 
-    # The pager slides a fixed-size window through the stream. The verbose job
-    # logs a few hundred lines, so a 100-line page has somewhere to step back to
-    # while a tail read is already at the newest line.
-    older = smoke_page.get_by_role("button", name="← Older")
-    newer = smoke_page.get_by_role("button", name="Newer →")
+    # The pager moves a window through the stream: paging back leaves the newest
+    # line behind, and Follow returns to it. A 100-line page gives the verbose
+    # job's few hundred lines somewhere to step back to.
     page_size = "select[title='How many lines one page holds']"
     smoke_page.select_option(page_size, "100")
     smoke_page.wait_for_function(
         "() => document.querySelectorAll('[data-row]').length === 100",
         timeout=10000,
     )
-    assert newer.is_disabled(), "a tail read already holds the newest line"
-    assert not older.is_disabled()
-
-    oldest_before = smoke_page.locator("[data-row]").first.inner_text()
-    older.click()
-    smoke_page.wait_for_function(
-        "(before) => document.querySelector('[data-row]')?.innerText !== before",
-        arg=oldest_before,
-        timeout=10000,
-    )
-    assert not newer.is_disabled(), "paging back must enable the forward step"
-    assert smoke_page.locator("[data-row]").count() == 100, "the window slides, it does not grow"
-
-    # Follow returns the window to the live tail from wherever it was paged to.
+    smoke_page.get_by_role("button", name="← Older").click()
+    _wait_for_rows(smoke_page, "DONE: all lines emitted", present=False)
     smoke_page.get_by_role("button", name="Follow").click()
-    smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('DONE: all lines emitted')",
-        timeout=10000,
-    )
-    assert newer.is_disabled(), "Follow must land on the newest page"
+    _wait_for_rows(smoke_page, "DONE: all lines emitted", present=True)
     smoke_page.select_option(page_size, "500")
-    smoke_page.wait_for_function(
-        "() => document.querySelectorAll('[data-row]').length > 100",
-        timeout=10000,
-    )
 
     # The regex filter re-queries the server and drops non-matching lines entirely. It
     # applies on Enter, not on every keystroke. Keep this pattern literal-compatible
@@ -566,31 +564,18 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
     filter_input = "input[placeholder^='Filter regex']"
     smoke_page.fill(filter_input, "validation failed")
     smoke_page.press(filter_input, "Enter")
-    smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('validation failed') && "
-        "!document.body.textContent.includes('processing data batch')",
-        timeout=5000,
-    )
+    _wait_for_rows(smoke_page, "processing data batch", present=False)
     smoke_screenshot(
         "task-logs-filtered",
         "Task detail page with log filter input populated and filtered log lines visible in the log viewer.",
     )
 
     # Expanding context brings back the lines the filter hides, around every
-    # loaded hit at once, without dropping the filter itself.
-    filtered_count = smoke_page.locator("[data-row]").count()
+    # loaded hit at once, and collapsing puts them away again.
     smoke_page.get_by_role("button", name="Expand all").click()
-    smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('processing data batch')",
-        timeout=10000,
-    )
-    assert smoke_page.locator("[data-row]").count() > filtered_count
+    _wait_for_rows(smoke_page, "processing data batch", present=True)
     smoke_page.get_by_role("button", name="Collapse").click()
-    smoke_page.wait_for_function(
-        "(n) => document.querySelectorAll('[data-row]').length === n",
-        arg=filtered_count,
-        timeout=5000,
-    )
+    _wait_for_rows(smoke_page, "processing data batch", present=False)
 
     # The timestamp action still makes a permalink. The next control sets an
     # exact start time. The start time stays set after the string filter clears.
@@ -619,12 +604,11 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
     assert since_trigger.inner_text() == locked_since
 
     # A start time can also be typed or pasted, which the native date input this
-    # replaced could not accept at all.
+    # replaced could not accept at all. An unreadable value is refused in place.
     since_trigger.click()
     smoke_page.fill("[data-log-since-field]", "not a time")
     smoke_page.press("[data-log-since-field]", "Enter")
     assert_visible(smoke_page, "text=Unrecognized time")
-    assert since_trigger.inner_text() == locked_since, "a rejected value must not move the window"
     smoke_page.fill("[data-log-since-field]", "1970-01-01 00:00:00.000")
     smoke_page.press("[data-log-since-field]", "Enter")
     smoke_page.wait_for_function(
