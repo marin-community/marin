@@ -1,48 +1,25 @@
 ---
 name: write-tests
-description: Write or revise Marin tests with an emphasis on behavior, regression coverage, pytest style, and avoiding "slop tests." Use when adding tests, fixing failing tests, reviewing test quality, or deciding what test would catch a bug.
+description: Write, fix, or review Marin tests for behavioral regression coverage and pytest quality.
 ---
 
 # Write Tests
 
-Use this skill when a change needs tests or when existing tests look too coupled
-to implementation details.
+Read root `AGENTS.md` and `TESTING.md`. For files under `lib/*`, also read the
+nearest module `AGENTS.md` and its referenced testing guide; those documents
+own local commands, markers, fakes, mocks, optional dependencies, and numerical
+tolerances.
 
-Read root `TESTING.md` before writing or reviewing non-trivial tests. It is the
-shared project-wide testing policy used by `write-tests`, `review-pr`, and
-`commit`.
+1. Find existing coverage for the behavior before adding a file.
+2. State the observable behavior that should fail when the code is wrong.
+3. Exercise it through a public API, structured output, persisted state, or real
+   side effect. Avoid implementation-detail and tautological assertions.
+4. For a bug, prefer a regression test that fails before the fix.
+5. Keep setup realistic and small; use fixtures or parameterization only when
+   they remove meaningful duplication.
+6. Run the narrow test, then the relevant package command. The safe branch-wide
+   default is `uv run --no-project infra/ci/run_tests.py`; do not override its
+   marker expression.
+7. Before a PR, run `./infra/pre-commit.py --changed-files --fix`.
 
-Also read the relevant module-specific docs before choosing test style,
-fixtures, mocks, markers, or commands:
-
-- root `AGENTS.md`
-- root `TESTING.md`
-- the nearest subproject `AGENTS.md` for files under `lib/*`
-- package testing docs referenced from that `AGENTS.md`, such as
-  `lib/iris/TESTING.md`
-
-## Workflow
-
-1. Find existing tests for the touched behavior before creating a new file.
-2. Check module-specific testing rules for commands, markers, fakes, mocks, and
-   numerical tolerances.
-3. Name the behavior that should fail if the code is wrong.
-4. Write the smallest test that observes that behavior through a public API,
-   structured output, persisted state, or real side effect.
-5. Prefer a regression test before the fix when fixing a bug. Ensure the test fails before implementing the bug fix.
-6. Keep test setup realistic but small. Use fixtures and parameterization to
-   remove duplication.
-7. Run the narrow test first, then the relevant package test command. Before a
-   PR, run the repo lint entry point required by `AGENTS.md`.
-
-## Default Commands
-
-- Run a narrow test path while editing, then run
-  `uv run --no-project infra/ci/run_tests.py`. Do not override the repository's
-  default marker expression.
-- For package-specific commands, use the relevant `lib/*/AGENTS.md` or testing
-  doc.
-
-For PR preparation, run `./infra/pre-commit.py --changed-files --fix` or
-`./infra/pre-commit.py --all-files --fix` as appropriate. Do not replace it
-with `uv run pre-commit`.
+Do not substitute `uv run pre-commit` for the repository lint entry point.
