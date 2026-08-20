@@ -30,8 +30,12 @@ from levanter.grug.sharding import _batch_axes
 # QuACK's grouped GEMMs are written for SM100 and ship only with the CUDA 13 GPU extra.
 _SM100_COMPUTE_CAPABILITY = 10.0
 
+# An expert MLP takes both views of the receiver buffer's group sizes: the physical sizes,
+# which charge trailing padding to the last expert, and the active sizes, which count only
+# received rows. Which one a kernel needs depends on whether it covers the buffer or reads
+# segment boundaries.
 _ExpertMlp: TypeAlias = Callable[
-    [jax.Array, jax.Array, jax.Array, jax.Array, Callable[[jax.Array], jax.Array]], jax.Array
+    [jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, Callable[[jax.Array], jax.Array]], jax.Array
 ]
 
 
@@ -39,33 +43,42 @@ def _ragged_dot_expert_mlp(
     x_dispatch: jax.Array,
     moe_w13_local: jax.Array,
     moe_w2_local: jax.Array,
-    group_sizes: jax.Array,
+    physical_group_sizes: jax.Array,
+    active_group_sizes: jax.Array,
     activation_fn: Callable[[jax.Array], jax.Array],
 ) -> jax.Array:
-    """Portable expert MLP over XLA's `ragged_dot`."""
-    w13_out = ragged_dot(x_dispatch, moe_w13_local, group_sizes)
+    """Portable expert MLP over XLA's `ragged_dot`, which covers the whole receiver buffer."""
+    del active_group_sizes
+    w13_out = ragged_dot(x_dispatch, moe_w13_local, physical_group_sizes)
     moe_dim = moe_w2_local.shape[1]
     gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-    return ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
+    return ragged_dot(activation_fn(gate) * up, moe_w2_local, physical_group_sizes)
 
 
 def _cute_expert_mlp(
     x_dispatch: jax.Array,
     moe_w13_local: jax.Array,
     moe_w2_local: jax.Array,
-    group_sizes: jax.Array,
+    physical_group_sizes: jax.Array,
+    active_group_sizes: jax.Array,
     activation_fn: Callable[[jax.Array], jax.Array],
 ) -> jax.Array:
-    """Expert MLP on QuACK's SM100 grouped GEMMs, which fuse SwiGLU into the gate/up GEMM."""
-    del activation_fn
+    """Expert MLP on QuACK's SM100 grouped GEMMs plus cuDNN grouped weight gradients.
 
-    # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
-    from levanter.grug._moe.sonic_cute import _expert_mlp, _interleave_gate_up  # noqa: PLC0415
+    The grouped kernels are driven by segment boundaries, so they take the active sizes and
+    mask the receiver buffer's trailing padding rather than charging it to the last expert.
+    """
+    del activation_fn, physical_group_sizes
+
+    # QuACK, cuDNN Frontend, and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
+    from levanter.grug._moe.sonic_cute import _expert_mlp_cudnn, _interleave_gate_up  # noqa: PLC0415
 
     moe_dim = moe_w2_local.shape[1]
     w13_interleaved = _interleave_gate_up(moe_w13_local, moe_dim)
-    cumulative_group_sizes = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(group_sizes).astype(jnp.int32)])
-    return _expert_mlp(x_dispatch, w13_interleaved, moe_w2_local, group_sizes, cumulative_group_sizes)
+    cumulative_group_sizes = jnp.concatenate(
+        [jnp.zeros((1,), jnp.int32), jnp.cumsum(active_group_sizes).astype(jnp.int32)]
+    )
+    return _expert_mlp_cudnn(x_dispatch, w13_interleaved, moe_w2_local, active_group_sizes, cumulative_group_sizes)
 
 
 @functools.cache
@@ -154,7 +167,7 @@ def _moe_mlp_ep_ragged_a2a_local(
             recv_sizes,
             axis_name="expert",
         )
-        x_dispatch, local_sorted_indices, local_group_sizes = _local_permute_from_counts(
+        x_dispatch, local_sorted_indices, physical_group_sizes, active_group_sizes = _local_permute_from_counts(
             x_dispatched,
             clipped_group_sizes,
             local_expert_size=local_experts,
@@ -163,7 +176,12 @@ def _moe_mlp_ep_ragged_a2a_local(
 
     with jax.named_scope("moe_up_down"):
         out_dispatch = _select_expert_mlp(activation_fn)(
-            x_dispatch, moe_w13_local, moe_w2_local, local_group_sizes, activation_fn
+            x_dispatch,
+            moe_w13_local,
+            moe_w2_local,
+            physical_group_sizes,
+            active_group_sizes,
+            activation_fn,
         )
 
     with jax.named_scope("combine"):
