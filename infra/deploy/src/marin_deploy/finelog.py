@@ -4,8 +4,15 @@
 """Finelog deployment commands."""
 
 import click
-from finelog.deploy.operations import rollback as rollback_finelog
-from finelog.deploy.operations import rollout as rollout_finelog
+from finelog.deploy import _k8s
+from finelog.deploy.config import FinelogConfig, load_finelog_config
+
+
+def _k8s_config(name: str, operation: str) -> FinelogConfig:
+    config = load_finelog_config(name)
+    if config.deployment.k8s is None:
+        raise click.ClickException(f"{operation} requires a Kubernetes deployment config")
+    return config
 
 
 @click.group()
@@ -18,7 +25,8 @@ def finelog() -> None:
 @click.option("-y", "--yes", is_flag=True, help="Skip Pulumi confirmation.")
 def rollout_cmd(name: str, yes: bool) -> None:
     """Deploy and verify a Pulumi-managed Kubernetes Finelog server."""
-    rollout_finelog(name, yes=yes)
+    config = _k8s_config(name, "rollout")
+    _k8s.k8s_pulumi_rollout(config, stack=name, yes=yes)
 
 
 @finelog.command("rollback")
@@ -27,4 +35,5 @@ def rollout_cmd(name: str, yes: bool) -> None:
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation.")
 def rollback_cmd(name: str, to_revision: int | None, yes: bool) -> None:
     """Restore a retained Kubernetes Finelog revision."""
-    rollback_finelog(name, to_revision=to_revision, yes=yes)
+    config = _k8s_config(name, "rollback")
+    _k8s.k8s_rollback(config, stack=name, to_revision=to_revision, yes=yes)
