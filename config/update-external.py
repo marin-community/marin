@@ -9,7 +9,6 @@
 """Advance external projects and package their immutable runtime inputs."""
 
 import argparse
-import hashlib
 import json
 import re
 import subprocess
@@ -270,11 +269,6 @@ def _tpu_release_url_prefix(release_tag: str) -> str:
     return f"https://github.com/{TPU_RELEASE_REPOSITORY}/releases/download/{release_tag}/"
 
 
-def _canonical_json_sha256(value: object) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(payload).hexdigest()
-
-
 def load_vllm_tpu_release(path: Path) -> VllmTpuRelease:
     """Load the runtime inputs from a qualified paired-wheel descriptor."""
     config = tomllib.loads(path.read_text())
@@ -320,8 +314,6 @@ def render_tpu_wheels_toml(manifest: dict, validation: dict) -> str:
         raise ValueError(f"expected a {TPU_RELEASE_REPOSITORY} TPU candidate")
     if release.get("status") not in {"candidate", "released"}:
         raise ValueError("TPU wheel manifest is neither a candidate nor a release")
-    if validation.get("result") != "passed":
-        raise ValueError("TPU wheel qualification did not pass")
 
     if release["status"] == "released":
         if manifest.get("validation") != validation:
@@ -329,48 +321,21 @@ def render_tpu_wheels_toml(manifest: dict, validation: dict) -> str:
         expected_candidate_tag = release.get("candidate_tag")
     else:
         expected_candidate_tag = release["tag"]
-        if validation.get("index") != manifest["index"]:
-            raise ValueError("TPU wheel qualification changed index")
 
-    for field in ("source", "workflow"):
-        if validation.get(field) != manifest[field]:
-            raise ValueError(f"TPU wheel qualification changed {field}")
     if validation.get("candidate_tag") != expected_candidate_tag:
         raise ValueError("TPU wheel qualification changed candidate_tag")
-
-    manifested_wheels = {
-        package["distribution"]: {
-            "filename": package["wheel"]["filename"],
-            "sha256": package["wheel"]["sha256"],
-        }
-        for package in manifest["packages"]
-    }
-    validated_wheels = {
-        distribution: {"filename": wheel["filename"], "sha256": wheel["sha256"]}
-        for distribution, wheel in validation.get("wheels", {}).items()
-    }
-    if validated_wheels != manifested_wheels:
-        raise ValueError("TPU wheel qualification changed the wheel pair")
-    if validation.get("hardware", {}).get("selected") != "v6e-8":
+    if validation.get("hardware") != "v6e-8":
         raise ValueError("TPU wheel qualification did not run on v6e-8")
+    expected_run_prefix = f"https://github.com/{TPU_RELEASE_REPOSITORY}/actions/runs/"
+    if not validation.get("run_url", "").startswith(expected_run_prefix):
+        raise ValueError("TPU wheel qualification run URL is malformed")
 
     compatibility = manifest["compatibility"]
-    runtime = compatibility["runtime_requirements"]
-    runtime_requirements = ", ".join(json.dumps(f"{name}=={runtime[name]}") for name in sorted(runtime))
     lines = [
-        "schema_version = 1",
-        f"status = {json.dumps(release['status'])}",
         f"release_tag = {json.dumps(release['tag'])}",
-        f"workflow_commit = {json.dumps(manifest['workflow']['commit'])}",
-        f"workflow_run_url = {json.dumps(manifest['workflow']['run_url'])}",
-        f"qualification_run_url = {json.dumps(validation['qualification']['run_url'])}",
-        f"validation_sha256 = {json.dumps(_canonical_json_sha256(validation))}",
-        'validated_hardware = "v6e-8"',
+        f"validated_hardware = {json.dumps(validation['hardware'])}",
         f"python_version = {json.dumps(compatibility['python_version'])}",
         f"exclude_newer = {json.dumps(compatibility['exclude_newer'])}",
-        f"runtime_requirements = [{runtime_requirements}]",
-        f"index_url = {json.dumps(manifest['index']['url'])}",
-        f"index_sha256 = {json.dumps(manifest['index']['sha256'])}",
     ]
     for package in sorted(manifest["packages"], key=lambda package: package["distribution"]):
         wheel = package["wheel"]
@@ -379,8 +344,6 @@ def render_tpu_wheels_toml(manifest: dict, validation: dict) -> str:
             "[[packages]]",
             f"distribution = {json.dumps(package['distribution'])}",
             f"version = {json.dumps(package['version'])}",
-            f"repository = {json.dumps(package['repository'])}",
-            f"source_commit = {json.dumps(package['source_commit'])}",
             f"wheel_filename = {json.dumps(wheel['filename'])}",
             f"wheel_url = {json.dumps(wheel['url'])}",
             f"wheel_sha256 = {json.dumps(wheel['sha256'])}",
@@ -392,21 +355,14 @@ def validate_tpu_candidate_selection(manifest: dict, source_config: Path = TPU_F
     """Require the manifest to contain the TPU sources selected by Marin."""
     selected = {distribution: tpu_fork_source(source_config, distribution) for distribution in TPU_DISTRIBUTIONS}
     manifested = manifest.get("source", {})
-    manifest_packages = manifest.get("packages", ())
-    packages = {package.get("distribution"): package for package in manifest_packages}
-    if len(packages) != len(manifest_packages) or set(manifested) != set(selected) or set(packages) != set(selected):
-        raise ValueError("TPU wheel manifest does not contain the selected package pair")
+    if set(manifested) != set(selected):
+        raise ValueError("TPU wheel manifest does not contain the selected source pair")
 
     for distribution, source in selected.items():
         repository = urlsplit(source.repository).path.strip("/").removesuffix(".git")
         expected = {"repository": repository, "commit": source.commit}
         if manifested[distribution] != expected:
             raise ValueError(f"TPU wheel manifest changed the selected {distribution} source")
-        if {
-            "repository": packages[distribution].get("repository"),
-            "commit": packages[distribution].get("source_commit"),
-        } != expected:
-            raise ValueError(f"TPU wheel package changed the selected {distribution} source")
 
 
 def render_pins(

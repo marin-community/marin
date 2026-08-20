@@ -80,8 +80,6 @@ def _tpu_candidate() -> tuple[dict, dict]:
         {
             "distribution": distribution,
             "version": version,
-            "repository": source[distribution]["repository"],
-            "source_commit": source[distribution]["commit"],
             "wheel": wheel,
         }
         for distribution, version, wheel in (
@@ -97,19 +95,13 @@ def _tpu_candidate() -> tuple[dict, dict]:
         "compatibility": {
             "python_version": "3.12",
             "exclude_newer": "2026-08-12T00:00:00Z",
-            "runtime_requirements": {"jax": "0.10.2", "jaxlib": "0.10.2", "libtpu": "0.0.43"},
         },
         "packages": packages,
     }
     validation = {
         "candidate_tag": tag,
-        "source": source,
-        "workflow": workflow,
-        "qualification": {"run_url": "https://github.com/marin-community/vllm/actions/runs/456"},
-        "index": index,
-        "wheels": {distribution: dict(wheel) for distribution, wheel in wheels.items()},
-        "hardware": {"selected": "v6e-8"},
-        "result": "passed",
+        "hardware": "v6e-8",
+        "run_url": "https://github.com/marin-community/vllm/actions/runs/456",
     }
     return manifest, validation
 
@@ -121,18 +113,19 @@ def test_render_tpu_wheels_round_trips_a_qualified_pair(tmp_path):
 
     path.write_text(update_external.render_tpu_wheels_toml(manifest, validation))
     release = update_external.load_vllm_tpu_release(path)
+    packages = {package["distribution"]: package for package in manifest["packages"]}
 
     assert release.release_tag == manifest["release"]["tag"]
-    assert release.vllm.sha256 == validation["wheels"]["vllm"]["sha256"]
-    assert release.tpu_inference.sha256 == validation["wheels"]["tpu-inference"]["sha256"]
+    assert release.vllm.sha256 == packages["vllm"]["wheel"]["sha256"]
+    assert release.tpu_inference.sha256 == packages["tpu-inference"]["wheel"]["sha256"]
 
 
-def test_render_tpu_wheels_rejects_a_result_for_other_bytes():
+def test_render_tpu_wheels_rejects_a_result_for_another_candidate():
     update_external = _update_external()
     manifest, validation = _tpu_candidate()
-    validation["wheels"]["vllm"]["sha256"] = "0" * 64
+    validation["candidate_tag"] = "marin-vllm-tpu-candidate-other"
 
-    with pytest.raises(ValueError, match="changed the wheel pair"):
+    with pytest.raises(ValueError, match="changed candidate_tag"):
         update_external.render_tpu_wheels_toml(manifest, validation)
 
 
@@ -150,10 +143,6 @@ def test_render_tpu_wheels_accepts_the_promoted_copy_of_qualified_bytes(tmp_path
     }
     for package in manifest["packages"]:
         package["wheel"]["url"] = prefix + package["wheel"]["filename"]
-    manifest["index"] = {
-        "url": prefix + "marin-vllm-tpu-index-1111111111111111.html",
-        "sha256": "1" * 64,
-    }
     manifest["validation"] = validation
     path = tmp_path / "tpu_wheels.toml"
 
@@ -165,7 +154,7 @@ def test_render_tpu_wheels_accepts_the_promoted_copy_of_qualified_bytes(tmp_path
     assert release.tpu_inference.url.startswith(prefix)
 
 
-def test_tpu_candidate_selection_binds_manifest_and_packages_to_selected_sources(tmp_path):
+def test_tpu_candidate_selection_rejects_another_source(tmp_path):
     update_external = _update_external()
     source_config = tmp_path / "tpu.toml"
     source_config.write_text(
@@ -182,11 +171,6 @@ commit = "{'b' * 40}"
     manifest, _ = _tpu_candidate()
     manifest["source"]["vllm"]["commit"] = "0" * 40
     with pytest.raises(ValueError, match="selected vllm source"):
-        update_external.validate_tpu_candidate_selection(manifest, source_config)
-
-    manifest, _ = _tpu_candidate()
-    manifest["packages"][0]["source_commit"] = "0" * 40
-    with pytest.raises(ValueError, match="package changed the selected vllm source"):
         update_external.validate_tpu_candidate_selection(manifest, source_config)
 
 

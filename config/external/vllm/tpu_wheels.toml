@@ -1,22 +1,11 @@
-schema_version = 1
-status = "candidate"
 release_tag = "marin-vllm-tpu-candidate-5b69c198a2cc-e8f28a4ef357-27909099ec4f-98342a6ffe5e"
-workflow_commit = "27909099ec4fed7ef6ea12e9aa85b66cdc802675"
-workflow_run_url = "https://github.com/marin-community/vllm/actions/runs/32210039639"
-qualification_run_url = "https://github.com/marin-community/vllm/actions/runs/32213439610"
-validation_sha256 = "c5e654b17533187b424cace40b4ff13c4922c09e4c9d4a59ae91f183da788248"
 validated_hardware = "v6e-8"
 python_version = "3.12"
 exclude_newer = "2026-08-12T00:00:00Z"
-runtime_requirements = ["jax==0.10.2", "jaxlib==0.10.2", "libtpu==0.0.43"]
-index_url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-tpu-candidate-5b69c198a2cc-e8f28a4ef357-27909099ec4f-98342a6ffe5e/marin-vllm-tpu-index-f6995dfff229c288.html"
-index_sha256 = "f6995dfff229c288eb8dc1efb8372343bfee1e9be165295e0768f7dab8ee83e7"
 
 [[packages]]
 distribution = "tpu-inference"
 version = "0.26.0+marin.e8f28a4ef357"
-repository = "marin-community/tpu-inference"
-source_commit = "e8f28a4ef35783227546da8032c03f3c61167e25"
 wheel_filename = "tpu_inference-0.26.0+marin.e8f28a4ef357-py3-none-any.whl"
 wheel_url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-tpu-candidate-5b69c198a2cc-e8f28a4ef357-27909099ec4f-98342a6ffe5e/tpu_inference-0.26.0+marin.e8f28a4ef357-py3-none-any.whl"
 wheel_sha256 = "083c570ed08fd2afeff12e61068f918037f0e65105b4a771d6762698132bcdd1"
@@ -24,8 +13,6 @@ wheel_sha256 = "083c570ed08fd2afeff12e61068f918037f0e65105b4a771d6762698132bcdd1
 [[packages]]
 distribution = "vllm"
 version = "0.20.1rc1.dev0+marin.5b69c198a2cc.tpu"
-repository = "marin-community/vllm"
-source_commit = "5b69c198a2cc51ae531ad7d8d46ced8ff3c7d8df"
 wheel_filename = "vllm-0.20.1rc1.dev0+marin.5b69c198a2cc.tpu-cp312-cp312-linux_x86_64.whl"
 wheel_url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-tpu-candidate-5b69c198a2cc-e8f28a4ef357-27909099ec4f-98342a6ffe5e/vllm-0.20.1rc1.dev0+marin.5b69c198a2cc.tpu-cp312-cp312-linux_x86_64.whl"
 wheel_sha256 = "9e8878827c22632f93effafcb84c6072dbe1d9a38f1fad893b15ba0222ef23a6"
