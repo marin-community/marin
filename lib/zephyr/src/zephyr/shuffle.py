@@ -106,8 +106,6 @@ _SCATTER_METADATA_FILENAME = "metadata.msgpack"
 _SIDECAR_READ_CONCURRENCY = 8
 
 _PROGRESS_LOG_INTERVAL_SECONDS = 60.0
-# Polars streaming chunk size, important to avoid excessive memory usage during merge.
-_POLARS_STREAMING_CHUNK_SIZE = 10000
 # Bound Parquet footer size when a shuffle has thousands of target shards. One
 # row group per target gives ideal predicate pruning, but makes every reducer
 # read multi-megabyte footers from every mapper chunk before it can read data.

@@ -29,7 +29,9 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -44,11 +46,12 @@ from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import StoragePath
 from zephyr import memory_budget
 from zephyr.shuffle import (
-    ScatterWriter,
     _DATAFRAME_ROW_COUNT,
     _PAYLOAD_COL,
     _SORT_KEY_COL,
+    ScatterWriter,
     _merge_sorted_frames,
+    _process_rss_bytes,
     _scan_scatter_parquet,
     _task_memory_bytes,
     _unify_frame_schemas,
@@ -58,6 +61,16 @@ _RESULT_PREFIX = "MEMORY_RESULT: "
 _RSS_SAMPLE_INTERVAL = 0.01
 _FRAME_TARGET_BYTES = 64 * 1024 * 1024
 _MANIFEST_NAME = "manifest.json"
+
+
+class WriteMode(StrEnum):
+    FORCED = "forced"
+    PLANNED = "planned"
+
+
+class ChildFailureMode(StrEnum):
+    STOP = "stop"
+    RECORD = "record"
 
 
 @dataclass(frozen=True)
@@ -98,12 +111,12 @@ class RssSampler:
         self._interval = interval
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._sample, name="rss-sampler", daemon=True)
-        self.peak_bytes = _rss_bytes()
+        self.peak_bytes = _process_rss_bytes()
 
     def _sample(self) -> None:
         while not self._stop.wait(self._interval):
             try:
-                self.peak_bytes = max(self.peak_bytes, _rss_bytes())
+                self.peak_bytes = max(self.peak_bytes, _process_rss_bytes())
             except OSError:
                 return
 
@@ -115,7 +128,7 @@ class RssSampler:
         self._stop.set()
         self._thread.join(timeout=2.0)
         try:
-            self.peak_bytes = max(self.peak_bytes, _rss_bytes())
+            self.peak_bytes = max(self.peak_bytes, _process_rss_bytes())
         except OSError:
             pass
 
@@ -125,9 +138,7 @@ def _parse_bytes(value: str) -> int:
 
 
 def _validate_calibration_path(path: str, role: str) -> None:
-    iris_environment = any(
-        os.environ.get(name) for name in ("IRIS_JOB_ID", "IRIS_TASK_ID", "IRIS_CONTROLLER_URL")
-    )
+    iris_environment = any(os.environ.get(name) for name in ("IRIS_JOB_ID", "IRIS_TASK_ID", "IRIS_CONTROLLER_URL"))
     if not iris_environment:
         return
     if "/tmp/ttl=1d/zephyr-shuffle-calibration/" not in path:
@@ -175,12 +186,6 @@ def _frame(
 
 def _warm_polars() -> None:
     pl.DataFrame({"x": [2, 1]}).sort("x")
-
-
-def _rss_bytes() -> int:
-    with open("/proc/self/statm") as statm:
-        resident_pages = int(statm.read().split()[1])
-    return resident_pages * os.sysconf("SC_PAGE_SIZE")
 
 
 def _process_peak_bytes() -> int:
@@ -246,7 +251,7 @@ def _write_child(
     output_root: str,
     seed: int,
     repetition: int,
-    auto_flush: bool,
+    write_mode: WriteMode,
 ) -> dict[str, Any]:
     _warm_polars()
     writer = ScatterWriter(
@@ -254,7 +259,7 @@ def _write_child(
         key_fn=lambda item: item,
         source_shard=0,
     )
-    baseline = max(_rss_bytes(), _process_peak_bytes())
+    baseline = max(_process_rss_bytes(), _process_peak_bytes())
     estimated_bytes_per_row = float(max(item_bytes + 24, 1))
     rows = 0
     estimated_bytes = 0
@@ -285,13 +290,13 @@ def _write_child(
             estimated_bytes += frame_estimated_bytes
             estimated_bytes_per_row = frame.estimated_size() / len(frame)
 
-            if auto_flush:
+            if write_mode is WriteMode.PLANNED:
                 buffered_after_write = writer._buffer_estimated_bytes + frame_estimated_bytes
                 writer.write(frame)
                 max_buffer_estimated_bytes = max(max_buffer_estimated_bytes, buffered_after_write)
                 frames.clear()
 
-        if not auto_flush:
+        if write_mode is WriteMode.FORCED:
             writer._frames = frames
             writer._buffer_estimated_bytes = estimated_bytes
             max_buffer_estimated_bytes = estimated_bytes
@@ -316,7 +321,7 @@ def _write_child(
         "target_rows": exact_rows,
         "estimated_bytes": estimated_bytes,
         "max_buffer_estimated_bytes": max_buffer_estimated_bytes,
-        "auto_flush": auto_flush,
+        "write_mode": write_mode.value,
         "flush_count": len(writer._chunk_paths),
         "rows": rows,
         "item_bytes": item_bytes,
@@ -420,6 +425,58 @@ def _load_read_manifest(input_root: str) -> ReadManifest:
     return ReadManifest.from_json(value)
 
 
+@dataclass(frozen=True)
+class ReadOutput:
+    rows: int
+    payload_bytes: int
+    max_batch_rows: int
+    max_batch_bytes: int
+
+
+def _consume_read_batches(batches: Iterable[pl.DataFrame]) -> ReadOutput:
+    rows = 0
+    payload_bytes = 0
+    max_batch_rows = 0
+    max_batch_bytes = 0
+    for batch in batches:
+        rows += len(batch)
+        payload_bytes += int(batch[_PAYLOAD_COL].bin.size().sum())
+        max_batch_rows = max(max_batch_rows, len(batch))
+        max_batch_bytes = max(max_batch_bytes, int(batch.estimated_size()))
+    return ReadOutput(rows, payload_bytes, max_batch_rows, max_batch_bytes)
+
+
+def _execute_read_operation(
+    operation: str,
+    frames: list[pl.LazyFrame],
+    output_root: str,
+    fan_in: int,
+    repetition: int,
+    total_rows: int,
+    total_payload_bytes: int,
+) -> ReadOutput:
+    if operation == "read-sink":
+        output_path = f"{output_root.rstrip('/')}/sink-rep-{repetition}.parquet"
+        with open_url(output_path, "wb") as output:
+            pl.merge_sorted(frames, key=_SORT_KEY_COL).sink_parquet(output, compression="zstd")
+        return ReadOutput(total_rows, total_payload_bytes, 0, 0)
+
+    if operation == "read-collect":
+        fan_in = max(fan_in, len(frames))
+    elif operation not in {"read-external", "read-planned"}:
+        raise ValueError(f"unknown read operation {operation}")
+
+    return _consume_read_batches(
+        _merge_sorted_frames(
+            frames=frames,
+            sort_key=_SORT_KEY_COL,
+            external_sort_dir=f"{output_root.rstrip('/')}/spill-rep-{repetition}",
+            fan_in=fan_in,
+            shard=0,
+        )
+    )
+
+
 def _read_child(
     *,
     operation: str,
@@ -439,7 +496,7 @@ def _read_child(
 
     frames = _unify_frame_schemas([_scan_scatter_parquet(path) for path in paths])
     _warm_polars()
-    baseline = max(_rss_bytes(), _process_peak_bytes())
+    baseline = max(_process_rss_bytes(), _process_peak_bytes())
     total_payload_bytes = sum(
         width * count for width, count in zip(manifest.item_bytes[:input_count], rows, strict=True)
     )
@@ -456,73 +513,29 @@ def _read_child(
     effective_fan_in = min(len(frames), fan_in) if operation in {"read-external", "read-planned"} else len(frames)
     bytes_at_risk = effective_fan_in * streaming_rows * avg_item_bytes
     mean_input_payload_bytes = total_payload_bytes / len(frames)
-    model_active_rows = min(
-        effective_fan_in * memory_budget.STREAMING_CHUNK_SIZE_ROWS,
-        total_payload_bytes / avg_item_bytes,
+    model_predicted_growth_bytes = memory_budget.read_merge_growth_bytes(
+        effective_fan_in,
+        avg_item_bytes,
+        len(frames),
+        total_payload_bytes,
+        pl.thread_pool_size(),
     )
-    model_batch_bytes = model_active_rows * avg_item_bytes
-    model_expanded_batch_bytes = min(
-        memory_budget.R_READ_MAX * model_batch_bytes,
-        memory_budget.R_READ_PAYLOAD * model_batch_bytes
-        + memory_budget.READ_ROW_OVERHEAD_BYTES * model_active_rows,
-    )
-    model_thread_shard_bytes = min(pl.thread_pool_size(), effective_fan_in) * mean_input_payload_bytes
-    model_active_input_payload_bytes = min(total_payload_bytes, effective_fan_in * mean_input_payload_bytes)
-    model_buffered_input_payload_bytes = max(0.0, model_active_input_payload_bytes - model_batch_bytes)
-    model_predicted_growth_bytes = (
-        memory_budget.FIXED_OVERHEAD_READ_BYTES
-        + model_expanded_batch_bytes
-        + memory_budget.R_READ_BUFFERED_INPUT_PAYLOAD * model_buffered_input_payload_bytes
-        + memory_budget.R_READ_THREAD_SHARD * model_thread_shard_bytes
-        + (memory_budget.R_READ_SPILL_PAYLOAD * total_payload_bytes if effective_fan_in < len(frames) else 0.0)
-    )
-    output_rows = 0
-    output_payload_bytes = 0
-    max_output_batch_rows = 0
-    max_output_batch_bytes = 0
     started = time.monotonic()
     with pl.Config() as polars_config, RssSampler() as sampler:
         polars_config.set_streaming_chunk_size(streaming_rows)
-        if operation == "read-collect":
-            batches = _merge_sorted_frames(
-                frames=frames,
-                sort_key=_SORT_KEY_COL,
-                external_sort_dir=f"{output_root.rstrip('/')}/spill-rep-{repetition}",
-                fan_in=max(fan_in, len(frames)),
-                shard=0,
-            )
-            for batch in batches:
-                output_rows += len(batch)
-                output_payload_bytes += int(batch[_PAYLOAD_COL].bin.size().sum())
-                max_output_batch_rows = max(max_output_batch_rows, len(batch))
-                max_output_batch_bytes = max(max_output_batch_bytes, int(batch.estimated_size()))
-        elif operation == "read-sink":
-            output_path = f"{output_root.rstrip('/')}/sink-rep-{repetition}.parquet"
-            with open_url(output_path, "wb") as output:
-                pl.merge_sorted(frames, key=_SORT_KEY_COL).sink_parquet(output, compression="zstd")
-            output_rows = total_rows
-            output_payload_bytes = sum(
-                width * count for width, count in zip(manifest.item_bytes[:input_count], rows, strict=True)
-            )
-        elif operation in {"read-external", "read-planned"}:
-            batches = _merge_sorted_frames(
-                frames=frames,
-                sort_key=_SORT_KEY_COL,
-                external_sort_dir=f"{output_root.rstrip('/')}/spill-rep-{repetition}",
-                fan_in=fan_in,
-                shard=0,
-            )
-            for batch in batches:
-                output_rows += len(batch)
-                output_payload_bytes += int(batch[_PAYLOAD_COL].bin.size().sum())
-                max_output_batch_rows = max(max_output_batch_rows, len(batch))
-                max_output_batch_bytes = max(max_output_batch_bytes, int(batch.estimated_size()))
-        else:
-            raise ValueError(f"unknown read operation {operation}")
+        output = _execute_read_operation(
+            operation,
+            frames,
+            output_root,
+            fan_in,
+            repetition,
+            total_rows,
+            total_payload_bytes,
+        )
     elapsed = time.monotonic() - started
 
-    if output_rows != total_rows:
-        raise RuntimeError(f"read row mismatch: expected {total_rows}, produced {output_rows}")
+    if output.rows != total_rows:
+        raise RuntimeError(f"read row mismatch: expected {total_rows}, produced {output.rows}")
 
     peak = max(sampler.peak_bytes, _process_peak_bytes())
     return {
@@ -541,29 +554,24 @@ def _read_child(
         "effective_fan_in": effective_fan_in,
         "avg_item_bytes": avg_item_bytes,
         "input_rows": total_rows,
-        "output_rows": output_rows,
-        "output_payload_bytes": output_payload_bytes,
-        "max_output_batch_rows": max_output_batch_rows,
-        "max_output_batch_bytes": max_output_batch_bytes,
+        "output_rows": output.rows,
+        "output_payload_bytes": output.payload_bytes,
+        "max_output_batch_rows": output.max_batch_rows,
+        "max_output_batch_bytes": output.max_batch_bytes,
         "task_memory_bytes": task_memory_bytes,
         "total_payload_bytes": total_payload_bytes,
         "mean_input_payload_bytes": mean_input_payload_bytes,
-        "model_batch_bytes": model_batch_bytes,
-        "model_expanded_batch_bytes": model_expanded_batch_bytes,
-        "model_thread_shard_bytes": model_thread_shard_bytes,
-        "model_active_input_payload_bytes": model_active_input_payload_bytes,
-        "model_buffered_input_payload_bytes": model_buffered_input_payload_bytes,
         "model_predicted_growth_bytes": model_predicted_growth_bytes,
         "model_utilization": (peak - baseline) / model_predicted_growth_bytes,
     }
 
 
-def _run_children(repetitions: int, threads: int, allow_child_failure: bool) -> None:
-    child_args = [arg for arg in sys.argv[1:] if arg not in {"--child"}]
+def _run_children(repetitions: int, threads: int, failure_mode: ChildFailureMode) -> None:
+    child_args = sys.argv[1:]
     env = os.environ.copy()
     env["POLARS_MAX_THREADS"] = str(threads)
     for repetition in range(-1, repetitions):
-        command = [sys.executable, __file__, *child_args, "--child", "--repetition", str(repetition)]
+        command = [sys.executable, __file__, *child_args, "--repetition", str(repetition)]
         completed = subprocess.run(command, env=env, check=False)
         if completed.returncode != 0:
             failure = {
@@ -572,7 +580,7 @@ def _run_children(repetitions: int, threads: int, allow_child_failure: bool) -> 
                 "returncode": completed.returncode,
             }
             print(_RESULT_PREFIX + json.dumps(failure), flush=True)
-            if not allow_child_failure:
+            if failure_mode is ChildFailureMode.STOP:
                 raise SystemExit(completed.returncode)
 
 
@@ -599,10 +607,13 @@ def _run_children(repetitions: int, threads: int, allow_child_failure: bool) -> 
 @click.option("--seed", type=int, default=17)
 @click.option("--threads", type=int, default=2)
 @click.option("--repetitions", type=int, default=5)
-@click.option("--auto-flush", is_flag=True)
-@click.option("--allow-child-failure", is_flag=True)
-@click.option("--child", is_flag=True, hidden=True)
-@click.option("--repetition", type=int, default=0, hidden=True)
+@click.option("--write-mode", type=click.Choice([mode.value for mode in WriteMode]), default=WriteMode.FORCED.value)
+@click.option(
+    "--child-failure",
+    type=click.Choice([mode.value for mode in ChildFailureMode]),
+    default=ChildFailureMode.STOP.value,
+)
+@click.option("--repetition", type=int, default=None, hidden=True)
 def main(
     operation: str,
     target_estimated_bytes: str,
@@ -622,10 +633,9 @@ def main(
     seed: int,
     threads: int,
     repetitions: int,
-    auto_flush: bool,
-    allow_child_failure: bool,
-    child: bool,
-    repetition: int,
+    write_mode: str,
+    child_failure: str,
+    repetition: int | None,
 ) -> None:
     """Run one memory-calibration cell."""
     run_id = os.environ.get("CALIBRATION_RUN_ID", f"local-{int(time.time())}")
@@ -649,8 +659,8 @@ def main(
         print(_RESULT_PREFIX + json.dumps({"operation": operation, **manifest.to_json()}), flush=True)
         return
 
-    if not child:
-        _run_children(repetitions, threads, allow_child_failure)
+    if repetition is None:
+        _run_children(repetitions, threads, ChildFailureMode(child_failure))
         return
 
     if operation == "write":
@@ -663,7 +673,7 @@ def main(
             output_root=output_root,
             seed=seed,
             repetition=repetition,
-            auto_flush=auto_flush,
+            write_mode=WriteMode(write_mode),
         )
     else:
         if input_root is None:

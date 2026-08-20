@@ -92,13 +92,14 @@ def write_flush_threshold_bytes(task_memory_bytes: int, baseline_rss_bytes: int)
     return max(1, int(growth_budget / R_WRITE))
 
 
-def _read_merge_growth_bytes(
+def read_merge_growth_bytes(
     fan_in: int,
     avg_item_bytes: float,
     total_chunks: int,
     shard_payload_bytes: float,
     polars_threads: int,
 ) -> float:
+    """Predict RSS growth for one sorted-merge plan."""
     active_rows = min(fan_in * STREAMING_CHUNK_SIZE_ROWS, shard_payload_bytes / avg_item_bytes)
     batch_bytes = active_rows * avg_item_bytes
     expanded_batch_bytes = min(
@@ -144,7 +145,7 @@ def read_merge_fan_in(
     growth_budget = int(task_memory_bytes * SAFETY_FRACTION_READ) - baseline_rss_bytes
     direct_fan_in = max(MIN_MERGE_FAN_IN, total_chunks)
     if (
-        _read_merge_growth_bytes(
+        read_merge_growth_bytes(
             direct_fan_in,
             avg_item_bytes,
             total_chunks,
@@ -156,7 +157,7 @@ def read_merge_fan_in(
         return direct_fan_in
 
     if (
-        _read_merge_growth_bytes(
+        read_merge_growth_bytes(
             MIN_MERGE_FAN_IN,
             avg_item_bytes,
             total_chunks,
@@ -173,7 +174,7 @@ def read_merge_fan_in(
     high = max(MIN_MERGE_FAN_IN, total_chunks - 1)
     while low < high:
         candidate = (low + high + 1) // 2
-        predicted_growth = _read_merge_growth_bytes(
+        predicted_growth = read_merge_growth_bytes(
             candidate,
             avg_item_bytes,
             total_chunks,
