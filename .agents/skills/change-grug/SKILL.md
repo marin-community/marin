@@ -1,6 +1,6 @@
 ---
 name: change-grug
-description: Modify or upstream a Grug/Grugformer experiment variant.
+description: Modify model or training behavior in a Grug/Grugformer experiment variant, or upstream a proven variant change.
 ---
 
 # Skill: Changing Grug (Template-First)
@@ -8,6 +8,9 @@ description: Modify or upstream a Grug/Grugformer experiment variant.
 Grug is intentionally template-first: the canonical edit surface lives in `experiments/grug/base/`, not in a shared `levanter.grug` trainer stack.
 
 This skill covers two steps: trying a change in an experiment copy, and upstreaming it into the base template when it proves out.
+
+Do not use this skill to run an existing variant, change launch-only configuration, or add a
+bounded operational diagnostic. Use the variant README and launcher controls for those tasks.
 
 ## Source Of Truth
 

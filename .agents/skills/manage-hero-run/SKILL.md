@@ -5,7 +5,7 @@ description: Launch, monitor, hand off, resume, rollback, or babysit expensive M
 
 # Manage Hero Run
 
-Use this skill for expensive or production-critical runs where a bad launch, stale worktree, weak handoff, or confused resume can waste significant compute. Optimize first for deliberate launch, then reliable babysitting, then disciplined resume/recovery.
+Use this skill for expensive or production-critical runs where a bad launch, stale worktree, weak handoff, or confused resume can waste significant compute.
 
 As a rule of thumb, use this skill for runs that are expected to run for 1e22 model flops or more. (6ND heuristic is fine.) You should also use this skill if asked.
 
@@ -16,7 +16,31 @@ As a rule of thumb, use this skill for runs that are expected to run for 1e22 mo
 - Never stop, restart, or bounce an Iris cluster without explicit user permission.
 - If something needs human judgment or authorization, attempt to contact the DRI, usually the user in the chat, through available channels such as GitHub issue comments, Discord, email, or Slack.
 
+Classify the run before loading supporting workflows:
+
+- A **production run** is long-lived, has a durable output contract, or is expected to exceed the
+  1e22 FLOP guideline. It requires the full run record below.
+- A **bounded diagnostic** has a small fixed step or time limit, lifecycle-managed output, no
+  canonical export, and one monitoring owner. Record its launch contract in the originating
+  conversation or durable session channel. Do not create an issue or logbook solely to submit it.
+
+Do not load `run-research`, `task-logbook`, `task-snapshot`, `file-issue`, or their writing guides
+for a bounded diagnostic. Load them only when the run requires the artifact they govern.
+
 ## Launch
+
+Start from the user's reference command or the nearest existing launcher. Read that launcher's
+README and `--help`, then apply only the requested differences. Do not reconstruct the experiment
+from implementation internals or add a launcher when existing flags express the run.
+
+Resolve the launch blockers first:
+
+1. Confirm the requested source commit is present with a direct ancestry check.
+2. Inspect the reference job read-only for the fields that the new run must preserve.
+3. Choose unique job, run, output, checkpoint, and rendezvous identities.
+4. Print the dry plan and exact submit command.
+5. Submit once the checks below are resolved. Issue setup, prose polishing, broad repository tests,
+   and prior-work searches do not block a bounded diagnostic.
 
 Before launching, print and validate:
 
@@ -25,7 +49,8 @@ Before launching, print and validate:
 - Pinned durable output root. Mutable and development runs must use a caller-owned
   `users/<username>/...` path below `MARIN_PREFIX`; do not write run data below a cluster's
   `iris/` prefix.
-- W&B id/name and resume policy.
+- Tracker mode. When W&B is enabled, record its id/name and resume policy. Bounded diagnostics may
+  disable W&B when logs and checkpoints provide the required evidence.
 - Checkpoint retention policy. Put rolling resume checkpoints under a region-local
   `marin_temp_bucket(ttl_days=30, ..., source_prefix=<output root>)` path. Keep one by default and at
   most two unless the DRI approves and records a deeper rollback window. Keep one durable canonical
@@ -49,87 +74,26 @@ If any value is inferred, label it as inferred. If code lineage, checkpoint poli
 
 ## Run Record
 
-Maintain research-style run records (cf the run-research skill):
+For a production run, create or use a dedicated experiment issue and an append-only logbook at
+`.agents/logbooks/<run>.md`. Follow `task-logbook` for their format and publication rules. Bootstrap
+and push both links before launch.
 
-- Create or use a dedicated GitHub issue for important status, decisions, and escalation. Apply the appropriate experiment/run label when available.
-- Keep an append-only logbook at `.agents/logbooks/<run>.md` unless the user chooses another path.
-- Commit and push the logbook every time it is materially updated; git history is the durability layer, not the local Codex worktree.
-- Link the issue and logbook both ways.
-- Record every launched instance: timestamp, DRI, exact command line with secrets scrubbed, git SHA, dirty-tree status, source bundle identity, hardware/topology, W&B run id/display name, durable output root, resume checkpoint root and retention count, projected checkpoint bytes, canonical export path, trace/rendezvous/spill destinations, `initialize_from`, final step, and babysitter state.
-- Post issue updates for significant milestones, failures, relaunches, rollbacks, retention changes, and escalations. Keep dense logs in the logbook and concise status in the issue.
+Record each production instance's command, source SHA and bundle, dirty-tree status, DRI,
+hardware/topology, tracker identity, output and checkpoint roots, retention and projected bytes,
+`initialize_from`, final step, and monitoring owner. Update the logbook at material events. Post
+concise issue updates for launches, failures, relaunches, retention changes, milestones, and final
+seal; post a routine status at least every 24 hours.
 
-Bootstrap the issue and logbook before launch:
-
-1. Pick a stable run slug, e.g. `grug-moe-1e23-ep8`.
-2. Create `.agents/logbooks/<run>.md` from the template below.
-3. If no dedicated issue exists, create one:
-
-```bash
-gh issue create \
-  --repo marin-community/marin \
-  --title "Hero run: <run name>" \
-  --label experiment \
-  --label agent-generated \
-  --body-file /tmp/<run>-hero-issue.md
-```
-
-4. Put the issue URL in the logbook, and put the logbook path in the issue body.
-5. Commit and push the initial logbook before launch:
-
-```bash
-git add .agents/logbooks/<run>.md
-git commit -m "<run>: start hero-run logbook"
-git push
-```
-
-After launch, commit and push the logbook every time it is materially updated. Use concise commit messages such as `<run>: log launch`, `<run>: log relaunch`, or `<run>: log final seal`. Issue comments should start with `🤖` unless the exact text was explicitly approved by the user.
-
-Use this compact logbook shape:
-
-```md
-# <Run Name>: Hero Run Logbook
-
-## Run Contract
-- DRI:
-- Goal:
-- Stop/escalation criteria:
-- Issue:
-- W&B:
-- Output root:
-- Resume checkpoint root / retention / projected bytes:
-- Canonical export:
-- Raw trace / rendezvous / Ray spill:
-- Final step:
-
-## Launched Instances
-### YYYY-MM-DD HH:MM TZ - <instance id>
-- Command: `<scrubbed command>`
-- Git SHA:
-- Dirty tree: no | yes, approved by <person>, patch identity <link/hash>
-- Source bundle/container:
-- Hardware/topology:
-- `initialize_from`:
-- Final step:
-- Checkpoint policy:
-- Storage report:
-- Babysitter/check cadence:
-
-## Event Log
-### YYYY-MM-DD HH:MM TZ - <event>
-- Status:
-- Evidence:
-- Decision:
-- Next:
-```
-
-
-Issue updates should happen every 24 hours unless an interesting event (crash, spike, etc) occurs. Logbook updates should happen at every check cadence and whenever an interesting event occurs. The logbook is the detailed record of what happened, while the issue is the high-level status for observers.
+For a bounded diagnostic, record the same applicable fields in the durable session channel or
+originating conversation. Add an issue or logbook when the diagnostic needs a handoff, lasts more
+than one day, changes production lineage, or produces an artifact that must remain discoverable.
 
 ## Babysitting
 
 - Check at the agreed cadence from the operating model.
 - Use the babysitting workflow for job health, monitor freshness, W&B progress, checkpoint completion, loss/metric sanity, and completion checks.
-- Validate the active W&B run id, display name, state, `_timestamp`, `global_step`, and key losses against the intended run id/display name recorded at launch. Do not rely only on a saved W&B URL.
+- When W&B is enabled, validate the active run id, display name, state, `_timestamp`, `global_step`,
+  and key losses against the launch record. Do not rely only on a saved W&B URL.
 - Prefer narrow Iris/orchestrator status queries, SQL checks, and targeted job inspection over broad blocking status calls.
 - Classify stale diagnostic jobs separately from the current production child job.
 - Escalate to the DRI when the next action requires judgment, spend/capacity tradeoffs, lineage choice, cluster intervention, or accepting a dirty/unverified state.
@@ -185,15 +149,19 @@ Many failures can be recoverable just by relaunching using the same id. These in
 When a hero run finishes or reaches a handoff milestone:
 
 - Verify terminal orchestrator status is successful.
-- Verify W&B is finished or has the expected final state and metrics.
-- Verify the final checkpoint has `metadata.json`.
+- When W&B is enabled, verify it is finished or has the expected final state and metrics.
+- When the run writes checkpoints, verify the final checkpoint has `metadata.json`.
 - Verify terminal cleanup or lifecycle coverage for resume checkpoints, raw traces, failed-launch
   markers, rendezvous state, and Ray session/debug uploads.
-- Capture final metrics, final step, W&B run id/display name, output root, final checkpoint path, and any caveats.
+- Capture final metrics, final step, output root, final checkpoint path, and any caveats. Include the
+  W&B run id/display name when enabled.
 - Stop or delete heartbeat/monitor automations that are no longer needed.
 - If approved dirty-tree changes were used, create a seal commit and tag immediately so the actual operational state is recoverable.
-- Create and push a seal tag for the completed run or milestone.
-- Update the GitHub issue and logbook with the W&B run, checkpoint, commit/tag, final metrics, launch command, and caveats.
+- For a production run, create and push a seal tag. Update its GitHub issue and logbook with the
+  tracker, checkpoint, commit/tag, final metrics, launch command, and caveats.
+- For a bounded diagnostic, post the final result in the originating conversation or durable
+  session channel. Include the command, source SHA, terminal status, final step and metrics, output
+  and checkpoint paths, tracker identity when enabled, and caveats.
 
 
 ## References
