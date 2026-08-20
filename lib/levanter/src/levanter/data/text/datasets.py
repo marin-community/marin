@@ -67,6 +67,7 @@ T_co = TypeVar("T_co", covariant=True)
 T = TypeVar("T")
 
 logger = logging.getLogger("levanter.data.text")
+CACHE_METADATA_WORKERS = 32
 
 
 class TokenSeqDict(TypedDict):
@@ -917,7 +918,7 @@ class LmDataConfig:
 
         catalog_splits: dict[str, dict[str, CacheCatalogEntry]] = {split: {} for split in splits}
         if candidates:
-            max_workers = min(32, len(candidates))
+            max_workers = min(CACHE_METADATA_WORKERS, len(candidates))
             with (
                 log_time(f"build_cache_catalog over {len(candidates)} caches"),
                 ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="build_cache_catalog") as pool,
@@ -1021,7 +1022,7 @@ class LmDataConfig:
 
         caches: dict[str, TreeCache[dict]] = {}
         to_build: list[tuple[str, tuple[str, ShardedDataSource, LmDatasetFormatBase]]] = []
-        max_workers = min(32, len(items))
+        max_workers = min(CACHE_METADATA_WORKERS, len(items))
         classified: dict[int, _ClassifiedComponent] = {}
         with (
             log_time(f"build_caches[{split}] over {len(items)} components"),
