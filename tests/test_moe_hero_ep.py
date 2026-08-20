@@ -169,19 +169,26 @@ def test_expert_bank_override_must_support_three_waves():
         launch.build_hero_run(run_id="bad-waves", dp_racks=1, num_steps=1, num_experts=256, version="dev")
 
 
+def _runtime_env_config(*, processes_per_task=1, watch_mode=train.WatchMode.INLINE, watch_interval=1):
+    """A stand-in for GrugRunConfig holding only the fields ``run_grug``'s env setup and dispatch read."""
+    return SimpleNamespace(
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
+            watch_mode=watch_mode,
+        ),
+        resources=object(),
+        processes_per_task=processes_per_task,
+        max_retries_failure=0,
+        max_task_failures=10,
+    )
+
+
 def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch):
     explicit_overlap = "--xla_gpu_experimental_parallel_collective_overlap_limit=2"
     monkeypatch.setenv("XLA_FLAGS", explicit_overlap)
     for name in train.HERO_EP_RUNTIME_ENV:
         monkeypatch.delenv(name, raising=False)
-    config = SimpleNamespace(
-        trainer=SimpleNamespace(
-            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
-            watch_mode=train.WatchMode.INLINE,
-        ),
-        resources=object(),
-        processes_per_task=1,
-    )
+    config = _runtime_env_config()
 
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)
@@ -204,14 +211,7 @@ def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
     for name in train.HERO_EP_RUNTIME_ENV:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv("XLA_FLAGS", raising=False)
-    config = SimpleNamespace(
-        trainer=SimpleNamespace(
-            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
-            watch_mode=train.WatchMode.INLINE,
-        ),
-        resources=object(),
-        processes_per_task=4,
-    )
+    config = _runtime_env_config(processes_per_task=4)
 
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)
@@ -228,14 +228,7 @@ def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
     monkeypatch.setenv("JAX_ENABLE_PGLE", "false")
     monkeypatch.setenv("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
     monkeypatch.delenv("XLA_FLAGS", raising=False)
-    config = SimpleNamespace(
-        trainer=SimpleNamespace(
-            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
-            watch_mode=train.WatchMode.INLINE,
-        ),
-        resources=object(),
-        processes_per_task=1,
-    )
+    config = _runtime_env_config()
 
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)
@@ -256,14 +249,7 @@ def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
     monkeypatch, watch_mode, watch_interval, expected_overlap_limit
 ):
     monkeypatch.delenv("XLA_FLAGS", raising=False)
-    config = SimpleNamespace(
-        trainer=SimpleNamespace(
-            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
-            watch_mode=watch_mode,
-        ),
-        resources=object(),
-        processes_per_task=1,
-    )
+    config = _runtime_env_config(watch_mode=watch_mode, watch_interval=watch_interval)
 
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)

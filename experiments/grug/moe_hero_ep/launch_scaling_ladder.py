@@ -23,6 +23,7 @@ analytic estimate (forward+backward, including attention and the latent-MoE corr
 
 import dataclasses
 import os
+from datetime import timedelta
 
 import click
 import jmp
@@ -36,6 +37,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
+from marin.training.training import temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -84,6 +86,15 @@ WATCH_INTERVAL = 10
 # scales every narrower rung by the same ratio.
 TOKENS_PER_ACTIVE_PARAM = 791
 TENSORSTORE_CACHE_BYTES = 125_000_000_000
+# A crash costs at most this much training time. A hero checkpoint is several TB, thus a shorter
+# interval would spend a large part of the run inside a checkpoint write.
+RESUME_SAVE_INTERVAL = timedelta(hours=1)
+# A rung runs up to 176 tasks for hundreds of GPU-days, where a hardware fault or a host
+# out-of-memory on one task is routine. A rung resumes from its newest checkpoint, thus a retry
+# continues the run instead of repeating it. Retry deeply so one bad task does not end a rung.
+# The two counters are separate gates and the job fails when either one trips.
+LADDER_MAX_RETRIES_FAILURE = 1000
+LADDER_MAX_TASK_FAILURES = 1000
 
 
 def _ladder_model(size: str):
@@ -123,8 +134,9 @@ def build_ladder_run(
     parameter at the rung's (rack-scaled) batch. Every eval scores the held-out set both as-trained
     and dropless. The narrow rungs eval every 5% of the run and keep only the forced final
     checkpoint; the d6144 hero evals every 3000 steps and keeps a permanent checkpoint every 6000.
-    ``checkpoint_every`` overrides that cadence for any rung. Checkpoints are output-only: an
-    offloaded run cannot restore from one, so they serve analysis rather than crash recovery.
+    ``checkpoint_every`` overrides that cadence for any rung. A rolling temporary checkpoint every
+    ``RESUME_SAVE_INTERVAL`` on region-local storage covers a crash or a preemption, and a rung
+    resumes from the newest checkpoint it finds.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -231,17 +243,14 @@ def build_ladder_run(
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
-            # Checkpoints are output-only: an offloaded run cannot restore from one (its pinned-host
-            # master/opt state comes back device-kind and mismatches the jitted step). load_checkpoint
-            # is forced False so a retry after a checkpoint starts fresh instead of crashing on the
-            # broken restore. A preempted run therefore restarts at step 0.
-            load_checkpoint=False,
-            # No time-based temporary checkpoints -- they would only exist to enable that broken
-            # restore. Keep just the permanent step-interval checkpoints below plus the forced final.
+            # load_checkpoint stays None: the trainer resumes from the newest checkpoint that
+            # exists, so a retry after a hardware or memory fault continues the run.
             checkpointer=CheckpointerConfig(
                 base_path=prefix_join(ctx.output_path, "checkpoints"),
-                temporary_base_path=None,
-                save_interval=None,
+                # Rolling resume checkpoints go to region-local temp storage with a lifecycle TTL.
+                # The durable output root keeps only the permanent milestones and the final one.
+                temporary_base_path=temporary_checkpoint_base_path(ctx.output_path),
+                save_interval=RESUME_SAVE_INTERVAL,
                 keep=keep_permanent,
                 append_run_id_to_base_path=False,
                 delete_old_temp_checkpoints=True,
@@ -273,6 +282,8 @@ def build_ladder_run(
             ),
             stop_after_steps=num_steps,
             processes_per_task=HERO_GPUS_PER_NODE,
+            max_retries_failure=LADDER_MAX_RETRIES_FAILURE,
+            max_task_failures=LADDER_MAX_TASK_FAILURES,
         )
 
     return ArtifactStep(
@@ -299,8 +310,9 @@ def build_ladder_run(
     "--checkpoint-every",
     type=click.IntRange(min=1),
     default=None,
-    help="Keep a permanent checkpoint every N steps. Default follows the rung (6000 at d6144, "
-    "final only elsewhere). Checkpoints are output-only; an offloaded run cannot restore from one.",
+    help="Keep a permanent checkpoint every N steps on the durable output root. Default follows "
+    "the rung (6000 at d6144, final only elsewhere). Resume uses the rolling temporary checkpoint "
+    "and is not affected by this option.",
 )
 @build_options
 def main(
