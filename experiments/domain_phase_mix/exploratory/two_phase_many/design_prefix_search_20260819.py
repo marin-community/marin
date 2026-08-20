@@ -83,23 +83,39 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E
 )
 
 DEFAULT_OUT = SCRIPT_DIR / "reference_outputs" / "prefix_search_design_20260819"
-# The ladder is expressed in CODE-FAMILY SHARE, not in an abstract step along a direction. Two reasons.
-# It is the coordinate the ordering evidence is stated in, so the rungs are interpretable. And it cannot
-# saturate: an earlier version stepped along a normalised direction and silently produced duplicate
-# mixtures, because the code family holds only 5.3% of the proportional policy, so "move code out" caps at
-# 0.053 total variation and every rung below it collapses onto the same point.
-# `None` is the proportional policy's own code share, substituted exactly at build time. Writing the
-# rounded 0.0531 instead leaves it 1.5e-5 total variation from the proportional reference prefix, which
-# is not a distinguishable policy but IS a distinct manifest row -- so that prefix would train its tied
-# anchor and this rung as two near-identical runs under the same seed, which is pure waste. Exact
-# equality instead makes the pair a genuine duplicate that `_assert_no_duplicate_runs` reseeds into a
-# free branch-noise cell.
-CODE_SHARE_LADDER = (0.0, 0.02, None, 0.10, 0.20, 0.35, 0.55, 0.80, 1.0)
-ORTHOGONAL_SEPARATIONS = (0.10, 0.20, 0.30, 0.40)
+# Continuations are drawn from Dirichlet(concentration * proportional) and chosen by maximin, with no
+# reference to what any bucket CONTAINS. The first revision laid them on a code-family-share ladder, which
+# was circular -- a design built around the code axis that then finds a code-axis effect has confirmed its
+# own premise -- and it collapsed the core to 1.6 effective dimensions out of 38 available, with 94.3% of
+# the variance in two directions. Measured over 17 continuations: hand-built 1.6, Dirichlet at a single
+# concentration 9.4-11.3, mixed concentrations i.i.d. 6.1 (worse, because mixing radii makes the set
+# anisotropic), mixed concentrations with maximin selection 12.9, and 11.5 once the epoch cap applies.
+#
+# Concentration is the label-agnostic replacement for a separation ladder: it sets distance from
+# proportional without naming a direction. 500 gives total variation 0.07-0.12, 5 gives 0.41-0.74.
+CONCENTRATIONS = (500.0,) * 4 + (100.0,) * 4 + (20.0,) * 4 + (5.0,) * 4
+CANDIDATES_PER_CONCENTRATION = 25
 LOCAL_SEPARATION = 0.15
-# Gate zero replicates a mid-ladder rung: far enough from the prefix that any real branch effect is
-# present, not so far that the measurement only describes an extreme policy nobody would deploy.
-GATE_ZERO_CONTINUATION = "code_share_0200"
+# Gate zero replicates a mid-spread continuation: far enough from the prefix that any real branch effect
+# is present, not so far that the measurement only describes an extreme policy nobody would deploy.
+GATE_ZERO_CONTINUATION = "common_08"
+# No bucket may exceed this many materialized epochs within a phase. Repetition is a different mechanism
+# from ordering, and an uncapped Dirichlet tail reaches 178 epochs. The cap costs 0.0-3.9% rejection
+# depending on concentration and only 12.9 -> 11.5 effective dimensions.
+#
+# Its interpretive cost is recorded rather than assumed: the archive sits deep in the repeated regime
+# (phase-0 max epoch median 9.65, p90 60.1, max 204, with 89% of rows above 4 epochs), so a phase-0 cap of
+# 10 retains 54.7% of archive rows and sampled prefixes therefore span the readout terciles of the
+# low-repetition HALF of the archive rather than of the archive itself.
+MAX_EPOCHS_PER_PHASE = 10.0
+# Below one sample per block a weight is quantisation noise: nominally positive, realised as zero or one
+# sequence at random. Levanter drops exact zeros but keeps these, so the realised mixture would differ
+# from the frozen one. Snapping moves a mixture by at most 6.2e-4 total variation. The archive's smallest
+# positive weights are 4.97e-122 and 8.58e-261, which is the signature of unsnapped Dirichlet generation.
+BLOCK_SIZE = 4096
+# A floor on DIRECTIONAL diversity, not a target: the first revision spanned 1.6 raw dimensions and read
+# as a perfectly reasonable design.
+MINIMUM_EFFECTIVE_DIMENSIONS = 9.0
 CERTIFICATION_SEEDS = 3
 TABLE9_RUN_NOISE = 0.00342  # measured on the archive; see ATOM-029 claim 2
 DESIGN_SEED = 20260819
@@ -123,34 +139,19 @@ def stable_seed(*parts) -> int:
     return DESIGN_SEED + int.from_bytes(hashlib.blake2b(payload, digest_size=4).digest(), "big") % 100_000
 
 
-def family_direction(fit, family: str, sign: float = 1.0) -> np.ndarray:
-    """A unit-total-variation direction moving mass into (or out of) one family.
+def isotropic_directions(count: int, dimension: int, seed: int) -> list[np.ndarray]:
+    """Zero-sum unit-total-variation directions drawn without reference to any coordinate's meaning.
 
-    Mass is taken from the other families and added within the target family in proportion to the
-    token-proportional policy, so the direction expresses a FAMILY-level shift without also asserting an
-    arbitrary opinion about allocation inside a family.
-    """
-    index = list(fit.family_names).index(family)
-    inside = fit.family_index == index
-    base = fit.proportional
-    direction = np.zeros(len(base))
-    direction[inside] = base[inside] / max(base[inside].sum(), 1e-12)
-    direction[~inside] = -base[~inside] / max(base[~inside].sum(), 1e-12)
-    return sign * direction / (0.5 * np.abs(direction).sum())
-
-
-def orthogonal_directions(fit, primary: np.ndarray, count: int, seed: int) -> list[np.ndarray]:
-    """Zero-sum directions orthogonal to the primary one, for coverage away from it.
-
-    Without these the design would only probe the direction already believed to matter, and a null result
-    would say nothing about every other way the two phases could differ.
+    Used for the per-prefix local probes, which measure the conditional response the one-step improvement
+    differentiates. They are isotropic rather than aimed, for the same reason the common core is drawn
+    rather than laid out: aiming them requires naming a direction, and naming a direction is what made the
+    first revision circular.
     """
     generator = np.random.default_rng(seed)
     found: list[np.ndarray] = []
     while len(found) < count:
-        draw = generator.normal(size=len(primary))
+        draw = generator.normal(size=dimension)
         draw -= draw.mean()
-        draw -= (draw @ primary) / (primary @ primary) * primary
         scale = 0.5 * np.abs(draw).sum()
         if scale > 1e-9:
             found.append(draw / scale)
@@ -199,35 +200,163 @@ def shift_to_separation(base: np.ndarray, direction: np.ndarray, separation: flo
     return at(0.5 * (low + high))
 
 
+def prepare_prefix(weights: np.ndarray, base: np.ndarray, rate: np.ndarray) -> np.ndarray:
+    """Snap a prefix and bring it inside the epoch cap by shrinking toward proportional.
+
+    Every prefix goes through this, not only the generated ones. Archive-sampled prefixes carry the
+    archive's own unsnapped weights -- its smallest positive weights are 4.97e-122, the signature of
+    unsnapped Dirichlet generation -- and a tied anchor copies its prefix verbatim, so without this the
+    quantisation noise the snap exists to remove would re-enter through the prefix side. The surrogate's
+    predicted optima are unconstrained argmins and can land far outside the cap.
+
+    Shrinking toward proportional rather than rejecting keeps the prefix's identity: a predicted optimum
+    pulled 20% toward proportional is still that optimum's direction, whereas a redraw is a different
+    policy answering a different question.
+    """
+    snapped = snap(weights)
+    if max_epochs(snapped, rate) <= MAX_EPOCHS_PER_PHASE:
+        return snapped
+    for step in np.linspace(0.05, 1.0, 20):
+        candidate = snap((1.0 - step) * snapped + step * base)
+        if max_epochs(candidate, rate) <= MAX_EPOCHS_PER_PHASE:
+            return candidate
+    raise ValueError("no shrink toward proportional satisfies the epoch cap")
+
+
+def exploratory_prefix(fit) -> np.ndarray:
+    """One prefix deliberately far from proportional, drawn rather than aimed."""
+    generator = np.random.default_rng(stable_seed("exploratory"))
+    rate = np.asarray(fit.c0, dtype=float)
+    while True:
+        candidate = snap(generator.dirichlet(5.0 * fit.proportional))
+        if max_epochs(candidate, rate) <= MAX_EPOCHS_PER_PHASE and separation_of(fit.proportional, candidate) > 0.4:
+            return candidate
+
+
+def local_probe(base: np.ndarray, direction: np.ndarray, rate: np.ndarray) -> np.ndarray:
+    """A probe at `LOCAL_SEPARATION` from its prefix, shortened only if the epoch cap requires it.
+
+    Shortening rather than redrawing keeps the probe's DIRECTION, which is what the conditional response
+    is estimated from; only its length gives way to the cap.
+    """
+    for scale in (1.0, 0.75, 0.5, 0.35, 0.25, 0.15, 0.1):
+        candidate = snap(shift_to_separation(base, direction, LOCAL_SEPARATION * scale))
+        if max_epochs(candidate, rate) <= MAX_EPOCHS_PER_PHASE:
+            return candidate
+    raise ValueError("no probe length along this direction satisfies the epoch cap")
+
+
+def snap(weights: np.ndarray) -> np.ndarray:
+    """Zero any weight that cannot earn one sample per block, then renormalise.
+
+    A weight below 1/BLOCK_SIZE is nominally positive but realised as zero or one sequence at random, so
+    the mixture that trains is not the mixture that was frozen. Levanter drops exact zeros cleanly but
+    keeps these, which is why the snap has to happen here rather than being left to the trainer.
+    """
+    snapped = np.where(weights * BLOCK_SIZE < 1.0, 0.0, weights)
+    total = snapped.sum()
+    if total <= 0:
+        raise ValueError("snapping removed all weight")
+    return snapped / total
+
+
+def max_epochs(weights: np.ndarray, rate: np.ndarray) -> float:
+    """Materialized epochs of the most-repeated bucket, given that phase's epochs-per-unit-weight."""
+    return float(np.max(weights * rate))
+
+
 def common_continuations(fit) -> list[dict]:
-    """The continuations run from EVERY prefix: a code-share ladder plus orthogonal coverage."""
+    """The continuations run from EVERY prefix, drawn without reference to what any bucket contains.
+
+    Dirichlet(concentration * proportional) has mean at the token-proportional policy, and concentration
+    controls how far a draw lands from it. Drawing a pool across a concentration ladder and then choosing
+    by maximin spreads the set over the simplex instead of along one axis, which is what makes the crossed
+    cells informative about more than a single direction.
+    """
     base = fit.proportional
-    proportional_share = float(base[fit.family_index == list(fit.family_names).index(evidence.CODE_FAMILY)].sum())
-    ladder = [proportional_share if share is None else share for share in CODE_SHARE_LADDER]
+    rate = np.asarray(fit.c1, dtype=float)
+    generator = np.random.default_rng(stable_seed("common"))
+    bands = sorted(set(CONCENTRATIONS), reverse=True)
+    per_band = (COMMON_COUNT - 1) // len(bands)
+    rejected = 0
+    chosen: list[np.ndarray] = [base]
+
+    # Selection separates DIRECTION from RADIUS, because the two goals conflict. Maximin over the pooled
+    # candidates maximises dimensional spread (12.9 effective dimensions) but every pick comes from the
+    # widest band, leaving a median distance of 0.75 from proportional and nothing in the near range a
+    # deployed policy would occupy. Maximin within a band fixes the radius coverage but collapses the
+    # spread to 6.8, because a band's candidates all sit at a similar distance.
+    #
+    # Taking the radius from the band and choosing on the unit direction gets both: each band contributes
+    # its own distance scale, and within the band the picks point as far apart as the pool allows.
+    directions: list[np.ndarray] = []
+    for concentration in bands:
+        pool: list[np.ndarray] = []
+        while len(pool) < CANDIDATES_PER_CONCENTRATION * per_band:
+            candidate = snap(generator.dirichlet(concentration * base))
+            if max_epochs(candidate, rate) > MAX_EPOCHS_PER_PHASE:
+                rejected += 1
+                continue
+            pool.append(candidate)
+        candidates = np.stack(pool)
+        unit = np.array([(row - base) / max(separation_of(base, row), 1e-12) for row in candidates])
+        for _ in range(per_band):
+            if directions:
+                spread = np.array([min(separation_of(row, taken) for taken in directions) for row in unit])
+            else:
+                spread = np.linalg.norm(unit, axis=1)
+            pick = int(np.argmax(spread))
+            chosen.append(candidates[pick])
+            directions.append(unit[pick])
+            candidates = np.delete(candidates, pick, axis=0)
+            unit = np.delete(unit, pick, axis=0)
+
     rows = [
         {
-            "continuation_id": f"code_share_{round(share * 1000):04d}",
-            "direction": "code_share",
-            "requested": share,
-            "weights": set_family_share(fit, base, evidence.CODE_FAMILY, share),
+            "continuation_id": "common_proportional" if index == 0 else f"common_{index:02d}",
+            "direction": "dirichlet_maximin",
+            "requested": float(separation_of(base, weights)),
+            "weights": weights,
         }
-        for share in ladder
+        for index, weights in enumerate(chosen)
     ]
-    code = family_direction(fit, evidence.CODE_FAMILY, +1.0)
-    for index, direction in enumerate(orthogonal_directions(fit, code, 2, stable_seed("common"))):
-        rows += [
-            {
-                "continuation_id": f"orthogonal{index}_{int(separation * 100):02d}",
-                "direction": f"orthogonal_{index}",
-                "requested": separation,
-                "weights": shift_to_separation(base, direction, separation),
-            }
-            for separation in ORTHOGONAL_SEPARATIONS
-        ]
     _assert_distinct([row["weights"] for row in rows], "common continuations")
+    _assert_spread([row["weights"] for row in rows], base, "common continuations")
     if len(rows) != COMMON_COUNT:
         raise ValueError(f"built {len(rows)} common continuations, expected {COMMON_COUNT}")
+    print(f"  common core: {rejected} candidates rejected by the {MAX_EPOCHS_PER_PHASE:.0f}-epoch cap")
     return rows
+
+
+def effective_dimensions(rows: list[np.ndarray]) -> float:
+    """Participation ratio of the centred set's singular spectrum."""
+    centred = np.stack(rows) - np.mean(rows, axis=0)
+    spectrum = np.linalg.svd(centred, compute_uv=False) ** 2
+    share = spectrum / spectrum.sum()
+    return float(np.exp(-np.sum(share * np.log(share + 1e-300))))
+
+
+def directional_dimensions(weights: list[np.ndarray], base: np.ndarray) -> float:
+    """The same ratio over UNIT directions from `base`, which is the property the design actually needs.
+
+    Applied to raw weights the ratio is variance-weighted, so a continuation at total variation 0.07 from
+    proportional contributes about a thirty-sixth of the variance of one at 0.45 and is discounted almost
+    to nothing. Since covering near AND far distances is a deliberate goal here, that metric penalises the
+    design for doing what it is supposed to do: the same set scores 7.0 on raw weights and 11.3 on
+    directions. What makes the crossed cells informative is how many distinct DIRECTIONS the continuations
+    explore, and distance is covered separately and on purpose, so the assertion is on this.
+    """
+    units = [(row - base) / separation_of(base, row) for row in weights if separation_of(base, row) > 1e-12]
+    return effective_dimensions(units)
+
+
+def _assert_spread(weights: list[np.ndarray], base: np.ndarray, label: str) -> None:
+    dimensions = directional_dimensions(weights, base)
+    if dimensions < MINIMUM_EFFECTIVE_DIMENSIONS:
+        raise ValueError(
+            f"{label}: {dimensions:.1f} directional dimensions, below the {MINIMUM_EFFECTIVE_DIMENSIONS} floor; "
+            "the set has collapsed onto too few directions to be worth crossing"
+        )
 
 
 def _assert_distinct(weights: list[np.ndarray], label: str) -> None:
@@ -264,7 +393,10 @@ def prefixes(fit, frame, geo) -> list[dict]:
     """The phase-0 mixtures, chosen by the ROLE each has to play rather than by one criterion."""
     readout = evidence.with_phase0_readout(frame)["readout_phase0_uncheatable_bpb"].to_numpy(float)
     endpoint = frame["table9_macro_bpb"].to_numpy(float)
-    usable = np.flatnonzero(np.isfinite(readout) & np.isfinite(endpoint))
+    phase_0_epochs = np.max(geo["phase_0"] * np.asarray(fit.c0, dtype=float), axis=1)
+    # The cap applies to prefixes too, which costs coverage and is recorded as such: it retains 54.7% of
+    # archive rows, so these span the readout terciles of the low-repetition half rather than of the whole.
+    usable = np.flatnonzero(np.isfinite(readout) & np.isfinite(endpoint) & (phase_0_epochs <= MAX_EPOCHS_PER_PHASE))
     terciles = np.quantile(readout[usable], [1 / 3, 2 / 3])
     generator = np.random.default_rng(stable_seed("prefixes"))
     chosen: list[dict] = []
@@ -318,7 +450,7 @@ def prefixes(fit, frame, geo) -> list[dict]:
         {
             "prefix_id": "exploratory_high_separation",
             "role": "exploratory",
-            "weights": shift_to_separation(fit.proportional, family_direction(fit, evidence.CODE_FAMILY, +1.0), 0.45),
+            "weights": exploratory_prefix(fit),
             "source_row": -1,
         }
     )
@@ -327,7 +459,13 @@ def prefixes(fit, frame, geo) -> list[dict]:
 
     # Four more sampled prefixes widen the crossed design; two of the twelve are then retrained under a
     # different data seed to expose prefix-level noise.
-    extra = generator.choice(usable, size=4, replace=False)
+    # Excluded by MIXTURE rather than by row index. The archive re-runs the same policy under different
+    # seeds, so two distinct rows can carry identical weights -- `reference_best_one_phase` and one extra
+    # draw collided exactly that way -- and two prefixes with the same weights and the same seed are
+    # bit-identical runs rather than extra coverage.
+    taken = {tuple(np.round(row["weights"], 8)) for row in chosen}
+    remaining = np.array([index for index in usable if tuple(np.round(geo["phase_0"][index], 8)) not in taken])
+    extra = generator.choice(remaining, size=4, replace=False)
     for pick in extra:
         chosen.append(
             {
@@ -337,6 +475,10 @@ def prefixes(fit, frame, geo) -> list[dict]:
                 "source_row": int(pick),
             }
         )
+    rate = np.asarray(fit.c0, dtype=float)
+    for row in chosen:
+        row["weights"] = prepare_prefix(row["weights"], fit.proportional, rate)
+    _assert_distinct([row["weights"] for row in chosen], "prefixes after preparation")
     full = list(chosen)
     replicates = []
     for source in (full[0], full[6]):
@@ -361,15 +503,15 @@ def branches(fit, prefix: dict, common: list[dict], carries_gate_zero: bool, ful
     if not full:
         return entries
 
-    code = family_direction(fit, evidence.CODE_FAMILY, +1.0)
-    local = orthogonal_directions(fit, code, LOCAL_COUNT, stable_seed("local", prefix["prefix_id"]))
+    rate = np.asarray(fit.c1, dtype=float)
+    local = isotropic_directions(LOCAL_COUNT, len(prefix["weights"]), stable_seed("local", prefix["prefix_id"]))
     for index, direction in enumerate(local):
         entries.append(
             {
                 "continuation_id": f"local_{index}",
                 "direction": f"local_{index}",
                 "requested": LOCAL_SEPARATION,
-                "weights": shift_to_separation(prefix["weights"], direction, LOCAL_SEPARATION),
+                "weights": local_probe(prefix["weights"], direction, rate),
                 "role": "local_probe",
                 "seed_offset": 0,
             }
@@ -486,6 +628,42 @@ def budget(manifest: pd.DataFrame) -> dict[str, float]:
     }
 
 
+def _report_design_properties(manifest: pd.DataFrame) -> None:
+    """The properties that make the design worth running, printed so a regression is visible."""
+    fit, _held = swarm39.load_scale("delphi_3e18")
+    base = fit.proportional
+    buckets = list(fit.buckets)
+
+    def vector(payload: str) -> np.ndarray:
+        mapping = json.loads(payload)
+        return np.asarray([mapping[bucket] for bucket in buckets], dtype=float)
+
+    common = manifest[manifest["branch_role"].eq("common_core")].drop_duplicates("continuation_id")
+    weights = [vector(payload) for payload in common["phase_1_weights_json"]]
+    separations = np.sort([separation_of(base, row) for row in weights])
+    phase_1 = np.stack([vector(payload) for payload in manifest["phase_1_weights_json"]])
+    phase_0 = np.stack([vector(payload) for payload in manifest["phase_0_weights_json"]])
+    epochs_1 = np.max(phase_1 * np.asarray(fit.c1, dtype=float), axis=1)
+    epochs_0 = np.max(phase_0 * np.asarray(fit.c0, dtype=float), axis=1)
+    positive = phase_1[phase_1 > 0]
+    # Asserted, not merely printed: each of these is a property the design's validity rests on, and each
+    # was violated at some point during construction while the manifest still looked entirely reasonable.
+    if epochs_0.max() > MAX_EPOCHS_PER_PHASE or epochs_1.max() > MAX_EPOCHS_PER_PHASE:
+        raise ValueError(f"epoch cap violated: phase-0 {epochs_0.max():.2f}, phase-1 {epochs_1.max():.2f}")
+    if positive.min() < 1.0 / BLOCK_SIZE:
+        raise ValueError(f"unsnapped weight {positive.min():.2e} below 1/{BLOCK_SIZE}")
+    print(
+        f"  directional dimensions {directional_dimensions(weights, base):.1f} of {len(weights) - 1}"
+        f" (floor {MINIMUM_EFFECTIVE_DIMENSIONS}), raw {effective_dimensions(weights):.1f}"
+    )
+    print(f"  common-core separations {np.round(separations, 3).tolist()}")
+    print(
+        f"  max epochs: phase-0 {epochs_0.max():.2f}, phase-1 {epochs_1.max():.2f}"
+        f" (cap {MAX_EPOCHS_PER_PHASE:.0f}); smallest positive weight {positive.min():.2e}"
+        f" (>= 1/{BLOCK_SIZE} = {1 / BLOCK_SIZE:.2e})"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
@@ -528,6 +706,7 @@ def main() -> None:
         + "\n"
     )
     print(f"wrote {path}")
+    _report_design_properties(manifest)
     print(f"  sha256 {digest[:16]}  {cost}")
     print(f"  stage 1 certifies effects >= {stage_one['minimum_certifiable_effect']:.5f} BPB (1 seed/arm)")
     print(
