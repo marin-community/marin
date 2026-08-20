@@ -913,7 +913,7 @@
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Accelerators",
+      "title": "Fleet accelerators",
       "type": "link",
       "url": "/d/marin-accel"
     },
@@ -963,7 +963,7 @@
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Clusters",
+      "title": "Fleet health",
       "type": "link",
       "url": "/d/marin-clusters"
     },

@@ -1,9 +1,10 @@
 import React from 'react';
 import { toDataFrame } from '@grafana/data';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CommitStrip } from './CommitStrip';
 import { ClusterCapacity } from './ClusterCapacity';
 import { NightlyMatrix } from './NightlyMatrix';
+import { SmUtilizationRaster } from './SmUtilizationRaster';
 import { StatusPage } from './StatusPage';
 import { WandbChart } from './WandbChart';
 
@@ -22,6 +23,9 @@ test('every view renders a placeholder instead of throwing on empty data', () =>
 
   rerender(<ClusterCapacity frames={[]} width={1200} height={800} />);
   expect(screen.getByText('No Kubernetes node inventory reported.')).toBeInTheDocument();
+
+  rerender(<SmUtilizationRaster frames={[]} width={700} height={240} />);
+  expect(screen.getByText('No SM utilization data')).toBeInTheDocument();
 });
 
 function frame(refId: string, rows: Array<Record<string, unknown>>) {
@@ -86,4 +90,29 @@ test('status page keeps worker status visible when another source has no data', 
   expect(within(workers).getByText('healthy workers')).toBeInTheDocument();
   expect(within(workers).getByText('us-east5')).toBeInTheDocument();
   expect(screen.getAllByText('No W&B data')).toHaveLength(3);
+});
+
+test('SM raster identifies the device and value under the pointer', () => {
+  const context = {
+    setTransform: jest.fn(), clearRect: jest.fn(), fillRect: jest.fn(), beginPath: jest.fn(),
+    moveTo: jest.fn(), lineTo: jest.fn(), stroke: jest.fn(), fillText: jest.fn(),
+  } as unknown as CanvasRenderingContext2D;
+  const contextSpy = jest.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context);
+  const frames = [frame('A', [
+    { time: 0, cluster: 'cw-a', node: 'node-1', gpu: '0', sm_utilization: 25 },
+    { time: 60_000, cluster: 'cw-a', node: 'node-1', gpu: '0', sm_utilization: 75 },
+    { time: 0, cluster: 'cw-a', node: 'node-1', gpu: '1', sm_utilization: 50 },
+  ])];
+
+  render(<SmUtilizationRaster frames={frames} width={700} height={240} />);
+  const canvas = screen.getByRole('img', { name: 'SM utilization for 2 GPUs across 1 node and 1 cluster' });
+  jest.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({
+    x: 0, y: 0, left: 0, top: 0, right: 700, bottom: 240, width: 700, height: 240, toJSON: () => ({}),
+  });
+
+  fireEvent.mouseMove(canvas, { clientX: 110, clientY: 10 });
+
+  expect(screen.getByRole('tooltip')).toHaveTextContent('25.0% SM active');
+  expect(screen.getByRole('tooltip')).toHaveTextContent('cw-a · node-1 · GPU 0');
+  contextSpy.mockRestore();
 });

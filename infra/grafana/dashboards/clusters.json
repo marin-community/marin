@@ -1,6 +1,6 @@
 {
   "uid": "marin-clusters",
-  "title": "Clusters",
+  "title": "Fleet health",
   "description": "Is the infrastructure under the jobs healthy: CoreWeave control planes, nodes, GB200 racks, host resources, and the finelog mirrors and canary probes behind them. The current-state reads have no history and cover every cluster; the cluster selector applies to the host-resource charts, which come from the node agents' telemetry stream. Each row says which of the two it is.",
   "tags": [
     "marin",
@@ -85,7 +85,7 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Accelerators",
+      "title": "Fleet accelerators",
       "type": "link",
       "url": "/d/marin-accel"
     },
