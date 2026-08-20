@@ -211,13 +211,20 @@ def test_expert_bank_override_must_support_three_waves():
         launch.build_hero_run(run_id="bad-waves", dp_racks=1, num_steps=1, num_experts=256, version="dev")
 
 
-def _runtime_env_config(*, processes_per_task=1, watch_mode=train.WatchMode.INLINE, watch_interval=1):
+def _runtime_env_config(
+    *,
+    processes_per_task=1,
+    watch_mode=train.WatchMode.INLINE,
+    watch_interval=1,
+    moe_implementation="fixed_pooled_wave_all_to_all",
+):
     """A stand-in for GrugRunConfig holding only the fields ``run_grug``'s env setup and dispatch read."""
     return SimpleNamespace(
         trainer=SimpleNamespace(
             trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
             watch_mode=watch_mode,
         ),
+        model=SimpleNamespace(moe_implementation=moe_implementation),
         resources=object(),
         processes_per_task=processes_per_task,
         max_retries_failure=0,
@@ -298,6 +305,20 @@ def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
 
     flags = os.environ["XLA_FLAGS"].split()
     assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={expected_overlap_limit}" in flags
+
+
+def test_run_grug_gives_the_ragged_transport_its_own_scheduling_posture(monkeypatch):
+    # A watch interval of 0 would otherwise select overlap 4, so the assertion below
+    # separates the ragged posture from the inline-watch one rather than aliasing it.
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = _runtime_env_config(watch_interval=0, moe_implementation=train.RAGGED_MOE_IMPLEMENTATION)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.RAGGED_COLLECTIVE_OVERLAP_LIMIT}" in flags
+    assert f"{train.XLA_LATENCY_HIDING_FLAG}=false" in flags
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():
