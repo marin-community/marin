@@ -33,6 +33,7 @@ GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
 GET /finelog/marin/alerts/training_stalls        active jobs + stalled-progress value(0|1)
+GET /finelog/marin/alerts/loss_spikes            active hero runs + loss-spike value(0|1)
 GET /finelog/marin/alerts/zephyr_stalls          active pipelines + stalled-progress value(0|1)
 GET /iris/{cluster}/jobs | workers | health      live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
@@ -196,8 +197,8 @@ Each dashboard answers one question, and they link to each other in a fixed nav 
 | `jobs.json` | What is running, queued, and stuck — and why? | cluster, job |
 | `cluster_capacity.json` | What jobs and requests occupy one cluster and node? | cluster |
 | `runs.json` | How is each Levanter training run doing? | cluster, run |
+| `training.json` | Is one training run — by default the hero run — on track? | run |
 | `clusters.json` | Is the infrastructure under the jobs healthy? | cluster |
-| `pipelines.json` | How is one Zephyr execution moving? | cluster, execution |
 | `inference.json` | How did one vLLM serve behave? | identity kind, serve |
 | `infra.json` | The custom React status page: nightly regressions, main CI, worker capacity, hero training. | none |
 
@@ -262,6 +263,19 @@ selector scopes the active-jobs table and the waiting-task series; with every jo
 selected the latter is the fleet backlog broken out by job, and narrowed to one
 job it is that job's queue over time.
 
+`training.json` is the status board for one run, and took the slot the unused
+Zephyr pipelines dashboard held. `runs.json` still answers the across-runs
+question; this one answers "is this run on track", so its selector is
+single-valued and its query orders hero runs first and newest first, leaving the
+board on the current hero run when it opens. It is scoped by `run_id` alone: a
+run that moves between clusters keeps one set of series. The status strip is one
+stat panel with ten fields, because a `telemetry_v1` scan costs what its window
+costs whatever it selects, and ten stat panels would cost ten scans. It carries
+both alert inputs — time since the last completed step, which
+`TrainingProgressStalled` reads, and train loss, which `TrainingLossSpike`
+reads — beside step time, throughput, schedule progress, the optimizer's own
+skip-step rejections, eval loss, and the hero trainers' device memory.
+
 ## Alerting
 
 Grafana unified alerting, provisioned entirely from the files under
@@ -287,7 +301,17 @@ minutes. Its `notification=hero-run`
 route uses the critical receiver and groups each root job separately. It does not
 require task-to-node GPU attribution. The root suffix before `-coord` and the
 Levanter trainer ID must match; zero eligible roots produce an explicit healthy
-row. A warning-only Zephyr rule reads fresh
+row. A second rule over the same enrolled roots watches their `train_loss`: it
+fires when the lowest loss of the last five minutes clears the mean plus six
+standard deviations of the preceding 55, or when the loss stops being finite.
+Six sigma is the band Levanter's own skip-step optimizer rejects a step on.
+Reducing the recent window to its floor is what separates a divergence from the
+single excursion skip-step already absorbs: one bad step lifts that window's
+mean and leaves its minimum where it was. The rule carries the
+`notification=slack` exception, so it announces without opening a triage
+session — the call it asks for, keep training or roll back to a checkpoint, is a
+person's, and a mixture stage boundary can move loss legitimately. Both hero
+rules share one enrolment query per cache interval. A warning-only Zephyr rule reads fresh
 `progress_time_seconds` rows from `service=zephyr` telemetry. It waits 45 minutes after a
 stage start or shard completion, then remains pending for five minutes. The
 execution ID separates concurrent pipelines under one root job. The stuck-pod

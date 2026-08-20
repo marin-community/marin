@@ -3,18 +3,15 @@
 
 """Bounded finelog queries and alert projection for stalled Levanter jobs."""
 
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import pyarrow as pa
-from vllm_observability import sql_string
+from hero_runs import TASK_STATE_LOOKBACK, HeroRun, as_utc, run_id_predicate, sql_timestamp
 
-_TASK_STATE_FRESHNESS = timedelta(seconds=90)
 _TRAINING_STALL_AGE = timedelta(minutes=15)
 _INITIALIZING_STALL_AGE = timedelta(minutes=45)
-_TASK_STATE_LOOKBACK = timedelta(hours=1)
 _PROGRESS_LOOKBACK = 2 * _TRAINING_STALL_AGE
-_EXECUTION_LOOKBACK = _TASK_STATE_LOOKBACK
+_EXECUTION_LOOKBACK = TASK_STATE_LOOKBACK
 # Keep the selected execution visible after its last heartbeat crosses the stall
 # threshold. The exact run predicate and training-status projection keep this
 # bounded scan below Finelog's deadline.
@@ -23,100 +20,19 @@ _ENROLLMENT_LOOKBACK = _EXECUTION_LOOKBACK
 _STEP_METRIC = "step"
 _PROGRESS_TIME_METRIC = "progress_time_seconds"
 _PHASE_METRIC = "phase"
-_HERO_RUN_PREFIX = "hero-"
-_COORDINATOR_SUFFIX = "-coord"
-_HERO_ROOT_PATTERN = f"%/{_HERO_RUN_PREFIX}%{_COORDINATOR_SUFFIX}"
 
 _INITIALIZING_PHASE = 0
 _TRAINING_PHASE = 1
 _FINISHED_PHASE = 2
 
 
-@dataclass(frozen=True)
-class HeroRun:
-    cluster: str
-    root_job: str
-    run_id: str
-    running_since: datetime
-
-
-def _sql_timestamp(at: datetime) -> str:
-    return at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def task_state_query(now: datetime) -> str:
-    """Return fresh active root jobs whose run name opts into hero alerts."""
-    start = _sql_timestamp(now - _TASK_STATE_LOOKBACK)
-    fresh = _sql_timestamp(now - _TASK_STATE_FRESHNESS)
-    end = _sql_timestamp(now)
-    return (
-        "WITH samples AS ("
-        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS cluster, root_job_id, ts, running "
-        'FROM "iris.task_state" '
-        f"WHERE root_job_id LIKE '{_HERO_ROOT_PATTERN}' AND ts >= TIMESTAMP '{start}' "
-        f"AND ts < TIMESTAMP '{end}'"
-        "), segmented AS ("
-        "SELECT cluster, root_job_id, ts, running, "
-        "SUM(CASE WHEN running <= 0 THEN 1 ELSE 0 END) OVER ("
-        "PARTITION BY cluster, root_job_id ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
-        ") AS running_segment FROM samples"
-        "), history AS ("
-        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS cluster, root_job_id, ts, running, "
-        "MIN(CASE WHEN running > 0 THEN ts END) OVER ("
-        "PARTITION BY cluster, root_job_id, running_segment"
-        ") AS running_since, "
-        "ROW_NUMBER() OVER ("
-        "PARTITION BY cluster, root_job_id ORDER BY ts DESC"
-        ") AS rn "
-        "FROM segmented"
-        ") "
-        "SELECT cluster, root_job_id AS job, ts AS state_at, running_since "
-        "FROM history "
-        f"WHERE rn = 1 AND running > 0 AND ts >= TIMESTAMP '{fresh}'"
-    )
-
-
-def _run_id(root_job: str) -> str | None:
-    root_name = root_job.rsplit("/", 1)[-1]
-    if not root_name.startswith(_HERO_RUN_PREFIX) or not root_name.endswith(_COORDINATOR_SUFFIX):
-        return None
-    run_id = root_name.removesuffix(_COORDINATOR_SUFFIX)
-    return run_id if run_id != _HERO_RUN_PREFIX else None
-
-
-def active_hero_runs(task_states: pa.Table) -> tuple[HeroRun, ...]:
-    """Return structured run identities from task-state selector rows."""
-    runs = []
-    for row in task_states.to_pylist():
-        root_job = str(row["job"])
-        run_id = _run_id(root_job)
-        if run_id is None:
-            continue
-        runs.append(
-            HeroRun(
-                cluster=str(row["cluster"]),
-                root_job=root_job,
-                run_id=run_id,
-                running_since=_as_utc(row["running_since"]),
-            )
-        )
-    return tuple(runs)
-
-
 def telemetry_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
     """Return current execution metrics for exact active hero run IDs."""
-    run_ids = sorted({run.run_id for run in runs})
-    if not run_ids:
-        raise ValueError("at least one active hero run is required")
-    if len(run_ids) == 1:
-        run_predicate = f"run_id = {sql_string(run_ids[0])}"
-    else:
-        run_predicate = f"run_id IN ({', '.join(sql_string(run_id) for run_id in run_ids)})"
-
-    execution_since = _sql_timestamp(now - _EXECUTION_LOOKBACK)
-    progress_since = _sql_timestamp(now - _PROGRESS_LOOKBACK)
-    enrolled_since = _sql_timestamp(now - _ENROLLMENT_LOOKBACK)
-    end = _sql_timestamp(now)
+    run_predicate = run_id_predicate(runs)
+    execution_since = sql_timestamp(now - _EXECUTION_LOOKBACK)
+    progress_since = sql_timestamp(now - _PROGRESS_LOOKBACK)
+    enrolled_since = sql_timestamp(now - _ENROLLMENT_LOOKBACK)
+    end = sql_timestamp(now)
     metric_names = f"'{_PHASE_METRIC}', '{_STEP_METRIC}', '{_PROGRESS_TIME_METRIC}'"
     return (
         "WITH filtered AS ("
@@ -163,14 +79,6 @@ def telemetry_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
     )
 
 
-def _as_utc(value: object) -> datetime:
-    if not isinstance(value, datetime):
-        raise ValueError(f"expected timestamp, got {value!r}")
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
-
-
 def _phase_name(phase: int | None) -> str:
     return {
         _INITIALIZING_PHASE: "initializing",
@@ -183,9 +91,8 @@ def _row(cluster: str, job: str, phase: str, reason: str, value: int) -> dict:
     return {"cluster": cluster, "job": job, "phase": phase, "reason": reason, "value": value}
 
 
-def training_stall_alert_rows(task_states: pa.Table, telemetry_metrics: pa.Table, now: datetime) -> list[dict]:
-    """Project active hero roots and their latest execution metrics into alert rows."""
-    runs = active_hero_runs(task_states)
+def training_stall_alert_rows(runs: tuple[HeroRun, ...], telemetry_metrics: pa.Table, now: datetime) -> list[dict]:
+    """Project enrolled hero roots and their latest execution metrics into alert rows."""
     metrics_by_job: dict[tuple[str, str], dict[str, tuple[datetime, float]]] = {}
     execution_started_by_job: dict[tuple[str, str], datetime] = {}
     for row in telemetry_metrics.to_pylist():
@@ -198,17 +105,17 @@ def training_stall_alert_rows(task_states: pa.Table, telemetry_metrics: pa.Table
             if telemetry_job != run.root_job and not telemetry_job.startswith(run.root_job + "/"):
                 continue
             key = (run.cluster, run.root_job)
-            execution_started = _as_utc(row["execution_started_at"])
+            execution_started = as_utc(row["execution_started_at"])
             current_execution = execution_started_by_job.get(key)
             if current_execution is None or execution_started > current_execution:
                 execution_started_by_job[key] = execution_started
             metric = str(row["name"])
-            observed = _as_utc(row["ts"])
+            observed = as_utc(row["ts"])
             current = metrics_by_job.setdefault(key, {}).get(metric)
             if current is None or observed > current[0]:
                 metrics_by_job[key][metric] = (observed, float(row["value"]))
 
-    now = _as_utc(now)
+    now = as_utc(now)
     rows: list[dict] = []
     for run in runs:
         metrics = {name: value for name, (_, value) in metrics_by_job.get((run.cluster, run.root_job), {}).items()}

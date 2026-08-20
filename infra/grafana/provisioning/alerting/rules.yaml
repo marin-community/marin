@@ -579,6 +579,51 @@ groups:
               conditions:
                 - evaluator: { type: gt, params: [0] }
 
+      # A hero run whose lowest loss over the last five minutes clears its own
+      # trailing mean plus six standard deviations, or stops being finite. It
+      # announces in Slack without opening a triage session, because the call it
+      # asks for is a person's: keep training, or roll back to a checkpoint.
+      - uid: training-loss-spike
+        title: TrainingLossSpike
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+          notification: slack
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.run }} training loss is {{ $labels.reason }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/training-loss-spike-alert.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/loss_spikes
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: job, text: job, type: string }
+                - { selector: run, text: run, type: string }
+                - { selector: reason, text: reason, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
   # This warning finds an active Zephyr producer that reports no shard
   # completion for 45 minutes. The bridge removes expired producers.
   - orgId: 1

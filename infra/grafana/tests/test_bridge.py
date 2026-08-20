@@ -16,6 +16,7 @@ from conftest import FINELOG_DEPLOYMENTS_PATH, bridge_config, deployment, health
 from finelog.errors import QueryResultTooLargeError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
+from hero_runs import HeroRun, active_hero_runs, task_state_query
 from k8s_source import K8sFleet
 from loom_alerts import (
     LoomAlertClient,
@@ -24,9 +25,10 @@ from loom_alerts import (
     SlackAnnouncementError,
     SlackThread,
 )
+from loss_spikes import loss_spike_alert_rows, loss_window_query
 from server import create_app, workload_overview
 from starlette.testclient import TestClient
-from training_stalls import HeroRun, active_hero_runs, task_state_query, telemetry_query, training_stall_alert_rows
+from training_stalls import telemetry_query, training_stall_alert_rows
 from wandb_source import WandbSource
 from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
 
@@ -247,7 +249,7 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
         execution_started_at=[now - timedelta(hours=1)] * 5,
     )
 
-    assert training_stall_alert_rows(task_states, telemetry_metrics, now) == [
+    assert training_stall_alert_rows(active_hero_runs(task_states), telemetry_metrics, now) == [
         {
             "cluster": "cw-a",
             "job": "/u/hero-stale-coord",
@@ -280,7 +282,7 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
 
 
 def test_training_stall_alert_returns_explicit_zero_without_running_jobs():
-    assert training_stall_alert_rows(pa.table({}), pa.table({}), datetime(2026, 7, 28, tzinfo=UTC)) == [
+    assert training_stall_alert_rows((), pa.table({}), datetime(2026, 7, 28, tzinfo=UTC)) == [
         {"cluster": "fleet", "job": "", "phase": "idle", "reason": "healthy", "value": 0}
     ]
 
@@ -390,7 +392,7 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
     ]
 
     enrolled = database.execute(telemetry_query(now, runs)).fetch_arrow_table()
-    firing = training_stall_alert_rows(task_states, enrolled, now)
+    firing = training_stall_alert_rows(runs, enrolled, now)
     assert firing == [
         {
             "cluster": "cw-a",
@@ -415,7 +417,7 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
         ),
     )
     recovered_metrics = database.execute(telemetry_query(now, runs)).fetch_arrow_table()
-    recovered = training_stall_alert_rows(task_states, recovered_metrics, now)
+    recovered = training_stall_alert_rows(runs, recovered_metrics, now)
     assert recovered == [
         {
             "cluster": "cw-a",
@@ -444,7 +446,7 @@ def test_training_stall_alert_gives_a_new_execution_its_own_initialization_windo
         execution_started_at=[now - timedelta(minutes=5)],
     )
 
-    assert training_stall_alert_rows(task_states, telemetry_metrics, now) == [
+    assert training_stall_alert_rows(active_hero_runs(task_states), telemetry_metrics, now) == [
         {
             "cluster": "cw-a",
             "job": "/u/hero-retry-coord",
@@ -453,6 +455,116 @@ def test_training_stall_alert_gives_a_new_execution_its_own_initialization_windo
             "value": 0,
         }
     ]
+
+
+def _hero_run(run_id: str) -> HeroRun:
+    return HeroRun("cw-a", f"/u/{run_id}-coord", run_id, datetime(2026, 7, 28, 11, tzinfo=UTC))
+
+
+def _loss_windows(now: datetime, runs: tuple[HeroRun, ...], samples: list[tuple[str, datetime, float]]) -> pa.Table:
+    """Run the alert's own SQL over (run_id, observed_at, loss) rows."""
+    database = duckdb.connect()
+    database.execute(
+        """
+        CREATE TABLE telemetry_v1(
+            cluster VARCHAR,
+            service VARCHAR,
+            run_id VARCHAR,
+            name VARCHAR,
+            value DOUBLE,
+            timestamp_ms BIGINT
+        )
+        """
+    )
+    database.executemany(
+        "INSERT INTO telemetry_v1 VALUES ('cw-a', 'levanter', ?, 'train_loss', ?, ?)",
+        [(run_id, loss, int(at.timestamp() * 1000)) for run_id, at, loss in samples],
+    )
+    return database.execute(loss_window_query(now, runs)).fetch_arrow_table()
+
+
+def _steady_baseline(run_id: str, now: datetime) -> list[tuple[str, datetime, float]]:
+    """Forty baseline samples alternating one hundredth around a loss of 3.5."""
+    return [(run_id, now - timedelta(minutes=50) + timedelta(seconds=30 * i), 3.5 + 0.01 * (-1) ** i) for i in range(40)]
+
+
+def _recent(run_id: str, now: datetime, losses: list[float]) -> list[tuple[str, datetime, float]]:
+    return [(run_id, now - timedelta(minutes=4) + timedelta(seconds=15 * i), loss) for i, loss in enumerate(losses)]
+
+
+def test_loss_spike_alert_fires_on_a_sustained_rise_and_not_on_a_single_step():
+    """A skipped step and a divergence look identical in the mean of the recent
+    window; the floor separates them. Here the blip run's recent mean is 3.96 and
+    its floor is 3.5, against a band of 3.56."""
+    now = datetime(2026, 7, 28, 12, tzinfo=UTC)
+    runs = tuple(_hero_run(run_id) for run_id in ("hero-steady", "hero-blip", "hero-diverging"))
+    samples = [
+        *_steady_baseline("hero-steady", now),
+        *_recent("hero-steady", now, [3.49] * 12),
+        *_steady_baseline("hero-blip", now),
+        *_recent("hero-blip", now, [3.5] * 6 + [9.0] + [3.5] * 5),
+        *_steady_baseline("hero-diverging", now),
+        *_recent("hero-diverging", now, [4.2] * 12),
+    ]
+
+    assert loss_spike_alert_rows(runs, _loss_windows(now, runs, samples)) == [
+        {"cluster": "cw-a", "job": "/u/hero-steady-coord", "run": "hero-steady", "reason": "healthy", "value": 0},
+        {"cluster": "cw-a", "job": "/u/hero-blip-coord", "run": "hero-blip", "reason": "healthy", "value": 0},
+        {
+            "cluster": "cw-a",
+            "job": "/u/hero-diverging-coord",
+            "run": "hero-diverging",
+            "reason": "spiking",
+            "value": 1,
+        },
+    ]
+
+
+def test_loss_spike_alert_fires_on_a_loss_that_stops_being_finite():
+    now = datetime(2026, 7, 28, 12, tzinfo=UTC)
+    runs = (_hero_run("hero-nan"),)
+    samples = [
+        *_steady_baseline("hero-nan", now),
+        *_recent("hero-nan", now, [3.5] * 6 + [float("nan")] * 6),
+    ]
+
+    assert loss_spike_alert_rows(runs, _loss_windows(now, runs, samples)) == [
+        {"cluster": "cw-a", "job": "/u/hero-nan-coord", "run": "hero-nan", "reason": "not_finite", "value": 1}
+    ]
+
+
+def test_loss_spike_alert_waits_for_a_baseline_before_judging_a_rise():
+    # A run that just started has no history to be an outlier against, and the
+    # first steps after initialization are its loudest.
+    now = datetime(2026, 7, 28, 12, tzinfo=UTC)
+    runs = (_hero_run("hero-fresh"),)
+    samples = [
+        ("hero-fresh", now - timedelta(minutes=8), 11.0),
+        ("hero-fresh", now - timedelta(minutes=7), 9.0),
+        *_recent("hero-fresh", now, [8.0] * 12),
+    ]
+
+    assert loss_spike_alert_rows(runs, _loss_windows(now, runs, samples)) == [
+        {"cluster": "cw-a", "job": "/u/hero-fresh-coord", "run": "hero-fresh", "reason": "warming_up", "value": 0}
+    ]
+
+
+def test_loss_spike_alert_returns_explicit_zero_without_active_hero_runs():
+    assert loss_spike_alert_rows((), pa.table({})) == [
+        {"cluster": "fleet", "job": "", "run": "", "reason": "healthy", "value": 0}
+    ]
+
+
+def test_loss_spike_query_reads_one_bounded_window_per_evaluation():
+    now = datetime(2026, 7, 28, 12, tzinfo=UTC)
+    sql = loss_window_query(now, (_hero_run("hero-prod"),))
+
+    assert sql.count('FROM "telemetry_v1"') == 1
+    assert "name = 'train_loss'" in sql
+    assert "run_id = 'hero-prod'" in sql
+    assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:00:00') * 1000 AS BIGINT)" in sql
+    assert "timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 12:00:00') * 1000 AS BIGINT)" in sql
+    assert "CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:55:00') * 1000 AS BIGINT)" in sql
 
 
 def test_zephyr_stall_alert_distinguishes_stale_healthy_and_expired_producers():
