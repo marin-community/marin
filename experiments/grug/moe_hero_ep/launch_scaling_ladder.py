@@ -89,6 +89,12 @@ TENSORSTORE_CACHE_BYTES = 125_000_000_000
 # A crash costs at most this much training time. A hero checkpoint is several TB, thus a shorter
 # interval would spend a large part of the run inside a checkpoint write.
 RESUME_SAVE_INTERVAL = timedelta(minutes=30)
+# A rung runs up to 176 tasks for hundreds of GPU-days, where a hardware fault or a host
+# out-of-memory on one task is routine. A rung resumes from its newest checkpoint, thus a retry
+# continues the run instead of repeating it. Retry deeply so one bad task does not end a rung.
+# The two counters are separate gates and the job fails when either one trips.
+LADDER_MAX_RETRIES_FAILURE = 1000
+LADDER_MAX_TASK_FAILURES = 1000
 
 
 def _ladder_model(size: str):
@@ -273,6 +279,8 @@ def build_ladder_run(
             ),
             stop_after_steps=num_steps,
             processes_per_task=HERO_GPUS_PER_NODE,
+            max_retries_failure=LADDER_MAX_RETRIES_FAILURE,
+            max_task_failures=LADDER_MAX_TASK_FAILURES,
         )
 
     return ArtifactStep(

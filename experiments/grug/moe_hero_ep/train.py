@@ -175,6 +175,12 @@ class GrugRunConfig:
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.hooks.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
+    # Retry budgets for the training job. The two are separate gates and the job fails when either
+    # one trips, thus raise them together. The defaults make a failure terminal, which is what a run
+    # that cannot resume wants: a retry would repeat it from step 0. Only a run that both saves and
+    # restores checkpoints benefits from a deep budget.
+    max_retries_failure: int = 0
+    max_task_failures: int = 10
 
 
 def build_train_dataset(
@@ -953,13 +959,8 @@ def run_grug(config: GrugRunConfig) -> None:
         local_entrypoint=_run_grug_local,
         resources=config.resources,
         processes_per_task=config.processes_per_task,
-        # A hero run spans hundreds of GPU-days across hundreds of tasks, where a hardware fault or
-        # a host out-of-memory on one task is routine. Retry deeply so one bad task does not end the
-        # run. Both counters are raised together, because the cumulative one caps the per-task one.
-        # A retry restarts from the newest checkpoint, thus a deep budget only pays off while
-        # load_checkpoint is on; with restore off, every retry repeats the run from step 0.
-        max_retries_failure=1000,
-        max_task_failures=1000,
+        max_retries_failure=config.max_retries_failure,
+        max_task_failures=config.max_task_failures,
     )
 
 
