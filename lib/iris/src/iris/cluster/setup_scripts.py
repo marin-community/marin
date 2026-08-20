@@ -66,7 +66,8 @@ def default_setup_script(
             compatibility); omitted when empty.
         packages: workspace members to sync. ``None`` syncs every member
             (``--all-packages``); a list scopes the sync to those members so an
-            unrelated member that fails to resolve cannot fail the job.
+            unrelated member that fails to resolve cannot fail the job. Default
+            dependency groups are omitted in both cases.
 
     Returns:
         A bash snippet that creates and populates the venv at ``$IRIS_VENV``.
@@ -89,7 +90,7 @@ def default_setup_script(
             link_mode_flag,
             python_flag,
             target,
-            "--no-group dev",
+            "--no-default-groups",
             extra_flags,
         ]
         if part
