@@ -3,71 +3,59 @@ name: triage-canary
 description: Triage a failed canary ferry run (CI-invoked).
 ---
 
-# Skill: Triage Canary
+# Triage Canary
 
-Triage a failed canary ferry run. Diagnose root cause, file a GitHub issue,
-write a Slack summary. Diagnosis and reporting only — no code changes, no PRs.
+Diagnose a failed canary, file one GitHub issue, and write the Slack summary.
+This workflow is diagnosis/reporting only: no code changes and no PRs.
 
-## Inputs (environment variables)
+## Inputs
 
-| Variable | Description |
+Required environment variables:
+
+| Variable | Meaning |
 |---|---|
-| `CANARY_LANE` | `gpu` (CoreWeave) or `tpu` (GCP) |
-| `CANARY_JOB_ID` | Iris job ID |
-| `CANARY_RUN_ID` | W&B run ID |
-| `IRIS_CONFIG` | Path to Iris cluster config |
-| `IRIS_NAMESPACE` | Kubernetes namespace (CW only) |
-| `WANDB_ENTITY` | W&B entity |
-| `WANDB_PROJECT` | W&B project |
-| `GHA_RUN_URL` | Full URL to the GitHub Actions run |
+| CANARY_LANE | gpu (CoreWeave) or tpu (GCP) |
+| CANARY_JOB_ID | Iris job ID |
+| CANARY_RUN_ID | W&B run ID |
+| IRIS_CONFIG | Iris cluster config path |
+| IRIS_NAMESPACE | CoreWeave namespace, default iris-ci |
+| WANDB_ENTITY | W&B entity |
+| WANDB_PROJECT | W&B project |
+| GHA_RUN_URL | GitHub Actions run URL |
 
-## Steps
+## Diagnose
 
-### 1. Gather diagnostics
+Collect diagnostics while the cluster is live:
 
-The cluster is still live. Collect signal now — it will be torn down after you.
+- Iris state: .venv/bin/iris --config=$IRIS_CONFIG job list.
+- GPU: use kubectl with ~/.kube/coreweave-iris and $IRIS_NAMESPACE for pod
+  status, controller/task logs, warning events, and describe. Filter by
+  'iris.job_id=<CANARY_JOB_ID with / replaced by .>' so co-tenant PR-CI
+  pods are excluded; for example:
+  kubectl -n iris-ci get pods -l iris.job_id=runner.iris-run-job-abc123.
+- TPU: use iris process logs and iris job list.
+- Re-run scripts/ci/validate_canary_metrics.py if its output is needed.
 
-- Iris job state via `.venv/bin/iris --config=$IRIS_CONFIG job list`
-- **GPU lane:** you have kubectl at `~/.kube/coreweave-iris`, namespace `$IRIS_NAMESPACE` (defaults to `iris-ci` — the canary shares this namespace with PR CI).
-  Get pod status, controller logs, task pod logs, warning events, pod describe.
-  **Filter by `iris.job_id=<CANARY_JOB_ID with '/' replaced by '.'>`** so you only see this canary's pods, not co-tenant CI pods. Example: `kubectl -n iris-ci get pods -l iris.job_id=runner.iris-run-job-abc123`.
-- **TPU lane:** use `iris process logs` and `iris job list`.
-- Re-run `scripts/ci/validate_canary_metrics.py` if you need the validation output.
+State hypotheses, gather evidence, and narrow to one category:
+infra/scheduling, training crash, metric regression, controller bug, or
+data/storage. Reproduce minimally when useful and verify the diagnosis matches
+the failure that stopped the canary.
 
-### 2. Identify root cause
+## Report
 
-Classify into one of: **infra/scheduling**, **training crash**, **metric regression**,
-**controller bug**, **data/storage**.
+Follow file-issue. Use title [canary-{lane}] {short failure description} and
+labels bug, agent-generated, and canary. Include a Canary run context section
+with lane, job ID, GHA URL, W&B URL, and date, supported by runtime evidence.
+Use a unique temporary --body-file.
 
-Use hypothesis-driven diagnosis: state hypothesis, gather evidence, narrow.
-Attempt to reproduce the issue locally and minimally.
-Triple check that you're narrowing down on the same issue as the one that actually broke the canary.
+Always write repo-root slack_message.md, even if issue creation fails; the
+workflow sends this file. Keep it to four lines:
 
-### 3. File a GitHub issue
-
-Follow the `file-issue` skill. Use the bug-report template.
-
-- **Title:** `[canary-{lane}] {short failure description}`
-- **Labels:** `bug`, `agent-generated`, `canary`
-- **Body must include** a "Canary run context" section with: lane, job ID,
-  GHA run URL, W&B run URL, date.
-- Support your claims using supporting data (e.g. runtime logs)
-- Keep the issue concise and maximally readable for humans.
-- Use GFM to make the details (e.g. log traces, code to reproduce issue) optional and declutter the issue.
-- Use `--body-file` with a temp file (see `file-issue` skill for the pattern).
-
-### 4. Write `slack_message.md`
-
-Write to the repo root. The workflow reads this file and sends it to Slack.
-Always write this file, even if issue creation failed.
-
-Format — keep to 4 lines max:
-
-```
+~~~text
 :red_circle: *{GPU|TPU} Canary failed* — {one-line summary}
 *Root cause:* {category} — {1 sentence}
 *Issue:* {github issue URL}
 *GHA run:* {GHA_RUN_URL}
-```
+~~~
 
-If root cause is unclear, say so: `root cause unclear` with your best-guess signals.
+If uncertain, write root cause unclear with the strongest signals.

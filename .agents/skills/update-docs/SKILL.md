@@ -3,40 +3,24 @@ name: update-docs
 description: "Update documentation, runbooks, and reusable task guidance when implementation work or experiments change behavior or operational practice."
 ---
 
-# Skill: Update Docs
+# Update Docs
 
-Use this when a task changes behavior, reveals stale instructions, creates a new
-operational pattern, or produces guidance that should survive outside the issue
-thread.
+Use when implementation or experiments change behavior, reveal stale
+instructions, create an operational pattern, or produce guidance that must
+survive the issue thread.
 
-## What to Update
+Update the nearest existing home:
 
-- User-facing docs when behavior or configuration changes.
-- Operational docs when commands, service setup, dashboards, alerts, or recovery
-  procedures change.
-- Skill docs when an agent workflow becomes reusable.
-- Experiment reports or indexes when the work produces durable research
-  findings.
+- user-facing docs for behavior/configuration;
+- OPS/runbooks for commands, services, dashboards, alerts, or recovery;
+- skill docs for reusable agent workflows;
+- experiment reports or indexes for durable findings.
 
-Prefer editing the nearest existing doc over adding a new one. Add a new doc
-only when the topic lacks a natural home or would make an existing page
-unfocused.
+Add a document only when no natural home exists or an existing page would become
+unfocused. Describe current behavior, include exact commands and paths for
+operations, and correct stale instructions instead of adding caveats. Keep
+broad docs concise; put detailed run notes in logbooks or issue comments.
 
-## Content Rules
-
-- Describe current behavior, not aspiration.
-- Include exact commands and paths for operational procedures.
-- Remove or correct stale instructions rather than adding caveats around them.
-- Keep broad docs concise; put detailed run notes in logbooks or issue comments.
-
-## Done Criteria
-
-- Docs and code agree for the changed behavior.
-- The next agent or human can find the authoritative procedure without reading
-  the whole issue thread.
-- Any generated guidance is generalized enough to reuse and specific enough to
-  act on.
-
-## Related Skills
-
-Follow `.agents/skills/writing-style/SKILL.md` for writing-style guidance.
+Done means code and docs agree, the authoritative procedure is discoverable
+without the issue thread, and reusable guidance is specific enough to act on.
+Apply .agents/skills/writing-style/SKILL.md to the prose.

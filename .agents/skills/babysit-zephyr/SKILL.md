@@ -3,126 +3,90 @@ name: babysit-zephyr
 description: Launch and babysit Zephyr pipeline jobs on Iris.
 ---
 
-# Skill: Babysit Zephyr Job
+# Babysit Zephyr
 
-Start, monitor, and keep Zephyr pipeline jobs running on Iris. Escalate deeper investigations to **debug**.
+Start, monitor, and recover Zephyr pipeline jobs on Iris. Escalate diagnosis to
+debug.
 
-## Zephyr Job Structure
+## Job model and commands
 
-A zephyr pipeline job spawns child Iris jobs:
-- **`*-coord`** — coordinator (1 task). Orchestrates pipeline stages, queues tasks, tracks progress.
-- **`*-workers`** — worker pool (many tasks). Workers poll the coordinator for shards.
+A Zephyr job has a *-coord coordinator and a *-workers pool. One job can run
+sequential pipelines (p<N> in child names); that is normal. A new hash with
+the same p0 is a retry, and old coordinators can linger. Child names follow
+'<hash>-p<pipeline>-a<attempt>-{coord,workers}'.
 
-A single job may execute **multiple pipelines sequentially** (e.g. fuzzy dedup runs connected components iteratively, each iteration a separate pipeline). These show as different `p<N>` values in child job names — normal, not failed retries.
+Resolve the user's cluster name to 'lib/iris/config/<name>.yaml' as described by
+babysit-job; substitute that path for '<CONFIG>' below.
 
-Failed retries show as different **hashes** with the same `p0`. Stale coordinators from previous attempts may linger (#3705).
+Dashboard:
 
-Child job naming: `<hash>-p<pipeline>-a<attempt>-{coord,workers}`.
+~~~bash
+uv run iris --config <CONFIG> cluster dashboard
+~~~
 
-## Iris Config
+Submit the user's command with --no-wait; increase the default 1 GB entrypoint
+memory for stateful long-running pipelines:
 
-All Iris commands below use `--config <CONFIG>`. Resolve the cluster name the user gives to the matching file under `lib/iris/config/` (see **babysit-job** for the full mapping). Examples use `marin.yaml` — substitute the actual config (e.g., `marin-dev.yaml`) as needed.
+~~~bash
+uv run iris --config <CONFIG> job run --region <REGION> --no-wait -- python <SCRIPT>
+uv run iris --config <CONFIG> job run --region <REGION> --memory 5GB --no-wait -- python <SCRIPT>
+~~~
 
-## Dashboard
+Record the returned job ID. To stop or restart, ask the user first: job cancel
+kills the coordinator and all workers.
 
-```bash
-# Connect to the Iris dashboard (establishes SSH tunnel, prints URL with port)
-uv run iris --config lib/iris/config/marin.yaml cluster dashboard
-```
+~~~bash
+uv run iris --config <CONFIG> job cancel <JOB_ID>
+~~~
 
-## Starting a Job
+## Monitor
 
-Get the run command from the user. Typical pattern:
-```bash
-uv run iris --config lib/iris/config/marin.yaml job run --region <REGION> --no-wait -- python <SCRIPT>
-```
+Check child state and resource usage:
 
-The entrypoint container defaults to 1GB memory. For long-running pipelines that accumulate state (GCS clients, logging), increase with `--memory`:
-```bash
-uv run iris --config lib/iris/config/marin.yaml job run --region <REGION> --memory 5GB --no-wait -- python <SCRIPT>
-```
+~~~bash
+uv run iris --config <CONFIG> rpc controller list-tasks --job-id <JOB_ID>
+~~~
 
-The command prints a job ID on success. Note it for monitoring.
+Healthy state is a RUNNING coordinator with one task and RUNNING workers ramping
+toward their target. diskMb updates about every 60 seconds and is always zero
+on Kubernetes because the workdir is inside the pod.
 
-## Stopping a Job
+Read coordinator progress and, when logs are flooded by worker RPCs, filter
+pull_task, Started operation, report_result, registered, and tasks completed
+entries:
 
-Always ask the user before stopping. Stopping kills all child jobs (coordinators, workers).
-```bash
-uv run iris --config lib/iris/config/marin.yaml job cancel <JOB_ID>
-```
-
-## Monitoring
-
-### Health Checks
-
-Check child job states via the Iris CLI (returns per-task state and resourceUsage):
-```bash
-# diskMb is updated every ~60s. On K8s it is always 0 (workdir lives inside the pod).
-uv run iris --config lib/iris/config/marin.yaml rpc controller list-tasks --job-id <JOB_ID>
-```
-
-A healthy zephyr job has:
-- Coordinator: RUNNING, 1 task running
-- Workers: RUNNING, tasks ramping up toward target count
-
-### Stage Progress
-
-The coordinator logs a progress line every 5s:
-```
-[stage0-Map → Scatter] 347/1964 complete, 1617 in-flight, 0 queued, 1828/1891 workers alive, 63 dead
-```
-
-Fetch via the Iris CLI:
-```bash
-uv run iris --config lib/iris/config/marin.yaml rpc controller get-task-logs \
+~~~bash
+uv run iris --config <CONFIG> rpc controller get-task-logs \
   --id <COORD_JOB_ID> --max-total-lines 5000 --attempt-id -1 --tail
-```
+~~~
 
-**Caveat**: With large worker pools, `pull_task` operations flood the log buffer (#3707). Filter when parsing:
-```python
+When parsing returned entries:
+
+~~~python
 for entry in task_logs:
-    msg = entry.get('data', '')
-    if 'pull_task' in msg or 'Started operation' in msg or 'report_result' in msg or 'registered' in msg or 'tasks completed' in msg:
+    message = entry.get("data", "")
+    if any(term in message for term in ("pull_task", "Started operation", "report_result", "registered", "tasks completed")):
         continue
-    print(msg)
-```
+    print(message)
+~~~
 
-### Coordinator Thread Dump
+Progress must show shards completing and stages advancing. A useful thread dump
+when logs are noisy is:
 
-When logs are flooded, a thread dump tells you if the coordinator is alive and working:
-```bash
-uv run iris --config lib/iris/config/marin.yaml rpc controller profile-task \
+~~~bash
+uv run iris --config <CONFIG> rpc controller profile-task \
   --json '{"target":"<COORD_JOB_ID>/0","durationSeconds":1,"profileType":{"threads":{}}}'
-```
+~~~
 
-Key patterns:
-- `actor-method_0` in `_wait_for_stage` → pipeline active, waiting for current stage to complete
-- `_coordinator_loop` thread present → heartbeat/dispatch loop running
-- All threads in `_worker` (thread pool idle) → pipeline exited, coordinator is a zombie
+actor-method_0 in _wait_for_stage and _coordinator_loop indicate active work.
+Threads all idle in _worker indicate an exited, zombie coordinator.
 
-## Monitoring Lifecycle
+Smoke-check child jobs and early errors during the first 2–5 minutes. Then check
+often enough to observe stage transitions (minutes for short stages, 15–30
+minutes for long ones). If workers are killed or the coordinator is zombie,
+inspect the newest hash/attempt because StepRunner may retry automatically.
+“Terminated by user” is not proof of a human cancellation; inspect parent,
+coordinator, and worker logs.
 
-After submitting, monitor in escalating stages:
-
-1. **Smoke check (first 2-5 minutes)**: Confirm coordinator and workers child jobs appear and reach RUNNING. Check coordinator logs for early errors. Failure here is likely a code bug, config issue, or bundle fetch timeout.
-
-2. **Steady-state monitoring**: Check stage progress via coordinator logs. Confirm (a) shards complete within the current stage, and (b) stages advance. Calibrate check-in interval so you see at least one stage transition between checks — every few minutes for many short stages, every 15-30 minutes for few long stages.
-
-3. **Failure detection**: If workers get KILLED or the coordinator goes zombie, the `StepRunner` may retry automatically (new child jobs with a different hash). Check the latest attempt. Stale coordinators from previous attempts may accumulate (#3705). If retries keep failing, escalate to **debug**.
-
-**"Terminated by user" is misleading**: This does not necessarily mean a human killed the job. The system uses this message for various internal termination reasons. Always check the actual logs at each level (parent job, coordinator, workers) to find the real cause.
-
-## Restarting After Failure
-
-1. Ask the user if it's okay to stop and restart.
-2. Stop the job.
-3. Get the run command (or reuse the previous one).
-4. Submit and resume monitoring.
-
-## When to Escalate
-
-Escalate to **debug** when:
-- A stage is stuck (no shard progress for an extended period)
-- Stragglers are holding up a stage (few in-flight, 0 queued, most workers idle)
-- Workers are failing repeatedly with the same error
-- Controller issues (e.g., RPCs timing out)
+Ask before canceling and resubmitting after failure. Escalate to debug for a
+stuck stage, stragglers, repeated worker errors, or controller/RPC failures.

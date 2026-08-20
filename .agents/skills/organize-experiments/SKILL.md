@@ -3,46 +3,28 @@ name: organize-experiments
 description: Curate the experiment report index at docs/reports/index.md.
 ---
 
-# Skill: Organize Experiment Reports
+# Organize Experiment Reports
 
-## Overview
-Curate `docs/reports/index.md` after new experiment issues are harvested: fold fresh entries into the right sections, refresh links, and leave `## Uncategorized` empty.
+Run the harvester, then move new entries from `## Uncategorized` into the
+canonical category in `docs/reports/index.md`:
 
-## Prerequisites
-- Local checkout of the marin repository with write access.
-- Ability to run `uv` commands.
-- Familiarity with the existing experiment categories in `docs/reports/index.md`.
+```sh
+uv run scripts/pm/itemize_experiment_issues.py
+```
 
-## Guidelines for Humans
+For each entry, merge W&B/Data Browser resources into an existing experiment
+record, remove its duplicate placeholder, and leave genuinely unmappable work
+under `## Uncategorized` with a reason. Never delete existing sections or
+conclusions, duplicate canonical entries, or change badge styling
+(`[![#NNN](https://img.shields.io/...)]`). Prefer direct `wandb.ai` links and
+`marin.community` Data Browser links; preserve access tokens already present.
 
-### Standard Workflow
-1. Run `uv run scripts/pm/itemize_experiment_issues.py` to append new experiments.
-2. Open the diff for `docs/reports/index.md` and identify the additions in `## Uncategorized`.
-3. For each experiment:
-   - Match it to an existing section (e.g., `Training and Performance`, `Data Experiments`).
-   - Merge any new resources (WandB links, Data Browser URLs) into the canonical entry in that section.
-   - Remove the placeholder entry from `## Uncategorized`.
-4. If an experiment truly does not fit, leave it under `## Uncategorized` and add a note explaining why.
-5. Proofread for duplicate bullets, broken Markdown, and consistent title casing.
-6. Commit the curated report, open a PR, or, if an interactive agent, signal to the user to look.
+Check duplicates, Markdown, title casing, and that Uncategorized is empty when
+possible:
 
-### Link Hygiene
-- Prefer direct `https://wandb.ai/...` links when available; keep legacy `api.wandb.ai` links only if the direct share link does not exist.
-- Use `https://marin.community` Data Browser URLs when the script surfaces them.
-- Preserve access tokens embedded in links.
+```sh
+rg "^- " docs/reports/index.md
+```
 
-## Rules for Agents
-- NEVER delete existing sections or conclusions.
-- Keep badge styling consistent: `[![#NNN](https://img.shields.io/...)]` next to each experiment title.
-- When merging new content, update the canonical entry instead of duplicating it.
-- Leave `## Uncategorized` empty whenever possible; a single placeholder sentence is fine.
-- Ask for guidance if an experiment does not map cleanly to known categories.
-
-## Validation
-- `rg "^- " docs/reports/index.md` to confirm bullets exist only under curated sections, not under `## Uncategorized`.
-- Re-run `uv run scripts/pm/itemize_experiment_issues.py` if unsure that all experiments were captured.
-- Optional: `markdownlint docs/reports/index.md` to catch formatting drift.
-
-## See Also
-- `scripts/pm/itemize_experiment_issues.py` for source data generation.
-- `.agents/skills/archive-experiments/SKILL.md` for retiring legacy experiments.
+Ask for guidance when an entry does not fit a known category. See
+`archive-experiments` for retiring source experiments.

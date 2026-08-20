@@ -3,64 +3,41 @@ name: debug
 description: Debug code bugs or Iris/Zephyr/TPU infrastructure faults with a structured incident record.
 ---
 
-# Skill: Debug
+# Debug
 
-Systematic debugging for code-level bugs and Marin infrastructure faults.
-For infrastructure symptoms, route to the right `OPS.md` section first. Publish
-durable investigation records to Echo with `write-ops-log`.
+For infrastructure symptoms, read the relevant `AGENTS.md` and `OPS.md` first;
+publish durable lessons with `write-ops-log`. Do not create repository debug-log
+files. Invoke `consult-echo` at the start when prior incidents may shorten the
+investigation, and search it again at resolution before changing `OPS.md`,
+`docs/`, or Echo.
 
-Do not add repository debug-log files. Use `write-ops-log` to finish an
-infrastructure or other multi-step incident as a standalone Echo postmortem.
-
-## Consult Echo
-
-Invoke `consult-echo` at the start when prior discussions, decisions, or
-incident patterns could materially shorten debugging. At resolution, always
-invoke it to search before deciding whether the reusable lesson belongs in
-`OPS.md`, `docs/`, the Echo incident record, or an existing or new synthesis.
-
-## Infrastructure faults
-
-Read `lib/iris/AGENTS.md` or `lib/zephyr/AGENTS.md` for context, then follow
-the matching `OPS.md` section:
+Route by symptom:
 
 | Symptom | Read |
 |---|---|
-| Stuck job, scheduling failure, resource leak, controller stalled | `lib/iris/OPS.md` → SQL Queries, Process Inspection & Profiling, Known Bugs, Troubleshooting |
-| Iris task misbehaving, container inspection, profiling a running task | `lib/iris/OPS.md` → Task Operations, Process Inspection & Profiling |
-| Zephyr pipeline slow / stragglers / data skew / worker failures | `lib/zephyr/OPS.md` → Diagnostic Patterns, Observability |
-| TPU bad node (`No accelerator found`, `FAILED_PRECONDITION`, `Device or resource busy`) | `lib/iris/OPS.md` → TPU Bad-Node Recovery |
+| Stuck job, scheduling/resource leak, controller stall | `lib/iris/OPS.md` → SQL, process inspection, known bugs, troubleshooting |
+| Misbehaving task, container inspection, running-task profiling | `lib/iris/OPS.md` → task operations, process inspection |
+| Zephyr slowdown, straggler, skew, worker failure | `lib/zephyr/OPS.md` → diagnostic patterns, observability |
+| TPU bad node (`No accelerator found`, `FAILED_PRECONDITION`, `Device or resource busy`) | `lib/iris/OPS.md` → TPU bad-node recovery |
 
-Operational guardrails (never modify the controller DB, prefer
-`iris process profile` over SSH, never run a full `iris cluster restart`
-without approval) live next to the relevant commands in `OPS.md` — read those
-sections. After a TPU recovery or zephyr fix, return to the active babysit
-loop (`babysit-job` or `babysit-zephyr`).
+Use the guardrails in those sections: never modify the controller DB, prefer
+`iris process profile` over SSH, and never run a full cluster restart without
+approval. Return to the active `babysit-job`/`babysit-zephyr` loop after recovery.
 
-## Code bugs
+For a code bug, keep notes in the active task and use this compact structure:
 
-For code-level bugs that are not infrastructure faults, keep working notes in
-the active task. A contained fix may use the lightweight structure below.
-Publish the complete `write-ops-log` structure to Echo when the investigation
-exposes a durable operational lesson:
-
-```
-# <System or component>: <symptom>
-
+```text
+# <System>: <symptom>
 <goal>
-
 ## Initial status
-<initial status, as reported or observed>
-
-## <Hypothesis N>
-The suspected source of the bug, or a change needed to isolate it.
-
-## Changes to make
-Which files you are altering and how.
-
+<observed state>
+## Hypothesis
+<suspected source or isolating change>
+## Changes
+<files and intended fix>
 ## Results
-Test results and any new hypotheses. Repeat the Hypothesis/Results cycle as needed.
-
-## Future work
-- [ ] Cleanups observed along the way
+<tests, evidence, and next hypothesis>
 ```
+
+Publish the full incident record with `write-ops-log` when the investigation
+reveals a durable operational lesson.
