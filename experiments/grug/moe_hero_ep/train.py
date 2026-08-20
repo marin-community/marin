@@ -77,10 +77,9 @@ HERO_EP_RUNTIME_ENV = {
 # asks for 125.7 GiB and fails that way. 85 sizes the arena at 113.6 GiB, leaving enough slack
 # for per-node variation in fragmentation. A lower percentage costs throughput, because a
 # smaller arena makes `HloRematerialization` recompute more of the step.
-_XLA_MEMORY_LIMIT_SLOP_FACTOR = "--xla_gpu_memory_limit_slop_factor=85"
 _XLA_FLAG_DEFAULTS = (
     "--xla_gpu_enable_latency_hiding_scheduler=true",
-    _XLA_MEMORY_LIMIT_SLOP_FACTOR,
+    "--xla_gpu_memory_limit_slop_factor=85",
 )
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
