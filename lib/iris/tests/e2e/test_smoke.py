@@ -522,6 +522,43 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
         "and non-matching log lines are still visible around the highlights.",
     )
 
+    # The pager slides a fixed-size window through the stream. The verbose job
+    # logs a few hundred lines, so a 100-line page has somewhere to step back to
+    # while a tail read is already at the newest line.
+    older = smoke_page.get_by_role("button", name="← Older")
+    newer = smoke_page.get_by_role("button", name="Newer →")
+    page_size = "select[title='How many lines one page holds']"
+    smoke_page.select_option(page_size, "100")
+    smoke_page.wait_for_function(
+        "() => document.querySelectorAll('[data-row]').length === 100",
+        timeout=10000,
+    )
+    assert newer.is_disabled(), "a tail read already holds the newest line"
+    assert not older.is_disabled()
+
+    oldest_before = smoke_page.locator("[data-row]").first.inner_text()
+    older.click()
+    smoke_page.wait_for_function(
+        "(before) => document.querySelector('[data-row]')?.innerText !== before",
+        arg=oldest_before,
+        timeout=10000,
+    )
+    assert not newer.is_disabled(), "paging back must enable the forward step"
+    assert smoke_page.locator("[data-row]").count() == 100, "the window slides, it does not grow"
+
+    # Follow returns the window to the live tail from wherever it was paged to.
+    smoke_page.get_by_role("button", name="Follow").click()
+    smoke_page.wait_for_function(
+        "() => document.body.textContent.includes('DONE: all lines emitted')",
+        timeout=10000,
+    )
+    assert newer.is_disabled(), "Follow must land on the newest page"
+    smoke_page.select_option(page_size, "500")
+    smoke_page.wait_for_function(
+        "() => document.querySelectorAll('[data-row]').length > 100",
+        timeout=10000,
+    )
+
     # The regex filter re-queries the server and drops non-matching lines entirely. It
     # applies on Enter, not on every keystroke. Keep this pattern literal-compatible
     # because CI runs Iris smoke tests against the latest published Finelog server;
@@ -539,6 +576,22 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
         "Task detail page with log filter input populated and filtered log lines visible in the log viewer.",
     )
 
+    # Expanding context brings back the lines the filter hides, around every
+    # loaded hit at once, without dropping the filter itself.
+    filtered_count = smoke_page.locator("[data-row]").count()
+    smoke_page.get_by_role("button", name="Expand all").click()
+    smoke_page.wait_for_function(
+        "() => document.body.textContent.includes('processing data batch')",
+        timeout=10000,
+    )
+    assert smoke_page.locator("[data-row]").count() > filtered_count
+    smoke_page.get_by_role("button", name="Collapse").click()
+    smoke_page.wait_for_function(
+        "(n) => document.querySelectorAll('[data-row]').length === n",
+        arg=filtered_count,
+        timeout=5000,
+    )
+
     # The timestamp action still makes a permalink. The next control sets an
     # exact start time. The start time stays set after the string filter clears.
     filtered_row = smoke_page.locator("[data-row]").filter(has_text="validation failed").first
@@ -547,13 +600,14 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
 
     selected_message = filtered_row.locator(":scope > span").last.inner_text()
     filtered_row.locator("[data-log-start]").click()
-    since_input = "input[type='datetime-local']"
+    # The time control collapses to a trigger labelled with the bound in force,
+    # so the bound is readable without opening the menu.
+    since_trigger = smoke_page.locator("[data-log-since]")
     smoke_page.wait_for_function(
-        "() => document.querySelector(\"input[type='datetime-local']\")?.value.length > 0",
+        "() => document.querySelector('[data-log-since]')?.textContent.includes('Since')",
         timeout=5000,
     )
-    locked_since = smoke_page.input_value(since_input)
-    assert locked_since
+    locked_since = since_trigger.inner_text()
     smoke_page.locator("[data-row]").filter(has_text=selected_message).wait_for(timeout=5000)
 
     smoke_page.get_by_role("button", name="Clear filter").click()
@@ -562,7 +616,21 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
         "document.body.textContent.includes('processing data batch')",
         timeout=5000,
     )
-    assert smoke_page.input_value(since_input) == locked_since
+    assert since_trigger.inner_text() == locked_since
+
+    # A start time can also be typed or pasted, which the native date input this
+    # replaced could not accept at all.
+    since_trigger.click()
+    smoke_page.fill("[data-log-since-field]", "not a time")
+    smoke_page.press("[data-log-since-field]", "Enter")
+    assert_visible(smoke_page, "text=Unrecognized time")
+    assert since_trigger.inner_text() == locked_since, "a rejected value must not move the window"
+    smoke_page.fill("[data-log-since-field]", "1970-01-01 00:00:00.000")
+    smoke_page.press("[data-log-since-field]", "Enter")
+    smoke_page.wait_for_function(
+        "() => document.querySelector('[data-log-since]')?.textContent.includes('1970-01-01')",
+        timeout=5000,
+    )
 
 
 def test_dashboard_jump_to_exception(smoke_cluster, smoke_page, smoke_screenshot):

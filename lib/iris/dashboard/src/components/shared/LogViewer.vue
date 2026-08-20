@@ -6,11 +6,13 @@ import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { useIndexCursor } from '@/composables/useIndexCursor'
 import { useLogSearch } from '@/composables/useLogSearch'
 import { useCopyToClipboard } from '@/composables/useCopyToClipboard'
-import { CUSTOM_PRESET, SINCE_PRESETS, type TimeZoneName, useTimeWindow } from '@/composables/useTimeWindow'
+import { useTimeWindow } from '@/composables/useTimeWindow'
+import TimeRangeMenu from '@/components/shared/TimeRangeMenu.vue'
 import { isFederated, type FetchLogsResponse, type LogEntry, type TaskAttempt } from '@/types/rpc'
-import { timestampMs, logLevelName, formatLogTime } from '@/utils/formatting'
+import { timestampMs, logLevelName, formatLogTime, type TimeZoneName } from '@/utils/formatting'
 import { parseLogLinks } from '@/utils/logLinks'
 import { groupNearbyIndices, highlightSegments, isExceptionEntry, type HighlightedSegment } from '@/utils/logSearch'
+import { CONTROL, CONTROL_OFF, CONTROL_ON, CONTROL_SM, FIELD, SELECT } from '@/styles/controls'
 
 const props = withDefaults(defineProps<{
   taskId?: string
@@ -41,10 +43,17 @@ const AUTO_REFRESH_MAX_LINES = 2000
 const POLL_INTERVAL_MS = 30_000
 // Retain at most this many rendered lines to keep the DOM bounded.
 const MAX_RETAINED_LINES = 20_000
-// Lines fetched either side of a row when expanding its context.
-const CONTEXT_LINES = 25
+// Lines fetched either side of a row, or of a run of filter hits, when expanding
+// context. The default is `grep -C 25`; the other two are the "just the
+// neighbours" and "show me the whole episode" ends of the same question.
+const CONTEXT_LINES_DEFAULT = 25
+const CONTEXT_LINE_CHOICES = [10, CONTEXT_LINES_DEFAULT, 100]
 // Bound the spliced-in context set; the oldest expansions are evicted first.
 const MAX_CONTEXT_ROWS = 5_000
+// Expanding a filtered set costs two reads per run of hits, so bound the runs: a
+// filter that matches all over the stream must not turn one click into hundreds
+// of fetches. The panel says so when it stops short.
+const MAX_CONTEXT_RUNS = 10
 // Rows within this distance of each other count as one failure when stepping
 // through exceptions — a traceback trips several patterns a few lines apart.
 const EXCEPTION_GROUP_GAP = 5
@@ -68,7 +77,7 @@ const WIRE_SCOPE: Record<MatchScope, WireMatchScope> = {
 // lines never arrive. Distinct from `search` below, which only marks lines.
 const filter = ref('')
 const level = ref('info')
-const tailLines = ref(500)
+const pageLines = ref(500)
 const selectedAttemptId = ref(props.currentAttemptId ?? -1)
 
 // Client-side find-in-loaded-lines: marks matches and steps between them without
@@ -83,20 +92,23 @@ const searchInput = ref<HTMLInputElement | null>(null)
 const sourceInput = ref('')
 const matchScope = ref<MatchScope>('EXACT')
 
-// Timezone for rendering log timestamps and interpreting the date picker.
-// Stored timestamps are UTC epoch ms regardless; 'local' shows the browser's
-// zone (default), 'utc' lines the prefix up with the UTC timestamps processes
-// embed in their raw log lines.
+// Timezone for rendering log timestamps and reading typed instants. Stored
+// timestamps are UTC epoch ms regardless; 'local' shows the browser's zone
+// (default), 'utc' lines the prefix up with the UTC timestamps processes embed
+// in their raw log lines.
 const timeZone = ref<TimeZoneName>('local')
 
-const { presetMs, customSince, absolute: absoluteSince, sinceMs, setSinceMs, selectPreset } = useTimeWindow(timeZone)
+const { presetMs, sinceInstant, absolute: absoluteSince, sinceMs, setSinceMs, selectPreset } = useTimeWindow()
 
 const entries = ref<LogEntry[]>([])
-// Lines pulled in by expanding a row's context, keyed by seq so they dedupe
-// against `entries` and splice into the right place. Iteration follows first
-// insertion, so `loadContext` evicts the earliest-expanded window first.
+// Lines pulled in by expanding context, keyed by seq so they dedupe against
+// `entries` and splice into the right place. Iteration follows first insertion,
+// so an expansion evicts the earliest-expanded window first.
 const contextEntries = ref<Map<number, LogEntry>>(new Map())
+const contextLines = ref(CONTEXT_LINES_DEFAULT)
 const contextPending = ref(false)
+// Set when an expansion covered only the first MAX_CONTEXT_RUNS runs of hits.
+const contextTruncated = ref(false)
 const loading = ref(false)
 const errorMsg = ref<string | null>(null)
 // proto JSON encodes int64 as string; 0/"0" both mean "no cursor".
@@ -106,6 +118,14 @@ const wrap = ref(true)
 const followTail = ref(true)
 const selectedSeq = ref<number | null>(null)
 const scrollBox = ref<HTMLElement | null>(null)
+
+// Where the window sits in the stream, under the current query. Each flag is the
+// end the matching step has run out of, so it also says whether that step is
+// still offered; `reachedNewest` additionally gates polling, which has nowhere
+// to put new lines while the window is paged back.
+const paging = ref(false)
+const reachedOldest = ref(false)
+const reachedNewest = ref(false)
 
 // Task IDs end with a numeric segment (e.g. /alice/job/0), job IDs don't.
 const isTask = computed(() => (sourceBase.value ? /\/\d+$/.test(sourceBase.value) : false))
@@ -231,6 +251,20 @@ const matchCursor = useIndexCursor(matchIndices)
 const exceptionCursor = useIndexCursor(exceptionIndices)
 const filterActive = computed(() => filter.value.length > 0)
 
+const contextActive = computed(() => contextEntries.value.size > 0)
+
+/** The clock span of the loaded window, labelling what the pager moves. */
+const loadedSpan = computed(() => {
+  const rows = logRows.value
+  if (rows.length === 0) return ''
+  const first = timestampMs(rows[0].entry.timestamp)
+  const last = timestampMs(rows[rows.length - 1].entry.timestamp)
+  if (!first || !last) return ''
+  // Seconds are enough at this scale; the per-row column carries milliseconds.
+  const clock = (ms: number) => formatLogTime(ms, timeZone.value).slice(0, 8)
+  return `${clock(first)}–${clock(last)}`
+})
+
 const exceptionLabel = computed(() => {
   const total = exceptionIndices.value.length
   if (total === 0) return 'No exceptions'
@@ -271,6 +305,29 @@ function baseRequest() {
   }
 }
 
+/**
+ * Read one page, plus a probe row past its far end.
+ *
+ * A page that comes back exactly the size it asked for says nothing about
+ * whether the store had more; asking for one row more than fits does. The probe
+ * is trimmed off before the page is shown, so it only ever answers whether the
+ * step in that direction is still available.
+ */
+async function fetchPage(request: Record<string, unknown>, limit: number, tail: boolean) {
+  const resp = await logServiceRpcCall<FetchLogsResponse>('FetchLogs', { ...request, maxLines: limit + 1, tail })
+  const rows = resp.entries ?? []
+  const more = rows.length > limit
+  // A tailing read returns the newest limit + 1 rows, so the probe is the first
+  // of them; a forward read returns the oldest, so the probe is the last.
+  if (!more) return { rows, more }
+  return { rows: tail ? rows.slice(1) : rows.slice(0, limit), more }
+}
+
+/** Where a poll resumes after this page: the last row shown, never the probe. */
+function pageCursor(rows: LogEntry[]): string | null {
+  return rows.length > 0 ? String(seqOf(rows[rows.length - 1])) : null
+}
+
 async function fetchTail() {
   if (!sourceInput.value) {
     entries.value = []
@@ -283,14 +340,19 @@ async function fetchTail() {
     // An explicit start date means "read forward from here": fetch the first
     // maxLines entries at/after sinceMs (oldest-first). Relative presets and the
     // default view stay anchored to now, so they tail the newest maxLines.
-    const resp = await logServiceRpcCall<FetchLogsResponse>('FetchLogs', {
-      ...baseRequest(),
-      maxLines: tailLines.value || undefined,
-      tail: !absoluteSince.value,
-    })
+    const tail = !absoluteSince.value
+    const { rows, more } = await fetchPage(baseRequest(), pageLines.value, tail)
     if (gen !== generation) return
-    entries.value = resp.entries ?? []
-    cursor.value = resp.cursor ?? null
+    entries.value = rows
+    cursor.value = pageCursor(rows)
+    if (tail) {
+      reachedNewest.value = true
+      reachedOldest.value = !more
+    } else {
+      // Nothing older belongs to a query already bounded below by a start time.
+      reachedOldest.value = true
+      reachedNewest.value = !more
+    }
   } catch (e) {
     if (gen !== generation) return
     errorMsg.value = e instanceof Error ? e.message : String(e)
@@ -306,6 +368,10 @@ async function fetchIncremental() {
     await fetchTail()
     return
   }
+  // Only a window that already holds the newest line can absorb newer ones.
+  // Paged back into the stream, polling has nowhere to put them; it picks up
+  // again by itself once Follow returns the window to the tail.
+  if (!reachedNewest.value) return
   const gen = ++generation
   // Incremental polls don't toggle `loading` so the UI doesn't flash on every
   // poll; the user only sees the spinner on the initial/tail load.
@@ -320,9 +386,11 @@ async function fetchIncremental() {
     const newEntries = resp.entries ?? []
     if (newEntries.length > 0) {
       const combined = entries.value.concat(newEntries)
-      entries.value = combined.length > MAX_RETAINED_LINES
-        ? combined.slice(combined.length - MAX_RETAINED_LINES)
-        : combined
+      const trimmed = combined.length > MAX_RETAINED_LINES
+      entries.value = trimmed ? combined.slice(combined.length - MAX_RETAINED_LINES) : combined
+      // Dropping the oldest rows to stay within the DOM budget gives up the
+      // beginning of the stream, so the backward step is live again.
+      if (trimmed) reachedOldest.value = false
     }
     if (resp.cursor !== undefined && resp.cursor !== null) {
       cursor.value = resp.cursor
@@ -341,10 +409,72 @@ async function doPoll() {
   await fetchIncremental()
 }
 
+const oldestSeq = computed(() => (entries.value.length ? seqOf(entries.value[0]) : 0))
+const newestSeq = computed(() => (entries.value.length ? seqOf(entries.value[entries.value.length - 1]) : 0))
+
+/**
+ * Show the page of lines immediately before or after the one on screen.
+ *
+ * The window moves rather than grows, so the line count and span beside these
+ * controls always describe exactly what is displayed, and the pair stays
+ * symmetric: whichever end you are not at is a step you can take. A page keeps
+ * the active filter, so paging a filtered view steps between hits rather than
+ * between raw lines.
+ */
+async function loadPage(direction: 'older' | 'newer') {
+  const older = direction === 'older'
+  const anchor = older ? oldestSeq.value : newestSeq.value
+  if (paging.value || anchor <= 0) return
+  paging.value = true
+  followTail.value = false
+  const gen = ++generation
+  try {
+    const bound = older ? { untilCursor: anchor } : { cursor: anchor }
+    const { rows, more } = await fetchPage({ ...baseRequest(), ...bound }, pageLines.value, older)
+    if (gen !== generation) return
+    errorMsg.value = null
+    if (rows.length === 0) {
+      if (older) reachedOldest.value = true
+      else reachedNewest.value = true
+      return
+    }
+    // Context was fetched around rows this page no longer holds.
+    collapseContext()
+    entries.value = rows
+    cursor.value = pageCursor(rows)
+    // The end just stepped away from is back in play either way.
+    if (older) {
+      reachedOldest.value = !more
+      reachedNewest.value = false
+    } else {
+      reachedNewest.value = !more
+      reachedOldest.value = false
+    }
+    // Land where reading continues: at the end of an earlier page, at the start
+    // of a later one.
+    if (older) scrollToBottom()
+    else nextTick(() => { if (scrollBox.value) scrollBox.value.scrollTop = 0 })
+  } catch (e) {
+    if (gen !== generation) return
+    errorMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    paging.value = false
+  }
+}
+
+/** Put the window back on the live tail and track it. */
+async function followNewest() {
+  followTail.value = true
+  // An absolute start bounds the query below, so its window cannot slide past
+  // the bound to the tail; there, Follow just returns to the end of the page.
+  if (!reachedNewest.value && !absoluteSince.value) await fetchTail()
+  scrollToBottom()
+}
+
 /** Drop the pinned row and everything expanded around it. */
 function clearAnchor() {
   selectedSeq.value = null
-  contextEntries.value = new Map()
+  collapseContext()
   if (route.query.logSeq !== undefined) {
     const { logSeq: _dropped, ...rest } = route.query
     router.replace({ query: rest })
@@ -357,54 +487,103 @@ function clearAnchor() {
 async function resetAndFetch() {
   cursor.value = null
   entries.value = []
+  reachedOldest.value = false
+  reachedNewest.value = false
   clearAnchor()
   matchCursor.reset()
   exceptionCursor.reset()
   await fetchTail()
 }
 
+/** Drop everything expanded so far, leaving the query's own rows. */
+function collapseContext() {
+  contextEntries.value = new Map()
+  contextTruncated.value = false
+}
+
 /**
- * Splice the neighbourhood of row `seq` into the view.
+ * The unfiltered neighbourhood of the seq range `[start, end]`.
  *
- * The neighbourhood is unfiltered: only the stream selector is sent, so the
- * spliced rows include the ones the active filter hides.
+ * Reads are bounded by seq but limited by count, and the stream selector is
+ * applied server-side, so `maxLines` counts rows of *this* source rather than
+ * store rows. That is what makes "the 25 lines before this one" mean what it
+ * says on a store shared by every task in the cluster.
  */
-async function loadContext(seq: number) {
-  if (seq <= 0 || contextPending.value) return
+function contextRequests(start: number, end: number, lines: number) {
+  return [
+    // Exclusive, so tailing it yields the rows ending just before the range.
+    { ...sourceRequest(), untilCursor: start, tail: true, maxLines: lines },
+    // Also exclusive: start - 1 is the tightest bound that still returns the
+    // first row. Reading forward from there covers the range's interior — the
+    // rows the filter dropped — and `lines` more past its end.
+    {
+      ...sourceRequest(),
+      cursor: start - 1,
+      tail: false,
+      maxLines: Math.min(end - start + lines + 1, MAX_CONTEXT_ROWS),
+    },
+  ]
+}
+
+/** Merge fetched rows into the spliced set, evicting the earliest expansions. */
+function spliceContext(fetched: LogEntry[][]) {
+  const next = new Map(contextEntries.value)
+  for (const batch of fetched) for (const entry of batch) next.set(seqOf(entry), entry)
+  while (next.size > MAX_CONTEXT_ROWS) {
+    const oldest = next.keys().next().value
+    if (oldest === undefined) break
+    next.delete(oldest)
+  }
+  contextEntries.value = next
+}
+
+async function fetchContext(ranges: { start: number; end: number }[]) {
+  if (contextPending.value || ranges.length === 0) return
   contextPending.value = true
   try {
-    const [before, fromAnchor] = await Promise.all([
-      logServiceRpcCall<FetchLogsResponse>('FetchLogs', {
-        ...sourceRequest(),
-        // Exclusive, so tailing it yields the rows ending just before the anchor.
-        untilCursor: seq,
-        tail: true,
-        maxLines: CONTEXT_LINES,
-      }),
-      logServiceRpcCall<FetchLogsResponse>('FetchLogs', {
-        ...sourceRequest(),
-        // Also exclusive: seq - 1 is the tightest bound that still returns the anchor.
-        cursor: seq - 1,
-        tail: false,
-        maxLines: CONTEXT_LINES + 1,
-      }),
-    ])
-    const next = new Map(contextEntries.value)
-    for (const entry of [...(before.entries ?? []), ...(fromAnchor.entries ?? [])]) {
-      next.set(seqOf(entry), entry)
-    }
-    while (next.size > MAX_CONTEXT_ROWS) {
-      const oldest = next.keys().next().value
-      if (oldest === undefined) break
-      next.delete(oldest)
-    }
-    contextEntries.value = next
+    const requests = ranges.flatMap((range) => contextRequests(range.start, range.end, contextLines.value))
+    const responses = await Promise.all(
+      requests.map((request) => logServiceRpcCall<FetchLogsResponse>('FetchLogs', request)),
+    )
+    spliceContext(responses.map((resp) => resp.entries ?? []))
     errorMsg.value = null
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : String(e)
   } finally {
     contextPending.value = false
   }
+}
+
+/** Splice the neighbourhood of one row into the view. */
+async function loadContext(seq: number) {
+  if (seq <= 0) return
+  await fetchContext([{ start: seq, end: seq }])
+}
+
+/** Ascending seqs collapsed into runs, merging any whose windows would overlap. */
+function contextRuns(seqs: number[], lines: number): { start: number; end: number }[] {
+  const runs: { start: number; end: number }[] = []
+  for (const seq of seqs) {
+    const last = runs[runs.length - 1]
+    if (last !== undefined && seq - last.end <= lines) last.end = seq
+    else runs.push({ start: seq, end: seq })
+  }
+  return runs
+}
+
+/**
+ * Bring back the lines the filter hides, around every loaded hit at once.
+ *
+ * The per-row control answers "what happened around this line". With a filter on
+ * and dozens of hits, asking that one row at a time is the tedious part, so this
+ * is the same expansion over the whole result set — `grep -C` on what is loaded.
+ */
+async function expandFilteredContext() {
+  if (contextPending.value) return
+  const seqs = entries.value.map(seqOf).filter((seq) => seq > 0)
+  const runs = contextRuns(seqs, contextLines.value)
+  contextTruncated.value = runs.length > MAX_CONTEXT_RUNS
+  await fetchContext(runs.slice(0, MAX_CONTEXT_RUNS))
 }
 
 /** Pin a row, expand its context, and scroll it into view. */
@@ -423,14 +602,11 @@ const { active: autoRefreshActive, toggle: toggleAutoRefresh } = useAutoRefresh(
 // match-scope select refetches via @change rather than a watch, so the
 // reassignment in applyDefaults() doesn't fire a redundant second fetch.
 watch(selectedAttemptId, applyDefaults)
-watch(tailLines, resetAndFetch)
+watch(pageLines, resetAndFetch)
 watch(level, resetAndFetch)
-watch([presetMs, customSince], resetAndFetch)
-// Changing the zone only alters the query when an absolute date is in effect
-// (it reinterprets the picker); otherwise it just re-renders timestamps.
-watch(timeZone, () => {
-  if (customSince.value) resetAndFetch()
-})
+watch([presetMs, sinceInstant], resetAndFetch)
+// The zone is not in the query: an absolute bound is held as an instant, so
+// switching clocks re-labels it and the timestamp column without moving either.
 
 // A different query means the old match position is meaningless.
 watch([search.applied, search.caseSensitive, search.useRegex], matchCursor.reset)
@@ -548,7 +724,10 @@ function clearFilter() {
 function onScroll() {
   const box = scrollBox.value
   if (!box) return
-  followTail.value = box.scrollHeight - box.scrollTop - box.clientHeight < FOLLOW_TAIL_SLACK_PX
+  const atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < FOLLOW_TAIL_SLACK_PX
+  // Reaching the end of a page that is not the live tail is not following it;
+  // paging back lands at the bottom of an earlier window on purpose.
+  followTail.value = atEnd && reachedNewest.value
 }
 
 // A start date means "read forward from here", so the interesting rows are at
@@ -633,33 +812,27 @@ defineExpose({ selectedAttemptId })
 
 <template>
   <div class="space-y-2">
-    <!-- Query row: which log stream to read (source + scope + attempt) -->
-    <div class="flex flex-wrap items-center gap-2 sm:gap-3 text-sm">
+    <!-- Stream row: which keys this panel reads -->
+    <div class="flex flex-wrap items-center gap-2">
       <input
         v-model="sourceInput"
         type="text"
         spellcheck="false"
         placeholder="Source key, e.g. /alice/job/ or /system/worker/… (Enter to apply)"
-        class="w-full sm:w-96 px-3 py-1.5 bg-surface border border-surface-border rounded
-               text-sm font-mono placeholder:text-text-muted
-               focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
+        :class="[FIELD, 'h-7 w-full text-sm sm:w-96']"
         @keyup.enter="resetAndFetch"
       />
       <select
         v-model="matchScope"
         title="How the source is matched against log keys"
-        class="px-2 py-1.5 border border-surface-border rounded text-sm"
+        :class="SELECT"
         @change="resetAndFetch"
       >
         <option value="EXACT">Exact</option>
         <option value="PREFIX">Prefix</option>
         <option value="REGEX">Regex</option>
       </select>
-      <select
-        v-if="attempts && attempts.length > 0"
-        v-model.number="selectedAttemptId"
-        class="px-2 py-1.5 border border-surface-border rounded text-sm"
-      >
+      <select v-if="attempts && attempts.length > 0" v-model.number="selectedAttemptId" :class="SELECT">
         <option :value="-1">All attempts</option>
         <option v-for="a in attempts" :key="a.attemptId" :value="a.attemptId">
           Attempt {{ a.attemptId }}
@@ -667,62 +840,45 @@ defineExpose({ selectedAttemptId })
       </select>
     </div>
 
-    <!-- Filter row: server-side narrowing — non-matching lines never arrive -->
-    <div class="flex flex-wrap items-center gap-2 sm:gap-3 text-sm">
+    <!-- Line row: which of that stream's lines to fetch -->
+    <div class="flex flex-wrap items-center gap-2">
       <input
         v-model="filter"
         type="text"
         title="Server-side regex filter: drops every line that does not match"
         placeholder="Filter regex… (Enter)"
-        class="w-full sm:w-56 px-3 py-1.5 bg-surface border border-surface-border rounded
-               text-sm font-mono placeholder:text-text-muted
-               focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
+        :class="[FIELD, 'h-7 w-full text-sm sm:w-56']"
         @keyup.enter="resetAndFetch"
       />
-      <select v-model="level" title="Minimum severity" class="px-2 py-1.5 border border-surface-border rounded text-sm">
+      <select v-model="level" title="Minimum severity" :class="SELECT">
         <option value="debug">Debug</option>
         <option value="info">Info</option>
         <option value="warning">Warning</option>
         <option value="error">Error</option>
       </select>
-      <select
-        :value="absoluteSince ? CUSTOM_PRESET : presetMs"
-        title="Only show logs newer than this"
-        class="px-2 py-1.5 border border-surface-border rounded text-sm"
-        @change="selectPreset(Number(($event.target as HTMLSelectElement).value))"
-      >
-        <option v-if="absoluteSince" :value="CUSTOM_PRESET">Custom</option>
-        <option v-for="p in SINCE_PRESETS" :key="p.ms" :value="p.ms">{{ p.label }}</option>
-      </select>
-      <input
-        v-model="customSince"
-        type="datetime-local"
-        step="0.001"
-        title="Show logs since a specific date/time"
-        class="px-2 py-1.5 border border-surface-border rounded text-sm"
+      <TimeRangeMenu
+        :preset-ms="presetMs"
+        :since-instant="sinceInstant"
+        :time-zone="timeZone"
+        @select-preset="selectPreset"
+        @set-since="setSinceMs"
+        @set-time-zone="timeZone = $event"
       />
-      <select
-        v-model="timeZone"
-        title="Timezone for displayed timestamps and the date picker"
-        class="px-2 py-1.5 border border-surface-border rounded text-sm"
-      >
-        <option value="local">Local</option>
-        <option value="utc">UTC</option>
-      </select>
-      <select v-model.number="tailLines" class="px-2 py-1.5 border border-surface-border rounded text-sm">
-        <option :value="500">500 lines</option>
-        <option :value="1000">1,000 lines</option>
-        <option :value="5000">5,000 lines</option>
-        <option :value="10000">10,000 lines</option>
+      <select v-model.number="pageLines" title="How many lines one page holds" :class="SELECT">
+        <option :value="100">100 per page</option>
+        <option :value="500">500 per page</option>
+        <option :value="1000">1,000 per page</option>
+        <option :value="5000">5,000 per page</option>
+        <option :value="10000">10,000 per page</option>
       </select>
       <button
-        class="px-2 py-1.5 border border-surface-border rounded text-sm hover:bg-surface-sunken"
-        :class="autoRefreshActive ? 'text-accent' : 'text-text-muted'"
+        type="button"
+        :class="[CONTROL, autoRefreshActive ? CONTROL_ON : CONTROL_OFF]"
+        :title="autoRefreshActive
+          ? `Polling for new lines every ${POLL_INTERVAL_MS / 1000}s`
+          : 'Paused; the view holds the lines already fetched'"
         @click="toggleAutoRefresh"
-      >
-        {{ autoRefreshActive ? 'Auto ⟳' : 'Paused' }}
-      </button>
-      <span class="ml-auto text-xs text-text-muted font-mono">{{ logRows.length }} lines</span>
+      >{{ autoRefreshActive ? 'Auto ⟳' : 'Paused' }}</button>
     </div>
 
     <div
@@ -732,121 +888,188 @@ defineExpose({ selectedAttemptId })
       {{ errorMsg }}
     </div>
 
-    <!-- The find bar, the filter notice and the log body read as one panel, so
+    <!-- The view bar, the context notice and the log body read as one panel, so
          they share a border and sit outside the toolbar's vertical rhythm. -->
     <div class="rounded-lg border border-surface-border overflow-hidden">
-    <!-- Find bar: client-side search over the loaded lines, plus failure nav -->
-    <div class="flex flex-wrap items-center gap-2 text-sm border-b border-surface-border
-                bg-surface-raised px-2 py-1.5">
-      <div class="relative">
-        <input
-          ref="searchInput"
-          v-model="search.query.value"
-          type="text"
-          spellcheck="false"
-          title="Highlights matches in the lines already loaded, keeping their context. Press / to focus, Enter or n for the next match."
-          placeholder="Search loaded lines… (/)"
-          class="w-56 pl-3 pr-16 py-1 bg-surface border border-surface-border rounded
-                 text-sm font-mono placeholder:text-text-muted
-                 focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
-          :class="search.error.value ? 'border-status-danger' : ''"
-          @keydown.enter.prevent="gotoMatch($event.shiftKey ? -1 : 1)"
-          @keydown.esc.prevent="search.query.value = ''"
-        />
-        <div class="absolute inset-y-0 right-1 flex items-center gap-0.5">
+      <!-- View bar: everything that acts on the lines already loaded. Controls
+           are grouped by what they answer, and each group is one flex item, so
+           a narrow viewport wraps them in whole groups rather than scattering
+           them individually. -->
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-surface-border
+                  bg-surface-raised px-2 py-1.5">
+        <div class="relative">
+          <input
+            ref="searchInput"
+            v-model="search.query.value"
+            type="text"
+            spellcheck="false"
+            title="Highlights matches in the lines already loaded, keeping their context. Press / to focus, Enter or n for the next match."
+            placeholder="Search loaded lines… (/)"
+            :class="[FIELD, 'h-6 w-64 pr-16 text-xs', search.error.value ? 'border-status-danger' : '']"
+            @keydown.enter.prevent="gotoMatch($event.shiftKey ? -1 : 1)"
+            @keydown.esc.prevent="search.query.value = ''"
+          />
+          <div class="absolute inset-y-0 right-1 flex items-center gap-0.5">
+            <button
+              type="button"
+              title="Match case"
+              class="rounded px-1 font-mono text-xs hover:bg-surface-sunken"
+              :class="search.caseSensitive.value ? 'text-accent' : 'text-text-muted'"
+              @click="search.caseSensitive.value = !search.caseSensitive.value"
+            >Aa</button>
+            <button
+              type="button"
+              title="Regular expression"
+              class="rounded px-1 font-mono text-xs hover:bg-surface-sunken"
+              :class="search.useRegex.value ? 'text-accent' : 'text-text-muted'"
+              @click="search.useRegex.value = !search.useRegex.value"
+            >.*</button>
+          </div>
+        </div>
+
+        <div v-if="search.applied.value && !search.error.value" class="inline-flex items-center gap-1">
+          <span class="font-mono text-xs tabular-nums text-text-muted">
+            {{ matchIndices.length
+              ? `${matchCursor.position.value >= 0 ? matchCursor.position.value + 1 : '–'} / ${matchIndices.length}`
+              : 'no matches' }}
+          </span>
           <button
-            title="Match case"
-            class="px-1 rounded text-xs font-mono hover:bg-surface-sunken"
-            :class="search.caseSensitive.value ? 'text-accent' : 'text-text-muted'"
-            @click="search.caseSensitive.value = !search.caseSensitive.value"
-          >Aa</button>
+            type="button"
+            :class="[CONTROL_SM, CONTROL_OFF]"
+            title="Previous match (Shift+Enter or N)"
+            :disabled="!matchIndices.length"
+            @click="gotoMatch(-1)"
+          >↑</button>
           <button
-            title="Regular expression"
-            class="px-1 rounded text-xs font-mono hover:bg-surface-sunken"
-            :class="search.useRegex.value ? 'text-accent' : 'text-text-muted'"
-            @click="search.useRegex.value = !search.useRegex.value"
-          >.*</button>
+            type="button"
+            :class="[CONTROL_SM, CONTROL_OFF]"
+            title="Next match (Enter or n)"
+            :disabled="!matchIndices.length"
+            @click="gotoMatch(1)"
+          >↓</button>
+          <button
+            v-if="!matchIndices.length"
+            type="button"
+            :class="[CONTROL_SM, 'border-accent-border bg-surface text-accent hover:bg-surface-sunken']"
+            title="No match among the loaded lines. Re-query the whole log with this text as a server-side filter."
+            @click="promoteSearchToFilter"
+          >Filter the full log</button>
+        </div>
+        <span v-else-if="search.error.value" class="text-xs text-status-danger">{{ search.error.value }}</span>
+
+        <div class="inline-flex items-center gap-1">
+          <button
+            type="button"
+            :class="[CONTROL_SM, exceptionIndices.length
+              ? 'border-status-danger-border bg-surface text-status-danger hover:bg-surface-sunken'
+              : 'border-surface-border bg-surface text-text-muted']"
+            :title="exceptionIndices.length
+              ? 'Jump to the next traceback or fatal error (e)'
+              : 'No traceback or fatal error among the loaded lines'"
+            :disabled="!exceptionIndices.length"
+            @click="gotoException(1)"
+          >⚠ {{ exceptionLabel }}</button>
+          <button
+            type="button"
+            :class="[CONTROL_SM, CONTROL_OFF]"
+            title="Previous exception (E)"
+            :disabled="!exceptionIndices.length"
+            @click="gotoException(-1)"
+          >↑</button>
+        </div>
+
+        <!-- Pager: the two steps flank the window they move, so which way each
+             one goes is legible without reading the labels. -->
+        <div class="ml-auto inline-flex items-center gap-1">
+          <button
+            type="button"
+            :class="[CONTROL_SM, CONTROL_OFF]"
+            :disabled="paging || reachedOldest || !entries.length"
+            :title="reachedOldest
+              ? 'Beginning of the stream'
+              : `Load the ${pageLines} lines before this window`"
+            @click="loadPage('older')"
+          >← Older</button>
+          <span class="whitespace-nowrap px-1 font-mono text-xs tabular-nums text-text-muted">
+            {{ logRows.length }} lines<template v-if="loadedSpan"> · {{ loadedSpan }}</template>
+          </span>
+          <button
+            type="button"
+            :class="[CONTROL_SM, CONTROL_OFF]"
+            :disabled="paging || reachedNewest || !entries.length"
+            :title="reachedNewest
+              ? 'Caught up with the newest line'
+              : `Load the ${pageLines} lines after this window`"
+            @click="loadPage('newer')"
+          >Newer →</button>
+        </div>
+
+        <div class="inline-flex items-center gap-1">
+          <button
+            type="button"
+            :class="[CONTROL_SM, wrap ? CONTROL_ON : CONTROL_OFF]"
+            title="Wrap long lines"
+            @click="wrap = !wrap"
+          >Wrap</button>
+          <button
+            type="button"
+            :class="[CONTROL_SM, followTail ? CONTROL_ON : CONTROL_OFF]"
+            title="Return to the newest line and keep it in view as logs arrive"
+            @click="followNewest"
+          >Follow</button>
+          <button
+            type="button"
+            :class="[CONTROL_SM, copied ? 'border-status-success-border bg-surface text-status-success'
+              : copyError ? 'border-status-danger-border bg-surface text-status-danger' : CONTROL_OFF]"
+            :disabled="!logRows.length"
+            title="Copy the loaded lines to the clipboard as JSON"
+            @click="copyLogs"
+          >{{ copied ? 'Copied' : copyError ? 'Failed' : 'Copy JSON' }}</button>
         </div>
       </div>
 
-      <template v-if="search.applied.value && !search.error.value">
-        <span class="text-xs font-mono text-text-muted tabular-nums">
-          {{ matchIndices.length
-            ? `${matchCursor.position.value >= 0 ? matchCursor.position.value + 1 : '–'} / ${matchIndices.length}`
-            : 'no matches' }}
-        </span>
-        <button
-          class="px-1.5 py-0.5 border border-surface-border rounded text-xs hover:bg-surface-sunken disabled:opacity-40"
-          title="Previous match (Shift+Enter or N)"
-          :disabled="!matchIndices.length"
-          @click="gotoMatch(-1)"
-        >↑</button>
-        <button
-          class="px-1.5 py-0.5 border border-surface-border rounded text-xs hover:bg-surface-sunken disabled:opacity-40"
-          title="Next match (Enter or n)"
-          :disabled="!matchIndices.length"
-          @click="gotoMatch(1)"
-        >↓</button>
-        <button
-          v-if="!matchIndices.length"
-          class="px-1.5 py-0.5 border border-surface-border rounded text-xs text-accent hover:bg-surface-sunken"
-          title="No match among the loaded lines. Re-query the whole log with this text as a server-side filter."
-          @click="promoteSearchToFilter"
-        >Filter the full log</button>
-      </template>
-      <span v-else-if="search.error.value" class="text-xs text-status-danger">{{ search.error.value }}</span>
-
-      <div class="flex items-center gap-1 ml-auto">
-        <button
-          class="px-1.5 py-0.5 border border-surface-border rounded text-xs hover:bg-surface-sunken
-                 disabled:opacity-40 disabled:hover:bg-transparent"
-          :class="exceptionIndices.length ? 'text-status-danger' : 'text-text-muted'"
-          :title="exceptionIndices.length
-            ? 'Jump to the next traceback or fatal error (e)'
-            : 'No traceback or fatal error among the loaded lines'"
-          :disabled="!exceptionIndices.length"
-          @click="gotoException(1)"
-        >
-          ⚠ {{ exceptionLabel }}
-        </button>
-        <button
-          class="px-1.5 py-0.5 border border-surface-border rounded text-xs hover:bg-surface-sunken disabled:opacity-40"
-          title="Previous exception (E)"
-          :disabled="!exceptionIndices.length"
-          @click="gotoException(-1)"
-        >↑</button>
-        <button
-          class="px-2 py-0.5 border border-surface-border rounded text-xs hover:bg-surface-sunken"
-          :class="copied ? 'text-status-success' : copyError ? 'text-status-danger' : 'text-text-muted'"
-          :disabled="!logRows.length"
-          title="Copy the loaded lines to the clipboard as JSON"
-          @click="copyLogs"
-        >{{ copied ? 'Copied' : copyError ? 'Failed' : 'Copy JSON' }}</button>
-        <button
-          class="px-2 py-0.5 border border-surface-border rounded text-xs hover:bg-surface-sunken"
-          :class="wrap ? 'text-accent' : 'text-text-muted'"
-          title="Wrap long lines"
-          @click="wrap = !wrap"
-        >Wrap</button>
-        <button
-          class="px-2 py-0.5 border border-surface-border rounded text-xs hover:bg-surface-sunken"
-          :class="followTail ? 'text-accent' : 'text-text-muted'"
-          title="Keep the newest line in view as logs arrive"
-          @click="followTail = true; scrollToBottom()"
-        >Follow</button>
-      </div>
-    </div>
-
+      <!-- Context notice: what the filter is hiding, and how to get it back. -->
       <div
-        v-if="filterActive"
-        class="flex items-center gap-2 px-3 py-1 text-xs border-b border-surface-border
-               bg-surface-raised text-text-secondary"
+        v-if="filterActive || contextActive"
+        class="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-surface-border
+               bg-surface-raised px-3 py-1 text-xs text-text-secondary"
       >
-        <span>
+        <span v-if="filterActive">
           Filtered to lines matching <code class="font-mono text-text">{{ filter }}</code> — surrounding
-          lines are hidden. Use <span class="font-mono">⋯</span> on a row to bring its context back.
+          lines are hidden.
         </span>
-        <button class="ml-auto text-accent hover:underline" @click="clearFilter">Clear filter</button>
+        <span v-else>Showing the lines expanded around pinned rows.</span>
+        <span v-if="contextTruncated" class="text-status-warning">
+          Expanded the first {{ MAX_CONTEXT_RUNS }} runs of hits only.
+        </span>
+
+        <div class="ml-auto inline-flex items-center gap-1">
+          <select
+            v-model.number="contextLines"
+            title="Lines kept either side of a hit, here and on a row's ⋯"
+            class="h-6 rounded border border-surface-border bg-surface px-1 text-xs text-text"
+          >
+            <option v-for="n in CONTEXT_LINE_CHOICES" :key="n" :value="n">± {{ n }} lines</option>
+          </select>
+          <button
+            v-if="filterActive"
+            type="button"
+            :class="[CONTROL_SM, CONTROL_OFF]"
+            :disabled="contextPending || !entries.length"
+            title="Bring back the hidden lines around every loaded hit at once"
+            @click="expandFilteredContext"
+          >{{ contextPending ? 'Expanding…' : 'Expand all' }}</button>
+          <button
+            v-if="contextActive"
+            type="button"
+            :class="[CONTROL_SM, CONTROL_OFF]"
+            title="Drop the expanded lines and show only the query's own hits"
+            @click="collapseContext"
+          >Collapse</button>
+          <button v-if="filterActive" type="button" class="px-1 text-accent hover:underline" @click="clearFilter">
+            Clear filter
+          </button>
+        </div>
       </div>
 
       <div
@@ -876,7 +1099,7 @@ defineExpose({ selectedAttemptId })
               v-if="row.seq > 0"
               class="shrink-0 w-4 select-none text-text-muted opacity-0 group-hover:opacity-100
                      focus-visible:opacity-100 hover:text-accent disabled:opacity-40"
-              :title="`Show the ${CONTEXT_LINES} lines either side of this one, unfiltered`"
+              :title="`Show the ${contextLines} lines either side of this one, unfiltered`"
               :disabled="contextPending"
               @click="loadContext(row.seq)"
             >⋯</button>
@@ -897,7 +1120,7 @@ defineExpose({ selectedAttemptId })
                 class="text-text-muted tabular-nums hover:text-accent hover:underline"
                 :title="`${isoTimestamp(row.entry)} — click to pin and link to this line`"
                 @click="selectRow(row.seq)"
-              >{{ formatLogTime(timestampMs(row.entry.timestamp), timeZone === 'utc') }}</button>
+              >{{ formatLogTime(timestampMs(row.entry.timestamp), timeZone) }}</button>
               <button
                 data-log-start
                 class="text-text-muted opacity-50 hover:opacity-100 hover:text-accent"
