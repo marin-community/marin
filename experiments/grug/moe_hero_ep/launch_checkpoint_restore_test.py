@@ -59,9 +59,7 @@ def run_checkpoint_restore_phase(config: CheckpointRestorePhaseConfig) -> None:
     """Run one bounded training phase and optionally abort its coordinator."""
     run_grug(config.grug)
     if config.abort_after_completion:
-        raise RuntimeError(
-            f"Intentional coordinator abort after checkpointed step {config.grug.stop_after_steps}."
-        )
+        raise RuntimeError(f"Intentional coordinator abort after checkpointed step {config.grug.stop_after_steps}.")
 
 
 def build_checkpoint_restore_phase(
@@ -78,9 +76,7 @@ def build_checkpoint_restore_phase(
     if not owner.strip() or "/" in owner or ".." in owner:
         raise ValueError(f"owner must be one path segment, got {owner!r}")
     if stop_after_steps <= 0 or stop_after_steps > REFERENCE_SCHEDULE_STEPS:
-        raise ValueError(
-            f"stop_after_steps must be in [1, {REFERENCE_SCHEDULE_STEPS}], got {stop_after_steps}"
-        )
+        raise ValueError(f"stop_after_steps must be in [1, {REFERENCE_SCHEDULE_STEPS}], got {stop_after_steps}")
 
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
@@ -130,6 +126,7 @@ def build_checkpoint_restore_phase(
                 group=CHECKPOINT_RESTORE_GROUP,
                 name=run_id,
                 replicate_path=ctx.output_path,
+                mode="disabled",
                 resume="allow",
             ),
             watch=WatchConfig(interval=10),
