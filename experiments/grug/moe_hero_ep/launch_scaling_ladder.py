@@ -268,6 +268,8 @@ def build_ladder_run(
                 eval_ema=False,
                 compute_bpb=True,
                 dropless_eval=True,
+                # The hero is the run whose full loss curve we report, so give it a step-0 baseline.
+                eval_at_step_0=size == "d6144",
             ),
             stop_after_steps=num_steps,
             processes_per_task=HERO_GPUS_PER_NODE,

@@ -155,6 +155,9 @@ class GrugEvalConfig:
     # expert-collapsed mesh, logging a separate `eval_dropless` macro loss alongside the
     # as-trained (with-drop) eval. No-op when the mesh has no expert parallelism.
     dropless_eval: bool = False
+    # Eval the initialized model once before the first optimization step, for a step-0 baseline on
+    # the loss curve. The periodic cadence never covers step 0 (its dispatch gates on next_step > 0).
+    eval_at_step_0: bool = False
 
 
 @dataclass(frozen=True)
@@ -842,6 +845,23 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             levanter.tracker.log(log_dict, step=step_count)
 
                     state_callbacks.add_hook(dropless_eval_hook, every=interval)
+
+        # Baseline eval on the initialized model, before the first optimization step. The periodic
+        # eval hooks never fire at step 0 -- their dispatch gates on `next_step > 0`, and the loop
+        # only runs hooks after a step -- so a fresh run gets no step-0 point without this. It runs
+        # only at step 0, so a resumed run (nonzero step) skips it. Mirrors the hook bodies above:
+        # the as-trained eval plus, for expert-parallel runs, the dropless eval on the collapsed mesh.
+        step0_eval = eval_cfg is not None and eval_cfg.eval_at_step_0 and eval_cfg.eval_current
+        if step0_eval and evaluator is not None and int(state.step) == 0:
+            levanter.tracker.log(eval_model(evaluator, state.params, prefix=eval_cfg.prefix), step=0)
+            if dropless_evaluator is not None and dropless_eval_mesh is not None:
+                with set_mesh(dropless_eval_mesh):
+                    step0_model = _reshard_tree_to_mesh(state.params, dropless_eval_mesh)
+                    with jax_config.enable_pgle(False):
+                        step0_dropless = eval_model(
+                            dropless_evaluator, step0_model, prefix=f"{eval_cfg.prefix}_dropless"
+                        )
+                levanter.tracker.log(step0_dropless, step=0)
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
