@@ -179,6 +179,8 @@ rolls through it.
 | `checkpointer.write.min_replica_slice_bytes` | Do not split an array when doing so would give each replica less than this.          | 16 MiB  |
 | `checkpointer.write.max_chunk_bytes`       | Upper bound on one zarr3 chunk, which bounds a single object store write.              | 512 MiB |
 | `checkpointer.write.max_staged_host_bytes` | Cap on host memory one process stages at once during a save.                           | 8 GiB   |
+| `checkpointer.write.cache_pool_bytes`      | Soft limit for each TensorStore write cache.                                            | 1 GiB   |
+| `checkpointer.write.data_copy_concurrency` | Maximum CPU concurrency TensorStore uses to copy and encode checkpoint data.           | 16      |
 
 ### JAX Compilation Cache Configuration
 
