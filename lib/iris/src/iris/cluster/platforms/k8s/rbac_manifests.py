@@ -38,6 +38,13 @@ CLUSTER_ROLE_RULES = [
         "verbs": ["get", "list", "watch", "delete"],
     },
     {
+        # GPU-count production priority is opt-in. The runtime controller creates a
+        # WorkloadPriorityClass for each requested count before it creates the Pods.
+        "apiGroups": ["kueue.x-k8s.io"],
+        "resources": ["workloadpriorityclasses"],
+        "verbs": ["get", "create", "update", "patch"],
+    },
+    {
         # Iris creates iris-{production,interactive,batch} PriorityClass objects at
         # startup so pods can be stamped without manual setup.
         "apiGroups": ["scheduling.k8s.io"],

@@ -63,7 +63,14 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     TopologyMode,
     gpu_gang_rack_slice_size,
 )
-from iris.cluster.platforms.k8s.kueue_manifests import WorkloadPriorityKind, workload_priority_class_name
+from iris.cluster.platforms.k8s.kueue_manifests import (
+    IrisWorkloadPriorityClass,
+    ProductionPriorityPolicy,
+    WorkloadPriorityKind,
+    build_workload_priority_class,
+    production_gpu_priority_class,
+    workload_priority_class_name,
+)
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
     IRIS_ATTEMPT_ID_LABEL,
@@ -510,6 +517,37 @@ class PodConfig:
     # UNSPECIFIED is treated as INTERACTIVE. Defaults to the iris-{band} classes
     # Iris creates at startup; override via kubernetes_provider.priority_classes.
     priority_class_names: dict[int, str] = field(default_factory=lambda: dict(_DEFAULT_PRIORITY_CLASS_NAMES))
+    # Kueue-only ordering among production GPU Workloads. FIXED preserves equal
+    # production priority; GPU_COUNT adds one point per GPU requested by the
+    # Workload, capped by production_priority_max_gpu_count.
+    production_priority_policy: ProductionPriorityPolicy = ProductionPriorityPolicy.FIXED
+    production_priority_max_gpu_count: int = 0
+
+    def __post_init__(self) -> None:
+        if (
+            self.production_priority_policy is ProductionPriorityPolicy.GPU_COUNT
+            and self.production_priority_max_gpu_count <= 0
+        ):
+            raise ValueError("production_priority_max_gpu_count must be positive for GPU_COUNT priority")
+
+
+def _dynamic_production_priority_class(
+    run_req: job_pb2.RunTaskRequest,
+    config: PodConfig,
+) -> IrisWorkloadPriorityClass | None:
+    effective_band = run_req.priority or job_pb2.PRIORITY_BAND_INTERACTIVE
+    if (
+        effective_band != job_pb2.PRIORITY_BAND_PRODUCTION
+        or config.production_priority_policy is not ProductionPriorityPolicy.GPU_COUNT
+    ):
+        return None
+
+    gpu_count = _run_req_gpu_count(run_req)
+    if gpu_count <= 0:
+        return None
+    workload_gpu_count = gpu_count * (run_req.num_tasks or 1) if run_req.coscheduling.group_by else gpu_count
+    priority_gpu_count = min(workload_gpu_count, config.production_priority_max_gpu_count)
+    return production_gpu_priority_class(priority_gpu_count)
 
 
 def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
@@ -915,11 +953,15 @@ def _build_pod_manifest(
     assert config.local_queue, "K8s backend requires a Kueue LocalQueue (kubernetes_provider.kueue.cluster_queue)"
     labels[_KUEUE_QUEUE_NAME] = config.local_queue
     effective_band = run_req.priority or job_pb2.PRIORITY_BAND_INTERACTIVE
-    if is_gang:
-        priority_kind = WorkloadPriorityKind.COSCHEDULED
+    dynamic_priority_class = _dynamic_production_priority_class(run_req, config)
+    if dynamic_priority_class is not None:
+        labels[_KUEUE_PRIORITY_CLASS] = dynamic_priority_class.name
     else:
-        priority_kind = WorkloadPriorityKind.ACCELERATOR if has_accelerator else WorkloadPriorityKind.CPU
-    labels[_KUEUE_PRIORITY_CLASS] = workload_priority_class_name(priority_band_name(effective_band), priority_kind)
+        if is_gang:
+            priority_kind = WorkloadPriorityKind.COSCHEDULED
+        else:
+            priority_kind = WorkloadPriorityKind.ACCELERATOR if has_accelerator else WorkloadPriorityKind.CPU
+        labels[_KUEUE_PRIORITY_CLASS] = workload_priority_class_name(priority_band_name(effective_band), priority_kind)
     if is_gang:
         group_by = run_req.coscheduling.group_by
         # group_by must name a topology level this cluster provisioned. An
@@ -2286,6 +2328,7 @@ class K8sTaskProvider:
     # were created under the current name, so their lookups must never consider the
     # pre-uid name — see _pod_name_candidates.
     _dispatched_attempts: set[tuple[str, int]] = field(default_factory=set, init=False, repr=False)
+    _ensured_dynamic_priority_classes: set[str] = field(default_factory=set, init=False, repr=False)
     _periodic_profiler: PeriodicProfiler | None = field(default=None, init=False, repr=False)
     _task_event_log: TaskEventLog | None = field(default=None, init=False, repr=False)
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
@@ -2399,6 +2442,8 @@ class K8sTaskProvider:
         GC only takes the active-pod snapshot here; its pass runs on its own
         thread.
         """
+        self._ensure_dynamic_priority_classes(request.tasks_to_run)
+
         # Free GPU capacity for any incoming GPU pod before it is created (gang
         # member or single-pod GPU job — both route through Kueue): Kueue TAS
         # computes node capacity at admission, so blockers must be gone (or
@@ -2489,6 +2534,19 @@ class K8sTaskProvider:
         self._start_terminal_gc()
 
         return updates
+
+    def _ensure_dynamic_priority_classes(self, requests: Sequence[job_pb2.RunTaskRequest]) -> None:
+        priority_classes = {
+            priority_class.name: priority_class
+            for request in requests
+            if (priority_class := _dynamic_production_priority_class(request, self.pods)) is not None
+        }
+        for name in sorted(priority_classes):
+            if name in self._ensured_dynamic_priority_classes:
+                continue
+            priority_class = priority_classes[name]
+            self.kubectl.apply_json(build_workload_priority_class(priority_class.name, priority_class.value))
+            self._ensured_dynamic_priority_classes.add(name)
 
     def _lookup_entry_pod(self, pods_by_name: dict[str, dict], entry: RunningTaskEntry) -> tuple[str, dict | None]:
         """Resolve a running entry to its pod, allowing the pre-uid name only when this

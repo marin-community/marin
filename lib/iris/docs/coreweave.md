@@ -177,6 +177,15 @@ tier in the band below it. Pod `priorityClassName` remains the ordinary Iris
 band, so this ordering affects Kueue admission and preemption but does not change
 kube-scheduler priority within an admitted workload.
 
+Clusters can opt production GPU Workloads into size-based priority with
+`kubernetes_provider.kueue.production_priority.policy: gpu_count`. The Workload
+priority becomes `1000 + min(requested GPUs, max_gpu_count)`. For a co-scheduled
+group, requested GPUs is the per-Pod GPU count times the group size. A larger
+production GPU Workload can therefore preempt smaller production Workloads in
+the shared ClusterQueue. CPU-only production Workloads remain at `1000`, and
+the Kubernetes Pod PriorityClass remains `iris-production` so Kueue performs
+whole-Workload preemption.
+
 For example, a `batch` CPU coordinator uses tier `0`, its separately admitted
 accelerator child uses tier `1`, and a co-scheduled CPU/GPU group uses tier `2`.
 Choose the Iris band for operational importance; Iris derives the tier from the
@@ -190,12 +199,15 @@ domains, but neither representation places Iris work below the health checker.
 ```mermaid
 flowchart TD
     request[RunTaskRequest] --> production{Production band?}
-    production -- Yes --> prod[Use production priority 1000]
+    production -- Yes --> gpuPolicy{GPU-count policy and GPUs requested?}
+    gpuPolicy -- Yes --> weighted[Use priority 1000 plus capped GPU count]
+    gpuPolicy -- No --> prod[Use production priority 1000]
     production -- No --> gang
     gang -- Yes --> native[Use band plus 2<br/>co-scheduled tier]
     gang -- No --> accelerator{Accelerator requested?}
     accelerator -- Yes --> gpu[Use band plus 1<br/>accelerator tier]
     accelerator -- No --> cpu[Use native Iris band<br/>CPU tier]
+    weighted --> queue[Kueue LocalQueue and shared ClusterQueue]
     prod --> queue[Kueue LocalQueue and shared ClusterQueue]
     native --> queue[Kueue LocalQueue and shared ClusterQueue]
     gpu --> queue

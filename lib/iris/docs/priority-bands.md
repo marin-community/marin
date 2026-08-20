@@ -8,7 +8,7 @@ either delays your work or disrupts other people's.
 
 | Band | Selected via | Behavior |
 |---|---|---|
-| `PRODUCTION` | `--priority production` | Always scheduled before lower bands. Can preempt INTERACTIVE/BATCH. Never downgraded by the budget system. |
+| `PRODUCTION` | `--priority production` | Always scheduled before lower bands. Can preempt INTERACTIVE/BATCH. Some clusters also order production GPU Workloads by requested size. Never downgraded by the budget system. |
 | `INTERACTIVE` | default (or `--priority interactive`) | Normal work. Yields to PRODUCTION; preempts BATCH. |
 | `BATCH` | `--priority batch` | Opportunistic. Yields to INTERACTIVE and PRODUCTION. Safe to launch in bulk. |
 
@@ -54,6 +54,14 @@ that band turns into actual preemption depends on the backend:
   higher-priority multi-host gang reclaim capacity from running `batch` gangs.
   Preemption is whole-Workload (gang-aware): Kueue evicts a full lower-priority gang,
   not a stray pod out of it.
+
+  A cluster can set
+  `kubernetes_provider.kueue.production_priority.policy: gpu_count` to add one
+  Kueue priority point per GPU requested by a production Workload, up to the
+  configured `max_gpu_count`. Larger production GPU Workloads can then preempt
+  smaller production Workloads. The Kubernetes Pod PriorityClass stays at
+  `iris-production`, so this ordering remains within Kueue's whole-Workload
+  preemption path.
 - **VM/TPU clusters.** There is no Kueue; the Iris controller's own scheduler ranks
   pending tasks by band and reclaims slices directly.
 

@@ -125,20 +125,24 @@ COVERED_RESOURCES = list(NON_BINDING_QUOTA)
 
 # Kueue-only priorities within each Iris band. Batch and interactive Workloads
 # order ordinary, standalone-accelerator, and co-scheduled work consecutively.
-# Production Workloads share one value so their request shape cannot preempt
-# other production work. The lowest batch Workload priority remains 0, above
-# CoreWeave's priority -1 node-health-check Pods even though Kueue and Pod
-# priority are separate scheduling domains.
+# The default Production classes share one value so request shape does not
+# enable same-band preemption. Clusters can opt into dynamic GPU-count classes.
+# The lowest batch Workload priority remains 0, above CoreWeave's priority -1
+# node-health-check Pods even though Kueue and Pod priority are separate
+# scheduling domains.
 class WorkloadPriorityKind(StrEnum):
     CPU = "cpu"
     ACCELERATOR = "accelerator"
     COSCHEDULED = "coscheduled"
 
 
+class ProductionPriorityPolicy(StrEnum):
+    FIXED = "fixed"
+    GPU_COUNT = "gpu_count"
+
+
 @dataclass(frozen=True)
 class IrisWorkloadPriorityClass:
-    band: str
-    kind: WorkloadPriorityKind
     name: str
     value: int
 
@@ -149,8 +153,6 @@ def workload_priority_class_name(band: str, kind: WorkloadPriorityKind) -> str:
 
 IRIS_WORKLOAD_PRIORITY_CLASSES = tuple(
     IrisWorkloadPriorityClass(
-        band=class_name.removeprefix("iris-"),
-        kind=kind,
         name=workload_priority_class_name(class_name.removeprefix("iris-"), kind),
         value=value if class_name == IRIS_PRIORITY_CLASS_PRODUCTION else value + offset,
     )
@@ -162,6 +164,20 @@ IRIS_WORKLOAD_PRIORITY_CLASSES = tuple(
         (WorkloadPriorityKind.COSCHEDULED, 2),
     )
 )
+
+_PRODUCTION_WORKLOAD_PRIORITY = next(
+    value for name, value, _ in IRIS_PRIORITY_CLASSES if name == IRIS_PRIORITY_CLASS_PRODUCTION
+)
+
+
+def production_gpu_priority_class(gpu_count: int) -> IrisWorkloadPriorityClass:
+    """Return the production WorkloadPriorityClass for a GPU-count boost."""
+    if gpu_count <= 0:
+        raise ValueError(f"gpu_count must be positive, got {gpu_count}")
+    return IrisWorkloadPriorityClass(
+        name=f"iris-gpu-{gpu_count}-production",
+        value=_PRODUCTION_WORKLOAD_PRIORITY + gpu_count,
+    )
 
 
 # --------------------------------------------------------------------------
