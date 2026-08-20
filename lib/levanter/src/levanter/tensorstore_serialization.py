@@ -53,6 +53,9 @@ _DEVICE_MEMORY_KIND = "device"
 _DEFAULT_STAGED_CHUNKS = 16
 # Host memory a staged byte occupies while its write is in flight, for reporting only.
 _STAGED_BYTE_OVERHEAD = 4
+# Host memory each process may hold in flight while a restore reads shards. JAX defaults to 32 GB
+# and the legacy path asked for 300, both far above what a save allows itself on the same node.
+_RESTORE_CONCURRENT_GB = 8
 
 
 def _format_gib(num_bytes: int) -> str:
@@ -799,7 +802,9 @@ def _restore_ocdbt(
         tspecs_to_load.append(spec)
 
     device_shardings, move_targets = _device_shardings_for_load(shardings_to_load)
-    deser_leaves = manager.deserialize(shardings=device_shardings, tensorstore_specs=tspecs_to_load)
+    deser_leaves = manager.deserialize(
+        shardings=device_shardings, tensorstore_specs=tspecs_to_load, concurrent_gb=_RESTORE_CONCURRENT_GB
+    )
     deser_leaves = _move_leaves_to_target_memory_kind(deser_leaves, move_targets)
     return deser_leaves, indices_to_load
 
@@ -847,7 +852,9 @@ def _restore_old_ts(
             logger.warning(to_log)
 
     device_shardings, move_targets = _device_shardings_for_load(shardings_to_load)
-    deser_leaves = manager.deserialize_with_paths(shardings=device_shardings, paths=paths_to_load, concurrent_gb=300)
+    deser_leaves = manager.deserialize_with_paths(
+        shardings=device_shardings, paths=paths_to_load, concurrent_gb=_RESTORE_CONCURRENT_GB
+    )
     deser_leaves = _move_leaves_to_target_memory_kind(deser_leaves, move_targets)
     return deser_leaves, indices_to_load
 

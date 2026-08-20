@@ -91,7 +91,9 @@ TOKENS_PER_ACTIVE_PARAM = 791
 # so more memory alone may not be enough.
 TASK_HOST_MEMORY = "930g"
 # 4 processes on each task share TASK_HOST_MEMORY, thus this cap costs four times what it reads.
-TENSORSTORE_CACHE_BYTES = 62_500_000_000
+# Halving it during an out-of-memory investigation freed no measured host memory, thus it keeps the
+# value that PR 8456 selected.
+TENSORSTORE_CACHE_BYTES = 125_000_000_000
 # A crash costs at most this much training time. A hero checkpoint is several TB, thus a shorter
 # interval would spend a large part of the run inside a checkpoint write.
 RESUME_SAVE_INTERVAL = timedelta(hours=1)
