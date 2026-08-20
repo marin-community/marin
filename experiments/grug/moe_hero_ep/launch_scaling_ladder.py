@@ -204,7 +204,7 @@ def build_ladder_run(
         "GB200",
         count=HERO_GPUS_PER_NODE,
         cpu=120,
-        ram="850g",
+        ram="890g",
         disk="1t",
         replicas=HERO_EP_NODES * dp_racks,
     )
