@@ -59,6 +59,8 @@ _STAGED_BYTE_OVERHEAD = 4
 # Host memory each process may hold in flight while a restore reads shards. JAX defaults to 32 GB
 # and the legacy path asked for 300, both far above what a save allows itself on the same node.
 _RESTORE_CONCURRENT_GB = 8
+# Maximum pageable-host range filled by one TensorStore restore operation.
+_RESTORE_HOST_CHUNK_BYTES = 1024**3
 # Lock file that serializes restores across the local ranks inside one container. Set
 # LEVANTER_RESTORE_LOCK to another path to move it, or to an empty value to restore concurrently.
 _RESTORE_LOCK_PATH_ENV = "LEVANTER_RESTORE_LOCK"
@@ -753,14 +755,25 @@ async def _deserialize_leaf_to_memory_kind(sharding: Sharding, tensorstore_spec:
     for device, index in sharding.addressable_devices_indices_map(shape).items():
         requested_domain = ts.IndexTransform(input_shape=shape)[index].domain
         restricted_domain = store.domain.intersect(requested_domain)
-        host_array = np.zeros(shard_shape, dtype=store.dtype.numpy_dtype)
-        await ts.array(host_array)[ts.d[:].translate_to[requested_domain.origin]][restricted_domain].write(
-            store[restricted_domain]
-        )
+        host_array = np.empty(shard_shape, dtype=store.dtype.numpy_dtype)
+        host_store = ts.array(host_array)[ts.d[:].translate_to[requested_domain.origin]]
+        if restricted_domain.rank == 0:
+            await host_store.write(store)
+        else:
+            bytes_per_row = math.prod(restricted_domain.shape[1:]) * host_array.itemsize
+            rows_per_chunk = max(1, _RESTORE_HOST_CHUNK_BYTES // max(1, bytes_per_row))
+            for start in range(restricted_domain.origin[0], restricted_domain.exclusive_max[0], rows_per_chunk):
+                limit = min(start + rows_per_chunk, restricted_domain.exclusive_max[0])
+                selection = (slice(start, limit),) + tuple(
+                    slice(origin, exclusive_max)
+                    for origin, exclusive_max in zip(restricted_domain.origin[1:], restricted_domain.exclusive_max[1:])
+                )
+                await host_store[selection].write(store[selection])
         if host_array.dtype != dtype:
             host_array = host_array.astype(dtype)
         target = jax.sharding.SingleDeviceSharding(device, memory_kind=sharding.memory_kind)
-        array = jax.device_put(host_array, target)
+        array = jax.device_put(host_array, target, donate=True)
+        del host_array
         array.block_until_ready()
         arrays.append(array)
 

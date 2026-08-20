@@ -3,6 +3,7 @@
 
 import dataclasses
 import functools
+import gc
 import itertools
 import logging
 import os
@@ -787,6 +788,21 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             )
 
         state = _init_state(model_key)
+        released_initial_state = trainer.load_checkpoint is not False and not trainer.allow_partial_checkpoint
+        if released_initial_state:
+            restore_template = jax.tree.map(
+                lambda leaf: (
+                    jax.ShapeDtypeStruct(leaf.shape, leaf.dtype, sharding=leaf.sharding)
+                    if isinstance(leaf, jax.Array)
+                    else leaf
+                ),
+                state,
+            )
+            jax.tree.map(lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) else None, state)
+            del state
+            gc.collect()
+            logger.info("Rank %d released initialized state before checkpoint restore", jax.process_index())
+            state = restore_template
 
         checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
         state = restore_grug_state_from_checkpoint(
@@ -796,6 +812,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
+        if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
+            logger.info("Rank %d initializes state because no checkpoint was found", jax.process_index())
+            state = _init_state(model_key)
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
