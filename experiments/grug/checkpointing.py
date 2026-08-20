@@ -12,11 +12,13 @@ from typing import ClassVar, Protocol, TypeVar, cast
 import fsspec
 import jax
 from fsspec import AbstractFileSystem
+from jax.experimental import multihost_utils
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 
 logger = logging.getLogger(__name__)
 
 StateT = TypeVar("StateT")
+RESTORE_COMPLETE_BARRIER = "grug_checkpoint_restore_complete"
 
 
 class _GrugState(Protocol):
@@ -122,6 +124,7 @@ def restore_grug_state_from_checkpoint(
                 allow_partial=allow_partial,
                 load_fn=_load_fn,
             )
+            multihost_utils.sync_global_devices(RESTORE_COMPLETE_BARRIER)
             if candidate not in checkpoint_search_paths:
                 logger.info("Loaded checkpoint from %s while searching %s", candidate, checkpoint_search_paths)
             return loaded

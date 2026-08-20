@@ -14,8 +14,6 @@ import numpy as np
 import optax
 import pytest
 from chex import assert_trees_all_close
-import eight_device_checkpoints
-from eight_device_checkpoints import run_on_eight_devices
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.testing.helpers import MLP, arrays_only, assert_trees_not_close, use_test_mesh
@@ -31,6 +29,8 @@ from levanter.tensorstore_serialization import (
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
 )
+import eight_device_checkpoints
+from eight_device_checkpoints import run_on_eight_devices
 
 
 def test_pageable_checkpoint_staging_detaches_from_donated_jax_buffer():
@@ -109,6 +109,26 @@ def test_tensorstore_checkpoint_restores_pinned_host_memory_kind():
             # allclose refuses to compare across memory spaces, so pull the host copy to device first.
             on_device = jax.device_put(restored, NamedSharding(mesh, P()))
             assert jnp.allclose(on_device, arr)
+
+
+def test_tensorstore_checkpoint_restores_mixed_memory_kinds_in_tree_order():
+    with use_test_mesh() as mesh:
+        first = jnp.arange(8, dtype=jnp.float32)
+        second = first + 10
+        pinned = NamedSharding(jax.sharding.get_abstract_mesh(), P("data")).with_memory_kind("pinned_host")
+        template = {
+            "device": jax.ShapeDtypeStruct(first.shape, first.dtype, sharding=NamedSharding(mesh, P("data"))),
+            "host": jax.ShapeDtypeStruct(second.shape, second.dtype, sharding=pinned),
+        }
+
+        with TemporaryDirectory() as tmpdir:
+            tree_serialize_leaves_tensorstore(tmpdir, {"device": first, "host": second})
+            restored = tree_deserialize_leaves_tensorstore(tmpdir, template)
+
+        assert restored["device"].sharding.memory_kind == "device"
+        assert restored["host"].sharding.memory_kind == "pinned_host"
+        np.testing.assert_array_equal(restored["device"], first)
+        np.testing.assert_array_equal(jax.device_put(restored["host"], NamedSharding(mesh, P())), second)
 
 
 def test_checkpoint_steps():

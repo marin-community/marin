@@ -3,6 +3,7 @@
 
 import dataclasses
 import functools
+import gc
 import itertools
 import logging
 import os
@@ -774,6 +775,53 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     with set_mesh(mesh):
         batch_schedule = trainer.batch_schedule
 
+        @jax.jit
+        def _init_state(model_rng):
+            return initial_state(
+                config.model,
+                optimizer=optimizer,
+                mp=trainer.mp,
+                key=model_rng,
+                ema_beta=config.trainer.ema_beta,
+                offload_opt_state=config.trainer.offload_opt_state,
+                master_param_mode=config.trainer.master_param_mode,
+            )
+
+        state = _init_state(model_key)
+        released_initial_state = trainer.load_checkpoint is not False and not trainer.allow_partial_checkpoint
+        if released_initial_state:
+            restore_template = jax.tree.map(
+                lambda leaf: (
+                    jax.ShapeDtypeStruct(leaf.shape, leaf.dtype, sharding=leaf.sharding)
+                    if isinstance(leaf, jax.Array)
+                    else leaf
+                ),
+                state,
+            )
+            jax.tree.map(lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) else None, state)
+            del state
+            gc.collect()
+            state = restore_template
+
+        checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
+        state = restore_grug_state_from_checkpoint(
+            state,
+            checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
+            load_checkpoint_setting=trainer.load_checkpoint,
+            mesh=mesh,
+            allow_partial=trainer.allow_partial_checkpoint,
+        )
+        if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
+            state = _init_state(model_key)
+        dump_grug_state_sharding_run_artifact(
+            state,
+            log_dir=trainer.log_dir,
+            run_id=run_id,
+            path_override=config.trainer.sharding_dump_path,
+        )
+
+        levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
+
         train_dataset = None
         train_loader = None
         if config.trainer.training_data_mode == TrainingDataMode.MIXTURE:
@@ -788,37 +836,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 batch_schedule=batch_schedule,
                 mesh=mesh,
             )
-
-        @jax.jit
-        def _init_state(model_rng):
-            return initial_state(
-                config.model,
-                optimizer=optimizer,
-                mp=trainer.mp,
-                key=model_rng,
-                ema_beta=config.trainer.ema_beta,
-                offload_opt_state=config.trainer.offload_opt_state,
-                master_param_mode=config.trainer.master_param_mode,
-            )
-
-        state = _init_state(model_key)
-
-        checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
-        state = restore_grug_state_from_checkpoint(
-            state,
-            checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
-            load_checkpoint_setting=trainer.load_checkpoint,
-            mesh=mesh,
-            allow_partial=trainer.allow_partial_checkpoint,
-        )
-        dump_grug_state_sharding_run_artifact(
-            state,
-            log_dir=trainer.log_dir,
-            run_id=run_id,
-            path_override=config.trainer.sharding_dump_path,
-        )
-
-        levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
         levanter.tracker.log_summary(flops_summary)

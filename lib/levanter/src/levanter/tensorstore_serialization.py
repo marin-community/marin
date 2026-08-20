@@ -53,6 +53,9 @@ _DEVICE_MEMORY_KIND = "device"
 _DEFAULT_STAGED_CHUNKS = 16
 # Host memory a staged byte occupies while its write is in flight, for reporting only.
 _STAGED_BYTE_OVERHEAD = 4
+# Host memory each process may hold in flight while a restore reads shards. JAX defaults to 32 GB
+# and the legacy path asked for 300, both far above what a save allows itself on the same node.
+_RESTORE_CONCURRENT_GB = 8
 
 
 def _format_gib(num_bytes: int) -> str:
@@ -704,43 +707,55 @@ def _fully_replicated_sharding(mesh):
     return hax.partitioning.sharding_for_axis((), {}, mesh)
 
 
-def _device_shardings_for_load(shardings: list) -> tuple[list, list]:
-    """Split target shardings into device-memory-kind loaders plus per-leaf move-back targets.
+async def _deserialize_leaf_to_memory_kind(sharding: Sharding, tensorstore_spec: dict) -> jax.Array:
+    """Read one array shard directly into its target memory kind."""
+    store = await ts.open(tensorstore_spec, open=True)
+    shape = tuple(store.shape)
+    dtype = jax.dtypes.canonicalize_dtype(store.dtype.numpy_dtype)
+    shard_shape = sharding.shard_shape(shape)
+    arrays = []
 
-    JAX reads tensorstore shards into ``device`` buffers, then assembles them under the requested
-    sharding. When that sharding carries a non-device memory kind -- as it does for a run with
-    ``offload_opt_state``/``FP32_PINNED_HOST``, whose master and optimizer leaves live on
-    ``pinned_host`` -- assembly fails the memory-kind check, so a checkpoint that was written cannot
-    be read back. Deserialize onto ``device`` and move each such leaf to its target afterwards.
+    for device, index in sharding.addressable_devices_indices_map(shape).items():
+        requested_domain = ts.IndexTransform(input_shape=shape)[index].domain
+        restricted_domain = store.domain.intersect(requested_domain)
+        host_array = np.zeros(shard_shape, dtype=store.dtype.numpy_dtype)
+        await ts.array(host_array)[ts.d[:].translate_to[requested_domain.origin]][restricted_domain].write(
+            store[restricted_domain]
+        )
+        if host_array.dtype != dtype:
+            host_array = host_array.astype(dtype)
+        target = jax.sharding.SingleDeviceSharding(device, memory_kind=sharding.memory_kind)
+        array = jax.device_put(host_array, target)
+        array.block_until_ready()
+        arrays.append(array)
 
-    Returns ``(device_shardings, move_targets)`` where ``move_targets[i]`` is the original sharding
-    for a leaf that must be relocated after deserialization, or ``None`` when it already loads in the
-    right place.
-    """
-    device_shardings = []
-    move_targets: list = []
-    for sharding in shardings:
-        if sharding.memory_kind not in (None, _DEVICE_MEMORY_KIND):
-            device_shardings.append(sharding.with_memory_kind(_DEVICE_MEMORY_KIND))
-            move_targets.append(sharding)
-        else:
-            device_shardings.append(sharding)
-            move_targets.append(None)
-    return device_shardings, move_targets
+    return jax.make_array_from_single_device_arrays(shape, sharding, arrays)
 
 
-def _move_leaves_to_target_memory_kind(leaves: list, move_targets: list) -> list:
-    """Relocate leaves deserialized onto ``device`` to the non-device target in ``move_targets``.
+def _deserialize_leaves(
+    manager: array_ser.GlobalAsyncCheckpointManager,
+    shardings: list[Sharding],
+    tensorstore_specs: list[dict],
+) -> list:
+    """Deserialize device leaves together and non-device leaves one at a time."""
+    leaves: list = [None] * len(shardings)
+    device_indices = [i for i, sharding in enumerate(shardings) if sharding.memory_kind in (None, _DEVICE_MEMORY_KIND)]
+    if device_indices:
+        device_leaves = manager.deserialize(
+            shardings=[shardings[i] for i in device_indices],
+            tensorstore_specs=[tensorstore_specs[i] for i in device_indices],
+            concurrent_gb=_RESTORE_CONCURRENT_GB,
+        )
+        for i, leaf in zip(device_indices, device_leaves):
+            leaves[i] = leaf
 
-    Holding the whole offloaded state on device here is safe: the jitted step already shuttles the
-    entire ``opt_state`` and ``master_params`` onto device every update (see the training step's
-    ``_tree_to_memory_kind(..., "device")`` calls), alongside gradients and updates. Restore rebuilds
-    only that state -- no gradients, updates, or activations -- so its device footprint is strictly
-    smaller than a training step's, and the move targets are host memory rather than more HBM.
-    """
-    if not any(target is not None for target in move_targets):
-        return leaves
-    return [jax.device_put(leaf, target) if target is not None else leaf for leaf, target in zip(leaves, move_targets)]
+    async def deserialize_non_device_leaves():
+        for i, sharding in enumerate(shardings):
+            if sharding.memory_kind not in (None, _DEVICE_MEMORY_KIND):
+                leaves[i] = await _deserialize_leaf_to_memory_kind(sharding, tensorstore_specs[i])
+
+    asyncio.run(deserialize_non_device_leaves())
+    return leaves
 
 
 def _restore_ocdbt(
@@ -798,9 +813,7 @@ def _restore_ocdbt(
         spec = _create_ocdbt_spec(checkpoint_root, path)
         tspecs_to_load.append(spec)
 
-    device_shardings, move_targets = _device_shardings_for_load(shardings_to_load)
-    deser_leaves = manager.deserialize(shardings=device_shardings, tensorstore_specs=tspecs_to_load)
-    deser_leaves = _move_leaves_to_target_memory_kind(deser_leaves, move_targets)
+    deser_leaves = _deserialize_leaves(manager, shardings_to_load, tspecs_to_load)
     return deser_leaves, indices_to_load
 
 
@@ -846,9 +859,8 @@ def _restore_old_ts(
                 to_log += f"\n  - {leaf_paths[i]}"
             logger.warning(to_log)
 
-    device_shardings, move_targets = _device_shardings_for_load(shardings_to_load)
-    deser_leaves = manager.deserialize_with_paths(shardings=device_shardings, paths=paths_to_load, concurrent_gb=300)
-    deser_leaves = _move_leaves_to_target_memory_kind(deser_leaves, move_targets)
+    tspecs_to_load = [array_ser.get_tensorstore_spec(path) for path in paths_to_load]
+    deser_leaves = _deserialize_leaves(manager, shardings_to_load, tspecs_to_load)
     return deser_leaves, indices_to_load
 
 
