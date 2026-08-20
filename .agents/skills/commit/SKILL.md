@@ -90,11 +90,11 @@ Opening or updating a PR includes monitoring until it merges or closes, the
 user asks to stop, or a 12-hour wait times out. Green CI alone is not terminal.
 
 Before the first wait, inspect all current issue comments, inline comments, and
-submitted reviews once and address actionable feedback. Set one honest Weaver
-status, then run one foreground wait:
+submitted reviews once and address actionable feedback. If Loom is available,
+set one honest status, then run one foreground wait:
 
 ```bash
-weaver status ok "waiting for PR #<N> events"
+loom status set --tag ok --message "waiting for PR #<N> events"
 uv run scripts/ci/wait_for.py --timeout 12h \
   "github.ci <N>" "github.pr <N>" \
   "github.pr_comment <N>" "github.review <N>"
