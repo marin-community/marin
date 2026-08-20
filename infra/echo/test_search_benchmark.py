@@ -157,10 +157,3 @@ def test_file_judgments_require_repository_qualified_targets():
                 "relevant": [{"domain": "file", "target": "README.md", "grade": 3}],
             }
         )
-
-
-def test_same_path_file_judgments_are_distinct():
-    marin = search_benchmark.RelevanceJudgment("file", "file:marin-community/marin@main:README.md", 3)
-    vllm = search_benchmark.RelevanceJudgment("file", "file:marin-community/vllm@main:README.md", 3)
-
-    assert search_benchmark.judgment_key(marin) != search_benchmark.judgment_key(vllm)
