@@ -13,8 +13,13 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from levanter.grug._moe.common import CapacityOverflow
-from levanter.grug._moe.ep_common import _assignment_sources, _ranks_within_groups, _token_sources
-from levanter.grug._moe.sonic import sonic_gather_sum_available, sonic_gather_sum_masked
+from levanter.grug._moe.ep_common import (
+    _assignment_sources,
+    _ranks_within_groups,
+    _token_sources,
+    _use_sonic_gather_sum,
+)
+from levanter.grug._moe.sonic import sonic_gather_sum_masked
 from levanter.grug.sharding import _batch_axes
 
 
@@ -36,10 +41,6 @@ class _PooledOutput(NamedTuple):
     sender_keep: Array
     assignment_sources: Int[Array, " send"]
     receiver_dropped: Int[Array, ""]
-
-
-def _use_sonic_gather_sum() -> bool:
-    return sonic_gather_sum_available() and jax.default_backend() == "gpu"
 
 
 def _dispatch_gather_input_grad(
