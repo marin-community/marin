@@ -113,7 +113,7 @@ See https://github.com/marin-community/marin/issues/3859 for context.
 ## Task Setup
 
 Before the command runs, the worker executes a list of setup scripts to prepare
-the environment. The default is `uv sync --all-packages --no-default-groups`;
+the environment. The default is `uv sync --all-packages --no-dev`;
 `sync_packages`/`--sync-package` scopes it to named workspace members. The
 worker is pure mechanism; the list is resolved client-side from
 `EnvironmentSpec.setup_scripts` — `None` for the default, `[]` to skip setup

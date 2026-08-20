@@ -929,7 +929,7 @@ Examples:
     "--sync-package",
     multiple=True,
     help=(
-        "Scope the default `uv sync --all-packages --no-default-groups` to specific "
+        "Scope the default `uv sync --all-packages --no-dev` to specific "
         "workspace members (e.g., --sync-package marin-core). Can be repeated."
     ),
 )
