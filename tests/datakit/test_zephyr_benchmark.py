@@ -146,3 +146,12 @@ def test_resolve_sources_rejects_unknown_source_names(monkeypatch):
 
     with pytest.raises(KeyError, match="not found under"):
         _resolve_sources(_SAMPLE_PREFIX, sources_arg="hplt_v3,nope", source_fraction=None, pool_workers=1)
+
+
+def test_resolve_sources_does_not_double_count_a_repeated_source(monkeypatch):
+    # sample_sources() collapses "hplt_v3,hplt_v3" into one source, so the guard
+    # must not sum its 1 shard twice and let --pool-workers=2 pass.
+    _patch_store(monkeypatch, {f"{_ROOT_KEY}/hplt_v3/outputs/main/shard-0000.parquet": 100})
+
+    with pytest.raises(ValueError, match="exceeds the 1 parquet shards"):
+        _resolve_sources(_SAMPLE_PREFIX, sources_arg="hplt_v3,hplt_v3", source_fraction=None, pool_workers=2)

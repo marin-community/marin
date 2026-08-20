@@ -45,6 +45,8 @@ from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
+from zephyr.execution import ZephyrContext
+from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.reference_pipeline import (
     SMOKE_SCALE,
@@ -181,7 +183,10 @@ def _resolve_sources(
     else:
         selected_sources = None if sources_arg == "all" else [name.strip() for name in sources_arg.split(",")]
 
-    selected_names = selected_sources if selected_sources is not None else sorted(stats)
+    # Dedup before summing: sample_sources() collapses a repeated name into one
+    # source, so counting it twice here would overstate coverage and let an
+    # oversized --pool-workers pass the guard below.
+    selected_names = sorted(set(selected_sources)) if selected_sources is not None else sorted(stats)
     unknown = sorted(set(selected_names) - set(stats))
     if unknown:
         raise KeyError(f"sources {unknown} not found under {sample_prefix}; known: {sorted(stats)}")
@@ -259,11 +264,20 @@ def main() -> None:
         prefix=prefix_join(prefix_join(BENCHMARK_OUTPUT_PREFIX, args.run_tag), "outputs"),
         source_prefix=args.sample_prefix,
     )
-    steps = _route_outputs(zephyr_datakit_steps(sources, scale), output_prefix)
-    StepRunner().run(
-        _steps_between(steps, args.first_stage, args.last_stage),
-        max_concurrent=args.max_concurrent,
-    )
+    # Every per-source stage must share this pool, or each falls back to its own
+    # dedicated pool capped at that one source's shard count -- silently
+    # defeating --pool-workers for every stage but exact_dedup and fuzzy_dedup.
+    with ZephyrContext(
+        name="zephyr-benchmark",
+        resources=scale.pool.worker,
+        max_workers=scale.pool.n_workers,
+        stage_runner_factory=SubprocessRunner,
+    ) as zephyr_context:
+        steps = _route_outputs(zephyr_datakit_steps(sources, scale, zephyr_context), output_prefix)
+        StepRunner().run(
+            _steps_between(steps, args.first_stage, args.last_stage),
+            max_concurrent=args.max_concurrent,
+        )
 
 
 if __name__ == "__main__":
