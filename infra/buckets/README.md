@@ -66,6 +66,12 @@ curl -fsS \
 The declared policy preserves seven-day incomplete-multipart cleanup and the nine
 `tmp/ttl=Nd/` expiration prefixes from `config/marin.yaml`.
 
+CoreWeave bucket access policies deny every principal the `s3:DeleteObject` and
+`s3:DeleteObjectVersion` actions under `marin/checkpoints/`. This keeps permanent checkpoints
+writable and readable while preventing deletion through individual or bulk S3 operations. Before
+the first policy update, audit each bucket's live access policy; Pulumi replaces the complete bucket
+policy.
+
 ## Automation boundary
 
 Pull-request CI does not preview or update this stack. Reviewers use the code diff and an
