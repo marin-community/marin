@@ -1377,7 +1377,7 @@ function sliceIdShort(sliceId?: string): string {
         <!-- Controller logs -->
         <div>
           <h4 class="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">Controller Logs</h4>
-          <LogViewer source="controller" max-height="40vh" />
+          <LogViewer max-height="40vh" />
         </div>
       </div>
     </details>
