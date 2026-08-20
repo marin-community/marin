@@ -89,6 +89,23 @@ def test_moe_backend_override_reaches_the_model_and_the_run_tags():
     assert not [tag for tag in tags if tag.startswith("transport-capacity-")]
 
 
+def test_disabling_the_master_keeps_fp32_weights_on_device():
+    step = launch.build_hero_run(
+        run_id="fp32-device-params",
+        dp_racks=1,
+        num_steps=1,
+        master_param_mode=train.MasterParamMode.DISABLED,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.master_param_mode is train.MasterParamMode.DISABLED
+    # Weights move to fp32 on device; the compute precision does not follow them there.
+    assert config.trainer.trainer.mp.param_dtype == jnp.float32
+    assert config.trainer.trainer.mp.compute_dtype == jnp.bfloat16
+    assert "master-params-disabled" in config.trainer.trainer.tracker.tags
+
+
 def test_full_bank_top_k_is_rejected_before_launch():
     # QB routing reads the (k+1)-th logit as its threshold, so a full-bank top-k asks `top_k` for
     # more entries than there are experts. Without this the job dies in the router, which is after
