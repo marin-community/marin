@@ -36,6 +36,7 @@ import logging
 from collections import defaultdict
 from dataclasses import replace
 from enum import StrEnum
+from typing import NamedTuple
 
 from fray.types import ResourceConfig
 from marin.execution.step_runner import StepRunner
@@ -92,8 +93,15 @@ def _steps_between(
     return [step for stage in _STAGE_ORDER[first_index : last_index + 1] for step in stage_steps[stage]]
 
 
-def _source_shard_stats(sample_prefix: str) -> dict[str, tuple[int, int]]:
-    """Map each source under ``sample_prefix`` to its ``(total_bytes, shard_count)``.
+class SourceShardStats(NamedTuple):
+    """Aggregate parquet-shard metadata for one source under a benchmark sample."""
+
+    total_bytes: int
+    shard_count: int
+
+
+def _source_shard_stats(sample_prefix: str) -> dict[str, SourceShardStats]:
+    """Map each source under ``sample_prefix`` to its shard stats.
 
     Reads object metadata only (no shard contents), grouping every
     ``<source>/outputs/main/*.parquet`` file by its source name. Parquet found
@@ -119,10 +127,10 @@ def _source_shard_stats(sample_prefix: str) -> dict[str, tuple[int, int]]:
         stats[source_name][1] += 1
     if not stats:
         raise FileNotFoundError(f"no parquet shards found under {sample_prefix}")
-    return {name: (total_bytes, shard_count) for name, (total_bytes, shard_count) in stats.items()}
+    return {name: SourceShardStats(total_bytes, shard_count) for name, (total_bytes, shard_count) in stats.items()}
 
 
-def _select_source_fraction(stats: dict[str, tuple[int, int]], fraction: float) -> list[str]:
+def _select_source_fraction(stats: dict[str, SourceShardStats], fraction: float) -> list[str]:
     """Select sources totaling roughly ``fraction`` of the sample's bytes.
 
     Orders sources by average shard size, ascending, so the selection favors
@@ -133,15 +141,15 @@ def _select_source_fraction(stats: dict[str, tuple[int, int]], fraction: float) 
     """
     if not 0.0 < fraction <= 1.0:
         raise ValueError(f"--source-fraction must be in (0.0, 1.0]; got {fraction}")
-    target_bytes = sum(total_bytes for total_bytes, _ in stats.values()) * fraction
-    ordered = sorted(stats, key=lambda name: stats[name][0] / stats[name][1])
+    target_bytes = sum(s.total_bytes for s in stats.values()) * fraction
+    ordered = sorted(stats, key=lambda name: stats[name].total_bytes / stats[name].shard_count)
     selected: list[str] = []
     selected_bytes = 0
     for name in ordered:
         if selected_bytes >= target_bytes:
             break
         selected.append(name)
-        selected_bytes += stats[name][0]
+        selected_bytes += stats[name].total_bytes
     return selected
 
 
@@ -166,8 +174,8 @@ def _resolve_sources(
     unknown = sorted(set(selected_names) - set(stats))
     if unknown:
         raise KeyError(f"sources {unknown} not found under {sample_prefix}; known: {sorted(stats)}")
-    total_shards = sum(stats[name][1] for name in selected_names)
-    total_bytes = sum(stats[name][0] for name in selected_names)
+    total_shards = sum(stats[name].shard_count for name in selected_names)
+    total_bytes = sum(stats[name].total_bytes for name in selected_names)
     if total_shards < pool_workers:
         raise ValueError(
             f"--pool-workers {pool_workers} exceeds the {total_shards} parquet shards available across "
