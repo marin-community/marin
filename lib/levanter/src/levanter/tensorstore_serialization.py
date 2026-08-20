@@ -5,8 +5,6 @@
 # * Orbax: https://github.com/google/orbax/blob/11d2934ecfff77e86b5e07d0fef02b67eff4511b/orbax/checkpoint/pytree_checkpoint_handler.py#L312
 import asyncio
 import collections
-import contextlib
-import fcntl
 import logging
 import math
 import os
@@ -58,7 +56,6 @@ _STAGED_BYTE_OVERHEAD = 4
 # Host memory each process may hold in flight while a restore reads shards. JAX defaults to 32 GB
 # and the legacy path asked for 300, both far above what a save allows itself on the same node.
 _RESTORE_CONCURRENT_GB = 8
-_LOCAL_RESTORE_LOCK_PATH = "/tmp/levanter-restore.lock"
 
 
 def _format_gib(num_bytes: int) -> str:
@@ -710,17 +707,6 @@ def _fully_replicated_sharding(mesh):
     return hax.partitioning.sharding_for_axis((), {}, mesh)
 
 
-@contextlib.contextmanager
-def _local_restore_slot():
-    """Serialize restores across local ranks that share a container memory limit."""
-    with open(_LOCAL_RESTORE_LOCK_PATH, "w") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
-
-
 async def _deserialize_leaf_to_memory_kind(sharding: Sharding, tensorstore_spec: dict) -> jax.Array:
     """Read one array shard directly into its target memory kind."""
     store = await ts.open(tensorstore_spec, open=True)
@@ -827,8 +813,7 @@ def _restore_ocdbt(
         spec = _create_ocdbt_spec(checkpoint_root, path)
         tspecs_to_load.append(spec)
 
-    with _local_restore_slot():
-        deser_leaves = _deserialize_leaves(manager, shardings_to_load, tspecs_to_load)
+    deser_leaves = _deserialize_leaves(manager, shardings_to_load, tspecs_to_load)
     return deser_leaves, indices_to_load
 
 
@@ -875,8 +860,7 @@ def _restore_old_ts(
             logger.warning(to_log)
 
     tspecs_to_load = [array_ser.get_tensorstore_spec(path) for path in paths_to_load]
-    with _local_restore_slot():
-        deser_leaves = _deserialize_leaves(manager, shardings_to_load, tspecs_to_load)
+    deser_leaves = _deserialize_leaves(manager, shardings_to_load, tspecs_to_load)
     return deser_leaves, indices_to_load
 
 
