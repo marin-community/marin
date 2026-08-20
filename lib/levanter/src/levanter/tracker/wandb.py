@@ -402,40 +402,57 @@ class WandbConfig(TrackerConfig):
         if "git_commit" in git_settings:
             hparams_to_save["git_commit"] = git_settings["git_commit"]
 
-        r = wandb.init(
-            entity=self.entity,
-            project=self.project,
-            name=self.name,
-            tags=self.tags,
-            id=id,
-            group=self.group,
-            resume=self.resume,
-            mode=mode,
-            config=hparams_to_save,
-            settings=git_settings,
-            allow_val_change=True,
-        )
+        process_count = jax.process_count()
+        metadata_to_share = None
+        if process_count > 1 and not is_primary_process:
+            metadata_to_share = jax_utils.multihost_broadcast_sync({"error": None}, is_source=False)
+            if metadata_to_share["error"] is not None:
+                raise RuntimeError(f"W&B initialization failed on process 0: {metadata_to_share['error']}")
 
-        assert r is not None
+        try:
+            r = wandb.init(
+                entity=self.entity,
+                project=self.project,
+                name=self.name,
+                tags=self.tags,
+                id=id,
+                group=self.group,
+                resume=self.resume,
+                mode=mode,
+                config=hparams_to_save,
+                settings=git_settings,
+                allow_val_change=True,
+            )
+            if r is None:
+                raise RuntimeError("W&B initialization returned no run")
+        except Exception as e:
+            if process_count > 1 and is_primary_process:
+                jax_utils.multihost_broadcast_sync(
+                    {"error": f"{type(e).__name__}: {e}"},
+                    is_source=True,
+                )
+            raise
 
         if r.step != 0:
             logger.info("Resuming wandb run. Attempting to mitigate issues.")
 
         minimum_log_step = int(r.step)
-        if jax.process_count() > 1:
+        if process_count > 1:
             # we need to share wandb run information across all hosts, because we use it for checkpoint paths and things
-            metadata_to_share = dict(
-                # entity=r.entity,
-                project=r.project,
-                name=r.name,
-                tags=r.tags,
-                id=r.id,
-                group=r.group,
-                minimum_log_step=minimum_log_step,
-            )
-            metadata_to_share = jax_utils.multihost_broadcast_sync(
-                metadata_to_share, is_source=jax.process_index() == 0
-            )
+            if is_primary_process:
+                metadata_to_share = dict(
+                    error=None,
+                    # entity=r.entity,
+                    project=r.project,
+                    name=r.name,
+                    tags=r.tags,
+                    id=r.id,
+                    group=r.group,
+                    minimum_log_step=minimum_log_step,
+                )
+                metadata_to_share = jax_utils.multihost_broadcast_sync(metadata_to_share, is_source=True)
+
+            assert metadata_to_share is not None
             minimum_log_step = int(metadata_to_share["minimum_log_step"])
 
             # if jax.process_index() != 0:
