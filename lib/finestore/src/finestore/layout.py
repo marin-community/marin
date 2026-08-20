@@ -32,16 +32,21 @@ RESERVED_COLUMNS = frozenset({SEQ_COLUMN, WRITER_COLUMN, GEN_COLUMN, COMMIT_COLU
 
 URI_SCHEME = "finestore"
 BLOBS_TABLE = "blobs"
-BLOB_NAME_COLUMN = "name"
-BLOB_DATA_COLUMN = "data"
-BLOB_SIZE_COLUMN = "size"
-BLOB_METADATA_COLUMN = "metadata_json"
-BLOB_PART_COUNT_COLUMN = "part_count"
-BLOB_PART_COLUMN = "part"
 BLOB_PARTS_TABLE = "_finestore_blob_parts"
 CHUNKED_BLOBS_FEATURE = "chunked-blobs-v1"
 
 SUPPORTED_MANIFEST_FEATURES: frozenset[str] = frozenset({CHUNKED_BLOBS_FEATURE})
+
+
+class BlobColumns(StrEnum):
+    """Columns shared by blob descriptors and part rows."""
+
+    NAME = "name"
+    DATA = "data"
+    SIZE = "size"
+    METADATA = "metadata_json"
+    PART_COUNT = "part_count"
+    PART = "part"
 
 
 class FormatVersionError(ValueError):

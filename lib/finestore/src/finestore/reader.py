@@ -23,16 +23,12 @@ from rigging.filesystem.storage_path import StoragePath
 
 from finestore.commit import ArchiveSnapshot, read_snapshot, validate_archive
 from finestore.layout import (
-    BLOB_DATA_COLUMN,
-    BLOB_NAME_COLUMN,
-    BLOB_PART_COLUMN,
-    BLOB_PART_COUNT_COLUMN,
     BLOB_PARTS_TABLE,
-    BLOB_SIZE_COLUMN,
     BLOBS_TABLE,
     COMMIT_COLUMN,
     GEN_COLUMN,
     SEQ_COLUMN,
+    BlobColumns,
     CommitToken,
     FineStoreLayout,
     SealMarker,
@@ -325,7 +321,7 @@ class _ReadOperations:
 
     def read_blob(self, name: str) -> bytes | None:
         """Return a named blob, or ``None`` when it is absent."""
-        row = self.point(BLOBS_TABLE, **{BLOB_NAME_COLUMN: name})
+        row = self.point(BLOBS_TABLE, **{BlobColumns.NAME: name})
         if row is None:
             return None
         output = io.BytesIO()
@@ -335,13 +331,13 @@ class _ReadOperations:
 
     def blob_parts(self, name: str, descriptor: dict) -> Iterator[bytes]:
         """Yield a pinned descriptor's inline value or ordered chunked parts."""
-        part_count = descriptor.get(BLOB_PART_COUNT_COLUMN)
+        part_count = descriptor.get(BlobColumns.PART_COUNT)
         if part_count is None:
-            data = descriptor.get(BLOB_DATA_COLUMN)
+            data = descriptor.get(BlobColumns.DATA)
             if data is None:
                 raise BlobCorruptionError(f"blob {name!r} has neither inline data nor parts")
             value = bytes(data)
-            size = descriptor.get(BLOB_SIZE_COLUMN)
+            size = descriptor.get(BlobColumns.SIZE)
             if size is not None and len(value) != size:
                 raise BlobCorruptionError(f"blob {name!r} declares {size} bytes but stores {len(value)}")
             yield value
@@ -352,15 +348,15 @@ class _ReadOperations:
         total_bytes = 0
         for row in self.iter_rows(
             BLOB_PARTS_TABLE,
-            columns=[BLOB_PART_COLUMN, BLOB_DATA_COLUMN],
-            where=[(BLOB_NAME_COLUMN, "==", name)],
+            columns=[BlobColumns.PART, BlobColumns.DATA],
+            where=[(BlobColumns.NAME, "==", name)],
         ):
-            part = row.get(BLOB_PART_COLUMN)
+            part = row.get(BlobColumns.PART)
             if part is not None and part >= part_count:
                 break
             if part != expected_part:
                 raise BlobCorruptionError(f"blob {name!r} is missing part {expected_part}")
-            data = row.get(BLOB_DATA_COLUMN)
+            data = row.get(BlobColumns.DATA)
             if data is None:
                 raise BlobCorruptionError(f"blob {name!r} part {part} has no data")
             value = bytes(data)
@@ -369,7 +365,7 @@ class _ReadOperations:
             yield value
         if expected_part != part_count:
             raise BlobCorruptionError(f"blob {name!r} has {expected_part} of {part_count} parts")
-        size = descriptor.get(BLOB_SIZE_COLUMN)
+        size = descriptor.get(BlobColumns.SIZE)
         if size is not None and total_bytes != size:
             raise BlobCorruptionError(f"blob {name!r} declares {size} bytes but stores {total_bytes}")
 

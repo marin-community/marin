@@ -21,18 +21,13 @@ from finestore.commit import ClearSeal, CommitCoordinator, CommitDelta, TableAdd
 from finestore.compaction import CompactionResult
 from finestore.compaction import compact as compact_table
 from finestore.layout import (
-    BLOB_DATA_COLUMN,
-    BLOB_METADATA_COLUMN,
-    BLOB_NAME_COLUMN,
-    BLOB_PART_COLUMN,
-    BLOB_PART_COUNT_COLUMN,
     BLOB_PARTS_TABLE,
-    BLOB_SIZE_COLUMN,
     BLOBS_TABLE,
     CHUNKED_BLOBS_FEATURE,
     RESERVED_COLUMNS,
     SEQ_COLUMN,
     WRITER_COLUMN,
+    BlobColumns,
     CommitToken,
     FineStoreLayout,
     OnConflict,
@@ -54,18 +49,18 @@ OBJECT_PART_BYTES = 8 * 1024 * 1024
 
 _BLOB_SCHEMA = pa.schema(
     [
-        pa.field(BLOB_NAME_COLUMN, pa.string()),
-        pa.field(BLOB_SIZE_COLUMN, pa.int64()),
-        pa.field(BLOB_METADATA_COLUMN, pa.string()),
-        pa.field(BLOB_DATA_COLUMN, pa.binary()),
-        pa.field(BLOB_PART_COUNT_COLUMN, pa.int64()),
+        pa.field(BlobColumns.NAME, pa.string()),
+        pa.field(BlobColumns.SIZE, pa.int64()),
+        pa.field(BlobColumns.METADATA, pa.string()),
+        pa.field(BlobColumns.DATA, pa.binary()),
+        pa.field(BlobColumns.PART_COUNT, pa.int64()),
     ]
 )
 _BLOB_PART_SCHEMA = pa.schema(
     [
-        pa.field(BLOB_NAME_COLUMN, pa.string()),
-        pa.field(BLOB_PART_COLUMN, pa.int64()),
-        pa.field(BLOB_DATA_COLUMN, pa.binary()),
+        pa.field(BlobColumns.NAME, pa.string()),
+        pa.field(BlobColumns.PART, pa.int64()),
+        pa.field(BlobColumns.DATA, pa.binary()),
     ]
 )
 
@@ -247,7 +242,7 @@ class DataStore:
     def _blob_table(self) -> DataTable:
         return self._tables.get(BLOBS_TABLE) or self.table(
             BLOBS_TABLE,
-            primary_key=(BLOB_NAME_COLUMN,),
+            primary_key=(BlobColumns.NAME,),
             schema=_BLOB_SCHEMA,
             on_conflict=OnConflict.SUPERSEDE,
         )
@@ -255,7 +250,7 @@ class DataStore:
     def _blob_part_table(self) -> DataTable:
         return self._tables.get(BLOB_PARTS_TABLE) or self.table(
             BLOB_PARTS_TABLE,
-            primary_key=(BLOB_NAME_COLUMN, BLOB_PART_COLUMN),
+            primary_key=(BlobColumns.NAME, BlobColumns.PART),
             schema=_BLOB_PART_SCHEMA,
             on_conflict=OnConflict.SUPERSEDE,
         )
@@ -263,22 +258,22 @@ class DataStore:
     @staticmethod
     def _blob_rows(name: str, data: bytes, metadata: Mapping[str, object] | None) -> tuple[dict, list[dict]]:
         descriptor: dict[str, object] = {
-            BLOB_NAME_COLUMN: name,
-            BLOB_SIZE_COLUMN: len(data),
-            BLOB_METADATA_COLUMN: json.dumps(dict(metadata or {})),
+            BlobColumns.NAME: name,
+            BlobColumns.SIZE: len(data),
+            BlobColumns.METADATA: json.dumps(dict(metadata or {})),
         }
         if len(data) <= OBJECT_PART_BYTES:
-            descriptor[BLOB_DATA_COLUMN] = data
+            descriptor[BlobColumns.DATA] = data
             return descriptor, []
         parts = [
             {
-                BLOB_NAME_COLUMN: name,
-                BLOB_PART_COLUMN: index,
-                BLOB_DATA_COLUMN: memoryview(data)[offset : offset + OBJECT_PART_BYTES],
+                BlobColumns.NAME: name,
+                BlobColumns.PART: index,
+                BlobColumns.DATA: memoryview(data)[offset : offset + OBJECT_PART_BYTES],
             }
             for index, offset in enumerate(range(0, len(data), OBJECT_PART_BYTES))
         ]
-        descriptor[BLOB_PART_COUNT_COLUMN] = len(parts)
+        descriptor[BlobColumns.PART_COUNT] = len(parts)
         return descriptor, parts
 
     def read_view(self) -> ReadView:
