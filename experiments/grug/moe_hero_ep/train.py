@@ -774,21 +774,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     with set_mesh(mesh):
         batch_schedule = trainer.batch_schedule
 
-        train_dataset = None
-        train_loader = None
-        if config.trainer.training_data_mode == TrainingDataMode.MIXTURE:
-            train_dataset = build_train_dataset(
-                config.data,
-                max_seq_len=config.model.max_seq_len,
-                batch_schedule=batch_schedule,
-                key=data_key,
-            )
-            train_loader = build_train_loader(
-                train_dataset,
-                batch_schedule=batch_schedule,
-                mesh=mesh,
-            )
-
         @jax.jit
         def _init_state(model_rng):
             return initial_state(
@@ -819,6 +804,22 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
+
+        logger.info("Rank %d starts data-cache construction after checkpoint restore", jax.process_index())
+        train_dataset = None
+        train_loader = None
+        if config.trainer.training_data_mode == TrainingDataMode.MIXTURE:
+            train_dataset = build_train_dataset(
+                config.data,
+                max_seq_len=config.model.max_seq_len,
+                batch_schedule=batch_schedule,
+                key=data_key,
+            )
+            train_loader = build_train_loader(
+                train_dataset,
+                batch_schedule=batch_schedule,
+                mesh=mesh,
+            )
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
         levanter.tracker.log_summary(flops_summary)
