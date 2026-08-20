@@ -3,8 +3,8 @@
 
 import pytest
 from finestore.fileset import FineStoreDirectory, fetch_file_set
-from finestore.layout import BlobTables
-from finestore.reader import ReadView
+from finestore.layout import BlobColumns, BlobTables
+from finestore.reader import BlobCorruptionError, ReadView
 from finestore.store import OBJECT_PART_BYTES, DataStore
 
 
@@ -39,6 +39,24 @@ def test_file_set_materializes_chunked_file(tmp_path):
     reloaded = tmp_path / "reloaded"
     assert fetch_file_set(root, str(reloaded)) == {"logs/archive.bin"}
     assert (reloaded / "logs" / "archive.bin").read_bytes() == payload
+
+
+def test_file_set_validates_inline_file_size(tmp_path):
+    root = str(tmp_path / "remote")
+    with DataStore.open(root, writer_id="w1") as store:
+        table = store.table(BlobTables.DESCRIPTORS, primary_key=(BlobColumns.NAME,))
+        table.append(
+            {
+                BlobColumns.NAME: "archive.bin",
+                BlobColumns.DATA: b"payload",
+                BlobColumns.SIZE: 1,
+                BlobColumns.PART_COUNT: None,
+            }
+        )
+        store.flush()
+
+    with pytest.raises(BlobCorruptionError, match="declares 1 bytes"):
+        fetch_file_set(root, str(tmp_path / "local"))
 
 
 def test_file_set_concurrent_writers_rebase_disjoint_files(tmp_path):

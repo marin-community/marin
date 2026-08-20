@@ -38,19 +38,15 @@ def fetch_file_set(root: str, local: str) -> set[str]:
     view = ReadView(root)
     for row in view.iter_rows(
         BlobTables.DESCRIPTORS,
-        columns=[BlobColumns.NAME, BlobColumns.DATA, BlobColumns.PART_COUNT],
+        columns=[BlobColumns.NAME, BlobColumns.DATA, BlobColumns.SIZE, BlobColumns.PART_COUNT],
     ):
         relative = _safe_relative(row[BlobColumns.NAME])
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         with atomic_rename(str(target)) as staged:
             with pathlib.Path(staged).open("wb") as output:
-                data = row.get(BlobColumns.DATA)
-                if data is not None:
-                    output.write(data)
-                else:
-                    for part in view.blob_parts(row[BlobColumns.NAME], row):
-                        output.write(part)
+                for part in view.blob_parts(row[BlobColumns.NAME], row):
+                    output.write(part)
         fetched.add(relative.as_posix())
     return fetched
 
