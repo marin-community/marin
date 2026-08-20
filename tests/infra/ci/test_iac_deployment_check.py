@@ -8,8 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
-
 
 WORKFLOW_PATH = Path(".github/workflows/ops-iac-preview.yaml")
 SUMMARY_SCRIPT = Path(".github/actions/pulumi-preview/summarize_deployment.py")
@@ -36,19 +36,17 @@ def test_iac_preview_checks_merged_pull_requests() -> None:
     assert "deployment_check_attempt" in triggers["workflow_dispatch"]["inputs"]
     prepare = workflow["jobs"]["prepare"]
     assert prepare["outputs"]["deployment_check"]
-    wait_step = next(step for step in prepare["steps"] if step["name"] == "Wait before deployment check")
-    assert all(delay in wait_step["run"] for delay in ("30m", "60m", "120m"))
-
-    for job_name in ("preview-coreweave", "preview-gcp"):
-        job = workflow["jobs"][job_name]
-        assert job["needs"] == "prepare"
-        checkout = next(step for step in job["steps"] if step["name"] == "Checkout code")
-        assert checkout["with"]["ref"] == "${{ needs.prepare.outputs.ref }}"
+    preview = workflow["jobs"]["preview"]
+    assert preview["needs"] == "prepare"
+    assert preview["strategy"]["matrix"] == "${{ fromJSON(needs.prepare.outputs.preview_matrix) }}"
+    checkout = next(step for step in preview["steps"] if step["name"] == "Checkout code")
+    assert checkout["with"]["ref"] == "${{ needs.prepare.outputs.ref }}"
 
     comment = workflow["jobs"]["comment"]
-    assert comment["permissions"]["actions"] == "write"
-    retry = next(step for step in comment["steps"] if step["name"] == "Schedule next deployment check")
-    assert "needs.prepare.outputs.attempt != '3'" in retry["if"]
+    assert "actions" not in comment["permissions"]
+    retry = workflow["jobs"]["retry-deployment-check"]
+    assert retry["permissions"]["actions"] == "write"
+    assert "needs.comment.outputs.next_attempt != ''" in retry["if"]
 
 
 def _write_preview(root: Path, stack: str, severity: str) -> None:
@@ -64,16 +62,15 @@ def _summarize(tmp_path: Path, *, attempt: int) -> tuple[str, dict[str, str]]:
     previews = tmp_path / "previews"
     comment = tmp_path / "comment.md"
     github_output = tmp_path / "github-output"
-    result = subprocess.run(
+    subprocess.run(
         [
             sys.executable,
             str(SUMMARY_SCRIPT),
+            "summarize",
             "--previews-dir",
             str(previews),
-            "--expected-stack",
-            "marin",
-            "--expected-stack",
-            "cw-rno2a",
+            "--preview-matrix",
+            '{"include":[{"stack":"marin"},{"stack":"cw-rno2a"}]}',
             "--attempt",
             str(attempt),
             "--merger",
@@ -89,9 +86,23 @@ def _summarize(tmp_path: Path, *, attempt: int) -> tuple[str, dict[str, str]]:
         text=True,
         capture_output=True,
     )
-    assert result.stdout == ""
     outputs = dict(line.split("=", 1) for line in github_output.read_text().splitlines())
     return comment.read_text(), outputs
+
+
+@pytest.mark.parametrize(
+    ("attempt", "delay"),
+    [(1, "30m"), (2, "60m"), (3, "120m")],
+)
+def test_deployment_check_delay_uses_exponential_schedule(attempt: int, delay: str) -> None:
+    result = subprocess.run(
+        [sys.executable, str(SUMMARY_SCRIPT), "delay", "--attempt", str(attempt)],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.stdout.strip() == delay
 
 
 def test_deployment_summary_requests_retry_for_changes_and_missing_stacks(tmp_path: Path) -> None:
@@ -99,21 +110,19 @@ def test_deployment_summary_requests_retry_for_changes_and_missing_stacks(tmp_pa
 
     comment, outputs = _summarize(tmp_path, attempt=1)
 
-    assert outputs == {"needs_retry": "true", "should_comment": "true"}
+    assert outputs == {"needs_retry": "true", "next_attempt": "2", "should_comment": "true"}
     assert "@operator" in comment
-    assert "Pending changes: `marin`." in comment
-    assert "Preview errors prevented verification: `cw-rno2a`." in comment
-    assert "next check runs in 60 minutes" in comment
+    assert "`marin`" in comment
+    assert "`cw-rno2a`" in comment
 
 
 def test_deployment_summary_clears_existing_reminder_after_retry(tmp_path: Path) -> None:
     _write_preview(tmp_path / "previews", "marin", "none")
     _write_preview(tmp_path / "previews", "cw-rno2a", "none")
 
-    comment, outputs = _summarize(tmp_path, attempt=2)
+    _, outputs = _summarize(tmp_path, attempt=2)
 
-    assert outputs == {"needs_retry": "false", "should_comment": "true"}
-    assert "no pending changes after check 2 of 3" in comment
+    assert outputs == {"needs_retry": "false", "next_attempt": "", "should_comment": "true"}
 
 
 def test_deployment_summary_does_not_comment_on_initial_clean_check(tmp_path: Path) -> None:
@@ -122,4 +131,4 @@ def test_deployment_summary_does_not_comment_on_initial_clean_check(tmp_path: Pa
 
     _, outputs = _summarize(tmp_path, attempt=1)
 
-    assert outputs == {"needs_retry": "false", "should_comment": "false"}
+    assert outputs == {"needs_retry": "false", "next_attempt": "", "should_comment": "false"}

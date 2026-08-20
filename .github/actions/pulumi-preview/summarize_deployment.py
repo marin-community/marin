@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,8 +12,8 @@ from assemble_comment import StackPreview, load_stacks
 
 
 MARKER = "<!-- iac-deployment-check -->"
-MAX_ATTEMPTS = 3
-CHECK_DELAYS = (30, 60, 120)
+CHECK_DELAYS_MINUTES = (30, 60, 120)
+MAX_ATTEMPTS = len(CHECK_DELAYS_MINUTES)
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,10 @@ def deployment_status(stacks: list[StackPreview], expected_stacks: set[str]) -> 
     )
 
 
+def check_delay(attempt: int) -> str:
+    return f"{CHECK_DELAYS_MINUTES[attempt - 1]}m"
+
+
 def _stack_list(stacks: tuple[str, ...]) -> str:
     return ", ".join(f"`{stack}`" for stack in stacks)
 
@@ -70,7 +75,7 @@ def render_comment(
 
     lines.extend(["", f"Check {attempt} of {MAX_ATTEMPTS}: [workflow run]({run_url})."])
     if status.needs_retry and attempt < MAX_ATTEMPTS:
-        lines.append(f"The next check runs in {CHECK_DELAYS[attempt]} minutes.")
+        lines.append(f"The next check runs in {CHECK_DELAYS_MINUTES[attempt]} minutes.")
     elif status.needs_retry:
         lines.append("No further checks are scheduled.")
     return "\n".join(lines) + "\n"
@@ -78,23 +83,35 @@ def render_comment(
 
 def _write_outputs(path: Path, *, status: DeploymentStatus, attempt: int) -> None:
     should_comment = status.needs_retry or attempt > 1
+    next_attempt = attempt + 1 if status.needs_retry and attempt < MAX_ATTEMPTS else ""
     with path.open("a", encoding="utf-8") as output:
         output.write(f"needs_retry={str(status.needs_retry).lower()}\n")
+        output.write(f"next_attempt={next_attempt}\n")
         output.write(f"should_comment={str(should_comment).lower()}\n")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--previews-dir", type=Path, required=True)
-    parser.add_argument("--expected-stack", action="append", required=True)
-    parser.add_argument("--attempt", type=int, choices=range(1, MAX_ATTEMPTS + 1), required=True)
-    parser.add_argument("--merger", required=True)
-    parser.add_argument("--run-url", required=True)
-    parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--github-output", type=Path, required=True)
+    commands = parser.add_subparsers(dest="command", required=True)
+    delay_parser = commands.add_parser("delay", help="Print the wait before an attempt.")
+    delay_parser.add_argument("--attempt", type=int, choices=range(1, MAX_ATTEMPTS + 1), required=True)
+    summarize_parser = commands.add_parser("summarize", help="Render the deployment check result.")
+    summarize_parser.add_argument("--previews-dir", type=Path, required=True)
+    summarize_parser.add_argument("--preview-matrix", required=True)
+    summarize_parser.add_argument("--attempt", type=int, choices=range(1, MAX_ATTEMPTS + 1), required=True)
+    summarize_parser.add_argument("--merger", required=True)
+    summarize_parser.add_argument("--run-url", required=True)
+    summarize_parser.add_argument("--out", type=Path, required=True)
+    summarize_parser.add_argument("--github-output", type=Path, required=True)
     args = parser.parse_args()
 
-    status = deployment_status(load_stacks(args.previews_dir), set(args.expected_stack))
+    if args.command == "delay":
+        print(check_delay(args.attempt))
+        return
+
+    preview_matrix = json.loads(args.preview_matrix)
+    expected_stacks = {entry["stack"] for entry in preview_matrix["include"]}
+    status = deployment_status(load_stacks(args.previews_dir), expected_stacks)
     args.out.write_text(
         render_comment(status, attempt=args.attempt, merger=args.merger, run_url=args.run_url),
         encoding="utf-8",
