@@ -53,6 +53,14 @@ HERO_PROCESSES_PER_TASK = 1
 # `num_ranks x splits`, so at EP64 this is 2048 CTAs; 32 measured best there.
 HERO_RAGGED_SPLITS_PER_PEER = 32
 HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
+# Weight storage that goes with each master-parameter mode. The pooled-wave hero needs the
+# pinned-host master to fit at all. The ragged transport does fit with fp32 weights on device,
+# and a paired hero measurement put the master 1.78 percent behind on that path -- it buys
+# memory relief that transport is not short of, and charges a host round trip per step for it.
+HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE = {
+    MasterParamMode.FP32_PINNED_HOST: HERO_MIXED_PRECISION,
+    MasterParamMode.DISABLED: "params=float32,compute=bfloat16,output=bfloat16",
+}
 # Keep MuonH state on pinned host memory to leave room for the pooled all-to-all buffers.
 HERO_OFFLOAD_OPT_STATE = True
 HERO_WATCH_INTERVAL = 0
@@ -98,6 +106,7 @@ def build_hero_run(
     latent_dim: int | None = None,
     moe_implementation: str | None = None,
     ragged_all_to_all_splits_per_peer: int | None = None,
+    master_param_mode: MasterParamMode = MasterParamMode.FP32_PINNED_HOST,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
     save_checkpoints: bool = False,
@@ -194,7 +203,7 @@ def build_hero_run(
         ema_beta=None,
         z_loss_weight=1e-4,
         offload_opt_state=HERO_OFFLOAD_OPT_STATE,
-        master_param_mode=MasterParamMode.FP32_PINNED_HOST,
+        master_param_mode=master_param_mode,
         training_data_mode=training_data_mode,
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
@@ -229,7 +238,7 @@ def build_hero_run(
                 process_index=0,
                 profile_options=ProfileOptionsConfig(enable_hlo_proto=True),
             ),
-            mp=jmp.get_policy(HERO_MIXED_PRECISION),
+            mp=jmp.get_policy(HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE[master_param_mode]),
             tracker=WandbConfig(
                 entity="marin-community",
                 project=wandb_project,
@@ -239,6 +248,7 @@ def build_hero_run(
                     "hero",
                     "ep",
                     backend_tag,
+                    f"master-params-{master_param_mode.value.replace('_', '-')}",
                     capacity_tag,
                     *transport_capacity_tags,
                     wave_tag,
@@ -453,6 +463,16 @@ def build_hero_run(
     ),
 )
 @click.option(
+    "--master-params",
+    type=click.Choice([mode.value for mode in MasterParamMode]),
+    default=MasterParamMode.FP32_PINNED_HOST.value,
+    show_default=True,
+    help=(
+        "Where the authoritative fp32 weights live. Disabling the master keeps them on device and "
+        "measured 1.78 percent faster on the ragged transport, which does not need the memory relief."
+    ),
+)
+@click.option(
     "--processes-per-task",
     type=click.IntRange(min=1),
     default=HERO_PROCESSES_PER_TASK,
@@ -483,6 +503,7 @@ def main(
     training_data: str,
     moe_implementation: str | None,
     ragged_all_to_all_splits_per_peer: int | None,
+    master_params: str,
     processes_per_task: int,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
@@ -508,6 +529,7 @@ def main(
         training_data_mode=TrainingDataMode(training_data),
         moe_implementation=moe_implementation,
         ragged_all_to_all_splits_per_peer=ragged_all_to_all_splits_per_peer,
+        master_param_mode=MasterParamMode(master_params),
         processes_per_task=processes_per_task,
     )
 
