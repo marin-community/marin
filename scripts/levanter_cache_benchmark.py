@@ -5,8 +5,8 @@
 
 The benchmark writes disposable data beneath ``marin_temp_bucket``. It measures
 the existing per-component ledger startup path against a merged cache catalog,
-then writes and reads identical token arrays with the prior Blosc/LZ4 codec and
-the proposed Blosc/Zstd codec.
+then writes and reads identical token arrays with Blosc/LZ4 level 5 and
+Blosc/Zstd level 1.
 """
 
 import argparse
@@ -19,22 +19,18 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
-
-from rigging.filesystem.cluster_config import marin_temp_bucket
-from rigging.filesystem.factory import url_to_fs
-from rigging.filesystem.storage_path import StoragePath
-
 from levanter.data.text.datasets import CACHE_METADATA_WORKERS, DatasetComponent, LmDataConfig
 from levanter.data.text.formats import PrebuiltLmDatasetFormat
-from levanter.store import jagged_array
 from levanter.store.cache import (
     CACHE_LAYOUT_SHARDED,
     LEDGER_FILE_NAME,
     CacheLedger,
     CacheMetadata,
 )
-from levanter.store.jagged_array import JaggedArrayStore, PreparedBatch
-
+from levanter.store.jagged_array import BloscCodec, JaggedArrayStore, PreparedBatch
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 logger = logging.getLogger(__name__)
 
@@ -52,30 +48,29 @@ TOKEN_ZIPF_EXPONENT = 1.2
 
 
 @dataclass(frozen=True)
-class Codec:
-    name: str
-    compression_level: int
+class SyntheticCacheShape:
+    num_shards: int
+    rows_per_shard: int
+    tokens_per_row: int
 
 
-LZ4 = Codec("lz4", 5)
-ZSTD = Codec("zstd", 1)
+LZ4 = BloscCodec("lz4", 5)
+ZSTD = BloscCodec("zstd", 1)
 
 
-def _component_ledger(num_shards: int, rows_per_shard: int, tokens_per_row: int) -> CacheLedger:
-    shard_names = [f"shard-{shard_index:04d}" for shard_index in range(num_shards)]
-    shard_rows = {name: rows_per_shard for name in shard_names}
-    field_counts_by_shard = {name: {"input_ids": rows_per_shard * tokens_per_row} for name in shard_names}
+def _component_ledger(shape: SyntheticCacheShape) -> CacheLedger:
+    shard_names = [f"shard-{shard_index:04d}" for shard_index in range(shape.num_shards)]
+    shard_rows = {name: shape.rows_per_shard for name in shard_names}
+    field_counts_by_shard = {name: {"input_ids": shape.rows_per_shard * shape.tokens_per_row} for name in shard_names}
     return CacheLedger(
-        total_num_rows=num_shards * rows_per_shard,
+        total_num_rows=shape.num_shards * shape.rows_per_shard,
         shard_rows=shard_rows,
         is_finished=True,
         finished_shards=shard_names,
-        field_counts={"input_ids": num_shards * rows_per_shard * tokens_per_row},
+        field_counts={"input_ids": shape.num_shards * shape.rows_per_shard * shape.tokens_per_row},
         field_counts_by_shard=field_counts_by_shard,
         layout=CACHE_LAYOUT_SHARDED,
-        metadata=CacheMetadata(
-            preprocessor_metadata={"input_ids_key": "input_ids", "loss_weights_key": None}
-        ),
+        metadata=CacheMetadata(preprocessor_metadata={"input_ids_key": "input_ids", "loss_weights_key": None}),
     )
 
 
@@ -83,15 +78,13 @@ def _write_component_ledgers(
     output_prefix: str,
     *,
     num_components: int,
-    num_shards: int,
-    rows_per_shard: int,
-    tokens_per_row: int,
+    shape: SyntheticCacheShape,
 ) -> dict[str, DatasetComponent]:
-    ledger = _component_ledger(num_shards, rows_per_shard, tokens_per_row)
+    ledger = _component_ledger(shape)
     components = {
         f"component-{component_index:04d}": DatasetComponent(
             source=None,
-            cache_dir=f"{output_prefix}/components/component-{component_index:04d}",
+            cache_dir=prefix_join(output_prefix, f"components/component-{component_index:04d}"),
             format=PrebuiltLmDatasetFormat(),
             flat_cache=True,
         )
@@ -100,7 +93,7 @@ def _write_component_ledgers(
 
     def write_one(component: DatasetComponent) -> None:
         assert component.cache_dir is not None
-        StoragePath(f"{component.cache_dir}/{LEDGER_FILE_NAME}").write_text(ledger.to_json())
+        StoragePath(prefix_join(component.cache_dir, LEDGER_FILE_NAME)).write_text(ledger.to_json())
 
     started = time.perf_counter()
     with ThreadPoolExecutor(max_workers=min(CACHE_METADATA_WORKERS, num_components)) as pool:
@@ -133,19 +126,15 @@ def benchmark_catalog(
     output_prefix: str,
     *,
     num_components: int,
-    num_shards: int,
-    rows_per_shard: int,
-    tokens_per_row: int,
+    shape: SyntheticCacheShape,
     repetitions: int,
 ) -> dict:
     components = _write_component_ledgers(
         output_prefix,
         num_components=num_components,
-        num_shards=num_shards,
-        rows_per_shard=rows_per_shard,
-        tokens_per_row=tokens_per_row,
+        shape=shape,
     )
-    catalog_path = f"{output_prefix}/cache-catalog.json"
+    catalog_path = prefix_join(output_prefix, "cache-catalog.json")
 
     started = time.perf_counter()
     catalog = _data_config(components).build_cache_catalog(catalog_path, splits=("train",))
@@ -167,7 +156,7 @@ def benchmark_catalog(
     catalog_median = statistics.median(catalog_seconds)
     return {
         "components": num_components,
-        "shards_per_component": num_shards,
+        "shards_per_component": shape.num_shards,
         "catalog_path": catalog_path,
         "catalog_bytes": StoragePath(catalog_path).size(),
         "catalog_build_seconds": catalog_build_seconds,
@@ -184,22 +173,21 @@ def _stored_bytes(path: str) -> int:
     return int(fs.du(fs_path, total=True))
 
 
-def _write_tokens(path: str, tokens: np.ndarray, codec: Codec) -> float:
-    previous_name = jagged_array.DEFAULT_BLOSC_COMPRESSOR
-    previous_level = jagged_array.DEFAULT_BLOSC_COMPRESSION_LEVEL
-    try:
-        jagged_array.DEFAULT_BLOSC_COMPRESSOR = codec.name
-        jagged_array.DEFAULT_BLOSC_COMPRESSION_LEVEL = codec.compression_level
-        started = time.perf_counter()
-        store = JaggedArrayStore.open(path, mode="w", item_rank=1, dtype=np.int32, cache_metadata=True)
-        store.extend(PreparedBatch(data=tokens, offsets=np.array([tokens.size], dtype=np.int64), shapes=None))
-        return time.perf_counter() - started
-    finally:
-        jagged_array.DEFAULT_BLOSC_COMPRESSOR = previous_name
-        jagged_array.DEFAULT_BLOSC_COMPRESSION_LEVEL = previous_level
+def _token_write_seconds(path: str, tokens: np.ndarray, codec: BloscCodec) -> float:
+    started = time.perf_counter()
+    store = JaggedArrayStore.open(
+        path,
+        mode="w",
+        item_rank=1,
+        dtype=np.int32,
+        cache_metadata=True,
+        write_codec=codec,
+    )
+    store.extend(PreparedBatch(data=tokens, offsets=np.array([tokens.size], dtype=np.int64), shapes=None))
+    return time.perf_counter() - started
 
 
-def _read_tokens(path: str, num_tokens: int, expected_edges: tuple[list[int], list[int]]) -> float:
+def _token_read_seconds(path: str, num_tokens: int, expected_edges: tuple[list[int], list[int]]) -> float:
     started = time.perf_counter()
     store = JaggedArrayStore.open(path, mode="r", item_rank=1, dtype=np.int32, cache_metadata=False)
     tokens = np.asarray(store.data[:num_tokens].read().result())
@@ -215,32 +203,32 @@ def benchmark_codecs(output_prefix: str, *, num_tokens: int, repetitions: int) -
     expected_edges = (tokens[:8].tolist(), tokens[-8:].tolist())
     raw_bytes = tokens.nbytes
     measurements = {
-        codec.name: {"write_seconds": [], "read_seconds": [], "stored_bytes": []} for codec in (LZ4, ZSTD)
+        codec.compressor: {"write_seconds": [], "read_seconds": [], "stored_bytes": []} for codec in (LZ4, ZSTD)
     }
     paths: dict[tuple[int, str], str] = {}
 
     for repetition in range(repetitions):
         codecs = (LZ4, ZSTD) if repetition % 2 == 0 else (ZSTD, LZ4)
         for codec in codecs:
-            path = f"{output_prefix}/codecs/{repetition}/{codec.name}"
-            paths[repetition, codec.name] = path
-            measurements[codec.name]["write_seconds"].append(_write_tokens(path, tokens, codec))
-            measurements[codec.name]["stored_bytes"].append(_stored_bytes(path))
+            path = prefix_join(output_prefix, f"codecs/{repetition}/{codec.compressor}")
+            paths[repetition, codec.compressor] = path
+            measurements[codec.compressor]["write_seconds"].append(_token_write_seconds(path, tokens, codec))
+            measurements[codec.compressor]["stored_bytes"].append(_stored_bytes(path))
 
     for repetition in range(repetitions):
         codecs = (ZSTD, LZ4) if repetition % 2 == 0 else (LZ4, ZSTD)
         for codec in codecs:
-            measurements[codec.name]["read_seconds"].append(
-                _read_tokens(paths[repetition, codec.name], num_tokens, expected_edges)
+            measurements[codec.compressor]["read_seconds"].append(
+                _token_read_seconds(paths[repetition, codec.compressor], num_tokens, expected_edges)
             )
 
     result = {"num_tokens": num_tokens, "raw_bytes": raw_bytes, "codecs": {}}
     for codec in (LZ4, ZSTD):
-        codec_measurements = measurements[codec.name]
+        codec_measurements = measurements[codec.compressor]
         write_median = statistics.median(codec_measurements["write_seconds"])
         read_median = statistics.median(codec_measurements["read_seconds"])
         stored_median = statistics.median(codec_measurements["stored_bytes"])
-        result["codecs"][codec.name] = {
+        result["codecs"][codec.compressor] = {
             "compression_level": codec.compression_level,
             **codec_measurements,
             "stored_bytes_median": stored_median,
@@ -271,15 +259,18 @@ def main() -> None:
         prefix=f"levanter-cache-benchmark/{args.run_tag}",
         source_prefix=COREWEAVE_DATA_PREFIX,
     )
+    cache_shape = SyntheticCacheShape(
+        num_shards=args.shards_per_component,
+        rows_per_shard=args.rows_per_shard,
+        tokens_per_row=args.tokens_per_row,
+    )
     result = {
         "run_tag": args.run_tag,
         "output_prefix": output_prefix,
         "catalog": benchmark_catalog(
             output_prefix,
             num_components=args.components,
-            num_shards=args.shards_per_component,
-            rows_per_shard=args.rows_per_shard,
-            tokens_per_row=args.tokens_per_row,
+            shape=cache_shape,
             repetitions=args.startup_repetitions,
         ),
         "codec": benchmark_codecs(
@@ -288,7 +279,7 @@ def main() -> None:
             repetitions=args.codec_repetitions,
         ),
     }
-    result_path = f"{output_prefix}/results.json"
+    result_path = prefix_join(output_prefix, "results.json")
     StoragePath(result_path).write_text(json.dumps(result, indent=2, sort_keys=True))
     logger.info("BENCHMARK_RESULT %s", json.dumps(result, sort_keys=True))
     logger.info("Wrote benchmark result to %s", result_path)

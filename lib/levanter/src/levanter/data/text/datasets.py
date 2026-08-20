@@ -567,6 +567,7 @@ def _component_cache_dir(name: str, component: DatasetComponent, default_root: s
 
 
 def _component_cache_path(name: str, component: DatasetComponent, default_root: str | None, split: str) -> str | None:
+    """Return the split cache path, or None when a flat cache does not provide that split."""
     cache_root = _component_cache_dir(name, component, default_root)
     if component.flat_cache:
         return cache_root if split == "train" else None
