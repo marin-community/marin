@@ -1,8 +1,10 @@
 # Hero training loss-spike alert
 
-`TrainingLossSpike` is a Grafana warning for active Iris root jobs named `hero-*-coord`. It announces once in Slack and does not open a Loom triage session, because the decision it asks for is a person's: keep training, or stop and resume from an earlier checkpoint. The alert does not kick, restart, or reconfigure a job.
+`TrainingLossSpike` is a critical Grafana alert for active Iris root jobs named `hero-*-coord`. It posts one Slack message per root job and opens a Loom triage session on that thread, the same `notification=hero-run` route [`TrainingProgressStalled`](training-stall-alert-contract.md) uses. The alert does not kick, restart, or reconfigure a job; the decision it asks for is a person's, which is to keep training or to stop and resume from an earlier checkpoint.
 
-Enrollment is the same contract as [`TrainingProgressStalled`](training-stall-alert-contract.md): a root job is eligible while its latest `iris.task_state` row is at most 90 seconds old, reports at least one running task, and matches `%/hero-%-coord`. Both rules read one enrollment query per bridge cache interval, so adding this alert did not add a `iris.task_state` scan.
+It pages because a hero run diverging unwatched costs more than a false page does, and a silence answers a false page. Expect benign firings at mixture stage boundaries; silence the run for that window rather than widening the band for every run.
+
+Enrollment is the same contract as [`TrainingProgressStalled`](training-stall-alert-contract.md): a root job is eligible while its latest `iris.task_state` row is at most 90 seconds old, reports at least one running task, and matches `%/hero-%-coord`. Both rules read one enrollment query per bridge cache interval, so they share a single `iris.task_state` scan.
 
 ## What fires it
 
@@ -21,7 +23,7 @@ The baseline is the run's own trailing history, so the band moves with training.
 
 A run reports `warming_up` with fewer than 20 baseline or 5 recent samples, and `healthy` otherwise. Both are zero-valued rows, which resolves a firing instance. With no eligible roots the bridge returns an explicit zero-valued `fleet` row; `noDataState: Alerting` is reserved for a malformed or unavailable response.
 
-`spiking` and `not_finite` are separate alert instances. A run that spikes and then diverges to NaN resolves the first and opens the second, which is a second Slack message for one incident. That is deliberate: the escalation is worth its own notification.
+`spiking` and `not_finite` are separate alert instances, but the route groups by root job and not by `reason`, so a run that spikes and then diverges to NaN threads under the message it already sent.
 
 ## When it fires
 
@@ -49,4 +51,4 @@ LIMIT 50;
 
 The windows, the sigma factor, the absolute floor, and the sample minimums are constants at the top of `infra/grafana/src/loss_spikes.py`. Changing one takes a redeploy of the Grafana service.
 
-The rule is warning-tier while the detector has no firing history against a real spike on a hero run. Promoting it to page is a label change in `provisioning/alerting/rules.yaml`: `severity: critical` with `notification: hero-run` routes it to the critical receiver and opens a triage session per root job, the way the stall alert already does.
+A benign firing that repeats across runs, rather than at one run's stage boundary, is the case for changing a constant. One run's boundary is a case for silencing that run.

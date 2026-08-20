@@ -3,17 +3,11 @@
 
 """Bounded finelog query and alert projection for hero-run training-loss spikes.
 
-The band is the one Levanter's skip-step optimizer applies to a single step, the
-trailing mean plus six standard deviations, read from Finelog and applied to a
-window of steps instead. What fires the alert is the lowest loss of the last few
-minutes clearing that band: every step in the window has to be above it. A
-single excursion, which is the case skip-step already handles, moves the peak
-and the mean of that window but not its floor.
-
-The baseline is the run's own recent history, so the band adapts to where
-training is. Early on, loss falls fast and its trailing standard deviation is
-wide, which is exactly when a lone excursion means least; late in a run the band
-tightens and a small persistent rise clears it.
+A run alerts when the lowest loss of the last few minutes clears its own trailing
+mean plus six standard deviations, the band Levanter's skip-step optimizer
+applies to a single step. Reducing the window to its floor means every step in it
+has to be above the band, so a single excursion, the case skip-step already
+discards, does not fire.
 """
 
 from dataclasses import dataclass

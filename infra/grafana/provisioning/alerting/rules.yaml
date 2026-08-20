@@ -581,8 +581,10 @@ groups:
 
       # A hero run whose lowest loss over the last five minutes clears its own
       # trailing mean plus six standard deviations, or stops being finite. It
-      # announces in Slack without opening a triage session, because the call it
-      # asks for is a person's: keep training, or roll back to a checkpoint.
+      # takes the same hero-run route as the stall alert: a hero run diverging
+      # unwatched costs more than a false page, which a silence answers. Grouping
+      # by root job excludes `reason`, so a spike that later goes non-finite
+      # threads under the message it already sent.
       - uid: training-loss-spike
         title: TrainingLossSpike
         condition: C
@@ -590,8 +592,8 @@ groups:
         noDataState: Alerting
         execErrState: Alerting
         labels:
-          severity: warning
-          notification: slack
+          severity: critical
+          notification: hero-run
         annotations:
           summary: "{{ $labels.cluster }}: {{ $labels.run }} training loss is {{ $labels.reason }}"
           runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/training-loss-spike-alert.md

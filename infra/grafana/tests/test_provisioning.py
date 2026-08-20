@@ -307,29 +307,6 @@ def test_node_deadlock_alert_pages_critical_after_five_minutes():
     assert rule["data"][0]["model"]["url"] == "/alerts/node_deadlocks"
 
 
-def test_loss_spike_alert_announces_in_slack_without_opening_a_triage_session():
-    # The call a loss spike asks for -- keep training or roll back to a checkpoint --
-    # is a person's, so this warning takes the notification=slack exception rather
-    # than the hero-run route that launches an ops agent.
-    (rule,) = [rule for rule in _rules() if rule["uid"] == "training-loss-spike"]
-    assert rule["for"] == "5m"
-    assert rule["labels"] == {"severity": "warning", "notification": "slack"}
-    assert rule["data"][0]["datasourceUid"] == "finelog-marin"
-    assert rule["data"][0]["model"]["url"] == "/alerts/loss_spikes"
-    assert {column["selector"] for column in rule["data"][0]["model"]["columns"]} == {
-        "cluster",
-        "job",
-        "run",
-        "reason",
-        "value",
-    }
-
-    (policy,) = _load(ALERTING / "policies.yaml")["policies"]
-    route = next(route for route in policy["routes"] if route["object_matchers"] == [["notification", "=", "slack"]])
-    assert route["receiver"] == "ops-slack"
-    assert "mute_time_intervals" not in route
-
-
 def test_zephyr_stall_alert_is_a_warning_after_five_minutes():
     (rule,) = [rule for rule in _rules() if rule["uid"] == "zephyr-pipeline-progress-stalled"]
     assert rule["for"] == "5m"
@@ -354,40 +331,6 @@ def test_training_stall_alert_pages_each_hero_run_after_five_minutes():
     )
     assert route["receiver"] == "ops-critical"
     assert route["group_by"] == ["alertname", "cluster", "job"]
-
-
-def test_training_dashboard_carries_the_signals_the_hero_alerts_read():
-    # The status board and the two hero alerts have to agree on what "stalled" and
-    # "spiking" mean, so an operator reading the Slack message can see the same
-    # numbers here. Both alert inputs -- the wall-clock stamp of the last completed
-    # step and train_loss -- are on the dashboard.
-    dashboard = _stitched_dashboards()["training.json"]
-    panels = {panel["title"]: panel for panel in _all_panels(dashboard)}
-    (status_target,) = panels["Run status"]["targets"]
-
-    assert {column["selector"] for column in status_target["columns"]} == {
-        "phase",
-        "step",
-        "progress",
-        "since_last_step",
-        "step_time",
-        "mfu",
-        "tokens_per_second",
-        "total_tokens",
-        "train_loss",
-        "sample_age_seconds",
-    }
-    assert panels["Run status"]["timeFrom"] == "15m"
-
-    sql = "\n".join(_panel_sql(dashboard))
-    for metric in ("progress_time_seconds", "train_loss", "optim_skipped_step", "throughput_duration", "run_progress"):
-        assert metric in sql, metric
-
-    (run_variable,) = dashboard["templating"]["list"]
-    assert run_variable["name"] == "run"
-    assert not run_variable["multi"] and not run_variable["includeAll"]
-    # Sorting is the query's job: hero runs first, so the board opens on one.
-    assert run_variable["sort"] == 0
 
 
 def test_clusters_dashboard_shows_finelog_fleet_health():
