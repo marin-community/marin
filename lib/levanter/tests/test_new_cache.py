@@ -17,6 +17,7 @@ from levanter.data._preprocessor import BatchProcessor
 from levanter.data.sharded_datasource import ShardedDataSource
 from levanter.data.utils import batched
 from levanter.data.sharded_datasource import TextUrlDataSource
+from levanter.store import jagged_array
 from levanter.store.cache import (
     CACHE_LAYOUT_SHARDED,
     CacheLedger,
@@ -582,6 +583,20 @@ def test_write_levanter_cache_end_to_end():
         assert len(store) == len(records)
         assert store[0]["input_ids"].tolist() == records[0]["input_ids"]
         assert store[len(records) - 1]["input_ids"].tolist() == records[len(records) - 1]["input_ids"]
+
+
+def test_tree_store_reads_codec_from_persisted_metadata(tmp_path, monkeypatch):
+    output_path = str(tmp_path / "cache")
+    records = _make_levanter_records(8)
+    monkeypatch.setattr(jagged_array, "DEFAULT_BLOSC_COMPRESSOR", "lz4")
+    monkeypatch.setattr(jagged_array, "DEFAULT_BLOSC_COMPRESSION_LEVEL", 5)
+    write_levanter_cache(iter(records), output_path, metadata={})
+
+    monkeypatch.setattr(jagged_array, "DEFAULT_BLOSC_COMPRESSOR", "zstd")
+    monkeypatch.setattr(jagged_array, "DEFAULT_BLOSC_COMPRESSION_LEVEL", 1)
+    store = TreeStore.open(records[0], output_path, mode="r", cache_metadata=False)
+
+    assert [row["input_ids"].tolist() for row in store[:]] == [record["input_ids"] for record in records]
 
 
 def _build_sharded_cache(root: Path, num_shards: int, rows_per_shard: int, seq_len: int) -> TreeCache:

@@ -611,7 +611,8 @@ def _ts_open_kwargs(mode: str) -> dict:
 
 def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
     mode_config = _mode_to_open_mode(mode)
-    spec = _get_spec(path, shape)
+    open_spec = _get_spec(path, shape, include_metadata=False)
+    create_spec = _get_spec(path, shape, include_metadata=True)
 
     if path is not None and mode != "r":
         StoragePath(path).parent.mkdirs()
@@ -621,7 +622,7 @@ def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
     # Basically, we want to load the existing shape metadata if it exists
     if not mode_config.get("delete_existing", False):
         try:
-            return ts.open(spec, **open_kwargs, **mode_config).result()
+            return ts.open(open_spec, **open_kwargs, **mode_config).result()
         except FileNotFoundError:
             pass
         except ValueError:
@@ -629,10 +630,10 @@ def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
 
     # TODO: groups?
     try:
-        if spec.get("kvstore", {}).get("path", "").startswith("memory://"):
+        if create_spec.get("kvstore", {}).get("path", "").startswith("memory://"):
             raise ValueError("No kvstore specified in spec, cannot open TensorStore")
         return ts.open(
-            spec,
+            create_spec,
             dtype=jnp.dtype(dtype).name,
             shape=[2**54, *shape[1:]],
             **open_kwargs,
@@ -647,7 +648,8 @@ def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
 
 async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
     mode_config = _mode_to_open_mode(mode)
-    spec = _get_spec(path, shape)
+    open_spec = _get_spec(path, shape, include_metadata=False)
+    create_spec = _get_spec(path, shape, include_metadata=True)
 
     if path is not None and mode != "r":
         StoragePath(path).parent.mkdirs()
@@ -657,7 +659,7 @@ async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
     # Basically, we want to load the existing shape metadata if it exists
     if not mode_config.get("delete_existing", False):
         try:
-            return await ts.open(spec, **open_kwargs, **mode_config)
+            return await ts.open(open_spec, **open_kwargs, **mode_config)
         except FileNotFoundError:
             pass
         except ValueError:
@@ -666,7 +668,7 @@ async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
     # TODO: groups?
     try:
         return await ts.open(
-            spec,
+            create_spec,
             dtype=jnp.dtype(dtype).name,
             shape=[2**54, *shape[1:]],
             **open_kwargs,
@@ -678,36 +680,37 @@ async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
         raise
 
 
-def _get_spec(path, shape):
+def _get_spec(path, shape, *, include_metadata: bool):
     if path is None:
         random_name = str(uuid.uuid4())
         spec = ts.Spec({"driver": "zarr", "kvstore": f"memory://{random_name}"})
     else:
         kvstore = build_kvstore_spec(path)
         spec = {"driver": "zarr3", "kvstore": kvstore}
-        spec["metadata"] = {
-            "chunk_grid": {
-                "name": "regular",
-                "configuration": {"chunk_shape": [DEFAULT_WRITE_CHUNK_SIZE, *shape[1:]]},
-            },
-            "codecs": [
-                {
-                    "name": "sharding_indexed",
-                    "configuration": {
-                        "chunk_shape": [DEFAULT_CHUNK_SIZE, *shape[1:]],
-                        "codecs": [
-                            {
-                                "name": "blosc",
-                                "configuration": {
-                                    "cname": DEFAULT_BLOSC_COMPRESSOR,
-                                    "clevel": DEFAULT_BLOSC_COMPRESSION_LEVEL,
-                                },
-                            }
-                        ],
+        if include_metadata:
+            spec["metadata"] = {
+                "chunk_grid": {
+                    "name": "regular",
+                    "configuration": {"chunk_shape": [DEFAULT_WRITE_CHUNK_SIZE, *shape[1:]]},
+                },
+                "codecs": [
+                    {
+                        "name": "sharding_indexed",
+                        "configuration": {
+                            "chunk_shape": [DEFAULT_CHUNK_SIZE, *shape[1:]],
+                            "codecs": [
+                                {
+                                    "name": "blosc",
+                                    "configuration": {
+                                        "cname": DEFAULT_BLOSC_COMPRESSOR,
+                                        "clevel": DEFAULT_BLOSC_COMPRESSION_LEVEL,
+                                    },
+                                }
+                            ],
+                        },
                     },
-                }
-            ],
-        }
+                ],
+            }
     return spec
 
 
