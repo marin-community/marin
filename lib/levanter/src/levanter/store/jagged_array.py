@@ -26,6 +26,8 @@ CACHE_BYTES_LIMIT = int(os.getenv("LEVANTER_TS_CACHE_LIMIT", "1000000000"))
 # at 4 bytes this is 256k elements
 DEFAULT_CHUNK_SIZE = 256 * 1024
 DEFAULT_WRITE_CHUNK_SIZE = DEFAULT_CHUNK_SIZE * 512
+DEFAULT_BLOSC_COMPRESSOR = "zstd"
+DEFAULT_BLOSC_COMPRESSION_LEVEL = 1
 
 
 _READ_CONTEXT: ts.Context | None = None
@@ -693,7 +695,15 @@ def _get_spec(path, shape):
                     "name": "sharding_indexed",
                     "configuration": {
                         "chunk_shape": [DEFAULT_CHUNK_SIZE, *shape[1:]],
-                        "codecs": [{"name": "blosc", "configuration": {"clevel": 5}}],
+                        "codecs": [
+                            {
+                                "name": "blosc",
+                                "configuration": {
+                                    "cname": DEFAULT_BLOSC_COMPRESSOR,
+                                    "clevel": DEFAULT_BLOSC_COMPRESSION_LEVEL,
+                                },
+                            }
+                        ],
                     },
                 }
             ],

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import json
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -570,6 +571,12 @@ def test_write_levanter_cache_end_to_end():
         assert result["count"] == len(records)
         assert result["exemplar"] == records[0]
         assert Path(output_path, ".success").exists()
+
+        zarr_metadata = json.loads(Path(output_path, "input_ids", "data", "zarr.json").read_text())
+        inner_codecs = zarr_metadata["codecs"][0]["configuration"]["codecs"]
+        blosc_codec = next(codec for codec in inner_codecs if codec["name"] == "blosc")
+        assert blosc_codec["configuration"]["cname"] == "zstd"
+        assert blosc_codec["configuration"]["clevel"] == 1
 
         store = TreeStore.open(records[0], output_path, mode="r", cache_metadata=False)
         assert len(store) == len(records)

@@ -38,7 +38,11 @@ from levanter.data.sharded_datasource import (
     UrlDataSource,
     datasource_from_hf_or_none,
 )
-from levanter.data.text.cache import build_lm_dataset_cache, load_lm_dataset_cache
+from levanter.data.text.cache import (
+    build_lm_dataset_cache,
+    load_lm_dataset_cache,
+    load_lm_dataset_cache_from_ledger,
+)
 from levanter.data.text.examples import (
     GrugLmExample,
     named_lm_example_from_grug,
@@ -52,7 +56,7 @@ from levanter.data.text.formats import (
 )
 from levanter.models.lm_model import LmExample
 from levanter.schedule import BatchSchedule
-from levanter.store.cache import CacheOptions, TreeCache
+from levanter.store.cache import CacheCatalog, CacheCatalogEntry, CacheLedger, CacheOptions, TreeCache
 from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 from levanter.utils.jax_utils import key_iterator
 from levanter.utils.logging import silence_transformer_nag
@@ -561,6 +565,13 @@ def _component_cache_dir(name: str, component: DatasetComponent, default_root: s
     return base
 
 
+def _component_cache_path(name: str, component: DatasetComponent, default_root: str | None, split: str) -> str | None:
+    cache_root = _component_cache_dir(name, component, default_root)
+    if component.flat_cache:
+        return cache_root if split == "train" else None
+    return prefix_join(cache_root, split)
+
+
 def _split_into_trainval_sets(
     dataset: "AsyncDataset[T]", num_validation_sequences: int, *, shuffle: bool = True
 ) -> tuple["AsyncDataset[T]", "AsyncDataset[T]"]:
@@ -617,6 +628,8 @@ class LmDataConfig:
 
     # config related to caching
     cache_dir: str | None = "cache/"
+    cache_catalog: str | None = None
+    """Authoritative catalog of cache paths and ledgers. Disables runtime cache discovery and building."""
     cache_options: CacheOptions = field(default_factory=CacheOptions)
     enforce_eos: bool = True  # whether to append eos even if the tokenizer doesn't
     auto_build_caches: bool = True
@@ -693,6 +706,12 @@ class LmDataConfig:
             return PassthroughTokenizer(self.vocab_size)
         else:
             return load_marin_tokenizer(self.tokenizer)
+
+    @cached_property
+    def _loaded_cache_catalog(self) -> CacheCatalog | None:
+        if self.cache_catalog is None:
+            return None
+        return CacheCatalog.load(self.cache_catalog)
 
     def _has_nonzero_weight(self, name: str) -> bool:
         weights = self.train_weights
@@ -869,10 +888,10 @@ class LmDataConfig:
         validation_datasets = self._validation_datasets_unwrapped(Pos)
         return {name: NamedLmDataset(ds, Pos) for name, ds in validation_datasets.items()}
 
-    def build_caches(self, split: str) -> dict[str, TreeCache[dict]]:
+    def _cache_items(self, split: str, *, include_zero_weight: bool = False) -> list[tuple[str, DatasetComponent]]:
         items: list[tuple[str, "DatasetComponent"]] = []
         for name, component in self.components.items():
-            if split == "train" and not self._has_nonzero_weight(name):
+            if split == "train" and not include_zero_weight and not self._has_nonzero_weight(name):
                 continue
             if isinstance(component, DirectDatasetComponent):
                 continue
@@ -883,9 +902,56 @@ class LmDataConfig:
             if not isinstance(component, DatasetComponent):
                 raise ValueError(f"Unsupported component type for {name}: {type(component)}")
             items.append((name, component))
+        return items
+
+    def build_cache_catalog(
+        self, catalog_path: str, *, splits: Sequence[str] = ("train", "validation")
+    ) -> CacheCatalog:
+        """Snapshot existing component ledgers into one catalog."""
+        candidates: list[tuple[str, str, str]] = []
+        for split in splits:
+            for name, component in self._cache_items(split, include_zero_weight=True):
+                cache_path = _component_cache_path(name, component, self.cache_dir, split)
+                if cache_path is not None:
+                    candidates.append((split, name, cache_path))
+
+        catalog_splits: dict[str, dict[str, CacheCatalogEntry]] = {split: {} for split in splits}
+        if candidates:
+            max_workers = min(32, len(candidates))
+            with (
+                log_time(f"build_cache_catalog over {len(candidates)} caches"),
+                ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="build_cache_catalog") as pool,
+            ):
+                pending = {
+                    pool.submit(CacheLedger.load, cache_path): (split, name, cache_path)
+                    for split, name, cache_path in candidates
+                }
+                for future in as_completed(pending):
+                    split, name, cache_path = pending[future]
+                    try:
+                        ledger = future.result()
+                    except FileNotFoundError:
+                        if split == "validation":
+                            logger.warning(
+                                "No completed cache for %s in %s split; omitting it from %s", name, split, catalog_path
+                            )
+                            continue
+                        raise FileNotFoundError(f"Cannot catalog missing cache for component {name} at {cache_path}")
+                    if not ledger.is_finished:
+                        raise ValueError(f"Cannot catalog unfinished cache for component {name} at {cache_path}")
+                    catalog_splits[split][name] = CacheCatalogEntry(cache_dir=cache_path, ledger=ledger)
+
+        catalog = CacheCatalog(splits=catalog_splits)
+        catalog.write(catalog_path)
+        return catalog
+
+    def build_caches(self, split: str) -> dict[str, TreeCache[dict]]:
+        items = self._cache_items(split)
 
         if not items:
             return {}
+
+        catalog = self._loaded_cache_catalog
 
         # Loads are pure GCS metadata reads and parallelize cleanly. Builds may
         # enter `_distributed_build_cache`, which uses unidentified jax
@@ -895,13 +961,27 @@ class LmDataConfig:
         # serially in the original component order.
         def _load_or_defer(item: tuple[str, "DatasetComponent"]) -> _ClassifiedComponent:
             name, component = item
-            cache_root = _component_cache_dir(name, component, self.cache_dir)
-            if component.flat_cache:
-                if split != "train":
+            if catalog is not None:
+                entry = catalog.entry(split, name)
+                if entry is None:
+                    if split == "train":
+                        raise ValueError(f"Cache catalog {self.cache_catalog} has no entry for {split}/{name}")
+                    logger.warning(
+                        "Cache catalog %s has no entry for %s/%s; skipping", self.cache_catalog, split, name
+                    )
                     return name, None, None
-                cache_path = cache_root
-            else:
-                cache_path = prefix_join(cache_root, split)
+                cache = load_lm_dataset_cache_from_ledger(
+                    entry.cache_dir,
+                    entry.ledger,
+                    component.format,
+                    self.the_tokenizer,
+                    self.enforce_eos,
+                )
+                return name, cache, None
+
+            cache_path = _component_cache_path(name, component, self.cache_dir, split)
+            if cache_path is None:
+                return name, None, None
             source = component.source
 
             if source is None:
