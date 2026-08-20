@@ -7,9 +7,11 @@ dashboard datasources exist. These files only otherwise fail inside a deployed
 Grafana, which is the most expensive place to find out."""
 
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import duckdb
 import pyarrow as pa
 import yaml
 from config import CLUSTERS, K8S_CLUSTERS, ClusterTarget
@@ -330,7 +332,8 @@ def test_training_stall_alert_pages_each_hero_run_after_five_minutes():
         )
     )
     assert route["receiver"] == "ops-critical"
-    assert route["group_by"] == ["alertname", "cluster", "job"]
+    assert route["group_by"] == ["alertname", "run"]
+    assert {column["selector"] for column in rule["data"][0]["model"]["columns"]} >= {"run", "job"}
 
 
 def test_clusters_dashboard_shows_finelog_fleet_health():
@@ -613,3 +616,69 @@ def test_cluster_series_keep_one_colour_across_dashboards():
                 (colour,) = [p["value"]["fixedColor"] for p in override["properties"] if p["id"] == "color"]
                 assert colours.setdefault(series, colour) == colour, f"{name}: {series} changes colour"
     assert len(colours) >= len(CLUSTERS)
+
+
+def test_training_dashboard_separates_attempt_loss_and_step_loss():
+    dashboard = _stitched_dashboards()["training.json"]
+    panels = {panel["title"]: panel for panel in _all_panels(dashboard)}
+
+    attempt_panel = panels["Training loss by attempt"]
+    attempt_sql = _panel_sql({**dashboard, "panels": [attempt_panel]})[0]
+    assert attempt_panel["type"] == "timeseries"
+    assert attempt_panel["fieldConfig"]["defaults"]["custom"]["insertNulls"] == 300_000
+    assert "execution_uid AS series" in attempt_sql
+    assert "GROUP BY 1, 2" in attempt_sql
+    assert {column["selector"] for column in attempt_panel["targets"][0]["columns"]} == {
+        "t",
+        "series",
+        "train_loss",
+    }
+
+    step_panel = panels["Training loss by step"]
+    step_sql = _panel_sql({**dashboard, "panels": [step_panel]})[0]
+    assert step_panel["type"] == "trend"
+    assert step_panel["options"]["xField"] == "step"
+    assert "PARTITION BY execution_uid" in step_sql
+    assert "PARTITION BY step ORDER BY timestamp_ms DESC, seq DESC" in step_sql
+    assert {column["selector"] for column in step_panel["targets"][0]["columns"]} == {
+        "step",
+        "train_loss",
+    }
+
+
+def test_training_loss_by_step_uses_the_newest_retry_sample():
+    dashboard = _stitched_dashboards()["training.json"]
+    panel = next(panel for panel in _all_panels(dashboard) if panel["title"] == "Training loss by step")
+    sql = _panel_sql({**dashboard, "panels": [panel]})[0]
+    sql = sql.replace("${run:sqlstring}", "'hero-run'")
+    sql = sql.replace("{{from}}", "TIMESTAMP '2026-08-20 00:00:00'")
+    sql = sql.replace("{{to}}", "TIMESTAMP '2026-08-21 00:00:00'")
+
+    database = duckdb.connect()
+    database.execute(
+        """
+        CREATE TABLE telemetry_v1(
+            service VARCHAR,
+            run_id VARCHAR,
+            execution_uid VARCHAR,
+            name VARCHAR,
+            value DOUBLE,
+            timestamp_ms BIGINT,
+            seq BIGINT
+        )
+        """
+    )
+    at = int(datetime(2026, 8, 20, 12, tzinfo=UTC).timestamp() * 1000)
+    database.executemany(
+        "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, ?, ?, ?, ?)",
+        [
+            ("attempt-1", "step", 10, at, 1),
+            ("attempt-1", "train_loss", 2.0, at, 2),
+            ("attempt-1", "step", 11, at + 1_000, 3),
+            ("attempt-1", "train_loss", 1.9, at + 1_000, 4),
+            ("attempt-2", "step", 10, at + 2_000, 1),
+            ("attempt-2", "train_loss", 2.2, at + 2_000, 2),
+        ],
+    )
+
+    assert database.execute(sql).fetchall() == [(10.0, 2.2), (11.0, 1.9)]

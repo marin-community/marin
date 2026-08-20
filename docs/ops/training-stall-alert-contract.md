@@ -1,12 +1,12 @@
 # Hero training stall alert
 
-`TrainingProgressStalled` is a critical Grafana alert for active Iris root jobs named `hero-*-coord`. It posts one Slack message per root job and opens a Loom triage session on that thread. The alert does not kick, restart, or profile a job. Capture `iris process profile threads -t <task>` for the affected tasks before deciding whether to intervene.
+`TrainingProgressStalled` is a critical Grafana alert for active Iris hero roots. Permitted names are `<run-id>-coord` and `<run-id>-coord-<retry>`. It posts one Slack message per run and opens a Loom triage session on that thread. The alert does not kick, restart, or profile a job. Capture `iris process profile threads -t <task>` for the applicable tasks before an intervention.
 
 This alert watches whether a run is stepping. [`TrainingLossSpike`](training-loss-spike-alert.md) watches what those steps produce, over the same enrollment.
 
-The rule evaluates once a minute and waits five minutes before notifying. A root job is eligible while its latest `iris.task_state` row is at most 90 seconds old, reports at least one running task, and matches `%/hero-%-coord`. The namespace before the run name is unrestricted. `/rav/hero-20260819-coord` and `/another-user/hero-20260819-coord` therefore have the same enrollment behavior. Other Levanter runs remain visible in Grafana without sending hero-run notifications.
+The rule evaluates once a minute and waits five minutes before notification. An eligible root has a current `iris.task_state` row. The row is at most 90 seconds old and reports one or more running tasks. The root name matches `%/hero-%-coord` or `%/hero-%-coord-%`. The namespace before the run name is unrestricted.
 
-Hero alert enrollment is a launch naming contract: the coordinator root's last component must be `<run-id>-coord`, `<run-id>` must begin with `hero-`, and Levanter's trainer `id` must be the same `<run-id>`. The selector derives the exact structured telemetry key from that contract. Changing only the user namespace is safe; changing either identity independently opts the run out or prevents telemetry attribution.
+Hero alert enrollment is a launch naming contract. The last root component is `<run-id>-coord` or `<run-id>-coord-<retry>`. The `<run-id>` value begins with `hero-`. The Levanter trainer `id` is the same `<run-id>`. A retry suffix changes the Iris job identity only. It does not change the logical run identity.
 
 An eligible job alerts when either condition holds:
 
@@ -43,11 +43,11 @@ ORDER BY timestamp_ms DESC, seq DESC
 LIMIT 20;
 ```
 
-Use the root job's last path component without `-coord` as `<hero-run-id>`. An empty result indicates missing Levanter telemetry; the named root remains eligible and becomes `initializing_stale` after 45 minutes.
+For an unsuffixed root, remove `-coord` to get `<hero-run-id>`. For a suffixed root, also remove the retry suffix. An empty result identifies missing Levanter telemetry. The root becomes `initializing_stale` after 45 minutes.
 
 Levanter republishes phase every minute. A current phase row binds progress to one execution. Finelog and telemetry health alerts cover loss of the durable telemetry path. Launcher-specific process watchdogs provide additional coverage where configured.
 
-Grafana routes `notification=hero-run` through `ops-critical`, grouped by alert name, cluster, and root job. The bridge announces firing once in Slack, opens one Loom session, suppresses webhook retries, refreshes thread retention on four-hour repeat notifications, and posts resolution under the same Slack root. When there are no eligible roots, the bridge returns an explicit zero-valued `fleet/idle/healthy` row; `noDataState: Alerting` is reserved for a malformed or unavailable response. The critical contact point also includes email when SMTP is configured.
+Grafana routes `notification=hero-run` through `ops-critical`. It groups notifications by alert name and logical run. Thus, a new retry root stays in the same alert group. The bridge posts one Slack message and opens one Loom session. A four-hour repeat notification keeps the thread active. A resolution uses the same Slack thread. An idle fleet returns an explicit zero-valued `fleet/idle/healthy` row. The `noDataState: Alerting` state identifies an invalid or unavailable response.
 
 ## NCCL RAS snapshots
 

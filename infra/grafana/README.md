@@ -270,7 +270,9 @@ a run that moves between clusters keeps one set of series. The status strip is a
 single ten-field stat panel because a `telemetry_v1` scan costs what its window
 costs whatever it selects, and it carries both hero alert inputs — time since the
 last completed step and train loss — beside step time, throughput, schedule
-progress, skip-step rejections, eval loss, and device memory.
+progress, skip-step rejections, eval loss, and device memory. One loss panel uses
+step as its x-axis and keeps the newest sample for a repeated step. The wall-clock
+panel separates each `execution_uid` and disconnects gaps longer than five minutes.
 
 ## Alerting
 
@@ -291,13 +293,13 @@ nonterminal without finalizers for five minutes after the bridge's two-minute
 overdue threshold, and a GB200 rack with fewer than 16 trays Ready for five
 minutes (the NVL72 rack spec is 18; a floor rather than an outright outage —
 see `gpu_racks` above). The hero training rule selects fresh running
-`iris.task_state` roots named `hero-*-coord`, derives their run IDs, and reads exact
-matches from structured `service=levanter` telemetry. It waits 15 minutes for
+`iris.task_state` roots named `hero-*-coord` or `hero-*-coord-<retry>`. It derives
+their run IDs and reads exact matches from structured `service=levanter` telemetry. It waits 15 minutes for
 training progress or 45 minutes for initialization, then remains pending for five
 minutes. Its `notification=hero-run`
-route uses the critical receiver and groups each root job separately. It does not
-require task-to-node GPU attribution. The root suffix before `-coord` and the
-Levanter trainer ID must match; zero eligible roots produce an explicit healthy
+route uses the critical receiver and groups notifications by logical run. It does not
+require task-to-node GPU attribution. The run ID before `-coord` and the Levanter
+trainer ID must match; zero eligible roots produce an explicit healthy
 row. A second rule over the same enrolled roots watches their `train_loss`, firing
 when the lowest loss of the last five minutes clears the mean plus six standard
 deviations of the preceding 55, or when the loss stops being finite. Six sigma is

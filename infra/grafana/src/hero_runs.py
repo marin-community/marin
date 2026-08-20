@@ -3,11 +3,11 @@
 
 """Hero-run enrollment shared by the training alert projections.
 
-A root job is a hero run while its latest `iris.task_state` row is fresh, reports
-a running task, and its last path component is `<run-id>-coord` with `<run-id>`
-beginning with `hero-`. That naming contract also gives the exact `run_id` its
-Levanter telemetry carries, so an alert reads structured columns and never scans
-for a pattern. See docs/ops/training-stall-alert-contract.md.
+A root job is a hero run while its latest `iris.task_state` row is fresh and
+reports a running task. Its last path component is `<run-id>-coord` or
+`<run-id>-coord-<retry>`, and `<run-id>` begins with `hero-`. This naming
+contract also gives the exact `run_id` in its Levanter telemetry. See
+docs/ops/training-stall-alert-contract.md.
 """
 
 from dataclasses import dataclass
@@ -20,8 +20,11 @@ _TASK_STATE_FRESHNESS = timedelta(seconds=90)
 TASK_STATE_LOOKBACK = timedelta(hours=1)
 
 HERO_RUN_PREFIX = "hero-"
-_COORDINATOR_SUFFIX = "-coord"
-_HERO_ROOT_PATTERN = f"%/{HERO_RUN_PREFIX}%{_COORDINATOR_SUFFIX}"
+_COORDINATOR_MARKER = "-coord"
+_HERO_ROOT_PATTERNS = (
+    f"%/{HERO_RUN_PREFIX}%{_COORDINATOR_MARKER}",
+    f"%/{HERO_RUN_PREFIX}%{_COORDINATOR_MARKER}-%",
+)
 
 
 @dataclass(frozen=True)
@@ -50,11 +53,12 @@ def task_state_query(now: datetime) -> str:
     start = sql_timestamp(now - TASK_STATE_LOOKBACK)
     fresh = sql_timestamp(now - _TASK_STATE_FRESHNESS)
     end = sql_timestamp(now)
+    root_predicate = " OR ".join(f"root_job_id LIKE '{pattern}'" for pattern in _HERO_ROOT_PATTERNS)
     return (
         "WITH samples AS ("
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS cluster, root_job_id, ts, running "
         'FROM "iris.task_state" '
-        f"WHERE root_job_id LIKE '{_HERO_ROOT_PATTERN}' AND ts >= TIMESTAMP '{start}' "
+        f"WHERE ({root_predicate}) AND ts >= TIMESTAMP '{start}' "
         f"AND ts < TIMESTAMP '{end}'"
         "), segmented AS ("
         "SELECT cluster, root_job_id, ts, running, "
@@ -79,9 +83,11 @@ def task_state_query(now: datetime) -> str:
 
 def _run_id(root_job: str) -> str | None:
     root_name = root_job.rsplit("/", 1)[-1]
-    if not root_name.startswith(HERO_RUN_PREFIX) or not root_name.endswith(_COORDINATOR_SUFFIX):
+    run_id, marker, retry = root_name.rpartition(_COORDINATOR_MARKER)
+    if not marker or not run_id.startswith(HERO_RUN_PREFIX):
         return None
-    run_id = root_name.removesuffix(_COORDINATOR_SUFFIX)
+    if retry and not retry.startswith("-"):
+        return None
     return run_id if run_id != HERO_RUN_PREFIX else None
 
 
