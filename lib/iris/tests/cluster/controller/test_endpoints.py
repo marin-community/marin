@@ -478,8 +478,8 @@ def test_register_resolves_through_service(state):
     endpoint_id = client.register("svc", "h:1", TaskAttempt(task_id=task, attempt_id=attempt))
 
     assert [r.endpoint_id for r in stub.registered] == [endpoint_id]
-    listed = stub.list_endpoints(controller_pb2.Controller.ListEndpointsRequest(prefix="svc", exact=True))
-    assert [(endpoint.endpoint_id, endpoint.address) for endpoint in listed.endpoints] == [(endpoint_id, "h:1")]
+    listed = client.list_endpoint_instances("svc")
+    assert [(endpoint.endpoint_id, endpoint.address) for endpoint in listed] == [(endpoint_id, "h:1")]
     client.close()
 
 

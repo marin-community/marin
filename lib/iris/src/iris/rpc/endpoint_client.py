@@ -42,6 +42,8 @@ RETRY_MAXIMUM = Duration.from_minutes(1)
 # Cap on a single sleep so the loop revisits its state; track/untrack/close wake
 # it sooner.
 _MAX_WAIT = Duration.from_minutes(5)
+# Per-call deadline for endpoint discovery.
+_LIST_TIMEOUT_MS = 10_000
 # Short deadline for the best-effort unregisters on close() so an unreachable
 # controller can't stall shutdown; the lease expires on its own regardless.
 _CLOSE_TIMEOUT_MS = 5_000
@@ -68,6 +70,13 @@ class EndpointStub(Protocol):
         *,
         timeout_ms: int | None = ...,
     ) -> Any: ...
+
+    def list_endpoints(
+        self,
+        request: controller_pb2.Controller.ListEndpointsRequest,
+        *,
+        timeout_ms: int | None = ...,
+    ) -> controller_pb2.Controller.ListEndpointsResponse: ...
 
     def close(self) -> None: ...
 
@@ -123,6 +132,21 @@ class EndpointClient:
         self._renewer.untrack(endpoint_id)
         self._registered.discard(endpoint_id)
         self._stub.unregister_endpoint(controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id))
+
+    def _list_endpoints(self, prefix: str, *, exact: bool) -> list[controller_pb2.Controller.Endpoint]:
+        def _call() -> list[controller_pb2.Controller.Endpoint]:
+            request = controller_pb2.Controller.ListEndpointsRequest(prefix=prefix, exact=exact)
+            return list(self._stub.list_endpoints(request, timeout_ms=_LIST_TIMEOUT_MS).endpoints)
+
+        return call_with_retry("list_endpoints", _call)
+
+    def list_endpoints(self, prefix: str) -> list[controller_pb2.Controller.Endpoint]:
+        """List endpoints whose names start with ``prefix``."""
+        return self._list_endpoints(prefix, exact=False)
+
+    def list_endpoint_instances(self, name: str) -> list[controller_pb2.Controller.Endpoint]:
+        """List every registered instance with the exact endpoint ``name``."""
+        return self._list_endpoints(name, exact=True)
 
     def close(self) -> None:
         """Stop renewing and best-effort unregister everything still registered.
