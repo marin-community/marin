@@ -58,7 +58,6 @@ _STAGED_BYTE_OVERHEAD = 4
 # Host memory each process may hold in flight while a restore reads shards. JAX defaults to 32 GB
 # and the legacy path asked for 300, both far above what a save allows itself on the same node.
 _RESTORE_CONCURRENT_GB = 8
-# Lock file that serializes restores across the local ranks inside one container.
 _LOCAL_RESTORE_LOCK_PATH = "/tmp/levanter-restore.lock"
 
 
