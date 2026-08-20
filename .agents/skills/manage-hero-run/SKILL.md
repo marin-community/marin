@@ -149,15 +149,19 @@ Many failures can be recoverable just by relaunching using the same id. These in
 When a hero run finishes or reaches a handoff milestone:
 
 - Verify terminal orchestrator status is successful.
-- Verify W&B is finished or has the expected final state and metrics.
-- Verify the final checkpoint has `metadata.json`.
+- When W&B is enabled, verify it is finished or has the expected final state and metrics.
+- When the run writes checkpoints, verify the final checkpoint has `metadata.json`.
 - Verify terminal cleanup or lifecycle coverage for resume checkpoints, raw traces, failed-launch
   markers, rendezvous state, and Ray session/debug uploads.
-- Capture final metrics, final step, W&B run id/display name, output root, final checkpoint path, and any caveats.
+- Capture final metrics, final step, output root, final checkpoint path, and any caveats. Include the
+  W&B run id/display name when enabled.
 - Stop or delete heartbeat/monitor automations that are no longer needed.
 - If approved dirty-tree changes were used, create a seal commit and tag immediately so the actual operational state is recoverable.
-- Create and push a seal tag for the completed run or milestone.
-- Update the GitHub issue and logbook with the W&B run, checkpoint, commit/tag, final metrics, launch command, and caveats.
+- For a production run, create and push a seal tag. Update its GitHub issue and logbook with the
+  tracker, checkpoint, commit/tag, final metrics, launch command, and caveats.
+- For a bounded diagnostic, post the final result in the originating conversation or durable
+  session channel. Include the command, source SHA, terminal status, final step and metrics, output
+  and checkpoint paths, tracker identity when enabled, and caveats.
 
 
 ## References

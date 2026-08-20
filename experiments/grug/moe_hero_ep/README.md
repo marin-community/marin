@@ -168,6 +168,7 @@ cold_version="<YYYY.MM.DD.N>"
 schedule_steps=390251
 
 uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --enable-extra-resources \
   --target-cluster cw-us-east-08a --priority interactive \
   --cpu 2 --memory 8GB --disk 32GB \
   --job-name "${run_id}-cold-coord" \
@@ -187,6 +188,7 @@ with a new coordinator job and JAX port:
 resume_version="<YYYY.MM.DD.N>"
 
 uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --enable-extra-resources \
   --target-cluster cw-us-east-08a --priority interactive \
   --cpu 2 --memory 8GB --disk 32GB \
   --job-name "${run_id}-resume-coord" \
