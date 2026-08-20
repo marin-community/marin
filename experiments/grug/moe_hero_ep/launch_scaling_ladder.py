@@ -86,10 +86,10 @@ WATCH_INTERVAL = 10
 # scales every narrower rung by the same ratio.
 TOKENS_PER_ACTIVE_PARAM = 791
 # Host memory for each task's container, against a GB200x4 node that holds 955.7 GiB. This leaves
-# 25.7 GiB for the operating system and the kubelet, thus it is close to the ceiling. A resume was
+# 15.7 GiB for the operating system and the kubelet, thus it is at the ceiling. A resume was
 # OOM-killed at 850 GiB and again at 909 GiB, and the peak tracked each limit at 97 to 99 percent,
 # so more memory alone may not be enough.
-TASK_HOST_MEMORY = "930g"
+TASK_HOST_MEMORY = "940g"
 # 4 processes on each task share TASK_HOST_MEMORY, thus this cap costs four times what it reads.
 # Halving it during an out-of-memory investigation freed no measured host memory, thus it keeps the
 # value that PR 8456 selected.

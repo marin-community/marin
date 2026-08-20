@@ -5,6 +5,9 @@
 # * Orbax: https://github.com/google/orbax/blob/11d2934ecfff77e86b5e07d0fef02b67eff4511b/orbax/checkpoint/pytree_checkpoint_handler.py#L312
 import asyncio
 import collections
+import contextlib
+import fcntl
+import gc
 import logging
 import math
 import os
@@ -56,6 +59,10 @@ _STAGED_BYTE_OVERHEAD = 4
 # Host memory each process may hold in flight while a restore reads shards. JAX defaults to 32 GB
 # and the legacy path asked for 300, both far above what a save allows itself on the same node.
 _RESTORE_CONCURRENT_GB = 8
+# Lock file that serializes restores across the local ranks inside one container. Set
+# LEVANTER_RESTORE_LOCK to another path to move it, or to an empty value to restore concurrently.
+_RESTORE_LOCK_PATH_ENV = "LEVANTER_RESTORE_LOCK"
+_DEFAULT_RESTORE_LOCK_PATH = "/tmp/levanter-restore.lock"
 
 
 def _format_gib(num_bytes: int) -> str:
@@ -707,6 +714,34 @@ def _fully_replicated_sharding(mesh):
     return hax.partitioning.sharding_for_axis((), {}, mesh)
 
 
+@contextlib.contextmanager
+def _local_restore_slot():
+    """Hold an exclusive slot while this process restores, so local ranks do not overlap.
+
+    Every rank inside a container draws on one host memory budget, and a restore costs a rank far
+    more than the state it ends up holding. Four ranks overlapping that cost is what exhausts a
+    GB200 node: each held about 187 GiB after deserialization and then grew by about 45 GiB while it
+    moved leaves to host, and the container died as the third one grew.
+
+    ``async_deserialize`` reads this process's own shards and does a single-device ``device_put``,
+    with no collective, so ranks may take turns. A caller that must restore concurrently can clear
+    the lock path.
+    """
+    path = os.environ.get(_RESTORE_LOCK_PATH_ENV, _DEFAULT_RESTORE_LOCK_PATH)
+    if not path:
+        yield
+        return
+    with open(path, "w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            # Drop what the restore built before the next rank starts, so its peak does not stack
+            # onto ours. device_put leaves the source alive until its copy lands.
+            gc.collect()
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 def _device_shardings_for_load(shardings: list) -> tuple[list, list]:
     """Split target shardings into device-memory-kind loaders plus per-leaf move-back targets.
 
@@ -804,10 +839,11 @@ def _restore_ocdbt(
         tspecs_to_load.append(spec)
 
     device_shardings, move_targets = _device_shardings_for_load(shardings_to_load)
-    deser_leaves = manager.deserialize(
-        shardings=device_shardings, tensorstore_specs=tspecs_to_load, concurrent_gb=_RESTORE_CONCURRENT_GB
-    )
-    deser_leaves = _move_leaves_to_target_memory_kind(deser_leaves, move_targets)
+    with _local_restore_slot():
+        deser_leaves = manager.deserialize(
+            shardings=device_shardings, tensorstore_specs=tspecs_to_load, concurrent_gb=_RESTORE_CONCURRENT_GB
+        )
+        deser_leaves = _move_leaves_to_target_memory_kind(deser_leaves, move_targets)
     return deser_leaves, indices_to_load
 
 
@@ -854,10 +890,11 @@ def _restore_old_ts(
             logger.warning(to_log)
 
     device_shardings, move_targets = _device_shardings_for_load(shardings_to_load)
-    deser_leaves = manager.deserialize_with_paths(
-        shardings=device_shardings, paths=paths_to_load, concurrent_gb=_RESTORE_CONCURRENT_GB
-    )
-    deser_leaves = _move_leaves_to_target_memory_kind(deser_leaves, move_targets)
+    with _local_restore_slot():
+        deser_leaves = manager.deserialize_with_paths(
+            shardings=device_shardings, paths=paths_to_load, concurrent_gb=_RESTORE_CONCURRENT_GB
+        )
+        deser_leaves = _move_leaves_to_target_memory_kind(deser_leaves, move_targets)
     return deser_leaves, indices_to_load
 
 
