@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marin-deploy"
+version = "0.0.0"
+description = "Deployment commands for Marin-operated services."
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.3.1",
+    "marin-finelog",
+]
+
+[project.scripts]
+deploy = "marin_deploy.cli:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/marin_deploy"]

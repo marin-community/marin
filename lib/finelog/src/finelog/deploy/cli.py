@@ -145,17 +145,6 @@ def up_cmd(name: str, build: bool, fast: bool) -> None:
     _gcp.gcp_up(cfg)
 
 
-@deploy.command("rollout")
-@click.argument("name")
-@click.option("-y", "--yes", is_flag=True, help="Skip Pulumi confirmation.")
-def rollout_cmd(name: str, yes: bool) -> None:
-    """Deploy and verify a Pulumi-managed Kubernetes Finelog server."""
-    cfg = load_finelog_config(name)
-    if cfg.deployment.k8s is None:
-        raise click.ClickException("rollout requires a Kubernetes deployment config")
-    _k8s.k8s_pulumi_rollout(cfg, stack=name, yes=yes)
-
-
 @deploy.command("down")
 @click.argument("name")
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation.")
@@ -208,18 +197,6 @@ def verify_cmd(name: str) -> None:
     if cfg.deployment.k8s is None:
         raise click.ClickException("verify requires a Kubernetes deployment config")
     _k8s.k8s_verify_ingest_ready(cfg)
-
-
-@deploy.command("rollback")
-@click.argument("name")
-@click.option("--to-revision", type=int, help="Restore an exact retained Kubernetes Deployment revision.")
-@click.option("-y", "--yes", is_flag=True, help="Skip confirmation.")
-def rollback_cmd(name: str, to_revision: int | None, yes: bool) -> None:
-    """Restore the previous retained Kubernetes Finelog revision."""
-    cfg = load_finelog_config(name)
-    if cfg.deployment.k8s is None:
-        raise click.ClickException("rollback requires a Kubernetes deployment config")
-    _k8s.k8s_rollback(cfg, stack=name, to_revision=to_revision, yes=yes)
 
 
 @deploy.command("status")

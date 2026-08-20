@@ -19,7 +19,8 @@ Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
   `RemoteLogHandler`, error types in `errors.py`.
 - `tests/` — store + server tests
 - `deploy/` — Docker image definition; deployment helpers live under `src/finelog/deploy/`,
-  and the Kubernetes Pulumi project lives in `infra/finelog/`
+  the shared operator CLI lives in `infra/deploy/`, and the Kubernetes Pulumi project
+  lives in `infra/finelog/`
 
 ## Boundaries
 
