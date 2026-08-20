@@ -9,14 +9,14 @@ process. Input preparation is a separate operation so read measurements do
 not include Parquet generation in their task cgroup peak.
 
 Examples:
-    uv run python lib/zephyr/tests/benchmark_shuffle_memory.py \
+    uv run python lib/zephyr/scripts/benchmark_shuffle_memory.py \
         --operation write --target-estimated-bytes 64MiB --output-root /tmp/write
 
-    uv run python lib/zephyr/tests/benchmark_shuffle_memory.py \
+    uv run python lib/zephyr/scripts/benchmark_shuffle_memory.py \
         --operation prepare-read --input-count 8 --rows-per-input 10000 \
         --item-bytes 1024 --output-root /tmp/read-input
 
-    uv run python lib/zephyr/tests/benchmark_shuffle_memory.py \
+    uv run python lib/zephyr/scripts/benchmark_shuffle_memory.py \
         --operation read-collect --input-root /tmp/read-input \
         --output-root /tmp/read-output
 """

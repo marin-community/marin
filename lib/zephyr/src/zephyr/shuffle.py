@@ -36,7 +36,6 @@ import gc
 import io
 import logging
 import math
-import os
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
@@ -46,6 +45,7 @@ import cloudpickle
 import humanfriendly
 import msgspec
 import polars as pl
+import psutil
 from iris.env_resources import TaskResources
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import StoragePath
@@ -61,9 +61,7 @@ logger = logging.getLogger(__name__)
 
 
 def _process_rss_bytes() -> int:
-    with open("/proc/self/statm", encoding="ascii") as process_memory:
-        resident_pages = int(process_memory.read().split()[1])
-    return resident_pages * os.sysconf("SC_PAGE_SIZE")
+    return psutil.Process().memory_info().rss
 
 
 # ---------------------------------------------------------------------------
