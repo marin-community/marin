@@ -107,6 +107,29 @@ and routes outputs to a seven-day temporary prefix. Use an immutable,
 region-local sample. Its default input is the GCS 100B sample in `europe-west4`.
 All arguments except `--run-tag` must match across the control and treatments.
 
+### Choose a benchmark scale preset
+
+| Preset | Sample | `--sources` / `--source-fraction` | `--pool-workers` | `--pool-cpu` | `--pool-ram` | `--pool-disk` | `--max-concurrent` | `--dedup-max-parallelism` |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| Full (matches the nemotron ferry) | `sample_100b_8ae7a94f` (measured: 256 GB, 768 parquet shards across 115 sources — the closest pre-built size to the ferry's ~350 GB) | `--sources all` | 512 | 16 | 160g | 32g | 8 | 1000 |
+| Light (~10% data, faster) | `sample_100b_8ae7a94f`, auto-selected subset | `--source-fraction 0.1` (measured: 77 sources, ~27 GB, 165 shards) | 128 | 16 | 160g | 32g | 4 | 500 |
+
+Use the full preset for a change that could regress the shared pool at
+production scale (shuffle, partitioning, spill, buffer, or scheduling
+changes). Use the light preset for a quicker, cheaper signal on a
+stage-local change.
+
+There is no pre-built sample near 10% of the ferry's size, so
+`zephyr_benchmark.py` builds the light preset's data at launch time:
+`--source-fraction 0.1` lists every source's parquet shards, greedily selects
+whole sources ordered by ascending average shard size (favoring shard-dense
+sources) until their combined size reaches ~10% of the full sample, and logs
+the resulting source count, bytes, and shard count.
+
+`zephyr_benchmark.py` fails with a clear error if `--pool-workers` exceeds the
+parquet shard count of the selected sources (whether from `--sources` or
+`--source-fraction`), rather than silently leaving workers idle.
+
 Set exactly one data-locality argument before launching:
 
 ```bash
@@ -139,6 +162,7 @@ uv run iris --config=lib/iris/config/marin.yaml job run --no-wait \
   -- python -m experiments.datakit.zephyr_benchmark \
     --sample-prefix "$SAMPLE_PREFIX" \
     --sources <COMMA_SEPARATED_SOURCES_OR_ALL> \
+    `# or --source-fraction <FRACTION> for the light preset, in place of --sources` \
     --run-tag <FRESH_RUN_TAG>-<ARM> \
     --pool-workers <WORKERS> \
     --pool-cpu <CPU_PER_WORKER> \
