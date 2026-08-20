@@ -6,6 +6,7 @@
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
+from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available
 
 
 def _sort_activations(inputs: Float[Array, "N *tail"], sort_indices: Int[Array, "N"]) -> Float[Array, "N *tail"]:
@@ -101,6 +102,10 @@ def _permute_by_global_expert(
     return sorted_x, sorted_indices, group_sizes
 
 
+def _use_sonic_gather_sum() -> bool:
+    return sonic_gather_sum_available() and jax.default_backend() == "gpu"
+
+
 def _unpermute_from_global_expert(
     intermediate: Float[Array, "TK H"],
     sorted_indices: Int[Array, "TK"],
@@ -109,7 +114,16 @@ def _unpermute_from_global_expert(
     tokens_per_shard: int,
     topk: int,
 ) -> Float[Array, "Tlocal H"]:
-    unsorted = _sort_activations(intermediate, jnp.argsort(sorted_indices))
+    """Weight each token's expert outputs by its routing weights and sum them."""
+    positions = jnp.argsort(sorted_indices)
+    if _use_sonic_gather_sum():
+        # One kernel for the gather and the sum, materializing neither the unpermuted
+        # ``[TK, H]`` buffer nor the ``[T, K, H]`` view -- at top-8 that view is eight times
+        # the output. It accumulates in fp32 like the einsum below and keeps the routing
+        # weight in fp32 through the multiply, where the einsum has to cast it down to avoid
+        # promoting the larger operand, so the two agree to a single rounding.
+        return sonic_gather_sum(intermediate, positions.reshape(tokens_per_shard, topk), combine_weights_local)
+    unsorted = _sort_activations(intermediate, positions)
     reshaped = unsorted.reshape(tokens_per_shard, topk, -1)
     return jnp.einsum(
         "tkd,tk->td", reshaped, combine_weights_local.astype(reshaped.dtype), preferred_element_type=jnp.float32
