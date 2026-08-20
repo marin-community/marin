@@ -18,6 +18,7 @@ import io
 import json
 import logging
 import os
+import re
 import sys
 from dataclasses import asdict, dataclass
 from datetime import timedelta
@@ -70,6 +71,7 @@ EXPECTED_PREFIX_HF_STEP = 2399
 EXPECTED_FULL_TRAIN_TOKENS = 1_576_534_016
 EXPECTED_PREFIX_TRAIN_TOKENS = 1_258_291_200
 EXPECTED_SOURCE_COORDINATE_HASH = "4db8e7f70dda72f2bc8a04fa4b8271f1a5959aa27e7119ad4f62f951cd1b2864"
+FULL_GIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 
 
 @dataclass(frozen=True)
@@ -120,6 +122,16 @@ def phase_0_boundary(full_train_steps: int, batch_size: int) -> tuple[int, int]:
     if prefix_train_steps <= 0 or prefix_train_steps >= full_train_steps:
         raise ValueError(f"Invalid phase-0 boundary {prefix_train_steps} for {full_train_steps} steps")
     return prefix_train_steps, prefix_train_steps - 1
+
+
+def validate_replay_code_commit(requested_commit: str, local_commit: str | None) -> str:
+    if FULL_GIT_SHA_PATTERN.fullmatch(requested_commit) is None:
+        raise ValueError(f"--replay-code-commit must be a full lowercase Git SHA: {requested_commit!r}")
+    if local_commit is not None and local_commit != requested_commit:
+        raise ValueError(
+            f"--replay-code-commit {requested_commit} does not match the local workspace HEAD {local_commit}"
+        )
+    return requested_commit
 
 
 def _source_coordinate_hash(run_specs: list[base.DelphiSwarmRunSpec]) -> str:
@@ -488,6 +500,11 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--tpu-zone", default=base.DEFAULT_TPU_ZONE)
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
     parser.add_argument("--run-order", type=int, default=None, help="Launch one canonical row as an idempotent canary")
+    parser.add_argument(
+        "--replay-code-commit",
+        required=True,
+        help="Full Git SHA of the clean workspace bundled by the external Iris client.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_known_args()
 
@@ -513,9 +530,7 @@ def main() -> None:
         tpu_region=args.tpu_region,
         tpu_zone=args.tpu_zone,
     )
-    replay_code_commit = get_git_commit()
-    if replay_code_commit is None or len(replay_code_commit) != 40:
-        raise ValueError(f"Could not resolve a full replay code commit: {replay_code_commit!r}")
+    replay_code_commit = validate_replay_code_commit(args.replay_code_commit, get_git_commit())
     launch_audit["replay_code_commit"] = replay_code_commit
     launch_audit["profiler_enabled"] = False
     if args.run_order is not None:
