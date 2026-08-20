@@ -20,9 +20,12 @@ import pulumi_kubernetes as k8s
 from finelog.deploy.bootstrap import CACHE_DIR
 from finelog.deploy.build import finelog_source_build_args
 from finelog.deploy.config import (
+    K8S_APP_LABEL,
+    K8S_CONTAINER_NAME,
     SOURCE_REVISION_ANNOTATION,
     FinelogConfig,
     auth_policy_json,
+    k8s_cache_pvc_name,
     k8s_env_secret_name,
 )
 from rigging.provenance import Provenance
@@ -101,8 +104,8 @@ def finelog_resource_args(args: FinelogServerArgs, image_ref: pulumi.Input[str])
     config = args.config
     assert config.deployment.k8s is not None
     deployment = config.deployment.k8s
-    labels = {"app": config.name}
-    cache_pvc_name = f"{config.name}-cache"
+    labels = {K8S_APP_LABEL: config.name}
+    cache_pvc_name = k8s_cache_pvc_name(config)
     metadata = k8s.meta.v1.ObjectMetaArgs(
         name=config.name,
         namespace=deployment.namespace,
@@ -110,7 +113,7 @@ def finelog_resource_args(args: FinelogServerArgs, image_ref: pulumi.Input[str])
     )
     health_action = k8s.core.v1.HTTPGetActionArgs(path=HEALTH_PATH, port=config.port)
     container = k8s.core.v1.ContainerArgs(
-        name="finelog",
+        name=K8S_CONTAINER_NAME,
         image=image_ref,
         image_pull_policy="IfNotPresent",
         security_context=k8s.core.v1.SecurityContextArgs(capabilities=k8s.core.v1.CapabilitiesArgs(add=["SYS_PTRACE"])),
@@ -293,7 +296,7 @@ class FinelogServer(pulumi.ComponentResource):
         pvc = k8s.core.v1.PersistentVolumeClaim(
             "pvc",
             args=resources.pvc,
-            opts=child_options(f"{namespace}/{config.name}-cache", protect=True),
+            opts=child_options(f"{namespace}/{k8s_cache_pvc_name(config)}", protect=True),
         )
         deployment = k8s.apps.v1.Deployment(
             "deployment",

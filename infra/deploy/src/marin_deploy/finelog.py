@@ -4,7 +4,6 @@
 """Finelog deployment commands."""
 
 import click
-
 from finelog.deploy.operations import rollback as rollback_finelog
 from finelog.deploy.operations import rollout as rollout_finelog
 

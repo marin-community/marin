@@ -292,9 +292,9 @@ project's paths and calls `./.github/actions/pulumi-preview` with its own `stack
   (`pulumi package add terraform-provider coreweave/coreweave`).
 - **Object storage** (`s3://marin-<region>` buckets + access keys): no schema or component
   exists yet; buckets are created by hand plus `configure_buckets.py` for lifecycle rules.
-  Clusters currently mix per-cluster buckets (`cw-us-west-04a`) and shared cross-region reuse
-  (`cw-rno2a`/`cw-us-east-08a` both read/write `marin-us-east-02a`'s bucket) — undecided whether
-  Pulumi should provision a bucket per cluster or this reuse is the standing choice.
+  `cw-rno2a` uses `marin-us-east-02a` through the LOTA endpoint, while `cw-us-east-02a` and
+  `cw-us-east-08a` share `marin-na` on R2. It remains undecided whether Pulumi should provision
+  a bucket per cluster or shared buckets are the standing choice.
 - **Federation peers**: `lib/iris/config/marin.yaml`/`marin-dev.yaml`'s `peers:` entries are
   hand-edited per cluster; generate or CI-validate the peer set from the cluster configs so a
   cluster can't be reachable-but-unregistered or registered-but-missing.

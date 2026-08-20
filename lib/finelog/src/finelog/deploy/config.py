@@ -26,6 +26,8 @@ from rigging.secrets import SecretSpec, as_secret_spec
 from rigging.tunnel import GcpSshForwardTarget, K8sPortForwardTarget, TunnelTarget
 
 USER_CONFIG_DIR = Path.home() / ".config" / "marin" / "finelog"
+K8S_APP_LABEL = "app"
+K8S_CONTAINER_NAME = "finelog"
 K8S_ENV_SECRET_SUFFIX = "-env"
 SOURCE_REVISION_ANNOTATION = "finelog.marin/source-revision"
 
@@ -243,6 +245,11 @@ def k8s_env_secret_name(config: FinelogConfig) -> str | None:
     if not config.remote_log_dir.startswith("s3://") and config.forwarding is None:
         return None
     return f"{config.name}{K8S_ENV_SECRET_SUFFIX}"
+
+
+def k8s_cache_pvc_name(config: FinelogConfig) -> str:
+    """Return the PersistentVolumeClaim name for a Kubernetes deployment."""
+    return f"{config.name}-cache"
 
 
 def _config_search_paths(name_or_path: str) -> list[Path]:

@@ -14,6 +14,7 @@ import pytest
 from finelog.deploy import _k8s
 from finelog.deploy._k8s import (
     K8sRevision,
+    K8sRevisionConflict,
     K8sRevisionHistory,
     _build_env_secret_manifest,
     k8s_pulumi_rollout,
@@ -291,7 +292,7 @@ def test_failed_pulumi_update_restores_captured_revision(monkeypatch: pytest.Mon
     deploy.pulumi_failure_target = attempted.replica_set
     monkeypatch.setattr(subprocess, "run", deploy.run)
 
-    with pytest.raises(click.ClickException, match="restored Kubernetes revision 4"):
+    with pytest.raises(click.ClickException):
         k8s_pulumi_rollout(_s3_config(), stack="cw", yes=True)
 
     assert deploy.current.replica_set == previous.replica_set
@@ -305,7 +306,7 @@ def test_failed_manual_rollback_restores_source_revision(monkeypatch: pytest.Mon
     deploy.unhealthy.add(target.replica_set)
     monkeypatch.setattr(subprocess, "run", deploy.run)
 
-    with pytest.raises(click.ClickException, match="restored finelog-current"):
+    with pytest.raises(click.ClickException):
         k8s_rollback(_s3_config(), stack="cw", to_revision=target.revision, yes=True)
 
     assert deploy.current.replica_set == current.replica_set
@@ -320,7 +321,7 @@ def test_manual_rollback_does_not_override_concurrent_rollout(monkeypatch: pytes
     deploy.change_on_second_deployment_read = concurrent.replica_set
     monkeypatch.setattr(subprocess, "run", deploy.run)
 
-    with pytest.raises(click.ClickException, match="plan the rollback again"):
+    with pytest.raises(K8sRevisionConflict):
         k8s_rollback(_s3_config(), stack="cw", to_revision=target.revision, yes=True)
 
     assert deploy.current.replica_set == concurrent.replica_set

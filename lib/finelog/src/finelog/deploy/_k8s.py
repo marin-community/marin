@@ -17,7 +17,13 @@ import click
 from rigging.secrets import resolve_secret_spec
 
 from finelog.deploy.bootstrap import HEALTH_OK, REGISTRATION_FAILED, health_probe_command
-from finelog.deploy.config import SOURCE_REVISION_ANNOTATION, FinelogConfig, k8s_env_secret_name
+from finelog.deploy.config import (
+    K8S_APP_LABEL,
+    K8S_CONTAINER_NAME,
+    SOURCE_REVISION_ANNOTATION,
+    FinelogConfig,
+    k8s_env_secret_name,
+)
 
 # S3-compatible endpoints that accept only virtual-hosted-style requests
 # (bucket as a host subdomain).
@@ -211,7 +217,7 @@ def _replica_set_revision(item: dict) -> K8sRevision:
     created_at = datetime.fromisoformat(metadata["creationTimestamp"].replace("Z", "+00:00"))
     template = item["spec"]["template"]
     containers = template["spec"]["containers"]
-    container = next((container for container in containers if container.get("name") == "finelog"), None)
+    container = next((container for container in containers if container.get("name") == K8S_CONTAINER_NAME), None)
     if container is None:
         raise click.ClickException(f"ReplicaSet {replica_set} has no finelog container")
     annotations = template.get("metadata", {}).get("annotations") or {}
@@ -240,7 +246,7 @@ def _revision_history(cfg: FinelogConfig, deployment: dict) -> K8sRevisionHistor
         "-n",
         cfg.deployment.k8s.namespace,
         "-l",
-        f"app={cfg.name}",
+        f"{K8S_APP_LABEL}={cfg.name}",
         "-o",
         "json",
         capture_output=True,

@@ -6,8 +6,9 @@ cluster. Each `Pulumi.<cluster>.yaml` stack loads the matching configuration fro
 `iac.kubernetes.finelog`.
 
 Pulumi owns the image, PersistentVolumeClaim, Deployment, and Service. The
-`finelog-<cluster>-env` Kubernetes Secret stays outside Pulumi state. Create or
-rotate it with `finelog deploy sync-secret` before updating a stack.
+`<config.name>-env` Kubernetes Secret (for example, `finelog-cw-use02a-env`)
+stays outside Pulumi state. Create or rotate it with `finelog deploy sync-secret`
+before updating a stack.
 
 ## Update a server
 
