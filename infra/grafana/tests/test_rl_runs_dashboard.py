@@ -176,18 +176,43 @@ def _run_rows() -> list[tuple]:
                     attributes={"gpu_uuid": f"GPU-{node}-0"},
                 )
             )
-        # The inference engines: job_id only, cumulative snapshots.
+        # The inference engines. The rollout callback reads them by RPC from the trainer's
+        # own process, so these rows carry the trainer's resource — role says `driver` there
+        # and `inference` on the series, and the two disagree by design.
+        for name, value in (
+            ("generation_throughput_tokens_per_second", 1024.0 + bucket),
+            ("prompt_throughput_tokens_per_second", 256.0 + bucket),
+            ("num_requests_running", 48.0),
+            ("num_requests_waiting", 12.0),
+            ("gpu_cache_usage_perc", 0.71),
+            ("prefix_cache_hit_rate", 0.42),
+        ):
+            rows.append(
+                _row(
+                    service="marinskyrl",
+                    name=name,
+                    value=value,
+                    moment=moment,
+                    seq=bucket,
+                    run_id=RUN_ID,
+                    job_id=JOB_ID,
+                    node_name=NODES[1],
+                    role="driver",
+                    attributes={"role": "inference", "engine": "all", "statistic": "median"},
+                )
+            )
         rows.append(
             _row(
-                service="vllm",
-                name="generation_tokens_total",
-                value=100000.0 * (bucket + 1),
+                service="marinskyrl",
+                name="request_latency_seconds",
+                value=3.5,
                 moment=moment,
                 seq=bucket,
+                run_id=RUN_ID,
                 job_id=JOB_ID,
                 node_name=NODES[1],
-                role="inference",
-                attributes={"source_temporality": "cumulative_snapshot", "model_name": "grug-67b-a2b"},
+                role="driver",
+                attributes={"role": "inference", "engine": "all", "statistic": "p90", "stage": "decode"},
             )
         )
     return rows
@@ -228,11 +253,7 @@ def _panel_sql(title: str) -> str:
     """One panel's shipped SQL, with Grafana's macros resolved to this window."""
     dashboard = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_runs.json"]
     panels = {panel["title"]: panel for panel in dashboard["panels"]}
-    (parameter,) = [
-        param
-        for param in panels[title]["targets"][0]["url_options"]["params"]
-        if param["key"] == "sql"
-    ]
+    (parameter,) = [param for param in panels[title]["targets"][0]["url_options"]["params"] if param["key"] == "sql"]
     sql = parameter["value"]
     sql = sql.replace("{{from}}", f"TIMESTAMP '{WINDOW_START.replace(tzinfo=None)}'")
     sql = sql.replace("{{to}}", f"TIMESTAMP '{NOW.replace(tzinfo=None)}'")
@@ -247,9 +268,7 @@ def test_the_run_variable_offers_a_run_the_trainer_reported(store) -> None:
     dashboard = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_runs.json"]
     (variable,) = [v for v in dashboard["templating"]["list"] if v["name"] == "run"]
     (parameter,) = [
-        param
-        for param in variable["query"]["infinityQuery"]["url_options"]["params"]
-        if param["key"] == "sql"
+        param for param in variable["query"]["infinityQuery"]["url_options"]["params"] if param["key"] == "sql"
     ]
     sql = parameter["value"]
     sql = sql.replace("{{from}}", f"TIMESTAMP '{WINDOW_START.replace(tzinfo=None)}'")
@@ -294,13 +313,25 @@ def test_the_node_agent_joins_through_node_name_without_a_run_id(store) -> None:
     assert rows[0][2] == pytest.approx(71.0)
 
 
-def test_the_engines_join_through_the_job_the_run_names(store) -> None:
-    # The serving path stamps job_id and not run_id, so the run reaches its engines only
-    # because MarinSkyRL stamps job_id too.
-    rows = store.execute(_panel_sql("Engine generated tokens")).fetchall()
+def test_the_engine_panels_read_role_from_the_series_not_the_resource(store) -> None:
+    # `role` is on both the resource and the series and they disagree: the process is a
+    # driver, the measurement is inference. A panel that reads the resource finds nothing.
+    throughput = store.execute(_panel_sql("Engine throughput")).fetchall()
+    assert [row[1] for row in throughput] == [1024.0 + bucket for bucket in range(6)]
 
-    deltas = [row[1] for row in rows if row[1] is not None]
-    assert deltas == [100000.0] * 5
+    queue = store.execute(_panel_sql("Engine queue and cache")).fetchall()
+    assert [(row[1], row[2]) for row in queue] == [(48.0, 12.0)] * 6
+
+    latency = store.execute(_panel_sql("Engine request latency (p90)")).fetchall()
+    assert {row[1] for row in latency} == {"decode"}
+
+
+def test_the_engines_inherit_the_run_id_rather_than_carrying_their_own(store) -> None:
+    # The engine series exist only because the trainer process stamped the run identity onto
+    # its own resource. Drop it and the engine panels go with it.
+    store.execute("UPDATE telemetry_v1 SET run_id = NULL " "WHERE json_get(attributes_json, 'role') = 'inference'")
+
+    assert store.execute(_panel_sql("Engine throughput")).fetchall() == []
 
 
 def test_a_trainer_that_stops_stamping_node_name_blanks_the_accelerator_panel(store) -> None:
@@ -311,7 +342,23 @@ def test_a_trainer_that_stops_stamping_node_name_blanks_the_accelerator_panel(st
     assert store.execute(_panel_sql("GPU utilisation on this run's nodes")).fetchall() == []
 
 
-def test_a_trainer_that_stops_stamping_job_id_blanks_the_engine_panel(store) -> None:
-    store.execute("UPDATE telemetry_v1 SET job_id = NULL WHERE service = 'marinskyrl'")
+def test_the_producer_census_separates_the_engine_series_from_the_trainer(store) -> None:
+    # Both are `service = 'marinskyrl'`. The census has to show them as distinct producers or
+    # it reports one where there are two.
+    rows = store.execute(_panel_sql("Producers reporting this run")).fetchall()
 
-    assert store.execute(_panel_sql("Engine generated tokens")).fetchall() == []
+    assert {(row[0], row[1]) for row in rows} >= {("marinskyrl", "trainer"), ("marinskyrl", "driver")}
+
+
+def test_every_panel_has_a_distinct_title_id_and_slot() -> None:
+    # A duplicated panel renders twice and shares an id, and a test that looks panels up by
+    # title cannot see it: the lookup keeps one and the dashboard keeps both.
+    dashboard = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_runs.json"]
+    panels = dashboard["panels"]
+
+    titles = [panel["title"] for panel in panels]
+    assert len(titles) == len(set(titles)), titles
+    ids = [panel["id"] for panel in panels]
+    assert len(ids) == len(set(ids)), ids
+    slots = [(panel["gridPos"]["x"], panel["gridPos"]["y"]) for panel in panels]
+    assert len(slots) == len(set(slots)), slots

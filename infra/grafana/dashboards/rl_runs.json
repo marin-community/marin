@@ -766,15 +766,15 @@
     {
       "id": 8,
       "type": "timeseries",
-      "title": "Engine generated tokens",
-      "description": "Tokens produced by the vLLM engines serving this run, from their cumulative /metrics snapshots. The serving path stamps job_id rather than run_id, so this is joined through the Iris job the run's own rows name.",
+      "title": "Engine throughput",
+      "description": "Prompt and generation tokens per second across the run's inference engines, from the stats the rollout callback reads by RPC. These rows come from the trainer's own process, so they carry the run's identity directly; `role` is read from the metric attributes because the process resource says driver or trainer while the series says inference.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
+        "w": 8,
         "x": 0,
         "y": 32
       },
@@ -787,7 +787,8 @@
             "showPoints": "never",
             "spanNulls": false
           },
-          "min": 0
+          "min": 0,
+          "unit": null
         },
         "overrides": []
       },
@@ -816,7 +817,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH run_job AS ( SELECT DISTINCT job_id FROM \"telemetry_v1\" WHERE service = 'marinskyrl' AND run_id IN (${run:sqlstring}) AND job_id IS NOT NULL AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), engine AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, job_id, resource_attributes_json, attributes_json, timestamp_ms, seq, value FROM \"telemetry_v1\" WHERE service = 'vllm' AND name = 'generation_tokens_total' AND json_get(attributes_json, 'source_temporality') = 'cumulative_snapshot' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), deltas AS ( SELECT t, value - LAG(value) OVER ( PARTITION BY job_id, resource_attributes_json, attributes_json ORDER BY timestamp_ms, seq) AS delta FROM engine WHERE job_id IN (SELECT job_id FROM run_job) ) SELECT t, SUM(CASE WHEN delta >= 0 THEN delta END) AS generated_tokens FROM deltas GROUP BY 1 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'generation_throughput_tokens_per_second' THEN value END) AS generation, AVG(CASE WHEN name = 'prompt_throughput_tokens_per_second' THEN value END) AS prompt FROM \"telemetry_v1\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'role') = 'inference' AND json_get(attributes_json, 'engine') = 'all' AND json_get(attributes_json, 'statistic') = 'median' AND name IN ('generation_throughput_tokens_per_second', 'prompt_throughput_tokens_per_second') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -835,8 +836,197 @@
               "type": "timestamp_epoch"
             },
             {
-              "selector": "generated_tokens",
-              "text": "generated_tokens",
+              "selector": "generation",
+              "text": "generation",
+              "type": "number"
+            },
+            {
+              "selector": "prompt",
+              "text": "prompt",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Engine queue and cache",
+      "description": "Requests running and waiting, KV-cache occupancy and prefix-cache hit rate, median across engines. Waiting climbing while running is flat is the engine saturated; a collapsing prefix hit rate after a weight sync is the cache being invalidated.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 32
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "unit": null
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'num_requests_running' THEN value END) AS running, AVG(CASE WHEN name = 'num_requests_waiting' THEN value END) AS waiting, AVG(CASE WHEN name = 'gpu_cache_usage_perc' THEN value END) AS kv_cache, AVG(CASE WHEN name = 'prefix_cache_hit_rate' THEN value END) AS prefix_hit_rate FROM \"telemetry_v1\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'role') = 'inference' AND json_get(attributes_json, 'engine') = 'all' AND json_get(attributes_json, 'statistic') = 'median' AND name IN ('num_requests_running', 'num_requests_waiting', 'gpu_cache_usage_perc', 'prefix_cache_hit_rate') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "running",
+              "text": "running",
+              "type": "number"
+            },
+            {
+              "selector": "waiting",
+              "text": "waiting",
+              "type": "number"
+            },
+            {
+              "selector": "kv_cache",
+              "text": "kv_cache",
+              "type": "number"
+            },
+            {
+              "selector": "prefix_hit_rate",
+              "text": "prefix_hit_rate",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Engine request latency (p90)",
+      "description": "Ninetieth-percentile latency by stage — queued, prefill, decode, time to first token, end to end. Queued dominating points at engine capacity; decode dominating points at generation length.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 32
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, json_get(attributes_json, 'stage') AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'role') = 'inference' AND json_get(attributes_json, 'engine') = 'all' AND json_get(attributes_json, 'statistic') = 'p90' AND name = 'request_latency_seconds' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
               "type": "number"
             }
           ]
