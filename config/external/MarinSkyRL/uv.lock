@@ -1144,7 +1144,7 @@ wheels = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#65a090f667f435d4f6db0cc8da3e676b9b713b4b" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#a2ebff59488cb6f3cb93e6bd22a88ebd7384e60e" }
 dependencies = [
     { name = "boto3" },
     { name = "datasets" },
