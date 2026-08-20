@@ -15,7 +15,10 @@ dependencies = [
     # does not depend on it, so the controller — its one consumer — pulls it in
     # explicitly.
     "marin-finelog >= 0.2.10",
-    "marin-finelog-server>=0.2.28.dev31271949117",
+    # 0.2.31 is the first release carrying FetchLogs.regex (#8198). An older
+    # server ignores the field rather than rejecting it, so the dashboard's
+    # filter would silently return unfiltered lines; the floor rules that out.
+    "marin-finelog-server>=0.2.31.dev32323413989",
     # Platform companion wheel containing the Rust-owned public proxy listener.
     "marin-iris-native>=0.1.6.dev31131847556",
     "click>=8.3.1",
