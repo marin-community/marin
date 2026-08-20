@@ -106,12 +106,12 @@ class RemoteIssue:
 @dataclass(frozen=True)
 class AuditResult:
     new_issues: tuple[RemoteIssue, ...]
-    removed_issue_numbers: tuple[int, ...]
+    out_of_scope_issue_numbers: tuple[int, ...]
     changed_issues: tuple[RemoteIssue, ...]
 
     @property
     def has_drift(self) -> bool:
-        return bool(self.new_issues or self.removed_issue_numbers or self.changed_issues)
+        return bool(self.new_issues or self.out_of_scope_issue_numbers or self.changed_issues)
 
 
 def _required(record: dict[str, Any], key: str) -> Any:
@@ -285,7 +285,7 @@ def audit_snapshot(data: ReportData, remote_issues: tuple[RemoteIssue, ...]) -> 
         issue.number: issue for issue in remote_issues if issue.title.startswith(data.metadata.title_prefix)
     }
     new_issues = tuple(remote_in_scope[number] for number in sorted(remote_in_scope.keys() - local_by_number.keys()))
-    removed_issue_numbers = tuple(sorted(local_by_number.keys() - remote_in_scope.keys()))
+    out_of_scope_issue_numbers = tuple(sorted(local_by_number.keys() - remote_in_scope.keys()))
     changed_issues = tuple(
         remote_in_scope[number]
         for number in sorted(local_by_number.keys() & remote_in_scope.keys())
@@ -294,7 +294,7 @@ def audit_snapshot(data: ReportData, remote_issues: tuple[RemoteIssue, ...]) -> 
     )
     return AuditResult(
         new_issues=new_issues,
-        removed_issue_numbers=removed_issue_numbers,
+        out_of_scope_issue_numbers=out_of_scope_issue_numbers,
         changed_issues=changed_issues,
     )
 
@@ -357,9 +357,9 @@ def _print_audit(result: AuditResult) -> None:
         print("New tracker issues requiring summaries:")
         for issue in result.new_issues:
             print(f"  #{issue.number} {issue.title}")
-    if result.removed_issue_numbers:
-        print("Issues no longer attached to the tracker:")
-        for number in result.removed_issue_numbers:
+    if result.out_of_scope_issue_numbers:
+        print("Issues no longer in report scope:")
+        for number in result.out_of_scope_issue_numbers:
             print(f"  #{number}")
     if result.changed_issues:
         print("Issues updated since their recorded snapshot:")
@@ -381,7 +381,7 @@ def _audit_json(result: AuditResult) -> str:
         {
             "has_drift": result.has_drift,
             "new_issues": [_remote_issue_json(issue) for issue in result.new_issues],
-            "removed_issue_numbers": list(result.removed_issue_numbers),
+            "out_of_scope_issue_numbers": list(result.out_of_scope_issue_numbers),
             "changed_issues": [_remote_issue_json(issue) for issue in result.changed_issues],
         },
         sort_keys=True,

@@ -61,7 +61,7 @@ The command returns:
 
 - `new_issues`: add structured records after reviewing their evidence;
 - `changed_issues`: re-read and update existing records;
-- `removed_issue_numbers`: confirm removal from #4281 before deleting a record.
+- `out_of_scope_issue_numbers`: confirm tracker removal or a title-prefix change before deleting a record.
 
 If `has_drift` is false, do not rewrite summaries only to vary wording.
 
@@ -194,7 +194,7 @@ A scheduled agent should:
 1. Read this playbook.
 2. Run the JSON drift audit.
 3. Stop without a commit when `has_drift` is false.
-4. Review only new, changed, or removed issues.
+4. Review only new, changed, or out-of-scope issues.
 5. Update the structured snapshot and page-level TL;DR when conclusions change.
 6. Render and validate the report.
 7. Open or update a PR with the evidence-changing issues linked in the body.

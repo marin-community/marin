@@ -22,7 +22,7 @@ def test_agent_moe_generated_report_matches_snapshot():
     assert DEFAULT_REPORT_PATH.read_text() == render_report(report)
 
 
-def test_agent_moe_audit_reports_new_removed_and_changed_issues():
+def test_agent_moe_audit_reports_new_out_of_scope_and_changed_issues():
     metadata = Metadata(
         schema_version=1,
         snapshot_date="2026-07-24",
@@ -49,7 +49,7 @@ def test_agent_moe_audit_reports_new_removed_and_changed_issues():
             ),
             Experiment(
                 issue=2,
-                title="Removed",
+                title="Out of scope",
                 rationale="The change could improve optimization.",
                 category="Modeling",
                 section=None,
@@ -71,6 +71,12 @@ def test_agent_moe_audit_reports_new_removed_and_changed_issues():
             updated_at="2026-07-21T00:00:00Z",
         ),
         RemoteIssue(
+            number=2,
+            title="Renamed tracker issue",
+            state="OPEN",
+            updated_at="2026-07-22T00:00:00Z",
+        ),
+        RemoteIssue(
             number=3,
             title="Agent MoE Experiment: New",
             state="OPEN",
@@ -87,8 +93,8 @@ def test_agent_moe_audit_reports_new_removed_and_changed_issues():
     result = audit_snapshot(report, remote_issues)
 
     assert result == AuditResult(
-        new_issues=(remote_issues[1],),
-        removed_issue_numbers=(2,),
+        new_issues=(remote_issues[2],),
+        out_of_scope_issue_numbers=(2,),
         changed_issues=(remote_issues[0],),
     )
     assert result.has_drift

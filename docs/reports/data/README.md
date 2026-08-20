@@ -40,7 +40,7 @@ uv run scripts/pm/render_agent_moe_report.py --audit-github --json
 The audit reports:
 
 - new matching sub-issues that need categorization and summaries;
-- issues removed from the tracker;
+- issues that no longer match the tracker and title-prefix scope;
 - issues whose state or `updatedAt` changed after review.
 
 Review only the reported issues, update their structured records and the
