@@ -36,10 +36,11 @@ import gc
 import io
 import logging
 import math
+import os
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any, NamedTuple, Protocol
+from typing import Any, Protocol
 
 import cloudpickle
 import humanfriendly
@@ -57,6 +58,12 @@ from zephyr.worker_context import _worker_ctx_var
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
+
+
+def _process_rss_bytes() -> int:
+    with open("/proc/self/statm", encoding="ascii") as process_memory:
+        resident_pages = int(process_memory.read().split()[1])
+    return resident_pages * os.sysconf("SC_PAGE_SIZE")
 
 
 # ---------------------------------------------------------------------------
@@ -333,13 +340,6 @@ def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
     return [f.cast(dict(unified)) for f in frames]
 
 
-class _SpillRun(NamedTuple):
-    """One sorted run file, addressed both as a URL and as a filesystem path."""
-
-    url: str
-    path: str
-
-
 def _merge_sorted_frames(
     frames: list[pl.LazyFrame],
     sort_key: str,
@@ -374,22 +374,21 @@ def _merge_sorted_frames(
     """
     if len(frames) == 0:
         return
-    if fan_in < 2:
-        raise ValueError(f"fan_in must be at least 2, got {fan_in}")
+    if fan_in < memory_budget.MIN_MERGE_FAN_IN:
+        raise ValueError(f"fan_in must be at least {memory_budget.MIN_MERGE_FAN_IN}, got {fan_in}")
 
     # Created lazily, on the first actual spill, so a shard that fits within
     # fan_in never pays for a filesystem round trip to external_sort_dir.
-    spill_fs = None
-    spill_dir = None
-    spill_files: set[str] = set()
+    spill_dir: StoragePath | None = None
+    spill_files: set[StoragePath] = set()
 
     try:
-        prior_runs: list[_SpillRun] = []
+        prior_runs: list[StoragePath] = []
         pass_index = 0
         while len(frames) > fan_in:
-            if spill_fs is None:
-                spill_fs, spill_dir = url_to_fs(external_sort_dir)
-                spill_fs.makedirs(spill_dir, exist_ok=True)
+            if spill_dir is None:
+                spill_dir = StoragePath(external_sort_dir)
+                spill_dir.mkdirs()
 
             logger.info(
                 "[shard %d] External sort: pass %d merging %d frames with fan_in=%d",
@@ -399,30 +398,30 @@ def _merge_sorted_frames(
                 fan_in,
             )
             groups = [frames[i : i + fan_in] for i in range(0, len(frames), fan_in)]
-            runs: list[_SpillRun] = []
+            runs: list[StoragePath] = []
             for run_index, group in enumerate(groups):
                 run_name = f"pass-{pass_index:04d}-run-{run_index:04d}.spill"
-                run = _SpillRun(url=f"{external_sort_dir}/{run_name}", path=f"{spill_dir}/{run_name}")
-                spill_files.add(run.path)
-                with open_url(run.url, "wb") as output:
+                run = spill_dir / run_name
+                spill_files.add(run)
+                with run.open("wb") as output:
                     pl.merge_sorted(group, key=sort_key).sink_parquet(output, compression="zstd")
                 runs.append(run)
 
-            if prior_runs:
-                prior_paths = [run.path for run in prior_runs]
-                spill_fs.rm(prior_paths)
-                spill_files.difference_update(prior_paths)
+            for prior_run in prior_runs:
+                prior_run.rm()
+                spill_files.remove(prior_run)
 
-            frames = [scan_parquet(run.url) for run in runs]
+            frames = [scan_parquet(str(run)) for run in runs]
             prior_runs = runs
             pass_index += 1
 
         logger.info("[shard %d] Final merge of %d frames (%d spill pass(es))", shard, len(frames), pass_index)
         yield from pl.merge_sorted(frames, key=sort_key).collect_batches()
     finally:
-        if spill_files and spill_fs is not None:
+        if spill_files:
             try:
-                spill_fs.rm(sorted(spill_files))
+                for spill_file in sorted(spill_files, key=str):
+                    spill_file.rm()
             except Exception:
                 logger.warning("Failed to delete external-sort run files under %s", spill_dir, exc_info=True)
 
@@ -527,19 +526,35 @@ class ScatterReader:
 
             if self.total_chunks == 0:
                 return
+            if self.shard_payload_bytes == 0:
+                return
 
+            frames = self.get_frames()
             memory_bytes = _task_memory_bytes()
-            fan_in = memory_budget.read_merge_fan_in(memory_bytes, self.avg_item_bytes)
+            baseline_rss_bytes = _process_rss_bytes()
+            polars_threads = pl.thread_pool_size()
+            fan_in = memory_budget.read_merge_fan_in(
+                memory_bytes,
+                baseline_rss_bytes,
+                self.avg_item_bytes,
+                self.total_chunks,
+                self.shard_payload_bytes,
+                polars_threads,
+            )
             logger.info(
-                "[shard %d] Merging %d chunks with fan_in=%d (shard_payload_bytes=%s)",
+                "[shard %d] Merging %d chunks with fan_in=%d "
+                "(baseline_rss=%s, shard_payload_bytes=%s, avg_item_bytes=%.1f, polars_threads=%d)",
                 self._target_shard,
                 self.total_chunks,
                 fan_in,
+                humanfriendly.format_size(baseline_rss_bytes, binary=True),
                 humanfriendly.format_size(self.shard_payload_bytes, binary=True),
+                self.avg_item_bytes,
+                polars_threads,
             )
 
             batches = _merge_sorted_frames(
-                frames=self.get_frames(),
+                frames=frames,
                 sort_key=_SORT_KEY_COL,
                 external_sort_dir=external_sort_dir,
                 fan_in=fan_in,
@@ -600,7 +615,7 @@ class ScatterWriter:
         self._source_shard = source_shard
         self._combiner_fn = combiner_fn
         self._memory_available_bytes = _task_memory_bytes()
-        self._flush_threshold_bytes = memory_budget.write_flush_threshold_bytes(self._memory_available_bytes)
+        self._flush_threshold_bytes: int | None = None
 
         # Buffered DataFrames, combined into one file per flush. Buffering
         # frames (not Python items) keeps the writer format-agnostic: a future
@@ -692,6 +707,18 @@ class ScatterWriter:
         """
         if len(df) == 0:
             return
+
+        if self._flush_threshold_bytes is None:
+            baseline_rss_bytes = _process_rss_bytes()
+            self._flush_threshold_bytes = memory_budget.write_flush_threshold_bytes(
+                self._memory_available_bytes, baseline_rss_bytes
+            )
+            logger.info(
+                "[shard %d] Scatter memory baseline %s; flush threshold %s",
+                self._source_shard,
+                humanfriendly.format_size(baseline_rss_bytes, binary=True),
+                humanfriendly.format_size(self._flush_threshold_bytes, binary=True),
+            )
 
         self._frames.append(df)
         self._buffer_estimated_bytes += int(df.estimated_size())

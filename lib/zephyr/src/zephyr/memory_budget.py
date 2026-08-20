@@ -3,73 +3,190 @@
 
 """Memory-budget arithmetic for Zephyr's scatter/reduce shuffle.
 
-The scatter write path (a flush) and the external-sort read path (a merge
-pass) bound their peak memory the same way: an operation's peak RSS growth is
-modeled as a single ratio, ``R``, times the estimated bytes it holds ("bytes
-at risk"), and the operation is allowed to grow to ``safety_fraction`` of the
-task's memory budget. The two ``R`` constants and two ``safety_fraction``
-constants below are the only free variables; every function here is derived
-from them plus already-available inputs (task memory/CPU, shard byte stats).
+The scatter write path (a flush) and external-sort read path (a merge pass)
+bound peak memory with additive models. A flush uses::
 
-``R_WRITE`` comes from a direct measurement: building one scatter buffer of
-1.5M rows / 150-byte payloads over 4096 target shards and comparing
-``DataFrame.estimated_size()`` against process RSS before and after
-``buffer.sort()`` (231.7 MiB estimated, 716.3 MiB RSS post-sort, 190.9 MiB
-process baseline). See https://github.com/marin-community/marin/issues/7946.
-``R_READ`` and both ``SAFETY_FRACTION`` constants are provisional
-placeholders pending calibration against
-``lib/zephyr/tests/benchmark_shuffle.py``; that same issue tracks the
-calibration work.
+    peak RSS = baseline RSS + fixed operation overhead + R * bytes at risk
+
+A merge separates memory associated with streaming rows, Polars workers
+buffering input shards, and intermediate spill runs::
+
+    peak RSS = baseline RSS + fixed operation overhead
+             + expanded_streaming_batch_bytes
+             + R_input * buffered_input_payload_outside_streaming_batch
+             + R_thread * active_threads * mean_input_payload
+             + R_spill * reducer_payload  # only when fan_in < total_chunks
+
+``baseline RSS`` is sampled in the shard subprocess after the operation's
+inputs have initialized Polars. The operation may use up to
+``safety_fraction`` of the task's memory budget.
+
+The base coefficients below are rounded envelopes from 80 write measurements,
+a 36-cell sufficient-shard read matrix, and eight held-out read cells on Iris.
+The buffered-input coefficient comes from the lower bound imposed by an
+incident-shaped OOM and a passing bounded-fan-in rerun. End-to-end cgroup,
+wide-merge, and ferry results are recorded at https://loom.oa.dev/s/wr1n8bmk.
+
+Tasks whose baseline plus fixed overhead exceeds the safety budget use the
+smallest executable flush or merge unit. That boundary cannot enforce the
+safety fraction, but it avoids rejecting tiny shuffles that do not incur the
+fitted large-operation overhead.
 """
 
 import math
 
-# Peak RSS growth during a scatter flush (pl.concat + sort + serialize), per
-# byte of buffered DataFrame.estimated_size(). Measured directly:
-# https://github.com/marin-community/marin/issues/7946.
-R_WRITE = 2.27
+# Rounded upper envelope from 80 Iris scatter-flush measurements. The fixed
+# term absorbs the scale-dependent growth in the zero-intercept ratio.
+FIXED_OVERHEAD_WRITE_BYTES = 320 * 2**20
+R_WRITE = 4.9
 
-# Peak RSS growth during one external-sort merge pass, per byte of
-# fan_in * STREAMING_CHUNK_SIZE_ROWS * avg_item_bytes held in flight.
-# Placeholder pending calibration: reuses R_WRITE as the closest available
-# estimate for a structurally similar Polars operation (sort/merge keeping
-# input batches live while building output).
-R_READ = R_WRITE
+# Conservative upper envelope over the production-path cluster matrix. Small
+# and medium rows expand by at most 8x. Wide rows instead follow 2.4 payload
+# copies plus 5.5 KiB of row-local state, whichever estimate is smaller.
+FIXED_OVERHEAD_READ_BYTES = 80 * 2**20
+R_READ_MAX = 8.0
+R_READ_PAYLOAD = 2.4
+READ_ROW_OVERHEAD_BYTES = int(5.5 * 2**10)
+# Rounded up from the 3.18 lower bound implied by the 191-input incident OOM.
+R_READ_BUFFERED_INPUT_PAYLOAD = 3.2
+R_READ_THREAD_SHARD = 1.1
+R_READ_SPILL_PAYLOAD = 1.1
 
-# Fraction of task memory a flush or merge pass is allowed to peak at.
-# Placeholders pending calibration.
-SAFETY_FRACTION_WRITE = 0.5
-SAFETY_FRACTION_READ = 0.5
+# Both paths passed three end-to-end Iris repetitions at 0.85, 0.90, and 0.95.
+# Keep the 0.90 setting selected by the predeclared 5% task-memory reserve.
+SAFETY_FRACTION_WRITE = 0.9
+SAFETY_FRACTION_READ = 0.9
 
 # Rows held per external-sort merge input at once; also Polars' streaming
 # chunk size for both the in-memory and external-sort merge paths.
 STREAMING_CHUNK_SIZE_ROWS = 10_000
+MIN_MERGE_FAN_IN = 2
 
 
-def write_flush_threshold_bytes(task_memory_bytes: int) -> int:
+def _growth_budget_bytes(
+    task_memory_bytes: int,
+    baseline_rss_bytes: int,
+    safety_fraction: float,
+    fixed_overhead_bytes: int,
+) -> int:
+    if task_memory_bytes <= 0:
+        raise ValueError(f"task_memory_bytes must be positive, got {task_memory_bytes}")
+    if baseline_rss_bytes < 0:
+        raise ValueError(f"baseline_rss_bytes must be nonnegative, got {baseline_rss_bytes}")
+
+    growth_budget = int(task_memory_bytes * safety_fraction) - baseline_rss_bytes - fixed_overhead_bytes
+    # The writer cannot flush before receiving its first DataFrame. Saturating
+    # at one byte makes tasks below the fitted envelope flush that frame
+    # immediately instead of rejecting small shuffles outright.
+    return max(1, growth_budget)
+
+
+def write_flush_threshold_bytes(task_memory_bytes: int, baseline_rss_bytes: int) -> int:
     """Buffered ``DataFrame.estimated_size()`` at which a scatter writer should flush."""
-    if task_memory_bytes <= 0:
-        raise ValueError(f"task_memory_bytes must be positive, got {task_memory_bytes}")
-    return int(task_memory_bytes * SAFETY_FRACTION_WRITE / R_WRITE)
+    growth_budget = _growth_budget_bytes(
+        task_memory_bytes,
+        baseline_rss_bytes,
+        SAFETY_FRACTION_WRITE,
+        FIXED_OVERHEAD_WRITE_BYTES,
+    )
+    return max(1, int(growth_budget / R_WRITE))
 
 
-def read_merge_fan_in(task_memory_bytes: int, avg_item_bytes: float) -> int:
-    """Maximum LazyFrames one ``pl.merge_sorted`` call may combine at once.
+def _read_merge_growth_bytes(
+    fan_in: int,
+    avg_item_bytes: float,
+    total_chunks: int,
+    shard_payload_bytes: float,
+    polars_threads: int,
+) -> float:
+    active_rows = min(fan_in * STREAMING_CHUNK_SIZE_ROWS, shard_payload_bytes / avg_item_bytes)
+    batch_bytes = active_rows * avg_item_bytes
+    expanded_batch_bytes = min(
+        R_READ_MAX * batch_bytes,
+        R_READ_PAYLOAD * batch_bytes + READ_ROW_OVERHEAD_BYTES * active_rows,
+    )
+    mean_chunk_payload_bytes = shard_payload_bytes / total_chunks
+    active_input_payload_bytes = min(shard_payload_bytes, fan_in * mean_chunk_payload_bytes)
+    buffered_input_payload_bytes = max(0.0, active_input_payload_bytes - batch_bytes)
+    thread_shard_bytes = min(polars_threads, fan_in) * mean_chunk_payload_bytes
+    spill_bytes = R_READ_SPILL_PAYLOAD * shard_payload_bytes if fan_in < total_chunks else 0.0
+    return (
+        FIXED_OVERHEAD_READ_BYTES
+        + expanded_batch_bytes
+        + R_READ_BUFFERED_INPUT_PAYLOAD * buffered_input_payload_bytes
+        + R_READ_THREAD_SHARD * thread_shard_bytes
+        + spill_bytes
+    )
 
-    Comparing this to a shard's total chunk count tells the caller whether
-    the whole shard merges in memory (``total_chunks <= fan_in``) or needs
-    ``zephyr.shuffle._merge_sorted_frames`` to spill; the same value bounds
-    every pass of that merge.
-    """
-    if task_memory_bytes <= 0:
-        raise ValueError(f"task_memory_bytes must be positive, got {task_memory_bytes}")
+
+def read_merge_fan_in(
+    task_memory_bytes: int,
+    baseline_rss_bytes: int,
+    avg_item_bytes: float,
+    total_chunks: int,
+    shard_payload_bytes: float,
+    polars_threads: int,
+) -> int:
+    """Return the maximum frames a merge may combine within the task budget."""
     if avg_item_bytes <= 0:
         raise ValueError(f"avg_item_bytes must be positive, got {avg_item_bytes}")
-    bytes_per_batch = STREAMING_CHUNK_SIZE_ROWS * avg_item_bytes
-    fan_in = math.floor(task_memory_bytes * SAFETY_FRACTION_READ / (R_READ * bytes_per_batch))
-    return max(2, fan_in)
+    if total_chunks <= 0:
+        raise ValueError(f"total_chunks must be positive, got {total_chunks}")
+    if shard_payload_bytes <= 0:
+        raise ValueError(f"shard_payload_bytes must be positive, got {shard_payload_bytes}")
+    if polars_threads <= 0:
+        raise ValueError(f"polars_threads must be positive, got {polars_threads}")
+    if task_memory_bytes <= 0:
+        raise ValueError(f"task_memory_bytes must be positive, got {task_memory_bytes}")
+    if baseline_rss_bytes < 0:
+        raise ValueError(f"baseline_rss_bytes must be nonnegative, got {baseline_rss_bytes}")
+
+    growth_budget = int(task_memory_bytes * SAFETY_FRACTION_READ) - baseline_rss_bytes
+    direct_fan_in = max(MIN_MERGE_FAN_IN, total_chunks)
+    if (
+        _read_merge_growth_bytes(
+            direct_fan_in,
+            avg_item_bytes,
+            total_chunks,
+            shard_payload_bytes,
+            polars_threads,
+        )
+        <= growth_budget
+    ):
+        return direct_fan_in
+
+    if (
+        _read_merge_growth_bytes(
+            MIN_MERGE_FAN_IN,
+            avg_item_bytes,
+            total_chunks,
+            shard_payload_bytes,
+            polars_threads,
+        )
+        > growth_budget
+    ):
+        # A merge cannot use fewer than two inputs. Below the fitted envelope,
+        # use that minimum so small shuffles still make progress.
+        return MIN_MERGE_FAN_IN
+
+    low = MIN_MERGE_FAN_IN
+    high = max(MIN_MERGE_FAN_IN, total_chunks - 1)
+    while low < high:
+        candidate = (low + high + 1) // 2
+        predicted_growth = _read_merge_growth_bytes(
+            candidate,
+            avg_item_bytes,
+            total_chunks,
+            shard_payload_bytes,
+            polars_threads,
+        )
+        if predicted_growth <= growth_budget:
+            low = candidate
+        else:
+            high = candidate - 1
+    return low
 
 
 def polars_thread_count(task_cpu: float) -> int:
-    """Polars thread pool size for a task's CPU allocation."""
+    """Return the Polars thread-pool size for a task's CPU allocation."""
     return max(1, math.ceil(task_cpu))

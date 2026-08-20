@@ -569,11 +569,13 @@ def zephyr_datakit_steps(
     sources: dict[str, StepSpec],
     scale: PipelineScale = DEFAULT_SCALE,
     zephyr_context: ZephyrContext | None = None,
+    output_path_prefix: str | None = None,
 ) -> ZephyrDatakitSteps:
     """Build exact-dedup, tokenize, MinHash, and fuzzy-dedup stages."""
     source_names = sorted(sources)
     exact_dedup = StepSpec(
         name="datakit/global_exact_dedup",
+        output_path_prefix=output_path_prefix,
         deps=[sources[name] for name in source_names],
         hash_attrs={"sources": source_names, "v": GLOBAL_EXACT_DEDUP_DATA_VERSION},
         fn=lambda output_path: global_exact_deduplicate(
@@ -589,18 +591,22 @@ def zephyr_datakit_steps(
     tokenize_steps: dict[str, StepSpec] = {}
     minhash_steps: dict[str, StepSpec] = {}
     for name, normalize_step in sources.items():
-        tokenize_steps[name] = tokenize_attributes_step(
-            name=f"datakit/tokenize/{name}",
-            train_normalize=normalize_step,
-            tokenizer=TOKENIZER,
-            tokenizer_backend=TOKENIZER_BACKEND,
-            tokenizer_revision=TOKENIZER_REVISION,
-            max_workers=scale.pool.n_workers,
-            worker_resources=scale.pool.worker,
-            zephyr_context=zephyr_context,
+        tokenize_steps[name] = replace(
+            tokenize_attributes_step(
+                name=f"datakit/tokenize/{name}",
+                train_normalize=normalize_step,
+                tokenizer=TOKENIZER,
+                tokenizer_backend=TOKENIZER_BACKEND,
+                tokenizer_revision=TOKENIZER_REVISION,
+                max_workers=scale.pool.n_workers,
+                worker_resources=scale.pool.worker,
+                zephyr_context=zephyr_context,
+            ),
+            output_path_prefix=output_path_prefix,
         )
         minhash_steps[name] = StepSpec(
             name=f"datakit/minhash/{name}",
+            output_path_prefix=output_path_prefix,
             deps=[normalize_step],
             hash_attrs={
                 "num_perms": mh.num_perms,
@@ -625,6 +631,7 @@ def zephyr_datakit_steps(
 
     fuzzy_dedup = StepSpec(
         name="datakit/dedup",
+        output_path_prefix=output_path_prefix,
         deps=list(minhash_steps.values()),
         hash_attrs={"v": FUZZY_DUPS_ATTR_DATA_VERSION},
         fn=lambda output_path: compute_fuzzy_dups_attrs(
