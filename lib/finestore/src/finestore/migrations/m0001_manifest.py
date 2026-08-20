@@ -17,7 +17,6 @@ from rigging.filesystem.storage_path import StoragePath
 
 from finestore.commit import read_snapshot, write_schema
 from finestore.layout import (
-    SEQ_COLUMN,
     ArchiveMetadata,
     CommitToken,
     FineStoreLayout,
@@ -27,6 +26,7 @@ from finestore.layout import (
     OnConflict,
     SealMarker,
     Shard,
+    SystemColumns,
     TableMetadata,
 )
 from finestore.reader import _ReadOperations
@@ -214,9 +214,9 @@ def _legacy_read_shards(root: StoragePath, table: str) -> tuple[LegacyReadShard,
 
 
 def _sequence_bounds(metadata: pq.FileMetaData) -> tuple[int, int]:
-    if SEQ_COLUMN not in metadata.schema.names or metadata.num_rows == 0:
+    if SystemColumns.SEQUENCE not in metadata.schema.names or metadata.num_rows == 0:
         return 0, 0
-    column = metadata.schema.names.index(SEQ_COLUMN)
+    column = metadata.schema.names.index(SystemColumns.SEQUENCE)
     minima = []
     maxima = []
     for group in range(metadata.num_row_groups):

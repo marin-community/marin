@@ -11,7 +11,7 @@ import itertools
 from collections import defaultdict
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import BinaryIO, Protocol
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -23,16 +23,13 @@ from rigging.filesystem.storage_path import StoragePath
 
 from finestore.commit import ArchiveSnapshot, read_snapshot, validate_archive
 from finestore.layout import (
-    BLOB_PARTS_TABLE,
-    BLOBS_TABLE,
-    COMMIT_COLUMN,
-    GEN_COLUMN,
-    SEQ_COLUMN,
     BlobColumns,
+    BlobTables,
     CommitToken,
     FineStoreLayout,
     SealMarker,
     Shard,
+    SystemColumns,
     TableMetadata,
     parse_uri,
 )
@@ -62,6 +59,39 @@ class MergedRow:
 
 class BlobCorruptionError(ValueError):
     """A committed blob is missing data or has inconsistent size metadata."""
+
+
+class _BlobReader(io.RawIOBase):
+    """Forward-only file interface over a sequence of bounded blob parts."""
+
+    def __init__(self, parts: Iterator[bytes]) -> None:
+        self._parts = parts
+        self._current = memoryview(b"")
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer) -> int:
+        if self.closed:
+            raise ValueError("I/O operation on closed blob")
+        target = memoryview(buffer).cast("B")
+        written = 0
+        while written < len(target):
+            if not self._current:
+                try:
+                    self._current = memoryview(next(self._parts))
+                except StopIteration:
+                    break
+            count = min(len(target) - written, len(self._current))
+            target[written : written + count] = self._current[:count]
+            self._current = self._current[count:]
+            written += count
+        return written
+
+    def close(self) -> None:
+        self._parts = iter(())
+        self._current = memoryview(b"")
+        super().close()
 
 
 class _ReadableShard(Protocol):
@@ -155,15 +185,15 @@ def iter_shard_rows(
         batches = source.sort_by(sort_columns).to_batches(max_chunksize=_STREAM_BATCH_ROWS)
     for batch in batches:
         for row in batch.to_pylist():
-            commit_sequence = row.get(COMMIT_COLUMN)
+            commit_sequence = row.get(SystemColumns.COMMIT)
             if commit_sequence is None:
                 commit_sequence = shard.commit_sequence
-            row[COMMIT_COLUMN] = commit_sequence
+            row[SystemColumns.COMMIT] = commit_sequence
             key = tuple((row.get(name) is None, row.get(name)) for name in primary_key)
             yield VersionedRow(
                 key=key,
                 commit_sequence=commit_sequence,
-                sequence=row.get(SEQ_COLUMN) or 0,
+                sequence=row.get(SystemColumns.SEQUENCE) or 0,
                 generation=shard.generation,
                 row=row,
             )
@@ -197,7 +227,15 @@ def _read_plan(
     read_columns = None
     if columns is not None:
         filter_columns = {name for name, _operator, _value in post_dedup_where}
-        needed = set(columns) | set(primary_key) | filter_columns | {SEQ_COLUMN, COMMIT_COLUMN}
+        needed = (
+            set(columns)
+            | set(primary_key)
+            | filter_columns
+            | {
+                SystemColumns.SEQUENCE,
+                SystemColumns.COMMIT,
+            }
+        )
         read_columns = [name for name in schema.names if name in needed]
     return _ReadPlan(
         shards=shards,
@@ -219,13 +257,20 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None) -> pa.Table:
     for (commit_sequence, generation), paths in sorted(by_version.items()):
         dataset = pds.dataset(paths, filesystem=plan.filesystem, format="parquet", schema=plan.schema)
         part = dataset.to_table(columns=plan.columns, filter=_build_filter(plan.pushdown_where))
-        part = part.append_column(GEN_COLUMN, pa.array([generation] * part.num_rows, pa.int32()))
+        part = part.append_column(
+            SystemColumns.GENERATION,
+            pa.array([generation] * part.num_rows, pa.int32()),
+        )
         commit_values = pa.array([commit_sequence] * part.num_rows, pa.int64())
-        if COMMIT_COLUMN in part.column_names:
-            commit_index = part.schema.get_field_index(COMMIT_COLUMN)
-            part = part.set_column(commit_index, COMMIT_COLUMN, pc.coalesce(part[COMMIT_COLUMN], commit_values))
+        if SystemColumns.COMMIT in part.column_names:
+            commit_index = part.schema.get_field_index(SystemColumns.COMMIT)
+            part = part.set_column(
+                commit_index,
+                SystemColumns.COMMIT,
+                pc.coalesce(part[SystemColumns.COMMIT], commit_values),
+            )
         else:
-            part = part.append_column(COMMIT_COLUMN, commit_values)
+            part = part.append_column(SystemColumns.COMMIT, commit_values)
         parts.append(part)
 
     combined = parts[0] if len(parts) == 1 else pa.concat_tables(parts, promote_options="permissive")
@@ -321,13 +366,21 @@ class _ReadOperations:
 
     def read_blob(self, name: str) -> bytes | None:
         """Return a named blob, or ``None`` when it is absent."""
-        row = self.point(BLOBS_TABLE, **{BlobColumns.NAME: name})
+        stream = self.open_blob(name)
+        if stream is None:
+            return None
+        with stream:
+            return stream.read()
+
+    def open_blob(self, name: str) -> BinaryIO | None:
+        """Open a named blob as a forward-only stream, or return ``None`` when absent.
+
+        Chunk and size validation completes when the caller reads through EOF.
+        """
+        row = self.point(BlobTables.DESCRIPTORS, **{BlobColumns.NAME: name})
         if row is None:
             return None
-        output = io.BytesIO()
-        for part in self.blob_parts(name, row):
-            output.write(part)
-        return output.getvalue()
+        return io.BufferedReader(_BlobReader(self.blob_parts(name, row)))
 
     def blob_parts(self, name: str, descriptor: dict) -> Iterator[bytes]:
         """Yield a pinned descriptor's inline value or ordered chunked parts."""
@@ -347,7 +400,7 @@ class _ReadOperations:
         expected_part = 0
         total_bytes = 0
         for row in self.iter_rows(
-            BLOB_PARTS_TABLE,
+            BlobTables.PARTS,
             columns=[BlobColumns.PART, BlobColumns.DATA],
             where=[(BlobColumns.NAME, "==", name)],
         ):
@@ -374,7 +427,7 @@ class _ReadOperations:
         ref = parse_uri(uri)
         if ref is None:
             raise ValueError(f"not a finestore:// reference: {uri!r}")
-        if ref.table != BLOBS_TABLE:
+        if ref.table != BlobTables.DESCRIPTORS:
             raise ValueError(f"finestore:// resolution supports the blobs table only, got {ref.table!r}")
         return self.read_blob(ref.key)
 
@@ -452,9 +505,13 @@ def _deduplicate(table: pa.Table, primary_key: tuple[str, ...]) -> pa.Table:
     if table.num_rows == 0:
         return table
     key_columns = [table.column(name).to_pylist() for name in primary_key]
-    commits = table.column(COMMIT_COLUMN).to_pylist()
-    generations = table.column(GEN_COLUMN).to_pylist()
-    sequences = table.column(SEQ_COLUMN).to_pylist() if SEQ_COLUMN in table.column_names else [0] * table.num_rows
+    commits = table.column(SystemColumns.COMMIT).to_pylist()
+    generations = table.column(SystemColumns.GENERATION).to_pylist()
+    sequences = (
+        table.column(SystemColumns.SEQUENCE).to_pylist()
+        if SystemColumns.SEQUENCE in table.column_names
+        else [0] * table.num_rows
+    )
     order = sorted(range(table.num_rows), key=lambda index: (commits[index], sequences[index], generations[index]))
     winners: dict[tuple, int] = {}
     for index in order:

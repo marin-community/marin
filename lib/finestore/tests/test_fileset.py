@@ -3,7 +3,7 @@
 
 import pytest
 from finestore.fileset import FineStoreDirectory, fetch_file_set
-from finestore.layout import BLOBS_TABLE
+from finestore.layout import BlobTables
 from finestore.reader import ReadView
 from finestore.store import OBJECT_PART_BYTES, DataStore
 
@@ -18,7 +18,7 @@ def test_file_set_round_trips_nested_files_in_one_level_zero(tmp_path):
         path.write_bytes(f"value-{index}".encode())
     writer.close()
 
-    assert len(ReadView(root).list_shards(BLOBS_TABLE)) == 1
+    assert len(ReadView(root).list_shards(BlobTables.DESCRIPTORS)) == 1
     reloaded = tmp_path / "reloaded"
     fetch_file_set(root, str(reloaded))
     assert sorted(path.read_bytes() for path in reloaded.rglob("*.textproto")) == sorted(

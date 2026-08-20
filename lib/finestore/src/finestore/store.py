@@ -21,18 +21,16 @@ from finestore.commit import ClearSeal, CommitCoordinator, CommitDelta, TableAdd
 from finestore.compaction import CompactionResult
 from finestore.compaction import compact as compact_table
 from finestore.layout import (
-    BLOB_PARTS_TABLE,
-    BLOBS_TABLE,
     CHUNKED_BLOBS_FEATURE,
     RESERVED_COLUMNS,
-    SEQ_COLUMN,
-    WRITER_COLUMN,
     BlobColumns,
+    BlobTables,
     CommitToken,
     FineStoreLayout,
     OnConflict,
     SealMarker,
     Shard,
+    SystemColumns,
     TableMetadata,
     build_uri,
 )
@@ -78,7 +76,7 @@ class TransactionTooLarge(ValueError):
 
 
 def _row_digest(row: Mapping[str, object]) -> bytes:
-    payload = {name: value for name, value in row.items() if name not in (SEQ_COLUMN, WRITER_COLUMN)}
+    payload = {name: value for name, value in row.items() if name not in (SystemColumns.SEQUENCE, SystemColumns.WRITER)}
     return hashlib.blake2b(json.dumps(payload, sort_keys=True, default=repr).encode(), digest_size=16).digest()
 
 
@@ -100,8 +98,8 @@ def _with_stamp_columns(schema: pa.Schema) -> pa.Schema:
         names = ", ".join(sorted(reserved))
         raise ValueError(f"table schema uses reserved FineStore columns: {names}")
     fields = list(schema)
-    fields.append(pa.field(SEQ_COLUMN, pa.int64()))
-    fields.append(pa.field(WRITER_COLUMN, pa.string()))
+    fields.append(pa.field(SystemColumns.SEQUENCE, pa.int64()))
+    fields.append(pa.field(SystemColumns.WRITER, pa.string()))
     return pa.schema(fields)
 
 
@@ -113,7 +111,7 @@ def _reject_reserved_columns(columns: Iterable[str]) -> None:
 
 
 def _addition_delta(additions: dict[str, TableAddition]) -> CommitDelta:
-    required_features = frozenset({CHUNKED_BLOBS_FEATURE}) if BLOB_PARTS_TABLE in additions else frozenset()
+    required_features = frozenset({CHUNKED_BLOBS_FEATURE}) if BlobTables.PARTS in additions else frozenset()
     return CommitDelta(additions=additions, required_features=required_features, seal_update=ClearSeal())
 
 
@@ -237,19 +235,19 @@ class DataStore:
             if part_table is not None:
                 part_table.extend(parts)
             blob_table.append(descriptor)
-        return build_uri(BLOBS_TABLE, name)
+        return build_uri(BlobTables.DESCRIPTORS, name)
 
     def _blob_table(self) -> DataTable:
-        return self._tables.get(BLOBS_TABLE) or self.table(
-            BLOBS_TABLE,
+        return self._tables.get(BlobTables.DESCRIPTORS) or self.table(
+            BlobTables.DESCRIPTORS,
             primary_key=(BlobColumns.NAME,),
             schema=_BLOB_SCHEMA,
             on_conflict=OnConflict.SUPERSEDE,
         )
 
     def _blob_part_table(self) -> DataTable:
-        return self._tables.get(BLOB_PARTS_TABLE) or self.table(
-            BLOB_PARTS_TABLE,
+        return self._tables.get(BlobTables.PARTS) or self.table(
+            BlobTables.PARTS,
             primary_key=(BlobColumns.NAME, BlobColumns.PART),
             schema=_BLOB_PART_SCHEMA,
             on_conflict=OnConflict.SUPERSEDE,
@@ -301,9 +299,11 @@ class DataStore:
     def flush_table(self, table: DataTable) -> CommitToken | None:
         """Commit ``table``'s buffer, pairing blob descriptor and part buffers when needed."""
         self.raise_if_failed()
-        if table.name in (BLOBS_TABLE, BLOB_PARTS_TABLE):
+        if table.name in (BlobTables.DESCRIPTORS, BlobTables.PARTS):
             tables = [
-                related for name in (BLOB_PARTS_TABLE, BLOBS_TABLE) if (related := self._tables.get(name)) is not None
+                related
+                for name in (BlobTables.PARTS, BlobTables.DESCRIPTORS)
+                if (related := self._tables.get(name)) is not None
             ]
             return self._flush_tables(tables)
         return self._flush_tables([table])
@@ -465,7 +465,7 @@ class Transaction:
             rows[part_table.name] = parts
         self._add_rows(rows)
         self._objects[name] = data
-        return build_uri(BLOBS_TABLE, name)
+        return build_uri(BlobTables.DESCRIPTORS, name)
 
     def lookup(self, name: str) -> bytes | None:
         """Read this transaction's latest object value, then its pinned committed base."""
@@ -559,8 +559,8 @@ class DataTable:
             )
             digest = _row_digest(row) if self._digests is not None else None
             placeholder = dict(row)
-            placeholder[SEQ_COLUMN] = 0
-            placeholder[WRITER_COLUMN] = self._writer_id
+            placeholder[SystemColumns.SEQUENCE] = 0
+            placeholder[SystemColumns.WRITER] = self._writer_id
             table = pa.Table.from_pylist([placeholder], schema=self._schema)
             buffered.append(ArrowRow(table, key, sort_key, digest))
         return buffered
@@ -572,10 +572,10 @@ class DataTable:
                 self._check_conflict(row)
                 sequence = self._next_seq
                 self._next_seq += 1
-                index = row.table.schema.get_field_index(SEQ_COLUMN)
+                index = row.table.schema.get_field_index(SystemColumns.SEQUENCE)
                 table = row.table.set_column(
                     index,
-                    pa.field(SEQ_COLUMN, pa.int64()),
+                    pa.field(SystemColumns.SEQUENCE, pa.int64()),
                     pa.array([sequence], type=pa.int64()),
                 )
                 stamped.append(ArrowRow(table, row.key, row.sort_key, row.digest, sequence))

@@ -19,13 +19,11 @@ import pyarrow.dataset as pds
 import pyarrow.parquet as pq
 from finestore.layout import (
     ARCHIVE_FILE,
-    COMMIT_COLUMN,
     FORMAT_VERSION,
-    GEN_COLUMN,
-    SEQ_COLUMN,
     ArchiveMetadata,
     FineStoreLayout,
     SealMarker,
+    SystemColumns,
 )
 from finestore.migrations import migrate
 from finestore.migrations.m0001_manifest import (
@@ -185,8 +183,12 @@ def _deduplicate_v1(table: pa.Table, primary_key: tuple[str, ...]) -> pa.Table:
     if table.num_rows == 0:
         return table
     key_columns = [table.column(name).to_pylist() for name in primary_key]
-    generations = table.column(GEN_COLUMN).to_pylist()
-    sequences = table.column(SEQ_COLUMN).to_pylist() if SEQ_COLUMN in table.column_names else [0] * table.num_rows
+    generations = table.column(SystemColumns.GENERATION).to_pylist()
+    sequences = (
+        table.column(SystemColumns.SEQUENCE).to_pylist()
+        if SystemColumns.SEQUENCE in table.column_names
+        else [0] * table.num_rows
+    )
     order = sorted(range(table.num_rows), key=lambda index: (sequences[index], generations[index]))
     winners: dict[tuple, int] = {}
     for index in order:
@@ -211,7 +213,10 @@ def _read_v1_table(root: str, table: LegacyTable) -> pa.Table | None:
     parts = []
     for generation, paths in sorted(paths_by_generation.items()):
         part = pds.dataset(paths, filesystem=pa_fs, format="parquet", schema=unified).to_table()
-        part = part.append_column(GEN_COLUMN, pa.array([generation] * part.num_rows, pa.int32()))
+        part = part.append_column(
+            SystemColumns.GENERATION,
+            pa.array([generation] * part.num_rows, pa.int32()),
+        )
         parts.append(part)
     combined = parts[0] if len(parts) == 1 else pa.concat_tables(parts, promote_options="permissive")
     if all(name in combined.column_names for name in table.metadata.primary_key):
@@ -220,8 +225,8 @@ def _read_v1_table(root: str, table: LegacyTable) -> pa.Table | None:
 
 
 def _canonical_table(table: pa.Table, primary_key: tuple[str, ...]) -> pa.Table:
-    if COMMIT_COLUMN in table.column_names:
-        table = table.drop_columns([COMMIT_COLUMN])
+    if SystemColumns.COMMIT in table.column_names:
+        table = table.drop_columns([SystemColumns.COMMIT])
     table = table.select(sorted(table.column_names))
     if table.num_rows and all(name in table.column_names for name in primary_key):
         table = table.sort_by([(name, "ascending") for name in primary_key])

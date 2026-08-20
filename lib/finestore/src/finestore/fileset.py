@@ -12,7 +12,7 @@ import threading
 
 from rigging.filesystem.atomic import atomic_rename
 
-from finestore.layout import BLOBS_TABLE, BlobColumns
+from finestore.layout import BlobColumns, BlobTables
 from finestore.reader import ReadView
 from finestore.store import DataStore
 
@@ -37,7 +37,7 @@ def fetch_file_set(root: str, local: str) -> set[str]:
     fetched = set()
     view = ReadView(root)
     for row in view.iter_rows(
-        BLOBS_TABLE,
+        BlobTables.DESCRIPTORS,
         columns=[BlobColumns.NAME, BlobColumns.DATA, BlobColumns.PART_COUNT],
     ):
         relative = _safe_relative(row[BlobColumns.NAME])

@@ -15,12 +15,12 @@ from finestore import shard_writer
 from finestore.commit import CommitConflict, CommitCoordinator, CommitDelta
 from finestore.compaction import compact
 from finestore.layout import (
-    BLOB_PARTS_TABLE,
-    BLOBS_TABLE,
     CHUNKED_BLOBS_FEATURE,
     FORMAT_VERSION,
     RESERVED_COLUMNS,
     ArchiveMetadata,
+    BlobColumns,
+    BlobTables,
     FineStoreLayout,
     FormatVersionError,
     OnConflict,
@@ -348,7 +348,10 @@ def test_large_blob_uses_bounded_parts_without_migrating_inline_blobs(tmp_path):
     view = ReadView(root)
     assert view.read_blob("old") == inline
     assert view.read_blob("large") == payload
-    parts = view.scan(BLOB_PARTS_TABLE, columns=["name", "part", "data"])
+    parts = view.scan(
+        BlobTables.PARTS,
+        columns=[BlobColumns.NAME, BlobColumns.PART, BlobColumns.DATA],
+    )
     assert parts is not None
     assert [(row["name"], row["part"], len(row["data"])) for row in parts.to_pylist()] == [
         ("large", 0, OBJECT_PART_BYTES),
@@ -359,7 +362,26 @@ def test_large_blob_uses_bounded_parts_without_migrating_inline_blobs(tmp_path):
     assert manifest["required_features"] == [CHUNKED_BLOBS_FEATURE]
 
 
-def test_chunked_blob_with_missing_parts_fails_as_corruption(tmp_path):
+def test_open_blob_reads_incrementally_across_parts(tmp_path):
+    root = str(tmp_path / "run")
+    payload = b"a" * (OBJECT_PART_BYTES - 2) + b"bcdef"
+    with DataStore.open(root, writer_id="w1") as store:
+        store.write_object("large", payload)
+        store.flush()
+
+    view = ReadView(root)
+    stream = view.open_blob("large")
+    assert stream is not None
+    assert not stream.seekable()
+    with stream:
+        assert stream.read(OBJECT_PART_BYTES - 1) == payload[: OBJECT_PART_BYTES - 1]
+        assert stream.read(4) == payload[OBJECT_PART_BYTES - 1 :]
+        assert stream.read() == b""
+    assert stream.closed
+    assert view.open_blob("missing") is None
+
+
+def test_chunked_blob_stream_detects_missing_parts_at_eof(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
         store.write_object("large", b"x" * (OBJECT_PART_BYTES + 1))
@@ -368,11 +390,14 @@ def test_chunked_blob_with_missing_parts_fails_as_corruption(tmp_path):
 
     manifest_path = StoragePath(token.manifest_path)
     manifest = json.loads(manifest_path.read_text())
-    del manifest["tables"][BLOB_PARTS_TABLE]
+    del manifest["tables"][BlobTables.PARTS]
     manifest_path.write_text(json.dumps(manifest))
 
-    with pytest.raises(BlobCorruptionError):
-        ReadView(root).read_blob("large")
+    stream = ReadView(root).open_blob("large")
+    assert stream is not None
+    with stream:
+        with pytest.raises(BlobCorruptionError):
+            stream.read()
 
 
 def test_chunked_blob_rewrite_ignores_stale_tail_parts(tmp_path):
@@ -783,7 +808,7 @@ def test_transaction_publishes_chunked_object_with_related_table(tmp_path):
         assert view.token == transaction.token
         assert view.point("purchases", order_id="o1") is not None
         assert view.resolve(uri) == payload
-        parts = view.scan(BLOB_PARTS_TABLE)
+        parts = view.scan(BlobTables.PARTS)
         assert parts is not None
         assert parts.num_rows == 2
 
@@ -829,7 +854,7 @@ def test_transaction_counts_chunk_arrow_buffers_toward_payload_bound(tmp_path):
                 transaction.write_object("large", payload)
 
         assert ReadView(root).read_blob("large") is None
-        assert ReadView(root).scan(BLOB_PARTS_TABLE) is None
+        assert ReadView(root).scan(BlobTables.PARTS) is None
 
 
 def test_transaction_lookup_is_pinned_to_its_starting_commit(tmp_path):
@@ -856,7 +881,7 @@ def test_failed_multi_table_flush_restores_every_buffer(tmp_path, monkeypatch):
 
         def fail_blob_write(table, pending):
             nonlocal failed
-            if table.name == BLOBS_TABLE and not failed:
+            if table.name == BlobTables.DESCRIPTORS and not failed:
                 failed = True
                 raise OSError("injected shard failure")
             return real_write(table, pending)
@@ -867,7 +892,7 @@ def test_failed_multi_table_flush_restores_every_buffer(tmp_path, monkeypatch):
         assert ReadView(root).scan("purchases") is None
         assert ReadView(root).scan("refunds") is None
         assert ReadView(root).read_blob("receipt") is None
-        assert ReadView(root).scan(BLOB_PARTS_TABLE) is None
+        assert ReadView(root).scan(BlobTables.PARTS) is None
 
         monkeypatch.setattr(DataTable, "_write", real_write)
         token = store.flush()

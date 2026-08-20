@@ -18,7 +18,7 @@ import rigging.filesystem.factory as factory
 from pyarrow.fs import FSSpecHandler, PyFileSystem
 
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
-from finestore.layout import COMMIT_COLUMN, SEQ_COLUMN, CommitToken, FineStoreLayout, Shard
+from finestore.layout import CommitToken, FineStoreLayout, Shard, SystemColumns
 from finestore.reader import ReadView, iter_shard_rows, merge_deduplicated_rows
 from finestore.shard_writer import ShardWriter, row_groups
 
@@ -62,8 +62,8 @@ def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None 
     unified = pa.unify_schemas(
         [pq.read_schema(shard.path, filesystem=pa_fs) for shard in shards], promote_options="permissive"
     )
-    if COMMIT_COLUMN not in unified.names:
-        unified = unified.append(pa.field(COMMIT_COLUMN, pa.int64()))
+    if SystemColumns.COMMIT not in unified.names:
+        unified = unified.append(pa.field(SystemColumns.COMMIT, pa.int64()))
 
     superseded = [0]
     merged_rows = merge_deduplicated_rows([iter_shard_rows(shard, unified, primary_key, pa_fs) for shard in shards])
@@ -86,7 +86,7 @@ def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None 
         arrow_rows = (pa.Table.from_pylist([row], schema=unified) for row in chain([first], survivors))
         for batch in row_groups(arrow_rows):
             writer.write_table(batch)
-            sequences = [sequence or 0 for sequence in batch[SEQ_COLUMN].to_pylist()]
+            sequences = [sequence or 0 for sequence in batch[SystemColumns.SEQUENCE].to_pylist()]
             min_seq = min(sequences) if min_seq is None else min(min_seq, *sequences)
             max_seq = max(sequences) if max_seq is None else max(max_seq, *sequences)
             written += batch.num_rows

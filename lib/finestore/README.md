@@ -70,17 +70,21 @@ transaction and commit token as ordinary table rows.
 
 Objects up to 8 MiB remain inline in the `blobs` row. Larger objects use an inline
 descriptor plus 8 MiB rows in the internal `_finestore_blob_parts` table. The
-descriptor and parts become visible in one manifest commit, and `ReadView.read_blob`
-reassembles either encoding. The first chunked-object commit adds the
+descriptor and parts become visible in one manifest commit, and `ReadView.open_blob`
+streams either encoding through one file interface. The first chunked-object commit adds the
 `chunked-blobs-v1` required manifest feature, so an older reader fails closed instead
 of returning a descriptor as an empty payload. Existing inline objects and archives
 need no migration.
 
-The object API still accepts and returns `bytes`; callers therefore hold the complete
-payload in memory. Chunking bounds Arrow values and Parquet row groups. File-set
-materialization streams committed parts into the destination file to avoid another
-complete copy. A transaction's `max_bytes` limit still applies; `FineStoreDirectory`
-treats its byte limit as a multi-file batch target and admits one larger file.
+`write_object` still accepts a complete `bytes` value. `read_blob` remains the
+convenience API that returns a complete `bytes` value, while `open_blob` returns a
+forward-only binary file object for incremental reads. Chunk-count and declared-size
+validation completes when the stream reaches EOF; closing it early intentionally skips
+whole-object validation. Chunking bounds Arrow values, Parquet row groups, and the data
+materialized by a streaming reader. File-set materialization streams committed parts
+into the destination file to avoid another complete copy. A transaction's `max_bytes`
+limit still applies; `FineStoreDirectory` treats its byte limit as a multi-file batch
+target and admits one larger file.
 
 Two adapters build cache behavior on this primitive:
 

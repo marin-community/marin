@@ -8,7 +8,7 @@ import textwrap
 import finestore.cache as cache_module
 from finestore.admin import drop_table
 from finestore.cache import PersistentKvCache
-from finestore.layout import BLOBS_TABLE
+from finestore.layout import BlobTables
 from finestore.reader import ReadView
 from finestore.store import DataStore
 from rigging.filesystem.storage_path import StoragePath
@@ -70,7 +70,7 @@ def test_persistent_cache_keeps_a_loaded_value_in_memory(tmp_path):
 
     reader = PersistentKvCache.at(root)
     assert reader.load("kernel") == b"object-code"
-    drop_table(root, BLOBS_TABLE)
+    drop_table(root, BlobTables.DESCRIPTORS)
     assert reader.load("kernel") == b"object-code"
 
 
