@@ -3,9 +3,9 @@
 
 import pytest
 from finestore.fileset import FineStoreDirectory, fetch_file_set
-from finestore.layout import BLOBS_TABLE
-from finestore.reader import ReadView
-from finestore.store import DataStore
+from finestore.layout import BlobColumns, BlobTables
+from finestore.reader import BlobCorruptionError, ReadView
+from finestore.store import OBJECT_PART_BYTES, DataStore
 
 
 def test_file_set_round_trips_nested_files_in_one_level_zero(tmp_path):
@@ -18,12 +18,45 @@ def test_file_set_round_trips_nested_files_in_one_level_zero(tmp_path):
         path.write_bytes(f"value-{index}".encode())
     writer.close()
 
-    assert len(ReadView(root).list_shards(BLOBS_TABLE)) == 1
+    assert len(ReadView(root).list_shards(BlobTables.DESCRIPTORS)) == 1
     reloaded = tmp_path / "reloaded"
     fetch_file_set(root, str(reloaded))
     assert sorted(path.read_bytes() for path in reloaded.rglob("*.textproto")) == sorted(
         f"value-{index}".encode() for index in range(100)
     )
+
+
+def test_file_set_materializes_chunked_file(tmp_path):
+    root = str(tmp_path / "remote")
+    local = tmp_path / "local"
+    payload = b"x" * (OBJECT_PART_BYTES + 1)
+    writer = FineStoreDirectory(root, str(local), flush_interval=3600, max_batch_data_bytes=1024 * 1024)
+    path = local / "logs" / "archive.bin"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(payload)
+    writer.close()
+
+    reloaded = tmp_path / "reloaded"
+    assert fetch_file_set(root, str(reloaded)) == {"logs/archive.bin"}
+    assert (reloaded / "logs" / "archive.bin").read_bytes() == payload
+
+
+def test_file_set_validates_inline_file_size(tmp_path):
+    root = str(tmp_path / "remote")
+    with DataStore.open(root, writer_id="w1") as store:
+        table = store.table(BlobTables.DESCRIPTORS, primary_key=(BlobColumns.NAME,))
+        table.append(
+            {
+                BlobColumns.NAME: "archive.bin",
+                BlobColumns.DATA: b"payload",
+                BlobColumns.SIZE: 1,
+                BlobColumns.PART_COUNT: None,
+            }
+        )
+        store.flush()
+
+    with pytest.raises(BlobCorruptionError, match="declares 1 bytes"):
+        fetch_file_set(root, str(tmp_path / "local"))
 
 
 def test_file_set_concurrent_writers_rebase_disjoint_files(tmp_path):

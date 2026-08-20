@@ -18,8 +18,8 @@ from finestore.store import DataStore
 
 _CACHE_TTL_DAYS = 30
 _EXIT_FLUSH_TIMEOUT = 10.0
-_MAX_TRANSACTION_BYTES = 100 * 1024 * 1024
-_MAX_TRANSACTION_OBJECTS = 65_536
+_MAX_BATCH_DATA_BYTES = 100 * 1024 * 1024
+_MAX_BATCH_OBJECTS = 65_536
 
 logger = logging.getLogger(__name__)
 
@@ -175,12 +175,11 @@ class PersistentKvCache:
         thread.start()
 
     def _drain_remote_writes(self) -> None:
-        """Publish every queued burst as a bounded multi-object transaction."""
+        """Publish queued values in batches bounded by data bytes and object count."""
         try:
             while pending := self._take_remote_batch():
                 try:
-                    max_bytes = sum(DataStore.estimate_object_bytes(key, value) for key, value in pending.items())
-                    with self._writer().transaction(max_bytes=max_bytes) as transaction:
+                    with self._writer().unbounded_transaction() as transaction:
                         for key, value in pending.items():
                             transaction.write_object(key, value)
                 except Exception as exc:
@@ -197,9 +196,9 @@ class PersistentKvCache:
             selected = []
             selected_bytes = 0
             for key, value in self._remote_pending.items():
-                object_bytes = DataStore.estimate_object_bytes(key, value)
+                object_bytes = len(value)
                 if selected and (
-                    len(selected) >= _MAX_TRANSACTION_OBJECTS or selected_bytes + object_bytes > _MAX_TRANSACTION_BYTES
+                    len(selected) >= _MAX_BATCH_OBJECTS or selected_bytes + object_bytes > _MAX_BATCH_DATA_BYTES
                 ):
                     break
                 selected.append(key)

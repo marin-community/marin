@@ -8,7 +8,7 @@ import textwrap
 import finestore.cache as cache_module
 from finestore.admin import drop_table
 from finestore.cache import PersistentKvCache
-from finestore.layout import BLOBS_TABLE
+from finestore.layout import BlobTables
 from finestore.reader import ReadView
 from finestore.store import DataStore
 from rigging.filesystem.storage_path import StoragePath
@@ -70,7 +70,7 @@ def test_persistent_cache_keeps_a_loaded_value_in_memory(tmp_path):
 
     reader = PersistentKvCache.at(root)
     assert reader.load("kernel") == b"object-code"
-    drop_table(root, BLOBS_TABLE)
+    drop_table(root, BlobTables.DESCRIPTORS)
     assert reader.load("kernel") == b"object-code"
 
 
@@ -100,11 +100,11 @@ def test_prefix_cache_uses_region_local_fine_store(tmp_path, monkeypatch):
     assert PersistentKvCache.for_prefix("cutlass-kernels").load("kernel") == b"value"
 
 
-def test_remote_cache_accounts_for_named_object_overhead(tmp_path, monkeypatch):
+def test_remote_cache_can_commit_object_larger_than_store_buffer(tmp_path, monkeypatch):
     root = str(tmp_path / "cache")
     open_store = DataStore.open
     monkeypatch.setattr(StoragePath, "is_remote", property(lambda _self: True))
-    monkeypatch.setattr(cache_module, "_MAX_TRANSACTION_BYTES", 64)
+    monkeypatch.setattr(cache_module, "_MAX_BATCH_DATA_BYTES", 64)
     monkeypatch.setattr(
         cache_module.DataStore,
         "open",

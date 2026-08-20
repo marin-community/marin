@@ -68,16 +68,36 @@ older value outrank a concurrent write.
 table and returns `finestore://blobs/<name>`. Named objects participate in the same
 transaction and commit token as ordinary table rows.
 
+Objects up to 8 MiB remain inline in the `blobs` row. Larger objects use an inline
+descriptor plus 8 MiB rows in the internal `_finestore_blob_parts` table. The
+descriptor and parts become visible in one manifest commit, and `ReadView.open_blob`
+streams either encoding through one file interface. The first chunked-object commit adds the
+`chunked-blobs-v1` required manifest feature, so an older reader fails closed instead
+of returning a descriptor as an empty payload. Existing inline objects and archives
+need no migration.
+
+`write_object` still accepts a complete `bytes` value. `read_blob` remains the
+convenience API that returns a complete `bytes` value, while `open_blob` returns a
+forward-only binary file object for incremental reads. Chunk-count and declared-size
+validation completes when the stream reaches EOF; closing it early intentionally skips
+whole-object validation. Each part occupies its own Parquet row group, and blob scans
+request one row with one batch of readahead, so a streaming reader does not materialize
+all of an object's parts. File-set materialization streams committed parts into the
+destination file to avoid another complete copy. A transaction's `max_bytes` limit
+still applies; `FineStoreDirectory` treats its byte limit as a multi-file batch target
+and admits one larger file.
+
 Two adapters build cache behavior on this primitive:
 
 - `finestore.cache.PersistentKvCache` stores serialized autotuning and compiled-kernel
   results by key. The process memory tier serves repeated reads. Remote writes queue in
-  the background, and each burst shares a bounded multi-object transaction. Normal
-  interpreter shutdown gives queued writes up to 10 seconds to finish. A stalled write
-  is then abandoned so cache storage cannot hold process shutdown. `cache.close()` waits
-  for queued writes when a caller wants deterministic resource cleanup.
+  the background; each batch is bounded by value bytes and object count, then published
+  in one transaction. Normal interpreter shutdown gives queued writes up to 10 seconds
+  to finish. A stalled write is then abandoned so cache storage cannot hold process
+  shutdown. `cache.close()` waits for queued writes when a caller wants deterministic
+  resource cleanup.
 - `finestore.fileset.FineStoreDirectory` materializes a committed named-object set
-  into a local directory and publishes newly created files in bounded transactions.
+  into a local directory and publishes newly created files in payload-bounded batches.
   Iris uses it for XLA's per-fusion autotune directory, replacing the ZIP mirror.
 
 Both adapters are caches: failures may be treated as misses by their callers. Cache

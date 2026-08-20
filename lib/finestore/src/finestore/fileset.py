@@ -12,15 +12,15 @@ import threading
 
 from rigging.filesystem.atomic import atomic_rename
 
-from finestore.layout import BLOB_DATA_COLUMN, BLOB_NAME_COLUMN, BLOBS_TABLE
-from finestore.reader import ReadView
+from finestore.layout import BlobTables
+from finestore.reader import BlobDescriptor, ReadView
 from finestore.store import DataStore
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_SYNC_INTERVAL = 120.0
-DEFAULT_TRANSACTION_BYTES = 100 * 1024 * 1024
-DEFAULT_TRANSACTION_FILES = 65_536
+DEFAULT_BATCH_DATA_BYTES = 100 * 1024 * 1024
+DEFAULT_BATCH_FILES = 65_536
 
 
 def _safe_relative(name: str) -> pathlib.PurePosixPath:
@@ -35,12 +35,19 @@ def fetch_file_set(root: str, local: str) -> set[str]:
     destination = pathlib.Path(local)
     destination.mkdir(parents=True, exist_ok=True)
     fetched = set()
-    for row in ReadView(root).iter_rows(BLOBS_TABLE, columns=[BLOB_NAME_COLUMN, BLOB_DATA_COLUMN]):
-        relative = _safe_relative(row[BLOB_NAME_COLUMN])
+    view = ReadView(root)
+    for row in view.iter_rows(
+        BlobTables.DESCRIPTORS,
+        columns=BlobDescriptor.COLUMNS,
+    ):
+        descriptor = BlobDescriptor.from_row(row)
+        relative = _safe_relative(descriptor.name)
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         with atomic_rename(str(target)) as staged:
-            pathlib.Path(staged).write_bytes(bytes(row[BLOB_DATA_COLUMN]))
+            with pathlib.Path(staged).open("wb") as output:
+                for part in view.blob_parts(descriptor):
+                    output.write(part)
         fetched.add(relative.as_posix())
     return fetched
 
@@ -54,8 +61,8 @@ class FineStoreDirectory:
         local: str,
         *,
         flush_interval: float = DEFAULT_SYNC_INTERVAL,
-        max_transaction_bytes: int = DEFAULT_TRANSACTION_BYTES,
-        max_transaction_files: int = DEFAULT_TRANSACTION_FILES,
+        max_batch_data_bytes: int = DEFAULT_BATCH_DATA_BYTES,
+        max_batch_files: int = DEFAULT_BATCH_FILES,
     ) -> None:
         self._root = root
         self._local = pathlib.Path(local)
@@ -63,8 +70,8 @@ class FineStoreDirectory:
         self._known = fetch_file_set(self._root, local)
         self._store = DataStore.open(self._root)
         self._flush_interval = flush_interval
-        self._max_transaction_bytes = max_transaction_bytes
-        self._max_transaction_files = max_transaction_files
+        self._max_batch_data_bytes = max_batch_data_bytes
+        self._max_batch_files = max_batch_files
         self._flush_lock = threading.Lock()
         self._stop = threading.Event()
         self._closed = False
@@ -73,7 +80,7 @@ class FineStoreDirectory:
         atexit.register(self.close)
 
     def flush(self) -> None:
-        """Publish files added since the last successful sync in bounded transactions."""
+        """Publish files added since the last sync in target-bounded multi-file transactions."""
         with self._flush_lock:
             present = {path.relative_to(self._local).as_posix() for path in self._local.rglob("*") if path.is_file()}
             pending = sorted(present - self._known)
@@ -84,7 +91,7 @@ class FineStoreDirectory:
             for relative in pending:
                 data = (self._local / relative).read_bytes()
                 if batch and (
-                    batch_bytes + len(data) > self._max_transaction_bytes or len(batch) >= self._max_transaction_files
+                    batch_bytes + len(data) > self._max_batch_data_bytes or len(batch) >= self._max_batch_files
                 ):
                     self._commit(batch)
                     self._known.update(name for name, _data in batch)
@@ -115,6 +122,6 @@ class FineStoreDirectory:
                 logger.warning("FineStore directory synchronization failed: %s", exc)
 
     def _commit(self, files: list[tuple[str, bytes]]) -> None:
-        with self._store.transaction(max_bytes=self._max_transaction_bytes) as transaction:
+        with self._store.unbounded_transaction() as transaction:
             for relative, data in files:
                 transaction.write_object(relative, data)

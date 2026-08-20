@@ -4,9 +4,10 @@
 """Shard write primitive: stream Arrow batches to one immutable, atomically-published Parquet object.
 
 :class:`ShardWriter` is the single write path shared by a store flush (buffered rows) and a
-compaction merge (a k-way-merged stream). Each :meth:`ShardWriter.write_table` call appends its rows
-as row groups capped at :data:`ROW_GROUP_ROWS`, so a large flush still splits into prunable groups
-and a caller streaming a merge holds only one bounded batch at a time rather than the whole table.
+compaction merge (a k-way-merged stream). Callers group fixed-schema rows toward
+:data:`ROW_GROUP_ROWS` and :data:`ROW_GROUP_TARGET_BYTES`, isolating a row that exceeds either
+target. Chunked objects bound each binary value separately.
+Blob parts occupy separate row groups so a reader can decode them incrementally.
 The shard is written to a temp sibling key and renamed into place on close, so its manifest commit
 can never expose a half-written object.
 """
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import BinaryIO
 
@@ -22,6 +24,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.storage_path import StoragePath
+
+from finestore.layout import BlobTables
 
 # Pin level 0 explicitly; PyArrow otherwise chooses its codec default (currently zstd level 1).
 _COMPRESSION = "zstd"
@@ -32,6 +36,33 @@ _COMPRESSION_LEVEL = 0
 # large flush that wrote one giant group would defeat the pruning. Bounding the group keeps a
 # ``name ==`` blob lookup or a ``task ==`` sample scan reading a fraction of a big shard.
 ROW_GROUP_ROWS = 16_384
+ROW_GROUP_TARGET_BYTES = 100 * 1024 * 1024
+BLOB_PART_ROW_GROUP_ROWS = 1
+
+
+def row_groups(row_tables: Iterable[pa.Table], *, max_rows: int | None = None) -> Iterator[pa.Table]:
+    """Group retained Arrow rows by row count and actual buffer size."""
+    row_limit = ROW_GROUP_ROWS if max_rows is None else max_rows
+    group: list[pa.Table] = []
+    group_rows = 0
+    group_bytes = 0
+    for table in row_tables:
+        if group and (group_rows + table.num_rows > row_limit or group_bytes + table.nbytes > ROW_GROUP_TARGET_BYTES):
+            yield pa.concat_tables(group)
+            group = []
+            group_rows = 0
+            group_bytes = 0
+        group.append(table)
+        group_rows += table.num_rows
+        group_bytes += table.nbytes
+    if group:
+        yield pa.concat_tables(group)
+
+
+def table_row_groups(table: str, row_tables: Iterable[pa.Table]) -> Iterator[pa.Table]:
+    """Apply the row-group policy for ``table`` to retained Arrow rows."""
+    max_rows = BLOB_PART_ROW_GROUP_ROWS if table == BlobTables.PARTS else None
+    yield from row_groups(row_tables, max_rows=max_rows)
 
 
 @dataclass(frozen=True)
@@ -124,10 +155,3 @@ class ShardWriter:
             self.close()
             return
         self._stack.__exit__(exc_type, exc_val, exc_tb)
-
-
-def write_table(path: str, table: pa.Table) -> ShardWriteResult:
-    """Write ``table`` atomically as one row group compressed with zstd level 0."""
-    with ShardWriter(path, table.schema) as writer:
-        writer.write_table(table)
-    return writer.result

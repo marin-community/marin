@@ -9,6 +9,7 @@ import logging
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
+from itertools import chain
 from typing import Protocol
 
 import pyarrow as pa
@@ -17,14 +18,13 @@ import rigging.filesystem.factory as factory
 from pyarrow.fs import FSSpecHandler, PyFileSystem
 
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
-from finestore.layout import COMMIT_COLUMN, SEQ_COLUMN, CommitToken, FineStoreLayout, Shard
+from finestore.layout import CommitToken, FineStoreLayout, Shard, SystemColumns
 from finestore.reader import ReadView, iter_shard_rows, merge_deduplicated_rows
-from finestore.shard_writer import ROW_GROUP_ROWS, ShardWriter
+from finestore.shard_writer import ShardWriter, table_row_groups
 
 logger = logging.getLogger(__name__)
 
 _COMPACTOR = "compactor"
-_COMPACT_BATCH_ROWS = ROW_GROUP_ROWS
 
 
 class CompactionCoordinator(Protocol):
@@ -62,8 +62,8 @@ def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None 
     unified = pa.unify_schemas(
         [pq.read_schema(shard.path, filesystem=pa_fs) for shard in shards], promote_options="permissive"
     )
-    if COMMIT_COLUMN not in unified.names:
-        unified = unified.append(pa.field(COMMIT_COLUMN, pa.int64()))
+    if SystemColumns.COMMIT not in unified.names:
+        unified = unified.append(pa.field(SystemColumns.COMMIT, pa.int64()))
 
     superseded = [0]
     merged_rows = merge_deduplicated_rows([iter_shard_rows(shard, unified, primary_key, pa_fs) for shard in shards])
@@ -83,23 +83,13 @@ def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None 
     min_seq: int | None = None
     max_seq: int | None = None
     with ShardWriter(output_path, unified) as writer:
-
-        def write_batch(rows: list[dict]) -> None:
-            nonlocal written, min_seq, max_seq
-            writer.write_table(pa.Table.from_pylist(rows, schema=unified))
-            sequences = [row.get(SEQ_COLUMN) or 0 for row in rows]
+        arrow_rows = (pa.Table.from_pylist([row], schema=unified) for row in chain([first], survivors))
+        for batch in table_row_groups(table, arrow_rows):
+            writer.write_table(batch)
+            sequences = [sequence or 0 for sequence in batch[SystemColumns.SEQUENCE].to_pylist()]
             min_seq = min(sequences) if min_seq is None else min(min_seq, *sequences)
             max_seq = max(sequences) if max_seq is None else max(max_seq, *sequences)
-            written += len(rows)
-
-        batch = [first]
-        for row in survivors:
-            batch.append(row)
-            if len(batch) >= _COMPACT_BATCH_ROWS:
-                write_batch(batch)
-                batch = []
-        if batch:
-            write_batch(batch)
+            written += batch.num_rows
 
     assert min_seq is not None and max_seq is not None
     shard_result = writer.result

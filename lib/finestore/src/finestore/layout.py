@@ -24,18 +24,39 @@ DATA_DIR = "data"
 MANIFESTS_DIR = "manifests"
 SCHEMAS_DIR = "schemas"
 
-SEQ_COLUMN = "_seq"
-WRITER_COLUMN = "_writer"
-GEN_COLUMN = "_gen"
-COMMIT_COLUMN = "_commit"
-RESERVED_COLUMNS = frozenset({SEQ_COLUMN, WRITER_COLUMN, GEN_COLUMN, COMMIT_COLUMN})
-
-SUPPORTED_MANIFEST_FEATURES: frozenset[str] = frozenset()
-
 URI_SCHEME = "finestore"
-BLOBS_TABLE = "blobs"
-BLOB_NAME_COLUMN = "name"
-BLOB_DATA_COLUMN = "data"
+CHUNKED_BLOBS_FEATURE = "chunked-blobs-v1"
+
+
+class SystemColumns(StrEnum):
+    """Columns FineStore adds to user rows while writing and reading shards."""
+
+    SEQUENCE = "_seq"
+    WRITER = "_writer"
+    GENERATION = "_gen"
+    COMMIT = "_commit"
+
+
+class BlobTables(StrEnum):
+    """Tables that encode named byte objects."""
+
+    DESCRIPTORS = "blobs"
+    PARTS = "_finestore_blob_parts"
+
+
+class BlobColumns(StrEnum):
+    """Columns shared by blob descriptors and part rows."""
+
+    NAME = "name"
+    DATA = "data"
+    SIZE = "size"
+    METADATA = "metadata_json"
+    PART_COUNT = "part_count"
+    PART = "part"
+
+
+RESERVED_COLUMNS = frozenset(SystemColumns)
+SUPPORTED_MANIFEST_FEATURES: frozenset[str] = frozenset({CHUNKED_BLOBS_FEATURE})
 
 
 class FormatVersionError(ValueError):

@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
 import rigging.filesystem.factory as factory
-from finestore.layout import ARCHIVE_FILE, BLOBS_TABLE, DATA_DIR, HEAD_FILE, MANIFESTS_DIR, SCHEMAS_DIR
+from finestore.layout import ARCHIVE_FILE, DATA_DIR, HEAD_FILE, MANIFESTS_DIR, SCHEMAS_DIR, BlobTables
 from finestore.migrations.m0001_manifest import LEGACY_SEAL_FILE
 from finestore.reader import ReadView
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -56,7 +56,14 @@ RESULTS_PREFIX = "results_"
 # The archive's own objects, which share the run's results root and must never be preserved into
 # themselves. See :func:`run_artifacts`.
 _ARCHIVE_DIRS = frozenset(
-    {DATA_DIR, MANIFESTS_DIR, SCHEMAS_DIR, ARCHIVE_SAMPLES_TABLE, ARCHIVE_STEPS_TABLE, BLOBS_TABLE}
+    {
+        DATA_DIR,
+        MANIFESTS_DIR,
+        SCHEMAS_DIR,
+        ARCHIVE_SAMPLES_TABLE,
+        ARCHIVE_STEPS_TABLE,
+        BlobTables.DESCRIPTORS,
+    }
 )
 _ARCHIVE_MARKERS = frozenset({ARCHIVE_FILE, HEAD_FILE, LEGACY_SEAL_FILE})
 
@@ -522,7 +529,7 @@ def preserved_sample_sources(out_path: str) -> tuple[str, ...]:
     return tuple(
         sorted(
             key[0]
-            for key in ReadView(out_path).keys(BLOBS_TABLE)
+            for key in ReadView(out_path).keys(BlobTables.DESCRIPTORS)
             if isinstance(key[0], str)
             and key[0].startswith(f"{SOURCES_PREFIX}/")
             and key[0].endswith(".jsonl")
