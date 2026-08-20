@@ -894,8 +894,8 @@ Examples:
     "--sync-package",
     multiple=True,
     help=(
-        "Scope the default `uv sync` to specific workspace members instead of "
-        "syncing all of them (e.g., --sync-package marin-core). Can be repeated."
+        "Scope the default `uv sync --all-packages --no-dev` to specific "
+        "workspace members (e.g., --sync-package marin-core). Can be repeated."
     ),
 )
 @click.option(
