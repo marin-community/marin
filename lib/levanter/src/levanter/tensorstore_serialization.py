@@ -735,15 +735,17 @@ def _device_shardings_for_load(shardings: list) -> tuple[list, list]:
 def _move_leaves_to_target_memory_kind(leaves: list, move_targets: list) -> list:
     """Relocate leaves deserialized onto ``device`` to the non-device target in ``move_targets``.
 
-    Holding the whole offloaded state on device here is safe: the jitted step already shuttles the
-    entire ``opt_state`` and ``master_params`` onto device every update (see the training step's
-    ``_tree_to_memory_kind(..., "device")`` calls), alongside gradients and updates. Restore rebuilds
-    only that state -- no gradients, updates, or activations -- so its device footprint is strictly
-    smaller than a training step's, and the move targets are host memory rather than more HBM.
+    Move in place. Rebinding each slot drops the last reference to that leaf's source buffer once
+    its copy lands, so the two full copies never coexist. Building a second list instead held every
+    source alive until the last move finished: on a d6144 hero resume each of a task's 4 ranks
+    reached about 190 GiB, and 4 ranks filled a 930 GiB container.
     """
     if not any(target is not None for target in move_targets):
         return leaves
-    return [jax.device_put(leaf, target) if target is not None else leaf for leaf, target in zip(leaves, move_targets)]
+    for i, target in enumerate(move_targets):
+        if target is not None:
+            leaves[i] = jax.device_put(leaves[i], target)
+    return leaves
 
 
 def _restore_ocdbt(
