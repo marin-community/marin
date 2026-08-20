@@ -171,7 +171,6 @@ _PRODUCTION_WORKLOAD_PRIORITY = next(
 
 
 def production_gpu_priority_class(gpu_count: int) -> IrisWorkloadPriorityClass:
-    """Return the production WorkloadPriorityClass for a GPU-count boost."""
     if gpu_count <= 0:
         raise ValueError(f"gpu_count must be positive, got {gpu_count}")
     return IrisWorkloadPriorityClass(
