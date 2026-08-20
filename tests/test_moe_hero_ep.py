@@ -69,6 +69,26 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
     )
 
 
+def test_moe_backend_override_reaches_the_model_and_the_run_tags():
+    step = launch.build_hero_run(
+        run_id="ragged-backend",
+        dp_racks=1,
+        num_steps=1,
+        moe_implementation="ragged_all_to_all",
+        processes_per_task=4,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.model.moe_implementation == "ragged_all_to_all"
+    assert config.processes_per_task == 4
+    tags = config.trainer.trainer.tracker.tags
+    assert "ragged-all-to-all" in tags
+    # The pooled receiver capacity is the pooled transport's own knob; reporting it against a
+    # transport that has no such buffer would label the run with a setting it never read.
+    assert not [tag for tag in tags if tag.startswith("transport-capacity-")]
+
+
 def test_full_bank_top_k_is_rejected_before_launch():
     # QB routing reads the (k+1)-th logit as its threshold, so a full-bank top-k asks `top_k` for
     # more entries than there are experts. Without this the job dies in the router, which is after
