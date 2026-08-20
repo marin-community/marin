@@ -180,7 +180,10 @@ def test_profile_manifest_renders_github_repositories_and_secret_references() ->
                     "agent": "codex",
                     "githubRepositories": ["marin-community/marin", "marin-community/vllm"],
                     "mcpAccess": {"mode": "all", "groups": []},
-                    "env": {"OPS_TOKEN": {"secretRef": "projects/example/secrets/ops-token/versions/7"}},
+                    "env": {
+                        "IRIS_USER": {"value": "loom"},
+                        "OPS_TOKEN": {"secretRef": "projects/example/secrets/ops-token/versions/7"},
+                    },
                 },
             ),
         )
@@ -190,10 +193,21 @@ def test_profile_manifest_renders_github_repositories_and_secret_references() ->
         "marin-community/vllm",
     ]
     assert profiles[0]["profile"]["mcp_access"] == {"mode": "all", "groups": []}
-    assert profiles[0]["env"] == [{"name": "OPS_TOKEN", "secret_ref": "projects/example/secrets/ops-token/versions/7"}]
+    assert profiles[0]["env"] == [
+        {"name": "IRIS_USER", "value": "loom"},
+        {"name": "OPS_TOKEN", "secret_ref": "projects/example/secrets/ops-token/versions/7"},
+    ]
     assert references == [("example", "ops-token")]
-    with pytest.raises(ValueError, match="full secretRef"):
+    with pytest.raises(ValueError, match="exactly one of value or secretRef"):
         ProfileConfig.parse("ops", {"agent": "codex", "env": {"OPS_TOKEN": "plaintext"}})
+    with pytest.raises(ValueError, match="exactly one of value or secretRef"):
+        ProfileConfig.parse(
+            "ops",
+            {
+                "agent": "codex",
+                "env": {"OPS_TOKEN": {"value": "x", "secretRef": "projects/example/secrets/ops-token/versions/7"}},
+            },
+        )
 
 
 def test_deployment_manifest_preserves_unicode_profile_instructions() -> None:

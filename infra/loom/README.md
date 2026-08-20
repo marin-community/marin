@@ -116,6 +116,15 @@ ordinary sessions use the deployment-managed `default` profile, while workload
 and future GitHub Actions callers select the automation profile authorized by
 their federation mapping.
 
+A profile's `env` block declares the environment every session of that profile
+receives. Each entry sets either an inline `value` for non-secret configuration
+or a `secretRef` that the host resolves from Secret Manager at launch; Pulumi
+grants the VM service account read access to each referenced secret. Profile
+environment is applied after `envClear`, so strict automation profiles receive
+it too. All profiles set `IRIS_USER=loom`, which makes Iris jobs submitted from
+a session land under `/loom/<job>` instead of inheriting the session container's
+`app` OS account.
+
 An interactive session always brokers the `loom-oa-dev` GitHub App for its own
 repository, and a stored personal token still takes precedence over it. The
 `default`, `github`, and `slack` profiles therefore allowlist owners rather than
