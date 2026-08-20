@@ -12,8 +12,8 @@ import threading
 
 from rigging.filesystem.atomic import atomic_rename
 
-from finestore.layout import BlobColumns, BlobTables
-from finestore.reader import ReadView
+from finestore.layout import BlobTables
+from finestore.reader import BlobDescriptor, ReadView
 from finestore.store import DataStore
 
 logger = logging.getLogger(__name__)
@@ -38,14 +38,15 @@ def fetch_file_set(root: str, local: str) -> set[str]:
     view = ReadView(root)
     for row in view.iter_rows(
         BlobTables.DESCRIPTORS,
-        columns=[BlobColumns.NAME, BlobColumns.DATA, BlobColumns.SIZE, BlobColumns.PART_COUNT],
+        columns=BlobDescriptor.COLUMNS,
     ):
-        relative = _safe_relative(row[BlobColumns.NAME])
+        descriptor = BlobDescriptor.from_row(row)
+        relative = _safe_relative(descriptor.name)
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         with atomic_rename(str(target)) as staged:
             with pathlib.Path(staged).open("wb") as output:
-                for part in view.blob_parts(row[BlobColumns.NAME], row):
+                for part in view.blob_parts(descriptor):
                     output.write(part)
         fetched.add(relative.as_posix())
     return fetched

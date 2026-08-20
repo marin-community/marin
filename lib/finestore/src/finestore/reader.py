@@ -9,9 +9,9 @@ import heapq
 import io
 import itertools
 from collections import defaultdict
-from collections.abc import Generator, Iterator, Sequence
+from collections.abc import Generator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import BinaryIO, Protocol
+from typing import BinaryIO, ClassVar, Protocol
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -35,11 +35,17 @@ from finestore.layout import (
 )
 
 _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
-_STREAM_BATCH_ROWS = 16_384
-_STREAM_BATCH_READAHEAD = 16
-_STREAM_FRAGMENT_READAHEAD = 4
-_BLOB_STREAM_BATCH_ROWS = 1
-_BLOB_STREAM_READAHEAD = 1
+
+
+@dataclass(frozen=True)
+class _ScanProfile:
+    batch_rows: int
+    batch_readahead: int
+    fragment_readahead: int
+
+
+_TABLE_SCAN_PROFILE = _ScanProfile(batch_rows=16_384, batch_readahead=16, fragment_readahead=4)
+_BLOB_SCAN_PROFILE = _ScanProfile(batch_rows=1, batch_readahead=1, fragment_readahead=1)
 
 
 @dataclass(frozen=True)
@@ -63,6 +69,45 @@ class MergedRow:
 
 class BlobCorruptionError(ValueError):
     """A committed blob is missing data or has inconsistent size metadata."""
+
+
+@dataclass(frozen=True)
+class BlobDescriptor:
+    """The descriptor fields needed to read an inline or chunked blob."""
+
+    COLUMNS: ClassVar[tuple[BlobColumns, ...]] = (
+        BlobColumns.NAME,
+        BlobColumns.SIZE,
+        BlobColumns.METADATA,
+        BlobColumns.DATA,
+        BlobColumns.PART_COUNT,
+    )
+
+    name: str
+    size: int | None
+    metadata_json: str | None
+    data: bytes | None
+    part_count: int | None
+
+    @classmethod
+    def from_row(cls, row: Mapping[str, object]) -> BlobDescriptor:
+        """Validate and convert one blob descriptor row."""
+        name = row.get(BlobColumns.NAME)
+        if not isinstance(name, str):
+            raise BlobCorruptionError(f"blob descriptor has invalid name {name!r}")
+        size = row.get(BlobColumns.SIZE)
+        if size is not None and not isinstance(size, int):
+            raise BlobCorruptionError(f"blob {name!r} has invalid size {size!r}")
+        metadata_json = row.get(BlobColumns.METADATA)
+        if metadata_json is not None and not isinstance(metadata_json, str):
+            raise BlobCorruptionError(f"blob {name!r} has invalid metadata {metadata_json!r}")
+        data = row.get(BlobColumns.DATA)
+        if data is not None and not isinstance(data, bytes):
+            raise BlobCorruptionError(f"blob {name!r} has invalid inline data")
+        part_count = row.get(BlobColumns.PART_COUNT)
+        if part_count is not None and not isinstance(part_count, int):
+            raise BlobCorruptionError(f"blob {name!r} has invalid part count {part_count!r}")
+        return cls(name=name, size=size, metadata_json=metadata_json, data=data, part_count=part_count)
 
 
 class _BlobReader(io.RawIOBase):
@@ -176,9 +221,7 @@ def iter_shard_rows(
     pa_fs: PyFileSystem,
     columns: list[str] | None = None,
     where: list[tuple[str, str, object]] | None = None,
-    batch_rows: int = _STREAM_BATCH_ROWS,
-    batch_readahead: int = _STREAM_BATCH_READAHEAD,
-    fragment_readahead: int = _STREAM_FRAGMENT_READAHEAD,
+    scan_profile: _ScanProfile = _TABLE_SCAN_PROFILE,
 ) -> Iterator[VersionedRow]:
     """Yield rows from one shard in primary-key order with version coordinates."""
     dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
@@ -187,14 +230,14 @@ def iter_shard_rows(
             columns=columns,
             filter=_build_filter(where),
             use_threads=False,
-            batch_size=batch_rows,
-            batch_readahead=batch_readahead,
-            fragment_readahead=fragment_readahead,
+            batch_size=scan_profile.batch_rows,
+            batch_readahead=scan_profile.batch_readahead,
+            fragment_readahead=scan_profile.fragment_readahead,
         ).to_batches()
     else:
         source = dataset.to_table(columns=columns, filter=_build_filter(where))
         sort_columns = [(name, "ascending") for name in primary_key if name in source.column_names]
-        batches = source.sort_by(sort_columns).to_batches(max_chunksize=batch_rows)
+        batches = source.sort_by(sort_columns).to_batches(max_chunksize=scan_profile.batch_rows)
     for batch in batches:
         for row in batch.to_pylist():
             commit_sequence = row.get(SystemColumns.COMMIT)
@@ -342,9 +385,7 @@ class _ReadOperations:
             table,
             columns=columns,
             where=where,
-            batch_rows=_STREAM_BATCH_ROWS,
-            batch_readahead=_STREAM_BATCH_READAHEAD,
-            fragment_readahead=_STREAM_FRAGMENT_READAHEAD,
+            scan_profile=_TABLE_SCAN_PROFILE,
         )
 
     def _iter_rows(
@@ -353,9 +394,7 @@ class _ReadOperations:
         *,
         columns: Sequence[str] | None,
         where: list[tuple[str, str, object]] | None,
-        batch_rows: int,
-        batch_readahead: int,
-        fragment_readahead: int,
+        scan_profile: _ScanProfile,
     ) -> Iterator[dict]:
         plan = self._read_plan(table, columns, where)
         if plan is None:
@@ -368,9 +407,7 @@ class _ReadOperations:
                 plan.filesystem,
                 plan.columns,
                 plan.pushdown_where,
-                batch_rows,
-                batch_readahead,
-                fragment_readahead,
+                scan_profile,
             )
             for shard in plan.shards
         ]
@@ -414,22 +451,21 @@ class _ReadOperations:
         row = self.point(BlobTables.DESCRIPTORS, **{BlobColumns.NAME: name})
         if row is None:
             return None
-        return io.BufferedReader(_BlobReader(self.blob_parts(name, row)))
+        return io.BufferedReader(_BlobReader(self.blob_parts(BlobDescriptor.from_row(row))))
 
-    def blob_parts(self, name: str, descriptor: dict) -> Generator[bytes, None, None]:
+    def blob_parts(self, descriptor: BlobDescriptor) -> Generator[bytes, None, None]:
         """Yield a pinned descriptor's inline value or ordered chunked parts."""
-        part_count = descriptor.get(BlobColumns.PART_COUNT)
+        name = descriptor.name
+        part_count = descriptor.part_count
         if part_count is None:
-            data = descriptor.get(BlobColumns.DATA)
+            data = descriptor.data
             if data is None:
                 raise BlobCorruptionError(f"blob {name!r} has neither inline data nor parts")
-            value = bytes(data)
-            size = descriptor.get(BlobColumns.SIZE)
-            if size is not None and len(value) != size:
-                raise BlobCorruptionError(f"blob {name!r} declares {size} bytes but stores {len(value)}")
-            yield value
+            if descriptor.size is not None and len(data) != descriptor.size:
+                raise BlobCorruptionError(f"blob {name!r} declares {descriptor.size} bytes but stores {len(data)}")
+            yield data
             return
-        if not isinstance(part_count, int) or part_count <= 0:
+        if part_count <= 0:
             raise BlobCorruptionError(f"blob {name!r} has invalid part count {part_count!r}")
         expected_part = 0
         total_bytes = 0
@@ -437,9 +473,7 @@ class _ReadOperations:
             BlobTables.PARTS,
             columns=[BlobColumns.PART, BlobColumns.DATA],
             where=[(BlobColumns.NAME, "==", name)],
-            batch_rows=_BLOB_STREAM_BATCH_ROWS,
-            batch_readahead=_BLOB_STREAM_READAHEAD,
-            fragment_readahead=_BLOB_STREAM_READAHEAD,
+            scan_profile=_BLOB_SCAN_PROFILE,
         ):
             part = row.get(BlobColumns.PART)
             if part is not None and part >= part_count:
@@ -455,9 +489,8 @@ class _ReadOperations:
             yield value
         if expected_part != part_count:
             raise BlobCorruptionError(f"blob {name!r} has {expected_part} of {part_count} parts")
-        size = descriptor.get(BlobColumns.SIZE)
-        if size is not None and total_bytes != size:
-            raise BlobCorruptionError(f"blob {name!r} declares {size} bytes but stores {total_bytes}")
+        if descriptor.size is not None and total_bytes != descriptor.size:
+            raise BlobCorruptionError(f"blob {name!r} declares {descriptor.size} bytes but stores {total_bytes}")
 
     def resolve(self, uri: str) -> bytes | None:
         """Resolve a blob URI, returning ``None`` when absent and rejecting unsupported references."""
