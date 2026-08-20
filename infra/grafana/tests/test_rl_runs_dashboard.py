@@ -148,19 +148,64 @@ def _run_rows() -> list[tuple]:
                     attributes={"queue": "rollout_buffer"},
                 )
             )
-        # The Ray controller, forwarded by the same service under a different role.
+        # The Ray controller, forwarded by the same service under a different role. Forwarded
+        # snapshots always arrive with kind "gauge" whatever they really are, so the truth is in
+        # source_temporality -- and the allowlist carries cumulative counters alongside gauges.
+        for node in NODES:
+            for name, value in (
+                ("ray_object_store_used_memory", 3.0e9),
+                ("ray_object_store_available_memory", 1.0e9),
+            ):
+                rows.append(
+                    _row(
+                        service="marinskyrl",
+                        name=name,
+                        value=value,
+                        moment=moment,
+                        seq=bucket,
+                        run_id=RUN_ID,
+                        job_id=JOB_ID,
+                        node_name=node,
+                        role="controller",
+                        attributes={"metric_source": "ray", "source_temporality": "current_snapshot"},
+                    )
+                )
+            for state, value in (("Spilled", 2.0e9), ("Restored", 5.0e8)):
+                rows.append(
+                    _row(
+                        service="marinskyrl",
+                        name="ray_spill_manager_objects_bytes",
+                        value=value,
+                        moment=moment,
+                        seq=bucket,
+                        run_id=RUN_ID,
+                        job_id=JOB_ID,
+                        node_name=node,
+                        role="controller",
+                        attributes={
+                            "metric_source": "ray",
+                            "source_temporality": "current_snapshot",
+                            "state": state,
+                        },
+                    )
+                )
+        # A cumulative counter from the same allowlist, which must never be averaged in.
         rows.append(
             _row(
                 service="marinskyrl",
-                name="ray_object_store_used_memory",
-                value=4.0e9 + bucket * 1.0e8,
+                name="ray_spill_manager_objects_bytes",
+                value=9.9e12,
                 moment=moment,
                 seq=bucket,
                 run_id=RUN_ID,
                 job_id=JOB_ID,
                 node_name=NODES[0],
                 role="controller",
-                attributes={"metric_source": "ray"},
+                attributes={
+                    "metric_source": "ray",
+                    "source_temporality": "cumulative_snapshot",
+                    "state": "Spilled",
+                },
             )
         )
         # The Iris node agent: node_name only. No run_id, no job_id, ever.
@@ -298,8 +343,10 @@ def test_the_trainer_panels_render_for_that_run(store) -> None:
     buffer = store.execute(_panel_sql("Rollout buffer occupancy")).fetchall()
     assert [(row[1], row[2]) for row in buffer] == [(12.0, 32.0)] * 6
 
-    ray = store.execute(_panel_sql("Ray object store and spill")).fetchall()
-    assert ray[0][1] == pytest.approx(4.0e9)
+    # Occupancy is a ratio, so two nodes reporting 3 GB used of 4 GB still reads 0.75 rather
+    # than doubling. 6e9 used over 8e9 total.
+    occupancy = store.execute(_panel_sql("Ray object store occupancy")).fetchall()
+    assert [row[1] for row in occupancy] == [pytest.approx(0.75)] * 6
 
 
 def test_the_node_agent_joins_through_node_name_without_a_run_id(store) -> None:
@@ -362,3 +409,14 @@ def test_every_panel_has_a_distinct_title_id_and_slot() -> None:
     assert len(ids) == len(set(ids)), ids
     slots = [(panel["gridPos"]["x"], panel["gridPos"]["y"]) for panel in panels]
     assert len(slots) == len(set(slots)), slots
+
+
+def test_ray_panels_exclude_cumulative_snapshots_and_never_mix_states(store) -> None:
+    # A forwarded snapshot's `kind` column is always "gauge"; the real semantics are in
+    # source_temporality. The Ray allowlist carries cumulative counters, and averaging one in
+    # would be silently wrong rather than visibly empty. The spill states are distinct
+    # quantities and must stay distinct series.
+    rows = store.execute(_panel_sql("Ray spilled objects by state")).fetchall()
+
+    by_state = {row[1]: row[2] for row in rows}
+    assert by_state == {"Spilled": pytest.approx(2.0e9), "Restored": pytest.approx(5.0e8)}

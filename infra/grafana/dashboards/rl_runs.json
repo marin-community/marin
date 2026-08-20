@@ -591,8 +591,8 @@
     {
       "id": 6,
       "type": "timeseries",
-      "title": "Ray object store and spill",
-      "description": "Used, available and spilled bytes from the Ray scheduler snapshots each Iris controller forwards for this run. Spill climbing is the object store overflowing to disk, which shows up as rollout latency long before it shows up as a failure.",
+      "title": "Ray object store occupancy",
+      "description": "Fraction of the Ray object store in use across the run's nodes. A ratio rather than bytes, so it does not move when the node count does. Climbing toward one is the store about to spill, which surfaces as rollout latency long before it surfaces as a failure.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -602,6 +602,89 @@
         "w": 12,
         "x": 0,
         "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "unit": "percentunit",
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, SUM(CASE WHEN name = 'ray_object_store_used_memory' THEN value END) / NULLIF(SUM(CASE WHEN name IN ('ray_object_store_used_memory', 'ray_object_store_available_memory') THEN value END), 0) AS object_store_used_fraction FROM \"telemetry_v1\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'metric_source') = 'ray' AND json_get(attributes_json, 'source_temporality') = 'current_snapshot' AND name IN ('ray_object_store_used_memory', 'ray_object_store_available_memory') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "object_store_used_fraction",
+              "text": "object_store_used_fraction",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Ray spilled objects by state",
+      "description": "Bytes the Ray spill manager holds, split by its own state label. The states are distinct quantities and are never summed or averaged together.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 40
       },
       "fieldConfig": {
         "defaults": {
@@ -642,7 +725,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'ray_object_store_used_memory' THEN value END) AS object_store_used, AVG(CASE WHEN name = 'ray_object_store_available_memory' THEN value END) AS object_store_available, AVG(CASE WHEN name = 'ray_spill_manager_objects_bytes' THEN value END) AS spilled FROM \"telemetry_v1\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'metric_source') = 'ray' AND name IN ('ray_object_store_used_memory', 'ray_object_store_available_memory', 'ray_spill_manager_objects_bytes') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(json_get(attributes_json, 'state'), 'unlabelled') AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'metric_source') = 'ray' AND json_get(attributes_json, 'source_temporality') = 'current_snapshot' AND name = 'ray_spill_manager_objects_bytes' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -661,18 +744,13 @@
               "type": "timestamp_epoch"
             },
             {
-              "selector": "object_store_used",
-              "text": "object_store_used",
-              "type": "number"
+              "selector": "series",
+              "text": "series",
+              "type": "string"
             },
             {
-              "selector": "object_store_available",
-              "text": "object_store_available",
-              "type": "number"
-            },
-            {
-              "selector": "spilled",
-              "text": "spilled",
+              "selector": "value",
+              "text": "value",
               "type": "number"
             }
           ]
