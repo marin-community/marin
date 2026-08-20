@@ -28,6 +28,7 @@ _LAUNCHER_PYTHON = "3.12"
 _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
 _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 SKYRL_POLICY_LOCATION = "<skyrl-policy>"
+_OBJECT_STORE_SCHEMES = ("s3", "gs", "gcs")
 
 
 class SkyRLRuntimeProfile(StrEnum):
@@ -146,6 +147,54 @@ class ArtifactHfModel:
 
 
 @dataclass(frozen=True)
+class ExternalModel:
+    """A published model that no step in this graph produces.
+
+    The Marin graph can only name checkpoints it built. Rerunning a published experiment against a
+    released checkpoint — Snowball, say — has no producing step to point :class:`ArtifactHfModel` at,
+    so the model is named directly and its immutability is asserted rather than derived.
+
+    ``uri`` is the object-store prefix the launcher materializes from. It must be an object-store
+    URI, not a Hugging Face repo id: the Marin request boundary always sends a task-local
+    ``--model_path`` plus ``--model-source-uri``, and MarinSkyRL's ``ModelSource`` rejects a
+    non-object-store source there. House convention mirrors a Hub export to
+    ``s3://marin-us-east-02a/models/<org>--<name>``, which is also the warm source the launcher
+    auto-derives for an offline Hub run.
+
+    ``identity`` is the reproducibility claim and belongs in the fingerprint: name the exact Hub
+    revision the mirror was seeded from (``org/name@<sha>``) so a rerun cannot silently pick up a
+    re-seeded prefix.
+    """
+
+    uri: str
+    identity: str
+    tokenizer_uri: str
+    tokenizer_revision: str
+
+    def __post_init__(self) -> None:
+        if not any(self.uri.startswith(f"{scheme}://") for scheme in _OBJECT_STORE_SCHEMES):
+            raise ValueError(
+                f"ExternalModel uri must be an object-store URI, got {self.uri!r}. "
+                "Mirror a Hugging Face export to s3://marin-us-east-02a/models/<org>--<name> first."
+            )
+        if not self.identity.strip():
+            raise ValueError("ExternalModel identity must name the exact source revision")
+
+    def deps(self) -> tuple[ArtifactStep, ...]:
+        return ()
+
+    def resolve(self, ctx: StepContext) -> ResolvedModelLocator:
+        del ctx
+        return ResolvedModelLocator(
+            uri=self.uri,
+            identity=self.identity,
+            local_path=str(_MARINSKYRL_STAGING_ROOT / "models" / PurePosixPath(self.uri.rstrip("/")).name),
+            tokenizer_uri=self.tokenizer_uri,
+            tokenizer_revision=self.tokenizer_revision,
+        )
+
+
+@dataclass(frozen=True)
 class ArtifactDataSource:
     """An immutable data directory produced by another Marin artifact step."""
 
@@ -166,6 +215,38 @@ class ArtifactDataSource:
 
 
 @dataclass(frozen=True)
+class ExternalDataSource:
+    """A published data directory that no step in this graph produces.
+
+    The counterpart to :class:`ExternalModel`, for rerunning a published experiment against the exact
+    dataset artifact it consumed. ``identity`` is the reproducibility claim and belongs in the
+    fingerprint: a prefix rebuilt with different rows must not resolve to the same experiment.
+    """
+
+    uri: str
+    identity: str
+    relative_path: str = ""
+
+    def __post_init__(self) -> None:
+        if not any(self.uri.startswith(f"{scheme}://") for scheme in _OBJECT_STORE_SCHEMES):
+            raise ValueError(f"ExternalDataSource uri must be an object-store URI, got {self.uri!r}")
+        if not self.identity.strip():
+            raise ValueError("ExternalDataSource identity must name the exact source build")
+
+    def deps(self) -> tuple[ArtifactStep, ...]:
+        return ()
+
+    def resolve(self, ctx: StepContext) -> ResolvedDataLocator:
+        del ctx
+        return ResolvedDataLocator(
+            uri=self.uri,
+            identity=self.identity,
+            local_path=str(_MARINSKYRL_STAGING_ROOT / "data" / PurePosixPath(self.uri.rstrip("/")).name),
+            relative_path=self.relative_path,
+        )
+
+
+@dataclass(frozen=True)
 class SkyRLSpec:
     """Backend-neutral, identity-bearing SkyRL experiment definition."""
 
@@ -173,9 +254,9 @@ class SkyRLSpec:
     version: str
     config_yaml: str
     runtime: SkyRLRuntime
-    model: ArtifactHfModel
-    train_data: tuple[ArtifactDataSource, ...]
-    validation_data: tuple[ArtifactDataSource, ...]
+    model: ArtifactHfModel | ExternalModel
+    train_data: tuple[ArtifactDataSource | ExternalDataSource, ...]
+    validation_data: tuple[ArtifactDataSource | ExternalDataSource, ...]
     topology: SkyRLTopology
     retention: SkyRLRetentionPolicy
     seed: int

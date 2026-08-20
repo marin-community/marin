@@ -6,7 +6,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import subprocess
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import cast
 
@@ -19,6 +19,8 @@ from marin.rl.skyrl import (
     SKYRL_POLICY_LOCATION,
     ArtifactDataSource,
     ArtifactHfModel,
+    ExternalDataSource,
+    ExternalModel,
     IrisSkyRLExecution,
     ResolvedDataLocator,
     ResolvedModelLocator,
@@ -324,3 +326,96 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
         "profile": SkyRLRuntimeProfile.FSDP.value,
     }
     assert launch_envelopes[0]["execution"]["job_name"] == "checkpoints-iceball-rl-2026.08.01-attempt-1"
+
+
+def test_external_model_names_a_published_checkpoint_no_step_produces() -> None:
+    model = ExternalModel(
+        uri="s3://marin-us-east-02a/models/laion--snowball-67b-a2b-sft-s2-thinking-step630",
+        identity="laion/snowball-67b-a2b-sft-s2-thinking-step630@cb70e49a1cdb",
+        tokenizer_uri="laion/snowball-67b-a2b-sft-s2-thinking-step630",
+        tokenizer_revision="cb70e49a1cdb",
+    )
+
+    assert model.deps() == ()
+
+    locator = model.resolve(cast(StepContext, None))
+    assert locator.uri == "s3://marin-us-east-02a/models/laion--snowball-67b-a2b-sft-s2-thinking-step630"
+    assert locator.identity == "laion/snowball-67b-a2b-sft-s2-thinking-step630@cb70e49a1cdb"
+    assert locator.local_path == "/tmp/marinskyrl/models/laion--snowball-67b-a2b-sft-s2-thinking-step630"
+
+
+def test_external_model_rejects_a_hub_repo_id_at_construction() -> None:
+    with pytest.raises(ValueError, match="must be an object-store URI"):
+        ExternalModel(
+            uri="laion/snowball-67b-a2b-sft-s2-thinking-step630",
+            identity="laion/snowball-67b-a2b-sft-s2-thinking-step630@cb70e49a1cdb",
+            tokenizer_uri="laion/snowball-67b-a2b-sft-s2-thinking-step630",
+            tokenizer_revision="cb70e49a1cdb",
+        )
+
+
+def test_external_model_requires_a_source_revision_identity() -> None:
+    with pytest.raises(ValueError, match="exact source revision"):
+        ExternalModel(
+            uri="s3://marin-us-east-02a/models/laion--snowball-67b-a2b-sft-s2-thinking-step630",
+            identity="   ",
+            tokenizer_uri="laion/snowball-67b-a2b-sft-s2-thinking-step630",
+            tokenizer_revision="cb70e49a1cdb",
+        )
+
+
+def test_external_model_identity_reaches_the_launch_request_fingerprint() -> None:
+    model = ExternalModel(
+        uri="s3://marin-us-east-02a/models/laion--snowball-67b-a2b-sft-s2-thinking-step630",
+        identity="laion/snowball-67b-a2b-sft-s2-thinking-step630@cb70e49a1cdb",
+        tokenizer_uri="laion/snowball-67b-a2b-sft-s2-thinking-step630",
+        tokenizer_revision="cb70e49a1cdb",
+    )
+    step = skyrl_step(replace(_spec(), model=model), _execution())
+    reseeded = skyrl_step(replace(_spec(), model=replace(model, identity="other@0000000")), _execution())
+
+    assert step.fingerprint() != reseeded.fingerprint()
+
+
+def test_external_data_source_names_a_published_dataset() -> None:
+    source = ExternalDataSource(
+        uri="s3://marin-us-east-02a/iris/rl-data/snowball-67b-a2b-rlvrmath-7498",
+        identity="snowball-67b-a2b-rlvrmath-7498:rlvrmath-bd2a9355+math500-6e4ed1a2",
+        relative_path="train.parquet",
+    )
+
+    assert source.deps() == ()
+
+    locator = source.resolve(cast(StepContext, None))
+    assert locator.uri == "s3://marin-us-east-02a/iris/rl-data/snowball-67b-a2b-rlvrmath-7498"
+    assert locator.local_path == "/tmp/marinskyrl/data/snowball-67b-a2b-rlvrmath-7498"
+    assert locator.relative_path == "train.parquet"
+
+
+def test_external_data_source_rejects_a_non_object_store_uri() -> None:
+    with pytest.raises(ValueError, match="must be an object-store URI"):
+        ExternalDataSource(uri="allenai/RLVR-MATH", identity="rlvrmath@bd2a9355")
+
+
+def test_external_sources_carry_no_dependencies_into_the_step() -> None:
+    spec = replace(
+        _spec(),
+        model=ExternalModel(
+            uri="s3://marin-us-east-02a/models/marin-community--grug-67b-a2b-sft-s2-thinking-step630",
+            identity="marin-community/grug-67b-a2b-sft-s2-thinking-step630@6808fe5c",
+            tokenizer_uri="marin-community/grug-67b-a2b-sft-s2-thinking-step630",
+            tokenizer_revision="6808fe5c",
+        ),
+        train_data=(
+            ExternalDataSource(
+                uri="s3://marin-us-east-02a/iris/rl-data/snowball-67b-a2b-rlvrmath-7498",
+                identity="snowball-67b-a2b-rlvrmath-7498:rlvrmath-bd2a9355+math500-6e4ed1a2",
+                relative_path="train.parquet",
+            ),
+        ),
+        validation_data=(),
+    )
+
+    step = skyrl_step(spec, _execution())
+
+    assert step.deps == ()
