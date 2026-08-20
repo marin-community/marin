@@ -17,8 +17,9 @@ from fray.client import JobHandle
 from fray.current_client import current_client
 from fray.types import ActorConfig, Entrypoint, JobRequest, JobStatus
 from iris.client.client import iris_ctx
-from iris.cluster.client.job_info import get_job_info
-from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName
+from iris.client.job_info import get_job_info
+from iris.resources.endpoint import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess
+from iris.resources.names import JobName
 from iris.resources.state import TaskState, is_job_finished
 from rigging.connect import capability_path, proxy_path
 from rigging.log_setup import configure_logging
@@ -315,7 +316,7 @@ def _register_dashboard(
             service.endpoint_name,
             address,
             metadata,
-            access=EndpointAccess.ENDPOINT_ACCESS_LINK,
+            access=EndpointAccess.LINK,
         ):
             logger.info(
                 "Registered inference endpoint name=%s address=%s proxy_path=%s",
@@ -565,7 +566,7 @@ def _expose_brokered_inference(
                 streaming=False,
                 proxy_timeout_seconds=proxy.request_timeout_seconds,
             ),
-            access=EndpointAccess.ENDPOINT_ACCESS_LINK,
+            access=EndpointAccess.LINK,
         ):
             internal_model = replace(running_model, tokenizer=model.tokenizer)
             exposed_model = (

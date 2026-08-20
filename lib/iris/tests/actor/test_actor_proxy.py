@@ -16,7 +16,7 @@ from connectrpc.errors import ConnectError
 from iris.actor.client import ActorClient
 from iris.actor.resolver import ProxyResolver
 from iris.actor.server import ActorServer
-from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
+from iris.cluster.controller.endpoint_registry import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.native_proxy import NativeProxy
 from iris.managed_thread import ThreadContainer
 

@@ -10,7 +10,7 @@ from types import MappingProxyType
 
 from rigging.timing import Timestamp
 
-from iris.cluster.types import JobName
+from iris.resources.names import JobName
 from iris.resources.state import FederationState, JobState, TaskState
 
 

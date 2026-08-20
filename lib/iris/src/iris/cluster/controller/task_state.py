@@ -8,22 +8,25 @@ from typing import NamedTuple, Protocol
 
 from rigging.timing import Deadline, Duration, Timestamp
 
-from iris.cluster.types import JobName, WorkerId
-from iris.rpc import job_pb2
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
+from iris.resources.state import TaskState
 
 ACTIVE_TASK_STATES: frozenset[int] = frozenset(
     {
-        job_pb2.TASK_STATE_ASSIGNED,
-        job_pb2.TASK_STATE_BUILDING,
-        job_pb2.TASK_STATE_RUNNING,
+        TaskState.ASSIGNED,
+        TaskState.BUILDING,
+        TaskState.RUNNING,
     }
 )
 
 # Subset of ACTIVE that excludes ASSIGNED — i.e. tasks already on a worker.
 EXECUTING_TASK_STATES: frozenset[int] = frozenset(
     {
-        job_pb2.TASK_STATE_BUILDING,
-        job_pb2.TASK_STATE_RUNNING,
+        TaskState.BUILDING,
+        TaskState.RUNNING,
     }
 )
 
@@ -32,8 +35,8 @@ EXECUTING_TASK_STATES: frozenset[int] = frozenset(
 # creation in the ``iris.task_state`` wait-age columns.
 DISPATCHED_TASK_STATES: frozenset[int] = frozenset(
     {
-        job_pb2.TASK_STATE_ASSIGNED,
-        job_pb2.TASK_STATE_BUILDING,
+        TaskState.ASSIGNED,
+        TaskState.BUILDING,
     }
 )
 
@@ -52,6 +55,27 @@ class RunningTaskEntry(NamedTuple):
     attempt_uid: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class AttemptRecord:
+    """One persisted Attempt history record."""
+
+    task_id: JobName
+    attempt_id: int
+    worker_id: WorkerId | None
+    state: int
+    created_at_ms: Timestamp
+    started_at_ms: Timestamp | None
+    finished_at_ms: Timestamp | None
+    exit_code: int | None
+    error: str | None
+    attempt_uid: str
+    backend_id: str
+    pod_name: str
+    pod_uid: str
+    node_name: str
+    terminal_reason: str
+
+
 def task_is_finished(
     state: int,
     failure_count: int,
@@ -60,13 +84,13 @@ def task_is_finished(
     max_retries_preemption: int,
 ) -> bool:
     """Whether a task has reached a terminal state with no remaining retries."""
-    if state == job_pb2.TASK_STATE_SUCCEEDED:
+    if state == TaskState.SUCCEEDED:
         return True
-    if state in (job_pb2.TASK_STATE_KILLED, job_pb2.TASK_STATE_UNSCHEDULABLE, job_pb2.TASK_STATE_COSCHED_FAILED):
+    if state in (TaskState.KILLED, TaskState.UNSCHEDULABLE, TaskState.COSCHED_FAILED):
         return True
-    if state == job_pb2.TASK_STATE_FAILED:
+    if state == TaskState.FAILED:
         return failure_count > max_retries_failure
-    if state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED):
+    if state in (TaskState.WORKER_FAILED, TaskState.PREEMPTED):
         return preemption_count > max_retries_preemption
     return False
 
@@ -80,7 +104,7 @@ class TaskStateRow(Protocol):
 def task_row_can_be_scheduled(task: TaskStateRow) -> bool:
     # Only PENDING tasks are schedulable; a PENDING task is never finished and
     # never has retries exhausted, so state is the sole discriminator here.
-    return task.state == job_pb2.TASK_STATE_PENDING
+    return task.state == TaskState.PENDING
 
 
 def job_scheduling_deadline(scheduling_deadline_epoch_ms: int | None) -> Deadline | None:
@@ -122,6 +146,7 @@ class TaskDetailRow:
 
     task_id: JobName
     job_id: JobName
+    task_index: int
     state: int
     current_attempt_id: int
     failure_count: int

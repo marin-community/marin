@@ -3,7 +3,7 @@
 
 """Tests for controller checkpoint: remote-only write and download-before-create restore."""
 
-from iris.cluster.controller.checkpoint import (
+from iris.cluster.controller.persistence.checkpoint import (
     download_checkpoint_to_local,
     latest_checkpoint_epoch_ms,
     parse_checkpoint_epoch_ms,
@@ -11,7 +11,7 @@ from iris.cluster.controller.checkpoint import (
     prune_old_checkpoints,
     write_checkpoint,
 )
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.persistence.database import ControllerDB
 from rigging.timing import Duration, ExponentialBackoff
 
 

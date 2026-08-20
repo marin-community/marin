@@ -1,0 +1,65 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Hosted Connect and dashboard surface for the worker daemon."""
+
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, JSONResponse
+from starlette.routing import Mount, Route
+
+from iris.cluster.dashboard_common import favicon_route, html_shell, static_files_mount
+from iris.rpc.async_adapter import AsyncServiceAdapter
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
+from iris.rpc.worker_connect import WorkerServiceASGIApplication
+from iris.rpc.worker_service import WorkerServiceImpl
+
+
+class WorkerDashboard:
+    """HTTP dashboard with Connect RPC and web UI."""
+
+    def __init__(
+        self,
+        service: WorkerServiceImpl,
+        host: str = "0.0.0.0",
+        port: int = 8080,
+    ):
+        self._service = service
+        self._host = host
+        self._port = port
+        self._app = self._create_app()
+
+    @property
+    def port(self) -> int:
+        return self._port
+
+    @property
+    def app(self) -> Starlette:
+        return self._app
+
+    def _create_app(self) -> Starlette:
+        # The ASGI connect app awaits each handler; AsyncServiceAdapter dispatches
+        # the sync WorkerServiceImpl methods to a thread.
+        rpc_app = WorkerServiceASGIApplication(
+            service=AsyncServiceAdapter(self._service),
+            compressions=IRIS_RPC_COMPRESSIONS,
+        )
+
+        # Vue Router handles client-side routing, so every SPA path serves the same shell.
+        routes = [
+            Route("/health", self._health),
+            Route("/", self._dashboard),
+            favicon_route(),
+            Route("/task/{task_id:path}", self._dashboard),
+            Route("/status", self._dashboard),
+            static_files_mount(),
+            Mount(rpc_app.path, app=rpc_app),
+        ]
+        return Starlette(routes=routes)
+
+    def _health(self, _request: Request) -> JSONResponse:
+        """Simple health check endpoint for bootstrap and load balancers."""
+        return JSONResponse({"status": "healthy"})
+
+    def _dashboard(self, _request: Request) -> HTMLResponse:
+        return HTMLResponse(html_shell("worker"))

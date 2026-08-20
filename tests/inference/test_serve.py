@@ -22,11 +22,10 @@ import pytest
 import requests
 from click.testing import CliRunner
 from fray.types import ANY_REGION, ResourceConfig, create_environment
-from iris.cluster.client.job_info import JobInfo, set_job_info
+from iris.client.job_info import JobInfo, set_job_info
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.types import JobName
-from iris.rpc import controller_pb2
-from iris.time_proto import timestamp_to_proto
+from iris.resources.endpoint import EndpointToken
+from iris.resources.names import JobName
 from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.backend import ModelSpec
 from marin.inference.config import (
@@ -512,9 +511,9 @@ def test_resolve_serving_plan_rejects_incompatible_tpu_alternatives():
         _plan(tpu="v6e-4,v6e-8")
 
 
-def _mint_response(token: str, ttl_hours: float) -> controller_pb2.Controller.MintEndpointTokenResponse:
+def _mint_response(token: str, ttl_hours: float) -> EndpointToken:
     expires = Timestamp.from_ms(int(time.time() * 1000) + int(ttl_hours * 3_600_000))
-    return controller_pb2.Controller.MintEndpointTokenResponse(token=token, expires_at=timestamp_to_proto(expires))
+    return EndpointToken(token=token, expires_at=expires, capability_url="")
 
 
 def test_mint_and_print_capability_url_prints_off_cluster_url(capsys):

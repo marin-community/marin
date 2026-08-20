@@ -50,13 +50,12 @@ from iris.cluster.controller.reconcile.snapshot import (
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, ActiveTaskRow
 from iris.cluster.stats.tables import TaskEventSeverity
-from iris.cluster.types import (
-    TERMINAL_JOB_STATES,
-    TERMINAL_TASK_STATES,
+from iris.resources.job import JobPreemptionPolicy
+from iris.resources.names import (
     JobName,
     WorkerId,
 )
-from iris.rpc import job_pb2
+from iris.resources.state import TERMINAL_JOB_STATES, TERMINAL_TASK_STATES, JobState, TaskState
 
 logger = logging.getLogger(__name__)
 
@@ -69,42 +68,6 @@ logger = logging.getLogger(__name__)
 # ``task.merge_task_termination``, and job.py is forbidden from importing task.
 
 
-def _finish_non_terminal_tasks(
-    overlay: Overlay,
-    job_id: JobName,
-    *,
-    task_state: int,
-    error: str | None,
-    exit_code: int | None,
-    message: str,
-    action_reason: TaskActionReason,
-    severity: TaskEventSeverity,
-    now_ms: int,
-) -> None:
-    """Finish all non-terminal tasks for a job and stop their active attempts."""
-    for row in overlay.active_tasks_for_job(job_id, states=NON_TERMINAL_TASK_STATES):
-        task.merge_task_termination(
-            overlay,
-            row.task_id.to_wire(),
-            row.current_attempt_id,
-            task_state,
-            error,
-            now_ms,
-            stamp_attempt_finished=False,
-            exit_code=exit_code,
-        )
-        overlay.emit_task_event(
-            TaskActionEvent(
-                task_id=row.task_id,
-                attempt_id=row.current_attempt_id,
-                ts=Timestamp.from_ms(now_ms),
-                reason=action_reason,
-                message=message,
-                severity=severity,
-            )
-        )
-
-
 def _kill_non_terminal_tasks(
     overlay: Overlay,
     job_id: JobName,
@@ -114,17 +77,51 @@ def _kill_non_terminal_tasks(
     action_reason: TaskActionReason,
 ) -> None:
     """Kill all non-terminal tasks for a single job and delete endpoints."""
-    _finish_non_terminal_tasks(
-        overlay,
-        job_id,
-        task_state=job_pb2.TASK_STATE_KILLED,
-        error=reason,
-        exit_code=None,
-        message=reason,
-        action_reason=action_reason,
-        severity=TaskEventSeverity.WARNING,
-        now_ms=now_ms,
-    )
+    for row in overlay.active_tasks_for_job(job_id, states=NON_TERMINAL_TASK_STATES):
+        task.merge_task_termination(
+            overlay,
+            row.task_id.to_wire(),
+            row.current_attempt_id,
+            TaskState.KILLED,
+            reason,
+            now_ms,
+            stamp_attempt_finished=False,
+        )
+        overlay.emit_task_event(
+            TaskActionEvent(
+                task_id=row.task_id,
+                attempt_id=row.current_attempt_id,
+                ts=Timestamp.from_ms(now_ms),
+                reason=action_reason,
+                message=reason,
+                severity=TaskEventSeverity.WARNING,
+            )
+        )
+
+
+def _succeed_non_terminal_tasks(overlay: Overlay, job_id: JobName, reason: str, now_ms: int) -> None:
+    """Complete every unfinished Task and Attempt in one Job."""
+    for row in overlay.active_tasks_for_job(job_id, states=NON_TERMINAL_TASK_STATES):
+        task.merge_task_termination(
+            overlay,
+            row.task_id.to_wire(),
+            row.current_attempt_id,
+            TaskState.SUCCEEDED,
+            None,
+            now_ms,
+            stamp_attempt_finished=True,
+            exit_code=0,
+        )
+        overlay.emit_task_event(
+            TaskActionEvent(
+                task_id=row.task_id,
+                attempt_id=row.current_attempt_id,
+                ts=Timestamp.from_ms(now_ms),
+                reason=TaskActionReason.JOB_COMPLETED_TASK_SUCCEEDED,
+                message=reason,
+                severity=TaskEventSeverity.NORMAL,
+            )
+        )
 
 
 def _cascade_to_children(
@@ -148,7 +145,7 @@ def _cascade_to_children(
         overlay.merge_cascade_kill(
             JobRowDelta(
                 job_id=child_job_id,
-                state=job_pb2.JOB_STATE_KILLED,
+                state=JobState.KILLED,
                 error=reason,
                 finished_at=Timestamp.from_ms(now_ms),
                 is_cascade_kill=True,
@@ -171,9 +168,9 @@ def _finalize_terminal_job(overlay: Overlay, job_id: JobName, terminal_state: in
         action_reason=TaskActionReason.JOB_FINALIZED_TASK_KILLED,
     )
     should_cascade = True
-    if terminal_state != job_pb2.JOB_STATE_SUCCEEDED:
+    if terminal_state != JobState.SUCCEEDED:
         policy = overlay.job_preemption_policy(job_id)
-        should_cascade = policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN
+        should_cascade = policy == JobPreemptionPolicy.TERMINATE_CHILDREN
     if should_cascade:
         _cascade_to_children(
             overlay,
@@ -338,6 +335,8 @@ class ReconcileState:
         for decision in ordered:
             if decision.kind is task.TerminalKind.PREEMPT:
                 self._apply_preempt_decision(decision, now_ms)
+            elif decision.kind is task.TerminalKind.TERMINATE:
+                self._apply_terminate_decision(decision, now_ms)
             elif decision.kind is task.TerminalKind.UNSCHEDULABLE:
                 self._apply_unschedulable_decision(decision)
             # TIMEOUT handled above.
@@ -377,7 +376,7 @@ class ReconcileState:
             self.overlay.merge_cascade_kill(
                 JobRowDelta(
                     job_id=jid,
-                    state=job_pb2.JOB_STATE_KILLED,
+                    state=JobState.KILLED,
                     error=job_reason,
                     finished_at=finished_at,
                     is_cascade_kill=True,
@@ -391,32 +390,22 @@ class ReconcileState:
         return self.overlay.effects
 
     def complete_job(self, job_id: JobName, now: Timestamp) -> ControllerEffects:
-        """Complete a running job successfully and stop its unfinished tasks."""
+        """Complete one active Job and stop its unfinished Task Attempts."""
         basis = self._snapshot.job_state_basis.get(job_id)
         if basis is None or basis.state in TERMINAL_JOB_STATES:
             return self.overlay.effects
 
         now_ms = now.epoch_ms()
-        reason = TERMINAL_STATE_FALLBACK_REASONS[job_pb2.JOB_STATE_SUCCEEDED]
-        _finish_non_terminal_tasks(
-            self.overlay,
-            job_id,
-            task_state=job_pb2.TASK_STATE_SUCCEEDED,
-            error=None,
-            exit_code=0,
-            message=reason,
-            action_reason=TaskActionReason.JOB_COMPLETED_TASK_SUCCEEDED,
-            severity=TaskEventSeverity.NORMAL,
-            now_ms=now_ms,
-        )
+        reason = TERMINAL_STATE_FALLBACK_REASONS[JobState.SUCCEEDED]
+        _succeed_non_terminal_tasks(self.overlay, job_id, reason, now_ms)
         self.overlay.merge_job_state(
             JobRowDelta(
                 job_id=job_id,
-                state=job_pb2.JOB_STATE_SUCCEEDED,
+                state=JobState.SUCCEEDED,
                 finished_at=Timestamp.from_ms(now_ms),
             )
         )
-        _finalize_terminal_job(self.overlay, job_id, job_pb2.JOB_STATE_SUCCEEDED, now_ms)
+        _finalize_terminal_job(self.overlay, job_id, JobState.SUCCEEDED, now_ms)
         self.overlay.emit_log_event(LogEvent(action="job_completed", entity_id=job_id.to_wire()))
         return self.overlay.effects
 
@@ -433,18 +422,16 @@ class ReconcileState:
         now_ms: int,
     ) -> None:
         """Record a retry or terminal decision for one state-changing outcome."""
-        if outcome.new_task_state == job_pb2.TASK_STATE_PENDING:
+        if outcome.new_task_state == TaskState.PENDING:
             reason = TaskActionReason.RETRY_SCHEDULED
             message = f"{message_prefix}; controller returned the task to PENDING."
             severity = TaskEventSeverity.NORMAL
         elif outcome.new_task_state in TERMINAL_TASK_STATES:
             reason = TaskActionReason.TERMINATED
-            resolved_state = job_pb2.TaskState.Name(outcome.new_task_state).removeprefix("TASK_STATE_")
+            resolved_state = TaskState(outcome.new_task_state).name
             message = f"{message_prefix}; controller resolved the task as {resolved_state}."
             severity = (
-                TaskEventSeverity.NORMAL
-                if outcome.new_task_state == job_pb2.TASK_STATE_SUCCEEDED
-                else TaskEventSeverity.WARNING
+                TaskEventSeverity.NORMAL if outcome.new_task_state == TaskState.SUCCEEDED else TaskEventSeverity.WARNING
             )
         else:
             return
@@ -472,7 +459,7 @@ class ReconcileState:
         if outcome is None:
             return
         if outcome.new_task_state != outcome.prior_state:
-            reported_state = job_pb2.TaskState.Name(update.new_state).removeprefix("TASK_STATE_")
+            reported_state = TaskState(update.new_state).name
             self._emit_task_transition_action(
                 outcome,
                 attempt_id=update.attempt_id,
@@ -541,9 +528,9 @@ class ReconcileState:
         Drained by :meth:`_recompute_and_finalize` so it runs once per job after
         every sibling in the batch has settled.
         """
-        if outcome.new_task_state != job_pb2.TASK_STATE_PENDING:
+        if outcome.new_task_state != TaskState.PENDING:
             return
-        if self.overlay.job_preemption_policy(outcome.job_id) == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN:
+        if self.overlay.job_preemption_policy(outcome.job_id) == JobPreemptionPolicy.TERMINATE_CHILDREN:
             self.pending_child_cascades.setdefault(outcome.job_id, reason)
 
     # ------------------------------------------------------------------
@@ -568,18 +555,18 @@ class ReconcileState:
             )
             candidates: list[tuple[JobName, int]] = []
             for desired in plan.request.desired:
-                if not desired.HasField("run") or not desired.run.HasField("request"):
+                if not isinstance(desired, worker.LaunchAttempt):
                     continue
-                req_proto = desired.run.request
-                cand_task_id = JobName.from_wire(req_proto.task_id)
+                launch = desired.launch
+                cand_task_id = launch.task_id
                 # Overlay-aware gate: a sibling already requeued to PENDING earlier
                 # in this same batch is no longer ASSIGNED, so it must not be
                 # fabricated into a synthetic WORKER_FAILED (split-slice corruption).
                 # ``assigned_updates_from_plan`` re-checks the snapshot, but that
                 # read is blind to same-batch overlay mutations.
-                if self.overlay.task_state(cand_task_id) != job_pb2.TASK_STATE_ASSIGNED:
+                if self.overlay.task_state(cand_task_id) != TaskState.ASSIGNED:
                     continue
-                candidates.append((cand_task_id, req_proto.attempt_id))
+                candidates.append((cand_task_id, launch.attempt_id))
             if not candidates:
                 return []
             return worker.assigned_updates_from_plan(self._snapshot, candidates, result.error)
@@ -640,7 +627,7 @@ class ReconcileState:
             prior_state,
             task_row.preemption_count,
             task_row.max_retries_preemption,
-            job_pb2.TASK_STATE_WORKER_FAILED,
+            TaskState.WORKER_FAILED,
         )
         # The worker is gone, so the attempt is truly done: finalize it (stamp
         # finished_at) rather than leaving it for a status update that will never
@@ -653,7 +640,7 @@ class ReconcileState:
             f"Worker {worker_id} failed: {error}",
             now_ms,
             stamp_attempt_finished=True,
-            attempt_state=job_pb2.TASK_STATE_WORKER_FAILED,
+            attempt_state=TaskState.WORKER_FAILED,
         )
         parent_job_id, _ = task_id.require_task()
         return task.TransitionOutcome(
@@ -692,6 +679,23 @@ class ReconcileState:
         self.overlay.emit_log_event(
             LogEvent(
                 action="task_preempted",
+                entity_id=decision.task_id.to_wire(),
+                details=(("reason", decision.reason),),
+            )
+        )
+
+    def _apply_terminate_decision(self, decision: task.TerminalDecision, now_ms: int) -> None:
+        effective_state = self.overlay.task_state(decision.task_id)
+        if effective_state is None or effective_state not in ACTIVE_TASK_STATES:
+            return
+        row = task.active_row_from_snapshot(self._snapshot, decision.task_id)
+        outcome = task.terminate_one(self.overlay, self._snapshot, decision.task_id, decision.reason, row=row)
+        if outcome is None:
+            return
+        self._fan_out(outcome, child_reason=decision.reason, now_ms=now_ms)
+        self.overlay.emit_log_event(
+            LogEvent(
+                action="attempt_terminated",
                 entity_id=decision.task_id.to_wire(),
                 details=(("reason", decision.reason),),
             )

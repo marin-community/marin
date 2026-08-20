@@ -1,0 +1,555 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+from collections.abc import Callable
+
+import pytest
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from google.protobuf import any_pb2
+from iris.cluster.controller.composition import wire_resource_service
+from iris.cluster.controller.persistence.schema import task_attempts_table, tasks_table
+from iris.resources.activity import ActivityQuery
+from iris.resources.endpoint import ExecResult, ProfileResult
+from iris.resources.identity import ResourceKey, ResourceKind
+from iris.resources.names import JobName
+from iris.resources.state import JobState
+from iris.rpc import (
+    iris_logging_pb2,
+    resource_command_pb2,
+    resource_fleet_pb2,
+    resource_identity_pb2,
+    resource_job_pb2,
+    resource_observability_pb2,
+    resource_pb2,
+    resource_task_pb2,
+)
+from iris.rpc.resource_service import ResourceServiceImpl
+from iris.rpc.resource_types import (
+    ACTIVITY_ENTRY,
+    ATTEMPT,
+    CAPACITY,
+    EXEC_SESSION,
+    JOB,
+    LOG_ENTRY,
+    PROFILE_CAPTURE,
+    TASK,
+)
+from sqlalchemy import update
+
+
+def _key(key) -> resource_identity_pb2.ResourceKey:
+    kinds = {
+        "job": resource_identity_pb2.RESOURCE_KIND_JOB,
+        "task": resource_identity_pb2.RESOURCE_KIND_TASK,
+        "attempt": resource_identity_pb2.RESOURCE_KIND_ATTEMPT,
+    }
+    return resource_identity_pb2.ResourceKey(
+        cluster_id=key.cluster_id,
+        kind=kinds[key.kind.value],
+        resource_id=key.resource_id,
+    )
+
+
+def _pack(value) -> any_pb2.Any:
+    result = any_pb2.Any()
+    result.Pack(value)
+    return result
+
+
+def _service(journey) -> ResourceServiceImpl:
+    return wire_resource_service(journey.controller.controller)
+
+
+def _ref(
+    cluster_id: str,
+    resource_type: str,
+    resource_id: str,
+    uid: str | None = None,
+) -> resource_pb2.ResourceRef:
+    result = resource_pb2.ResourceRef(
+        authority_cluster_id=cluster_id,
+        type=resource_type,
+        id=resource_id,
+    )
+    if uid is not None:
+        result.uid = uid
+    return result
+
+
+def _attempt_ref(identity: resource_identity_pb2.AttemptIdentity) -> resource_pb2.ResourceRef:
+    return _ref(
+        identity.task.cluster_id,
+        ATTEMPT,
+        f"{identity.task.resource_id}:{identity.attempt_number}",
+        identity.attempt_uid,
+    )
+
+
+def _fetch_logs(
+    service: ResourceServiceImpl,
+    request: resource_observability_pb2.LogQuery,
+) -> resource_pb2.ListResourcesResponse:
+    return service.list_resources(
+        resource_pb2.ListResourcesRequest(
+            type=LOG_ENTRY,
+            query=_pack(request),
+            view=resource_pb2.RESOURCE_VIEW_FULL,
+        ),
+        None,
+    )
+
+
+def _list_activity(
+    service: ResourceServiceImpl,
+    query: resource_observability_pb2.ActivityQuery,
+) -> resource_pb2.ListResourcesResponse:
+    return service.list_resources(
+        resource_pb2.ListResourcesRequest(
+            type=ACTIVITY_ENTRY,
+            query=_pack(query),
+            page_size=query.page.page_size,
+            page_token=query.page.page_token,
+            view=resource_pb2.RESOURCE_VIEW_FULL,
+        ),
+        None,
+    )
+
+
+def _batch_task_details(
+    service: ResourceServiceImpl,
+    keys: list[resource_identity_pb2.ResourceKey],
+) -> tuple[resource_task_pb2.TaskDetail, ...]:
+    response = service.batch_get_resources(
+        resource_pb2.BatchGetResourcesRequest(
+            type=TASK,
+            refs=[_ref(key.cluster_id, TASK, key.resource_id) for key in keys],
+            view=resource_pb2.RESOURCE_VIEW_FULL,
+        ),
+        None,
+    )
+    return tuple(resource_task_pb2.TaskDetail.FromString(result.resource.body.value) for result in response.results)
+
+
+def _create_attempt_child(
+    service: ResourceServiceImpl,
+    resource_type: str,
+    body,
+):
+    operation = service.create_resource(
+        resource_pb2.CreateResourceRequest(
+            mutation=resource_pb2.MutationMetadata(request_id=f"test-{resource_type}"),
+            type=resource_type,
+            parent=_attempt_ref(body.attempt),
+            body=_pack(body),
+        ),
+        None,
+    )
+    return operation.result
+
+
+def _job_state(
+    service: ResourceServiceImpl,
+    identity: resource_identity_pb2.JobIdentity,
+) -> int:
+    response = service.get_resource(
+        resource_pb2.GetResourceRequest(
+            ref=_ref(identity.key.cluster_id, JOB, identity.key.resource_id, identity.job_uid),
+            view=resource_pb2.RESOURCE_VIEW_BASIC,
+        ),
+        None,
+    )
+    return resource_job_pb2.JobSummary.FromString(response.resource.body.value).state
+
+
+def _capacity(service: ResourceServiceImpl) -> resource_fleet_pb2.CapacityStatus:
+    response = service.get_resource(
+        resource_pb2.GetResourceRequest(
+            ref=_ref("journey", CAPACITY, "capacity"),
+            view=resource_pb2.RESOURCE_VIEW_FULL,
+        ),
+        None,
+    )
+    return resource_fleet_pb2.CapacityStatus.FromString(response.resource.body.value)
+
+
+def _job_target(identity, *, uid: str | None = None) -> resource_observability_pb2.LogTarget:
+    return resource_observability_pb2.LogTarget(
+        job=resource_identity_pb2.JobIdentity(
+            key=_key(identity.key),
+            job_uid=identity.job_uid if uid is None else uid,
+        )
+    )
+
+
+def _task_target(identity, *, uid: str | None = None) -> resource_observability_pb2.LogTarget:
+    return resource_observability_pb2.LogTarget(
+        task=resource_identity_pb2.TaskIdentity(
+            key=_key(identity.key),
+            task_uid=identity.task_uid if uid is None else uid,
+        )
+    )
+
+
+def _attempt_target(identity, *, uid: str | None = None) -> resource_observability_pb2.LogTarget:
+    return resource_observability_pb2.LogTarget(attempt=_attempt_identity(identity, uid=uid))
+
+
+def _attempt_identity(identity, *, uid: str | None = None) -> resource_identity_pb2.AttemptIdentity:
+    return resource_identity_pb2.AttemptIdentity(
+        task=_key(identity.task),
+        attempt_number=identity.attempt_number,
+        attempt_uid=identity.attempt_uid if uid is None else uid,
+    )
+
+
+def _log_lines(service: ResourceServiceImpl, target: resource_observability_pb2.LogTarget) -> set[str]:
+    response = _fetch_logs(service, resource_observability_pb2.LogQuery(target=target))
+    return {iris_logging_pb2.LogEntry.FromString(item.body.value).data for item in response.resources}
+
+
+def test_state_only_rpc_tracks_one_exact_job_incarnation(journey) -> None:
+    job = journey.submit("state-only")
+    identity = journey.job(job).summary.identity
+    service = _service(journey)
+    selected = resource_identity_pb2.JobIdentity(key=_key(identity.key), job_uid=identity.job_uid)
+
+    assert JobState(_job_state(service, selected)) is JobState.PENDING
+
+    journey.settle()
+
+    assert JobState(_job_state(service, selected)) is JobState.RUNNING
+    selected.job_uid = "replaced-job"
+    with pytest.raises(ConnectError) as exc_info:
+        _job_state(service, selected)
+    assert exc_info.value.code is Code.FAILED_PRECONDITION
+
+
+def test_capacity_keeps_an_unavailable_backend_visible_with_source_status(journey) -> None:
+    journey.backend.fail_status(times=1)
+
+    response = _capacity(_service(journey))
+
+    assert [backend.backend_id for backend in response.backends] == ["default"]
+    assert response.source_statuses[0].source_id == "backend:default"
+    assert response.source_statuses[0].state == resource_pb2.SOURCE_STATE_UNAVAILABLE
+
+
+def test_logs_are_scoped_to_exact_job_task_and_attempt_identities(journey) -> None:
+    selected = journey.submit("logs-selected", tasks=2, preemption_retries=1)
+    other = journey.submit("logs-other")
+    journey.settle()
+    first_attempt = journey.attempt(selected[0]).summary.identity
+    journey.preempt(selected[0])
+    journey.settle()
+    current_attempt = journey.attempt(selected[0]).summary.identity
+
+    journey.push_task_logs(selected[0], ["selected-first-attempt"], attempt_id=0)
+    journey.push_task_logs(selected[0], ["selected-current-attempt"], attempt_id=1)
+    journey.push_task_logs(selected[1], ["selected-sibling"], attempt_id=0)
+    journey.push_task_logs(other[0], ["other-job"], attempt_id=0)
+
+    service = _service(journey)
+    job = journey.job(selected).summary.identity
+    task = journey.task(selected[0]).summary.identity
+
+    assert _log_lines(service, _job_target(job)) == {
+        "selected-first-attempt",
+        "selected-current-attempt",
+        "selected-sibling",
+    }
+    assert _log_lines(service, _task_target(task)) == {
+        "selected-first-attempt",
+        "selected-current-attempt",
+    }
+    assert _log_lines(service, _attempt_target(first_attempt)) == {"selected-first-attempt"}
+    assert _log_lines(service, _attempt_target(current_attempt)) == {"selected-current-attempt"}
+
+    stale_targets: tuple[Callable[[], resource_observability_pb2.LogTarget], ...] = (
+        lambda: _job_target(job, uid="replacement-job"),
+        lambda: _task_target(task, uid="replacement-task"),
+        lambda: _attempt_target(current_attempt, uid="replacement-attempt"),
+    )
+    for stale_target in stale_targets:
+        with pytest.raises(ConnectError) as exc_info:
+            _fetch_logs(service, resource_observability_pb2.LogQuery(target=stale_target()))
+        assert exc_info.value.code is Code.FAILED_PRECONDITION
+
+
+def test_activity_after_restart_keeps_durable_actions_when_task_events_are_unavailable(journey, monkeypatch) -> None:
+    job = journey.submit("activity-partial", preemption_retries=1)
+    journey.settle()
+    task = journey.task(job[0]).summary
+    current = task.current_attempt
+    assert current is not None
+    receipt = journey.retry_task(
+        task.identity,
+        expected_attempt_uid=current.attempt_uid,
+        idempotency_key="activity-partial",
+    )
+    journey.restart()
+
+    def unavailable_query(*_args, **_kwargs):
+        raise ConnectionError("finelog task events unavailable")
+
+    monkeypatch.setattr(journey.log_stack.client, "query", unavailable_query)
+    service = _service(journey)
+    response = _list_activity(
+        service,
+        resource_observability_pb2.ActivityQuery(
+            target=_key(task.identity.key),
+            attempt_uid=current.attempt_uid,
+        ),
+    )
+
+    entries = [resource_observability_pb2.ActivityEntry.FromString(item.body.value) for item in response.resources]
+    assert [(entry.entry_id, entry.correlation_id) for entry in entries] == [
+        (f"action:{receipt.action_id}", receipt.action_id)
+    ]
+    assert {(status.source_id, status.state) for status in response.source_statuses} == {
+        ("controller:journey", resource_pb2.SOURCE_STATE_AVAILABLE),
+        ("finelog:journey", resource_pb2.SOURCE_STATE_UNAVAILABLE),
+    }
+
+    with pytest.raises(ConnectError) as exc_info:
+        _list_activity(
+            service,
+            resource_observability_pb2.ActivityQuery(
+                target=_key(task.identity.key),
+                attempt_uid="replacement-attempt",
+            ),
+        )
+    assert exc_info.value.code is Code.FAILED_PRECONDITION
+
+
+def test_batch_describe_tasks_returns_ordered_details_with_attempts(journey) -> None:
+    job = journey.submit("batch-details", tasks=2)
+    journey.settle()
+    service = _service(journey)
+
+    details = _batch_task_details(
+        service,
+        [_key(journey.task(job[index]).summary.identity.key) for index in (1, 0)],
+    )
+
+    assert [detail.summary.identity.key.resource_id for detail in details] == [job[1].wire_id, job[0].wire_id]
+    assert [detail.attempts[0].identity.attempt_uid for detail in details] == [
+        journey.attempt(job[1]).summary.identity.attempt_uid,
+        journey.attempt(job[0]).summary.identity.attempt_uid,
+    ]
+
+
+def test_batch_task_details_omit_per_task_log_enrichment(journey, monkeypatch) -> None:
+    job = journey.submit("batch-failed", tasks=20)
+    journey.settle()
+    for index in range(job.tasks):
+        journey.fail(job[index])
+    journey.settle()
+
+    def unexpected_finelog_call(*_args, **_kwargs):
+        raise AssertionError("batch Task details must not issue per-Task finelog calls")
+
+    monkeypatch.setattr(journey.log_stack.client, "fetch_logs", unexpected_finelog_call)
+    details = _batch_task_details(
+        _service(journey),
+        [
+            _key(ResourceKey(job[index].authority_cluster_id, ResourceKind.TASK, job[index].wire_id))
+            for index in range(job.tasks)
+        ],
+    )
+
+    assert len(details) == job.tasks
+    assert all(not detail.root_cause_highlights for detail in details)
+
+
+def test_activity_page_token_continues_past_each_sources_first_batch(journey) -> None:
+    job = journey.submit("activity-pages", preemption_retries=3)
+    journey.settle()
+    task_identity = journey.task(job[0]).summary.identity
+    for index in range(3):
+        current = journey.task(job[0]).summary.current_attempt
+        assert current is not None
+        journey.retry_task(
+            task_identity,
+            expected_attempt_uid=current.attempt_uid,
+            idempotency_key=f"activity-page-{index}",
+        )
+        journey.settle()
+
+    journey.log_stack.task_event_table.flush()
+
+    all_entries = journey.controller.controller.list_activity(
+        ActivityQuery(target=task_identity.key, page_size=100)
+    ).items
+    paged_entries = []
+    page_token = None
+    while True:
+        page = journey.controller.controller.list_activity(
+            ActivityQuery(target=task_identity.key, page_size=1, page_token=page_token)
+        )
+        paged_entries.extend(page.items)
+        if page.next_page_token is None:
+            break
+        page_token = page.next_page_token
+
+    assert [entry.entry_id for entry in paged_entries] == [entry.entry_id for entry in all_entries]
+
+
+def test_attempt_runtime_and_history_use_the_attempts_retained_coordinates(journey) -> None:
+    job = journey.submit("attempt-runtime", preemption_retries=1)
+    journey.settle()
+    task_id = JobName.from_wire(job[0].wire_id)
+    backend_id = journey.backend.backend_id
+    with journey.database.transaction() as tx:
+        tx.execute(
+            update(task_attempts_table)
+            .where(task_attempts_table.c.task_id == task_id, task_attempts_table.c.attempt_id == 0)
+            .values(backend_id=backend_id, pod_name="pod-a", pod_uid="pod-uid-a", node_name="node-a")
+        )
+        tx.execute(update(tasks_table).where(tasks_table.c.task_id == task_id).values(container_id="container-a"))
+
+    current = journey.attempt(job[0], 0)
+    assert current.summary.backend_id == backend_id
+    assert current.summary.execution_cluster_id == "journey"
+    assert current.runtime is not None
+    assert (
+        current.runtime.provider_kind,
+        current.runtime.name,
+        current.runtime.provider_uid,
+        current.runtime.provider_node_id,
+        current.runtime.container_id,
+    ) == ("kubernetes", "pod-a", "pod-uid-a", "node-a", "container-a")
+
+    journey.preempt(job[0])
+    journey.settle()
+    replacement = journey.attempt(job[0])
+    assert replacement.summary.identity.attempt_number == 1
+    assert replacement.runtime is None
+    with journey.database.transaction() as tx:
+        tx.execute(
+            update(task_attempts_table)
+            .where(task_attempts_table.c.task_id == task_id, task_attempts_table.c.attempt_id == 0)
+            .values(backend_id="historical-backend")
+        )
+
+    historical = journey.attempt(job[0], 0)
+    assert (historical.summary.backend_id, historical.summary.execution_cluster_id, historical.summary.node) == (
+        "historical-backend",
+        "journey",
+        None,
+    )
+    assert historical.runtime is not None
+    assert historical.runtime.container_id == ""
+
+
+def test_exec_and_profile_after_restart_refuse_a_superseded_attempt_before_runtime(journey, monkeypatch) -> None:
+    job = journey.submit("debug-current", preemption_retries=1)
+    journey.settle()
+    journey.preempt(job[0])
+    journey.settle()
+    detail = journey.task(job[0])
+    stale_identity = detail.attempts[0].identity
+    current = detail.summary.current_attempt
+    assert current is not None
+    assert current.attempt_number == 1
+    journey.restart()
+
+    def exec_in_container(*_args, **_kwargs) -> ExecResult:
+        return ExecResult(0, "current exec", "", "")
+
+    def profile_task(*_args, **_kwargs) -> ProfileResult:
+        return ProfileResult(b"current profile", "")
+
+    monkeypatch.setattr(journey.backend, "exec_in_container", exec_in_container)
+    monkeypatch.setattr(journey.backend, "profile_task", profile_task)
+    service = _service(journey)
+
+    stale = _attempt_identity(stale_identity)
+    with pytest.raises(ConnectError) as exec_error:
+        _create_attempt_child(
+            service,
+            EXEC_SESSION,
+            resource_command_pb2.CreateExecSession(attempt=stale, command=["echo", "hello"]),
+        )
+    assert exec_error.value.code is Code.FAILED_PRECONDITION
+
+    with pytest.raises(ConnectError) as profile_error:
+        _create_attempt_child(
+            service,
+            PROFILE_CAPTURE,
+            resource_command_pb2.CreateProfileCapture(
+                attempt=stale,
+                profile=resource_command_pb2.ProfileType(cpu=resource_command_pb2.CpuProfile()),
+            ),
+        )
+    assert profile_error.value.code is Code.FAILED_PRECONDITION
+
+    current_identity = _attempt_identity(current)
+    exec_result = _create_attempt_child(
+        service,
+        EXEC_SESSION,
+        resource_command_pb2.CreateExecSession(attempt=current_identity, command=["echo", "hello"]),
+    )
+    profile_result = _create_attempt_child(
+        service,
+        PROFILE_CAPTURE,
+        resource_command_pb2.CreateProfileCapture(
+            attempt=current_identity,
+            profile=resource_command_pb2.ProfileType(cpu=resource_command_pb2.CpuProfile()),
+        ),
+    )
+    exec_response = resource_command_pb2.ExecSessionResult.FromString(exec_result.value)
+    profile_response = resource_command_pb2.ProfileCaptureResult.FromString(profile_result.value)
+
+    assert (exec_response.exit_code, exec_response.stdout) == (0, "current exec")
+    assert profile_response.profile_data == b"current profile"
+
+
+def test_exec_and_profile_refuse_an_attempt_from_a_replaced_task_incarnation(journey, monkeypatch) -> None:
+    original = journey.submit("debug-replaced")
+    journey.settle()
+    stale = journey.attempt(original[0]).summary.identity
+    journey.succeed(original[0])
+    journey.settle()
+    journey.restart()
+
+    replacement = journey.submit("debug-replaced")
+    journey.settle()
+    current = journey.attempt(replacement[0]).summary.identity
+    assert current.attempt_number == stale.attempt_number == 0
+    assert current.attempt_uid != stale.attempt_uid
+
+    runtime_calls: list[str] = []
+
+    def exec_in_container(*_args, **_kwargs) -> ExecResult:
+        runtime_calls.append("exec")
+        return ExecResult(0, "", "", "")
+
+    def profile_task(*_args, **_kwargs) -> ProfileResult:
+        runtime_calls.append("profile")
+        return ProfileResult(b"", "")
+
+    monkeypatch.setattr(journey.backend, "exec_in_container", exec_in_container)
+    monkeypatch.setattr(journey.backend, "profile_task", profile_task)
+    service = _service(journey)
+    stale_proto = _attempt_identity(stale)
+
+    with pytest.raises(ConnectError) as exec_error:
+        _create_attempt_child(
+            service,
+            EXEC_SESSION,
+            resource_command_pb2.CreateExecSession(attempt=stale_proto, command=["true"]),
+        )
+    with pytest.raises(ConnectError) as profile_error:
+        _create_attempt_child(
+            service,
+            PROFILE_CAPTURE,
+            resource_command_pb2.CreateProfileCapture(
+                attempt=stale_proto,
+                profile=resource_command_pb2.ProfileType(cpu=resource_command_pb2.CpuProfile()),
+            ),
+        )
+
+    assert exec_error.value.code is Code.FAILED_PRECONDITION
+    assert profile_error.value.code is Code.FAILED_PRECONDITION
+    assert runtime_calls == []

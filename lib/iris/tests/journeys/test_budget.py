@@ -21,5 +21,6 @@ def test_budget_spend_tracks_running_tasks_and_ignores_pending_or_resource_less_
     resource_less = journey.submit("resource-less", user=user, include_resources=False)
     journey.settle()
 
-    assert journey.task(resource_less[0]).current_attempt_id == 0
+    current = journey.task(resource_less[0]).summary.current_attempt
+    assert current is not None and current.attempt_number == 0
     assert journey.budget_spent(user) == 0

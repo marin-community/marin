@@ -33,7 +33,7 @@ from iris.cli.connect import connect_controller, rpc_client
 from iris.client.client import IrisClient
 from iris.client.workload import JobStatus
 from iris.client.workload_summary import job_summary_data
-from iris.cluster.types import JobName
+from iris.resources.names import JobName
 from iris.rpc import job_pb2, query_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from rigging.filesystem.storage_path import StoragePath

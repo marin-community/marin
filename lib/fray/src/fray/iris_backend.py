@@ -26,7 +26,7 @@ from iris.client.client import IrisClient as IrisClientLib
 from iris.client.client import Job as IrisJob
 from iris.client.client import JobAlreadyExists as IrisJobAlreadyExists
 from iris.client.client import get_iris_ctx, iris_ctx
-from iris.cluster.client.job_info import get_job_info
+from iris.client.job_info import get_job_info
 from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,
     Constraint,
@@ -38,14 +38,10 @@ from iris.cluster.constraints import (
     zone_constraint,
 )
 from iris.cluster.platforms.k8s.coreweave_topology import COSCHEDULE_LEAFGROUP, gpu_gang_coscheduling_level
-from iris.cluster.types import (
-    CoschedulingConfig,
-    EnvironmentSpec,
-    ResourceSpec,
-    tpu_device,
-)
-from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.hooks.multigpu import build_multigpu_hook
+from iris.resources.execution import Device, EnvironmentSpec, GpuDevice, ResourceSpec, tpu_device
+from iris.resources.execution import Entrypoint as IrisEntrypoint
+from iris.resources.job import CoschedulingConfig
 from iris.resources.state import JobState as IrisJobState
 from iris.resources.state import is_job_finished
 from iris.rpc import actor_pb2, job_pb2
@@ -102,15 +98,14 @@ def resolve_coscheduling(resources: ResourceConfig, replicas: int) -> Coscheduli
     return None
 
 
-def _convert_device(device: DeviceConfig) -> job_pb2.DeviceConfig | None:
-    """Convert fray DeviceConfig to Iris protobuf DeviceConfig."""
+def _convert_device(device: DeviceConfig) -> Device | None:
+    """Convert a Fray device request to the Iris resource model."""
     if isinstance(device, CpuConfig):
         return None
     elif isinstance(device, TpuConfig):
         return tpu_device(device.variant)
     elif isinstance(device, GpuConfig):
-        gpu = job_pb2.GpuDevice(variant=device.variant, count=device.count)
-        return job_pb2.DeviceConfig(gpu=gpu)
+        return GpuDevice(variant=device.variant, count=device.count)
     raise ValueError(f"Unknown device config type: {type(device)}")
 
 

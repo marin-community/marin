@@ -11,7 +11,7 @@ from fray.iris_backend import FrayIrisClient
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.config import load_config, make_local_config
 from iris.cluster.lifecycle import connect_cluster
-from iris.cluster.types import Entrypoint, ResourceSpec
+from iris.resources.execution import Entrypoint, ResourceSpec
 
 ZEPHYR_ROOT = Path(__file__).resolve().parents[2]
 IRIS_CONFIG = Path(__file__).resolve().parents[3] / "iris" / "config" / "ci-test.yaml"

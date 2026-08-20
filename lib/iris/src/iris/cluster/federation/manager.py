@@ -4,15 +4,13 @@
 """The federation manager: peer registry, handoff, delta-sync, and cancel.
 
 The controller composes one manager. It owns the peer registry, the submit-time
-:class:`~iris.cluster.federation.router.PeerRouter`, a capability heartbeat loop,
-and one sync loop per peer. Each sync pass delivers pending handoffs and cancels,
-then mirrors the peer's jobs into the local projection. Handoffs to one peer run
-with bounded concurrency. A slow LaunchJob delays only that peer's sync pass.
-Every durable mutation goes through an injected
-:class:`~iris.cluster.federation.store.FederationStore`, so the manager stays a
-self-contained module.
+:class:`~iris.cluster.federation.router.PeerRouter`, and two background loops —
+the capability heartbeat and the delta-sync loop that mirrors each peer's handed-
+off jobs back into the local projection. Every durable mutation goes through an
+injected :class:`~iris.cluster.federation.protocol.FederationStore`, so the manager
+stays a self-contained module.
 
-With no peers configured it is inert: no loops start and every view is
+With no peers configured it is inert: neither loop starts and every view is
 empty, so a single-cluster deployment is unchanged. A ``store`` is required only
 to hand a job off or run the sync loop; the observability slice (heartbeat,
 ``ListPeers``) works without one.
@@ -21,11 +19,9 @@ to hand a job off or run the sync loop; the observability slice (heartbeat,
 import logging
 import threading
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from typing import TypeVar
 
-from connectrpc.code import Code
-from connectrpc.errors import ConnectError
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.bundle import BundleStore
@@ -40,15 +36,20 @@ from iris.cluster.federation.availability import (
     assign_queued,
 )
 from iris.cluster.federation.peer import FederationPeer
-from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitPlan
-from iris.cluster.federation.store import (
+from iris.cluster.federation.protocol import (
     CancelTarget,
+    FederationBackendObservation,
+    FederationPeerObservation,
     FederationStore,
+    HandoffDelivery,
     HandoffSpec,
+    PeerCallError,
+    PeerErrorCode,
 )
-from iris.cluster.types import JobName
+from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitPlan
 from iris.managed_thread import ManagedThread, ThreadContainer
-from iris.rpc import controller_pb2
+from iris.resources.job import JobSpec
+from iris.resources.names import JobName
 
 logger = logging.getLogger(__name__)
 
@@ -64,43 +65,53 @@ DEFAULT_SYNC_INTERVAL = Duration.from_seconds(3)
 DEFAULT_MAX_HANDOFFS_PER_CYCLE = 8
 _JOIN_TIMEOUT = Duration.from_seconds(5.0)
 
-_PEER_RPC_ERRORS = (ConnectError, ConnectionError, OSError)
+_PEER_RPC_ERRORS = (PeerCallError,)
 
 # A peer's verdict on the handoff itself, which it will repeat on every retry: the job
 # id already exists there (ALREADY_EXISTS), its allowlist refuses the submitter
 # (PERMISSION_DENIED), or the request is malformed (INVALID_ARGUMENT). Transport and
 # auth failures are excluded — a federation bearer is minted per request, so
 # UNAUTHENTICATED is a key/clock/rollout transient that a later attempt can clear.
-_TERMINAL_HANDOFF_CODES = frozenset({Code.ALREADY_EXISTS, Code.PERMISSION_DENIED, Code.INVALID_ARGUMENT})
+_TERMINAL_HANDOFF_CODES = frozenset(
+    {PeerErrorCode.ALREADY_EXISTS, PeerErrorCode.PERMISSION_DENIED, PeerErrorCode.INVALID_ARGUMENT}
+)
 
 
-def _backend_availability(peer_id: str, backend: controller_pb2.Controller.BackendSummary) -> BackendAvailability:
+def _backend_availability(peer_id: str, backend: FederationBackendObservation) -> BackendAvailability:
     """Project one heartbeat backend into the assignment pass's view of it.
 
     A backend supplies a usable capacity metric only when it set the availability
     wrapper at a version this parent knows how to read; anything newer is dropped to
     shape-only matching rather than acted on with the wrong semantics.
     """
-    understood = backend.HasField("availability") and backend.availability.version <= AVAILABILITY_METRIC_VERSION
-    if backend.HasField("availability") and not understood:
+    availability = backend.availability
+    if availability is None:
+        return BackendAvailability(
+            backend_id=backend.backend_id,
+            supplies_metric=False,
+            generation=0,
+            amounts={},
+            held_by_band={},
+            advertised_shape={key: list(values) for key, values in backend.advertised_attributes.items()},
+        )
+    understood = availability.version <= AVAILABILITY_METRIC_VERSION
+    if not understood:
         logger.warning(
             "Peer %s backend %s reports availability metric v%d, newer than v%d: matching it on shape alone",
             peer_id,
             backend.backend_id,
-            backend.availability.version,
+            availability.version,
             AVAILABILITY_METRIC_VERSION,
         )
     return BackendAvailability(
         backend_id=backend.backend_id,
         supplies_metric=understood,
-        generation=backend.availability.observation_epoch_ms if understood else 0,
-        amounts=dict(backend.availability.amounts) if understood else {},
+        generation=availability.observation_epoch_ms if understood else 0,
+        amounts=dict(availability.amounts) if understood else {},
         held_by_band=(
-            {held.band: dict(held.amounts) for held in backend.availability.held_by_band if held.band}
-            if understood
-            else {}
+            {band: dict(amounts) for band, amounts in availability.held_by_band.items() if band} if understood else {}
         ),
-        advertised_shape={key: list(values.values) for key, values in backend.advertised_attributes.items()},
+        advertised_shape={key: list(values) for key, values in backend.advertised_attributes.items()},
     )
 
 
@@ -133,12 +144,12 @@ class FederationManager:
         # successive ticks between heartbeats do not each re-spend the same number.
         self._ledger = ReservationLedger()
         self._heartbeat_thread: ManagedThread | None = None
-        self._sync_threads: dict[str, ManagedThread] = {}
+        self._sync_thread: ManagedThread | None = None
 
     # -- lifecycle -----------------------------------------------------------
 
     def start(self) -> None:
-        """Start heartbeat and, when a store is wired, one sync loop per peer.
+        """Start the heartbeat and (when a store is wired) the sync loop.
 
         A no-op when no peers are configured, so a single-cluster deployment is
         unchanged.
@@ -147,22 +158,16 @@ class FederationManager:
             return
         self._heartbeat_thread = self._threads.spawn(self._run_heartbeat_loop, name="federation-heartbeat")
         if self._store is not None:
-            for peer_id, peer in self._peers.items():
-                self._sync_threads[peer_id] = self._threads.spawn(
-                    self._run_peer_sync_loop,
-                    name=f"federation-sync-{peer_id}",
-                    args=(peer,),
-                )
+            self._sync_thread = self._threads.spawn(self._run_sync_loop, name="federation-sync")
 
     def stop(self) -> None:
-        """Stop all loops and release peer connections. Idempotent."""
-        threads = [thread for thread in [self._heartbeat_thread, *self._sync_threads.values()] if thread is not None]
-        for thread in threads:
-            thread.stop()
-        for thread in threads:
-            thread.join(timeout=_JOIN_TIMEOUT)
+        """Stop both loops and release peer connections. Idempotent."""
+        for thread in (self._heartbeat_thread, self._sync_thread):
+            if thread is not None:
+                thread.stop()
+                thread.join(timeout=_JOIN_TIMEOUT)
         self._heartbeat_thread = None
-        self._sync_threads.clear()
+        self._sync_thread = None
         for peer in self._peers.values():
             peer.close()
 
@@ -185,9 +190,13 @@ class FederationManager:
         peer = self._peers.get(peer_id)
         return peer.controller_address if peer is not None else None
 
-    def peer_summaries(self) -> list[controller_pb2.Controller.PeerSummary]:
-        """A ``PeerSummary`` for every configured peer, ordered by peer id."""
-        return [self._build_summary(peer) for _, peer in sorted(self._peers.items())]
+    def peer_summaries(self) -> list[FederationPeerObservation]:
+        """Return native summaries for every configured peer, ordered by peer id."""
+        return [self._build_observation(peer) for _, peer in sorted(self._peers.items())]
+
+    def peer_observations(self) -> tuple[FederationPeerObservation, ...]:
+        """Return current peer health observations ordered by peer id."""
+        return tuple(self._build_observation(peer) for _, peer in sorted(self._peers.items()))
 
     # -- queue admission (parent side) ---------------------------------------
 
@@ -195,7 +204,7 @@ class FederationManager:
         self,
         *,
         local_job_id: JobName,
-        request: controller_pb2.Controller.LaunchJobRequest,
+        spec: JobSpec,
         pinned_peer_id: str,
         owner_principal: str,
         submitting_user: str,
@@ -223,7 +232,7 @@ class FederationManager:
                 peer_id=pinned_peer_id,
                 owner_principal=owner_principal,
                 submitting_user=submitting_user,
-                request=request,
+                spec=spec,
             )
         )
 
@@ -273,27 +282,16 @@ class FederationManager:
 
     # -- cancel (parent side) ------------------------------------------------
 
-    def cancel_federated(self, local_job_id: JobName) -> None:
-        """Route a versioned cancel for a federated job to its peer.
-
-        Bumps ``cancel_intent_version`` (so a cancelled pending handoff is never
-        delivered and a retried cancel is a no-op) and routes the idempotent
-        ``TerminateJob(local_job_id)`` (the peer runs the same id). A transient
-        failure is not fatal — the sync loop re-drives the cancel until the peer acks
-        or observes the job terminal/pruned.
-        """
-        if self._store is None:
-            raise RuntimeError("federation cancel requires a store")
-        target = self._store.bump_cancel_intent(local_job_id)
-        if target is not None:
-            self._deliver_cancel(target)
+    def deliver_cancel(self, target: CancelTarget) -> None:
+        """Deliver an already-persisted cancel intent to its execution peer."""
+        self._deliver_cancel(target)
 
     def _deliver_cancel(self, target: CancelTarget) -> None:
         """Route one ``TerminateJob`` to the peer.
 
         A peer ``NOT_FOUND`` means the job is already gone (terminal-and-pruned),
         which satisfies the cancel — terminalize the local mirror so the re-drive
-        stops. Any other RPC error is left for the next sync pass to retry.
+        stops. Any other RPC error is left for the next sync to retry.
         """
         assert self._store is not None
         peer = self._peers.get(target.peer_id)
@@ -304,8 +302,8 @@ class FederationManager:
             return
         try:
             peer.terminate_job(target.local_job_id)
-        except ConnectError as exc:
-            if exc.code == Code.NOT_FOUND:
+        except PeerCallError as exc:
+            if exc.code is PeerErrorCode.NOT_FOUND:
                 self._store.mark_cancel_satisfied(target.local_job_id, now_ms=Timestamp.now().epoch_ms())
                 return
             logger.warning(
@@ -347,49 +345,35 @@ class FederationManager:
     def _run_loop(self, stop_event: threading.Event, step: Callable[[], None], interval: float) -> None:
         """Run ``step`` every ``interval`` seconds until ``stop_event`` is set."""
         while not stop_event.is_set():
-            step()
+            try:
+                step()
+            except Exception:
+                # Maintenance loops are retrying processes. Preserve the traceback
+                # as the operator signal and retry on the next normal cadence.
+                logger.exception("Federation maintenance step failed")
             stop_event.wait(timeout=interval)
 
     def _run_heartbeat_loop(self, stop_event: threading.Event) -> None:
         self._run_loop(stop_event, self._probe_all_peers, self._heartbeat_interval.to_seconds())
 
-    def _run_peer_sync_loop(self, stop_event: threading.Event, peer: FederationPeer) -> None:
-        self._run_loop(
-            stop_event,
-            lambda: self._sync_peer_once(peer),
-            self._sync_interval.to_seconds(),
-        )
+    def _run_sync_loop(self, stop_event: threading.Event) -> None:
+        self._run_loop(stop_event, self.sync_once, self._sync_interval.to_seconds())
 
     def _probe_all_peers(self) -> None:
         for peer in self._peers.values():
             peer.probe()
 
     def sync_once(self) -> None:
-        """Deliver pending work and mirror one status batch from each peer."""
-        if self._store is None or not self._peers:
-            return
-        with ThreadPoolExecutor(max_workers=len(self._peers), thread_name_prefix="federation-once") as executor:
-            futures = [executor.submit(self._sync_peer_once, peer) for peer in self._peers.values()]
-            for future in futures:
-                future.result()
+        """One sync pass: re-drive pending handoffs and cancels, then pull each peer.
 
-    def _sync_peer_once(self, peer: FederationPeer) -> None:
-        assert self._store is not None
-        handoffs = [spec for spec in self._store.pending_handoffs() if spec.peer_id == peer.peer_id][
-            : self._max_handoffs_per_cycle
-        ]
-        if handoffs:
-            with ThreadPoolExecutor(
-                max_workers=len(handoffs),
-                thread_name_prefix=f"federation-handoff-{peer.peer_id}",
-            ) as executor:
-                futures = [executor.submit(self._deliver_handoff, spec) for spec in handoffs]
-                for future in futures:
-                    future.result()
-        for target in self._store.pending_cancels():
-            if target.peer_id == peer.peer_id:
-                self._deliver_cancel(target)
-        self._sync_peer(peer)
+        The unit the sync loop repeats; a no-op without a store.
+        """
+        if self._store is None:
+            return
+        self._redrive_pending_handoffs()
+        self._redrive_pending_cancels()
+        for peer in self._peers.values():
+            self._sync_peer(peer)
 
     def _redrive_pending_handoffs(self) -> None:
         """Re-deliver every handle still awaiting its peer (boot recovery + retry)."""
@@ -397,12 +381,20 @@ class FederationManager:
         for spec in self._store.pending_handoffs():
             self._deliver_handoff(spec)
 
+    def _redrive_pending_cancels(self) -> None:
+        """Re-route ``TerminateJob`` for every cancel intent the peer has not yet
+        acknowledged (a transient failure left it undelivered)."""
+        assert self._store is not None
+        for target in self._store.pending_cancels():
+            self._deliver_cancel(target)
+
     def _deliver_handoff(self, spec: HandoffSpec) -> None:
         """Deliver one handle to its peer, terminalizing a rejection the peer will repeat.
 
         A rejection marks the handle ``HANDOFF_REJECTED`` so the re-drive stops; the
-        user learns the peer's verdict from the failed job. Retryable RPC failures
-        leave the handle pending for the next sync pass.
+        user learns the peer's verdict from the failed job. Never raises on a peer's
+        answer: the re-drive loop calls this on the sync thread, which dies on an
+        uncaught exception.
         """
         assert self._store is not None
         peer = self._peers.get(spec.peer_id)
@@ -410,9 +402,9 @@ class FederationManager:
             logger.warning("Cannot hand off %s: peer %s is not configured", spec.local_job_id, spec.peer_id)
             return
         try:
-            handoff = self._build_handoff_request(spec)
+            handoff = self._build_handoff_delivery(spec)
             peer.launch_job(handoff)
-        except ConnectError as exc:
+        except PeerCallError as exc:
             # The peer answers a rejected handoff the same way every time — a name
             # collision there, a submitter its allowlist refuses, a malformed request.
             # Terminalize the handle so the re-drive stops rather than re-delivering
@@ -436,44 +428,41 @@ class FederationManager:
     def _sync_peer(self, peer: FederationPeer) -> None:
         assert self._store is not None
         cursor = self._store.read_cursor(peer.peer_id)
-        request = controller_pb2.Controller.FederationSyncRequest(requester_id=self._cluster_id, cursor=cursor)
         try:
-            response = peer.federation_sync(request)
+            response = peer.federation_sync(self._cluster_id, cursor)
         except _PEER_RPC_ERRORS as exc:
             logger.warning("Federation sync with peer %s failed: %s", peer.peer_id, exc)
             return
-        self._store.apply_sync_batch(
-            peer.peer_id,
-            list(response.deltas),
-            next_cursor=response.next_cursor,
-            cursor_stale=response.cursor_stale,
-            endpoints=list(response.endpoints),
-        )
+        except Exception:
+            # Response decoding happens inside the peer adapter. Isolate a wire
+            # version or codec gap to this peer and retain its cursor for retry.
+            logger.exception(
+                "Federation sync batch from peer %s at cursor %r could not be decoded",
+                peer.peer_id,
+                cursor,
+            )
+            return
+        try:
+            self._store.apply_sync_batch(
+                peer.peer_id,
+                response.deltas,
+                next_cursor=response.next_cursor,
+                cursor_stale=response.cursor_stale,
+                endpoints=response.endpoints,
+            )
+        except Exception:
+            # A rejected batch is durable input from one peer. Keep its cursor in
+            # place for retry, but do not let that peer stop sync for every other
+            # peer or kill the only sync thread.
+            logger.exception(
+                "Federation sync batch from peer %s at cursor %r was rejected",
+                peer.peer_id,
+                cursor,
+            )
 
     # -- helpers -------------------------------------------------------------
 
-    def _build_handoff_request(self, spec: HandoffSpec) -> controller_pb2.Controller.LaunchJobRequest:
-        """The request delivered to the peer: the same cluster-invariant job name,
-        federation attribution, and the routing directives stripped (the peer
-        matches workers, not the parent's ``backend``/``cluster`` pins)."""
-        handoff = controller_pb2.Controller.LaunchJobRequest()
-        handoff.CopyFrom(spec.request)
-        handoff.name = spec.local_job_id.to_wire()
-        kept = [c for c in spec.request.constraints if c.key not in (BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY)]
-        del handoff.constraints[:]
-        handoff.constraints.extend(kept)
-        handoff.federation.CopyFrom(
-            controller_pb2.Controller.FederationHandoff(
-                requester_id=self._cluster_id,
-                owner_principal=spec.owner_principal,
-                submitting_user=spec.submitting_user,
-                handoff_nonce=spec.handoff_nonce,
-            )
-        )
-        self._inline_blobs(handoff)
-        return handoff
-
-    def _inline_blobs(self, handoff: controller_pb2.Controller.LaunchJobRequest) -> None:
+    def _build_handoff_delivery(self, handoff: HandoffSpec) -> HandoffDelivery:
         """Carry the bytes behind every content id, which only this cluster can resolve.
 
         ``launch_job`` replaces the submitted workspace bundle and any large workdir
@@ -482,21 +471,42 @@ class FederationManager:
         handoff carries the bytes; the peer re-externalizes them under the same
         content ids on the way in.
         """
-        refs = dict(handoff.entrypoint.workdir_file_refs)
-        if not handoff.bundle_id and not refs:
-            return
-        assert self._bundles is not None, "federating a job that references blobs needs a bundle store"
-        if handoff.bundle_id:
-            handoff.bundle_blob = self._bundles.get(handoff.bundle_id)
-            handoff.ClearField("bundle_id")
+        spec = handoff.spec
+        refs = dict(spec.entrypoint.workdir_file_refs)
+        workdir_files = dict(spec.entrypoint.workdir_files)
+        bundle_blob = b""
+        if spec.bundle_id or refs:
+            assert self._bundles is not None, "federating a job that references blobs needs a bundle store"
+        if spec.bundle_id:
+            bundle_blob = self._bundles.get(spec.bundle_id)
         for name, blob_id in refs.items():
-            handoff.entrypoint.workdir_files[name] = self._bundles.get(blob_id)
-        handoff.entrypoint.ClearField("workdir_file_refs")
+            assert self._bundles is not None
+            workdir_files[name] = self._bundles.get(blob_id)
+        entrypoint = replace(spec.entrypoint, workdir_files=workdir_files, workdir_file_refs={})
+        stripped = replace(
+            spec,
+            name=handoff.local_job_id.to_wire(),
+            entrypoint=entrypoint,
+            bundle_id="" if bundle_blob else spec.bundle_id,
+            constraints=tuple(
+                constraint
+                for constraint in spec.constraints
+                if constraint.key not in (BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY)
+            ),
+        )
+        return HandoffDelivery(
+            spec=stripped,
+            bundle_blob=bundle_blob,
+            requester_id=self._cluster_id,
+            owner_principal=handoff.owner_principal,
+            submitting_user=handoff.submitting_user,
+            handoff_nonce=handoff.handoff_nonce,
+        )
 
-    def _build_summary(self, peer: FederationPeer) -> controller_pb2.Controller.PeerSummary:
+    def _build_observation(self, peer: FederationPeer) -> FederationPeerObservation:
         heartbeat = peer.heartbeat()
         active = self._store.active_federated_job_count(peer.peer_id) if self._store is not None else 0
-        return controller_pb2.Controller.PeerSummary(
+        return FederationPeerObservation(
             peer_id=peer.peer_id,
             controller_address=peer.controller_address,
             reachable=heartbeat.reachable,

@@ -28,7 +28,6 @@ from dataclasses import asdict, dataclass, field
 import httpx
 import pytest
 import uvicorn
-from iris.cluster.controller import reads
 from iris.cluster.controller.auth import (
     CONTROL_PLANE_AUDIENCES,
     FederationTokenProvider,
@@ -38,8 +37,8 @@ from iris.cluster.controller.auth import (
     NativeProxyAuthMode,
     create_controller_auth,
 )
-from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
+from iris.cluster.controller.controller import CapabilityUrlConfig
+from iris.cluster.controller.endpoint_registry import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
 from iris.cluster.controller.native_proxy import (
     DECISION_SECRET_HEADER,
@@ -48,10 +47,12 @@ from iris.cluster.controller.native_proxy import (
     UPSTREAM_URL_HEADER,
     NativeProxy,
 )
-from iris.cluster.controller.service import CapabilityUrlConfig, ControllerServiceImpl
-from iris.cluster.types import EndpointAccess, JobName
+from iris.cluster.controller.persistence import reads
 from iris.managed_thread import ThreadContainer
+from iris.resources.names import JobName
 from iris.rpc import controller_pb2
+from iris.rpc.dashboard import ControllerDashboard
+from iris.rpc.legacy.controller_service import LegacyControllerService
 from iris.testing.controller import promote_queued_federation, query_task
 from iris.testing.controller_state import ControllerTestState
 from iris.testing.federation import (
@@ -150,7 +151,7 @@ def _federation_auth(requester: str = PARENT_ID):
 
 
 def _register_endpoint(
-    peer_service: ControllerServiceImpl,
+    peer_service: LegacyControllerService,
     peer_state: ControllerTestState,
     job_id: JobName,
     address: str,
@@ -163,7 +164,7 @@ def _register_endpoint(
             address=address,
             task_id=task.to_wire(),
             attempt_id=query_task(peer_state, task).current_attempt_id,
-            access=EndpointAccess.ENDPOINT_ACCESS_LINK,
+            access=controller_pb2.Controller.ENDPOINT_ACCESS_LINK,
         ),
         None,
     )
@@ -221,7 +222,7 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, parent_state, _InProcessPeerConnection(peer_service))
 
         # The serving process the endpoint points at; the peer dials it directly.
         upstream = UpstreamObservation()
@@ -255,7 +256,7 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
             mode=NativeProxyAuthMode.ENFORCING,
             federation_keys={PARENT_ID: parent_public_key},
         )
-        peer_proxy.replace_registry(json.dumps(asdict(peer_service.endpoint_service.proxy_registry_snapshot())))
+        peer_proxy.replace_registry(json.dumps(asdict(peer_service.endpoint_service.registry.proxy_registry_snapshot())))
         peer_url = peer_proxy.address
 
         # Parent dashboard: resolves the mirrored remote endpoint and forwards to the
@@ -280,7 +281,9 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
             parent_decision_secret,
             mode=NativeProxyAuthMode.PERMISSIVE,
         )
-        parent_proxy.replace_registry(json.dumps(asdict(parent_service.endpoint_service.proxy_registry_snapshot())))
+        parent_proxy.replace_registry(
+            json.dumps(asdict(parent_service.endpoint_service.registry.proxy_registry_snapshot()))
+        )
         parent_url = parent_proxy.address
 
         # The whole forward: parent /proxy -> federation bearer -> peer /proxy -> upstream.
@@ -311,7 +314,9 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
             controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id), None
         )
         manager.sync_once()
-        parent_proxy.replace_registry(json.dumps(asdict(parent_service.endpoint_service.proxy_registry_snapshot())))
+        parent_proxy.replace_registry(
+            json.dumps(asdict(parent_service.endpoint_service.registry.proxy_registry_snapshot()))
+        )
 
         with httpx.Client() as client:
             gone = client.get(f"{parent_url}/proxy/{ENDPOINT_PROXY_NAME}/greet")

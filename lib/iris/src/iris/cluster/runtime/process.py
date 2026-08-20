@@ -50,9 +50,18 @@ from iris.cluster.runtime.types import (
 )
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import get_thread_container
-from iris.rpc import job_pb2
+from iris.resources.endpoint import (
+    CpuProfileConfiguration,
+    CpuProfileFormat,
+    MemoryProfileConfiguration,
+    MemoryProfileFormat,
+    ProfileConfiguration,
+    ThreadsProfileConfiguration,
+)
 
 logger = logging.getLogger(__name__)
+
+_IRIS_TASK_ID_ENV = "IRIS_TASK_ID"
 
 
 # =============================================================================
@@ -307,14 +316,14 @@ def _read_proc_cpu_millicores(
         return (0, prev_total, prev_utime)
 
 
-def _cpu_profile_stub(cpu_format: int) -> bytes:
+def _cpu_profile_stub(cpu_format: CpuProfileFormat) -> bytes:
     """Return a minimal stub CPU profile for when py-spy is unavailable."""
-    if cpu_format == job_pb2.CpuProfile.FLAMEGRAPH:
+    if cpu_format is CpuProfileFormat.FLAMEGRAPH:
         return (
             b'<svg xmlns="http://www.w3.org/2000/svg" width="400" height="50">'
             b'<text x="10" y="30" font-size="14">py-spy unavailable in local mode</text></svg>'
         )
-    elif cpu_format == job_pb2.CpuProfile.SPEEDSCOPE:
+    if cpu_format is CpuProfileFormat.SPEEDSCOPE:
         return (
             b'{"version":"0.1.0","$schema":"https://www.speedscope.app/file-format-schema.json",'
             b'"profiles":[],"shared":{"frames":[]}}'
@@ -323,16 +332,16 @@ def _cpu_profile_stub(cpu_format: int) -> bytes:
         return b"py-spy unavailable in local mode\n"
 
 
-def _memory_profile_stub(memory_format: int) -> bytes:
+def _memory_profile_stub(memory_format: MemoryProfileFormat) -> bytes:
     """Return a minimal stub memory profile for when memray is unavailable."""
-    if memory_format == job_pb2.MemoryProfile.FLAMEGRAPH:
+    if memory_format is MemoryProfileFormat.FLAMEGRAPH:
         return (
             b"<!DOCTYPE html><html><head><title>Memory Profile</title></head><body>"
             b"<p>memray unavailable in local mode</p></body></html>"
         )
-    elif memory_format == job_pb2.MemoryProfile.TABLE:
+    if memory_format is MemoryProfileFormat.TABLE:
         return b"memray unavailable in local mode\n"
-    elif memory_format == job_pb2.MemoryProfile.RAW:
+    if memory_format is MemoryProfileFormat.RAW:
         return b""
     else:  # STATS
         return b'{"error": "memray unavailable in local mode"}'
@@ -433,7 +442,13 @@ class ProcessContainerHandle:
 
         # Remap container paths to host paths in env vars
         mount_map = _resolve_mount_map(config, cache_dir=self.runtime._cache_dir)
-        env = {key: _remap_container_path(value, mount_map) for key, value in config.env.items()}
+        # Task IDs use slash-prefixed wire syntax, but are identities rather than
+        # container paths. Rewriting one through the /app workdir mount makes
+        # in-task endpoint registration and child submission address a fake Job.
+        env = {
+            key: value if key == _IRIS_TASK_ID_ENV else _remap_container_path(value, mount_map)
+            for key, value in config.env.items()
+        }
 
         # Track TMPFS dirs for cleanup and set TMPDIR so tempfile uses the mapped path
         for mount in config.mounts:
@@ -511,7 +526,7 @@ class ProcessContainerHandle:
             return int(shutil.disk_usage(self.config.workdir_host_path).used / (1024 * 1024))
         return 0
 
-    def profile(self, duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
+    def profile(self, duration_seconds: int, profile: ProfileConfiguration) -> bytes:
         """Profile the running process using py-spy (CPU), memray (memory), or thread dump.
 
         Runs profilers as host subprocesses sharing this worker's PID namespace.
@@ -526,22 +541,21 @@ class ProcessContainerHandle:
         pid = self._container._process.pid
         dispatch = LocalProfileDispatch(resume_pid=pid)
 
-        if profile_type.HasField("threads"):
+        if isinstance(profile, ThreadsProfileConfiguration):
             return capture_threads(
                 dispatch,
                 pid=str(pid),
-                include_locals=profile_type.threads.locals,
-                include_native=profile_type.threads.native,
+                include_locals=profile.include_locals,
+                include_native=profile.include_native,
             )
-        elif profile_type.HasField("cpu"):
-            return self._profile_cpu(dispatch, pid, duration_seconds, profile_type.cpu)
-        elif profile_type.HasField("memory"):
-            return self._profile_memory(dispatch, pid, duration_seconds, profile_type.memory)
-        else:
-            raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
+        if isinstance(profile, CpuProfileConfiguration):
+            return self._profile_cpu(dispatch, pid, duration_seconds, profile)
+        if isinstance(profile, MemoryProfileConfiguration):
+            return self._profile_memory(dispatch, pid, duration_seconds, profile)
+        raise RuntimeError("profile must specify cpu, memory, or threads profiler")
 
     def _profile_cpu(
-        self, dispatch: LocalProfileDispatch, pid: int, duration_seconds: int, cpu_config: job_pb2.CpuProfile
+        self, dispatch: LocalProfileDispatch, pid: int, duration_seconds: int, cpu_config: CpuProfileConfiguration
     ) -> bytes:
         """Profile CPU using py-spy, falling back to a stub when py-spy is unavailable."""
         try:
@@ -551,7 +565,11 @@ class ProcessContainerHandle:
             return _cpu_profile_stub(cpu_config.format)
 
     def _profile_memory(
-        self, dispatch: LocalProfileDispatch, pid: int, duration_seconds: int, memory_config: job_pb2.MemoryProfile
+        self,
+        dispatch: LocalProfileDispatch,
+        pid: int,
+        duration_seconds: int,
+        memory_config: MemoryProfileConfiguration,
     ) -> bytes:
         """Profile memory using memray, falling back to a stub when memray is unavailable."""
         try:

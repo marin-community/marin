@@ -17,7 +17,7 @@ from iris.cluster.controller.autoscaler.models import DemandEntry, ScalingAction
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.types import CloudSliceState
-from iris.rpc import job_pb2
+from iris.resources.execution import ResourceSpec
 from iris.testing.controller import (
     advance_all_tpus,
     make_autoscaler,
@@ -192,7 +192,7 @@ class TestAutoscalerWaterfallEndToEnd:
             config=config,
         )
 
-        big_resources = job_pb2.ResourceSpecProto(cpu_millicores=128000, memory_bytes=128 * 1024**3)
+        big_resources = ResourceSpec(cpu=128, memory=128 * 1024**3)
         normalized = PlacementRequirements(
             device_type=DeviceType.TPU,
             device_variants=frozenset({"v5p-8"}),
@@ -434,10 +434,10 @@ def test_marin_style_lifecycle():
             _mark_all_slices_ready(g)
 
     def routed(group_name):
-        routed_entries = autoscaler._last_routing_decision_proto.routed_entries
-        if group_name not in routed_entries:
+        routing = autoscaler.get_last_routing_decision()
+        if routing is None:
             return 0
-        return len(routed_entries[group_name].entries)
+        return len(routing.routed_entries.get(group_name, ()))
 
     def assert_no_load_on_last():
         assert routed("tpu-16vm") == 0, "tpu-16vm should never receive load"

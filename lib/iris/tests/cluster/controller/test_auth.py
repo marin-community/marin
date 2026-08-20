@@ -1,8 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for auth: session cookies, CSRF, default-deny middleware, stateless JWT,
-controller auth setup, and null-auth mode."""
+"""Tests for auth: request policies, stateless JWTs, controller setup, and null-auth mode."""
 
 from unittest.mock import Mock
 
@@ -10,6 +9,8 @@ import jwt
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from iris.backends.protocol import BackendCapability
+from iris.backends.status import BackendStatus, WorkerFleetStatus
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import AuthConfig, IapAuthConfig, PeerConfig
 from iris.cluster.controller.auth import (
@@ -17,7 +18,6 @@ from iris.cluster.controller.auth import (
     CONTROL_PLANE_AUDIENCES,
     FEDERATION_AUDIENCE,
     FEDERATION_PEER_ROLE,
-    SESSION_TOKEN_TTL_SECONDS,
     WORKER_TOKEN_TTL_SECONDS,
     WORKER_USER,
     ControllerAuth,
@@ -30,18 +30,20 @@ from iris.cluster.controller.auth import (
     request_auth_policy,
     require_persistent_signing_key,
 )
-from iris.cluster.controller.backend import BackendCapability
-from iris.cluster.controller.dashboard import (
+from iris.cluster.controller.endpoint_registry import EndpointRegistry
+from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.persistence.projections.endpoints import EndpointsProjection
+from iris.cluster.federation.manager import FederationManager
+from iris.cluster.types import DEFAULT_BACKEND_ID
+from iris.managed_thread import get_thread_container
+from iris.rpc import job_pb2
+from iris.rpc.auth import DASHBOARD_ROLE, authorize_method
+from iris.rpc.dashboard import (
     _UNAUTHENTICATED_RPCS,
     ControllerDashboard,
 )
-from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
-from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.types import DEFAULT_BACKEND_ID
-from iris.rpc import job_pb2
-from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE, authorize_method
+from iris.rpc.endpoint_service import EndpointServiceImpl
+from iris.testing.controller import make_controller_service
 from iris.testing.controller_state import ControllerTestState
 from rigging.server_auth import (
     PolicyAuthInterceptor,
@@ -61,8 +63,6 @@ from starlette.testclient import TestClient
 _TEST_TOKEN = "valid-test-token"
 _TEST_USER = "test-user"
 _CLUSTER = "test-cluster"
-CSRF_HEADERS = {"Origin": "http://testserver"}
-
 # A persistent signing key for authed create_controller_auth calls: an authed
 # cluster requires one (the ephemeral fallback is null-auth only).
 _SIGNING_KEYPAIR = generate_ed25519_keypair()
@@ -79,22 +79,27 @@ def _jwt_manager() -> JwtTokenManager:
 
 
 def _make_service(db, log_client, auth=None):
-    """A ControllerServiceImpl with minimal deps for login / auth-setup tests."""
+    """A legacy controller service with minimal deps for login and auth-setup tests."""
     EndpointsProjection(db)
     controller_mock = Mock()
     controller_mock.wake = Mock()
     controller_mock.get_job_scheduling_diagnostics = Mock(return_value="")
     controller_mock.last_scheduling_context = None
     controller_mock.autoscaler = None
-    controller_mock.provider = Mock()
-    controller_mock.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
-    return ControllerServiceImpl(
+    capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
+    controller_mock.provider = Mock(capabilities=capabilities)
+    controller_mock.provider.status.return_value = BackendStatus(worker=WorkerFleetStatus())
+    controller_mock.capabilities = capabilities
+    controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
+    controller_mock.scale_group_to_backend = {}
+    controller_mock.federation = FederationManager([], threads=get_thread_container())
+    return make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
         log_client=log_client,
         db=db,
         auth=auth or ControllerAuth(),
-        endpoint_service=EndpointServiceImpl(db=db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=db)),
     )
 
 
@@ -122,14 +127,17 @@ def service(state, tmp_path, log_client):
     worker_caps = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
     controller_mock.provider = Mock(capabilities=worker_caps)
     controller_mock.provider.name = "worker"
+    controller_mock.provider.status.return_value = BackendStatus(worker=WorkerFleetStatus())
     controller_mock.capabilities = worker_caps
     controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
-    return ControllerServiceImpl(
+    controller_mock.scale_group_to_backend = {}
+    controller_mock.federation = FederationManager([], threads=get_thread_container())
+    return make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
     )
 
 
@@ -154,87 +162,6 @@ def noauth_client(service):
     return TestClient(dashboard.app)
 
 
-# -- Token verification -------------------------------------------------------
-
-
-def test_auth_session_rejects_invalid_token(authed_client):
-    resp = authed_client.post("/auth/session", json={"token": "bad-token"}, headers=CSRF_HEADERS)
-    assert resp.status_code == 401
-    assert resp.json()["error"] == "invalid token"
-
-
-def test_auth_session_accepts_valid_token(authed_client):
-    resp = authed_client.post("/auth/session", json={"token": _TEST_TOKEN}, headers=CSRF_HEADERS)
-    assert resp.status_code == 200
-    assert resp.json()["ok"] is True
-    assert "iris_session" in resp.cookies
-
-
-def test_auth_session_returns_400_for_empty_token(authed_client):
-    resp = authed_client.post("/auth/session", json={"token": "  "}, headers=CSRF_HEADERS)
-    assert resp.status_code == 400
-
-
-def test_auth_session_skips_verification_when_auth_disabled(noauth_client):
-    resp = noauth_client.post("/auth/session", json={"token": "any-token-works"}, headers=CSRF_HEADERS)
-    assert resp.status_code == 200
-    assert resp.json()["ok"] is True
-
-
-# -- CSRF protection ----------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "headers, expected_status",
-    [
-        ({"Origin": "http://evil.example.com"}, 403),
-        ({}, 403),  # no Origin or Referer
-        ({"Origin": "http://testserver"}, 200),
-        ({"Referer": "http://testserver/auth/login"}, 200),
-    ],
-    ids=["mismatched-origin", "missing-origin-and-referer", "matching-origin", "matching-referer"],
-)
-def test_csrf_on_session_endpoint(authed_client, headers, expected_status):
-    resp = authed_client.post("/auth/session", json={"token": _TEST_TOKEN}, headers=headers)
-    assert resp.status_code == expected_status
-
-
-def test_csrf_on_logout_rejects_missing_origin(authed_client):
-    assert authed_client.post("/auth/logout").status_code == 403
-
-
-def test_csrf_on_logout_accepts_matching_origin(authed_client):
-    assert authed_client.post("/auth/logout", headers=CSRF_HEADERS).status_code == 200
-
-
-def test_csrf_accepts_x_forwarded_host(authed_client):
-    """CSRF check should use X-Forwarded-Host when behind a reverse proxy."""
-    resp = authed_client.post(
-        "/auth/session",
-        json={"token": _TEST_TOKEN},
-        headers={
-            "Origin": "https://proxy.example.com",
-            "X-Forwarded-Host": "proxy.example.com",
-            "X-Forwarded-Proto": "https",
-        },
-    )
-    assert resp.status_code == 200
-
-
-def test_csrf_rejects_wrong_x_forwarded_host(authed_client):
-    """CSRF check should reject when Origin doesn't match X-Forwarded-Host."""
-    resp = authed_client.post(
-        "/auth/session",
-        json={"token": _TEST_TOKEN},
-        headers={
-            "Origin": "https://evil.example.com",
-            "X-Forwarded-Host": "proxy.example.com",
-            "X-Forwarded-Proto": "https",
-        },
-    )
-    assert resp.status_code == 403
-
-
 # -- Per-route auth policy -----------------------------------------------------
 
 
@@ -251,6 +178,11 @@ def test_public_route_accessible_without_auth(authed_client, path):
 
 def test_auth_config_reports_enabled(authed_client):
     assert authed_client.get("/auth/config").json()["auth_enabled"] is True
+
+
+@pytest.mark.parametrize("path", ["/auth/session", "/auth/logout"])
+def test_browser_session_routes_are_not_exposed(authed_client, path):
+    assert authed_client.post(path, json={"token": _TEST_TOKEN}).status_code == 404
 
 
 def test_static_accessible_without_auth(authed_client):
@@ -282,7 +214,7 @@ def test_all_routes_accessible_when_auth_disabled(noauth_client):
 def test_jwt_create_and_verify():
     """A minted control-plane token round-trips through the stateless verifier."""
     mgr = _jwt_manager()
-    token = mgr.create_token("bob", "user", "k-bob", ttl_seconds=SESSION_TOKEN_TTL_SECONDS)
+    token = mgr.create_token("bob", "user", "k-bob", ttl_seconds=60)
     identity = mgr.verify(token)
     assert identity.user_id == "bob"
     assert identity.role == "user"
@@ -504,20 +436,6 @@ def test_optional_auth_dashboard_accessible(optional_auth_client):
         assert optional_auth_client.get(path).status_code == 200
 
 
-def test_optional_auth_config_reports_optional(optional_auth_client):
-    """The /auth/config endpoint reports optional=true."""
-    data = optional_auth_client.get("/auth/config").json()
-    assert data["auth_enabled"] is True
-    assert data["optional"] is True
-    assert data["provider"] == "iap"
-
-
-def test_auth_config_reports_not_optional(authed_client):
-    """Non-optional auth reports optional=false."""
-    data = authed_client.get("/auth/config").json()
-    assert data["optional"] is False
-
-
 # -- Route middleware parity: HTTP agrees with the auth chain ----------------
 
 
@@ -600,7 +518,6 @@ def _dashboard_interceptor(**verifiers):
     policy = RequestAuthPolicy.enforcing(verifier=MockVerifier({}), **verifiers)
     return PolicyAuthInterceptor(
         policy,
-        cookie_name=SESSION_COOKIE,
         unauthenticated_methods=_UNAUTHENTICATED_RPCS,
         authorize=authorize_method,
     )
@@ -855,7 +772,7 @@ def test_null_auth_yields_worker_token_and_default_policy():
 def test_null_auth_get_current_user(db, log_client):
     auth = create_controller_auth(AuthConfig(), cluster_name=_CLUSTER)
     service = _make_service(db, log_client, auth=auth)
-    jwt_token = auth.jwt_manager.create_token("anonymous", "admin", "iris_s_test", ttl_seconds=SESSION_TOKEN_TTL_SECONDS)
+    jwt_token = auth.jwt_manager.create_token("anonymous", "admin", "iris_s_test", ttl_seconds=60)
     reset = _verified_identity.set(auth.verifier.verify(jwt_token))
     try:
         resp = service.get_current_user(job_pb2.GetCurrentUserRequest(), None)

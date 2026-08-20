@@ -7,8 +7,13 @@
  */
 import { ref, computed } from 'vue'
 import type { LocationQueryValue, RouteLocationNormalizedLoaded } from 'vue-router'
-import { controllerRpcCall } from '@/composables/useRpc'
-import { LOCAL_CLUSTER, type BackendInfo, type ListBackendsResponse, type ListPeersResponse, type PeerSummary } from '@/types/rpc'
+import { getResource, RESOURCE_TYPES } from '@/composables/useResources'
+import {
+  LOCAL_CLUSTER,
+  type BackendInfo,
+  type ResourceCapacityPeer,
+  type ResourceGetCapacityStatusResponse,
+} from '@/types/rpc'
 
 /** First string value of a route query param (``?k=a&k=b`` → ``a``), or ``''``. */
 export function firstQueryValue(raw: LocationQueryValue | LocationQueryValue[]): string {
@@ -33,22 +38,18 @@ function resolveScopeId(
 // Module-level state — shared across all callers.
 const backends = ref<BackendInfo[]>([])
 const capabilities = ref<string[]>([])
-// Federation peers this cluster can hand jobs off to. Populated from ListPeers
-// (the /auth/config payload carries backends but not peers). Empty on a
+const clusterId = ref('')
+// Federation peers this cluster can hand jobs off to. Populated from the
+// capacity resource (/auth/config carries backends but not peers). Empty on a
 // single-cluster deployment, so every peer-derived affordance stays inert.
-const peers = ref<PeerSummary[]>([])
+const peers = ref<ResourceCapacityPeer[]>([])
 let _configFetched = false
 let _peersFetched = false
 // In-flight ensurePeers() request, shared so concurrent callers issue one RPC.
 let _peersPromise: Promise<void> | null = null
 
 export interface AuthConfig {
-  authEnabled: boolean
-  authenticated: boolean
-  authOptional: boolean
-  // The login provider ('iap', 'cidr', or null for null-auth). Drives 401 recovery:
-  // an IAP cluster re-authenticates at the edge on reload, so a 401 must not route to
-  // the bearer-token login page (see App.vue onAuthRequired).
+  // An IAP cluster re-authenticates at the edge on a full-page reload.
   provider: string | null
 }
 
@@ -58,20 +59,17 @@ export function useBackends() {
   /**
    * Fetch /auth/config and populate the module-level singleton.
    * Safe to call multiple times — only the first call performs the fetch.
-   * Returns auth-related fields so App.vue can handle login redirection
-   * without a second fetch.
+   * Returns the edge provider so App.vue can handle IAP re-authentication.
    */
   async function fetchConfig(): Promise<AuthConfig> {
-    const authDefaults: AuthConfig = { authEnabled: false, authenticated: false, authOptional: false, provider: null }
+    const authDefaults: AuthConfig = { provider: null }
     if (_configFetched) return authDefaults
     _configFetched = true
     try {
       const resp = await fetch('/auth/config')
       if (!resp.ok) return authDefaults
       const config = await resp.json() as {
-        auth_enabled?: boolean
-        authenticated?: boolean
-        optional?: boolean
+        cluster_id?: string
         provider?: string | null
         capabilities?: string[]
         backends?: Array<{ id: string; name?: string; capabilities?: string[] }>
@@ -81,6 +79,7 @@ export function useBackends() {
       // back to the legacy single-backend field so a pre-feature-PR controller
       // still gates tabs correctly.
       capabilities.value = config.capabilities ?? config.backend?.capabilities ?? []
+      clusterId.value = config.cluster_id ?? ''
       if (Array.isArray(config.backends) && config.backends.length > 0) {
         backends.value = config.backends.map(b => ({
           id: b.id,
@@ -89,9 +88,6 @@ export function useBackends() {
         }))
       }
       return {
-        authEnabled: config.auth_enabled ?? false,
-        authenticated: config.authenticated ?? false,
-        authOptional: config.optional ?? false,
         provider: config.provider ?? null,
       }
     } catch {
@@ -109,17 +105,15 @@ export function useBackends() {
     return resolveScopeId(route.query.backend, backends.value.map(b => b.id))
   }
 
-  /** One-shot call to the ListBackends RPC. */
-  async function listBackends(): Promise<ListBackendsResponse> {
-    return controllerRpcCall<ListBackendsResponse>('ListBackends', {})
-  }
-
-  /** One-shot call to the ListPeers RPC; also refreshes the shared roster. */
-  async function listPeers(): Promise<ListPeersResponse> {
-    const resp = await controllerRpcCall<ListPeersResponse>('ListPeers', {})
+  /** Load the peer roster from the canonical capacity resource. */
+  async function fetchPeers(): Promise<void> {
+    const resp = await getResource<ResourceGetCapacityStatusResponse>({
+      authorityClusterId: clusterId.value || 'system',
+      type: RESOURCE_TYPES.capacity,
+      id: 'capacity',
+    }, 'FULL')
     peers.value = resp.peers ?? []
     _peersFetched = true
-    return resp
   }
 
   /**
@@ -131,8 +125,7 @@ export function useBackends() {
   function ensurePeers(): Promise<void> {
     if (_peersFetched) return Promise.resolve()
     if (_peersPromise) return _peersPromise
-    _peersPromise = listPeers()
-      .then(() => undefined)
+    _peersPromise = fetchPeers()
       .catch(() => {
         _peersPromise = null
       })
@@ -153,13 +146,12 @@ export function useBackends() {
   return {
     backends,
     capabilities,
+    clusterId,
     peers,
     multiBackend,
     fetchConfig,
     currentBackend,
     currentCluster,
-    listBackends,
-    listPeers,
     ensurePeers,
   }
 }

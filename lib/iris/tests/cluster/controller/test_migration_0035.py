@@ -15,7 +15,7 @@ import importlib.util
 import sqlite3
 from pathlib import Path
 
-_MIGRATION = Path(__file__).parents[3] / "src/iris/cluster/controller/migrations/0035_federation_unify.py"
+_MIGRATION = Path(__file__).parents[3] / "src/iris/cluster/controller/persistence/migrations/0035_federation_unify.py"
 
 # The pre-0035 (0034-era) federation schema: federated_jobs is SENT-only with the
 # handoff column NOT NULL, and there is no changelog table yet. Job ids are

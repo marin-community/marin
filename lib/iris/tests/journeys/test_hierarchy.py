@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from connectrpc.errors import ConnectError
+from iris.resources.errors import ResourcePreconditionFailed
 from iris.rpc import job_pb2
 
 
@@ -21,15 +21,15 @@ def test_root_cancellation_terminates_only_live_descendants(journey):
     journey.cancel(root)
     journey.settle()
 
-    assert journey.job(root).state == job_pb2.JOB_STATE_KILLED
-    child_status = journey.job(child)
+    assert journey.job(root).summary.state == job_pb2.JOB_STATE_KILLED
+    child_status = journey.job(child).summary
     child_tasks = journey.tasks(child)
     assert child_status.state == job_pb2.JOB_STATE_KILLED
-    assert child_status.error == "Parent job terminated"
+    assert child_status.error_message == "Parent job terminated"
     assert [task.state for task in child_tasks] == [job_pb2.TASK_STATE_KILLED] * 2
-    assert [task.error for task in child_tasks] == [child_status.error] * 2
-    assert journey.job(finished_child).state == job_pb2.JOB_STATE_SUCCEEDED
-    assert journey.job(unrelated).state == job_pb2.JOB_STATE_RUNNING
+    assert [task.error_message for task in child_tasks] == [child_status.error_message] * 2
+    assert journey.job(finished_child).summary.state == job_pb2.JOB_STATE_SUCCEEDED
+    assert journey.job(unrelated).summary.state == job_pb2.JOB_STATE_RUNNING
 
 
 def test_parent_failure_marks_child_as_parent_terminated(journey):
@@ -41,16 +41,16 @@ def test_parent_failure_marks_child_as_parent_terminated(journey):
     journey.fail(root[0])
     journey.settle()
 
-    root_status = journey.job(root)
-    child_status = journey.job(child)
+    root_status = journey.job(root).summary
+    child_status = journey.job(child).summary
     assert root_status.state == job_pb2.JOB_STATE_FAILED
-    assert "max_task_failures" in root_status.error
-    assert "failures=1" in root_status.error
-    assert "limit=0" in root_status.error
-    assert "application failure" in root_status.error
+    assert "max_task_failures" in root_status.error_message
+    assert "failures=1" in root_status.error_message
+    assert "limit=0" in root_status.error_message
+    assert "application failure" in root_status.error_message
     assert child_status.state == job_pb2.JOB_STATE_KILLED
-    assert child_status.error == "Parent job terminated"
-    assert [task.error for task in journey.tasks(child)] == [child_status.error]
+    assert child_status.error_message == "Parent job terminated"
+    assert [task.error_message for task in journey.tasks(child)] == [child_status.error_message]
 
 
 def test_child_cancellation_preserves_its_parent_and_sibling(journey):
@@ -63,9 +63,9 @@ def test_child_cancellation_preserves_its_parent_and_sibling(journey):
     journey.cancel(child)
     journey.settle()
 
-    assert journey.job(child).state == job_pb2.JOB_STATE_KILLED
-    assert journey.job(sibling).state == job_pb2.JOB_STATE_RUNNING
-    assert journey.job(root).state == job_pb2.JOB_STATE_RUNNING
+    assert journey.job(child).summary.state == job_pb2.JOB_STATE_KILLED
+    assert journey.job(sibling).summary.state == job_pb2.JOB_STATE_RUNNING
+    assert journey.job(root).summary.state == job_pb2.JOB_STATE_RUNNING
 
 
 def test_finished_parent_refuses_a_new_child(journey):
@@ -74,5 +74,5 @@ def test_finished_parent_refuses_a_new_child(journey):
     journey.succeed(root[0])
     journey.settle()
 
-    with pytest.raises(ConnectError, match="has terminated"):
+    with pytest.raises(ResourcePreconditionFailed, match="has terminated"):
         journey.submit_child(root, "late-child")

@@ -9,7 +9,7 @@ Three layers, exercised in order:
    proto per worker from a ``ReconcileInputs`` snapshot. No DB.
 2. **Wire & dispatch** — ``RpcTaskBackend.reconcile`` fans out via a
    fake stub factory and synthesizes ``WorkerReconcileResult.observations``.
-3. **Apply + e2e** — ``apply_reconcile`` against real SQLite DB state, plus a
+3. **Apply + e2e** — ``apply_worker_reconcile`` against real SQLite DB state, plus a
    handful of end-to-end convergence ticks driven through the production control
    tick's reconcile phase (``reconcile_once``).
 """
@@ -19,38 +19,44 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 import pytest
-from iris.cluster.backends.rpc.backend import (
-    WORKER_RECONCILE_TEARDOWN_REASON,
-    RpcTaskBackend,
-)
-from iris.cluster.controller import ops, writes
-from iris.cluster.controller.backend import (
+from iris.backends.protocol import (
     AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
-    BackendRuntime,
+    BackendWorkerStore,
     ReconcileRequest,
     ReconcileResult,
     ScheduleRequest,
     ScheduleResult,
     plans_from_snapshot,
 )
-from iris.cluster.controller.backend_store import BackendWorkerStore
-from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.reconcile.loader import load_closed_snapshot
+from iris.backends.rpc.backend import (
+    WORKER_RECONCILE_TEARDOWN_REASON,
+    RpcTaskBackend,
+)
+from iris.cluster.controller.persistence import operations as ops
+from iris.cluster.controller.persistence import writes
+from iris.cluster.controller.persistence.backends import DbBackendWorkerStore
+from iris.cluster.controller.persistence.reconcile.loader import load_closed_snapshot
+from iris.cluster.controller.persistence.schema import task_attempts_table
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.worker import (
+    AttemptStopReason,
+    KeepAttempt,
+    LaunchAttempt,
     ReconcileInputs,
     ReconcileRow,
+    StopAttempt,
     WorkerReconcilePlan,
+    WorkerReconcileRequest,
     WorkerReconcileResult,
     build_reconcile_plans,
 )
 from iris.cluster.controller.reconcile.worker import (
     observations_to_updates as worker_observations_to_updates,
 )
+from iris.cluster.controller.scheduling.decision import Assignment
 from iris.cluster.controller.scheduling.scheduler import Scheduler
-from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.controller.worker_health import (
     BUILD_FAILURE_THRESHOLD,
     MIN_UNREACHABLE_FAILURES,
@@ -58,8 +64,21 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEventKind,
     WorkerHealthTracker,
 )
-from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.types import (
+    DEFAULT_BACKEND_ID,
+    UserBudgetDefaults,
+)
+from iris.resources.attempt import AttemptLaunch, AttemptLaunchTemplate, AttemptObservation
+from iris.resources.execution import CommandEntrypoint, Environment, ResourceSpec, RuntimeEntrypoint
+from iris.resources.job import ContainerProfile, PriorityBand
+from iris.resources.names import (
+    AttemptUid,
+    JobName,
+    WorkerId,
+)
+from iris.resources.state import TaskState
 from iris.rpc import job_pb2, worker_pb2
+from iris.rpc.worker_client import RpcWorkerClient
 from iris.testing.controller import (
     assign_task,
     dispatch_task,
@@ -74,7 +93,6 @@ from iris.testing.controller import (
     register_worker,
     run_worker_daemon_reconcile,
     run_worker_daemon_schedule,
-    store_from_runtime,
     submit_job,
 )
 from iris.testing.controller_state import ControllerTestState
@@ -105,14 +123,11 @@ def _task_id(name: str, index: int = 0) -> JobName:
 
 def _make_plan(
     worker_id: str,
-    desired: list[worker_pb2.Worker.DesiredAttempt] | None = None,
+    desired: list[LaunchAttempt | KeepAttempt | StopAttempt] | None = None,
 ) -> WorkerReconcilePlan:
     return WorkerReconcilePlan(
         worker_id=WorkerId(worker_id),
-        request=worker_pb2.Worker.ReconcileRequest(
-            worker_id=worker_id,
-            desired=desired or [],
-        ),
+        request=WorkerReconcileRequest(worker_id=WorkerId(worker_id), desired=tuple(desired or ())),
     )
 
 
@@ -122,30 +137,22 @@ def _obs(
     *,
     exit_code: int | None = None,
     error: str | None = None,
-) -> worker_pb2.Worker.AttemptObservation:
-    kwargs: dict = {
-        "attempt_uid": attempt_uid,
-        "state": state,
-    }
-    if exit_code is not None:
-        kwargs["exit_code"] = exit_code
-    if error is not None:
-        kwargs["error"] = error
-    return worker_pb2.Worker.AttemptObservation(**kwargs)
-
-
-def _desired_run(attempt_uid: str, *, spec: job_pb2.RunTaskRequest | None = None):
-    return worker_pb2.Worker.DesiredAttempt(
-        attempt_uid=attempt_uid,
-        run=worker_pb2.Worker.AttemptSpec(request=spec) if spec is not None else worker_pb2.Worker.AttemptSpec(),
+) -> AttemptObservation:
+    return AttemptObservation(
+        attempt_uid=AttemptUid(attempt_uid),
+        state=TaskState(state),
+        exit_code=exit_code or None,
+        error=error,
     )
 
 
-def _desired_stop(attempt_uid: str, *, reason=worker_pb2.Worker.STOP_REASON_CANCELLED):
-    return worker_pb2.Worker.DesiredAttempt(
-        attempt_uid=attempt_uid,
-        stop=reason,
-    )
+def _desired_run(attempt_uid: str, *, spec: AttemptLaunch | None = None):
+    uid = AttemptUid(attempt_uid)
+    return LaunchAttempt(uid, spec) if spec is not None else KeepAttempt(uid)
+
+
+def _desired_stop(attempt_uid: str, *, reason: AttemptStopReason = AttemptStopReason.CANCELLED):
+    return StopAttempt(AttemptUid(attempt_uid), reason)
 
 
 # ===========================================================================
@@ -215,7 +222,7 @@ def test_insert_attempt_remints_on_uid_collision(monkeypatch):
 
         # token_hex hands back the existing uid (collision), then a fresh one.
         scripted = iter([first_uid, "cafebabecafebabe"])
-        monkeypatch.setattr("iris.cluster.controller.writes.secrets.token_hex", lambda _n: next(scripted))
+        monkeypatch.setattr("iris.cluster.controller.persistence.writes.secrets.token_hex", lambda _n: next(scripted))
 
         second_uid = _insert_attempt(state, task_b, attempt_id=0)
 
@@ -233,7 +240,7 @@ def test_insert_attempt_exhausts_retries_when_every_mint_collides(monkeypatch):
 
         first_uid = _insert_attempt(state, task_a, attempt_id=0)
         # Every mint returns the already-stored uid.
-        monkeypatch.setattr("iris.cluster.controller.writes.secrets.token_hex", lambda _n: first_uid)
+        monkeypatch.setattr("iris.cluster.controller.persistence.writes.secrets.token_hex", lambda _n: first_uid)
 
         with pytest.raises(RuntimeError, match="exhausted attempt_uid retries"):
             _insert_attempt(state, task_b, attempt_id=0)
@@ -272,8 +279,8 @@ def _row(
         worker_id=WorkerId(_W1),
         task_id=_task_id(task_id),
         attempt_id=attempt_id,
-        task_state=task_state,
-        attempt_state=attempt_state,
+        task_state=TaskState(task_state),
+        attempt_state=TaskState(attempt_state),
         job_id=_job_id(job),
         attempt_uid=AttemptUid(attempt_uid),
     )
@@ -282,20 +289,37 @@ def _row(
 def _plan_for(
     rows: list[ReconcileRow],
     *,
-    job_specs: dict[JobName, job_pb2.RunTaskRequest] | None = None,
+    launch_templates: dict[JobName, AttemptLaunchTemplate] | None = None,
 ) -> WorkerReconcilePlan:
     """Run the pure-compute layer for one worker and return its plan."""
     wid = WorkerId(_W1)
     inputs = ReconcileInputs(
-        job_specs=dict(job_specs or {}),
+        launch_templates=dict(launch_templates or {}),
         worker_ids=[wid],
         rows_by_worker={wid: list(rows)},
     )
     return build_reconcile_plans(inputs)[0]
 
 
-def _spec(image: str = "spec-image") -> job_pb2.RunTaskRequest:
-    return job_pb2.RunTaskRequest(task_image=image)
+def _spec(image: str = "spec-image") -> AttemptLaunchTemplate:
+    return AttemptLaunchTemplate(
+        num_tasks=1,
+        entrypoint=RuntimeEntrypoint((), CommandEntrypoint(("true",)), {}, {}),
+        environment=Environment({}, ()),
+        bundle_id="",
+        resources=ResourceSpec(),
+        timeout=None,
+        ports=(),
+        constraints=(),
+        task_image=image,
+        coscheduling=None,
+        priority_band=PriorityBand.INTERACTIVE,
+        container_profile=ContainerProfile.DEFAULT,
+    )
+
+
+def _launch(task_id: JobName, attempt_id: int, attempt_uid: str, *, image: str = "spec-image") -> AttemptLaunch:
+    return AttemptLaunch(task_id, attempt_id, AttemptUid(attempt_uid), _spec(image))
 
 
 def test_reconcile_worker_empty_rows_yields_empty_plan():
@@ -307,24 +331,23 @@ def test_reconcile_worker_empty_rows_yields_empty_plan():
 
 def test_reconcile_worker_assigned_with_spec_emits_run_with_inline_spec():
     row = _row(job_pb2.TASK_STATE_ASSIGNED, attempt_id=7, job="job-a", task_id="task-a")
-    plan = _plan_for([row], job_specs={_job_id("job-a"): _spec("custom-image")})
+    plan = _plan_for([row], launch_templates={_job_id("job-a"): _spec("custom-image")})
 
     assert len(plan.request.desired) == 1
     desired = plan.request.desired[0]
     assert desired.attempt_uid == row.attempt_uid
-    assert desired.HasField("run")
-    assert desired.run.HasField("request")
+    assert isinstance(desired, LaunchAttempt)
     # The inline RunTaskRequest is stamped with the routing key: the worker's
     # submit_task reads attempt_uid from the request.
-    assert desired.run.request.task_image == "custom-image"
-    assert desired.run.request.task_id == row.task_id.to_wire()
-    assert desired.run.request.attempt_id == 7
-    assert desired.run.request.attempt_uid == row.attempt_uid
+    assert desired.launch.template.task_image == "custom-image"
+    assert desired.launch.task_id == row.task_id
+    assert desired.launch.attempt_id == 7
+    assert desired.launch.attempt_uid == row.attempt_uid
 
 
 def test_reconcile_worker_assigned_without_spec_is_omitted():
     """ASSIGNED with no cached job spec is dropped (scheduler reissues later)."""
-    plan = _plan_for([_row(job_pb2.TASK_STATE_ASSIGNED, job="job-missing")], job_specs={})
+    plan = _plan_for([_row(job_pb2.TASK_STATE_ASSIGNED, job="job-missing")], launch_templates={})
     assert list(plan.request.desired) == []
 
 
@@ -338,8 +361,7 @@ def test_reconcile_worker_executing_states_emit_run_without_inline_spec(task_sta
     plan = _plan_for([row])
     assert len(plan.request.desired) == 1
     desired = plan.request.desired[0]
-    assert desired.HasField("run")
-    assert not desired.run.HasField("request")
+    assert isinstance(desired, KeepAttempt)
     assert desired.attempt_uid == row.attempt_uid
 
 
@@ -348,11 +370,11 @@ def test_reconcile_worker_executing_states_emit_run_without_inline_spec(task_sta
     [
         # Execution timeout marks the task FAILED; the cosched cascade and the
         # other controller-induced terminals map to JOB_TERMINATED.
-        (job_pb2.TASK_STATE_FAILED, worker_pb2.Worker.STOP_REASON_TASK_TIMEOUT),
-        (job_pb2.TASK_STATE_COSCHED_FAILED, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED),
-        (job_pb2.TASK_STATE_WORKER_FAILED, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED),
-        (job_pb2.TASK_STATE_UNSCHEDULABLE, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED),
-        (job_pb2.TASK_STATE_SUCCEEDED, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED),
+        (job_pb2.TASK_STATE_FAILED, AttemptStopReason.TASK_TIMEOUT),
+        (job_pb2.TASK_STATE_COSCHED_FAILED, AttemptStopReason.JOB_TERMINATED),
+        (job_pb2.TASK_STATE_WORKER_FAILED, AttemptStopReason.JOB_TERMINATED),
+        (job_pb2.TASK_STATE_UNSCHEDULABLE, AttemptStopReason.JOB_TERMINATED),
+        (job_pb2.TASK_STATE_SUCCEEDED, AttemptStopReason.JOB_TERMINATED),
     ],
 )
 def test_reconcile_worker_controller_terminal_with_terminal_attempt_emits_stop(task_state, expected_reason):
@@ -364,8 +386,8 @@ def test_reconcile_worker_controller_terminal_with_terminal_attempt_emits_stop(t
 
     assert len(plan.request.desired) == 1
     desired = plan.request.desired[0]
-    assert desired.HasField("stop")
-    assert desired.stop == expected_reason
+    assert isinstance(desired, StopAttempt)
+    assert desired.reason is expected_reason
     assert desired.attempt_uid == row.attempt_uid
 
 
@@ -388,16 +410,15 @@ def test_reconcile_worker_stranded_terminal_with_live_attempt_emits_run(task_sta
 
     assert len(plan.request.desired) == 1
     desired = plan.request.desired[0]
-    assert desired.HasField("run")
-    assert not desired.run.HasField("request")
+    assert isinstance(desired, KeepAttempt)
     assert desired.attempt_uid == row.attempt_uid
 
 
 @pytest.mark.parametrize(
     "task_state,expected_reason",
     [
-        (job_pb2.TASK_STATE_KILLED, worker_pb2.Worker.STOP_REASON_CANCELLED),
-        (job_pb2.TASK_STATE_PREEMPTED, worker_pb2.Worker.STOP_REASON_PREEMPTED),
+        (job_pb2.TASK_STATE_KILLED, AttemptStopReason.CANCELLED),
+        (job_pb2.TASK_STATE_PREEMPTED, AttemptStopReason.PREEMPTED),
     ],
 )
 def test_reconcile_worker_stop_states_emit_stop_with_reason(task_state, expected_reason):
@@ -405,8 +426,8 @@ def test_reconcile_worker_stop_states_emit_stop_with_reason(task_state, expected
     plan = _plan_for([row])
     assert len(plan.request.desired) == 1
     desired = plan.request.desired[0]
-    assert desired.HasField("stop")
-    assert desired.stop == expected_reason
+    assert isinstance(desired, StopAttempt)
+    assert desired.reason is expected_reason
     assert desired.attempt_uid == row.attempt_uid
 
 
@@ -441,8 +462,8 @@ def test_reconcile_worker_pending_with_terminal_attempt_emits_stop():
 
     assert len(plan.request.desired) == 1
     desired = plan.request.desired[0]
-    assert desired.HasField("stop")
-    assert desired.stop == worker_pb2.Worker.STOP_REASON_PREEMPTED
+    assert isinstance(desired, StopAttempt)
+    assert desired.reason is AttemptStopReason.PREEMPTED
     assert desired.attempt_uid == row.attempt_uid
 
 
@@ -465,10 +486,11 @@ def test_reconcile_worker_holds_assigned_run_while_preemption_victim_occupies_wo
         attempt_id=1,
         attempt_uid="bbbbbbbbbbbbbbbb",
     )
-    plan = _plan_for([victim, preemptor], job_specs={_job_id("job-preemptor"): _spec()})
+    plan = _plan_for([victim, preemptor], launch_templates={_job_id("job-preemptor"): _spec()})
 
     by_uid = {d.attempt_uid: d for d in plan.request.desired}
-    assert by_uid[victim.attempt_uid].stop == worker_pb2.Worker.STOP_REASON_PREEMPTED
+    assert isinstance(by_uid[victim.attempt_uid], StopAttempt)
+    assert by_uid[victim.attempt_uid].reason is AttemptStopReason.PREEMPTED
     assert (
         preemptor.attempt_uid not in by_uid
     ), "preemptor run-intent must be withheld while the victim occupies the worker"
@@ -484,10 +506,10 @@ def test_reconcile_worker_dispatches_assigned_once_victim_finalized():
         attempt_id=1,
         attempt_uid="bbbbbbbbbbbbbbbb",
     )
-    plan = _plan_for([preemptor], job_specs={_job_id("job-preemptor"): _spec()})
+    plan = _plan_for([preemptor], launch_templates={_job_id("job-preemptor"): _spec()})
 
     by_uid = {d.attempt_uid: d for d in plan.request.desired}
-    assert by_uid[preemptor.attempt_uid].HasField("run")
+    assert isinstance(by_uid[preemptor.attempt_uid], LaunchAttempt)
 
 
 def test_reconcile_worker_running_cotenant_does_not_hold_assigned_dispatch():
@@ -508,11 +530,11 @@ def test_reconcile_worker_running_cotenant_does_not_hold_assigned_dispatch():
         attempt_id=1,
         attempt_uid="dddddddddddddddd",
     )
-    plan = _plan_for([running, assigned], job_specs={_job_id("job-fresh"): _spec()})
+    plan = _plan_for([running, assigned], launch_templates={_job_id("job-fresh"): _spec()})
 
     by_uid = {d.attempt_uid: d for d in plan.request.desired}
-    assert by_uid[assigned.attempt_uid].HasField("run")
-    assert by_uid[running.attempt_uid].HasField("run")
+    assert isinstance(by_uid[assigned.attempt_uid], LaunchAttempt)
+    assert isinstance(by_uid[running.attempt_uid], KeepAttempt)
 
 
 def test_reconcile_worker_mixed_rows_per_axis():
@@ -523,14 +545,15 @@ def test_reconcile_worker_mixed_rows_per_axis():
         _row(job_pb2.TASK_STATE_KILLED, task_id="c", attempt_id=3, job="j3", attempt_uid="cccccccccccccccc"),
         _row(job_pb2.TASK_STATE_SUCCEEDED, task_id="d", attempt_id=4, job="j4", attempt_uid="dddddddddddddddd"),
     ]
-    plan = _plan_for(rows, job_specs={_job_id("j1"): _spec("img-j1")})
+    plan = _plan_for(rows, launch_templates={_job_id("j1"): _spec("img-j1")})
 
     by_uid = {d.attempt_uid: d for d in plan.request.desired}
     assert set(by_uid) == {row.attempt_uid for row in rows}
-    assert by_uid["aaaaaaaaaaaaaaaa"].run.HasField("request")
-    assert not by_uid["bbbbbbbbbbbbbbbb"].run.HasField("request")
-    assert by_uid["cccccccccccccccc"].stop == worker_pb2.Worker.STOP_REASON_CANCELLED
-    assert not by_uid["dddddddddddddddd"].run.HasField("request")
+    assert isinstance(by_uid["aaaaaaaaaaaaaaaa"], LaunchAttempt)
+    assert isinstance(by_uid["bbbbbbbbbbbbbbbb"], KeepAttempt)
+    assert isinstance(by_uid["cccccccccccccccc"], StopAttempt)
+    assert by_uid["cccccccccccccccc"].reason is AttemptStopReason.CANCELLED
+    assert isinstance(by_uid["dddddddddddddddd"], KeepAttempt)
 
 
 # --- attempt_uid is stamped on every emit site ------------------------------
@@ -558,8 +581,8 @@ def test_reconcile_worker_stamps_attempt_uid_on_every_emit_site(task_state):
     uid = "00112233aabbccdd"
     row = _row(task_state, attempt_id=9, job="job-uid", attempt_uid=uid)
     # ASSIGNED needs a cached spec or the row is dropped before any emit.
-    job_specs = {_job_id("job-uid"): _spec()} if task_state == job_pb2.TASK_STATE_ASSIGNED else None
-    plan = _plan_for([row], job_specs=job_specs)
+    launch_templates = {_job_id("job-uid"): _spec()} if task_state == job_pb2.TASK_STATE_ASSIGNED else None
+    plan = _plan_for([row], launch_templates=launch_templates)
 
     assert len(plan.request.desired) == 1
     assert plan.request.desired[0].attempt_uid == uid
@@ -572,7 +595,7 @@ def test_reconcile_worker_emits_distinct_uids_for_distinct_rows():
         _row(job_pb2.TASK_STATE_RUNNING, task_id="b", attempt_id=2, job="j2", attempt_uid="2222222222222222"),
         _row(job_pb2.TASK_STATE_KILLED, task_id="c", attempt_id=3, job="j3", attempt_uid="3333333333333333"),
     ]
-    plan = _plan_for(rows, job_specs={_job_id("j1"): _spec()})
+    plan = _plan_for(rows, launch_templates={_job_id("j1"): _spec()})
 
     uids = {d.attempt_uid for d in plan.request.desired}
     assert uids == {"1111111111111111", "2222222222222222", "3333333333333333"}
@@ -625,17 +648,19 @@ def _provider_with_stub(stub: _FakeWorkerStub | None = None) -> tuple[RpcTaskBac
     if stub is None:
         stub = _FakeWorkerStub(address=_W1_ADDR)
     factory = _FakeStubFactory(stubs={_W1_ADDR: stub})
-    return RpcTaskBackend(stub_factory=factory), stub
+    return RpcTaskBackend(worker_client=RpcWorkerClient(factory)), stub
 
 
 def _bind_provider(provider: RpcTaskBackend, state: ControllerTestState) -> None:
-    provider.bind_runtime(
-        BackendRuntime(
-            backend_id=DEFAULT_BACKEND_ID,
+    provider.attach_worker_store(
+        DEFAULT_BACKEND_ID,
+        DbBackendWorkerStore(
             db=state._db,
             owns_scale_group=lambda _scale_group: True,
-            budget_defaults=UserBudgetDefaults(),
-        )
+            health=provider.health,
+            defaults=UserBudgetDefaults(),
+            autoscale=provider.autoscale,
+        ),
     )
     provider.seed_liveness()
 
@@ -657,7 +682,10 @@ def test_reconcile_rpc_forwards_observations(state):
     assign_task(state, task, worker_id)
     attempt = query_attempt(state, task.task_id, 0)
     assert attempt is not None
-    observation = _obs(attempt.attempt_uid, job_pb2.TASK_STATE_RUNNING)
+    observation = worker_pb2.Worker.AttemptObservation(
+        attempt_uid=attempt.attempt_uid,
+        state=job_pb2.TASK_STATE_RUNNING,
+    )
     stub = _FakeWorkerStub(
         address=_W1_ADDR,
         reconcile_response=worker_pb2.Worker.ReconcileResponse(
@@ -830,7 +858,7 @@ def _setup_assigned_task(state: ControllerTestState, worker_id: str = _W1) -> tu
 def _apply_observations(
     state: ControllerTestState,
     worker_id: str,
-    observations: list[worker_pb2.Worker.AttemptObservation],
+    observations: list[AttemptObservation],
     *,
     plan: WorkerReconcilePlan | None = None,
 ):
@@ -842,14 +870,7 @@ def _apply_observations(
     tests that need to exercise the filter pass an explicit ``plan``.
     """
     if plan is None:
-        desired = [
-            worker_pb2.Worker.DesiredAttempt(
-                attempt_uid=obs.attempt_uid,
-                run=worker_pb2.Worker.AttemptSpec(),
-            )
-            for obs in observations
-            if obs.attempt_uid
-        ]
+        desired = [KeepAttempt(obs.attempt_uid) for obs in observations if obs.attempt_uid]
         plan = _make_plan(worker_id, desired=desired)
     result = WorkerReconcileResult(worker_id=WorkerId(worker_id), observations=observations, error=None)
     with state._db.transaction() as cur:
@@ -1070,10 +1091,7 @@ def test_rpc_failure_bounces_assigned_task_back_to_pending():
     """RPC failure on an ASSIGNED dispatch synthesizes WORKER_FAILED, returning the task to PENDING."""
     with make_controller_state() as state:
         task_id, attempt_id, uid = _setup_assigned_task(state)
-        spec = _spec()
-        spec.task_id = task_id.to_wire()
-        spec.attempt_id = attempt_id
-        spec.attempt_uid = uid
+        spec = _launch(task_id, attempt_id, uid)
         plan = _make_plan(_W1, desired=[_desired_run(uid, spec=spec)])
         _apply_failure(state, _W1, plan, "timeout")
         # Synthetic WORKER_FAILED bounces the task back to PENDING so it can be re-dispatched.
@@ -1191,9 +1209,9 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
 
 def _observations_to_updates(
     state: ControllerTestState,
-    observations: list[worker_pb2.Worker.AttemptObservation],
+    observations: list[AttemptObservation],
 ) -> list[TaskUpdate]:
-    uids = [AttemptUid(obs.attempt_uid) for obs in observations if obs.attempt_uid]
+    uids = [obs.attempt_uid for obs in observations if obs.attempt_uid]
     with state._db.transaction() as cur:
         snapshot = load_closed_snapshot(cur, now=Timestamp.now(), observation_uids=uids)
         return worker_observations_to_updates(snapshot, observations)
@@ -1310,8 +1328,8 @@ class _ScriptedProvider:
     def get_process_status(self, *_args, **_kwargs):
         raise NotImplementedError
 
-    def bind_runtime(self, runtime: BackendRuntime) -> None:
-        self._store = store_from_runtime(runtime, self.health, self.autoscale)
+    def attach_worker_store(self, backend_id: str, store: BackendWorkerStore) -> None:
+        self._store = store
 
     def seed_liveness(self) -> None:
         assert self._store is not None
@@ -1390,8 +1408,8 @@ class _UnreachableProvider:
     def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         self.advertised = advertised
 
-    def bind_runtime(self, runtime: BackendRuntime) -> None:
-        self._store = store_from_runtime(runtime, self.health, self.autoscale)
+    def attach_worker_store(self, backend_id: str, store: BackendWorkerStore) -> None:
+        self._store = store
 
     def seed_liveness(self) -> None:
         assert self._store is not None
@@ -1534,7 +1552,7 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     assert ctrl.provider.health.all() == {}, "whole slice should be forgotten from the tracker"
 
 
-def _fail_first_held(plan: WorkerReconcilePlan) -> list[worker_pb2.Worker.AttemptObservation]:
+def _fail_first_held(plan: WorkerReconcilePlan) -> list[AttemptObservation]:
     """Report the worker's first still-held run attempt as a launch failure.
 
     The kernel attributes an ASSIGNED -> WORKER_FAILED transition observed over
@@ -1545,11 +1563,11 @@ def _fail_first_held(plan: WorkerReconcilePlan) -> list[worker_pb2.Worker.Attemp
     first held attempt is a fresh one.
     """
     for desired in plan.request.desired:
-        if desired.HasField("run"):
+        if isinstance(desired, LaunchAttempt):
             return [
-                worker_pb2.Worker.AttemptObservation(
+                AttemptObservation(
                     attempt_uid=desired.attempt_uid,
-                    state=job_pb2.TASK_STATE_WORKER_FAILED,
+                    state=TaskState.WORKER_FAILED,
                     error="host failed to launch attempt",
                 )
             ]
@@ -1612,7 +1630,7 @@ def test_reconcile_reaps_worker_at_build_failure_threshold(make_controller):
 # Section 6: same-batch coscheduling split-slice corruption (#2 / #3)
 # ===========================================================================
 #
-# ``apply_reconcile`` (the batch verb) shares one Overlay overlay across
+# ``apply_worker_reconcile`` (the batch verb) shares one Overlay overlay across
 # every worker in a batch. When a coscheduled member's terminal update requeues
 # its sibling, the sibling's PENDING task state + PREEMPTED attempt state are
 # written into the overlay only. Reconcile guards that later read the raw
@@ -1702,10 +1720,7 @@ def _run_plan(worker_id: str, task_id: JobName, attempt_id: int, attempt_uid: st
     ``run.request`` (it reads ``task_id`` / ``attempt_id`` from it), and the
     success path drops any observation whose ``attempt_uid`` is not in the plan.
     """
-    spec = _spec()
-    spec.task_id = task_id.to_wire()
-    spec.attempt_id = attempt_id
-    spec.attempt_uid = attempt_uid
+    spec = _launch(task_id, attempt_id, attempt_uid)
     return _make_plan(worker_id, desired=[_desired_run(attempt_uid, spec=spec)])
 
 
@@ -1716,7 +1731,7 @@ def _apply_batch(
 ):
     """Apply a multi-worker reconcile batch through the production verb.
 
-    ``results`` order is the per-worker processing order (``apply_reconcile``
+    ``results`` order is the per-worker processing order (``apply_worker_reconcile``
     iterates it in order), so it controls which worker is seen first.
     """
     plan_results = [(plans[r.worker_id], r) for r in results]
@@ -1767,7 +1782,7 @@ def test_coscheduled_running_repoll_does_not_revive_after_sibling_requeue():
 def test_coscheduled_rpc_failure_does_not_split_slice():
     """#2: an RPC failure must not fabricate WORKER_FAILED for a same-batch requeued sibling.
 
-    One batch through the production ``apply_reconcile`` verb: worker W0 succeeds
+    One batch through the production ``apply_worker_reconcile`` verb: worker W0 succeeds
     reporting t0=WORKER_FAILED (with preemption budget, so t0 -> PENDING, which
     requeues sibling t1 to PENDING in the overlay), and worker W1's reconcile RPC
     fails. Processing W0 first means the RPC-failure synthesis for W1 runs after

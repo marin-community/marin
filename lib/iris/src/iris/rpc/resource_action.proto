@@ -1,0 +1,51 @@
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+
+edition = "2023";
+
+package iris.resource;
+
+import "resource_identity.proto";
+import "time.proto";
+
+option features.field_presence = EXPLICIT;
+
+enum ActionKind {
+  ACTION_KIND_UNSPECIFIED = 0;
+  ACTION_KIND_CANCEL_JOB = 1;
+  ACTION_KIND_RETRY_TASK = 2;
+  ACTION_KIND_TERMINATE_ATTEMPT = 3;
+  ACTION_KIND_FAIL_ATTEMPT = 4;
+}
+
+enum ActionState {
+  ACTION_STATE_UNSPECIFIED = 0;
+  ACTION_STATE_ACCEPTED = 1;
+  ACTION_STATE_VERIFYING = 2;
+  ACTION_STATE_SUCCEEDED = 3;
+  ACTION_STATE_FAILED = 4;
+}
+
+enum ActionResult {
+  ACTION_RESULT_UNSPECIFIED = 0;
+  ACTION_RESULT_NONE = 1;
+  ACTION_RESULT_SATISFIED = 2;
+  ACTION_RESULT_TARGET_ABSENT = 3;
+  ACTION_RESULT_PROVIDER_REJECTED = 4;
+  ACTION_RESULT_INTERNAL_ERROR = 5;
+}
+
+message ActionReceipt {
+  string action_id = 1;
+  ActionKind kind = 2;
+  ResourceKey target = 3;
+  string expected_target_uid = 4;
+  string expected_attempt_uid = 5;
+  ActionState state = 6;
+  ActionResult result_code = 7;
+  string result_message = 8;
+  iris.time.Timestamp created_at = 9;
+  iris.time.Timestamp updated_at = 10;
+  iris.time.Timestamp completed_at = 11;
+  int32 expected_attempt_number = 12;
+}

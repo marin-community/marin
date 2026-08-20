@@ -1,0 +1,467 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""ResourceService wire codecs.
+
+The frozen records in :mod:`iris.resources` are Iris's public Python API.
+Generated protobuf messages stay at the RPC boundary because their mutable,
+presence-sensitive semantics are transport concerns rather than resource behavior.
+"""
+
+from collections.abc import Iterable
+
+from iris.resources.activity import ActivityEntry, ActivityQuery
+from iris.resources.attempt import AttemptDetail, AttemptRuntimeObject, AttemptSummary
+from iris.resources.endpoint import (
+    EndpointDetail,
+    EndpointQuery,
+    EndpointSummary,
+    EndpointToken,
+    ExecResult,
+    ProfileResult,
+)
+from iris.resources.job import JobDetail, JobQuery, JobSummary
+from iris.resources.log import LogEntry, LogLevel, LogPage, LogQuery
+from iris.resources.node import (
+    NodeAttribute,
+    NodeAttributeKind,
+    NodeCapacity,
+    NodeDetail,
+    NodeQuery,
+    NodeSummary,
+)
+from iris.resources.slice import SliceDetail, SliceMember, SliceQuery, SliceSummary
+from iris.resources.source import Page
+from iris.resources.state import JobState, TaskState
+from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
+from iris.rpc import (
+    iris_logging_pb2,
+    resource_command_pb2,
+    resource_endpoint_pb2,
+    resource_fleet_pb2,
+    resource_job_pb2,
+    resource_observability_pb2,
+    resource_pb2,
+    resource_task_pb2,
+)
+from iris.rpc.resource_codec import (
+    attempt_identity_from_proto as _attempt_identity_from_proto,
+)
+from iris.rpc.resource_codec import (
+    endpoint_access_from_proto,
+    job_identity_from_proto,
+    job_spec_from_proto,
+    membership_state_from_proto,
+    node_health_from_proto,
+    node_health_to_proto,
+    resource_key_to_proto,
+    resource_spec_from_proto,
+    slice_capacity_state_from_proto,
+    slice_lifecycle_from_proto,
+)
+from iris.rpc.resource_codec import (
+    node_identity_from_proto as _node_identity_from_proto,
+)
+from iris.rpc.resource_codec import (
+    resource_key_from_proto as _resource_key_from_proto,
+)
+from iris.rpc.resource_codec import (
+    resource_source_status_from_proto as _source_status_from_proto,
+)
+from iris.rpc.resource_codec import (
+    slice_identity_from_proto as _slice_identity_from_proto,
+)
+from iris.rpc.resource_codec import (
+    task_identity_from_proto as _task_identity_from_proto,
+)
+from iris.time_proto import timestamp_from_proto, timestamp_to_proto
+
+
+def _page_request(page_size: int, page_token: str | None) -> resource_pb2.PageRequest:
+    return resource_pb2.PageRequest(page_size=page_size, page_token=page_token or "")
+
+
+def _page[T](items: tuple[T, ...], value: resource_pb2.PageInfo) -> Page[T]:
+    return Page(
+        items=items,
+        next_page_token=value.next_page_token or None,
+        source_statuses=tuple(_source_status_from_proto(status) for status in value.source_statuses),
+    )
+
+
+def job_query_to_proto(value: JobQuery) -> resource_job_pb2.JobQuery:
+    result = resource_job_pb2.JobQuery(
+        resource_id=value.resource_id or "",
+        owner_id=value.owner_id or "",
+        job_id_prefix=value.job_id_prefix or "",
+        states=value.states,
+        backend_id=value.backend_id or "",
+        execution_cluster_id=value.execution_cluster_id or "",
+        top_level_only=value.top_level_only,
+        page=_page_request(value.page_size, value.page_token),
+    )
+    if value.parent is not None:
+        result.parent.CopyFrom(resource_key_to_proto(value.parent))
+    return result
+
+
+def _job_summary_from_proto(value: resource_job_pb2.JobSummary) -> JobSummary:
+    return JobSummary(
+        identity=job_identity_from_proto(value.identity),
+        owner_id=value.owner_id,
+        parent=job_identity_from_proto(value.parent) if value.HasField("parent") else None,
+        state=JobState(value.state),
+        execution_cluster_id=value.execution_cluster_id,
+        backend_id=value.backend_id,
+        num_tasks=value.num_tasks,
+        submitted_at=timestamp_from_proto(value.submitted_at),
+        started_at=timestamp_from_proto(value.started_at) if value.HasField("started_at") else None,
+        finished_at=timestamp_from_proto(value.finished_at) if value.HasField("finished_at") else None,
+        error_message=value.error_message,
+        pending_reason=value.pending_reason,
+        exit_code=value.exit_code if value.HasField("exit_code") else None,
+        resources=resource_spec_from_proto(value.resources),
+    )
+
+
+def job_detail_from_proto(value: resource_job_pb2.JobDetail) -> JobDetail:
+    return JobDetail(_job_summary_from_proto(value.summary), job_spec_from_proto(value.spec))
+
+
+def job_page_from_proto(
+    items: Iterable[resource_job_pb2.JobSummary],
+    page: resource_pb2.PageInfo,
+) -> Page[JobSummary]:
+    return _page(tuple(_job_summary_from_proto(item) for item in items), page)
+
+
+def task_query_to_proto(value: TaskQuery) -> resource_task_pb2.TaskQuery:
+    result = resource_task_pb2.TaskQuery(
+        job_id_prefix=value.job_id_prefix or "",
+        states=value.states,
+        backend_id=value.backend_id or "",
+        authority_cluster_id=value.authority_cluster_id or "",
+        execution_cluster_id=value.execution_cluster_id or "",
+        page=_page_request(value.page_size, value.page_token),
+    )
+    if value.job is not None:
+        result.job.CopyFrom(resource_key_to_proto(value.job))
+    return result
+
+
+def _task_summary_from_proto(value: resource_task_pb2.TaskSummary) -> TaskSummary:
+    return TaskSummary(
+        identity=_task_identity_from_proto(value.identity),
+        job=job_identity_from_proto(value.job),
+        task_index=value.task_index,
+        state=TaskState(value.state),
+        execution_cluster_id=value.execution_cluster_id,
+        backend_id=value.backend_id,
+        current_attempt=(
+            _attempt_identity_from_proto(value.current_attempt) if value.HasField("current_attempt") else None
+        ),
+        current_node=_node_identity_from_proto(value.current_node) if value.HasField("current_node") else None,
+        failure_count=value.failure_count,
+        preemption_count=value.preemption_count,
+        submitted_at=timestamp_from_proto(value.submitted_at),
+        started_at=timestamp_from_proto(value.started_at) if value.HasField("started_at") else None,
+        finished_at=timestamp_from_proto(value.finished_at) if value.HasField("finished_at") else None,
+        status_message=value.status_message,
+        error_message=value.error_message,
+    )
+
+
+def _attempt_summary_from_proto(value: resource_task_pb2.AttemptSummary) -> AttemptSummary:
+    return AttemptSummary(
+        identity=_attempt_identity_from_proto(value.identity),
+        state=TaskState(value.state),
+        execution_cluster_id=value.execution_cluster_id,
+        backend_id=value.backend_id,
+        node=_node_identity_from_proto(value.node) if value.HasField("node") else None,
+        created_at=timestamp_from_proto(value.created_at),
+        started_at=timestamp_from_proto(value.started_at) if value.HasField("started_at") else None,
+        finished_at=timestamp_from_proto(value.finished_at) if value.HasField("finished_at") else None,
+        exit_code=value.exit_code if value.HasField("exit_code") else None,
+        error_message=value.error_message,
+        terminal_reason=value.terminal_reason,
+    )
+
+
+def task_page_from_proto(
+    items: Iterable[resource_task_pb2.TaskSummary],
+    page: resource_pb2.PageInfo,
+) -> Page[TaskSummary]:
+    return _page(tuple(_task_summary_from_proto(item) for item in items), page)
+
+
+def task_detail_from_proto(value: resource_task_pb2.TaskDetail) -> TaskDetail:
+    return TaskDetail(
+        summary=_task_summary_from_proto(value.summary),
+        attempts=tuple(_attempt_summary_from_proto(item) for item in value.attempts),
+        source_statuses=tuple(_source_status_from_proto(status) for status in value.source_statuses),
+        root_cause_highlights=tuple(value.root_cause_highlights),
+    )
+
+
+def task_details_from_proto(items: Iterable[resource_task_pb2.TaskDetail]) -> tuple[TaskDetail, ...]:
+    return tuple(task_detail_from_proto(item) for item in items)
+
+
+def attempt_detail_from_proto(value: resource_task_pb2.AttemptDetail) -> AttemptDetail:
+    runtime = None
+    if value.HasField("runtime"):
+        runtime = AttemptRuntimeObject(
+            provider_kind=value.runtime.provider_kind,
+            namespace=value.runtime.namespace,
+            name=value.runtime.name,
+            provider_uid=value.runtime.provider_uid,
+            provider_node_id=value.runtime.provider_node_id,
+            provider_node_uid=value.runtime.provider_node_uid,
+            container_id=value.runtime.container_id,
+            observed_at=timestamp_from_proto(value.runtime.observed_at),
+        )
+    return AttemptDetail(
+        summary=_attempt_summary_from_proto(value.summary),
+        runtime=runtime,
+        source_statuses=tuple(_source_status_from_proto(status) for status in value.source_statuses),
+    )
+
+
+def node_query_to_proto(value: NodeQuery) -> resource_fleet_pb2.NodeQuery:
+    return resource_fleet_pb2.NodeQuery(
+        backend_id=value.backend_id or "",
+        contains=value.contains or "",
+        health=[node_health_to_proto(item) for item in value.health],
+        page=_page_request(value.page_size, value.page_token),
+    )
+
+
+def _node_summary_from_proto(value: resource_fleet_pb2.NodeSummary) -> NodeSummary:
+    health = node_health_from_proto(value.health)
+    capacity = value.capacity
+    return NodeSummary(
+        identity=_node_identity_from_proto(value.identity),
+        health=health,
+        schedulable=value.schedulable,
+        capacity=NodeCapacity(
+            cpu_millicores=capacity.cpu_millicores,
+            memory_bytes=capacity.memory_bytes,
+            disk_bytes=capacity.disk_bytes,
+            accelerator_kind=capacity.accelerator_kind,
+            accelerator_variant=capacity.accelerator_variant,
+            accelerator_count=capacity.accelerator_count,
+        ),
+        scaling_group_id=value.scaling_group_id or None,
+        slice=_slice_identity_from_proto(value.slice) if value.HasField("slice") else None,
+        running_task_count=value.running_task_count,
+        observed_at=timestamp_from_proto(value.observed_at),
+        region=value.region or None,
+    )
+
+
+def _node_attribute(value: resource_fleet_pb2.NodeAttribute) -> NodeAttribute:
+    selected = value.WhichOneof("value")
+    if selected == "string_value":
+        return NodeAttribute(value.key, NodeAttributeKind.STRING, string_value=value.string_value)
+    if selected == "integer_value":
+        return NodeAttribute(value.key, NodeAttributeKind.INTEGER, integer_value=value.integer_value)
+    if selected == "float_value":
+        return NodeAttribute(value.key, NodeAttributeKind.FLOAT, float_value=value.float_value)
+    raise ValueError("node response contains an attribute without a value")
+
+
+def node_page_from_proto(
+    items: Iterable[resource_fleet_pb2.NodeSummary],
+    page: resource_pb2.PageInfo,
+) -> Page[NodeSummary]:
+    return _page(tuple(_node_summary_from_proto(item) for item in items), page)
+
+
+def node_detail_from_proto(value: resource_fleet_pb2.NodeDetail) -> NodeDetail:
+    return NodeDetail(
+        summary=_node_summary_from_proto(value.summary),
+        address=value.address or None,
+        attributes=tuple(_node_attribute(item) for item in value.attributes),
+        recent_attempts=tuple(_attempt_summary_from_proto(item) for item in value.recent_attempts),
+        bootstrap_logs=value.bootstrap_logs or None,
+        source_statuses=tuple(_source_status_from_proto(status) for status in value.source_statuses),
+    )
+
+
+def slice_query_to_proto(value: SliceQuery) -> resource_fleet_pb2.SliceQuery:
+    return resource_fleet_pb2.SliceQuery(
+        backend_id=value.backend_id or "",
+        scaling_group_id=value.scaling_group_id or "",
+        page=_page_request(value.page_size, value.page_token),
+    )
+
+
+def _slice_summary_from_proto(value: resource_fleet_pb2.SliceSummary) -> SliceSummary:
+    lifecycle = slice_lifecycle_from_proto(value.lifecycle)
+    membership = membership_state_from_proto(value.membership_state)
+    capacity_state = slice_capacity_state_from_proto(value.capacity_state)
+    return SliceSummary(
+        identity=_slice_identity_from_proto(value.identity),
+        scaling_group_id=value.scaling_group_id,
+        lifecycle=lifecycle,
+        membership_state=membership,
+        observed_member_count=value.observed_member_count,
+        observed_at=timestamp_from_proto(value.observed_at) if value.HasField("observed_at") else None,
+        error_message=value.error_message,
+        created_at=timestamp_from_proto(value.created_at) if value.HasField("created_at") else None,
+        last_active_at=timestamp_from_proto(value.last_active_at) if value.HasField("last_active_at") else None,
+        capacity_state=capacity_state,
+        healthy_member_count=value.healthy_member_count,
+        degraded_member_count=value.degraded_member_count,
+        running_task_count=value.running_task_count,
+    )
+
+
+def slice_page_from_proto(
+    items: Iterable[resource_fleet_pb2.SliceSummary],
+    page: resource_pb2.PageInfo,
+) -> Page[SliceSummary]:
+    return _page(tuple(_slice_summary_from_proto(item) for item in items), page)
+
+
+def slice_detail_from_proto(value: resource_fleet_pb2.SliceDetail) -> SliceDetail:
+    return SliceDetail(
+        summary=_slice_summary_from_proto(value.summary),
+        members=tuple(
+            SliceMember(
+                provider_node_id=item.provider_node_id,
+                node=_node_identity_from_proto(item.node) if item.HasField("node") else None,
+                observed_at=timestamp_from_proto(item.observed_at),
+                worker_id=item.worker_id,
+                healthy=item.healthy,
+                usability=item.usability,
+                running_task_count=item.running_task_count,
+                zone=item.zone,
+            )
+            for item in value.members
+        ),
+        source_statuses=tuple(_source_status_from_proto(status) for status in value.source_statuses),
+    )
+
+
+def endpoint_query_to_proto(value: EndpointQuery) -> resource_endpoint_pb2.EndpointQuery:
+    result = resource_endpoint_pb2.EndpointQuery(
+        name_prefix=value.name_prefix or "",
+        page=_page_request(value.page_size, value.page_token),
+    )
+    if value.task is not None:
+        result.task.CopyFrom(resource_key_to_proto(value.task))
+    return result
+
+
+def _endpoint_summary_from_proto(value: resource_endpoint_pb2.EndpointSummary) -> EndpointSummary:
+    access = endpoint_access_from_proto(value.access)
+    return EndpointSummary(
+        key=_resource_key_from_proto(value.key),
+        endpoint_id=value.endpoint_id,
+        name=value.name,
+        task=_resource_key_from_proto(value.task) if value.HasField("task") else None,
+        execution_cluster_id=value.execution_cluster_id,
+        access=access,
+        lease_deadline=timestamp_from_proto(value.lease_deadline) if value.HasField("lease_deadline") else None,
+    )
+
+
+def endpoint_page_from_proto(
+    items: Iterable[resource_endpoint_pb2.EndpointSummary],
+    page: resource_pb2.PageInfo,
+) -> Page[EndpointSummary]:
+    return _page(tuple(_endpoint_summary_from_proto(item) for item in items), page)
+
+
+def endpoint_detail_from_proto(value: resource_endpoint_pb2.EndpointDetail) -> EndpointDetail:
+    return EndpointDetail(_endpoint_summary_from_proto(value.summary), value.address, dict(value.metadata))
+
+
+def endpoint_details_from_proto(
+    items: Iterable[resource_endpoint_pb2.EndpointDetail],
+) -> tuple[EndpointDetail, ...]:
+    return tuple(endpoint_detail_from_proto(endpoint) for endpoint in items)
+
+
+def endpoint_token_from_proto(value: resource_endpoint_pb2.EndpointCapability) -> EndpointToken:
+    return EndpointToken(value.token, timestamp_from_proto(value.expires_at), value.capability_url)
+
+
+def activity_query_to_proto(value: ActivityQuery) -> resource_observability_pb2.ActivityQuery:
+    result = resource_observability_pb2.ActivityQuery(
+        target=resource_key_to_proto(value.target),
+        attempt_uid=value.attempt_uid or "",
+        page=_page_request(value.page_size, value.page_token),
+    )
+    if value.after is not None:
+        result.after.CopyFrom(timestamp_to_proto(value.after))
+    return result
+
+
+def activity_page_from_proto(
+    items: Iterable[resource_observability_pb2.ActivityEntry],
+    page: resource_pb2.PageInfo,
+) -> Page[ActivityEntry]:
+    return _page(
+        tuple(
+            ActivityEntry(
+                entry_id=item.entry_id,
+                occurred_at=timestamp_from_proto(item.occurred_at),
+                source=item.source,
+                severity=item.severity,
+                kind=item.kind,
+                message=item.message,
+                target=_resource_key_from_proto(item.target),
+                attempt_uid=item.attempt_uid or None,
+                correlation_id=item.correlation_id or None,
+                attributes=dict(item.attributes),
+            )
+            for item in items
+        ),
+        page,
+    )
+
+
+def log_query_to_proto(value: LogQuery) -> resource_observability_pb2.LogFilter:
+    result = resource_observability_pb2.LogFilter(
+        cursor=value.cursor,
+        max_lines=value.max_lines,
+        substring=value.substring,
+        minimum_level=value.minimum_level,
+        tail=value.tail,
+    )
+    if value.after is not None:
+        result.after.CopyFrom(timestamp_to_proto(value.after))
+    return result
+
+
+def log_page_from_proto(
+    entries: Iterable[iris_logging_pb2.LogEntry],
+    next_cursor: int,
+    source_statuses: Iterable[resource_pb2.ResourceSourceStatus],
+) -> LogPage:
+    return LogPage(
+        entries=tuple(
+            LogEntry(
+                timestamp=timestamp_from_proto(entry.timestamp) if entry.HasField("timestamp") else None,
+                source=entry.source,
+                data=entry.data,
+                attempt_id=entry.attempt_id,
+                level=LogLevel(entry.level),
+                key=entry.key,
+                sequence=entry.seq,
+            )
+            for entry in entries
+        ),
+        next_cursor=next_cursor,
+        source_statuses=tuple(_source_status_from_proto(status) for status in source_statuses),
+    )
+
+
+def exec_result_from_proto(value: resource_command_pb2.ExecSessionResult) -> ExecResult:
+    return ExecResult(value.exit_code, value.stdout, value.stderr, value.error_message)
+
+
+def profile_result_from_proto(value: resource_command_pb2.ProfileCaptureResult) -> ProfileResult:
+    return ProfileResult(value.profile_data, value.error_message)

@@ -8,25 +8,34 @@ live backends, the ListPeers view, and the submit router's decision matrix
 (prefer-local, hand off when locally infeasible, explicit ``cluster`` pin).
 """
 
+from dataclasses import replace
+from typing import cast
+
 import pydantic
 import pytest
-from iris.cluster.backends.rpc.backend import EXEC_IN_CONTAINER_MAX_TIMEOUT
 from iris.cluster.config import PeerConfig, config_to_dict, parse_config, user_admitted
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
-from iris.cluster.federation import peer as peer_module
 from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer, build_peers
+from iris.cluster.federation.protocol import (
+    FederationBackendObservation,
+    FederationResourceAvailability,
+    FederationStore,
+    FederationSyncBatch,
+    PeerCallError,
+    PeerErrorCode,
+)
 from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitDisposition
 from iris.managed_thread import get_thread_container, thread_container_scope
-from iris.rpc import controller_pb2, job_pb2
+from iris.resources.state import PriorityBand
 from rigging.timing import Duration, ExponentialBackoff
 
 
-def _device_backend(backend_id: str, device_type: str) -> controller_pb2.Controller.BackendSummary:
+def _device_backend(backend_id: str, device_type: str) -> FederationBackendObservation:
     return _backend(
         backend_id,
-        advertised_attributes={WellKnownAttribute.DEVICE_TYPE: controller_pb2.StringList(values=[device_type])},
+        advertised_attributes={WellKnownAttribute.DEVICE_TYPE: (device_type,)},
     )
 
 
@@ -34,13 +43,13 @@ def _device_constraint(device_type: str) -> Constraint:
     return Constraint.create(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value=device_type)
 
 
-def _gpu_backend(backend_id: str, variant: str) -> controller_pb2.Controller.BackendSummary:
+def _gpu_backend(backend_id: str, variant: str) -> FederationBackendObservation:
     """A peer GPU backend advertising both the device type and the variant."""
     return _backend(
         backend_id,
         advertised_attributes={
-            WellKnownAttribute.DEVICE_TYPE: controller_pb2.StringList(values=["gpu"]),
-            WellKnownAttribute.DEVICE_VARIANT: controller_pb2.StringList(values=[variant]),
+            WellKnownAttribute.DEVICE_TYPE: ("gpu",),
+            WellKnownAttribute.DEVICE_VARIANT: (variant,),
         },
     )
 
@@ -57,8 +66,8 @@ def _config(**extra) -> dict:
     return {"name": "parent", "platform": {"local": {}}, **extra}
 
 
-def _backend(backend_id: str, **fields) -> controller_pb2.Controller.BackendSummary:
-    return controller_pb2.Controller.BackendSummary(backend_id=backend_id, **fields)
+def _backend(backend_id: str, **fields) -> FederationBackendObservation:
+    return FederationBackendObservation(backend_id=backend_id, **fields)
 
 
 # ---------------------------------------------------------------------------
@@ -107,20 +116,73 @@ def test_peers_config_rejects_unknown_field():
 class _StubConnection:
     """A peer connection whose ListBackends probe returns a canned answer."""
 
-    def __init__(self, backends: tuple[controller_pb2.Controller.BackendSummary, ...], *, fail: bool = False):
+    def __init__(self, backends: tuple[FederationBackendObservation, ...], *, fail: bool = False):
         self.backends = backends
         self.fail = fail
         self.probe_count = 0
         self.shutdown_count = 0
 
-    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
+    def list_backends(self) -> tuple[FederationBackendObservation, ...]:
         self.probe_count += 1
         if self.fail:
-            raise ConnectionError("peer unreachable")
-        return list(self.backends)
+            raise PeerCallError(PeerErrorCode.UNAVAILABLE, "peer unreachable")
+        return self.backends
 
     def shutdown(self) -> None:
         self.shutdown_count += 1
+
+
+class _SyncConnection(_StubConnection):
+    def __init__(self, peer_id: str):
+        super().__init__(())
+        self.peer_id = peer_id
+        self.cursors: list[str] = []
+
+    def federation_sync(self, requester_id: str, cursor: str) -> FederationSyncBatch:
+        self.cursors.append(cursor)
+        return FederationSyncBatch(
+            deltas=(),
+            next_cursor=f"{self.peer_id}-{len(self.cursors)}",
+            cursor_stale=False,
+            endpoints=(),
+        )
+
+
+class _TransientUndecodableSyncConnection(_SyncConnection):
+    """A peer adapter that cannot decode its first sync response."""
+
+    def federation_sync(self, requester_id: str, cursor: str) -> FederationSyncBatch:
+        self.cursors.append(cursor)
+        if len(self.cursors) == 1:
+            raise ValueError("device has no selected kind")
+        if len(self.cursors) > 2:
+            raise PeerCallError(PeerErrorCode.UNAVAILABLE, "peer unavailable after recovery")
+        return FederationSyncBatch(
+            deltas=(),
+            next_cursor=f"{self.peer_id}-{len(self.cursors)}",
+            cursor_stale=False,
+            endpoints=(),
+        )
+
+
+class _RejectingSyncStore:
+    def __init__(self) -> None:
+        self.cursors: dict[str, str] = {}
+        self.reject_peer = "bad"
+
+    def pending_handoffs(self):
+        return []
+
+    def pending_cancels(self):
+        return []
+
+    def read_cursor(self, peer_id: str) -> str:
+        return self.cursors.get(peer_id, "")
+
+    def apply_sync_batch(self, peer_id: str, deltas, *, next_cursor: str, cursor_stale: bool, endpoints=()) -> None:
+        if peer_id == self.reject_peer:
+            raise ValueError("conflicting retained mirror")
+        self.cursors[peer_id] = next_cursor
 
 
 def _peer(peer_id: str, connection: _StubConnection) -> FederationPeer:
@@ -147,30 +209,36 @@ def test_peer_probe_failure_marks_unreachable_and_keeps_last_backends():
     assert [b.backend_id for b in heartbeat.backends] == ["tpu-fleet"]  # last-known backends retained
 
 
-def test_list_peers_view_surfaces_heartbeat_backends():
+def test_peer_observation_surfaces_current_reachability():
     backend = _backend("tpu-fleet", kind="worker-daemon", worker_count=3)
     peer = _peer("cw-east", _StubConnection((backend,)))
     manager = FederationManager([peer], threads=get_thread_container())
     peer.probe()
-    (summary,) = manager.peer_summaries()
+    (summary,) = manager.peer_observations()
     assert summary.peer_id == "cw-east"
     assert summary.controller_address == "http://cw:10000"
     assert summary.reachable is True
-    (forwarded,) = summary.backends
-    assert forwarded.backend_id == "tpu-fleet"
-    assert forwarded.kind == "worker-daemon"
-    assert forwarded.worker_count == 3
     assert summary.last_contact_ms > 0
+    (observed_backend,) = summary.backends
+    assert (observed_backend.backend_id, observed_backend.kind, observed_backend.worker_count) == (
+        "tpu-fleet",
+        "worker-daemon",
+        3,
+    )
 
 
-def _availability_backend(backend_id: str, version: int) -> controller_pb2.Controller.BackendSummary:
+def _availability_backend(backend_id: str, version: int) -> FederationBackendObservation:
     """A GPU backend reporting the capacity metric at ``version``."""
-    backend = _gpu_backend(backend_id, "h100")
-    backend.availability.version = version
-    backend.availability.observation_epoch_ms = 1000
-    backend.availability.amounts["h100"] = 8
-    backend.availability.held_by_band.add(band=job_pb2.PRIORITY_BAND_BATCH, amounts={"h100": 16})
-    return backend
+    return replace(
+        _gpu_backend(backend_id, "h100"),
+        availability=FederationResourceAvailability(
+            version=version,
+            observation_epoch_ms=1000,
+            amounts={"h100": 8},
+            total_amounts={"h100": 24},
+            held_by_band={PriorityBand.BATCH: {"h100": 16}},
+        ),
+    )
 
 
 def test_availability_at_a_known_version_is_read_in_full():
@@ -180,14 +248,15 @@ def test_availability_at_a_known_version_is_read_in_full():
     ((backend,),) = [p.backends for p in manager.peer_availability()]
     assert backend.supplies_metric is True
     assert backend.amounts == {"h100": 8}
-    assert backend.held_by_band == {job_pb2.PRIORITY_BAND_BATCH: {"h100": 16}}
+    assert backend.held_by_band == {PriorityBand.BATCH: {"h100": 16}}
 
 
 def test_availability_from_an_older_metric_version_is_still_read():
     # v1 reports free amounts and no band split. Its numbers are conservative under v2
     # semantics, so a rolling upgrade keeps gating on them rather than dropping the gate.
     backend = _availability_backend("gpu", 1)
-    backend.availability.ClearField("held_by_band")
+    assert backend.availability is not None
+    backend = replace(backend, availability=replace(backend.availability, held_by_band={}))
     peer = _peer("cw", _StubConnection((backend,)))
     manager = FederationManager([peer], threads=get_thread_container())
     peer.probe()
@@ -208,38 +277,6 @@ def test_availability_from_a_newer_metric_version_is_treated_as_unsupplied():
     assert (backend.amounts, backend.held_by_band, backend.generation) == ({}, {}, 0)
 
 
-class _RecordingStub:
-    """A controller stub that records the deadline each on-demand RPC was given."""
-
-    def __init__(self):
-        self.exec_timeout_ms = 0
-
-    def exec_in_container(self, request, timeout_ms):
-        self.exec_timeout_ms = timeout_ms
-        return controller_pb2.Controller.ExecInContainerResponse()
-
-    def close(self):
-        pass
-
-
-def test_exec_proxy_deadline_outlasts_the_peer(monkeypatch):
-    """The parent->peer exec hop must give the peer at least its own exec budget.
-
-    A negative ("no caller limit") timeout is capped at EXEC_IN_CONTAINER_MAX_TIMEOUT
-    on the peer, so the parent's deadline must clear that cap rather than collapse to
-    the proxy margin; a positive timeout carries the caller's budget plus margin.
-    """
-    stub = _RecordingStub()
-    monkeypatch.setattr(peer_module, "ControllerServiceClientSync", lambda **kwargs: stub)
-    connection = peer_module._PeerRpcConnection("http://peer:10000", [])
-
-    connection.exec_in_container(controller_pb2.Controller.ExecInContainerRequest(task_id="/u/j/0", timeout_seconds=-1))
-    assert stub.exec_timeout_ms >= EXEC_IN_CONTAINER_MAX_TIMEOUT.to_ms()
-
-    connection.exec_in_container(controller_pb2.Controller.ExecInContainerRequest(task_id="/u/j/0", timeout_seconds=30))
-    assert stub.exec_timeout_ms > 30 * 1000
-
-
 def test_heartbeat_loop_refreshes_backends_and_stop_releases_connections():
     connection = _StubConnection((_backend("cpu-fleet"),))
     peer = _peer("local", connection)
@@ -255,6 +292,54 @@ def test_heartbeat_loop_refreshes_backends_and_stop_releases_connections():
         finally:
             manager.stop()
     assert connection.shutdown_count == 1
+
+
+def test_rejected_peer_batch_does_not_stop_other_peers_or_future_sync():
+    bad_connection = _SyncConnection("bad")
+    good_connection = _SyncConnection("good")
+    store = _RejectingSyncStore()
+    manager = FederationManager(
+        [_peer("bad", bad_connection), _peer("good", good_connection)],
+        threads=get_thread_container(),
+        store=cast(FederationStore, store),
+        cluster_id="parent",
+    )
+
+    manager.sync_once()
+
+    assert store.cursors == {"good": "good-1"}
+    store.reject_peer = ""
+    manager.sync_once()
+
+    assert store.cursors == {"bad": "bad-2", "good": "good-2"}
+    assert bad_connection.cursors == ["", ""]
+    assert good_connection.cursors == ["", "good-1"]
+
+
+def test_sync_loop_with_undecodable_peer_response_retries_without_losing_cursor():
+    connection = _TransientUndecodableSyncConnection("cw")
+    store = _RejectingSyncStore()
+    store.reject_peer = ""
+    with thread_container_scope() as threads:
+        manager = FederationManager(
+            [_peer("cw", connection)],
+            threads=threads,
+            store=cast(FederationStore, store),
+            cluster_id="parent",
+            heartbeat_interval=Duration.from_seconds(60),
+            sync_interval=Duration.from_seconds(0.02),
+        )
+        manager.start()
+        try:
+            reached = ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
+                lambda: store.cursors.get("cw") == "cw-2",
+                timeout=Duration.from_seconds(3),
+            )
+            assert reached
+        finally:
+            manager.stop()
+
+    assert connection.cursors[:2] == ["", ""]
 
 
 def test_manager_without_peers_is_inert():

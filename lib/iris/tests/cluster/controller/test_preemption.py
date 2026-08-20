@@ -4,12 +4,14 @@
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
 from iris.cluster.constraints import AttributeValue, Constraint, ConstraintIndex, ConstraintOp, WellKnownAttribute
-from iris.cluster.controller import ops, reads
 from iris.cluster.controller.budget import compute_effective_band
-from iris.cluster.controller.ops.task import Assignment, finalize
+from iris.cluster.controller.persistence import operations as ops
+from iris.cluster.controller.persistence import reads
+from iris.cluster.controller.persistence.operations.task import finalize
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.task import resolve_task_failure_state as _resolve_task_failure_state
+from iris.cluster.controller.scheduling.decision import Assignment
 from iris.cluster.controller.scheduling.policy import (
     PreemptionCandidate,
     _sort_pending_tasks_by_resolved_band,
@@ -17,7 +19,14 @@ from iris.cluster.controller.scheduling.policy import (
     run_preemption_pass,
 )
 from iris.cluster.controller.scheduling.scheduler import JobRequirements, RunningTaskInfo, WorkerCapacity
-from iris.cluster.types import TERMINAL_JOB_STATES, JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.types import (
+    UserBudgetDefaults,
+)
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
+from iris.resources.state import TERMINAL_JOB_STATES
 from iris.rpc import controller_pb2, job_pb2
 from iris.testing.controller import (
     ControllerTestHarness,

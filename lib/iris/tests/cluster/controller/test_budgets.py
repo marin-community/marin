@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 from iris.cluster.config import UserBudgetTier
-from iris.cluster.controller import reads, writes
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
-from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.reads import UserBudget
+from iris.cluster.controller.persistence import reads, writes
+from iris.cluster.controller.persistence.database import ControllerDB
+from iris.cluster.controller.persistence.reads import UserBudget
 from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import text

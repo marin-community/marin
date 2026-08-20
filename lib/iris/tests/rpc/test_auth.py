@@ -7,18 +7,19 @@ import jwt
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from iris.cluster.authorization import authorize_resource_owner
 from iris.cluster.controller.auth import (
     CONTROL_PLANE_AUDIENCE,
     CONTROL_PLANE_AUDIENCES,
     JwtTokenManager,
 )
+from iris.resources.errors import ResourcePermissionDenied
 from iris.rpc.auth import (
     DASHBOARD_ROLE,
     FEDERATION_PEER_ROLE,
     AuthzAction,
     authorize,
     authorize_method,
-    authorize_resource_owner,
 )
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from rigging.token_authority import (
@@ -44,7 +45,18 @@ def _manager(*, keypair: Ed25519Keypair | None = None) -> JwtTokenManager:
 # --- read-only dashboard role: per-method authorization ----------------------
 
 
-@pytest.mark.parametrize("method", ["ListJobs", "GetJobStatus", "ListWorkers", "ListPeers"])
+@pytest.mark.parametrize(
+    "method",
+    [
+        "ListJobs",
+        "GetJobStatus",
+        "BatchDescribeTasks",
+        "BatchDescribeEndpoints",
+        "ListWorkers",
+        "ListPeers",
+        "GetCapacityStatus",
+    ],
+)
 def test_authorize_method_allows_dashboard_reads(method):
     # Does not raise: read methods are the dashboard role's contract.
     authorize_method(VerifiedIdentity("alice@example.com", DASHBOARD_ROLE), method)
@@ -75,12 +87,13 @@ def test_authorize_method_allows_federation_sync_for_peer():
     authorize_method(VerifiedIdentity("peer-cluster", FEDERATION_PEER_ROLE), "FederationSync")
 
 
-def test_authorize_method_allows_scoped_exec_for_peer():
-    # Exec represents on-demand debug proxies admitted at the method gate; the handler then
-    # scopes each to a job the peer federated here (see the controller service's
-    # _authorize_federated_debug_target). Without this, a proxied stack/exec/status
-    # for a federated task is rejected before the peer can route it.
-    authorize_method(VerifiedIdentity("peer-cluster", FEDERATION_PEER_ROLE), "ExecInContainer")
+@pytest.mark.parametrize(
+    "method",
+    ["CancelJob", "RetryTask", "TerminateAttempt", "ExecAttempt", "ProfileAttempt", "GetProcessStatus"],
+)
+def test_authorize_method_allows_scoped_resource_operations_for_peer(method):
+    # The resource handler then scopes each operation to a Job the peer federated here.
+    authorize_method(VerifiedIdentity("peer-cluster", FEDERATION_PEER_ROLE), method)
 
 
 @pytest.mark.parametrize("method", ["SetUserBudget", "ListJobs", "GetJobStatus", "ExecuteRawQuery"])
@@ -149,6 +162,10 @@ def test_jwt_token_manager_worker_role(jwt_manager):
     identity = jwt_manager.verify(token)
     assert identity.user_id == "system:worker"
     assert identity.role == "worker"
+    # Workers resolve the controller-owned log endpoint during startup; the
+    # authenticated resource reads are therefore part of the worker-token contract.
+    authorize_method(identity, "ListEndpoints")
+    authorize_method(identity, "BatchDescribeEndpoints")
 
 
 # ---------------------------------------------------------------------------
@@ -190,9 +207,8 @@ def test_authorize_resource_owner_same_user():
 
 def test_authorize_resource_owner_different_user_denied():
     with identity_scope(VerifiedIdentity(user_id="bob", role="user")):
-        with pytest.raises(ConnectError) as exc_info:
+        with pytest.raises(ResourcePermissionDenied, match="cannot access resources owned by 'alice'"):
             authorize_resource_owner("alice")
-        assert exc_info.value.code == Code.PERMISSION_DENIED
 
 
 def test_authorize_resource_owner_admin_can_access_any():

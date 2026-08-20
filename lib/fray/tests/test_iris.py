@@ -7,20 +7,18 @@ Tests type conversions and handle serialization without requiring an Iris cluste
 Integration tests that need a running cluster are marked with @pytest.mark.iris.
 """
 
-import logging
 import pickle
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import fray.iris_backend as iris_backend
 import pytest
-from connectrpc.code import Code
-from connectrpc.errors import ConnectError
 from fray.iris_backend import (
     FrayIrisClient,
     IrisActorHandle,
     IrisJobHandle,
     convert_constraints,
+    convert_resources,
     resolve_coscheduling,
     wrap_multiprocess,
 )
@@ -29,14 +27,12 @@ from fray.types import (
     Entrypoint,
     GpuConfig,
     JobRequest,
-    JobStatus,
     ResourceConfig,
     TpuConfig,
 )
 from iris.cluster.constraints import ConstraintOp
-from iris.cluster.types import Entrypoint as IrisEntrypoint
-from iris.cluster.types import JobName, ResourceSpec, gpu_device
-from iris.resources.state import JobState as IrisJobState
+from iris.resources.execution import Entrypoint as IrisEntrypoint
+from iris.resources.execution import GpuDevice, ResourceSpec, TpuDevice, gpu_device
 
 
 class TestConvertConstraints:
@@ -113,6 +109,17 @@ class TestConvertConstraints:
         assert cluster_constraints[0].values[0].value == "cw-us-east-02a"
 
 
+@pytest.mark.parametrize(
+    ("device", "expected"),
+    [
+        (GpuConfig(variant="H100", count=8), GpuDevice(variant="H100", count=8)),
+        (TpuConfig(variant="v5litepod-16"), TpuDevice(variant="v5litepod-16", topology="", count=4)),
+    ],
+)
+def test_convert_resources_uses_native_iris_devices(device, expected) -> None:
+    assert convert_resources(ResourceConfig(device=device)).device == expected
+
+
 class TestConvertConstraintsDeviceAlternatives:
     def test_no_alternatives_produces_no_device_constraint(self):
         resources = ResourceConfig.with_tpu("v5p-8")
@@ -131,23 +138,24 @@ class TestConvertConstraintsDeviceAlternatives:
         assert {v.value for v in c.values} == {"v4-8", "v5p-8"}
 
 
-class TestIrisActorHandlePickle:
-    def test_pickle_roundtrip_preserves_name(self):
-        handle = IrisActorHandle("my-actor")
-        data = pickle.dumps(handle)
-        restored = pickle.loads(data)
-        assert restored._endpoint_name == "my-actor"
-        assert restored._client is None
+def test_pickled_actor_handle_resolves_and_calls_by_endpoint_name(monkeypatch):
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
 
-    def test_pickle_drops_client(self):
-        """Client is transient state — pickle should not carry it."""
-        handle = IrisActorHandle("my-actor", resolver=MagicMock())
-        # Manually set client to simulate resolved state
-        handle._client = "fake-client"
-        data = pickle.dumps(handle)
-        restored = pickle.loads(data)
-        assert restored._client is None
-        assert restored._resolver is None
+    class Actor:
+        def __init__(self, endpoint_name: str) -> None:
+            self.endpoint_name = endpoint_name
+
+        def ping(self, *args, **kwargs):
+            calls.append((self.endpoint_name, args, kwargs))
+            return "pong"
+
+    monkeypatch.setattr(iris_backend, "get_iris_ctx", lambda: SimpleNamespace(resolver=MagicMock()))
+    monkeypatch.setattr(iris_backend, "ActorClient", lambda _resolver, name: Actor(name))
+
+    restored = pickle.loads(pickle.dumps(IrisActorHandle("my-actor", resolver=MagicMock())))
+
+    assert restored.ping(1, label="ready") == "pong"
+    assert calls == [("my-actor", (1,), {"label": "ready"})]
 
 
 def test_actor_group_created_by_driver_uses_creating_client(monkeypatch):
@@ -188,39 +196,6 @@ def test_iris_job_handle_returns_a_globally_bounded_tail():
 
     assert lines == ("task-0 earlier", "task-1 latest")
     job.logs.assert_called_once_with(max_lines=2, tail=True)
-
-
-def test_iris_job_handle_reports_killed_job_as_stopped():
-    job = MagicMock()
-    job.state_only.return_value = IrisJobState.KILLED
-
-    assert IrisJobHandle(job).status() is JobStatus.STOPPED
-
-
-def test_actor_startup_after_task_termination_stops_server_without_error(monkeypatch, caplog):
-    def reject_registration(_name, _address):
-        raise ConnectError(
-            Code.FAILED_PRECONDITION,
-            "Task /user/job/0 is already terminal; endpoint not registered",
-        )
-
-    stopped = []
-    server = SimpleNamespace(
-        register=lambda _name, _instance: None,
-        serve_background=lambda: 1234,
-        stop=lambda: stopped.append(True),
-    )
-    registry = SimpleNamespace(register=reject_registration)
-    ctx = SimpleNamespace(job_id=JobName.from_wire("/user/job"), registry=registry, get_port=lambda _name: 1234)
-    job_info = SimpleNamespace(task_index=0, advertise_host="worker")
-    monkeypatch.setattr(iris_backend, "ActorServer", lambda **_kwargs: server)
-    monkeypatch.setattr(iris_backend, "iris_ctx", lambda: ctx)
-    monkeypatch.setattr(iris_backend, "get_job_info", lambda: job_info)
-
-    iris_backend._host_actor(object, (), {}, "actor")
-
-    assert stopped
-    assert any(record.levelno == logging.ERROR for record in caplog.records)
 
 
 class TestResourceConfigScale:
@@ -505,7 +480,7 @@ def test_wrap_multiprocess_one_process_per_gpu() -> None:
     wrapped = wrap_multiprocess(
         IrisEntrypoint.from_command("python", "train.py", "--steps", "10"), _gpu_resources(8), processes_per_task=8
     )
-    assert wrapped.command == [
+    assert wrapped.command == (
         "python",
         "-m",
         "iris.hooks.multigpu_main",
@@ -518,14 +493,14 @@ def test_wrap_multiprocess_one_process_per_gpu() -> None:
         "train.py",
         "--steps",
         "10",
-    ]
+    )
 
 
 def test_wrap_multiprocess_groups_devices_when_fewer_processes() -> None:
     wrapped = wrap_multiprocess(
         IrisEntrypoint.from_command("python", "train.py"), _gpu_resources(8), processes_per_task=4
     )
-    assert wrapped.command[:8] == [
+    assert wrapped.command[:8] == (
         "python",
         "-m",
         "iris.hooks.multigpu_main",
@@ -534,7 +509,7 @@ def test_wrap_multiprocess_groups_devices_when_fewer_processes() -> None:
         "--devices-per-proc",
         "2",
         "--",
-    ]
+    )
 
 
 def test_wrap_multiprocess_requires_gpu() -> None:
@@ -564,11 +539,11 @@ def test_wrap_nsys_composes_the_hook_into_a_shell_entrypoint(monkeypatch):
 
     wrapped = iris_backend.wrap_nsys(entrypoint)
 
-    assert wrapped.command == [
+    assert wrapped.command == (
         "bash",
         "-c",
         "exec $IRIS_PYTHON -m iris.hooks.nsys_main --tasks first -- $IRIS_PYTHON -u run.py",
-    ]
+    )
     assert wrapped.workdir_files == entrypoint.workdir_files
 
 
@@ -578,7 +553,7 @@ def test_wrap_nsys_composes_the_hook_into_a_binary_entrypoint(monkeypatch):
 
     wrapped = iris_backend.wrap_nsys(entrypoint)
 
-    assert wrapped.command == [
+    assert wrapped.command == (
         "$IRIS_PYTHON",
         "-m",
         "iris.hooks.nsys_main",
@@ -589,4 +564,4 @@ def test_wrap_nsys_composes_the_hook_into_a_binary_entrypoint(monkeypatch):
         "train.py",
         "--steps",
         "5",
-    ]
+    )

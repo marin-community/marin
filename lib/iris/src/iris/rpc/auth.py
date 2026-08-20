@@ -12,29 +12,28 @@ authenticates browsers with, and it reads the identity ``rigging.server_auth``
 bound for the request to enforce them.
 """
 
-from enum import StrEnum
-
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from rigging.server_auth import VerifiedIdentity, require_identity
+from rigging.server_auth import VerifiedIdentity
 
-# Browser session cookie the dashboard sets; passed to rigging's auth
-# interceptors as ``cookie_name`` so a cookie-bearing browser RPC authenticates.
-SESSION_COOKIE = "iris_session"
-
-# Read-only role granted to an IAP-authenticated caller whose email is not
-# provisioned in the user store (see the controller's IAP role resolver). It may
-# only call the read RPCs in DASHBOARD_READABLE_RPCS; see authorize_method. A
-# provisioned admin/user behind IAP resolves to their real role instead.
-DASHBOARD_ROLE = "dashboard"
+from iris.cluster.authorization import (
+    DASHBOARD_ROLE,
+    FEDERATION_PEER_ROLE,
+    AuthzAction,
+)
+from iris.cluster.authorization import (
+    authorize as authorize_resource_action,
+)
+from iris.cluster.authorization import (
+    authorize_resource_owner as authorize_native_resource_owner,
+)
+from iris.resources.errors import ResourcePermissionDenied
 
 # Role carried by a verified federation token — a trusted peer handing a job off or
 # driving its sync/cancel/proxy. Method-scoped to FEDERATION_RPCS and the
 # target-scoped FEDERATION_SCOPED_RPCS below, never a general identity: a federation
 # bearer the composite verifier accepts cannot reach any other RPC even though it
 # authenticated.
-FEDERATION_PEER_ROLE = "federation-peer"
-
 # RPCs a federation-peer identity may call unconditionally: whole-job handoff, routed
 # cancel, delta-sync, and the capability heartbeat. A default-deny allowlist, like
 # DASHBOARD_READABLE_RPCS.
@@ -45,23 +44,23 @@ FEDERATION_RPCS: frozenset[str] = frozenset({"LaunchJob", "TerminateJob", "Feder
 # RECEIVED handle) — a peer must not profile/exec/inspect the receiving cluster's own
 # tasks or its controller. authorize_method admits these; the controller service's
 # _authorize_federated_debug_target enforces the per-target ownership.
-FEDERATION_SCOPED_RPCS: frozenset[str] = frozenset({"ProfileTask", "ExecInContainer", "GetProcessStatus"})
-
-
-class AuthzAction(StrEnum):
-    """Actions requiring authorization. Add new actions here; policy is in POLICY."""
-
-    ACT_AS_WORKER = "act_as_worker"
-    MANAGE_BUDGETS = "manage_budgets"
-    SET_CONTAINER_PROFILE = "set_container_profile"
-
-
-# Action → frozenset of roles allowed. Admin is implicitly always allowed.
-POLICY: dict[AuthzAction, frozenset[str]] = {
-    AuthzAction.ACT_AS_WORKER: frozenset({"worker"}),
-    AuthzAction.MANAGE_BUDGETS: frozenset(),  # admin only
-    AuthzAction.SET_CONTAINER_PROFILE: frozenset(),  # admin only (elevated container profiles)
-}
+FEDERATION_SCOPED_RPCS: frozenset[str] = frozenset(
+    {
+        "ProfileTask",
+        "ExecInContainer",
+        "GetProcessStatus",
+        "CancelJob",
+        "RetryTask",
+        "TerminateAttempt",
+        "ExecAttempt",
+        "ProfileAttempt",
+        "GetResource",
+        "ListResources",
+        "BatchGetResources",
+        "UpdateResource",
+        "CreateResource",
+    }
+)
 
 
 # RPC methods the read-only `dashboard` role may call. A default-deny allowlist:
@@ -80,6 +79,13 @@ DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
         "GetTaskStatus",
         "ListTasks",
         "GetProcessStatus",
+        "DescribeJob",
+        "DescribeTask",
+        "BatchDescribeTasks",
+        "DescribeAttempt",
+        "ListActivity",
+        "FetchLogs",
+        "GetActionReceipt",
         # Workers, endpoints, scheduler, autoscaler
         "ListWorkers",
         "GetWorkerStatus",
@@ -88,6 +94,17 @@ DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
         "GetSchedulerState",
         "GetKubernetesClusterStatus",
         "ListBackends",
+        "ListNodes",
+        "DescribeNode",
+        "ListSlices",
+        "DescribeSlice",
+        "GetCapacityStatus",
+        "DescribeEndpoint",
+        "BatchDescribeEndpoints",
+        "GetResource",
+        "ListResources",
+        "BatchGetResources",
+        "GetServiceInfo",
         # Federation (read-only peer observation)
         "ListPeers",
         # Identity, users, budgets (read)
@@ -120,8 +137,7 @@ def authorize_method(identity: VerifiedIdentity, method_name: str) -> None:
     if identity.role == DASHBOARD_ROLE and method_name not in DASHBOARD_READABLE_RPCS:
         raise ConnectError(
             Code.PERMISSION_DENIED,
-            f"Read-only dashboard access cannot call {method_name}; "
-            "this identity is not provisioned for write access",
+            f"Read-only dashboard access cannot call {method_name}; this identity is not provisioned for write access",
         )
     if (
         identity.role == FEDERATION_PEER_ROLE
@@ -135,27 +151,16 @@ def authorize_method(identity: VerifiedIdentity, method_name: str) -> None:
 
 
 def authorize(action: AuthzAction) -> VerifiedIdentity:
-    """Require the current caller has permission for the given action.
-
-    Admin role is always authorized. Other roles are checked against POLICY.
-    """
-    identity = require_identity()
-    if identity.role == "admin":
-        return identity
-    allowed = POLICY.get(action, frozenset())
-    if identity.role not in allowed:
-        raise ConnectError(Code.PERMISSION_DENIED, f"{action} not allowed for role {identity.role}")
-    return identity
+    """Map native Iris action authorization failures to Connect."""
+    try:
+        return authorize_resource_action(action)
+    except ResourcePermissionDenied as exc:
+        raise ConnectError(Code.PERMISSION_DENIED, str(exc)) from exc
 
 
 def authorize_resource_owner(resource_owner: str) -> VerifiedIdentity:
-    """Require the caller owns the resource or is admin."""
-    identity = require_identity()
-    if identity.role == "admin":
-        return identity
-    if identity.user_id != resource_owner:
-        raise ConnectError(
-            Code.PERMISSION_DENIED,
-            f"User '{identity.user_id}' cannot access resources owned by '{resource_owner}'",
-        )
-    return identity
+    """Map native Iris resource-owner authorization failures to Connect."""
+    try:
+        return authorize_native_resource_owner(resource_owner)
+    except ResourcePermissionDenied as exc:
+        raise ConnectError(Code.PERMISSION_DENIED, str(exc)) from exc

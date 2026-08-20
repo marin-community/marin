@@ -15,31 +15,38 @@ from connectrpc.errors import ConnectError
 from connectrpc.interceptor import InterceptorSync
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
-from rigging.connect import proxy_path
-from rigging.timing import Deadline, Duration, ExponentialBackoff
-
-from iris.cluster.client.bundle import create_workspace_zip
-from iris.cluster.client.endpoint_client import EndpointClient
+from iris.client.bundle import create_workspace_zip
+from iris.cluster.constraints import Constraint
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import build_log_source
-from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
-from iris.cluster.runtime.env import with_slice_topology_env
 from iris.cluster.stats.tables import TASK_STATUS_NAMESPACE, TASK_STATUS_STORAGE_POLICY, TaskStatusRow
-from iris.cluster.types import (
-    EndpointAccess,
+from iris.resources.endpoint import EndpointAccess
+from iris.resources.execution import (
     Entrypoint,
     EnvironmentSpec,
-    JobName,
-    TaskAttempt,
+    ResourceSpec,
     adjust_tpu_replicas,
-    is_job_finished,
+    build_runtime_entrypoint,
+    with_slice_topology_environment,
 )
+from iris.resources.job import CoschedulingConfig
+from iris.resources.names import JobName, TaskAttempt
+from iris.resources.state import is_job_finished
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
+from iris.rpc.endpoint_client import EndpointClient
 from iris.rpc.errors import call_with_retry, format_connect_error, poll_with_retries
+from iris.rpc.legacy.job_codec import (
+    constraint_to_proto,
+    environment_to_proto,
+    resource_spec_to_proto,
+    runtime_entrypoint_to_proto,
+)
 from iris.time_proto import duration_to_proto
 from iris.version import client_revision_date
+from rigging.connect import proxy_path
+from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -151,12 +158,12 @@ class RemoteClusterClient:
         self,
         job_id: JobName,
         entrypoint: Entrypoint,
-        resources: job_pb2.ResourceSpecProto,
-        environment: job_pb2.EnvironmentConfig | None = None,
+        resources: ResourceSpec,
+        environment: EnvironmentSpec | None = None,
         ports: list[str] | None = None,
         scheduling_timeout: Duration | None = None,
-        constraints: list[job_pb2.Constraint] | None = None,
-        coscheduling: job_pb2.CoschedulingConfig | None = None,
+        constraints: list[Constraint] | None = None,
+        coscheduling: CoschedulingConfig | None = None,
         replicas: int = 1,
         max_retries_failure: int = 0,
         max_retries_preemption: int = 1000,
@@ -171,21 +178,19 @@ class RemoteClusterClient:
     ) -> JobName:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
-        replicas = adjust_tpu_replicas(resources.device if resources.HasField("device") else None, replicas)
+        replicas = adjust_tpu_replicas(resources.device, replicas)
 
-        if environment is None:
-            environment = EnvironmentSpec().to_proto()
-        env_config = with_slice_topology_env(environment, resources, replicas)
+        env_config = with_slice_topology_environment((environment or EnvironmentSpec()).resolve(), resources, replicas)
 
         runtime_ep = build_runtime_entrypoint(entrypoint, env_config)
 
         request = controller_pb2.Controller.LaunchJobRequest(
             name=job_id.to_wire(),
-            entrypoint=runtime_ep,
-            resources=resources,
-            environment=env_config,
+            entrypoint=runtime_entrypoint_to_proto(runtime_ep),
+            resources=resource_spec_to_proto(resources),
+            environment=environment_to_proto(env_config),
             ports=ports or [],
-            constraints=constraints or [],
+            constraints=[constraint_to_proto(constraint) for constraint in constraints or ()],
             replicas=replicas,
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
@@ -213,7 +218,7 @@ class RemoteClusterClient:
         if timeout is not None:
             request.timeout.CopyFrom(duration_to_proto(timeout))
         if coscheduling is not None:
-            request.coscheduling.CopyFrom(coscheduling)
+            request.coscheduling.group_by = coscheduling.group_by
 
         launch_timeout_ms = max(self._timeout_ms, LAUNCH_JOB_TIMEOUT_FLOOR_MS)
 
@@ -411,7 +416,7 @@ class RemoteClusterClient:
         address: str,
         task_attempt: TaskAttempt,
         metadata: dict[str, str] | None = None,
-        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
+        access: EndpointAccess = EndpointAccess.PRIVATE,
     ) -> str:
         return self._endpoint_client.register(name, address, task_attempt, metadata, access)
 

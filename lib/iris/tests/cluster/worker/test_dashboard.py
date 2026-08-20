@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for WorkerDashboard HTTP/RPC endpoints and WorkerService implementation."""
+"""Behavior tests for the hosted worker RPC and dashboard surface."""
 
 from unittest.mock import Mock
 
@@ -9,13 +9,13 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
-from iris.cluster.types import JobName
-from iris.cluster.worker.dashboard import WorkerDashboard
-from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
+from iris.resources.names import JobName
 from iris.rpc import job_pb2, worker_pb2
+from iris.rpc.worker_dashboard import WorkerDashboard
+from iris.rpc.worker_service import WorkerServiceImpl
 from iris.test_util import wait_for_condition
-from iris.testing.worker import create_run_task_request
+from iris.testing.worker import create_attempt_launch
 from rigging.timing import Duration
 from starlette.testclient import TestClient
 
@@ -74,7 +74,7 @@ def rpc_post(client, method, body=None):
 
 def test_list_tasks_with_data(client, worker):
     for i in range(3):
-        request = create_run_task_request(task_id=JobName.root("test-user", f"job-{i}").task(0).to_wire())
+        request = create_attempt_launch(task_id=JobName.root("test-user", f"job-{i}").task(0).to_wire())
         worker.submit_task(request)
 
     response = rpc_post(client, "ListTasks")
@@ -102,7 +102,7 @@ def test_get_task_not_found(client):
 
 def test_get_task_success(client, worker):
     task_id = JobName.root("test-user", "job-details").task(0).to_wire()
-    request = create_run_task_request(task_id=task_id, ports=["http", "grpc"])
+    request = create_attempt_launch(task_id=task_id, ports=["http", "grpc"])
     worker.submit_task(request)
 
     # Wait for task to complete (mock runtime returns running=False immediately)
@@ -138,7 +138,7 @@ def test_task_detail_page_loads(client):
 
 def test_run_task_with_ports(worker):
     task_id = JobName.root("test-user", "job-with-ports").task(0).to_wire()
-    request = create_run_task_request(task_id=task_id, ports=["http", "grpc"])
+    request = create_attempt_launch(task_id=task_id, ports=["http", "grpc"])
     worker.submit_task(request)
 
     # Ports are allocated in the task thread during setup, so wait for the
@@ -165,7 +165,7 @@ def test_get_task_status_not_found(service, worker, request_context):
 
 def test_get_task_status_completed_task(service, worker, request_context):
     task_id = JobName.root("test-user", "job-completed").task(0).to_wire()
-    request = create_run_task_request(task_id=task_id)
+    request = create_attempt_launch(task_id=task_id)
     worker.submit_task(request)
 
     # Wait for task to complete

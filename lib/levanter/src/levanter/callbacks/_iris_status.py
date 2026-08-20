@@ -12,8 +12,8 @@ not running inside an Iris job.
 import logging
 from datetime import timedelta
 
-from iris.client.client import get_iris_ctx
-from iris.cluster.client.job_info import get_job_info
+from iris.client import get_iris_ctx
+from iris.client.job_info import get_job_info
 from rigging.timing import RateLimiter
 
 import levanter.tracker

@@ -14,8 +14,8 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
-from iris.client.client import iris_ctx
-from iris.cluster.client.job_info import JobInfo, get_job_info
+from iris.client import iris_ctx
+from iris.client.job_info import JobInfo, get_job_info
 from iris.rpc.errors import is_retryable_error
 from rigging.network import interface_for_ipv4
 from rigging.timing import Duration, ExponentialBackoff

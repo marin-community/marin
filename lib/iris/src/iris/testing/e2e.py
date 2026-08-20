@@ -41,12 +41,10 @@ from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.types import (
     AcceleratorType,
     CapacityType,
-    CoschedulingConfig,
-    Entrypoint,
-    EnvironmentSpec,
-    ResourceSpec,
-    is_job_finished,
 )
+from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.resources.job import CoschedulingConfig
+from iris.resources.state import is_job_finished
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 

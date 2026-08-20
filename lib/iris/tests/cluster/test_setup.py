@@ -8,7 +8,7 @@ import subprocess
 
 import pytest
 from iris.cluster.setup_scripts import default_setup_script
-from iris.cluster.types import EnvironmentSpec
+from iris.resources.execution import EnvironmentSpec
 
 
 @pytest.mark.parametrize(
@@ -26,7 +26,7 @@ from iris.cluster.types import EnvironmentSpec
     ],
 )
 def test_to_proto_resolves_user_setup_scripts(setup_scripts, expected):
-    resolved = list(EnvironmentSpec(setup_scripts=setup_scripts).to_proto().setup_scripts)
+    resolved = list(EnvironmentSpec(setup_scripts=setup_scripts).resolve().setup_scripts)
 
     if expected is None:
         assert len(resolved) == 1  # the generated default

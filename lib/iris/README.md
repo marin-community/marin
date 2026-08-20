@@ -27,8 +27,8 @@ uv run iris --cluster=marin cluster stop
 ### Submit a Job
 
 ```python
-from iris.client import IrisClient, JobState
-from iris.cluster.types import Entrypoint, ResourceSpec
+from iris.client import IrisClient
+from iris.resources.execution import Entrypoint, ResourceSpec
 
 def my_task():
     print("Hello from Iris!")
@@ -39,16 +39,8 @@ job = client.submit(
     entrypoint=Entrypoint.from_callable(my_task),
     resources=ResourceSpec(cpu=1, memory="2GB"),
 )
-status = job.wait()
-assert status.state is JobState.SUCCEEDED
+job.wait()
 ```
-
-`Job.status()`, `Job.wait()`, `Task.status()`, `Task.describe()`,
-`Attempt.status()`, and the IrisClient list methods return immutable Iris values
-rather than generated protobuf messages. `Job.cancel()` and Task actions address
-the logical workload on the deployed ControllerService. A numbered Attempt
-action is rejected after a newer Attempt becomes current; full incarnation
-fencing requires the resource operation protocol.
 
 For accelerator jobs, request the accelerator on the task itself with `--tpu ...` or `--gpu ...`.
 `--reserve <accel>` is a hard constraint that confines the job to a zone where `<accel>` has actually
@@ -57,25 +49,19 @@ attach accelerator devices (use `--tpu`/`--gpu` for that) and does not hold capa
 
 ## Architecture
 
-```
-Controller Process (in Docker container):
-├── gRPC service (job dispatch, worker registration)
-├── HTTP dashboard (monitoring, status)
-├── Scheduler thread (task→worker matching)
-├── Autoscaler thread (VM lifecycle management)
-└── WorkerVm threads (per-VM state machines)
+The controller exposes the native `ResourceService`, the retained
+`ControllerService`, and `EndpointService` through one Connect/HTTP process.
+`ControllerService` is a compatibility boundary: its old Job and Task messages
+are converted to native `iris.resources` records before controller behavior runs.
 
-Worker Process (on each VM):
-├── Task executor (runs jobs in containers)
-└── Heartbeat reporter (health monitoring)
-```
+The control loop reads a database-neutral snapshot, asks each `TaskBackend` to
+schedule, reconcile, and autoscale, then commits the returned decisions and
+effects. `RpcTaskBackend` talks to Iris worker daemons; `K8sTaskProvider` talks
+to Kubernetes and lets Kueue place Pods. Backends consume native records and do
+not import controller persistence or protobuf messages.
 
-The controller drives task execution through a single `TaskBackend` contract with
-two placements: `Placement.IRIS` (Iris schedules task→worker and fans reconcile
-RPCs to worker daemons — the diagram above) and `Placement.BACKEND` (the backend,
-e.g. Kubernetes via Kueue, places tasks itself). See
-[`docs/architecture.md`](docs/architecture.md#the-taskbackend-contract) for the
-contract and how the controller dispatches by placement.
+See [`docs/architecture.md`](docs/architecture.md) for the package boundaries,
+RPC paths, and control-flow diagrams.
 
 ## Actor System
 
@@ -338,29 +324,21 @@ iris --config cluster.yaml job run --no-wait -- python long_job.py
 # Pin a zone when you need to colocate with data or target a specific pool.
 iris --config cluster.yaml job run --zone us-central2-b -- python train.py
 
-# Stream logs for a job and child jobs (batch-fetches matching tasks in one RPC)
-iris --config cluster.yaml job logs /my-job
-iris --config cluster.yaml job logs /my-job --follow
-iris --config cluster.yaml job logs /my-job --since-seconds 300
+# Inspect one exact Job and its Tasks
+iris --config cluster.yaml job describe /user/my-job
+iris --config cluster.yaml task list --job /user/my-job
+iris --config cluster.yaml task describe /user/my-job/0
 
-# Narrow the same log view to one Task or numbered Attempt
-iris --config cluster.yaml task logs /my-job/0 --follow
-iris --config cluster.yaml attempt logs /my-job/0:2 --follow
+# Read or stream logs for one exact Job incarnation
+iris --config cluster.yaml job logs /user/my-job
+iris --config cluster.yaml job logs /user/my-job --tail
 
 # Wait for an existing job; prints its terminal state and exits nonzero unless it succeeded
-iris --config cluster.yaml job wait /my-job
+iris --config cluster.yaml job wait /user/my-job
 
-# Cancel one or more Jobs
-iris --config cluster.yaml job cancel /my-job
-iris --config cluster.yaml job cancel --prefix /my-job-prefix
-
-# Explicitly record an active Job and its unfinished descendants as successful
-iris --config cluster.yaml job complete /my-job
+# Cancel one exact Job incarnation
+iris --config cluster.yaml job cancel /user/my-job
 ```
-
-`iris process logs` is the low-level diagnostic view for a controller, worker,
-or task-runtime process. Workload output is always under `job logs`, `task logs`,
-or `attempt logs`.
 
 ## Smoke Test
 

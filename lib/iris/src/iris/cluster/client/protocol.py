@@ -6,10 +6,13 @@
 from typing import Protocol
 
 from finelog.rpc import logging_pb2
-from rigging.timing import Deadline, Duration
-
-from iris.cluster.types import EndpointAccess, Entrypoint, JobName, TaskAttempt
+from iris.cluster.constraints import Constraint
+from iris.resources.endpoint import EndpointAccess
+from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.resources.job import CoschedulingConfig
+from iris.resources.names import JobName, TaskAttempt
 from iris.rpc import controller_pb2, job_pb2
+from rigging.timing import Deadline, Duration
 
 
 class ClusterClient(Protocol):
@@ -23,12 +26,12 @@ class ClusterClient(Protocol):
         self,
         job_id: JobName,
         entrypoint: Entrypoint,
-        resources: job_pb2.ResourceSpecProto,
-        environment: job_pb2.EnvironmentConfig | None = None,
+        resources: ResourceSpec,
+        environment: EnvironmentSpec | None = None,
         ports: list[str] | None = None,
         scheduling_timeout: Duration | None = None,
-        constraints: list[job_pb2.Constraint] | None = None,
-        coscheduling: job_pb2.CoschedulingConfig | None = None,
+        constraints: list[Constraint] | None = None,
+        coscheduling: CoschedulingConfig | None = None,
         replicas: int = 1,
         max_retries_failure: int = 0,
         max_retries_preemption: int = 1000,
@@ -76,7 +79,7 @@ class ClusterClient(Protocol):
         address: str,
         task_attempt: TaskAttempt,
         metadata: dict[str, str] | None = None,
-        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
+        access: EndpointAccess = EndpointAccess.PRIVATE,
     ) -> str: ...
 
     def unregister_endpoint(self, endpoint_id: str) -> None: ...

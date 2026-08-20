@@ -16,7 +16,7 @@ import importlib.util
 import sqlite3
 from pathlib import Path
 
-_MIGRATION = Path(__file__).parents[3] / "src/iris/cluster/controller/migrations/0037_federation_fixup.py"
+_MIGRATION = Path(__file__).parents[3] / "src/iris/cluster/controller/persistence/migrations/0037_federation_fixup.py"
 
 # Pre-revision (post-#6821) shape of the tables 0037 reconciles: child_cluster on
 # jobs/tasks, the tasks partial indexes over child_cluster, and the extra

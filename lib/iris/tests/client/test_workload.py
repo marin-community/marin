@@ -9,8 +9,9 @@ import pytest
 from finelog.rpc import logging_pb2
 from iris.client import Attempt, IrisClient
 from iris.client.client import IrisContext, iris_ctx_scope
-from iris.cluster.client import ClusterClient
-from iris.cluster.types import Entrypoint, JobName, ResourceSpec, TaskAttempt
+from iris.cluster.client.protocol import ClusterClient
+from iris.resources.execution import Entrypoint, ResourceSpec
+from iris.resources.names import JobName, TaskAttempt
 from iris.resources.state import TaskState
 from iris.rpc import controller_pb2, job_pb2
 

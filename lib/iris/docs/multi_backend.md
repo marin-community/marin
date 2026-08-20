@@ -57,7 +57,7 @@ commits `effects` without learning any worker identities.
 ## The contract
 
 Every backend — in-process or remote — implements the same `TaskBackend`
-Protocol (`controller/backend.py`). The controller calls these uniformly each
+Protocol (`iris.backends.protocol`). The controller calls these uniformly each
 tick; it never branches on the concrete backend type.
 
 | Method | Controller → backend | Backend → controller |
@@ -68,10 +68,11 @@ tick; it never branches on the concrete backend type.
 | `autoscale(AutoscaleRequest)` | residual demand | `AutoscaleResult` (capacity changes) |
 | `status()` | — | `BackendStatus` (authored k8s pod/node detail or worker-fleet detail, for the dashboard) |
 
-**Owned by the backend:** its `WorkerHealthTracker`, `WorkerSource`, and
-`Autoscaler`. A worker-daemon backend constructs its own tracker and seeds it
-from its scale-group-scoped worker view; worker registration routes to the owning
-backend's tracker by scale group. **Owned by the controller:** the database, the
+**Owned by the backend:** its `WorkerHealthTracker`, `WorkerClient`, and
+`Autoscaler`. The controller supplies a worker-daemon backend with a typed,
+scale-group-scoped `BackendWorkerStore`; the backend never receives the concrete
+database. Worker registration routes to the owning backend's tracker by scale
+group. **Owned by the controller:** the database, the store implementation, the
 meta-scheduler, the per-user budget, and the loop cadence; it reaches per-worker
 liveness only through the backends (`liveness_for_worker`, `all_liveness`).
 

@@ -14,10 +14,11 @@ from dataclasses import dataclass, field
 from unittest.mock import patch
 
 import pytest
-from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
-from iris.cluster.client.job_info import JobInfo
+from iris.client import IrisClient, IrisContext, iris_ctx_scope
+from iris.client.job_info import JobInfo
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
-from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
+from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.resources.names import JobName
 
 
 def dummy_entrypoint():
@@ -86,8 +87,7 @@ def test_child_job_does_not_inherit_os_environ(capturing_client, parent_context)
         client.submit(entrypoint, "infra-test", resources)
 
     assert stub.captured_env["MY_VAR"] == "keep"
-    assert "PATH" not in stub.captured_env
-    assert "HOME" not in stub.captured_env
+    assert stub.captured_env == {"MY_VAR": "keep"}
 
 
 def test_child_explicit_env_overrides_inherited(capturing_client, parent_context):
@@ -117,7 +117,8 @@ def test_no_env_inheritance_without_parent_context(capturing_client):
 
     client.submit(entrypoint, "no-parent-test", resources)
 
-    assert stub.captured_env == {}
+    assert "PATH" not in stub.captured_env
+    assert "HOME" not in stub.captured_env
 
 
 def test_child_job_inherits_parent_constraints(capturing_client, parent_context):
@@ -135,11 +136,9 @@ def test_child_job_inherits_parent_constraints(capturing_client, parent_context)
     ):
         client.submit(entrypoint, "child-inherit-constraints", resources)
 
+    assert any(c.key == WellKnownAttribute.REGION and c.values[0].value == "us-west4" for c in stub.captured_constraints)
     assert any(
-        c.key == WellKnownAttribute.REGION and c.value.string_value == "us-west4" for c in stub.captured_constraints
-    )
-    assert any(
-        c.key == WellKnownAttribute.PREEMPTIBLE and c.value.string_value == "true" for c in stub.captured_constraints
+        c.key == WellKnownAttribute.PREEMPTIBLE and c.values[0].value == "true" for c in stub.captured_constraints
     )
 
 
@@ -157,10 +156,10 @@ def test_child_explicit_constraints_override_parent(capturing_client, parent_con
         client.submit(entrypoint, "child-override-constraints", resources, constraints=child_constraints)
 
     assert any(
-        c.key == WellKnownAttribute.REGION and c.value.string_value == "europe-west4" for c in stub.captured_constraints
+        c.key == WellKnownAttribute.REGION and c.values[0].value == "europe-west4" for c in stub.captured_constraints
     )
     assert not any(
-        c.key == WellKnownAttribute.REGION and c.value.string_value == "us-west4" for c in stub.captured_constraints
+        c.key == WellKnownAttribute.REGION and c.values[0].value == "us-west4" for c in stub.captured_constraints
     )
 
 

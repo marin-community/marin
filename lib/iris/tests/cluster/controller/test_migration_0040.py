@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-_MIGRATION = Path(__file__).parents[3] / "src/iris/cluster/controller/migrations/0040_drop_users.py"
+_MIGRATION = Path(__file__).parents[3] / "src/iris/cluster/controller/persistence/migrations/0040_drop_users.py"
 
 # Pre-0040 shape: users table + the two FKs to it. jobs carries the full column set
 # (the migration's INSERT names every column) plus its parent_job_id self-FK; tasks

@@ -7,11 +7,12 @@ Tests verify dashboard functionality through the Connect RPC endpoints.
 The dashboard serves a web UI that fetches data via RPC calls.
 """
 
+from dataclasses import replace
 from unittest.mock import Mock
 
 import httpx
 import pytest
-from iris.cluster.backends.k8s.tasks import (
+from iris.backends.k8s.tasks import (
     _KUEUE_POD_GROUP_NAME,
     _KUEUE_QUEUE_NAME,
     _LABEL_MANAGED,
@@ -20,19 +21,41 @@ from iris.cluster.backends.k8s.tasks import (
     K8sTaskProvider,
     PodConfig,
 )
-from iris.cluster.backends.rpc.backend import RpcTaskBackend
+from iris.backends.protocol import BackendCapability, DeviceCapacity
+from iris.backends.rpc.backend import RpcTaskBackend
+from iris.backends.status import (
+    AutoscalerActionStatus,
+    AutoscalerStatus,
+    BackendStatus,
+    GroupRoutingStatus,
+    KubernetesStatus,
+    RoutingStatus,
+    ScaleGroupStatus,
+    SliceStatus,
+    VmState,
+    VmStatus,
+    WorkerFleetStatus,
+)
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller import ops, reads
-from iris.cluster.controller.autoscaler.status import PendingHint, overlay_worker_usability
-from iris.cluster.controller.backend import BackendCapability, BackendRuntime, DeviceCapacity
-from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.dashboard import ControllerDashboard, ProxyControllerDashboard
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.projections.endpoints import EndpointRow
-from iris.cluster.controller.reads import ControlSnapshot, healthy_active_workers_with_attributes
+from iris.cluster.controller.autoscaler.status import (
+    PendingHint,
+    overlay_worker_usability,
+)
+from iris.cluster.controller.endpoint_registry import EndpointRegistry
+from iris.cluster.controller.persistence import operations as ops
+from iris.cluster.controller.persistence import reads
+from iris.cluster.controller.persistence.backends import DbBackendWorkerStore
+from iris.cluster.controller.persistence.json_codec import (
+    constraints_from_json,
+    device_counts_from_json,
+    device_variant_from_json,
+)
+from iris.cluster.controller.persistence.projections.endpoints import EndpointRow
+from iris.cluster.controller.persistence.reads import healthy_active_workers_with_attributes
+from iris.cluster.controller.persistence.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.scheduling.decision import Assignment
 from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
@@ -41,14 +64,26 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
-from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.snapshot import ControlSnapshot
+from iris.cluster.federation.manager import FederationManager
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, WorkerUsability
-from iris.rpc import controller_pb2, job_pb2, vm_pb2
+from iris.cluster.types import (
+    DEFAULT_BACKEND_ID,
+    UserBudgetDefaults,
+    WorkerUsability,
+)
+from iris.managed_thread import get_thread_container
+from iris.resources.names import (
+    JobName,
+    WorkerId,
+)
+from iris.rpc import controller_pb2, job_pb2, resource_pb2
+from iris.rpc.dashboard import ControllerDashboard, ProxyControllerDashboard
+from iris.rpc.endpoint_service import EndpointServiceImpl
 from iris.testing.controller import (
     check_task_can_be_scheduled,
+    make_controller_service,
     make_test_entrypoint,
     make_worker_metadata,
     register_worker,
@@ -58,7 +93,6 @@ from iris.testing.controller import (
 )
 from iris.testing.controller_state import ControllerTestState, submit_job_in_tx
 from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
-from iris.time_proto import timestamp_to_proto
 from rigging.auth import StaticTokenProvider
 from rigging.credentials import ClientCredentials
 from rigging.server_auth import RequestAuthPolicy
@@ -165,16 +199,18 @@ def _worker_backend(state, autoscaler, backend_id=DEFAULT_BACKEND_ID):
     overlay from its own state, groups tagged with its own ``backend_id`` — so the
     controller reads the result verbatim. The stub factory is unused by the status
     paths, so a bare ``Mock`` suffices."""
-    backend = RpcTaskBackend(stub_factory=Mock())
+    backend = RpcTaskBackend(worker_client=Mock())
     backend.health = state._health
     backend.autoscaler = autoscaler
-    backend.bind_runtime(
-        BackendRuntime(
-            backend_id=backend_id,
+    backend.attach_worker_store(
+        backend_id,
+        DbBackendWorkerStore(
             db=state._db,
             owns_scale_group=lambda _scale_group: True,
-            budget_defaults=UserBudgetDefaults(),
-        )
+            health=backend.health,
+            defaults=UserBudgetDefaults(),
+            autoscale=backend.autoscale,
+        ),
     )
     return backend
 
@@ -270,20 +306,23 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock.liveness_for_worker = lambda wid: state._health.liveness(wid)
     controller_mock.last_unroutable_jobs = {}
     controller_mock.scale_group_to_backend = {}
+    controller_mock.federation = FederationManager([], threads=get_thread_container())
     return controller_mock
 
 
 @pytest.fixture
 def service(state, scheduler, tmp_path, embedded_log_server, log_client):
     controller_mock = _make_controller_mock(state, scheduler)
-    return ControllerServiceImpl(
+    return make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
         endpoint_service=EndpointServiceImpl(
-            db=state._db,
-            system_endpoints={"/system/log-server": embedded_log_server.address},
+            EndpointRegistry(
+                db=state._db,
+                system_endpoints={"/system/log-server": embedded_log_server.address},
+            )
         ),
     )
 
@@ -294,15 +333,34 @@ def client(service):
     return TestClient(dashboard.app)
 
 
+def test_dashboard_serves_the_resource_service_surface(service) -> None:
+    resource_service = Mock()
+    resource_service.list_resources.return_value = resource_pb2.ListResourcesResponse()
+    client = TestClient(ControllerDashboard(service, resource_service=resource_service).app)
+
+    response = client.post(
+        "/iris.resource.ResourceService/ListResources",
+        json={
+            "type": "iris/job",
+            "query": {"@type": "type.googleapis.com/iris.resource.JobQuery"},
+            "view": "RESOURCE_VIEW_BASIC",
+        },
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {}
+
+
 @pytest.fixture
 def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path, log_client):
     controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
-    return ControllerServiceImpl(
+    return make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
     )
 
 
@@ -687,49 +745,49 @@ def test_get_autoscaler_status_returns_disabled_when_no_autoscaler(client):
 
 @pytest.fixture
 def mock_autoscaler():
-    """Create a mock autoscaler that returns a status proto."""
+    """Create a mock autoscaler that returns native status."""
     autoscaler = Mock()
     autoscaler.get_pending_hints.return_value = {}
-    autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
-        groups=[
-            vm_pb2.ScaleGroupStatus(
+    autoscaler.get_status.return_value = AutoscalerStatus(
+        groups=(
+            ScaleGroupStatus(
                 name="test-group",
                 device_type="tpu",
                 device_variant="v4-8",
-                slices=[
-                    vm_pb2.SliceInfo(
+                slices=(
+                    SliceStatus(
                         slice_id="slice-1",
                         scale_group="test-group",
-                        vms=[vm_pb2.VmInfo(vm_id="vm-1", state=vm_pb2.VM_STATE_READY)],
+                        vms=(VmStatus(vm_id="vm-1", state=VmState.READY),),
                     ),
-                    vm_pb2.SliceInfo(
+                    SliceStatus(
                         slice_id="slice-2",
                         scale_group="test-group",
-                        vms=[vm_pb2.VmInfo(vm_id="vm-2", state=vm_pb2.VM_STATE_READY)],
+                        vms=(VmStatus(vm_id="vm-2", state=VmState.READY),),
                     ),
-                    vm_pb2.SliceInfo(
+                    SliceStatus(
                         slice_id="slice-3",
                         scale_group="test-group",
-                        vms=[vm_pb2.VmInfo(vm_id="vm-3", state=vm_pb2.VM_STATE_BOOTING)],
+                        vms=(VmStatus(vm_id="vm-3", state=VmState.BOOTING),),
                     ),
-                ],
+                ),
                 current_demand=3,
                 availability_status="requesting",
                 availability_reason="scale-up in progress",
-                blocked_until=timestamp_to_proto(Timestamp.from_ms(0)),
+                blocked_until=Timestamp.from_ms(0),
             ),
-        ],
+        ),
         current_demand={"test-group": 3},
-        last_evaluation=timestamp_to_proto(Timestamp.from_ms(1000)),
-        recent_actions=[
-            vm_pb2.AutoscalerAction(
-                timestamp=timestamp_to_proto(Timestamp.from_ms(1000)),
+        last_evaluation=Timestamp.from_ms(1000),
+        recent_actions=(
+            AutoscalerActionStatus(
+                timestamp=Timestamp.from_ms(1000),
                 action_type="scale_up",
                 scale_group="test-group",
                 slice_id="slice-1",
                 reason="demand=3 > capacity=2",
             ),
-        ],
+        ),
     )
     return autoscaler
 
@@ -800,20 +858,20 @@ def test_get_autoscaler_status_populates_worker_id_for_unrostered_vm(client_with
 def test_overlay_worker_usability_tags_vms_and_per_slice_degraded_count():
     """The overlay tags each VM with usability/worker_healthy/running_task_count and
     records the per-slice count of degraded (reachable-but-failing) hosts."""
-    status = vm_pb2.AutoscalerStatus(
-        groups=[
-            vm_pb2.ScaleGroupStatus(
+    status = AutoscalerStatus(
+        groups=(
+            ScaleGroupStatus(
                 name="g",
-                slices=[
-                    vm_pb2.SliceInfo(
+                slices=(
+                    SliceStatus(
                         slice_id="s1",
                         state="ready",
-                        vms=[vm_pb2.VmInfo(vm_id="w-healthy"), vm_pb2.VmInfo(vm_id="w-degraded")],
+                        vms=(VmStatus(vm_id="w-healthy"), VmStatus(vm_id="w-degraded")),
                     ),
-                    vm_pb2.SliceInfo(slice_id="s2", state="ready", vms=[vm_pb2.VmInfo(vm_id="w-unrostered")]),
-                ],
-            )
-        ]
+                    SliceStatus(slice_id="s2", state="ready", vms=(VmStatus(vm_id="w-unrostered"),)),
+                ),
+            ),
+        )
     )
     usability_by_id = {
         "w-healthy": WorkerUsability.HEALTHY,
@@ -822,7 +880,7 @@ def test_overlay_worker_usability_tags_vms_and_per_slice_degraded_count():
     }
     running = {WorkerId("w-healthy"): {"task-1"}}
 
-    overlay_worker_usability(status, usability_by_id, running)
+    status = overlay_worker_usability(status, usability_by_id, running)
 
     group = status.groups[0]
     s1, s2 = group.slices
@@ -843,22 +901,22 @@ def test_overlay_worker_usability_tags_vms_and_per_slice_degraded_count():
 def test_overlay_capacity_status_busy_healthy_slice_is_in_use():
     """Regression for '40 schedulable' on fully booked slices: a healthy slice that
     is running tasks is `in_use`, never counted as free/schedulable capacity."""
-    status = vm_pb2.AutoscalerStatus(
-        groups=[
-            vm_pb2.ScaleGroupStatus(
+    status = AutoscalerStatus(
+        groups=(
+            ScaleGroupStatus(
                 name="g",
-                slices=[
-                    vm_pb2.SliceInfo(
+                slices=(
+                    SliceStatus(
                         slice_id="s",
                         state="ready",
-                        vms=[vm_pb2.VmInfo(vm_id="a"), vm_pb2.VmInfo(vm_id="b")],
-                    )
-                ],
-            )
-        ]
+                        vms=(VmStatus(vm_id="a"), VmStatus(vm_id="b")),
+                    ),
+                ),
+            ),
+        )
     )
     usability = {"a": WorkerUsability.HEALTHY, "b": WorkerUsability.HEALTHY}
-    overlay_worker_usability(status, usability, {WorkerId("a"): {"t1"}, WorkerId("b"): {"t2"}})
+    status = overlay_worker_usability(status, usability, {WorkerId("a"): {"t1"}, WorkerId("b"): {"t2"}})
 
     assert status.groups[0].slices[0].capacity_status == "in_use"
 
@@ -1188,7 +1246,14 @@ def test_get_task_status_attempts_carry_attempt_uid(client, state, job_request):
             [
                 WorkerTaskUpdates(
                     worker_id=wid,
-                    updates=[TaskUpdate(task_id=task_id, attempt_id=1, new_state=job_pb2.TASK_STATE_RUNNING)],
+                    updates=[
+                        TaskUpdate(
+                            task_id=task_id,
+                            attempt_id=1,
+                            new_state=job_pb2.TASK_STATE_RUNNING,
+                            container_id="container-1",
+                        )
+                    ],
                 )
             ],
             health=state._health,
@@ -1211,6 +1276,8 @@ def test_get_task_status_attempts_carry_attempt_uid(client, state, job_request):
     assert len(attempts) == 2
     proto_uids = {a["attemptId"]: a.get("attemptUid") for a in attempts}
     assert proto_uids == db_uids
+    assert resp["task"]["workerAddress"] == "h1:8080"
+    assert resp["task"]["containerId"] == "container-1"
 
 
 def test_get_task_status_includes_runtime_image(client, state, job_request):
@@ -1485,12 +1552,12 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, log_cli
     controller_mock.provider = Mock(capabilities=cluster_caps)
     controller_mock.provider.name = "kubernetes"
     controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
-    svc = ControllerServiceImpl(
+    svc = make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
     )
     dashboard = ControllerDashboard(svc)
     k8s_client = TestClient(dashboard.app)
@@ -1521,12 +1588,12 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client):
     controller_mock.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
     controller_mock.provider = provider
     controller_mock.backends = {DEFAULT_BACKEND_ID: provider}
-    svc = ControllerServiceImpl(
+    svc = make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
     )
     dashboard = ControllerDashboard(svc)
     return TestClient(dashboard.app), k8s, provider
@@ -1712,20 +1779,16 @@ def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None, adve
     # a cluster view returns ``kubernetes``; everything else returns ``worker``.
     if cluster_status is not None:
         backend.get_cluster_status.return_value = cluster_status
-        backend.status.return_value = controller_pb2.Controller.BackendStatus(kubernetes=cluster_status)
+        backend.status.return_value = BackendStatus(kubernetes=cluster_status)
     else:
-        autoscaler_status = autoscaler.get_status.return_value if autoscaler is not None else vm_pb2.AutoscalerStatus()
-        backend.status.return_value = controller_pb2.Controller.BackendStatus(
-            worker=controller_pb2.Controller.WorkerFleetDetail(autoscaler=autoscaler_status)
-        )
+        autoscaler_status = autoscaler.get_status.return_value if autoscaler is not None else AutoscalerStatus()
+        backend.status.return_value = BackendStatus(worker=WorkerFleetStatus(autoscaler=autoscaler_status))
 
     # autoscaler_status() authors this backend's groups tagged with its own id (the
     # dict key is the backend_id in these tests), mirroring the real backend.
     def _autoscaler_status():
-        status = autoscaler.get_status() if autoscaler is not None else vm_pb2.AutoscalerStatus()
-        for group in status.groups:
-            group.backend_id = name
-        return status
+        status = autoscaler.get_status() if autoscaler is not None else AutoscalerStatus()
+        return replace(status, groups=tuple(replace(group, backend_id=name) for group in status.groups))
 
     backend.autoscaler_status.side_effect = _autoscaler_status
     return backend
@@ -1737,24 +1800,24 @@ def _multi_backend_client(state, scheduler, tmp_path, log_client, backends):
     controller_mock.backends = dict(backends)
     controller_mock.provider = next(iter(backends.values()))
     controller_mock.capabilities = frozenset(cap for backend in backends.values() for cap in backend.capabilities)
-    svc = ControllerServiceImpl(
+    svc = make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
     )
     return TestClient(ControllerDashboard(svc).app)
 
 
 def _status_autoscaler(group_name):
     autoscaler = Mock()
-    autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
-        groups=[vm_pb2.ScaleGroupStatus(name=group_name)],
+    autoscaler.get_status.return_value = AutoscalerStatus(
+        groups=(ScaleGroupStatus(name=group_name),),
         current_demand={group_name: 1},
-        last_evaluation=timestamp_to_proto(Timestamp.from_ms(5)),
-        last_routing_decision=vm_pb2.RoutingDecision(
-            group_statuses=[vm_pb2.GroupRoutingStatus(group=group_name, decision="hold")],
+        last_evaluation=Timestamp.from_ms(5),
+        last_routing_decision=RoutingStatus(
+            group_statuses=(GroupRoutingStatus(group=group_name, decision="hold"),),
         ),
     )
     return autoscaler
@@ -1807,7 +1870,7 @@ def test_get_autoscaler_status_merges_all_backends(state, scheduler, tmp_path, l
 
 def test_get_kubernetes_cluster_status_finds_non_representative_backend(state, scheduler, tmp_path, log_client):
     """GetKubernetesClusterStatus locates the CLUSTER_VIEW backend even when it is not the representative one."""
-    cluster_status = controller_pb2.Controller.GetKubernetesClusterStatusResponse(namespace="eu", total_nodes=2)
+    cluster_status = KubernetesStatus(namespace="eu", total_nodes=2)
     client = _multi_backend_client(
         state,
         scheduler,
@@ -1831,10 +1894,10 @@ def test_task_backend_id_propagated_to_proto(client, state, job_request):
     tasks = _query_tasks_with_attempts(state, job_id)
     task_id = tasks[0].task_id
     with state._db.transaction() as tx:
-        tx.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(backend_id="gcp"))
+        tx.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(backend_id=DEFAULT_BACKEND_ID))
 
     resp = rpc_post(client, "GetTaskStatus", {"taskId": task_id.to_wire()})
-    assert resp["task"]["backendId"] == "gcp"
+    assert resp["task"]["backendId"] == DEFAULT_BACKEND_ID
 
 
 def test_job_backend_id_propagated_to_list_jobs(client, state, job_request):
@@ -1879,13 +1942,14 @@ def test_list_jobs_filters_by_backend_id(client, state, job_request):
 def test_list_workers_stamps_backend_id_and_scale_group(state, scheduler, tmp_path, log_client, job_request):
     """ListWorkers stamps backend_id (resolved via backend_id_for_scale_group) and scale_group."""
     controller_mock = _make_controller_mock(state, scheduler)
-    controller_mock.backend_id_for_scale_group = lambda sg: "gcp" if sg == "tpu-v5e" else DEFAULT_BACKEND_ID
-    svc = ControllerServiceImpl(
+    controller_mock.scale_group_to_backend = {"tpu-v5e": "gcp"}
+    controller_mock.backends["gcp"] = _worker_backend(state, None, "gcp")
+    svc = make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
     )
     client = TestClient(ControllerDashboard(svc).app)
 
@@ -1902,12 +1966,12 @@ def test_worker_backend_id_propagated_to_get_worker_status(state, scheduler, tmp
     """GetWorkerStatus stamps backend_id (resolved via scale_group) and scale_group (worker detail page)."""
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.backend_id_for_scale_group = lambda sg: "gcp" if sg == "tpu-v5e" else DEFAULT_BACKEND_ID
-    svc = ControllerServiceImpl(
+    svc = make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
     )
     client = TestClient(ControllerDashboard(svc).app)
 
@@ -1921,13 +1985,19 @@ def test_worker_backend_id_propagated_to_get_worker_status(state, scheduler, tmp
 def test_list_workers_filters_by_backend_id(state, scheduler, tmp_path, log_client):
     """ListWorkers.query.backendId returns only workers whose scale_group maps to that backend."""
     controller_mock = _make_controller_mock(state, scheduler)
-    controller_mock.backend_id_for_scale_group = lambda sg: {"tpu-v5e": "gcp", "h100": "cw"}.get(sg, DEFAULT_BACKEND_ID)
-    svc = ControllerServiceImpl(
+    controller_mock.scale_group_to_backend = {"tpu-v5e": "gcp", "h100": "cw"}
+    controller_mock.backends.update(
+        {
+            "gcp": _worker_backend(state, None, "gcp"),
+            "cw": _worker_backend(state, None, "cw"),
+        }
+    )
+    svc = make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
     )
     client = TestClient(ControllerDashboard(svc).app)
 
@@ -1959,12 +2029,12 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
         sg, DEFAULT_BACKEND_ID
     )
     controller_mock.last_unroutable_jobs = {"/alice/exp": "no backend matches the job's constraints"}
-    svc = ControllerServiceImpl(
+    svc = make_controller_service(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        endpoint_service=EndpointServiceImpl(db=state._db),
+        endpoint_service=EndpointServiceImpl(EndpointRegistry(db=state._db)),
     )
     client = TestClient(ControllerDashboard(svc).app)
 
@@ -2024,19 +2094,19 @@ def test_list_backends_worker_detail_overlays_running_task_counts(state, schedul
     """detail.worker runs the same usability overlay as GetAutoscalerStatus, so a VM
     with a running task reports a non-zero running_task_count (not idle)."""
     autoscaler = Mock()
-    autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
-        groups=[
-            vm_pb2.ScaleGroupStatus(
+    autoscaler.get_status.return_value = AutoscalerStatus(
+        groups=(
+            ScaleGroupStatus(
                 name="tpu-v5e-us",
-                slices=[
-                    vm_pb2.SliceInfo(
+                slices=(
+                    SliceStatus(
                         slice_id="s1",
                         state="ready",
-                        vms=[vm_pb2.VmInfo(vm_id="w-run", state=vm_pb2.VM_STATE_READY)],
-                    )
-                ],
-            )
-        ],
+                        vms=(VmStatus(vm_id="w-run", state=VmState.READY),),
+                    ),
+                ),
+            ),
+        ),
     )
     client = _multi_backend_client(
         state,
@@ -2109,8 +2179,8 @@ def test_list_backends_kubernetes_detail_from_cluster_state(state, scheduler, tm
 
 def test_get_kubernetes_cluster_status_ambiguous_raises(state, scheduler, tmp_path, log_client):
     """GetKubernetesClusterStatus raises INVALID_ARGUMENT when >1 CLUSTER_VIEW backends and no backend_id."""
-    cluster_a = controller_pb2.Controller.GetKubernetesClusterStatusResponse(namespace="eu", total_nodes=2)
-    cluster_b = controller_pb2.Controller.GetKubernetesClusterStatusResponse(namespace="us", total_nodes=4)
+    cluster_a = KubernetesStatus(namespace="eu", total_nodes=2)
+    cluster_b = KubernetesStatus(namespace="us", total_nodes=4)
     client = _multi_backend_client(
         state,
         scheduler,
@@ -2152,17 +2222,21 @@ def _proxy_dashboard_with_transport(monkeypatch, credentials=None):
     return ProxyControllerDashboard("https://iris.example", credentials=credentials), requests
 
 
-def test_proxy_dashboard_forwards_endpoint_service_rpc(monkeypatch):
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/iris.cluster.EndpointService/ListEndpoints",
+        "/iris.resource.ResourceService/ListResources",
+    ],
+)
+def test_proxy_dashboard_forwards_resource_and_endpoint_service_rpcs(monkeypatch, path):
     dashboard, requests = _proxy_dashboard_with_transport(monkeypatch)
     with TestClient(dashboard.app) as client:
-        response = client.post(
-            "/iris.cluster.EndpointService/ListEndpoints",
-            json={"prefix": "/jobs/"},
-        )
+        response = client.post(path, json={"prefix": "/jobs/"})
 
     assert response.status_code == 200
     assert response.json() == {"endpoints": []}
-    assert [request.url.path for request in requests] == ["/iris.cluster.EndpointService/ListEndpoints"]
+    assert [request.url.path for request in requests] == [path]
 
 
 def _static_credentials() -> ClientCredentials:

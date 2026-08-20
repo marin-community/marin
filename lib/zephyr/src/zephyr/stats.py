@@ -24,8 +24,8 @@ from datetime import UTC, datetime
 from typing import ClassVar
 
 from finelog.client import LogClient, Table
-from iris.client.client import get_iris_ctx
-from iris.cluster.client.job_info import get_job_info
+from iris.client import get_iris_ctx
+from iris.client.job_info import get_job_info
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from rigging.timing import RateLimiter
 

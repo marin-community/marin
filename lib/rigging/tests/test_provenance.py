@@ -30,6 +30,16 @@ def test_json_round_trip():
     assert Provenance.from_json(p.to_json()) == p
 
 
+def test_from_json_accepts_minimal_persisted_payload():
+    assert Provenance.from_json('{"tree_hash": "aaaa"}') == Provenance(
+        tree_hash="aaaa",
+        base_commit="aaaa",
+        dirty=False,
+        branch=None,
+        built_by=None,
+    )
+
+
 def test_username_segment_sanitizes_email_to_a_clean_distinct_segment(monkeypatch):
     # Drops the domain but keeps the whole local name, so the segment is path-safe (no '@'/'.')
     # and two users who share a first name don't collapse onto one namespace.

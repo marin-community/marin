@@ -18,6 +18,8 @@ from enum import Enum, StrEnum
 
 from rigging.timing import Duration, Timestamp, TokenBucket
 
+from iris.backends.status import ScaleGroupStatus, VmState, VmStatus
+from iris.backends.status import SliceStatus as SliceStatusRecord
 from iris.chaos import chaos_raise
 from iris.cluster.config import (
     ScaleGroupConfig,
@@ -48,9 +50,12 @@ from iris.cluster.controller.autoscaler.backoff_detector import (
 from iris.cluster.controller.autoscaler.state import GroupPersist, SlicePersist
 from iris.cluster.platforms.protocols import WorkerInfraProvider
 from iris.cluster.platforms.types import Labels, QuotaExhaustedError, SliceHandle
-from iris.cluster.types import AcceleratorType, CapacityType, WorkerStatusMap, get_gpu_count, get_tpu_count
-from iris.rpc import job_pb2, time_pb2, vm_pb2
-from iris.time_proto import timestamp_to_proto
+from iris.cluster.types import (
+    AcceleratorType,
+    CapacityType,
+    WorkerStatusMap,
+)
+from iris.resources.execution import ResourceSpec, get_gpu_count, get_tpu_count
 
 logger = logging.getLogger(__name__)
 
@@ -246,19 +251,19 @@ def _zones_from_config(config: ScaleGroupConfig) -> list[str]:
     )
 
 
-def _lifecycle_to_vm_state(lifecycle: SliceLifecycleState) -> vm_pb2.VmState:
-    """Map slice lifecycle state to a VM state for proto APIs."""
+def _lifecycle_to_vm_state(lifecycle: SliceLifecycleState) -> VmState:
+    """Map slice lifecycle state to the status record's VM state."""
     return {
-        SliceLifecycleState.REQUESTING: vm_pb2.VM_STATE_BOOTING,
-        SliceLifecycleState.BOOTING: vm_pb2.VM_STATE_BOOTING,
-        SliceLifecycleState.INITIALIZING: vm_pb2.VM_STATE_INITIALIZING,
-        SliceLifecycleState.READY: vm_pb2.VM_STATE_READY,
-        SliceLifecycleState.FAILED: vm_pb2.VM_STATE_FAILED,
+        SliceLifecycleState.REQUESTING: VmState.BOOTING,
+        SliceLifecycleState.BOOTING: VmState.BOOTING,
+        SliceLifecycleState.INITIALIZING: VmState.INITIALIZING,
+        SliceLifecycleState.READY: VmState.READY,
+        SliceLifecycleState.FAILED: VmState.FAILED,
     }[lifecycle]
 
 
-def slice_state_to_proto(state: SliceState, idle_threshold: Duration | None = None) -> vm_pb2.SliceInfo:
-    """Convert a SliceState to a SliceInfo proto for RPC APIs."""
+def slice_state_to_status(state: SliceState, idle_threshold: Duration | None = None) -> SliceStatusRecord:
+    """Project a tracked slice into native status."""
     created_at = state.handle.created_at
     vm_state = _lifecycle_to_vm_state(state.lifecycle)
 
@@ -272,22 +277,22 @@ def slice_state_to_proto(state: SliceState, idle_threshold: Duration | None = No
     # slice, report the transition time (= quiet_since).
     last_active_ts = state.quiet_since if state.quiet_since is not None else Timestamp.now()
 
-    return vm_pb2.SliceInfo(
+    return SliceStatusRecord(
         slice_id=state.handle.slice_id,
         scale_group=state.handle.scale_group,
         state=state.lifecycle.value,
-        created_at=time_pb2.Timestamp(epoch_ms=created_at.epoch_ms()),
-        vms=[
-            vm_pb2.VmInfo(
+        created_at=created_at,
+        vms=tuple(
+            VmStatus(
                 vm_id=worker_id,
                 state=vm_state,
-                created_at=time_pb2.Timestamp(epoch_ms=created_at.epoch_ms()),
-                state_changed_at=time_pb2.Timestamp(epoch_ms=created_at.epoch_ms()),
+                created_at=created_at,
+                state_changed_at=created_at,
             )
             for worker_id in state.worker_ids
-        ],
+        ),
         error_message=state.error_message,
-        last_active=timestamp_to_proto(last_active_ts),
+        last_active=last_active_ts,
         idle=is_idle,
     )
 
@@ -796,7 +801,7 @@ class ScalingGroup:
         self._current_demand = demand
         self._peak_demand = max(self._peak_demand, demand)
 
-    def check_resource_fit(self, resources: job_pb2.ResourceSpecProto) -> str | None:
+    def check_resource_fit(self, resources: ResourceSpec) -> str | None:
         """Check whether a demand entry's resources fit within one VM.
 
         Unconfigured group resource values (0 in the proto) are passed as None
@@ -808,7 +813,7 @@ class ScalingGroup:
         if sg_resources is None:
             return f"group '{self.name}' has no resources configured"
 
-        device_count = get_gpu_count(resources.device) + get_tpu_count(resources.device)
+        device_count = get_gpu_count(resources.device) + get_tpu_count(resources.device) if resources.device else 0
         available = ResourceCapacity(
             cpu_millicores=sg_resources.cpu_millicores or None,
             memory_bytes=sg_resources.memory_bytes or None,
@@ -817,8 +822,8 @@ class ScalingGroup:
         )
         required = ResourceCapacity(
             cpu_millicores=resources.cpu_millicores,
-            memory_bytes=resources.memory_bytes,
-            disk_bytes=resources.disk_bytes,
+            memory_bytes=resources.memory,
+            disk_bytes=resources.disk,
             gpu_count=device_count,
         )
         return check_resource_fit(available, required)
@@ -1209,8 +1214,8 @@ class ScalingGroup:
         for slice_id, state in slices.items():
             self._detector.record_created(slice_id, state.handle.created_at)
 
-    def to_status(self) -> vm_pb2.ScaleGroupStatus:
-        """Build a ScaleGroupStatus proto for the status API."""
+    def to_status(self) -> ScaleGroupStatus:
+        """Build native status for this scaling group."""
         with self._slices_lock:
             snapshot = list(self._slices.values())
         now = Timestamp.now()
@@ -1219,7 +1224,7 @@ class ScalingGroup:
         counts = self.slice_state_counts()
 
         resources = self._config.resources
-        status = vm_pb2.ScaleGroupStatus(
+        return ScaleGroupStatus(
             name=self.name,
             device_type=accelerator_type_to_string(resources.device_type) if resources is not None else "",
             device_variant=resources.device_variant if resources is not None else "",
@@ -1228,20 +1233,18 @@ class ScalingGroup:
             region=self.region or "",
             current_demand=self._current_demand,
             peak_demand=self._peak_demand,
-            backoff_until=timestamp_to_proto(Timestamp.from_ms(0)),
+            backoff_until=Timestamp.from_ms(0),
             consecutive_failures=self._failure_count_for_status(now),
-            last_scale_up=timestamp_to_proto(self._last_scale_up),
-            last_scale_down=timestamp_to_proto(self._last_scale_down),
+            last_scale_up=self._last_scale_up,
+            last_scale_down=self._last_scale_down,
             availability_status=availability.status.value,
             availability_reason=availability.reason,
-            blocked_until=timestamp_to_proto(blocked_until),
-            scale_up_cooldown_until=timestamp_to_proto(Timestamp.from_ms(0)),
-            slices=[slice_state_to_proto(state, idle_threshold=self._idle_threshold) for state in snapshot],
+            blocked_until=blocked_until,
+            scale_up_cooldown_until=Timestamp.from_ms(0),
+            slices=tuple(slice_state_to_status(state, idle_threshold=self._idle_threshold) for state in snapshot),
+            slice_state_counts=counts,
             idle_threshold_ms=self._idle_threshold.to_ms(),
         )
-        for state_name, count in counts.items():
-            status.slice_state_counts[state_name] = count
-        return status
 
 
 # ---------------------------------------------------------------------------

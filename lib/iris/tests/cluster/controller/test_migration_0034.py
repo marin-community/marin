@@ -14,7 +14,7 @@ import importlib.util
 import sqlite3
 from pathlib import Path
 
-_MIGRATION = Path(__file__).parents[3] / "src/iris/cluster/controller/migrations/0034_federation.py"
+_MIGRATION = Path(__file__).parents[3] / "src/iris/cluster/controller/persistence/migrations/0034_federation.py"
 
 # The pre-0034 tasks table carries the priority columns the partial index
 # ``idx_tasks_pending_local`` is built over.

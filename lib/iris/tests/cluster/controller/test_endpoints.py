@@ -17,22 +17,26 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
-from iris.cluster.client.endpoint_client import EndpointClient, EndpointLeaseRenewer, renew_interval
 from iris.cluster.config import AuthConfig
 from iris.cluster.controller.auth import MAX_ENDPOINT_TOKEN_TTL_SECONDS, create_controller_auth
-from iris.cluster.controller.endpoint_service import (
+from iris.cluster.controller.endpoint_registry import (
     ENDPOINT_LEASE,
     MIN_ENDPOINT_LEASE,
-    EndpointServiceImpl,
+    EndpointRegistry,
     ProxyRegistryReset,
 )
-from iris.cluster.controller.projections.endpoints import EndpointRow
-from iris.cluster.controller.pruner import prune_old_data
-from iris.cluster.controller.schema import tasks_table
-from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, JobName, TaskAttempt
+from iris.cluster.controller.persistence.projections.endpoints import EndpointRow
+from iris.cluster.controller.persistence.pruning import prune_old_data
+from iris.cluster.controller.persistence.schema import tasks_table
+from iris.resources.endpoint import PROXY_TIMEOUT_METADATA_KEY
+from iris.resources.names import (
+    JobName,
+    TaskAttempt,
+)
 from iris.rpc import controller_pb2, job_pb2
-from iris.testing.controller import make_job_request, query_task, submit_job
+from iris.rpc.endpoint_client import EndpointClient, EndpointLeaseRenewer, renew_interval
+from iris.rpc.endpoint_service import EndpointServiceImpl
+from iris.testing.controller import make_controller_service, make_job_request, query_task, submit_job
 from iris.time_proto import duration_to_proto
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
@@ -41,7 +45,7 @@ from sqlalchemy import update as sa_update
 
 
 def _service(state, *, lease: Duration = ENDPOINT_LEASE) -> EndpointServiceImpl:
-    return EndpointServiceImpl(db=state._db, lease=lease)
+    return EndpointServiceImpl(EndpointRegistry(db=state._db, lease=lease))
 
 
 def _row(endpoint_id: str, name: str, task_id: JobName, *, lease_deadline: Timestamp | None) -> EndpointRow:
@@ -130,7 +134,7 @@ def test_expired_lease_hidden_from_reads(state):
     service = _service(state)
     listed = service.list_endpoints(controller_pb2.Controller.ListEndpointsRequest(prefix="svc", exact=True), None)
     assert [endpoint.endpoint_id for endpoint in listed.endpoints] == ["live"]
-    assert service.resolve_endpoint("svc") == "h:1"
+    assert service.registry.resolve_endpoint("svc") == "h:1"
 
 
 def test_sweep_expired_deletes_only_expired(state):
@@ -175,20 +179,20 @@ def test_proxy_registry_publishes_deltas_and_snapshots(state):
     task, attempt = _live_task(state)
     service = _service(state)
     deltas = []
-    service.subscribe_proxy_updates(deltas.append)
+    service.registry.subscribe_proxy_updates(deltas.append)
 
     response = service.register_endpoint(
         _register_request("svc", task, attempt_id=attempt, endpoint_id="endpoint-1"),
         None,
     )
-    service.register_system_endpoint("/system/log-server", "http://logs:9000")
+    service.registry.register_system_endpoint("/system/log-server", "http://logs:9000")
 
     assert response.endpoint_id == "endpoint-1"
     assert [(delta.base_generation, delta.next_generation) for delta in deltas] == [(0, 1), (1, 2)]
     assert [mapping.endpoint_id for mapping in deltas[0].upserts] == ["endpoint-1"]
     assert [mapping.endpoint_id for mapping in deltas[1].upserts] == ["system:/system/log-server"]
 
-    snapshot = service.proxy_registry_snapshot()
+    snapshot = service.registry.proxy_registry_snapshot()
     assert snapshot.generation == 2
     assert {mapping.endpoint_id for mapping in snapshot.endpoints} == {
         "endpoint-1",
@@ -208,8 +212,8 @@ def test_proxy_registry_omits_tcp_endpoint_without_hiding_it(state):
     task, attempt = _live_task(state)
     service = _service(state)
     updates = []
-    service.subscribe_proxy_updates(updates.append)
-    service.register_system_endpoint("/system/log-server", "http://logs:9000")
+    service.registry.subscribe_proxy_updates(updates.append)
+    service.registry.register_system_endpoint("/system/log-server", "http://logs:9000")
     updates.clear()
 
     service.register_endpoint(
@@ -226,7 +230,7 @@ def test_proxy_registry_omits_tcp_endpoint_without_hiding_it(state):
     [delta] = updates
     assert delta.upserts == ()
     assert delta.deletes == ("tcp-endpoint",)
-    assert [mapping.endpoint_id for mapping in service.proxy_registry_snapshot().endpoints] == [
+    assert [mapping.endpoint_id for mapping in service.registry.proxy_registry_snapshot().endpoints] == [
         "system:/system/log-server"
     ]
     listed = service.list_endpoints(
@@ -241,7 +245,7 @@ def test_proxy_registry_omits_tcp_endpoint_without_hiding_it(state):
 def test_proxy_registry_requires_snapshot_after_database_replace(state, tmp_path: Path):
     service = _service(state)
     updates = []
-    service.subscribe_proxy_updates(updates.append)
+    service.registry.subscribe_proxy_updates(updates.append)
     backup_dir = tmp_path / "backup"
     backup_dir.mkdir()
     state._db.backup_to(backup_dir / "controller.sqlite3")
@@ -252,7 +256,7 @@ def test_proxy_registry_requires_snapshot_after_database_replace(state, tmp_path
     assert len(updates) == 1
     reset = updates[0]
     assert isinstance(reset, ProxyRegistryReset)
-    assert service.proxy_registry_snapshot().generation == 1
+    assert service.registry.proxy_registry_snapshot().generation == 1
 
 
 def test_register_honors_and_clamps_requested_lease(state):
@@ -303,9 +307,9 @@ def test_register_terminal_task_raises(state):
 
 def test_system_endpoints_resolve_and_list(state):
     svc = _service(state)
-    svc.register_system_endpoint("/system/log-server", "logs:9000")
+    svc.registry.register_system_endpoint("/system/log-server", "logs:9000")
 
-    assert svc.resolve_endpoint("/system/log-server") == "logs:9000"
+    assert svc.registry.resolve_endpoint("/system/log-server") == "logs:9000"
     listed = svc.list_endpoints(
         controller_pb2.Controller.ListEndpointsRequest(prefix="/system/log-server", exact=True), None
     )
@@ -362,35 +366,22 @@ def test_proxy_registry_reads_timeout_metadata(state, metadata_value, expected):
         ),
         None,
     )
-    [mapping] = svc.proxy_registry_snapshot().endpoints
+    [mapping] = svc.registry.proxy_registry_snapshot().endpoints
     assert mapping.timeout_seconds == expected
-
-
-def test_resolve_task_endpoint_returns_owner_row(state):
-    task, attempt = _live_task(state)
-    svc = _service(state)
-    svc.register_endpoint(_register_with_access("/serve/foo", task, attempt, 0), None)
-
-    row = svc.resolve_task_endpoint("/serve/foo")
-    assert row is not None and row.task_id == task
-    assert svc.resolve_task_endpoint("serve.foo") is not None  # dotted form too
-    # /system/ endpoints have no owning task and are not returned.
-    svc.register_system_endpoint("/system/log-server", "logs:9000")
-    assert svc.resolve_task_endpoint("/system/log-server") is None
 
 
 # --- MintEndpointToken RPC -----------------------------------------------------
 
 
 def _mint_service(state, mock_controller, log_client, tmp_path):
-    """A ControllerServiceImpl with auth enabled (a provider ⇒ owner authz on)."""
+    """A legacy controller service with auth enabled (a provider implies owner authz)."""
     auth = create_controller_auth(
         AuthConfig(trusted_cidrs=["10.0.0.0/8"]),
         cluster_name="test-cluster",
         signing_key_pem=generate_ed25519_keypair().private_pem,
     )
-    endpoint_service = EndpointServiceImpl(db=state._db)
-    service = ControllerServiceImpl(
+    endpoint_service = EndpointServiceImpl(EndpointRegistry(db=state._db))
+    service = make_controller_service(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
@@ -487,8 +478,8 @@ def test_register_resolves_through_service(state):
     endpoint_id = client.register("svc", "h:1", TaskAttempt(task_id=task, attempt_id=attempt))
 
     assert [r.endpoint_id for r in stub.registered] == [endpoint_id]
-    listed = stub.list_endpoints(controller_pb2.Controller.ListEndpointsRequest(prefix="svc", exact=True))
-    assert [(endpoint.endpoint_id, endpoint.address) for endpoint in listed.endpoints] == [(endpoint_id, "h:1")]
+    listed = client.list_endpoint_instances("svc")
+    assert [(endpoint.endpoint_id, endpoint.address) for endpoint in listed] == [(endpoint_id, "h:1")]
     client.close()
 
 

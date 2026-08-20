@@ -7,7 +7,9 @@ import importlib.util
 import sqlite3
 from pathlib import Path
 
-_MIGRATION = Path(__file__).parents[3] / "src/iris/cluster/controller/migrations/0049_resolve_priority_band.py"
+_MIGRATION = (
+    Path(__file__).parents[3] / "src/iris/cluster/controller/persistence/migrations/0049_resolve_priority_band.py"
+)
 
 _PRODUCTION = 1
 _INTERACTIVE = 2

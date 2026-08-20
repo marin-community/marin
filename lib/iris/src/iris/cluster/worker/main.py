@@ -18,6 +18,7 @@ from iris.cluster.provenance import provenance_from_env
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.worker.env_probe import detect_gcp_zone
 from iris.cluster.worker.worker import Worker, worker_config_from_wire
+from iris.rpc.worker_runtime import worker_rpc_bindings
 
 
 def _configure_docker_ar_auth(ar_host: str) -> None:
@@ -72,7 +73,14 @@ def serve(worker_config: str):
 
     container_runtime = DockerRuntime(cache_dir=config.cache_dir, capacity_type=config.capacity_type)
 
-    worker = Worker(config, container_runtime=container_runtime)
+    rpc = worker_rpc_bindings(config)
+    worker = Worker(
+        config,
+        container_runtime=container_runtime,
+        log_client=rpc.log_client,
+        controller=rpc.controller,
+        server=rpc.server,
+    )
 
     click.echo(f"Starting Iris worker on {config.host}:{config.port}")
     click.echo(f"  Cache dir: {config.cache_dir}")

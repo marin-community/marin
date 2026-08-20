@@ -97,7 +97,7 @@ def _peer_can_host(peer: FederationPeer, constraints: Sequence[Constraint]) -> b
     if not routing:
         return True
     for backend in heartbeat.backends:
-        advertised = {key: list(values.values) for key, values in backend.advertised_attributes.items()}
+        advertised = {key: list(values) for key, values in backend.advertised_attributes.items()}
         if all(backend_satisfies(advertised, c) for c in routing):
             return True
     return False

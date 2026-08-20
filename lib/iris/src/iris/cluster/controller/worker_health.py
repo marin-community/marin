@@ -43,7 +43,8 @@ from enum import StrEnum
 
 from rigging.timing import Duration
 
-from iris.cluster.types import WorkerId, WorkerUsability
+from iris.cluster.types import WorkerUsability
+from iris.resources.names import WorkerId
 
 logger = logging.getLogger(__name__)
 

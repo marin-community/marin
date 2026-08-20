@@ -34,6 +34,7 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.client.context_state import current_context, reset_context, set_context
+from iris.client.job_info import JobInfo, get_job_info, resolve_job_user
 from iris.client.workload import AttemptStatus, JobStatus, TaskActionResult, TaskDescription, TaskStatus
 from iris.client.workload_codec import (
     job_state_from_proto,
@@ -42,30 +43,18 @@ from iris.client.workload_codec import (
     task_description_from_proto,
     task_status_from_proto,
 )
-from iris.cluster.client import (
-    ClusterClient,
-    JobInfo,
-    RemoteClusterClient,
-    get_job_info,
-    resolve_job_user,
-)
+from iris.cluster.client.protocol import ClusterClient
+from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.constraints import (
     Constraint,
     is_any_region_marker,
     merge_constraints,
 )
 from iris.cluster.log_keys import build_log_source
-from iris.cluster.types import (
-    CoschedulingConfig,
-    EndpointAccess,
-    Entrypoint,
-    EnvironmentSpec,
-    JobName,
-    Namespace,
-    ResourceSpec,
-    TaskAttempt,
-    adjust_tpu_replicas,
-)
+from iris.resources.endpoint import EndpointAccess
+from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec, adjust_tpu_replicas
+from iris.resources.job import CoschedulingConfig
+from iris.resources.names import JobName, Namespace, TaskAttempt
 from iris.resources.state import TERMINAL_TASK_STATES, JobState, TaskState, is_job_finished
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import timestamp_from_proto
@@ -608,7 +597,7 @@ class EndpointRegistry(Protocol):
         name: str,
         address: str,
         metadata: dict[str, str] | None = None,
-        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
+        access: EndpointAccess = EndpointAccess.PRIVATE,
     ) -> str:
         """Register an endpoint for actor discovery.
 
@@ -636,7 +625,7 @@ class EndpointRegistry(Protocol):
         name: str,
         address: str,
         metadata: dict[str, str] | None = None,
-        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
+        access: EndpointAccess = EndpointAccess.PRIVATE,
     ) -> AbstractContextManager[str]:
         """Own one renewable endpoint registration for a context lifetime."""
         ...
@@ -660,7 +649,7 @@ class NamespacedEndpointRegistry:
         name: str,
         address: str,
         metadata: dict[str, str] | None = None,
-        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
+        access: EndpointAccess = EndpointAccess.PRIVATE,
     ) -> str:
         """Register an endpoint, auto-prefixing with namespace.
 
@@ -700,7 +689,7 @@ class NamespacedEndpointRegistry:
         name: str,
         address: str,
         metadata: dict[str, str] | None = None,
-        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
+        access: EndpointAccess = EndpointAccess.PRIVATE,
     ) -> Generator[str, None, None]:
         """Register and renew an endpoint, then remove it promptly on clean exit."""
         endpoint_id = self.register(name, address, metadata, access)
@@ -1070,22 +1059,16 @@ class IrisClient:
         if constraints:
             constraints = [c for c in constraints if not is_any_region_marker(c)]
 
-        # Convert to wire format
-        resources_proto = resources.to_proto()
-        environment_proto = environment.to_proto() if environment else None
-        constraints_proto = [c.to_proto() for c in constraints or []]
-        coscheduling_proto = coscheduling.to_proto() if coscheduling else None
-
         try:
             canonical_id = self._cluster_client.submit_job(
                 job_id=job_id,
                 entrypoint=entrypoint,
-                resources=resources_proto,
-                environment=environment_proto,
+                resources=resources,
+                environment=environment,
                 ports=ports,
                 scheduling_timeout=scheduling_timeout,
-                constraints=constraints_proto,
-                coscheduling=coscheduling_proto,
+                constraints=constraints,
+                coscheduling=coscheduling,
                 replicas=replicas,
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
@@ -1165,7 +1148,7 @@ class IrisClient:
         """
         query = controller_pb2.Controller.JobQuery()
         if state is not None:
-            query.state_filter = state.value
+            query.state_filter = state.name
         if prefix:
             query.job_id_prefix = prefix
 

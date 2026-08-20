@@ -3,6 +3,11 @@
 
 """Behavior tests for read-only Zephyr memory stores."""
 
+import contextvars
+import threading
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -12,6 +17,12 @@ import pyarrow.parquet as pq
 import pytest
 from fray.actor import ActorHandle, ActorUnavailableError
 from fray.local_backend import LocalClient
+from fray.types import ResourceConfig
+from iris.client import IrisClient, Task, iris_ctx
+from iris.resources.identity import AttemptIdentity
+from iris.resources.names import JobName
+from iris.test_util import SentinelFile
+from rigging.timing import Duration, ExponentialBackoff
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext, _require_resolvable_worker_handles
 from zephyr.memory_store import (
@@ -23,7 +34,6 @@ from zephyr.memory_store import (
     MemoryTableLookup,
     MemoryTableStatus,
 )
-from zephyr.testing.context import memory_store_context
 
 
 class _TestActorFuture:
@@ -76,6 +86,19 @@ def _parquet_pair(row: dict) -> tuple[tuple[int, str], str]:
     return (row["partition"], row["id"]), row["text"]
 
 
+@contextmanager
+def _store_context(client, tmp_path, *, max_workers: int = 2) -> Iterator[ZephyrContext]:
+    context = ZephyrContext(
+        client=client,
+        max_workers=max_workers,
+        resources=ResourceConfig(cpu=1, ram="256m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name="memory-store-test",
+    )
+    with context:
+        yield context
+
+
 def _load_store(
     context: ZephyrContext,
     dataset: Dataset,
@@ -104,6 +127,30 @@ def _fake_store(actor: _SequencedActor, recovery_timeout: float = 1) -> MemorySt
     )
 
 
+def _worker_task_id(context: ZephyrContext, actor_index: int) -> JobName:
+    assert context._pool is not None
+    worker_job_id = context._pool.coordinator.worker_job_id.remote().result(timeout=30.0)
+    return JobName.from_wire(f"{worker_job_id}/{actor_index}")
+
+
+def _iris_client() -> IrisClient:
+    client = iris_ctx().client
+    if client is None:
+        raise RuntimeError("Iris context has no client")
+    return client
+
+
+def _current_task(client: IrisClient, task_id: JobName) -> Task:
+    return client.current_task(task_id)
+
+
+def _current_attempt(task: Task) -> AttemptIdentity:
+    attempt = task.status().current_attempt
+    if attempt is None:
+        raise RuntimeError(f"Task {task.task_id} has no current Attempt")
+    return attempt
+
+
 def test_memory_store_routes_existing_partitions_and_preserves_lookup_order(local_client, tmp_path):
     partitions = [
         [((0, "a"), "zero-a"), ((0, "b"), "zero-b"), ((0, "none"), None)],
@@ -113,7 +160,7 @@ def test_memory_store_routes_existing_partitions_and_preserves_lookup_order(loca
     ]
     dataset = Dataset.from_list(partitions).flat_map(_partition_rows)
 
-    with memory_store_context(local_client, tmp_path) as context:
+    with _store_context(local_client, tmp_path) as context:
         store = _load_store(context, dataset)
 
         assert store.get_many([(3, "a"), (0, "b"), (2, "a"), (0, "b")]) == [
@@ -138,16 +185,33 @@ def test_memory_store_routes_existing_partitions_and_preserves_lookup_order(loca
 def test_memory_store_rejects_hash_that_disagrees_with_existing_partition(local_client, tmp_path):
     dataset = Dataset.from_list([[((0, "a"), "value")], [((1, "b"), "value")]]).flat_map(_partition_rows)
 
-    with memory_store_context(local_client, tmp_path) as context:
+    with _store_context(local_client, tmp_path) as context:
         with pytest.raises(MemoryStorePartitionError):
             _load_store(context, dataset, hash_key=_wrong_key_partition)
+
+
+@pytest.mark.requires_cluster
+def test_memory_store_invalid_input_does_not_restart_workers(iris_integration_client, tmp_path):
+    dataset = Dataset.from_list([[((0, "a"), "value")], [((1, "b"), "value")]]).flat_map(_partition_rows)
+
+    with _store_context(iris_integration_client, tmp_path) as context:
+        task_ids = [_worker_task_id(context, actor_index) for actor_index in range(2)]
+        client = _iris_client()
+        tasks = [_current_task(client, task_id) for task_id in task_ids]
+        attempts_before = [_current_attempt(task) for task in tasks]
+
+        with pytest.raises(MemoryStorePartitionError):
+            _load_store(context, dataset, name="invalid-partition", hash_key=_wrong_key_partition)
+
+        attempts_after = [_current_attempt(task) for task in tasks]
+        assert attempts_after == attempts_before
 
 
 def test_memory_store_rejects_duplicate_key_without_poisoning_worker(local_client, tmp_path):
     duplicate = Dataset.from_list([[((0, "same"), "first"), ((0, "same"), "second")]]).flat_map(_partition_rows)
     valid = Dataset.from_list([((0, "valid"), "value")])
 
-    with memory_store_context(local_client, tmp_path) as context:
+    with _store_context(local_client, tmp_path) as context:
         with pytest.raises(DuplicateMemoryStoreKey):
             _load_store(context, duplicate, name="duplicates")
 
@@ -159,7 +223,7 @@ def test_memory_store_multiple_tables_have_independent_lifetimes(local_client, t
     first_dataset = Dataset.from_list([((0, "key"), "first")])
     second_dataset = Dataset.from_list([((0, "key"), "second")])
 
-    with memory_store_context(local_client, tmp_path) as context:
+    with _store_context(local_client, tmp_path) as context:
         first = _load_store(context, first_dataset, name="first")
         second = _load_store(context, second_dataset, name="second")
 
@@ -190,7 +254,7 @@ def test_memory_store_pickle_round_trip_works_in_later_pipelines(local_client, t
     dataset = Dataset.from_files(str(parquet_dir / "*.parquet")).load_parquet().map(_parquet_pair)
     keys = [(3, "b"), (0, "a"), (2, "b"), (1, "a")]
 
-    with memory_store_context(local_client, tmp_path) as context:
+    with _store_context(local_client, tmp_path) as context:
         store = _load_store(context, dataset)
         restored = cloudpickle.loads(cloudpickle.dumps(store))
 
@@ -199,6 +263,25 @@ def test_memory_store_pickle_round_trip_works_in_later_pipelines(local_client, t
 
     assert first_result.results == ["text-3-b", "text-0-a", "text-2-b", "text-1-a"]
     assert second_result.results == ["text-1-a", "text-2-b", "text-0-a", "text-3-b"]
+
+
+@pytest.mark.requires_cluster
+def test_memory_store_loads_and_serves_through_actor_backend(integration_client, tmp_path):
+    dataset = Dataset.from_list(
+        [
+            ((0, "a"), "zero"),
+            ((1, "a"), "one"),
+        ]
+    )
+
+    with _store_context(integration_client, tmp_path) as context:
+        store = _load_store(context, dataset, hash_key=lambda key: key[0])
+        restored = cloudpickle.loads(cloudpickle.dumps(store))
+        first = context.execute(Dataset.from_list([(1, "a"), (0, "a")]).map(restored.get))
+        second = context.execute(Dataset.from_list([(0, "a"), (1, "a")]).map(restored.get))
+
+    assert first.results == ["one", "zero"]
+    assert second.results == ["zero", "one"]
 
 
 def test_memory_store_retries_only_actor_unavailability():
@@ -241,12 +324,59 @@ def test_memory_store_requires_an_entered_owning_context(local_client, tmp_path)
 def test_context_shutdown_makes_store_unavailable(local_client, tmp_path):
     dataset = Dataset.from_list([((0, "a"), "value")])
 
-    with memory_store_context(local_client, tmp_path) as context:
+    with _store_context(local_client, tmp_path) as context:
         store = _load_store(context, dataset, name="shutdown", recovery_timeout=0.01)
         assert store.get((0, "a")) == "value"
 
     with pytest.raises(MemoryStoreUnavailable):
         store.get((0, "a"))
+
+
+@pytest.mark.requires_cluster
+def test_memory_store_recovers_partition_after_iris_preemption(iris_integration_client, tmp_path):
+    gate_reload = SentinelFile(str(tmp_path / "gate-reload"))
+    reload_started = SentinelFile(str(tmp_path / "reload-started"))
+    release_reload = SentinelFile(str(tmp_path / "release-reload"))
+
+    def delay_reload(item):
+        if gate_reload.is_set():
+            reload_started.signal()
+            release_reload.wait(timeout=Duration.from_seconds(15))
+        return item
+
+    dataset = Dataset.from_list([((0, "a"), "zero"), ((1, "a"), "one")]).map(delay_reload)
+
+    with _store_context(iris_integration_client, tmp_path) as context:
+        store = _load_store(context, dataset, hash_key=lambda key: key[0], recovery_timeout=15)
+        task_id = _worker_task_id(context, 0)
+        task = _current_task(_iris_client(), task_id)
+        initial_attempt = _current_attempt(task)
+        gate_reload.signal()
+
+        task.retry(idempotency_key="memory-store-recovery")
+
+        restarted = ExponentialBackoff(initial=0.1, maximum=1).wait_until(
+            lambda: _current_attempt(task).attempt_number > initial_attempt.attempt_number,
+            timeout=Duration.from_seconds(15),
+        )
+        assert restarted
+
+        lookup_started = threading.Event()
+
+        def lookup_during_reload():
+            lookup_started.set()
+            return store.get((0, "a"))
+
+        caller_context = contextvars.copy_context()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            lookup = executor.submit(caller_context.run, lookup_during_reload)
+            try:
+                assert lookup_started.wait(timeout=5)
+                reload_started.wait(timeout=Duration.from_seconds(15))
+                assert not lookup.done()
+            finally:
+                release_reload.signal()
+            assert lookup.result(timeout=30) == "zero"
 
 
 def test_memory_store_rejects_pipeline_with_shuffle(local_client, tmp_path):
@@ -256,7 +386,7 @@ def test_memory_store_rejects_pipeline_with_shuffle(local_client, tmp_path):
         num_output_shards=1,
     )
 
-    with memory_store_context(local_client, tmp_path) as context:
+    with _store_context(local_client, tmp_path) as context:
         with pytest.raises(ValueError):
             _load_store(context, dataset, name="shuffled")
 

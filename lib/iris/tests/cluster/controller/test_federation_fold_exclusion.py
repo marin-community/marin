@@ -16,14 +16,18 @@ this is a behavior-preserving refactor; the tests inject the rows the future
 sync will write and pin the boundary now.
 """
 
-from iris.cluster.controller import reads
-from iris.cluster.controller.reads import TaskScope
-from iris.cluster.controller.reconcile import dispatch
-from iris.cluster.controller.reconcile.loader import load_closed_snapshot
+from iris.cluster.controller.persistence import reads
+from iris.cluster.controller.persistence.reads import TaskScope
+from iris.cluster.controller.persistence.reconcile import dispatch
+from iris.cluster.controller.persistence.reconcile.loader import load_closed_snapshot
+from iris.cluster.controller.persistence.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.reconcile.policy import NON_TERMINAL_TASK_STATES
-from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
-from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
+from iris.cluster.types import (
+    LOCAL_CLUSTER,
+)
+from iris.resources.names import JobName
+from iris.resources.state import TERMINAL_JOB_STATES
 from iris.rpc import job_pb2
 from iris.testing.controller import make_worker_metadata, query_tasks_for_job, register_worker, submit_direct_job
 from rigging.timing import Timestamp
@@ -81,8 +85,8 @@ def test_federated_pending_task_is_not_routed_or_dispatched(state):
     with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur)
     dispatched = {r.task_id for r in batch.tasks_to_run}
-    assert local_task.to_wire() in dispatched
-    assert dispatched.isdisjoint({t.to_wire() for t in fed_tasks})
+    assert local_task in dispatched
+    assert dispatched.isdisjoint(fed_tasks)
     # The RUNNING federated task must not enter the poll/redrive set either.
     running_ids = {e.task_id for e in batch.running_tasks}
     assert running_ids.isdisjoint(fed_tasks)
