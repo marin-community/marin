@@ -2141,3 +2141,35 @@ Experiment ID prefix: `MEP`.
   fewer multi-device Mosaic launches per layer (the shelved fused2 arc)
   or a persistent-semaphore protocol that lets JAX drop the barrier;
   (2) grouped-vs-dense GEMM gap 0.64 s/step; (3) fp8 dispatch wire.
+
+### 2026-08-20 18:55 - MEP-084: expand-fix arms — gap 1.21 -> 0.34 s/it; and the tqdm meter was hiding half of it
+- METER CORRECTION. Every earlier entry quoted tqdm_loggable's `rate:` field,
+  which is a smoothed estimate. On tonight's pair it reads 17.2 s/it for BOTH
+  arms while the raw `elapsed` stamps differ by 0.47 s/it. All arms are
+  re-read below with an unsmoothed window, (elapsed@25 - elapsed@10)/15
+  (scratchpad late_window.py). Historical `rate:`-based numbers in MEP-076..082
+  are NOT comparable to these; the direction of every past conclusion holds but
+  the magnitudes were compressed.
+- Arms, unsmoothed late window, drops at it25:
+  | night | arm | s/it | drops |
+  | 08-18 | control (main as-pinned 954a5251a2) | 16.67 | 2.33% |
+  | 08-18 | cf 1.05 tuned, no fix | 17.88 (it9->25) | 0.80% |
+  | 08-20 | control (same pin) | 17.13 | 2.40% |
+  | 08-20 | cf 1.05 + expand fix (e2) | 17.33 | 0.60% |
+  | 08-20 | cf 1.05 + expand fix (e4) | 17.60 | 0.65% |
+- Same-night paired gap: 08-18 +1.21 s/it (+7.3%); 08-20 +0.34 s/it mean of
+  two treatment draws vs the one control draw (+2.0%). The keep-mask gather
+  VJP (1912d25067) is worth ~0.9 s/it at the rack — the largest single win of
+  the campaign, and roughly a third of what the one-tray bench projected
+  (-24.5 ms/layer = -1.18 s/step), so the tray proxy overstates.
+- Cross-night placement is confirmed real and large: the same control binary
+  drew 16.67 on the 18th and 17.13 on the 20th (+2.8%). Only same-night pairs
+  are admissible.
+- Within-run variance is also large — tonight's control ran 4-iteration
+  windows from 15.5 to 18.0 s/it — so each number carries roughly +-0.3 s/it.
+  Parity is NOT established: ~2% remains, of the same order as the error bar.
+- GATE STATUS: drops significantly lower — MET (0.60-0.65% vs 2.33-2.40%,
+  3.6-4x). Raw parity — NOT met, ~2% gap on the honest meter, down from 7.3%.
+- Next: the MultiGpuBarrier lever (MEP-083, 0.80 s/step = 4.7% of the step) is
+  larger than the remaining gap. Chase that before spending more rack on
+  replication.
