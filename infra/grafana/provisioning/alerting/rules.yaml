@@ -14,6 +14,10 @@
 # error), so paging on them would be noise.
 apiVersion: 1
 
+deleteRules:
+  - orgId: 1
+    uid: infra-probe-failed
+
 groups:
   - orgId: 1
     name: k8s-control-plane
@@ -524,68 +528,6 @@ groups:
               expression: A
               conditions:
                 - evaluator: { type: gt, params: [0] }
-
-  # The canary writes one probe_up row per check and target. Read the newest row
-  # from the last two cadences. NoData covers a stopped probe daemon or a broken
-  # metrics path; a zero covers a completed check that failed.
-  - orgId: 1
-    name: infra-probes
-    folder: Alerts
-    interval: 1m
-    rules:
-      - uid: infra-probe-failed
-        title: InfraProbeFailed
-        condition: C
-        for: 5m
-        noDataState: Alerting
-        execErrState: Alerting
-        labels:
-          severity: warning
-        annotations:
-          summary: "{{ $labels.probe }}: infrastructure probe failing for {{ $labels.target }}"
-          runbook_url: https://github.com/marin-community/marin/blob/main/infra/probes/README.md
-        data:
-          - refId: A
-            relativeTimeRange: { from: 3600, to: 0 }
-            datasourceUid: finelog-marin
-            model:
-              refId: A
-              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
-              type: json
-              source: url
-              parser: backend
-              format: table
-              url: /query
-              url_options:
-                method: GET
-                params:
-                  - key: sql
-                    value: >-
-                      WITH recent AS (
-                        SELECT labels, value,
-                               ROW_NUMBER() OVER (PARTITION BY labels ORDER BY collected_at DESC) AS row_num
-                        FROM "infra.canary.metrics"
-                        WHERE metric = 'probe_up'
-                          AND collected_at >= CURRENT_TIMESTAMP - INTERVAL '60 minutes'
-                      )
-                      SELECT json_get(labels, 'probe') AS probe,
-                             COALESCE(json_get(labels, 'cluster'), json_get(labels, 'zone'), 'global') AS target,
-                             value
-                      FROM recent
-                      WHERE row_num = 1
-              columns:
-                - { selector: probe, text: probe, type: string }
-                - { selector: target, text: target, type: string }
-                - { selector: value, text: value, type: number }
-          - refId: C
-            datasourceUid: __expr__
-            model:
-              refId: C
-              datasource: { type: __expr__, uid: __expr__ }
-              type: threshold
-              expression: A
-              conditions:
-                - evaluator: { type: lt, params: [1] }
 
   # Hero-run stalled-training detection. A fresh running task-state row whose
   # root is named hero-*-coord enrolls the job. Structured run_id telemetry

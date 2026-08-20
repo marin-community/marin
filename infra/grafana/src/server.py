@@ -26,7 +26,6 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /github/builds                           recent main commits with CI rollup state
     GET /github/nightlies                        7-day nightly-lane matrix (one row per lane/day)
     GET /wandb/{chart}                           sampled public hero-report series by chart key
-    GET /overview/provisioning                   latest fleet and resource-pool provisioning cycle
     GET /k8s/control_plane                       watched components + webhook endpoints, all clusters
     GET /k8s/crashloops                          containers in backoff waiting states
     GET /k8s/pending                             Pending / SchedulingGated pods with age
@@ -66,7 +65,7 @@ import json
 import logging
 from collections.abc import Mapping
 from dataclasses import asdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pyarrow as pa
 import uvicorn
@@ -96,7 +95,6 @@ from loom_alerts import (
     SlackAnnouncementError,
 )
 from nightly_config import NIGHTLY_LANES
-from overview import PROVISIONING_LOOKBACK_HOURS, provisioning_query, provisioning_rows
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -118,8 +116,8 @@ logger = logging.getLogger(__name__)
 FROM_MACRO = "{{from}}"
 TO_MACRO = "{{to}}"
 
-# infra/probes writes its label set as a JSON object string. The bridge expands
-# it into columns under this prefix so a panel can select one as a series.
+# EAV metrics store labels as a JSON object string. The bridge expands it into
+# columns under this prefix so a panel can select one as a series.
 LABELS_COLUMN = "labels"
 LABEL_PREFIX = "label_"
 _K8S_TERMINATION_CANDIDATES_CACHE_KEY = "termination_candidates"
@@ -198,8 +196,8 @@ def _json_safe(value: object) -> object:
 def _labels_as_dict(raw: object) -> dict | None:
     """Coerce a labels cell to a ``{key: value}`` dict, or None if it isn't one.
 
-    Handles both label encodings finelog serves: a JSON-string column (the probes
-    EAV convention) and a native ``Map<Utf8,Utf8>`` column, which arrives from
+    Handles both label encodings finelog serves: a JSON-string EAV column and a
+    native ``Map<Utf8,Utf8>`` column, which arrives from
     ``Table.to_pylist()`` as a ``list[(key, value)]`` (or a dict).
     """
     if isinstance(raw, dict):
@@ -533,23 +531,6 @@ def create_app(
         except UpstreamError as err:
             return JSONResponse({"error": str(err), "source": err.source}, status_code=err.status_code)
 
-    def overview_provisioning(_: Request) -> JSONResponse:
-        try:
-            now = datetime.now(UTC)
-
-            def run() -> list[dict]:
-                source = finelog_sources[_target_for(_FINELOG_HUB_CLUSTER, finelog_sources).name]
-                cutoff = now - timedelta(hours=PROVISIONING_LOOKBACK_HOURS)
-                table = source.query(provisioning_query(cutoff), max_rows=config.max_rows)
-                return [asdict(row) for row in provisioning_rows(rows_to_json(table))]
-
-            key = ("overview_provisioning", _bucket(now, config.cache_ttl))
-            return JSONResponse(finelog_cache.get_or_compute(key, run))
-        except _BadRequest as err:
-            return JSONResponse({"error": str(err)}, status_code=400)
-        except QueryResultTooLargeError as err:
-            return JSONResponse({"error": f"{err}; reduce the provisioning lookback"}, status_code=400)
-
     def k8s_endpoint(key: str, run) -> JSONResponse:
         # Per-cluster failures are labeled rows inside the response; only a bridge
         # bug raises here, and Starlette turns that into a 500.
@@ -701,7 +682,6 @@ def create_app(
             Route("/github/builds", github_builds),
             Route("/github/nightlies", github_nightlies),
             Route("/wandb/{chart}", wandb_chart),
-            Route("/overview/provisioning", overview_provisioning),
             Route("/finelog/{cluster}/query", query),
             Route("/finelog/{cluster}/v1/vllm/overview", vllm_overview),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),

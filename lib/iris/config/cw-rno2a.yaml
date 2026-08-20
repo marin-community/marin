@@ -103,12 +103,10 @@ auth:
       MCowBQYDK2VwAyEA42ziFTlGKgaA/fQ1wJCONKOml7rx5Y8UAQqVLTCtrCo=
       -----END PUBLIC KEY-----
   # *@openathena.ai covers human operators. Machine submitters are admitted
-  # explicitly: github-iris runs CI workloads, while infra-probes submits the
-  # tiny scheduling canary through the marin hub.
+  # explicitly; github-iris runs CI workloads through the marin hub.
   allowed_submitters:
     - "*@openathena.ai"
     - github-iris@hai-gcp-models.iam.gserviceaccount.com
-    - infra-probes@hai-gcp-models.iam.gserviceaccount.com
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
 
 kubernetes_provider:

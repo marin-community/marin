@@ -105,64 +105,6 @@ def _wandb(chart: str) -> list[dict]:
     return rows
 
 
-def _provisioning() -> list[dict]:
-    common = {
-        "collected_at": round(_NOW.timestamp() * 1000),
-        "pools_placing": 0,
-        "pools_no_ready_outcome": 0,
-        "latency_p95_seconds": None,
-        "window_hours": None,
-    }
-    return [
-        {
-            **common,
-            "scope": "fleet",
-            "resource_type": "",
-            "scale_group": "",
-            "zone": "",
-            "ready": 18,
-            "stockout": 3,
-            "error": 1,
-            "preempted": 2,
-            "outcomes": 22,
-            "success_ratio": 18 / 22,
-            "pools_placing": 5,
-            "pools_no_ready_outcome": 1,
-            "latency_p50_seconds": 48,
-            "latency_p95_seconds": 132,
-            "window_hours": 3,
-        },
-        {
-            **common,
-            "scope": "pool",
-            "resource_type": "v5p-8",
-            "scale_group": "reserved",
-            "zone": "us-east5-a",
-            "ready": 6,
-            "stockout": 1,
-            "error": 0,
-            "preempted": 1,
-            "outcomes": 7,
-            "success_ratio": 6 / 7,
-            "latency_p50_seconds": 42,
-        },
-        {
-            **common,
-            "scope": "pool",
-            "resource_type": "h100-8",
-            "scale_group": "gpu",
-            "zone": "cw-us-east-08a",
-            "ready": 4,
-            "stockout": 2,
-            "error": 1,
-            "preempted": 1,
-            "outcomes": 7,
-            "success_ratio": 4 / 7,
-            "latency_p50_seconds": 65,
-        },
-    ]
-
-
 def _finelog(query: str) -> list[dict]:
     sql = parse_qs(query).get("sql", [""])[0]
     if 'FROM "iris.task"' in sql:
@@ -221,51 +163,6 @@ def _finelog(query: str) -> list[dict]:
             }
             for node, metrics in values.items()
             for name, value in metrics.items()
-        ]
-    if "probe_latency_ms" in sql and "ROW_NUMBER" not in sql:
-        return [
-            {
-                "t": round((_NOW - timedelta(minutes=5 * index)).timestamp() * 1000),
-                "label_probe": probe,
-                "value": 22 + index % 8,
-            }
-            for probe in ("iris", "finelog", "kueue")
-            for index in range(24)
-        ]
-    if "probe_up" in sql and "metric IN" not in sql:
-        return [{"value": 1}, {"value": 1}, {"value": 1}]
-    if "metric IN" in sql and "provision_success_ratio" not in sql:
-        return [
-            {"probe": probe, "metric": metric, "value": value}
-            for probe in ("iris", "finelog", "kueue")
-            for metric, value in (("probe_up", 1), ("probe_latency_ms", 24))
-        ]
-    if "worker_healthy" in sql:
-        return [
-            {
-                "t": round((_NOW - timedelta(minutes=10 * index)).timestamp() * 1000),
-                "label_region": region,
-                "value": base + index % 3,
-            }
-            for region, base in (("us-east5", 84), ("us-central2", 51), ("cw-us-east", 37))
-            for index in range(24)
-        ]
-    if "provision_success_ratio" in sql:
-        return [
-            {
-                "t": round((_NOW - timedelta(minutes=10 * index)).timestamp() * 1000),
-                "series": series,
-                "value": base + (index % 4) * 0.008,
-            }
-            for series, base in (
-                ("fleet", 0.81),
-                ("europe-west4", 0.72),
-                ("us-central1", 0.94),
-                ("us-east1", 0.78),
-                ("us-east5", 0.86),
-                ("us-west4", 0.75),
-            )
-            for index in range(24)
         ]
     return []
 
@@ -351,8 +248,6 @@ def _rows(path: str, query: str) -> list[dict] | dict:
                 )
             )
         ]
-    if path == "/overview/provisioning":
-        return _provisioning()
     if path == "/iris/marin/health":
         return [{"reachable": True, "up": 1, "latency_ms": 18}]
     if path == "/iris/marin/peers":

@@ -1222,7 +1222,6 @@ project_grants:
   - serviceAccount:github-actions-logging@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/logging.logWriter
   members:
-  - serviceAccount:infra-probes@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:instance-deleter@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:iris-controller@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:iris-worker@hai-gcp-models.iam.gserviceaccount.com
@@ -1656,12 +1655,6 @@ artifact_repositories:
   - role: roles/artifactregistry.reader
     members:
     - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
-- location: us-central1
-  repository: marin
-  grants:
-  - role: roles/artifactregistry.reader
-    members:
-    - serviceAccount:infra-probes@hai-gcp-models.iam.gserviceaccount.com
 - location: us-central1
   repository: marin-evaldash
   grants:
