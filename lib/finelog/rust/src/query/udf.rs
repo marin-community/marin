@@ -2,8 +2,8 @@
 //!
 //! DataFusion lacks functions the finelog query corpus + FetchLogs rely on;
 //! register Rust equivalents. Three match DuckDB predicate semantics; the
-//! `json_*` family extracts values from a JSON-string column (e.g. infra/probes'
-//! `labels`, and any EAV label set) so they are first-class in SQL — filterable
+//! `json_*` family extracts values from a JSON-string column (e.g. an EAV label
+//! set) so they are first-class in SQL — filterable
 //! and groupable — instead of forcing raw-string `regexp_matches`/`contains`
 //! workarounds:
 //!

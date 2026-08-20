@@ -8,7 +8,7 @@ Grafana, which is the most expensive place to find out."""
 
 import re
 from pathlib import Path
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlsplit
 
 import pyarrow as pa
 import yaml
@@ -16,7 +16,6 @@ from config import CLUSTERS, K8S_CLUSTERS, ClusterTarget
 from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
 from dashboard_stitch import stitch_all
 from finelog_health import FinelogHealth, FinelogRole
-from fixture_bridge import _finelog
 from github_source import GithubSource
 from k8s_source import K8sFleet
 from server import create_app
@@ -138,8 +137,6 @@ class _FakeFinelog:
         )
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
-        if '"infra.canary.metrics"' in sql:
-            return pa.table({"probe": ["controller-ping"], "target": ["marin"], "value": [1]})
         if '"storage.usage"' in sql:
             if "AS detail" in sql:
                 return pa.table(
@@ -528,67 +525,10 @@ def test_status_page_has_each_required_source():
         "N": "/github/nightlies",
         "G": "/github/builds",
         "W": "/iris/marin/workers",
-        "P": "/overview/provisioning",
-        "H": "/finelog/marin/query",
-        "R": "/finelog/marin/query",
         "T": "/wandb/train-loss",
         "L": "/wandb/paloma-macro-loss",
         "M": "/wandb/mfu",
     }
-
-
-def test_status_page_queries_provisioning_snapshot_and_region_history():
-    dashboard = _stitched_dashboards()["infra.json"]
-    (panel,) = dashboard["panels"]
-    targets = {target["refId"]: target for target in panel["targets"]}
-
-    assert panel["type"] == "marin-infra-panel"
-    assert panel["options"]["view"] == "status"
-    assert targets["P"]["url"] == "/overview/provisioning"
-    snapshot_columns = {column["selector"] for column in targets["P"]["columns"]}
-    assert {
-        "scope",
-        "ready",
-        "stockout",
-        "error",
-        "preempted",
-        "outcomes",
-        "success_ratio",
-        "pools_placing",
-        "pools_no_ready_outcome",
-    } <= snapshot_columns
-
-    target = targets["R"]
-    columns = {column["selector"]: column for column in target["columns"]}
-    assert columns["series"] == {"selector": "series", "text": "region", "type": "string"}
-    assert columns["value"]["type"] == "number"
-
-    sql = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
-    assert "metric = 'provision_success_ratio'" in sql
-    assert "metric IN ('provision_ready', 'provision_outcomes')" in sql
-    assert "regexp_matches(json_get(labels, 'zone'), '^[a-z]+-[a-z]+[0-9]+-[a-z]$')" in sql
-    assert "ELSE json_get(labels, 'zone') END AS series" in sql
-    assert "ready / NULLIF(outcomes, 0)" in sql
-
-
-def test_provisioning_render_fixture_routes_metric_query_to_region_series():
-    dashboard = _stitched_dashboards()["infra.json"]
-    (panel,) = dashboard["panels"]
-    (target,) = [target for target in panel["targets"] if target["refId"] == "R"]
-    sql = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
-
-    rows = _finelog(urlencode({"sql": sql}))
-
-    assert rows
-    assert {row["series"] for row in rows} == {
-        "fleet",
-        "europe-west4",
-        "us-central1",
-        "us-east1",
-        "us-east5",
-        "us-west4",
-    }
-    assert all({"t", "series", "value"} <= row.keys() for row in rows)
 
 
 def test_stat_panels_use_grafana_reduce_options_schema():
