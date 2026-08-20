@@ -11,7 +11,12 @@ bucket-qualified, scheme-stripped keys.
 import pytest
 
 from experiments.datakit import zephyr_benchmark
-from experiments.datakit.zephyr_benchmark import _resolve_sources, _select_source_fraction, _source_shard_stats
+from experiments.datakit.zephyr_benchmark import (
+    SourceShardStats,
+    _resolve_sources,
+    _select_source_fraction,
+    _source_shard_stats,
+)
 
 _SAMPLE_PREFIX = "gs://marin-test/sample_100b"
 _ROOT_KEY = "marin-test/sample_100b"
@@ -45,8 +50,8 @@ def test_source_shard_stats_groups_parquet_by_source(monkeypatch):
     )
 
     assert _source_shard_stats(_SAMPLE_PREFIX) == {
-        "hplt_v3": (150, 2),
-        "cp/wikiteam": (500, 1),
+        "hplt_v3": SourceShardStats(150, 2),
+        "cp/wikiteam": SourceShardStats(500, 1),
     }
 
 
@@ -77,13 +82,17 @@ def test_source_shard_stats_requires_object_store_prefix():
 def test_select_source_fraction_prefers_shard_dense_sources():
     # 10000 bytes total; a 0.2 byte budget must land on the two 10-shard-per-
     # 1000-byte sources and skip the single-shard 8000-byte source entirely.
-    stats = {"sparse_huge": (8000, 1), "dense_small": (1000, 10), "dense_mid": (1000, 5)}
+    stats = {
+        "sparse_huge": SourceShardStats(8000, 1),
+        "dense_small": SourceShardStats(1000, 10),
+        "dense_mid": SourceShardStats(1000, 5),
+    }
 
     assert _select_source_fraction(stats, 0.2) == ["dense_small", "dense_mid"]
 
 
 def test_select_source_fraction_full_selects_every_source():
-    stats = {"a": (10, 1), "b": (30, 2)}
+    stats = {"a": SourceShardStats(10, 1), "b": SourceShardStats(30, 2)}
 
     assert _select_source_fraction(stats, 1.0) == ["a", "b"]
 
@@ -91,7 +100,7 @@ def test_select_source_fraction_full_selects_every_source():
 @pytest.mark.parametrize("fraction", [0.0, -0.5, 1.5])
 def test_select_source_fraction_rejects_out_of_range_fraction(fraction):
     with pytest.raises(ValueError, match="source-fraction"):
-        _select_source_fraction({"a": (10, 1)}, fraction)
+        _select_source_fraction({"a": SourceShardStats(10, 1)}, fraction)
 
 
 def test_resolve_sources_fraction_returns_selected_names(monkeypatch):
