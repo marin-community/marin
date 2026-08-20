@@ -81,6 +81,8 @@ def build_hero_run(
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
+    moe_implementation: str | None = None,
+    processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
     save_checkpoints: bool = False,
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
@@ -139,6 +141,7 @@ def build_hero_run(
             ("intermediate_dim", intermediate_dim),
             ("capacity_factor", capacity_factor),
             ("latent_dim", latent_dim),
+            ("moe_implementation", moe_implementation),
         )
         if value is not None
     }
@@ -153,13 +156,15 @@ def build_hero_run(
         raise ValueError(
             f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
         )
-    if model.moe_implementation != "fixed_pooled_wave_all_to_all":
-        raise AssertionError(f"unexpected hero MoE implementation: {model.moe_implementation}")
-    if model.pooled_transport_capacity_factor is None:
+    pooled = model.moe_implementation == "fixed_pooled_wave_all_to_all"
+    if pooled and model.pooled_transport_capacity_factor is None:
         raise AssertionError("the pooled-wave hero requires a transport capacity factor")
     backend_tag = model.moe_implementation.replace("_", "-")
     capacity_tag = f"capacity-{model.capacity_factor:g}"
-    transport_capacity_tag = f"transport-capacity-{model.pooled_transport_capacity_factor:g}"
+    # Only the pooled transport has a receiver capacity of its own to report.
+    transport_capacity_tags = (
+        (f"transport-capacity-{model.pooled_transport_capacity_factor:g}",) if pooled else ()
+    )
     wave_tag = f"expert-waves-{model.num_expert_waves}"
     size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
@@ -215,7 +220,7 @@ def build_hero_run(
                     "ep",
                     backend_tag,
                     capacity_tag,
-                    transport_capacity_tag,
+                    *transport_capacity_tags,
                     wave_tag,
                     size_tag,
                     "gb200",
@@ -261,7 +266,7 @@ def build_hero_run(
                 GrugEvalConfig(steps_per_eval=eval_every, eval_ema=False, compute_bpb=True) if eval_every > 0 else None
             ),
             stop_after_steps=num_steps,
-            processes_per_task=HERO_PROCESSES_PER_TASK,
+            processes_per_task=processes_per_task,
         )
 
     return ArtifactStep(
@@ -411,6 +416,18 @@ def build_hero_run(
     show_default=True,
     help="Override the pooled receiver capacity factor.",
 )
+@click.option(
+    "--moe-implementation",
+    default=None,
+    help="Override the MoE backend, e.g. ragged_all_to_all. Defaults to the hero spec.",
+)
+@click.option(
+    "--processes-per-task",
+    type=click.IntRange(min=1),
+    default=HERO_PROCESSES_PER_TASK,
+    show_default=True,
+    help="JAX processes per node. The ragged transport needs one process per GPU.",
+)
 @build_options
 def main(
     run_id: str,
@@ -433,6 +450,8 @@ def main(
     profile_steps: int,
     profile_start_step: int,
     training_data: str,
+    moe_implementation: str | None,
+    processes_per_task: int,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
         run_id=run_id,
@@ -455,6 +474,8 @@ def main(
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
         training_data_mode=TrainingDataMode(training_data),
+        moe_implementation=moe_implementation,
+        processes_per_task=processes_per_task,
     )
 
 
