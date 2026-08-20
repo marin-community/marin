@@ -9,7 +9,7 @@ author: rav
 
 ## Current TL;DR
 
-The cold phase is pending on Iris at production priority. It runs from `751f8ab088`, which descends directly from the #8480 merge commit. The reference production run remains active and is read-only for this test.
+The cold GPU child completed five steps and committed the step-5 checkpoint. Its coordinator then failed as planned. The restore-to-15 phase is pending at production priority. Both successful phases run from `891d7d8c60`, which descends from the #8480 merge commit. The reference production run remains read-only.
 
 ## Run Contract
 
@@ -24,12 +24,14 @@ The cold phase is pending on Iris at production priority. It runs from `751f8ab0
 - Raw trace / rendezvous / Ray spill: XProf disabled; tracker mirror and all run artifacts stay below the output root; Grug uses no Ray spill path.
 - Final step: Phase 1 stops at 5 and intentionally aborts its coordinator after the checkpoint commits. Phase 2 restores step 5 and stops at 15.
 - Hardware and topology: `cw-us-east-08a`; 16 tasks with four GB200 GPUs and four JAX ranks each; one NVL72 rack; 850 GiB host-memory request for each task.
-- Source: `751f8ab08829cc882929344b5b082996bd6461ee`, pushed to `origin/weaver/marin-test-iris-run`; parent `b3c5884a5c45d3bf3c84afd2d68eed1655447419` is the #8480 merge commit.
+- Source: `891d7d8c605af2a625b201180b82770799b70a45`, pushed to `origin/weaver/marin-test-iris-run`; ancestor `b3c5884a5c45d3bf3c84afd2d68eed1655447419` is the #8480 merge commit.
 - Babysitter: This session owns the monitor. Check once after 120 seconds, then every 570 seconds until each phase reaches its required terminal state.
 
 ## Launched Instances
 
-- Cold coordinator: [`/rav/hero-pr8480-1rack-resume-20260820-1914-cold`](https://iris.oa.dev/#/job/%2Frav%2Fhero-pr8480-1rack-resume-20260820-1914-cold), submitted at 2026-08-20 19:18 UTC with production priority.
+- Cancelled cold coordinator: [`/rav/hero-pr8480-1rack-resume-20260820-1914-cold`](https://iris.oa.dev/#/job/%2Frav%2Fhero-pr8480-1rack-resume-20260820-1914-cold), submitted at 2026-08-20 19:18 UTC with production priority.
+- Successful cold coordinator: [`/rav/hero-pr8480-1rack-resume-20260820-1914-cold-nowandb`](https://iris.oa.dev/#/job/%2Frav%2Fhero-pr8480-1rack-resume-20260820-1914-cold-nowandb), submitted at 2026-08-20 19:23 UTC with production priority.
+- Restore coordinator: [`/rav/hero-pr8480-1rack-resume-20260820-1914-resume`](https://iris.oa.dev/#/job/%2Frav%2Fhero-pr8480-1rack-resume-20260820-1914-resume), submitted at 2026-08-20 19:36 UTC with production priority.
 
 ## Event Log
 
@@ -54,3 +56,18 @@ The cold phase is pending on Iris at production priority. It runs from `751f8ab0
 - Status: Cancelled the coordinator and its descendants before any training step or checkpoint.
 - Evidence: Rank 0 failed in `wandb.init` with `No API key configured`; the other ranks waited in global tracker initialization.
 - Decision: Set the diagnostic's `WandbConfig.mode` to `disabled`, snapshot the change, and relaunch from the same isolated one-day path.
+
+### 2026-08-20 19:35 UTC - Cold phase completed and intentionally aborted
+
+- Status: The 16-task GPU child succeeded with zero failures or preemptions. The coordinator then raised the planned error after child completion.
+- Training: Five synthetic steps completed with finite loss; step 4 reported loss 11.8.
+- Checkpoint: Rank 0 logged `Saved checkpoint` for `<output root>/checkpoints/step-5` at 19:34:53 UTC. The serialized state was 4,993.38 GiB, about 78 GiB per rank.
+- Memory: Finelog's 30-second task samples ranged from 754,785 to 782,855 MiB at this point. The maximum was 764.5 GiB against an 850 GiB request. Serialization reported about 40 GiB of host memory in flight per rank.
+- Limitation: Local `fsutil` lacks CoreWeave credentials, so the commit marker and the next phase's successful load are the completeness evidence.
+
+### 2026-08-20 19:36 UTC - Restore phase submitted
+
+- Status: Pending on `cw-us-east-08a` at production priority.
+- Contract: Load the latest complete checkpoint from the same isolated prefix, start at step 5, run ten more synthetic steps, and stop at step 15.
+- Isolation: New coordinator job and JAX port 32649; W&B remains disabled.
+- Next: Verify the step-5 load, finite progress through step 15, final checkpoint commit, terminal success, and peak task memory.
