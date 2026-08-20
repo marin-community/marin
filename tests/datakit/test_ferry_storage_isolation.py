@@ -34,6 +34,5 @@ def test_nemotron_ferry_keeps_step_metadata_out_of_raw_storage(monkeypatch):
     assert all(step.output_path.startswith(output_root) for step in steps)
     assert all(not step.output_path.startswith(raw_root) for step in steps)
     assert _normalize_input(steps, datakit_nemotron_ferry, monkeypatch) == (
-        f"{raw_root}/{datakit_nemotron_ferry.NEMOTRON_DATA_SUBDIR}/"
-        f"{datakit_nemotron_ferry.NEMOTRON_QUALITY_DIR}"
+        f"{raw_root}/{datakit_nemotron_ferry.NEMOTRON_DATA_SUBDIR}/" f"{datakit_nemotron_ferry.NEMOTRON_QUALITY_DIR}"
     )
