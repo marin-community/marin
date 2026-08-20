@@ -9,6 +9,7 @@ from iris.cli.job import (
     build_job_constraints,
     build_resources,
     cancel,
+    complete,
     describe,
     run,
     wait,
@@ -509,9 +510,10 @@ def test_job_describe_cli_shows_active_backend_status(monkeypatch):
     assert 'Kueue: excluded: resource "memory": 32' in result.output
 
 
-class _CancelClusterClient:
+class _JobActionClusterClient:
     def __init__(self):
         self.cancelled: list[JobName] = []
+        self.completed: list[JobName] = []
 
     def list_jobs(self, *, query, **_kwargs):
         jobs = [
@@ -523,6 +525,9 @@ class _CancelClusterClient:
 
     def terminate_job(self, job_id):
         self.cancelled.append(job_id)
+
+    def complete_job(self, job_id):
+        self.completed.append(job_id)
 
 
 def test_job_cancel_combines_positional_and_csv_stdin_targets():
@@ -539,7 +544,7 @@ def test_job_cancel_combines_positional_and_csv_stdin_targets():
 
 
 def test_job_cancel_prefix_cancels_only_active_jobs(monkeypatch):
-    cluster = _CancelClusterClient()
+    cluster = _JobActionClusterClient()
     monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: IrisClient(cluster))
 
     result = CliRunner().invoke(
@@ -552,3 +557,17 @@ def test_job_cancel_prefix_cancels_only_active_jobs(monkeypatch):
     assert cluster.cancelled == [JobName.from_wire("/alice/running")]
     assert "/alice/running" in result.output
     assert "/alice/done" not in result.output
+
+
+def test_job_complete_targets_selected_job(monkeypatch):
+    cluster = _JobActionClusterClient()
+    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: IrisClient(cluster))
+
+    result = CliRunner().invoke(
+        complete,
+        ["/alice/running"],
+        obj={"controller_url": "http://controller.test", "config": None, "credentials": None},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert cluster.completed == [JobName.from_wire("/alice/running")]

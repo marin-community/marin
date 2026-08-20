@@ -1099,6 +1099,16 @@ def cancel(ctx, job_ids: tuple[str, ...], prefix: bool, stdin: bool, dry_run: bo
     _print_cancelled(_cancel_jobs(client, tuple(targets), prefix))
 
 
+@job.command("complete")
+@click.argument("job_id")
+@click.pass_context
+def complete(ctx: click.Context, job_id: str) -> None:
+    """Mark a Job and its unfinished descendants successful, then stop them."""
+    job_name = JobName.from_wire(job_id)
+    _remote_client(ctx).job(job_name).complete()
+    click.echo(f"Completed job: {job_name}")
+
+
 @job.command("list")
 @click.option("--state", type=str, default=None, help="Filter by state (e.g., running, pending, failed)")
 @click.option(

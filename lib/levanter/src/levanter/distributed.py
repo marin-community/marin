@@ -36,7 +36,7 @@ def _complete_iris_job_after_clean_exit(client: IrisClient, job_id: JobName) -> 
     # Preserve retries for genuine failures; the successful rank-0 exit owns completed-job teardown.
     if getattr(sys, "last_exc", None) is not None:
         return
-    client.complete(job_id)
+    client.complete_job(job_id)
 
 
 def _unregister_iris_job_completion() -> None:

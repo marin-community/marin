@@ -17,7 +17,7 @@ from levanter.distributed import _square_brace_expand
 
 def _run_with_iris_completion(marker: Path, outcome: str) -> None:
     class RecordingClient:
-        def complete(self, _job_id: JobName) -> None:
+        def complete_job(self, _job_id: JobName) -> None:
             marker.touch()
 
     distributed.get_job_info = lambda: JobInfo(task_id=JobName.from_wire("/test/training/0"))

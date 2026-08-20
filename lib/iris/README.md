@@ -353,6 +353,9 @@ iris --config cluster.yaml job wait /my-job
 # Cancel one or more Jobs
 iris --config cluster.yaml job cancel /my-job
 iris --config cluster.yaml job cancel --prefix /my-job-prefix
+
+# Explicitly record an active Job and its unfinished descendants as successful
+iris --config cluster.yaml job complete /my-job
 ```
 
 `iris process logs` is the low-level diagnostic view for a controller, worker,

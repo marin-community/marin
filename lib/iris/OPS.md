@@ -163,6 +163,7 @@ iris job run -- python train.py           # submit + stream logs
 iris job list --state running             # filter by state
 iris job logs /user/job-name -f           # follow job + child logs
 iris job cancel /user/job-name            # exact job name + its children
+iris job complete /user/job-name          # mark unfinished descendants successful, then stop them
 iris job cancel --prefix /user/job-prefix # all jobs with this ID prefix
 iris job describe /user/job-name          # per-task state, exit, duration, peak memory
 ```
@@ -171,7 +172,7 @@ The workload command hierarchy is:
 
 | Resource | Inspection | Actions |
 | --- | --- | --- |
-| Job | `list`, `describe`, `logs`, `wait` | `run`, `cancel` |
+| Job | `list`, `describe`, `logs`, `wait` | `run`, `cancel`, `complete` |
 | Task | `list`, `describe`, `events`, `logs`, `wait` | `exec`, `profile`, `preempt`, `fail` |
 | Attempt | `describe`, `events`, `logs`, `wait` | `profile`, `preempt`, `fail` |
 
@@ -327,6 +328,10 @@ one write transaction with the scheduler instead of racing it. Only tasks
 running on a worker (ASSIGNED / BUILDING / RUNNING) can be changed; pending or
 already-terminal tasks are rejected with a reason. `preempted` charges the
 preemption budget; `failed` is terminal with no retry.
+
+Use `job complete` only when the workload should be recorded as successful. It
+marks the Job and every unfinished Task and Attempt `SUCCEEDED`, then stops
+their runtimes. `job cancel` records the Job as `KILLED` instead.
 
 `task preempt`, `task fail`, and `job cancel` also read IDs from **stdin**
 (`--stdin`, or a literal `-` target) and take `--dry-run`. This is the

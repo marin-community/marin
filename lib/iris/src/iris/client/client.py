@@ -593,8 +593,8 @@ class Job:
         self._client.cancel_job(self._job_id)
 
     def complete(self) -> None:
-        """Complete this job successfully and stop its unfinished tasks."""
-        self._client._cluster_client.complete_job(self._job_id)
+        """Mark this Job and its unfinished descendants successful, then stop them."""
+        self._client.complete_job(self._job_id)
 
 
 # =============================================================================
@@ -1131,8 +1131,9 @@ class IrisClient:
         _require_job_name(job_id)
         self._cluster_client.terminate_job(job_id)
 
-    def complete(self, job_id: JobName) -> None:
-        """Complete a job successfully and stop its unfinished tasks."""
+    def complete_job(self, job_id: JobName) -> None:
+        """Mark a Job and its unfinished descendants successful, then stop them."""
+        _require_job_name(job_id)
         self._cluster_client.complete_job(job_id)
 
     def list_jobs(
