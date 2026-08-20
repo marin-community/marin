@@ -162,8 +162,10 @@ Copy the printed URI into `output_root`, choose two unused calendar versions, an
 ```bash
 run_id="<run-id>"
 output_root="<printed-marin-temp-bucket-uri>"
+output_root="${output_root%/}"
 checkpoint_root="${output_root}/checkpoints"
 cold_version="<YYYY.MM.DD.N>"
+schedule_steps=390251
 
 uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
   --target-cluster cw-us-east-08a --priority interactive \
@@ -172,7 +174,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
   -e MARIN_PREFIX "$output_root" -e WANDB_MODE disabled -e IRIS_PORT_JAX 32575 \
   -- python -m experiments.grug.moe_hero_ep.launch_mfu_test \
     --run-id "$run_id" --dp-racks 1 \
-    --num-steps 5 --schedule-steps 390251 \
+    --num-steps 5 --schedule-steps "$schedule_steps" \
     --training-data synthetic --save-checkpoints \
     --checkpoint-path "$checkpoint_root" \
     --version "$cold_version" --run
@@ -191,7 +193,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
   -e MARIN_PREFIX "$output_root" -e WANDB_MODE disabled -e IRIS_PORT_JAX 32576 \
   -- python -m experiments.grug.moe_hero_ep.launch_mfu_test \
     --run-id "$run_id" --dp-racks 1 \
-    --num-steps 15 --schedule-steps 390251 \
+    --num-steps 15 --schedule-steps "$schedule_steps" \
     --training-data synthetic --save-checkpoints \
     --checkpoint-path "$checkpoint_root" \
     --version "$resume_version" --run
