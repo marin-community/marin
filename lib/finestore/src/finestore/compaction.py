@@ -20,7 +20,7 @@ from pyarrow.fs import FSSpecHandler, PyFileSystem
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
 from finestore.layout import CommitToken, FineStoreLayout, Shard, SystemColumns
 from finestore.reader import ReadView, iter_shard_rows, merge_deduplicated_rows
-from finestore.shard_writer import ShardWriter, row_groups
+from finestore.shard_writer import ShardWriter, table_row_groups
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None 
     max_seq: int | None = None
     with ShardWriter(output_path, unified) as writer:
         arrow_rows = (pa.Table.from_pylist([row], schema=unified) for row in chain([first], survivors))
-        for batch in row_groups(arrow_rows):
+        for batch in table_row_groups(table, arrow_rows):
             writer.write_table(batch)
             sequences = [sequence or 0 for sequence in batch[SystemColumns.SEQUENCE].to_pylist()]
             min_seq = min(sequences) if min_seq is None else min(min_seq, *sequences)

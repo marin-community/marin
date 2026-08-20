@@ -357,6 +357,9 @@ def test_large_blob_uses_bounded_parts_without_migrating_inline_blobs(tmp_path):
         ("large", 0, OBJECT_PART_BYTES),
         ("large", 1, 1),
     ]
+    part_shards = view.list_shards(BlobTables.PARTS)
+    assert len(part_shards) == 1
+    assert pq.ParquetFile(part_shards[0].path).metadata.num_row_groups == 2
 
     manifest = json.loads(StoragePath(token.manifest_path).read_text())
     assert manifest["required_features"] == [CHUNKED_BLOBS_FEATURE]

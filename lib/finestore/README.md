@@ -80,11 +80,12 @@ need no migration.
 convenience API that returns a complete `bytes` value, while `open_blob` returns a
 forward-only binary file object for incremental reads. Chunk-count and declared-size
 validation completes when the stream reaches EOF; closing it early intentionally skips
-whole-object validation. Chunking bounds Arrow values, Parquet row groups, and the data
-materialized by a streaming reader. File-set materialization streams committed parts
-into the destination file to avoid another complete copy. A transaction's `max_bytes`
-limit still applies; `FineStoreDirectory` treats its byte limit as a multi-file batch
-target and admits one larger file.
+whole-object validation. Each part occupies its own Parquet row group, and blob scans
+request one row with one batch of readahead, so a streaming reader does not materialize
+all of an object's parts. File-set materialization streams committed parts into the
+destination file to avoid another complete copy. A transaction's `max_bytes` limit
+still applies; `FineStoreDirectory` treats its byte limit as a multi-file batch target
+and admits one larger file.
 
 Two adapters build cache behavior on this primitive:
 

@@ -9,7 +9,7 @@ import heapq
 import io
 import itertools
 from collections import defaultdict
-from collections.abc import Iterator, Sequence
+from collections.abc import Generator, Iterator, Sequence
 from dataclasses import dataclass
 from typing import BinaryIO, Protocol
 
@@ -36,6 +36,10 @@ from finestore.layout import (
 
 _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
 _STREAM_BATCH_ROWS = 16_384
+_STREAM_BATCH_READAHEAD = 16
+_STREAM_FRAGMENT_READAHEAD = 4
+_BLOB_STREAM_BATCH_ROWS = 1
+_BLOB_STREAM_READAHEAD = 1
 
 
 @dataclass(frozen=True)
@@ -64,8 +68,8 @@ class BlobCorruptionError(ValueError):
 class _BlobReader(io.RawIOBase):
     """Forward-only file interface over a sequence of bounded blob parts."""
 
-    def __init__(self, parts: Iterator[bytes]) -> None:
-        self._parts = parts
+    def __init__(self, parts: Generator[bytes, None, None]) -> None:
+        self._parts: Generator[bytes, None, None] | None = parts
         self._current = memoryview(b"")
 
     def readable(self) -> bool:
@@ -79,6 +83,7 @@ class _BlobReader(io.RawIOBase):
         while written < len(target):
             if not self._current:
                 try:
+                    assert self._parts is not None
                     self._current = memoryview(next(self._parts))
                 except StopIteration:
                     break
@@ -89,7 +94,9 @@ class _BlobReader(io.RawIOBase):
         return written
 
     def close(self) -> None:
-        self._parts = iter(())
+        if self._parts is not None:
+            self._parts.close()
+            self._parts = None
         self._current = memoryview(b"")
         super().close()
 
@@ -169,6 +176,9 @@ def iter_shard_rows(
     pa_fs: PyFileSystem,
     columns: list[str] | None = None,
     where: list[tuple[str, str, object]] | None = None,
+    batch_rows: int = _STREAM_BATCH_ROWS,
+    batch_readahead: int = _STREAM_BATCH_READAHEAD,
+    fragment_readahead: int = _STREAM_FRAGMENT_READAHEAD,
 ) -> Iterator[VersionedRow]:
     """Yield rows from one shard in primary-key order with version coordinates."""
     dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
@@ -177,12 +187,14 @@ def iter_shard_rows(
             columns=columns,
             filter=_build_filter(where),
             use_threads=False,
-            batch_size=_STREAM_BATCH_ROWS,
+            batch_size=batch_rows,
+            batch_readahead=batch_readahead,
+            fragment_readahead=fragment_readahead,
         ).to_batches()
     else:
         source = dataset.to_table(columns=columns, filter=_build_filter(where))
         sort_columns = [(name, "ascending") for name in primary_key if name in source.column_names]
-        batches = source.sort_by(sort_columns).to_batches(max_chunksize=_STREAM_BATCH_ROWS)
+        batches = source.sort_by(sort_columns).to_batches(max_chunksize=batch_rows)
     for batch in batches:
         for row in batch.to_pylist():
             commit_sequence = row.get(SystemColumns.COMMIT)
@@ -326,6 +338,25 @@ class _ReadOperations:
         where: list[tuple[str, str, object]] | None = None,
     ) -> Iterator[dict]:
         """Yield deduplicated rows from this view in primary-key order."""
+        return self._iter_rows(
+            table,
+            columns=columns,
+            where=where,
+            batch_rows=_STREAM_BATCH_ROWS,
+            batch_readahead=_STREAM_BATCH_READAHEAD,
+            fragment_readahead=_STREAM_FRAGMENT_READAHEAD,
+        )
+
+    def _iter_rows(
+        self,
+        table: str,
+        *,
+        columns: Sequence[str] | None,
+        where: list[tuple[str, str, object]] | None,
+        batch_rows: int,
+        batch_readahead: int,
+        fragment_readahead: int,
+    ) -> Iterator[dict]:
         plan = self._read_plan(table, columns, where)
         if plan is None:
             return
@@ -337,6 +368,9 @@ class _ReadOperations:
                 plan.filesystem,
                 plan.columns,
                 plan.pushdown_where,
+                batch_rows,
+                batch_readahead,
+                fragment_readahead,
             )
             for shard in plan.shards
         ]
@@ -382,7 +416,7 @@ class _ReadOperations:
             return None
         return io.BufferedReader(_BlobReader(self.blob_parts(name, row)))
 
-    def blob_parts(self, name: str, descriptor: dict) -> Iterator[bytes]:
+    def blob_parts(self, name: str, descriptor: dict) -> Generator[bytes, None, None]:
         """Yield a pinned descriptor's inline value or ordered chunked parts."""
         part_count = descriptor.get(BlobColumns.PART_COUNT)
         if part_count is None:
@@ -399,10 +433,13 @@ class _ReadOperations:
             raise BlobCorruptionError(f"blob {name!r} has invalid part count {part_count!r}")
         expected_part = 0
         total_bytes = 0
-        for row in self.iter_rows(
+        for row in self._iter_rows(
             BlobTables.PARTS,
             columns=[BlobColumns.PART, BlobColumns.DATA],
             where=[(BlobColumns.NAME, "==", name)],
+            batch_rows=_BLOB_STREAM_BATCH_ROWS,
+            batch_readahead=_BLOB_STREAM_READAHEAD,
+            fragment_readahead=_BLOB_STREAM_READAHEAD,
         ):
             part = row.get(BlobColumns.PART)
             if part is not None and part >= part_count:

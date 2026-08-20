@@ -36,7 +36,7 @@ from finestore.layout import (
 )
 from finestore.migrations import migrate_for_write
 from finestore.reader import ReadView
-from finestore.shard_writer import ROW_GROUP_TARGET_BYTES, ShardWriter, row_groups
+from finestore.shard_writer import ROW_GROUP_TARGET_BYTES, ShardWriter, table_row_groups
 
 logger = logging.getLogger(__name__)
 
@@ -618,7 +618,7 @@ class DataTable:
         schema = _drop_empty_struct_fields(schema)
         arrow_rows = (_align_arrow_row(row.table, schema) for row in rows)
         with ShardWriter(path, schema) as writer:
-            for group in row_groups(arrow_rows):
+            for group in table_row_groups(self.name, arrow_rows):
                 writer.write_table(group)
         written = writer.result
         return Shard(
