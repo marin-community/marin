@@ -6,7 +6,7 @@
 import click
 
 from iris.cli.connect import iris_client_for_ctx
-from iris.cli.logs import echo_log_entries, log_start, workload_log_options
+from iris.cli.logs import echo_workload_logs, workload_log_options
 from iris.cli.process_status import run_profile, workload_profile_options
 from iris.cli.targets import collect_resource_ids, workload_action_options
 from iris.cli.task import (
@@ -66,6 +66,7 @@ def attempt_logs(
     attempt_ref: str,
     since_ms: int | None,
     since_seconds: int | None,
+    follow: bool,
     max_lines: int,
     tail: bool,
     level: str | None,
@@ -74,14 +75,16 @@ def attempt_logs(
     """Read logs for one numbered Attempt."""
     ref = _attempt_ref(attempt_ref)
     with iris_client_for_ctx(ctx, workspace=None) as client:
-        entries = client.attempt(ref).logs(
-            start=log_start(since_ms, since_seconds),
+        echo_workload_logs(
+            client.attempt(ref),
+            since_ms=since_ms,
+            since_seconds=since_seconds,
+            follow=follow,
             max_lines=max_lines,
             tail=tail,
-            min_level=level.upper() if level else "",
+            level=level,
             substring=substring,
         )
-    echo_log_entries(entries)
 
 
 @attempt.command("wait")

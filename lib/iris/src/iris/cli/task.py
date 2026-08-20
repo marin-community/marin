@@ -23,7 +23,7 @@ from rigging.timing import Timestamp
 from tabulate import tabulate
 
 from iris.cli.connect import iris_client_for_ctx, require_controller_url, rpc_client_for_ctx
-from iris.cli.logs import echo_log_entries, log_start, workload_log_options
+from iris.cli.logs import echo_workload_logs, workload_log_options
 from iris.cli.process_status import run_profile, workload_profile_options
 from iris.cli.targets import collect_resource_ids, workload_action_options
 from iris.client.workload import (
@@ -371,6 +371,7 @@ def task_logs(
     task_id: str,
     since_ms: int | None,
     since_seconds: int | None,
+    follow: bool,
     max_lines: int,
     tail: bool,
     level: str | None,
@@ -381,14 +382,16 @@ def task_logs(
     if target.attempt_id is not None:
         raise click.UsageError("task logs accepts a Task ID; use `iris attempt logs` for one Attempt")
     with iris_client_for_ctx(ctx, workspace=None) as client:
-        entries = client.task(target.task_id).logs(
-            start=log_start(since_ms, since_seconds),
+        echo_workload_logs(
+            client.task(target.task_id),
+            since_ms=since_ms,
+            since_seconds=since_seconds,
+            follow=follow,
             max_lines=max_lines,
             tail=tail,
-            min_level=level.upper() if level else "",
+            level=level,
             substring=substring,
         )
-    echo_log_entries(entries)
 
 
 @task.command("wait")

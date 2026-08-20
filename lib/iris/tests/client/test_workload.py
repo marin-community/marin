@@ -62,6 +62,42 @@ class _WorkloadTransport:
         ]
 
 
+class _FollowTransport:
+    def __init__(self) -> None:
+        self.log_requests: list[tuple[str, int, int, bool]] = []
+
+    def get_job_states(self, job_ids: list[JobName]):
+        return {job_id.to_wire(): job_pb2.JOB_STATE_SUCCEEDED for job_id in job_ids}
+
+    def get_task_status(self, task_name: JobName, *, deadline=None):
+        task = job_pb2.TaskStatus(
+            task_id=task_name.to_wire(),
+            state=job_pb2.TASK_STATE_SUCCEEDED,
+            current_attempt_id=2,
+        )
+        task.attempts.add(
+            attempt_id=2,
+            attempt_uid="attempt-2",
+            state=job_pb2.TASK_STATE_SUCCEEDED,
+        )
+        return task
+
+    def fetch_logs(self, source: str, *, match_scope: int, cursor: int = 0, tail: bool = False, **_kwargs):
+        self.log_requests.append((source, match_scope, cursor, tail))
+        if cursor >= 2:
+            return logging_pb2.FetchLogsResponse(cursor=2)
+        sequence = cursor + 1
+        entry = logging_pb2.LogEntry(
+            timestamp=logging_pb2.Timestamp(epoch_ms=sequence * 1_000),
+            source="stdout",
+            data=f"line {sequence}",
+            attempt_id=2,
+            key="/alice/train/0:2",
+            seq=sequence,
+        )
+        return logging_pb2.FetchLogsResponse(entries=[entry], cursor=sequence)
+
+
 def _client(transport: _WorkloadTransport) -> IrisClient:
     return IrisClient(cast(ClusterClient, transport))
 
@@ -119,3 +155,30 @@ def test_submit_rejects_numeric_child_name_before_launching():
 
     with iris_ctx_scope(context), pytest.raises(ValueError, match="Nested Job name cannot be an integer"):
         client.submit(Entrypoint(command=["true"]), "123", ResourceSpec())
+
+
+@pytest.mark.parametrize(
+    ("resource", "source", "match_scope"),
+    [
+        ("job", "/alice/train/", logging_pb2.MATCH_SCOPE_PREFIX),
+        ("task", "/alice/train/0:", logging_pb2.MATCH_SCOPE_PREFIX),
+        ("attempt", "/alice/train/0:2", logging_pb2.MATCH_SCOPE_EXACT),
+    ],
+)
+def test_workload_log_following_drains_terminal_resource_without_replaying_entries(resource, source, match_scope):
+    transport = _FollowTransport()
+    client = IrisClient(cast(ClusterClient, transport))
+    handle = {
+        "job": client.job(JobName.from_wire("/alice/train")),
+        "task": client.task(JobName.from_wire("/alice/train/0")),
+        "attempt": client.attempt(TaskAttempt.from_wire("/alice/train/0:2")),
+    }[resource]
+
+    entries = list(handle.follow_logs(max_lines=1, tail=True, poll_interval=0.001))
+
+    assert [entry.data for entry in entries] == ["line 1", "line 2"]
+    assert transport.log_requests == [
+        (source, match_scope, 0, True),
+        (source, match_scope, 1, False),
+        (source, match_scope, 2, False),
+    ]

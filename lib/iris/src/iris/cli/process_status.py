@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""CLI commands for process status, logs, and profiling.
+"""Low-level CLI diagnostics for controller, worker, and task processes.
 
 Provides ``iris process <status|logs|profile>`` with ``--target`` to address
 a specific process by its RPC path (e.g. ``/system/worker/<id>`` for a worker,
@@ -64,7 +64,7 @@ def _print_status(resp: job_pb2.GetProcessStatusResponse, label: str) -> None:
 
 @click.group(name="process")
 def process_group():
-    """Process status, logs, and profiling for controller or workers."""
+    """Diagnose controller, worker, or task-runtime processes."""
 
 
 @process_group.command()
@@ -98,7 +98,7 @@ def status(ctx, target: str | None):
 @click.option("--substring", default="", help="Substring filter")
 @click.pass_context
 def logs(ctx, target: str | None, level: str, follow: bool, max_lines: int, substring: str):
-    """Show process logs."""
+    """Show runtime diagnostics; use job/task/attempt logs for workload output."""
     url = require_controller_url(ctx)
     source = target or _CONTROLLER_LOG_TARGET
     credentials = ctx.obj.get("credentials") if ctx.obj else None

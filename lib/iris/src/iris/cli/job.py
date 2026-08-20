@@ -26,7 +26,7 @@ from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
 from iris.cli.connect import iris_client_for_ctx, require_controller_url
-from iris.cli.logs import echo_log_entries, log_start, workload_log_options
+from iris.cli.logs import echo_workload_logs, workload_log_options
 from iris.cli.targets import collect_resource_ids
 from iris.client.client import IrisClient, JobFailedError
 from iris.client.workload import JobStatus, TaskStatus
@@ -1281,7 +1281,6 @@ def wait(ctx, job_id: str) -> None:
 
 @job.command("logs")
 @click.argument("job_id")
-@click.option("--follow", "-f", is_flag=True, help="Stream logs continuously.")
 @workload_log_options
 @click.pass_context
 def logs(
@@ -1295,30 +1294,16 @@ def logs(
     level: str | None,
     substring: str,
 ) -> None:
-    """Stream task logs for a job and its descendants using batch log fetching."""
+    """Read logs for a Job and its descendants."""
     client = _remote_client(ctx)
-    start = log_start(since_ms, since_seconds)
     job_name = JobName.from_wire(job_id)
-
-    min_level = level.upper() if level else ""
-
-    if follow:
-        job = client.job(job_name)
-        job.wait(
-            stream_logs=True,
-            timeout=float("inf"),
-            raise_on_failure=False,
-            since_ms=start.epoch_ms() if start is not None else 0,
-            min_level=min_level,
-            substring=substring,
-        )
-        return
-
-    entries = client.job(job_name).logs(
-        start=start,
+    echo_workload_logs(
+        client.job(job_name),
+        since_ms=since_ms,
+        since_seconds=since_seconds,
+        follow=follow,
         max_lines=max_lines,
         tail=tail,
-        min_level=min_level,
+        level=level,
         substring=substring,
     )
-    echo_log_entries(entries)

@@ -28,6 +28,7 @@ from typing import Protocol, TypeVar, cast
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from finelog.rpc import logging_pb2
 from rigging.credentials import ClientCredentials
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
@@ -119,6 +120,26 @@ def _task_id_from_key(key: str, fallback: JobName | None = None) -> JobName:
     if colon >= 0:
         return JobName.from_wire(key[:colon])
     return JobName.from_wire(key)
+
+
+def _task_log_entries(
+    entries: Sequence[logging_pb2.LogEntry],
+    target: JobName,
+    attempt_id: int,
+) -> list[TaskLogEntry]:
+    result = [
+        TaskLogEntry(
+            timestamp=timestamp_from_proto(entry.timestamp),
+            task_id=_task_id_from_key(entry.key, target if attempt_id >= 0 else None),
+            source=entry.source,
+            data=entry.data,
+            attempt_id=entry.attempt_id,
+            key=entry.key,
+        )
+        for entry in entries
+    ]
+    result.sort(key=lambda entry: entry.timestamp.epoch_ms())
+    return result
 
 
 def _require_job_name(job_id: JobName) -> JobName:
@@ -232,6 +253,31 @@ class Attempt:
             attempt_id=self._attempt_number,
         )
 
+    def follow_logs(
+        self,
+        *,
+        start: Timestamp | None = None,
+        max_lines: int = 0,
+        substring: str = "",
+        min_level: str = "",
+        tail: bool = False,
+        poll_interval: float = 1.0,
+    ) -> Generator[TaskLogEntry, None, None]:
+        """Yield new log entries until this Attempt finishes and its logs drain."""
+        return self._client._follow_logs(
+            self._task_name,
+            _LogQuery(
+                start=start,
+                max_lines=max_lines,
+                substring=substring,
+                min_level=min_level,
+                tail=tail,
+            ),
+            finished=lambda: self.status().state in TERMINAL_TASK_STATES,
+            attempt_id=self._attempt_number,
+            poll_interval=poll_interval,
+        )
+
     def wait(self, timeout: float = 300.0, poll_interval: float = 30.0) -> AttemptStatus:
         """Wait until this Attempt reaches a terminal state."""
         return _wait_for_status(
@@ -333,6 +379,30 @@ class Task:
                 min_level=min_level,
                 tail=tail,
             ),
+        )
+
+    def follow_logs(
+        self,
+        *,
+        start: Timestamp | None = None,
+        max_lines: int = 0,
+        substring: str = "",
+        min_level: str = "",
+        tail: bool = False,
+        poll_interval: float = 1.0,
+    ) -> Generator[TaskLogEntry, None, None]:
+        """Yield new log entries across Attempts until this Task finishes and its logs drain."""
+        return self._client._follow_logs(
+            self._task_name,
+            _LogQuery(
+                start=start,
+                max_lines=max_lines,
+                substring=substring,
+                min_level=min_level,
+                tail=tail,
+            ),
+            finished=lambda: self.status().state in TERMINAL_TASK_STATES,
+            poll_interval=poll_interval,
         )
 
     def wait(self, timeout: float = 300.0, poll_interval: float = 30.0) -> TaskStatus:
@@ -442,6 +512,30 @@ class Job:
                 min_level=min_level,
                 tail=tail,
             ),
+        )
+
+    def follow_logs(
+        self,
+        *,
+        start: Timestamp | None = None,
+        max_lines: int = 0,
+        substring: str = "",
+        min_level: str = "",
+        tail: bool = False,
+        poll_interval: float = 1.0,
+    ) -> Generator[TaskLogEntry, None, None]:
+        """Yield new log entries until this Job finishes and its logs drain."""
+        return self._client._follow_logs(
+            self._job_id,
+            _LogQuery(
+                start=start,
+                max_lines=max_lines,
+                substring=substring,
+                min_level=min_level,
+                tail=tail,
+            ),
+            finished=lambda: is_job_finished(self.state_only()),
+            poll_interval=poll_interval,
         )
 
     def wait(
@@ -1205,19 +1299,50 @@ class IrisClient:
             tail=query.tail,
         )
 
-        result = [
-            TaskLogEntry(
-                timestamp=timestamp_from_proto(e.timestamp),
-                task_id=_task_id_from_key(e.key, target if attempt_id >= 0 else None),
-                source=e.source,
-                data=e.data,
-                attempt_id=e.attempt_id,
-                key=e.key,
+        return _task_log_entries(response.entries, target, attempt_id)
+
+    def _follow_logs(
+        self,
+        target: JobName,
+        query: _LogQuery,
+        *,
+        finished: Callable[[], bool],
+        attempt_id: int = -1,
+        poll_interval: float,
+    ) -> Generator[TaskLogEntry, None, None]:
+        """Page logs forward until the selected resource is terminal and drained."""
+        if poll_interval <= 0:
+            raise ValueError("poll_interval must be positive")
+
+        source, match_scope = build_log_source(target, attempt_id)
+        cursor = 0
+        first_page = True
+        terminal = False
+
+        while True:
+            response = self._cluster_client.fetch_logs(
+                source,
+                match_scope=match_scope,
+                since_ms=query.start.epoch_ms() if query.start else 0,
+                cursor=cursor,
+                max_lines=query.max_lines,
+                substring=query.substring,
+                min_level=query.min_level,
+                tail=query.tail if first_page else False,
             )
-            for e in response.entries
-        ]
-        result.sort(key=lambda x: x.timestamp.epoch_ms())
-        return result
+            entries = _task_log_entries(response.entries, target, attempt_id)
+            yield from entries
+
+            if terminal and not entries:
+                return
+            if entries and response.cursor <= cursor:
+                raise RuntimeError(f"Log cursor did not advance past {cursor} for {source}")
+
+            cursor = max(cursor, response.cursor)
+            first_page = False
+            if not terminal:
+                terminal = finished()
+            Event().wait(poll_interval)
 
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the client and, in local mode, the controller.

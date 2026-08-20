@@ -175,6 +175,11 @@ The workload command hierarchy is:
 | Task | `list`, `describe`, `events`, `logs`, `wait` | `exec`, `profile`, `preempt`, `fail` |
 | Attempt | `describe`, `events`, `logs`, `wait` | `profile`, `preempt`, `fail` |
 
+All three workload `logs` commands accept the same filters and `--follow`. Use
+`job logs` for the aggregate, `task logs` across a Task's Attempts, and
+`attempt logs` for one numbered Attempt. `process logs` is reserved for
+controller, worker, and task-runtime diagnostics.
+
 Task actions without an attempt suffix target the current attempt. Attempt actions
 require `/user/job/task:attempt` and are accepted only while that attempt is still
 current. `exec` remains a Task action because its request identifies a Task rather

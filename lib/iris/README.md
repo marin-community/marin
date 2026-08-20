@@ -343,6 +343,10 @@ iris --config cluster.yaml job logs /my-job
 iris --config cluster.yaml job logs /my-job --follow
 iris --config cluster.yaml job logs /my-job --since-seconds 300
 
+# Narrow the same log view to one Task or numbered Attempt
+iris --config cluster.yaml task logs /my-job/0 --follow
+iris --config cluster.yaml attempt logs /my-job/0:2 --follow
+
 # Wait for an existing job; prints its terminal state and exits nonzero unless it succeeded
 iris --config cluster.yaml job wait /my-job
 
@@ -350,6 +354,10 @@ iris --config cluster.yaml job wait /my-job
 iris --config cluster.yaml job cancel /my-job
 iris --config cluster.yaml job cancel --prefix /my-job-prefix
 ```
+
+`iris process logs` is the low-level diagnostic view for a controller, worker,
+or task-runtime process. Workload output is always under `job logs`, `task logs`,
+or `attempt logs`.
 
 ## Smoke Test
 
