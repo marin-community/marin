@@ -16,6 +16,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/marin/fleet_health              hub query health + k8s mirror readiness
     GET /finelog/marin/alerts/fleet_health       alert rows: server labels + value(0|1)
     GET /finelog/marin/alerts/training_stalls    active jobs + stalled-progress value(0|1)
+    GET /finelog/marin/alerts/loss_spikes        active hero runs + loss-spike value(0|1)
     GET /finelog/marin/alerts/zephyr_stalls      active pipelines + stalled-progress value(0|1)
     GET /iris/{cluster}/jobs                     root-job counts by state (in-flight + 24h terminal)
     GET /iris/{cluster}/workers                  healthy worker counts + resource totals per region
@@ -85,6 +86,7 @@ from finelog_health import FinelogHealth
 from finelog_source import FinelogSource, MetricSource
 from github_app import GithubAppAuth
 from github_source import GithubSource
+from hero_runs import HeroRun, active_hero_runs, task_state_query
 from iris_source import IrisSource
 from k8s_source import K8sFleet, K8sSource
 from loom_alerts import (
@@ -94,12 +96,13 @@ from loom_alerts import (
     SlackAlertClient,
     SlackAnnouncementError,
 )
+from loss_spikes import loss_spike_alert_rows, loss_window_query
 from nightly_config import NIGHTLY_LANES
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
-from training_stalls import active_hero_runs, task_state_query, telemetry_query, training_stall_alert_rows
+from training_stalls import telemetry_query, training_stall_alert_rows
 from vllm_observability import (
     VLLM_MAX_RESULT_ROWS,
     VLLM_OVERVIEW_SECTIONS,
@@ -437,43 +440,57 @@ def create_app(
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
 
-    def finelog_alerts_training_stalls(_: Request) -> JSONResponse:
+    def hero_runs(target: ClusterTarget, now: datetime) -> tuple[HeroRun, ...]:
+        """Enrolled hero roots, computed once per TTL for every hero alert route."""
+        key = ("hero_runs", _bucket(now, config.cache_ttl))
+        source = finelog_sources[target.name]
+        return finelog_cache.get_or_compute(
+            key,
+            lambda: active_hero_runs(source.query(task_state_query(now), max_rows=config.max_rows)),
+        )
+
+    def finelog_alert_endpoint(name: str, project) -> JSONResponse:
+        """Serve one finelog-backed alert projection under the hub's cache and error contract."""
         try:
             target = _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
             now = datetime.now(UTC)
-
-            def run() -> list[dict]:
-                source = finelog_sources[target.name]
-                task_states = source.query(task_state_query(now), max_rows=config.max_rows)
-                runs = active_hero_runs(task_states)
-                telemetry_metrics = (
-                    source.query(telemetry_query(now, runs), max_rows=config.max_rows) if runs else pa.table({})
-                )
-                return training_stall_alert_rows(task_states, telemetry_metrics, now)
-
-            key = ("training_stalls", _bucket(now, config.cache_ttl))
-            return JSONResponse(finelog_cache.get_or_compute(key, run))
+            key = (name, _bucket(now, config.cache_ttl))
+            return JSONResponse(finelog_cache.get_or_compute(key, lambda: project(target, now)))
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
         except QueryResultTooLargeError as err:
             return JSONResponse({"error": f"{err}; reduce the alert query lookback"}, status_code=400)
+
+    def finelog_alerts_training_stalls(_: Request) -> JSONResponse:
+        def project(target: ClusterTarget, now: datetime) -> list[dict]:
+            runs = hero_runs(target, now)
+            telemetry_metrics = (
+                finelog_sources[target.name].query(telemetry_query(now, runs), max_rows=config.max_rows)
+                if runs
+                else pa.table({})
+            )
+            return training_stall_alert_rows(runs, telemetry_metrics, now)
+
+        return finelog_alert_endpoint("training_stalls", project)
+
+    def finelog_alerts_loss_spikes(_: Request) -> JSONResponse:
+        def project(target: ClusterTarget, now: datetime) -> list[dict]:
+            runs = hero_runs(target, now)
+            loss_windows = (
+                finelog_sources[target.name].query(loss_window_query(now, runs), max_rows=config.max_rows)
+                if runs
+                else pa.table({})
+            )
+            return loss_spike_alert_rows(runs, loss_windows)
+
+        return finelog_alert_endpoint("loss_spikes", project)
 
     def finelog_alerts_zephyr_stalls(_: Request) -> JSONResponse:
-        try:
-            target = _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
-            now = datetime.now(UTC)
+        def project(target: ClusterTarget, now: datetime) -> list[dict]:
+            progress_metrics = finelog_sources[target.name].query(zephyr_progress_query(now), max_rows=config.max_rows)
+            return zephyr_stall_alert_rows(progress_metrics, now)
 
-            def run() -> list[dict]:
-                source = finelog_sources[target.name]
-                progress_metrics = source.query(zephyr_progress_query(now), max_rows=config.max_rows)
-                return zephyr_stall_alert_rows(progress_metrics, now)
-
-            key = ("zephyr_stalls", _bucket(now, config.cache_ttl))
-            return JSONResponse(finelog_cache.get_or_compute(key, run))
-        except _BadRequest as err:
-            return JSONResponse({"error": str(err)}, status_code=400)
-        except QueryResultTooLargeError as err:
-            return JSONResponse({"error": f"{err}; reduce the alert query lookback"}, status_code=400)
+        return finelog_alert_endpoint("zephyr_stalls", project)
 
     def iris_endpoint(request: Request, endpoint: str, run) -> JSONResponse:
         try:
@@ -687,6 +704,7 @@ def create_app(
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_stalls", finelog_alerts_training_stalls),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/loss_spikes", finelog_alerts_loss_spikes),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/zephyr_stalls", finelog_alerts_zephyr_stalls),
             Route("/iris/{cluster}/jobs", iris_jobs),
             Route("/iris/{cluster}/workers", iris_workers),

@@ -33,6 +33,7 @@ GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
 GET /finelog/marin/alerts/training_stalls        active jobs + stalled-progress value(0|1)
+GET /finelog/marin/alerts/loss_spikes            active hero runs + loss-spike value(0|1)
 GET /finelog/marin/alerts/zephyr_stalls          active pipelines + stalled-progress value(0|1)
 GET /iris/{cluster}/jobs | workers | health      live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
@@ -196,8 +197,8 @@ Each dashboard answers one question, and they link to each other in a fixed nav 
 | `jobs.json` | What is running, queued, and stuck — and why? | cluster, job |
 | `cluster_capacity.json` | What jobs and requests occupy one cluster and node? | cluster |
 | `runs.json` | How is each Levanter training run doing? | cluster, run |
+| `training.json` | Is one training run — by default the hero run — on track? | run |
 | `clusters.json` | Is the infrastructure under the jobs healthy? | cluster |
-| `pipelines.json` | How is one Zephyr execution moving? | cluster, execution |
 | `inference.json` | How did one vLLM serve behave? | identity kind, serve |
 | `infra.json` | The custom React status page: nightly regressions, main CI, worker capacity, hero training. | none |
 
@@ -262,6 +263,15 @@ selector scopes the active-jobs table and the waiting-task series; with every jo
 selected the latter is the fleet backlog broken out by job, and narrowed to one
 job it is that job's queue over time.
 
+`training.json` answers "is this run on track" for one run, where `runs.json`
+answers the across-runs question; its selector is single-valued and orders hero
+runs first so the board opens on the current one, and scopes by `run_id` alone so
+a run that moves between clusters keeps one set of series. The status strip is a
+single ten-field stat panel because a `telemetry_v1` scan costs what its window
+costs whatever it selects, and it carries both hero alert inputs — time since the
+last completed step and train loss — beside step time, throughput, schedule
+progress, skip-step rejections, eval loss, and device memory.
+
 ## Alerting
 
 Grafana unified alerting, provisioned entirely from the files under
@@ -273,7 +283,8 @@ redeploy.
 Critical rules notify operators immediately: an unreachable cluster or
 federation peer, a crash-looping watched component, an admission webhook with no ready endpoints, a
 dead production Iris controller, an unhealthy finelog hub or mirror, CoreWeave
-storage above 80 percent of quota, or stalled training on an enrolled hero run.
+storage above 80 percent of quota, or stalled training or a loss spike on an
+enrolled hero run.
 Warning rules remain in Grafana's home alert list without sending email, Slack,
 or Loom notifications: a degraded component, a GPU pod that stays node-bound and
 nonterminal without finalizers for five minutes after the bridge's two-minute
@@ -287,7 +298,15 @@ minutes. Its `notification=hero-run`
 route uses the critical receiver and groups each root job separately. It does not
 require task-to-node GPU attribution. The root suffix before `-coord` and the
 Levanter trainer ID must match; zero eligible roots produce an explicit healthy
-row. A warning-only Zephyr rule reads fresh
+row. A second rule over the same enrolled roots watches their `train_loss`, firing
+when the lowest loss of the last five minutes clears the mean plus six standard
+deviations of the preceding 55, or when the loss stops being finite. Six sigma is
+the band Levanter's skip-step optimizer rejects a step on, and reducing the recent
+window to its floor is what separates a divergence from the single excursion
+skip-step already absorbs. It takes the `notification=hero-run` route as well: a
+hero run diverging unwatched costs more than a false page, which a silence
+answers. Both hero rules share one enrolment query per cache interval.
+A warning-only Zephyr rule reads fresh
 `progress_time_seconds` rows from `service=zephyr` telemetry. It waits 45 minutes after a
 stage start or shard completion, then remains pending for five minutes. The
 execution ID separates concurrent pipelines under one root job. The stuck-pod

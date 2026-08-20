@@ -2,6 +2,8 @@
 
 `TrainingProgressStalled` is a critical Grafana alert for active Iris root jobs named `hero-*-coord`. It posts one Slack message per root job and opens a Loom triage session on that thread. The alert does not kick, restart, or profile a job. Capture `iris process profile threads -t <task>` for the affected tasks before deciding whether to intervene.
 
+This alert watches whether a run is stepping. [`TrainingLossSpike`](training-loss-spike-alert.md) watches what those steps produce, over the same enrollment.
+
 The rule evaluates once a minute and waits five minutes before notifying. A root job is eligible while its latest `iris.task_state` row is at most 90 seconds old, reports at least one running task, and matches `%/hero-%-coord`. The namespace before the run name is unrestricted. `/rav/hero-20260819-coord` and `/another-user/hero-20260819-coord` therefore have the same enrollment behavior. Other Levanter runs remain visible in Grafana without sending hero-run notifications.
 
 Hero alert enrollment is a launch naming contract: the coordinator root's last component must be `<run-id>-coord`, `<run-id>` must begin with `hero-`, and Levanter's trainer `id` must be the same `<run-id>`. The selector derives the exact structured telemetry key from that contract. Changing only the user namespace is safe; changing either identity independently opts the run out or prevents telemetry attribution.
