@@ -456,7 +456,7 @@
       "id": 2,
       "type": "timeseries",
       "title": "Training loss",
-      "description": "Mean train loss per bucket. A step change up is a restart from an older checkpoint or a divergence; a flat line is a run that stopped stepping. The loss-spike alert compares this run's recent mean against its own trailing baseline, so a rise visible here for more than a few minutes is what fires it.",
+      "description": "Mean train loss per bucket. A step change up is a restart from an older checkpoint or a divergence; a flat line is a run that stopped stepping. The loss-spike alert reads the same metric, and fires when the lowest loss of the last five minutes clears the mean plus six standard deviations of the preceding 55, so a rise that lifts this whole curve for five minutes is what fires it.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

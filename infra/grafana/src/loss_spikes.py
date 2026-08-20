@@ -87,9 +87,9 @@ def _number(value: object) -> float | None:
     return float(value) if isinstance(value, int | float) else None
 
 
-def _is_finite(value: float | None) -> bool:
-    """True for a real number; a missing reduction is not a divergence."""
-    return value is None or isfinite(value)
+def _diverged(value: float | None) -> bool:
+    """True when a reduction came back NaN or infinite. A missing one has not diverged."""
+    return value is not None and not isfinite(value)
 
 
 def _windows_by_run(loss_windows: pa.Table) -> dict[tuple[str, str], LossWindows]:
@@ -118,14 +118,14 @@ def _classify(windows: LossWindows | None) -> tuple[str, int]:
     # A NaN loss averages to NaN and compares false against every threshold, so
     # divergence into NaN or infinity needs its own case. Both reductions are
     # checked because engines order NaN differently.
-    if not _is_finite(windows.recent_loss) or not _is_finite(windows.recent_peak):
+    if _diverged(windows.recent_loss) or _diverged(windows.recent_peak):
         return "not_finite", 1
 
     floor, baseline = windows.recent_floor, windows.baseline_loss
     if floor is None or baseline is None or not isfinite(baseline):
         return "warming_up", 0
-    # A one-sample baseline has no standard deviation; the absolute rise carries
-    # the band until the window fills.
+    # A flat baseline has zero spread, and an engine that cannot compute one
+    # returns NULL. The absolute rise carries the band in both.
     stddev = windows.baseline_stddev
     spread = stddev if stddev is not None and isfinite(stddev) else 0.0
     band = baseline + max(_MIN_RISE, _SIGMA_FACTOR * spread)

@@ -3,6 +3,7 @@
 
 """Bounded finelog queries and alert projection for stalled Levanter jobs."""
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import pyarrow as pa
@@ -91,10 +92,18 @@ def _row(cluster: str, job: str, phase: str, reason: str, value: int) -> dict:
     return {"cluster": cluster, "job": job, "phase": phase, "reason": reason, "value": value}
 
 
-def training_stall_alert_rows(runs: tuple[HeroRun, ...], telemetry_metrics: pa.Table, now: datetime) -> list[dict]:
-    """Project enrolled hero roots and their latest execution metrics into alert rows."""
-    metrics_by_job: dict[tuple[str, str], dict[str, tuple[datetime, float]]] = {}
-    execution_started_by_job: dict[tuple[str, str], datetime] = {}
+@dataclass(frozen=True)
+class ExecutionMetrics:
+    """One root job's newest value per metric, and when its execution started."""
+
+    metrics: dict[str, float]
+    execution_started: datetime | None
+
+
+def _metrics_by_job(runs: tuple[HeroRun, ...], telemetry_metrics: pa.Table) -> dict[tuple[str, str], ExecutionMetrics]:
+    """Fold telemetry rows onto the root job that owns them, keeping the newest of each metric."""
+    newest: dict[tuple[str, str], dict[str, tuple[datetime, float]]] = {}
+    started: dict[tuple[str, str], datetime] = {}
     for row in telemetry_metrics.to_pylist():
         cluster = str(row["cluster"])
         run_id = str(row["run_id"])
@@ -106,50 +115,64 @@ def training_stall_alert_rows(runs: tuple[HeroRun, ...], telemetry_metrics: pa.T
                 continue
             key = (run.cluster, run.root_job)
             execution_started = as_utc(row["execution_started_at"])
-            current_execution = execution_started_by_job.get(key)
-            if current_execution is None or execution_started > current_execution:
-                execution_started_by_job[key] = execution_started
+            if key not in started or execution_started > started[key]:
+                started[key] = execution_started
             metric = str(row["name"])
             observed = as_utc(row["ts"])
-            current = metrics_by_job.setdefault(key, {}).get(metric)
+            current = newest.setdefault(key, {}).get(metric)
             if current is None or observed > current[0]:
-                metrics_by_job[key][metric] = (observed, float(row["value"]))
+                newest[key][metric] = (observed, float(row["value"]))
 
-    now = as_utc(now)
-    rows: list[dict] = []
-    for run in runs:
-        metrics = {name: value for name, (_, value) in metrics_by_job.get((run.cluster, run.root_job), {}).items()}
-        raw_phase = metrics.get(_PHASE_METRIC)
-        phase = int(raw_phase) if raw_phase is not None else None
-        step = metrics.get(_STEP_METRIC, 0.0)
-        progress_time = metrics.get(_PROGRESS_TIME_METRIC, 0.0)
-        execution_started = execution_started_by_job.get((run.cluster, run.root_job), run.running_since)
-        attempt_age = now - max(run.running_since, execution_started)
+    return {
+        key: ExecutionMetrics(
+            metrics={name: value for name, (_, value) in metrics.items()},
+            execution_started=started.get(key),
+        )
+        for key, metrics in newest.items()
+    }
 
-        reason = "healthy"
-        value = 0
-        is_training = phase == _TRAINING_PHASE or step > 0
-        if phase == _FINISHED_PHASE:
-            reason = "finished"
-        elif is_training and progress_time > 0:
-            progress_age = now - datetime.fromtimestamp(progress_time, tz=UTC)
-            if progress_age >= _TRAINING_STALL_AGE:
-                reason = "training_stalled"
-                value = 1
-        elif is_training and attempt_age >= _TRAINING_STALL_AGE:
+
+def _classify(run: HeroRun, observed: ExecutionMetrics | None, now: datetime) -> tuple[str, str, int]:
+    """Return the phase name, alert reason, and firing value for one enrolled root."""
+    metrics = observed.metrics if observed is not None else {}
+    raw_phase = metrics.get(_PHASE_METRIC)
+    phase = int(raw_phase) if raw_phase is not None else None
+    step = metrics.get(_STEP_METRIC, 0.0)
+    progress_time = metrics.get(_PROGRESS_TIME_METRIC, 0.0)
+    execution_started = observed.execution_started if observed is not None else None
+    attempt_age = now - max(run.running_since, execution_started or run.running_since)
+
+    reason = "healthy"
+    value = 0
+    is_training = phase == _TRAINING_PHASE or step > 0
+    if phase == _FINISHED_PHASE:
+        reason = "finished"
+    elif is_training and progress_time > 0:
+        progress_age = now - datetime.fromtimestamp(progress_time, tz=UTC)
+        if progress_age >= _TRAINING_STALL_AGE:
             reason = "training_stalled"
             value = 1
-        elif attempt_age >= _INITIALIZING_STALL_AGE:
-            reason = "initializing_stale"
-            value = 1
-        else:
-            reason = "training" if is_training else "initializing"
+    elif is_training and attempt_age >= _TRAINING_STALL_AGE:
+        reason = "training_stalled"
+        value = 1
+    elif attempt_age >= _INITIALIZING_STALL_AGE:
+        reason = "initializing_stale"
+        value = 1
+    else:
+        reason = "training" if is_training else "initializing"
 
-        phase_name = _phase_name(phase)
-        if phase is None:
-            phase_name = "training" if is_training else "initializing"
-        rows.append(_row(run.cluster, run.root_job, phase_name, reason, value))
+    if phase is None:
+        return ("training" if is_training else "initializing"), reason, value
+    return _phase_name(phase), reason, value
 
+
+def training_stall_alert_rows(runs: tuple[HeroRun, ...], telemetry_metrics: pa.Table, now: datetime) -> list[dict]:
+    """Project enrolled hero roots and their latest execution metrics into alert rows."""
+    observed = _metrics_by_job(runs, telemetry_metrics)
+    now = as_utc(now)
+    rows = [
+        _row(run.cluster, run.root_job, *_classify(run, observed.get((run.cluster, run.root_job)), now)) for run in runs
+    ]
     if rows:
         return rows
     return [_row("fleet", "", "idle", "healthy", 0)]
