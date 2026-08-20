@@ -88,7 +88,7 @@ TOKENS_PER_ACTIVE_PARAM = 791
 TENSORSTORE_CACHE_BYTES = 125_000_000_000
 # A crash costs at most this much training time. A hero checkpoint is several TB, thus a shorter
 # interval would spend a large part of the run inside a checkpoint write.
-RESUME_SAVE_INTERVAL = timedelta(minutes=30)
+RESUME_SAVE_INTERVAL = timedelta(hours=1)
 # A rung runs up to 176 tasks for hundreds of GPU-days, where a hardware fault or a host
 # out-of-memory on one task is routine. A rung resumes from its newest checkpoint, thus a retry
 # continues the run instead of repeating it. Retry deeply so one bad task does not end a rung.

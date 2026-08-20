@@ -192,9 +192,9 @@ Train batch is 1024 × racks; eval batch is 64 × racks (one sequence per device
 791 tokens per active parameter (18T at d6144); pass `--num-steps` to override.
 
 A rung resumes from the newest checkpoint it finds. The permanent checkpoints above go to the
-durable output root, and a rolling temporary checkpoint every 30 minutes goes to region-local temp
+durable output root, and a rolling temporary checkpoint every hour goes to region-local temp
 storage with the shared 14-day lifecycle TTL. One temporary checkpoint is kept. A hardware fault, a
-host out-of-memory, or a preemption thus costs at most 30 minutes of training. The training job
+host out-of-memory, or a preemption thus costs at most one hour of training. The training job
 retries 1000 times on failure and 100 times on preemption.
 
 ```bash
