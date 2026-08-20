@@ -85,14 +85,6 @@ WATCH_INTERVAL = 10
 # 791 tokens per active parameter sets the step budget: it lands the d6144 hero at 18T tokens and
 # scales every narrower rung by the same ratio.
 TOKENS_PER_ACTIVE_PARAM = 791
-# Host memory for each task's container, against a GB200x4 node that holds 955.7 GiB. This leaves
-# 15.7 GiB for the operating system and the kubelet, thus it is at the ceiling. A resume was
-# OOM-killed at 850 GiB and again at 909 GiB, and the peak tracked each limit at 97 to 99 percent,
-# so more memory alone may not be enough.
-TASK_HOST_MEMORY = "940g"
-# 4 processes on each task share TASK_HOST_MEMORY, thus this cap costs four times what it reads.
-# Halving it during an out-of-memory investigation freed no measured host memory, thus it keeps the
-# value that PR 8456 selected.
 TENSORSTORE_CACHE_BYTES = 125_000_000_000
 # A crash costs at most this much training time. A hero checkpoint is several TB, thus a shorter
 # interval would spend a large part of the run inside a checkpoint write.
@@ -212,7 +204,7 @@ def build_ladder_run(
         "GB200",
         count=HERO_GPUS_PER_NODE,
         cpu=120,
-        ram=TASK_HOST_MEMORY,
+        ram="850g",
         disk="1t",
         replicas=HERO_EP_NODES * dp_racks,
     )

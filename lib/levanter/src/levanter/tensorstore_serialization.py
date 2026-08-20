@@ -7,7 +7,6 @@ import asyncio
 import collections
 import contextlib
 import fcntl
-import gc
 import logging
 import math
 import os
@@ -59,12 +58,8 @@ _STAGED_BYTE_OVERHEAD = 4
 # Host memory each process may hold in flight while a restore reads shards. JAX defaults to 32 GB
 # and the legacy path asked for 300, both far above what a save allows itself on the same node.
 _RESTORE_CONCURRENT_GB = 8
-# Maximum pageable-host range filled by one TensorStore restore operation.
-_RESTORE_HOST_CHUNK_BYTES = 1024**3
-# Lock file that serializes restores across the local ranks inside one container. Set
-# LEVANTER_RESTORE_LOCK to another path to move it, or to an empty value to restore concurrently.
-_RESTORE_LOCK_PATH_ENV = "LEVANTER_RESTORE_LOCK"
-_DEFAULT_RESTORE_LOCK_PATH = "/tmp/levanter-restore.lock"
+# Lock file that serializes restores across the local ranks inside one container.
+_LOCAL_RESTORE_LOCK_PATH = "/tmp/levanter-restore.lock"
 
 
 def _format_gib(num_bytes: int) -> str:
@@ -718,29 +713,12 @@ def _fully_replicated_sharding(mesh):
 
 @contextlib.contextmanager
 def _local_restore_slot():
-    """Hold an exclusive slot while this process restores, so local ranks do not overlap.
-
-    Every rank inside a container draws on one host memory budget, and a restore costs a rank far
-    more than the state it ends up holding. Four ranks overlapping that cost is what exhausts a
-    GB200 node: each held about 187 GiB after deserialization and then grew by about 45 GiB while it
-    moved leaves to host, and the container died as the third one grew.
-
-    ``async_deserialize`` reads this process's own shards and does a single-device ``device_put``,
-    with no collective, so ranks may take turns. A caller that must restore concurrently can clear
-    the lock path.
-    """
-    path = os.environ.get(_RESTORE_LOCK_PATH_ENV, _DEFAULT_RESTORE_LOCK_PATH)
-    if not path:
-        yield
-        return
-    with open(path, "w") as handle:
+    """Serialize restores across local ranks that share a container memory limit."""
+    with open(_LOCAL_RESTORE_LOCK_PATH, "w") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         try:
             yield
         finally:
-            # Drop what the restore built before the next rank starts, so its peak does not stack
-            # onto ours. device_put leaves the source alive until its copy lands.
-            gc.collect()
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
@@ -755,25 +733,14 @@ async def _deserialize_leaf_to_memory_kind(sharding: Sharding, tensorstore_spec:
     for device, index in sharding.addressable_devices_indices_map(shape).items():
         requested_domain = ts.IndexTransform(input_shape=shape)[index].domain
         restricted_domain = store.domain.intersect(requested_domain)
-        host_array = np.empty(shard_shape, dtype=store.dtype.numpy_dtype)
-        host_store = ts.array(host_array)[ts.d[:].translate_to[requested_domain.origin]]
-        if restricted_domain.rank == 0:
-            await host_store.write(store)
-        else:
-            bytes_per_row = math.prod(restricted_domain.shape[1:]) * host_array.itemsize
-            rows_per_chunk = max(1, _RESTORE_HOST_CHUNK_BYTES // max(1, bytes_per_row))
-            for start in range(restricted_domain.origin[0], restricted_domain.exclusive_max[0], rows_per_chunk):
-                limit = min(start + rows_per_chunk, restricted_domain.exclusive_max[0])
-                selection = (slice(start, limit),) + tuple(
-                    slice(origin, exclusive_max)
-                    for origin, exclusive_max in zip(restricted_domain.origin[1:], restricted_domain.exclusive_max[1:])
-                )
-                await host_store[selection].write(store[selection])
+        host_array = np.zeros(shard_shape, dtype=store.dtype.numpy_dtype)
+        await ts.array(host_array)[ts.d[:].translate_to[requested_domain.origin]][restricted_domain].write(
+            store[restricted_domain]
+        )
         if host_array.dtype != dtype:
             host_array = host_array.astype(dtype)
         target = jax.sharding.SingleDeviceSharding(device, memory_kind=sharding.memory_kind)
-        array = jax.device_put(host_array, target, donate=True)
-        del host_array
+        array = jax.device_put(host_array, target)
         array.block_until_ready()
         arrays.append(array)
 

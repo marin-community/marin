@@ -21,7 +21,6 @@ from levanter.testing.helpers import MLP, arrays_only, assert_trees_not_close, u
 from levanter.checkpoint import load_checkpoint, save_checkpoint
 from levanter.checkpoint_manifest import CHECKPOINT_FORMAT_VERSION, manifest_path, read_manifest
 from levanter.models.gpt2 import Gpt2Mlp
-from levanter import tensorstore_serialization
 from levanter.tensorstore_serialization import (
     TensorStoreWriteConfig,
     _capped_chunk_shape,
@@ -110,21 +109,6 @@ def test_tensorstore_checkpoint_restores_pinned_host_memory_kind():
             # allclose refuses to compare across memory spaces, so pull the host copy to device first.
             on_device = jax.device_put(restored, NamedSharding(mesh, P()))
             assert jnp.allclose(on_device, arr)
-
-
-def test_tensorstore_checkpoint_restores_pinned_host_from_multiple_chunks(monkeypatch):
-    monkeypatch.setattr(tensorstore_serialization, "_RESTORE_HOST_CHUNK_BYTES", 16)
-    with use_test_mesh() as mesh:
-        source = jnp.arange(32, dtype=jnp.float32).reshape(8, 4)
-        pinned = NamedSharding(jax.sharding.get_abstract_mesh(), P("data", None)).with_memory_kind("pinned_host")
-        template = jax.ShapeDtypeStruct(source.shape, source.dtype, sharding=pinned)
-
-        with TemporaryDirectory() as tmpdir:
-            tree_serialize_leaves_tensorstore(tmpdir, {"x": source})
-            restored = tree_deserialize_leaves_tensorstore(tmpdir, {"x": template})["x"]
-
-        on_device = jax.device_put(restored, NamedSharding(mesh, P()))
-        np.testing.assert_array_equal(on_device, source)
 
 
 def test_tensorstore_checkpoint_restores_mixed_memory_kinds_in_tree_order():

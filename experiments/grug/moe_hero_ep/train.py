@@ -801,7 +801,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             jax.tree.map(lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) else None, state)
             del state
             gc.collect()
-            logger.info("Rank %d released initialized state before checkpoint restore", jax.process_index())
             state = restore_template
 
         checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
@@ -813,7 +812,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             allow_partial=trainer.allow_partial_checkpoint,
         )
         if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
-            logger.info("Rank %d initializes state because no checkpoint was found", jax.process_index())
             state = _init_state(model_key)
         dump_grug_state_sharding_run_artifact(
             state,
@@ -824,7 +822,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
-        logger.info("Rank %d starts data-cache construction after checkpoint restore", jax.process_index())
         train_dataset = None
         train_loader = None
         if config.trainer.training_data_mode == TrainingDataMode.MIXTURE:

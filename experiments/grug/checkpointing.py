@@ -124,9 +124,7 @@ def restore_grug_state_from_checkpoint(
                 allow_partial=allow_partial,
                 load_fn=_load_fn,
             )
-            logger.info("Rank %d finished checkpoint restore and entered the restore barrier", jax.process_index())
             multihost_utils.sync_global_devices(RESTORE_COMPLETE_BARRIER)
-            logger.info("Rank %d exited the restore barrier", jax.process_index())
             if candidate not in checkpoint_search_paths:
                 logger.info("Loaded checkpoint from %s while searching %s", candidate, checkpoint_search_paths)
             return loaded
