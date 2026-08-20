@@ -52,6 +52,8 @@ class TrainLmConfig:
     model: LmConfig = field(default_factory=LlamaConfig)
     train_seq_len: int | None = None
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
+    optimizer_schedule_num_train_steps: int | None = None
+    """Optional optimizer schedule horizon when execution intentionally stops earlier."""
 
     # config related to continued pretraining
     initialize_from_hf: bool | str = False
@@ -136,6 +138,18 @@ def _load_lm_model_from_configured_source(
     return model
 
 
+def _optimizer_schedule_steps(config: TrainLmConfig) -> int:
+    schedule_steps = config.optimizer_schedule_num_train_steps
+    if schedule_steps is None:
+        return config.trainer.num_train_steps
+    if schedule_steps < config.trainer.num_train_steps:
+        raise ValueError(
+            "optimizer_schedule_num_train_steps must be at least trainer.num_train_steps, got "
+            f"{schedule_steps} < {config.trainer.num_train_steps}"
+        )
+    return schedule_steps
+
+
 def main(config: TrainLmConfig):
     tokenizer = config.data.the_tokenizer
 
@@ -169,7 +183,7 @@ def main(config: TrainLmConfig):
         converter = None
 
     levanter.trainer.initialize(config)
-    optimizer = config.optimizer.build(config.trainer.num_train_steps)
+    optimizer = config.optimizer.build(_optimizer_schedule_steps(config))
 
     def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
         return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
