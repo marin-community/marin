@@ -31,6 +31,7 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
+from levanter.tensorstore_serialization import TensorStoreWriteConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.build_context import resolve_version
@@ -86,6 +87,7 @@ WATCH_INTERVAL = 10
 # scales every narrower rung by the same ratio.
 TOKENS_PER_ACTIVE_PARAM = 791
 TENSORSTORE_CACHE_BYTES = 125_000_000_000
+CHECKPOINT_MAX_WRITE_REPLICAS = 1024
 # A crash costs at most this much training time. A hero checkpoint is several TB, thus a shorter
 # interval would spend a large part of the run inside a checkpoint write.
 RESUME_SAVE_INTERVAL = timedelta(hours=1)
@@ -255,6 +257,9 @@ def build_ladder_run(
                 append_run_id_to_base_path=False,
                 delete_old_temp_checkpoints=True,
                 keep_last_temporary_checkpoints=1,
+                # The planner clamps this to the run's replicas, divisible leaf dimensions, and
+                # its minimum slice size. The higher ceiling spreads hero state beyond 64 writers.
+                write=TensorStoreWriteConfig(max_write_replicas=CHECKPOINT_MAX_WRITE_REPLICAS),
             ),
         )
         return GrugRunConfig(
