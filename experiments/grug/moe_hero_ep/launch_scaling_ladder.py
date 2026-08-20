@@ -22,6 +22,7 @@ analytic estimate (forward+backward, including attention and the latent-MoE corr
 """
 
 import dataclasses
+import datetime
 import os
 
 import click
@@ -231,17 +232,17 @@ def build_ladder_run(
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
-            # Checkpoints are output-only: an offloaded run cannot restore from one (its pinned-host
-            # master/opt state comes back device-kind and mismatches the jitted step). load_checkpoint
-            # is forced False so a retry after a checkpoint starts fresh instead of crashing on the
-            # broken restore. A preempted run therefore restarts at step 0.
-            load_checkpoint=False,
-            # No time-based temporary checkpoints -- they would only exist to enable that broken
-            # restore. Keep just the permanent step-interval checkpoints below plus the forced final.
+            # The pinned-host restore fix (#8443) lets an offloaded run restore its own checkpoint.
+            # `None` resumes from the latest checkpoint when one exists and starts fresh otherwise, so
+            # a preempted run continues instead of restarting at step 0 while the first launch (no
+            # checkpoint yet) still begins from scratch rather than erroring.
+            load_checkpoint=None,
+            # Hourly temporary checkpoints bound the work lost to a preemption; only the latest is
+            # kept. They live under a separate path from the permanent step-interval checkpoints below.
             checkpointer=CheckpointerConfig(
                 base_path=prefix_join(ctx.output_path, "checkpoints"),
-                temporary_base_path=None,
-                save_interval=None,
+                temporary_base_path=prefix_join(ctx.output_path, "checkpoints_temp"),
+                save_interval=datetime.timedelta(hours=1),
                 keep=keep_permanent,
                 append_run_id_to_base_path=False,
                 delete_old_temp_checkpoints=True,
