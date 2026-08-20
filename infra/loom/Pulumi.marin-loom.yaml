@@ -35,6 +35,9 @@ config:
       class: interactive
       prelude: weaver
       instructionsFile: profiles/user/AGENTS.md
+      env: &loomIrisUser
+        IRIS_USER:
+          value: loom
       githubRepositories: &interactiveGithubRepositories
         - Open-Athena/*
         - marin-community/*
@@ -51,6 +54,7 @@ config:
       class: interactive
       prelude: weaver
       instructionsFile: profiles/github/AGENTS.md
+      env: *loomIrisUser
       githubRepositories: *interactiveGithubRepositories
       mcpAccess:
         mode: all
@@ -71,6 +75,7 @@ config:
       turnBudget: 100
       prelude: weaver
       instructionsFile: profiles/fork-ferry/AGENTS.md
+      env: *loomIrisUser
       restricted: false
       githubRepositories:
         - marin-community/evalchemy
@@ -98,6 +103,7 @@ config:
       turnBudget: 100
       prelude: weaver
       instructionsFile: profiles/ops/AGENTS.md
+      env: *loomIrisUser
       restricted: false
       allowedTools: []
       mcpAccess:
@@ -113,6 +119,7 @@ config:
       class: interactive
       prelude: weaver
       instructionsFile: profiles/slack/AGENTS.md
+      env: *loomIrisUser
       githubRepositories: *interactiveGithubRepositories
       mcpAccess:
         mode: all

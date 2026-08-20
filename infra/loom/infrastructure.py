@@ -126,26 +126,48 @@ class WorkloadIdentityConfig:
 
 
 @dataclass(frozen=True)
+class ProfileLiteralEnvConfig:
+    """A non-secret environment value declared inline in stack configuration."""
+
+    name: str
+    value: str
+
+    def manifest(self) -> dict[str, str]:
+        return {"name": self.name, "value": self.value}
+
+
+@dataclass(frozen=True)
 class ProfileSecretConfig:
+    """An environment value the Loom host reads from Secret Manager at launch."""
+
     name: str
     secret_ref: str
     project: str
     secret: str
 
-    @classmethod
-    def parse(cls, name: str, value: object, profile: str) -> ProfileSecretConfig:
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) or name.startswith(("LOOM_", "WEAVER_")):
-            raise ValueError(f"profile {profile!r} has invalid environment name {name!r}")
-        if not isinstance(value, dict):
-            raise ValueError(f"profile {profile!r} env {name!r} must use a full secretRef")
-        secret_ref = str(value.get("secretRef", "")).strip()
-        match = SECRET_REF.fullmatch(secret_ref)
-        if not match:
-            raise ValueError(f"profile {profile!r} env {name!r} must use a full secretRef")
-        return cls(name, secret_ref, match.group("project"), match.group("secret"))
-
     def manifest(self) -> dict[str, str]:
         return {"name": self.name, "secret_ref": self.secret_ref}
+
+
+type ProfileEnvConfig = ProfileLiteralEnvConfig | ProfileSecretConfig
+
+
+def _parse_profile_env(name: str, value: object, profile: str) -> ProfileEnvConfig:
+    """Parse one profile environment entry, which sets either a literal or a secretRef."""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) or name.startswith(("LOOM_", "WEAVER_")):
+        raise ValueError(f"profile {profile!r} has invalid environment name {name!r}")
+    if not isinstance(value, dict) or ("value" in value) == ("secretRef" in value):
+        raise ValueError(f"profile {profile!r} env {name!r} must set exactly one of value or secretRef")
+    if "value" in value:
+        literal = value["value"]
+        if not isinstance(literal, str) or not literal.strip():
+            raise ValueError(f"profile {profile!r} env {name!r} value must be a non-empty string")
+        return ProfileLiteralEnvConfig(name, literal)
+    secret_ref = str(value.get("secretRef", "")).strip()
+    match = SECRET_REF.fullmatch(secret_ref)
+    if not match:
+        raise ValueError(f"profile {profile!r} env {name!r} must use a full secretRef")
+    return ProfileSecretConfig(name, secret_ref, match.group("project"), match.group("secret"))
 
 
 def _string_tuple(value: object, field: str, profile: str) -> tuple[str, ...]:
@@ -234,7 +256,7 @@ class ProfileConfig:
     github_repositories: tuple[str, ...]
     allowed_tools: tuple[str, ...]
     mcp_access: McpAccessConfig
-    env: tuple[ProfileSecretConfig, ...]
+    env: tuple[ProfileEnvConfig, ...]
 
     @classmethod
     def parse(cls, name: str, value: Mapping[str, object]) -> ProfileConfig:
@@ -246,7 +268,7 @@ class ProfileConfig:
         raw_env = value.get("env", {})
         if not isinstance(raw_env, dict):
             raise ValueError(f"profile {name!r} env must be an object")
-        env = tuple(ProfileSecretConfig.parse(str(key), item, name) for key, item in sorted(raw_env.items()))
+        env = tuple(_parse_profile_env(str(key), item, name) for key, item in sorted(raw_env.items()))
         return cls(
             name=name,
             agent=agent,
@@ -351,7 +373,7 @@ def _deployment_profiles(
     secret_refs: list[tuple[str, str]] = []
     for profile in sorted(profiles, key=lambda item: item.name):
         result.append({"profile": profile.manifest(), "env": [item.manifest() for item in profile.env]})
-        secret_refs.extend((item.project, item.secret) for item in profile.env)
+        secret_refs.extend((item.project, item.secret) for item in profile.env if isinstance(item, ProfileSecretConfig))
     return result, secret_refs
 
 
