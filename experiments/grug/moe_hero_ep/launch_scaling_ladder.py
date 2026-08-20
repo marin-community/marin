@@ -85,10 +85,11 @@ WATCH_INTERVAL = 10
 # 791 tokens per active parameter sets the step budget: it lands the d6144 hero at 18T tokens and
 # scales every narrower rung by the same ratio.
 TOKENS_PER_ACTIVE_PARAM = 791
-# Host memory for each task's container. A resume peaked at 841.2 GiB against the earlier 850 GiB
-# request and the container was OOM-killed, because a restore adds about 140 GiB over a cold start's
-# 699.6 GiB.
-TASK_HOST_MEMORY = "909g"
+# Host memory for each task's container, against a GB200x4 node that holds 955.7 GiB. This leaves
+# 25.7 GiB for the operating system and the kubelet, thus it is close to the ceiling. A resume was
+# OOM-killed at 850 GiB and again at 909 GiB, and the peak tracked each limit at 97 to 99 percent,
+# so more memory alone may not be enough.
+TASK_HOST_MEMORY = "930g"
 # 4 processes on each task share TASK_HOST_MEMORY, thus this cap costs four times what it reads.
 TENSORSTORE_CACHE_BYTES = 62_500_000_000
 # A crash costs at most this much training time. A hero checkpoint is several TB, thus a shorter
