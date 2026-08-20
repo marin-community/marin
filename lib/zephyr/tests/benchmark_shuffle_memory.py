@@ -45,14 +45,15 @@ from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import StoragePath
 from zephyr import memory_budget
+from zephyr.parquet_scan import scan_parquet
 from zephyr.shuffle import (
     _DATAFRAME_ROW_COUNT,
     _PAYLOAD_COL,
     _SORT_KEY_COL,
     ScatterWriter,
+    _FrameWithSchema,
     _merge_sorted_frames,
     _process_rss_bytes,
-    _scan_scatter_parquet,
     _task_memory_bytes,
     _unify_frame_schemas,
 )
@@ -494,7 +495,10 @@ def _read_child(
     total_rows = sum(rows)
     avg_item_bytes = sum(estimated) / total_rows
 
-    frames = _unify_frame_schemas([_scan_scatter_parquet(path) for path in paths])
+    scanned = [scan_parquet(path) for path in paths]
+    frames = _unify_frame_schemas(
+        [_FrameWithSchema(frame=frame, schema=frame.collect_schema()) for frame in scanned]
+    )
     _warm_polars()
     baseline = max(_process_rss_bytes(), _process_peak_bytes())
     total_payload_bytes = sum(
