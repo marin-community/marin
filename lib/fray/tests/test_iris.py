@@ -15,7 +15,6 @@ import fray.iris_backend as iris_backend
 import pytest
 from fray.iris_backend import (
     FrayIrisClient,
-    IrisActorGroup,
     IrisActorHandle,
     IrisJobHandle,
     convert_constraints,
@@ -32,10 +31,8 @@ from fray.types import (
     TpuConfig,
 )
 from iris.cluster.constraints import ConstraintOp
-from iris.resources.endpoint import EndpointQuery
 from iris.resources.execution import Entrypoint as IrisEntrypoint
 from iris.resources.execution import GpuDevice, ResourceSpec, TpuDevice, gpu_device
-from iris.resources.names import JobName
 
 
 class TestConvertConstraints:
@@ -164,9 +161,7 @@ def test_pickled_actor_handle_resolves_and_calls_by_endpoint_name(monkeypatch):
 def test_actor_group_created_by_driver_uses_creating_client(monkeypatch):
     fake_iris = MagicMock()
     fake_iris.submit.return_value = MagicMock(job_id="/user/job")
-    fake_iris.list_endpoints.return_value = SimpleNamespace(
-        items=(SimpleNamespace(name="/user/job/dummy-0"),), next_page_token=None
-    )
+    fake_iris.list_endpoints.return_value = [SimpleNamespace(name="/user/job/dummy-0")]
     resolver = MagicMock()
     fake_iris.resolver_for_job.return_value = resolver
     fake_actor = MagicMock()
@@ -189,31 +184,13 @@ def test_actor_group_created_by_driver_uses_creating_client(monkeypatch):
     fake_iris.resolver_for_job.assert_called_once_with("/user/job")
 
 
-def test_actor_discovery_reads_all_bounded_endpoint_pages():
-    def list_endpoints(query: EndpointQuery):
-        if query.page_token is None:
-            return SimpleNamespace(items=(SimpleNamespace(name="/user/job/actor-0"),), next_page_token="next")
-        return SimpleNamespace(items=(SimpleNamespace(name="/user/job/actor-1"),), next_page_token=None)
-
-    client = MagicMock()
-    client.list_endpoints.side_effect = list_endpoints
-    group = IrisActorGroup("actor", 2, JobName.from_wire("/user/job"), client)
-
-    discovered = group.discover_new()
-
-    assert len(discovered) == 2
-    assert group.ready_count == 2
-
-
 def test_iris_job_handle_returns_a_globally_bounded_tail():
     job = MagicMock()
     job.job_id = "/user/job"
-    job.logs.return_value = SimpleNamespace(
-        entries=(
-            MagicMock(data="task-0 earlier\n"),
-            MagicMock(data="task-1 latest\n"),
-        )
-    )
+    job.logs.return_value = [
+        MagicMock(data="task-0 earlier\n"),
+        MagicMock(data="task-1 latest\n"),
+    ]
 
     lines = IrisJobHandle(job).logs(max_lines=2)
 
