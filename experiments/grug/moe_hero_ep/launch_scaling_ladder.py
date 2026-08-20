@@ -97,13 +97,12 @@ TENSORSTORE_CACHE_BYTES = 125_000_000_000
 # A crash costs at most this much training time. A hero checkpoint is several TB, thus a shorter
 # interval would spend a large part of the run inside a checkpoint write.
 RESUME_SAVE_INTERVAL = timedelta(hours=1)
-# A rung runs up to 176 tasks for hundreds of GPU-days, where a single hardware fault is routine, so
-# a rung retries instead of ending. But Iris retries without a backoff, thus a deterministic failure
-# repeats for the whole budget: a resume that ran out of host memory on 3 tasks reran the gang every
-# 25 minutes on 704 GPUs and made no progress. The cumulative gate stays small so that a failure
-# which reproduces stops the run, while a lone transient one does not.
-LADDER_MAX_RETRIES_FAILURE = 3
-LADDER_MAX_TASK_FAILURES = 5
+# A rung runs up to 176 tasks for hundreds of GPU-days, where a hardware fault or a host
+# out-of-memory on one task is routine. A rung resumes from its newest checkpoint, thus a retry
+# continues the run instead of repeating it. Retry deeply so one bad task does not end a rung.
+# The two counters are separate gates and the job fails when either one trips.
+LADDER_MAX_RETRIES_FAILURE = 1000
+LADDER_MAX_TASK_FAILURES = 1000
 
 
 def _ladder_model(size: str):
