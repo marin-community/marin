@@ -139,7 +139,15 @@ export function parseLogTimestamp(value: string, zone: TimeZoneName): number | n
   // Reject out-of-range fields rather than letting Date roll them over, so a
   // typo lands as "unrecognized" instead of silently moving the window.
   if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || s > 59) return null
-  return utc ? Date.UTC(y, mo - 1, d, h, mi, s, ms) : new Date(y, mo - 1, d, h, mi, s, ms).getTime()
+  const date = utc
+    ? new Date(Date.UTC(y, mo - 1, d, h, mi, s, ms))
+    : new Date(y, mo - 1, d, h, mi, s, ms)
+  // A day past the end of its month (Feb 31) is in range for every field yet
+  // still not a date; Date rolls it forward instead of refusing it. Only the
+  // calendar knows which those are, so ask it whether the day survived.
+  const sameDay = utc ? date.getUTCDate() === d : date.getDate() === d
+  if (!sameDay) return null
+  return date.getTime()
 }
 
 /** Format an uptime duration in milliseconds as a human-readable string. */

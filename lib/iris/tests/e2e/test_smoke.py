@@ -529,7 +529,7 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
     # Search marks matching lines in place. "validation failed" only appears in
     # ERROR lines, so the INFO lines around them must survive — that is the whole
     # point of search being distinct from filter.
-    search_input = "input[placeholder^='Search loaded lines']"
+    search_input = "[data-log-search]"
     smoke_page.fill(search_input, "validation failed")
     smoke_page.wait_for_function(
         "() => document.querySelectorAll('mark').length > 0 && "
@@ -545,7 +545,7 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
     # The pager moves a window through the stream: paging back leaves the newest
     # line behind, and Follow returns to it. A 100-line page gives the verbose
     # job's few hundred lines somewhere to step back to.
-    page_size = "select[title='How many lines one page holds']"
+    page_size = "[data-log-page-size]"
     smoke_page.select_option(page_size, "100")
     smoke_page.wait_for_function(
         "() => document.querySelectorAll('[data-row]').length === 100",
@@ -562,7 +562,7 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
     # server that ignores FetchLogs.regex (anything below the pinned floor) returns
     # every line, and one that treats the pattern literally returns none, so this
     # fails on either rather than passing on a filter that never ran.
-    filter_input = "input[placeholder^='Filter regex']"
+    filter_input = "[data-log-filter]"
     smoke_page.fill(filter_input, "validation (failed|skipped)")
     smoke_page.press(filter_input, "Enter")
     _wait_for_rows(smoke_page, "processing data batch", present=False)
@@ -598,16 +598,20 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
 
     smoke_page.get_by_role("button", name="Clear filter").click()
     smoke_page.wait_for_function(
-        "() => document.querySelector(\"input[placeholder^='Filter regex']\")?.value === '' && "
+        "() => document.querySelector('[data-log-filter]')?.value === '' && "
         "document.body.textContent.includes('processing data batch')",
         timeout=5000,
     )
     assert since_trigger.inner_text() == locked_since
 
     # A start time can also be typed or pasted, which the native date input this
-    # replaced could not accept at all. An unreadable value is refused in place.
+    # replaced could not accept at all. An unreadable value is refused in place,
+    # and so is a date that reads cleanly but does not exist.
     since_trigger.click()
     smoke_page.fill("[data-log-since-field]", "not a time")
+    smoke_page.press("[data-log-since-field]", "Enter")
+    assert_visible(smoke_page, "text=Unrecognized time")
+    smoke_page.fill("[data-log-since-field]", "2026-02-31 12:00")
     smoke_page.press("[data-log-since-field]", "Enter")
     assert_visible(smoke_page, "text=Unrecognized time")
     smoke_page.fill("[data-log-since-field]", "1970-01-01 00:00:00.000")
@@ -616,6 +620,14 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
         "() => document.querySelector('[data-log-since]')?.textContent.includes('1970-01-01')",
         timeout=5000,
     )
+
+    # A start time is only a lower bound, so the stream still has a live end.
+    # With more lines than fit one page the window opens on the oldest of them,
+    # and Follow has to cross the rest of the stream to reach the newest line.
+    smoke_page.select_option(page_size, "100")
+    _wait_for_rows(smoke_page, "DONE: all lines emitted", present=False)
+    smoke_page.get_by_role("button", name="Follow").click()
+    _wait_for_rows(smoke_page, "DONE: all lines emitted", present=True)
 
 
 def test_dashboard_jump_to_exception(smoke_cluster, smoke_page, smoke_screenshot):

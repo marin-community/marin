@@ -328,7 +328,17 @@ function pageCursor(rows: LogEntry[]): string | null {
   return rows.length > 0 ? String(seqOf(rows[rows.length - 1])) : null
 }
 
-async function fetchTail() {
+/**
+ * Load the page at one end of the query and make it the whole window.
+ *
+ * `tail` picks the end. It defaults to the one a fresh query opens on: an
+ * explicit start date means "read forward from here", so the first page is the
+ * oldest one at/after sinceMs, while relative presets and the default view stay
+ * anchored to now and open on the newest page. Following the stream asks for the
+ * newest page either way — `sinceMs` only bounds the query from below, so it
+ * constrains a tailing read without contradicting it.
+ */
+async function fetchTail(tail = !absoluteSince.value) {
   if (!sourceInput.value) {
     entries.value = []
     return
@@ -337,12 +347,9 @@ async function fetchTail() {
   loading.value = true
   errorMsg.value = null
   try {
-    // An explicit start date means "read forward from here": fetch the first
-    // maxLines entries at/after sinceMs (oldest-first). Relative presets and the
-    // default view stay anchored to now, so they tail the newest maxLines.
-    const tail = !absoluteSince.value
     const { rows, more } = await fetchPage(baseRequest(), pageLines.value, tail)
     if (gen !== generation) return
+    collapseContext()
     entries.value = rows
     cursor.value = pageCursor(rows)
     if (tail) {
@@ -465,9 +472,7 @@ async function loadPage(direction: 'older' | 'newer') {
 /** Put the window back on the live tail and track it. */
 async function followNewest() {
   followTail.value = true
-  // An absolute start bounds the query below, so its window cannot slide past
-  // the bound to the tail; there, Follow just returns to the end of the page.
-  if (!reachedNewest.value && !absoluteSince.value) await fetchTail()
+  if (!reachedNewest.value) await fetchTail(true)
   scrollToBottom()
 }
 
@@ -845,6 +850,7 @@ defineExpose({ selectedAttemptId })
       <input
         v-model="filter"
         type="text"
+        data-log-filter
         title="Server-side regex filter: drops every line that does not match"
         placeholder="Filter regex… (Enter)"
         :class="[FIELD, 'h-7 w-full text-sm sm:w-56']"
@@ -864,7 +870,12 @@ defineExpose({ selectedAttemptId })
         @set-since="setSinceMs"
         @set-time-zone="timeZone = $event"
       />
-      <select v-model.number="pageLines" title="How many lines one page holds" :class="SELECT">
+      <select
+        v-model.number="pageLines"
+        data-log-page-size
+        title="How many lines one page holds"
+        :class="SELECT"
+      >
         <option :value="100">100 per page</option>
         <option :value="500">500 per page</option>
         <option :value="1000">1,000 per page</option>
@@ -903,6 +914,7 @@ defineExpose({ selectedAttemptId })
             v-model="search.query.value"
             type="text"
             spellcheck="false"
+            data-log-search
             title="Highlights matches in the lines already loaded, keeping their context. Press / to focus, Enter or n for the next match."
             placeholder="Search loaded lines… (/)"
             :class="[FIELD, 'h-6 w-64 pr-16 text-xs', search.error.value ? 'border-status-danger' : '']"
