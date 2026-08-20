@@ -12,8 +12,7 @@ import logging
 import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
-from typing import Literal
+from dataclasses import replace
 
 import fsspec
 import msgspec
@@ -22,15 +21,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import vortex
 import zstandard as zstd
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem.factory import open_url, url_to_fs
 
 from zephyr import counters
-from zephyr.expr import Expr, referenced_columns, to_pyarrow_expr
+from zephyr.expr import referenced_columns, to_pyarrow_expr
+from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_FILE_PATH_COLUMN = "__file_path"
-
 
 # ---------------------------------------------------------------------------
 # Shared Parquet row-group reader
@@ -103,30 +100,6 @@ def iter_parquet_row_groups(
 _READ_BLOCK_SIZE = 16_000_000
 _READ_CACHE_TYPE = "background"
 _READ_MAX_BLOCKS = 2
-
-
-@dataclass
-class InputFileSpec:
-    """Specification for reading a file or portion of a file.
-
-    Pure read-spec: everything here is caller-supplied. Discovered metadata
-    (e.g. file size from a bulk listing) lives on ``FileEntry`` instead.
-
-    Attributes:
-        path: Path to the file
-        format: File format ("parquet", "jsonl", or "auto" to detect)
-        columns: List of columns to read
-        row_start: Optional start row for chunked reading
-        row_end: Optional end row for chunked reading
-        filter_expr: Optional filter expression to apply
-    """
-
-    path: str
-    format: Literal["parquet", "jsonl", "vortex", "auto"] = "auto"
-    columns: list[str] | None = None
-    row_start: int | None = None
-    row_end: int | None = None
-    filter_expr: Expr | None = None
 
 
 def _as_spec(source: str | InputFileSpec) -> InputFileSpec:

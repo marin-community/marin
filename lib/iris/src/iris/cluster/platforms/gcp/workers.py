@@ -40,7 +40,6 @@ from iris.cluster.platforms.gcp.handles import (
 from iris.cluster.platforms.gcp.service import (
     CAPACITY_TYPE_LABEL,
     CAPACITY_TYPE_RESERVED_VALUE,
-    CloudGcpService,
     GcpService,
     TpuCreateRequest,
     VmCreateRequest,
@@ -254,8 +253,8 @@ class GcpWorkerProvider:
         gcp_config: GcpPlatformConfig,
         label_prefix: str,
         worker_port: int,
+        gcp_service: GcpService,
         ssh_config: SshConfig | None = None,
-        gcp_service: GcpService | None = None,
     ):
         self._project_id = gcp_config.project_id
         self._registry_mirrors = gcp_config.registry_mirrors
@@ -264,7 +263,7 @@ class GcpWorkerProvider:
         self._iris_labels = Labels(label_prefix)
         self._ssh_config = ssh_config
         self._zones = list(gcp_config.zones)
-        self._gcp: GcpService = gcp_service or CloudGcpService(project_id=self._project_id)
+        self._gcp = gcp_service
 
     @property
     def gcp_service(self) -> GcpService:
@@ -436,6 +435,7 @@ class GcpWorkerProvider:
             boot_disk_type=DEFAULT_BOOT_DISK_TYPE,
             image_family="debian-12",
             image_project="debian-cloud",
+            network_tags=tuple(gcp.network_tags),
         )
 
         logger.info("Creating GCE instance: %s (zone=%s, type=%s)", config.name, zone, machine_type)
@@ -691,12 +691,12 @@ class GcpWorkerProvider:
         self,
         zones: list[str],
         labels: dict[str, str] | None = None,
-    ) -> list[GcpSliceHandle | GcpVmSliceHandle]:
+    ) -> list[SliceHandle]:
         """List TPU and VM slices across zones, optionally filtered by labels."""
         if self._gcp.mode == ServiceMode.LOCAL:
-            return self._gcp.get_local_slices(labels)  # type: ignore[return-value]
+            return self._gcp.get_local_slices(labels)
 
-        handles: list[GcpSliceHandle | GcpVmSliceHandle] = []
+        handles: list[SliceHandle] = []
 
         tpu_infos = self._gcp.tpu_list(zones, labels)
         for tpu in tpu_infos:

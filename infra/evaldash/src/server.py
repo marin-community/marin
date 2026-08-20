@@ -3,18 +3,14 @@
 
 """Eval-results dashboard server (Starlette + uvicorn).
 
-Serves a bundled Vue SPA plus a small JSON API over eval run records under the GCS or CoreWeave
-``evals`` output root. It also scans the former flat ``eval-metadata/runs`` roots while older CLI
-checkouts can still write there.
+Serves a bundled Vue SPA plus a small JSON API over eval run records materialized in PostgreSQL.
+Object-store ``record.json`` files remain the producer and recovery format; a background reconciler
+scans the GCS and CoreWeave roots after the server has booted from its last committed DB generation.
 
-A background task ingests the records on startup and every ``EVALDASH_INGEST_INTERVAL`` seconds
-(default 300). Reads are served through a ``RecordStore`` selected by ``EVALDASH_STORE``: the
-production ``postgres`` store upserts each record into Cloud SQL and fails fast if no DB is
-configured, while the ``local`` store serves entirely from the object-store record snapshot with
-no database (for development against a ``RECORDS_PREFIXES`` directory). Both keep an in-memory
-snapshot the matrix/meta/groups/history views read from, since ``results_db`` exposes no aggregate
-query for them; a prefix whose listing fails keeps its last successfully-listed records in that
-snapshot rather than dropping out of it.
+A background task discovers records every ``EVALDASH_INGEST_INTERVAL`` seconds (default 600) and
+revalidates each known object's generation or ETag at least daily. The production ``postgres`` store
+serves its committed DB snapshot even when object storage is unavailable. The ``local`` store keeps
+the direct object scan used for development.
 
 ``/api/status`` reports each prefix's last-probe health, the active store, and the ingest
 cadence; ``POST /api/refresh`` runs one ingest pass immediately, serialised with the loop.
@@ -40,32 +36,20 @@ import contextlib
 import logging
 import os
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
-import review
-import samples
-import sqlalchemy
 import uvicorn
+from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE, Completeness, MissingPolicy, SelectionRequest
 from marin.evaluation.records import (
     DEFAULT_SCAN_PREFIXES,
     EvalRunRecord,
     RecordParseFailure,
+    list_record_paths,
     scan_records,
-)
-from metrics import build_matrix, build_meta, build_model_detail, record_score
-from results_db import (
-    connect_engine,
-    ensure_schema,
-    eval_runs,
-    fetch_archived_models,
-    fetch_runs,
-    resolve_db_config,
-    set_model_archived,
-    upsert_record,
 )
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from sqlalchemy.engine import Engine
@@ -74,6 +58,36 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
+
+from . import review, samples
+from .metrics import (
+    RUN_FACETS,
+    build_comparison,
+    build_meta,
+    build_model_detail,
+    build_panel,
+    panel_request,
+    record_headline,
+)
+from .record_reconciliation import VerificationSchedule, inspect_record_paths
+from .results_db import (
+    PrefixStatus,
+    RecordObservation,
+    SourceState,
+    catalog_generation,
+    configure_prefixes,
+    connect_engine,
+    ensure_schema,
+    fetch_archived_models,
+    fetch_snapshot,
+    mark_prefix_failed,
+    prefix_statuses,
+    prune_untracked_records,
+    reconcile_prefix,
+    resolve_db_config,
+    set_model_archived,
+    source_states,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +99,9 @@ RECORDS_PREFIXES = tuple(
     ).split(",")
     if part.strip()
 )
-INGEST_INTERVAL_SECONDS = int(os.environ.get("EVALDASH_INGEST_INTERVAL", "300"))
+INGEST_INTERVAL_SECONDS = int(os.environ.get("EVALDASH_INGEST_INTERVAL", "600"))
+REVALIDATE_AFTER_SECONDS = int(os.environ.get("EVALDASH_REVALIDATE_AFTER", "86400"))
+CATALOG_POLL_SECONDS = 10
 # Which record store backs reads: "postgres" (production, requires the eval DB) or "local"
 # (development, serves entirely from the RECORDS_PREFIXES record snapshot with no database).
 STORE_MODE = os.environ.get("EVALDASH_STORE", "postgres").strip().lower()
@@ -97,6 +113,8 @@ DEFAULT_SAMPLE_LIMIT = 50
 MAX_SAMPLE_LIMIT = 500
 DEFAULT_REVIEW_SAMPLES = 20
 MAX_REVIEW_SAMPLES = 40
+# Most models one request may compare head-to-head; mirrors the SPA's picker cap.
+MAX_COMPARE_MODELS = 4
 REVIEW_FILTERS = ("all", "correct", "incorrect", "ungraded")
 
 IAP_USER_HEADER = "x-goog-authenticated-user-email"
@@ -115,6 +133,10 @@ class StoreInfo:
     backend: str
     instance: str | None
     database: str | None
+    record_count: int
+    catalog_generation: int | None
+    snapshot_updated_at: str | None
+    catalog_error: str | None
 
 
 def _deduplicate_records(records: list[EvalRunRecord]) -> list[EvalRunRecord]:
@@ -166,15 +188,7 @@ def _group_sibling_row(record: EvalRunRecord) -> dict:
 
 
 class RecordStore:
-    """In-memory snapshot of eval records plus the read views the API serves over it.
-
-    The base serves every read from the snapshot the ingest loop swaps wholesale each cycle (run
-    list, run detail, group siblings, matrix, meta, groups, history) and holds the archived-model
-    set in memory. :class:`MemoryRecordStore` uses these directly for local, offline runs;
-    :class:`PgRecordStore` overrides the run list, run detail, group siblings, refresh, and archive
-    state to read the durable Postgres index instead. The lock guards the snapshot swap against the
-    ingest worker thread.
-    """
+    """Expose dashboard query views over one consistent in-memory record snapshot."""
 
     backend = "memory"
 
@@ -195,16 +209,25 @@ class RecordStore:
             return self._records, self._by_id
 
     def store_info(self) -> StoreInfo:
-        return StoreInfo(backend=self.backend, instance=None, database=None)
+        records, _by_id = self._snapshot()
+        return StoreInfo(
+            backend=self.backend,
+            instance=None,
+            database=None,
+            record_count=len(records),
+            catalog_generation=None,
+            snapshot_updated_at=None,
+            catalog_error=None,
+        )
 
     def refresh(self, records: list[EvalRunRecord]) -> None:
-        """Absorb a fresh record listing. The base only swaps the snapshot; Postgres also upserts."""
+        """Replace the direct-scan snapshot used by the local store."""
         records = _deduplicate_records(records)
         self._set_snapshot(records)
         logger.info("memory store refreshed: %d records", len(records))
 
     def archived_models(self) -> set[str]:
-        """Model names hidden from the headline matrix. In-memory in the base; a table in Postgres."""
+        """Model names hidden from the headline panel. In-memory in the base; a table in Postgres."""
         with self._lock:
             return set(self._archived)
 
@@ -244,14 +267,25 @@ class RecordStore:
         rows.sort(key=lambda row: row["created_at"] or "", reverse=True)
         return rows[:limit]
 
-    def matrix(self, include_archived: bool = False) -> dict:
-        """The model x eval matrix over the snapshot. Archived models are dropped unless requested;
-        when included, their rows carry ``archived: true`` so the UI can style them apart."""
+    def panel(self, request: SelectionRequest, aggregate: MissingPolicy | None, include_archived: bool) -> dict:
+        """The model x benchmark panel the request selects, over the snapshot.
+
+        Archived models are dropped unless requested; when included, their rows carry
+        ``archived: true`` so the UI can style them apart.
+        """
         records, _by_id = self._snapshot()
         archived = self.archived_models()
         if not include_archived:
             records = [record for record in records if record.model.name not in archived]
-        return build_matrix(records, frozenset(archived))
+        return build_panel(records, request, frozenset(archived), aggregate)
+
+    def comparison(self, request: SelectionRequest, models: tuple[str, ...]) -> dict:
+        """Head-to-head difference intervals between named models, over the snapshot.
+
+        Archived models are always in scope: naming a model is an explicit request for it.
+        """
+        records, _by_id = self._snapshot()
+        return build_comparison(records, request, models)
 
     def meta(self) -> dict:
         records, _by_id = self._snapshot()
@@ -298,28 +332,18 @@ class RecordStore:
     def history(self, model: str, task: str) -> list[dict]:
         """Every run's headline score for one ``(model, eval)`` over time, oldest first.
 
-        ``task`` is a matrix column, i.e. a registry eval name. One point per run that produced a
-        primary metric -- with its stderr, status, and provenance for the score-over-time tooltip.
+        ``task`` is a panel column, i.e. a registry eval name. One point per run that produced a
+        primary metric, each carrying its interval, coverage, and provenance for the tooltip.
         """
         records, _by_id = self._snapshot()
         points = []
         for record in records:
             if record.model.name != model or record.evaluation.name != task:
                 continue
-            score = record_score(record)
-            if score is None:
+            headline = record_headline(record)
+            if headline is None:
                 continue
-            points.append(
-                {
-                    "run_id": record.run_id,
-                    "created_at": record.created_at,
-                    "value": score.value,
-                    "stderr": score.stderr,
-                    "metric": score.metric,
-                    "status": record.status.value,
-                    "git_sha": record.provenance.git_sha,
-                }
-            )
+            points.append({**headline, "status": record.status.value})
         points.sort(key=lambda point: point["created_at"] or "")
         return points
 
@@ -355,13 +379,7 @@ class MemoryRecordStore(RecordStore):
 
 
 class PgRecordStore(RecordStore):
-    """Serves the run list and run details from the indexed Postgres tables; upserts on refresh.
-
-    ``get_record`` reads the durable ``record`` jsonb from Postgres -- the same table the run list
-    is served from -- so a run indexed there but absent from the latest ingest snapshot (its source
-    prefix failed to list this cycle) still resolves. ``matrix``, ``meta``, ``groups``, and
-    ``history`` inherit the base's snapshot reads, since ``results_db`` exposes no aggregate query.
-    """
+    """Boots and serves from a committed PostgreSQL catalog generation."""
 
     backend = "postgres"
 
@@ -370,69 +388,83 @@ class PgRecordStore(RecordStore):
         self._engine = engine
         self._instance = instance
         self._database = database
+        snapshot = fetch_snapshot(engine)
+        self._catalog_generation = snapshot.generation
+        self._snapshot_updated_at = snapshot.updated_at
+        self._catalog_error: str | None = None
+        self._set_snapshot(snapshot.records)
 
     def store_info(self) -> StoreInfo:
-        return StoreInfo(backend=self.backend, instance=self._instance, database=self._database)
+        with self._lock:
+            return StoreInfo(
+                backend=self.backend,
+                instance=self._instance,
+                database=self._database,
+                record_count=len(self._records),
+                catalog_generation=self._catalog_generation,
+                snapshot_updated_at=self._snapshot_updated_at.isoformat(),
+                catalog_error=self._catalog_error,
+            )
 
-    def refresh(self, records: list[EvalRunRecord]) -> None:
-        records = _deduplicate_records(records)
-        self._set_snapshot(records)
-        for record in records:
-            upsert_record(self._engine, record)
-        logger.info("postgres store upserted %d records", len(records))
+    def reload_if_changed(self) -> bool:
+        """Load a newer committed generation, returning whether the snapshot advanced."""
+        generation = catalog_generation(self._engine)
+        with self._lock:
+            current_generation = self._catalog_generation
+        if generation == current_generation:
+            return False
+        snapshot = fetch_snapshot(self._engine)
+        with self._lock:
+            self._records = snapshot.records
+            self._by_id = {record.run_id: record for record in snapshot.records}
+            self._catalog_generation = snapshot.generation
+            self._snapshot_updated_at = snapshot.updated_at
+        logger.info("postgres store loaded generation %d with %d records", snapshot.generation, len(snapshot.records))
+        return True
+
+    def set_catalog_error(self, error: str | None) -> None:
+        with self._lock:
+            self._catalog_error = error
+
+    def configure_prefixes(self, prefixes: tuple[str, ...]) -> None:
+        configure_prefixes(self._engine, prefixes)
+        self.reload_if_changed()
+
+    def source_states(self, prefix: str) -> dict[str, SourceState]:
+        return source_states(self._engine, prefix)
+
+    def reconcile_prefix(
+        self,
+        prefix: str,
+        paths: list[str],
+        observations: list[RecordObservation],
+        probe_at: datetime,
+        confirm_missing_after: float,
+    ) -> None:
+        reconcile_prefix(
+            self._engine,
+            prefix,
+            paths,
+            observations,
+            probe_at,
+            confirm_missing_after,
+        )
+
+    def mark_prefix_failed(self, prefix: str, probe_at: datetime, error: str) -> None:
+        mark_prefix_failed(self._engine, prefix, probe_at, error)
+
+    def finish_reconciliation(self, prefixes: tuple[str, ...]) -> None:
+        prune_untracked_records(self._engine, prefixes)
+        self.reload_if_changed()
+
+    def prefix_statuses(self) -> list[PrefixStatus]:
+        return prefix_statuses(self._engine)
 
     def archived_models(self) -> set[str]:
         return fetch_archived_models(self._engine)
 
     def set_model_archived(self, model_name: str, archived: bool, updated_by: str | None) -> None:
         set_model_archived(self._engine, model_name, archived, updated_by)
-
-    def get_record(self, run_id: str) -> dict | None:
-        stmt = sqlalchemy.select(eval_runs.c.record).where(eval_runs.c.run_id == run_id)
-        with self._engine.begin() as conn:
-            row = conn.execute(stmt).first()
-        return row[0] if row is not None else None
-
-    def fetch_runs(
-        self,
-        *,
-        model: str | None = None,
-        eval_name: str | None = None,
-        user: str | None = None,
-        status: str | None = None,
-        group: str | None = None,
-        limit: int = DEFAULT_RUNS_LIMIT,
-    ) -> list[dict]:
-        rows = fetch_runs(
-            self._engine, model=model, eval_name=eval_name, user=user, status=status, group=group, limit=limit
-        )
-        # The task list and jobs map live in the record jsonb, so enrich each row from the cache.
-        _records, by_id = self._snapshot()
-        for row in rows:
-            record = by_id.get(row.get("run_id"))
-            row["tasks"] = [task.name for task in record.evaluation.tasks] if record else []
-            row["jobs"] = dict(record.jobs) if record else {}
-            # version lives only in the record jsonb, not an eval_runs column, so fill it from the cache.
-            row["version"] = record.version if record else None
-        return rows
-
-    def group_siblings(self, group_id: str, exclude_run_id: str) -> list[dict]:
-        stmt = (
-            sqlalchemy.select(
-                eval_runs.c.run_id,
-                eval_runs.c.eval_name,
-                eval_runs.c.model_name,
-                eval_runs.c.status,
-                eval_runs.c.created_at,
-            )
-            .where(eval_runs.c.group_id == group_id, eval_runs.c.run_id != exclude_run_id)
-            .order_by(eval_runs.c.created_at.desc())
-        )
-        with self._engine.begin() as conn:
-            rows = [dict(row) for row in conn.execute(stmt).mappings().all()]
-        for row in rows:
-            row["created_at"] = row["created_at"].isoformat()
-        return rows
 
 
 def create_store() -> RecordStore:
@@ -455,8 +487,15 @@ def create_store() -> RecordStore:
         )
     engine = connect_engine(config.instance, config.db, config.user, config.password)
     ensure_schema(engine)
-    logger.info("connected to eval DB %s/%s", config.instance, config.db)
-    return PgRecordStore(engine, instance=config.instance, database=config.db)
+    store = PgRecordStore(engine, instance=config.instance, database=config.db)
+    logger.info(
+        "loaded eval DB %s/%s generation %s with %d records",
+        config.instance,
+        config.db,
+        store.store_info().catalog_generation,
+        store.store_info().record_count,
+    )
+    return store
 
 
 # --------------------------------------------------------------------------------------
@@ -466,6 +505,26 @@ def create_store() -> RecordStore:
 
 def _utcnow_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+async def _run_periodically(
+    operation: Callable[[], Awaitable[None]],
+    interval: float,
+    label: str,
+    set_error: Callable[[str | None], None],
+) -> None:
+    while True:
+        try:
+            await operation()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            set_error(error)
+            logger.exception("%s failed; retrying in %ss", label, interval)
+        else:
+            set_error(None)
+        await asyncio.sleep(interval)
 
 
 @dataclass
@@ -508,6 +567,7 @@ class Ingestor:
         self._last_good: dict[str, list[EvalRunRecord]] = {prefix: [] for prefix in prefixes}
         self._record_cache: dict[str, dict[str, EvalRunRecord]] = {prefix: {} for prefix in prefixes}
         self.last_pass_time: str | None = None
+        self.cycle_error: str | None = None
 
     async def run_once(self) -> None:
         """Run one full ingest pass, serialised against any other pass via ``_lock``."""
@@ -546,22 +606,147 @@ class Ingestor:
     async def run_loop(self) -> None:
         if not self._prefixes:
             return  # ingestion disabled; nothing to poll
-        while True:
-            try:
-                await self.run_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("ingest cycle failed; retrying in %ss", self.interval)
-            await asyncio.sleep(self.interval)
+        await _run_periodically(self.run_once, self.interval, "ingest cycle", self._set_cycle_error)
+
+    def _set_cycle_error(self, error: str | None) -> None:
+        self.cycle_error = error
 
     def status(self) -> dict:
         """Serialisable ingest health: cadence, last full pass, and each prefix's probe."""
         return {
             "interval_seconds": self.interval,
+            "revalidate_after_seconds": None,
             "last_pass_time": self.last_pass_time,
+            "cycle_error": self.cycle_error,
             "prefixes": [asdict(self._probes[prefix]) for prefix in self._prefixes],
         }
+
+
+class PostgresIngestor:
+    """Reconcile object membership and versions into PostgreSQL after serving has started."""
+
+    def __init__(
+        self,
+        store: PgRecordStore,
+        prefixes: tuple[str, ...],
+        interval: float,
+        revalidate_after: float,
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        self._store = store
+        self._prefixes = prefixes
+        self.interval = interval
+        self.revalidate_after = revalidate_after
+        self._now = now
+        self._lock = asyncio.Lock()
+        store.configure_prefixes(prefixes)
+        self._probes = {prefix: PrefixProbe(prefix=prefix) for prefix in prefixes}
+        for row in store.prefix_statuses():
+            probe = self._probes.get(row.prefix)
+            if probe is None:
+                continue
+            probe.last_probe_time = row.last_probe_at.isoformat() if row.last_probe_at else None
+            probe.last_success_time = row.last_success_at.isoformat() if row.last_success_at else None
+            probe.record_count = row.record_count
+            probe.error = row.error
+        for prefix, probe in self._probes.items():
+            probe.parse_failures = [
+                RecordParseFailure(path=path, error=state.error)
+                for path, state in sorted(store.source_states(prefix).items())
+                if state.error is not None
+            ]
+        self.last_pass_time: str | None = None
+        self.cycle_error: str | None = None
+
+    async def run_once(self) -> None:
+        if not self._prefixes:
+            return
+        async with self._lock:
+            for prefix in self._prefixes:
+                probe = self._probes[prefix]
+                probe_at = self._now()
+                probe.last_probe_time = probe_at.isoformat()
+                try:
+                    paths = await asyncio.to_thread(list_record_paths, prefix)
+                    states = await asyncio.to_thread(self._store.source_states, prefix)
+                    observations = await asyncio.to_thread(
+                        inspect_record_paths,
+                        paths,
+                        states,
+                        VerificationSchedule(
+                            checked_at=probe_at,
+                            retry_after=self.interval,
+                            revalidate_after=self.revalidate_after,
+                        ),
+                    )
+                    failures = {
+                        path: state.error for path, state in states.items() if path in paths and state.error is not None
+                    }
+                    for observation in observations:
+                        if observation.error is None:
+                            failures.pop(observation.path, None)
+                        else:
+                            failures[observation.path] = observation.error
+                    await asyncio.to_thread(
+                        self._store.reconcile_prefix,
+                        prefix,
+                        paths,
+                        observations,
+                        probe_at,
+                        self.interval,
+                    )
+                except Exception as exc:
+                    error = f"{type(exc).__name__}: {exc}"
+                    probe.error = error
+                    logger.exception("reconcile: %s failed; keeping its committed catalog rows", prefix)
+                    await asyncio.to_thread(self._store.mark_prefix_failed, prefix, probe_at, error)
+                    continue
+                probe.last_success_time = probe.last_probe_time
+                probe.record_count = len(paths)
+                probe.parse_failures = [
+                    RecordParseFailure(path=path, error=error) for path, error in sorted(failures.items())
+                ]
+                probe.error = None
+                logger.info(
+                    "reconcile: %d candidates, %d checked, %d invalid from %s",
+                    len(paths),
+                    len(observations),
+                    len(probe.parse_failures),
+                    prefix,
+                )
+            await asyncio.to_thread(self._store.finish_reconciliation, self._prefixes)
+            self.last_pass_time = self._now().isoformat()
+
+    async def run_loop(self) -> None:
+        if not self._prefixes:
+            return
+        await _run_periodically(self.run_once, self.interval, "reconcile cycle", self._set_cycle_error)
+
+    def _set_cycle_error(self, error: str | None) -> None:
+        self.cycle_error = error
+
+    def status(self) -> dict:
+        return {
+            "interval_seconds": self.interval,
+            "revalidate_after_seconds": self.revalidate_after,
+            "last_pass_time": self.last_pass_time,
+            "cycle_error": self.cycle_error,
+            "prefixes": [asdict(self._probes[prefix]) for prefix in self._prefixes],
+        }
+
+
+async def _reload_catalog_loop(store: PgRecordStore) -> None:
+    """Poll for committed generations and expose any refresh failure through store status."""
+
+    async def reload_once() -> None:
+        await asyncio.to_thread(store.reload_if_changed)
+
+    await _run_periodically(
+        reload_once,
+        CATALOG_POLL_SECONDS,
+        "catalog generation poll",
+        store.set_catalog_error,
+    )
 
 
 # --------------------------------------------------------------------------------------
@@ -578,8 +763,7 @@ _NOT_BUILT_HTML = (
 
 
 def _dashboard_dist() -> Path:
-    """Locate the built SPA: env override, the image layout (beside this file), or the repo
-    layout (``../dashboard/dist``)."""
+    """Locate the built SPA: env override, package-local dist, or repository dashboard dist."""
     override = os.environ.get("EVALDASH_DASHBOARD_DIST")
     if override:
         return Path(override)
@@ -620,6 +804,10 @@ def _current_user(request: Request) -> str | None:
     return raw.removeprefix(IAP_USER_PREFIX)
 
 
+class BadRequest(ValueError):
+    """A query parameter the server will not guess at, surfaced to the caller as a 400."""
+
+
 def _parse_limit(raw: str | None) -> int:
     return _parse_int(raw, default=DEFAULT_RUNS_LIMIT, low=1, high=MAX_RUNS_LIMIT)
 
@@ -633,6 +821,48 @@ def _parse_int(raw: str | None, *, default: int, low: int, high: int) -> int:
     except ValueError:
         return default
     return max(low, min(value, high))
+
+
+def _parse_flag(raw: str | None) -> bool:
+    return raw in ("1", "true")
+
+
+def _parse_names(raw: str | None) -> tuple[str, ...] | None:
+    """A comma-separated benchmark selection, or None for "every benchmark present"."""
+    if not raw:
+        return None
+    names = tuple(part.strip() for part in raw.split(",") if part.strip())
+    return names or None
+
+
+def _parse_coverage(raw: str | None) -> float:
+    """The coverage floor a result must clear to be displayed."""
+    if not raw:
+        return DEFAULT_MIN_COVERAGE
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise BadRequest(f"min_coverage must be a number in [0, 1], got {raw!r}") from exc
+    if not 0.0 <= value <= 1.0:
+        raise BadRequest(f"min_coverage must be in [0, 1], got {value}")
+    return value
+
+
+def _parse_aggregate(raw: str | None) -> MissingPolicy | None:
+    """The cross-benchmark aggregation policy, or None for no aggregate at all.
+
+    Absent by default: a mean across benchmarks has no interpretation without a declared panel and
+    missing-data policy, so a caller has to ask for one and say which policy it wants. An unrecognized
+    policy is an error rather than "no aggregate": the two answer different questions, and silently
+    substituting one for the other hides the typo.
+    """
+    if not raw:
+        return None
+    try:
+        return MissingPolicy(raw)
+    except ValueError as exc:
+        policies = ", ".join(policy.value for policy in MissingPolicy)
+        raise BadRequest(f"unknown aggregate policy {raw!r}; expected one of: {policies}") from exc
 
 
 def _parse_review_n(raw: object) -> int:
@@ -651,7 +881,17 @@ def _collect_job_status(gateway: ClusterGatewayLike, jobs: dict[str, str]) -> li
     return [{"role": role, "job_path": path, **gateway.job_status(path)} for role, path in jobs.items()]
 
 
-def _status_payload(store: RecordStore, ingestor: Ingestor) -> dict:
+class IngestorLike(Protocol):
+    interval: float
+
+    async def run_once(self) -> None: ...
+
+    async def run_loop(self) -> None: ...
+
+    def status(self) -> dict: ...
+
+
+def _status_payload(store: RecordStore, ingestor: IngestorLike) -> dict:
     """The ``/api/status`` body: which store serves reads plus ingest/probe health."""
     return {"store": asdict(store.store_info()), "ingest": ingestor.status()}
 
@@ -669,26 +909,20 @@ def _status_rollup(statuses: set[str]) -> str:
 
 
 def _run_headline(record: dict) -> dict | None:
-    """The run's overall grade for the detail header: its rolled-up primary metric as
-    ``{value, metric, stderr}``, or None when nothing scored (an infra or eval failure that never
-    produced metrics)."""
-    score = record_score(EvalRunRecord.model_validate(record))
-    if score is None:
-        return None
-    return {"value": score.value, "metric": score.metric, "stderr": score.stderr}
+    """The run's overall grade for the detail header: its rolled-up primary metric with the interval
+    and coverage behind it, or None when nothing scored (an infra or eval failure that never produced
+    metrics)."""
+    return record_headline(EvalRunRecord.model_validate(record))
 
 
 def _group_member(record: EvalRunRecord) -> dict:
     """One eval within a launch: its identity, status, and headline score for the expanded group row."""
-    score = record_score(record)
     return {
         "run_id": record.run_id,
         "eval_name": record.evaluation.name,
         "status": record.status.value,
         "created_at": record.created_at,
-        "value": score.value if score else None,
-        "metric": score.metric if score else None,
-        "stderr": score.stderr if score else None,
+        "headline": record_headline(record),
     }
 
 
@@ -723,17 +957,25 @@ def create_app(
     ingestion entirely (for a store populated out of band, e.g. tests or a one-shot screenshot run),
     which keeps the app from ever reaching the remote defaults.
     """
-    ingestor = Ingestor(store, prefixes, INGEST_INTERVAL_SECONDS)
+    ingestor: IngestorLike
+    if isinstance(store, PgRecordStore):
+        ingestor = PostgresIngestor(store, prefixes, INGEST_INTERVAL_SECONDS, REVALIDATE_AFTER_SECONDS)
+    else:
+        ingestor = Ingestor(store, prefixes, INGEST_INTERVAL_SECONDS)
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
-        task = asyncio.create_task(ingestor.run_loop())
+        tasks = [asyncio.create_task(ingestor.run_loop())]
+        if isinstance(store, PgRecordStore):
+            tasks.append(asyncio.create_task(_reload_catalog_loop(store)))
         try:
             yield
         finally:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+            for task in tasks:
+                task.cancel()
+            for task in tasks:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
     async def healthz(_request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "store": store.backend})
@@ -862,9 +1104,41 @@ def create_app(
             return JSONResponse({"error": "unknown model"}, status_code=404)
         return JSONResponse(detail)
 
-    async def api_matrix(request: Request) -> JSONResponse:
-        include_archived = request.query_params.get("include_archived") in ("1", "true")
-        return JSONResponse(await asyncio.to_thread(store.matrix, include_archived))
+    def _selection(params: Mapping[str, str]) -> SelectionRequest:
+        """The panel selection a query string asks for, shared by the panel and compare endpoints."""
+        return panel_request(
+            benchmarks=_parse_names(params.get("benchmarks")),
+            cohort_version=params.get("cohort") or None,
+            completeness=Completeness.COMPLETE_PANEL if _parse_flag(params.get("complete")) else Completeness.ANY,
+            min_coverage=_parse_coverage(params.get("min_coverage")),
+            filters={facet: value for facet in RUN_FACETS if (value := params.get(facet))},
+            model_query=params.get("model") or None,
+            include_flagged=_parse_flag(params.get("include_flagged")),
+        )
+
+    async def api_panel(request: Request) -> JSONResponse:
+        params = request.query_params
+        try:
+            selection = _selection(params)
+            aggregate = _parse_aggregate(params.get("aggregate"))
+        except BadRequest as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        payload = await asyncio.to_thread(store.panel, selection, aggregate, _parse_flag(params.get("include_archived")))
+        return JSONResponse(payload)
+
+    async def api_compare(request: Request) -> JSONResponse:
+        params = request.query_params
+        models = _parse_names(params.get("models"))
+        if models is None or len(models) < 2:
+            return JSONResponse({"error": "compare needs at least two models"}, status_code=400)
+        if len(models) > MAX_COMPARE_MODELS:
+            return JSONResponse({"error": f"compare takes at most {MAX_COMPARE_MODELS} models"}, status_code=400)
+        try:
+            selection = _selection(params)
+        except BadRequest as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        payload = await asyncio.to_thread(store.comparison, selection, models)
+        return JSONResponse(payload)
 
     async def api_groups(request: Request) -> JSONResponse:
         params = request.query_params
@@ -913,7 +1187,8 @@ def create_app(
         Route("/api/runs/{run_id:str}/samples", api_run_samples),
         Route("/api/runs/{run_id:str}/group", api_run_group),
         Route("/api/runs/{run_id:str}", api_run_detail),
-        Route("/api/matrix", api_matrix),
+        Route("/api/panel", api_panel),
+        Route("/api/compare", api_compare),
         Route("/api/history", api_history),
         Route("/api/meta", api_meta),
         Route("/api/status", api_status),
@@ -937,7 +1212,7 @@ def main() -> None:
     else:
         # Production only: the live gateway pulls in the iris/finelog connect clients, which local
         # mode neither has nor needs. Import it lazily so local dev runs without those deps.
-        from cluster import ClusterGateway  # noqa: PLC0415
+        from .cluster import ClusterGateway  # noqa: PLC0415
 
         configure_coreweave_s3()
         gateway = ClusterGateway()

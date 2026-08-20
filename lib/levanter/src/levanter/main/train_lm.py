@@ -23,6 +23,7 @@ import levanter.callbacks
 import levanter.eval
 import levanter.eval_harness
 from levanter import callbacks
+from levanter.callbacks._iris_status import iris_status_reporter
 from levanter.callbacks.labeled_eval import LabeledLmEvalConfig, add_labeled_lm_eval_callbacks
 from levanter.adaptor import AdaptorConfig, AdaptorExportConfig, NoAdaptorConfig
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
@@ -386,7 +387,7 @@ def main(config: TrainLmConfig):
             callbacks.log_performance_stats(Pos.size, trainer.config.batch_schedule, flops_per_example), every=1
         )
         trainer.add_hook(
-            callbacks.iris_status_reporter(
+            iris_status_reporter(
                 Pos.size, trainer.config.batch_schedule, trainer.config.num_train_steps, flops_per_example
             ),
             every=10,

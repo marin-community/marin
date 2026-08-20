@@ -8,12 +8,14 @@ submits its own jobs and is independently runnable. In local mode the cluster
 has workers across CPU, TPU coscheduling, and multi-region scale groups.
 """
 
+import contextlib
 import logging
 import os
 import uuid
 from pathlib import Path
 
 import pytest
+from finelog.client import FlushResult, LogClient
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client.client import IrisClient, iris_ctx
@@ -29,13 +31,11 @@ from iris.cluster.config import (
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.lifecycle import connect_cluster
+from iris.cluster.stats.tables import TASK_EVENT_NAMESPACE, TASK_EVENT_STORAGE_POLICY, TaskEventRow
 from iris.cluster.types import AcceleratorType, CapacityType, Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from rigging.connect import proxy_path
-from rigging.timing import Duration, ExponentialBackoff
-
-from .conftest import (
+from iris.testing.e2e import (
     DEFAULT_CONFIG,
     MARIN_ROOT,
     ClusterCapabilities,
@@ -46,7 +46,9 @@ from .conftest import (
     discover_capabilities,
     wait_for_dashboard_ready,
 )
-from .helpers import TestJobs
+from iris.testing.e2e_helpers import TestJobs
+from rigging.connect import proxy_path
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -420,6 +422,61 @@ def _wait_for_task_log_marker(
     )
 
 
+def test_dashboard_task_events_exclude_prior_incarnations(smoke_cluster, smoke_page):
+    """The task timeline excludes retained events from a prior run with reused IDs."""
+    job = smoke_cluster.submit(TestJobs.quick, "smoke-event-incarnation")
+    smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
+    task_status = smoke_cluster.task_status(job)
+    task_id = task_status.task_id
+    job_id = job.job_id.to_wire()
+    current_attempt = next(
+        attempt for attempt in task_status.attempts if attempt.attempt_id == task_status.current_attempt_id
+    )
+
+    log_server_url = f"{smoke_cluster.url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}"
+    with contextlib.closing(LogClient.connect(log_server_url)) as log_client:
+        table = log_client.get_table(
+            TASK_EVENT_NAMESPACE,
+            TaskEventRow,
+            storage_policy=TASK_EVENT_STORAGE_POLICY,
+        )
+        now = Timestamp.now()
+        event_source = "iris/controller"
+        table.write(
+            [
+                TaskEventRow(
+                    task_id=task_id,
+                    attempt_id=current_attempt.attempt_id,
+                    attempt_uid="prior-incarnation",
+                    ts=now.add_ms(-1_000).as_naive_utc(),
+                    type="Warning",
+                    reason="PriorIncarnationEvent",
+                    message="This retained event belongs to an earlier run.",
+                    source=event_source,
+                    count=1,
+                ),
+                TaskEventRow(
+                    task_id=task_id,
+                    attempt_id=current_attempt.attempt_id,
+                    attempt_uid=current_attempt.attempt_uid,
+                    ts=now.as_naive_utc(),
+                    type="Normal",
+                    reason="CurrentIncarnationEvent",
+                    message="This event belongs to the task shown by the controller.",
+                    source=event_source,
+                    count=1,
+                ),
+            ]
+        )
+        assert table.flush(timeout=5) == FlushResult.SUCCEEDED
+
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}/task/{task_id}")
+    wait_for_dashboard_ready(smoke_page)
+    smoke_page.get_by_text("CurrentIncarnationEvent", exact=True).wait_for(timeout=10_000)
+
+    assert smoke_page.get_by_text("PriorIncarnationEvent", exact=True).count() == 0
+
+
 def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
     """Task logs show search, filter, permalink, and time-bound controls."""
     task_status = smoke_cluster.task_status(verbose_job)
@@ -465,9 +522,11 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
         "and non-matching log lines are still visible around the highlights.",
     )
 
-    # The filter re-queries the server and drops non-matching lines entirely. It
-    # applies on Enter, not on every keystroke.
-    filter_input = "input[placeholder^='Filter:']"
+    # The regex filter re-queries the server and drops non-matching lines entirely. It
+    # applies on Enter, not on every keystroke. Keep this pattern literal-compatible
+    # because CI runs Iris smoke tests against the latest published Finelog server;
+    # the Rust test covers regex metacharacters against this branch's server source.
+    filter_input = "input[placeholder^='Filter regex']"
     smoke_page.fill(filter_input, "validation failed")
     smoke_page.press(filter_input, "Enter")
     smoke_page.wait_for_function(
@@ -499,7 +558,7 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
 
     smoke_page.get_by_role("button", name="Clear filter").click()
     smoke_page.wait_for_function(
-        "() => document.querySelector(\"input[placeholder^='Filter:']\")?.value === '' && "
+        "() => document.querySelector(\"input[placeholder^='Filter regex']\")?.value === '' && "
         "document.body.textContent.includes('processing data batch')",
         timeout=5000,
     )

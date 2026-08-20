@@ -25,10 +25,11 @@ import pyarrow.parquet as pq
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.text.formats import LmDatasetFormatBase, preprocessor_for_format
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
 from zephyr.dataset import Dataset, FileEntry
-from zephyr.readers import InputFileSpec
+from zephyr.input_file import InputFileSpec
 from zephyr.worker_context import zephyr_worker_ctx
 
 from marin.datakit.normalize import generate_id
@@ -48,6 +49,7 @@ MAX_TOKENS_PER_RECORD = 16 * 1024 * 1024
 # Zero-based position of a row inside its source document. See
 # :func:`split_oversized_token_record` for the contract.
 CHUNK_INDEX_FIELD = "chunk_index"
+INPUT_IDS_FIELD = "input_ids"
 
 _TOKENIZE_EXTENSIONS = ["json.{gz,zst,zstd}", "jsonl.{gz,zst,zstd}", "parquet"]
 
@@ -206,6 +208,7 @@ def _splits_with_tokens(value: object, num_tokens: int) -> bool:
 def split_oversized_token_record(
     record: dict,
     *,
+    token_data_key: str = INPUT_IDS_FIELD,
     max_tokens: int = MAX_TOKENS_PER_RECORD,
 ) -> Iterator[dict]:
     """Split one token record into Parquet-safe rows.
@@ -223,7 +226,7 @@ def split_oversized_token_record(
     if max_tokens <= 0:
         raise ValueError(f"max_tokens must be positive, got {max_tokens}")
 
-    input_ids = record.get("input_ids", [])
+    input_ids = record.get(token_data_key, [])
     num_tokens = len(input_ids)
     if num_tokens <= max_tokens:
         yield {**record, CHUNK_INDEX_FIELD: 0}
@@ -247,9 +250,10 @@ def tokenize_batches_with_id(
 ) -> Iterator[dict]:
     """Tokenize batches and yield ``{id, chunk_index, input_ids, ...}`` rows.
 
-    A document yields one row with ``chunk_index == 0``, unless its token count is
-    above :data:`MAX_TOKENS_PER_RECORD`. Such a document yields several adjacent
-    rows that share its ``id``, in ``chunk_index`` order — see
+    Empty documents are dropped. A non-empty document yields one row with
+    ``chunk_index == 0``, unless its token count is above
+    :data:`MAX_TOKENS_PER_RECORD`. Such a document yields several adjacent rows
+    that share its ``id``, in ``chunk_index`` order — see
     :func:`split_oversized_token_record`.
 
     Each input record must already carry ``id`` (apply :func:`attach_id` upstream).
@@ -273,6 +277,7 @@ def tokenize_batches_with_id(
     if hasattr(inner, "_long_string_workaround"):
         inner._long_string_workaround = True
     processor = IdPreservingPreprocessor(inner)
+    token_data_key = data_format.token_data_key
     counters.pipeline.update_counter("tokenize/initialization_seconds", time.monotonic() - initialization_start)
 
     batch_count = 0
@@ -283,14 +288,18 @@ def tokenize_batches_with_id(
     for batch in batches:
         batch_count += 1
         records = processor(batch)
-        batch_token_count = sum(len(record.get("input_ids", [])) for record in records)
+        empty_docs = sum(len(record[token_data_key]) == 0 for record in records)
+        if empty_docs:
+            counters.pipeline.update_counter("tokenize/empty_docs", empty_docs)
+            records = [record for record in records if len(record[token_data_key]) > 0]
+        batch_token_count = sum(len(record[token_data_key]) for record in records)
         counters.pipeline.update_counter("tokenize/docs_out", len(records))
         counters.pipeline.update_counter("tokenize/tokens_out", batch_token_count)
         record_count += len(records)
         token_count += batch_token_count
         oversized = 0
         for record in records:
-            num_tokens = len(record.get("input_ids", []))
+            num_tokens = len(record.get(token_data_key, []))
             if num_tokens > MAX_TOKENS_PER_RECORD:
                 oversized += 1
                 logger.warning(
@@ -299,7 +308,7 @@ def tokenize_batches_with_id(
                     num_tokens,
                     MAX_TOKENS_PER_RECORD,
                 )
-            yield from split_oversized_token_record(record)
+            yield from split_oversized_token_record(record, token_data_key=token_data_key)
         if oversized:
             counters.pipeline.update_counter("tokenize/oversized_docs", oversized)
         if batch_count % 10 == 0:

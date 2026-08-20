@@ -46,14 +46,23 @@ _INVALID_SOURCE_DOCUMENTS = {
 }
 
 
-def _external_python(*args: str, hash_seed: str = "0", check: bool = True) -> subprocess.CompletedProcess[str]:
+def _external_python(
+    *args: str,
+    hash_seed: str = "0",
+    check: bool = True,
+    extra_python_path: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
     environment = dict(os.environ)
     environment["PYTHONHASHSEED"] = hash_seed
-    environment["PYTHONPATH"] = str(_ROOT / "lib/marin/src")
+    python_paths = [str(_ROOT / "lib/marin/src")]
+    if extra_python_path is not None:
+        python_paths.insert(0, str(extra_python_path))
+    environment["PYTHONPATH"] = os.pathsep.join(python_paths)
     return subprocess.run(
         [
             "uv",
             "run",
+            "--isolated",
             "--project",
             str(_EXTERNAL_PROJECT),
             "--frozen",
@@ -73,6 +82,7 @@ def _preflight(
     *,
     hash_seed: str = "0",
     check: bool = True,
+    extra_python_path: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     request_path = tmp_path / f"requests-{hash_seed}.json"
     request_path.write_text(
@@ -81,7 +91,14 @@ def _preflight(
             separators=(",", ":"),
         )
     )
-    return _external_python(str(_DRIVER), "preflight", str(request_path), hash_seed=hash_seed, check=check)
+    return _external_python(
+        str(_DRIVER),
+        "preflight",
+        str(request_path),
+        hash_seed=hash_seed,
+        check=check,
+        extra_python_path=extra_python_path,
+    )
 
 
 def _run_single_turn_aime_agent(
@@ -155,7 +172,16 @@ def _run_single_turn_aime_agent(
             max_tokens=256,
             request_retry_initial=0.001,
         )
-        asyncio.run(agent.run("Solve this AIME problem", Environment(), object()))
+        async def drive_agent():
+            environment = Environment()
+            await agent.setup(environment=environment)
+            await agent.run(
+                instruction="Solve this AIME problem",
+                environment=environment,
+                context=object(),
+            )
+
+        asyncio.run(drive_agent())
         print(json.dumps({{
             "answer": agent_module.Path({str(answer_path)!r}).read_text(),
             "response": agent_module.Path({str(logs_dir / "response.txt")!r}).read_text(),
@@ -182,6 +208,57 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
     expected = checked_policies[path.name]
     assert all(result["stable_policy_json"] == expected["stable_policy_json"] for result in seeded)
     assert all(result["digest"] == expected["digest"] for result in seeded)
+
+
+@pytest.mark.parametrize(
+    ("setup_parameters", "run_parameters", "callback", "keywords"),
+    [
+        ("_environment", "instruction, environment, context", "setup", "environment"),
+        ("environment", "instruction, environment, _context", "run", "instruction, environment, context"),
+        (
+            "environment",
+            "instruction, environment, context, scratch_dir",
+            "run",
+            "instruction, environment, context",
+        ),
+    ],
+)
+def test_preflight_rejects_agent_callback_keyword_mismatch(
+    tmp_path,
+    setup_parameters,
+    run_parameters,
+    callback,
+    keywords,
+):
+    module_path = tmp_path / "keyword_mismatched_agent.py"
+    module_path.write_text(
+        textwrap.dedent(
+            f"""
+            class KeywordMismatchedAgent:
+                async def setup(self, {setup_parameters}):
+                    pass
+
+                async def run(self, {run_parameters}):
+                    pass
+            """
+        )
+    )
+    document = yaml.safe_load((_POLICIES / "aime-smoke.yaml").read_text())
+    document["agents"][0]["import_path"] = "keyword_mismatched_agent:KeywordMismatchedAgent"
+    policy_path = tmp_path / "keyword-mismatched-agent.yaml"
+    policy_path.write_text(yaml.safe_dump(document))
+
+    completed = _preflight(
+        tmp_path,
+        [(policy_path, {})],
+        check=False,
+        extra_python_path=tmp_path,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert f"keyword_mismatched_agent:KeywordMismatchedAgent.{callback}()" in completed.stderr
+    assert all(keyword in completed.stderr for keyword in keywords.split(", "))
 
 
 def test_single_turn_aime_agent_grades_length_finished_response(tmp_path):

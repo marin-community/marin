@@ -32,8 +32,8 @@ from levanter.store.cache import SerialCacheWriter
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from levanter.utils.tree_utils import inference_mode
 
-from test_text_chat import MULTI_TOOL_TEMPLATE
-from test_utils import use_test_mesh
+from levanter.testing.chat_templates import MULTI_TOOL_TEMPLATE
+from levanter.testing.helpers import use_test_mesh
 
 MODEL_NAME = "marin-community/marin-tokenizer"
 

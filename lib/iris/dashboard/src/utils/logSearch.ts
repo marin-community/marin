@@ -1,7 +1,7 @@
 // Client-side search over the log lines already on screen, and detection of the
 // lines worth jumping to when hunting for a failure.
 //
-// Search is deliberately separate from the server-side `substring` filter: a
+// Search is deliberately separate from the server-side regex filter: a
 // filter drops non-matching rows, while a search only marks them, so the
 // surrounding context stays visible. Both exist because they answer different
 // questions ("show me only these lines" vs "where in these lines is X").

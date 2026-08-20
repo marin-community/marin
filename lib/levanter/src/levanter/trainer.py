@@ -30,7 +30,7 @@ from typing import (
 
 import equinox as eqx
 import haliax as hax
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 import haliax.tree_util
 import jax
 import jax.numpy as jnp

@@ -93,7 +93,10 @@ def test_profile_uploads_new_xplane_session_and_logs_viewer_link(monkeypatch, tm
     link_record = next(record for record in caplog.records if record.message.startswith("XProf profile:"))
     link = link_record.message.removeprefix("XProf profile: ")
     assert urlparse(link).path == "/proxy/xprof/open"
-    assert parse_qs(urlparse(link).query) == {"uri": [f"file://{upload_dir}"]}
+    assert parse_qs(urlparse(link).query) == {
+        "uri": [f"file://{upload_dir}"],
+        "tool": ["trace_viewer"],
+    }
 
 
 def test_upload_destination_uses_xprof_ttl_path(monkeypatch):

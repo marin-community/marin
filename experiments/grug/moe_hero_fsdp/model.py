@@ -837,7 +837,8 @@ class MoEMLP(eqx.Module):
             report_capacity_overflow=self.cfg.report_capacity_overflow,
         )
         if self.cfg.report_capacity_overflow:
-            routed_flat, dropped_assignments = moe_out
+            routed_flat, capacity_overflow = moe_out
+            dropped_assignments = capacity_overflow.total
         else:
             routed_flat = moe_out
             dropped_assignments = _zero_dropped_assignments()

@@ -55,7 +55,7 @@ Launch (a CPU coordinator job submits the training sub-job)::
 
     uv run iris --cluster=marin job run --job-name sft-coord --region us-east5 \\
       --cpu 1 --memory 2G --extra cpu --priority interactive --no-wait \\
-      -e MARIN_PREFIX gs://marin-us-east5 -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" \\
+      -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" \\
       -- python -m experiments.sft.configs.delphi_1e22 --accelerator v4-64
 
 The CoreWeave H100 path only changes the launch flags: ``--accelerator 8xH100`` and an
@@ -91,7 +91,7 @@ from marin.experiment.checkpoints import HfToLevanterCheckpoint
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache
 from marin.processing.tokenize.tokenize import tokenize as run_tokenize
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.instruction import (
     InstructionDatasetConfig,

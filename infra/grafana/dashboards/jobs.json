@@ -155,6 +155,26 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
+      "title": "Node details",
+      "type": "link",
+      "url": "/d/marin-nodes"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Node pools",
+      "type": "link",
+      "url": "/d/marin-node-pools"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
       "title": "Runs",
       "type": "link",
       "url": "/d/marin-runs"
@@ -170,14 +190,17 @@
       "url": "/d/marin-clusters"
     },
     {
+      "linkRef": "cluster_capacity"
+    },
+    {
       "asDropdown": false,
       "icon": "dashboard",
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Pipelines",
+      "title": "Training run",
       "type": "link",
-      "url": "/d/marin-pipelines"
+      "url": "/d/marin-training"
     },
     {
       "asDropdown": false,

@@ -49,6 +49,7 @@ def dispatch_grug_training_run(
     local_entrypoint: Callable[[ConfigT], None],
     resources: ResourceConfig,
     max_retries_failure: int = 3,
+    max_task_failures: int = 10,
     processes_per_task: int = 1,
     priority: int = INHERIT_PRIORITY,
 ) -> None:
@@ -56,6 +57,10 @@ def dispatch_grug_training_run(
 
     ``INHERIT_PRIORITY`` takes the submitting job's band, or ``interactive`` when the submitter is
     not itself an Iris job -- which is the case for a launcher run from a dev box.
+
+    ``max_retries_failure`` is the per-task retry budget and ``max_task_failures`` is the
+    cumulative one. The job fails when either is exhausted, so raise the two together: a large
+    per-task budget under a small cumulative one still ends the job at the cumulative limit.
     """
     safe_run_id = _safe_job_suffix(run_id)
     env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
@@ -65,7 +70,7 @@ def dispatch_grug_training_run(
         resources=resources,
         environment=create_environment(env_vars=env_vars, extras=extras_for_resources(resources)),
         max_retries_failure=max_retries_failure,
-        max_task_failures=10,
+        max_task_failures=max_task_failures,
         processes_per_task=processes_per_task,
         priority=priority,
     )

@@ -283,7 +283,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         *,
         key=None,
         pos_ids: NamedArray | None = None,
-    ) -> NamedArray | tuple[NamedArray, NamedArray | float]:
+    ) -> NamedArray | tuple[NamedArray, NamedOrNumeric]:
         """
         Compute the activations for the next token in a sequence.
         Args:

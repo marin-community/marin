@@ -11,6 +11,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
+from levanter.grug._moe.common import CapacityOverflow
 from levanter.grug._moe.ep_common import (
     _clip_receiver_group_sizes,
     _compact_by_keep_mask,
@@ -35,7 +36,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
-) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+) -> tuple[Float[Array, "Tlocal H"], CapacityOverflow]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(
@@ -121,4 +122,4 @@ def _moe_mlp_ep_ragged_a2a_local(
         ).astype(x_local.dtype)
         dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - jnp.sum(sender_group_sizes, dtype=jnp.int32)
         dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
-    return out_local, dropped_total
+    return out_local, CapacityOverflow(sender=dropped_total, receiver=jnp.zeros_like(dropped_total))

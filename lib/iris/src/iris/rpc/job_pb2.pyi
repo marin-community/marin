@@ -205,10 +205,12 @@ class MemoryProfile(_message.Message):
     def __init__(self, format: _Optional[_Union[MemoryProfile.Format, str]] = ..., leaks: _Optional[bool] = ...) -> None: ...
 
 class ThreadsProfile(_message.Message):
-    __slots__ = ("locals",)
+    __slots__ = ("locals", "native")
     LOCALS_FIELD_NUMBER: _ClassVar[int]
+    NATIVE_FIELD_NUMBER: _ClassVar[int]
     locals: bool
-    def __init__(self, locals: _Optional[bool] = ...) -> None: ...
+    native: bool
+    def __init__(self, locals: _Optional[bool] = ..., native: _Optional[bool] = ...) -> None: ...
 
 class ProfileType(_message.Message):
     __slots__ = ("cpu", "memory", "threads")

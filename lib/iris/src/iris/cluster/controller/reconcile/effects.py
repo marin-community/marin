@@ -122,6 +122,8 @@ class TaskActionReason(StrEnum):
     COSCHEDULED_SIBLING_TERMINATED = "CoscheduledSiblingTerminated"
     COSCHEDULED_SIBLING_REQUEUED = "CoscheduledSiblingRequeued"
     JOB_FINALIZED_TASK_KILLED = "JobFinalizedTaskKilled"
+    PARENT_JOB_TERMINATED = "ParentJobTerminated"
+    JOB_COMPLETED_TASK_SUCCEEDED = "JobCompletedTaskSucceeded"
 
 
 @dataclass(frozen=True, slots=True)

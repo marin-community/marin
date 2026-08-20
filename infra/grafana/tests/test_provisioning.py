@@ -8,7 +8,7 @@ Grafana, which is the most expensive place to find out."""
 
 import re
 from pathlib import Path
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlsplit
 
 import pyarrow as pa
 import yaml
@@ -16,7 +16,6 @@ from config import CLUSTERS, K8S_CLUSTERS, ClusterTarget
 from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
 from dashboard_stitch import stitch_all
 from finelog_health import FinelogHealth, FinelogRole
-from fixture_bridge import _finelog
 from github_source import GithubSource
 from k8s_source import K8sFleet
 from server import create_app
@@ -29,6 +28,7 @@ DASHBOARDS = ROOT / "dashboards"
 
 EXPRESSION_UID = "__expr__"
 VALID_SEVERITIES = {"critical", "warning"}
+STORAGE_ALERT_FRACTION = 0.8
 
 
 def _stitched_dashboards() -> dict[str, dict]:
@@ -90,11 +90,12 @@ def test_alert_rules_have_resolvable_datasources_and_refids():
             assert uid == EXPRESSION_UID or uid in datasource_uids, f"{rule['uid']}: unknown datasource {uid!r}"
 
 
-def test_every_rule_alerts_on_nodata_and_error():
-    # The alert endpoints return explicit zeros when healthy, so NoData/exec
-    # errors can only mean the pipeline itself broke — which must page too.
+def test_alert_rules_define_nodata_and_error_behavior():
+    # Most alert endpoints return explicit zeros when healthy. The storage rules
+    # stay normal until the optional CoreWeave collector writes its first rows.
     for rule in _rules():
-        assert rule["noDataState"] == "Alerting", rule["uid"]
+        expected_no_data = "OK" if rule["uid"].startswith("coreweave-storage-") else "Alerting"
+        assert rule["noDataState"] == expected_no_data, rule["uid"]
         assert rule["execErrState"] == "Alerting", rule["uid"]
         assert rule["labels"]["severity"] in VALID_SEVERITIES, rule["uid"]
 
@@ -136,8 +137,22 @@ class _FakeFinelog:
         )
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
-        if '"infra.canary.metrics"' in sql:
-            return pa.table({"probe": ["controller-ping"], "target": ["marin"], "value": [1]})
+        if '"storage.usage"' in sql:
+            if "AS detail" in sql:
+                return pa.table(
+                    {
+                        "region": ["US-EAST-02A"],
+                        "metric": ["quota_bytes"],
+                        "detail": ["STANDARD"],
+                        "value": [0],
+                    }
+                )
+            return pa.table(
+                {
+                    "region": ["US-EAST-02A"],
+                    "value": [0.81],
+                }
+            )
         return pa.table({})
 
 
@@ -192,7 +207,11 @@ def test_policies_reference_provisioned_contact_points():
 
 def test_warning_alerts_remain_visible_without_notifications():
     (policy,) = _load(ALERTING / "policies.yaml")["policies"]
-    routes_by_severity = {route["object_matchers"][0][2]: route for route in policy["routes"]}
+    routes_by_severity = {
+        route["object_matchers"][0][2]: route
+        for route in policy["routes"]
+        if route["object_matchers"][0][0] == "severity"
+    }
 
     assert routes_by_severity["critical"].get("mute_time_intervals") is None
     assert routes_by_severity["warning"]["mute_time_intervals"] == ["dashboard-only"]
@@ -203,6 +222,57 @@ def test_warning_alerts_remain_visible_without_notifications():
             "location": "UTC",
         }
     ]
+
+
+def test_coreweave_storage_capacity_pages_critical_ops():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "coreweave-storage-capacity"]
+    source, threshold = rule["data"]
+    sql = next(param["value"] for param in source["model"]["url_options"]["params"] if param["key"] == "sql")
+
+    assert rule["for"] == "5m"
+    assert rule["noDataState"] == "OK"
+    assert rule["labels"] == {"severity": "critical"}
+    assert source["datasourceUid"] == "finelog-marin"
+    assert 'FROM "storage.usage"' in sql
+    assert "metric IN ('used_bytes', 'quota_bytes')" in sql
+    assert "PARTITION BY provider, metric, zone, bucket, storage_class" in sql
+    assert "ORDER BY observed_at DESC, seq DESC" in sql
+    assert "observed_at >= CURRENT_TIMESTAMP - INTERVAL '3 hours'" in sql
+    assert "SUM(value_bytes) AS usage_bytes" in sql
+    assert "MAX(value_bytes) AS quota_bytes" in sql
+    assert "usage.usage_bytes / NULLIF(quota.quota_bytes, 0) AS value" in sql
+    assert {column["selector"] for column in source["model"]["columns"]} == {"region", "value"}
+    assert threshold["model"]["conditions"][0]["evaluator"] == {
+        "type": "gt",
+        "params": [STORAGE_ALERT_FRACTION],
+    }
+
+    (policy,) = _load(ALERTING / "policies.yaml")["policies"]
+    routes = policy["routes"]
+    route = next(route for route in routes if route["object_matchers"] == [["severity", "=", "critical"]])
+    assert route["receiver"] == "ops-critical"
+    assert "mute_time_intervals" not in route
+
+
+def test_coreweave_storage_alert_notifies_slack_when_a_known_series_is_stale():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "coreweave-storage-telemetry-stale"]
+    source, threshold = rule["data"]
+    sql = next(param["value"] for param in source["model"]["url_options"]["params"] if param["key"] == "sql")
+
+    assert rule["for"] == "5m"
+    assert rule["noDataState"] == "OK"
+    assert rule["labels"] == {"severity": "warning", "notification": "slack"}
+    assert 'FROM "storage.usage"' in sql
+    assert "PARTITION BY provider, metric, zone, bucket, storage_class" in sql
+    assert "COALESCE(bucket, storage_class) AS detail" in sql
+    assert "observed_at < CURRENT_TIMESTAMP - INTERVAL '3 hours'" in sql
+    assert {column["selector"] for column in source["model"]["columns"]} == {
+        "region",
+        "metric",
+        "detail",
+        "value",
+    }
+    assert threshold["model"]["conditions"][0]["evaluator"] == {"type": "gt", "params": [0]}
 
 
 def test_every_slack_alert_goes_through_the_bridge_and_none_through_grafana():
@@ -244,6 +314,25 @@ def test_zephyr_stall_alert_is_a_warning_after_five_minutes():
     assert rule["data"][0]["model"]["url"] == "/alerts/zephyr_stalls"
 
 
+def test_training_stall_alert_pages_each_hero_run_after_five_minutes():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "training-progress-stalled"]
+    assert rule["for"] == "5m"
+    assert "isPaused" not in rule
+    assert rule["labels"] == {"severity": "critical", "notification": "hero-run"}
+    assert rule["data"][0]["model"]["url"] == "/alerts/training_stalls"
+
+    (policy,) = _load(ALERTING / "policies.yaml")["policies"]
+    route = next(
+        route
+        for route in policy["routes"]
+        if all(
+            operator == "=" and rule["labels"].get(label) == value for label, operator, value in route["object_matchers"]
+        )
+    )
+    assert route["receiver"] == "ops-critical"
+    assert route["group_by"] == ["alertname", "cluster", "job"]
+
+
 def test_clusters_dashboard_shows_finelog_fleet_health():
     (panel,) = [
         panel
@@ -273,6 +362,103 @@ def test_clusters_dashboard_shows_node_deadlock_and_reboot_state():
         "cordon_reason",
         "pending_phase",
     } <= selectors
+
+
+def test_node_details_dashboard_combines_live_state_and_hardware_history():
+    dashboard = _stitched_dashboards()["nodes.json"]
+    panels = _all_panels(dashboard)
+    state_target = next(
+        target for panel in panels for target in panel.get("targets", []) if target.get("url") == "/nodes"
+    )
+    selectors = {column["selector"] for column in state_target["columns"]}
+    assert {
+        "cluster",
+        "node",
+        "node_pool",
+        "instance_type",
+        "gpu_model",
+        "gpu_capacity",
+        "ready",
+        "unschedulable",
+        "rack_name",
+        "rack_slot",
+        "ib_fabric",
+        "ib_speed",
+    } <= selectors
+
+    sql = "\n".join(_panel_sql(dashboard))
+    assert "gpu_sm_active_ratio" in sql
+    assert "gpu_memory_total_bytes" in sql
+    assert "gpu_nvlink_receive_bytes_per_second" in sql
+    assert "gpu_pcie_transmit_bytes_per_second" in sql
+    assert "node_cpu_utilization_percent" in sql
+    assert "node_network_receive_bytes" in sql
+    assert "json_get(attributes_json, 'node_name') IN (${node:sqlstring})" in sql
+
+
+def test_node_pools_dashboard_reads_live_node_pool_state():
+    dashboard = _stitched_dashboards()["node_pools.json"]
+    targets = [target for panel in _all_panels(dashboard) for target in panel.get("targets", [])]
+
+    assert targets
+    assert {target["url"] for target in targets} == {"/node_pools"}
+    table_target = next(target for target in targets if len(target["columns"]) > 1)
+    selectors = {column["selector"] for column in table_target["columns"]}
+    assert {
+        "cluster",
+        "node_pool",
+        "instance_type",
+        "compute_class",
+        "current_nodes",
+        "target_nodes",
+        "missing_nodes",
+        "in_progress_nodes",
+        "queued_nodes",
+        "at_target",
+        "capacity_available",
+        "under_quota",
+        "problems",
+    } <= selectors
+
+
+def test_accelerators_dashboard_shows_sm_and_temperature_distributions():
+    dashboard = _stitched_dashboards()["accelerators.json"]
+    heatmaps = {panel["title"]: panel for panel in _all_panels(dashboard) if panel.get("type") == "heatmap"}
+
+    assert set(heatmaps) == {"SM utilization distribution", "GPU temperature distribution"}
+    assert all(panel["options"]["calculate"] for panel in heatmaps.values())
+    sm_sql = _panel_sql({**dashboard, "panels": [heatmaps["SM utilization distribution"]]})
+    temperature_sql = _panel_sql({**dashboard, "panels": [heatmaps["GPU temperature distribution"]]})
+    assert len(sm_sql) == len(temperature_sql) == 1
+    assert "name = 'gpu_sm_active_ratio'" in sm_sql[0]
+    assert "name = 'gpu_temperature_celsius'" in temperature_sql[0]
+
+
+def test_storage_dashboard_shows_latest_coreweave_bucket_bytes():
+    dashboard = _stitched_dashboards()["storage.json"]
+    panels = {panel["title"]: panel for panel in _all_panels(dashboard)}
+    bucket_panel = panels["CoreWeave object storage by bucket"]
+    quota_panel = panels["CoreWeave zone quota usage"]
+    sql_by_panel = {title: _panel_sql({**dashboard, "panels": [panel]})[0] for title, panel in panels.items()}
+
+    assert bucket_panel["type"] == "timeseries"
+    assert bucket_panel["fieldConfig"]["defaults"]["unit"] == "bytes"
+    assert bucket_panel["datasource"]["uid"] == "finelog-marin"
+    bucket_sql = sql_by_panel[bucket_panel["title"]]
+    assert 'FROM "storage.usage"' in bucket_sql
+    assert "provider = 'coreweave'" in bucket_sql
+    assert "metric = 'used_bytes'" in bucket_sql
+    assert "PARTITION BY observed_at, provider, metric, zone, bucket, storage_class ORDER BY seq DESC" in bucket_sql
+
+    assert quota_panel["type"] == "timeseries"
+    assert quota_panel["fieldConfig"]["defaults"]["unit"] == "percentunit"
+    quota_sql = sql_by_panel[quota_panel["title"]]
+    assert 'FROM "storage.usage"' in quota_sql
+    assert "metric IN ('used_bytes', 'quota_bytes')" in quota_sql
+    assert "usage_bytes / NULLIF(quota_bytes, 0) AS value" in quota_sql
+    for source in ("home.json", "infra.json"):
+        (link,) = [link for link in _stitched_dashboards()[source]["links"] if link["url"] == "/d/marin-storage"]
+        assert not link["keepTime"]
 
 
 def test_clusters_dashboard_shows_finelog_pods_storage_and_events():
@@ -339,67 +525,10 @@ def test_status_page_has_each_required_source():
         "N": "/github/nightlies",
         "G": "/github/builds",
         "W": "/iris/marin/workers",
-        "P": "/overview/provisioning",
-        "H": "/finelog/marin/query",
-        "R": "/finelog/marin/query",
         "T": "/wandb/train-loss",
         "L": "/wandb/paloma-macro-loss",
         "M": "/wandb/mfu",
     }
-
-
-def test_status_page_queries_provisioning_snapshot_and_region_history():
-    dashboard = _stitched_dashboards()["infra.json"]
-    (panel,) = dashboard["panels"]
-    targets = {target["refId"]: target for target in panel["targets"]}
-
-    assert panel["type"] == "marin-infra-panel"
-    assert panel["options"]["view"] == "status"
-    assert targets["P"]["url"] == "/overview/provisioning"
-    snapshot_columns = {column["selector"] for column in targets["P"]["columns"]}
-    assert {
-        "scope",
-        "ready",
-        "stockout",
-        "error",
-        "preempted",
-        "outcomes",
-        "success_ratio",
-        "pools_placing",
-        "pools_no_ready_outcome",
-    } <= snapshot_columns
-
-    target = targets["R"]
-    columns = {column["selector"]: column for column in target["columns"]}
-    assert columns["series"] == {"selector": "series", "text": "region", "type": "string"}
-    assert columns["value"]["type"] == "number"
-
-    sql = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
-    assert "metric = 'provision_success_ratio'" in sql
-    assert "metric IN ('provision_ready', 'provision_outcomes')" in sql
-    assert "regexp_matches(json_get(labels, 'zone'), '^[a-z]+-[a-z]+[0-9]+-[a-z]$')" in sql
-    assert "ELSE json_get(labels, 'zone') END AS series" in sql
-    assert "ready / NULLIF(outcomes, 0)" in sql
-
-
-def test_provisioning_render_fixture_routes_metric_query_to_region_series():
-    dashboard = _stitched_dashboards()["infra.json"]
-    (panel,) = dashboard["panels"]
-    (target,) = [target for target in panel["targets"] if target["refId"] == "R"]
-    sql = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
-
-    rows = _finelog(urlencode({"sql": sql}))
-
-    assert rows
-    assert {row["series"] for row in rows} == {
-        "fleet",
-        "europe-west4",
-        "us-central1",
-        "us-east1",
-        "us-east5",
-        "us-west4",
-    }
-    assert all({"t", "series", "value"} <= row.keys() for row in rows)
 
 
 def test_stat_panels_use_grafana_reduce_options_schema():

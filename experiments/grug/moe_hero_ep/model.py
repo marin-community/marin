@@ -9,6 +9,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 
 import dataclasses
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Literal
 
 import equinox as eqx
@@ -48,6 +49,7 @@ from levanter.grug.grug_moe import (
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
+from levanter.kernels.pallas.short_conv import short_conv
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
@@ -57,7 +59,16 @@ _ROUTING_RENORM_SUM = 2.5
 # Large-vocab CE via the plain-XLA path (no shared-memory tiling, so v_block can be large).
 # v=4096 is the dominant MFU lever for the 128k vocab; the SMEM-tiled batched_xla kernel caps the
 # h*v weight tile at ~99KB and cannot take v=4096.
-_CE_BLOCK_SIZES = BlockSizes(v_block_size=4096)
+#
+# b_block_size is the CE forward's batch tile. The 1024 default splits the per-rank
+# B=65,536 CE shard into 64 batch blocks, and with 32 vocab blocks that is 2,048
+# forward iterations of ~11 kernels each. Measured single-GPU at the hero shape on
+# GB200 (lib/levanter/scripts/bench/bench_ce_hero_shape.py), those kernels average
+# 15.6 us with the compute stream 98.8% busy: they are back-to-back but far too
+# small to fill the SMs. Setting the tile to the whole shard turns the forward into
+# one GEMM per vocab block. Measured: forward 171.3 ms -> 81.9 ms, peak HBM +0.04 GiB.
+_CE_TOKENS_PER_RANK = 65_536
+_CE_BLOCK_SIZES = BlockSizes(b_block_size=_CE_TOKENS_PER_RANK, v_block_size=4096)
 # The embedding is fully replicated for a local lookup. The language-model head
 # is sharded across the data, expert, and model axes.
 _EMBED_PARTITION_SPEC = P(None, None)
@@ -66,7 +77,7 @@ _LM_HEAD_PARTITION_SPEC = P(_FSDP_AXES, "model")
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
-GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
+GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 2
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -126,6 +137,20 @@ def _hf_config_attr(config: HfConfig, names: tuple[str, ...], default: Any = Non
     return default
 
 
+class QbEstimator(StrEnum):
+    """How the QB router estimates each expert's threshold beta (the (1-K/E) upper quantile of the
+    logit margins ``score - alpha``).
+
+    ``TOPK`` takes a per-device ``top_k`` of the margins and ``pmean``s the result -- one small
+    collective per layer. ``HIST`` bins the margins into ``qb_hist_bins`` over the live global
+    ``[min, max]`` (a ``pmin``/``pmax`` this step) and reads the quantile from the summed histogram --
+    a smoother estimate at the cost of a per-expert count reduction.
+    """
+
+    TOPK = "topk"
+    HIST = "hist"
+
+
 @dataclass(frozen=True)
 class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer.
@@ -140,6 +165,10 @@ class GrugModelConfig:
     num_shared_experts: int = 1
     num_experts: int = 256
     num_experts_per_token: int = 4
+    # LatentMoE (arXiv 2601.18089); latent RMSNorm per issue #6822.
+    latent_dim: int | None = None
+    qb_estimator: QbEstimator = QbEstimator.TOPK
+    qb_hist_bins: int = 1000  # bins for the QB histogram estimator; ignored by the top-k estimator
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
@@ -155,10 +184,12 @@ class GrugModelConfig:
     qk_mult: float = 1.3
     sconv: bool = False
     sconv_kernel: int = 4
-    sconv_sites: tuple[str, ...] = ("k", "v", "attn", "mlp")
+    sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
+    pooled_transport_capacity_factor: float | None = None
+    num_expert_waves: int = 1
     report_capacity_overflow: bool = False
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
@@ -194,12 +225,24 @@ class GrugModelConfig:
             # QB routing takes top-(k+1) and keeps the last entry as the threshold alpha, so a
             # full-bank top-k asks `jax.lax.top_k` for more entries than the router has experts.
             raise ValueError("num_experts_per_token must be < num_experts, because QB routing selects top-(k+1)")
+        if self.latent_dim is not None and not 0 < self.latent_dim <= self.hidden_dim:
+            raise ValueError(
+                f"latent_dim must be in (0, hidden_dim={self.hidden_dim}], got {self.latent_dim}; "
+                "it only reduces communication when it is smaller than the hidden dimension"
+            )
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         if self.capacity_factor <= 0:
             raise ValueError("capacity_factor must be positive")
         if self.expert_chunks <= 0:
             raise ValueError("expert_chunks must be positive")
+        if self.pooled_transport_capacity_factor is not None and self.pooled_transport_capacity_factor <= 0:
+            raise ValueError("pooled_transport_capacity_factor must be positive")
+        if self.moe_implementation == "fixed_pooled_wave_all_to_all":
+            if self.pooled_transport_capacity_factor is None:
+                raise ValueError("fixed_pooled_wave_all_to_all requires pooled_transport_capacity_factor")
+        if self.num_expert_waves <= 0:
+            raise ValueError("num_expert_waves must be positive")
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
         resolve_moe_implementation(self.moe_implementation)
@@ -246,6 +289,7 @@ class GrugModelConfig:
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig) -> "GrugModelConfig":
         rope = RotaryConfig(theta=float(_hf_config_attr(hf_config, ("rope_theta",), 10000.0)))
+        latent_dim = _hf_config_attr(hf_config, ("latent_dim",))
         return cls(
             vocab_size=int(_hf_config_attr(hf_config, ("vocab_size",))),
             hidden_dim=int(_hf_config_attr(hf_config, ("hidden_dim", "hidden_size"), 2048)),
@@ -262,6 +306,7 @@ class GrugModelConfig:
             num_shared_experts=int(_hf_config_attr(hf_config, ("num_shared_experts",), 1)),
             num_experts=int(_hf_config_attr(hf_config, ("num_experts", "num_local_experts"), 8)),
             num_experts_per_token=int(_hf_config_attr(hf_config, ("num_experts_per_token", "num_experts_per_tok"), 2)),
+            latent_dim=None if latent_dim is None else int(latent_dim),
             num_layers=int(_hf_config_attr(hf_config, ("num_layers", "num_hidden_layers"), 24)),
             num_heads=int(_hf_config_attr(hf_config, ("num_heads", "num_attention_heads"), 16)),
             num_kv_heads=int(_hf_config_attr(hf_config, ("num_kv_heads", "num_key_value_heads"), 16)),
@@ -278,7 +323,7 @@ class GrugModelConfig:
             rope_fused=bool(_hf_config_attr(hf_config, ("rope_fused",), False)),
             sconv=bool(_hf_config_attr(hf_config, ("sconv",), False)),
             sconv_kernel=int(_hf_config_attr(hf_config, ("sconv_kernel",), 4)),
-            sconv_sites=tuple(_hf_config_attr(hf_config, ("sconv_sites",), ("k", "v", "attn", "mlp"))),
+            sconv_sites=tuple(_hf_config_attr(hf_config, ("sconv_sites",), ("k", "attn", "mlp"))),
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: dict[str, Any] | None = None) -> GrugMoeHfConfig:
@@ -307,6 +352,7 @@ class GrugModelConfig:
             "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
             "num_shared_experts": self.num_shared_experts,
             # grug-specific (no public equivalent)
+            "latent_dim": self.latent_dim,
             "qk_mult": self.qk_mult,
             "local_kv_heads": self.local_kv_heads,
             "global_kv_heads": self.global_kv_heads,
@@ -377,8 +423,10 @@ class ShortConv(eqx.Module):
     A kernel of ``W`` taps mixes each channel with its own ``W-1`` causal predecessors,
     ``out[t] = sum_{lag} weight[lag] * x[t-lag]``, independently per channel. Identity-init
     (``weight[0]=1``, later taps 0) makes it a pass-through at step 0. Weights are tiny (``W*C``) and
-    routed to Adam. Implemented as a pad-and-shift weighted sum (XLA fuses it well and it is
-    shard-local -- no cross-channel or cross-shard dependency, so no collectives).
+    routed to Adam. Shard-local -- no cross-channel or cross-shard dependency, so no collectives.
+
+    The body dispatches to ``levanter.kernels.pallas.short_conv``, which selects a fused Pallas
+    kernel on GPU and the pad-and-shift weighted sum everywhere else; see that module's docstring.
     """
 
     weight: Float[Array, "W C"]
@@ -387,24 +435,16 @@ class ShortConv(eqx.Module):
     @staticmethod
     def init(channels: int, kernel_size: int) -> "ShortConv":
         weight = jnp.zeros((kernel_size, channels)).at[0].set(1.0)
-        # FSDP-shard the channel dim over data so the grad reduce-scatters (coalesced) instead of a
-        # standalone replicated all-reduce; the forward gathers the weight back to replicated.
-        return ShortConv(weight=reshard(weight, P(None, "data")), kernel_size=kernel_size)
+        # FSDP-shard the channel dim so the grad reduce-scatters instead of all-reducing; the
+        # forward gathers the weight back to replicated.
+        return ShortConv(weight=reshard(weight, P(None, _FSDP_AXES)), kernel_size=kernel_size)
 
     def __call__(self, x: Float[Array, "B S C"], segment_ids: Int[Array, "B S"] | None = None) -> Float[Array, "B S C"]:
-        # Depthwise causal shift-and-sum. With segment_ids (packed documents), a tap that reaches
-        # into a previous document is zeroed so the conv never mixes across a boundary; the lag-0
-        # (current-token) tap is always kept.
-        seq_len = x.shape[1]
+        # With segment_ids (packed documents), a tap that reaches into a previous document is
+        # zeroed so the conv never mixes across a boundary; the lag-0 (current-token) tap is
+        # always kept.
         weight = reshard(self.weight, P(None, None))
-        out = weight[0] * x
-        for lag in range(1, self.kernel_size):
-            shifted = jnp.pad(x, ((0, 0), (lag, 0), (0, 0)))[:, :seq_len, :]
-            if segment_ids is not None:
-                seg_shifted = jnp.pad(segment_ids, ((0, 0), (lag, 0)), constant_values=-1)[:, :seq_len]
-                shifted = jnp.where((seg_shifted == segment_ids)[..., None], shifted, 0.0)
-            out = out + weight[lag] * shifted
-        return out
+        return short_conv(weight, x, segment_ids, batch_axes=_BATCH_AXES)
 
 
 class CausalSelfAttention(eqx.Module):
@@ -414,7 +454,6 @@ class CausalSelfAttention(eqx.Module):
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"]
     sconv_k: "ShortConv | None"  # SConv after the K projection (cfg.sconv)
-    sconv_v: "ShortConv | None"  # SConv after the V projection (cfg.sconv)
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -428,7 +467,6 @@ class CausalSelfAttention(eqx.Module):
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", _FSDP_AXES)),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
             sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
-            sconv_v=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "v" in cfg.sconv_sites else None),
             cfg=cfg,
         )
 
@@ -447,14 +485,12 @@ class CausalSelfAttention(eqx.Module):
         q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
         k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
         v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
-        # SConv: depthwise causal conv after the K/V projections. segment_ids (packed-document
+        # SConv: depthwise causal conv after the K projection. segment_ids (packed-document
         # boundaries) come from the mask so the conv never mixes across a document boundary.
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
         sconv_segment_ids = _seg[0] if _seg is not None else None
         if self.sconv_k is not None:
             k_flat = self.sconv_k(k_flat, sconv_segment_ids)
-        if self.sconv_v is not None:
-            v_flat = self.sconv_v(v_flat, sconv_segment_ids)
         q = rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
         k = rearrange(k_flat, "... (m d) -> ... m d", d=head_dim)
         v = rearrange(v_flat, "... (m d) -> ... m d", d=head_dim)
@@ -462,7 +498,22 @@ class CausalSelfAttention(eqx.Module):
         if self.cfg.local_kv_heads is not None and self.cfg.global_kv_heads is not None:
             stored_kv_heads = self.cfg.stored_kv_heads
 
+            # Both branches must agree on sharding, not just shape: `lax.cond` compares full types
+            # under explicit mesh axes. The pass-through case keeps the projection's `model`-sharded
+            # head axis, while the align case slices to one head -- which cannot stay sharded -- and
+            # broadcasts back, giving an identical shape with a different sharding. Reshard both to
+            # the same spec. This is a no-op wherever the mesh leaves `model` at one, which is why
+            # the hero shape never hit it despite also setting local_kv_heads != global_kv_heads.
+            #
+            # Replicate the head axis rather than pinning it to `model`: a shape can carry fewer
+            # KV heads than the model axis is wide (d768 stores one), and the KV tensors are small
+            # enough -- at most a dozen heads of 128 -- that replication is not worth a special case.
+            kv_spec = P(_BATCH_AXES, None, None, None)
+
             def _logical_kv(projection: jax.Array, num_kv_heads: int) -> jax.Array:
+                # Replicate before slicing, not after: narrowing a `model`-sharded head axis to a
+                # count that does not divide the mesh axis is unsupported.
+                projection = reshard(projection, kv_spec)
                 if num_kv_heads == stored_kv_heads:
                     return projection
                 return align_kv_heads(projection[:, :, :num_kv_heads, :], num_q_heads=stored_kv_heads)
@@ -627,32 +678,96 @@ class DenseMLP(eqx.Module):
         return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
 
 
-def _routing_stats(
+def _local_routing_stats(
     selected_experts: Int[Array, "T K"],
     router_probs: Float[Array, "T E"],
     router_logits: Float[Array, "T E"],
+    mesh: jax.sharding.AbstractMesh,
+    *,
+    num_experts: int,
+) -> dict[str, jax.Array]:
+    """Per-shard partial sums for the router metrics, with the cross-device reduction left undone.
+
+    Every router metric bottoms out in a *linear* reduction over tokens -- an expert count, a
+    probability sum, a sum of squared logsumexps -- followed by pointwise algebra on the reduced
+    values. Reducing over the batch axes here, inside the layer, costs one ~1.5 KB single-block
+    ``ncclDevKernel_AllReduce_Sum_f32_RING_LL`` per MoE layer (48 per step at hero scale, fully
+    exposed) and buys nothing, because nothing inside the layer reads the reduced value: entropy,
+    the load-balance term and the z-loss are logging-only (``next_token_loss`` sets
+    ``loss = cross_entropy_loss``) and ``qb_beta`` reaches the router bias only on the *next* step,
+    via the trainer's ``pending_qb_betas``.
+
+    So return the unreduced per-shard partials and let ``_reduce_router_stats`` do the collective
+    once, on the stacked ``[num_layers, num_shards, ...]`` scan outputs. The returned arrays carry a
+    leading shard axis that stays sharded over ``_BATCH_AXES``; per device they are the same size as
+    the replicated per-layer metrics they replace.
+    """
+
+    def _local(sel: jax.Array, probs: jax.Array, logits: jax.Array) -> dict[str, jax.Array]:
+        probs_f = probs.astype(jnp.float32)
+        logits_f = logits.astype(jnp.float32)
+        counts = jnp.sum(jax.nn.one_hot(sel, num_experts, dtype=jnp.float32), axis=(0, 1))
+        z = jsp.special.logsumexp(logits_f, axis=-1)
+        return {
+            "routing_counts_local": counts[None, :],
+            "router_prob_sum_local": jnp.sum(probs_f, axis=0)[None, :],
+            "router_z_sq_sum_local": jnp.sum(z**2)[None],
+        }
+
+    return shard_map(
+        _local,
+        mesh=mesh,
+        in_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES, None), P(_BATCH_AXES, None)),
+        out_specs={
+            "routing_counts_local": P(_BATCH_AXES, None),
+            "router_prob_sum_local": P(_BATCH_AXES, None),
+            "router_z_sq_sum_local": P(_BATCH_AXES),
+        },
+    )(selected_experts, router_probs, router_logits)
+
+
+def _reduce_router_stats(
+    stacked: dict[str, jax.Array],
     *,
     num_experts: int,
     num_experts_per_token: int,
+    num_tokens: int,
 ) -> dict[str, jax.Array]:
-    router_probs_f = router_probs.astype(jnp.float32)
-    router_logits_f = router_logits.astype(jnp.float32)
-    expert_counts = jnp.sum(jax.nn.one_hot(selected_experts, num_experts, dtype=jnp.float32), axis=(0, 1))
-    total_assignments = jnp.maximum(jnp.sum(expert_counts), 1.0)
-    assignment_fraction = expert_counts / total_assignments
-    routing_entropy = -jnp.sum(assignment_fraction * jnp.log(assignment_fraction + 1e-6))
-    token_fraction = assignment_fraction * num_experts_per_token
-    p = jnp.mean(router_probs_f, axis=0)
-    load_balancing_loss = num_experts * jnp.sum(token_fraction * p)
-    z = jsp.special.logsumexp(router_logits_f, axis=-1)
-    router_z_loss = jnp.mean(z**2)
+    """Reduce the stacked per-shard router partials across devices once, after the layer scan.
 
-    return {
-        "routing_counts": expert_counts,
+    ``stacked`` holds the scan's ``ys``: a leading ``[num_layers]`` axis over a shard axis that is
+    still sharded over ``_BATCH_AXES``. Summing that shard axis is one all-reduce for the whole
+    stack rather than one per layer; XLA's all-reduce combiner then merges the four into a single
+    tupled collective, so the layer scan emits none at all. The pointwise algebra below is
+    identical to what the old per-layer ``_routing_stats`` did, just vectorized over the layer axis.
+
+    ``num_tokens`` is the global (batch x seq) token count, the denominator the per-layer
+    ``jnp.mean(..., axis=0)`` used to carry.
+    """
+    counts = jnp.sum(stacked["routing_counts_local"], axis=1)
+    prob_sum = jnp.sum(stacked["router_prob_sum_local"], axis=1)
+    z_sq_sum = jnp.sum(stacked["router_z_sq_sum_local"], axis=1)
+
+    total_assignments = jnp.maximum(jnp.sum(counts, axis=-1, keepdims=True), 1.0)
+    assignment_fraction = counts / total_assignments
+    routing_entropy = -jnp.sum(assignment_fraction * jnp.log(assignment_fraction + 1e-6), axis=-1)
+    token_fraction = assignment_fraction * num_experts_per_token
+    p = prob_sum / num_tokens
+    load_balancing_loss = num_experts * jnp.sum(token_fraction * p, axis=-1)
+
+    out = {
+        "routing_counts": counts,
         "routing_entropy": routing_entropy,
         "load_balancing_loss": load_balancing_loss,
-        "router_z_loss": router_z_loss,
+        "router_z_loss": z_sq_sum / num_tokens,
     }
+    # The TOPK estimator defers its `pmean`; the HIST estimator cannot (its bin grid needs a global
+    # pmin/pmax before binning), so it arrives already reduced.
+    if "qb_beta_local" in stacked:
+        out["qb_beta"] = jnp.mean(stacked["qb_beta_local"], axis=1)
+    else:
+        out["qb_beta"] = stacked["qb_beta"]
+    return out
 
 
 def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
@@ -661,11 +776,18 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
     router_z_loss = router_metrics["router_z_loss_per_layer"]
     capacity_overflow = router_metrics["capacity_overflow_per_layer"]
+    sender_capacity_overflow = router_metrics["sender_capacity_overflow_per_layer"]
+    receiver_capacity_overflow = router_metrics["receiver_capacity_overflow_per_layer"]
+    margin_min = router_metrics["margin_min_per_layer"]  # HIST estimator's live grid lo per layer (0 under TOPK)
+    margin_max = router_metrics["margin_max_per_layer"]  # HIST estimator's live grid hi per layer (0 under TOPK)
+    qb_beta = router_metrics.get("qb_beta_per_layer")  # per-layer per-expert beta; router_bias = -qb_beta
     num_layers = int(routing_entropy.shape[0])
 
     # Per-layer total assignments = sum of routing_counts over experts (= tokens * k).
     assignments_per_layer = jnp.sum(routing_counts.astype(jnp.float32), axis=-1)
     capacity_overflow_rate = capacity_overflow.astype(jnp.float32) / jnp.maximum(assignments_per_layer, 1.0)
+    sender_overflow_rate = sender_capacity_overflow.astype(jnp.float32) / jnp.maximum(assignments_per_layer, 1.0)
+    receiver_overflow_rate = receiver_capacity_overflow.astype(jnp.float32) / jnp.maximum(assignments_per_layer, 1.0)
 
     out: dict[str, jax.Array | SummaryStats] = {
         "train/router/routing_entropy_mean": jnp.mean(routing_entropy),
@@ -673,14 +795,25 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         "train/router/router_z_loss": jnp.mean(router_z_loss),
         "train/router/routing_counts_per_layer": routing_counts,
         "train/router/capacity_overflow_rate_mean": jnp.mean(capacity_overflow_rate),
-        "qb_beta_per_layer": router_metrics.get("qb_beta_per_layer"),
+        "train/router/sender_overflow_rate_mean": jnp.mean(sender_overflow_rate),
+        "train/router/receiver_overflow_rate_mean": jnp.mean(receiver_overflow_rate),
+        # QB HIST margin range: min over layers and max over layers, plus per-layer below.
+        "train/router/margin_min": jnp.min(margin_min),
+        "train/router/margin_max": jnp.max(margin_max),
+        "qb_beta_per_layer": qb_beta,
     }
+    if qb_beta is not None:
+        # Router bias applied to the logits is -qb_beta; log the extent of the per-expert bias.
+        out["train/router/bias_min"] = -jnp.max(qb_beta)
+        out["train/router/bias_max"] = -jnp.min(qb_beta)
     for i in range(num_layers):
         out[f"train/router/layer_{i}/routing_entropy"] = routing_entropy[i]
         out[f"train/router/layer_{i}/load_balancing_loss"] = load_balancing_loss[i]
         out[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
         out[f"train/router/layer_{i}/routing_hist"] = _histogram_from_expert_counts(routing_counts[i])
         out[f"train/router/layer_{i}/capacity_overflow_rate"] = capacity_overflow_rate[i]
+        out[f"train/router/layer_{i}/margin_min"] = margin_min[i]
+        out[f"train/router/layer_{i}/margin_max"] = margin_max[i]
     return out
 
 
@@ -709,17 +842,82 @@ def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
     )
 
 
+def _bincount_upper_quantile(
+    s_local: jax.Array,
+    *,
+    num_experts: int,
+    n_bins: int,
+    lo: jax.Array,
+    hi: jax.Array,
+    target_rank: float,
+) -> jax.Array:
+    """Per-expert (1-K/E) upper quantile of ``s_local`` via one fused bincount over ``[lo, hi]``.
+
+    Runs inside a ``shard_map``: a single ``jnp.bincount`` over an expert-major flat index
+    (``expert*n_bins + bin``, clip-to-edge) builds the local per-expert histogram, one integer ``psum``
+    pools it globally, and beta is read from the top-cumulative counts, interpolated in the crossing bin.
+    """
+    bin_width = (hi - lo) / n_bins
+    expert_ids = jnp.arange(num_experts, dtype=jnp.int32)[None, :]
+    idx = jnp.clip(((s_local - lo) / bin_width).astype(jnp.int32), 0, n_bins - 1)
+    flat = (expert_ids * n_bins + idx).reshape(-1)
+    local_counts = jnp.bincount(flat, length=num_experts * n_bins).reshape(num_experts, n_bins)
+    counts = jax.lax.psum(local_counts, axis_name=_BATCH_AXES).astype(jnp.float32)
+    cum_from_top = jnp.cumsum(counts[:, ::-1], axis=-1)[:, ::-1]  # #{margins in bins >= b}
+    bstar = jnp.clip(jnp.sum((cum_from_top >= target_rank).astype(jnp.int32), axis=-1) - 1, 0, n_bins - 1)
+    ct_b = jnp.take_along_axis(cum_from_top, bstar[:, None], axis=-1)[:, 0]
+    h_b = jnp.take_along_axis(counts, bstar[:, None], axis=-1)[:, 0]
+    lower_edge = lo + bstar.astype(jnp.float32) * bin_width
+    return lower_edge + bin_width * (ct_b - target_rank) / jnp.maximum(h_b, 1.0)
+
+
+def _qb_beta_hist(
+    s_ma: jax.Array,
+    mesh: jax.sharding.AbstractMesh,
+    *,
+    num_experts_per_token: int,
+    num_experts: int,
+    n_bins: int,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Global (1-K/E)-quantile of the logit margins over the live ``[min, max]`` grid (this step's).
+
+    A ``pmin``/``pmax`` sets the grid to the exact current range of the margins, then
+    ``_bincount_upper_quantile`` reads the per-expert threshold. Replaces the per-device ``top_k`` +
+    ``pmean`` estimate with a smoother global quantile at the cost of the per-expert count reduction.
+
+    Returns ``(beta, margin_min, margin_max)``: the per-expert threshold plus the live margin range
+    (the grid ``lo``/``hi``), surfaced for logging.
+    """
+    target_rank = float(s_ma.shape[0]) * num_experts_per_token / num_experts  # tokens at/above beta per expert
+
+    def _fn(s_local: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
+        # pmin/pmax have no autodiff rule and the range is a control quantity, so detach their inputs;
+        # the bincount path drops tangents at the integer bin cast, so it needs none downstream either.
+        lo = jax.lax.pmin(jax.lax.stop_gradient(jnp.min(s_local)), axis_name=_BATCH_AXES)
+        hi = jax.lax.pmax(jax.lax.stop_gradient(jnp.max(s_local)), axis_name=_BATCH_AXES)
+        hi_grid = jnp.maximum(hi, lo + 1e-6)  # guard a degenerate all-equal range
+        beta = _bincount_upper_quantile(
+            s_local, num_experts=num_experts, n_bins=n_bins, lo=lo, hi=hi_grid, target_rank=target_rank
+        )
+        return beta, lo, hi  # surface the live margin range for logging
+
+    return shard_map(_fn, mesh=mesh, in_specs=(P(_BATCH_AXES, None),), out_specs=(P(), P(), P()))(s_ma)
+
+
 class MoEMLP(eqx.Module):
     """QB-routed MoE with sigmoid combine weights."""
 
     router: jax.Array
     router_bias: jax.Array
     expert_mlp: MoEExpertMlp
+    w_latent_down: jax.Array | None
+    latent_norm: RMSNorm | None
+    w_latent_up: jax.Array | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
-        k_router, k_expert = random.split(key, 2)
+        k_router, k_expert, k_down, k_up = random.split(key, 4)
         mesh = get_abstract_mesh()
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
@@ -727,19 +925,36 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         d, e = cfg.hidden_dim, cfg.num_experts
+        # Routed experts live in the latent space; the router reads the full-width token, so its
+        # own projection keeps `hidden_dim`.
+        expert_width = cfg.latent_dim if cfg.latent_dim is not None else d
+        latent = cfg.latent_dim
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
+            w_latent_down=(
+                None
+                if latent is None
+                else reshard(_init_weight(k_down, (d, latent), cfg.initializer_std), P(_FSDP_AXES, "model"))
+            ),
+            latent_norm=None if latent is None else RMSNorm.init(latent, cfg.layer_norm_eps),
+            w_latent_up=(
+                None
+                if latent is None
+                else reshard(_init_weight(k_up, (latent, d), cfg.initializer_std), P("model", _FSDP_AXES))
+            ),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
-                hidden_dim=cfg.hidden_dim,
+                hidden_dim=expert_width,
                 intermediate_dim=cfg.intermediate_dim,
                 initializer_std=cfg.initializer_std,
                 key=k_expert,
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=cfg.capacity_factor,
+                pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
                 expert_chunks=cfg.expert_chunks,
+                num_expert_waves=cfg.num_expert_waves,
             ),
             cfg=cfg,
         )
@@ -766,47 +981,99 @@ class MoEMLP(eqx.Module):
         denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
         combine_weights = combine_weights_f.astype(x.dtype)
-        router_stats = _routing_stats(
-            selected_experts,
-            router_probs,
-            router_logits,
-            num_experts=self.cfg.num_experts,
-            num_experts_per_token=self.cfg.num_experts_per_token,
-        )
-        # Sharded QB: compute beta locally per device, then average.
         mesh = get_abstract_mesh()
+        # Per-shard partials only; the cross-device reduction happens once after the layer scan.
+        router_stats = _local_routing_stats(
+            reshard(selected_experts, P(_BATCH_AXES, None)),
+            reshard(router_probs, P(_BATCH_AXES, None)),
+            reshard(router_logits, P(_BATCH_AXES, None)),
+            mesh,
+            num_experts=self.cfg.num_experts,
+        )
+        # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha`.
         s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
-        num_devices = 1
-        for a in _BATCH_AXES:
-            num_devices *= mesh.shape[a]
-        local_tokens = s_minus_alpha.shape[0] // num_devices
-        qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
+        if self.cfg.qb_estimator == QbEstimator.HIST:
+            beta, margin_min, margin_max = _qb_beta_hist(
+                s_minus_alpha,
+                mesh,
+                num_experts_per_token=self.cfg.num_experts_per_token,
+                num_experts=self.cfg.num_experts,
+                n_bins=self.cfg.qb_hist_bins,
+            )
+            router_stats["qb_beta"] = beta
+            router_stats["margin_min"] = margin_min
+            router_stats["margin_max"] = margin_max
+        else:
+            num_devices = 1
+            for a in _BATCH_AXES:
+                num_devices *= mesh.shape[a]
+            local_tokens = s_minus_alpha.shape[0] // num_devices
+            qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
 
-        def _local_qb_beta(s_ma):
-            topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
-            beta = topk_vals[:, -1]
-            return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
+            def _local_qb_beta(s_ma):
+                topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
+                # The `pmean` that used to live here is deferred to `_reduce_router_stats`: the
+                # mean of the per-shard betas is the same number whether it is taken per layer or
+                # once over the stacked layers, and beta is not read until the *next* step.
+                return topk_vals[:, -1][None, :]
 
-        router_stats["qb_beta"] = shard_map(
-            _local_qb_beta,
-            mesh=mesh,
-            in_specs=(P(_BATCH_AXES, None),),
-            out_specs=P(),
-        )(s_minus_alpha)
+            router_stats["qb_beta_local"] = shard_map(
+                _local_qb_beta,
+                mesh=mesh,
+                in_specs=(P(_BATCH_AXES, None),),
+                out_specs=P(_BATCH_AXES, None),
+            )(s_minus_alpha)
+            # TOPK has no histogram grid, so no live margin range to surface. Reshard the
+            # placeholder onto the run's mesh: a bare constant carries an empty-mesh sharding,
+            # and stacking that through the router stats leaves the train step's inputs placed
+            # inconsistently with the compiled executable under offloaded pinned-host state.
+            zero = reshard(jnp.zeros((), dtype=jnp.float32), P())
+            router_stats["margin_min"] = zero
+            router_stats["margin_max"] = zero
 
+        # LatentMoE: compress before dispatch so the expert-parallel all-to-all carries
+        # `latent_dim`-wide rows in both directions. The router above already read the full-width
+        # token, and the shared experts in the enclosing block never see this path.
+        routed_input = x_flat
+        if self.w_latent_down is not None and self.latent_norm is not None:
+            routed_input = jnp.einsum(
+                "td,dl->tl",
+                x_flat,
+                self.w_latent_down.astype(x_flat.dtype),
+                out_sharding=_batch_spec(),
+            )
+            # Keep the expert input scale independent of the down-projection initialization.
+            routed_input = self.latent_norm(routed_input)
         moe_out = self.expert_mlp(
-            x_flat,
+            routed_input,
             selected_experts.astype(jnp.int32),
             combine_weights,
             mesh=get_abstract_mesh(),
             report_capacity_overflow=self.cfg.report_capacity_overflow,
         )
         if self.cfg.report_capacity_overflow:
-            routed_flat, dropped_assignments = moe_out
+            routed_flat, capacity_overflow = moe_out
+            dropped_assignments = capacity_overflow.total
+            sender_dropped_assignments = capacity_overflow.sender
+            receiver_dropped_assignments = capacity_overflow.receiver
         else:
             routed_flat = moe_out
             dropped_assignments = _zero_dropped_assignments()
+            sender_dropped_assignments = _zero_dropped_assignments()
+            receiver_dropped_assignments = _zero_dropped_assignments()
         router_stats["capacity_overflow"] = dropped_assignments
+        router_stats["sender_capacity_overflow"] = sender_dropped_assignments
+        router_stats["receiver_capacity_overflow"] = receiver_dropped_assignments
+
+        # Expand after the combine: `expert_mlp` already returns the weight-summed expert output,
+        # which is the vector the paper's W_up acts on.
+        if self.w_latent_up is not None:
+            routed_flat = jnp.einsum(
+                "tl,ld->td",
+                routed_flat,
+                self.w_latent_up.astype(routed_flat.dtype),
+                out_sharding=_batch_spec(),
+            )
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
@@ -883,8 +1150,10 @@ class Block(eqx.Module):
 
 
 def _long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
+    # Every global_every-th layer is full-causal, and the last layer always is, so a depth that is
+    # not a multiple of global_every still ends on a global-context layer.
     layer_indices = jnp.arange(num_layers)
-    return ((layer_indices + 1) % global_every) == 0
+    return (((layer_indices + 1) % global_every) == 0) | (layer_indices == num_layers - 1)
 
 
 class Transformer(eqx.Module):
@@ -1008,13 +1277,25 @@ class Transformer(eqx.Module):
         hidden, stacked_router_stats = jax.lax.scan(
             _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
         )
+        # One cross-device reduction for the whole stack of layers, instead of one inside every
+        # scan iteration. See `_local_routing_stats`.
+        reduced_router_stats = _reduce_router_stats(
+            stacked_router_stats,
+            num_experts=cfg.num_experts,
+            num_experts_per_token=cfg.num_experts_per_token,
+            num_tokens=batch_size * seq_len,
+        )
         router_metrics = {
-            "routing_entropy_per_layer": stacked_router_stats["routing_entropy"],
-            "routing_counts_per_layer": stacked_router_stats["routing_counts"],
-            "load_balancing_loss_per_layer": stacked_router_stats["load_balancing_loss"],
-            "router_z_loss_per_layer": stacked_router_stats["router_z_loss"],
-            "qb_beta_per_layer": stacked_router_stats["qb_beta"],
+            "routing_entropy_per_layer": reduced_router_stats["routing_entropy"],
+            "routing_counts_per_layer": reduced_router_stats["routing_counts"],
+            "load_balancing_loss_per_layer": reduced_router_stats["load_balancing_loss"],
+            "router_z_loss_per_layer": reduced_router_stats["router_z_loss"],
+            "qb_beta_per_layer": reduced_router_stats["qb_beta"],
             "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
+            "sender_capacity_overflow_per_layer": stacked_router_stats["sender_capacity_overflow"],
+            "receiver_capacity_overflow_per_layer": stacked_router_stats["receiver_capacity_overflow"],
+            "margin_min_per_layer": stacked_router_stats["margin_min"],
+            "margin_max_per_layer": stacked_router_stats["margin_max"],
         }
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
@@ -1047,6 +1328,18 @@ class Transformer(eqx.Module):
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
+        # NOTE (2026-08-17): gradients from this loss differ from hero runs before
+        # this date, and the difference is intentional. "xla_fast_bwd" keeps the
+        # same forward -- the loss is bitwise identical -- but its backward is the
+        # scan/one-hot/bf16-tensor-core rewrite, whose grad_x and grad_w are ~30%
+        # CLOSER to a float32 reference than the old "xla" backward (rel-RMS
+        # 2.170e-03 -> 1.445e-03 for grad_x, 1.946e-03 -> 1.433e-03 for grad_w,
+        # measured at this exact CE shape on GB200). Widening _CE_BLOCK_SIZES'
+        # b_block_size above moves grad_w too, for the same reason: it removes a
+        # bf16 accumulation across batch blocks. If you are diffing a checkpoint
+        # against an older run, this is why. Set LEVANTER_CE_XLA_FAST_BWD=0 to
+        # force the old backward back on without editing code, or swap this to
+        # implementation="xla" for a code-level A/B.
         cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
             self.output_proj,
@@ -1055,7 +1348,7 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
-            implementation="xla",
+            implementation="xla_fast_bwd",
             block_sizes=_CE_BLOCK_SIZES,
         )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
@@ -1068,7 +1361,17 @@ class Transformer(eqx.Module):
                 jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
             )
             if self.config.report_capacity_overflow:
-                summarized_metrics["moe/dropped_assignments"] = jnp.sum(router_metrics["capacity_overflow_per_layer"])
+                # Keep the per-layer int32 counts (each fits int32); the trainer sums them over layers on
+                # the host in int64. Summing here with jnp.sum overflows int32 at large batch (e.g. batch
+                # 4096: 4096*4096*8*48 ~ 6.4e9 assignments > 2.1e9) and breaks the total==sender+receiver
+                # accounting check, since jax_enable_x64 is off so an in-device int64 sum silently downcasts.
+                summarized_metrics["moe/dropped_assignments"] = router_metrics["capacity_overflow_per_layer"]
+                summarized_metrics["moe/sender_dropped_assignments"] = router_metrics[
+                    "sender_capacity_overflow_per_layer"
+                ]
+                summarized_metrics["moe/receiver_dropped_assignments"] = router_metrics[
+                    "receiver_capacity_overflow_per_layer"
+                ]
             return loss, summarized_metrics
         return loss
 
@@ -1144,10 +1447,19 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
                 f"{layer_prefix}.mlp.experts.down_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_down),
             }
         )
+        if block.mlp.w_latent_down is not None:
+            assert block.mlp.latent_norm is not None
+            assert block.mlp.w_latent_up is not None
+            tensors.update(
+                {
+                    f"{layer_prefix}.mlp.latent_down_proj.weight": _linear_inference_tensor(block.mlp.w_latent_down),
+                    f"{layer_prefix}.mlp.latent_norm.weight": block.mlp.latent_norm.weight,
+                    f"{layer_prefix}.mlp.latent_up_proj.weight": _linear_inference_tensor(block.mlp.w_latent_up),
+                }
+            )
         # SConv weights are learned; export them per site so the checkpoint reconstructs an sconv model.
         for site_name, conv in (
             ("self_attn.sconv_k", block.attn.sconv_k),
-            ("self_attn.sconv_v", block.attn.sconv_v),
             ("sconv_attn", block.sconv_attn),
             ("sconv_mlp", block.sconv_mlp),
         ):

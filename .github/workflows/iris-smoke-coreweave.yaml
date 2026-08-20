@@ -114,27 +114,7 @@ jobs:
             --kubeconfig "$HOME/.kube/coreweave-iris" \
             --log-path "$RUNNER_TEMP/iris-cw-port-forward.log"
 
-      - name: Run integration tests
-        env:
-          WANDB_MODE: disabled
-          WANDB_API_KEY: ""
-          JAX_TRACEBACK_FILTERING: off
-          # When set, the marin-on-iris test uploads fixtures and writes
-          # intermediate data to S3 (R2) so remote Zephyr pods can access them.
-          MARIN_CI_S3_PREFIX: s3://marin-na/tmp/ttl=3d/ci
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_ENDPOINT_URL: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
-          FSSPEC_S3: '{"endpoint_url": "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"}'
-        run: |
-          export KUBECONFIG=~/.kube/coreweave-iris
-          uv run pytest tests/integration/iris/ \
-            --controller-url "$IRIS_CONTROLLER_URL" \
-            -v --tb=short --timeout=600 \
-            -o "addopts=" \
-            -x
-
-      - name: Run full integration pipeline
+      - name: Run Marin integration pipeline
         env:
           WANDB_MODE: disabled
           WANDB_API_KEY: ""
@@ -158,8 +138,6 @@ jobs:
           if [ -n "${PF_LOG:-}" ] && [ -f "$PF_LOG" ]; then
             cp "$PF_LOG" "$LOG_DIR/port-forward.log"
           fi
-          # No job submitted in this lane, so the iris.job_id selector matches
-          # nothing — continue-on-error tolerates the empty kubernetes-pods.json.
           uv run python scripts/ci/iris_monitor.py collect \
             --job-id "ci-smoke" \
             --controller-url "$IRIS_CONTROLLER_URL" \

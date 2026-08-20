@@ -1,10 +1,12 @@
 # Loom production deployment
 
 The `marin-loom` Pulumi stack manages `loom.oa.dev`: its GCE host with a
-persistent root disk, Artifact Registry repository, Secret Manager access,
-Cloudflare DNS, and scheduled root-disk snapshots. The runtime is built from
-the operator's local Loom worktree and runs as a Docker Compose application on
-the GCE host.
+retained Hyperdisk root disk, Artifact Registry repository, Secret Manager
+access, and Cloudflare DNS. The production host is an on-demand C4D VM with an
+AMD Turin CPU. It uses NVMe for its boot disk and gVNIC for networking, as
+required by the machine family. Hyperdisk performance is pinned to the included
+3,000 IOPS and 140 MB/s baseline. The runtime is built from the operator's local
+Loom worktree and runs as a Docker Compose application on the GCE host.
 
 ## Prerequisites
 
@@ -29,6 +31,15 @@ gcloud auth configure-docker us-central1-docker.pkg.dev
 ```
 
 The local Docker builder must support `linux/amd64`.
+
+Activation restarts the host's startup script over SSH. Create the Compute
+Engine key pair once so the key is present and propagated before deploying;
+activation fails immediately when `~/.ssh/google_compute_engine` is missing
+rather than stalling while `gcloud` generates and propagates a new key.
+
+```sh
+gcloud compute ssh loom --zone=us-central1-a --project=hai-gcp-models
+```
 
 ## Deploy
 
@@ -86,13 +97,57 @@ identity of the existing `marin-grafana` Cloud Run service account to select
 only the `ops` profile. Pulumi resolves that account's email and immutable
 numeric subject; it does not create or copy a Loom token.
 
+The `fork-ferry` mapping accepts OIDC tokens only from the `marin` repository's
+`ops-fork-ferry.yaml` workflow on `main`. It authorizes the dedicated
+`fork-ferry` automation profile. Loom brokers short-lived `loom-oa-dev` GitHub
+App tokens for the profile's Marin fork repositories, with contents, issues,
+and pull-request write access. The App key remains in `LOOM_DOTENV`; the profile
+does not store a GitHub token or grant Actions access. The GitHub Pulumi stack
+reads the mapping's profile from this stack's `githubFederationProfiles` output
+and publishes it as the workflow's `LOOM_FORK_FERRY_PROFILE` repository variable.
+
+Organization prompt policy lives beside the runtime profiles in
+`profiles/<name>/AGENTS.md`. A profile's `instructionsFile` is resolved below
+`infra/loom`, read by Pulumi, and reconciled into Loom's visible profile
+`instructions` field. Loom therefore does not need access to this checkout at
+runtime, and the effective text remains inspectable in Settings. The production
+`slack.profile` and `github.profile` settings select their dedicated profiles;
+ordinary sessions use the deployment-managed `default` profile, while workload
+and future GitHub Actions callers select the automation profile authorized by
+their federation mapping.
+
+A profile's `env` block declares the environment every session of that profile
+receives. Each entry sets either an inline `value` for non-secret configuration
+or a `secretRef` that the host resolves from Secret Manager at launch; Pulumi
+grants the VM service account read access to each referenced secret. Profile
+environment is applied after `envClear`, so strict automation profiles receive
+it too. All profiles set `IRIS_USER=loom`, which makes Iris jobs submitted from
+a session land under `/loom/<job>` instead of inheriting the session container's
+`app` OS account.
+
+An interactive session always brokers the `loom-oa-dev` GitHub App for its own
+repository, and a stored personal token still takes precedence over it. The
+`default`, `github`, and `slack` profiles therefore allowlist owners rather than
+repositories: an `owner/*` entry lets a session expand into any repository under
+that owner without waiting for a human decision. Each expansion is still
+validated against the App's installations and recorded as a revocable grant, so
+the App's installation list is what actually bounds this. Removing an owner here
+does not withdraw access a session already holds.
+
+The `fork-ferry` automation profile keeps an explicit repository list: an
+automation session is stamped with its profile's entries verbatim and needs
+concrete repositories to mint the cross-repository token its workflow depends
+on.
+
 The Pulumi declaration is authoritative at activation time. An unchanged
 profile keeps its database revision; a changed declaration overwrites the
 current row and advances the revision. UI or API edits persist only until the
-next activation. Deployment pruning is enabled, so a profile or federation
-removed from `Pulumi.marin-loom.yaml` is removed from new selection on the next
-activation. Weaver's stock `default`, `github_comment`, and `watch` profiles are
-not deployment-managed and are not pruned.
+next activation. Deployment pruning is enabled, so a deployment-managed
+setting, profile, or federation removed from `Pulumi.marin-loom.yaml` is removed
+from its deployment layer on the next activation. Stock profiles omitted from
+the declaration remain unmanaged and are not pruned; production intentionally
+manages `default` so interactive instruction and runtime policy are reviewed in
+this repository.
 
 At runtime, the Grafana bridge gets a Google-signed ID token from the Cloud Run
 metadata server, exchanges it at `/api/auth/federate`, and uses the resulting
@@ -140,7 +195,9 @@ Recreating the control-plane service preserves those containers, and the new
 control plane discovers and adopts them. Do not run `docker compose down` while
 sessions are live because it removes their shared network.
 
-To roll back, check out the prior Loom tree, restore its numbered
-`dotenvSecretVersion` when necessary, and run the normal preview and update.
-The separately managed persistent root disk is protected, is not auto-deleted
-with the VM, and has scheduled snapshots.
+To roll back an application release, check out the prior Loom tree, restore its
+numbered `dotenvSecretVersion` when necessary, and run the normal preview and
+update. The separately managed root disk is protected, retained if removed from
+Pulumi, and not auto-deleted with the VM. A replacement root disk must use an
+explicit `bootDiskSnapshot`; keep that source snapshot until a newer rollback
+point has been verified.

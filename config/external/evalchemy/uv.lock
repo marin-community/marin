@@ -427,7 +427,7 @@ wheels = [
 [[package]]
 name = "evalchemy"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/evalchemy.git?branch=main#d1a1005118e5928ed02064b85f14e8854ed28e22" }
+source = { git = "https://github.com/marin-community/evalchemy.git?branch=main#df7bcf952715700a252abc28ee4dd4873802740f" }
 dependencies = [
     { name = "bespokelabs-curator" },
     { name = "datasets" },
@@ -437,8 +437,10 @@ dependencies = [
     { name = "numpy" },
     { name = "openai" },
     { name = "protobuf" },
+    { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
+    { name = "regex" },
     { name = "sentencepiece" },
     { name = "sqlalchemy" },
     { name = "transformers" },

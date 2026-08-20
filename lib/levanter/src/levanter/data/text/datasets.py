@@ -18,7 +18,7 @@ import numpy as np
 from draccus import ChoiceRegistry, field
 from haliax import Axis
 from jaxtyping import PRNGKeyArray
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import log_time
 
 import levanter

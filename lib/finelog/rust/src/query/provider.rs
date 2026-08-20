@@ -17,7 +17,7 @@
 //! captured; the snapshot here is the read side of that seam.
 
 use std::any::Any;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
@@ -47,7 +47,10 @@ pub struct NamespaceProvider {
     /// segment's typed index bundle. Empty for the typed-empty
     /// (no-segments) case.
     segment_paths: Vec<String>,
+    segment_key_column: Option<String>,
+    segment_key_bounds: BTreeMap<String, (i64, i64)>,
     index_cache: Arc<IndexCache>,
+    exact_postings_policy: Option<BTreeMap<String, Vec<String>>>,
 }
 
 #[derive(Debug)]
@@ -102,6 +105,50 @@ impl NamespaceProvider {
         &self.index_cache
     }
 
+    fn listing_table(schema: SchemaRef, segment_paths: &[String]) -> DFResult<Arc<ListingTable>> {
+        let urls: Vec<ListingTableUrl> = segment_paths
+            .iter()
+            .map(|path| ListingTableUrl::parse(format!("file://{path}")))
+            .collect::<DFResult<Vec<_>>>()?;
+        let options =
+            ListingOptions::new(Arc::new(ParquetFormat::default())).with_file_extension(".parquet");
+        let config = ListingTableConfig::new_with_multi_paths(urls)
+            .with_listing_options(options)
+            .with_schema(schema);
+        Ok(Arc::new(ListingTable::try_new(config)?))
+    }
+
+    fn segment_paths_for_filters(&self, filters: &[Expr]) -> Vec<String> {
+        let Some(key_column) = self.segment_key_column.as_ref() else {
+            return self.segment_paths.clone();
+        };
+        let ranges = crate::query::predicate::int_column_ranges(filters);
+        let Some(range) = ranges.get(key_column) else {
+            return self.segment_paths.clone();
+        };
+        let paths = self
+            .segment_paths
+            .iter()
+            .filter(|path| {
+                self.segment_key_bounds
+                    .get(path.as_str())
+                    .is_none_or(|&(minimum, maximum)| {
+                        minimum > maximum || range.overlaps(minimum, maximum)
+                    })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if paths.len() != self.segment_paths.len() {
+            tracing::debug!(
+                key_column,
+                segments_total = self.segment_paths.len(),
+                segments_selected = paths.len(),
+                "scoped segment planning to key range"
+            );
+        }
+        paths
+    }
+
     /// Build a provider from the registered arrow `schema` and a snapshot of
     /// sealed segment file paths.
     ///
@@ -121,26 +168,45 @@ impl NamespaceProvider {
                 schema,
                 inner: Inner::Empty(Arc::new(mem)),
                 segment_paths: Vec::new(),
+                segment_key_column: None,
+                segment_key_bounds: BTreeMap::new(),
                 index_cache,
+                exact_postings_policy: None,
             });
         }
 
-        let urls: Vec<ListingTableUrl> = segment_paths
-            .iter()
-            .map(|p| ListingTableUrl::parse(format!("file://{p}")))
-            .collect::<DFResult<Vec<_>>>()?;
-        let opts =
-            ListingOptions::new(Arc::new(ParquetFormat::default())).with_file_extension(".parquet");
-        let cfg = ListingTableConfig::new_with_multi_paths(urls)
-            .with_listing_options(opts)
-            .with_schema(Arc::clone(&schema));
-        let listing = ListingTable::try_new(cfg)?;
+        let listing = Self::listing_table(Arc::clone(&schema), segment_paths)?;
         Ok(NamespaceProvider {
             schema,
-            inner: Inner::Listing(Arc::new(listing)),
+            inner: Inner::Listing(listing),
             segment_paths: segment_paths.to_vec(),
+            segment_key_column: None,
+            segment_key_bounds: BTreeMap::new(),
             index_cache,
+            exact_postings_policy: None,
         })
+    }
+
+    /// Attach exact Int64 key bounds captured with the segment path snapshot.
+    /// Paths missing from `bounds` remain queryable for scan safety.
+    pub fn with_segment_key_bounds(
+        mut self,
+        key_column: impl Into<String>,
+        bounds: BTreeMap<String, (i64, i64)>,
+    ) -> Self {
+        self.segment_key_column = Some(key_column.into());
+        self.segment_key_bounds = bounds;
+        self
+    }
+
+    /// Supply the registered values for which segment indexes may contain exact postings.
+    pub fn with_exact_postings_policy(mut self, mut policy: BTreeMap<String, Vec<String>>) -> Self {
+        for values in policy.values_mut() {
+            values.sort();
+            values.dedup();
+        }
+        self.exact_postings_policy = Some(policy);
+        self
     }
 }
 
@@ -176,12 +242,32 @@ impl TableProvider for NamespaceProvider {
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         match &self.inner {
             Inner::Listing(t) => {
+                let segment_paths = self.segment_paths_for_filters(filters);
                 // Delegate to DataFusion's parquet scan (which keeps the existing
                 // range / min-max row-group pruning), then layer bundle-backed
                 // filtered projections or access plans onto its files.
-                let plan = t.scan(state, projection, filters, limit).await?;
+                let plan = if segment_paths.len() == self.segment_paths.len() {
+                    t.scan(state, projection, filters, limit).await?
+                } else if segment_paths.is_empty() {
+                    MemTable::try_new(Arc::clone(&self.schema), vec![vec![]])?
+                        .scan(state, projection, filters, limit)
+                        .await?
+                } else {
+                    Self::listing_table(Arc::clone(&self.schema), &segment_paths)?
+                        .scan(state, projection, filters, limit)
+                        .await?
+                };
                 let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
-                let exact = crate::query::exact_prune::values_by_column(filters);
+                let mut exact = crate::query::exact_prune::values_by_column(filters);
+                if let Some(policy) = &self.exact_postings_policy {
+                    exact.retain(|column, values| {
+                        policy.get(column).is_some_and(|indexed| {
+                            values
+                                .iter()
+                                .all(|value| indexed.binary_search(value).is_ok())
+                        })
+                    });
+                }
                 if needles.is_empty() && exact.is_empty() {
                     return Ok(plan);
                 }
@@ -211,7 +297,6 @@ impl TableProvider for NamespaceProvider {
                 );
                 // Bundle + footer reads are blocking, so run pruning off the
                 // async worker.
-                let segment_paths = self.segment_paths.clone();
                 let index_cache = Arc::clone(&self.index_cache);
                 tokio::task::spawn_blocking(move || {
                     let plan = crate::query::trigram_prune::apply_with_needles(
@@ -243,6 +328,7 @@ impl TableProvider for NamespaceProvider {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::FileExt;
     use std::sync::Arc;
 
     use arrow::array::{Array, Int64Array, StringArray};
@@ -448,6 +534,117 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn key_range_excludes_disjoint_segments_before_projection_planning() {
+        let dir = tempdir("key_range_projection");
+        let old = worker_batch(1, vec!["w-2"], vec![10]);
+        let recent = worker_batch(2, vec!["w-2"], vec![110]);
+        let unknown = worker_batch(3, vec!["w-2"], vec![120]);
+        let (old_path, _) = write_segment_to_dir(&dir, 1, 1, &old).unwrap();
+        let (recent_path, _) = write_segment_to_dir(&dir, 1, 2, &recent).unwrap();
+        let (unknown_path, _) = write_segment_to_dir(&dir, 1, 3, &unknown).unwrap();
+        let index_config = crate::store::segment_index::SegmentIndexConfig::from_policies(
+            Vec::<String>::new(),
+            &[crate::store::exact::ExactIndexConfig {
+                column: "worker_id".to_string(),
+                exact_values: vec!["w-2".to_string()],
+                value_counts: false,
+            }],
+            &[crate::store::schema::CoveringProjection::new(
+                "workers",
+                "worker_id",
+                ["w-2"],
+                ["seq", "worker_id", "mem_bytes"],
+            )],
+            None,
+        );
+        for (path, batch) in [
+            (&old_path, &old),
+            (&recent_path, &recent),
+            (&unknown_path, &unknown),
+        ] {
+            crate::store::segment_index::write_segment_index(
+                path,
+                std::slice::from_ref(batch),
+                &index_config,
+            )
+            .unwrap();
+        }
+        let paths = [&old_path, &recent_path, &unknown_path]
+            .map(|path| path.to_string_lossy().into_owned());
+        let provider = NamespaceProvider::build(
+            worker_arrow(),
+            &paths,
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap()
+        .with_segment_key_bounds(
+            "mem_bytes",
+            BTreeMap::from([(paths[0].clone(), (10, 10)), (paths[1].clone(), (110, 110))]),
+        );
+        let filters = [
+            col("worker_id").eq(lit("w-2")),
+            col("mem_bytes").gt_eq(lit(100_i64)),
+            col("mem_bytes").lt(lit(200_i64)),
+        ];
+        let ctx = SessionContext::new();
+        let plan = provider
+            .scan(&ctx.state(), None, &filters, None)
+            .await
+            .unwrap();
+        let exec = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec");
+        let config = exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        let locations: Vec<&str> = config
+            .file_groups
+            .iter()
+            .flat_map(|group| group.files())
+            .map(|file| file.object_meta.location.as_ref())
+            .collect();
+        let old_projection = crate::store::exact::named_projection_path(&old_path, "workers");
+        let old_projection = old_projection.file_name().unwrap().to_str().unwrap();
+        assert_eq!(locations.len(), 2);
+        assert!(locations
+            .iter()
+            .all(|location| location.ends_with(".fidx.workers.parquet")));
+        assert!(locations
+            .iter()
+            .all(|location| !location.ends_with(old_projection)));
+
+        ctx.register_table("workers", Arc::new(provider)).unwrap();
+        let batches = ctx
+            .sql(
+                "SELECT mem_bytes FROM workers WHERE worker_id = 'w-2' \
+                 AND mem_bytes >= 100 AND mem_bytes < 200 ORDER BY mem_bytes",
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let values = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![110, 120]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
     async fn missing_projection_falls_back_only_for_that_segment() {
         let dir = tempdir("exact_projection_fallback");
         let first = worker_batch(1, vec!["w-1", "w-2"], vec![100, 200]);
@@ -533,6 +730,182 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first_column_strings(&batches), vec!["w-2", "w-2"]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn uncovered_exact_value_does_not_read_postings_payload() {
+        let dir = tempdir("uncovered_exact_value");
+        let batch = worker_batch(1, vec!["w-1", "w-2"], vec![100, 200]);
+        let (path, _) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
+        let config = crate::store::exact::ExactIndexConfig {
+            column: "worker_id".to_string(),
+            exact_values: vec!["w-2".to_string()],
+            value_counts: false,
+        };
+        crate::store::segment_index::write_segment_index(
+            &path,
+            &[batch],
+            &crate::store::segment_index::SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[config],
+                &[],
+                None,
+            ),
+        )
+        .unwrap();
+
+        let bundle_path = crate::store::index_bundle::bundle_path(&path);
+        let header = crate::store::index_bundle::read_header(&bundle_path).unwrap();
+        let postings = header
+            .sections
+            .iter()
+            .find(|section| section.kind == crate::store::index_bundle::SectionKind::ExactPostings)
+            .unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&bundle_path)
+            .unwrap()
+            .write_all_at(&[0xff], postings.offset)
+            .unwrap();
+
+        let cache = crate::query::index_cache::test_index_cache();
+        let provider = NamespaceProvider::build(
+            worker_arrow(),
+            &[path.to_string_lossy().into_owned()],
+            Arc::clone(&cache),
+        )
+        .unwrap();
+        let plan = provider
+            .scan(
+                &SessionContext::new().state(),
+                None,
+                &[col("worker_id").eq(lit("w-missing"))],
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            cache.corruption_counts().sections,
+            0,
+            "header coverage should reject the predicate before reading the corrupt payload"
+        );
+        let exec = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec");
+        let config = exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        assert!(config
+            .file_groups
+            .iter()
+            .flat_map(|group| group.files())
+            .all(|file| file.extensions.is_none()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn registered_policy_skips_uncovered_legacy_postings_payload() {
+        let dir = tempdir("legacy_uncovered_exact_value");
+        let batch = worker_batch(1, vec!["w-1", "w-2"], vec![100, 200]);
+        let (path, _) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
+        let config = crate::store::exact::ExactIndexConfig {
+            column: "worker_id".to_string(),
+            exact_values: vec!["w-2".to_string()],
+            value_counts: false,
+        };
+        crate::store::segment_index::write_segment_index(
+            &path,
+            &[batch],
+            &crate::store::segment_index::SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[config],
+                &[],
+                None,
+            ),
+        )
+        .unwrap();
+
+        let bundle_path = crate::store::index_bundle::bundle_path(&path);
+        let header = crate::store::index_bundle::read_header(&bundle_path).unwrap();
+        let postings = header
+            .sections
+            .iter()
+            .find(|section| section.kind == crate::store::index_bundle::SectionKind::ExactPostings)
+            .unwrap();
+        let payload =
+            crate::store::index_bundle::read_section(&bundle_path, &header, postings.id.as_str())
+                .unwrap();
+        let legacy_bundle = crate::store::index_bundle::serialize(
+            &header.binding,
+            &[crate::store::index_bundle::SectionInput {
+                id: postings.id.clone(),
+                kind: postings.kind,
+                method_version: 1,
+                exactness: postings.exactness,
+                coverage: Vec::new(),
+                payload,
+            }],
+        )
+        .unwrap();
+        std::fs::write(&bundle_path, legacy_bundle).unwrap();
+        let legacy_header = crate::store::index_bundle::read_header(&bundle_path).unwrap();
+        let legacy_postings = legacy_header
+            .sections
+            .iter()
+            .find(|section| section.kind == crate::store::index_bundle::SectionKind::ExactPostings)
+            .unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&bundle_path)
+            .unwrap()
+            .write_all_at(&[0xff], legacy_postings.offset)
+            .unwrap();
+
+        let cache = crate::query::index_cache::test_index_cache();
+        let provider = NamespaceProvider::build(
+            worker_arrow(),
+            &[path.to_string_lossy().into_owned()],
+            Arc::clone(&cache),
+        )
+        .unwrap()
+        .with_exact_postings_policy(BTreeMap::from([(
+            "worker_id".to_string(),
+            vec!["w-2".to_string()],
+        )]));
+        let plan = provider
+            .scan(
+                &SessionContext::new().state(),
+                None,
+                &[col("worker_id").eq(lit("w-missing"))],
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            cache.corruption_counts().sections,
+            0,
+            "the registered policy should reject the predicate before reading legacy postings"
+        );
+        let exec = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec");
+        let config = exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        assert!(config
+            .file_groups
+            .iter()
+            .flat_map(|group| group.files())
+            .all(|file| file.extensions.is_none()));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1018,6 +1391,68 @@ mod tests {
             ),
             None,
         )
+        .await
+        .unwrap();
+        assert_prunes_to_span1(&plan, rg1_rows);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn regex_query_returns_matches_and_prunes_row_groups() {
+        use datafusion::logical_expr::{col, lit};
+        use datafusion::logical_expr::{expr::ScalarFunction, Expr};
+
+        let dir = tempdir("regex_prune");
+        let pattern = r"Bootstrap.*TPU-[a-z]+";
+        let rg1 = vec![
+            "idle heartbeat ok",
+            "E0601 Bootstrap completed for TPU-xyz started",
+            "Bootstrap stopped for GPU-xyz",
+        ];
+        let rg1_rows = rg1.len();
+        let path = write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &rg1);
+
+        let ctx = crate::query::make_ctx();
+        let provider = NamespaceProvider::build(
+            log_arrow(),
+            std::slice::from_ref(&path),
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap();
+        ctx.register_table(
+            datafusion::common::TableReference::bare("log"),
+            Arc::new(provider),
+        )
+        .unwrap();
+        let batches = ctx
+            .sql(&format!(
+                "SELECT data FROM \"log\" WHERE regexp_matches(data, '{pattern}') ORDER BY seq"
+            ))
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(
+            first_column_strings(&batches),
+            vec!["E0601 Bootstrap completed for TPU-xyz started".to_string()]
+        );
+
+        let udf = {
+            use datafusion::execution::FunctionRegistry;
+            ctx.udf("regexp_matches").unwrap()
+        };
+        let filter = Expr::ScalarFunction(ScalarFunction::new_udf(
+            udf,
+            vec![col("data"), lit(pattern)],
+        ));
+        let plan = NamespaceProvider::build(
+            log_arrow(),
+            &[path],
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap()
+        .scan(&ctx.state(), None, &[filter], None)
         .await
         .unwrap();
         assert_prunes_to_span1(&plan, rg1_rows);

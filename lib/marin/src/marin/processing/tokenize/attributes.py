@@ -33,7 +33,7 @@ from fray.types import ResourceConfig
 from levanter.data.text.formats import LmDatasetFormatBase, TextLmDatasetFormat
 from levanter.tokenizers import TokenizerBackend
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file

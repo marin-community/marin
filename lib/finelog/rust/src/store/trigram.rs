@@ -65,7 +65,7 @@
 //! A bloom covers a fixed [`SIDECAR_SPAN_ROWS`] span of the segment's rows, which
 //! is deliberately NOT the parquet row-group size: row groups are sized by bytes
 //! so the footer stays small (see
-//! [`crate::store::segment::segment_writer_properties`]), while pruning wants the
+//! [`crate::store::segment::segment_writer_properties_with_max_rows`]), while pruning wants the
 //! finest
 //! granularity its blooms can afford. The prune path maps the span mask onto the
 //! parquet row groups, emitting a row selection when a row group is only

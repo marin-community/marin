@@ -39,21 +39,20 @@ from iris.cluster.controller.service import (
 from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
-from rigging.server_auth import VerifiedIdentity, _verified_identity
-from rigging.timing import Duration, Timestamp
-from sqlalchemy import func
-from sqlalchemy import update as sa_update
-from tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
-from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
-
-from .conftest import (
+from iris.testing.controller import (
     make_job_request,
     make_test_entrypoint,
     make_worker_metadata,
 )
-from .conftest import (
+from iris.testing.controller import (
     query_tasks_with_attempts as _query_tasks_with_attempts,
 )
+from iris.testing.controller_state import ControllerTestState, submit_job_in_tx
+from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
+from rigging.server_auth import VerifiedIdentity, _verified_identity
+from rigging.timing import Duration, Timestamp
+from sqlalchemy import func
+from sqlalchemy import update as sa_update
 
 # =============================================================================
 # Test Helpers
@@ -852,11 +851,32 @@ def test_terminate_job_allowed_by_owner(service):
     assert status.job.state == job_pb2.JOB_STATE_KILLED
 
 
-def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, log_client):
-    """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
+@pytest.mark.parametrize(
+    ("rpc_request", "operation"),
+    [
+        pytest.param(
+            controller_pb2.Controller.TerminateJobRequest(job_id="/alice/my-job"),
+            ControllerServiceImpl.terminate_job,
+            id="terminate",
+        ),
+        pytest.param(
+            controller_pb2.Controller.CompleteJobRequest(job_id="/alice/my-job"),
+            ControllerServiceImpl.complete_job,
+            id="complete",
+        ),
+    ],
+)
+def test_job_finalization_rejected_for_non_owner(
+    state,
+    mock_controller,
+    tmp_path,
+    log_client,
+    rpc_request,
+    operation,
+):
     auth_service = ControllerServiceImpl(
         controller=mock_controller,
-        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_job_finalization")),
         log_client=log_client,
         db=state._db,
         auth=ControllerAuth(provider="static"),
@@ -867,14 +887,12 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, 
 
     token = _verified_identity.set(VerifiedIdentity(user_id="bob", role="user"))
     try:
-        request = controller_pb2.Controller.TerminateJobRequest(job_id="/alice/my-job")
         with pytest.raises(ConnectError) as exc_info:
-            auth_service.terminate_job(request, None)
+            operation(auth_service, rpc_request, None)
         assert exc_info.value.code == Code.PERMISSION_DENIED
     finally:
         _verified_identity.reset(token)
 
-    # Job should still be running
     status = auth_service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id="/alice/my-job"), None)
     assert status.job.state == job_pb2.JOB_STATE_PENDING
 
@@ -1461,21 +1479,34 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
 # =============================================================================
 
 
+# The controller's own build date, which the floor is measured back from. Chosen
+# well in the past so the tests never depend on the wall clock.
+CONTROLLER_BUILD = date(2026, 5, 1)
+
+
+@pytest.fixture
+def controller_build(monkeypatch):
+    monkeypatch.setattr(service_module, "client_revision_date", lambda: CONTROLLER_BUILD.isoformat())
+
+
 @pytest.mark.parametrize(
     "client_date,expected_code",
     [
-        pytest.param(date.today().isoformat(), None, id="today_accepted"),
-        pytest.param((date.today() - FRESHNESS_WINDOW).isoformat(), None, id="window_edge_accepted"),
+        pytest.param(CONTROLLER_BUILD.isoformat(), None, id="same_build_accepted"),
+        pytest.param((CONTROLLER_BUILD - FRESHNESS_WINDOW).isoformat(), None, id="window_edge_accepted"),
         pytest.param(
-            (date.today() - FRESHNESS_WINDOW - timedelta(days=1)).isoformat(),
+            (CONTROLLER_BUILD - FRESHNESS_WINDOW - timedelta(days=1)).isoformat(),
             Code.FAILED_PRECONDITION,
             id="over_window_rejected",
         ),
-        pytest.param("", Code.FAILED_PRECONDITION, id="empty_rejected"),
+        pytest.param((CONTROLLER_BUILD + timedelta(days=30)).isoformat(), None, id="newer_than_controller_accepted"),
+        pytest.param("", None, id="unidentifiable_client_accepted"),
         pytest.param("not-a-date", Code.INVALID_ARGUMENT, id="malformed_rejected"),
     ],
 )
-def test_launch_job_client_revision_date_enforces_freshness_window(service, client_date, expected_code):
+def test_launch_job_client_revision_date_enforces_freshness_window(
+    service, controller_build, client_date, expected_code
+):
     request = make_job_request("client-freshness")
     request.client_revision_date = client_date
 
@@ -1490,14 +1521,70 @@ def test_launch_job_client_revision_date_enforces_freshness_window(service, clie
     assert service.list_jobs(controller_pb2.Controller.ListJobsRequest(), None).jobs == []
 
 
-def test_launch_job_received_handoff_is_exempt_from_client_freshness(service):
+def test_rejection_names_both_builds_and_the_remedy_for_each_install(service, controller_build):
+    """The operator has to be able to act on this without reading the source.
+
+    Naming only the floor leaves "too old than what?" unanswered, and `uv sync` is
+    the wrong remedy for the case that actually strands people: a checkout whose
+    date comes from its own git history, where merging is the fix.
+    """
+    request = make_job_request("stale-client")
+    request.client_revision_date = "2026-04-01"
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, object())
+
+    assert exc_info.value.message == (
+        "marin-iris client is too old: your build is 2026-04-01, this controller runs "
+        "2026-05-01, and the oldest client accepted is 2026-04-17 (14 days). A build date "
+        "is the last commit touching lib/iris. From a checkout, merge or rebase onto a "
+        "newer main; from an installed marin-iris, upgrade it and re-run `uv sync`."
+    )
+
+
+def test_launch_job_admits_a_client_as_old_as_the_controller_itself(service, monkeypatch):
+    """A quiet iris tree must not lock out clients that are current with it.
+
+    A client's date is the last commit touching the iris tree, so a month without
+    such a commit leaves every client — and the controller running that same code —
+    reporting a month-old date. Measuring back from the controller's own build keeps
+    that case admissible, where a floor of ``today - FRESHNESS_WINDOW`` rejected it.
+    """
+    stale_build = (date.today() - timedelta(days=60)).isoformat()
+    monkeypatch.setattr(service_module, "client_revision_date", lambda: stale_build)
+    request = make_job_request("quiet-tree")
+    request.client_revision_date = stale_build
+
+    response = service.launch_job(request, object())
+    assert response.job_id == JobName.root("test-user", "quiet-tree").to_wire()
+
+
+def test_launch_job_measures_from_today_when_the_controller_cannot_identify_its_build(service, monkeypatch):
+    """Images predating the build stamp keep the old wall-clock rule.
+
+    Abstaining instead would silently disable the gate on every cluster until its
+    controller is rebuilt, which is the window where it is least safe to lose.
+    """
+    monkeypatch.setattr(service_module, "client_revision_date", lambda: "")
+    stale = make_job_request("no-controller-build")
+    stale.client_revision_date = "2000-01-01"
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(stale, object())
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+
+    current = make_job_request("current-against-wall-clock")
+    current.client_revision_date = date.today().isoformat()
+    response = service.launch_job(current, object())
+    assert response.job_id == JobName.root("test-user", "current-against-wall-clock").to_wire()
+
+
+def test_launch_job_received_handoff_is_exempt_from_client_freshness(service, controller_build):
     """A federated handoff carries no client date and must still be admitted.
 
     The parent rebuilds a handoff from its stored job state, which does not carry the
-    submitter's ``client_revision_date`` — so every delivered handoff arrives with the
-    field empty, which the freshness check would otherwise read as the (long past)
-    feature-introduction date and reject. The parent already gated the submitter's
-    client at its own LaunchJob.
+    submitter's ``client_revision_date``, so every delivered handoff arrives with the
+    field empty. The parent already gated the submitter's client at its own LaunchJob.
     """
     request = make_job_request("received-handoff")
     request.federation.requester_id = "parent-cluster"

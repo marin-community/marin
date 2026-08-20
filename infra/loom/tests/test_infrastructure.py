@@ -12,10 +12,12 @@ import yaml
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 
 from infra.loom.infrastructure import (
+    ROOT,
     DeploymentConfig,
     GitHubFederationConfig,
     ProfileConfig,
     WorkloadIdentityConfig,
+    _deployment_manifest,
     _deployment_profiles,
     _validated_image_reference,
     create_infrastructure,
@@ -61,10 +63,14 @@ def deployment_config() -> DeploymentConfig:
         network="default",
         instance_name="loom",
         vm_service_account_name="loom-vm",
-        machine_type="e2-highmem-4",
+        machine_type="c4d-highmem-4",
+        boot_disk_name="loom-hyperdisk",
+        boot_disk_type="hyperdisk-balanced",
         boot_disk_gb=100,
+        boot_disk_iops=3000,
+        boot_disk_throughput=140,
+        boot_disk_snapshot="loom-pre-c4d-hyperdisk-20260816",
         dotenv_secret_version=3,
-        snapshot_retention_days=14,
         vm_project_roles=("roles/cloudsql.client", "roles/cloudsql.instanceUser"),
         vm_pulumi_kms_keys=(
             "projects/example/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key",
@@ -79,6 +85,7 @@ def deployment_config() -> DeploymentConfig:
                     "class": "automation",
                     "strict": True,
                     "envClear": True,
+                    "instructionsFile": "profiles/ops/AGENTS.md",
                     "env": {"KUBECONFIG": {"secretRef": "projects/example/secrets/ops-kubeconfig/versions/latest"}},
                 },
             ),
@@ -146,6 +153,15 @@ def test_github_federations_require_unique_names_and_known_profiles() -> None:
         replace(base, github_federations=(duplicate, duplicate))
 
 
+def test_fork_ferry_workflow_stays_within_loom_profile_capacity() -> None:
+    stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())
+    workflow = yaml.safe_load((ROOT.parent.parent / ".github/workflows/ops-fork-ferry.yaml").read_text())
+    max_concurrent = stack["config"]["marin-loom:profiles"]["fork-ferry"]["maxConcurrent"]
+    units = workflow["jobs"]["ferry"]["strategy"]["matrix"]["include"]
+
+    assert len(units) <= max_concurrent
+
+
 def test_release_reference_must_be_the_expected_registry_digest() -> None:
     canonical = "us-central1-docker.pkg.dev/example/loom/loom@sha256:" + "a" * 64
     tagged = "us-central1-docker.pkg.dev/example/loom/loom:latest@sha256:" + "a" * 64
@@ -155,24 +171,52 @@ def test_release_reference_must_be_the_expected_registry_digest() -> None:
         _validated_image_reference("us-central1-docker.pkg.dev/example/loom/loom:main", "example", "us-central1")
 
 
-def test_profile_manifest_accepts_secret_references_but_rejects_values() -> None:
+def test_profile_manifest_renders_github_repositories_and_secret_references() -> None:
     profiles, references = _deployment_profiles(
         (
             ProfileConfig.parse(
                 "ops",
                 {
                     "agent": "codex",
+                    "githubRepositories": ["marin-community/marin", "marin-community/vllm"],
                     "mcpAccess": {"mode": "all", "groups": []},
                     "env": {"OPS_TOKEN": {"secretRef": "projects/example/secrets/ops-token/versions/7"}},
                 },
             ),
         )
     )
+    assert profiles[0]["profile"]["github_repositories"] == [
+        "marin-community/marin",
+        "marin-community/vllm",
+    ]
     assert profiles[0]["profile"]["mcp_access"] == {"mode": "all", "groups": []}
     assert profiles[0]["env"] == [{"name": "OPS_TOKEN", "secret_ref": "projects/example/secrets/ops-token/versions/7"}]
     assert references == [("example", "ops-token")]
-    with pytest.raises(ValueError, match="full secretRef"):
+    with pytest.raises(ValueError, match="exactly one of value or secretRef"):
         ProfileConfig.parse("ops", {"agent": "codex", "env": {"OPS_TOKEN": "plaintext"}})
+
+
+def test_deployment_manifest_preserves_unicode_profile_instructions() -> None:
+    profile = ProfileConfig.parse("github", {"agent": "codex", "instructions": "Prefix comments with 🤖"})
+    config = replace(deployment_config(), profiles=(profile,), workloads=(), github_federations=())
+    profiles, _ = _deployment_profiles(config.profiles)
+    manifest = _deployment_manifest(config, profiles, [])
+    assert "🤖" in manifest
+    assert json.loads(manifest)["profiles"][0]["profile"]["instructions"] == "Prefix comments with 🤖"
+
+
+def test_profile_instructions_reject_ambiguous_or_external_sources() -> None:
+    with pytest.raises(ValueError, match="only one"):
+        ProfileConfig.parse(
+            "slack",
+            {
+                "agent": "codex",
+                "instructions": "inline",
+                "instructionsFile": "profiles/slack/AGENTS.md",
+            },
+        )
+    with pytest.raises(ValueError, match="under"):
+        ProfileConfig.parse("slack", {"agent": "codex", "instructionsFile": "../../AGENTS.md"})
 
 
 @pytest.mark.parametrize(
@@ -197,6 +241,8 @@ def test_deployment_models_durable_resources_without_secret_payloads():
         assert "gcp:secretmanager/secretVersion:SecretVersion" not in resource_types
         assert "gcp:iam/workloadIdentityPool:WorkloadIdentityPool" not in resource_types
         assert "gcp:iam/workloadIdentityPoolProvider:WorkloadIdentityPoolProvider" not in resource_types
+        assert "gcp:compute/resourcePolicy:ResourcePolicy" not in resource_types
+        assert "gcp:compute/diskResourcePolicyAttachment:DiskResourcePolicyAttachment" not in resource_types
 
         vm = by_name(mocks, "loom")
         attached = field(vm.inputs, "attached_disks", "attachedDisks")
@@ -204,12 +250,24 @@ def test_deployment_models_durable_resources_without_secret_payloads():
         boot_disk = field(vm.inputs, "boot_disk", "bootDisk")
         assert boot_disk is not None
         assert field(boot_disk, "auto_delete", "autoDelete") is False
-        root_disk = by_name(mocks, "loom-root")
+        assert field(boot_disk, "interface", "interface") == "NVME"
+        root_disk = by_name(mocks, "loom-primary-root")
         assert root_disk.typ == "gcp:compute/disk:Disk"
-        assert root_disk.inputs["name"] == "loom"
-        assert boot_disk["source"] == "loom-root_id"
-        snapshot_attachment = by_name(mocks, "loom-snapshot-policy")
-        assert snapshot_attachment.inputs["disk"] == "loom"
+        assert root_disk.inputs["name"] == "loom-hyperdisk"
+        assert root_disk.inputs["type"] == "hyperdisk-balanced"
+        assert field(root_disk.inputs, "provisioned_iops", "provisionedIops") == 3000
+        assert field(root_disk.inputs, "provisioned_throughput", "provisionedThroughput") == 140
+        assert root_disk.inputs["snapshot"] == "loom-pre-c4d-hyperdisk-20260816"
+        assert boot_disk["source"] == "loom-primary-root_id"
+        network_interface = field(vm.inputs, "network_interfaces", "networkInterfaces")[0]
+        assert field(network_interface, "nic_type", "nicType") == "GVNIC"
+        assert field(vm.inputs, "machine_type", "machineType") == "c4d-highmem-4"
+        assert field(vm.inputs, "reservation_affinity", "reservationAffinity")["type"] == "NO_RESERVATION"
+        scheduling = field(vm.inputs, "scheduling", "scheduling")
+        assert field(scheduling, "automatic_restart", "automaticRestart") is True
+        assert field(scheduling, "on_host_maintenance", "onHostMaintenance") == "MIGRATE"
+        assert scheduling["preemptible"] is False
+        assert field(scheduling, "provisioning_model", "provisioningModel") == "STANDARD"
         metadata = vm.inputs["metadata"]
         assert metadata["dotenv-secret-version"] == "3"
         assert json.loads(metadata["docker-daemon-config"]) == {
@@ -295,13 +353,19 @@ def test_release_rollout_pins_metadata_to_the_built_image_digest():
 
 @pulumi.runtime.test
 def test_profiles_and_workloads_render_to_vm_metadata():
-    infrastructure, mocks = infrastructure_and_mocks()
+    mocks = RecordingMocks()
+    pulumi.runtime.set_mocks(mocks, project="marin-loom", stack="test", preview=False)
+    infrastructure = create_infrastructure(replace(deployment_config(), settings=(("slack.profile", "ops"),)))
 
     def check(_: object) -> None:
         assert by_name(mocks, "loom-workload-marin-ops").typ == "gcp:serviceaccount/account:Account"
         manifest = json.loads(by_name(mocks, "loom").inputs["metadata"]["loom-deployment"])
         assert manifest["prune"] is True
+        assert manifest["settings"] == {"slack.profile": "ops"}
         assert manifest["profiles"][0]["profile"]["name"] == "ops"
+        assert manifest["profiles"][0]["profile"]["instructions"] == (
+            (ROOT / "profiles/ops/AGENTS.md").read_text().strip()
+        )
         assert manifest["federations"][0]["subject"] == "11223344556677889900"
 
     return infrastructure.instance.id.apply(check)

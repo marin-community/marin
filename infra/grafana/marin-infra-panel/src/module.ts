@@ -10,6 +10,7 @@ export const plugin = new PanelPlugin<InfraPanelOptions>(InfraPanel).setPanelOpt
     settings: {
       options: [
         { value: 'status', label: 'Status page' },
+        { value: 'cluster', label: 'Cluster capacity' },
         { value: 'nightlies', label: 'Nightly matrix' },
         { value: 'commits', label: 'Commit strip' },
         { value: 'wandb', label: 'W&B chart' },

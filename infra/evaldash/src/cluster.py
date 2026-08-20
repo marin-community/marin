@@ -21,13 +21,14 @@ from dataclasses import dataclass
 from typing import TypeVar
 
 from connectrpc.errors import ConnectError
-from discovery import resolve_internal_ip
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.message import Message
 from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
+
+from .discovery import resolve_internal_ip
 
 logger = logging.getLogger(__name__)
 

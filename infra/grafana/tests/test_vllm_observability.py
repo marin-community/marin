@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from pathlib import Path
 from typing import NamedTuple
 
 import duckdb
@@ -21,6 +22,9 @@ BUCKET_MS = 60_000
 class TelemetryRow(NamedTuple):
     cluster: str
     service: str
+    job_id: str
+    run_id: str
+    execution_uid: str
     name: str
     kind: str
     value: float
@@ -50,7 +54,19 @@ def _record(
     job: str = "/serve",
     kind: str = "gauge",
 ) -> TelemetryRow:
-    return TelemetryRow("cw-a", "vllm", name, kind, value, _resource(job, replica), attributes, timestamp_ms)
+    return TelemetryRow(
+        "cw-a",
+        "vllm",
+        job,
+        "run-1",
+        "execution-1",
+        name,
+        kind,
+        value,
+        _resource(job, replica),
+        attributes,
+        timestamp_ms,
+    )
 
 
 def _database(rows: list[TelemetryRow]) -> duckdb.DuckDBPyConnection:
@@ -60,6 +76,9 @@ def _database(rows: list[TelemetryRow]) -> duckdb.DuckDBPyConnection:
         CREATE TABLE telemetry_v1(
             cluster VARCHAR,
             service VARCHAR,
+            job_id VARCHAR,
+            run_id VARCHAR,
+            execution_uid VARCHAR,
             name VARCHAR,
             kind VARCHAR,
             value DOUBLE,
@@ -75,10 +94,23 @@ def _database(rows: list[TelemetryRow]) -> duckdb.DuckDBPyConnection:
     )
     if rows:
         database.executemany(
-            "INSERT INTO telemetry_v1 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO telemetry_v1 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [(*row, seq) for seq, row in enumerate(rows)],
         )
     return database
+
+
+def test_dashboard_run_identity_variable_reads_promoted_column():
+    dashboard = json.loads((Path(__file__).parents[1] / "dashboards" / "inference.json").read_text())
+    sql = dashboard["templating"]["list"][1]["query"]["infinityQuery"]["url_options"]["params"][0]["value"]
+    sql = (
+        sql.replace("${identity_kind}", "run_id")
+        .replace("{{from}}", "TIMESTAMP '1970-01-01 00:02:00'")
+        .replace("{{to}}", "TIMESTAMP '1970-01-01 00:03:00'")
+    )
+    database = _database([_record("a", "num_requests_running", 1, 150_000, _attributes())])
+
+    assert database.execute(sql).fetchall() == [("run-1",)]
 
 
 def _query_rows(

@@ -64,7 +64,7 @@ const WIRE_SCOPE: Record<MatchScope, WireMatchScope> = {
   REGEX: 'MATCH_SCOPE_REGEX',
 }
 
-// Server-side narrowing: `filter` becomes FetchLogs.substring, so non-matching
+// Server-side narrowing: `filter` becomes FetchLogs.regex, so non-matching
 // lines never arrive. Distinct from `search` below, which only marks lines.
 const filter = ref('')
 const level = ref('info')
@@ -265,7 +265,7 @@ function requestSinceMs(): number | undefined {
 function baseRequest() {
   return {
     ...sourceRequest(),
-    substring: filter.value || undefined,
+    regex: filter.value || undefined,
     minLevel: level.value ? level.value.toUpperCase() : undefined,
     sinceMs: requestSinceMs(),
   }
@@ -418,7 +418,7 @@ async function revealSeq(seq: number) {
 
 const { active: autoRefreshActive, toggle: toggleAutoRefresh } = useAutoRefresh(doPoll, POLL_INTERVAL_MS)
 
-// Free-text fields (source key, substring filter) apply on Enter, not on every
+// Free-text fields (source key, regex filter) apply on Enter, not on every
 // keystroke. The discrete selectors below refetch immediately on change. The
 // match-scope select refetches via @change rather than a watch, so the
 // reassignment in applyDefaults() doesn't fire a redundant second fetch.
@@ -533,7 +533,10 @@ function setStartTime(entry: LogEntry) {
 
 /** Promote the client-side search into the server-side filter over the whole log. */
 function promoteSearchToFilter() {
-  filter.value = search.query.value
+  const pattern = search.useRegex.value
+    ? search.query.value
+    : search.query.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  filter.value = search.caseSensitive.value ? pattern : `(?i)${pattern}`
   resetAndFetch()
 }
 
@@ -669,8 +672,8 @@ defineExpose({ selectedAttemptId })
       <input
         v-model="filter"
         type="text"
-        title="Server-side filter: drops every line that does not contain this text"
-        placeholder="Filter: keep only lines containing… (Enter)"
+        title="Server-side regex filter: drops every line that does not match"
+        placeholder="Filter regex… (Enter)"
         class="w-full sm:w-56 px-3 py-1.5 bg-surface border border-surface-border rounded
                text-sm font-mono placeholder:text-text-muted
                focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
@@ -840,7 +843,7 @@ defineExpose({ selectedAttemptId })
                bg-surface-raised text-text-secondary"
       >
         <span>
-          Filtered to lines containing <code class="font-mono text-text">{{ filter }}</code> — surrounding
+          Filtered to lines matching <code class="font-mono text-text">{{ filter }}</code> — surrounding
           lines are hidden. Use <span class="font-mono">⋯</span> on a row to bring its context back.
         </span>
         <button class="ml-auto text-accent hover:underline" @click="clearFilter">Clear filter</button>
@@ -871,22 +874,24 @@ defineExpose({ selectedAttemptId })
           >
             <button
               v-if="row.seq > 0"
-              class="shrink-0 w-4 text-text-muted opacity-0 group-hover:opacity-100
+              class="shrink-0 w-4 select-none text-text-muted opacity-0 group-hover:opacity-100
                      focus-visible:opacity-100 hover:text-accent disabled:opacity-40"
               :title="`Show the ${CONTEXT_LINES} lines either side of this one, unfiltered`"
               :disabled="contextPending"
               @click="loadContext(row.seq)"
             >⋯</button>
-            <span v-else class="shrink-0 w-4" />
-            <RouterLink
-              v-if="row.taskRef && props.taskId"
-              :to="`/job/${encodeURIComponent(props.taskId)}/task/${encodeURIComponent(row.taskRef.taskId)}`"
-              class="shrink-0 text-accent hover:underline"
-              :title="row.taskRef.taskId"
-            >
-              T{{ row.taskRef.taskIndex }}
-            </RouterLink>
-            <span class="shrink-0 inline-flex items-center gap-1">
+            <span v-else class="shrink-0 w-4 select-none" />
+            <template v-if="showTaskLinks">
+              <RouterLink
+                v-if="row.taskRef && props.taskId"
+                :to="`/job/${encodeURIComponent(props.taskId)}/task/${encodeURIComponent(row.taskRef.taskId)}`"
+                class="shrink-0 w-12 overflow-hidden select-none text-right tabular-nums
+                       text-accent hover:underline"
+                :title="row.taskRef.taskId"
+              >T{{ row.taskRef.taskIndex }}</RouterLink>
+              <span v-else class="shrink-0 w-12 select-none" />
+            </template>
+            <span class="shrink-0 select-none inline-flex items-center gap-1">
               <button
                 data-log-permalink
                 class="text-text-muted tabular-nums hover:text-accent hover:underline"
@@ -901,6 +906,8 @@ defineExpose({ selectedAttemptId })
                 @click="setStartTime(row.entry)"
               >▶</button>
             </span>
+            <!-- The gutter is select-none: each item is a flex item, so a browser
+                 would otherwise copy every one of them onto its own line. -->
             <span
               :class="wrap ? 'whitespace-pre-wrap break-words flex-1' : 'whitespace-pre'"
             ><template

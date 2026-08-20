@@ -241,7 +241,7 @@ class TelemetryConfig(TrackerConfig):
         process_index = jax.process_index()
         runtime_telemetry.configure(
             "levanter",
-            root_run_uid=run_id,
+            run_id=run_id,
             process_index=process_index,
         )
         return TelemetryTracker(publish_tracker_metrics=process_index == 0)

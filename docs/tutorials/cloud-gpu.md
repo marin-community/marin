@@ -70,7 +70,7 @@ the cluster. Use that prefix for inputs, outputs, and caches. Use a
 lifecycle-managed path for disposable data:
 
 ```python
-from rigging.filesystem import marin_temp_bucket
+from rigging.filesystem.cluster_config import marin_temp_bucket
 
 scratch = marin_temp_bucket(ttl_days=1, prefix="my-experiment")
 ```
@@ -86,10 +86,10 @@ cluster-managed `iris-task-env` Kubernetes Secret.
 
 ```bash
 uv run iris --cluster=marin job logs -f /<user>/<job-name>
-uv run iris --cluster=marin job summary /<user>/<job-name>
+uv run iris --cluster=marin job describe /<user>/<job-name>
 ```
 
-Logs are relayed from the CoreWeave peer. `job summary` reads the mirrored job
+Logs are relayed from the CoreWeave peer. `job describe` reads the mirrored job
 state and can be more current than a busy log stream.
 
 After the `dev` run finishes, check

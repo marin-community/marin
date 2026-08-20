@@ -23,7 +23,7 @@ lookback_days: 3
 # max_usd. Pinging is best-effort: a breach is always logged, but the POST is
 # skipped on --dry-run and when `webhook_url_env` is unset, so local runs and
 # environments without the secret stay silent. The webhook decides the channel
-# (the repo's SLACK_WEBHOOK_URL); point webhook_url_env at a #marin-eng webhook.
+# (the repo's SLACK_WEBHOOK_URL); point webhook_url_env at a #marin-alerts webhook.
 alerts:
   webhook_url_env: SLACK_WEBHOOK_URL
   rules:

@@ -62,21 +62,14 @@ Example:
 
 Title: `# Proposed Fix`
 
-There are 2 cases:
+State the root cause or missing behavior, then describe the smallest fix. For a
+bug, show the call chain that triggers the error. Include a code snippet only if
+the fix is non-obvious.
 
-* **Bug fix**: Show the call chain that triggers the error, then state the fix
-  in one sentence. Include a code snippet only if the fix is non-obvious.
+> `env.run()` returns a tuple; `foo()` assumes an object and calls `.abc()`.
+> Fix: unwrap the tuple in `RolloutWorker._step()` before passing to `foo()`.
 
-  > `env.run()` returns a tuple; `foo()` assumes an object and calls `.abc()`.
-  > Fix: unwrap the tuple in `RolloutWorker._step()` before passing to `foo()`.
-
-* **Design change**: The design doc replaces the `# Proposed Fix` section.
-  Write it per `.agents/skills/write-design-doc/SKILL.md` directly in the issue comment
-  (agents cannot commit files before the PR). The 3-4 sentence prose cap
-  applies to `# Research`; the design doc follows its own length guidelines.
-  Keep everything in one comment.
-
-In both cases: find the minimally disruptive fix. Do not over-engineer.
+Find the minimally disruptive fix. Do not over-engineer.
 
 ## Implementation
 
@@ -120,7 +113,7 @@ The tasks for this skill:
 - [ ] Fetch issue information
 - [ ] Research codebase for all relevant source files
 - [ ] Run duplicate-work preflight against open PRs/issues
-- [ ] Formulate fix and post Research + Proposed Fix comment
+- [ ] Post Research and Proposed Fix
 - [ ] Create branch for the changes
 - [ ] Write a test case as needed for changes
 - [ ] Implement changes until all tests pass

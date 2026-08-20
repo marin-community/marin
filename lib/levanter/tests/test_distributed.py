@@ -1,7 +1,62 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from iris.cluster.client.job_info import JobInfo
+from iris.cluster.types import Entrypoint, JobName
+
+from levanter import distributed
 from levanter.distributed import _square_brace_expand
+
+
+def _run_with_iris_completion(marker: Path, outcome: str) -> None:
+    class RecordingClient:
+        def complete_job(self, _job_id: JobName) -> None:
+            marker.touch()
+
+    distributed.get_job_info = lambda: JobInfo(task_id=JobName.from_wire("/test/training/0"))
+    distributed.configure_megascale_from_iris = lambda: None
+    distributed.initialize_iris_jax = lambda: None
+    distributed.iris_ctx = lambda: SimpleNamespace(client=RecordingClient())
+    distributed.jax.process_index = lambda: 0
+
+    distributed.DistributedConfig().initialize()
+    if outcome == "exception":
+        raise RuntimeError("training failed")
+    if outcome == "system-exit":
+        raise SystemExit(7)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected_returncode", "expected_completion"),
+    [
+        pytest.param("return", 0, True, id="clean-return"),
+        pytest.param("exception", 1, False, id="uncaught-exception"),
+        pytest.param("system-exit", 7, False, id="nonzero-system-exit"),
+    ],
+)
+def test_callable_runner_only_completes_iris_job_after_clean_exit(
+    tmp_path: Path,
+    outcome: str,
+    expected_returncode: int,
+    expected_completion: bool,
+) -> None:
+    marker = tmp_path / "completed"
+    entrypoint = Entrypoint.from_callable(_run_with_iris_completion, marker, outcome)
+    for name, contents in entrypoint.workdir_files.items():
+        (tmp_path / name).write_bytes(contents)
+
+    env = {**os.environ, "IRIS_WORKDIR": str(tmp_path)}
+    result = subprocess.run([sys.executable, tmp_path / "_callable_runner.py"], env=env, check=False)
+
+    assert result.returncode == expected_returncode
+    assert marker.exists() is expected_completion
 
 
 def test_square_brace_expand():

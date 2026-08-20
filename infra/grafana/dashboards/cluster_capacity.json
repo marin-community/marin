@@ -1,0 +1,425 @@
+{
+  "uid": "marin-cluster-capacity",
+  "title": "Cluster capacity",
+  "description": "What is tying up one cluster right now: live Iris jobs, Kubernetes placement and requested resources, node capacity, and recent observed CPU, memory, GPU, and HBM utilization. GPU blocks show scheduler allocation; live percentages come from the node-agent telemetry stream.",
+  "tags": [
+    "marin",
+    "generated"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 42,
+  "refresh": "30s",
+  "time": {
+    "from": "now-10m",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "label": "Cluster",
+        "type": "custom",
+        "description": "One cluster at a time so the packing diagram remains legible. CoreWeave clusters expose live Kubernetes placement; marin and marin-dev currently render an empty placement view.",
+        "query": "cw-rno2a,cw-us-east-02a,cw-us-east-08a,marin,marin-dev",
+        "options": [
+          {
+            "selected": false,
+            "text": "cw-rno2a",
+            "value": "cw-rno2a"
+          },
+          {
+            "selected": true,
+            "text": "cw-us-east-02a",
+            "value": "cw-us-east-02a"
+          },
+          {
+            "selected": false,
+            "text": "cw-us-east-08a",
+            "value": "cw-us-east-08a"
+          },
+          {
+            "selected": false,
+            "text": "marin",
+            "value": "marin"
+          },
+          {
+            "selected": false,
+            "text": "marin-dev",
+            "value": "marin-dev"
+          }
+        ],
+        "current": {
+          "selected": true,
+          "text": "cw-us-east-02a",
+          "value": "cw-us-east-02a"
+        },
+        "includeAll": false,
+        "multi": false,
+        "hide": 0,
+        "refresh": 0
+      }
+    ]
+  },
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Home",
+      "type": "link",
+      "url": "/d/marin-home"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Jobs",
+      "type": "link",
+      "url": "/d/marin-jobs"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Fleet health",
+      "type": "link",
+      "url": "/d/marin-clusters"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Node details",
+      "type": "link",
+      "url": "/d/marin-nodes"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Accelerators",
+      "type": "link",
+      "url": "/d/marin-accel"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Infra",
+      "type": "link",
+      "url": "/d/infra"
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "marin-infra-panel",
+      "title": "",
+      "transparent": true,
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "status"
+      },
+      "gridPos": {
+        "h": 40,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "view": "cluster"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "W",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/k8s/workloads",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "cluster",
+                "value": "${cluster}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "namespace",
+              "text": "namespace",
+              "type": "string"
+            },
+            {
+              "selector": "pod",
+              "text": "pod",
+              "type": "string"
+            },
+            {
+              "selector": "node",
+              "text": "node",
+              "type": "string"
+            },
+            {
+              "selector": "job",
+              "text": "job",
+              "type": "string"
+            },
+            {
+              "selector": "task",
+              "text": "task",
+              "type": "string"
+            },
+            {
+              "selector": "phase",
+              "text": "phase",
+              "type": "string"
+            },
+            {
+              "selector": "ready",
+              "text": "ready",
+              "type": "boolean"
+            },
+            {
+              "selector": "priority_class",
+              "text": "priority_class",
+              "type": "string"
+            },
+            {
+              "selector": "age_seconds",
+              "text": "age_seconds",
+              "type": "number"
+            },
+            {
+              "selector": "cpu_request_millicores",
+              "text": "cpu_request_millicores",
+              "type": "number"
+            },
+            {
+              "selector": "memory_request_bytes",
+              "text": "memory_request_bytes",
+              "type": "number"
+            },
+            {
+              "selector": "gpu_request_count",
+              "text": "gpu_request_count",
+              "type": "number"
+            },
+            {
+              "selector": "gpu_variant",
+              "text": "gpu_variant",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "refId": "N",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/k8s/nodes",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "cluster",
+                "value": "${cluster}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "node",
+              "text": "node",
+              "type": "string"
+            },
+            {
+              "selector": "instance_type",
+              "text": "instance_type",
+              "type": "string"
+            },
+            {
+              "selector": "node_pool",
+              "text": "node_pool",
+              "type": "string"
+            },
+            {
+              "selector": "gpu_model",
+              "text": "gpu_model",
+              "type": "string"
+            },
+            {
+              "selector": "gpu_capacity",
+              "text": "gpu_capacity",
+              "type": "number"
+            },
+            {
+              "selector": "gpu_allocatable",
+              "text": "gpu_allocatable",
+              "type": "number"
+            },
+            {
+              "selector": "cpu_allocatable",
+              "text": "cpu_allocatable",
+              "type": "string"
+            },
+            {
+              "selector": "memory_allocatable",
+              "text": "memory_allocatable",
+              "type": "string"
+            },
+            {
+              "selector": "ready",
+              "text": "ready",
+              "type": "boolean"
+            },
+            {
+              "selector": "unschedulable",
+              "text": "unschedulable",
+              "type": "boolean"
+            }
+          ]
+        },
+        {
+          "refId": "T",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/finelog/marin/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH latest AS ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS source_cluster, task_id AS task, worker_id AS pod, cpu_millicores, memory_mb * 1048576 AS memory_bytes, ts AS sampled_at, ROW_NUMBER() OVER (PARTITION BY COALESCE(NULLIF(\"cluster\", ''), 'marin'), task_id, worker_id ORDER BY ts DESC) AS row_number FROM \"iris.task\" WHERE COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} ) SELECT source_cluster AS \"cluster\", task, pod, cpu_millicores, memory_bytes, sampled_at FROM latest WHERE row_number = 1 ORDER BY task, pod"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "task",
+              "text": "task",
+              "type": "string"
+            },
+            {
+              "selector": "pod",
+              "text": "pod",
+              "type": "string"
+            },
+            {
+              "selector": "cpu_millicores",
+              "text": "cpu_millicores",
+              "type": "number"
+            },
+            {
+              "selector": "memory_bytes",
+              "text": "memory_bytes",
+              "type": "number"
+            },
+            {
+              "selector": "sampled_at",
+              "text": "sampled_at",
+              "type": "timestamp_epoch"
+            }
+          ]
+        },
+        {
+          "refId": "H",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/finelog/marin/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH latest AS ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS source_cluster, json_get(attributes_json, 'node_name') AS node, name, COALESCE(json_get(attributes_json, 'gpu_uuid'), '') AS gpu, value, timestamp_ms, ROW_NUMBER() OVER (PARTITION BY COALESCE(NULLIF(\"cluster\", ''), 'marin'), json_get(attributes_json, 'node_name'), name, COALESCE(json_get(attributes_json, 'gpu_uuid'), '') ORDER BY timestamp_ms DESC) AS row_number FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('node_cpu_utilization_percent', 'node_memory_used_bytes', 'node_memory_total_bytes', 'gpu_utilization_percent', 'gpu_memory_used_bytes', 'gpu_memory_total_bytes') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ) SELECT source_cluster AS \"cluster\", node, name, CASE WHEN name IN ('gpu_memory_used_bytes', 'gpu_memory_total_bytes') THEN SUM(value) ELSE AVG(value) END AS value, MAX(timestamp_ms) AS sampled_at FROM latest WHERE row_number = 1 AND node <> '' GROUP BY source_cluster, node, name ORDER BY node, name"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "node",
+              "text": "node",
+              "type": "string"
+            },
+            {
+              "selector": "name",
+              "text": "name",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            },
+            {
+              "selector": "sampled_at",
+              "text": "sampled_at",
+              "type": "timestamp_epoch"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

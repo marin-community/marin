@@ -79,6 +79,16 @@ tens of minutes rather than at once. Enabling a column supersedes the whole
 `.fidx` policy, so every segment's bundle is rebuilt rather than extended: budget
 one core across the namespace's full segment count.
 
+That escaping rule is specific to `LIKE`. Equality already treats underscores
+as ordinary characters, so use the stored metric name without backslashes:
+
+```sql
+WHERE name = 'grad_norm_layers_0_ln2_b'
+```
+
+`name = 'grad\_norm\_layers\_0\_ln2\_b'` asks for a different string and cannot
+use postings declared for the unescaped name.
+
 An unindexed substring predicate spends its cost in the `LIKE` kernel, not in
 IO. `bytes_scanned` stays small while `pushdown_rows_pruned` reaches the
 namespace's row count. Read both.
@@ -87,7 +97,10 @@ For repeated equality families, declare the hot string values in
 `ColumnIndex.exact_values`. Finelog stores exact source-row postings in the
 segment's `.fidx` bundle. The planner attaches them for `=` and same-column
 `IN`/`OR` predicates when they retain at most 25% of the segment; denser matches
-keep the contiguous source scan.
+keep the contiguous source scan. The bundle header records the values covered by
+each exact section, so a query for an undeclared value skips the postings payload
+instead of opening and decoding it. Bundles written before this coverage header
+remain queryable by scan and are rebuilt by the normal index backfill.
 
 Use a named `Schema.projections` entry when the recurring query also benefits
 from a compact physical copy. Each projection declares one predicate and an
@@ -114,6 +127,15 @@ result above 16,384 values use DataFusion.
 `telemetry_v1` enables this for `service`, `kind`, and `name`, while its
 training-status metric names also use an exact filtered projection.
 
+`telemetry_v1` exposes stable resource dimensions as nullable columns:
+`run_id`, `job_id`, `execution_uid`, `region`, `node_name`, and `process_index`.
+Producers may send them directly in the request's `resource`
+object. When omitted, Finelog infers them from same-named resource attributes.
+An explicit field wins over an attribute and replaces the same key in
+`resource_attributes_json`; the JSON map is canonicalized rather than retaining
+both conflicting values. Selectors and groupings should use the structured
+columns.
+
 `GET /api/segments?namespace=telemetry_v1&physical=true` reports each local
 segment identity and `.fidx` section directory. Use it to distinguish incomplete
 backfill from a planner miss. `GET /api/server` reports corrupt bundle and
@@ -132,15 +154,27 @@ than in-memory bytes is what matters: a telemetry row compresses to ~8 bytes
 against a log line's hundreds, so an in-memory target under-sizes worst exactly
 where the fix is needed.
 
-Each segment's footer carries the layout revision it was written with. Since the
-terminal level is never re-compacted, a maintenance pass re-encodes segments
+A schema can impose a `max_row_group_rows` bound from 16,384 through 1,048,576
+and a multi-column `sort_columns` order. The compactor appends `seq` as the final deterministic
+tie-breaker. `telemetry_v1` uses 128K-row groups and sorts by
+`(service, run_id, name, timestamp_ms, seq)`, which clusters the common service,
+run, metric-name, and time predicates while keeping `timestamp_ms` as the
+retention key. Existing compacted telemetry files are not immediately rewritten
+for this schema-only policy change. New flushes use the row ceiling, multi-input
+compactions use the sort order, and single-input promotions preserve their input
+layout. The share of old-layout files declines through normal compaction and
+retention; complete convergence is not guaranteed without a layout-version bump.
+
+Separately, each segment's footer carries the global layout revision it was
+written with. A revision bump causes a maintenance pass to re-encode segments
 still on an older revision, a couple per namespace per 30 s tick — otherwise a
 namespace's bulk would keep its old row groups until eviction aged it out, which
 for `telemetry_v1`'s 15 GiB is about four days and for `log`'s about eight. The
 rewrite keeps the filename and preserves the rows and their order, so it costs no
 remote bandwidth: the archive keys objects by basename and only uploads segments
 still marked `Local`. A rewritten segment's remote copy keeps the old layout
-while holding the same rows.
+while holding the same rows. Schema-level sort-policy changes do not bump this
+revision and therefore do not schedule that rewrite.
 
 Watch it with the `rewrote segment layout` events, which report the before and
 after byte size per segment. Confirm the era split before concluding a layout
@@ -268,7 +302,9 @@ Interpret the pair as follows:
 The forwarder gives every live namespace one batch-sized turn per round and
 starts another round immediately while work remains. A large telemetry backlog
 therefore does not monopolize forwarding ahead of new log rows. Hub or network
-failures can still delay a turn because forwarding is best effort.
+failures get three attempts, then leave the affected cursor in place and yield to
+the next namespace. The same batch is retried on the next sweep; exhaustion does
+not discard it.
 
 Inspect the sender's forwarder messages without changing the deployment. Read
 the deployment name and Kubernetes connection details from
@@ -284,8 +320,10 @@ Warnings name the affected namespace. `backlog exceeds the warning threshold`
 reports pressure but does not change the forwarding cursor; the sender continues
 draining every locally retained row. `rows evicted before they were forwarded`
 means that local retention has already made source sequence positions unreadable.
-The cumulative `skipped_seqs` progress counter also includes permanently rejected
-malformed batches and does not by itself prove that `log` rows were dropped.
+`hub rejected the batch; preserving the cursor` means the sender will re-register
+the namespace's current schema on the next sweep and retry the same rows. The
+cumulative `skipped_seqs` progress counter reports only sequence positions lost to
+local retention; filtered foreign-origin rows may make it an upper bound on lost rows.
 
 To rotate a key, add the new Secret Manager version, add its public key alongside
 the old one under the same `keys[].cluster` (the hub accepts either), roll the

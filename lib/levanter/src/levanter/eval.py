@@ -16,6 +16,7 @@ import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
+from jax._src import config as jax_config
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Float, Int
 from tqdm_loggable.auto import tqdm
@@ -44,6 +45,7 @@ from levanter.utils.tree_utils import inference_mode
 
 
 logger = logging.getLogger(__name__)
+_TAGGED_EVAL_SHUFFLE_SEED = 0
 
 
 T = TypeVar("T")
@@ -410,13 +412,16 @@ def cb_tagged_evaluate(
             ProgressEvent.EVALUATION_STARTED,
             ProgressEvent.EVALUATION_FINISHED,
         ):
-            if eval_current:
-                log_dict = eval_model(evaluator, step.model, prefix=prefix)
-                levanter.tracker.log(log_dict, step=step_count)
+            # AutoPGLE profiles each newly compiled module. The tagged evaluation module must not
+            # start a second CUPTI profiling session while training uses its PGLE executable.
+            with jax_config.enable_pgle(False):
+                if eval_current:
+                    log_dict = eval_model(evaluator, step.model, prefix=prefix)
+                    levanter.tracker.log(log_dict, step=step_count)
 
-            if eval_ema:
-                log_dict = eval_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "ema"))
-                levanter.tracker.log(log_dict, step=step_count)
+                if eval_ema:
+                    log_dict = eval_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "ema"))
+                    levanter.tracker.log(log_dict, step=step_count)
             last_eval_step = step_count
 
     return eval_callback
@@ -512,13 +517,18 @@ class TaggedEvaluator(Generic[Ex, M]):
         device_mesh=None,
         axis_mapping=None,
         max_examples_per_dataset=None,
+        shuffle: bool = False,
     ):
         if isinstance(EvalBatch, int):
             EvalBatch = hax.Axis("batch", EvalBatch)
         self.loss_fn = loss_fn
         self.dataset = DomainTaggedDataset(tagged_eval_sets, max_examples_per_dataset)
+        loader_dataset = self.dataset.as_async_dataset()
+        if shuffle:
+            # Keep evaluation order reproducible across hosts and repeated evaluations.
+            loader_dataset = loader_dataset.shuffle(jax.random.PRNGKey(_TAGGED_EVAL_SHUFFLE_SEED))
         self.loader = DataLoader(
-            self.dataset.as_async_dataset(),
+            loader_dataset,
             EvalBatch,
             max_buffered_batches=100,
             mesh=device_mesh,

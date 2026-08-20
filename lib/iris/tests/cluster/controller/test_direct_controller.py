@@ -25,12 +25,7 @@ from iris.cluster.controller.schema import tasks_table
 from iris.cluster.controller.writes import set_user_budget, stamp_backend
 from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2
-from rigging.timing import RateLimiter, Timestamp
-from sqlalchemy import update as sa_update
-from tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
-from tests.cluster.controller.transition_driver import commit_dispatch_updates
-
-from .conftest import (
+from iris.testing.controller import (
     make_direct_job_request,
     query_attempt,
     query_task,
@@ -38,6 +33,10 @@ from .conftest import (
     reconcile_once,
     submit_direct_job,
 )
+from iris.testing.controller_state import ControllerTestState, submit_job_in_tx
+from iris.testing.transitions import commit_dispatch_updates
+from rigging.timing import RateLimiter, Timestamp
+from sqlalchemy import update as sa_update
 
 
 class FakeDirectProvider:

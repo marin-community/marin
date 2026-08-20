@@ -14,6 +14,13 @@ provides an IAP-gated HTTP interface and browser dashboard.
   embeddings, timestamps, attribution, and deliberate-reference counters. Search
   indexes the prose fields and can filter by tags.
 - `work_log` is an append-only agent logbook with one row per distilled milestone.
+- `search_feedback` records the query, IAP-authenticated caller, and short overall
+  explanation. `search_feedback_grades` links 0–10 grades to exact stored search-result
+  rows.
+- `search_executions` permanently records every API search, including its normalized
+  query, mode, selected domains and filters, result count, latency, indexed repository
+  commit, and service revision. Each `search_execution_results` row has an identity key
+  and snapshots the returned rank, metadata, snippet, and raw reranker score.
 
 ## CLI
 
@@ -23,6 +30,11 @@ provides an IAP-gated HTTP interface and browser dashboard.
 uv run infra/echo/cli.py search "expert parallel MoE MFU on B200" --limit 10
 uv run infra/echo/cli.py search "ragged_all_to_all" --domain file --domain pr
 uv run infra/echo/cli.py get file:lib/iris/OPS.md
+uv run infra/echo/cli.py feedback --query "how do I deploy Iris?" \
+  --execution-id 1234 --grade wiki:730=0 --grade file:731=10 <<'EOF'
+The file result answered the question; the wiki result did not.
+EOF
+uv run infra/echo/cli.py history export > echo-search-history.jsonl
 uv run infra/echo/cli.py grep ragged_all_to_all --source discord
 uv run infra/echo/cli.py wiki search "grafana access" --tag ops
 uv run infra/echo/cli.py wiki add --file note.md          # OKF markdown document
@@ -79,18 +91,53 @@ BGE semantic retrieval.
 The API retrieves at least 20 candidates from each selected domain, takes the best 20
 after first-stage fusion, and reranks their complete indexed chunks with the INT8 ONNX
 build of `ms-marco-MiniLM-L-6-v2`. Final rank is reciprocal-rank fusion of the
-first-stage rank (weight 0.2) and cross-encoder rank (weight 0.8). Candidates with a
-raw cross-encoder score below -2 are omitted. The threshold is an empirical relevance
-floor, not a calibrated probability. Because every returned result must be reranked,
-a search can return fewer than the requested limit and returns at most 20 results.
-`grep` remains a case-insensitive literal substring scan over activity, newest first.
+first-stage rank (weight 0.2) and cross-encoder rank (weight 0.8). Wiki candidates need
+a raw cross-encoder score of at least -1; other domains retain the -2 floor. These are
+empirical relevance floors, not calibrated probabilities. The wiki cutoff retains 93%
+of graded results scoring at least 4 while removing 22% of results below 4 in the 155
+execution-linked wiki grades available on 2026-08-18. Raw reranker scores are retained
+with new result snapshots so other domain cutoffs can use stable data. A search can
+return fewer than the requested limit and returns at most 20 results. `grep` remains a
+case-insensitive literal substring scan over activity, newest first.
 
-CLI search prints one table with stable result ID, title, and source-derived detail.
+CLI search prints one table with an execution-specific grading key, source ID, title,
+and source-derived detail. Grading keys use `<domain>:<numeric-key>` and remain attached
+to the stored row even when a later corpus sync replaces an activity chunk ID.
 Run `uv run infra/echo/cli.py get <domain:id>` to fetch the full indexed wiki body,
 repository file, pull request or issue chunk, or Discord message and its canonical URL.
 Wiki summaries use the `use_when` hint; files and activity use the matching source
 excerpt. Echo does not generate summaries with an LLM at query time, avoiding added
 latency and an additional prompt-injection path.
+
+`search` reports the number of results and elapsed wall-clock time before its table. The
+measurement covers token acquisition, the network request, server retrieval and
+reranking, and response decoding: the time the caller waited for Echo.
+
+### Record and inspect search feedback
+
+Submit useful or poor results with `feedback`. A search prints its durable execution ID;
+pass it with `--execution-id` so each judgment is tied to the exact ranked result set.
+Repeat `--grade <result-key>=<0-10>` for
+the results you evaluated, where 0 means irrelevant and 10 means directly useful to the
+task. The exact query makes each judgment replayable against a future search version.
+A short overall explanation is required on stdin. Capture the result set's gestalt
+without restating each score. An explanation without grades can describe an empty or
+globally poor result set. When an execution ID is supplied, the caller and query must
+match and every graded result must have appeared in that recorded execution.
+
+Search history is retained indefinitely for internal search-quality work. The service
+does not persist request headers, user agents, or network addresses in these tables.
+`history export` pages through the durable records as JSONL, including result-row IDs,
+ranked snapshots, and raw reranker scores. Historical query manifests can be replayed
+through normal search so each record captures current results under the same contract
+as future traffic.
+
+Use the durable export for retrieval analysis. Cloud Logging request lines are operational
+telemetry and do not preserve the execution-to-result relationship:
+
+```bash
+uv run infra/echo/cli.py history export > echo-search-history.jsonl
+```
 
 The scheduled sync checks GitHub at most once per hour. An unchanged head only advances
 the check time. A new head uses GitHub's compare API to delete, fetch, and re-embed
@@ -139,8 +186,10 @@ A pg_trgm GIN index on chunks.text makes the substring match an index scan.
 Direct SQL access remains available for raw queries through Cloud SQL IAM group
 authentication. Members of `eng-all@openathena.ai` inherit `roles/cloudsql.instanceUser`,
 `roles/cloudsql.client`, `SELECT` on `chunks`, `repository_file_chunks`,
-`repository_index_state`, and `wiki_entries`, and `SELECT, INSERT` on `work_log`; the
-`loom-vm` service account receives the same access. No database password is shared.
+`repository_index_state`, `wiki_entries`, `search_feedback`,
+`search_feedback_grades`, `search_executions`, and `search_execution_results`, and
+`SELECT, INSERT` on `work_log`; the `loom-vm` service
+account receives the same access. No database password is shared.
 Group membership and IAM changes can take about 15 minutes to propagate.
 
 ## Dashboard and HTTP API
@@ -158,6 +207,9 @@ the activity corpus and wiki notes. The same service exposes OpenAPI documentati
 - `GET /api/chunks/{id}`
 - `GET /api/wiki/search`
 - `GET /api/wiki/{id}`
+- `GET /api/feedback`
+- `POST /api/feedback`
+- `GET /api/search-executions`
 - `POST /api/wiki`
 - `PUT /api/wiki/{id}`
 - `POST /api/wiki/{id}/references`
@@ -178,11 +230,27 @@ defaults, and displayed commit length used by the dashboard. The CLI's `get` com
 uses the existing wiki and activity detail endpoints plus
 `GET /api/repository-files/{path}` for complete indexed files.
 
+Every successful search response includes `X-Echo-Search-Execution-ID` and is stored
+with its returned result snapshot. `GET /api/search-executions` returns stable ID-ordered
+pages of at most 500 records for evaluation exports.
+
+`POST /api/feedback` accepts an exact query, up to 20 unique `{key, grade}` records from
+0 through 10, and a required overall explanation of at most 2,000 characters. Grades may be empty
+when the search returns no useful results. The API attributes feedback to the
+IAP-authenticated caller and optionally links it to a matching search execution.
+`GET /api/feedback` returns recent submissions newest-first. Each grade includes its
+grading key, source ID, title, and browseable URL from the recorded search snapshot or
+current source.
+The response also includes explanation-only submissions with an empty grade list.
+
 The dashboard is a Vue single-page app served from the same origin, with client-side
-routes at `/` (search), `/wiki` (recently updated notes), `/wiki/<id>` (a note), and
-`/chunk/<id>` (an activity chunk). The API's catch-all route serves `index.html` for
-any path that isn't `/api/...`, `/healthz`, `/static/...`, `/docs`, or `/openapi.json`,
-so vue-router's history-mode navigation and reloads resolve correctly.
+routes at `/` (search), `/wiki` (recently updated notes), `/conversation` (recent agent
+work-log entries), `/feedback` (recent result grades), `/wiki/<id>` (a note), and
+`/chunk/<id>` (an activity chunk). Conversation details load when an entry is opened.
+The feedback table links each grade to its source and keeps explanation-only submissions
+visible. The API's catch-all route serves `index.html` for any path that isn't
+`/api/...`, `/healthz`, `/static/...`, `/docs`, or `/openapi.json`, so vue-router's
+history-mode navigation and reloads resolve correctly.
 
 Dashboard search uses the federated endpoint and exposes checkboxes for files, wiki,
 Discord, pull requests, and issues. Discord starts unchecked. Header tabs provide common

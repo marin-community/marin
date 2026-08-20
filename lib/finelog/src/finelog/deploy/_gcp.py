@@ -16,7 +16,13 @@ import time
 
 import click
 
-from finelog.deploy.bootstrap import CONTAINER_NAME, HEALTH_OK, health_probe_command, render_bootstrap
+from finelog.deploy.bootstrap import (
+    CONTAINER_NAME,
+    HEALTH_OK,
+    REGISTRATION_FAILED,
+    health_probe_command,
+    render_bootstrap,
+)
 from finelog.deploy.config import FinelogConfig, auth_policy_json
 from finelog.deploy.image import resolve_image_digest
 
@@ -75,13 +81,14 @@ def _ssh_args(cfg: FinelogConfig, command: str) -> list[str]:
 
 
 def _wait_health_via_ssh(cfg: FinelogConfig, port: int, max_attempts: int = 90) -> str:
-    """Poll ``/health`` from inside the VM over SSH until it reports ``HEALTH_OK``.
+    """Poll ``/health`` from inside the VM over SSH until ingest resolves.
 
     Returns the last body seen, which callers report verbatim: ``HEALTH_OK``,
     the server's account of what is degraded, or ``"unreachable"`` if the probe
     never answered. ``/health`` answers 200 whenever the server is listening, so
     the body is the signal — a binary whose schema the catalog rejects listens
-    and accepts no rows.
+    and accepts no rows. That rejection is terminal for the running binary, so
+    it returns immediately rather than waiting out the remaining attempts.
 
     Used by ``gcp_up`` (where early attempts fail while OS Login propagates the
     SSH key) and ``gcp_restart``, which re-runs the bootstrap over SSH and so
@@ -98,6 +105,8 @@ def _wait_health_via_ssh(cfg: FinelogConfig, port: int, max_attempts: int = 90) 
         if result.returncode == 0:
             body = result.stdout.strip()
             if body == HEALTH_OK:
+                return body
+            if REGISTRATION_FAILED in body:
                 return body
         time.sleep(2)
     return body

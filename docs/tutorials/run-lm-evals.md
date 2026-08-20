@@ -504,7 +504,8 @@ Other GPU-served models (DeepSeek-V2-Lite, Qwen3-30B-A3B, …) need no extra fla
 
 - `config`: the `EvalchemyRunConfig`, including tasks, generation settings, concurrency, and limits.
 - `serve`: the model-server behavior (`vllm` or `levanter` and its server options).
-- `resource_hint`: optional CPU, memory, and disk overrides for the inference worker.
+- `resource_hint`: optional CPU, memory, and disk overrides for the inference worker. Host memory
+  defaults to a size derived from the checkpoint's weight files.
 - `accelerator`: the exact TPU or GPU slice used for inference.
 - `tokenizer`: HF tokenizer id the eval client loads; defaults to the served checkpoint. Set it to a
   base-model HF id when serving a `gs://` path the Evalchemy client cannot load a tokenizer from.

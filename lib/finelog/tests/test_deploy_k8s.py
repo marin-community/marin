@@ -11,6 +11,7 @@ from dataclasses import replace
 import click
 import pytest
 import yaml
+from finelog.deploy import _k8s
 from finelog.deploy._k8s import (
     _K8S_MANIFEST_DIR,
     _MANIFESTS,
@@ -276,3 +277,34 @@ def test_rollout_accepts_a_pod_reporting_ok(monkeypatch: pytest.MonkeyPatch) -> 
     _health_body(monkeypatch, f"{HEALTH_OK}\n")
 
     _verify_ingest_ready(_forwarding_cfg())
+
+
+def _health_bodies(monkeypatch: pytest.MonkeyPatch, bodies: list[str]) -> None:
+    """Answer successive kubectl invocations with `bodies`, repeating the last."""
+    monkeypatch.setattr(_k8s.time, "sleep", lambda _: None)
+    remaining = list(bodies)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(
+            argv, 0, stdout=remaining.pop(0) if len(remaining) > 1 else remaining[0], stderr=""
+        ),
+    )
+
+
+def test_rollout_waits_out_a_namespace_that_is_still_registering(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Registration runs after the server starts listening, so a busy catalog is
+    # pending for the first probes of a deploy that goes on to succeed.
+    _health_bodies(
+        monkeypatch,
+        ["degraded: telemetry_v1: registration pending", "degraded: telemetry_v1: registration pending", HEALTH_OK],
+    )
+
+    _verify_ingest_ready(_forwarding_cfg())
+
+
+def test_rollout_fails_when_registration_never_completes(monkeypatch: pytest.MonkeyPatch) -> None:
+    _health_bodies(monkeypatch, ["degraded: telemetry_v1: registration pending"])
+
+    with pytest.raises(click.ClickException, match="registration pending"):
+        _verify_ingest_ready(_forwarding_cfg(), max_attempts=3)

@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { formatScore, formatStderr, formatTimestamp } from '@/utils/formatting'
+import { formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
 import type { LaunchGroup, RunRow } from '@/types/api'
 import StatusChip from '@/components/shared/StatusChip.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
@@ -279,9 +279,11 @@ function jobLinks(row: RunRow): { role: string; path: string }[] {
                         <td class="px-3 py-1.5 whitespace-nowrap">{{ e.eval_name }}</td>
                         <td class="px-3 py-1.5"><StatusChip :status="e.status" /></td>
                         <td class="px-3 py-1.5 tabular-nums whitespace-nowrap">
-                          <template v-if="e.value !== null">
-                            {{ formatScore(e.value) }}
-                            <span class="text-text-muted text-xs">{{ formatStderr(e.value, e.stderr) }}</span>
+                          <template v-if="e.headline">
+                            {{ formatScore(e.headline.value) }}
+                            <span class="text-text-muted text-xs">{{
+                              formatInterval(e.headline.low, e.headline.high)
+                            }}</span>
                           </template>
                           <span v-else class="text-text-muted">—</span>
                         </td>

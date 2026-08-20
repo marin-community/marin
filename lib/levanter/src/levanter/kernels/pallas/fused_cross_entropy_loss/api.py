@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Callable, Sequence
-from functools import lru_cache
+from functools import lru_cache, partial
 import hashlib
 import json
 import logging
@@ -15,8 +15,8 @@ import jax
 import jax.numpy as jnp
 import jaxlib
 from jaxtyping import Array, Float, Int
+from finestore.cache import PersistentKvCache
 from rigging.cache import (
-    PersistentKvCache,
     combined_content_hash,
     directory_content_hash,
     file_content_hash,
@@ -44,6 +44,7 @@ Implementation: TypeAlias = Literal[
     "pallas_tpu",
     "batched_xla",
     "xla",
+    "xla_fast_bwd",
     "reference",
 ]
 Reduction: TypeAlias = Literal["sum", "mean"] | None
@@ -56,6 +57,17 @@ ArrayImpl = Callable[..., KernelOutput]
 IMPLEMENTATIONS: dict[str, ArrayImpl] = {
     "reference": linear_softmax_cross_entropy_loss_reference,
     "xla": linear_softmax_cross_entropy_loss_xla,
+    # Same forward as "xla" (loss and lse are bitwise identical), but the backward
+    # is the scan/one-hot/tensor-core rewrite: no scatter, one GEMM per vocab block
+    # over the whole batch, and dlogits cast to the activation dtype so both
+    # backward GEMMs stay on bf16 tensor cores instead of being upcast to
+    # float32/TF32. Measured on GB200 at the grug EP hero CE shape
+    # (B=65,536 H=6,144 V=128,256): 723.4 ms -> 310.0 ms end-to-end for the kernel,
+    # 428 -> 1,000 TFLOP/s on the 3-GEMM convention (571 -> 1,333 counting all four
+    # GEMMs the kernel issues), at +0.04 GiB peak HBM. Gradients change: they are
+    # ~30% CLOSER to a float32 reference than the "xla" path. Opt in explicitly;
+    # "xla" is unchanged for every other caller.
+    "xla_fast_bwd": partial(linear_softmax_cross_entropy_loss_xla, fast_backward=True),
 }
 _DEFAULT_IMPLEMENTATION: tuple[Implementation, ...] = ("xla",)
 _IMPLEMENTATION_FALLBACK_WARNINGS_EMITTED: set[str] = set()
@@ -105,7 +117,7 @@ def _autotune_entry_name(key: str) -> str:
 
 
 class AutotuneBlockSizeCache:
-    """Tuned block sizes keyed by an opaque string, encoded to one object per key.
+    """Tuned block sizes keyed by an opaque string and stored as named values.
 
     The tiering and the per-process memo live in :class:`PersistentKvCache`; this
     wrapper only translates a block-size entry to and from its JSON object. Backed
@@ -674,7 +686,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         impl_for_call = impl
         if explicit_block_sizes:
             block_sizes_for_impl = resolved_block_sizes
-        elif impl_for_call in ("xla", "reference"):
+        elif impl_for_call in ("xla", "xla_fast_bwd", "reference"):
             block_sizes_for_impl = None
         elif isinstance(impl_for_call, str) and impl_for_call in ("pallas_tpu", "batched_xla"):
             inferred, has_tuned_match = infer_block_sizes_with_tuned_match(

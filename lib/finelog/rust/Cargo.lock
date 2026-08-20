@@ -1897,6 +1897,7 @@ dependencies = [
  "parquet",
  "protoc-bin-vendored",
  "regex",
+ "regex-syntax",
  "rusqlite",
  "rustls",
  "serde",

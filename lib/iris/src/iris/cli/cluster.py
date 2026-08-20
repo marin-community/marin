@@ -13,6 +13,7 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,7 +24,6 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finelog.deploy.cli import down_cmd, logs_cmd, restart_cmd, status_cmd, up_cmd
 from rigging.config_discovery import list_cluster_configs
-from rigging.filesystem import marin_temp_bucket
 from rigging.provenance import Provenance
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from rigging.token_authority import SigningKey, generate_ed25519_keypair, signing_key_from_private_pem
@@ -41,7 +41,6 @@ from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, r
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import (
     KUBERNETES_WORKER_RUNTIME,
-    clear_remote_state,
     make_local_config,
     slice_template_zone,
 )
@@ -61,6 +60,7 @@ from iris.cluster.controller.rollout import (
 from iris.cluster.dashboard_common import VUE_DIST_DIR
 from iris.cluster.inject_env import with_injected_task_env
 from iris.cluster.local_cluster import LocalCluster
+from iris.cluster.platforms.factory import ProviderBundle
 from iris.cluster.platforms.gcp.worker_bootstrap import build_worker_bootstrap_script
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.types import Labels
@@ -595,6 +595,53 @@ def cluster_init_keys(out_file: Path | None, gcp_secret: str | None, accessor: s
     click.echo(key.public_pem.rstrip("\n"))
 
 
+# A platform's "controller is up" signal stops short of "clients can reach it".
+# On Kubernetes it is a Deployment counter, which goes green the moment the new
+# pod passes its readiness probe while the Service can still route to the pod
+# that is going away; on GCP the health check runs on the controller VM itself.
+# A client that connects in that window reaches nothing and the controller logs
+# no request at all. Probing over a tunnel spends the settling time inside
+# `cluster start` instead of failing the command after it.
+CONTROLLER_REACHABLE_TIMEOUT = 120.0
+CONTROLLER_HEALTH_REQUEST_TIMEOUT = 5.0
+
+# Controller tunnels are local forwards, so an HTTP_PROXY in the operator's
+# environment must never be consulted for them.
+_HEALTH_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _wait_controller_reachable(bundle: ProviderBundle, address: str) -> None:
+    """Poll the controller's ``/health`` over a client tunnel until it answers.
+
+    Raises:
+        click.ClickException: the controller never answered within
+            ``CONTROLLER_REACHABLE_TIMEOUT``.
+    """
+    failure = "no response"
+
+    with bundle.controller.tunnel(address) as url:
+
+        def answered() -> bool:
+            nonlocal failure
+            try:
+                with _HEALTH_OPENER.open(f"{url}/health", timeout=CONTROLLER_HEALTH_REQUEST_TIMEOUT) as response:
+                    if response.status == 200:
+                        return True
+                    failure = f"HTTP {response.status}"
+            except OSError as e:
+                failure = str(e)
+            return False
+
+        backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
+        if backoff.wait_until(answered, timeout=Duration.from_seconds(CONTROLLER_REACHABLE_TIMEOUT)):
+            return
+
+    raise click.ClickException(
+        f"Controller at {address} did not answer /health over a tunnel within "
+        f"{CONTROLLER_REACHABLE_TIMEOUT:.0f}s: {failure}"
+    )
+
+
 @cluster.command("start")
 @click.option("--local", is_flag=True, help="Create a local cluster for testing that mimics the original config")
 @click.option(
@@ -615,12 +662,15 @@ def cluster_init_keys(out_file: Path | None, gcp_secret: str | None, accessor: s
 )
 @click.pass_context
 def cluster_start(ctx, local: bool, fresh: bool, task_image_platforms: str | None, cargo_profile: str):
-    """Start controller and wait for health.
+    """Start controller and wait until it answers over a client tunnel.
 
     Each platform handles its own controller lifecycle:
     - GCP: builds images, creates GCE VM, SSHes in, bootstraps
     - CoreWeave: kubectl apply ConfigMap + NodePool + Deployment + Service
     - Local: starts in-process controller
+
+    Remote platforms then get a ``/health`` probe over a tunnel, so the command
+    only reports success once the next ``iris`` invocation can reach it.
 
     Use --local to create a local cluster for testing that mimics the original config.
     """
@@ -665,117 +715,14 @@ def cluster_start(ctx, local: bool, fresh: bool, task_image_platforms: str | Non
         else:
             bundle = provider_bundle(config)
             address = bundle.controller.start_controller(config, fresh=fresh)
+            click.echo("Waiting for the controller to answer over a client tunnel...")
+            _wait_controller_reachable(bundle, address)
             click.echo(f"Controller started at {address}")
             click.echo("\nController is running with integrated autoscaler.")
             click.echo("Use 'iris --config=... cluster status' to check cluster state.")
     except Exception as e:
         click.echo(f"Failed to start controller: {e}", err=True)
         raise SystemExit(1) from e
-
-
-@cluster.command("start-smoke")
-@click.option("--label-prefix", required=True, help="Label prefix to isolate GCP resources")
-@click.option("--url-file", required=True, type=click.Path(), help="Write tunnel URL to this file when ready")
-@click.option("--wait-for-workers", "min_workers", type=int, default=1, help="Min healthy workers before writing URL")
-@click.option("--worker-timeout", type=int, default=600, help="Seconds to wait for workers")
-@click.option("--clear-state/--no-clear-state", default=True, help="Wipe remote state before starting")
-@click.option(
-    "--image-platform",
-    "task_image_platforms",
-    default=None,
-    help="Override the Docker platform(s) selected automatically for the task image.",
-)
-@click.option(
-    "--cargo-profile",
-    type=click.Choice(CARGO_PROFILES),
-    default=DEFAULT_CARGO_PROFILE,
-    show_default=True,
-    help="Rust profile used to build native Iris components.",
-)
-@click.pass_context
-def cluster_start_smoke(
-    ctx,
-    label_prefix,
-    url_file,
-    min_workers,
-    worker_timeout,
-    clear_state,
-    task_image_platforms,
-    cargo_profile,
-):
-    """Boot a smoke-test cluster, open tunnel, write URL to file, and block until killed.
-
-    Designed for CI: run in background, poll for url_file, then pass URL to pytest.
-    SIGINT/SIGTERM cleanly close the tunnel.
-    """
-    config = ctx.obj.get("config")
-    if not config:
-        raise click.ClickException("--config is required for start-smoke")
-
-    config.platform.label_prefix = label_prefix
-
-    # Set ephemeral state dir via marin_temp_bucket, which resolves
-    # region-appropriate storage from MARIN_PREFIX.
-    config.storage.remote_state_dir = marin_temp_bucket(ttl_days=7, prefix=f"iris/state/{label_prefix}")
-
-    provenance = get_git_provenance()
-    _pin_latest_images(config, provenance, task_image_platforms)
-    verbose = ctx.obj.get("verbose", False)
-    _build_cluster_images(
-        config,
-        provenance,
-        verbose=verbose,
-        task_platforms=task_image_platforms,
-        cargo_profile=cargo_profile,
-    )
-
-    bundle = provider_bundle(config)
-
-    try:
-        bundle.controller.stop_all(config)
-    except Exception:
-        click.echo("No existing cluster to stop, continuing")
-
-    if clear_state:
-        remote_state_dir = config.storage.remote_state_dir
-        if remote_state_dir:
-            click.echo(f"Clearing remote state: {remote_state_dir}")
-            clear_remote_state(remote_state_dir)
-
-    click.echo("Starting controller...")
-    address = bundle.controller.start_controller(config)
-    click.echo(f"Controller at {address}")
-
-    stop_event = threading.Event()
-    if threading.current_thread() is threading.main_thread():
-        signal.signal(signal.SIGINT, lambda *_: stop_event.set())
-        signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
-
-    try:
-        with bundle.controller.tunnel(address) as url:
-            click.echo(f"Tunnel ready: {url}")
-
-            with rpc_client_for_ctx(ctx, url=url) as client:
-                deadline = time.monotonic() + worker_timeout
-                healthy_count = 0
-                while time.monotonic() < deadline:
-                    workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
-                    healthy = [w for w in workers if w.healthy]
-                    healthy_count = len(healthy)
-                    if healthy_count >= min_workers:
-                        break
-                    time.sleep(2)
-                else:
-                    raise click.ClickException(
-                        f"Only {healthy_count} of {min_workers} workers healthy after {worker_timeout}s"
-                    )
-
-            click.echo(f"{healthy_count} workers ready, writing URL to {url_file}")
-            Path(url_file).write_text(url)
-
-            stop_event.wait()
-    finally:
-        click.echo("Shutting down (tunnel closed)")
 
 
 @cluster.command("stop")

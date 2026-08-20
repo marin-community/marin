@@ -14,7 +14,7 @@ import zipfile
 from io import BytesIO
 
 import requests
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
