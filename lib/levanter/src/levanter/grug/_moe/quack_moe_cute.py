@@ -40,7 +40,9 @@ def _cute_dtype(dt):
 
 
 @cute_launcher_factory
-def _build_launcher(*, a_dtype, tile_mn, cluster_mnk, activation, max_active_clusters, max_swizzle):
+def _build_launcher(
+    *, a_dtype, tile_mn, cluster_mnk, activation, max_active_clusters, max_swizzle, use_clc_persistence=False
+):
     """Return a ``@cute.jit`` launcher with the cutlass_call signature.
 
     Signature: (stream, mA, mB, mCuSeqlens, mD, mPostAct)
@@ -57,7 +59,7 @@ def _build_launcher(*, a_dtype, tile_mn, cluster_mnk, activation, max_active_clu
             tile_mn,
             cluster_mnk,
             gather_A=False,
-            use_clc_persistence=False,
+            use_clc_persistence=use_clc_persistence,
         )
         epi_args = GemmActMixin.EpilogueArguments(
             mPostAct,
@@ -81,6 +83,7 @@ def quack_gated_grouped_gemm(
     tile_mn=(256, 128),
     cluster_mnk=(2, 1, 1),
     max_swizzle=8,
+    use_clc_persistence=False,
     return_preact=False,
 ):
     """Grouped SwiGLU expert GEMM via QuACK's SM100 kernel.
@@ -103,6 +106,7 @@ def quack_gated_grouped_gemm(
         activation=activation,
         max_active_clusters=max_active_clusters,
         max_swizzle=max_swizzle,
+        use_clc_persistence=use_clc_persistence,
     )
     ts = cjax.TensorSpec
     # divisibility is in physical-dim order (contiguous dim gets the vector width).
@@ -129,12 +133,16 @@ def quack_gated_grouped_gemm(
 
 
 @cute_launcher_factory
-def _build_plain_launcher(*, a_dtype, tile_mn, cluster_mnk, max_active_clusters, max_swizzle):
+def _build_plain_launcher(
+    *, a_dtype, tile_mn, cluster_mnk, max_active_clusters, max_swizzle, use_clc_persistence=False
+):
     """Return a ``@cute.jit`` plain grouped-GEMM launcher."""
 
     @cute.jit
     def launcher(stream, mA, mB, mCuSeqlens, mD):
-        gemm = GemmDefaultSm100(_ACC, a_dtype, tile_mn, cluster_mnk, gather_A=False, use_clc_persistence=False)
+        gemm = GemmDefaultSm100(
+            _ACC, a_dtype, tile_mn, cluster_mnk, gather_A=False, use_clc_persistence=use_clc_persistence
+        )
         epi_args = GemmDefaultEpiMixin.EpilogueArguments()
         scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
         varlen_args = make_varlen_args(mCuSeqlens, None, None)
@@ -143,7 +151,17 @@ def _build_plain_launcher(*, a_dtype, tile_mn, cluster_mnk, max_active_clusters,
     return launcher
 
 
-def quack_grouped_gemm(a, w, cu_seqlens, *, b_major="n", tile_mn=(256, 128), cluster_mnk=(2, 1, 1), max_swizzle=8):
+def quack_grouped_gemm(
+    a,
+    w,
+    cu_seqlens,
+    *,
+    b_major="n",
+    tile_mn=(256, 128),
+    cluster_mnk=(2, 1, 1),
+    max_swizzle=8,
+    use_clc_persistence=False,
+):
     """Plain grouped GEMM a[M,K] @ w -> [M,N], grouped by cu_seqlens (varlen_m).
 
     b_major='n': w is [E,K,N] (n-major, mode (2,1,0)).  b_major='k': w is [E,N,K]
@@ -157,7 +175,12 @@ def quack_grouped_gemm(a, w, cu_seqlens, *, b_major="n", tile_mn=(256, 128), clu
     else:
         mac = get_max_active_clusters(cluster_mnk[0] * cluster_mnk[1])
     launcher = _build_plain_launcher(
-        a_dtype=a_dtype, tile_mn=tile_mn, cluster_mnk=cluster_mnk, max_active_clusters=mac, max_swizzle=max_swizzle
+        a_dtype=a_dtype,
+        tile_mn=tile_mn,
+        cluster_mnk=cluster_mnk,
+        max_active_clusters=mac,
+        max_swizzle=max_swizzle,
+        use_clc_persistence=use_clc_persistence,
     )
     ts = cjax.TensorSpec
     a_spec = ts(divisibility=(1, 8), static=False)

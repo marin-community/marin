@@ -32,6 +32,17 @@ from levanter.grug._moe.common import (
 from levanter.grug._moe.cudnn_wgrad_cute import cudnn_grouped_wgrad
 from levanter.grug._moe.quack_moe_cute import quack_gated_grouped_gemm, quack_grouped_gemm
 
+# QuACK activation-path GEMM configuration, tuned at the i3072 hero shapes on one GB200.
+# Tile (256, 256) beats the (256, 128) default by 1.235x on the gated GEMM and 1.094x on the
+# down GEMM. CLC persistence adds a further 1.049x / 1.120x at that tile. Under CLC the two
+# GEMMs prefer different clusters: the gated gate/up GEMM stays at (2, 1, 1), while the plain
+# grouped GEMMs -- down forward plus the backward dh/dx matmuls -- gain 1.055x at (2, 2, 1).
+# All of this is scheduling, so none of it changes the computed function.
+_QUACK_TILE_MN = (256, 256)
+_QUACK_USE_CLC = True
+_QUACK_GATED_KW = dict(tile_mn=_QUACK_TILE_MN, cluster_mnk=(2, 1, 1), use_clc_persistence=_QUACK_USE_CLC)
+_QUACK_GROUPED_KW = dict(tile_mn=_QUACK_TILE_MN, cluster_mnk=(2, 2, 1), use_clc_persistence=_QUACK_USE_CLC)
+
 
 def _interleave_gate_up(moe_w13: jax.Array, moe_dim: int) -> jax.Array:
     """grug w13 [E,H,2I] gate=[:I], up=[I:] -> interleaved [g0,u0,g1,u1,...] (QuACK layout)."""
@@ -93,14 +104,14 @@ def _expert_mlp_cudnn(x_dispatch, w13_il, moe_w2, group_sizes, cu):
     the rows inside ``cu``, and those trailing rows flow on through the unpermute and
     combine, so they have to be zero rather than whatever the buffer held.
     """
-    _gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
-    y = quack_grouped_gemm(h, moe_w2, cu, b_major="n")
+    _gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True, **_QUACK_GATED_KW)
+    y = quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW)
     return _zero_inactive_grouped_rows(y, cu)
 
 
 def _expert_mlp_cudnn_fwd(x_dispatch, w13_il, moe_w2, group_sizes, cu):
-    gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
-    y = quack_grouped_gemm(h, moe_w2, cu, b_major="n")
+    gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True, **_QUACK_GATED_KW)
+    y = quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW)
     return _zero_inactive_grouped_rows(y, cu), (x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu)
 
 
@@ -109,10 +120,10 @@ def _expert_mlp_cudnn_bwd(res, dy):
     # The cotangent's trailing rows are whatever the caller's buffer held; the grouped GEMMs
     # contract every row they are handed, so they have to be cleared here too.
     dy = _zero_inactive_grouped_rows(dy, cu)
-    dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k")
+    dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k", **_QUACK_GROUPED_KW)
     dw2 = cudnn_grouped_wgrad(h, dy, group_sizes)
     d_gu = _swiglu_gate_up_backward(gu, dh)
-    dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k")
+    dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k", **_QUACK_GROUPED_KW)
     dx = _zero_inactive_grouped_rows(dx, cu)
     dw13_il = cudnn_grouped_wgrad(x_dispatch, d_gu, group_sizes)
     gs_ct = np.zeros(group_sizes.shape, dtype=jax.dtypes.float0)
