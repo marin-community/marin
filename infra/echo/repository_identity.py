@@ -44,6 +44,18 @@ def parse_repository_file_id(value: str) -> RepositoryFileReference:
     raise ValueError("repository file ID must name a configured repository and branch")
 
 
+def stored_repository_file_reference(value: str) -> RepositoryFileReference:
+    """Parse a qualified file ID or a pre-federation Marin path-only ID."""
+    try:
+        return parse_repository_file_id(value)
+    except ValueError:
+        detail = value.removeprefix("file:")
+        identity, separator, _ = detail.partition(":")
+        if separator and "/" in identity and "@" in identity:
+            raise
+        return repository_file_reference(search_config.LEGACY_REPOSITORY_TARGET, detail)
+
+
 def configured_repository_target(repository: str) -> search_config.RepositoryTarget:
     for target in search_config.REPOSITORY_TARGETS:
         if target.repository == repository:

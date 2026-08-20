@@ -35,6 +35,7 @@ interface and browser dashboard.
 ```bash
 uv run infra/echo/cli.py search "expert parallel MoE MFU on B200" --limit 10
 uv run infra/echo/cli.py search "ragged_all_to_all" --domain file --domain pr
+uv run infra/echo/cli.py search "compare cache implementations" --repository all
 uv run infra/echo/cli.py get file:marin-community/marin@main:lib/iris/OPS.md
 uv run infra/echo/cli.py feedback --query "how do I deploy Iris?" \
   --execution-id 1234 --grade wiki:730=0 --grade file:731=10 <<'EOF'
@@ -59,17 +60,22 @@ which cached login to reuse.
 `search` returns one ranked result set across five domains:
 
 - `wiki` searches durable Echo entries.
-- `file` searches one corpus made from the six configured GitHub `main` branches.
+- `file` searches the selected configured GitHub `main` branch.
 - `discord` searches Discord messages.
 - `pr` searches GitHub pull requests and their comments.
 - `issue` searches GitHub issues and their comments.
 
 Wiki, files, pull requests, and issues are searched by default. Discord is opt-in
 because high-volume conversation is a noisier source of agent context. Repeat
-`--domain` to select a subset or add `--domain discord`. `domain` is the only selector
-on `search`; the activity-only `grep` command retains `--source` and `--kind` filters.
-The compatibility `GET /api/search` endpoint still accepts source, kind, and date
-filters for existing API clients.
+`--domain` to select a subset or add `--domain discord`. When files are selected and
+`--repository` is omitted, the CLI infers the configured Marin-community repository
+from the current Git checkout. A contributor fork remote with the same repository name
+maps to its Marin-community target. Pass `--repository <owner/repo>` to choose one
+configured repository or `--repository all` to search all six. An unscoped file search
+outside a supported checkout stops before making a request and names both remedies.
+Searches without files need no Git checkout. The activity-only `grep` command retains
+`--source` and `--kind` filters. The compatibility `GET /api/search` endpoint still
+accepts source, kind, and date filters for existing API clients.
 
 The first retrieval stage uses reciprocal-rank fusion with `k=60`. Paths, filenames,
 flags, code-like identifiers, and one- or two-token keyword searches use semantic
@@ -140,9 +146,11 @@ does not persist request headers, user agents, or network addresses in these tab
 ranked snapshots, and raw reranker scores. New file snapshots contain qualified IDs and
 commit-pinned URLs. Existing path-only IDs, stored URLs, and nullable
 `repository_commit` values are left unchanged and still export from their stored data;
-old path-only IDs are not accepted by the new detail route. Historical query manifests
-can be replayed through normal search so each record captures current results under the
-same contract as future traffic.
+old path-only IDs are not accepted by the new detail route. Feedback still interprets
+path-only historical file IDs as Marin results, but rejects unknown qualified repository
+or branch identities instead of falling back to Marin. Historical query manifests replay
+through explicit all-repository search, preserving the existing six-repository quality
+comparison.
 
 Use the durable export for retrieval analysis. Cloud Logging request lines are operational
 telemetry and do not preserve the execution-to-result relationship:
@@ -259,10 +267,15 @@ direct database access.
 
 `GET /api/search` preserves the activity-only response used by existing clients.
 `GET /api/federated-search` accepts repeated
-`domain=wiki|file|discord|pr|issue` parameters and returns the common ranked result
-shape. `GET /api/repository-index` always returns all six targets in configured order.
-Each row is `empty`, `building` with completed and total file counts, or `ready` with
-its indexed commit and time. The dashboard displays every row on its landing page.
+`domain=wiki|file|discord|pr|issue` parameters and an optional `repository` parameter.
+Use a configured `<owner>/<repository>` value for one file corpus or `all` for all six.
+Omission selects `marin-community/marin`, which is also the dashboard default. The
+repository scope applies only to file candidates; wiki remains global and pull requests
+and issues are unchanged. Search history records the resolved file scope. The response
+shape is unchanged. `GET /api/repository-index` always returns all six targets in
+configured order. Each row is `empty`, `building` with completed and total file counts,
+or `ready` with its indexed commit and time. The dashboard displays every row on its
+landing page.
 `GET /api/search-configuration` supplies the domain catalog, defaults, and displayed
 commit length used by the dashboard. The CLI's `get` command uses the existing wiki and
 activity detail endpoints plus the qualified repository-file route for complete indexed

@@ -514,6 +514,27 @@ def test_search_feedback_list_includes_linked_results_and_explanation_only_entri
     ]
 
 
+def test_feedback_list_rejects_unknown_qualified_file_identity(client_with):
+    feedback = make_row(
+        id=19,
+        created_at=datetime(2026, 8, 20, tzinfo=UTC),
+        author="agent@openathena.ai",
+        query="README.md",
+        note="The result was useful.",
+        execution_id=None,
+    )
+    grade = make_row(
+        feedback_id=19,
+        result_id="file:marin-community/vllm@dev:README.md",
+        search_result_id=None,
+        grade=10,
+    )
+    harness = client_with([], responses=[[feedback], [grade]])
+
+    with pytest.raises(ValueError):
+        harness.client.get("/api/feedback", params={"days": 30, "limit": 20})
+
+
 def test_search_feedback_rejects_grade_absent_from_linked_execution(client_with):
     harness = client_with([], responses=[[]])
 
@@ -726,7 +747,16 @@ def test_training_log_question_uses_finelog_and_iris_query_vocabulary(client_wit
     harness = client_with([row])
     query = "how do i query logs from training runs?"
 
-    echo.federated_search(harness.engine, harness.model, harness.reranker, echo.DEFAULT_CONFIG, query, ["issue"], 10)
+    echo.federated_search(
+        harness.engine,
+        harness.model,
+        harness.reranker,
+        echo.DEFAULT_CONFIG,
+        query,
+        ["issue"],
+        (echo.search_config.LEGACY_REPOSITORY_TARGET,),
+        10,
+    )
 
     expanded = f"{query}\n{echo.search_config.LOG_QUERY_EXPANSION}"
     assert harness.model.queries == [expanded]
@@ -763,6 +793,7 @@ def test_federated_search_classifies_github_comment_domain(client_with):
         echo.DEFAULT_CONFIG,
         "scheduler",
         ["pr"],
+        (echo.search_config.LEGACY_REPOSITORY_TARGET,),
         10,
     )
     assert [result.model_dump(mode="json") for result in results] == [
@@ -783,28 +814,44 @@ def test_federated_search_classifies_github_comment_domain(client_with):
 
 
 def test_federated_file_result_names_exact_indexed_head(client_with):
-    state = make_row(
-        repository="marin-community/marin",
-        branch="main",
-        commit_sha="abcdef1234567890",
-        indexed_at=datetime(2026, 7, 29, 20, tzinfo=UTC),
-        completed_files=None,
-        total_files=None,
-        started_at=None,
-    )
-    file = make_row(
-        id=9,
-        repository="marin-community/marin",
-        branch="main",
-        path="lib/iris/src/iris/scheduler.py",
-        title="scheduler.py",
-        start_line=40,
-        text="def place_gang():\n    raise FAILED_PRECONDITION\n",
-        score=0.05,
-        distance=0.1,
-        lexical_score=4.0,
-    )
-    harness = client_with([], responses=[[], [state], [file]])
+    states = [
+        make_row(
+            repository=repository,
+            branch="main",
+            commit_sha=commit_sha,
+            indexed_at=datetime(2026, 7, 29, 20, tzinfo=UTC),
+            completed_files=None,
+            total_files=None,
+            started_at=None,
+        )
+        for repository, commit_sha in (
+            ("marin-community/marin", "abcdef1234567890"),
+            ("marin-community/vllm", "b" * 40),
+        )
+    ]
+    files = [
+        make_row(
+            id=9,
+            repository=repository,
+            branch="main",
+            path="lib/iris/src/iris/scheduler.py",
+            title="scheduler.py",
+            start_line=40,
+            text=text,
+            score=0.05,
+            distance=0.1,
+            lexical_score=4.0,
+        )
+        for repository, text in (
+            ("marin-community/marin", "def place_gang():\n    raise FAILED_PRECONDITION\n"),
+            ("marin-community/vllm", "raise OFF_SCOPE\n"),
+        )
+    ]
+
+    def rows_matching_repository(_statement, params):
+        return [row for row in files if row.repository == params["repository_0"]]
+
+    harness = client_with([], responses=[[], states, rows_matching_repository])
 
     response = harness.client.get(
         "/api/federated-search",
@@ -865,6 +912,7 @@ def test_federated_file_result_names_exact_indexed_head(client_with):
     assert execution_params["domains"] == ["file"]
     assert execution_params["returned_count"] == 1
     assert execution_params["repository_commit"] is None
+    assert execution_params["filters"] == {"repository": "marin-community/marin"}
     result_insert = next(
         statement
         for statement in harness.engine.executions
@@ -930,7 +978,7 @@ def test_same_path_search_results_and_new_history_keep_repository_identity(clien
 
     response = harness.client.get(
         "/api/federated-search",
-        params={"q": "README.md", "domain": "file"},
+        params={"q": "README.md", "domain": "file", "repository": "all"},
     )
 
     assert response.status_code == 200
@@ -950,6 +998,7 @@ def test_same_path_search_results_and_new_history_keep_repository_identity(clien
         if getattr(statement, "is_insert", False) and statement.table.name == "search_executions"
     )
     assert execution_insert.compile().params["repository_commit"] is None
+    assert execution_insert.compile().params["filters"] == {"repository": "all"}
     result_insert = next(
         statement
         for statement in harness.engine.executions
@@ -975,12 +1024,121 @@ def test_same_path_search_results_and_new_history_keep_repository_identity(clien
             "README.md\nREADME.md\n\nvLLM is a fast and easy-to-use inference engine."
         ),
     ]
-    file_searches = [
+
+
+def test_explicit_fork_scope_keeps_wikis_and_activity_global(client_with):
+    indexed_at = datetime(2026, 8, 20, tzinfo=UTC)
+    wiki = make_row(
+        id=7,
+        title="Repository search guidance",
+        use_when="when choosing an Echo file scope",
+        body="Wikis stay global across repository scopes.",
+        score=0.05,
+        distance=0.1,
+        lexical_score=4.0,
+    )
+    states = [
+        make_row(
+            repository=repository,
+            branch="main",
+            commit_sha=commit_sha,
+            indexed_at=indexed_at,
+            completed_files=None,
+            total_files=None,
+            started_at=None,
+        )
+        for repository, commit_sha in (
+            ("marin-community/marin", "a" * 40),
+            ("marin-community/vllm", "b" * 40),
+        )
+    ]
+    files = [
+        make_row(
+            id=9,
+            repository=repository,
+            branch="main",
+            path="README.md",
+            title="README.md",
+            start_line=1,
+            text=text,
+            score=0.05,
+            distance=0.1,
+            lexical_score=4.0,
+        )
+        for repository, text in (
+            ("marin-community/marin", "Marin must stay outside explicit vLLM scope."),
+            ("marin-community/vllm", "vLLM is a fast inference engine."),
+        )
+    ]
+
+    def rows_matching_repository(_statement, params):
+        return [row for row in files if row.repository == params["repository_0"]]
+
+    activity = [
+        make_row(
+            id=10,
+            source="github",
+            kind="pr",
+            date=indexed_at,
+            author="alice",
+            title="Pull request",
+            url="https://github.com/marin-community/marin/pull/10",
+            text="Repository search pull request.",
+            score=0.05,
+            distance=0.1,
+            lexical_score=4.0,
+        ),
+        make_row(
+            id=11,
+            source="github",
+            kind="issue",
+            date=indexed_at,
+            author="bob",
+            title="Issue",
+            url="https://github.com/marin-community/marin/issues/11",
+            text="Repository search issue.",
+            score=0.05,
+            distance=0.1,
+            lexical_score=4.0,
+        ),
+    ]
+    harness = client_with([], responses=[[], [wiki], states, rows_matching_repository, activity])
+
+    response = harness.client.get(
+        "/api/federated-search",
+        params={
+            "q": "repository search",
+            "domain": ["wiki", "file", "pr", "issue"],
+            "repository": "marin-community/vllm",
+        },
+    )
+
+    assert response.status_code == 200
+    assert {(result["domain"], result["id"]) for result in response.json()} == {
+        ("wiki", "wiki:7"),
+        ("file", "file:marin-community/vllm@main:README.md"),
+        ("pr", "pr:10"),
+        ("issue", "issue:11"),
+    }
+    execution_insert = next(
         statement
         for statement in harness.engine.executions
-        if isinstance(statement, sqlalchemy.sql.elements.TextClause) and "repository_file_chunks" in statement.text
-    ]
-    assert len(file_searches) == 2
+        if getattr(statement, "is_insert", False) and statement.table.name == "search_executions"
+    )
+    assert execution_insert.compile().params["filters"] == {"repository": "marin-community/vllm"}
+
+
+@pytest.mark.parametrize("repository", ["marin-community/unknown", ""])
+def test_federated_search_rejects_invalid_repository_scope(client_with, repository):
+    harness = client_with([])
+
+    response = harness.client.get(
+        "/api/federated-search",
+        params={"q": "repository search", "repository": repository},
+    )
+
+    assert response.status_code == 422
+    assert harness.model.queries == []
 
 
 def test_file_summary_skips_license_boilerplate_for_filename_match():

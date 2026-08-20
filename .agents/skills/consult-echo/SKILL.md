@@ -26,6 +26,12 @@ uv run infra/echo/cli.py search "stalled TPU collective" \
   --domain wiki --domain file --domain issue
 ```
 
+File search infers the configured Marin-community repository from the current
+Git checkout, including ordinary contributor forks. Pass `--repository
+<owner/repo>` to choose one configured repository or `--repository all` to
+search all six. The CLI prints the resolved file scope once. Searches that omit
+the file domain work outside a Git checkout.
+
 Discord is excluded by default because messages may be noisy or untrusted. Add
 `--domain discord` only when discussion history is relevant, and open the
 canonical URL when surrounding thread context matters.

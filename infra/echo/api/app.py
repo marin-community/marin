@@ -736,10 +736,7 @@ def default_feedback_result_metadata(result_id: str, config: EchoConfig) -> Feed
     if domain == "wiki":
         return FeedbackResultMetadata(title=f"Wiki note #{value}", url=f"{config.public_url}/wiki/{value}")
     if domain == "file":
-        try:
-            reference = repository_identity.parse_repository_file_id(result_id)
-        except ValueError:
-            reference = repository_identity.repository_file_reference(search_config.LEGACY_REPOSITORY_TARGET, value)
+        reference = repository_identity.stored_repository_file_reference(result_id)
         return FeedbackResultMetadata(
             title=PurePosixPath(reference.path).name,
             url=repository_blob_url(reference.target, reference.target.branch, reference.path),
@@ -981,12 +978,13 @@ def repository_file_candidates(
     params: dict[str, object],
     retrieval_limit: int,
     query: str,
+    targets: tuple[search_config.RepositoryTarget, ...],
 ) -> list[SearchCandidate]:
     states = repository_index_states(conn)
     if not states:
         return []
     candidates = []
-    for target in search_config.REPOSITORY_TARGETS:
+    for target in targets:
         state = states.get(target)
         if state is None:
             continue
@@ -1147,6 +1145,7 @@ def federated_search(
     config: EchoConfig,
     query: str,
     domains: list[search_config.SearchDomain],
+    repository_targets: tuple[search_config.RepositoryTarget, ...],
     limit: int,
 ) -> list[SearchResult]:
     """Search wiki, repository file, and activity domains and merge their hybrid ranks."""
@@ -1158,7 +1157,7 @@ def federated_search(
         if "wiki" in domains:
             candidates.extend(wiki_candidates(conn, params, config))
         if "file" in domains:
-            candidates.extend(repository_file_candidates(conn, params, retrieval_limit, query))
+            candidates.extend(repository_file_candidates(conn, params, retrieval_limit, query, repository_targets))
         activity_domains = [candidate for candidate in domains if candidate in ("discord", "pr", "issue")]
         if activity_domains:
             candidates.extend(activity_candidates(conn, params, activity_domains))
@@ -1176,6 +1175,10 @@ def federated_search_endpoint(
     domain: list[search_config.SearchDomain] | None = Query(
         None, description="Search this domain; repeat to select several."
     ),
+    repository: str | None = Query(
+        None,
+        description="Repository-file scope: one configured owner/repository or all. Omission selects Marin.",
+    ),
     limit: int = Query(search_config.DEFAULT_SEARCH_LIMIT, ge=1, le=search_config.MAX_SEARCH_LIMIT),
     x_goog_authenticated_user_email: str | None = Header(None),
 ) -> list[SearchResult]:
@@ -1183,8 +1186,16 @@ def federated_search_endpoint(
     if not query:
         raise HTTPException(422, "q must not be blank")
     domains = list(dict.fromkeys(domain or search_config.DEFAULT_SEARCH_DOMAINS))
+    repository_scope = search_config.LEGACY_REPOSITORY_TARGET.repository if repository is None else repository
+    if repository_scope == search_config.ALL_REPOSITORIES:
+        repository_targets = search_config.REPOSITORY_TARGETS
+    else:
+        try:
+            repository_targets = (repository_identity.configured_repository_target(repository_scope),)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
     started_at = time.perf_counter()
-    results = federated_search(engine, model, reranker, config, query, domains, limit)
+    results = federated_search(engine, model, reranker, config, query, domains, repository_targets, limit)
     execution = attach_search_execution(
         response,
         engine,
@@ -1193,7 +1204,7 @@ def federated_search_endpoint(
             query=query,
             mode="federated",
             domains=tuple(domains),
-            filters={},
+            filters={"repository": repository_scope} if "file" in domains else {},
             requested_limit=limit,
             returned_count=len(results),
             duration_ms=(time.perf_counter() - started_at) * MILLISECONDS_PER_SECOND,

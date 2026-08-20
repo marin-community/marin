@@ -47,14 +47,19 @@ indexed repository documentation could inform a task:
 
 ```bash
 uv run infra/echo/cli.py search "how do I deploy Iris"
+uv run infra/echo/cli.py search "compare cache implementations" --repository all
 uv run infra/echo/cli.py get <domain:id>
 ```
 
 Search covers wiki, repository files, pull requests, and issues by default.
-Repeat `--domain` to select a subset; add `--domain discord` only when discussion
-history is relevant. Use `grep` for exact strings in remote activity and `rg`
-for the current checkout, including branch-only or uncommitted files. Echo's
-file results follow the periodically refreshed GitHub head rather than the local
+File search infers the configured Marin-community repository from the current
+Git checkout, including ordinary contributor forks. Pass `--repository
+<owner/repo>` for one configured repository or `--repository all` for all six.
+Repeat `--domain` to select a subset; searches without the file domain do not
+need a Git checkout. Add `--domain discord` only when discussion history is
+relevant. Use `grep` for exact strings in remote activity and `rg` for the
+current checkout, including branch-only or uncommitted files. Echo's file
+results follow the periodically refreshed GitHub head rather than the local
 working tree. See the `consult-echo` skill for the complete workflow.
 
 ## Development

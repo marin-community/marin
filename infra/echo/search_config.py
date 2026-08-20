@@ -85,6 +85,7 @@ REPOSITORY_TARGETS = (
     RepositoryTarget("marin-community/harbor", "main"),
     RepositoryTarget("marin-community/MarinSkyRL", "main"),
 )
+ALL_REPOSITORIES = "all"
 # Path-only file IDs created before repository federation always referred to Marin.
 LEGACY_REPOSITORY_TARGET = REPOSITORY_TARGETS[0]
 

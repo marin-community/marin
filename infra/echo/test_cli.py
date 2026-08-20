@@ -5,6 +5,7 @@
 
 import io
 import logging
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 import cli
@@ -50,14 +51,32 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
     monkeypatch.setattr(cli, "request_response", fake_request)
     clock = iter((10.0, 11.234))
     monkeypatch.setattr(cli.time, "perf_counter", lambda: next(clock))
-    args = cli.build_parser().parse_args(["search", "FAILED_PRECONDITION", "--domain", "file", "--domain", "pr"])
+    args = cli.build_parser().parse_args(
+        [
+            "search",
+            "FAILED_PRECONDITION",
+            "--domain",
+            "file",
+            "--domain",
+            "pr",
+            "--repository",
+            "marin-community/marin",
+        ]
+    )
     args.func(args)
 
     assert calls == [
         (
             "GET",
             "/federated-search",
-            {"params": {"q": "FAILED_PRECONDITION", "domain": ["file", "pr"], "limit": 10}},
+            {
+                "params": {
+                    "q": "FAILED_PRECONDITION",
+                    "domain": ["file", "pr"],
+                    "limit": 10,
+                    "repository": "marin-community/marin",
+                }
+            },
         )
     ]
     output = capsys.readouterr().out
@@ -65,6 +84,7 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
     assert cli.SEARCH_DETAIL_INSTRUCTION in output
     assert "file:731" in output
     assert "L42 raise FAILED_PRECONDITION" in output
+    assert output.count("File scope: marin-community/marin") == 1
 
 
 def test_search_defaults_to_curated_domains_without_discord(monkeypatch):
@@ -75,16 +95,96 @@ def test_search_defaults_to_curated_domains_without_discord(monkeypatch):
         return json_response([])
 
     monkeypatch.setattr(cli, "request_response", fake_request)
-    args = cli.build_parser().parse_args(["search", "scheduler"])
+    args = cli.build_parser().parse_args(["search", "scheduler", "--repository", "marin-community/marin"])
     args.func(args)
 
     assert calls == [
         (
             "GET",
             "/federated-search",
-            {"params": {"q": "scheduler", "domain": ["wiki", "file", "pr", "issue"], "limit": 10}},
+            {
+                "params": {
+                    "q": "scheduler",
+                    "domain": ["wiki", "file", "pr", "issue"],
+                    "limit": 10,
+                    "repository": "marin-community/marin",
+                }
+            },
         )
     ]
+
+
+def test_search_infers_configured_repository_from_contributor_fork(monkeypatch, tmp_path, capsys):
+    repository = tmp_path / "vllm"
+    subprocess.run(["git", "init", repository], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:contributor/vllm.git"],
+        cwd=repository,
+        check=True,
+    )
+    calls = []
+
+    def fake_request(method, path, **options):
+        calls.append((method, path, options))
+        return json_response([])
+
+    monkeypatch.chdir(repository)
+    monkeypatch.setattr(cli, "request_response", fake_request)
+    args = cli.build_parser().parse_args(["search", "scheduler", "--domain", "file"])
+    args.func(args)
+
+    assert calls[0][2]["params"]["repository"] == "marin-community/vllm"
+    assert capsys.readouterr().out.count("File scope: marin-community/vllm") == 1
+
+
+@pytest.mark.parametrize("repository", ["marin-community/vllm", "all"])
+def test_search_explicit_repository_bypasses_checkout_inference(monkeypatch, tmp_path, repository):
+    calls = []
+
+    def fake_request(method, path, **options):
+        calls.append((method, path, options))
+        return json_response([])
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "request_response", fake_request)
+    args = cli.build_parser().parse_args(["search", "scheduler", "--domain", "file", "--repository", repository])
+    args.func(args)
+
+    assert calls[0][2]["params"]["repository"] == repository
+
+
+def test_unscoped_file_search_fails_before_request_outside_supported_checkout(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_request(*args, **kwargs):
+        calls.append((args, kwargs))
+        return json_response([])
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "request_response", fake_request)
+    args = cli.build_parser().parse_args(["search", "scheduler", "--domain", "file"])
+
+    with pytest.raises(SystemExit) as error:
+        args.func(args)
+
+    assert "--repository <owner/repo>" in str(error.value)
+    assert "--repository all" in str(error.value)
+    assert calls == []
+
+
+def test_search_without_file_domain_works_outside_git(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_request(method, path, **options):
+        calls.append((method, path, options))
+        return json_response([])
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "request_response", fake_request)
+    args = cli.build_parser().parse_args(["search", "scheduler", "--domain", "wiki"])
+    args.func(args)
+
+    assert calls == [("GET", "/federated-search", {"params": {"q": "scheduler", "domain": ["wiki"], "limit": 10}})]
 
 
 def test_bearer_token_quiets_only_the_known_missing_email_scope_warning(monkeypatch, caplog):

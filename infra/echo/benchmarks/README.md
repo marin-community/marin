@@ -42,7 +42,9 @@ them as ranking failures. A result is credited when its domain and stable target
 match a judged artifact; line hints guide human review and sub-file evaluation.
 
 Tune only on the `dev` split. Freeze the model, candidate budget, fusion weights,
-and quality threshold before collecting the `test` split:
+and quality threshold before collecting the `test` split. The collector explicitly
+requests all six repositories, so its results measure cross-repository search rather
+than the API's Marin default:
 
 ```bash
 uv run infra/echo/search_benchmark.py collect \

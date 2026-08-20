@@ -278,6 +278,7 @@ def collect_one(case: BenchmarkCase, limit: int) -> tuple[BenchmarkCase, Capture
             params={
                 "q": case.query,
                 "domain": list(case.domains or search_config.DEFAULT_SEARCH_DOMAINS),
+                "repository": search_config.ALL_REPOSITORIES,
                 "limit": limit,
             },
         )
