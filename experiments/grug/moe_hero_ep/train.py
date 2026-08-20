@@ -155,9 +155,9 @@ class GrugEvalConfig:
     # expert-collapsed mesh, logging a separate `eval_dropless` macro loss alongside the
     # as-trained (with-drop) eval. No-op when the mesh has no expert parallelism.
     dropless_eval: bool = False
-    # Eval the initialized model once before the first optimization step, for a step-0 baseline on
-    # the loss curve. The periodic cadence never covers step 0 (its dispatch gates on next_step > 0).
-    eval_at_step_0: bool = False
+    # Run the evals once after the first optimization step, for a baseline at the start of the loss
+    # curve. The periodic cadence first fires at `steps_per_eval`, thus it leaves that start bare.
+    eval_at_first_step: bool = False
 
 
 @dataclass(frozen=True)
@@ -263,6 +263,25 @@ def _to_dropless_local(model: Transformer) -> Transformer:
     expert_mlp = model.stacked_blocks.stacked.mlp.expert_mlp
     dropless = dataclasses.replace(expert_mlp, implementation="sonic_cute", expert_chunks=1)
     return eqx.tree_at(lambda m: m.stacked_blocks.stacked.mlp.expert_mlp, model, dropless)
+
+
+def _first_step_only(hook: Callable[..., None]) -> Callable[..., None]:
+    """Wrap ``hook`` so that it runs one time only, after the first optimization step.
+
+    ``StateCallbackRunner`` dispatches on ``next_step % every``, thus ``every=1`` is the only
+    interval that covers the first step. The gate makes that registration one-shot. A resumed run
+    starts above step 1 and never fires it.
+    """
+
+    # `LambdaCallback` reads the signature to decide whether to pass `force`, and the `**kwargs`
+    # below would otherwise advertise a `force` parameter that the wrapped hook can lack.
+    @functools.wraps(hook)
+    def gated(step, *args, **kwargs):
+        if step.next_step != 1:
+            return
+        hook(step, *args, **kwargs)
+
+    return gated
 
 
 def build_tagged_evaluator(
@@ -820,16 +839,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if evaluator is not None and eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
             eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None
-            if interval is not None and interval > 0 and (eval_cfg.eval_current or eval_ema):
-                state_callbacks.add_hook(
-                    cb_tagged_evaluate(
-                        evaluator,
-                        prefix=eval_cfg.prefix,
-                        eval_current=eval_cfg.eval_current,
-                        eval_ema=eval_ema,
-                    ),
-                    every=interval,
+            if eval_cfg.eval_current or eval_ema:
+                tagged_eval_hook = cb_tagged_evaluate(
+                    evaluator,
+                    prefix=eval_cfg.prefix,
+                    eval_current=eval_cfg.eval_current,
+                    eval_ema=eval_ema,
                 )
+                eval_hooks: list[Callable[..., None]] = [tagged_eval_hook]
                 if dropless_evaluator is not None and dropless_eval_mesh is not None:
                     # The training loop runs under `set_mesh(mesh)` (expert-parallel). The dropless
                     # evaluator runs under the expert-collapsed mesh, so the model params -- sharded on
@@ -844,30 +861,33 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         step_count = int(step.step)
                         if step_count < 0:
                             return
+                        # `model` must stay a local. The eval mesh has expert=1, so a leaf sharded on
+                        # the expert axis lands replicated, and the copy is much larger than the
+                        # train-mesh params. The train step needs almost the whole device budget for
+                        # its temporary buffer, thus this copy must die before the next step.
                         with set_mesh(_mesh):
                             model = _reshard_tree_to_mesh(step.model, _mesh)
                             with jax_config.enable_pgle(False):
                                 log_dict = eval_model(_ev, model, prefix=_prefix)
                             levanter.tracker.log(log_dict, step=step_count)
 
-                    state_callbacks.add_hook(dropless_eval_hook, every=interval)
+                    eval_hooks.append(dropless_eval_hook)
 
-        # Baseline eval on the initialized model, before the first optimization step. The periodic
-        # eval hooks never fire at step 0 -- their dispatch gates on `next_step > 0`, and the loop
-        # only runs hooks after a step -- so a fresh run gets no step-0 point without this. It runs
-        # only at step 0, so a resumed run (nonzero step) skips it. Mirrors the hook bodies above:
-        # the as-trained eval plus, for expert-parallel runs, the dropless eval on the collapsed mesh.
-        step0_eval = eval_cfg is not None and eval_cfg.eval_at_step_0 and eval_cfg.eval_current
-        if step0_eval and evaluator is not None and int(state.step) == 0:
-            levanter.tracker.log(eval_model(evaluator, state.params, prefix=eval_cfg.prefix), step=0)
-            if dropless_evaluator is not None and dropless_eval_mesh is not None:
-                with set_mesh(dropless_eval_mesh):
-                    step0_model = _reshard_tree_to_mesh(state.params, dropless_eval_mesh)
-                    with jax_config.enable_pgle(False):
-                        step0_dropless = eval_model(
-                            dropless_evaluator, step0_model, prefix=f"{eval_cfg.prefix}_dropless"
-                        )
-                levanter.tracker.log(step0_dropless, step=0)
+                if interval is not None and interval > 0:
+                    for hook in eval_hooks:
+                        state_callbacks.add_hook(hook, every=interval)
+
+                # Baseline point at the start of the loss curve. The periodic cadence first fires at
+                # `steps_per_eval` (step 3000 on the hero), thus a fresh run gets no early point.
+                # These run after the first optimization step, not before it: the first train step
+                # then allocates against a clean pool, and the eval-to-train handoff gets a gate at
+                # step 2 instead of first at step 3000. `every=1` is the only interval that covers
+                # the first step, and `_first_step_only` makes the hook fire once. A resumed run
+                # starts above step 1, thus it never fires. The hooks log at `StepInfo.step`, which
+                # is 0 there, so the point lands at step 0 on the curve.
+                if eval_cfg.eval_at_first_step:
+                    for hook in eval_hooks:
+                        state_callbacks.add_hook(_first_step_only(hook), every=1)
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
