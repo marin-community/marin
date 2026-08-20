@@ -29,8 +29,8 @@ from levanter.tensorstore_serialization import (
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
 )
-from lib.levanter.tests import eight_device_checkpoints
-from lib.levanter.tests.eight_device_checkpoints import run_on_eight_devices
+import eight_device_checkpoints
+from eight_device_checkpoints import run_on_eight_devices
 
 
 def test_pageable_checkpoint_staging_detaches_from_donated_jax_buffer():
