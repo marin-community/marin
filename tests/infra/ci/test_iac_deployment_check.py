@@ -8,7 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 import yaml
 
 WORKFLOW_PATH = Path(".github/workflows/ops-iac-preview.yaml")
@@ -33,9 +32,12 @@ def test_iac_preview_checks_merged_pull_requests() -> None:
     triggers = _triggers(workflow)
 
     assert "closed" in triggers["pull_request"]["types"]
-    assert "deployment_check_attempt" in triggers["workflow_dispatch"]["inputs"]
+    dispatch_inputs = triggers["workflow_dispatch"]["inputs"]
+    assert "deployment_check_attempt" in dispatch_inputs
+    assert "deployment_check_ref" not in dispatch_inputs
     prepare = workflow["jobs"]["prepare"]
     assert prepare["outputs"]["deployment_check"]
+    assert all(step.get("uses") != "actions/checkout@v5" for step in prepare["steps"])
     preview = workflow["jobs"]["preview"]
     assert preview["needs"] == "prepare"
     assert preview["strategy"]["matrix"] == "${{ fromJSON(needs.prepare.outputs.preview_matrix) }}"
@@ -47,6 +49,9 @@ def test_iac_preview_checks_merged_pull_requests() -> None:
     retry = workflow["jobs"]["retry-deployment-check"]
     assert retry["permissions"]["actions"] == "write"
     assert "needs.comment.outputs.next_attempt != ''" in retry["if"]
+    delays = json.loads(workflow["env"]["CHECK_DELAYS_MINUTES"])
+    assert delays[0] == 30
+    assert delays[1:] == [2 * delay for delay in delays[:-1]]
 
 
 def _write_preview(root: Path, stack: str, severity: str) -> None:
@@ -66,11 +71,12 @@ def _summarize(tmp_path: Path, *, attempt: int) -> tuple[str, dict[str, str]]:
         [
             sys.executable,
             str(SUMMARY_SCRIPT),
-            "summarize",
             "--previews-dir",
             str(previews),
             "--preview-matrix",
             '{"include":[{"stack":"marin"},{"stack":"cw-rno2a"}]}',
+            "--check-delays-minutes",
+            "[30,60,120]",
             "--attempt",
             str(attempt),
             "--merger",
@@ -88,21 +94,6 @@ def _summarize(tmp_path: Path, *, attempt: int) -> tuple[str, dict[str, str]]:
     )
     outputs = dict(line.split("=", 1) for line in github_output.read_text().splitlines())
     return comment.read_text(), outputs
-
-
-@pytest.mark.parametrize(
-    ("attempt", "delay"),
-    [(1, "30m"), (2, "60m"), (3, "120m")],
-)
-def test_deployment_check_delay_uses_exponential_schedule(attempt: int, delay: str) -> None:
-    result = subprocess.run(
-        [sys.executable, str(SUMMARY_SCRIPT), "delay", "--attempt", str(attempt)],
-        check=True,
-        text=True,
-        capture_output=True,
-    )
-
-    assert result.stdout.strip() == delay
 
 
 def test_deployment_summary_requests_retry_for_changes_and_missing_stacks(tmp_path: Path) -> None:
