@@ -3,8 +3,10 @@
 
 """Ragged all-to-all expert-parallel Grug MoE backend."""
 
+import functools
 import math
 from collections.abc import Callable
+from typing import TypeAlias
 
 import jax
 import jax.numpy as jnp
@@ -24,6 +26,71 @@ from levanter.grug._moe.ep_common import (
     _unpermute_from_global_expert,
 )
 from levanter.grug.sharding import _batch_axes
+
+# QuACK's grouped GEMMs are written for SM100 and ship only with the CUDA 13 GPU extra.
+_SM100_COMPUTE_CAPABILITY = 10.0
+
+_ExpertMlp: TypeAlias = Callable[
+    [jax.Array, jax.Array, jax.Array, jax.Array, Callable[[jax.Array], jax.Array]], jax.Array
+]
+
+
+def _ragged_dot_expert_mlp(
+    x_dispatch: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    group_sizes: jax.Array,
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> jax.Array:
+    """Portable expert MLP over XLA's `ragged_dot`."""
+    w13_out = ragged_dot(x_dispatch, moe_w13_local, group_sizes)
+    moe_dim = moe_w2_local.shape[1]
+    gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+    return ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
+
+
+def _cute_expert_mlp(
+    x_dispatch: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    group_sizes: jax.Array,
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> jax.Array:
+    """Expert MLP on QuACK's SM100 grouped GEMMs, which fuse SwiGLU into the gate/up GEMM."""
+    del activation_fn
+
+    # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
+    from levanter.grug._moe.sonic_cute import _expert_mlp, _interleave_gate_up  # noqa: PLC0415
+
+    moe_dim = moe_w2_local.shape[1]
+    w13_interleaved = _interleave_gate_up(moe_w13_local, moe_dim)
+    cumulative_group_sizes = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(group_sizes).astype(jnp.int32)])
+    return _expert_mlp(x_dispatch, w13_interleaved, moe_w2_local, group_sizes, cumulative_group_sizes)
+
+
+@functools.cache
+def _quack_grouped_gemm_available() -> bool:
+    if jax.default_backend() != "gpu":
+        return False
+    if float(jax.devices("gpu")[0].compute_capability) < _SM100_COMPUTE_CAPABILITY:
+        return False
+    try:
+        import levanter.grug._moe.sonic_cute  # noqa: F401,PLC0415
+    except ImportError:
+        return False
+    return True
+
+
+def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array]) -> _ExpertMlp:
+    """Pick the fastest expert-MLP kernel this process can actually run.
+
+    QuACK's kernel fuses SwiGLU, so it only applies to SiLU. Everything else -- another
+    activation, a non-SM100 GPU, a TPU or CPU, or a build without the GPU extra -- runs the
+    portable `ragged_dot` path, which computes the same function.
+    """
+    if activation_fn is jax.nn.silu and _quack_grouped_gemm_available():
+        return _cute_expert_mlp
+    return _ragged_dot_expert_mlp
 
 
 def _moe_mlp_ep_ragged_a2a_local(
@@ -95,10 +162,9 @@ def _moe_mlp_ep_ragged_a2a_local(
         )
 
     with jax.named_scope("moe_up_down"):
-        w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
-        moe_dim = moe_w2_local.shape[1]
-        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
+        out_dispatch = _select_expert_mlp(activation_fn)(
+            x_dispatch, moe_w13_local, moe_w2_local, local_group_sizes, activation_fn
+        )
 
     with jax.named_scope("combine"):
         local_output = _sort_activations(out_dispatch, jnp.argsort(local_sorted_indices))

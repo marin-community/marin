@@ -30,6 +30,11 @@ from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
     _interleaved_receiver_ranks,
     _receiver_ranks,
 )
+from levanter.grug._moe.ep_ragged_all_to_all import (
+    _cute_expert_mlp,
+    _ragged_dot_expert_mlp,
+    _select_expert_mlp,
+)
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -952,6 +957,17 @@ def test_shard_a2a_params_uses_sender_side_output_offsets():
     np.testing.assert_array_equal(np.asarray(input_offsets), np.array([0, 3, 8], dtype=np.int32))
     np.testing.assert_array_equal(np.asarray(recv_sizes), np.array([7, 5, 8], dtype=np.int32))
     np.testing.assert_array_equal(np.asarray(output_offsets), np.array([1, 7, 2], dtype=np.int32))
+
+
+def test_ragged_expert_gemms_fall_back_off_the_quack_kernel_s_domain(monkeypatch):
+    # QuACK's grouped GEMM fuses SwiGLU into the gate/up matmul, so it computes the wrong
+    # function for any other activation even where the kernel is installed and supported.
+    monkeypatch.setattr("levanter.grug._moe.ep_ragged_all_to_all._quack_grouped_gemm_available", lambda: True)
+    assert _select_expert_mlp(jax.nn.silu) is _cute_expert_mlp
+    assert _select_expert_mlp(jax.nn.gelu) is _ragged_dot_expert_mlp
+
+    monkeypatch.setattr("levanter.grug._moe.ep_ragged_all_to_all._quack_grouped_gemm_available", lambda: False)
+    assert _select_expert_mlp(jax.nn.silu) is _ragged_dot_expert_mlp
 
 
 def test_split_peer_transfers_partition_the_same_rows():
