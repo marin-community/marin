@@ -57,7 +57,7 @@ EVALCHEMY = ExternalDependency(
     distribution="evalchemy",
     repository="https://github.com/marin-community/evalchemy.git",
     version="0.1.0",
-    commit="4ccc392877ba2b129b3887fe2de3f706688252c2",
+    commit="df7bcf952715700a252abc28ee4dd4873802740f",
     runtime_requirements=(),
 )
 
@@ -66,7 +66,7 @@ HARBOR = ExternalDependency(
     distribution="harbor",
     repository="https://github.com/marin-community/harbor.git",
     version="0.8.1",
-    commit="e0e80550b3c582614d1f9414e4a07fbb7dfd5974",
+    commit="a7502f1e3bd26f2a64db0a81cd2ebe46efa89aa1",
     runtime_requirements=("daytona==0.200.2", "gcsfs==2026.7.0", "pydantic-settings==2.14.2", "s3fs==2026.7.0"),
 )
 
@@ -75,7 +75,7 @@ MARIN_SKYRL = ExternalDependency(
     distribution="marinskyrl",
     repository="https://github.com/marin-community/MarinSkyRL.git",
     version="0.1.0",
-    commit="0e476fc4de104607cc5c523aafd4e724bb021122",
+    commit="65a090f667f435d4f6db0cc8da3e676b9b713b4b",
     runtime_requirements=(),
 )
 

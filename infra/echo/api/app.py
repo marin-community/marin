@@ -183,6 +183,7 @@ class SearchReference(BaseModel):
 
 
 class SearchResult(BaseModel):
+    key: str | None = Field(default=None, description="Execution-specific key for grading this returned row.")
     id: str
     domain: search_config.SearchDomain
     title: str
@@ -219,13 +220,13 @@ class SearchConfiguration(BaseModel):
 
 
 class SearchFeedbackGrade(BaseModel):
-    result_id: str = Field(min_length=1, max_length=search_feedback.MAX_RESULT_ID_CHARACTERS)
+    key: str = Field(min_length=1, max_length=search_feedback.MAX_RESULT_KEY_CHARACTERS)
     grade: int = Field(ge=search_feedback.MIN_GRADE, le=search_feedback.MAX_GRADE)
 
-    @field_validator("result_id")
+    @field_validator("key")
     @classmethod
-    def validate_result_id(cls, result_id: str) -> str:
-        return search_feedback.checked_result_id(result_id)
+    def validate_key(cls, key: str) -> str:
+        return search_feedback.checked_result_key(key)
 
 
 class SearchFeedbackCreate(BaseModel):
@@ -245,8 +246,8 @@ class SearchFeedbackCreate(BaseModel):
     @field_validator("grades")
     @classmethod
     def reject_duplicate_results(cls, grades: list[SearchFeedbackGrade]) -> list[SearchFeedbackGrade]:
-        result_ids = [grade.result_id for grade in grades]
-        if len(result_ids) != len(set(result_ids)):
+        keys = [grade.key for grade in grades]
+        if len(keys) != len(set(keys)):
             raise ValueError("each result may be graded once per feedback submission")
         return grades
 
@@ -265,7 +266,10 @@ class SearchFeedbackEntry(SearchFeedbackCreate):
     author: str
 
 
-class SearchFeedbackResultGrade(SearchFeedbackGrade):
+class SearchFeedbackResultGrade(BaseModel):
+    key: str | None
+    source_id: str
+    grade: int
     title: str
     url: str
 
@@ -281,6 +285,7 @@ class SearchFeedbackListEntry(BaseModel):
 
 
 class SearchExecutionResultEntry(BaseModel):
+    id: int
     rank: int
     result_id: str
     domain: search_config.SearchDomain
@@ -290,6 +295,7 @@ class SearchExecutionResultEntry(BaseModel):
     score: float
     distance: float | None
     lexical_score: float | None
+    rerank_score: float | None
 
 
 class SearchExecutionEntry(BaseModel):
@@ -396,6 +402,22 @@ class SearchCandidate:
 class FeedbackResultMetadata:
     title: str
     url: str
+
+
+@dataclass(frozen=True)
+class StoredFeedbackResult:
+    id: int
+    execution_id: int
+    source_id: str
+    domain: str
+    title: str | None
+    url: str
+
+
+@dataclass(frozen=True)
+class StoredFeedbackGrade:
+    result: StoredFeedbackResult
+    grade: int
 
 
 class RerankerModel(Protocol):
@@ -549,6 +571,7 @@ def recorded_search_result(result: SearchResult) -> search_history.SearchResultR
         score=result.score,
         distance=result.distance,
         lexical_score=result.lexical_score,
+        rerank_score=result.rerank_score,
     )
 
 
@@ -563,6 +586,7 @@ def recorded_hit(result: Hit) -> search_history.SearchResultRecord:
         score=result.score,
         distance=result.distance,
         lexical_score=result.lexical_score,
+        rerank_score=None,
     )
 
 
@@ -587,7 +611,9 @@ def database_error_code(error: sqlalchemy.exc.DBAPIError) -> str | None:
     return None
 
 
-def record_live_search(engine: sqlalchemy.Engine, record: search_history.SearchExecutionRecord) -> int | None:
+def record_live_search(
+    engine: sqlalchemy.Engine, record: search_history.SearchExecutionRecord
+) -> search_history.StoredSearchExecution | None:
     """Persist a search, returning ``None`` only while its additive schema is unavailable."""
     try:
         with engine.begin() as conn:
@@ -603,10 +629,11 @@ def attach_search_execution(
     response: Response,
     engine: sqlalchemy.Engine,
     record: search_history.SearchExecutionRecord,
-) -> None:
-    execution_id = record_live_search(engine, record)
-    if execution_id is not None:
-        response.headers[SEARCH_EXECUTION_HEADER] = str(execution_id)
+) -> search_history.StoredSearchExecution | None:
+    execution = record_live_search(engine, record)
+    if execution is not None:
+        response.headers[SEARCH_EXECUTION_HEADER] = str(execution.id)
+    return execution
 
 
 def wiki_search_result(row: sqlalchemy.Row, config: EchoConfig) -> SearchResult:
@@ -732,20 +759,77 @@ def default_feedback_result_metadata(result_id: str, config: EchoConfig) -> Feed
     )
 
 
-def recorded_feedback_result_metadata(
-    conn: sqlalchemy.Connection, execution_ids: set[int]
-) -> dict[tuple[int, str], FeedbackResultMetadata]:
-    if not execution_ids:
+def stored_feedback_results(conn: sqlalchemy.Connection, search_result_ids: set[int]) -> dict[int, StoredFeedbackResult]:
+    if not search_result_ids:
         return {}
     rows = conn.execute(
         sqlalchemy.select(
+            schema.search_execution_results.c.id,
             schema.search_execution_results.c.execution_id,
             schema.search_execution_results.c.result_id,
+            schema.search_execution_results.c.domain,
             schema.search_execution_results.c.title,
             schema.search_execution_results.c.url,
-        ).where(schema.search_execution_results.c.execution_id.in_(execution_ids))
+        ).where(schema.search_execution_results.c.id.in_(search_result_ids))
     )
-    return {(row.execution_id, row.result_id): FeedbackResultMetadata(row.title or "", row.url) for row in rows}
+    return {
+        row.id: StoredFeedbackResult(
+            id=row.id,
+            execution_id=row.execution_id,
+            source_id=row.result_id,
+            domain=row.domain,
+            title=row.title,
+            url=row.url,
+        )
+        for row in rows
+    }
+
+
+def resolve_feedback_grades(
+    conn: sqlalchemy.Connection,
+    grades: list[SearchFeedbackGrade],
+    execution_id: int | None,
+) -> tuple[tuple[StoredFeedbackGrade, ...], int | None]:
+    parsed = [(grade, *search_feedback.result_key_parts(grade.key)) for grade in grades]
+    stored_results = stored_feedback_results(conn, {result_id for _, _, result_id in parsed})
+    invalid_keys = [
+        grade.key
+        for grade, domain, result_id in parsed
+        if result_id not in stored_results or stored_results[result_id].domain != domain
+    ]
+    if invalid_keys:
+        raise HTTPException(422, "unknown search result keys: " + ", ".join(sorted(invalid_keys)))
+
+    resolved = tuple(StoredFeedbackGrade(stored_results[result_id], grade.grade) for grade, _, result_id in parsed)
+    graded_execution_ids = {grade.result.execution_id for grade in resolved}
+    if len(graded_execution_ids) > 1:
+        raise HTTPException(422, "graded search results must come from one execution")
+    if not graded_execution_ids:
+        return resolved, execution_id
+
+    graded_execution_id = graded_execution_ids.pop()
+    if execution_id is not None and execution_id != graded_execution_id:
+        raise HTTPException(422, "graded search results were not returned by the linked search execution")
+    return resolved, graded_execution_id
+
+
+def validate_feedback_execution(
+    conn: sqlalchemy.Connection,
+    execution_id: int | None,
+    author: str,
+    query: str,
+) -> None:
+    if execution_id is None:
+        return
+    execution = conn.execute(
+        sqlalchemy.select(schema.search_executions.c.author, schema.search_executions.c.query).where(
+            schema.search_executions.c.id == execution_id
+        )
+    ).first()
+    if execution is None:
+        raise HTTPException(422, f"no search execution {execution_id}")
+    if execution.author != author or execution.query != query:
+        raise HTTPException(422, "execution_id must identify this caller's exact query")
 
 
 def current_feedback_result_metadata(
@@ -873,7 +957,8 @@ def rerank_candidates(
     reranked = [
         result
         for result in reranked
-        if result.rerank_score is not None and result.rerank_score >= search_config.MIN_RERANK_SCORE
+        if result.rerank_score is not None
+        and result.rerank_score >= search_config.MIN_RERANK_SCORE_BY_DOMAIN[result.domain]
     ]
     reranked.sort(key=lambda result: (-result.score, result.domain, result.id))
     return reranked[:limit]
@@ -1099,7 +1184,7 @@ def federated_search_endpoint(
     domains = list(dict.fromkeys(domain or search_config.DEFAULT_SEARCH_DOMAINS))
     started_at = time.perf_counter()
     results = federated_search(engine, model, reranker, config, query, domains, limit)
-    attach_search_execution(
+    execution = attach_search_execution(
         response,
         engine,
         search_history.SearchExecutionRecord(
@@ -1116,7 +1201,13 @@ def federated_search_endpoint(
             results=tuple(recorded_search_result(result) for result in results),
         ),
     )
-    return results
+    if execution is None:
+        return results
+    assert len(execution.search_result_ids) == len(results)
+    return [
+        result.model_copy(update={"key": f"{result.domain}:{result_id}"})
+        for result, result_id in zip(results, execution.search_result_ids, strict=True)
+    ]
 
 
 @api.get("/grep", response_model=list[Hit])
@@ -1333,26 +1424,24 @@ def list_search_feedback(
             )
         )
 
-        execution_ids = {row.execution_id for row in feedback_rows if row.execution_id is not None}
-        exact_metadata = recorded_feedback_result_metadata(conn, execution_ids)
-        feedback_by_id = {row.id: row for row in feedback_rows}
-        missing_result_ids = set()
+        search_result_ids = {row.search_result_id for row in grade_rows if row.search_result_id is not None}
+        stored_results = stored_feedback_results(conn, search_result_ids)
+        missing_result_ids: set[str] = set()
         for grade in grade_rows:
-            feedback = feedback_by_id[grade.feedback_id]
-            exact = exact_metadata.get((feedback.execution_id, grade.result_id))
-            if exact is None or not exact.title:
+            stored = stored_results.get(grade.search_result_id)
+            if stored is None or not stored.title:
                 missing_result_ids.add(grade.result_id)
         current_metadata = current_feedback_result_metadata(conn, missing_result_ids, config)
 
     grades_by_feedback: dict[int, list[SearchFeedbackResultGrade]] = {}
     for grade in grade_rows:
-        feedback = feedback_by_id[grade.feedback_id]
+        stored = stored_results.get(grade.search_result_id)
         current = current_metadata.get(grade.result_id) or default_feedback_result_metadata(grade.result_id, config)
-        exact = exact_metadata.get((feedback.execution_id, grade.result_id))
-        metadata = FeedbackResultMetadata(exact.title or current.title, exact.url) if exact else current
+        metadata = FeedbackResultMetadata(stored.title or current.title, stored.url) if stored else current
         grades_by_feedback.setdefault(grade.feedback_id, []).append(
             SearchFeedbackResultGrade(
-                result_id=grade.result_id,
+                key=f"{stored.domain}:{stored.id}" if stored else None,
+                source_id=grade.result_id,
                 grade=grade.grade,
                 title=metadata.title,
                 url=metadata.url,
@@ -1376,50 +1465,33 @@ def add_search_feedback(
 ) -> SearchFeedbackEntry:
     """Store one query's optional note and per-result relevance grades."""
     author = iap_caller(x_goog_authenticated_user_email)
-    statement = (
-        schema.search_feedback.insert()
-        .values(
-            author=author,
-            query=feedback.query,
-            note=feedback.note,
-            execution_id=feedback.execution_id,
-        )
-        .returning(schema.search_feedback)
-    )
     with engine.begin() as conn:
-        if feedback.execution_id is not None:
-            execution = conn.execute(
-                sqlalchemy.select(schema.search_executions.c.author, schema.search_executions.c.query).where(
-                    schema.search_executions.c.id == feedback.execution_id
-                )
-            ).first()
-            if execution is None:
-                raise HTTPException(422, f"no search execution {feedback.execution_id}")
-            if execution.author != author or execution.query != feedback.query:
-                raise HTTPException(422, "execution_id must identify this caller's exact query")
-            if feedback.grades:
-                recorded_result_ids = set(
-                    conn.execute(
-                        sqlalchemy.select(schema.search_execution_results.c.result_id).where(
-                            schema.search_execution_results.c.execution_id == feedback.execution_id
-                        )
-                    ).scalars()
-                )
-                unrecorded_result_ids = {grade.result_id for grade in feedback.grades} - recorded_result_ids
-                if unrecorded_result_ids:
-                    raise HTTPException(
-                        422,
-                        "graded results were not returned by the linked search execution: "
-                        + ", ".join(sorted(unrecorded_result_ids)),
-                    )
+        resolved_grades, execution_id = resolve_feedback_grades(conn, feedback.grades, feedback.execution_id)
+        validate_feedback_execution(conn, execution_id, author, feedback.query)
+
+        statement = (
+            schema.search_feedback.insert()
+            .values(
+                author=author,
+                query=feedback.query,
+                note=feedback.note,
+                execution_id=execution_id,
+            )
+            .returning(schema.search_feedback)
+        )
         row = conn.execute(statement).first()
         assert row is not None
-        if feedback.grades:
+        if resolved_grades:
             conn.execute(
                 schema.search_feedback_grades.insert().values(
                     [
-                        {"feedback_id": row.id, "result_id": grade.result_id, "grade": grade.grade}
-                        for grade in feedback.grades
+                        {
+                            "feedback_id": row.id,
+                            "result_id": grade.result.source_id,
+                            "search_result_id": grade.result.id,
+                            "grade": grade.grade,
+                        }
+                        for grade in resolved_grades
                     ]
                 )
             )
@@ -1430,7 +1502,7 @@ def add_search_feedback(
         query=feedback.query,
         grades=feedback.grades,
         note=feedback.note,
-        execution_id=feedback.execution_id,
+        execution_id=execution_id,
     )
 
 

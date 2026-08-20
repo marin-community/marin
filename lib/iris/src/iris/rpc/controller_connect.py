@@ -31,6 +31,9 @@ class ControllerService(Protocol):
     async def terminate_job(self, request: controller__pb2.Controller.TerminateJobRequest, ctx: RequestContext) -> job__pb2.Empty:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def complete_job(self, request: controller__pb2.Controller.CompleteJobRequest, ctx: RequestContext) -> job__pb2.Empty:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     async def list_jobs(self, request: controller__pb2.Controller.ListJobsRequest, ctx: RequestContext) -> controller__pb2.Controller.ListJobsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -148,6 +151,16 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.terminate_job,
+                ),
+                "/iris.cluster.ControllerService/CompleteJob": Endpoint.unary(
+                    method=MethodInfo(
+                        name="CompleteJob",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.CompleteJobRequest,
+                        output=job__pb2.Empty,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.complete_job,
                 ),
                 "/iris.cluster.ControllerService/ListJobs": Endpoint.unary(
                     method=MethodInfo(
@@ -475,6 +488,26 @@ class ControllerServiceClient(ConnectClient):
                 name="TerminateJob",
                 service_name="iris.cluster.ControllerService",
                 input=controller__pb2.Controller.TerminateJobRequest,
+                output=job__pb2.Empty,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def complete_job(
+        self,
+        request: controller__pb2.Controller.CompleteJobRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> job__pb2.Empty:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="CompleteJob",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.CompleteJobRequest,
                 output=job__pb2.Empty,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
@@ -1093,6 +1126,8 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def terminate_job(self, request: controller__pb2.Controller.TerminateJobRequest, ctx: RequestContext) -> job__pb2.Empty:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def complete_job(self, request: controller__pb2.Controller.CompleteJobRequest, ctx: RequestContext) -> job__pb2.Empty:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_jobs(self, request: controller__pb2.Controller.ListJobsRequest, ctx: RequestContext) -> controller__pb2.Controller.ListJobsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_task_status(self, request: controller__pb2.Controller.GetTaskStatusRequest, ctx: RequestContext) -> controller__pb2.Controller.GetTaskStatusResponse:
@@ -1186,6 +1221,16 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.terminate_job,
+                ),
+                "/iris.cluster.ControllerService/CompleteJob": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="CompleteJob",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.CompleteJobRequest,
+                        output=job__pb2.Empty,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.complete_job,
                 ),
                 "/iris.cluster.ControllerService/ListJobs": EndpointSync.unary(
                     method=MethodInfo(
@@ -1513,6 +1558,26 @@ class ControllerServiceClientSync(ConnectClientSync):
                 name="TerminateJob",
                 service_name="iris.cluster.ControllerService",
                 input=controller__pb2.Controller.TerminateJobRequest,
+                output=job__pb2.Empty,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def complete_job(
+        self,
+        request: controller__pb2.Controller.CompleteJobRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> job__pb2.Empty:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="CompleteJob",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.CompleteJobRequest,
                 output=job__pb2.Empty,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),

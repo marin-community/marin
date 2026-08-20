@@ -156,7 +156,7 @@ fn batch(batch_id: &str) -> Vec<u8> {
         "batch_id": batch_id,
         "resource": {
             "service": "trainer",
-            "attributes": {"role": "worker", "root_run_uid": "run-1"}
+            "attributes": {"role": "worker", "run_id": "run-1"}
         },
         "records": [
             {
@@ -227,6 +227,22 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
         .find(|column| column.name == "name")
         .unwrap();
     assert!(name.index.trigram);
+    for column in [
+        "run_id",
+        "job_id",
+        "execution_uid",
+        "region",
+        "node_name",
+        "process_index",
+    ] {
+        let column = schema
+            .columns
+            .iter()
+            .find(|item| item.name == column)
+            .unwrap();
+        assert!(column.nullable);
+        assert_eq!(column.r#type, ColumnType::COLUMN_TYPE_STRING);
+    }
     assert_eq!(
         name.index.exact_values,
         [
@@ -290,11 +306,33 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
         .columns
         .iter()
         .any(|column| column == "attributes_json"));
+    for name in [
+        "accelerator-power",
+        "accelerator-memory",
+        "accelerator-faults",
+        "accelerator-interconnect",
+        "accelerator-inventory",
+        "accelerator-sm-activity",
+        "accelerator-temperature",
+        "accelerator-tensor-activity",
+        "accelerator-utilization",
+        "node-host-network",
+        "node-host-utilization",
+        "training-run-attribution",
+    ] {
+        assert!(projections[name]
+            .columns
+            .iter()
+            .any(|column| column == "node_name"));
+    }
     let training_status = projections["training-status"];
     assert!(training_status
         .columns
         .iter()
         .any(|column| column == "attributes_json"));
+    for column in ["run_id", "job_id"] {
+        assert!(training_status.columns.iter().any(|item| item == column));
+    }
     assert_eq!(schema.grouped_extrema.len(), 1);
     let grouped = &schema.grouped_extrema[0];
     assert_eq!(grouped.filter_column, "service");
@@ -412,7 +450,7 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
     assert_eq!(bodies.value(1), r#"{"step":10}"#);
     assert_eq!(
         rows[0].column(3).as_string::<i32>().value(0),
-        r#"{"role":"worker","root_run_uid":"run-1"}"#
+        r#"{"role":"worker","run_id":"run-1"}"#
     );
     assert_eq!(
         rows[0].column(4).as_string::<i32>().value(0),
@@ -421,8 +459,7 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
 
     let bounded = query(
         &store,
-        "SELECT name, to_timestamp_millis(timestamp_ms) AS observed_at, \
-         json_get(resource_attributes_json, 'root_run_uid') AS run \
+        "SELECT name, to_timestamp_millis(timestamp_ms) AS observed_at, run_id \
          FROM telemetry_v1 \
          WHERE timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2023-11-14 22:13:20') * 1000 AS BIGINT) \
          AND timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '2023-11-14 22:13:21') * 1000 AS BIGINT)",
@@ -433,6 +470,74 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
         2
     );
     assert_eq!(bounded[0].column(2).as_string::<i32>().value(0), "run-1");
+}
+
+#[tokio::test]
+async fn explicit_resource_dimensions_override_attribute_fallbacks() {
+    let store = disk_store("telemetry-explicit-resource-dimensions");
+    let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
+    let client = http_client();
+    let batch_id = "c847d02a-c8c3-4547-8d4f-acde56943e51";
+    let body = serde_json::to_vec(&json!({
+        "version": 1,
+        "batch_id": batch_id,
+        "resource": {
+            "service": "levanter",
+            "run_id": "run-explicit",
+            "job_id": "job-explicit",
+            "execution_uid": "execution-1",
+            "region": "us-central2",
+            "node_name": "node-1",
+            "process_index": "3",
+            "attributes": {
+                "run_id": "run-attribute",
+                "job_id": "job-legacy"
+            }
+        },
+        "records": [{
+            "timestamp_ms": 1_700_000_000_000_i64,
+            "kind": "gauge",
+            "name": "loss",
+            "value": 1.0,
+            "attributes": {}
+        }]
+    }))
+    .unwrap();
+
+    let response = post(
+        &client,
+        addr,
+        body,
+        Some(batch_id),
+        Some("application/json"),
+        None,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::OK);
+    store
+        .await_persisted("telemetry_v1", 1, Duration::from_secs(5))
+        .await
+        .unwrap();
+    let rows = query(
+        &store,
+        "SELECT run_id, job_id, execution_uid, region, node_name, process_index \
+         FROM telemetry_v1",
+    )
+    .await;
+    let values: Vec<&str> = (0..6)
+        .map(|column| rows[0].column(column).as_string::<i32>().value(0))
+        .collect();
+    assert_eq!(
+        values,
+        [
+            "run-explicit",
+            "job-explicit",
+            "execution-1",
+            "us-central2",
+            "node-1",
+            "3",
+        ]
+    );
 }
 
 #[tokio::test]

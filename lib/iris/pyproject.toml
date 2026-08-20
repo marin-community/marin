@@ -45,7 +45,8 @@ dependencies = [
 
 [project.optional-dependencies]
 controller = [
-    "kubernetes>=31.0.0,<36",
+    # v36.0.0 omits bearer-token auth: https://github.com/kubernetes-client/python/pull/2585
+    "kubernetes>=31.0.0,!=36.0.0,<37",
     # The controller resolves `gcp-secret://` config references (e.g. the auth
     # signing key) at startup via rigging.secrets, which imports the Secret
     # Manager client. Only the controller runs resolve_config_secrets, so this
@@ -72,7 +73,8 @@ test = [
     # Keep the test environment on the workspace runtime pin. The node-local
     # XLA autotune cache requires JAX's cache-key exclusion for its directory.
     "jax==0.11.0",
-    "kubernetes>=31.0.0,<36",
+    # v36.0.0 omits bearer-token auth: https://github.com/kubernetes-client/python/pull/2585
+    "kubernetes>=31.0.0,!=36.0.0,<37",
     "memray>=1.19.3",
     "playwright>=1.49.0",
     "pytest-asyncio",
@@ -86,6 +88,11 @@ dev = [
     { include-group = "examples" },
     { include-group = "test" },
 ]
+
+[tool.hatch.build.hooks.custom]
+# hatch_build.py stamps iris/_build_info.py into wheels and sdists so an
+# installed marin-iris can report the revision it was built from.
+path = "hatch_build.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/iris"]
@@ -102,7 +109,11 @@ packages = ["src/iris"]
 # Without an explicit sdist scope, hatchling sweeps the whole iris/ directory
 # and bundles ~146 MiB of dashboard/node_modules (git-ignored but still on
 # disk). Restrict to source + configs so the sdist stays small.
-packages = ["src/iris"]
+#
+# only-include rather than packages: packages would relocate src/iris to iris/,
+# and the wheel target inside the unpacked sdist looks for src/iris, so every
+# wheel built from the sdist came out with no Python modules at all.
+only-include = ["src/iris"]
 
 [tool.hatch.build.targets.sdist.force-include]
 "config" = "config"

@@ -5,8 +5,8 @@
 
 These runs mirror the EP hero: 384 routed experts, top-8 routing, hidden/2-wide experts in a hidden/2
 latent, two shared experts, and the pooled-wave all-to-all transport at receiver/sender capacity 1.15.
-Each run uses the small sweep width and 750 tokens per active parameter. The data, evaluations,
-and step counts match the Aug hero learning-rate sweep from issue #7856.
+Each run uses the small sweep width and 750 tokens per active parameter. The runs use the Harrier
+2026.08.17.1 mixture.
 
 Each ``--size`` submits one job on the fleet ``--target`` names: a GB200 rack (EP64), 8 H100 nodes
 (EP64), or 2 H100 nodes (EP16). The expert axis spans the fleet, and it sets cell size, so the
@@ -24,10 +24,8 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from marin.datakit.source_key import datakit_source_path
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
@@ -36,9 +34,13 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
-from experiments.grug.moe.launch_datakit_moe_mix import _datakit_data_config, _val_component
+from experiments.grug.moe_hero_ep.harrier_mix_2026_08_17_1 import (
+    HARRIER_MIX_2026_08_17_1_STORE,
+    HARRIER_MIX_2026_08_17_1_TAG,
+    harrier_mix_2026_08_17_1_data_config,
+)
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
-from experiments.grug.moe_hero_ep.launch import (
+from experiments.grug.moe_hero_ep.launch_mfu_test import (
     DEFAULT_WANDB_PROJECT,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
@@ -250,14 +252,6 @@ def _active_params(cfg: GrugModelConfig) -> int:
     return cfg.num_layers * (attn + router + routed + latent_proj + shared)
 
 
-def _root_component(component: DatasetComponent | ConcatDatasetComponent) -> DatasetComponent | ConcatDatasetComponent:
-    """Root a datakit component's relative cache_dir against MARIN_PREFIX (recursing into concat
-    children); absolute paths -- e.g. the paloma/uncheatable caches -- pass through unchanged."""
-    if isinstance(component, ConcatDatasetComponent):
-        return dataclasses.replace(component, children={n: _root_component(c) for n, c in component.children.items()})
-    return dataclasses.replace(component, cache_dir=datakit_source_path(component.cache_dir))
-
-
 def build_small_run(
     *,
     run_id: str,
@@ -407,6 +401,7 @@ def build_small_run(
                     "hero",
                     "ep",
                     "small-abl",
+                    HARRIER_MIX_2026_08_17_1_TAG,
                     f"shape-{size}",
                     f"capacity-{capacity_factor:g}",
                     f"seq{seq_len}",
@@ -434,22 +429,12 @@ def build_small_run(
                 keep_last_temporary_checkpoints=1,
             ),
         )
-        # Datakit two-phase mixture, marin_prefix-rooted (relative bucket paths resolve against the
-        # cluster's region-local prefix). Paloma + uncheatable ride in as zero-train-weight components
-        # so they surface as tagged eval sets.
-        if ctx.is_fingerprint:
-            val_components = {v.name: _val_component(ctx.artifact_path(v)) for v in _VALIDATION}
-        else:
-            val_components = {v.name: ctx.resolved(v).as_component() for v in _VALIDATION}
-        data = _datakit_data_config(
+        data = harrier_mix_2026_08_17_1_data_config(
+            ctx=ctx,
             total_steps=num_steps,
             batch_size=batch_size,
             max_seq_len=seq_len,
-            enable_simulated_epoching=False,
-            val_components=val_components,
-        )
-        data = dataclasses.replace(
-            data, components={name: _root_component(component) for name, component in data.components.items()}
+            validation=_VALIDATION,
         )
         return GrugRunConfig(
             model=model,
@@ -478,7 +463,7 @@ def build_small_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=tuple(_VALIDATION),
+        deps=(HARRIER_MIX_2026_08_17_1_STORE, *_VALIDATION),
         runtime_args={"train_resources": train_resources},
     )
 

@@ -44,8 +44,13 @@ ARRAY_DRIVER = "zarr3"
 KVSTORE_DRIVER = "ocdbt"
 # JAX's memory kind for host memory a device can address. Offloaded optimizer state lives here.
 _HOST_MEMORY_KIND = "pinned_host"
-# Chunks a save stages at once. Four processes at 32 GiB each exhausted a GB200 node.
-_DEFAULT_STAGED_CHUNKS = 32
+# JAX's default memory kind: buffers live in device (HBM) memory.
+_DEVICE_MEMORY_KIND = "device"
+# Chunks a save stages at once. The budget is per process, so a node holds it once per local
+# process. Four processes at 32 GiB each exhausted a GB200 node, and 16 GiB each still did: a
+# process carries about four times its budget in flight (_STAGED_BYTE_OVERHEAD) on top of its
+# resident shard of the offloaded state.
+_DEFAULT_STAGED_CHUNKS = 8
 # Host memory a staged byte occupies while its write is in flight, for reporting only.
 _STAGED_BYTE_OVERHEAD = 4
 
@@ -131,7 +136,7 @@ async def _transfer_shard_to_pageable_host(shard, local_slice: tuple[int, int, i
 class TensorStoreWriteConfig:
     """How a checkpoint save divides work across the processes that hold the state."""
 
-    max_write_replicas: int = 64
+    max_write_replicas: int = 1024
     """Cap on how many replicas of an array write part of it. 1 disables replica splitting."""
 
     min_replica_slice_bytes: int = 16 * 1024**2
@@ -659,7 +664,9 @@ def _sharding_from_leaf(leaf, axis_mapping, mesh) -> Optional[jax.sharding.Shard
                 concrete_mesh = get_concrete_mesh()
 
             if concrete_mesh is not None and not concrete_mesh.empty:
-                return jax.sharding.NamedSharding(concrete_mesh, sharding.spec)
+                # Preserve memory_kind: an offloaded run's leaves carry `pinned_host`, and dropping it
+                # here would silently reload the state into device memory.
+                return jax.sharding.NamedSharding(concrete_mesh, sharding.spec, memory_kind=sharding.memory_kind)
         return sharding
 
     if is_named_array(leaf):
@@ -679,6 +686,45 @@ def _sharding_from_leaf(leaf, axis_mapping, mesh) -> Optional[jax.sharding.Shard
 
 def _fully_replicated_sharding(mesh):
     return hax.partitioning.sharding_for_axis((), {}, mesh)
+
+
+def _device_shardings_for_load(shardings: list) -> tuple[list, list]:
+    """Split target shardings into device-memory-kind loaders plus per-leaf move-back targets.
+
+    JAX reads tensorstore shards into ``device`` buffers, then assembles them under the requested
+    sharding. When that sharding carries a non-device memory kind -- as it does for a run with
+    ``offload_opt_state``/``FP32_PINNED_HOST``, whose master and optimizer leaves live on
+    ``pinned_host`` -- assembly fails the memory-kind check, so a checkpoint that was written cannot
+    be read back. Deserialize onto ``device`` and move each such leaf to its target afterwards.
+
+    Returns ``(device_shardings, move_targets)`` where ``move_targets[i]`` is the original sharding
+    for a leaf that must be relocated after deserialization, or ``None`` when it already loads in the
+    right place.
+    """
+    device_shardings = []
+    move_targets: list = []
+    for sharding in shardings:
+        if sharding.memory_kind not in (None, _DEVICE_MEMORY_KIND):
+            device_shardings.append(sharding.with_memory_kind(_DEVICE_MEMORY_KIND))
+            move_targets.append(sharding)
+        else:
+            device_shardings.append(sharding)
+            move_targets.append(None)
+    return device_shardings, move_targets
+
+
+def _move_leaves_to_target_memory_kind(leaves: list, move_targets: list) -> list:
+    """Relocate leaves deserialized onto ``device`` to the non-device target in ``move_targets``.
+
+    Holding the whole offloaded state on device here is safe: the jitted step already shuttles the
+    entire ``opt_state`` and ``master_params`` onto device every update (see the training step's
+    ``_tree_to_memory_kind(..., "device")`` calls), alongside gradients and updates. Restore rebuilds
+    only that state -- no gradients, updates, or activations -- so its device footprint is strictly
+    smaller than a training step's, and the move targets are host memory rather than more HBM.
+    """
+    if not any(target is not None for target in move_targets):
+        return leaves
+    return [jax.device_put(leaf, target) if target is not None else leaf for leaf, target in zip(leaves, move_targets)]
 
 
 def _restore_ocdbt(
@@ -736,7 +782,9 @@ def _restore_ocdbt(
         spec = _create_ocdbt_spec(checkpoint_root, path)
         tspecs_to_load.append(spec)
 
-    deser_leaves = manager.deserialize(shardings=shardings_to_load, tensorstore_specs=tspecs_to_load)
+    device_shardings, move_targets = _device_shardings_for_load(shardings_to_load)
+    deser_leaves = manager.deserialize(shardings=device_shardings, tensorstore_specs=tspecs_to_load)
+    deser_leaves = _move_leaves_to_target_memory_kind(deser_leaves, move_targets)
     return deser_leaves, indices_to_load
 
 
@@ -782,7 +830,9 @@ def _restore_old_ts(
                 to_log += f"\n  - {leaf_paths[i]}"
             logger.warning(to_log)
 
-    deser_leaves = manager.deserialize_with_paths(shardings=shardings_to_load, paths=paths_to_load, concurrent_gb=300)
+    device_shardings, move_targets = _device_shardings_for_load(shardings_to_load)
+    deser_leaves = manager.deserialize_with_paths(shardings=device_shardings, paths=paths_to_load, concurrent_gb=300)
+    deser_leaves = _move_leaves_to_target_memory_kind(deser_leaves, move_targets)
     return deser_leaves, indices_to_load
 
 

@@ -105,7 +105,6 @@ auth:
       -----END PUBLIC KEY-----
   allowed_submitters:
     - "*@openathena.ai"
-    - infra-probes@hai-gcp-models.iam.gserviceaccount.com
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
 
 kubernetes_provider:

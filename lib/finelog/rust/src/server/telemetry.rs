@@ -36,7 +36,7 @@ use crate::store::Store;
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 8;
 pub const DEFAULT_DEDUPE_CAPACITY: usize = 10_000;
 
-const TELEMETRY_NAMESPACE: &str = "telemetry_v1";
+pub(crate) const TELEMETRY_NAMESPACE: &str = "telemetry_v1";
 const MAX_BODY_BYTES: usize = 4 << 20;
 const MAX_NORMALIZED_BYTES: usize = 16 << 20;
 const MAX_RECORDS: usize = 10_000;
@@ -44,8 +44,15 @@ const MAX_ATTRIBUTES: usize = 64;
 const MAX_STRING_BYTES: usize = 4_096;
 const MAX_JSON_DEPTH: usize = 32;
 const NORMALIZED_ROW_OVERHEAD: usize = 128;
+const TELEMETRY_MAX_ROW_GROUP_ROWS: u32 = 128 * 1024;
 const TELEMETRY_VERSION: u32 = 1;
 const ERROR_CODE_INTERNAL: &str = "internal";
+const RUN_ID_COLUMN: &str = "run_id";
+const JOB_ID_COLUMN: &str = "job_id";
+const EXECUTION_UID_COLUMN: &str = "execution_uid";
+const REGION_COLUMN: &str = "region";
+const NODE_NAME_COLUMN: &str = "node_name";
+const PROCESS_INDEX_COLUMN: &str = "process_index";
 const TRAINING_STATUS_NAMES: [&str; 3] = ["phase", "progress_time_seconds", "step"];
 const TRAINING_RUN_NAMES: [&str; 1] = ["global_step"];
 const HOST_METRIC_NAMES: [&str; 7] = [
@@ -75,9 +82,10 @@ const ACCELERATOR_METRIC_NAMES: [&str; 16] = [
     "gpu_xid_error_code",
     "hardware_inventory",
 ];
-const DEVICE_METRIC_PROJECTION_COLUMNS: [&str; 6] = [
+const DEVICE_METRIC_PROJECTION_COLUMNS: [&str; 7] = [
     "timestamp_ms",
     "service",
+    NODE_NAME_COLUMN,
     "name",
     "value",
     "attributes_json",
@@ -98,7 +106,69 @@ struct TelemetryBatch {
 struct Resource {
     service: String,
     #[serde(default)]
+    run_id: Option<String>,
+    #[serde(default)]
+    job_id: Option<String>,
+    #[serde(default)]
+    execution_uid: Option<String>,
+    #[serde(default)]
+    region: Option<String>,
+    #[serde(default)]
+    node_name: Option<String>,
+    #[serde(default)]
+    process_index: Option<String>,
+    #[serde(default)]
     attributes: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Copy)]
+struct ResourceDimensions<'a> {
+    run_id: Option<&'a str>,
+    job_id: Option<&'a str>,
+    execution_uid: Option<&'a str>,
+    region: Option<&'a str>,
+    node_name: Option<&'a str>,
+    process_index: Option<&'a str>,
+}
+
+impl Resource {
+    fn dimensions(&self) -> ResourceDimensions<'_> {
+        ResourceDimensions {
+            run_id: self.explicit_or_attribute(self.run_id.as_deref(), RUN_ID_COLUMN),
+            job_id: self.explicit_or_attribute(self.job_id.as_deref(), JOB_ID_COLUMN),
+            execution_uid: self
+                .explicit_or_attribute(self.execution_uid.as_deref(), EXECUTION_UID_COLUMN),
+            region: self.explicit_or_attribute(self.region.as_deref(), REGION_COLUMN),
+            node_name: self.explicit_or_attribute(self.node_name.as_deref(), NODE_NAME_COLUMN),
+            process_index: self
+                .explicit_or_attribute(self.process_index.as_deref(), PROCESS_INDEX_COLUMN),
+        }
+    }
+
+    fn explicit_or_attribute<'a>(
+        &'a self,
+        explicit: Option<&'a str>,
+        attribute_name: &str,
+    ) -> Option<&'a str> {
+        explicit.or_else(|| self.attributes.get(attribute_name).map(String::as_str))
+    }
+
+    fn normalized_attributes(&self) -> BTreeMap<String, String> {
+        let mut attributes = self.attributes.clone();
+        for (name, value) in [
+            (RUN_ID_COLUMN, self.run_id.as_ref()),
+            (JOB_ID_COLUMN, self.job_id.as_ref()),
+            (EXECUTION_UID_COLUMN, self.execution_uid.as_ref()),
+            (REGION_COLUMN, self.region.as_ref()),
+            (NODE_NAME_COLUMN, self.node_name.as_ref()),
+            (PROCESS_INDEX_COLUMN, self.process_index.as_ref()),
+        ] {
+            if let Some(value) = value {
+                attributes.insert(name.to_string(), value.clone());
+            }
+        }
+        attributes
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -531,6 +601,24 @@ fn validate_batch(batch: &TelemetryBatch) -> Result<(), ApiError> {
     }
     validate_string(&batch.resource.service, "resource.service", false)?;
     validate_attributes(&batch.resource.attributes, "resource.attributes")?;
+    for (field, value) in [
+        ("resource.run_id", batch.resource.run_id.as_deref()),
+        ("resource.job_id", batch.resource.job_id.as_deref()),
+        (
+            "resource.execution_uid",
+            batch.resource.execution_uid.as_deref(),
+        ),
+        ("resource.region", batch.resource.region.as_deref()),
+        ("resource.node_name", batch.resource.node_name.as_deref()),
+        (
+            "resource.process_index",
+            batch.resource.process_index.as_deref(),
+        ),
+    ] {
+        if let Some(value) = value {
+            validate_string(value, field, false)?;
+        }
+    }
     if batch.records.is_empty() {
         return Err(ApiError::bad_request("records must not be empty"));
     }
@@ -621,7 +709,7 @@ fn validate_json(root: &Value, record_index: usize) -> Result<(), ApiError> {
 }
 
 fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<u8>, ApiError> {
-    let resource_attributes = serde_json::to_string(&batch.resource.attributes)
+    let resource_attributes = serde_json::to_string(&batch.resource.normalized_attributes())
         .map_err(|error| ApiError::bad_request(format!("invalid resource attributes: {error}")))?;
     let mut kinds = Vec::with_capacity(batch.records.len());
     let mut names = Vec::with_capacity(batch.records.len());
@@ -630,6 +718,19 @@ fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<u8>, ApiError> {
     let mut units = Vec::with_capacity(batch.records.len());
     let mut attributes = Vec::with_capacity(batch.records.len());
     let mut normalized_bytes = 0_usize;
+    let dimensions = batch.resource.dimensions();
+    let dimension_bytes = [
+        dimensions.run_id,
+        dimensions.job_id,
+        dimensions.execution_uid,
+        dimensions.region,
+        dimensions.node_name,
+        dimensions.process_index,
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::len)
+    .sum::<usize>();
     for record in &batch.records {
         let body = record
             .body
@@ -645,6 +746,7 @@ fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<u8>, ApiError> {
             .and_then(|size| size.checked_add(batch.batch_id.len()))
             .and_then(|size| size.checked_add(batch.resource.service.len()))
             .and_then(|size| size.checked_add(resource_attributes.len()))
+            .and_then(|size| size.checked_add(dimension_bytes))
             .and_then(|size| size.checked_add(record.name.len()))
             .and_then(|size| size.checked_add(record.unit.as_deref().map_or(0, str::len)))
             .and_then(|size| size.checked_add(body.as_deref().map_or(0, str::len)))
@@ -682,6 +784,12 @@ fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<u8>, ApiError> {
                 batch.resource.service.as_str();
                 row_count
             ])),
+            Arc::new(StringArray::from(vec![dimensions.run_id; row_count])),
+            Arc::new(StringArray::from(vec![dimensions.job_id; row_count])),
+            Arc::new(StringArray::from(vec![dimensions.execution_uid; row_count])),
+            Arc::new(StringArray::from(vec![dimensions.region; row_count])),
+            Arc::new(StringArray::from(vec![dimensions.node_name; row_count])),
+            Arc::new(StringArray::from(vec![dimensions.process_index; row_count])),
             Arc::new(StringArray::from(kinds)),
             Arc::new(StringArray::from(names)),
             Arc::new(Float64Array::from(values)),
@@ -708,7 +816,7 @@ fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<u8>, ApiError> {
     })
 }
 
-fn telemetry_schema() -> Schema {
+pub(crate) fn telemetry_schema() -> Schema {
     Schema::new(
         vec![
             Column::new("schema_version", ColumnType::COLUMN_TYPE_INT32, false),
@@ -716,6 +824,12 @@ fn telemetry_schema() -> Schema {
             Column::new("batch_id", ColumnType::COLUMN_TYPE_STRING, false),
             Column::new("record_index", ColumnType::COLUMN_TYPE_INT64, false),
             Column::new("service", ColumnType::COLUMN_TYPE_STRING, false).with_value_counts(),
+            Column::new(RUN_ID_COLUMN, ColumnType::COLUMN_TYPE_STRING, true),
+            Column::new(JOB_ID_COLUMN, ColumnType::COLUMN_TYPE_STRING, true),
+            Column::new(EXECUTION_UID_COLUMN, ColumnType::COLUMN_TYPE_STRING, true),
+            Column::new(REGION_COLUMN, ColumnType::COLUMN_TYPE_STRING, true),
+            Column::new(NODE_NAME_COLUMN, ColumnType::COLUMN_TYPE_STRING, true),
+            Column::new(PROCESS_INDEX_COLUMN, ColumnType::COLUMN_TYPE_STRING, true),
             Column::new("kind", ColumnType::COLUMN_TYPE_STRING, false).with_value_counts(),
             // Metric names are the primary substring-search target
             // (`name LIKE '%nccl%'`), so this column carries the trigram index.
@@ -741,6 +855,8 @@ fn telemetry_schema() -> Schema {
         ],
         "timestamp_ms",
     )
+    .with_sort_columns(["service", RUN_ID_COLUMN, "name", "timestamp_ms"])
+    .with_max_row_group_rows(TELEMETRY_MAX_ROW_GROUP_ROWS)
     .with_covering_projection(CoveringProjection::new(
         "training-status",
         "name",
@@ -749,6 +865,8 @@ fn telemetry_schema() -> Schema {
             "seq",
             "timestamp_ms",
             "service",
+            RUN_ID_COLUMN,
+            JOB_ID_COLUMN,
             "name",
             "value",
             "resource_attributes_json",
@@ -763,6 +881,10 @@ fn telemetry_schema() -> Schema {
         [
             "timestamp_ms",
             "service",
+            RUN_ID_COLUMN,
+            JOB_ID_COLUMN,
+            NODE_NAME_COLUMN,
+            PROCESS_INDEX_COLUMN,
             "name",
             "resource_attributes_json",
             "cluster",
@@ -775,6 +897,7 @@ fn telemetry_schema() -> Schema {
         [
             "timestamp_ms",
             "service",
+            NODE_NAME_COLUMN,
             "name",
             "value",
             "resource_attributes_json",
@@ -816,6 +939,7 @@ fn telemetry_schema() -> Schema {
         [
             "timestamp_ms",
             "service",
+            NODE_NAME_COLUMN,
             "name",
             "attributes_json",
             "cluster",
@@ -866,7 +990,7 @@ fn telemetry_schema() -> Schema {
     .with_grouped_extrema(GroupExtremaConfig::new(
         "service",
         "resource_attributes_json",
-        "job_id",
+        JOB_ID_COLUMN,
         "timestamp_ms",
     ))
 }

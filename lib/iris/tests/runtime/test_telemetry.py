@@ -112,7 +112,7 @@ def test_configure_stamps_canonical_resource_identity(
     with _iris_metadata(info, telemetry_receiver.endpoint):
         telemetry.configure(
             "levanter",
-            root_run_uid="pretrain-42",
+            run_id="pretrain-42",
             attributes={"model_revision": "abc123", "role": rigging_telemetry.TelemetryRole.TRAINER.value},
         )
         rigging_telemetry.gauge("identity_probe").set(1)
@@ -128,7 +128,7 @@ def test_configure_stamps_canonical_resource_identity(
             "node_name": "g83d142",
             "model_revision": "abc123",
             "role": "trainer",
-            "root_run_uid": "pretrain-42",
+            "run_id": "pretrain-42",
             "execution_uid": "iris:/alice/train/worker/3:attempt:1",
         },
     }
@@ -142,19 +142,19 @@ def test_vllm_resource_exposes_serving_job_join(telemetry_receiver: TelemetryRec
 
     attributes = telemetry_receiver.latest_resource()["attributes"]
     assert attributes["serving_job_id"] == "/alice/serve"
-    assert attributes["root_run_uid"] == "/alice/serve"
+    assert attributes["run_id"] == "/alice/serve"
 
 
 def test_configure_stamps_explicit_distributed_process_index(telemetry_receiver: TelemetryReceiver) -> None:
     info = JobInfo(task_id=JobName.from_wire("/alice/train/7"), worker_id="w-1", attempt_id=2)
     with _iris_metadata(info, telemetry_receiver.endpoint):
-        telemetry.configure("levanter", root_run_uid="run-42", process_index=0)
+        telemetry.configure("levanter", run_id="run-42", process_index=0)
         rigging_telemetry.gauge("identity_probe").set(1)
 
     attributes = telemetry_receiver.latest_resource()["attributes"]
     assert attributes["task_id"] == "/alice/train/7"
     assert attributes["attempt"] == "2"
-    assert attributes["root_run_uid"] == "run-42"
+    assert attributes["run_id"] == "run-42"
     assert attributes["process_index"] == "0"
 
 

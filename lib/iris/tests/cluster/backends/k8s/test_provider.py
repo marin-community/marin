@@ -296,6 +296,7 @@ def test_sync_pod_not_found_marks_worker_failed(provider, k8s):
     assert len(result) == 1
     assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
     assert result[0].terminal_reason == _POD_DELETED_TERMINAL_REASON
+    assert result[0].error == _POD_DELETED_TERMINAL_REASON
 
 
 def test_sync_finds_pod_dispatched_before_pod_names_embedded_uid(provider, k8s):
@@ -403,7 +404,7 @@ def test_sync_ignores_legacy_pod_for_an_attempt_this_process_dispatched(provider
 
     result = provider.sync(batch)
     assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
-    assert result[0].error == "Pod not found"
+    assert result[0].error == _POD_DELETED_TERMINAL_REASON
 
 
 _EVICTION_REASON = "WorkloadEvictedDueToPreempted: Preempted to accommodate a higher priority Workload"
@@ -442,6 +443,7 @@ def test_sync_vanished_pod_reports_the_kueue_eviction_that_deleted_it(provider, 
     result = provider.sync(batch)
     assert result[0].new_state == job_pb2.TASK_STATE_PREEMPTED
     assert result[0].terminal_reason == _EVICTION_REASON
+    assert result[0].error == _EVICTION_REASON
 
 
 def test_sync_does_not_charge_a_new_incarnation_with_the_previous_eviction(provider, k8s):

@@ -2,7 +2,7 @@
 //!
 //! CRITICAL: L0 is written **UNSORTED**. Rows already arrive seq-monotonic (seq
 //! is allocated under the insertion lock at append time); the explicit
-//! `ORDER BY (key, seq)` sort happens only at L0->L1 compaction, so a single
+//! configured sort plus `seq` happens only at L0->L1 compaction, so a single
 //! write's sort cost lands once in the bg compactor, not on every flush.
 //! `write_segment` therefore writes the batch verbatim.
 
@@ -73,8 +73,8 @@ const REWRITE_BATCH_ROWS: usize = 8_192;
 /// Parquet `WriterProperties` shared by every finelog segment writer — the L0
 /// flush (`write_segment`) and the compaction output (`write_merged_segment`).
 ///
-/// Sets the row-group bounds ([`TARGET_ROW_GROUP_BYTES`] and
-/// [`MAX_ROW_GROUP_ROWS`]) and zstd level 1 (not the library default 3).
+/// Sets the row-group bounds ([`TARGET_ROW_GROUP_BYTES`] and the caller's row
+/// ceiling) and zstd level 1 (not the library default 3).
 /// Centralizing this keeps L0 and compacted segments on one consistent on-disk
 /// layout.
 ///
@@ -82,10 +82,13 @@ const REWRITE_BATCH_ROWS: usize = 8_192;
 /// 15% of each segment and pruned nothing measurable; the key-column bloom that
 /// outlived that only served exact-key lookups against unsorted L0, which is a
 /// few hundred KiB that compaction consumes within a tick or two, while its write
-/// cost fell on every flush. L1+ is sorted by `(key, seq)`, so min/max statistics
-/// prune the key band, and substring queries prune from the trigram sidecar.
-pub fn segment_writer_properties() -> Result<WriterProperties, StatsError> {
-    parquet_writer_properties_with_id(TARGET_ROW_GROUP_BYTES, MAX_ROW_GROUP_ROWS, Uuid::new_v4())
+/// cost fell on every flush. Multi-input compaction uses the schema's configured
+/// sort order plus `seq`; single-input promotions retain their input order.
+/// Substring queries prune from the trigram sidecar.
+pub fn segment_writer_properties_with_max_rows(
+    max_row_group_rows: usize,
+) -> Result<WriterProperties, StatsError> {
+    parquet_writer_properties_with_id(TARGET_ROW_GROUP_BYTES, max_row_group_rows, Uuid::new_v4())
 }
 
 pub(crate) fn parquet_writer_properties(
@@ -132,7 +135,14 @@ pub struct SegmentMetadata {
 
 /// Encode `batch` to parquet bytes (UNSORTED L0, zstd-1).
 pub fn write_segment(batch: &RecordBatch) -> Result<Vec<u8>, StatsError> {
-    let props = segment_writer_properties()?;
+    write_segment_with_max_row_group_rows(batch, MAX_ROW_GROUP_ROWS)
+}
+
+pub fn write_segment_with_max_row_group_rows(
+    batch: &RecordBatch,
+    max_row_group_rows: usize,
+) -> Result<Vec<u8>, StatsError> {
+    let props = segment_writer_properties_with_max_rows(max_row_group_rows)?;
     let mut buf: Vec<u8> = Vec::new();
     let opts = ArrowWriterOptions::new().with_properties(props);
     let mut writer = ArrowWriter::try_new_with_options(&mut buf, batch.schema(), opts)
@@ -155,7 +165,17 @@ pub fn write_segment_to_dir(
     min_seq: i64,
     batch: &RecordBatch,
 ) -> Result<(PathBuf, i64), StatsError> {
-    let bytes = write_segment(batch)?;
+    write_segment_to_dir_with_max_row_group_rows(dir, level, min_seq, batch, MAX_ROW_GROUP_ROWS)
+}
+
+pub fn write_segment_to_dir_with_max_row_group_rows(
+    dir: &Path,
+    level: i32,
+    min_seq: i64,
+    batch: &RecordBatch,
+    max_row_group_rows: usize,
+) -> Result<(PathBuf, i64), StatsError> {
+    let bytes = write_segment_with_max_row_group_rows(batch, max_row_group_rows)?;
     let filename = seg_filename(level, min_seq);
     let final_path = dir.join(&filename);
     let staging_path = dir.join(format!("{filename}.tmp"));
@@ -334,7 +354,10 @@ pub fn segment_layout_is_current(path: &Path) -> bool {
 ///
 /// Streams a batch at a time rather than materializing the segment, which for a
 /// terminal-level file would be hundreds of MiB of Arrow.
-pub fn stage_rewritten_segment(path: &Path) -> Result<(PathBuf, i64), StatsError> {
+pub fn stage_rewritten_segment(
+    path: &Path,
+    max_row_group_rows: usize,
+) -> Result<(PathBuf, i64), StatsError> {
     let file = std::fs::File::open(path)
         .map_err(|e| StatsError::Internal(format!("open {}: {e}", path.display())))?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)
@@ -351,7 +374,7 @@ pub fn stage_rewritten_segment(path: &Path) -> Result<(PathBuf, i64), StatsError
         .map_err(|e| StatsError::Internal(format!("create {}: {e}", staging.display())))?;
     let opts = ArrowWriterOptions::new().with_properties(parquet_writer_properties_with_id(
         TARGET_ROW_GROUP_BYTES,
-        MAX_ROW_GROUP_ROWS,
+        max_row_group_rows,
         segment_id,
     )?);
     let mut writer = ArrowWriter::try_new_with_options(out, schema, opts)
@@ -732,7 +755,7 @@ mod tests {
         let first_id = segment_id(&first).unwrap();
         assert_ne!(first_id, segment_id(&second).unwrap());
 
-        let (staging, _) = stage_rewritten_segment(&first).unwrap();
+        let (staging, _) = stage_rewritten_segment(&first, MAX_ROW_GROUP_ROWS).unwrap();
         std::fs::rename(staging, &first).unwrap();
 
         assert_eq!(segment_id(&first), Some(first_id));
@@ -783,7 +806,8 @@ mod tests {
         let before_rows = read_all(&path);
         assert!(before_groups > 1, "fixture must have several row groups");
 
-        let (staging, size) = stage_rewritten_segment(&path).unwrap();
+        let max_row_group_rows = 32;
+        let (staging, size) = stage_rewritten_segment(&path, max_row_group_rows).unwrap();
         std::fs::rename(&staging, &path).unwrap();
 
         // Same file, same rows in the same order, now on the current layout.
@@ -795,6 +819,10 @@ mod tests {
             segment_row_group_rows(&path).unwrap().len() < before_groups,
             "the byte target should coalesce the legacy row groups"
         );
+        assert!(segment_row_group_rows(&path)
+            .unwrap()
+            .iter()
+            .all(|&rows| rows <= max_row_group_rows));
         // No stray staging file survives.
         assert!(!dir.join("seg_L1_0000000000000000001.parquet.tmp").exists());
 

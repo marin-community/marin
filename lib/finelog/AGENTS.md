@@ -61,6 +61,13 @@ of a table with a `cluster` column are stamped with the origin and skipped if th
 already carry a foreign one, so a hub's own relayed rows never loop. The cursor is
 durable, so a restart resumes rather than replays.
 
+`telemetry_v1` is server-owned at both ends of federation. A JWT sender's
+`RegisterTable` cannot evolve an existing hub telemetry schema or its physical layout.
+If the sender is ahead by an optional column, the hub reports the ignored column once,
+drops that column from forwarded batches, and appends the compatible fields. Required
+unknown columns and shared-column type changes remain errors. Other namespaces retain
+ordinary additive registration.
+
 Forwarding is **best-effort by construction**: the sending store holds the record,
 the hub a convenience copy. A backlog is a durable cursor into the sender's bounded
 local retention rather than a separate queue, so the forwarder drains it without an
@@ -297,8 +304,10 @@ No segment carries a parquet bloom filter. Writing them for every column cost 15
 of each segment and pruned nothing measurable; the key-column bloom that outlived
 that only served exact-key lookups against unsorted L0, which is a few hundred
 KiB that compaction consumes within a tick or two, against a write cost on every
-flush. L1+ is sorted by `(key, seq)` and prunes the key band from min/max
-statistics; substring queries prune from the trigram bundle section.
+flush. L1+ is sorted by the schema's configured columns plus `seq`; schemas
+without an explicit order retain `(key, seq)`. Min/max statistics prune the
+clustered dimensions and key band, while substring queries prune from the
+trigram bundle section.
 
 A starts-with predicate — `prefix(col, P)`, `col LIKE 'P%'`, or
 `regexp_matches(col, '^P…')` — prunes only because `PrefixRangeRewrite` ANDs the

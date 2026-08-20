@@ -118,6 +118,7 @@ from iris.rpc.proto_display import (
     task_state_friendly,
 )
 from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_to_proto
+from iris.version import client_revision_date
 
 logger = logging.getLogger(__name__)
 
@@ -223,40 +224,49 @@ def _accumulate_routing_decision(merged: vm_pb2.RoutingDecision, sub: vm_pb2.Rou
 
 
 # A root LaunchJob submission is rejected if its client_revision_date is more
-# than FRESHNESS_WINDOW older than today. Clients get exactly this long to
-# upgrade after a new marin-iris release is cut.
+# than FRESHNESS_WINDOW older than the controller's own build. Clients get
+# exactly this long to upgrade after the cluster moves to a new marin-iris.
 FRESHNESS_WINDOW = timedelta(days=14)
 
-# Date this freshness check shipped. An empty client_revision_date is
-# interpreted as this date — already-deployed clients that don't set the field
-# start being rejected FRESHNESS_WINDOW after rollout.
-FEATURE_INTRODUCTION_DATE = date(2026, 4, 22)
 
+def _check_client_freshness(client_date_str: str, controller_date_str: str, today: date) -> None:
+    """Reject root LaunchJob submissions built long before the controller's own marin-iris.
 
-def _check_client_freshness(client_date_str: str, now: date) -> None:
-    """Reject root LaunchJob submissions whose client is older than FRESHNESS_WINDOW.
+    Both dates come from `iris.version.client_revision_date`: the stamp baked into
+    an image or wheel, the last commit touching the iris tree in a source checkout.
+    Comparing the two anchors staleness to the code the cluster actually runs, so a
+    quiet week in the iris tree cannot strand a client that is current with it.
 
-    Empty string is treated as FEATURE_INTRODUCTION_DATE so old clients (which
-    don't set the field at all) behave as if they shipped the day this check
-    rolled out.
+    A controller that cannot identify its own build measures from today instead,
+    which is the rule that predates the stamp. Every image built before the stamp
+    existed lands here, so holding the old behavior for them keeps the gate
+    enforced across the rollout rather than silently opening it.
+
+    An empty client date means that build cannot identify itself, which leaves no
+    basis for a verdict, so the gate does not apply to it.
     """
     if not client_date_str:
-        client_date = FEATURE_INTRODUCTION_DATE
-    else:
-        try:
-            client_date = date.fromisoformat(client_date_str)
-        except ValueError as err:
-            raise ConnectError(
-                Code.INVALID_ARGUMENT,
-                f"client_revision_date must be ISO YYYY-MM-DD, got {client_date_str!r}",
-            ) from err
-    floor = now - FRESHNESS_WINDOW
+        return
+    try:
+        client_date = date.fromisoformat(client_date_str)
+    except ValueError as err:
+        raise ConnectError(
+            Code.INVALID_ARGUMENT,
+            f"client_revision_date must be ISO YYYY-MM-DD, got {client_date_str!r}",
+        ) from err
+    reference = date.fromisoformat(controller_date_str) if controller_date_str else today
+    floor = reference - FRESHNESS_WINDOW
     if client_date < floor:
+        measured = (
+            f"this controller runs {controller_date_str}" if controller_date_str else "today is " + today.isoformat()
+        )
         raise ConnectError(
             Code.FAILED_PRECONDITION,
-            f"marin-iris client is too old (build {client_date.isoformat()}; "
-            f"minimum {floor.isoformat()}). Run `uv sync` or upgrade "
-            f"marin-iris and retry.",
+            f"marin-iris client is too old: your build is {client_date.isoformat()}, "
+            f"{measured}, and the oldest client accepted is {floor.isoformat()} "
+            f"({FRESHNESS_WINDOW.days} days). A build date is the last commit touching "
+            f"lib/iris. From a checkout, merge or rebase onto a newer main; from an "
+            f"installed marin-iris, upgrade it and re-run `uv sync`.",
         )
 
 
@@ -1458,7 +1468,7 @@ class ControllerServiceImpl:
         # queue for longer than the window before it is delivered. Runs after the
         # handoff is authorized, so a forged ``federation`` field cannot dodge the gate.
         if job_id.is_root and ctx is not None and not is_received_handoff:
-            _check_client_freshness(request.client_revision_date, date.today())
+            _check_client_freshness(request.client_revision_date, client_revision_date(), date.today())
 
         # A received handoff carries the acting owner in its handoff name (from the
         # parent's signed ``owner_principal``), so it is exempt from re-pinning — the
@@ -2044,6 +2054,31 @@ class ControllerServiceImpl:
         # The next polling tick reconciles each affected worker; the
         # cancellation appears in the desired-set diff so the worker stops
         # the attempt within one tick rather than waiting on the next backoff.
+        self._controller.wake()
+        return job_pb2.Empty()
+
+    def complete_job(
+        self,
+        request: controller_pb2.Controller.CompleteJobRequest,
+        _ctx: RequestContext | None,
+    ) -> job_pb2.Empty:
+        """Complete a running job successfully and stop its unfinished tasks."""
+        job_id = JobName.from_wire(request.job_id)
+        state = _job_state(self._db, job_id)
+        if state is None:
+            raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
+
+        self._authorize_job_actor(job_id)
+
+        with self._db.read_snapshot() as snap:
+            if reads.federated_handle(snap, job_id) is not None:
+                raise ConnectError(
+                    Code.FAILED_PRECONDITION,
+                    "A federated job must be completed on the cluster running its tasks",
+                )
+
+        with self._db.transaction() as cur:
+            ops.job.complete(cur, job_id=job_id)
         self._controller.wake()
         return job_pb2.Empty()
 

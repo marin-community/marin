@@ -948,3 +948,17 @@ def test_grouped_extrema_round_trip_through_proto():
     )
 
     assert schema_from_proto(schema_to_proto(schema)) == schema
+
+
+def test_compaction_layout_round_trips_through_proto():
+    schema = Schema(
+        columns=(
+            Column(name="service", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+        ),
+        key_column="timestamp_ms",
+        sort_columns=("service", "timestamp_ms"),
+        max_row_group_rows=131_072,
+    )
+
+    assert schema_from_proto(schema_to_proto(schema)) == schema

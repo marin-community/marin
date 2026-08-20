@@ -27,6 +27,16 @@ def test_stitch_dashboard_leaves_non_ref_panels_untouched():
     assert stitch_dashboard(source, {})["panels"] == [inline_panel]
 
 
+def test_stitch_dashboard_resolves_shared_links():
+    source = {"links": [{"linkRef": "cluster_capacity"}], "panels": []}
+
+    (link,) = stitch_dashboard(source, {})["links"]
+
+    assert link["title"] == "Cluster capacity"
+    assert link["url"] == "/d/marin-cluster-capacity"
+    assert link["includeVars"] is True
+
+
 def test_stitch_dashboard_rejects_an_unknown_fragment_name():
     source = {"panels": [{"id": 7, "gridPos": {}, "panelRef": "missing"}]}
     with pytest.raises(KeyError, match="missing"):

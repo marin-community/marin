@@ -68,6 +68,8 @@ class ClusterClient(Protocol):
 
     def terminate_job(self, job_id: JobName) -> None: ...
 
+    def complete_job(self, job_id: JobName) -> None: ...
+
     def register_endpoint(
         self,
         name: str,

@@ -1,0 +1,1298 @@
+{
+  "uid": "marin-training",
+  "title": "Training run",
+  "description": "The status of one training run, from the telemetry_v1 stream its JAX process 0 reports. The run selector lists every Levanter run that reported a step inside the dashboard window, hero runs first, so it opens on the current hero run. Runs are identified by run_id alone: a run that moves between clusters keeps one set of series here. Use the Runs dashboard to compare runs against each other.",
+  "tags": [
+    "marin",
+    "generated"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "run",
+        "label": "Run",
+        "type": "query",
+        "description": "Levanter runs that reported a step inside the dashboard window, hero runs first and newest first within each group. Sorting is left to the query, so the default selection is the newest hero run.",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "finelog-marin"
+        },
+        "definition": "SELECT run_id AS value FROM \"telemetry_v1\" WHERE service = 'levanter' AND name = 'step'",
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable-run",
+          "infinityQuery": {
+            "refId": "variable-run",
+            "type": "json",
+            "source": "url",
+            "format": "table",
+            "parser": "backend",
+            "url": "/query",
+            "url_options": {
+              "method": "GET",
+              "params": [
+                {
+                  "key": "sql",
+                  "value": "SELECT run_id AS value FROM \"telemetry_v1\" WHERE service = 'levanter' AND name = 'step' AND run_id IS NOT NULL AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY run_id ORDER BY CASE WHEN run_id LIKE 'hero-%' THEN 0 ELSE 1 END, MAX(timestamp_ms) DESC"
+                },
+                {
+                  "key": "from",
+                  "value": "${__from}"
+                },
+                {
+                  "key": "to",
+                  "value": "${__to}"
+                }
+              ]
+            },
+            "columns": [
+              {
+                "selector": "value",
+                "text": "value",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "includeAll": false,
+        "multi": false,
+        "refresh": 2,
+        "sort": 0,
+        "regex": "",
+        "hide": 0
+      }
+    ]
+  },
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Home",
+      "type": "link",
+      "url": "/d/marin-home"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Accelerators",
+      "type": "link",
+      "url": "/d/marin-accel"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Node details",
+      "type": "link",
+      "url": "/d/marin-nodes"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Node pools",
+      "type": "link",
+      "url": "/d/marin-node-pools"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Jobs",
+      "type": "link",
+      "url": "/d/marin-jobs"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Runs",
+      "type": "link",
+      "url": "/d/marin-runs"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Clusters",
+      "type": "link",
+      "url": "/d/marin-clusters"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Inference",
+      "type": "link",
+      "url": "/d/marin-inference"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Infra",
+      "type": "link",
+      "url": "/d/infra"
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Run status",
+      "description": "Where the run is right now. The window is a fixed fifteen minutes; the dashboard time range does not reach this panel. One query serves every tile, because a telemetry_v1 scan costs what its window costs whatever it selects, and ten stat panels would cost ten scans. Time since last step is the stall alert's own input, the age of the wall-clock stamp Levanter writes after each completed step. Sample age is the age of any telemetry from the run, so the two together separate a stalled trainer from a broken telemetry path.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "phase"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "initializing",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "training",
+                        "index": 1
+                      },
+                      "2": {
+                        "text": "finished",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "progress"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "since last step"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 300
+                    },
+                    {
+                      "color": "red",
+                      "value": 900
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "sample age"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 300
+                    },
+                    {
+                      "color": "red",
+                      "value": 900
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "step time"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MFU"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "train loss"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 3
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT MAX(CASE WHEN name = 'phase' THEN value END) AS phase, MAX(CASE WHEN name = 'step' THEN value END) AS step, MAX(CASE WHEN name = 'run_progress' THEN value END) AS progress, (CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) - CAST(MAX(CASE WHEN name = 'progress_time_seconds' THEN value END) * 1000 AS BIGINT)) / 1000.0 AS since_last_step, AVG(CASE WHEN name = 'throughput_duration' THEN value END) AS step_time, AVG(CASE WHEN name = 'throughput_mfu' THEN value END) AS mfu, AVG(CASE WHEN name = 'throughput_tokens_per_second' THEN value END) AS tokens_per_second, MAX(CASE WHEN name = 'throughput_total_tokens' THEN value END) AS total_tokens, AVG(CASE WHEN name = 'train_loss' THEN value END) AS train_loss, (CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) - MAX(timestamp_ms)) / 1000.0 AS sample_age_seconds FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('phase', 'step', 'run_progress', 'progress_time_seconds', 'throughput_duration', 'throughput_mfu', 'throughput_tokens_per_second', 'throughput_total_tokens', 'train_loss') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "phase",
+              "text": "phase",
+              "type": "number"
+            },
+            {
+              "selector": "step",
+              "text": "step",
+              "type": "number"
+            },
+            {
+              "selector": "progress",
+              "text": "progress",
+              "type": "number"
+            },
+            {
+              "selector": "since_last_step",
+              "text": "since last step",
+              "type": "number"
+            },
+            {
+              "selector": "step_time",
+              "text": "step time",
+              "type": "number"
+            },
+            {
+              "selector": "mfu",
+              "text": "MFU",
+              "type": "number"
+            },
+            {
+              "selector": "tokens_per_second",
+              "text": "tokens/s",
+              "type": "number"
+            },
+            {
+              "selector": "total_tokens",
+              "text": "tokens seen",
+              "type": "number"
+            },
+            {
+              "selector": "train_loss",
+              "text": "train loss",
+              "type": "number"
+            },
+            {
+              "selector": "sample_age_seconds",
+              "text": "sample age",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "timeFrom": "15m"
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Training loss",
+      "description": "Mean train loss per bucket. A step change up is a restart from an older checkpoint or a divergence; a flat line is a run that stopped stepping. The loss-spike alert reads the same metric, and fires when the lowest loss of the last five minutes clears the mean plus six standard deviations of the preceding 55, so a rise that lifts this whole curve for five minutes is what fires it.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(value) AS train_loss FROM \"telemetry_v1\" WHERE service = 'levanter' AND name = 'train_loss' AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "train_loss",
+              "text": "train loss",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Loss spikes and skipped steps",
+      "description": "Peak loss against the optimizer's own rejection threshold, and how many steps the optimizer skipped. Levanter's skip-step rule rejects a step whose loss exceeds the trailing mean plus six standard deviations, so a peak crossing the threshold line with a matching skip is a spike the run absorbed. Both series are empty when the optimizer runs without skip-step; the loss-spike alert reads train_loss directly and covers that case.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "skipped steps"
+            },
+            "properties": [
+              {
+                "id": "custom.drawStyle",
+                "value": "bars"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 60
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "reject threshold"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, MAX(CASE WHEN name = 'train_loss' THEN value END) AS peak_loss, AVG(CASE WHEN name = 'optim_skip_step_loss_threshold' THEN value END) AS reject_threshold, SUM(CASE WHEN name = 'optim_skipped_step' THEN value END) AS skipped_steps FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('train_loss', 'optim_skip_step_loss_threshold', 'optim_skipped_step') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "peak_loss",
+              "text": "peak loss",
+              "type": "number"
+            },
+            {
+              "selector": "reject_threshold",
+              "text": "reject threshold",
+              "type": "number"
+            },
+            {
+              "selector": "skipped_steps",
+              "text": "skipped steps",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Step time",
+      "description": "Mean and slowest seconds per step in each bucket, and how much of the mean was data loading and hooks. The slowest-step series is where a periodic cost shows: a checkpoint write or an eval lands on one step, lifting the maximum while the mean holds. Loading time growing into step time is an input-pipeline stall, which appears here well before it appears in loss.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 15
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "slowest step"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'throughput_duration' THEN value END) AS step, MAX(CASE WHEN name = 'throughput_duration' THEN value END) AS slowest, AVG(CASE WHEN name = 'throughput_loading_time' THEN value END) AS loading, AVG(CASE WHEN name = 'throughput_hook_time' THEN value END) AS hooks FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('throughput_duration', 'throughput_loading_time', 'throughput_hook_time') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "step",
+              "text": "step",
+              "type": "number"
+            },
+            {
+              "selector": "slowest",
+              "text": "slowest step",
+              "type": "number"
+            },
+            {
+              "selector": "loading",
+              "text": "loading",
+              "type": "number"
+            },
+            {
+              "selector": "hooks",
+              "text": "hooks",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Throughput",
+      "description": "Model FLOP utilization on the left axis and token rate on the right. MFU is the throughput-regression signal that moves before loss does; tokens per second falls with it on a slowdown and without it on a smaller job.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 15
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "tokens/s"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'throughput_mfu' THEN value END) AS mfu, AVG(CASE WHEN name = 'throughput_tokens_per_second' THEN value END) AS tokens_per_second FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('throughput_mfu', 'throughput_tokens_per_second') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "mfu",
+              "text": "MFU",
+              "type": "number"
+            },
+            {
+              "selector": "tokens_per_second",
+              "text": "tokens/s",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Run progress",
+      "description": "Fraction of the configured schedule completed on the left axis, tokens consumed on the right. The slope of the progress line is what a completion estimate rests on; it goes flat during a stall and steps backward when a restart resumes from an older checkpoint. Progress is only reported by a run configured with a total step count.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 23
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "tokens seen"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, MAX(CASE WHEN name = 'run_progress' THEN value END) AS progress, MAX(CASE WHEN name = 'throughput_total_tokens' THEN value END) AS total_tokens FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('run_progress', 'throughput_total_tokens') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "progress",
+              "text": "progress",
+              "type": "number"
+            },
+            {
+              "selector": "total_tokens",
+              "text": "tokens seen",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Optimizer",
+      "description": "Global gradient norm on the left axis and learning rate on the right. A gradient norm climbing while the schedule holds the learning rate flat is the shape that precedes a loss spike; a learning rate that moves without a schedule boundary means the run resumed with a different config.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 23
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "learning rate"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'grad_norm_total' THEN value END) AS grad_norm, AVG(CASE WHEN name = 'optim_learning_rate' THEN value END) AS learning_rate FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('grad_norm_total', 'optim_learning_rate') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "grad_norm",
+              "text": "gradient norm",
+              "type": "number"
+            },
+            {
+              "selector": "learning_rate",
+              "text": "learning rate",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Evaluation loss",
+      "description": "Held-out and Paloma macro loss, one series per metric. Sparse by design -- evals run on a cadence, so points rather than lines.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 31
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 0,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, name AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('eval_loss', 'eval_macro_loss', 'eval_paloma_macro_loss') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Device memory",
+      "description": "HBM in use and peak against the allocator limit, from JAX's memory stats on the trainer's local device. Peak approaching the limit is what flips rematerialization on and costs throughput, so read it beside MFU. Only the hero trainers log this.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 31
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "gbytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "limit"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'memory_in_use_gib' THEN value END) AS in_use, MAX(CASE WHEN name = 'memory_peak_gib' THEN value END) AS peak, MAX(CASE WHEN name = 'memory_limit_gib' THEN value END) AS limit_gib FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('memory_in_use_gib', 'memory_peak_gib', 'memory_limit_gib') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "in_use",
+              "text": "in use",
+              "type": "number"
+            },
+            {
+              "selector": "peak",
+              "text": "peak",
+              "type": "number"
+            },
+            {
+              "selector": "limit_gib",
+              "text": "limit",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -684,6 +684,10 @@ class Controller:
         """Whether the controller loops have been started."""
         return self._started
 
+    def begin_shutdown(self) -> None:
+        """Reject new control-plane requests without stopping workers."""
+        self._dashboard.begin_shutdown()
+
     def start(self) -> None:
         """Start the dashboard server and the control + housekeeping threads.
 
@@ -848,13 +852,15 @@ class Controller:
         """Stop all background components gracefully. Idempotent.
 
         Shutdown ordering:
-        1. Unregister atexit hook so it doesn't fire against a closed DB.
-        2. Stop the control loop so no new work is triggered.
-        3. Shut down the autoscaler (stops monitors, terminates VMs, stops platform).
-        4. Stop remaining threads (server) and executors.
+        1. Reject new control-plane requests.
+        2. Unregister atexit hook so it doesn't fire against a closed DB.
+        3. Stop the control loop so no new work is triggered.
+        4. Shut down the autoscaler (stops monitors, terminates VMs, stops platform).
+        5. Stop remaining threads (server) and executors.
         """
         if self._stopped:
             return
+        self.begin_shutdown()
         self._stopped = True
         # Unregister atexit hook before closing DB connections.
         if self._atexit_registered:
@@ -1828,6 +1834,14 @@ class Controller:
         """Terminate a running job."""
         request = controller_pb2.Controller.TerminateJobRequest(job_id=job_id)
         return self._service.terminate_job(request, None)
+
+    def complete_job(
+        self,
+        job_id: str,
+    ) -> job_pb2.Empty:
+        """Complete a running job successfully."""
+        request = controller_pb2.Controller.CompleteJobRequest(job_id=job_id)
+        return self._service.complete_job(request, None)
 
     def kick_tasks(
         self,

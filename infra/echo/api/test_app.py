@@ -46,7 +46,8 @@ class FakeConn:
         if getattr(statement, "is_insert", False) and statement.table.name == "search_executions":
             return FakeResult([make_row(id=991)])
         if getattr(statement, "is_insert", False) and statement.table.name == "search_execution_results":
-            return FakeResult([])
+            ranks = sorted(value for key, value in statement.compile().params.items() if key.startswith("rank_m"))
+            return FakeResult([make_row(id=1000 + rank, rank=rank) for rank in ranks])
         if self._responses:
             return FakeResult(self._responses.pop(0))
         return FakeResult(self._rows)
@@ -221,15 +222,35 @@ def test_add_search_feedback_persists_authenticated_replayable_judgments(client_
         author="agent@openathena.ai",
         query="how do I deploy Iris?",
         note="Wiki result was unrelated.",
+        execution_id=991,
     )
-    harness = client_with([row])
+    stored_results = [
+        make_row(
+            id=730,
+            execution_id=991,
+            result_id="wiki:123",
+            domain="wiki",
+            title="Stale Iris deployment notes",
+            url="https://echo.oa.dev/wiki/123",
+        ),
+        make_row(
+            id=731,
+            execution_id=991,
+            result_id="file:lib/iris/OPS.md",
+            domain="file",
+            title="Iris Operations",
+            url="https://example.com/OPS.md",
+        ),
+    ]
+    execution = make_row(author="agent@openathena.ai", query="how do I deploy Iris?")
+    harness = client_with([row], responses=[stored_results, [execution]])
     response = harness.client.post(
         "/api/feedback",
         json={
             "query": "  how do I deploy Iris?  ",
             "grades": [
-                {"result_id": "wiki:123", "grade": 0},
-                {"result_id": "file:lib/iris/OPS.md", "grade": 10},
+                {"key": "wiki:730", "grade": 0},
+                {"key": "file:731", "grade": 10},
             ],
             "note": "  Wiki result was unrelated.  ",
         },
@@ -243,11 +264,11 @@ def test_add_search_feedback_persists_authenticated_replayable_judgments(client_
         "author": "agent@openathena.ai",
         "query": "how do I deploy Iris?",
         "grades": [
-            {"result_id": "wiki:123", "grade": 0},
-            {"result_id": "file:lib/iris/OPS.md", "grade": 10},
+            {"key": "wiki:730", "grade": 0},
+            {"key": "file:731", "grade": 10},
         ],
         "note": "Wiki result was unrelated.",
-        "execution_id": None,
+        "execution_id": 991,
     }
     feedback_params = harness.engine.executions[-2].compile().params
     assert feedback_params["author"] == "agent@openathena.ai"
@@ -257,9 +278,11 @@ def test_add_search_feedback_persists_authenticated_replayable_judgments(client_
     assert grade_params == {
         "feedback_id_m0": 17,
         "result_id_m0": "wiki:123",
+        "search_result_id_m0": 730,
         "grade_m0": 0,
         "feedback_id_m1": 17,
         "result_id_m1": "file:lib/iris/OPS.md",
+        "search_result_id_m1": 731,
         "grade_m1": 10,
     }
 
@@ -274,14 +297,22 @@ def test_search_feedback_links_matching_execution(client_with):
         note="The file answered it.",
         execution_id=991,
     )
-    harness = client_with([feedback], responses=[[execution], [["file:lib/iris/OPS.md"]]])
+    stored_result = make_row(
+        id=731,
+        execution_id=991,
+        result_id="file:lib/iris/OPS.md",
+        domain="file",
+        title="Iris Operations",
+        url="https://example.com/OPS.md",
+    )
+    harness = client_with([feedback], responses=[[stored_result], [execution]])
 
     response = harness.client.post(
         "/api/feedback",
         json={
             "query": "how do I deploy Iris?",
             "execution_id": 991,
-            "grades": [{"result_id": "file:lib/iris/OPS.md", "grade": 10}],
+            "grades": [{"key": "file:731", "grade": 10}],
             "note": "The file answered it.",
         },
         headers={"X-Goog-Authenticated-User-Email": "accounts.google.com:agent@openathena.ai"},
@@ -317,19 +348,28 @@ def test_search_feedback_list_includes_linked_results_and_explanation_only_entri
         ),
     ]
     grade_rows = [
-        make_row(feedback_id=17, result_id="file:lib/iris/OPS.md", grade=10),
-        make_row(feedback_id=17, result_id="wiki:123", grade=0),
+        make_row(feedback_id=17, result_id="file:lib/iris/OPS.md", search_result_id=731, grade=10),
+        make_row(feedback_id=17, result_id="wiki:123", search_result_id=730, grade=0),
     ]
     execution_result_rows = [
         make_row(
+            id=731,
             execution_id=991,
             result_id="file:lib/iris/OPS.md",
+            domain="file",
             title="Iris Operations",
             url="https://github.com/marin-community/marin/blob/abc/lib/iris/OPS.md",
-        )
+        ),
+        make_row(
+            id=730,
+            execution_id=991,
+            result_id="wiki:123",
+            domain="wiki",
+            title="Stale Iris deployment notes",
+            url="https://echo.oa.dev/wiki/123",
+        ),
     ]
-    wiki_rows = [make_row(id=123, title="Stale Iris deployment notes")]
-    harness = client_with([], responses=[feedback_rows, grade_rows, execution_result_rows, wiki_rows])
+    harness = client_with([], responses=[feedback_rows, grade_rows, execution_result_rows])
 
     response = harness.client.get("/api/feedback", params={"days": 30, "limit": 20})
 
@@ -353,13 +393,15 @@ def test_search_feedback_list_includes_linked_results_and_explanation_only_entri
             "execution_id": 991,
             "grades": [
                 {
-                    "result_id": "file:lib/iris/OPS.md",
+                    "key": "file:731",
+                    "source_id": "file:lib/iris/OPS.md",
                     "grade": 10,
                     "title": "Iris Operations",
                     "url": "https://github.com/marin-community/marin/blob/abc/lib/iris/OPS.md",
                 },
                 {
-                    "result_id": "wiki:123",
+                    "key": "wiki:730",
+                    "source_id": "wiki:123",
                     "grade": 0,
                     "title": "Stale Iris deployment notes",
                     "url": "https://echo.oa.dev/wiki/123",
@@ -370,15 +412,14 @@ def test_search_feedback_list_includes_linked_results_and_explanation_only_entri
 
 
 def test_search_feedback_rejects_grade_absent_from_linked_execution(client_with):
-    execution = make_row(author="agent@openathena.ai", query="how do I deploy Iris?")
-    harness = client_with([], responses=[[execution], [["file:lib/iris/OPS.md"]]])
+    harness = client_with([], responses=[[]])
 
     response = harness.client.post(
         "/api/feedback",
         json={
             "query": "how do I deploy Iris?",
             "execution_id": 991,
-            "grades": [{"result_id": "wiki:123", "grade": 0}],
+            "grades": [{"key": "wiki:730", "grade": 0}],
             "note": "This was not in the recorded result set.",
         },
         headers={"X-Goog-Authenticated-User-Email": "accounts.google.com:agent@openathena.ai"},
@@ -409,6 +450,7 @@ def test_search_execution_export_preserves_result_rank(client_with):
     )
     result_rows = [
         make_row(
+            id=731,
             execution_id=41,
             rank=1,
             result_id="file:lib/iris/OPS.md",
@@ -419,8 +461,10 @@ def test_search_execution_export_preserves_result_rank(client_with):
             score=0.9,
             distance=0.1,
             lexical_score=1.2,
+            rerank_score=4.2,
         ),
         make_row(
+            id=732,
             execution_id=41,
             rank=2,
             result_id="wiki:12",
@@ -431,6 +475,7 @@ def test_search_execution_export_preserves_result_rank(client_with):
             score=0.8,
             distance=0.2,
             lexical_score=None,
+            rerank_score=-0.5,
         ),
     ]
     harness = client_with([], responses=[[execution], result_rows])
@@ -442,6 +487,7 @@ def test_search_execution_export_preserves_result_rank(client_with):
         (1, "file:lib/iris/OPS.md"),
         (2, "wiki:12"),
     ]
+    assert [(result.id, result.rerank_score) for result in entries[0].results] == [(731, 4.2), (732, -0.5)]
 
 
 def test_search_feedback_rejects_out_of_range_grade(client_with):
@@ -450,7 +496,7 @@ def test_search_feedback_rejects_out_of_range_grade(client_with):
         "/api/feedback",
         json={
             "query": "scheduler",
-            "grades": [{"result_id": "wiki:123", "grade": 11}],
+            "grades": [{"key": "wiki:730", "grade": 11}],
             "note": "The result looked relevant.",
         },
     )
@@ -459,7 +505,7 @@ def test_search_feedback_rejects_out_of_range_grade(client_with):
     assert harness.engine.executions == []
 
 
-def test_search_feedback_rejects_result_id_outside_bigint_range(client_with):
+def test_search_feedback_rejects_result_key_outside_bigint_range(client_with):
     row = make_row(
         id=19,
         created_at=datetime(2026, 8, 14, tzinfo=UTC),
@@ -473,7 +519,7 @@ def test_search_feedback_rejects_result_id_outside_bigint_range(client_with):
         "/api/feedback",
         json={
             "query": "scheduler",
-            "grades": [{"result_id": "wiki:9223372036854775808", "grade": 5}],
+            "grades": [{"key": "wiki:9223372036854775808", "grade": 5}],
             "note": "The result looked relevant.",
         },
     )
@@ -486,7 +532,7 @@ def test_search_feedback_requires_overall_explanation(client_with):
     harness = client_with([])
     response = harness.client.post(
         "/api/feedback",
-        json={"query": "scheduler", "grades": [{"result_id": "wiki:123", "grade": 5}]},
+        json={"query": "scheduler", "grades": [{"key": "wiki:730", "grade": 5}]},
     )
 
     assert response.status_code == 422
@@ -616,6 +662,7 @@ def test_federated_search_classifies_github_comment_domain(client_with):
     )
     assert [result.model_dump(mode="json") for result in results] == [
         {
+            "key": None,
             "id": "pr:8",
             "domain": "pr",
             "title": "Scheduler discussion",
@@ -659,6 +706,7 @@ def test_federated_file_result_names_exact_indexed_head(client_with):
     assert response.headers[echo.SEARCH_EXECUTION_HEADER] == "991"
     assert response.json() == [
         {
+            "key": "file:1001",
             "id": "file:lib/iris/src/iris/scheduler.py",
             "domain": "file",
             "title": "scheduler.py",
@@ -712,6 +760,7 @@ def test_federated_file_result_names_exact_indexed_head(client_with):
     )
     assert result_insert.compile().params["result_id_m0"] == "file:lib/iris/src/iris/scheduler.py"
     assert result_insert.compile().params["rank_m0"] == 1
+    assert result_insert.compile().params["rerank_score_m0"] == 0.0
 
 
 def test_file_summary_skips_license_boilerplate_for_filename_match():
@@ -839,6 +888,35 @@ def test_reranker_suppresses_all_candidates_below_the_quality_floor(monkeypatch)
     ]
 
     assert echo.rerank_candidates(candidates, "how do i deploy iris", RejectingReranker(), 3) == []
+
+
+def test_reranker_applies_stricter_wiki_quality_floor():
+    candidates = [
+        echo.SearchCandidate(
+            echo.SearchResult(
+                id=f"{domain}:123",
+                domain=domain,
+                title="Related result",
+                subtitle="",
+                url="https://example.com/result",
+                snippet="Related result",
+                score=0.1,
+                distance=0.2,
+                lexical_score=None,
+            ),
+            "Only weakly related to the query.",
+        )
+        for domain in ("wiki", "file")
+    ]
+
+    class WeakReranker:
+        def rerank(self, _query, documents, batch_size):
+            del batch_size
+            return [-1.5 for _ in documents]
+
+    results = echo.rerank_candidates(candidates, "how do i deploy iris", WeakReranker(), 2)
+
+    assert [result.domain for result in results] == ["file"]
 
 
 def test_file_artifact_reconstructs_overlapping_indexed_chunks(client_with):

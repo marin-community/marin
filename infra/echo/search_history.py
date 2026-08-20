@@ -23,6 +23,13 @@ class SearchResultRecord:
     score: float
     distance: float | None
     lexical_score: float | None
+    rerank_score: float | None
+
+
+@dataclass(frozen=True)
+class StoredSearchExecution:
+    id: int
+    search_result_ids: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -56,20 +63,22 @@ def execution_values(record: SearchExecutionRecord) -> dict[str, object]:
     }
 
 
-def insert_execution(conn: sqlalchemy.Connection, record: SearchExecutionRecord) -> int:
+def insert_execution(conn: sqlalchemy.Connection, record: SearchExecutionRecord) -> StoredSearchExecution:
     """Insert one execution and its ranked result snapshot.
 
     Returns:
-        The new search execution ID.
+        The new search execution and its result-row IDs in rank order.
     """
     row = conn.execute(
         schema.search_executions.insert().values(**execution_values(record)).returning(schema.search_executions.c.id)
     ).first()
     assert row is not None
     execution_id = row.id
+    search_result_ids: tuple[int, ...] = ()
     if record.results:
-        conn.execute(
-            schema.search_execution_results.insert().values(
+        stored_results = conn.execute(
+            schema.search_execution_results.insert()
+            .values(
                 [
                     {
                         "execution_id": execution_id,
@@ -82,9 +91,12 @@ def insert_execution(conn: sqlalchemy.Connection, record: SearchExecutionRecord)
                         "score": result.score,
                         "distance": result.distance,
                         "lexical_score": result.lexical_score,
+                        "rerank_score": result.rerank_score,
                     }
                     for rank, result in enumerate(record.results, start=1)
                 ]
             )
-        )
-    return execution_id
+            .returning(schema.search_execution_results.c.id, schema.search_execution_results.c.rank)
+        ).all()
+        search_result_ids = tuple(row.id for row in sorted(stored_results, key=lambda row: row.rank))
+    return StoredSearchExecution(execution_id, search_result_ids)

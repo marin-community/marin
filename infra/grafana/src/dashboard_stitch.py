@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stitch shared panel fragments into dashboard JSON at image build time.
+"""Stitch shared panel and link fragments into dashboard JSON at image build time.
 
 A dashboard's ``panels`` array can hold a stitch marker instead of a full panel
 body: ``{"id": N, "gridPos": {...}, "panelRef": "<fragment-name>"}``. Every other
@@ -13,6 +13,8 @@ dashboard-local: they are the only two things that legitimately vary by placemen
 This keeps ``dashboards/*.json`` file-provisioned and git-reviewable end to end —
 no Grafana library-panel API, no runtime sync, no new credential — while killing
 copy-pasted panel bodies that drift out of sync with the bridge's actual schema.
+Dashboard links use ``{"linkRef": "<fragment-name>"}`` markers resolved from
+``SHARED_LINKS`` for the same reason.
 """
 
 import argparse
@@ -20,6 +22,22 @@ import json
 from pathlib import Path
 
 PANEL_REF_KEY = "panelRef"
+LINK_REF_KEY = "linkRef"
+
+_CLUSTER_CAPACITY_LINK = {
+    "asDropdown": False,
+    "icon": "dashboard",
+    "includeVars": True,
+    "keepTime": True,
+    "targetBlank": False,
+    "title": "Cluster capacity",
+    "type": "link",
+    "url": "/d/marin-cluster-capacity",
+}
+_SHARED_LINKS = {
+    "cluster_capacity": _CLUSTER_CAPACITY_LINK,
+    "cluster_capacity_without_vars": {**_CLUSTER_CAPACITY_LINK, "includeVars": False},
+}
 
 
 def load_panel_fragments(panels_dir: Path) -> dict[str, dict]:
@@ -47,13 +65,29 @@ def _stitch_panels(panels: list[dict], fragments: dict[str, dict]) -> list[dict]
     return resolved
 
 
+def _stitch_links(links: list[dict]) -> list[dict]:
+    resolved = []
+    for link in links:
+        ref = link.get(LINK_REF_KEY)
+        if ref is None:
+            resolved.append(link)
+            continue
+        if ref not in _SHARED_LINKS:
+            raise KeyError(f"unknown dashboard link fragment {ref!r}")
+        resolved.append(_SHARED_LINKS[ref])
+    return resolved
+
+
 def stitch_dashboard(source: dict, fragments: dict[str, dict]) -> dict:
-    """Replace every panelRef marker in source's panels with its fragment body.
+    """Replace panelRef and linkRef markers with their fragment bodies.
 
     Raises:
-        KeyError: A panel references a fragment name missing from ``fragments``.
+        KeyError: A panel or link references an unknown fragment.
     """
-    return {**source, "panels": _stitch_panels(source["panels"], fragments)}
+    dashboard = {**source, "panels": _stitch_panels(source["panels"], fragments)}
+    if "links" in source:
+        dashboard["links"] = _stitch_links(source["links"])
+    return dashboard
 
 
 def stitch_all(src_dir: Path, panels_dir: Path) -> dict[str, dict]:

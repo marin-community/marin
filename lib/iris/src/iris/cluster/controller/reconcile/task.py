@@ -135,6 +135,7 @@ def merge_task_termination(
     *,
     stamp_attempt_finished: bool,
     attempt_state: int | None = None,
+    exit_code: int | None = None,
 ) -> None:
     """Move a task to ``task_state`` and record its attempt.
 
@@ -167,6 +168,7 @@ def merge_task_termination(
                     attempt_id=attempt_id,
                     state=effective_attempt_state,
                     finished_at=now if stamp_attempt_finished else None,
+                    exit_code=exit_code,
                     error=error,
                 )
             )
@@ -176,6 +178,7 @@ def merge_task_termination(
             task_id=task_name,
             state=task_state,
             error=error,
+            exit_code=exit_code,
             finished_at=task_finished_at,
         )
     )

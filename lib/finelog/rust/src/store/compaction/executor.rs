@@ -16,7 +16,7 @@
 //! Multi-input job   => `apply_merge`: read each input's batches via
 //! `ParquetRecordBatchReaderBuilder` (sync) under `spawn_blocking`, project each
 //! onto the namespace schema (additive null-fill), k-way merge by
-//! `(key_column, seq)`, write via `ArrowWriter` (rg=16384, zstd) to a
+//! the namespace's configured columns plus `seq`, write via `ArrowWriter` to a
 //! `.parquet.tmp`, then rename to the final distinctly-named output. The inputs
 //! stay on disk until the commit unlinks them.
 
@@ -36,7 +36,7 @@ use crate::store::compaction::merge::{
     kway_merge, project_to_schema, sort_batch_by, sort_col_indices,
 };
 use crate::store::compaction::planner::aggregate_key_bounds;
-use crate::store::segment::{segment_bounds, segment_writer_properties};
+use crate::store::segment::{segment_bounds, segment_writer_properties_with_max_rows};
 use crate::store::segment_index::{write_segment_index, SegmentIndexConfig};
 use crate::store::types::{seg_filename, LocalSegment, SegmentLocation, SegmentRow};
 
@@ -72,9 +72,16 @@ pub struct PlannedSwap {
     pub input_arrow_bytes: i64,
 }
 
+#[derive(Clone, Copy)]
+pub struct CompactionLayout<'a> {
+    pub sort_columns: &'a [String],
+    pub max_row_group_rows: usize,
+}
+
 /// Resolve `job` into a `PlannedSwap`, performing the heavy read/merge/write for
 /// a multi-input job. `dir` is the namespace directory; `arrow_schema` is the
-/// store-form schema (with `seq`); `key_column` is the namespace's ordering key.
+/// store-form schema (with `seq`); the layout's sort columns precede the
+/// implicit `seq`.
 ///
 /// `max_merge_arrow_bytes` caps the decoded size the merge holds: inputs are
 /// read in order and the merge takes the longest prefix that fits, leaving the
@@ -87,7 +94,7 @@ pub fn run_job(
     job: &CompactionJob,
     dir: &Path,
     arrow_schema: &SchemaRef,
-    key_column: Option<&str>,
+    layout: CompactionLayout<'_>,
     index_config: &SegmentIndexConfig,
     max_merge_arrow_bytes: i64,
     input_key_bounds: impl Fn(&str) -> (Option<i64>, Option<i64>),
@@ -99,7 +106,7 @@ pub fn run_job(
             job,
             dir,
             arrow_schema,
-            key_column,
+            layout,
             index_config,
             max_merge_arrow_bytes,
             &input_key_bounds,
@@ -187,7 +194,7 @@ fn apply_merge(
     job: &CompactionJob,
     dir: &Path,
     arrow_schema: &SchemaRef,
-    key_column: Option<&str>,
+    layout: CompactionLayout<'_>,
     index_config: &SegmentIndexConfig,
     max_merge_arrow_bytes: i64,
     input_key_bounds: &impl Fn(&str) -> (Option<i64>, Option<i64>),
@@ -196,12 +203,12 @@ fn apply_merge(
     let merged_path = dir.join(&merged_filename);
     let staging_path = dir.join(format!("{merged_filename}.tmp"));
 
-    let sort_cols = sort_col_indices(arrow_schema, key_column);
+    let sort_cols = sort_col_indices(arrow_schema, layout.sort_columns);
 
     // Read each input's row-group batches, project onto the namespace schema
     // (additive null-fill), then SORT each batch and feed it to the k-way merge
     // as its own sorted run. L0 segments are written UNSORTED, so this per-batch
-    // sort is what lets the merge produce globally `(key, seq)`-ordered output.
+    // sort is what lets the merge produce globally ordered output.
     // An N-way merge is partition-independent — splitting one segment into its
     // row-group batches yields identical output to merging the segment whole.
     //
@@ -288,7 +295,12 @@ fn apply_merge(
     // writes below (each input plus the output is a fully materialized,
     // uncompressed copy of the segment).
     drop(projected);
-    write_merged_segment(&staging_path, arrow_schema, &merged)?;
+    write_merged_segment(
+        &staging_path,
+        arrow_schema,
+        &merged,
+        layout.max_row_group_rows,
+    )?;
     std::fs::rename(&staging_path, &merged_path).map_err(|e| {
         StatsError::Internal(format!(
             "rename merge output {} -> {}: {e}",
@@ -385,14 +397,14 @@ pub fn read_segment_projected(
     Ok(out)
 }
 
-/// Write `batches` to `path` via `ArrowWriter`, using the shared
-/// `segment_writer_properties` with no bloom column.
+/// Write merged batches with the configured row-group ceiling.
 fn write_merged_segment(
     path: &Path,
     schema: &SchemaRef,
     batches: &[RecordBatch],
+    max_row_group_rows: usize,
 ) -> Result<(), StatsError> {
-    let props = segment_writer_properties()?;
+    let props = segment_writer_properties_with_max_rows(max_row_group_rows)?;
     let file = std::fs::File::create(path)
         .map_err(|e| StatsError::Internal(format!("create {}: {e}", path.display())))?;
     let opts = ArrowWriterOptions::new().with_properties(props);
@@ -426,7 +438,9 @@ mod tests {
     use crate::store::exact::ExactIndexConfig;
     use crate::store::index_bundle::{self, SectionKind};
     use crate::store::schema::CoveringProjection;
-    use crate::store::segment::{read_segment_footer, write_segment_to_dir};
+    use crate::store::segment::{
+        read_segment_footer, segment_row_group_rows, write_segment_to_dir, MAX_ROW_GROUP_ROWS,
+    };
     use crate::store::segment_index::{parse_projection_reference, read_exact_section};
     use crate::store::types::{seg_filename, SegmentRow};
 
@@ -447,6 +461,13 @@ mod tests {
             Field::new("key", DataType::Int64, false),
             Field::new("worker_id", DataType::Utf8, false),
         ]))
+    }
+
+    fn default_layout(sort_columns: &[String]) -> CompactionLayout<'_> {
+        CompactionLayout {
+            sort_columns,
+            max_row_group_rows: MAX_ROW_GROUP_ROWS,
+        }
     }
 
     /// rows: (seq, key, worker_id).
@@ -569,7 +590,7 @@ mod tests {
             &job,
             &dir,
             &schema(),
-            Some("key"),
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 std::slice::from_ref(&exact),
@@ -622,6 +643,99 @@ mod tests {
                 .unwrap();
         assert_eq!(reference.descriptor.row_count, 1);
         assert!(crate::store::segment_index::projection_path(&out, &reference).exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn merge_uses_configured_sort_columns_and_row_group_limit() {
+        let dir = tempdir("secondary_sort");
+        let (first, _) = write_segment_to_dir(
+            &dir,
+            0,
+            1,
+            &batch(&[(1, 30, "b"), (2, 20, "a"), (3, 10, "b")]),
+        )
+        .unwrap();
+        let (second, _) = write_segment_to_dir(
+            &dir,
+            0,
+            4,
+            &batch(&[(4, 40, "a"), (5, 10, "a"), (6, 20, "b")]),
+        )
+        .unwrap();
+        let job = CompactionJob {
+            inputs: vec![
+                row_for(&first.to_string_lossy(), 0, 1, 3, 100),
+                row_for(&second.to_string_lossy(), 0, 4, 6, 100),
+            ],
+            output_level: 1,
+            output_min_seq: 1,
+        };
+        let swap = run_job(
+            &job,
+            &dir,
+            &schema(),
+            CompactionLayout {
+                sort_columns: &["worker_id".to_string(), "key".to_string()],
+                max_row_group_rows: 2,
+            },
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
+            i64::MAX,
+            |_| (None, None),
+        )
+        .unwrap();
+
+        let output = PathBuf::from(&added_seg(&swap).path);
+        let rows: Vec<(String, i64, i64)> = read_segment_batches(&output)
+            .unwrap()
+            .iter()
+            .flat_map(|batch| {
+                let seq = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+                let key = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+                let worker = batch
+                    .column(2)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                (0..batch.num_rows())
+                    .map(|row| {
+                        (
+                            worker.value(row).to_string(),
+                            key.value(row),
+                            seq.value(row),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("a".to_string(), 10, 5),
+                ("a".to_string(), 20, 2),
+                ("a".to_string(), 40, 4),
+                ("b".to_string(), 10, 3),
+                ("b".to_string(), 20, 6),
+                ("b".to_string(), 30, 1),
+            ]
+        );
+        assert!(segment_row_group_rows(&output)
+            .unwrap()
+            .iter()
+            .all(|&rows| rows <= 2));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -693,7 +807,7 @@ mod tests {
             &job,
             &dir,
             &schema(),
-            Some("key"),
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 &[],
@@ -725,7 +839,7 @@ mod tests {
             &job,
             &dir,
             &schema(),
-            Some("key"),
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 &[],
@@ -765,7 +879,7 @@ mod tests {
             &job,
             &dir,
             &schema(),
-            Some("key"),
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 &[],
@@ -816,7 +930,7 @@ mod tests {
             &job,
             &dir,
             &schema(),
-            Some("key"),
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 &[],
@@ -875,7 +989,7 @@ mod tests {
             &job,
             &dir,
             &schema(),
-            Some("key"),
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 &[],
@@ -916,7 +1030,7 @@ mod tests {
             &job,
             &dir,
             &schema(),
-            Some("key"),
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 &[],
@@ -978,7 +1092,7 @@ mod tests {
             &job,
             &dir,
             &schema(),
-            Some("key"),
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 &[],
@@ -1027,7 +1141,7 @@ mod tests {
             &job,
             &dir,
             &schema(),
-            Some("key"),
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 &[],
@@ -1108,7 +1222,7 @@ mod tests {
             &job,
             &dir,
             &log,
-            Some("key"),
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(["data"], &[], &[], Some("key".to_string())),
             i64::MAX,
             |_| (None, None),
@@ -1174,7 +1288,7 @@ mod tests {
         let total: usize = batches.iter().map(|b| b.num_rows()).sum();
 
         let path = dir.join("seg_L1_00000000000000000001.parquet");
-        write_merged_segment(&path, &log, &batches).unwrap();
+        write_merged_segment(&path, &log, &batches, MAX_ROW_GROUP_ROWS).unwrap();
 
         let row_group_rows =
             segment_row_group_rows(&path).expect("readable footer for the written segment");
@@ -1230,7 +1344,7 @@ mod tests {
             &job,
             &dir,
             &wide,
-            Some("key"),
+            default_layout(&["key".to_string()]),
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),
                 &[],

@@ -32,6 +32,15 @@ gcloud auth configure-docker us-central1-docker.pkg.dev
 
 The local Docker builder must support `linux/amd64`.
 
+Activation restarts the host's startup script over SSH. Create the Compute
+Engine key pair once so the key is present and propagated before deploying;
+activation fails immediately when `~/.ssh/google_compute_engine` is missing
+rather than stalling while `gcloud` generates and propagates a new key.
+
+```sh
+gcloud compute ssh loom --zone=us-central1-a --project=hai-gcp-models
+```
+
 ## Deploy
 
 By default, Pulumi resolves the HEAD of Loom's default branch to its full commit
@@ -107,12 +116,19 @@ ordinary sessions use the deployment-managed `default` profile, while workload
 and future GitHub Actions callers select the automation profile authorized by
 their federation mapping.
 
-The `default`, `github`, and `slack` profiles allowlist the repositories where
-interactive sessions may fall back to the `loom-oa-dev` GitHub App. Loom stamps
-only the session's current repository and brokers a short-lived installation
-token when the launching user has not stored a personal token. A personal token
-continues to take precedence. Keep these lists aligned with the repositories
-registered in production and the App's installations.
+An interactive session always brokers the `loom-oa-dev` GitHub App for its own
+repository, and a stored personal token still takes precedence over it. The
+`default`, `github`, and `slack` profiles therefore allowlist owners rather than
+repositories: an `owner/*` entry lets a session expand into any repository under
+that owner without waiting for a human decision. Each expansion is still
+validated against the App's installations and recorded as a revocable grant, so
+the App's installation list is what actually bounds this. Removing an owner here
+does not withdraw access a session already holds.
+
+The `fork-ferry` automation profile keeps an explicit repository list: an
+automation session is stamped with its profile's entries verbatim and needs
+concrete repositories to mint the cross-repository token its workflow depends
+on.
 
 The Pulumi declaration is authoritative at activation time. An unchanged
 profile keeps its database revision; a changed declaration overwrites the

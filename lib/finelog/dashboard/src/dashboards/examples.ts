@@ -7,12 +7,12 @@ import type { DashboardDefinition, DashboardPanel, DashboardPanelWidth } from '@
  * reader is plausibly looking at, not every job the retention window holds.
  */
 function jobIdOptions(service: string): string {
-  return `SELECT json_get(resource_attributes_json, 'job_id') AS job_id
+  return `SELECT job_id
 FROM telemetry_v1
 WHERE service = '${service}'
   AND timestamp_ms >= {{from_ms}}
   AND timestamp_ms < {{to_ms}}
-  AND json_get(resource_attributes_json, 'job_id') IS NOT NULL
+  AND job_id IS NOT NULL
 GROUP BY 1
 ORDER BY max(timestamp_ms) DESC
 LIMIT 50`
@@ -40,7 +40,7 @@ function trainingMetricPanel(
 FROM telemetry_v1
 WHERE service = 'levanter'
   AND name = '${metricName}'
-  AND json_get(resource_attributes_json, 'job_id') = {{job_id}}
+  AND job_id = {{job_id}}
   AND timestamp_ms >= {{from_ms}}
   AND timestamp_ms < {{to_ms}}
 GROUP BY 1
@@ -64,7 +64,7 @@ const HARDWARE_AND_COMMUNICATIONS: DashboardDefinition = {
       sql: `WITH ranked AS (
   SELECT to_timestamp_millis(timestamp_ms) AS observed_at,
          COALESCE(json_get(attributes_json, 'node_name'),
-                  json_get(resource_attributes_json, 'node_name'), 'unknown') AS node,
+                  node_name, 'unknown') AS node,
          json_get(attributes_json, 'gpu_uuid') AS gpu_uuid,
          name,
          value,
@@ -137,20 +137,20 @@ ORDER BY 1, 2`,
       width: 'half',
       description: 'Aggregate physical-interface traffic on nodes observed for the job. Includes non-NCCL and colocated traffic.',
       sql: `WITH job_nodes AS (
-  SELECT DISTINCT json_get(resource_attributes_json, 'node_name') AS node_name
+  SELECT DISTINCT node_name
   FROM telemetry_v1
   WHERE service = 'levanter'
     AND timestamp_ms >= {{from_ms}}
     AND timestamp_ms < {{to_ms}}
-    AND json_get(resource_attributes_json, 'job_id') = {{job_id}}
-    AND json_get(resource_attributes_json, 'node_name') IS NOT NULL
+    AND job_id = {{job_id}}
+    AND node_name IS NOT NULL
 ), samples AS (
   SELECT timestamp_ms,
          seq,
          name,
          value,
          COALESCE(json_get(attributes_json, 'node_name'),
-                  json_get(resource_attributes_json, 'node_name')) AS node_name,
+                  node_name) AS node_name,
          LAG(value) OVER (
            PARTITION BY "cluster", name, resource_attributes_json, attributes_json
            ORDER BY timestamp_ms, seq
@@ -244,7 +244,7 @@ const INFERENCE_SERVE: DashboardDefinition = {
   FROM telemetry_v1
   WHERE service = 'vllm'
     AND name IN ('num_requests_waiting', 'kv_cache_usage_perc', 'gpu_cache_usage_perc')
-    AND json_get(resource_attributes_json, 'job_id') = {{job_id}}
+    AND job_id = {{job_id}}
     AND timestamp_ms >= {{from_ms}}
     AND timestamp_ms < {{to_ms}}
   GROUP BY 1, 2, name
@@ -275,7 +275,7 @@ ORDER BY 1, 2`,
   FROM telemetry_v1
   WHERE service = 'vllm'
     AND name IN ('time_to_first_token_seconds_sum', 'time_to_first_token_seconds_count')
-    AND json_get(resource_attributes_json, 'job_id') = {{job_id}}
+    AND job_id = {{job_id}}
     AND timestamp_ms >= {{from_ms}} - ${COUNTER_LOOKBACK_MS}
     AND timestamp_ms < {{to_ms}}
 ), deltas AS (

@@ -948,7 +948,6 @@ temporary capacity or placement changes.
 |----------|---------|------|
 | `marin-canary-ferry.yaml` | Daily 6AM UTC | TPU canary on GCP (`marin-dev.yaml`) |
 | `marin-canary-ferry-coreweave.yaml` | Daily 10AM UTC | GPU canary on CW — shares `iris-ci` controller + H100 nodepool with `iris-smoke-coreweave.yaml` (concurrency group `iris-coreweave-ci-shared`) |
-| `iris-smoke-gcp.yaml` | PRs touching `lib/iris/` | GCP smoke test (ephemeral cluster) |
 | `iris-smoke-coreweave.yaml` | PRs touching `lib/iris/` | CW integration tests (warm cluster) |
 | `ops-docker-images.yaml` | `workflow_dispatch` / Sun 02:00 UTC | Rebuilds + pushes SHA-pinned `iris-{controller,worker,task}` images to GHCR (see Controller Restart) |
 

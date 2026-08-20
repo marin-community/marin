@@ -34,12 +34,10 @@ import gc
 import io
 import logging
 import math
-import os
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any
-from urllib.parse import urlparse
+from typing import Any, Protocol
 
 import cloudpickle
 import humanfriendly
@@ -47,11 +45,11 @@ import msgspec
 import polars as pl
 from iris.env_resources import TaskResources
 from rigging.filesystem.factory import open_url, url_to_fs
-from rigging.filesystem.s3_compat import needs_virtual_host_addressing
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import RateLimiter, log_time
 
 from zephyr.external_sort import external_sort_merge
+from zephyr.parquet_scan import scan_parquet
 from zephyr.shard_keys import encode_key, hash_encoded_key
 from zephyr.worker_context import _worker_ctx_var
 from zephyr.writers import ensure_parent_dir
@@ -93,8 +91,10 @@ _SCATTER_METADATA_FILENAME = "metadata.msgpack"
 
 # Number of parallel small-file reads (sidecars, parquet schema footers) each
 # reducer issues while building its ScatterReader. These reads are GCS
-# GET-bound, so a modest pool keeps latency low without thrashing.
-_SIDECAR_READ_CONCURRENCY = 32
+# GET-bound, so a modest pool keeps latency low without thrashing. The bound is
+# per task, and a wave multiplies it: 2,048 reducers at 32 offered ~65,000
+# simultaneous connections, more than a pod has ephemeral ports (#8402).
+_SIDECAR_READ_CONCURRENCY = 8
 # Fraction of available memory available for merging.
 _SCATTER_READ_MEMORY_FRACTION = 0.4
 
@@ -275,18 +275,26 @@ class _SidecarSlice:
     target_bytes: int
 
 
-def _read_sidecar_slice(path: str, target_shard: int) -> _SidecarSlice | None:
-    """Read one sidecar and return its file list plus the target shard's payload bytes.
+class _SidecarFilesystem(Protocol):
+    """A protocol because ``url_to_fs`` returns a bare fsspec filesystem for
+    ``s3://`` and a ``CrossRegionGuardedFS`` wrapper for ``gs://``, which share
+    no base class."""
 
-    Returns ``None`` if the sidecar has no files (empty writer).
+    def _strip_protocol(self, path: str) -> str: ...
 
-    Uses ``fs.cat_file`` rather than ``open_url`` — one direct GET returning
-    bytes is ~25% faster than going through ``TextIOWrapper(BufferedFile)``
-    for small sidecars, and msgpack decodes bytes directly.
+    def cat_file(self, path: str) -> bytes: ...
+
+
+def _read_sidecar_slice(fs: _SidecarFilesystem, path: str, target_shard: int) -> _SidecarSlice | None:
+    """Read one sidecar and return its file list plus the target shard's payload
+    bytes, or ``None`` if the writer wrote no files.
+
+    ``fs`` comes from the caller because fsspec keys its instance cache on the
+    calling thread, so resolving here builds a client per pool worker (#8402).
+    ``cat_file`` beats ``open_url`` by ~25% on small sidecars.
     """
-    meta_path = _scatter_meta_path(path)
-    fs, fs_path = url_to_fs(meta_path)
-    meta = _sidecar_decoder().decode(fs.cat_file(fs_path))
+    meta_path = fs._strip_protocol(_scatter_meta_path(path))
+    meta = _sidecar_decoder().decode(fs.cat_file(meta_path))
     files = meta.get("files", [])
     if not files:
         return None
@@ -301,11 +309,16 @@ def _read_sidecar_slice(path: str, target_shard: int) -> _SidecarSlice | None:
 def _read_sidecar_slices_parallel(scatter_paths: list[str], target_shard: int) -> list[_SidecarSlice]:
     """Read every sidecar concurrently and return slices in input order.
 
-    Empty sidecars (no files written) are dropped from the result.
+    Empty sidecars (no files written) are dropped from the result. All sidecars
+    of one scatter live under the same root, so one filesystem resolved here
+    serves the whole pool.
     """
+    if not scatter_paths:
+        return []
     ordered: list[_SidecarSlice | None] = [None] * len(scatter_paths)
+    fs, _ = url_to_fs(_scatter_meta_path(scatter_paths[0]))
     with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
-        futures = {pool.submit(_read_sidecar_slice, p, target_shard): i for i, p in enumerate(scatter_paths)}
+        futures = {pool.submit(_read_sidecar_slice, fs, p, target_shard): i for i, p in enumerate(scatter_paths)}
         for fut in concurrent.futures.as_completed(futures):
             idx = futures[fut]
             ordered[idx] = fut.result()
@@ -332,31 +345,6 @@ def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
         return frames
     unified = pl.concat([f.limit(0) for f in frames], how="diagonal_relaxed").collect_schema()
     return [f.cast(dict(unified)) for f in frames]
-
-
-def _scan_scatter_parquet(path: str) -> pl.LazyFrame:
-    """Scan a scatter chunk with the addressing required by CoreWeave object storage."""
-    endpoint = os.environ.get("AWS_ENDPOINT_URL_S3") or os.environ.get("AWS_ENDPOINT_URL")
-    if not path.startswith("s3://") or not endpoint or not needs_virtual_host_addressing(endpoint):
-        return pl.scan_parquet(path)
-
-    bucket = urlparse(path).netloc
-    parsed_endpoint = urlparse(endpoint)
-    hostname = parsed_endpoint.hostname or ""
-    if not hostname.startswith(f"{bucket}."):
-        endpoint = parsed_endpoint._replace(netloc=f"{bucket}.{parsed_endpoint.netloc}").geturl()
-
-    # Polars' Rust object_store client reads credentials and region from the
-    # environment, but unlike fsspec it cannot infer CoreWeave's virtual-host
-    # requirement. In virtual-host mode object_store uses the endpoint verbatim,
-    # so the bucket must be part of the endpoint host.
-    return pl.scan_parquet(
-        path,
-        storage_options={
-            "aws_endpoint_url": endpoint,
-            "aws_virtual_hosted_style_request": "true",
-        },
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +419,7 @@ class ScatterReader:
 
     def get_frames(self) -> list[pl.LazyFrame]:
         frames = [
-            _scan_scatter_parquet(path).filter(pl.col(_SHARD_COL) == self._target_shard).drop(_SHARD_COL)
+            scan_parquet(path).filter(pl.col(_SHARD_COL) == self._target_shard).drop(_SHARD_COL)
             for _, chunk_paths in self._files
             for path in chunk_paths
         ]

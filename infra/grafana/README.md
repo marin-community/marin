@@ -33,16 +33,17 @@ GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
 GET /finelog/marin/alerts/training_stalls        active jobs + stalled-progress value(0|1)
+GET /finelog/marin/alerts/loss_spikes            active hero runs + loss-spike value(0|1)
 GET /finelog/marin/alerts/zephyr_stalls          active pipelines + stalled-progress value(0|1)
 GET /iris/{cluster}/jobs | workers | health      live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
 GET /github/ferries | builds | nightlies          GitHub REST / GraphQL
 GET /wandb/{train-loss,paloma-macro-loss,mfu}      public report runset and sampled history
-GET /overview/provisioning                         latest fleet and resource-pool cycle
 GET /k8s/control_plane | crashloops | pending     CW control-plane state, all clusters
 GET /k8s/termination_candidates | kueue | events | health
                                                     ... one response, `cluster` column
-GET /k8s/nodes                                    node inventory, topology, readiness, lifecycle state
+GET /k8s/workloads                                live Iris task placement and requested resources
+GET /k8s/nodes                                    node inventory, allocatable resources, readiness, lifecycle state
 GET /k8s/node_pools                               NodePool capacity, autoscaling policy, conditions
 GET /k8s/finelog | finelog_events                 mirror pods/PVCs and matching warnings
 GET /k8s/overview                                 explicit pending/crashloop counts
@@ -96,10 +97,6 @@ groups those rows into the compact trailing-week matrix.
 W&B: the bridge reads the public hero-training report anonymously, follows the runset
 pinned in its report spec, and samples train cross-entropy, Paloma macro loss, and MFU
 against cumulative training tokens. Grafana receives flat rows and never needs a W&B key.
-
-`overview/provisioning` reads the latest shared cycle in the prior six hours. It returns
-one fleet row and one row per resource pool. Each row contains outcome counts, success
-ratio, latency, and pool-health fields from the former status page.
 
 k8s: the bridge polls the three production CoreWeave clusters' public CKS API servers with plain
 httpx GETs (paginated LISTs, bounded timeouts, one 429 retry) and a single org-wide CW
@@ -173,7 +170,6 @@ src/finelog_source.py  finelog query over its internal IP (LogClient)
 src/iris_source.py     live controller RPCs: jobs, workers, health, federation peers, ad-hoc query
 src/github_source.py   ferry runs and CI build rollup, precomputed
 src/wandb_source.py    public W&B report runset and token-axis samples
-src/overview.py        fixed provisioning projection for the status page
 src/k8s_source.py      CW k8s API reads + the per-cluster fan-out and alert rows
 src/discovery.py       GCE label -> internal IP
 src/config.py          cluster targets, watched components, and bridge settings
@@ -199,11 +195,12 @@ Each dashboard answers one question, and they link to each other in a fixed nav 
 | `nodes.json` | What is happening on one physical GPU node? | cluster, node |
 | `node_pools.json` | Is CoreWeave capacity at target? | cluster |
 | `jobs.json` | What is running, queued, and stuck — and why? | cluster, job |
+| `cluster_capacity.json` | What jobs and requests occupy one cluster and node? | cluster |
 | `runs.json` | How is each Levanter training run doing? | cluster, run |
+| `training.json` | Is one training run — by default the hero run — on track? | run |
 | `clusters.json` | Is the infrastructure under the jobs healthy? | cluster |
-| `pipelines.json` | How is one Zephyr execution moving? | cluster, execution |
 | `inference.json` | How did one vLLM serve behave? | identity kind, serve |
-| `infra.json` | The custom React status page: nightly regressions, main CI, worker capacity, provisioning, hero training. | none |
+| `infra.json` | The custom React status page: nightly regressions, main CI, worker capacity, hero training. | none |
 
 `home.json` is provisioned as the default home dashboard
 (`GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/home.json`,
@@ -226,6 +223,16 @@ TPU hosts report no power, so this dashboard covers the GPU clusters only.
 Power is attributed to a run by joining the node agent's `node_name` to the
 `node_name` on Levanter's resource attributes, per time bucket — the residue is
 `(idle / unattributed)`, which is the number worth driving down.
+
+`cluster_capacity.json` is the quick occupancy view for one cluster. It combines
+live `/k8s/workloads` placement and scheduler requests with `/k8s/nodes`
+allocatable CPU, memory, and GPU capacity. The custom panel rolls tasks up by
+root job and renders each GPU node as a block-packing card, with unallocated GPU
+slots left visible. Recent `iris.task` samples supply per-job CPU and working-set
+memory; `iris-node-agent` telemetry supplies host CPU/memory and aggregate GPU/HBM
+pressure. Scheduler requests and observed utilization are labeled separately
+because neither is a substitute for the other. The default cluster is
+`cw-us-east-02a`; the selector is single-valued to keep placement legible.
 
 `nodes.json` is the selected-node view. Its live row reads `/k8s/nodes`; bounded
 Finelog panels retain per-GPU utilization, SM/tensor activity, HBM, core/HBM
@@ -256,6 +263,15 @@ selector scopes the active-jobs table and the waiting-task series; with every jo
 selected the latter is the fleet backlog broken out by job, and narrowed to one
 job it is that job's queue over time.
 
+`training.json` answers "is this run on track" for one run, where `runs.json`
+answers the across-runs question; its selector is single-valued and orders hero
+runs first so the board opens on the current one, and scopes by `run_id` alone so
+a run that moves between clusters keeps one set of series. The status strip is a
+single ten-field stat panel because a `telemetry_v1` scan costs what its window
+costs whatever it selects, and it carries both hero alert inputs — time since the
+last completed step and train loss — beside step time, throughput, schedule
+progress, skip-step rejections, eval loss, and device memory.
+
 ## Alerting
 
 Grafana unified alerting, provisioned entirely from the files under
@@ -266,19 +282,31 @@ redeploy.
 
 Critical rules notify operators immediately: an unreachable cluster or
 federation peer, a crash-looping watched component, an admission webhook with no ready endpoints, a
-dead production Iris controller, an unhealthy finelog hub or mirror, or CoreWeave
-storage above 80 percent of quota.
+dead production Iris controller, an unhealthy finelog hub or mirror, CoreWeave
+storage above 80 percent of quota, or stalled training or a loss spike on an
+enrolled hero run.
 Warning rules remain in Grafana's home alert list without sending email, Slack,
-or Loom notifications: a degraded component, a failed infra probe, a GPU
-pod that stays node-bound and
+or Loom notifications: a degraded component, a GPU pod that stays node-bound and
 nonterminal without finalizers for five minutes after the bridge's two-minute
 overdue threshold, and a GB200 rack with fewer than 16 trays Ready for five
 minutes (the NVL72 rack spec is 18; a floor rather than an outright outage —
-see `gpu_racks` above). A warning-only training rule joins fresh running
-`iris.task_state` rows to root jobs with retained `service=levanter` phase telemetry,
-while bounding progress samples to the prior 24 hours: it waits 15 minutes for
+see `gpu_racks` above). The hero training rule selects fresh running
+`iris.task_state` roots named `hero-*-coord`, derives their run IDs, and reads exact
+matches from structured `service=levanter` telemetry. It waits 15 minutes for
 training progress or 45 minutes for initialization, then remains pending for five
-minutes. It does not require task-to-node GPU attribution. A warning-only Zephyr rule reads fresh
+minutes. Its `notification=hero-run`
+route uses the critical receiver and groups each root job separately. It does not
+require task-to-node GPU attribution. The root suffix before `-coord` and the
+Levanter trainer ID must match; zero eligible roots produce an explicit healthy
+row. A second rule over the same enrolled roots watches their `train_loss`, firing
+when the lowest loss of the last five minutes clears the mean plus six standard
+deviations of the preceding 55, or when the loss stops being finite. Six sigma is
+the band Levanter's skip-step optimizer rejects a step on, and reducing the recent
+window to its floor is what separates a divergence from the single excursion
+skip-step already absorbs. It takes the `notification=hero-run` route as well: a
+hero run diverging unwatched costs more than a false page, which a silence
+answers. Both hero rules share one enrolment query per cache interval.
+A warning-only Zephyr rule reads fresh
 `progress_time_seconds` rows from `service=zephyr` telemetry. It waits 45 minutes after a
 stage start or shard completion, then remains pending for five minutes. The
 execution ID separates concurrent pipelines under one root job. The stuck-pod

@@ -325,6 +325,7 @@ def run_controller_serve(
         # a full cluster teardown, `iris cluster stop` handles VM cleanup via
         # stop_all(), so the SIGTERM handler never needs to delete VMs itself.
         logger.info("Shutdown signal received")
+        controller.begin_shutdown()
         if not config.dry_run:
             try:
                 path, result = controller.begin_checkpoint()

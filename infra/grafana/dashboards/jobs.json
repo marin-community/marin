@@ -190,14 +190,17 @@
       "url": "/d/marin-clusters"
     },
     {
+      "linkRef": "cluster_capacity"
+    },
+    {
       "asDropdown": false,
       "icon": "dashboard",
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Pipelines",
+      "title": "Training run",
       "type": "link",
-      "url": "/d/marin-pipelines"
+      "url": "/d/marin-training"
     },
     {
       "asDropdown": false,

@@ -21,7 +21,7 @@
 //! freshly allocated seq under the lock, and never writes parquet.
 
 use std::cmp::Reverse;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -36,17 +36,23 @@ use crate::proto::finelog::stats::ColumnType;
 use crate::query::index_cache::IndexCache;
 use crate::store::catalog::Catalog;
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
-use crate::store::compaction::executor::{read_segment_projected, run_job, PlannedSwap};
+use crate::store::compaction::executor::{
+    read_segment_projected, run_job, CompactionLayout, PlannedSwap,
+};
 use crate::store::compaction::planner::plan;
 use crate::store::exact::{ExactIndexConfig, NAMED_PROJECTION_MARKER};
 use crate::store::policy::StoragePolicy;
 use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
 use crate::store::reconcile::reconcile_remote_segments;
 use crate::store::remote::{build_remote_store, RemoteStore};
-use crate::store::schema::{schema_to_arrow, AlignedBatch, Schema};
+use crate::store::schema::{
+    resolve_key_column, resolve_sort_columns, schema_to_arrow, AlignedBatch, Schema,
+};
+#[cfg(test)]
+use crate::store::segment::write_segment_to_dir;
 use crate::store::segment::{
     discover_segments, read_segment_footer, segment_layout_is_current, stage_rewritten_segment,
-    write_segment_to_dir,
+    write_segment_to_dir_with_max_row_group_rows, MAX_ROW_GROUP_ROWS,
 };
 use crate::store::segment_index::{
     covering_projection_paths, covering_projection_staging_paths, legacy_artifact_paths,
@@ -187,7 +193,9 @@ pub struct Namespace {
     name: String,
     schema: Schema,
     arrow_schema: SchemaRef,
-    key_column: Option<String>,
+    key_column: String,
+    sort_columns: Vec<String>,
+    max_row_group_rows: usize,
     /// `None` => in-memory mode (every append immediately persisted, no parquet).
     data_dir: Option<PathBuf>,
     catalog: Arc<Catalog>,
@@ -294,9 +302,10 @@ struct BackfillCandidate {
 }
 
 /// A namespace's sealed local segments as one consistent observation: the files a
-/// scan may read, and the lowest `seq` any of them holds.
+/// scan may read, their known key bounds, and the lowest `seq` any of them holds.
 pub struct SegmentSnapshot {
     pub paths: Vec<String>,
+    pub key_bounds: BTreeMap<String, (i64, i64)>,
     pub min_seq: Option<i64>,
 }
 
@@ -330,11 +339,13 @@ impl Namespace {
     ) -> Result<Arc<Namespace>, StatsError> {
         let startup_started = Instant::now();
         let arrow_schema = schema_to_arrow(&schema);
-        let key_column = if schema.key_column.is_empty() {
-            None
+        let sort_columns = resolve_sort_columns(&schema)?;
+        let max_row_group_rows = if schema.max_row_group_rows == 0 {
+            MAX_ROW_GROUP_ROWS
         } else {
-            Some(schema.key_column.clone())
+            schema.max_row_group_rows as usize
         };
+        let key_column = resolve_key_column(&schema)?;
 
         let local_recovery_started = Instant::now();
         let (next_seq, adopted, init_persisted) = match &data_dir {
@@ -343,7 +354,7 @@ impl Namespace {
                 std::fs::create_dir_all(dir).map_err(|e| {
                     StatsError::Internal(format!("create namespace dir {}: {e}", dir.display()))
                 })?;
-                let adopted = adopt_local_segments(dir, key_column.as_deref(), &catalog, name);
+                let adopted = adopt_local_segments(dir, Some(&key_column), &catalog, name);
                 // Seed next_seq past every segment the catalog knows about, not
                 // just on-disk footers. A segment evicted to remote has its local
                 // parquet unlinked, so a footer-only scan under-counts and would
@@ -388,6 +399,8 @@ impl Namespace {
             schema,
             arrow_schema: Arc::clone(&arrow_schema),
             key_column,
+            sort_columns,
+            max_row_group_rows,
             data_dir,
             catalog: Arc::clone(&catalog),
             compaction_config: CompactionConfig::default(),
@@ -456,7 +469,7 @@ impl Namespace {
             remote,
             &self.name,
             dir,
-            self.key_column.as_deref(),
+            Some(&self.key_column),
         )
         .await?;
         // Reconcile may have adopted REMOTE-only segments the catalog did not
@@ -492,8 +505,13 @@ impl Namespace {
         &self.arrow_schema
     }
 
-    /// Snapshot the sealed local segment paths and the lowest `seq` they hold, under
-    /// one hold of the insertion lock so the two describe the same segment set.
+    /// Resolved physical key, including the implicit `timestamp_ms` default.
+    pub fn key_column(&self) -> &str {
+        &self.key_column
+    }
+
+    /// Snapshot sealed local paths, key bounds, and their lowest `seq` under one
+    /// hold of the insertion lock so they describe the same segment set.
     /// `min_seq` is `None` when no local segment exists (an empty namespace, or one
     /// whose segments have all been evicted to remote).
     ///
@@ -504,12 +522,23 @@ impl Namespace {
     /// Only SEALED segments appear: queries see flushed data, never the in-RAM buffer.
     pub fn query_snapshot(&self) -> SegmentSnapshot {
         let inner = self.inner.lock().unwrap();
+        let key_bounds = inner
+            .local_segments
+            .iter()
+            .filter_map(|segment| {
+                Some((
+                    segment.path.clone(),
+                    (segment.min_key_value?, segment.max_key_value?),
+                ))
+            })
+            .collect();
         SegmentSnapshot {
             paths: inner
                 .local_segments
                 .iter()
                 .map(|s| s.path.clone())
                 .collect(),
+            key_bounds,
             min_seq: inner.local_segments.iter().map(|s| s.min_seq).min(),
         }
     }
@@ -734,7 +763,13 @@ impl Namespace {
 
     /// Write the sealed buffer to disk + catalog (no `persisted_seq` advance).
     fn write_sealed(&self, dir: &std::path::Path, sealed: &SealedBuffer) -> Result<(), StatsError> {
-        let (path, size) = write_segment_to_dir(dir, 0, sealed.min_seq, &sealed.batch)?;
+        let (path, size) = write_segment_to_dir_with_max_row_group_rows(
+            dir,
+            0,
+            sealed.min_seq,
+            &sealed.batch,
+            self.max_row_group_rows,
+        )?;
         // L0 files are small and short-lived. Derived indexes are built after
         // compaction promotes them to L1+, keeping flush acknowledgement fast
         // while query plans merge indexed counts with uncovered L0 data.
@@ -769,10 +804,7 @@ impl Namespace {
     /// Int64 key-column bounds from the in-memory sealed batch (cheaper than
     /// re-reading the parquet footer we just wrote).
     fn key_bounds(&self, batch: &RecordBatch) -> (Option<i64>, Option<i64>) {
-        let Some(key) = &self.key_column else {
-            return (None, None);
-        };
-        let Ok(idx) = batch.schema().index_of(key) else {
+        let Ok(idx) = batch.schema().index_of(&self.key_column) else {
             return (None, None);
         };
         let Some(col) = batch.column(idx).as_any().downcast_ref::<Int64Array>() else {
@@ -872,7 +904,10 @@ impl Namespace {
             job,
             dir,
             &self.arrow_schema,
-            self.key_column.as_deref(),
+            CompactionLayout {
+                sort_columns: &self.sort_columns,
+                max_row_group_rows: self.max_row_group_rows,
+            },
             &index_config,
             self.compaction_config.max_merge_arrow_bytes,
             |path| self.input_key_bounds(path),
@@ -967,7 +1002,7 @@ impl Namespace {
             self.indexed_columns(),
             &self.exact_indexes(),
             &self.schema.projections,
-            self.key_column.clone(),
+            Some(self.key_column.clone()),
         )
         .with_adaptive_value_counts(self.adaptive_count_columns())
         .with_adaptive_group_extrema(self.schema.grouped_extrema.clone())
@@ -1524,7 +1559,10 @@ impl Namespace {
                 break;
             };
             let started = Instant::now();
-            let (staging, size) = match stage_rewritten_segment(Path::new(&path)) {
+            let (staging, size) = match stage_rewritten_segment(
+                Path::new(&path),
+                self.max_row_group_rows,
+            ) {
                 Ok(staged) => staged,
                 Err(e) => {
                     tracing::warn!(namespace = %self.name, segment = %basename(&path), error = %e,
@@ -2222,6 +2260,31 @@ mod tests {
         assert_eq!(stats.max_seq, 3);
         assert_eq!(stats.segment_count, 1);
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn implicit_timestamp_key_captures_segment_bounds() {
+        let dir = tempdir();
+        let mut schema = worker_schema();
+        schema.key_column.clear();
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns(
+            "iris.worker",
+            schema,
+            Some(dir.join("iris.worker")),
+            catalog,
+        );
+        let last = ns.append_aligned_batch(&aligned(3));
+        ns.await_persisted(last, Duration::from_secs(10))
+            .await
+            .unwrap();
+
+        let snapshot = ns.query_snapshot();
+        assert_eq!(
+            snapshot.key_bounds.values().copied().collect::<Vec<_>>(),
+            vec![(1000, 1002)]
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -34,8 +34,7 @@ guidelines.
 # GitHub pull requests
 
 Agents can use the `commit` skill for PR
-description style, testing requirements, self-review, and specification
-guidelines.
+description style, testing requirements, and self-review.
 
 ## General code style
 

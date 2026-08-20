@@ -48,7 +48,7 @@ VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
 
 _S3_CONNECT_TIMEOUT = 30
 _S3_READ_TIMEOUT = 120
-_S3_RETRY_MAX_ATTEMPTS = 5
+S3_RETRY_MAX_ATTEMPTS = 5
 
 # botocore's default pool of 10 serializes any caller fanning listing or transfer
 # threads over one filesystem. Connections are created on demand, so a high cap
@@ -57,7 +57,7 @@ _S3_MAX_POOL_CONNECTIONS = 128
 # Whole-request ceiling. It spans pool wait, connect, body upload, and response
 # download, so it bounds every S3 request rather than only a stalled one: a
 # genuine transfer slower than 600s now fails and is retried from byte zero, up
-# to _S3_RETRY_MAX_ATTEMPTS times. 600 leaves ample headroom for the largest
+# to S3_RETRY_MAX_ATTEMPTS times. 600 leaves ample headroom for the largest
 # request we issue (a 50 MiB multipart part needs ~90 KiB/s to fit), while still
 # failing a wedged request inside a shard's useful lifetime. Single-object reads
 # of many GB through this filesystem are the case to re-check if this bites.
@@ -103,7 +103,7 @@ def s3_request_bounds_config_kwargs() -> dict[str, Any]:
     return {
         "connect_timeout": _S3_CONNECT_TIMEOUT,
         "read_timeout": _S3_READ_TIMEOUT,
-        "retries": {"max_attempts": _S3_RETRY_MAX_ATTEMPTS, "mode": "standard"},
+        "retries": {"max_attempts": S3_RETRY_MAX_ATTEMPTS, "mode": "standard"},
         "max_pool_connections": _S3_MAX_POOL_CONNECTIONS,
     }
 

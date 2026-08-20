@@ -33,6 +33,16 @@ _READ_CONTEXT_LOCK = threading.Lock()
 _READ_CACHE_SETTINGS = {"total_bytes_limit": CACHE_BYTES_LIMIT}
 
 
+def set_jagged_array_read_cache_bytes(total_bytes_limit: int) -> None:
+    """Set the shared TensorStore read cache size before opening any stores."""
+    if total_bytes_limit <= 0:
+        raise ValueError("total_bytes_limit must be positive")
+    with _READ_CONTEXT_LOCK:
+        if _READ_CONTEXT is not None:
+            raise RuntimeError("Jagged array read cache is already initialized")
+        _READ_CACHE_SETTINGS["total_bytes_limit"] = total_bytes_limit
+
+
 def _read_context() -> ts.Context:
     global _READ_CONTEXT
     with _READ_CONTEXT_LOCK:
@@ -600,8 +610,12 @@ def _ts_open_kwargs(mode: str) -> dict:
 
 
 def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
-    spec = _get_spec(path, shape)
     mode_config = _mode_to_open_mode(mode)
+    spec = _get_spec(path, shape)
+
+    if path is not None and mode != "r":
+        StoragePath(path).parent.mkdirs()
+
     open_kwargs = _ts_open_kwargs(mode)
 
     # Basically, we want to load the existing shape metadata if it exists
@@ -632,8 +646,12 @@ def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
 
 
 async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
-    spec = _get_spec(path, shape)
     mode_config = _mode_to_open_mode(mode)
+    spec = _get_spec(path, shape)
+
+    if path is not None and mode != "r":
+        StoragePath(path).parent.mkdirs()
+
     open_kwargs = _ts_open_kwargs(mode)
 
     # Basically, we want to load the existing shape metadata if it exists
@@ -662,7 +680,6 @@ def _get_spec(path, shape):
     else:
         kvstore = build_kvstore_spec(path)
         spec = {"driver": "zarr3", "kvstore": kvstore}
-        StoragePath(os.path.dirname(path)).mkdirs()
         spec["metadata"] = {
             "chunk_grid": {
                 "name": "regular",

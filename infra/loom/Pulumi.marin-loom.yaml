@@ -36,15 +36,8 @@ config:
       prelude: weaver
       instructionsFile: profiles/user/AGENTS.md
       githubRepositories: &interactiveGithubRepositories
-        - Open-Athena/marinmirror
-        - Open-Athena/mumwelt
-        - marin-community/MarinSkyRL
-        - marin-community/evalchemy
-        - marin-community/harbor
-        - marin-community/loom
-        - marin-community/marin
-        - marin-community/marin-style
-        - marin-community/vllm
+        - Open-Athena/*
+        - marin-community/*
       mcpAccess:
         mode: all
         groups: []
@@ -114,7 +107,7 @@ config:
       agent: codex
       description: Slack-triggered Marin conversations and repository work
       model: gpt-5.6-sol
-      effort: high
+      effort: medium
       protocol: acp
       mode: auto
       class: interactive
