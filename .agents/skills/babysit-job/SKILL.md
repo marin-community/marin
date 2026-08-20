@@ -158,7 +158,7 @@ part of the setup. The state file allows resume after context reset.
 
 7. RECOVER (STOP -> RESUBMIT)
    - If current job is still non-terminal, stop it first:
-     uv run iris --config <CONFIG> job cancel <JOB_ID>
+     uv run iris --config <CONFIG> job cancel --exact <JOB_ID>
    - Then resubmit:
      <RESUBMIT_COMMAND>
    - Capture `job_id` from output (line like `Job submitted: /<user>/<job>`).

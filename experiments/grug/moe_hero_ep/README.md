@@ -23,9 +23,11 @@ data-parallel rack uses one 64-device expert mesh.
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
 - Runtime: one JAX process per four-GPU worker, BF16 parameters and compute, GPU command buffers
   off, `cuda_async`, PGLE off, and collective overlap limit 4.
-- Output: Metrics only by default. `--save-checkpoints` writes checkpoints, but restore with the
-  pinned-host optimizer state has a known memory-kind mismatch. Do not use these checkpoints to
-  restart a run. Drop metrics include the sender and receiver shares of all assignments. The
+- Output: Metrics only by default. `--save-checkpoints` writes checkpoints and resumes from the
+  newest complete checkpoint below `--checkpoint-path`. PR
+  [#8480](https://github.com/marin-community/marin/pull/8480) bounded pinned-host restore memory;
+  its d6144 run restored step 164 and continued training with a 735 GiB fleet peak against a
+  940 GiB request. Drop metrics include the sender and receiver shares of all assignments. The
   receiver also reports its drop share of assignments that reached it.
 
 The attention, shared-expert, language-model-head, and optimizer states use the combined `data` and
@@ -95,7 +97,10 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--batch-size` | sets global sequences per step and the optimizer token budget |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
 | `--eval-every` | adds Paloma evaluation at the selected interval |
-| `--save-checkpoints` | writes checkpoints with the restore limitation above |
+| `--save-checkpoints` | writes periodic and final checkpoints |
+| `--checkpoint-minutes` | sets the wall-clock checkpoint interval |
+| `--checkpoint-path` | places checkpoints at an explicit storage prefix |
+| `--training-data synthetic` | reuses a deterministic batch without opening TensorStore |
 | `--watch-interval`, `--watch-mode` | select inline or diagnostic norm collection |
 | `--profile-start-step`, `--profile-steps` | select the rank-0 XProf window |
 | `--seed` | sets the trainer seed |
@@ -131,6 +136,71 @@ W&B uses the `WANDB_PROJECT` environment variable, or project `marin_moe` when i
 group `moe-hero-ep` and the supplied run ID. The run output includes the durable W&B metrics
 artifact. Give each concurrent gang its own `IRIS_PORT_JAX`: rank 0 binds and registers that port
 for the JAX coordinator, and the default 8476 is shared by every run on the cluster.
+
+### Checkpoint and restore diagnostic
+
+A five-step process followed by a separate process that stops at step 15 validates checkpoint
+restore and ten post-restore steps. The first process forces a final checkpoint before it exits, so
+an intentional coordinator failure is unnecessary. Use the same run ID and checkpoint root in both
+phases. Use distinct fixed versions so Marin does not reuse the successful phase-one artifact.
+
+Resolve a lifecycle-managed root from a durable prefix in the target cluster's region:
+
+```bash
+uv run --package marin-core python -c '
+from rigging.filesystem.cluster_config import marin_temp_bucket
+print(marin_temp_bucket(
+    ttl_days=1,
+    prefix="users/<owner>/hero-checkpoint-restore/<run-id>",
+    source_prefix="<reference-run-output-root>",
+))
+'
+```
+
+Copy the printed URI into `output_root`, choose two unused calendar versions, and submit phase one:
+
+```bash
+run_id="<run-id>"
+output_root="<printed-marin-temp-bucket-uri>"
+checkpoint_root="${output_root}/checkpoints"
+cold_version="<YYYY.MM.DD.N>"
+
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --target-cluster cw-us-east-08a --priority interactive \
+  --cpu 2 --memory 8GB --disk 32GB \
+  --job-name "${run_id}-cold-coord" \
+  -e MARIN_PREFIX "$output_root" -e WANDB_MODE disabled -e IRIS_PORT_JAX 32575 \
+  -- python -m experiments.grug.moe_hero_ep.launch_mfu_test \
+    --run-id "$run_id" --dp-racks 1 \
+    --num-steps 5 --schedule-steps 390251 \
+    --training-data synthetic --save-checkpoints \
+    --checkpoint-path "$checkpoint_root" \
+    --version "$cold_version" --run
+```
+
+Wait for terminal success and verify `${checkpoint_root}/step-5/metadata.json`. Then submit phase two
+with a new coordinator job and JAX port:
+
+```bash
+resume_version="<YYYY.MM.DD.N>"
+
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --target-cluster cw-us-east-08a --priority interactive \
+  --cpu 2 --memory 8GB --disk 32GB \
+  --job-name "${run_id}-resume-coord" \
+  -e MARIN_PREFIX "$output_root" -e WANDB_MODE disabled -e IRIS_PORT_JAX 32576 \
+  -- python -m experiments.grug.moe_hero_ep.launch_mfu_test \
+    --run-id "$run_id" --dp-racks 1 \
+    --num-steps 15 --schedule-steps 390251 \
+    --training-data synthetic --save-checkpoints \
+    --checkpoint-path "$checkpoint_root" \
+    --version "$resume_version" --run
+```
+
+The resume logs must report step 5 as the selected complete checkpoint. Completion requires step 15,
+finite loss, no task failures or preemptions, and `${checkpoint_root}/step-15/metadata.json`. Use
+production priority only with DRI approval. Set `WANDB_MODE=online` and record a stable run ID when
+W&B evidence is part of the test.
 
 ### Small-scale hero-shape ablations
 

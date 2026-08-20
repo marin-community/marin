@@ -64,7 +64,7 @@ class HeroThroughputResult(Artifact):
     """Result of the rack-scale throughput hero run.
 
     The run mirrors its tracker metrics to the output path. It writes no checkpoint by default.
-    Checkpoint restore has a known memory-kind mismatch with the offloaded optimizer state.
+    With checkpointing enabled, it resumes from the newest complete checkpoint.
     """
 
 
@@ -172,7 +172,6 @@ def build_hero_run(
         master_param_mode=MasterParamMode.FP32_PINNED_HOST,
         training_data_mode=training_data_mode,
         watch_mode=watch_mode,
-        # The default offloaded optimizer state has a known memory-kind mismatch during restore.
         save_checkpoints=save_checkpoints,
         expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
         replica_axis_size=dp_racks,
@@ -349,7 +348,7 @@ def build_hero_run(
     "--save-checkpoints/--no-save-checkpoints",
     default=False,
     show_default=True,
-    help="Write checkpoints. Restore is not supported for the pinned-host optimizer state.",
+    help="Write periodic and final checkpoints, and resume from the newest complete checkpoint.",
 )
 @click.option(
     "--checkpoint-minutes",
