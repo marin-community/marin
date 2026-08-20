@@ -475,7 +475,7 @@ class TreeCache(AsyncDataset[T_co]):
         ledger: "CacheLedger",
         options: Optional["CacheMetadata"] = None,
     ) -> "TreeCache":
-        """Load a cache using ledger metadata supplied by a collection catalog."""
+        """Load a cache from supplied ledger metadata."""
         if options:
             diff = ledger.metadata.compare_to(options)
             if diff:
@@ -747,7 +747,7 @@ class CacheCatalog:
 
     @staticmethod
     def load(path: str) -> "CacheCatalog":
-        """Read a catalog with one storage operation."""
+        """Load and validate a cache catalog."""
         logger.info("Loading cache catalog from %s", path)
         return CacheCatalog.from_json(StoragePath(path).read_text())
 
