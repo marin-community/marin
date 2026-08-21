@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Out-of-process runtime cap and early release for one arm.
+#
+# Two jobs, both of which end with `iris job cancel` on the coord path (Iris cancels descendants,
+# so the 16-node train job goes with it):
+#   1. Hard cap: cancel at ARM_TIMEOUT seconds from submission, whatever the arm is doing. This is
+#      the layer that guarantees a production rack is never held longer than the budget. Iris's own
+#      --timeout on the coord job is the first layer; this is the second, and it runs in a separate
+#      process so a wedged CLI or a lost session cannot defeat it.
+#   2. Early release: cancel as soon as W&B shows the last step the scoring window needs. A scored
+#      arm has no reason to keep 64 GB200s.
+#
+# systemd-run and crontab are both unavailable in this sandbox, so this is a plain detached poll
+# loop rather than a timer unit.
+#
+# usage: RID=<run-id> [ARM_TIMEOUT=900] [SCORE_MAX_STEP=19] watchdog.sh
+set -uo pipefail
+
+RID="${RID:?set RID}"
+ARM_TIMEOUT="${ARM_TIMEOUT:-900}"
+SCORE_MAX_STEP="${SCORE_MAX_STEP:-19}"
+POLL="${POLL:-60}"
+
+LOOP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "${LOOP_DIR}/../.." && pwd)"
+IRIS=(uv run iris --config lib/iris/config/marin.yaml)
+COORD="/mwittmann/${RID}-coord"
+deadline=$(( $(date +%s) + ARM_TIMEOUT ))
+
+cancel_arm() {  # cancel_arm <reason>
+  echo "$(date -u +%H:%M:%S) cancelling ${COORD}: $1"
+  # Cancel the train job by its own path as well as through the coordinator. Iris's --timeout may
+  # already have taken the coordinator down, and a cancel routed only through a dead parent is
+  # exactly how a 16-node child gets orphaned on the rack.
+  ( cd "$REPO" && timeout 300 "${IRIS[@]}" job cancel "${COORD}/grug-train-${RID}" 2>&1 | tail -2 )
+  ( cd "$REPO" && timeout 300 "${IRIS[@]}" job cancel "$COORD" 2>&1 | tail -2 )
+}
+
+state_of() {  # state_of <job path>
+  ( cd "$REPO" && timeout 180 "${IRIS[@]}" job describe "$1" 2>/dev/null \
+      | sed -n 's/^State: \([a-z_]*\).*/\1/p' | head -1 )
+}
+
+max_step() {
+  ( cd "$REPO" && timeout 180 uv run --with wandb python - "$RID" <<'PY' 2>/dev/null
+import sys, wandb
+try:
+    run = wandb.Api().run(f"marin-community/marin_moe/{sys.argv[1]}")
+except Exception:
+    print(-1); raise SystemExit
+steps = [row.get("_step", -1) for row in run.scan_history(keys=["_step", "throughput/mfu"])]
+print(max(steps) if steps else -1)
+PY
+  )
+}
+
+while :; do
+  now=$(date +%s)
+  if [ "$now" -ge "$deadline" ]; then
+    cancel_arm "hard cap ${ARM_TIMEOUT}s reached"
+    echo "WATCHDOG hard-cap"
+    exit 0
+  fi
+  train_state="$(state_of "${COORD}/grug-train-${RID}")"
+  steps="$(max_step)"
+  echo "$(date -u +%H:%M:%S) t=$(( now - deadline + ARM_TIMEOUT ))s train=${train_state:-none} step=${steps}"
+  # Iris has several terminal failure states beyond a bare `failed` (worker_failed, cosched_failed
+  # among them), so match the suffix rather than enumerating them.
+  case "$train_state" in
+    succeeded|killed|cancelled|*failed)
+      echo "WATCHDOG terminal train=${train_state} step=${steps}"; exit 0;;
+  esac
+  if [ "${steps:--1}" -ge "$SCORE_MAX_STEP" ] 2>/dev/null; then
+    cancel_arm "scored through step ${steps}"
+    echo "WATCHDOG scored step=${steps}"
+    exit 0
+  fi
+  sleep "$POLL"
+done
