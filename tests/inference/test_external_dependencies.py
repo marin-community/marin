@@ -52,6 +52,128 @@ def _promoted_manifest() -> dict:
     }
 
 
+def _tpu_candidate() -> tuple[dict, dict]:
+    tag = "marin-vllm-tpu-candidate-test"
+    prefix = f"https://github.com/marin-community/vllm/releases/download/{tag}/"
+    source = {
+        "vllm": {"repository": "marin-community/vllm", "commit": "a" * 40},
+        "tpu-inference": {"repository": "marin-community/tpu-inference", "commit": "b" * 40},
+    }
+    workflow = {
+        "commit": "c" * 40,
+        "run_url": "https://github.com/marin-community/vllm/actions/runs/123",
+    }
+    index = {
+        "filename": "marin-vllm-tpu-index-dddddddddddddddd.html",
+        "url": prefix + "marin-vllm-tpu-index-dddddddddddddddd.html",
+        "sha256": "d" * 64,
+    }
+    wheels = {
+        "vllm": {"filename": "vllm-test.whl", "url": prefix + "vllm-test.whl", "sha256": "e" * 64},
+        "tpu-inference": {
+            "filename": "tpu_inference-test.whl",
+            "url": prefix + "tpu_inference-test.whl",
+            "sha256": "f" * 64,
+        },
+    }
+    packages = [
+        {
+            "distribution": distribution,
+            "version": version,
+            "wheel": wheel,
+        }
+        for distribution, version, wheel in (
+            ("vllm", "0.20.1rc1.dev0+marin.aaaaaaaaaaaa.tpu", wheels["vllm"]),
+            ("tpu-inference", "0.26.0+marin.bbbbbbbbbbbb", wheels["tpu-inference"]),
+        )
+    ]
+    manifest = {
+        "release": {"status": "candidate", "tag": tag, "repository": "marin-community/vllm"},
+        "workflow": workflow,
+        "source": source,
+        "index": index,
+        "compatibility": {
+            "python_version": "3.12",
+            "exclude_newer": "2026-08-12T00:00:00Z",
+        },
+        "packages": packages,
+    }
+    validation = {
+        "candidate_tag": tag,
+        "hardware": "v6e-8",
+        "run_url": "https://github.com/marin-community/vllm/actions/runs/456",
+    }
+    return manifest, validation
+
+
+def test_render_tpu_wheels_round_trips_a_qualified_pair(tmp_path):
+    update_external = _update_external()
+    manifest, validation = _tpu_candidate()
+    path = tmp_path / "tpu_wheels.toml"
+
+    path.write_text(update_external.render_tpu_wheels_toml(manifest, validation))
+    release = update_external.load_vllm_tpu_release(path)
+    packages = {package["distribution"]: package for package in manifest["packages"]}
+
+    assert release.release_tag == manifest["release"]["tag"]
+    assert release.vllm.sha256 == packages["vllm"]["wheel"]["sha256"]
+    assert release.tpu_inference.sha256 == packages["tpu-inference"]["wheel"]["sha256"]
+
+
+def test_render_tpu_wheels_rejects_a_result_for_another_candidate():
+    update_external = _update_external()
+    manifest, validation = _tpu_candidate()
+    validation["candidate_tag"] = "marin-vllm-tpu-candidate-other"
+
+    with pytest.raises(ValueError, match="changed candidate_tag"):
+        update_external.render_tpu_wheels_toml(manifest, validation)
+
+
+def test_render_tpu_wheels_accepts_the_promoted_copy_of_qualified_bytes(tmp_path):
+    update_external = _update_external()
+    manifest, validation = _tpu_candidate()
+    candidate_tag = manifest["release"]["tag"]
+    release_tag = "marin-vllm-tpu-20260101-aaaaaaaaaaaa-bbbbbbbbbbbb"
+    prefix = f"https://github.com/marin-community/vllm/releases/download/{release_tag}/"
+    manifest["release"] = {
+        "status": "released",
+        "tag": release_tag,
+        "repository": "marin-community/vllm",
+        "candidate_tag": candidate_tag,
+    }
+    for package in manifest["packages"]:
+        package["wheel"]["url"] = prefix + package["wheel"]["filename"]
+    manifest["validation"] = validation
+    path = tmp_path / "tpu_wheels.toml"
+
+    path.write_text(update_external.render_tpu_wheels_toml(manifest, validation))
+    release = update_external.load_vllm_tpu_release(path)
+
+    assert release.release_tag == release_tag
+    assert release.vllm.url.startswith(prefix)
+    assert release.tpu_inference.url.startswith(prefix)
+
+
+def test_tpu_candidate_selection_rejects_another_source(tmp_path):
+    update_external = _update_external()
+    source_config = tmp_path / "tpu.toml"
+    source_config.write_text(
+        f"""[vllm]
+repository = "https://github.com/marin-community/vllm.git"
+commit = "{'a' * 40}"
+
+[tpu-inference]
+repository = "https://github.com/marin-community/tpu-inference.git"
+commit = "{'b' * 40}"
+"""
+    )
+
+    manifest, _ = _tpu_candidate()
+    manifest["source"]["vllm"]["commit"] = "0" * 40
+    with pytest.raises(ValueError, match="selected vllm source"):
+        update_external.validate_tpu_candidate_selection(manifest, source_config)
+
+
 def test_gpu_release_pin_matches_its_descriptor():
     update_external = _update_external()
     descriptor = update_external.load_vllm_gpu_release(update_external.VLLM_GPU_RELEASE_CONFIG)

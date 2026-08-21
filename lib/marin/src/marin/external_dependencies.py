@@ -129,26 +129,26 @@ VLLM_GPU_RELEASE = VllmGpuRelease(
 )
 
 VLLM_TPU_RELEASE = VllmTpuRelease(
-    release_tag="marin-vllm-tpu-candidate-3d26773be1d7-c63712cb74eb-ac3c42e02dcb-7a69bb2e0699",
+    release_tag="marin-vllm-tpu-20260821-5b69c198a2cc-e8f28a4ef357-01403cbc5541-4c6175a67ce1",
     python_version="3.12",
     exclude_newer="2026-08-12T00:00:00Z",
     vllm=VllmTpuWheel(
-        version="0.20.1rc1.dev0+marin.3d26773be1d7.tpu",
+        version="0.20.1rc1.dev0+marin.5b69c198a2cc.tpu",
         url=(
             "https://github.com/marin-community/vllm/releases/download/"
-            "marin-vllm-tpu-candidate-3d26773be1d7-c63712cb74eb-ac3c42e02dcb-7a69bb2e0699/"
-            "vllm-0.20.1rc1.dev0+marin.3d26773be1d7.tpu-cp312-cp312-linux_x86_64.whl"
+            "marin-vllm-tpu-20260821-5b69c198a2cc-e8f28a4ef357-01403cbc5541-4c6175a67ce1/"
+            "vllm-0.20.1rc1.dev0+marin.5b69c198a2cc.tpu-cp312-cp312-linux_x86_64.whl"
         ),
-        sha256="526332073d6039fb6909a1ee70e2f48e5e50dd8045be741b8f1161b410d12e5a",
+        sha256="d570d798fe1a08bb9b526261f6c1382b47bf1031adc7e9f376d0cbbef47c5024",
     ),
     tpu_inference=VllmTpuWheel(
-        version="0.26.0+marin.c63712cb74eb",
+        version="0.26.0+marin.e8f28a4ef357",
         url=(
             "https://github.com/marin-community/vllm/releases/download/"
-            "marin-vllm-tpu-candidate-3d26773be1d7-c63712cb74eb-ac3c42e02dcb-7a69bb2e0699/"
-            "tpu_inference-0.26.0+marin.c63712cb74eb-py3-none-any.whl"
+            "marin-vllm-tpu-20260821-5b69c198a2cc-e8f28a4ef357-01403cbc5541-4c6175a67ce1/"
+            "tpu_inference-0.26.0+marin.e8f28a4ef357-py3-none-any.whl"
         ),
-        sha256="acc412c61dae42016c2c116d6303da257cc00b0dd39e5bd0a300987196631aee",
+        sha256="de18dc063d32afa42f108a20b2f8e09fb73aa57be34627775398635759261bf3",
     ),
 )
 

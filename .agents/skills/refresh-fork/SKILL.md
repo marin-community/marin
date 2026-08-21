@@ -19,15 +19,12 @@ preparing the stable-branch promotion with rollback and date tags. Fork stable
 branches are protected. An unattended run stops after opening the draft Marin PR
 and identifies the admin promotion it needs; it never force-moves the stable branch.
 
-Each pin refreshes independently. The one exception is a `group`, which refreshes as a
-unit: its sections refresh together on one run and re-pin in one PR (each still rebases
-onto its own base). Only the vllm/tpu-inference pair is grouped, because the TPU
-launcher installs both pins at once and vllm's TPU base derives from the tpu-inference
-release; splitting them could pin a mixed, unblessed stack. The vllm fork's GPU pin is
-not in that group — it tracks upstream head on the fork's `main`, independent of the
-`tpu` branch that carries the TPU pin. The weekly `ops-fork-ferry` workflow sends Weaver one request per
-supported pin or group. That request names this skill and the forks to update; this
-file owns the migration procedure.
+Each pin refreshes independently. A `group` refreshes all of its sections in one run
+and one Marin PR. The `tpu-vllm` group selects two source revisions in `tpu.toml`,
+builds them as one public wheel candidate, qualifies those exact bytes, and records
+the pair in `tpu_wheels.toml`. The source selection and runtime pin may never move
+separately. The vllm GPU pin is outside this group. The weekly `ops-fork-ferry`
+workflow sends Weaver one request per supported pin or group.
 
 Use the same algorithm in CI and local runs. In local/manual mode, ask before
 external mutations: pushing fork branches, opening the Marin PR, or filing a GitHub
@@ -41,9 +38,10 @@ Read the target fork's section in `config/external/migration.toml`. It gives:
 - `group` — if present, refresh every section in the group together in one PR
   (read them all now); if absent, this pin refreshes alone.
 - `base_select` (+ `derived_from`) — how to choose the new upstream base.
-- `pin` — where the resolved pin is recorded (`isolated_project` uv.lock,
-  `descriptor:<path>#<section>` SHA, or `release:<path>` prebuilt wheel); drives the
-  re-pin step.
+- `source` — for a built release, where its exact source revision is selected.
+- `pin` — where the runtime pin is recorded (`isolated_project` uv.lock,
+  `descriptor:<path>#<section>` SHA, `release:<path>` wheel, or
+  `paired_release:<path>` two-package wheel release); drives the re-pin step.
 - `branch` — the fork branch this pin tracks (`main` for a single-pin fork and for the
   vllm GPU pin; `tpu` for the vllm fork's TPU pin). The refresh stages on `<branch>-next`;
   an admin promotes that validated tip after reviewing the draft Marin PR.
@@ -70,6 +68,12 @@ revision.
   `Fork refresh blocked: <fork> — <short reason>`, with current pins, the selected
   base, branch names/SHAs if created, attempted fixes, the remaining failure, and
   artifacts.
+
+For `tpu-vllm`, the pre-review PR pins a qualified candidate. Do not promote the
+candidate, move either stable fork branch, or replace the candidate descriptor with a
+final release descriptor before human review. The PR must name those post-review
+steps. Promotion reuses the candidate wheel bytes and then regenerates the descriptor
+from the promoted manifest.
 
 ## Scratch setup
 
@@ -191,19 +195,49 @@ behind the fork is.
 
 ## Pin at the staged tip
 
-Point Marin at `<branch>-next` so the e2e runs against the replayed code, then run
-`uv run config/update-external.py` to regenerate
-`lib/marin/src/marin/external_dependencies.py`; confirm only the intended pins change.
-The stable `<branch>` remains at the old tip until an admin hard-swaps it after reviewing
-the draft PR. Because `<branch>-next` and the eventual `<branch>` are the same commit,
-the pin set here needs no change after that promotion.
+Point Marin at the exact staged result, regenerate
+`lib/marin/src/marin/external_dependencies.py`, and confirm only the intended pins
+change. Stable fork branches remain at their old tips until an admin promotes the
+reviewed staging tips.
 
-- `pin = descriptor:<path>#<section>` (`vllm`, `tpu-inference`): push `<branch>-next` to
-  the fork. Set the section's `commit` to its tip and `upstream_base` to the selected
-  base in `vllm/tpu.toml`. This stack resolves entirely inside the `uvx` env from
-  the two forks, so there are no `uv.lock` changes and `jax`/`jaxlib`/`libtpu`/`torch`
-  come from the forks' own dependencies — do not touch `marin-core`, `marin-levanter`,
-  or `marin-fray`.
+- `pin = paired_release:vllm/tpu_wheels.toml` (`tpu-vllm`): keep source selection,
+  candidate publication, qualification, and the Marin descriptor in one reviewed refresh.
+  1. Push `main-next` for tpu-inference and `tpu-next` for vllm. Set each section's
+     `commit` and `upstream_base` in `vllm/tpu.toml` to those exact revisions.
+  2. Push the reviewed vLLM producer tip to a named PR branch. Record its full SHA,
+     dispatch the candidate workflow with `--ref` set to that branch, and require the
+     run's `GITHUB_SHA` and the manifest's workflow commit to equal the recorded SHA.
+     Pass `lane=tpu`, both selected full package SHAs, and a whole-second UTC
+     `exclude_newer` cutoff. The candidate identity binds both package SHAs, the
+     producer SHA, compatibility inputs, and both wheel digests. Do not select a
+     candidate by recency or reuse a tag for different bytes.
+  3. Download the candidate manifest and public assets. Verify the manifest, both
+     wheel hashes, and the full content-addressed flat-index digest. Clean-install
+     both verified wheel files in a new Python 3.12 environment; do not hash one copy
+     and let the resolver fetch another. A Git source or unverified local artifact
+     does not qualify the public release assets.
+  4. Dispatch the vLLM release workflow from the same producer branch with `lane=tpu`,
+     the exact candidate tag, and `promote=false`. Again require its `GITHUB_SHA` to
+     equal the recorded producer SHA, and require its independent v6e-8 Qwen
+     qualification artifact.
+  5. Run `uv run config/update-external.py --pin-tpu-wheels <candidate-manifest>
+     --tpu-validation <qualification-result>`. This command rejects a manifest whose
+     package sources differ from `tpu.toml` and deterministically writes the paired
+     wheel descriptor plus generated pins. Inspect the complete diff, then run the
+     descriptor's cold Marin e2e from its digest-pinned wheel URLs.
+  6. Open one draft Marin PR containing both source selections and the qualified
+     candidate descriptor. Stop for human review. Do not move stable branches, run
+     promotion, or let another ferry refresh this group concurrently.
+  7. After explicit approval, promote `main-next` and `tpu-next` to their protected
+     stable branches, then rerun the release workflow with the same candidate tag and
+     `promote=true`. Download the final manifest, index, and wheels; verify the final
+     index digest and require the wheel hashes to match the reviewed candidate. Re-pin
+     from the final manifest and cold-run `served_qwen3` from those digest-pinned wheel
+     URLs. Update the same Marin PR only after the final install path passes; never
+     create a second pin PR for the promotion.
+
+  No `uv.lock` changes belong to this group. JAX, jaxlib, libtpu, and torch are
+  resolved inside the isolated wheel environment.
 - `pin = release:<path>` (`vllm-gpu`): the pin is a prebuilt wheel, so the refresh builds
   and promotes one through the fork's own release pipeline, then re-pins from the promoted
   manifest. Dispatching fork workflows needs `actions:write` on `marin-community/vllm`,
@@ -287,16 +321,16 @@ logs as artifacts.
 Run the descriptor's `e2e` before opening the PR:
 
 - **`experiments/evals/served_qwen3.py::QWEN3_TPU_INFERENCE`** (`vllm`,
-  `tpu-inference`) — a bounded brokered TPU serve+eval smoke. Run TPU workloads
-  through Iris on the `marin` cluster at interactive priority, `v6e-4` in GCP
-  `europe-west4`. Confirm the proxy served completions, lm-eval wrote metrics and
-  sample outputs, and no TPU/vLLM build, import, or runtime tracebacks occurred:
+  `tpu-inference`) — a bounded cold brokered TPU serve+eval smoke from the
+  digest-pinned wheel URLs. Run on `v6e-4` in `us-east5`. Preserve the install log
+  and prove both manifested versions installed without a VCS checkout or source build.
+  Confirm the proxy served completions and lm-eval wrote metrics and samples:
 
 ```sh
 uv run iris --config lib/iris/config/marin.yaml job run \
   --job-name served-qwen3-<run-id> --cpu 1 --memory 2G --extra cpu \
-  --priority interactive --no-wait -- python -c \
-  "from dataclasses import replace; from fray.types import ResourceConfig; from marin.execution.lazy import lower; from marin.execution.step_runner import StepRunner; from experiments.evals.lm_eval_suite import lm_eval_suite; from experiments.evals.served_qwen3 import QWEN3_TPU_INFERENCE; inference = replace(QWEN3_TPU_INFERENCE, iris=replace(QWEN3_TPU_INFERENCE.iris, worker_resources=ResourceConfig.with_tpu('v6e-4', ram='96g', regions=['europe-west4']))); StepRunner().run([lower(lm_eval_suite(inference, model_name='qwen3-0.6b-refresh-smoke', version='<run-id>-dev', limit=8))])"
+  --priority production --no-wait -- python -c \
+  "from dataclasses import replace; from fray.types import ResourceConfig; from marin.execution.lazy import lower; from marin.execution.step_runner import StepRunner; from experiments.evals.lm_eval_suite import lm_eval_suite; from experiments.evals.served_qwen3 import QWEN3_TPU_INFERENCE; inference = replace(QWEN3_TPU_INFERENCE, iris=replace(QWEN3_TPU_INFERENCE.iris, worker_resources=ResourceConfig.with_tpu('v6e-4', ram='96g', regions=['us-east5']))); StepRunner().run([lower(lm_eval_suite(inference, model_name='qwen3-0.6b-refresh-smoke', version='<run-id>-dev', limit=8))])"
 ```
 
 - **`tests/cluster/vllm/test_snowball_backend_parity.py`** (`vllm-gpu`) — the
