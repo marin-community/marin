@@ -61,6 +61,7 @@ _DEFAULT_STAGED_CHUNKS = 32
 _STAGED_BYTE_OVERHEAD = 4
 _LOTA_ENDPOINT_HOST = "cwlota.com"
 _LOTA_PREFETCH_RANGE = "bytes=0-0"
+_JEMALLOC_LIBRARY_NAME = "jemalloc"
 
 
 def _malloc_trim() -> None:
@@ -77,6 +78,9 @@ def _malloc_trim() -> None:
 
 def _trim_host_memory_after_commits(commit_futures: Sequence[ts.Future]) -> None:
     """Schedule one heap trim after every local TensorStore commit finishes."""
+    if _JEMALLOC_LIBRARY_NAME in os.environ.get("LD_PRELOAD", ""):
+        return
+
     remaining = len(commit_futures)
     if remaining == 0:
         return

@@ -19,9 +19,13 @@ logger = logging.getLogger(__name__)
 
 StateT = TypeVar("StateT")
 RESTORE_COMPLETE_BARRIER = "grug_checkpoint_restore_complete"
-# Well clear of a cold restore, which reads for tens of minutes. Expiring aborts the attempt for
-# the scheduler to retry, rather than holding every rank behind one that may never arrive.
-RESTORE_BARRIER_TIMEOUT = 90 * 60
+# The barrier runs one clock, started by the first rank to arrive, so this bounds the spread
+# between arrivals rather than the length of a restore. A gang whose object-store caches are only
+# partly warm spreads widest, since re-reading a checkpoint is an order of magnitude faster than
+# reading it cold, and killing a stalled gang is what leaves a fleet in that state. Expiring
+# aborts the attempt for the scheduler to retry, rather than holding every rank behind one that
+# never arrives.
+RESTORE_BARRIER_TIMEOUT = 40 * 60
 
 
 class _GrugState(Protocol):

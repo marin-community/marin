@@ -6,6 +6,7 @@ import functools
 import logging
 import os
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -40,6 +41,7 @@ from levanter.recovery.types import AblationSpec, RunOutcome
 from levanter.schedule import BatchSchedule
 from levanter.tracker.telemetry import capture_stall_diagnostics
 from levanter.trainer import TrainerConfig
+from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
@@ -56,6 +58,8 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 logger = logging.getLogger(__name__)
 
 HERO_FSDP_RUNTIME_ENV = {
+    "LD_PRELOAD": "libjemalloc.so.2",
+    "MALLOC_CONF": "background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2",
     "JAX_ENABLE_PGLE": "1",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
     # NVLink SHARP. Below the sweep's resolution alone; carried by the combined configuration.
@@ -513,7 +517,19 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
     )
-    with set_mesh(mesh):
+    # Armed before the state is built or restored, so its startup deadline covers a stall in
+    # initialization, checkpoint restore, cache construction or compilation. The step and process
+    # deadlines only arm once a step reports progress.
+    progress_watchdog = trainer.progress_watchdog.create(
+        process_index=jax.process_index(),
+        diagnostic=capture_stall_diagnostics,
+    )
+
+    checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
+    dashboard = (
+        TrainingDashboard(config, checkpointer.request_checkpoint, run_id) if checkpointer is not None else nullcontext()
+    )
+    with set_mesh(mesh), dashboard:
         batch_schedule = trainer.batch_schedule
 
         train_dataset = build_train_dataset(
@@ -541,7 +557,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
-        checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
@@ -583,10 +598,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             model_getter=lambda s: s.params,
             eval_model_getter=lambda s: s.ema_params if s.ema_params is not None else s.params,
             opt_state_getter=lambda s: s.opt_state,
-        )
-        progress_watchdog = trainer.progress_watchdog.create(
-            process_index=jax.process_index(),
-            diagnostic=capture_stall_diagnostics,
         )
         if progress_watchdog is not None:
             state_callbacks.add_hook(progress_watchdog, every=1)

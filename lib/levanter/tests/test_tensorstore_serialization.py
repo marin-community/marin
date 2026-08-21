@@ -30,6 +30,7 @@ from levanter.tensorstore_serialization import (
     TensorStoreWriteConfig,
     _capped_chunk_shape,
     _HostByteBudget,
+    _trim_host_memory_after_commits,
     _transfer_shard_to_pageable_host,
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
@@ -115,6 +116,19 @@ def test_s3_checkpoint_prefetch_only_targets_lota_s3(monkeypatch):
     monkeypatch.setattr(tensorstore_serialization, "s3_endpoint", lambda _: "http://cwlota.com")
     assert tensorstore_serialization._uses_lota("s3://checkpoints/run")
     assert not tensorstore_serialization._uses_lota("gs://checkpoints/run")
+
+
+def test_jemalloc_checkpoint_skips_glibc_trim_callback(monkeypatch):
+    callbacks = []
+    future = SimpleNamespace(add_done_callback=callbacks.append)
+
+    monkeypatch.setenv("LD_PRELOAD", "libjemalloc.so.2")
+    _trim_host_memory_after_commits([future])
+    assert callbacks == []
+
+    monkeypatch.delenv("LD_PRELOAD")
+    _trim_host_memory_after_commits([future])
+    assert len(callbacks) == 1
 
 
 def test_tensorstore_checkpoint_simple():
