@@ -24,7 +24,6 @@ from experiments.datakit.reference_pipeline import (
     reference_datakit_steps,
     zephyr_datakit_steps,
 )
-from experiments.datakit.zephyr_benchmark import _route_outputs
 
 
 @pytest.fixture(autouse=True)
@@ -67,11 +66,24 @@ def test_global_exact_dedup_filters_only_the_store():
 
 
 def test_benchmark_routes_every_stage_under_one_prefix():
-    routed = _route_outputs(reference_pipeline.zephyr_datakit_steps(_sources()), "gs://temp/benchmark")
+    routed = reference_pipeline.zephyr_datakit_steps(_sources(), output_path_prefix="gs://temp/benchmark")
     steps = [routed.exact_dedup, *routed.tokenize.values(), *routed.minhash.values(), routed.fuzzy_dedup]
 
     assert all(step.output_path.startswith("gs://temp/benchmark/") for step in steps)
-    assert routed.fuzzy_dedup.deps == list(routed.minhash.values())
+
+    # fuzzy_dedup.fn reads each minhash step's output_path through a closure over
+    # a *different* dict than fuzzy_dedup.deps: rerouting deps alone (e.g. a caller
+    # patching the returned StepSpecs after construction, as this benchmark used to)
+    # leaves that closure pointed at the unrouted default path, so fn silently reads
+    # the wrong location even though deps and output_path look correctly routed.
+    closure_vars = dict(
+        zip(
+            routed.fuzzy_dedup.fn.__code__.co_freevars,
+            (c.cell_contents for c in routed.fuzzy_dedup.fn.__closure__),
+            strict=True,
+        )
+    )
+    assert closure_vars["minhash_steps"] is routed.minhash
 
 
 def test_no_region_path_in_hash_attrs_except_known_bloom_gap():
