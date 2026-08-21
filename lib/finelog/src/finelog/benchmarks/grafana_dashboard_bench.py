@@ -14,7 +14,6 @@ metrics for every rendered SQL target.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import statistics
 import time
@@ -143,7 +142,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             dashboards.append(
                 {
                     "path": str(dashboard),
-                    "sha256": hashlib.sha256(dashboard.read_bytes()).hexdigest(),
+                    "sha256": corpus.sha256,
                     "uid": corpus.uid,
                     "title": corpus.title,
                     "refresh": corpus.refresh,

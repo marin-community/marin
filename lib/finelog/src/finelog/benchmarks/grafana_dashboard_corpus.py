@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Mapping
@@ -27,6 +28,7 @@ class DashboardCorpus:
     uid: str
     title: str
     refresh: str
+    sha256: str
     queries: tuple[DashboardQuery, ...]
 
 
@@ -99,7 +101,8 @@ def load_dashboard_corpus(
     variables: Mapping[str, tuple[str, ...]],
 ) -> DashboardCorpus:
     """Extract and render every Finelog SQL target from a dashboard."""
-    document = json.loads(path.read_text())
+    dashboard_bytes = path.read_bytes()
+    document = json.loads(dashboard_bytes)
     dashboard_title = str(document.get("title", ""))
     queries: list[DashboardQuery] = []
     seen_names: set[str] = set()
@@ -146,5 +149,6 @@ def load_dashboard_corpus(
         uid=str(document.get("uid", "")),
         title=dashboard_title,
         refresh=str(document.get("refresh", "")),
+        sha256=hashlib.sha256(dashboard_bytes).hexdigest(),
         queries=tuple(queries),
     )

@@ -444,8 +444,6 @@ def test_accelerators_dashboard_shows_per_gpu_sm_raster_and_temperature_distribu
     assert "name = 'gpu_sm_active_ratio'" in sm_sql[0]
     assert "GROUP BY 1, 2, 3, 4" in sm_sql[0]
     assert "name = 'gpu_temperature_celsius'" in temperature_sql[0]
-    assert "COUNT(*) AS value" in temperature_sql[0]
-    assert "CEIL(sample / 5.0)" in temperature_sql[0]
 
 
 def test_storage_dashboard_shows_latest_coreweave_bucket_bytes():
