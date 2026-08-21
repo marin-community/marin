@@ -146,11 +146,10 @@ class IrisWorkerStat:
 class IrisTaskStat:
     """One row per attempt resource update."""
 
-    # The dashboard's latest-per-task query exposes the task IDs' shared prefix
-    # alongside its exact IN list. Sorting compacted segments by task_id (with
-    # seq as the secondary key, monotonic with ts because seq is allocated at
-    # the insertion lock) lets that prefix range prune parquet row groups while
-    # preserving in-task time order within each group.
+    # Finelog derives the dashboard IN list's shared task prefix into a range.
+    # Sorting compacted segments by task_id (with seq as the secondary key,
+    # monotonic with ts because seq is allocated at the insertion lock) lets
+    # that range prune parquet row groups while preserving in-task time order.
     key_column: ClassVar[str] = "task_id"
 
     task_id: str

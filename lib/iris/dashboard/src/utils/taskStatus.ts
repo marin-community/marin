@@ -5,12 +5,14 @@
 // here is what actually hides a stale task from the UI, so workers must keep
 // re-emitting faster than this window.
 
-import { sqlString } from '@/utils/sql'
-
 export const TASK_STATUS_NAMESPACE = 'iris.task_status'
 
 // Workers must re-emit faster than this window or their tasks will fall off the UI.
 export const TASK_STATUS_RETENTION_INTERVAL = "INTERVAL '10 minutes'"
+
+function sqlString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
+}
 
 const FRESH_CLAUSE = `ts > now() - ${TASK_STATUS_RETENTION_INTERVAL}`
 
