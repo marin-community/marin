@@ -396,7 +396,7 @@ def test_node_details_dashboard_combines_live_state_and_hardware_history():
     assert "gpu_pcie_transmit_bytes_per_second" in sql
     assert "node_cpu_utilization_percent" in sql
     assert "node_network_receive_bytes" in sql
-    assert "json_get(attributes_json, 'node_name') IN (${node:sqlstring})" in sql
+    assert "node_name IN (${node:sqlstring})" in sql
 
 
 def test_node_pools_dashboard_reads_live_node_pool_state():
@@ -431,7 +431,7 @@ def test_accelerators_dashboard_shows_per_gpu_sm_raster_and_temperature_distribu
 
     assert len(heatmaps) == 1
     (temperature_panel,) = heatmaps
-    assert temperature_panel["options"]["calculate"]
+    assert not temperature_panel["options"]["calculate"]
     assert sm_panel["type"] == "marin-infra-panel"
     assert sm_panel["maxDataPoints"] == 100
     assert {column["selector"] for column in sm_panel["targets"][0]["columns"]} == {
