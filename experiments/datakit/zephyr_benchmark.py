@@ -48,14 +48,13 @@ from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
-from zephyr.execution import ZephyrContext
-from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.reference_pipeline import (
     SMOKE_SCALE,
     SOURCE_DISCOVERY_DEPTHS,
     PoolConfig,
     ZephyrDatakitSteps,
+    pool_zephyr_context,
     sample_sources,
     zephyr_datakit_steps,
 )
@@ -269,19 +268,7 @@ def main() -> None:
         prefix=prefix_join(prefix_join(BENCHMARK_OUTPUT_PREFIX, args.run_tag), "outputs"),
         source_prefix=args.sample_prefix,
     )
-    # Every per-source stage must share this pool, or each falls back to its own
-    # dedicated pool capped at that one source's shard count -- silently
-    # defeating --pool-workers for every stage but exact_dedup and fuzzy_dedup.
-    # max_concurrent_pipelines defaults to 16 (MAX_CONCURRENT_PIPELINES); raising
-    # it to match --max-concurrent keeps StepRunner's dispatch ceiling from being
-    # silently re-capped by the pool's own default.
-    with ZephyrContext(
-        name="zephyr-benchmark",
-        resources=scale.pool.worker,
-        max_workers=scale.pool.n_workers,
-        max_concurrent_pipelines=args.max_concurrent,
-        stage_runner_factory=SubprocessRunner,
-    ) as zephyr_context:
+    with pool_zephyr_context("zephyr-benchmark", scale, max_concurrent_pipelines=args.max_concurrent) as zephyr_context:
         steps = zephyr_datakit_steps(sources, scale, zephyr_context, output_path_prefix=output_prefix)
         StepRunner().run(
             _steps_between(steps, args.first_stage, args.last_stage),
