@@ -82,6 +82,7 @@ compute-scaled optimizer values stay constant across a sweep.
 | `--num-experts-per-token` | routed top-k |
 | `--latent-dim` | routed input and output width |
 | `--capacity-factor` | pooled receiver capacity factor |
+| `--qb-estimator`, `--qb-hist-bins` | select the quantile-balancing estimator |
 
 Three quantities set what a sweep can fit on one rack:
 
@@ -108,6 +109,7 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--watch-interval`, `--watch-mode` | select inline or diagnostic norm collection |
 | `--profile-start-step`, `--profile-steps` | select the rank-0 XProf window |
 | `--seed` | sets the trainer seed |
+| `--processes-per-task` | sets the JAX process count on each four-GPU worker |
 
 ## Launch
 

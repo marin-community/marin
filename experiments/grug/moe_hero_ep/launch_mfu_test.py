@@ -30,6 +30,7 @@ from experiments.grug.moe_hero_ep.harrier_mix_2026_08_17_1 import (
     harrier_mix_2026_08_17_1_data_config,
 )
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, build_hero_configs
+from experiments.grug.moe_hero_ep.model import QbEstimator
 from experiments.grug.moe_hero_ep.train import (
     CheckpointRestoreMode,
     GrugEvalConfig,
@@ -82,6 +83,9 @@ def build_hero_run(
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
+    qb_estimator: QbEstimator = HERO_MODEL.qb_estimator,
+    qb_hist_bins: int = HERO_MODEL.qb_hist_bins,
+    processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
     save_checkpoints: bool = False,
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
@@ -111,6 +115,10 @@ def build_hero_run(
         raise ValueError(f"num_steps must be positive, got {num_steps}")
     if checkpoint_interval <= timedelta(0):
         raise ValueError(f"checkpoint_interval must be positive, got {checkpoint_interval}")
+    if processes_per_task <= 0 or HERO_GPUS_PER_NODE % processes_per_task != 0:
+        raise ValueError(
+            f"processes_per_task must be a positive divisor of {HERO_GPUS_PER_NODE}, got {processes_per_task}"
+        )
     if profile_steps < 0:
         raise ValueError(f"profile_steps must be non-negative, got {profile_steps}")
     if profile_start_step < 0:
@@ -133,6 +141,7 @@ def build_hero_run(
         num_train_steps=total_schedule_steps,
         batch_size=batch_size,
     )
+    model = dataclasses.replace(model, qb_estimator=qb_estimator, qb_hist_bins=qb_hist_bins)
     overrides = {
         name: value
         for name, value in (
@@ -264,7 +273,7 @@ def build_hero_run(
                 GrugEvalConfig(steps_per_eval=eval_every, eval_ema=False, compute_bpb=True) if eval_every > 0 else None
             ),
             stop_after_steps=num_steps,
-            processes_per_task=HERO_PROCESSES_PER_TASK,
+            processes_per_task=processes_per_task,
         )
 
     return ArtifactStep(
@@ -346,6 +355,27 @@ def build_hero_run(
     type=click.IntRange(min=1),
     default=None,
     help="LatentMoE: run routed experts at this width. Divides all-to-all traffic by hidden/latent.",
+)
+@click.option(
+    "--qb-estimator",
+    type=click.Choice([estimator.value for estimator in QbEstimator]),
+    default=HERO_MODEL.qb_estimator.value,
+    show_default=True,
+    help="Quantile-balancing estimator used by the resumed training executable.",
+)
+@click.option(
+    "--qb-hist-bins",
+    type=click.IntRange(min=1),
+    default=HERO_MODEL.qb_hist_bins,
+    show_default=True,
+    help="Histogram bins when --qb-estimator=hist.",
+)
+@click.option(
+    "--processes-per-task",
+    type=click.IntRange(min=1, max=HERO_GPUS_PER_NODE),
+    default=HERO_PROCESSES_PER_TASK,
+    show_default=True,
+    help="JAX processes on each four-GPU worker. Must divide the GPU count.",
 )
 @click.option(
     "--save-checkpoints/--no-save-checkpoints",
@@ -434,6 +464,9 @@ def main(
     intermediate_dim: int | None,
     capacity_factor: float | None,
     latent_dim: int | None,
+    qb_estimator: str,
+    qb_hist_bins: int,
+    processes_per_task: int,
     save_checkpoints: bool,
     checkpoint_minutes: float,
     checkpoint_path: str | None,
@@ -457,6 +490,9 @@ def main(
         intermediate_dim=intermediate_dim,
         capacity_factor=capacity_factor,
         latent_dim=latent_dim,
+        qb_estimator=QbEstimator(qb_estimator),
+        qb_hist_bins=qb_hist_bins,
+        processes_per_task=processes_per_task,
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),
         checkpoint_path=checkpoint_path,
