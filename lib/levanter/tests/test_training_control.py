@@ -87,7 +87,7 @@ def test_training_dashboard_registers_redacted_status_page(monkeypatch, tmp_path
             headers = response.headers
 
         assert registry.name == "/alice/parent/train/training-control"
-        assert registry.access == EndpointAccess.ENDPOINT_ACCESS_PRIVATE
+        assert registry.access == EndpointAccess.ENDPOINT_ACCESS_LINK
         assert headers["Cache-Control"] == "no-store"
         assert "<li>Run ID: dashboard-run</li>" in body
         assert "tiny-model" in body

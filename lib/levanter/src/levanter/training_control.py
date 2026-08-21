@@ -225,7 +225,7 @@ class TrainingDashboard(Generic[ConfigT]):
                 context.registry.registered(
                     endpoint_name,
                     address,
-                    access=EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
+                    access=EndpointAccess.ENDPOINT_ACCESS_LINK,
                 )
             )
         except Exception:
