@@ -29,8 +29,8 @@ a training run with no signal that it happened. That is what `iris_state_stale` 
 
 | Reason | Condition | Metric |
 |---|---|---|
-| `telemetry_gone` | Newest sample over 10 minutes old while Iris still reports the tasks running | `phase` |
-| `run_down` | Newest sample over 10 minutes old and Iris no longer reports them running | `phase` |
+| `telemetry_gone` | Last phase was training, over 10 minutes old, while Iris still reports the tasks running | `phase` |
+| `run_down` | The same, and Iris no longer reports them running | `phase` |
 | `loss_jump` | Recent five-minute loss floor over 1.0 above the trailing floor of the same attempt, where the six-sigma band did not already catch it | `train_loss` |
 | `grad_norm_high` | Newest value above 2.0 | `grad_norm_total` |
 | `steps_skipped` | 3 or more skipped steps in 15 minutes | `optim_skipped_step` |
@@ -60,13 +60,18 @@ as a slow run. Fewer than 10 samples fires nothing.
 
 Silence pages either way; the Iris state only picks the reason. `telemetry_gone` means Iris still
 counts the tasks, so the telemetry path or the process is the suspect. `run_down` means it no longer
-does, so the job probably exited — the most severe case, and one neither this run's `phase` nor
-`TrainingProgressStalled` reports on its own, since both enrollments need running tasks. A finished
-tracker ended on purpose and pages for neither. A run that has published nothing at all stays with
-`TrainingProgressStalled`, which allows the full initialization budget.
+does, so the job probably exited — the most severe case, and one `TrainingProgressStalled` cannot
+report, since its enrollment needs running tasks.
 
-Levanter enrollment runs an hour so a silent run stays watched while the rule counts out its ten
-minutes and its five-minute pending period; the alert resolves when the run leaves that window.
+Both need the run's last phase to have been training. A finished tracker ended on purpose, and a run
+still initializing is `TrainingProgressStalled`'s, which allows the full startup budget. That
+exclusion carries most of the traffic: `hero-` names a smoke test as often as a production run, and
+40 hours of production telemetry held one production run against about 25 short dev runs, every one
+of which died during initialization.
+
+The phase heartbeat is read over a day rather than the hour the other metrics use, because an outage
+is measured from the last heartbeat however long ago it was. Levanter enrollment runs an hour, so a
+silent run stays watched while the rule counts out its threshold and pending period.
 
 Every other check needs fresh phase telemetry reporting the training phase, so an initializing,
 finished, or silent attempt announces nothing. `iris_state_stale` additionally needs a row that went
