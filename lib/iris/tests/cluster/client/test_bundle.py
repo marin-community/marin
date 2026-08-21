@@ -5,6 +5,7 @@
 
 import os
 import re
+import subprocess
 from unittest.mock import patch
 
 import pytest
@@ -37,6 +38,17 @@ def test_collect_falls_back_when_git_unavailable(workspace):
     assert "pyproject.toml" in rel
     assert "src/main.py" in rel
     assert not any("__pycache__" in r for r in rel)
+
+
+def test_collect_excludes_github_credentials(workspace):
+    credentials = workspace / "gha-creds-test.json"
+    credentials.write_text("{}")
+    subprocess.run(["git", "init", "--quiet"], cwd=workspace, check=True)
+
+    files = collect_workspace_files(workspace)
+
+    assert workspace / "src" / "main.py" in files
+    assert credentials not in files
 
 
 def test_collect_includes_generated_proto_files(workspace):
