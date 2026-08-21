@@ -7,9 +7,11 @@ dashboard datasources exist. These files only otherwise fail inside a deployed
 Grafana, which is the most expensive place to find out."""
 
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import duckdb
 import pyarrow as pa
 import yaml
 from config import CLUSTERS, K8S_CLUSTERS, ClusterTarget
@@ -330,7 +332,8 @@ def test_training_stall_alert_pages_each_hero_run_after_five_minutes():
         )
     )
     assert route["receiver"] == "ops-critical"
-    assert route["group_by"] == ["alertname", "cluster", "job"]
+    assert route["group_by"] == ["alertname", "run"]
+    assert {column["selector"] for column in rule["data"][0]["model"]["columns"]} >= {"run", "job"}
 
 
 def test_clusters_dashboard_shows_finelog_fleet_health():
@@ -625,3 +628,81 @@ def test_cluster_series_keep_one_colour_across_dashboards():
                 (colour,) = [p["value"]["fixedColor"] for p in override["properties"] if p["id"] == "color"]
                 assert colours.setdefault(series, colour) == colour, f"{name}: {series} changes colour"
     assert len(colours) >= len(CLUSTERS)
+
+
+def test_training_loss_by_attempt_separates_process_incarnations():
+    dashboard = _stitched_dashboards()["training.json"]
+    panel = next(panel for panel in _all_panels(dashboard) if panel["title"] == "Training loss by attempt")
+    sql = _panel_sql({**dashboard, "panels": [panel]})[0]
+    sql = sql.replace("${__interval_ms}", "60000")
+    sql = sql.replace("${run:sqlstring}", "'hero-run'")
+    sql = sql.replace("{{from}}", "TIMESTAMP '2026-08-20 00:00:00'")
+    sql = sql.replace("{{to}}", "TIMESTAMP '2026-08-21 00:00:00'")
+
+    database = duckdb.connect()
+    database.execute("CREATE MACRO to_timestamp_millis(value) AS epoch_ms(value)")
+    database.execute("CREATE MACRO date_bin(bucket, value) AS time_bucket(bucket, value)")
+    database.execute(
+        """
+        CREATE TABLE telemetry_v1(
+            service VARCHAR,
+            run_id VARCHAR,
+            execution_uid VARCHAR,
+            name VARCHAR,
+            value DOUBLE,
+            timestamp_ms BIGINT
+        )
+        """
+    )
+    at = int(datetime(2026, 8, 20, 12, tzinfo=UTC).timestamp() * 1000)
+    database.executemany(
+        "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, 'train_loss', ?, ?)",
+        [
+            ("iris:controller-attempt-first", 2.0, at),
+            ("iris:controller-attempt-first", 1.8, at + 10_000),
+            ("iris:controller-attempt-second", 2.4, at + 20_000),
+        ],
+    )
+
+    assert database.execute(sql).fetchall() == [
+        (datetime(2026, 8, 20, 12), "iris:controller-attempt-first", 1.9),
+        (datetime(2026, 8, 20, 12), "iris:controller-attempt-second", 2.4),
+    ]
+
+
+def test_training_loss_by_step_uses_the_newest_retry_sample():
+    dashboard = _stitched_dashboards()["training.json"]
+    panel = next(panel for panel in _all_panels(dashboard) if panel["title"] == "Training loss by step")
+    sql = _panel_sql({**dashboard, "panels": [panel]})[0]
+    sql = sql.replace("${run:sqlstring}", "'hero-run'")
+    sql = sql.replace("{{from}}", "TIMESTAMP '2026-08-20 00:00:00'")
+    sql = sql.replace("{{to}}", "TIMESTAMP '2026-08-21 00:00:00'")
+
+    database = duckdb.connect()
+    database.execute(
+        """
+        CREATE TABLE telemetry_v1(
+            service VARCHAR,
+            run_id VARCHAR,
+            execution_uid VARCHAR,
+            name VARCHAR,
+            value DOUBLE,
+            timestamp_ms BIGINT,
+            seq BIGINT
+        )
+        """
+    )
+    at = int(datetime(2026, 8, 20, 12, tzinfo=UTC).timestamp() * 1000)
+    database.executemany(
+        "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, ?, ?, ?, ?)",
+        [
+            ("attempt-1", "step", 10, at, 1),
+            ("attempt-1", "train_loss", 2.0, at, 2),
+            ("attempt-1", "step", 11, at + 1_000, 3),
+            ("attempt-1", "train_loss", 1.9, at + 1_000, 4),
+            ("attempt-2", "step", 10, at + 2_000, 1),
+            ("attempt-2", "train_loss", 2.2, at + 2_000, 2),
+        ],
+    )
+
+    assert database.execute(sql).fetchall() == [(10.0, 2.2), (11.0, 1.9)]

@@ -253,6 +253,7 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
         {
             "cluster": "cw-a",
             "job": "/u/hero-stale-coord",
+            "run": "hero-stale",
             "phase": "training",
             "reason": "training_stalled",
             "value": 1,
@@ -260,6 +261,7 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
         {
             "cluster": "cw-a",
             "job": "/u/hero-initializing-coord",
+            "run": "hero-initializing",
             "phase": "initializing",
             "reason": "initializing_stale",
             "value": 1,
@@ -267,6 +269,7 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
         {
             "cluster": "cw-b",
             "job": "/u/hero-healthy-coord",
+            "run": "hero-healthy",
             "phase": "training",
             "reason": "healthy",
             "value": 0,
@@ -274,6 +277,7 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
         {
             "cluster": "cw-b",
             "job": "/another-user/hero-starting-coord",
+            "run": "hero-starting",
             "phase": "initializing",
             "reason": "initializing",
             "value": 0,
@@ -283,7 +287,7 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
 
 def test_training_stall_alert_returns_explicit_zero_without_running_jobs():
     assert training_stall_alert_rows((), pa.table({}), datetime(2026, 7, 28, tzinfo=UTC)) == [
-        {"cluster": "fleet", "job": "", "phase": "idle", "reason": "healthy", "value": 0}
+        {"cluster": "fleet", "job": "", "run": "", "phase": "idle", "reason": "healthy", "value": 0}
     ]
 
 
@@ -305,6 +309,28 @@ def test_training_stall_task_state_resets_running_age_after_retry():
 
     (row,) = database.execute(task_state_query(now)).fetchall()
     assert row[3] == now.replace(tzinfo=None) - timedelta(minutes=5)
+
+
+def test_hero_alerts_enroll_suffixed_retry_roots():
+    now = datetime(2026, 8, 20, 23, 30, tzinfo=UTC)
+    database = duckdb.connect()
+    database.execute(
+        'CREATE TABLE "iris.task_state"(cluster VARCHAR, root_job_id VARCHAR, ts TIMESTAMP, running BIGINT)'
+    )
+    database.executemany(
+        'INSERT INTO "iris.task_state" VALUES (?, ?, ?, ?)',
+        [
+            ("cw-a", "/power/hero-12d8b6f0-dee637-coord-slop85", now - timedelta(seconds=30), 64),
+            ("cw-a", "/power/hero-other-coord", now - timedelta(seconds=30), 64),
+            ("cw-a", "/power/not-hero-coord-slop85", now - timedelta(seconds=30), 64),
+        ],
+    )
+
+    task_states = database.execute(task_state_query(now)).fetch_arrow_table()
+    assert {(run.root_job, run.run_id) for run in active_hero_runs(task_states)} == {
+        ("/power/hero-12d8b6f0-dee637-coord-slop85", "hero-12d8b6f0-dee637"),
+        ("/power/hero-other-coord", "hero-other"),
+    }
 
 
 def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
@@ -397,6 +423,7 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
         {
             "cluster": "cw-a",
             "job": "/rav/hero-20260819-coord",
+            "run": "hero-20260819",
             "phase": "training",
             "reason": "training_stalled",
             "value": 1,
@@ -422,6 +449,7 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
         {
             "cluster": "cw-a",
             "job": "/rav/hero-20260819-coord",
+            "run": "hero-20260819",
             "phase": "training",
             "reason": "healthy",
             "value": 0,
@@ -450,6 +478,7 @@ def test_training_stall_alert_gives_a_new_execution_its_own_initialization_windo
         {
             "cluster": "cw-a",
             "job": "/u/hero-retry-coord",
+            "run": "hero-retry",
             "phase": "initializing",
             "reason": "initializing",
             "value": 0,

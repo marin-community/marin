@@ -88,8 +88,8 @@ def _phase_name(phase: int | None) -> str:
     }.get(phase, "unknown")
 
 
-def _row(cluster: str, job: str, phase: str, reason: str, value: int) -> dict:
-    return {"cluster": cluster, "job": job, "phase": phase, "reason": reason, "value": value}
+def _row(cluster: str, job: str, run: str, phase: str, reason: str, value: int) -> dict:
+    return {"cluster": cluster, "job": job, "run": run, "phase": phase, "reason": reason, "value": value}
 
 
 @dataclass(frozen=True)
@@ -171,8 +171,9 @@ def training_stall_alert_rows(runs: tuple[HeroRun, ...], telemetry_metrics: pa.T
     observed = _metrics_by_job(runs, telemetry_metrics)
     now = as_utc(now)
     rows = [
-        _row(run.cluster, run.root_job, *_classify(run, observed.get((run.cluster, run.root_job)), now)) for run in runs
+        _row(run.cluster, run.root_job, run.run_id, *_classify(run, observed.get((run.cluster, run.root_job)), now))
+        for run in runs
     ]
     if rows:
         return rows
-    return [_row("fleet", "", "idle", "healthy", 0)]
+    return [_row("fleet", "", "", "idle", "healthy", 0)]

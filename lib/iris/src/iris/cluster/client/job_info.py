@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from google.protobuf import json_format
 
 from iris.cluster.constraints import Constraint
+from iris.cluster.runtime.env import IRIS_ATTEMPT_UID_ENV
 from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import job_pb2
 
@@ -29,6 +30,7 @@ class JobInfo:
     task_id: JobName
     num_tasks: int = 1
     attempt_id: int = 0
+    attempt_uid: str | None = None
     worker_id: str | None = None
     bundle_id: str | None = None
 
@@ -107,6 +109,7 @@ def get_job_info() -> JobInfo | None:
             task_id=task_id,
             num_tasks=int(os.environ.get("IRIS_NUM_TASKS", "1")),
             attempt_id=attempt_id,
+            attempt_uid=os.environ.get(IRIS_ATTEMPT_UID_ENV),
             worker_id=os.environ.get("IRIS_WORKER_ID"),
             controller_address=os.environ.get("IRIS_CONTROLLER_ADDRESS"),
             advertise_host=os.environ.get("IRIS_ADVERTISE_HOST", "127.0.0.1"),

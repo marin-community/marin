@@ -441,8 +441,8 @@
     {
       "id": 2,
       "type": "timeseries",
-      "title": "Training loss",
-      "description": "Mean train loss per bucket. A step change up is a restart from an older checkpoint or a divergence; a flat line is a run that stopped stepping. The loss-spike alert reads the same metric, and fires when the lowest loss of the last five minutes clears the mean plus six standard deviations of the preceding 55, so a rise that lifts this whole curve for five minutes is what fires it.",
+      "title": "Training loss by attempt",
+      "description": "Wall-clock loss for each Iris execution. Grafana disconnects a series after five minutes without data. A new series identifies a restart. Compare the endpoints to find a resume loss change.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -461,7 +461,8 @@
             "lineWidth": 2,
             "fillOpacity": 0,
             "showPoints": "never",
-            "spanNulls": false
+            "spanNulls": false,
+            "insertNulls": 300000
           }
         },
         "overrides": []
@@ -491,7 +492,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(value) AS train_loss FROM \"telemetry_v1\" WHERE service = 'levanter' AND name = 'train_loss' AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, execution_uid AS series, AVG(value) AS train_loss FROM \"telemetry_v1\" WHERE service = 'levanter' AND name = 'train_loss' AND run_id IN (${run:sqlstring}) AND execution_uid IS NOT NULL AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -508,6 +509,92 @@
               "selector": "t",
               "text": "time",
               "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "attempt",
+              "type": "string"
+            },
+            {
+              "selector": "train_loss",
+              "text": "train loss",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "trend",
+      "title": "Training loss by step",
+      "description": "Training loss against Levanter step in the selected time range. For a repeated step, the newest sample wins. Use this panel for the continuous curve. Use the attempt panel for outages and restarts.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "xField": "step",
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH paired AS (SELECT timestamp_ms, seq, execution_uid, name, value, MAX(CASE WHEN name = 'step' THEN value END) OVER (PARTITION BY execution_uid ORDER BY timestamp_ms, seq ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS step FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('step', 'train_loss') AND run_id IN (${run:sqlstring}) AND execution_uid IS NOT NULL AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)), losses AS (SELECT step, value AS train_loss, timestamp_ms, seq, ROW_NUMBER() OVER (PARTITION BY step ORDER BY timestamp_ms DESC, seq DESC) AS rn FROM paired WHERE name = 'train_loss' AND step IS NOT NULL) SELECT step, train_loss FROM losses WHERE rn = 1 ORDER BY step"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "step",
+              "text": "step",
+              "type": "number"
             },
             {
               "selector": "train_loss",
@@ -530,8 +617,8 @@
       "gridPos": {
         "h": 9,
         "w": 12,
-        "x": 12,
-        "y": 6
+        "x": 0,
+        "y": 15
       },
       "fieldConfig": {
         "defaults": {
@@ -666,7 +753,7 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 15
       },
       "fieldConfig": {
@@ -785,8 +872,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 15
+        "x": 0,
+        "y": 24
       },
       "fieldConfig": {
         "defaults": {
@@ -888,8 +975,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
-        "y": 23
+        "x": 12,
+        "y": 24
       },
       "fieldConfig": {
         "defaults": {
@@ -991,8 +1078,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 23
+        "x": 0,
+        "y": 32
       },
       "fieldConfig": {
         "defaults": {
@@ -1090,8 +1177,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
-        "y": 31
+        "x": 12,
+        "y": 32
       },
       "fieldConfig": {
         "defaults": {
@@ -1175,8 +1262,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 31
+        "x": 0,
+        "y": 40
       },
       "fieldConfig": {
         "defaults": {

@@ -530,9 +530,9 @@ groups:
                 - evaluator: { type: gt, params: [0] }
 
   # Hero-run stalled-training detection. A fresh running task-state row whose
-  # root is named hero-*-coord enrolls the job. Structured run_id telemetry
-  # supplies current-execution progress; task-to-node GPU attribution is not
-  # required.
+  # root is named hero-*-coord or hero-*-coord-<retry> enrolls the job.
+  # Structured run_id telemetry supplies current-execution progress;
+  # task-to-node GPU attribution is not required.
   - orgId: 1
     name: training-progress
     folder: Alerts
@@ -566,6 +566,7 @@ groups:
               columns:
                 - { selector: cluster, text: cluster, type: string }
                 - { selector: job, text: job, type: string }
+                - { selector: run, text: run, type: string }
                 - { selector: phase, text: phase, type: string }
                 - { selector: reason, text: reason, type: string }
                 - { selector: value, text: value, type: number }

@@ -616,14 +616,15 @@ def test_port_env_vars_set(mock_worker, mock_runtime):
 
 
 def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
-    """Job-level env vars win over task_env, which wins over iris system vars.
+    """Job env wins over task defaults without replacing attempt identity.
 
     The merge order in _create_container is:
       1. iris system vars (IRIS_TASK_ID, etc.)
       2. task_env (worker-level defaults, overrides iris vars)
-      3. job-level env_vars (from the request, wins over everything user-visible)
+      3. job-level env_vars (from the request, wins over user-visible values)
+      4. controller-owned attempt identity
 
-    This test verifies the observable precedence: job > default > absent.
+    This test verifies the observable precedence and reserved identity.
     """
     config = WorkerConfig(
         port=0,
@@ -631,7 +632,11 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
         poll_interval=Duration.from_seconds(0.1),
         cache_dir=tmp_path / "cache",
         default_task_image="mock-image",
-        task_env={"SHARED_KEY": "default_value", "DEFAULT_ONLY": "from_default"},
+        task_env={
+            "SHARED_KEY": "default_value",
+            "DEFAULT_ONLY": "from_default",
+            "IRIS_ATTEMPT_UID": "stale-cluster-value",
+        },
     )
     w = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
 
@@ -646,7 +651,11 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
         attempt_uid="uid-env-test",
         entrypoint=Entrypoint.from_callable(_fn).to_proto(),
         environment=job_pb2.EnvironmentConfig(
-            env_vars={"SHARED_KEY": "job_value", "JOB_ONLY": "from_job"},
+            env_vars={
+                "SHARED_KEY": "job_value",
+                "JOB_ONLY": "from_job",
+                "IRIS_ATTEMPT_UID": "shared-job-value",
+            },
         ),
         bundle_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=512 * 1024**2),
@@ -667,6 +676,7 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     assert env["JOB_ONLY"] == "from_job"
     # Iris system vars are always injected.
     assert "IRIS_TASK_ID" in env
+    assert env["IRIS_ATTEMPT_UID"] == "uid-env-test"
 
 
 def test_task_image_override_uses_request_value(mock_bundle_store, mock_runtime, tmp_path):

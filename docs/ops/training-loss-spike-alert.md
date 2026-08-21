@@ -1,10 +1,10 @@
 # Hero training loss-spike alert
 
-`TrainingLossSpike` is a critical Grafana alert for active Iris root jobs named `hero-*-coord`. It posts one Slack message per root job and opens a Loom triage session on that thread, the same `notification=hero-run` route [`TrainingProgressStalled`](training-stall-alert-contract.md) uses. The alert does not kick, restart, or reconfigure a job; the decision it asks for is a person's, which is to keep training or to stop and resume from an earlier checkpoint.
+`TrainingLossSpike` is a critical Grafana alert for active Iris hero roots. It posts one Slack message per logical run. It uses the same `notification=hero-run` route as [`TrainingProgressStalled`](training-stall-alert-contract.md). The alert does not kick, restart, or configure a job. An operator decides whether to continue training or resume from an earlier checkpoint.
 
 It pages because a hero run diverging unwatched costs more than a false page does, and a silence answers a false page. Expect benign firings at mixture stage boundaries; silence the run for that window rather than widening the band for every run.
 
-Enrollment is the same contract as [`TrainingProgressStalled`](training-stall-alert-contract.md): a root job is eligible while its latest `iris.task_state` row is at most 90 seconds old, reports at least one running task, and matches `%/hero-%-coord`. Both rules read one enrollment query per bridge cache interval, so they share a single `iris.task_state` scan.
+Enrollment uses the [`TrainingProgressStalled`](training-stall-alert-contract.md) contract. A root matches `%/hero-%-coord` or `%/hero-%-coord-%`. The two rules share one `iris.task_state` query in each bridge cache interval.
 
 ## What fires it
 
@@ -23,11 +23,11 @@ The baseline is the run's own trailing history, so the band moves with training.
 
 A run reports `warming_up` with fewer than 20 baseline or 5 recent samples, and `healthy` otherwise. Both are zero-valued rows, which resolves a firing instance. With no eligible roots the bridge returns an explicit zero-valued `fleet` row; `noDataState: Alerting` is reserved for a malformed or unavailable response.
 
-`spiking` and `not_finite` are separate alert instances, but the route groups by root job and not by `reason`, so a run that spikes and then diverges to NaN threads under the message it already sent.
+`spiking` and `not_finite` are separate alert instances. The route groups by logical run. Thus, retries and reason changes use one notification group.
 
 ## When it fires
 
-1. Open the [Training run dashboard](https://grafana.oa.dev/d/marin-training) and select the run named in the alert. Its loss panel is the same `train_loss` series the rule reduces, and the spike panel puts the peak beside the optimizer's own rejection threshold and its skipped-step count.
+1. Open the [Training run dashboard](https://grafana.oa.dev/d/marin-training) and select the run in the alert. The step panel shows the continuous curve. The attempt panel shows restart gaps. The spike panel compares the peak, rejection threshold, and skipped-step count.
 2. Separate a data cause from a numerical one. A mixture stage boundary, a resumed run reading a different config, or a checkpoint restore all shift the level legitimately, and the run progress and optimizer panels date the change. A gradient norm climbing into the spike points at the optimizer.
 3. Check whether the optimizer absorbed it. Steps skipped during the window mean the update was rejected and the weights did not take the spike; a spike with no skipped steps entered the weights.
 4. Decide. Resuming from the last checkpoint before the rise costs the steps since it; letting a diverged run continue costs everything after it. `manage-hero-run` covers the rollback.
