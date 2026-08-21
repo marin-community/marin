@@ -208,6 +208,12 @@ curl -X POST \
 
 The capability URL is a credential for one endpoint. Do not share it. Iris sets an expiration time when it creates the URL.
 
+Its `/healthz` route reports what the stall watchdog sees: whether the run has passed the deadline
+for whatever it waits on. It returns 503 once the current wait exceeds its deadline, and 200
+otherwise, with the phase, the elapsed seconds, and the deadline in the body. Set a
+`trainer.progress_watchdog` deadline to arm it. Without one the route stays 200 and reports
+`monitored: false`, because the process holds no deadline to answer against.
+
 ## Memory pressure
 
 If training OOMs, see [Making Things Fit in HBM](../references/hbm-optimization.md) for a
