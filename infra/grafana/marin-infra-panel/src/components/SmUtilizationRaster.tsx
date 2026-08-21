@@ -16,6 +16,13 @@ interface Geometry {
   rowHeight: number;
 }
 
+interface RasterScale extends Geometry {
+  interval: number;
+  timeStart: number;
+  timeSpan: number;
+  bucketWidth: number;
+}
+
 interface HoveredCell {
   device: SmUtilizationDevice;
   sampledAt: number;
@@ -73,6 +80,21 @@ function sampleInterval(timestamps: number[]): number {
   return differences[Math.floor(differences.length / 2)];
 }
 
+function rasterScale(raster: SmUtilizationRasterData, width: number, height: number): RasterScale {
+  const layout = geometry(width, height, raster.devices.length);
+  const interval = sampleInterval(raster.timestamps);
+  const timeStart = raster.timestamps[0];
+  const timeEnd = raster.timestamps[raster.timestamps.length - 1] + interval;
+  const timeSpan = Math.max(1, timeEnd - timeStart);
+  return {
+    ...layout,
+    interval,
+    timeStart,
+    timeSpan,
+    bucketWidth: layout.plotWidth * interval / timeSpan,
+  };
+}
+
 function formatUtc(timestamp: number): string {
   return new Intl.DateTimeFormat(undefined, {
     hour: '2-digit',
@@ -114,29 +136,25 @@ function drawRaster(
   context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   context.clearRect(0, 0, width, height);
 
-  const layout = geometry(width, height, raster.devices.length);
-  const interval = sampleInterval(raster.timestamps);
-  const timeStart = raster.timestamps[0];
-  const timeEnd = raster.timestamps[raster.timestamps.length - 1] + interval;
-  const timeSpan = Math.max(1, timeEnd - timeStart);
-  const bucketWidth = layout.plotWidth * interval / timeSpan;
-  const columnGap = Math.min(1.5, bucketWidth * 0.14);
-  const rowGap = layout.rowHeight >= 2 ? Math.min(1, layout.rowHeight * 0.15) : 0;
+  const scale = rasterScale(raster, width, height);
+  const columnGap = Math.min(1.5, scale.bucketWidth * 0.14);
+  const rowGap = scale.rowHeight >= 2 ? Math.min(1, scale.rowHeight * 0.15) : 0;
 
   context.fillStyle = colors.background;
-  context.fillRect(layout.left, layout.top, layout.plotWidth, layout.plotHeight);
+  context.fillRect(scale.left, scale.top, scale.plotWidth, scale.plotHeight);
   for (let deviceIndex = 0; deviceIndex < raster.devices.length; deviceIndex += 1) {
-    const y = layout.top + deviceIndex * layout.rowHeight;
+    const y = scale.top + deviceIndex * scale.rowHeight;
     for (let timestampIndex = 0; timestampIndex < raster.timestamps.length; timestampIndex += 1) {
       const percent = raster.values[deviceIndex * raster.timestamps.length + timestampIndex];
       if (!Number.isFinite(percent)) {continue;}
-      const x = layout.left + (raster.timestamps[timestampIndex] - timeStart) / timeSpan * layout.plotWidth;
+      const x = scale.left
+        + (raster.timestamps[timestampIndex] - scale.timeStart) / scale.timeSpan * scale.plotWidth;
       context.fillStyle = SM_COLORS[Math.round(Math.max(0, Math.min(100, percent)))];
       context.fillRect(
         x + columnGap / 2,
         y + rowGap / 2,
-        Math.max(0.5, bucketWidth - columnGap),
-        Math.max(0.5 / pixelRatio, layout.rowHeight - rowGap)
+        Math.max(0.5, scale.bucketWidth - columnGap),
+        Math.max(0.5 / pixelRatio, scale.rowHeight - rowGap)
       );
     }
   }
@@ -148,18 +166,18 @@ function drawRaster(
     const clusterEnded = index === raster.devices.length
       || raster.devices[index].cluster !== raster.devices[clusterStart].cluster;
     if (!clusterEnded) {continue;}
-    const startY = layout.top + clusterStart * layout.rowHeight;
-    const endY = layout.top + index * layout.rowHeight;
+    const startY = scale.top + clusterStart * scale.rowHeight;
+    const endY = scale.top + index * scale.rowHeight;
     context.beginPath();
-    context.moveTo(layout.left, endY);
-    context.lineTo(layout.left + layout.plotWidth, endY);
+    context.moveTo(scale.left, endY);
+    context.lineTo(scale.left + scale.plotWidth, endY);
     context.stroke();
-    if (layout.left >= CLUSTER_LABEL_WIDTH && endY - startY >= 11) {
+    if (scale.left >= CLUSTER_LABEL_WIDTH && endY - startY >= 11) {
       context.fillStyle = colors.text;
       context.font = '11px Inter, sans-serif';
       context.textAlign = 'right';
       context.textBaseline = 'middle';
-      context.fillText(raster.devices[clusterStart].cluster, layout.left - 8, (startY + endY) / 2, layout.left - 12);
+      context.fillText(raster.devices[clusterStart].cluster, scale.left - 8, (startY + endY) / 2, scale.left - 12);
     }
     clusterStart = index;
   }
@@ -168,8 +186,8 @@ function drawRaster(
   context.font = '11px Inter, sans-serif';
   context.textBaseline = 'bottom';
   for (const fraction of [0, 0.25, 0.5, 0.75, 1]) {
-    const x = layout.left + fraction * layout.plotWidth;
-    const timestamp = timeStart + fraction * timeSpan;
+    const x = scale.left + fraction * scale.plotWidth;
+    const timestamp = scale.timeStart + fraction * scale.timeSpan;
     context.textAlign = fraction === 0 ? 'left' : fraction === 1 ? 'right' : 'center';
     context.fillText(formatUtc(timestamp), x, height - 2);
   }
@@ -205,19 +223,16 @@ export function SmUtilizationRaster({ frames, width, height }: Props) {
     const bounds = event.currentTarget.getBoundingClientRect();
     const x = (event.clientX - bounds.left) * width / bounds.width;
     const y = (event.clientY - bounds.top) * height / bounds.height;
-    const layout = geometry(width, height, raster.devices.length);
-    if (x < layout.left || x > layout.left + layout.plotWidth || y < layout.top || y >= layout.top + layout.plotHeight) {
+    const scale = rasterScale(raster, width, height);
+    if (x < scale.left || x > scale.left + scale.plotWidth || y < scale.top || y >= scale.top + scale.plotHeight) {
       setHovered(null);
       return;
     }
-    const deviceIndex = Math.min(raster.devices.length - 1, Math.floor((y - layout.top) / layout.rowHeight));
-    const interval = sampleInterval(raster.timestamps);
-    const timeStart = raster.timestamps[0];
-    const timeEnd = raster.timestamps[raster.timestamps.length - 1] + interval;
-    const timestamp = timeStart + (x - layout.left) / layout.plotWidth * (timeEnd - timeStart);
+    const deviceIndex = Math.min(raster.devices.length - 1, Math.floor((y - scale.top) / scale.rowHeight));
+    const timestamp = scale.timeStart + (x - scale.left) / scale.plotWidth * scale.timeSpan;
     const timestampIndex = nearestTimestampIndex(raster.timestamps, timestamp);
     const percent = raster.values[deviceIndex * raster.timestamps.length + timestampIndex];
-    if (!Number.isFinite(percent) || Math.abs(raster.timestamps[timestampIndex] - timestamp) > interval / 2) {
+    if (!Number.isFinite(percent) || Math.abs(raster.timestamps[timestampIndex] - timestamp) > scale.interval / 2) {
       setHovered(null);
       return;
     }

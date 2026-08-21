@@ -34,9 +34,33 @@ _CLUSTER_CAPACITY_LINK = {
     "type": "link",
     "url": "/d/marin-cluster-capacity",
 }
+_FLEET_ACCELERATORS_LINK = {
+    "asDropdown": False,
+    "icon": "dashboard",
+    "includeVars": True,
+    "keepTime": True,
+    "targetBlank": False,
+    "title": "Fleet accelerators",
+    "type": "link",
+    "url": "/d/marin-accel",
+}
+_FLEET_HEALTH_LINK = {
+    "asDropdown": False,
+    "icon": "dashboard",
+    "includeVars": True,
+    "keepTime": True,
+    "targetBlank": False,
+    "title": "Fleet health",
+    "type": "link",
+    "url": "/d/marin-clusters",
+}
 _SHARED_LINKS = {
     "cluster_capacity": _CLUSTER_CAPACITY_LINK,
     "cluster_capacity_without_vars": {**_CLUSTER_CAPACITY_LINK, "includeVars": False},
+    "fleet_accelerators": _FLEET_ACCELERATORS_LINK,
+    "fleet_accelerators_without_vars": {**_FLEET_ACCELERATORS_LINK, "includeVars": False},
+    "fleet_health": _FLEET_HEALTH_LINK,
+    "fleet_health_without_vars": {**_FLEET_HEALTH_LINK, "includeVars": False},
 }
 
 

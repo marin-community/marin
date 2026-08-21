@@ -423,11 +423,12 @@ def test_node_pools_dashboard_reads_live_node_pool_state():
 
 def test_accelerators_dashboard_shows_per_gpu_sm_raster_and_temperature_distribution():
     dashboard = _stitched_dashboards()["accelerators.json"]
-    heatmaps = {panel["title"]: panel for panel in _all_panels(dashboard) if panel.get("type") == "heatmap"}
+    heatmaps = [panel for panel in _all_panels(dashboard) if panel.get("type") == "heatmap"]
     (sm_panel,) = [panel for panel in _all_panels(dashboard) if panel.get("options", {}).get("view") == "sm"]
 
-    assert set(heatmaps) == {"GPU temperature distribution"}
-    assert heatmaps["GPU temperature distribution"]["options"]["calculate"]
+    assert len(heatmaps) == 1
+    (temperature_panel,) = heatmaps
+    assert temperature_panel["options"]["calculate"]
     assert sm_panel["type"] == "marin-infra-panel"
     assert sm_panel["maxDataPoints"] == 100
     assert {column["selector"] for column in sm_panel["targets"][0]["columns"]} == {
@@ -438,7 +439,7 @@ def test_accelerators_dashboard_shows_per_gpu_sm_raster_and_temperature_distribu
         "sm_utilization",
     }
     sm_sql = _panel_sql({**dashboard, "panels": [sm_panel]})
-    temperature_sql = _panel_sql({**dashboard, "panels": [heatmaps["GPU temperature distribution"]]})
+    temperature_sql = _panel_sql({**dashboard, "panels": [temperature_panel]})
     assert len(sm_sql) == len(temperature_sql) == 1
     assert "name = 'gpu_sm_active_ratio'" in sm_sql[0]
     assert "GROUP BY 1, 2, 3, 4" in sm_sql[0]

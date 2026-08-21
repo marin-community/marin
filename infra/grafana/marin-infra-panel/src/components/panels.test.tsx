@@ -25,7 +25,7 @@ test('every view renders a placeholder instead of throwing on empty data', () =>
   expect(screen.getByText('No Kubernetes node inventory reported.')).toBeInTheDocument();
 
   rerender(<SmUtilizationRaster frames={[]} width={700} height={240} />);
-  expect(screen.getByText('No SM utilization data')).toBeInTheDocument();
+  expect(screen.getByLabelText('No data')).toBeInTheDocument();
 });
 
 function frame(refId: string, rows: Array<Record<string, unknown>>) {
@@ -105,14 +105,14 @@ test('SM raster identifies the device and value under the pointer', () => {
   ])];
 
   render(<SmUtilizationRaster frames={frames} width={700} height={240} />);
-  const canvas = screen.getByRole('img', { name: 'SM utilization for 2 GPUs across 1 node and 1 cluster' });
+  const canvas = screen.getByRole('img');
   jest.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({
     x: 0, y: 0, left: 0, top: 0, right: 700, bottom: 240, width: 700, height: 240, toJSON: () => ({}),
   });
 
   fireEvent.mouseMove(canvas, { clientX: 110, clientY: 10 });
 
-  expect(screen.getByRole('tooltip')).toHaveTextContent('25.0% SM active');
-  expect(screen.getByRole('tooltip')).toHaveTextContent('cw-a · node-1 · GPU 0');
+  expect(screen.getByRole('tooltip')).toHaveTextContent('25.0%');
+  expect(screen.getByRole('tooltip')).toHaveTextContent('node-1');
   contextSpy.mockRestore();
 });

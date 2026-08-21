@@ -117,14 +117,7 @@
       "url": "/d/marin-runs"
     },
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": true,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Fleet health",
-      "type": "link",
-      "url": "/d/marin-clusters"
+      "linkRef": "fleet_health"
     },
     {
       "asDropdown": false,
