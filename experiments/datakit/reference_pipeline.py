@@ -572,6 +572,35 @@ class ZephyrDatakitSteps:
     fuzzy_dedup: StepSpec
 
 
+def pool_zephyr_context(
+    name: str,
+    scale: PipelineScale,
+    *,
+    max_concurrent_pipelines: int | None = None,
+) -> ZephyrContext:
+    """Build the shared pool every subprocess-compatible stage in this DAG must enter.
+
+    A caller that walks the DAG :func:`zephyr_datakit_steps` builds must enter this as a
+    context manager and thread the result through as ``zephyr_context``, or each per-source
+    tokenize/minhash step silently falls back to its own dedicated pool capped at that one
+    source's shard count instead of sharing ``scale.pool``.
+
+    ``max_concurrent_pipelines`` defaults to the pool's own default
+    (``MAX_CONCURRENT_PIPELINES``) when unset; pass a caller's step-level concurrency limit
+    to keep that default from silently re-capping it.
+    """
+    kwargs: dict[str, int] = {}
+    if max_concurrent_pipelines is not None:
+        kwargs["max_concurrent_pipelines"] = max_concurrent_pipelines
+    return ZephyrContext(
+        name=name,
+        resources=scale.pool.worker,
+        max_workers=scale.pool.n_workers,
+        stage_runner_factory=SubprocessRunner,
+        **kwargs,
+    )
+
+
 def zephyr_datakit_steps(
     sources: dict[str, StepSpec],
     scale: PipelineScale = DEFAULT_SCALE,
@@ -1150,12 +1179,7 @@ def main() -> None:
     scale = _apply_pool_overrides(SMOKE_SCALE if args.mode == "sample" else DEFAULT_SCALE, args)
     sources = _select_pipeline_sources(args)
 
-    with ZephyrContext(
-        name="datakit-reference",
-        resources=scale.pool.worker,
-        max_workers=scale.pool.n_workers,
-        stage_runner_factory=SubprocessRunner,
-    ) as zephyr_context:
+    with pool_zephyr_context("datakit-reference", scale) as zephyr_context:
         result = reference_datakit_steps(
             sources,
             quality_model=args.quality_model,
