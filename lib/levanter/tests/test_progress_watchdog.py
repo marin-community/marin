@@ -320,3 +320,30 @@ def test_health_reports_the_process_deadline_between_steps(monkeypatch) -> None:
     assert (health.event, health.timeout) == (ProgressEvent.CHECKPOINT_STARTED, 900.0)
 
     watchdog.stop()
+
+
+def test_health_stays_stalled_while_the_diagnostic_runs(monkeypatch) -> None:
+    """A terminating watchdog must not report FINISHED during its diagnostic budget."""
+    exited = Event()
+    current_time = 0.0
+
+    monkeypatch.setattr(progress_watchdog_module.os, "_exit", lambda _exit_code: exited.set())
+    monkeypatch.setattr(progress_watchdog_module, "monotonic", lambda: current_time)
+    watchdog = ProgressWatchdog(
+        step_timeout=timedelta(seconds=600),
+        process_timeout=timedelta(seconds=900),
+        startup_grace_period=timedelta(0),
+        diagnostic=lambda _timeout: None,
+        diagnostic_timeout=timedelta(seconds=20),
+        poll_interval=0.005,
+    )
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_STARTED)
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_FINISHED)
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_STARTED)
+
+    current_time = 600.0
+    assert exited.wait(timeout=1)
+
+    health = watchdog.health()
+    assert health.state is ProgressState.STALLED
+    assert health.event is ProgressEvent.TRAIN_STEP_STARTED
