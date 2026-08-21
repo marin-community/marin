@@ -110,9 +110,8 @@ def test_training_progress_and_phase_are_current_snapshots(exported, monkeypatch
     tracker.log({"train/loss": 1.25}, step=3)
     tracker.finish()
 
-    values = _values(exported.wait_for(7))
-    assert values["progress_time_seconds"] == 1234.5
-    assert values["phase"] == TrainingPhase.FINISHED
+    exported.wait_for_value("progress_time_seconds", {}, 1234.5)
+    exported.wait_for_value("phase", {}, TrainingPhase.FINISHED)
 
 
 def test_nonprimary_process_does_not_replicate_training_telemetry(exported, monkeypatch):
