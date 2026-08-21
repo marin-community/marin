@@ -3,6 +3,7 @@
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+import json
 import re
 from types import SimpleNamespace
 from urllib.error import HTTPError
@@ -10,10 +11,12 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import pytest
+from jax import numpy as jnp
 
 import levanter.training_control as training_control
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import EndpointAccess, JobName
+from levanter.checkpoint import Checkpointer
 from levanter.training_control import TrainingDashboard
 from levanter.trainer import TrainerConfig
 
@@ -53,7 +56,7 @@ class _FailingRegistry:
         raise RuntimeError("controller unavailable")
 
 
-def test_training_dashboard_registers_redacted_status_page(monkeypatch):
+def test_training_dashboard_registers_redacted_status_page(monkeypatch, tmp_path):
     config = _TrainingConfig(trainer=TrainerConfig(id="config-run"))
     registry = _Registry()
     job_info = JobInfo(
@@ -74,13 +77,9 @@ def test_training_dashboard_registers_redacted_status_page(monkeypatch):
             "MARIN_PROVENANCE": '{"argv": ["--token", "nested-provenance-secret"]}',
         },
     )
-    checkpoint_requests = 0
+    checkpointer = Checkpointer(tmp_path / "checkpoints", None, [])
 
-    def request_checkpoint():
-        nonlocal checkpoint_requests
-        checkpoint_requests += 1
-
-    with TrainingDashboard(config, request_checkpoint, "dashboard-run"):
+    with TrainingDashboard(config, checkpointer.request_checkpoint, "dashboard-run"):
         assert registry.active
         assert registry.address is not None
         with urlopen(registry.address, timeout=2) as response:
@@ -105,12 +104,19 @@ def test_training_dashboard_registers_redacted_status_page(monkeypatch):
         request = Request(registry.address, data=urlencode({"token": token_match.group(1)}).encode(), method="POST")
         with urlopen(request, timeout=2) as response:
             assert response.status == 202
-        assert checkpoint_requests == 1
+        checkpointer.on_step(tree={"value": jnp.array(1)}, step=1)
+        checkpointer.wait_until_finished()
+
+        metadata = json.loads((tmp_path / "checkpoints" / "step-1" / "metadata.json").read_text())
+        assert metadata["step"] == 1
+        assert metadata["is_temporary"] is False
 
         with pytest.raises(HTTPError) as error:
             urlopen(Request(registry.address, data=b"token=invalid", method="POST"), timeout=2)
         assert error.value.code == 403
-        assert checkpoint_requests == 1
+        checkpointer.on_step(tree={"value": jnp.array(2)}, step=2)
+        checkpointer.wait_until_finished()
+        assert [path.name for path in (tmp_path / "checkpoints").iterdir()] == ["step-1"]
     assert not registry.active
 
 
