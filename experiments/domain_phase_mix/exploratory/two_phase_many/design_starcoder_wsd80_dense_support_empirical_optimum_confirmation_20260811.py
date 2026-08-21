@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -31,7 +32,9 @@ OUTPUT_DIR = (
     SCRIPT_DIR / "reference_outputs/starcoder_wsd80_dense_support_empirical_optimum_confirmation_design_20260811"
 )
 SOURCE_OBSERVATIONS_PATH = OUTPUT_DIR / "coverage_observations.csv"
-DESIGN_PATH = SCRIPT_DIR.parents[1] / "starcoder_wsd80_dense_support_empirical_optimum_confirmation_design_20260811.json"
+DESIGN_PATH = (
+    SCRIPT_DIR.parents[1] / "starcoder_wsd80_dense_support_empirical_optimum_confirmation_design_20260811.json.gz"
+)
 RUN_MANIFEST_PATH = OUTPUT_DIR / "run_manifest.csv"
 SELECTION_PATH = OUTPUT_DIR / "selected_policies.csv"
 REPORT_PATH = OUTPUT_DIR / "report.md"
@@ -260,7 +263,8 @@ def build_payload() -> dict[str, Any]:
 def write_outputs() -> None:
     payload = build_payload()
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    DESIGN_PATH.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    serialized = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
+    DESIGN_PATH.write_bytes(gzip.compress(serialized, mtime=0))
     pd.DataFrame(payload["selected_policies"]).to_csv(SELECTION_PATH, index=False)
     pd.DataFrame(payload["runs"]).to_csv(RUN_MANIFEST_PATH, index=False)
 
