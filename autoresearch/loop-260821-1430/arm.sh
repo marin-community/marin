@@ -30,7 +30,11 @@ ARM_TIMEOUT="${ARM_TIMEOUT:-900}"
 NUM_STEPS="${NUM_STEPS:-30}"
 MASTER_PARAMS="${MASTER_PARAMS:-disabled}"
 WHEEL="${WHEEL:-s3://marin-us-east-02a/marin/research/mcwitt-ra2a/pjrt-kmax128-devkernel-merge47263-20260817/jax_cuda13_pjrt-0.11.1.dev0+selfbuilt-py3-none-manylinux_2_27_aarch64.whl}"
-SCHEDULE_STEPS=19073486
+# The learning-rate schedule's length. The harrier mix rejects a schedule whose token budget
+# exceeds the mix's own (18.75T at 4.19M tokens/step, so 4.47M steps), and the check runs at
+# fingerprint time even for a synthetic-data run. Same value for every arm: at step 20 the LR is
+# deep in warmup either way, and holding it fixed keeps losses comparable.
+SCHEDULE_STEPS=4470000
 
 read -r -a EXTRA <<<"${EXTRA_LAUNCH_ARGS:-}"
 
