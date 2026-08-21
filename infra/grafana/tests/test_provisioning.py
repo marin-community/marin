@@ -742,6 +742,7 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
             cluster VARCHAR,
             job_id VARCHAR,
             execution_uid VARCHAR,
+            process_index VARCHAR,
             name VARCHAR,
             value DOUBLE,
             timestamp_ms BIGINT,
@@ -751,13 +752,22 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
     )
     fixed_now_ms = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
-        "INSERT INTO telemetry_v1 VALUES ('levanter', ?, 'cw-a', ?, ?, 'phase', ?, ?, ?)",
+        "INSERT INTO telemetry_v1 VALUES ('levanter', ?, 'cw-a', ?, ?, ?, 'phase', ?, ?, ?)",
         [
-            ("hero-run", "/u/hero-run-coord/train", "attempt-old", 1, fixed_now_ms - 80 * 60_000, 1),
-            ("hero-run", "/u/hero-run-coord/train", "attempt-old", 1, fixed_now_ms - 2 * 60_000, 2),
-            ("hero-run", "/u/hero-run-coord/train", "attempt-current", 0, fixed_now_ms - 4 * 60 * 60_000, 1),
-            ("hero-run", "/u/hero-run-coord/train", "attempt-current", 1, fixed_now_ms - 60_000, 3),
-            ("other-run", "/u/other-run-coord/train", "other-attempt", 1, fixed_now_ms - 30_000, 4),
+            ("hero-run", "/u/hero-run-coord/train", "attempt-old", "0", 1, fixed_now_ms - 80 * 60_000, 1),
+            ("hero-run", "/u/hero-run-coord/train", "attempt-old", "0", 1, fixed_now_ms - 2 * 60_000, 2),
+            (
+                "hero-run",
+                "/u/hero-run-coord/train",
+                "attempt-current",
+                "0",
+                0,
+                fixed_now_ms - 4 * 60 * 60_000,
+                1,
+            ),
+            ("hero-run", "/u/hero-run-coord/train", "attempt-current", "0", 1, fixed_now_ms - 60_000, 3),
+            ("hero-run", "/u/hero-run-coord/train", "attempt-replica", "1", 1, fixed_now_ms - 30_000, 4),
+            ("other-run", "/u/other-run-coord/train", "other-attempt", "0", 1, fixed_now_ms - 20_000, 5),
         ],
     )
     database.execute(

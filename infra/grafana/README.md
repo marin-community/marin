@@ -280,7 +280,8 @@ The execution-health strip shows the current attempt age, Iris task counts,
 task-state age, and retained retry events. Initialization age appears only before
 training progress. Its orange 45-minute band matches the initialization alert.
 Its red 60-minute band matches the GPU startup supervisor. The Iris values match
-the current execution cluster and job root.
+the current execution cluster and job root. The JAX process-zero phase heartbeat
+selects one stable replica for the attempt age.
 The Token drops and Router health panels show the MoE signals that the hero
 monitor uses. The dashboard uses a 7% drop limit. The router limits are 5.92
 entropy and 400 bias.
