@@ -47,10 +47,11 @@ _HOST_MEMORY_KIND = "pinned_host"
 # JAX's default memory kind: buffers live in device (HBM) memory.
 _DEVICE_MEMORY_KIND = "device"
 # Chunks a save stages at once. The budget is per process, so a node holds it once per local
-# process. Four processes at 32 GiB each exhausted a GB200 node, and 16 GiB each still did: a
-# process carries about four times its budget in flight (_STAGED_BYTE_OVERHEAD) on top of its
-# resident shard of the offloaded state.
-_DEFAULT_STAGED_CHUNKS = 16
+# process, and a process carries about four times what it holds in flight
+# (_STAGED_BYTE_OVERHEAD) on top of its resident shard of the offloaded state. A save blocks
+# training only for the bytes it must stage past this budget. In-flight bytes are bounded by a
+# process's share of the write, so a budget above that share never binds.
+_DEFAULT_STAGED_CHUNKS = 32
 # Host memory a staged byte occupies while its write is in flight, for reporting only.
 _STAGED_BYTE_OVERHEAD = 4
 # Host memory each process may hold in flight while a restore reads shards. JAX defaults to 32 GB
