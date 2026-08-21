@@ -481,6 +481,19 @@ def test_ep_ablation_defaults_match_the_documented_arm_and_scale_per_rack():
     assert four_cfg.trainer.trainer.train_batch_size == cfg.trainer.trainer.train_batch_size * 4
 
 
+def test_ep_ablation_uses_dropless_eval_only_on_blackwell():
+    gb200 = abl.build_small_run(run_id="gb200-eval", size="d768", target="gb200-rack", version="dev")
+    h100 = abl.build_small_run(run_id="h100-eval", size="d768", target="h100-2node", version="dev")
+
+    gb200_config = gb200.build_config(StepContext.for_fingerprint(gb200.runtime_args, gb200.deps))
+    h100_config = h100.build_config(StepContext.for_fingerprint(h100.runtime_args, h100.deps))
+
+    assert gb200_config.eval is not None
+    assert gb200_config.eval.dropless_eval is True
+    assert h100_config.eval is not None
+    assert h100_config.eval.dropless_eval is False
+
+
 def test_odd_depth_config_is_not_silently_rounded():
     # GrugModelConfig must preserve an odd depth so HF round-trips and odd configs stay faithful;
     # even-rounding is the launcher's job.

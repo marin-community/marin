@@ -68,6 +68,7 @@ EVAL_BATCH_SIZE = 256
 # 38 GB, against 2.7 TiB at the d6144 hero shape.
 CHECKPOINT_INTERVAL = timedelta(minutes=30)
 SMALL_SCALE_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
+BLACKWELL_ACCELERATOR = "GB200"
 
 # Paloma + uncheatable held-out sets (marin_tokenizer), added as zero-train-weight datakit components
 # so they surface as tagged eval sets -- matching the FSDP sweep.
@@ -448,9 +449,8 @@ def build_small_run(
                 max_eval_batches=8,
                 eval_current=True,
                 eval_ema=False,
-                # EP rungs also log an `eval_dropless` macro loss (dropless local backend on an
-                # expert-collapsed mesh); a no-op for the FSDP flavors, which already run dropless.
-                dropless_eval=True,
+                # GB200 EP rungs also log an `eval_dropless` macro loss on an expert-collapsed mesh.
+                dropless_eval=fleet.accelerator == BLACKWELL_ACCELERATOR,
             ),
             # One process per GPU on every target: the H100 nodes hold 8 GPUs, not the
             # GB200 hero's 4, so the count follows the fleet rather than the hero constant.
