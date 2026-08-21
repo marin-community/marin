@@ -287,10 +287,11 @@ monitor uses. The dashboard uses a 7% drop limit. The router limits are 5.92
 entropy and 400 bias.
 
 One loss panel uses step as its x-axis and keeps the newest sample for a repeated
-step. The wall-clock loss panel separates each `execution_uid` and disconnects
-gaps longer than five minutes. Iris forms this identity from the controller-minted
-`attempt_uid`. Thus, a new controller process cannot join loss from a prior
-process with the same numeric task attempt.
+step. It ignores the Grafana time range and reads all retained samples for the
+selected run. The wall-clock loss panel separates each `execution_uid` and
+disconnects gaps longer than five minutes. Iris forms this identity from the
+controller-minted `attempt_uid`. Thus, a new controller process cannot join loss
+from a prior process with the same numeric task attempt.
 
 ## Alerting
 
@@ -657,10 +658,10 @@ Four things about the data will bite you:
   fails to parse. Qualifying or wrapping it is enough for the parser, but panels
   always write `"cluster"`, and a test rejects every other spelling so nobody has
   to remember which positions are safe.
-- **Bound every `telemetry_v1` query, and fold the boundary.** The namespace is
-  sorted on `timestamp_ms` alone, so write
-  `timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT)`, never
-  `timestamp_ms >= {{from}}`. An unbounded query exceeds the bridge's 20s deadline.
+- **Give every `telemetry_v1` query a prunable scope.** For a time scope, write
+  `timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT)`. The
+  loss-by-step panel is the only unbounded query. It selects one run and two
+  metric names, which follow the `(service, run_id, name, timestamp_ms)` sort.
 - **Cost tracks the window, not the rows.** A `telemetry_v1` panel costs roughly
   3s over 3h and 10s over 24h no matter how selective its `name` filter is, so a
   second scan of the same window nearly doubles a panel. Prefer one scan with

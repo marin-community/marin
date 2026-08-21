@@ -528,7 +528,7 @@
       "id": 10,
       "type": "trend",
       "title": "Training loss by step",
-      "description": "Training loss against Levanter step in the selected time range. For a repeated step, the newest sample wins. Use this panel for the continuous curve. Use the attempt panel for outages and restarts.",
+      "description": "Training loss against Levanter step for all retained samples from the selected run. This panel ignores the Grafana time range. For a repeated step, the newest sample wins. Use this panel for the continuous curve. Use the attempt panel for outages and restarts.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -578,15 +578,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH paired AS (SELECT timestamp_ms, seq, execution_uid, name, value, MAX(CASE WHEN name = 'step' THEN value END) OVER (PARTITION BY execution_uid ORDER BY timestamp_ms, seq ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS step FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('step', 'train_loss') AND run_id IN (${run:sqlstring}) AND execution_uid IS NOT NULL AND process_index = '0' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)), losses AS (SELECT step, value AS train_loss, timestamp_ms, seq, ROW_NUMBER() OVER (PARTITION BY step ORDER BY timestamp_ms DESC, seq DESC) AS rn FROM paired WHERE name = 'train_loss' AND step IS NOT NULL) SELECT step, train_loss FROM losses WHERE rn = 1 ORDER BY step"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
+                "value": "WITH paired AS (SELECT timestamp_ms, seq, execution_uid, name, value, MAX(CASE WHEN name = 'step' THEN value END) OVER (PARTITION BY execution_uid ORDER BY timestamp_ms, seq ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS step FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('step', 'train_loss') AND run_id IN (${run:sqlstring}) AND execution_uid IS NOT NULL AND process_index = '0'), losses AS (SELECT step, value AS train_loss, timestamp_ms, seq, ROW_NUMBER() OVER (PARTITION BY step ORDER BY timestamp_ms DESC, seq DESC) AS rn FROM paired WHERE name = 'train_loss' AND step IS NOT NULL) SELECT step, train_loss FROM losses WHERE rn = 1 ORDER BY step"
               }
             ]
           },
