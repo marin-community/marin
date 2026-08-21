@@ -29,6 +29,7 @@ PRIORITY="${PRIORITY:-production}"
 ARM_TIMEOUT="${ARM_TIMEOUT:-900}"
 NUM_STEPS="${NUM_STEPS:-30}"
 MASTER_PARAMS="${MASTER_PARAMS:-disabled}"
+MOE_IMPL="${MOE_IMPL:-ragged_all_to_all}"
 WHEEL="${WHEEL:-s3://marin-us-east-02a/marin/research/mcwitt-ra2a/pjrt-kmax128-devkernel-merge47263-20260817/jax_cuda13_pjrt-0.11.1.dev0+selfbuilt-py3-none-manylinux_2_27_aarch64.whl}"
 # The learning-rate schedule's length. The harrier mix rejects a schedule whose token budget
 # exceeds the mix's own (18.75T at 4.19M tokens/step, so 4.47M steps), and the check runs at
@@ -56,7 +57,7 @@ uv run iris --config lib/iris/config/marin.yaml job run \
      --run-id "${RID}" \
      --dp-racks 1 --num-steps "${NUM_STEPS}" --schedule-steps "${SCHEDULE_STEPS}" \
      --capacity-factor 1.15 \
-     --moe-implementation ragged_all_to_all \
+     --moe-implementation "${MOE_IMPL}" \
      --processes-per-task 4 \
      --master-params "${MASTER_PARAMS}" \
      --training-data synthetic \

@@ -434,9 +434,12 @@ def build_hero_run(
 @click.option(
     "--ragged-all-to-all-splits-per-peer",
     type=click.IntRange(min=1),
-    default=1,
+    default=32,
     show_default=True,
-    help="Split each peer transfer into this many ragged updates. Ragged backend only.",
+    help=(
+        "Split each peer transfer into this many ragged updates. Ragged backend only. The one-shot "
+        "kernel launches num_ranks x splits CTAs, so this also sets the transport's grid."
+    ),
 )
 @click.option(
     "--master-params",
