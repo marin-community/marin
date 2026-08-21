@@ -10,9 +10,9 @@ region-to-bucket mirror set, the URL scheme, and the temp TTL policy.
 :func:`use_data_config`, else the cluster named by ``MARIN_CLUSTER`` (default
 ``marin``), loaded from ``config/<cluster>.yaml``. Every "where does data live"
 answer flows through it: :func:`marin_prefix` is ``data_config().resolved_root()``,
-while :func:`marin_temp_bucket` and :func:`marin_cluster_temp_bucket` resolve
-data-local and execution-cluster-local scratch respectively. Lifecycle rules on
-every configured data bucket are managed by ``infra/buckets``.
+while :func:`marin_temp_bucket` resolves region-local scratch, honoring a
+cluster-wide ``MARIN_TEMP_PREFIX`` override when configured. Lifecycle rules
+on every configured data bucket are managed by ``infra/buckets``.
 """
 
 import contextlib
@@ -79,7 +79,7 @@ MARIN_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
 
 _MARIN_PREFIX_ENV = "MARIN_PREFIX"
 _MARIN_CLUSTER_ENV = "MARIN_CLUSTER"
-_MARIN_CLUSTER_TEMP_PREFIX_ENV = "MARIN_CLUSTER_TEMP_PREFIX"
+_MARIN_TEMP_PREFIX_ENV = "MARIN_TEMP_PREFIX"
 _GCP_METADATA_ZONE_URL = "http://metadata.google.internal/computeMetadata/v1/instance/zone"
 _DEFAULT_LOCAL_PREFIX = "/tmp/marin"
 
@@ -500,7 +500,13 @@ def _resolve_ttl_days(ttl_days: int, allowed: tuple[int, ...]) -> int:
     return capped
 
 
-def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | None = None) -> str:
+def marin_temp_bucket(
+    ttl_days: int,
+    prefix: str = "",
+    *,
+    source_prefix: str | None = None,
+    use_env_override: bool = True,
+) -> str:
     """Return a path on region-local temp storage. Never returns ``None``.
 
     For a GCS marin prefix with a known region, or an explicitly provided
@@ -521,6 +527,9 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
 
     Pulumi-managed lifecycle rules on every data bucket auto-delete objects
     under ``tmp/ttl=Nd/`` after *N* days.
+    When ``MARIN_TEMP_PREFIX`` is set, it overrides ambient and explicit source
+    prefixes so every temporary write in that cluster uses the configured
+    bucket.
 
     Args:
         ttl_days: Lifecycle TTL in days.  Values not in the active config's
@@ -531,18 +540,23 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
         source_prefix: Optional path used to choose the temp bucket region.
             Useful when configuring a remote job from a launcher that may be in
             a different region than the job output path.
+        use_env_override: Honor ``MARIN_TEMP_PREFIX`` when set. Disable only
+            when resolving a legacy data-local path for reads, never for writes.
     """
     cfg = data_config()
     ttl_days = _resolve_ttl_days(ttl_days, cfg.ttl_days)
 
-    mp = marin_prefix()
+    override_prefix = os.environ.get(_MARIN_TEMP_PREFIX_ENV) if use_env_override else None
+    mp = override_prefix or marin_prefix()
 
-    # An explicit source_prefix fully determines the backend and region, taking
-    # precedence over the ambient marin prefix and VM metadata so that an R2
-    # source_prefix yields an R2 temp path even on a GCP launcher. Only when
-    # source_prefix is absent do we derive the location from the marin prefix
-    # (and VM metadata for the GCS region).
-    if source_prefix is not None:
+    # A cluster temp override takes precedence over explicit source routing so
+    # all disposable writes from the cluster share one lifecycle-managed bucket.
+    # Otherwise source_prefix fully determines the backend and region, taking
+    # precedence over the ambient marin prefix and VM metadata.
+    if override_prefix is not None:
+        region = region_from_prefix(override_prefix)
+        s3_bucket = _s3_bucket_from_prefix(override_prefix)
+    elif source_prefix is not None:
         region = region_from_prefix(source_prefix)
         s3_bucket = _s3_bucket_from_prefix(source_prefix)
     else:
@@ -568,23 +582,6 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
         mp = f"file://{mp}"
     path = f"{mp}/{cfg.temp_path}"
     return _append_path_prefix(path, prefix)
-
-
-def marin_cluster_temp_bucket(
-    ttl_days: int,
-    prefix: str = "",
-    *,
-    fallback_source_prefix: str | None = None,
-) -> str:
-    """Return shared temporary storage local to the execution cluster.
-
-    ``MARIN_CLUSTER_TEMP_PREFIX`` selects the managed scratch bucket independently
-    of durable data location. When it is unset, ``fallback_source_prefix`` selects
-    the data-local temp bucket; an absent fallback uses ambient Marin storage.
-    """
-    cluster_prefix = os.environ.get(_MARIN_CLUSTER_TEMP_PREFIX_ENV)
-    source_prefix = cluster_prefix or fallback_source_prefix
-    return marin_temp_bucket(ttl_days, prefix, source_prefix=source_prefix)
 
 
 # ---------------------------------------------------------------------------

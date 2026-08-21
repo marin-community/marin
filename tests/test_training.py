@@ -84,7 +84,7 @@ def test_temporary_checkpoint_base_path_uses_cluster_local_scratch():
         os.environ,
         {
             "MARIN_PREFIX": "s3://marin-us-east-02a/marin",
-            "MARIN_CLUSTER_TEMP_PREFIX": "s3://hero-checkpoints",
+            "MARIN_TEMP_PREFIX": "s3://hero-checkpoints",
         },
     ):
         assert temporary_checkpoint_base_path("s3://marin-us-east-02a/experiments/grug/base-trial") == (
@@ -118,7 +118,7 @@ def test_apply_output_path_sets_run_specific_temp_checkpoints(trainer_config):
 
 def test_apply_output_path_does_not_enable_adapter_hf_export_without_steps(trainer_config):
     with patch(
-        "marin.training.training.marin_cluster_temp_bucket",
+        "marin.training.training.marin_temp_bucket",
         return_value="gs://tmp/ttl=14d/checkpoints-temp/example-run",
     ):
         updated = apply_output_path(
@@ -136,7 +136,7 @@ def test_apply_output_path_does_not_enable_adapter_hf_export_without_steps(train
 
 def test_apply_output_path_routes_adapter_hf_export_to_peft(trainer_config):
     with patch(
-        "marin.training.training.marin_cluster_temp_bucket",
+        "marin.training.training.marin_temp_bucket",
         return_value="gs://tmp/ttl=14d/checkpoints-temp/example-run",
     ):
         updated = apply_output_path(

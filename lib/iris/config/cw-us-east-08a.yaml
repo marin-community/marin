@@ -167,11 +167,10 @@ defaults:
     scale_down_delay:
       milliseconds: 300000
   task_env:
-    # Durable outputs and general scratch remain in 02A. The explicit cluster-temp
-    # prefix is reserved for specialized region-local state such as the hero's
-    # rolling checkpoints; rigging adds lifecycle-managed tmp/ttl=Nd prefixes.
+    # Durable outputs remain in 02A. All lifecycle-managed temporary writes use
+    # the region-local 08A bucket; rigging adds the tmp/ttl=Nd prefixes.
     MARIN_PREFIX: s3://marin-us-east-02a/marin
-    MARIN_CLUSTER_TEMP_PREFIX: s3://hero-checkpoints
+    MARIN_TEMP_PREFIX: s3://hero-checkpoints
     # Task pods carry one CoreWeave endpoint/credential set valid for both buckets.
     # GB200 hostNetwork pods also see IB and SR-IOV link-local interfaces. Exclude
     # IB/IPoIB (ibs*, ibp*) and virtual interfaces so NCCL's bootstrap socket falls

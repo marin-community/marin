@@ -22,11 +22,7 @@ from levanter.main.train_lm import TrainLmConfig
 from levanter.schedule import BatchSchedule
 from mergedeep import mergedeep
 from pydantic import BaseModel
-from rigging.filesystem.cluster_config import (
-    check_gcs_paths_same_region,
-    marin_cluster_temp_bucket,
-    marin_temp_bucket,
-)
+from rigging.filesystem.cluster_config import check_gcs_paths_same_region, marin_temp_bucket
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -167,21 +163,22 @@ def temporary_storage_base_path(output_path: str, *, ttl_days: int, category: st
 
 def temporary_checkpoint_base_path(output_path: str) -> str:
     """Return the region-local temporary checkpoint base for an executor output path."""
-    output_component = _output_path_temp_component(output_path)
-    temporary_root = marin_cluster_temp_bucket(
+    temporary_root = temporary_storage_base_path(
+        output_path,
         ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
-        prefix=prefix_join(TEMPORARY_CHECKPOINTS_PATH, output_component),
-        fallback_source_prefix=output_path,
+        category=TEMPORARY_CHECKPOINTS_PATH,
     )
     return prefix_join(temporary_root, DEFAULT_CHECKPOINTS_PATH)
 
 
 def data_local_temporary_checkpoint_base_path(output_path: str) -> str:
-    """Return the checkpoint temp path selected from the durable output location."""
-    temporary_root = temporary_storage_base_path(
-        output_path,
+    """Return the legacy data-local checkpoint path, bypassing the cluster temp override."""
+    output_component = _output_path_temp_component(output_path)
+    temporary_root = marin_temp_bucket(
         ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
-        category=TEMPORARY_CHECKPOINTS_PATH,
+        prefix=os.path.join(TEMPORARY_CHECKPOINTS_PATH, output_component),
+        source_prefix=output_path,
+        use_env_override=False,
     )
     return prefix_join(temporary_root, DEFAULT_CHECKPOINTS_PATH)
 
