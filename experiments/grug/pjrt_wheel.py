@@ -15,6 +15,10 @@ it over the stock nightly set. Leave it unset and nothing changes.
 """
 
 import os
+import sys
+from collections.abc import Sequence
+
+from iris.cluster.setup_scripts import cuda_toolchain_setup_script, default_setup_script, wants_gpu_extra
 
 PJRT_WHEEL_ENV = "MARIN_PJRT_WHEEL"
 
@@ -69,9 +73,29 @@ PY
 """
 
 
-def pjrt_wheel_setup_scripts() -> tuple[str, ...]:
-    """Setup scripts installing the wheel named by ``MARIN_PJRT_WHEEL``, or none when unset."""
+def pjrt_wheel_setup_scripts(*, extras: Sequence[str]) -> tuple[str, ...]:
+    """Full setup script list ending in the ``MARIN_PJRT_WHEEL`` install, or none when unset.
+
+    Passing ``setup_scripts`` replaces iris's default setup rather than adding to it, so the
+    default uv sync and the CUDA toolchain staging have to be rebuilt here in the order
+    ``EnvironmentSpec.to_proto`` would have used. Getting this wrong leaves no venv at all: the
+    first attempt shipped the wheel script alone and every rank died on a missing
+    ``$IRIS_VENV/bin/python``.
+
+    The wheel install goes last, after the toolchain staging, matching the ordering these wheels
+    have been validated under.
+    """
     wheel_url = os.environ.get(PJRT_WHEEL_ENV)
     if not wheel_url:
         return ()
-    return (_install_script(wheel_url),)
+    extras = list(extras)
+    scripts = [
+        default_setup_script(
+            extras=extras,
+            python_version=f"{sys.version_info.major}.{sys.version_info.minor}",
+        )
+    ]
+    if wants_gpu_extra(extras):
+        scripts.append(cuda_toolchain_setup_script())
+    scripts.append(_install_script(wheel_url))
+    return tuple(scripts)
