@@ -28,7 +28,7 @@ from rigging.redaction import REDACTED_VALUE, redact_value
 from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import EndpointAccess
-from levanter.trainer import AllConfig
+
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +47,9 @@ class _TrainingSnapshot:
     @classmethod
     def capture(
         cls,
-        config: AllConfig,
+        config: object,
         *,
+        run_id: str,
         job_id: str,
         task_id: str,
     ) -> _TrainingSnapshot:
@@ -59,7 +60,7 @@ class _TrainingSnapshot:
         redacted_environment = cast(dict[str, str], redact_value(environment))
         encoded_config = redact_value(draccus.encode(config))
         return cls(
-            run_id=config.trainer.id or "unknown",
+            run_id=run_id,
             job_id=job_id,
             task_id=task_id,
             environment=dict(sorted(redacted_environment.items())),
@@ -176,9 +177,10 @@ def _serve_status_page(snapshot: _TrainingSnapshot, request_checkpoint: Callable
 class TrainingDashboard:
     """Publish the process-zero training status page through Iris."""
 
-    def __init__(self, config: AllConfig, request_checkpoint: Callable[[], None]):
+    def __init__(self, config: object, request_checkpoint: Callable[[], None], run_id: str):
         self._config = config
         self._request_checkpoint = request_checkpoint
+        self._run_id = run_id
         self._stack: ExitStack | None = None
 
     def __enter__(self) -> TrainingDashboard:
@@ -198,6 +200,7 @@ class TrainingDashboard:
             return
         snapshot = _TrainingSnapshot.capture(
             self._config,
+            run_id=self._run_id,
             job_id=str(job_info.job_id),
             task_id=str(job_info.task_id),
         )

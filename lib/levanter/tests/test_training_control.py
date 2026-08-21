@@ -54,7 +54,7 @@ class _FailingRegistry:
 
 
 def test_training_dashboard_registers_redacted_status_page(monkeypatch):
-    config = _TrainingConfig(trainer=TrainerConfig(id="test-run"))
+    config = _TrainingConfig(trainer=TrainerConfig(id="config-run"))
     registry = _Registry()
     job_info = JobInfo(
         task_id=JobName.from_wire("/alice/parent/train/0"),
@@ -80,7 +80,7 @@ def test_training_dashboard_registers_redacted_status_page(monkeypatch):
         nonlocal checkpoint_requests
         checkpoint_requests += 1
 
-    with TrainingDashboard(config, request_checkpoint):
+    with TrainingDashboard(config, request_checkpoint, "dashboard-run"):
         assert registry.active
         assert registry.address is not None
         with urlopen(registry.address, timeout=2) as response:
@@ -90,7 +90,7 @@ def test_training_dashboard_registers_redacted_status_page(monkeypatch):
         assert registry.name == "/alice/parent/train/training-control"
         assert registry.access == EndpointAccess.ENDPOINT_ACCESS_PRIVATE
         assert headers["Cache-Control"] == "no-store"
-        assert "test-run" in body
+        assert "<li>Run ID: dashboard-run</li>" in body
         assert "tiny-model" in body
         assert "VISIBLE_VALUE" in body
         assert "value &lt;script&gt;alert(1)&lt;/script&gt;" in body
@@ -126,7 +126,7 @@ def test_training_dashboard_failure_does_not_stop_training(monkeypatch):
     monkeypatch.setattr(training_control, "get_iris_ctx", lambda: SimpleNamespace(registry=registry))
     monkeypatch.setattr(training_control, "get_job_info", lambda: job_info)
 
-    with TrainingDashboard(config, lambda: None):
+    with TrainingDashboard(config, lambda: None, "test-run"):
         pass
 
     assert registry.called
