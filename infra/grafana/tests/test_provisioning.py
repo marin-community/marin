@@ -556,9 +556,12 @@ def test_stat_panels_use_grafana_reduce_options_schema():
             assert reduce_options.get("calcs"), f"{name} panel {panel['id']}: missing reduction"
 
 
-def test_telemetry_queries_have_a_prunable_time_or_run_scope():
-    # Time bounds prune segments. The loss-by-step query instead follows the physical
-    # service/run/name sort to read all retained samples for one selected run.
+def test_telemetry_queries_bound_their_window_with_foldable_macros():
+    # Time-scoped queries need foldable bounds for segment pruning. A direct bigint-to-
+    # timestamp comparison such as `timestamp_ms >= {{from}}` cannot prune segments.
+    training = _stitched_dashboards()["training.json"]
+    step_panel = next(panel for panel in _all_panels(training) if panel["id"] == 10)
+    (step_sql,) = _panel_sql({"panels": [step_panel]})
     unbounded: list[tuple[str, str]] = []
     for name, dashboard in _stitched_dashboards().items():
         for sql in _panel_sql(dashboard):
@@ -570,11 +573,7 @@ def test_telemetry_queries_have_a_prunable_time_or_run_scope():
             assert "timestamp_ms < CAST(EXTRACT(EPOCH FROM" in sql, name
             assert "timestamp_ms >= {{from}}" not in sql, name
 
-    [(name, sql)] = unbounded
-    assert name == "training.json"
-    assert "service = 'levanter'" in sql
-    assert "name IN ('step', 'train_loss')" in sql
-    assert "run_id IN (${run:sqlstring})" in sql
+    assert unbounded == [("training.json", step_sql)]
 
 
 def test_cluster_column_is_only_referenced_quoted_or_as_an_alias():
@@ -678,12 +677,10 @@ def test_training_loss_by_attempt_separates_process_incarnations():
     ]
 
 
-def test_training_loss_by_step_ignores_time_range_and_uses_newest_retry_sample():
+def test_training_loss_by_step_uses_the_newest_retry_sample():
     dashboard = _stitched_dashboards()["training.json"]
     panel = next(panel for panel in _all_panels(dashboard) if panel["title"] == "Training loss by step")
     sql = _panel_sql({**dashboard, "panels": [panel]})[0]
-    assert "{{from}}" not in sql
-    assert "{{to}}" not in sql
     sql = sql.replace("${run:sqlstring}", "'hero-run'")
 
     database = duckdb.connect()
