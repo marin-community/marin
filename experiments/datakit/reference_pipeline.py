@@ -587,7 +587,15 @@ def pool_zephyr_context(
 
     ``max_concurrent_pipelines`` defaults to the pool's own default
     (``MAX_CONCURRENT_PIPELINES``) when unset; pass a caller's step-level concurrency limit
-    to keep that default from silently re-capping it.
+    to keep that default from silently re-capping it -- but don't raise it far past that
+    default. The coordinator is one actor with a fixed concurrent-call budget
+    (``ActorConfig(max_concurrency=100)`` in ``zephyr.execution``) shared between every
+    in-flight ``run_pipeline`` call (held for a whole pipeline's duration, not briefly) and
+    every worker's poll/heartbeat/registration call; raising concurrent pipelines without
+    headroom for worker traffic can starve worker calls of a slot entirely, deadlocking the
+    pool (pipelines wait on workers that can't report back). A caller that genuinely needs
+    more concurrent pipelines than this leaves headroom for should raise the coordinator's
+    own ``max_concurrency`` rather than push ``max_concurrent_pipelines`` close to it.
     """
     kwargs: dict[str, int] = {}
     if max_concurrent_pipelines is not None:

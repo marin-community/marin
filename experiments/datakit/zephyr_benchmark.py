@@ -12,16 +12,19 @@ the required run tag. ``--sample-prefix`` defaults to the 100B GCS sample in
 the equivalent S3 path to run on CoreWeave.
 
 Example (the "full" preset from the `ab-test-zephyr` skill, sized to match
-`datakit_nemotron_ferry.py`'s data volume and worker pool). ``--max-concurrent``
-is high because every per-source stage now shares one pool (see
-``zephyr_datakit_steps``'s ``zephyr_context``) -- StepRunner's dispatch ceiling,
-not pod-provisioning cost, is what should limit it:
+`datakit_nemotron_ferry.py`'s data volume and worker pool). Every per-source
+stage now shares one pool (see ``zephyr_datakit_steps``'s ``zephyr_context``),
+so ``--max-concurrent`` no longer needs to stay near 1 to avoid provisioning a
+pod per pipeline -- but the pool's single coordinator actor has a fixed
+concurrent-call budget (100) shared between every in-flight ``run_pipeline``
+wait and every worker's poll/heartbeat/registration call, so it cannot be
+raised freely either; see the skill for the sizing rationale:
 
     python -m experiments.datakit.zephyr_benchmark \
         --sources all --run-tag zephyr-100b-v1 \
         --pool-workers 512 --pool-cpu 16 --pool-ram 160g --pool-disk 32g \
         --first-stage exact --last-stage fuzzy \
-        --max-concurrent 64 --dedup-max-parallelism 1000 --dedup-cc-max-iterations 3
+        --max-concurrent 8 --dedup-max-parallelism 1000 --dedup-cc-max-iterations 3
 
 The "light" preset uses ``--source-fraction`` instead of ``--sources`` to
 auto-select a byte-budgeted subset of sources, favoring shard-dense sources so
@@ -31,7 +34,7 @@ the reduced ``--pool-workers`` still has enough parquet shards to fill:
         --source-fraction 0.1 --run-tag zephyr-100b-light-v1 \
         --pool-workers 128 --pool-cpu 16 --pool-ram 160g --pool-disk 32g \
         --first-stage exact --last-stage fuzzy \
-        --max-concurrent 32 --dedup-max-parallelism 500 --dedup-cc-max-iterations 3
+        --max-concurrent 8 --dedup-max-parallelism 500 --dedup-cc-max-iterations 3
 """
 
 import argparse
