@@ -44,7 +44,7 @@ from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COLLECTION_INTERVAL = 30.0
+DEFAULT_COLLECTION_INTERVAL = 60.0
 K8S_API_TIMEOUT = 2.0
 NODE_EXPORTER_ADDRESS = "127.0.0.1"
 _K8S_GPU_MODEL_LABELS = ("nvidia.com/gpu.product", "gpu.nvidia.com/model")
@@ -764,7 +764,7 @@ def collect_once(
     publish_node_telemetry(target, metrics, time.time())
     if task_stats_collector is not None:
         task_stats_collector.collect_once()
-    telemetry.record_runtime_health()
+    telemetry.record_runtime_health(telemetry.TelemetryGroup.NODE_AGENT)
 
 
 def _collect_telemetry(config: IrisClusterConfig, k8s: CloudK8sService, node_name: str, stop: threading.Event) -> None:

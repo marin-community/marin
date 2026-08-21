@@ -284,7 +284,9 @@ def test_native_metrics_polling_recovers_after_initial_snapshot_failure(telemetr
             labels,
             7,
         )
-        assert telemetry_transport.record("rpc_requests_total", labels)["value"] == 7
+        record = telemetry_transport.record("rpc_requests_total", labels)
+        assert record["value"] == 7
+        assert record["group"] == "iris.rpc"
     finally:
         publisher.detach(proxy)
 

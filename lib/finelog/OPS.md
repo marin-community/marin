@@ -67,8 +67,8 @@ column to every row; producers do not declare it, but SQL queries can select it.
 Inspect the namespace before changing its policy or resetting it. Record its row
 count, bytes, segment count, key column, and policy from `ListNamespaces`; a
 correct key with many segments points to a different problem than a
-misconfigured key. Do not reset a shared namespace such as `telemetry_v1` without
-checking which producers use it.
+misconfigured key. Do not reset `telemetry_v1` or one of its semantic children
+without checking which producers use it.
 
 Use native timestamp comparisons for timestamp columns. For telemetry's epoch-millisecond column, keep the predicate numeric:
 
@@ -130,7 +130,7 @@ Use a named `Schema.projections` entry when the recurring query also benefits
 from a compact physical copy. Each projection declares one predicate and an
 explicit included-column list. Covered segments substitute the narrow Parquet
 file while uncovered segments use postings or source Parquet, so partial
-backfill is useful. `telemetry_v1` has a `training-status` projection for three
+backfill is useful. Both telemetry tables have a `training-status` projection for three
 dashboard metric names and a `training-process-zero` projection for rows whose
 `process_index` is `0`. The latter covers the structured columns used by the
 training loss window query. `process_index = '0'` and `name = 'train_loss'`
@@ -151,10 +151,23 @@ summaries without opening Parquet. `EXPLAIN` shows the rewrite. It is
 all-or-nothing and limited to one grouping column; filters, joins, multiple
 aggregates, a per-segment column above 4,096 distinct values, or a combined
 result above 16,384 values use DataFusion.
-`telemetry_v1` enables this for `service`, `kind`, and `name`, while its
+Telemetry children enable this for `service`, `kind`, and `name`; their
 training-status metric names also use an exact filtered projection.
 
-`telemetry_v1` exposes stable resource dimensions as nullable columns:
+Telemetry records carry a required semantic group. Finelog routes them to
+`telemetry_v1.node_agent`, `telemetry_v1.levanter.core`,
+`telemetry_v1.levanter.extra`, `telemetry_v1.iris.rpc`, `telemetry_v1.vllm`,
+`telemetry_v1.zephyr.core`, or `telemetry_v1.zephyr.extra`. All children use the
+same row schema. Query a child when its producer is known. Query `telemetry_v1`
+for a logical `UNION ALL` of every child plus rows retained in the pre-split
+physical table.
+
+The child retention budgets sum to 50 GiB: 20 GiB for Levanter core, 10 GiB
+each for Levanter extra and node-agent telemetry, 6 GiB for vLLM, 2 GiB for Iris
+RPC, and 1 GiB for each Zephyr child. The legacy physical table keeps a 50 GiB
+override while its historical rows age out.
+
+All children expose stable resource dimensions as nullable columns:
 `run_id`, `job_id`, `execution_uid`, `region`, `node_name`, and `process_index`.
 Producers may send them directly in the request's `resource`
 object. When omitted, Finelog infers them from same-named resource attributes.
@@ -163,12 +176,12 @@ An explicit field wins over an attribute and replaces the same key in
 both conflicting values. Selectors and groupings should use the structured
 columns.
 
-`GET /api/segments?namespace=telemetry_v1&physical=true` reports each local
-segment identity and `.fidx` section directory. Use it to distinguish incomplete
+`GET /api/segments?namespace=telemetry_v1.levanter.core&physical=true`
+reports each local segment identity and `.fidx` section directory. Use it to distinguish incomplete
 backfill from a planner miss. `GET /api/server` reports corrupt bundle and
 section counters; either condition is a safe scan fallback but should trigger a
 local rebuild investigation. A time bound remains the fastest containment:
-`telemetry_v1` is keyed on `timestamp_ms`, so bounded queries can prune before
+both telemetry tables are keyed on `timestamp_ms`, so bounded queries can prune before
 any secondary method runs.
 
 `finelog query` applies a client deadline just past the server's own 10s one.
@@ -183,7 +196,7 @@ where the fix is needed.
 
 A schema can impose a `max_row_group_rows` bound from 16,384 through 1,048,576
 and a multi-column `sort_columns` order. The compactor appends `seq` as the final deterministic
-tie-breaker. `telemetry_v1` uses 128K-row groups and sorts by
+tie-breaker. Both telemetry tables use 128K-row groups and sort by
 `(service, run_id, name, timestamp_ms, seq)`, which clusters the common service,
 run, metric-name, and time predicates while keeping `timestamp_ms` as the
 retention key. Existing compacted telemetry files are not immediately rewritten
@@ -196,8 +209,8 @@ Separately, each segment's footer carries the global layout revision it was
 written with. A revision bump causes a maintenance pass to re-encode segments
 still on an older revision, a couple per namespace per 30 s tick — otherwise a
 namespace's bulk would keep its old row groups until eviction aged it out, which
-for `telemetry_v1`'s 15 GiB is about four days and for `log`'s about eight. The
-rewrite keeps the filename and preserves the rows and their order, so it costs no
+occurs on a timescale set by the namespace's local-cache budget. The rewrite
+keeps the filename and preserves the rows and their order, so it costs no
 remote bandwidth: the archive keys objects by basename and only uploads segments
 still marked `Local`. A rewritten segment's remote copy keeps the old layout
 while holding the same rows. Schema-level sort-policy changes do not bump this
@@ -379,8 +392,9 @@ Kubernetes liveness, readiness, and startup probe, so it cannot fail on a
 condition a restart will not clear. The body carries the verdict: `ok`, or
 `degraded: <namespace>: registration failed: <reason>`.
 
-`telemetry_v1` must be registered before it accepts a row, and the registration
-is re-driven from the catalog's persisted schema on every boot. When the
+`telemetry_v1` and every semantic child must be registered before telemetry
+accepts a row, and registration is re-driven from the catalog's persisted
+schema on every boot. When the
 binary's schema and the catalog disagree in a way no merge can reconcile (a
 column type change), every write to that namespace fails until one of them
 changes, across restarts.

@@ -19,6 +19,8 @@ from rigging.telemetry.probes import nccl, nccl_client, nccl_ras, nvidia
 from rigging.telemetry.probes.runner import MAX_OUTPUT_BYTES, BoundedCommandRunner, CommandStatus
 from rigging.testing import RecordingTelemetryTransport, nccl_ras_payload
 
+_GROUP = telemetry.TelemetryGroup.LEVANTER_EXTRA
+
 
 @pytest.fixture(autouse=True)
 def reset_telemetry() -> Iterator[None]:
@@ -342,7 +344,7 @@ def test_nccl_collection_preserves_complete_reduced_report_above_default_limit(
     monkeypatch.setattr(nccl, "_CLIENT_COMMAND", (str(command),))
     transport = _configure(monkeypatch)
 
-    session = nccl.start()
+    session = nccl.start(group=_GROUP)
     available = transport.record("ras_available", {"outcome": "success"})
     session.shutdown()
 
@@ -369,7 +371,7 @@ def test_nvidia_probe_emits_only_stable_hardware_evidence(
     )
     transport = _configure(monkeypatch)
 
-    session = nvidia.start()
+    session = nvidia.start(group=_GROUP)
     inventory = transport.record("hardware_inventory", {"gpu_uuid": "GPU-f81d4fae"})
     session.shutdown()
 
@@ -390,7 +392,7 @@ def test_nccl_probe_emits_only_communicator_evidence(
     )
     transport = _configure(monkeypatch)
 
-    session = nccl.start()
+    session = nccl.start(group=_GROUP)
     rank = transport.record(
         "communicator_rank_status",
         {"communicator_hash": "0xae94423cfbb2ef4a", "rank": "1"},
@@ -427,7 +429,7 @@ def test_nvidia_probe_summarizes_healthy_devices_without_zero_error_rows(
     )
     transport = _configure(monkeypatch)
 
-    session = nvidia.start()
+    session = nvidia.start(group=_GROUP)
     available = transport.record("nvidia_health_available", {"outcome": "success"})
     healthy = transport.record("gpu_devices", {"device_state": "healthy"})
     session.shutdown()
@@ -460,7 +462,7 @@ def test_nccl_probe_records_unavailable_service(
     )
     transport = _configure(monkeypatch)
 
-    session = nccl.start()
+    session = nccl.start(group=_GROUP)
     available = transport.record("ras_available", {"outcome": "unavailable"})
     failures = transport.record("ras_poll_failures", {"failure_kind": "unavailable"})
     session.shutdown()
@@ -484,7 +486,7 @@ def test_nccl_probe_records_outer_deadline(
     monkeypatch.setattr(nccl, "TIMEOUT", 0.05)
     transport = _configure(monkeypatch)
 
-    session = nccl.start()
+    session = nccl.start(group=_GROUP)
     available = transport.record("ras_available", {"outcome": "deadline_exceeded"})
     timeouts = transport.record("ras_poll_timeouts", {})
     session.shutdown()
@@ -509,7 +511,7 @@ print({baseline!r})
     _install_commands(monkeypatch, tmp_path, nvidia_source=nvidia_source, nccl_source="raise SystemExit(2)")
     transport = _configure(monkeypatch)
 
-    session = nvidia.start()
+    session = nvidia.start(group=_GROUP)
     memory = transport.record("gpu_memory_total_bytes", {"gpu_uuid": "GPU-f81d4fae"})
     available = transport.record("nvidia_health_available", {"outcome": "success_baseline"})
     session.shutdown()
@@ -530,8 +532,8 @@ def test_output_limit_drops_one_probe_without_blocking_its_peer(
     )
     transport = _configure(monkeypatch)
 
-    nvidia_session = nvidia.start()
-    nccl_session = nccl.start()
+    nvidia_session = nvidia.start(group=_GROUP)
+    nccl_session = nccl.start(group=_GROUP)
     transport.record("communicators", {})
     nvidia_session.shutdown()
     nccl_session.shutdown()
@@ -584,8 +586,8 @@ threading.Event().wait(60)
     nccl_command.write_text(nccl_command.read_text().replace("PROBE_PID_PATH", "NCCL_PID_PATH"))
     monkeypatch.setenv("NCCL_PID_PATH", str(nccl_pid))
 
-    nvidia_session = nvidia.start()
-    nccl_session = nccl.start()
+    nvidia_session = nvidia.start(group=_GROUP)
+    nccl_session = nccl.start(group=_GROUP)
     deadline = time.monotonic() + 2
     while not (nvidia_pid.exists() and nccl_pid.exists()) and time.monotonic() < deadline:
         threading.Event().wait(0.001)

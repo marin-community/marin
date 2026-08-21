@@ -19,7 +19,7 @@ from rigging.telemetry import metrics
 logger = logging.getLogger(__name__)
 
 DEFAULT_SCRAPE_TIMEOUT = 5.0
-DEFAULT_POLL_INTERVAL = 15.0
+DEFAULT_POLL_INTERVAL = 60.0
 DEFAULT_MAX_SCRAPE_BYTES = 16 << 20
 
 type PrometheusProcessor = Callable[[tuple[PrometheusMetric, ...]], Sequence[metrics.MetricSnapshot]]
@@ -125,6 +125,7 @@ class PrometheusCollector:
         scraper: PrometheusScraper,
         processor: PrometheusProcessor,
         publisher: metrics.MetricSnapshotPublisher,
+        group: telemetry.TelemetryGroup,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
     ) -> None:
         if not metric_source:
@@ -135,6 +136,7 @@ class PrometheusCollector:
         self._scraper = scraper
         self._processor = processor
         self._publisher = publisher
+        self._group = group
         self._poll_interval = poll_interval
         self._stage_failures = {stage: 0 for stage in _PrometheusStage}
         self._stop = threading.Event()
@@ -189,26 +191,28 @@ class PrometheusCollector:
             "metric_source": self._metric_source,
             **telemetry.snapshot_attributes("counter", telemetry.CUMULATIVE_SNAPSHOT),
         }
-        telemetry.gauge("prometheus_source_available").set(float(source_available), attributes=current)
+        telemetry.gauge("prometheus_source_available", group=self._group).set(
+            float(source_available), attributes=current
+        )
         for stage, failures in self._stage_failures.items():
-            telemetry.gauge("prometheus_stage_failures", unit="{failure}").set(
+            telemetry.gauge("prometheus_stage_failures", unit="{failure}", group=self._group).set(
                 failures,
                 attributes={**cumulative, "stage": stage.value},
             )
         if result is not None and result.configured:
-            telemetry.gauge("prometheus_enqueued_samples", unit="{sample}").set(
+            telemetry.gauge("prometheus_enqueued_samples", unit="{sample}", group=self._group).set(
                 result.enqueued_records,
                 attributes=current,
             )
-            telemetry.gauge("prometheus_dropped_samples", unit="{sample}").set(
+            telemetry.gauge("prometheus_dropped_samples", unit="{sample}", group=self._group).set(
                 result.sample_limit_dropped_records,
                 attributes={**current, "drop_reason": "sample_limit"},
             )
-            telemetry.gauge("prometheus_dropped_samples", unit="{sample}").set(
+            telemetry.gauge("prometheus_dropped_samples", unit="{sample}", group=self._group).set(
                 result.telemetry_lost_records,
                 attributes={**current, "drop_reason": "telemetry_loss"},
             )
-        telemetry.record_runtime_health()
+        telemetry.record_runtime_health(self._group)
 
     def _run(self) -> None:
         self.poll_once()

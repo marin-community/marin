@@ -17,7 +17,9 @@ logger = logging.getLogger(__name__)
 
 CACHE_RECLAIM_INTERVAL = Duration.from_minutes(5)
 _CACHE_RECLAIM_PREFIX = ".iris-reclaim-"
-_RECLAIM_FAILURES = telemetry.counter("iris_cache_reclaim_failures", unit="{failure}")
+_RECLAIM_FAILURES = telemetry.counter(
+    "iris_cache_reclaim_failures", unit="{failure}", group=telemetry.TelemetryGroup.NODE_AGENT
+)
 
 
 def _record_failure(failure_kind: str) -> None:

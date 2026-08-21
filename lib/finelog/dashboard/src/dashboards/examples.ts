@@ -7,8 +7,9 @@ import type { DashboardDefinition, DashboardPanel, DashboardPanelWidth } from '@
  * reader is plausibly looking at, not every job the retention window holds.
  */
 function jobIdOptions(service: string): string {
+  const namespace = service === 'vllm' ? '"telemetry_v1.vllm"' : 'telemetry_v1'
   return `SELECT job_id
-FROM telemetry_v1
+FROM ${namespace}
 WHERE service = '${service}'
   AND timestamp_ms >= {{from_ms}}
   AND timestamp_ms < {{to_ms}}
@@ -25,6 +26,7 @@ function trainingMetricPanel(
   title: string,
   description: string,
   metricName: string,
+  namespace: 'telemetry_v1' | '"telemetry_v1.levanter.core"' | '"telemetry_v1.levanter.extra"',
   series: string,
   width: DashboardPanelWidth,
 ): DashboardPanel {
@@ -37,7 +39,7 @@ function trainingMetricPanel(
     sql: `SELECT date_bin(INTERVAL '{{interval_ms}} milliseconds', to_timestamp_millis(timestamp_ms)) AS t,
        '${series}' AS series,
        AVG(value) AS value
-FROM telemetry_v1
+FROM ${namespace}
 WHERE service = 'levanter'
   AND name = '${metricName}'
   AND job_id = {{job_id}}
@@ -111,7 +113,7 @@ LIMIT 500`,
            PARTITION BY "cluster", name, resource_attributes_json, attributes_json
            ORDER BY timestamp_ms, seq
          ) AS previous_value
-  FROM telemetry_v1
+  FROM "telemetry_v1.node_agent"
   WHERE timestamp_ms >= {{from_ms}} - ${COUNTER_LOOKBACK_MS}
     AND timestamp_ms < {{to_ms}}
     AND name IN ('gpu_pcie_replay_errors', 'gpu_nvlink_errors')
@@ -159,7 +161,7 @@ ORDER BY 1, 2`,
            PARTITION BY "cluster", name, resource_attributes_json, attributes_json
            ORDER BY timestamp_ms, seq
          ) AS previous_timestamp_ms
-  FROM telemetry_v1
+  FROM "telemetry_v1.node_agent"
   WHERE service = 'node'
     AND timestamp_ms >= {{from_ms}} - ${COUNTER_LOOKBACK_MS}
     AND timestamp_ms < {{to_ms}}
@@ -200,6 +202,7 @@ const TRAINING_RUN: DashboardDefinition = {
       'Training throughput',
       'Mean tokens per second across workers reporting for the job.',
       'throughput_tokens_per_second',
+      '"telemetry_v1.levanter.extra"',
       'tokens/s',
       'half',
     ),
@@ -208,6 +211,7 @@ const TRAINING_RUN: DashboardDefinition = {
       'Mean MFU',
       'Mean model-flop utilization percentage across workers.',
       'throughput_mean_mfu',
+      '"telemetry_v1.levanter.extra"',
       'MFU %',
       'half',
     ),
@@ -216,6 +220,7 @@ const TRAINING_RUN: DashboardDefinition = {
       'Training loss',
       'Mean train/loss snapshots for the selected job.',
       'train_loss',
+      '"telemetry_v1.levanter.core"',
       'train loss',
       'full',
     ),
@@ -241,7 +246,7 @@ const INFERENCE_SERVE: DashboardDefinition = {
               THEN 'KV cache %' ELSE 'waiting requests' END AS series,
          CASE WHEN name IN ('kv_cache_usage_perc', 'gpu_cache_usage_perc')
               THEN AVG(value) ELSE SUM(value) END AS value
-  FROM telemetry_v1
+  FROM "telemetry_v1.vllm"
   WHERE service = 'vllm'
     AND name IN ('num_requests_waiting', 'kv_cache_usage_perc', 'gpu_cache_usage_perc')
     AND job_id = {{job_id}}
@@ -272,7 +277,7 @@ ORDER BY 1, 2`,
            PARTITION BY "cluster", name, resource_attributes_json, attributes_json
            ORDER BY timestamp_ms, seq
          ) AS previous_value
-  FROM telemetry_v1
+  FROM "telemetry_v1.vllm"
   WHERE service = 'vllm'
     AND name IN ('time_to_first_token_seconds_sum', 'time_to_first_token_seconds_count')
     AND job_id = {{job_id}}

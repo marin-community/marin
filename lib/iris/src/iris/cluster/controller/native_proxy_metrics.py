@@ -18,7 +18,7 @@ from rigging import telemetry
 from iris.cluster.controller.native_proxy import NativeProxy
 
 IN_FLIGHT_METRIC_NAME = "rpc_in_flight"
-DEFAULT_POLL_INTERVAL = 15.0
+DEFAULT_POLL_INTERVAL = 60.0
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +118,7 @@ def _merge_shared_counters(
 
 def _publish(name: str, value: float, attributes: dict[str, str], source_kind: str) -> None:
     temporality = telemetry.CURRENT_SNAPSHOT if source_kind == "gauge" else telemetry.CUMULATIVE_SNAPSHOT
-    telemetry.gauge(name).set(
+    telemetry.gauge(name, group=telemetry.TelemetryGroup.IRIS_RPC).set(
         value,
         attributes={**attributes, **telemetry.snapshot_attributes(source_kind, temporality)},
     )

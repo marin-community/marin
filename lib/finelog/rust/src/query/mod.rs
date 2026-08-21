@@ -32,10 +32,12 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema, Schem
 use datafusion::catalog::TableProvider;
 use datafusion::common::config::Dialect;
 use datafusion::common::TableReference;
+use datafusion::datasource::ViewTable;
 use datafusion::error::Result as DFResult;
 use datafusion::execution::memory_pool::GreedyMemoryPool;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion::prelude::{SQLOptions, SessionConfig, SessionContext};
 
 use crate::query::provider::NamespaceProvider;
@@ -46,6 +48,14 @@ use crate::query::string_values::StringValues;
 pub struct RegisteredProvider {
     pub name: String,
     pub provider: NamespaceProvider,
+}
+
+pub const TELEMETRY_ROLLUP_NAMESPACE: &str = "telemetry_v1";
+pub const TELEMETRY_NAMESPACE_PREFIX: &str = "telemetry_v1.";
+const TELEMETRY_LEGACY_NAMESPACE: &str = "__finelog_telemetry_v1_legacy";
+
+pub fn is_telemetry_namespace(namespace: &str) -> bool {
+    namespace == TELEMETRY_ROLLUP_NAMESPACE || namespace.starts_with(TELEMETRY_NAMESPACE_PREFIX)
 }
 
 /// Floor for the query memory pool so a tiny/misreported cgroup can't strangle
@@ -445,8 +455,13 @@ pub async fn run_query_over(
     let aggregate_sources: HashMap<String, exact_aggregate::AggregateSource> = providers
         .iter()
         .map(|provider| {
+            let name = if provider.name == TELEMETRY_ROLLUP_NAMESPACE {
+                TELEMETRY_LEGACY_NAMESPACE.to_string()
+            } else {
+                provider.name.clone()
+            };
             (
-                provider.name.clone(),
+                name,
                 exact_aggregate::AggregateSource {
                     segment_paths: provider.provider.segment_paths().to_vec(),
                     index_cache: Arc::clone(provider.provider.index_cache()),
@@ -455,12 +470,45 @@ pub async fn run_query_over(
             )
         })
         .collect();
-    let names: Vec<String> = providers.iter().map(|p| p.name.clone()).collect();
+    let mut names = Vec::with_capacity(providers.len() + 1);
+    let mut telemetry_sources = Vec::new();
     for rp in providers {
         // `TableReference::bare` keeps a dotted name (`iris.worker`) as ONE
         // table identifier rather than a `schema.table` split, so the user's
         // quoted `FROM "iris.worker"` resolves to exactly this registration.
-        ctx.register_table(TableReference::bare(rp.name), Arc::new(rp.provider))?;
+        let registered_name = if rp.name == TELEMETRY_ROLLUP_NAMESPACE {
+            TELEMETRY_LEGACY_NAMESPACE.to_string()
+        } else {
+            rp.name
+        };
+        if registered_name == TELEMETRY_LEGACY_NAMESPACE
+            || registered_name.starts_with(TELEMETRY_NAMESPACE_PREFIX)
+        {
+            telemetry_sources.push(registered_name.clone());
+        }
+        ctx.register_table(
+            TableReference::bare(registered_name.clone()),
+            Arc::new(rp.provider),
+        )?;
+        names.push(registered_name);
+    }
+    if let Some(first) = telemetry_sources.first() {
+        let mut rollup = ctx
+            .table(TableReference::bare(first.as_str()))
+            .await?
+            .into_unoptimized_plan();
+        for source in telemetry_sources.iter().skip(1) {
+            let child = ctx
+                .table(TableReference::bare(source.as_str()))
+                .await?
+                .into_unoptimized_plan();
+            rollup = LogicalPlanBuilder::from(rollup).union(child)?.build()?;
+        }
+        ctx.register_table(
+            TableReference::bare(TELEMETRY_ROLLUP_NAMESPACE),
+            Arc::new(ViewTable::new(rollup, None)),
+        )?;
+        names.push(TELEMETRY_ROLLUP_NAMESPACE.to_string());
     }
     ctx.add_optimizer_rule(Arc::new(exact_aggregate::ExactAggregateRewrite::new(
         aggregate_sources.clone(),

@@ -69,7 +69,7 @@
               "params": [
                 {
                   "key": "sql",
-                  "value": "SELECT DISTINCT CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END AS value FROM \"telemetry_v1\" WHERE service = 'vllm' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END IS NOT NULL ORDER BY 1"
+                  "value": "SELECT DISTINCT CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END AS value FROM \"telemetry_v1.vllm\" WHERE service = 'vllm' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END IS NOT NULL ORDER BY 1"
                 },
                 {
                   "key": "from",
@@ -201,7 +201,7 @@
       "id": 9,
       "type": "table",
       "title": "Replica freshness detail",
-      "description": "Worst-first freshness for up to 128 producer/resource identities observed in the bounded scan. Current telemetry_v1 records producer time but not ingest time, so producer and export gaps cannot yet be separated.",
+      "description": "Worst-first freshness for up to 128 producer/resource identities observed in the bounded scan. Current telemetry_v1.vllm records producer time but not ingest time, so producer and export gaps cannot yet be separated.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

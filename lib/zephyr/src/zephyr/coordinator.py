@@ -531,8 +531,10 @@ class ZephyrCoordinator:
             attributes = {**_SNAPSHOT_ATTRIBUTES, "run": execution_id}
             for name, value in counters.items():
                 metric_name = re.sub(r"[^a-zA-Z0-9_]", "_", name.removeprefix("zephyr/"))
-                telemetry.gauge(metric_name).set(value, attributes=attributes)
-            telemetry.gauge(ZEPHYR_PROGRESS_TIME_METRIC, unit="s").set(
+                telemetry.gauge(metric_name, group=telemetry.TelemetryGroup.ZEPHYR_EXTRA).set(
+                    value, attributes=attributes
+                )
+            telemetry.gauge(ZEPHYR_PROGRESS_TIME_METRIC, unit="s", group=telemetry.TelemetryGroup.ZEPHYR_CORE).set(
                 progress_time_seconds,
                 attributes=attributes,
             )

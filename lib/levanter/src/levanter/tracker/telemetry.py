@@ -26,6 +26,8 @@ from levanter.tracker.histogram import SummaryStats
 logger = logging.getLogger(__name__)
 
 _CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
+_CORE_METRICS = frozenset({"train_loss", "step", "phase", "progress_time_seconds", "global_step"})
+_EXTRA_LOG_INTERVAL = 10
 
 
 class TrainingPhase(IntEnum):
@@ -40,8 +42,18 @@ def _metric_name(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_]", "_", name)
 
 
-def _set(name: str, value: float, *, attributes: dict[str, str] = _CURRENT) -> None:
-    telemetry.gauge(_metric_name(name)).set(value, attributes=attributes)
+def _set(
+    name: str,
+    value: float,
+    *,
+    attributes: dict[str, str] = _CURRENT,
+    group: telemetry.TelemetryGroup = telemetry.TelemetryGroup.LEVANTER_EXTRA,
+) -> None:
+    telemetry.gauge(_metric_name(name), group=group).set(value, attributes=attributes)
+
+
+def _set_core(name: str, value: float, *, attributes: dict[str, str] = _CURRENT) -> None:
+    _set(name, value, attributes=attributes, group=telemetry.TelemetryGroup.LEVANTER_CORE)
 
 
 # Keep this well under the reader's enrollment window. Telemetry is best-effort and
@@ -76,8 +88,10 @@ class _PhaseHeartbeat:
 
     def publish(self, phase: TrainingPhase) -> None:
         with self._lock:
+            if self._phase == phase:
+                return
             self._phase = phase
-        _set("phase", float(phase))
+        _set_core("phase", float(phase))
 
     def start(self) -> None:
         with self._lock:
@@ -93,13 +107,15 @@ class _PhaseHeartbeat:
             self._stop.set()
         if thread is not None:
             thread.join(timeout=self._interval * 2)
+        with self._lock:
+            self._phase = None
 
     def _run(self) -> None:
         while not self._stop.wait(self._interval):
             with self._lock:
                 phase = self._phase
             if phase is not None:
-                _set("phase", float(phase))
+                _set_core("phase", float(phase))
 
 
 _HEARTBEAT = _PhaseHeartbeat()
@@ -131,7 +147,7 @@ def _start_nccl_ras_probe() -> nccl.NcclRasSession | None:
             return None
         if jax.default_backend() != "gpu" or jax.process_index() != 0:
             return None
-        return nccl.start(interval=_NCCL_RAS_POLL_SECONDS)
+        return nccl.start(group=telemetry.TelemetryGroup.LEVANTER_EXTRA, interval=_NCCL_RAS_POLL_SECONDS)
     except RuntimeError:
         logger.warning("could not start NCCL RAS telemetry", exc_info=True)
         return None
@@ -160,20 +176,29 @@ class TelemetryTracker(Tracker):
     def __init__(self, *, publish_tracker_metrics: bool = True) -> None:
         self._publish_tracker_metrics = publish_tracker_metrics
         self._nccl_ras_probe = _start_nccl_ras_probe()
-        _set("progress_time_seconds", 0)
-        set_training_phase(TrainingPhase.INITIALIZING)
-        _HEARTBEAT.start()
+        if self._publish_tracker_metrics:
+            _set_core("progress_time_seconds", 0)
+            set_training_phase(TrainingPhase.INITIALIZING)
+            _HEARTBEAT.start()
 
-    def _publish(self, metrics: Mapping[str, object]) -> None:
+    def _publish(self, metrics: Mapping[str, object], *, include_extra: bool) -> None:
         if not self._publish_tracker_metrics:
             return
         for key, value in metrics.items():
+            metric_name = _metric_name(key)
+            group = (
+                telemetry.TelemetryGroup.LEVANTER_CORE
+                if metric_name in _CORE_METRICS
+                else telemetry.TelemetryGroup.LEVANTER_EXTRA
+            )
+            if group is telemetry.TelemetryGroup.LEVANTER_EXTRA and not include_extra:
+                continue
             if isinstance(value, SummaryStats):
                 self._publish_summary(key, value)
                 continue
             scalar = _as_scalar(value)
             if scalar is not None:
-                _set(key, scalar)
+                _set(key, scalar, group=group)
 
     def _publish_summary(self, key: str, stats: SummaryStats) -> None:
         """Export a summary's reduced moments as gauges."""
@@ -198,16 +223,18 @@ class TelemetryTracker(Tracker):
         pass
 
     def log(self, metrics, *, step: Optional[int], commit: Optional[bool] = None):
+        if not self._publish_tracker_metrics:
+            return
         if step is not None:
-            _set("step", float(step))
+            _set_core("step", float(step))
             loss = _as_scalar(metrics.get("train/loss"))
             if loss is not None:
-                _set("progress_time_seconds", time())
+                _set_core("progress_time_seconds", time())
                 set_training_phase(TrainingPhase.TRAINING)
-        self._publish(metrics)
+        self._publish(metrics, include_extra=step is None or step % _EXTRA_LOG_INTERVAL == 0)
 
     def log_summary(self, metrics: dict[str, Any]):
-        self._publish(metrics)
+        self._publish(metrics, include_extra=True)
 
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
         pass
@@ -218,6 +245,8 @@ class TelemetryTracker(Tracker):
                 self._nccl_ras_probe.shutdown()
             except Exception:
                 logger.warning("could not stop NCCL RAS telemetry", exc_info=True)
+        if not self._publish_tracker_metrics:
+            return
         set_training_phase(TrainingPhase.FINISHED)
         # The run is over, so there is nothing left to keep enrolled. FINISHED is
         # already published above, and republishing it for the process's remaining

@@ -149,6 +149,7 @@ def test_k8s_collection_exports_normalized_node_and_device_records(monkeypatch: 
     assert pcie_transmit["unit"] == "By/s"
     assert inventory["attributes"]["gpu_model"] == "NVIDIA H100 80GB HBM3"
     assert inventory["attributes"]["driver_version"] == "570.86.15"
+    assert all(record["group"] == "node_agent" for record in transport.records)
     assert transport.resources[-1] == {
         "service": "iris-node-agent",
         "attributes": {"node_name": "g83d142", "node_uid": "node-uid-1", "role": "worker"},

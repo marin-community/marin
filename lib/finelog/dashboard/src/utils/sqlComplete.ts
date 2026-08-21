@@ -24,7 +24,7 @@ export interface Completion {
  * Identifiers the SQL dialect would otherwise swallow, and so must be inserted
  * quoted.
  *
- * `cluster` is a column of both `telemetry_v1` and `log` and the one most worth
+ * `cluster` is a column of the telemetry namespaces and `log` and the one most worth
  * grouping by, but `CLUSTER BY` is dialect syntax, so `SELECT name, cluster FROM
  * …` is a parse error while `SELECT cluster, name FROM …` is fine. It is the
  * only collision across the 124 distinct column names registered on the marin

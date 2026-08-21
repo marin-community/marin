@@ -14,6 +14,8 @@ import requests
 import zstandard
 from rigging import telemetry
 
+_GROUP = telemetry.TelemetryGroup.LEVANTER_CORE
+
 
 @dataclass
 class FakeResponse:
@@ -133,10 +135,10 @@ def configure(monkeypatch: pytest.MonkeyPatch, transport: RecordingTransport, **
 
 
 def test_unconfigured_instruments_are_noops() -> None:
-    telemetry.counter("requests").add()
-    telemetry.gauge("workers").set(2)
-    telemetry.histogram("latency", unit="ms").record(1.5)
-    telemetry.event("ready", telemetry.serialization.EventBody({"worker": 3}))
+    telemetry.counter("requests", group=_GROUP).add()
+    telemetry.gauge("workers", group=_GROUP).set(2)
+    telemetry.histogram("latency", unit="ms", group=_GROUP).record(1.5)
+    telemetry.event("ready", telemetry.serialization.EventBody({"worker": 3}), group=_GROUP)
 
     assert telemetry.runtime_status() == telemetry.TelemetryStatus(False, 0, 0, 0, 0, 0, 0, 0, None, 0.0)
 
@@ -180,7 +182,7 @@ def test_requests_transport_tracks_server_encoding_rollouts(monkeypatch: pytest.
 
 def test_invalid_configuration_stays_inert(caplog: pytest.LogCaptureFixture) -> None:
     telemetry.configure(endpoint="file:///tmp/telemetry", service="test")
-    telemetry.counter("requests").add()
+    telemetry.counter("requests", group=_GROUP).add()
 
     assert telemetry.runtime_status().configured is False
     assert "invalid configuration" in caplog.text
@@ -190,11 +192,27 @@ def test_custom_resource_role_is_exported(monkeypatch: pytest.MonkeyPatch) -> No
     transport = RecordingTransport()
     configure(monkeypatch, transport, attributes={"role": "skyrl_driver"})
 
-    telemetry.counter("requests").add()
+    telemetry.counter("requests", group=_GROUP).add()
 
     assert transport.accepted.wait(1)
     payload = json.loads(transport.requests[0][1])
     assert payload["resource"]["attributes"]["role"] == "skyrl_driver"
+
+
+def test_metric_group_is_exported_per_record(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = RecordingTransport()
+    configure(monkeypatch, transport, max_batch_records=2)
+
+    telemetry.gauge("step", group=telemetry.TelemetryGroup.LEVANTER_CORE).set(3)
+    telemetry.gauge("gpu_power_watts", group=telemetry.TelemetryGroup.NODE_AGENT).set(500)
+
+    assert transport.accepted.wait(1)
+    telemetry.shutdown(0.2)
+    records = [record for request in transport.requests for record in json.loads(request[1])["records"]]
+    assert {record["name"]: record["group"] for record in records} == {
+        "step": "levanter.core",
+        "gpu_power_watts": "node_agent",
+    }
 
 
 def test_retry_reuses_exact_batch_id_and_body(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -203,7 +221,7 @@ def test_retry_reuses_exact_batch_id_and_body(monkeypatch: pytest.MonkeyPatch) -
     )
     configure(monkeypatch, transport)
 
-    telemetry.counter("requests", unit="request").add(2, attributes={"route": "/chat"})
+    telemetry.counter("requests", unit="request", group=_GROUP).add(2, attributes={"route": "/chat"})
 
     assert transport.accepted.wait(1)
     status = telemetry.runtime_status()
@@ -224,7 +242,7 @@ def test_retry_reuses_exact_batch_id_and_body(monkeypatch: pytest.MonkeyPatch) -
 def test_network_wait_never_runs_on_emitting_thread(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = BlockingTransport()
     configure(monkeypatch, transport, max_batch_records=1)
-    counter = telemetry.counter("requests")
+    counter = telemetry.counter("requests", group=_GROUP)
     counter.add()
     assert transport.started.wait(1)
 
@@ -253,7 +271,7 @@ def test_pending_and_queued_records_share_hard_caps(
         max_batch_records=1,
         max_batch_bytes=queue_bytes,
     )
-    metric = telemetry.gauge("worker.load")
+    metric = telemetry.gauge("worker.load", group=_GROUP)
     metric.set(1)
     assert transport.started.wait(1)
 
@@ -274,7 +292,7 @@ def test_terminal_response_drops_batch_and_records_loss(monkeypatch: pytest.Monk
     transport = RecordingTransport([status_outcome(422)])
     configure(monkeypatch, transport)
 
-    telemetry.event("invalid", telemetry.serialization.EventBody({"reason": "test"}))
+    telemetry.event("invalid", telemetry.serialization.EventBody({"reason": "test"}), group=_GROUP)
 
     assert transport.rejected.wait(1)
     deadline = time.monotonic() + 1
@@ -289,10 +307,10 @@ def test_terminal_response_drops_batch_and_records_loss(monkeypatch: pytest.Monk
 def test_exporter_health_records_queue_loss_retry_and_freshness(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = RecordingTransport([error_outcome(requests.ConnectionError("offline")), status_outcome(200)])
     configure(monkeypatch, transport, max_batch_records=20)
-    telemetry.counter("application_progress").add()
+    telemetry.counter("application_progress", group=_GROUP).add()
     assert transport.accepted.wait(1)
 
-    status = telemetry.record_runtime_health()
+    status = telemetry.record_runtime_health(_GROUP)
     deadline = time.monotonic() + 1
     while telemetry.runtime_status().queued_records and time.monotonic() < deadline:
         threading.Event().wait(0.001)
@@ -330,8 +348,8 @@ def test_invalid_typed_event_cannot_poison_valid_metric(monkeypatch: pytest.Monk
     transport = RecordingTransport()
     configure(monkeypatch, transport)
 
-    telemetry.event("invalid", telemetry.serialization.EventBody({"value": float("nan")}))
-    telemetry.counter("valid").add()
+    telemetry.event("invalid", telemetry.serialization.EventBody({"value": float("nan")}), group=_GROUP)
+    telemetry.counter("valid", group=_GROUP).add()
 
     assert transport.accepted.wait(1)
     payload = json.loads(transport.requests[0][1])
@@ -346,6 +364,7 @@ def test_event_integer_boundaries_match_serde_json(monkeypatch: pytest.MonkeyPat
     telemetry.event(
         "integer.bounds",
         telemetry.serialization.EventBody({"minimum": -(1 << 63), "maximum": (1 << 64) - 1}),
+        group=_GROUP,
     )
 
     assert transport.accepted.wait(1)
@@ -374,7 +393,7 @@ def test_nonfinite_network_configuration_stays_inert(monkeypatch: pytest.MonkeyP
 def test_invalid_shutdown_budget_is_bounded(monkeypatch: pytest.MonkeyPatch, timeout: object) -> None:
     transport = BlockingTransport()
     configure(monkeypatch, transport)
-    telemetry.event("stuck", telemetry.serialization.EventBody({}))
+    telemetry.event("stuck", telemetry.serialization.EventBody({}), group=_GROUP)
     assert transport.started.wait(1)
 
     started = time.monotonic()
@@ -405,7 +424,7 @@ def test_raising_log_handler_cannot_stop_exporter_settlement(monkeypatch: pytest
     telemetry.logger.addHandler(handler)
     monkeypatch.setattr(telemetry, "_last_warning", None)
     try:
-        telemetry.event("rejected", telemetry.serialization.EventBody({}))
+        telemetry.event("rejected", telemetry.serialization.EventBody({}), group=_GROUP)
         assert transport.rejected.wait(1)
         deadline = time.monotonic() + 1
         while telemetry.runtime_status().queued_records and time.monotonic() < deadline:
@@ -445,7 +464,7 @@ def test_same_configuration_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> No
     }
     telemetry.configure(**options)
     telemetry.configure(**options)
-    telemetry.event("ready", telemetry.serialization.EventBody({}))
+    telemetry.event("ready", telemetry.serialization.EventBody({}), group=_GROUP)
 
     assert transports[0].accepted.wait(1)
     assert len(transports) == 1
@@ -454,7 +473,7 @@ def test_same_configuration_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> No
 def test_shutdown_returns_within_budget_when_transport_is_stuck(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = BlockingTransport()
     configure(monkeypatch, transport)
-    telemetry.event("stuck", telemetry.serialization.EventBody({}))
+    telemetry.event("stuck", telemetry.serialization.EventBody({}), group=_GROUP)
     assert transport.started.wait(1)
 
     started = time.monotonic()
@@ -469,7 +488,7 @@ def test_shutdown_returns_within_budget_when_transport_is_stuck(monkeypatch: pyt
 def test_flush_drains_records_without_disabling_export(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = RecordingTransport()
     configure(monkeypatch, transport, max_batch_records=1)
-    counter = telemetry.counter("flushed_record")
+    counter = telemetry.counter("flushed_record", group=_GROUP)
 
     counter.add(1)
     assert telemetry.flush(1.0)
@@ -484,7 +503,7 @@ def test_flush_drains_records_without_disabling_export(monkeypatch: pytest.Monke
 def test_flush_timeout_leaves_exporter_running(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = BlockingTransport()
     configure(monkeypatch, transport)
-    telemetry.counter("stuck_record").add()
+    telemetry.counter("stuck_record", group=_GROUP).add()
     assert transport.started.wait(1)
 
     started = time.monotonic()
@@ -500,7 +519,7 @@ def test_flush_timeout_leaves_exporter_running(monkeypatch: pytest.MonkeyPatch) 
 def test_shutdown_drains_multiple_queued_batches_after_success(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = BlockingTransport()
     configure(monkeypatch, transport, max_batch_records=1)
-    counter = telemetry.counter("terminal_record")
+    counter = telemetry.counter("terminal_record", group=_GROUP)
     counter.add(1)
     counter.add(2)
     counter.add(3)

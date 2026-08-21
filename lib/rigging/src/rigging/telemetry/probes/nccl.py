@@ -59,7 +59,8 @@ class NcclRasCollection:
 class NcclRasSession:
     """Own periodic collection and provide one serialized stall capture path."""
 
-    def __init__(self, *, interval: float) -> None:
+    def __init__(self, *, interval: float, group: telemetry.TelemetryGroup) -> None:
+        self._group = group
         self._periodic = PeriodicProbe(
             "nccl_ras",
             self._collect_periodic,
@@ -89,6 +90,7 @@ class NcclRasSession:
             result.result,
             collection.duration_seconds,
             trigger,
+            self._group,
             observed_bytes=result.observed_bytes,
             limit_bytes=result.limit_bytes,
         )
@@ -96,22 +98,22 @@ class NcclRasSession:
             nccl_ras.NcclRasResult.CLIENT_TIMEOUT,
             nccl_ras.NcclRasResult.DEADLINE_EXCEEDED,
         }:
-            _record_timeout(trigger)
+            _record_timeout(trigger, self._group)
         if result.report is None:
             return
         snapshots = ras_snapshots(result.report, trigger=trigger)
-        published = MetricSnapshotPublisher(max_records=len(snapshots)).publish(snapshots)
+        published = MetricSnapshotPublisher(max_records=len(snapshots), group=self._group).publish(snapshots)
         attributes = {
             "trigger": trigger.value,
             **telemetry.snapshot_attributes("nccl_ras", telemetry.CURRENT_SNAPSHOT),
         }
-        telemetry.gauge(_METRIC_RECORDS_NAME, unit="{record}").set(
+        telemetry.gauge(_METRIC_RECORDS_NAME, unit="{record}", group=self._group).set(
             float(len(snapshots)), attributes={**attributes, "record_state": "input"}
         )
-        telemetry.gauge(_METRIC_RECORDS_NAME, unit="{record}").set(
+        telemetry.gauge(_METRIC_RECORDS_NAME, unit="{record}", group=self._group).set(
             float(published.enqueued_records), attributes={**attributes, "record_state": "enqueued"}
         )
-        telemetry.gauge(_METRIC_RECORDS_NAME, unit="{record}").set(
+        telemetry.gauge(_METRIC_RECORDS_NAME, unit="{record}", group=self._group).set(
             float(published.telemetry_lost_records), attributes={**attributes, "record_state": "telemetry_lost"}
         )
 
@@ -120,9 +122,9 @@ class NcclRasSession:
         self._periodic.shutdown(timeout)
 
 
-def start(*, interval: float = _DEFAULT_INTERVAL) -> NcclRasSession:
+def start(*, group: telemetry.TelemetryGroup, interval: float = _DEFAULT_INTERVAL) -> NcclRasSession:
     """Collect NCCL RAS summaries until shutdown."""
-    return NcclRasSession(interval=interval)
+    return NcclRasSession(interval=interval, group=group)
 
 
 def collect_ras(
@@ -345,8 +347,8 @@ def ras_snapshots(report: nccl_ras.NcclRasReport, *, trigger: RasTrigger) -> tup
     return tuple(snapshots)
 
 
-def _record_timeout(trigger: RasTrigger) -> None:
-    telemetry.counter("ras_poll_timeouts", unit="{timeout}").add(
+def _record_timeout(trigger: RasTrigger, group: telemetry.TelemetryGroup) -> None:
+    telemetry.counter("ras_poll_timeouts", unit="{timeout}", group=group).add(
         1,
         attributes={
             "trigger": trigger.value,
@@ -359,6 +361,7 @@ def _record_poll(
     outcome: nccl_ras.NcclRasResult,
     duration: float,
     trigger: RasTrigger,
+    group: telemetry.TelemetryGroup,
     *,
     observed_bytes: int | None = None,
     limit_bytes: int | None = None,
@@ -369,15 +372,15 @@ def _record_poll(
         "trigger": trigger.value,
         **telemetry.snapshot_attributes("nccl_ras", telemetry.CURRENT_SNAPSHOT),
     }
-    telemetry.gauge("ras_available").set(float(available), attributes=current)
-    telemetry.histogram("ras_poll_duration_seconds", unit="s").record(duration, attributes=current)
+    telemetry.gauge("ras_available", group=group).set(float(available), attributes=current)
+    telemetry.histogram("ras_poll_duration_seconds", unit="s", group=group).record(duration, attributes=current)
     if not available:
         limit_attributes = {}
         if observed_bytes is not None:
             limit_attributes["observed_bytes"] = str(observed_bytes)
         if limit_bytes is not None:
             limit_attributes["limit_bytes"] = str(limit_bytes)
-        telemetry.counter("ras_poll_failures", unit="{failure}").add(
+        telemetry.counter("ras_poll_failures", unit="{failure}", group=group).add(
             1,
             attributes={
                 "failure_kind": outcome.value,

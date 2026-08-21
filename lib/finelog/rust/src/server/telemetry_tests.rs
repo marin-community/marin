@@ -165,6 +165,7 @@ fn batch(batch_id: &str) -> Vec<u8> {
                 "name": "tokens",
                 "value": 32.0,
                 "unit": "token",
+                "group": "levanter.core",
                 "attributes": {"stage": "train"}
             },
             {
@@ -172,6 +173,7 @@ fn batch(batch_id: &str) -> Vec<u8> {
                 "kind": "event",
                 "name": "checkpoint",
                 "body": {"step": 10},
+                "group": "levanter.core",
                 "attributes": {}
             }
         ]
@@ -202,6 +204,7 @@ fn training_metrics_batch(
                 "kind": "gauge",
                 "name": "step",
                 "value": step,
+                "group": "levanter.core",
                 "attributes": {}
             },
             {
@@ -209,6 +212,7 @@ fn training_metrics_batch(
                 "kind": "gauge",
                 "name": "train_loss",
                 "value": loss,
+                "group": "levanter.core",
                 "attributes": {}
             }
         ]
@@ -434,11 +438,11 @@ async fn process_zero_training_query_uses_projection_without_changing_results() 
         assert_eq!(response.status, StatusCode::OK);
     }
     store
-        .maintain_namespace("telemetry_v1", true)
+        .maintain_namespace("telemetry_v1.levanter.core", true)
         .await
         .unwrap();
 
-    const FILTER_AND_ORDER: &str = "FROM telemetry_v1 \
+    const FILTER_AND_ORDER: &str = "FROM \"telemetry_v1.levanter.core\" \
         WHERE service = 'levanter' \
           AND name IN ('step', 'train_loss') \
           AND run_id = 'run-projection' \
@@ -524,11 +528,16 @@ async fn a_registration_the_catalog_rejects_shows_up_in_health_and_server_info()
     assert!(health.contains("telemetry_v1"), "{health}");
 
     let info: Value = serde_json::from_str(&get_text(&client, addr, "/api/server").await).unwrap();
-    let namespace = &info["ingest"][0];
-    assert_eq!(namespace["namespace"], "telemetry_v1");
-    assert_eq!(namespace["state"], "failed");
-    assert!(namespace["sinceUnix"].as_i64().unwrap() > 0);
-    assert!(namespace["error"].as_str().unwrap().contains("name"));
+    let namespaces = info["ingest"].as_array().unwrap();
+    for expected in ["telemetry_v1", "telemetry_v1.levanter.core"] {
+        let namespace = namespaces
+            .iter()
+            .find(|namespace| namespace["namespace"] == expected)
+            .unwrap();
+        assert_eq!(namespace["state"], "failed");
+        assert!(namespace["sinceUnix"].as_i64().unwrap() > 0);
+        assert!(namespace["error"].as_str().unwrap().contains("name"));
+    }
 
     let posted = post(
         &client,
@@ -575,7 +584,7 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
     assert_eq!(response.payload["deduplicated"], false);
     assert_eq!(response.payload["record_count"], 2);
     store
-        .await_persisted("telemetry_v1", 1, Duration::from_secs(5))
+        .await_persisted("telemetry_v1.levanter.core", 1, Duration::from_secs(5))
         .await
         .unwrap();
     let rows = query(
@@ -620,6 +629,101 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
 }
 
 #[tokio::test]
+async fn semantic_groups_route_to_children_and_roll_up() {
+    let store = disk_store("telemetry-groups");
+    let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
+    let client = http_client();
+    let batch_id = "21d4d611-9daa-4556-9529-11ed4868dca6";
+    let body = serde_json::to_vec(&json!({
+        "version": 1,
+        "batch_id": batch_id,
+        "resource": {"service": "levanter", "attributes": {}},
+        "records": [
+            {
+                "timestamp_ms": 1_700_000_000_000_i64,
+                "kind": "gauge",
+                "name": "train_loss",
+                "value": 1.25,
+                "group": "levanter.core",
+                "attributes": {}
+            },
+            {
+                "timestamp_ms": 1_700_000_000_001_i64,
+                "kind": "gauge",
+                "name": "grad_norm_total",
+                "value": 3.0,
+                "attributes": {},
+                "group": "levanter.extra"
+            }
+        ]
+    }))
+    .unwrap();
+
+    let response = post(
+        &client,
+        addr,
+        body.clone(),
+        Some(batch_id),
+        Some("application/json"),
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status, StatusCode::OK);
+    let repeated = post(
+        &client,
+        addr,
+        body,
+        Some(batch_id),
+        Some("application/json"),
+        None,
+    )
+    .await;
+    assert_eq!(repeated.status, StatusCode::OK);
+    assert_eq!(repeated.payload["deduplicated"], true);
+    store
+        .await_persisted("telemetry_v1.levanter.core", 1, Duration::from_secs(5))
+        .await
+        .unwrap();
+    store
+        .await_persisted("telemetry_v1.levanter.extra", 1, Duration::from_secs(5))
+        .await
+        .unwrap();
+    let core = query(&store, "SELECT name FROM \"telemetry_v1.levanter.core\"").await;
+    let extra = query(&store, "SELECT name FROM \"telemetry_v1.levanter.extra\"").await;
+    let rollup = query(&store, "SELECT name FROM telemetry_v1 ORDER BY name").await;
+    let windowed = query(
+        &store,
+        "SELECT name, ROW_NUMBER() OVER (PARTITION BY service ORDER BY timestamp_ms) AS position \
+         FROM telemetry_v1 ORDER BY position",
+    )
+    .await;
+    assert_eq!(core[0].column(0).as_string::<i32>().value(0), "train_loss");
+    assert_eq!(
+        extra[0].column(0).as_string::<i32>().value(0),
+        "grad_norm_total"
+    );
+    assert_eq!(
+        rollup.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        2
+    );
+    assert_eq!(
+        windowed[0]
+            .column(1)
+            .as_primitive::<arrow::datatypes::UInt64Type>()
+            .values(),
+        &[1, 2]
+    );
+    assert_eq!(
+        store
+            .get_policy("telemetry_v1.levanter.core")
+            .unwrap()
+            .max_bytes,
+        Some(20 * 1024 * 1024 * 1024)
+    );
+}
+
+#[tokio::test]
 async fn explicit_resource_dimensions_override_attribute_fallbacks() {
     let store = disk_store("telemetry-explicit-resource-dimensions");
     let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
@@ -646,6 +750,7 @@ async fn explicit_resource_dimensions_override_attribute_fallbacks() {
             "kind": "gauge",
             "name": "loss",
             "value": 1.0,
+            "group": "levanter.extra",
             "attributes": {}
         }]
     }))
@@ -662,7 +767,7 @@ async fn explicit_resource_dimensions_override_attribute_fallbacks() {
     .await;
     assert_eq!(response.status, StatusCode::OK);
     store
-        .await_persisted("telemetry_v1", 1, Duration::from_secs(5))
+        .await_persisted("telemetry_v1.levanter.extra", 1, Duration::from_secs(5))
         .await
         .unwrap();
     let rows = query(
@@ -709,7 +814,7 @@ async fn zstd_batch_is_accepted_and_queryable() {
 
     assert_eq!(response.status, StatusCode::OK);
     store
-        .await_persisted("telemetry_v1", 1, Duration::from_secs(5))
+        .await_persisted("telemetry_v1.levanter.core", 1, Duration::from_secs(5))
         .await
         .unwrap();
     let rows = query(&store, "SELECT count(*) AS n FROM telemetry_v1").await;
@@ -769,7 +874,7 @@ async fn repeated_and_concurrent_requests_append_once_but_changed_content_confli
     assert_eq!(response.payload["error"]["code"], "idempotency_conflict");
 
     store
-        .await_persisted("telemetry_v1", 1, Duration::from_secs(5))
+        .await_persisted("telemetry_v1.levanter.core", 1, Duration::from_secs(5))
         .await
         .unwrap();
     let rows = query(&store, "SELECT count(*) AS n FROM telemetry_v1").await;
@@ -881,6 +986,7 @@ async fn body_and_normalized_amplification_limits_return_413() {
                 "kind": "gauge",
                 "name": "load",
                 "value": 1.0,
+                "group": "levanter.extra",
                 "attributes": {}
             })
         })
@@ -961,7 +1067,14 @@ async fn record_attribute_and_string_bounds_are_checked_before_storage() {
             StatusCode::BAD_REQUEST,
         ),
     ];
-    for (index, (records, attributes, expected)) in cases.into_iter().enumerate() {
+    for (index, (mut records, attributes, expected)) in cases.into_iter().enumerate() {
+        if let Some(records) = records.as_array_mut() {
+            for record in records {
+                if let Some(record) = record.as_object_mut() {
+                    record.insert("group".to_string(), json!("levanter.extra"));
+                }
+            }
+        }
         let batch_id = format!("00000000-0000-4000-8000-{index:012}");
         let body = serde_json::to_vec(&json!({
             "version": 1,
@@ -1012,7 +1125,7 @@ async fn admission_and_store_unavailability_are_retryable_json_errors() {
     let store = disk_store("telemetry-schema-conflict");
     store
         .register_table(
-            "telemetry_v1",
+            "telemetry_v1.levanter.core",
             Schema::new(
                 vec![Column::new("other", ColumnType::COLUMN_TYPE_STRING, false)],
                 "other",

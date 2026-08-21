@@ -19,9 +19,9 @@ use crate::proto::finelog::stats::{
     OwnedQueryRequestView, OwnedRegisterTableRequestView, OwnedWriteRowsRequestView, QueryResponse,
     RegisterTableResponse, StatsService, WriteRowsResponse,
 };
+use crate::query::is_telemetry_namespace;
 use crate::query::{make_ctx, query_timeout, run_query_over, truncate_sql_for_log};
 use crate::server::auth::{request_identity, AuthIdentity};
-use crate::server::telemetry::TELEMETRY_NAMESPACE;
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::ipc::encode_ipc;
 use crate::store::namespace::DEFAULT_PERSIST_TIMEOUT;
@@ -45,7 +45,7 @@ impl StatsServiceImpl {
         }
     }
 
-    fn report_ignored_forwarded_telemetry_columns(&self, columns: Vec<String>) {
+    fn report_ignored_forwarded_telemetry_columns(&self, namespace: &str, columns: Vec<String>) {
         let mut seen = self.ignored_forwarded_telemetry_columns.lock().unwrap();
         let new_columns: Vec<String> = columns
             .into_iter()
@@ -53,7 +53,7 @@ impl StatsServiceImpl {
             .collect();
         if !new_columns.is_empty() {
             tracing::warn!(
-                namespace = TELEMETRY_NAMESPACE,
+                namespace,
                 columns = ?new_columns,
                 "finelog hub: ignoring candidate-only nullable telemetry columns",
             );
@@ -62,7 +62,7 @@ impl StatsServiceImpl {
 }
 
 fn is_forwarded_telemetry(ctx: &RequestContext, namespace: &str) -> bool {
-    namespace == TELEMETRY_NAMESPACE
+    is_telemetry_namespace(namespace)
         && matches!(request_identity(ctx), Some(AuthIdentity::Jwt { .. }))
 }
 
@@ -161,7 +161,7 @@ impl StatsService for StatsServiceImpl {
             Ok((effective, effective_policy, Vec::new()))
         })
         .await?;
-        self.report_ignored_forwarded_telemetry_columns(ignored_columns);
+        self.report_ignored_forwarded_telemetry_columns(&namespace, ignored_columns);
 
         connectrpc::Response::ok(RegisterTableResponse {
             effective_schema: MessageField::some(schema_to_proto_owned(&effective)),
@@ -185,7 +185,7 @@ impl StatsService for StatsServiceImpl {
         // Resolve the origin cluster from the credential before the blocking
         // hop so a forwarding writer's rows are stamped with its cluster.
         let origin_cluster = write_origin_cluster(&ctx)?;
-        let forwarded_telemetry = origin_cluster.is_some() && namespace == TELEMETRY_NAMESPACE;
+        let forwarded_telemetry = origin_cluster.is_some() && is_telemetry_namespace(&namespace);
 
         // Decode + validate + align + append on the blocking pool; the size/row
         // caps and IPC decode live in `Store::write_rows`.
@@ -215,7 +215,7 @@ impl StatsService for StatsServiceImpl {
             last_seq,
             ignored_columns,
         } = outcome;
-        self.report_ignored_forwarded_telemetry_columns(ignored_columns);
+        self.report_ignored_forwarded_telemetry_columns(&namespace, ignored_columns);
 
         // The server does not auto-cancel on the client deadline; enforce the
         // durability await ourselves, bounded by the remaining budget (falling

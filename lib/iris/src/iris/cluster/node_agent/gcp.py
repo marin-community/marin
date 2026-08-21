@@ -27,7 +27,7 @@ from iris.rpc import controller_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import EndpointServiceClientSync
 
-DEFAULT_COLLECTION_INTERVAL = 30.0
+DEFAULT_COLLECTION_INTERVAL = 60.0
 _BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
 
 
@@ -106,8 +106,8 @@ def _publish_tpu_inventory(hardware: HardwareProbe) -> None:
         attributes["tpu_name"] = hardware.tpu_name
     if hardware.tpu_worker_id:
         attributes["worker_index"] = hardware.tpu_worker_id
-    telemetry.gauge("hardware_inventory").set(1.0, attributes=attributes)
-    telemetry.gauge("hardware_source_available").set(
+    telemetry.gauge("hardware_inventory", group=telemetry.TelemetryGroup.NODE_AGENT).set(1.0, attributes=attributes)
+    telemetry.gauge("hardware_source_available", group=telemetry.TelemetryGroup.NODE_AGENT).set(
         1.0,
         attributes=telemetry.snapshot_attributes("gcp_metadata", telemetry.CURRENT_SNAPSHOT),
     )
@@ -121,7 +121,7 @@ def collect_once(
     """Publish one bounded local-host collection pass."""
     publish_node_telemetry(target, _local_metrics(collector, target.node_uid), time.time())
     _publish_tpu_inventory(hardware)
-    telemetry.record_runtime_health()
+    telemetry.record_runtime_health(telemetry.TelemetryGroup.NODE_AGENT)
 
 
 def run(config_path: Path, stop: threading.Event) -> None:
@@ -147,7 +147,7 @@ def run(config_path: Path, stop: threading.Event) -> None:
         device_variant=config.accelerator_variant or hardware.gpu_name,
     )
     collector = HostMetricsCollector(disk_path=config.cache_dir)
-    nvidia_probe = nvidia.start() if target.device_type == "gpu" else None
+    nvidia_probe = nvidia.start(group=telemetry.TelemetryGroup.NODE_AGENT) if target.device_type == "gpu" else None
     try:
         while not stop.is_set():
             collect_once(collector, target, hardware)

@@ -55,6 +55,18 @@ class TelemetryRole(StrEnum):
     EVALUATOR = "evaluator"
 
 
+class TelemetryGroup(StrEnum):
+    """Semantic Finelog child namespace for one telemetry record."""
+
+    NODE_AGENT = "node_agent"
+    LEVANTER_CORE = "levanter.core"
+    LEVANTER_EXTRA = "levanter.extra"
+    IRIS_RPC = "iris.rpc"
+    VLLM = "vllm"
+    ZEPHYR_CORE = "zephyr.core"
+    ZEPHYR_EXTRA = "zephyr.extra"
+
+
 @dataclass(frozen=True)
 class TelemetryStatus:
     """Process-local exporter state."""
@@ -116,30 +128,31 @@ class _Handle:
     name: str
     kind: str
     unit: str
+    group: TelemetryGroup
 
     def _emit(self, value: float) -> None:
-        _emit(self.kind, self.name, value=value, unit=self.unit)
+        _emit(self.kind, self.name, value=value, unit=self.unit, group=self.group)
 
 
 class Counter(_Handle):
     """A counter whose calls emit deltas."""
 
     def add(self, value: float = 1.0, *, attributes: Mapping[str, str] | None = None) -> None:
-        _emit(self.kind, self.name, value=value, unit=self.unit, attributes=attributes)
+        _emit(self.kind, self.name, value=value, unit=self.unit, attributes=attributes, group=self.group)
 
 
 class Gauge(_Handle):
     """A gauge whose calls emit current values."""
 
     def set(self, value: float, *, attributes: Mapping[str, str] | None = None) -> None:
-        _emit(self.kind, self.name, value=value, unit=self.unit, attributes=attributes)
+        _emit(self.kind, self.name, value=value, unit=self.unit, attributes=attributes, group=self.group)
 
 
 class Histogram(_Handle):
     """A histogram whose calls emit individual observations."""
 
     def record(self, value: float, *, attributes: Mapping[str, str] | None = None) -> None:
-        _emit(self.kind, self.name, value=value, unit=self.unit, attributes=attributes)
+        _emit(self.kind, self.name, value=value, unit=self.unit, attributes=attributes, group=self.group)
 
 
 def snapshot_attributes(source_kind: str, temporality: str) -> dict[str, str]:
@@ -466,29 +479,45 @@ _last_warning: float | None = None
 _warning_lock = threading.Lock()
 
 
-def counter(name: str, *, unit: str = "") -> Counter:
+def counter(
+    name: str,
+    *,
+    group: TelemetryGroup,
+    unit: str = "",
+) -> Counter:
     """Declare a counter that emits deltas when configured."""
-    return Counter(name, "counter", unit)
+    return Counter(name, "counter", unit, group)
 
 
-def gauge(name: str, *, unit: str = "") -> Gauge:
+def gauge(
+    name: str,
+    *,
+    group: TelemetryGroup,
+    unit: str = "",
+) -> Gauge:
     """Declare a gauge that emits current values when configured."""
-    return Gauge(name, "gauge", unit)
+    return Gauge(name, "gauge", unit, group)
 
 
-def histogram(name: str, *, unit: str = "") -> Histogram:
+def histogram(
+    name: str,
+    *,
+    group: TelemetryGroup,
+    unit: str = "",
+) -> Histogram:
     """Declare a histogram that emits individual observations when configured."""
-    return Histogram(name, "histogram", unit)
+    return Histogram(name, "histogram", unit, group)
 
 
 def event(
     name: str,
     body: serialization.EventBody,
     *,
+    group: TelemetryGroup,
     attributes: Mapping[str, str] | None = None,
 ) -> None:
     """Emit one structured event when configured."""
-    _emit(_EVENT_KIND, name, body=body, attributes=attributes)
+    _emit(_EVENT_KIND, name, body=body, attributes=attributes, group=group)
 
 
 def configure(
@@ -573,29 +602,29 @@ def runtime_status() -> TelemetryStatus:
     return runtime.status() if runtime is not None else TelemetryStatus(False, 0, 0, 0, 0, 0, 0, 0, None, 0.0)
 
 
-def record_runtime_health() -> TelemetryStatus:
+def record_runtime_health(group: TelemetryGroup) -> TelemetryStatus:
     """Publish one bounded snapshot of direct exporter loss and freshness."""
     status = runtime_status()
     if not status.configured:
         return status
     current = snapshot_attributes("gauge", CURRENT_SNAPSHOT)
     cumulative = snapshot_attributes("counter", CUMULATIVE_SNAPSHOT)
-    gauge("queue_depth", unit="{record}").set(
+    gauge("queue_depth", unit="{record}", group=group).set(
         status.queued_records,
         attributes={**current, "queue_kind": "telemetry_export"},
     )
-    gauge("telemetry_queue_bytes", unit="By").set(status.queued_bytes, attributes=current)
-    gauge("telemetry_lost_records", unit="{record}").set(status.lost_records, attributes=cumulative)
-    gauge("telemetry_export_attempts", unit="{attempt}").set(status.export_attempts, attributes=cumulative)
-    gauge("telemetry_export_failures", unit="{attempt}").set(status.export_failures, attributes=cumulative)
-    gauge("telemetry_export_retries", unit="{attempt}").set(status.export_retries, attributes=cumulative)
-    gauge("telemetry_rejected_records", unit="{record}").set(status.rejected_records, attributes=cumulative)
-    gauge("telemetry_oldest_queued_age_seconds", unit="s").set(
+    gauge("telemetry_queue_bytes", unit="By", group=group).set(status.queued_bytes, attributes=current)
+    gauge("telemetry_lost_records", unit="{record}", group=group).set(status.lost_records, attributes=cumulative)
+    gauge("telemetry_export_attempts", unit="{attempt}", group=group).set(status.export_attempts, attributes=cumulative)
+    gauge("telemetry_export_failures", unit="{attempt}", group=group).set(status.export_failures, attributes=cumulative)
+    gauge("telemetry_export_retries", unit="{attempt}", group=group).set(status.export_retries, attributes=cumulative)
+    gauge("telemetry_rejected_records", unit="{record}", group=group).set(status.rejected_records, attributes=cumulative)
+    gauge("telemetry_oldest_queued_age_seconds", unit="s", group=group).set(
         status.oldest_queued_record_age_seconds,
         attributes=current,
     )
     if status.last_success_time_seconds is not None:
-        gauge("progress_time_seconds", unit="s").set(
+        gauge("progress_time_seconds", unit="s", group=group).set(
             status.last_success_time_seconds,
             attributes={**current, "progress_kind": "telemetry_export"},
         )
@@ -606,6 +635,7 @@ def _emit(
     kind: str,
     name: str,
     *,
+    group: TelemetryGroup,
     value: float | None = None,
     body: serialization.EventBody | None = None,
     unit: str = "",
@@ -614,7 +644,7 @@ def _emit(
     runtime = _runtime
     if runtime is None:
         return
-    _emit_to_runtime(runtime, kind, name, value=value, body=body, unit=unit, attributes=attributes)
+    _emit_to_runtime(runtime, kind, name, value=value, body=body, unit=unit, attributes=attributes, group=group)
 
 
 def _emit_to_runtime(
@@ -622,6 +652,7 @@ def _emit_to_runtime(
     kind: str,
     name: str,
     *,
+    group: TelemetryGroup,
     value: float | None = None,
     body: serialization.EventBody | None = None,
     unit: str = "",
@@ -636,6 +667,7 @@ def _emit_to_runtime(
         serialization.validate_attributes(attrs)
         record: dict[str, Any] = {
             "attributes": attrs,
+            "group": group.value,
             "kind": kind,
             "name": name,
             "timestamp_ms": int(time.time() * 1_000),

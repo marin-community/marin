@@ -1,6 +1,6 @@
 //! Registration health for the namespaces this process ingests into itself.
 //!
-//! `telemetry_v1` must be registered before it accepts a row, and the
+//! Server-owned telemetry namespaces must be registered before accepting rows, and the
 //! registration is re-driven from the catalog on every boot, so a schema the
 //! catalog rejects wedges ingest across restarts. `/health` reports that in its
 //! body; `/api/server` carries the per-namespace detail.
