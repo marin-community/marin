@@ -58,6 +58,11 @@ pub fn is_telemetry_namespace(namespace: &str) -> bool {
     namespace == TELEMETRY_ROLLUP_NAMESPACE || namespace.starts_with(TELEMETRY_NAMESPACE_PREFIX)
 }
 
+struct QueryRegistrations {
+    names: Vec<String>,
+    aggregate_sources: HashMap<String, exact_aggregate::AggregateSource>,
+}
+
 /// Floor for the query memory pool so a tiny/misreported cgroup can't strangle
 /// every query (256 MiB).
 const MIN_QUERY_POOL_BYTES: usize = 256 * 1024 * 1024;
@@ -452,6 +457,44 @@ pub async fn run_query_over(
     providers: Vec<RegisteredProvider>,
     sql: &str,
 ) -> DFResult<QueryResult> {
+    let registrations = register_query_providers(ctx, providers).await?;
+    let aggregate_sources = registrations.aggregate_sources;
+    let names = registrations.names;
+    ctx.add_optimizer_rule(Arc::new(exact_aggregate::ExactAggregateRewrite::new(
+        aggregate_sources.clone(),
+    )));
+    ctx.add_optimizer_rule(Arc::new(group_extrema::GroupExtremaRewrite::new(
+        aggregate_sources,
+    )));
+    let started = Instant::now();
+    let result = async {
+        let df = ctx.sql_with_options(sql, read_only_sql_options()).await?;
+        let schema = Arc::new(df.schema().as_arrow().clone());
+        let batches = df.collect().await?;
+        // Match DuckDB's all-nullable result schema (the captured plan schema
+        // keeps source non-nullability that DuckDB would have dropped).
+        let (schema, batches) = normalize_result(&schema, batches)?;
+        Ok(QueryResult { schema, batches })
+    }
+    .await;
+    let elapsed = started.elapsed();
+    for name in &names {
+        // Best-effort cleanup; a deregister failure must not mask the query
+        // result/error.
+        let _ = ctx.deregister_table(TableReference::bare(name.as_str()));
+    }
+    let rows = result
+        .as_ref()
+        .ok()
+        .map(|r| r.batches.iter().map(|b| b.num_rows()).sum());
+    log_slow_query(ctx, elapsed, "Query", sql, rows);
+    result
+}
+
+async fn register_query_providers(
+    ctx: &SessionContext,
+    providers: Vec<RegisteredProvider>,
+) -> DFResult<QueryRegistrations> {
     let aggregate_sources: HashMap<String, exact_aggregate::AggregateSource> = providers
         .iter()
         .map(|provider| {
@@ -510,35 +553,10 @@ pub async fn run_query_over(
         )?;
         names.push(TELEMETRY_ROLLUP_NAMESPACE.to_string());
     }
-    ctx.add_optimizer_rule(Arc::new(exact_aggregate::ExactAggregateRewrite::new(
-        aggregate_sources.clone(),
-    )));
-    ctx.add_optimizer_rule(Arc::new(group_extrema::GroupExtremaRewrite::new(
+    Ok(QueryRegistrations {
+        names,
         aggregate_sources,
-    )));
-    let started = Instant::now();
-    let result = async {
-        let df = ctx.sql_with_options(sql, read_only_sql_options()).await?;
-        let schema = Arc::new(df.schema().as_arrow().clone());
-        let batches = df.collect().await?;
-        // Match DuckDB's all-nullable result schema (the captured plan schema
-        // keeps source non-nullability that DuckDB would have dropped).
-        let (schema, batches) = normalize_result(&schema, batches)?;
-        Ok(QueryResult { schema, batches })
-    }
-    .await;
-    let elapsed = started.elapsed();
-    for name in &names {
-        // Best-effort cleanup; a deregister failure must not mask the query
-        // result/error.
-        let _ = ctx.deregister_table(TableReference::bare(name.as_str()));
-    }
-    let rows = result
-        .as_ref()
-        .ok()
-        .map(|r| r.batches.iter().map(|b| b.num_rows()).sum());
-    log_slow_query(ctx, elapsed, "Query", sql, rows);
-    result
+    })
 }
 
 /// Read `log`-namespace rows matching `where_parts`, ordered by seq.

@@ -1098,20 +1098,21 @@ def _configure_vllm_telemetry(
     if not telemetry.runtime_status().configured:
         return handle
     metrics_url = f"http://{host}:{handle.port}/metrics"
+    group = telemetry.TelemetryGroup.VLLM
     metrics_collector = PrometheusCollector(
         metric_source=_VLLM_METRICS_SERVICE,
         scraper=PrometheusScraper(metrics_url),
         processor=functools.partial(prefixed_metric_snapshots, metric_prefix=_VLLM_METRIC_PREFIX),
-        group=telemetry.TelemetryGroup.VLLM,
+        group=group,
         publisher=MetricSnapshotPublisher(
             max_records=_MAX_VLLM_METRIC_SNAPSHOTS,
-            group=telemetry.TelemetryGroup.VLLM,
+            group=group,
             attributes={"metric_source": _VLLM_METRICS_SERVICE},
         ),
     )
     metrics_collector.start()
     logger.info("Forwarding vLLM metrics from %s to telemetry_v1.vllm", metrics_url)
-    nccl_probe = nccl.start(group=telemetry.TelemetryGroup.VLLM) if _starts_nccl_ras_probe(launcher) else None
+    nccl_probe = nccl.start(group=group) if _starts_nccl_ras_probe(launcher) else None
     return dataclasses.replace(
         handle,
         metrics_collector=metrics_collector,

@@ -457,8 +457,8 @@ impl TelemetryState {
             .get_or_try_init(|| async {
                 let store = Arc::clone(&self.store);
                 match tokio::task::spawn_blocking(move || {
-                    // Keep the pre-split table registered while its historical
-                    // rows age out. Queries expose it through the rollup view.
+                    // The rollup reads this physical source alongside semantic
+                    // children; HTTP ingest writes only to the children.
                     store.register_table(
                         TELEMETRY_NAMESPACE,
                         telemetry_schema(),
