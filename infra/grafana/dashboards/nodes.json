@@ -169,7 +169,7 @@
               "params": [
                 {
                   "key": "sql",
-                  "value": "SELECT DISTINCT json_get(attributes_json, 'node_name') AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'hardware_inventory' AND json_get(attributes_json, 'device_kind') = 'gpu' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ORDER BY 1"
+                  "value": "SELECT DISTINCT node_name AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'hardware_inventory' AND json_get(attributes_json, 'device_kind') = 'gpu' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ORDER BY 1"
                 },
                 {
                   "key": "from",
@@ -441,7 +441,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'GPU ' || json_get(attributes_json, 'gpu_index') || ' · ' || CASE name WHEN 'gpu_utilization_percent' THEN 'utilization' WHEN 'gpu_sm_active_ratio' THEN 'SM active' ELSE 'tensor active' END AS series, AVG(CASE WHEN name = 'gpu_utilization_percent' THEN value ELSE value * 100.0 END) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('gpu_utilization_percent', 'gpu_sm_active_ratio', 'gpu_tensor_active_ratio') AND json_get(attributes_json, 'node_name') IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'GPU ' || json_get(attributes_json, 'gpu_index') || ' · ' || CASE name WHEN 'gpu_utilization_percent' THEN 'utilization' WHEN 'gpu_sm_active_ratio' THEN 'SM active' ELSE 'tensor active' END AS series, AVG(CASE WHEN name = 'gpu_utilization_percent' THEN value ELSE value * 100.0 END) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('gpu_utilization_percent', 'gpu_sm_active_ratio', 'gpu_tensor_active_ratio') AND node_name IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -547,7 +547,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'GPU ' || json_get(attributes_json, 'gpu_index') || CASE name WHEN 'gpu_memory_temperature_celsius' THEN ' · HBM' ELSE ' · core' END AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('gpu_temperature_celsius', 'gpu_memory_temperature_celsius') AND json_get(attributes_json, 'node_name') IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'GPU ' || json_get(attributes_json, 'gpu_index') || CASE name WHEN 'gpu_memory_temperature_celsius' THEN ' · HBM' ELSE ' · core' END AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('gpu_temperature_celsius', 'gpu_memory_temperature_celsius') AND node_name IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -636,7 +636,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'GPU ' || json_get(attributes_json, 'gpu_index') AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND json_get(attributes_json, 'node_name') IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'GPU ' || json_get(attributes_json, 'gpu_index') AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND node_name IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -727,7 +727,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'GPU ' || json_get(attributes_json, 'gpu_index') AS series, 100.0 * AVG(CASE WHEN name = 'gpu_memory_used_bytes' THEN value END) / NULLIF(AVG(CASE WHEN name = 'gpu_memory_total_bytes' THEN value END), 0) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('gpu_memory_used_bytes', 'gpu_memory_total_bytes') AND json_get(attributes_json, 'node_name') IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'GPU ' || json_get(attributes_json, 'gpu_index') AS series, 100.0 * AVG(CASE WHEN name = 'gpu_memory_used_bytes' THEN value END) / NULLIF(AVG(CASE WHEN name = 'gpu_memory_total_bytes' THEN value END), 0) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('gpu_memory_used_bytes', 'gpu_memory_total_bytes') AND node_name IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -816,7 +816,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'GPU ' || json_get(attributes_json, 'gpu_index') || ' · ' || CASE name WHEN 'gpu_nvlink_receive_bytes_per_second' THEN 'NVLink RX' WHEN 'gpu_nvlink_transmit_bytes_per_second' THEN 'NVLink TX' WHEN 'gpu_pcie_receive_bytes_per_second' THEN 'PCIe RX' ELSE 'PCIe TX' END AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('gpu_nvlink_receive_bytes_per_second', 'gpu_nvlink_transmit_bytes_per_second', 'gpu_pcie_receive_bytes_per_second', 'gpu_pcie_transmit_bytes_per_second') AND json_get(attributes_json, 'node_name') IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'GPU ' || json_get(attributes_json, 'gpu_index') || ' · ' || CASE name WHEN 'gpu_nvlink_receive_bytes_per_second' THEN 'NVLink RX' WHEN 'gpu_nvlink_transmit_bytes_per_second' THEN 'NVLink TX' WHEN 'gpu_pcie_receive_bytes_per_second' THEN 'PCIe RX' ELSE 'PCIe TX' END AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('gpu_nvlink_receive_bytes_per_second', 'gpu_nvlink_transmit_bytes_per_second', 'gpu_pcie_receive_bytes_per_second', 'gpu_pcie_transmit_bytes_per_second') AND node_name IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -907,7 +907,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH raw AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, name, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('node_cpu_utilization_percent', 'node_memory_used_bytes', 'node_memory_total_bytes', 'node_disk_used_bytes', 'node_disk_total_bytes') AND json_get(attributes_json, 'node_name') IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ) SELECT t, 'CPU' AS series, MAX(CASE WHEN name = 'node_cpu_utilization_percent' THEN value END) AS value FROM raw GROUP BY 1 UNION ALL SELECT t, 'memory' AS series, 100.0 * MAX(CASE WHEN name = 'node_memory_used_bytes' THEN value END) / NULLIF(MAX(CASE WHEN name = 'node_memory_total_bytes' THEN value END), 0) AS value FROM raw GROUP BY 1 UNION ALL SELECT t, 'local disk' AS series, 100.0 * MAX(CASE WHEN name = 'node_disk_used_bytes' THEN value END) / NULLIF(MAX(CASE WHEN name = 'node_disk_total_bytes' THEN value END), 0) AS value FROM raw GROUP BY 1 ORDER BY 1"
+                "value": "WITH raw AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, name, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('node_cpu_utilization_percent', 'node_memory_used_bytes', 'node_memory_total_bytes', 'node_disk_used_bytes', 'node_disk_total_bytes') AND node_name IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ) SELECT t, 'CPU' AS series, MAX(CASE WHEN name = 'node_cpu_utilization_percent' THEN value END) AS value FROM raw GROUP BY 1 UNION ALL SELECT t, 'memory' AS series, 100.0 * MAX(CASE WHEN name = 'node_memory_used_bytes' THEN value END) / NULLIF(MAX(CASE WHEN name = 'node_memory_total_bytes' THEN value END), 0) AS value FROM raw GROUP BY 1 UNION ALL SELECT t, 'local disk' AS series, 100.0 * MAX(CASE WHEN name = 'node_disk_used_bytes' THEN value END) / NULLIF(MAX(CASE WHEN name = 'node_disk_total_bytes' THEN value END), 0) AS value FROM raw GROUP BY 1 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -996,7 +996,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH samples AS ( SELECT timestamp_ms, name, value, LAG(value) OVER (PARTITION BY name, json_get(attributes_json, 'source_replica_uid') ORDER BY timestamp_ms) AS prior_value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('node_network_receive_bytes', 'node_network_transmit_bytes') AND json_get(attributes_json, 'node_name') IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) - ${__interval_ms} AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, CASE name WHEN 'node_network_receive_bytes' THEN 'receive' ELSE 'transmit' END AS series, SUM(CASE WHEN value >= prior_value THEN value - prior_value ELSE 0 END) * 1000.0 / ${__interval_ms} AS value FROM samples WHERE timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "WITH samples AS ( SELECT timestamp_ms, name, value, LAG(value) OVER (PARTITION BY name, json_get(attributes_json, 'source_replica_uid') ORDER BY timestamp_ms) AS prior_value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('node_network_receive_bytes', 'node_network_transmit_bytes') AND node_name IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) - ${__interval_ms} AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, CASE name WHEN 'node_network_receive_bytes' THEN 'receive' ELSE 'transmit' END AS series, SUM(CASE WHEN value >= prior_value THEN value - prior_value ELSE 0 END) * 1000.0 / ${__interval_ms} AS value FROM samples WHERE timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -1109,7 +1109,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT json_get(attributes_json, 'gpu_index') AS gpu, json_get(attributes_json, 'gpu_uuid') AS uuid, json_get(attributes_json, 'pci_bus_id') AS pci_bus, MAX(json_get(attributes_json, 'gpu_model')) AS model, MAX(json_get(attributes_json, 'driver_version')) AS driver, (CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) - MAX(timestamp_ms)) / 1000.0 AS lag FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'hardware_inventory' AND json_get(attributes_json, 'device_kind') = 'gpu' AND json_get(attributes_json, 'node_name') IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ORDER BY 1"
+                "value": "SELECT json_get(attributes_json, 'gpu_index') AS gpu, json_get(attributes_json, 'gpu_uuid') AS uuid, json_get(attributes_json, 'pci_bus_id') AS pci_bus, MAX(json_get(attributes_json, 'gpu_model')) AS model, MAX(json_get(attributes_json, 'driver_version')) AS driver, (CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) - MAX(timestamp_ms)) / 1000.0 AS lag FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'hardware_inventory' AND json_get(attributes_json, 'device_kind') = 'gpu' AND node_name IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -1203,7 +1203,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT json_get(attributes_json, 'gpu_index') AS gpu, MAX(CASE WHEN name = 'gpu_xid_error_code' THEN value END) AS xid, MAX(CASE WHEN name = 'gpu_row_remap_failures' THEN value END) AS remap_failures, MAX(CASE WHEN name = 'gpu_pcie_replay_errors' THEN value END) AS pcie_replays FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('gpu_xid_error_code', 'gpu_row_remap_failures', 'gpu_pcie_replay_errors') AND json_get(attributes_json, 'node_name') IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 HAVING MAX(value) > 0 ORDER BY 2 DESC, 3 DESC, 4 DESC"
+                "value": "SELECT json_get(attributes_json, 'gpu_index') AS gpu, MAX(CASE WHEN name = 'gpu_xid_error_code' THEN value END) AS xid, MAX(CASE WHEN name = 'gpu_row_remap_failures' THEN value END) AS remap_failures, MAX(CASE WHEN name = 'gpu_pcie_replay_errors' THEN value END) AS pcie_replays FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('gpu_xid_error_code', 'gpu_row_remap_failures', 'gpu_pcie_replay_errors') AND node_name IN (${node:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 HAVING MAX(value) > 0 ORDER BY 2 DESC, 3 DESC, 4 DESC"
               },
               {
                 "key": "from",

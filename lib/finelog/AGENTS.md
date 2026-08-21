@@ -129,7 +129,9 @@ layout, and per-query `EXPLAIN ANALYZE` metrics.
 - `log_query_bench` — the operator query corpus for `log`: job substring
   scoping, task tails, first-error lookups, body search. `generate` builds a
   corpus; `measure` runs it over a directory that already holds segments.
-- `grafana_dashboard_bench` — every query in a checked-in Grafana dashboard.
+- `grafana_dashboard_bench` — every Finelog query in one or more checked-in
+  Grafana dashboards, with fixed values supplied through repeatable
+  `--variable NAME=VALUE` arguments.
 - `telemetry_layout_bench` — the storage-layout candidates for `telemetry_v1`.
 
 Point `--log-dir` at a **disposable copy**: starting Finelog activates

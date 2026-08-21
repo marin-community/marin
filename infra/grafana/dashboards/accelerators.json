@@ -560,7 +560,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT COUNT(DISTINCT json_get(attributes_json, 'node_name')) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)"
+                "value": "SELECT COUNT(DISTINCT node_name) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)"
               },
               {
                 "key": "from",
@@ -1370,7 +1370,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cluster, json_get(attributes_json, 'node_name') AS node, json_get(attributes_json, 'gpu_index') AS gpu, MAX(CASE WHEN name = 'gpu_xid_error_code' THEN value END) AS xid, MAX(CASE WHEN name = 'gpu_row_remap_failures' THEN value END) AS remap_failures, MAX(CASE WHEN name = 'gpu_pcie_replay_errors' THEN value END) AS pcie_replays FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('gpu_xid_error_code', 'gpu_row_remap_failures', 'gpu_pcie_replay_errors') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 HAVING MAX(value) > 0 ORDER BY 4 DESC, 5 DESC, 6 DESC"
+                "value": "SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cluster, node_name AS node, json_get(attributes_json, 'gpu_index') AS gpu, MAX(CASE WHEN name = 'gpu_xid_error_code' THEN value END) AS xid, MAX(CASE WHEN name = 'gpu_row_remap_failures' THEN value END) AS remap_failures, MAX(CASE WHEN name = 'gpu_pcie_replay_errors' THEN value END) AS pcie_replays FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('gpu_xid_error_code', 'gpu_row_remap_failures', 'gpu_pcie_replay_errors') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 HAVING MAX(value) > 0 ORDER BY 4 DESC, 5 DESC, 6 DESC"
               },
               {
                 "key": "from",
@@ -1504,7 +1504,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cluster, COUNT(DISTINCT json_get(attributes_json, 'gpu_uuid')) AS gpus, COUNT(DISTINCT json_get(attributes_json, 'node_name')) AS nodes, (CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) - MAX(timestamp_ms)) / 1000.0 AS lag_seconds FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 4 DESC"
+                "value": "SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cluster, COUNT(DISTINCT json_get(attributes_json, 'gpu_uuid')) AS gpus, COUNT(DISTINCT node_name) AS nodes, (CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) - MAX(timestamp_ms)) / 1000.0 AS lag_seconds FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 4 DESC"
               },
               {
                 "key": "from",
@@ -1746,7 +1746,7 @@
         "overrides": []
       },
       "options": {
-        "calculate": true,
+        "calculate": false,
         "calculation": {
           "yBuckets": {
             "mode": "count",
@@ -1798,7 +1798,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, json_get(attributes_json, 'node_name') || '/gpu' || json_get(attributes_json, 'gpu_index') AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_temperature_celsius' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "WITH per_gpu AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, node_name AS node, json_get(attributes_json, 'gpu_index') AS gpu, AVG(value) AS sample FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_temperature_celsius' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ) SELECT t, CAST(CEIL(sample / 5.0) * 5.0 AS VARCHAR) AS series, COUNT(*) AS value FROM per_gpu GROUP BY 1, 2 ORDER BY 1, 2"
               },
               {
                 "key": "from",

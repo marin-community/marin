@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,22 +40,29 @@ def render_sql(
     start_ms: int,
     end_ms: int,
     interval_ms: int,
-    clusters: tuple[str, ...],
+    variables: Mapping[str, tuple[str, ...]],
 ) -> str:
     """Resolve the Grafana macros used by Finelog dashboards to fixed values."""
     if start_ms >= end_ms:
         raise ValueError("start_ms must be less than end_ms")
     if interval_ms <= 0:
         raise ValueError("interval_ms must be positive")
-    if not clusters:
-        raise ValueError("at least one cluster is required")
     replacements = {
-        "${cluster:sqlstring}": ",".join(_sql_string(cluster) for cluster in clusters),
         "${__interval_ms}": str(interval_ms),
         "{{from}}": f"to_timestamp_millis({start_ms})",
         "{{to}}": f"to_timestamp_millis({end_ms})",
         "now()": f"to_timestamp_millis({end_ms})",
     }
+    for name, values in variables.items():
+        if not values:
+            raise ValueError(f"dashboard variable {name!r} must have at least one value")
+        replacements.update(
+            {
+                f"${{{name}:sqlstring}}": ",".join(_sql_string(value) for value in values),
+                f"${{{name}:csv}}": ",".join(values),
+                f"${{{name}}}": ",".join(values),
+            }
+        )
     rendered = sql
     for macro, value in replacements.items():
         rendered = rendered.replace(macro, value)
@@ -88,10 +96,11 @@ def load_dashboard_corpus(
     start_ms: int,
     end_ms: int,
     interval_ms: int,
-    clusters: tuple[str, ...],
+    variables: Mapping[str, tuple[str, ...]],
 ) -> DashboardCorpus:
     """Extract and render every Finelog SQL target from a dashboard."""
     document = json.loads(path.read_text())
+    dashboard_title = str(document.get("title", ""))
     queries: list[DashboardQuery] = []
     seen_names: set[str] = set()
     for panel in _panels(document.get("panels", [])):
@@ -99,6 +108,7 @@ def load_dashboard_corpus(
         targets = panel.get("targets", [])
         if not isinstance(title, str) or not isinstance(targets, list):
             continue
+        query_title = title or dashboard_title
         for target in targets:
             if not isinstance(target, dict):
                 continue
@@ -112,21 +122,21 @@ def load_dashboard_corpus(
                 continue
             if len(sql_values) != 1 or not isinstance(sql_values[0], str) or not isinstance(target_name, str):
                 raise ValueError(f"panel {title!r} target has an invalid SQL parameter")
-            name = _query_name(title, target_name)
+            name = _query_name(query_title, target_name)
             if name in seen_names:
                 raise ValueError(f"duplicate dashboard query name: {name}")
             seen_names.add(name)
             queries.append(
                 DashboardQuery(
                     name=name,
-                    panel_title=title,
+                    panel_title=query_title,
                     target=target_name,
                     sql=render_sql(
                         sql_values[0],
                         start_ms=start_ms,
                         end_ms=end_ms,
                         interval_ms=interval_ms,
-                        clusters=clusters,
+                        variables=variables,
                     ),
                 )
             )
@@ -134,7 +144,7 @@ def load_dashboard_corpus(
         raise ValueError(f"dashboard contains no Finelog SQL targets: {path}")
     return DashboardCorpus(
         uid=str(document.get("uid", "")),
-        title=str(document.get("title", "")),
+        title=dashboard_title,
         refresh=str(document.get("refresh", "")),
         queries=tuple(queries),
     )
