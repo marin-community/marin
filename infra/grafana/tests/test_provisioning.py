@@ -711,6 +711,11 @@ def test_training_loss_by_step_uses_the_newest_retry_sample():
 def test_training_execution_health_uses_the_current_attempt_and_iris_state():
     dashboard = _stitched_dashboards()["training.json"]
     panel = next(panel for panel in _all_panels(dashboard) if panel["title"] == "Execution health")
+    attempt_age = next(
+        override for override in panel["fieldConfig"]["overrides"] if override["matcher"]["options"] == "attempt age"
+    )
+    thresholds = next(field for field in attempt_age["properties"] if field["id"] == "thresholds")
+    assert [step["value"] for step in thresholds["value"]["steps"]] == [None, 2700, 3600]
     sql_by_ref = {
         target["refId"]: next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
         for target in panel["targets"]
@@ -748,7 +753,7 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
         [
             ("hero-run", "/u/hero-run-coord/train", "attempt-old", 1, fixed_now_ms - 80 * 60_000, 1),
             ("hero-run", "/u/hero-run-coord/train", "attempt-old", 1, fixed_now_ms - 2 * 60_000, 2),
-            ("hero-run", "/u/hero-run-coord/train", "attempt-current", 0, fixed_now_ms - 70 * 60_000, 1),
+            ("hero-run", "/u/hero-run-coord/train", "attempt-current", 0, fixed_now_ms - 4 * 60 * 60_000, 1),
             ("hero-run", "/u/hero-run-coord/train", "attempt-current", 0, fixed_now_ms - 60_000, 3),
             ("other-run", "/u/other-run-coord/train", "other-attempt", 1, fixed_now_ms - 30_000, 4),
         ],
@@ -819,7 +824,7 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
         ],
     )
 
-    assert database.execute(sql_by_ref["A"]).fetchall() == [(4200.0,)]
+    assert database.execute(sql_by_ref["A"]).fetchall() == [(14_400.0,)]
     assert database.execute(sql_by_ref["B"]).fetchall() == [(176, 170, 1, 2, 3, 30.0)]
     assert database.execute(sql_by_ref["C"]).fetchall() == [(2, 60.0)]
 

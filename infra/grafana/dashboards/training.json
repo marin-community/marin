@@ -1371,7 +1371,7 @@
       "id": 11,
       "type": "stat",
       "title": "Execution health",
-      "description": "Attempt age starts at the first phase sample for the current execution. Orange marks the 45-minute initialization alert. Red marks the 80-minute startup-watchdog deadline. Task counts use the newest Iris root state from the last 15 minutes. Retry events use retained Iris controller decisions from the last seven days.",
+      "description": "Attempt age starts at the first phase sample for the current execution. Orange marks the 45-minute initialization alert. Red marks the 60-minute startup-supervisor deadline. Task counts use the newest Iris root state from the last 15 minutes. Retry events use retained Iris controller decisions from the last seven days.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1425,7 +1425,7 @@
                     },
                     {
                       "color": "red",
-                      "value": 4800
+                      "value": 3600
                     }
                   ]
                 }
@@ -1504,7 +1504,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH phase AS (SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS origin_cluster, job_id, execution_uid, timestamp_ms, seq FROM \"telemetry_v1\" WHERE service = 'levanter' AND name = 'phase' AND run_id IN (${run:sqlstring}) AND job_id IS NOT NULL AND execution_uid IS NOT NULL AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)), ranked AS (SELECT origin_cluster, job_id, execution_uid, timestamp_ms, seq, ROW_NUMBER() OVER (ORDER BY timestamp_ms DESC, seq DESC, origin_cluster, job_id, execution_uid) AS rn FROM phase) SELECT (CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) - MIN(phase.timestamp_ms)) / 1000.0 AS attempt_age_seconds FROM phase JOIN ranked ON phase.origin_cluster = ranked.origin_cluster AND phase.job_id = ranked.job_id AND phase.execution_uid = ranked.execution_uid WHERE ranked.rn = 1"
+                "value": "WITH recent_phase AS (SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS origin_cluster, job_id, execution_uid, timestamp_ms, seq FROM \"telemetry_v1\" WHERE service = 'levanter' AND name = 'phase' AND run_id IN (${run:sqlstring}) AND job_id IS NOT NULL AND execution_uid IS NOT NULL AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)), current_execution AS (SELECT origin_cluster, job_id, execution_uid FROM recent_phase ORDER BY timestamp_ms DESC, seq DESC, origin_cluster, job_id, execution_uid LIMIT 1), phase_history AS (SELECT phase.timestamp_ms FROM \"telemetry_v1\" AS phase JOIN current_execution ON COALESCE(NULLIF(phase.\"cluster\", ''), 'marin') = current_execution.origin_cluster AND phase.job_id = current_execution.job_id AND phase.execution_uid = current_execution.execution_uid WHERE phase.service = 'levanter' AND phase.name = 'phase' AND phase.run_id IN (${run:sqlstring}) AND phase.timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)) SELECT (CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) - MIN(timestamp_ms)) / 1000.0 AS attempt_age_seconds FROM phase_history"
               },
               {
                 "key": "from",
