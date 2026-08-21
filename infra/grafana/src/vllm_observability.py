@@ -67,8 +67,8 @@ _GAUGES = (
 )
 _HISTOGRAM_FAMILIES = (
     ("time_to_first_token_seconds", "ttft"),
-    ("inter_token_latency_seconds", "tpot"),
-    ("time_per_output_token_seconds", "tpot"),
+    ("request_time_per_output_token_seconds", "tpot"),
+    ("inter_token_latency_seconds", "inter_token_latency"),
     ("request_queue_time_seconds", "queue"),
     ("e2e_request_latency_seconds", "e2e"),
 )
