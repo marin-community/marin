@@ -93,6 +93,7 @@ PRIORITY_BAND_VALUES: tuple[int, ...] = (
 )
 
 PRIORITY_BAND_NAMES: tuple[str, ...] = tuple(priority_band_name(b) for b in PRIORITY_BAND_VALUES)
+ADMIN_PRIORITY_BAND_VALUES = frozenset((job_pb2.PRIORITY_BAND_SYSTEM, job_pb2.PRIORITY_BAND_PRODUCTION))
 
 
 def priority_band_rank(band: int) -> int:

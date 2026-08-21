@@ -112,6 +112,7 @@ from iris.cluster.types import (
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authorize_resource_owner
 from iris.rpc.proto_display import (
+    ADMIN_PRIORITY_BAND_VALUES,
     PRIORITY_BAND_VALUES,
     job_state_friendly,
     priority_band_name,
@@ -1529,7 +1530,7 @@ class ControllerServiceImpl:
         # reads the same real band without re-deriving one.
         request.priority_band = band
         if not is_received_handoff:
-            if band in (job_pb2.PRIORITY_BAND_SYSTEM, job_pb2.PRIORITY_BAND_PRODUCTION) and self._auth.provider:
+            if band in ADMIN_PRIORITY_BAND_VALUES and self._auth.provider:
                 authorize(AuthzAction.MANAGE_BUDGETS)
             else:
                 with self._db.read_snapshot() as _snap:

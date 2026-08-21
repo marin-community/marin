@@ -3,6 +3,7 @@
 
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
+import pytest
 from iris.cluster.constraints import AttributeValue, Constraint, ConstraintIndex, ConstraintOp, WellKnownAttribute
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.budget import compute_effective_band
@@ -117,23 +118,21 @@ def _tpu_capacity(worker_id: WorkerId, *, attributes: dict[str, AttributeValue] 
 # ---------------------------------------------------------------------------
 
 
-def test_production_preempts_batch():
-    """PRODUCTION task preempts a BATCH task on the same worker."""
-    w1 = WorkerId("w1")
-    # Worker with 4 CPUs, all committed (0 available)
-    cap = WorkerCapacity(
-        worker_id=w1,
-        available_cpu_millicores=0,
-        available_memory=0,
-        available_gpus=0,
-        available_tpus=0,
-    )
-    ctx = _make_simple_context([cap])
-
+@pytest.mark.parametrize(
+    "preemptor_band, victim_band",
+    [
+        (job_pb2.PRIORITY_BAND_SYSTEM, job_pb2.PRIORITY_BAND_PRODUCTION),
+        (job_pb2.PRIORITY_BAND_PRODUCTION, job_pb2.PRIORITY_BAND_BATCH),
+        (job_pb2.PRIORITY_BAND_INTERACTIVE, job_pb2.PRIORITY_BAND_BATCH),
+    ],
+)
+def test_higher_band_preempts_lower_band(preemptor_band, victim_band):
+    worker = WorkerId("worker")
+    ctx = _make_simple_context([WorkerCapacity(worker, 0, 0, 0, 0)])
     victim = RunningTaskInfo(
-        task_id=JobName.from_wire("/alice/batch-job:0"),
-        worker_id=w1,
-        priority_band=job_pb2.PRIORITY_BAND_BATCH,
+        task_id=JobName.from_wire("/alice/victim:0"),
+        worker_id=worker,
+        priority_band=victim_band,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -141,74 +140,15 @@ def test_production_preempts_batch():
         gpu_count=0,
         tpu_count=0,
     )
-
-    preemptor_id = JobName.from_wire("/bob/prod-job:0")
-    unscheduled = [
-        PreemptionCandidate(preemptor_id, _cpu_requirements(1), job_pb2.PRIORITY_BAND_PRODUCTION),
-    ]
-
-    preemptions = run_preemption_pass(unscheduled, [victim], ctx).evictions
-    assert len(preemptions) == 1
-    assert preemptions[0] == (preemptor_id, victim.task_id)
-
-
-def test_interactive_preempts_batch():
-    """INTERACTIVE task preempts a BATCH task."""
-    w1 = WorkerId("w1")
-    cap = WorkerCapacity(
-        worker_id=w1,
-        available_cpu_millicores=0,
-        available_memory=0,
-        available_gpus=0,
-        available_tpus=0,
-    )
-    ctx = _make_simple_context([cap])
-
-    victim = RunningTaskInfo(
-        task_id=JobName.from_wire("/alice/batch-job:0"),
-        worker_id=w1,
-        priority_band=job_pb2.PRIORITY_BAND_BATCH,
-        resource_value=1000,
-        is_coscheduled=False,
-        cpu_millicores=1000,
-        memory_bytes=1024**3,
-        gpu_count=0,
-        tpu_count=0,
-    )
-
-    preemptor_id = JobName.from_wire("/bob/interactive-job:0")
-    unscheduled = [
-        PreemptionCandidate(preemptor_id, _cpu_requirements(1), job_pb2.PRIORITY_BAND_INTERACTIVE),
-    ]
-
-    preemptions = run_preemption_pass(unscheduled, [victim], ctx).evictions
-    assert len(preemptions) == 1
-    assert preemptions[0] == (preemptor_id, victim.task_id)
-
-
-def test_system_preempts_production():
-    production_worker = WorkerId("production-worker")
-    ctx = _make_simple_context([WorkerCapacity(production_worker, 0, 0, 0, 0)])
-    production_victim = RunningTaskInfo(
-        task_id=JobName.from_wire("/alice/production-job:0"),
-        worker_id=production_worker,
-        priority_band=job_pb2.PRIORITY_BAND_PRODUCTION,
-        resource_value=1000,
-        is_coscheduled=False,
-        cpu_millicores=1000,
-        memory_bytes=1024**3,
-        gpu_count=0,
-        tpu_count=0,
-    )
-    preemptor_id = JobName.from_wire("/bob/system-job:0")
+    preemptor_id = JobName.from_wire("/bob/preemptor:0")
 
     preemptions = run_preemption_pass(
-        [PreemptionCandidate(preemptor_id, _cpu_requirements(1), job_pb2.PRIORITY_BAND_SYSTEM)],
-        [production_victim],
+        [PreemptionCandidate(preemptor_id, _cpu_requirements(1), preemptor_band)],
+        [victim],
         ctx,
     ).evictions
 
-    assert preemptions == [(preemptor_id, production_victim.task_id)]
+    assert preemptions == [(preemptor_id, victim.task_id)]
 
 
 def test_interactive_does_not_preempt_production():

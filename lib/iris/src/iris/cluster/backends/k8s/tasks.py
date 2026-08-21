@@ -114,7 +114,7 @@ from iris.cluster.stats.tables import (
 )
 from iris.cluster.types import JobName, WellKnownAttribute, WorkerId, get_gpu_count
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
-from iris.rpc.proto_display import priority_band_name, resolve_container_profile
+from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, priority_band_name, resolve_container_profile
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -679,8 +679,7 @@ def _build_pdb_manifest(
     }
     if managed_label:
         labels[managed_label] = "true"
-    protected_bands = (job_pb2.PRIORITY_BAND_SYSTEM, job_pb2.PRIORITY_BAND_PRODUCTION)
-    availability = {"minAvailable": 1} if priority_band in protected_bands else {"maxUnavailable": 1}
+    availability = {"minAvailable": 1} if priority_band in ADMIN_PRIORITY_BAND_VALUES else {"maxUnavailable": 1}
     return {
         "apiVersion": "policy/v1",
         "kind": "PodDisruptionBudget",
