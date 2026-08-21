@@ -512,8 +512,13 @@ def _tree_to_memory_kind(tree, memory_kind: str):
         sharding = jax.typeof(leaf).sharding
         mesh = getattr(sharding, "mesh", None)
         if mesh is None or len(getattr(mesh, "axis_names", ())) == 0:
-            # Scalar optimizer metadata carries no named mesh and is negligible in HBM.
-            return leaf
+            if jax.sharding.get_abstract_mesh().empty:
+                return leaf
+            # Scalar optimizer metadata has no operand from which to inherit the active mesh.
+            # Bind it before changing memory kind so the initial and updated states have the
+            # same JIT input signature.
+            leaf = jax.sharding.reshard(leaf, P())
+            sharding = jax.typeof(leaf).sharding
         return jax.device_put(leaf, sharding.with_memory_kind(memory_kind))
 
     return jax.tree.map(_move, tree)

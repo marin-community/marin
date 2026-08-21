@@ -779,6 +779,31 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
     np.testing.assert_allclose(step_one_stats["grad/norm/total"], 3.2)
 
 
+def test_offloaded_optimizer_scalar_state_uses_the_active_mesh():
+    mesh = AbstractMesh(
+        axis_sizes=(1, 1, 1, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+
+    with use_abstract_mesh(mesh):
+        state = eqx.filter_eval_shape(
+            lambda: train.initial_state(
+                _latent_config(),
+                optimizer=optax.adam(0.1),
+                mp=jmp.get_policy("f32"),
+                key=jax.random.key(0),
+                ema_beta=None,
+                offload_opt_state=True,
+            )
+        )
+
+    count_sharding = state.opt_state[0].count.sharding
+    assert isinstance(count_sharding, NamedSharding)
+    assert count_sharding.mesh == mesh
+    assert count_sharding.spec == P()
+
+
 def test_fp32_host_master_accumulates_updates_before_bfloat16_cast(monkeypatch):
     params = _TinyWatchModel(weight=jnp.array(1.0, dtype=jnp.bfloat16))
     master_params = _TinyWatchModel(weight=jnp.array(1.0, dtype=jnp.float32))
