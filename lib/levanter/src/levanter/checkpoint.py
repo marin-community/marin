@@ -623,7 +623,7 @@ class Checkpointer:
             )
 
     def request_checkpoint(self) -> None:
-        """Request a temporary checkpoint on the next step."""
+        """Request a checkpoint on the next step, subject to the save policy."""
         with self._checkpoint_request_lock:
             self._checkpoint_requested = True
 

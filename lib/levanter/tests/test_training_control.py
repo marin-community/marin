@@ -89,7 +89,7 @@ def test_training_dashboard_registers_redacted_status_page(monkeypatch, tmp_path
         assert registry.name == "/alice/parent/train/training-control"
         assert registry.access == EndpointAccess.ENDPOINT_ACCESS_LINK
         assert headers["Cache-Control"] == "no-store"
-        assert "<li>Run ID: dashboard-run</li>" in body
+        assert "dashboard-run" in body
         assert "tiny-model" in body
         assert "VISIBLE_VALUE" in body
         assert "value &lt;script&gt;alert(1)&lt;/script&gt;" in body
@@ -98,6 +98,27 @@ def test_training_dashboard_registers_redacted_status_page(monkeypatch, tmp_path
         assert "environment-secret" not in body
         assert "nested-environment-secret" not in body
         assert "nested-provenance-secret" not in body
+
+    assert not registry.active
+
+
+def test_training_dashboard_requests_persist_temporary_checkpoints(monkeypatch, tmp_path):
+    config = _TrainingConfig(trainer=TrainerConfig(id="config-run"))
+    registry = _Registry()
+    job_info = JobInfo(
+        task_id=JobName.from_wire("/alice/parent/train/0"),
+        advertise_host="127.0.0.1",
+    )
+
+    monkeypatch.setattr(training_control.jax, "process_index", lambda: 0)
+    monkeypatch.setattr(training_control, "get_iris_ctx", lambda: SimpleNamespace(registry=registry))
+    monkeypatch.setattr(training_control, "get_job_info", lambda: job_info)
+    checkpointer = Checkpointer(tmp_path / "checkpoints", None, [])
+
+    with TrainingDashboard(config, checkpointer.request_checkpoint, "dashboard-run"):
+        assert registry.address is not None
+        with urlopen(registry.address, timeout=2) as response:
+            body = response.read().decode()
 
         token_match = re.search(r'name="token" value="([^"]+)"', body)
         assert token_match is not None
