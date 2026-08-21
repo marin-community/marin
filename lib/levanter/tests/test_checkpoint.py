@@ -435,9 +435,14 @@ def test_trainer_config_checkpoint_search_paths():
             temporary_base_path="/tmp/test-temp",
             append_run_id_to_base_path=True,
         ),
-        load_checkpoint_fallback_paths=["/tmp/test-old-temp", "/tmp/test-temp/run1"],
     )
-    assert config.checkpoint_search_paths("run1") == [
+    assert config.checkpoint_search_paths("run1") == ["/tmp/test-perm/run1", "/tmp/test-temp/run1"]
+
+    multi_config = dataclasses.replace(
+        config,
+        load_checkpoint_path=["/tmp/test-perm/run1", "/tmp/test-temp/run1", "/tmp/test-old-temp"],
+    )
+    assert multi_config.checkpoint_search_paths("run1") == [
         "/tmp/test-perm/run1",
         "/tmp/test-temp/run1",
         "/tmp/test-old-temp",

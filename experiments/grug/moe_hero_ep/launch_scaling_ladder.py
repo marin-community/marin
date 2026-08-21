@@ -217,6 +217,9 @@ def build_ladder_run(
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
+        permanent_checkpoint_path = prefix_join(ctx.output_path, "checkpoints")
+        temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path)
+        data_local_checkpoint_path = data_local_temporary_checkpoint_base_path(ctx.output_path)
         trainer = TrainerConfig(
             id=run_id,
             seed=0,
@@ -247,16 +250,18 @@ def build_ladder_run(
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
             # Existing 02A temporaries remain valid resume candidates for this lineage.
-            load_checkpoint_fallback_paths=[
-                data_local_temporary_checkpoint_base_path(ctx.output_path),
+            load_checkpoint_path=[
+                permanent_checkpoint_path,
+                temporary_checkpoint_path,
+                data_local_checkpoint_path,
             ],
             # load_checkpoint stays None: the trainer resumes from the newest checkpoint that
             # exists, so a retry after a hardware or memory fault continues the run.
             checkpointer=CheckpointerConfig(
-                base_path=prefix_join(ctx.output_path, "checkpoints"),
+                base_path=permanent_checkpoint_path,
                 # Rolling resume checkpoints go to region-local temp storage with a lifecycle TTL.
                 # The durable output root keeps only the permanent milestones and the final one.
-                temporary_base_path=temporary_checkpoint_base_path(ctx.output_path),
+                temporary_base_path=temporary_checkpoint_path,
                 save_interval=RESUME_SAVE_INTERVAL,
                 keep=keep_permanent,
                 append_run_id_to_base_path=False,
