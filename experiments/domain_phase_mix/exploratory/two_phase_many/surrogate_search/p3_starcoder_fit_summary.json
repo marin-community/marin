@@ -1,0 +1,111 @@
+{
+  "cv": {
+    "best_candidate": "10",
+    "best_value": 0.9086067080497742,
+    "chosen_candidate": "90007",
+    "chosen_value": 0.9140891432762146,
+    "cv_foldmax_regret_at_1": 0.004169344902038574,
+    "cv_foldmean_regret_at_1": 0.0016062974929809126,
+    "cv_foldmedian_regret_at_1": 0.00025689601898182257,
+    "pearson": 0.992143513105388,
+    "r2": 0.9843315863291031,
+    "regret_at_1": 0.00548243522644043,
+    "rmse": 0.040951791643119496,
+    "spearman": 0.9740129935032484
+  },
+  "dataset": "two_phase_starcoder",
+  "feature_names": [
+    "signal_nemotron_full",
+    "signal_starcoder",
+    "negative_phase0_concentration",
+    "negative_phase1_concentration"
+  ],
+  "linear_head": {
+    "active_mask": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "coef_standardized": [
+      -0.9071111726430663,
+      -0.474174193892299,
+      0.022143095508408928,
+      0.21931922202999254
+    ],
+    "intercept": 1.1281286462627609
+  },
+  "model": "P3",
+  "n_params": {
+    "intercept": 1,
+    "linear_coefficients": 4,
+    "ridge_hyperparameter": 1,
+    "shape_parameters": 3,
+    "total_with_ridge_hyperparameter": 9,
+    "total_without_ridge_hyperparameter": 8
+  },
+  "n_runs": 116,
+  "n_subset_runs": 45,
+  "selected_params": {
+    "a": 0.7142857142857143,
+    "eta": 5.0,
+    "p": 0.5,
+    "ridge_alpha": 0.03162277660168379
+  },
+  "subset_selected_params": {
+    "a": 0.5,
+    "eta": 2.0,
+    "p": 1.5,
+    "ridge_alpha": 0.0001
+  },
+  "target": "eval/paloma/dolma_100_programing_languages/bpb",
+  "train": {
+    "best_candidate": "10",
+    "best_value": 0.9086067080497742,
+    "chosen_candidate": "90007",
+    "chosen_value": 0.9140891432762146,
+    "pearson": 0.9935250423772525,
+    "r2": 0.9870840665903264,
+    "regret_at_1": 0.00548243522644043,
+    "rmse": 0.03718119047688984,
+    "spearman": 0.9716987660016145
+  },
+  "u_shape": {
+    "all_data_fit_metrics_on_subset": {
+      "best_candidate": "10",
+      "best_value": 0.9086067080497742,
+      "chosen_candidate": "10",
+      "chosen_value": 0.9086067080497742,
+      "pearson": 0.9779489693035346,
+      "r2": 0.9478309733151852,
+      "regret_at_1": 0.0,
+      "rmse": 0.03634717336081096,
+      "spearman": 0.9640316205533597
+    },
+    "all_data_fit_slice_min": {
+      "bpb": 0.8909832916620939,
+      "epochs": 3.664414594259917,
+      "phase_1_starcoder": 0.277
+    },
+    "observed_subset_min": {
+      "bpb": 0.9086067080497742,
+      "phase_1_starcoder": 0.2814080848021789
+    },
+    "subset_fit_metrics_on_subset": {
+      "best_candidate": "10",
+      "best_value": 0.9086067080497742,
+      "chosen_candidate": "17",
+      "chosen_value": 0.9132933020591736,
+      "pearson": 0.9937495109843901,
+      "r2": 0.9875380685217804,
+      "regret_at_1": 0.004686594009399414,
+      "rmse": 0.017764662245127162,
+      "spearman": 0.9061923583662713
+    },
+    "subset_fit_slice_min": {
+      "bpb": 0.8994818747640776,
+      "epochs": 3.413064856747504,
+      "phase_1_starcoder": 0.258
+    }
+  }
+}

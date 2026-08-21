@@ -1,0 +1,7 @@
+{
+  "packet_root": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_mixing_packet_v31",
+  "mct_code_dir": "/private/tmp/chatgpt_pro_session_12_review/5_joint_mixture_scale_structural_v31_mct/joint_mixture_scale_structural_v31_mct/code",
+  "outdir": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/mct_barrier_ablation_20260424",
+  "selected_clean_structural_candidate": "mct_lrq69_balanced_no_barrier_for_prediction_only",
+  "recommendation": "The hand-coded P(w) can be ablated for prediction but not for raw optima. Current generic barriers are not clean replacements; use constrained deployment or keep P(w) explicitly labeled as an ad hoc prior."
+}

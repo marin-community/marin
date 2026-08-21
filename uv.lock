@@ -4521,6 +4521,7 @@ name = "marin-root"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "joblib" },
     { name = "marin-core" },
     { name = "marin-ducky" },
     { name = "marin-dupekit" },
@@ -4531,11 +4532,13 @@ dependencies = [
     { name = "marin-levanter" },
     { name = "marin-rigging", extra = ["secrets"] },
     { name = "marin-zephyr" },
+    { name = "scikit-learn" },
     { name = "watchdog" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "joblib" },
     { name = "marin-core", editable = "lib/marin" },
     { name = "marin-ducky", editable = "lib/ducky" },
     { name = "marin-dupekit", editable = "lib/dupekit" },
@@ -4546,6 +4549,7 @@ requires-dist = [
     { name = "marin-levanter", editable = "lib/levanter" },
     { name = "marin-rigging", extras = ["secrets"], editable = "lib/rigging" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
+    { name = "scikit-learn" },
     { name = "watchdog" },
 ]
 

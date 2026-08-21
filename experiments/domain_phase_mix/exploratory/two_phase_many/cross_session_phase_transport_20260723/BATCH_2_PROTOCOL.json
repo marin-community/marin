@@ -1,0 +1,62 @@
+{
+  "protocol_version": 1,
+  "frozen_at": "2026-07-23T00:30:00-07:00",
+  "motivation_from_batch_1": "Finite-potential transport improved paired phase-delta CV and exposed heldout diagnostics over HAN39, but the SFOS aggregate spine dominated catastrophic total-loss errors. This batch changes the aggregate latent state rather than adding phase interactions.",
+  "candidate_batch": [
+    {
+      "candidate_id": "compact_zero",
+      "mechanism": "Compact one-phase Weibull coverage plus literal replay, with no chronological correction."
+    },
+    {
+      "candidate_id": "compact_fpt_global",
+      "mechanism": "Compact one-phase Weibull coverage plus literal replay, with one physical recency coefficient and one nonnegative Jensen coefficient."
+    }
+  ],
+  "aggregate_state": {
+    "exposure": "e_i = w_i * (c0_i + c1_i), measured in simulated epochs",
+    "coverage": "B_i = 1 - exp(-(rate * e_i)^power)",
+    "replay": "H = sum_i max(e_i - 1, 0)^2",
+    "response": "L = intercept - sum_i beta_i B_i + rho H, beta_i >= 0, rho >= 0",
+    "rate_grid": [
+      0.1,
+      0.25,
+      0.5,
+      1.0,
+      2.0
+    ],
+    "power_grid": [
+      0.35,
+      0.5,
+      0.7,
+      1.0
+    ],
+    "ridge_grid": [
+      0.1,
+      1.0,
+      3.0,
+      10.0,
+      30.0,
+      100.0
+    ],
+    "selection": "Five-fold CV on one-phase outcomes only, independently by target. The selected shape is frozen before examining paired phase deltas."
+  },
+  "phase_transport": {
+    "odd": "O = alpha0 * alpha1 * (F(w0) - F(w1))",
+    "jensen": "J = alpha0 * F(w0) + alpha1 * F(w1) - F(alpha0*w0 + alpha1*w1)",
+    "response": "Delta L = theta * O + gamma * J",
+    "theta": "signed, with its implied recency share reported",
+    "gamma": "nonnegative",
+    "ridge_grid": [
+      0.0,
+      0.1,
+      1.0,
+      3.0,
+      10.0,
+      30.0,
+      100.0,
+      300.0
+    ],
+    "selection": "Nested inner CV inside every outer paired-delta fold."
+  },
+  "evaluation_and_gate": "Identical to PROTOCOL.json. This is exposed local development evidence and requires a future untouched confirmation."
+}

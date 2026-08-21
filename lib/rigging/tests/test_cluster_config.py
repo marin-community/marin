@@ -13,6 +13,7 @@ from rigging.filesystem.cluster_config import (
     data_config,
     load_cluster_config,
     marin_prefix,
+    marin_prefix_for_region,
     marin_temp_bucket,
     reset_data_config_cache,
     s3_data_buckets,
@@ -95,6 +96,21 @@ def test_marin_prefix_routes_through_active_config():
     override = DataConfig(region_buckets={}, root="gs://pinned/root")
     with use_data_config(override):
         assert marin_prefix() == "gs://pinned/root"
+
+
+def test_marin_prefix_for_region_uses_configured_gcs_bucket():
+    config = DataConfig(region_buckets={"us-east5": BucketSpec("marin-us-east5", StoreType.GCS)})
+    with use_data_config(config):
+        assert marin_prefix_for_region("US-EAST5") == "gs://marin-us-east5"
+
+
+def test_marin_prefix_for_region_rejects_unknown_or_non_gcs_region():
+    config = DataConfig(region_buckets={"us-east-02a": BucketSpec("marin-us-east-02a", StoreType.COREWEAVE)})
+    with use_data_config(config):
+        with pytest.raises(ValueError, match="does not use GCS"):
+            marin_prefix_for_region("us-east-02a")
+        with pytest.raises(ValueError, match="No Marin data bucket configured"):
+            marin_prefix_for_region("unknown")
 
 
 def test_resolved_root_env_wins(monkeypatch):

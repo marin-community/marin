@@ -1,0 +1,12 @@
+model,description,feature_count,ridge,coef_l2
+smooth_mct_lrq_like,"Existing anchored LRQ mixture body plus global N, canonical family D, and ND cross terms.",9,10.0,0.05894909395169553
+paper_first_order_domain_power,Paper first-order domain synergy adapted as centered domain-specific D-scaling heads.,48,100.0,0.05134622250747548
+paper_first_order_domain_log,"Same as first-order domain, using log(D/D0) exactly from z_k(D)-z_k(D0).",48,100.0,0.05135769349094304
+paper_first_order_current_source_power,First-order synergy on source-aware groups instead of all 39 domains.,16,10.0,0.05857101665857174
+paper_first_order_current_source_log,Source-aware first-order synergy using log(D/D0).,16,10.0,0.05895559580361435
+paper_first_order_canonical_power,First-order synergy on the canonical MCT-LRQ family partition.,16,10.0,0.056992057462346125
+paper_entropy_current_source_power,Paper log-D decomposition entropy term on source-aware shares.,10,10.0,0.06057279043304683
+paper_second_order_current_source_tau0.1,"Paper second-order soft-min co-occurrence terms on source-aware groups, tau=0.1.",30,10.0,0.059031938597023374
+paper_second_order_current_source_tau1,"Paper second-order soft-min co-occurrence terms on source-aware groups, tau=1.",30,10.0,0.05903193757470997
+paper_first_second_current_source_power_tau0.1,Source-aware first-order plus second-order soft-min synergy.,37,10.0,0.05871258930183204
+paper_full_current_source_power_tau0.1,"Source-aware first-order, entropy, and second-order synergy terms.",38,10.0,0.05844468052079716

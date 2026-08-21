@@ -237,7 +237,11 @@ class DistributedConfig:
             return
 
         job_info = get_job_info()
-        if job_info is not None:
+        tpu_runtime_managed = os.environ.get("PJRT_DEVICE", "").upper() == "TPU" or os.environ.get(
+            "JAX_PLATFORMS", ""
+        ).lower().startswith("tpu")
+
+        if job_info is not None and (not self._is_distributed() or tpu_runtime_managed):
             logger.info("Detected Iris job context; initializing jax.distributed via iris.runtime.jax_init.")
             configure_megascale_from_iris()
             initialize_iris_jax()

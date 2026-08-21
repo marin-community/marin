@@ -1,20 +1,34 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import logging
-from dataclasses import replace
+import os
+from dataclasses import dataclass
 from functools import lru_cache
 
+import numpy as np
 from levanter.data.text.datasets import (
     DEFAULT_LM_DATA_SHUFFLE,
     BlockShuffleConfig,
     DatasetComponent,
+    HierarchicalMixtureDatasetComponent,
     LmDataConfig,
+    LmDatasetFormatBase,
     LmDatasetSourceConfigBase,
+    TextLmDatasetFormat,
+    UrlDatasetSourceConfig,
 )
 from levanter.tokenizers import load_tokenizer
+from rigging.filesystem import marin_prefix
 
-from marin.processing.tokenize.tokenize import TokenizeConfig
+from marin.execution import unwrap_versioned_value
+from marin.execution.lazy import ArtifactStep, materialized_config
+from marin.execution.types import ExecutorStep, InputName, output_path_of
+from marin.processing.tokenize.tokenize import TokenizeConfigBase
+
+TokenizerStep = ExecutorStep[TokenizeConfigBase]
+TokenizerConfigLike = TokenizeConfigBase | TokenizerStep | ArtifactStep
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +54,91 @@ _EQUIVALENT_TOKENIZERS = frozenset(
 )
 
 
+@dataclass(frozen=True)
+class TokenizedMixtureGroup:
+    """Logical runtime component backed by a weighted group of tokenized child caches."""
+
+    components: dict[str, TokenizerConfigLike]
+    weights: dict[str, float]
+    token_counts: dict[str, int] | None = None
+
+    @property
+    def tokenizer(self) -> str:
+        return _verify_tokenizers_same(self.components)
+
+
+@dataclass(frozen=True)
+class ExistingTokenizedCacheConfig(TokenizeConfigBase):
+    """Reference an already-finished tokenized cache without rebuilding it."""
+
+    cache_path: str
+    tokenizer: str
+    tags: list[str] = dataclasses.field(default_factory=list)
+    format: LmDatasetFormatBase = dataclasses.field(default_factory=TextLmDatasetFormat)
+
+    def as_lm_dataset_source_config(
+        self, actual_output_path: str | InputName | None, *, include_raw_paths: bool = True
+    ) -> LmDatasetSourceConfigBase:
+        return UrlDatasetSourceConfig(
+            tags=self.tags,
+            train_urls=[],
+            validation_urls=[],
+            cache_dir=actual_output_path,
+            format=self.format,
+        )
+
+
+def step_to_lm_dataset_source_config(
+    step: TokenizerConfigLike,
+    *,
+    include_raw_paths: bool,
+) -> LmDatasetSourceConfigBase:
+    """Convert a tokenized-cache step or config to a Levanter source config."""
+    if isinstance(step, TokenizeConfigBase):
+        return step.as_lm_dataset_source_config(step.cache_path, include_raw_paths=include_raw_paths)
+    if isinstance(step, ArtifactStep):
+        config = materialized_config(step, marin_prefix())
+        if not isinstance(config, TokenizeConfigBase):
+            raise TypeError(f"{step.name}@{step.version}: expected TokenizeConfigBase, got {type(config).__name__}")
+        return config.as_lm_dataset_source_config(config.cache_path, include_raw_paths=include_raw_paths)
+
+    return step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
+
+
+def step_to_lm_mixture_component(
+    step: TokenizerConfigLike | TokenizedMixtureGroup,
+    include_raw_paths: bool,
+) -> DatasetComponent | HierarchicalMixtureDatasetComponent:
+    """
+    Converts a tokenizer step to a Levanter dataset component. This is useful for creating
+    data mixture configs.
+    """
+    if isinstance(step, TokenizedMixtureGroup):
+        child_components = {
+            name: step_to_lm_mixture_component(child, include_raw_paths=include_raw_paths)
+            for name, child in step.components.items()
+        }
+        if not all(isinstance(component, DatasetComponent) for component in child_components.values()):
+            raise ValueError("TokenizedMixtureGroup only supports cache-backed child components.")
+
+        return HierarchicalMixtureDatasetComponent(
+            components=child_components,  # type: ignore[arg-type]
+            train_weights=step.weights,
+            token_counts=step.token_counts,
+        )
+
+    source = step_to_lm_dataset_source_config(step, include_raw_paths=include_raw_paths)
+    return dataset_component(source)
+
+
 def dataset_component(source: LmDatasetSourceConfigBase) -> DatasetComponent:
-    """Wrap a resolved dataset source as a Levanter mixture component, carrying its
-    cache dir, format, and tags."""
-    return DatasetComponent(source=source, cache_dir=source.cache_dir, format=source.format, tags=source.tags)
+    """Wrap a resolved dataset source as a Levanter cache-backed mixture component."""
+    return DatasetComponent(
+        source=source,
+        cache_dir=source.cache_dir,
+        format=source.format,
+        tags=source.tags,
+    )
 
 
 def with_pack(data: LmDataConfig, pack: bool | int) -> LmDataConfig:
@@ -52,23 +147,63 @@ def with_pack(data: LmDataConfig, pack: bool | int) -> LmDataConfig:
     Packing is a load-time view over the tokenized cache, so this re-tokenizes nothing.
     Components without a ``pack`` field (concat/direct) are returned unchanged.
     """
-    return replace(
+    return dataclasses.replace(
         data,
         components={
-            name: replace(component, pack=pack) if isinstance(component, DatasetComponent) else component
+            name: dataclasses.replace(component, pack=pack) if isinstance(component, DatasetComponent) else component
             for name, component in data.components.items()
         },
     )
 
 
-def step_to_lm_mixture_component(step: TokenizeConfig, include_raw_paths: bool) -> DatasetComponent:
-    """Convert a tokenize config to a Levanter dataset component, for building data mixtures."""
-    source = step.as_lm_dataset_source_config(step.cache_path, include_raw_paths=include_raw_paths)
-    return dataset_component(source)
+def lm_data_config(
+    training_set: TokenizerStep | InputName,
+    *,
+    validation_sets: dict[str, TokenizerStep] | None = None,
+    shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
+    max_train_batches: dict[str, int] | None = None,
+    num_validation_sequences: dict[str, int] | None = None,
+    block_cross_document_attention: bool = True,
+) -> LmDataConfig:
+    """
+    Creates a dataset config suitable for Levanter's TrainLMConfig from a single training set
+
+    Notes:
+
+    Args:
+        training_set: The training set to use
+        validation_sets: A sequence of validation sets to use
+        shuffle: Shuffle policy. Defaults to hierarchical block shuffle.
+            `True` = full shuffle, `BlockShuffleConfig` = hierarchical block shuffle.
+        max_train_batches: Maximum number of batches to use for the training set per dataset.
+        num_validation_sequences: Number of validation sequences to take from the training set per dataset.
+        block_cross_document_attention: Whether to mask attention across document boundaries.
+    """
+    tokenizer = training_set.config.tokenizer
+
+    if validation_sets is not None:
+        for name, step in validation_sets.items():
+            if step.config.tokenizer != tokenizer:
+                raise ValueError(
+                    f"Validation set {name} ({step.name}) must have same tokenizer as training set's,"
+                    f" but got: {step.config.tokenizer} vs {tokenizer}"
+                )
+
+    train_set_name = os.path.basename(training_set.name)
+
+    return lm_mixture_data_config(
+        {train_set_name: training_set, **(validation_sets or {})},
+        {train_set_name: 1.0},
+        shuffle=shuffle,
+        missing_weights_are_validation=True,
+        max_train_batches=max_train_batches,
+        num_validation_sequences=num_validation_sequences,
+        block_cross_document_attention=block_cross_document_attention,
+    )
 
 
 def lm_mixture_data_config(
-    components: dict[str, TokenizeConfig],
+    components: dict[str, TokenizerConfigLike | TokenizedMixtureGroup],
     weights: dict[str, float],
     *,
     shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
@@ -125,6 +260,176 @@ def lm_mixture_data_config(
     )
 
 
+def interpolate_mixture_weights(mixture_weights: list[dict[str, float]], weights: list[float]) -> dict[str, float]:
+    """
+    Interpolates the weights of multiple mixtures into a single set of weights.
+
+    This method normalizes the weights of each mixture to sum to 1.0 before combining them.
+
+    Args:
+        mixture_weights: List of dictionaries, each mapping dataset names to their weights in the mixture.
+        weights: List of weights corresponding to each mixture. Must sum to 1.0.
+    Returns:
+        A single dictionary mapping dataset names to their interpolated weights.
+    """
+    if len(mixture_weights) != len(weights):
+        raise ValueError("mixture_train_weights and weights must have the same length")
+
+    # check weights are numeric and sum to 1.0
+    if not all(isinstance(w, int | float) for w in weights):
+        raise TypeError("All items in weights must be numeric")
+
+    if not np.isclose(sum(weights), 1.0):
+        raise ValueError("Weights must sum to 1.0")
+
+    combined_weights = {}
+    for train_weights, weight in zip(mixture_weights, weights, strict=False):
+        total_weight_in_mixture = sum(train_weights.values())
+        if total_weight_in_mixture == 0:
+            raise ValueError("Total weight in mixture cannot be zero")
+        normalized_mixture_weights = {name: w / total_weight_in_mixture for name, w in train_weights.items()}
+        for name in normalized_mixture_weights:
+            if name not in combined_weights:
+                combined_weights[name] = 0.0
+            else:
+                logger.info(f"Datasource {name} is in both mixtures, adding weights together.")
+            combined_weights[name] += weight * normalized_mixture_weights.get(name, 0.0)
+    return combined_weights
+
+
+def lm_varying_mixture_data_config(
+    components: dict[str, TokenizerConfigLike | TokenizedMixtureGroup],
+    weights_list: list[tuple[int, dict[str, float]]],
+    *,
+    shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
+    missing_weights_are_validation: bool = True,
+    include_raw_paths: bool = True,
+    mixture_block_size: int | None = None,
+    max_train_batches: dict[str, int] | None = None,
+    num_validation_sequences: dict[str, int] | None = None,
+    block_cross_document_attention: bool = True,
+) -> LmDataConfig:
+    """
+    Creates a training config from a mixture of datasources with varying weights.
+
+    Args:
+        components: dict from names of datasets to the steps that produced them.
+        weights_list: list of tuples of (start_step, weights_dict)
+            weights_dict maps dataset names to their weights.
+            The weights will change at each start_step. start_step values must be sorted in ascending order.
+            Note: start_step is a training step index (batch index), not a sequence index.
+            LMMixtureDatasetConfig.train_set() will convert step indices to sequence indices
+            using rescale_mixture_schedule_for_batch_schedule().
+        shuffle: shuffling policy. Defaults to hierarchical block shuffle.
+            `True` enables a full permutation shuffle; `BlockShuffleConfig` enables hierarchical block shuffling.
+        missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
+        include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
+        mixture_block_size: The block size to use for the mixture.
+        max_train_batches: Maximum number of batches to use for the training set per dataset.
+        num_validation_sequences: Number of validation sequences to take from the training set per dataset.
+        block_cross_document_attention: Whether to mask attention across document boundaries.
+    Returns:
+        LmDataConfig configured with the varying weights
+    """
+    component_configs = {
+        name: step_to_lm_mixture_component(step, include_raw_paths=include_raw_paths)
+        for name, step in components.items()
+    }
+
+    # Validate and normalize weights
+    if not weights_list:
+        raise ValueError("weights_list cannot be empty")
+
+    if weights_list[0][0] != 0:
+        raise ValueError("First weight stage must start at index 0")
+
+    # If missing_weights_are_validation, pad out weights with zeros
+    if missing_weights_are_validation:
+        padded_weights_list = []
+        for step_idx, weights in weights_list:
+            missing_keys = {k: 0.0 for k in components if k not in weights}
+            padded_weights_list.append((step_idx, {**weights, **missing_keys}))
+        weights_list = padded_weights_list
+
+    tokenizer = _verify_tokenizers_same(components)
+
+    return LmDataConfig(
+        components=component_configs,
+        train_weights=weights_list,
+        tokenizer=tokenizer,
+        cache_dir=None,
+        shuffle=shuffle,
+        mixture_block_size=mixture_block_size or 2048,
+        permutation_type="feistel",
+        max_train_batches=max_train_batches,
+        num_validation_sequences=num_validation_sequences,
+        block_cross_document_attention=block_cross_document_attention,
+    )
+
+
+def add_validation_sets_to_mixture(config: LmDataConfig, validation_sets: dict[str, TokenizerStep]) -> LmDataConfig:
+    """
+    Adds validation sets to a mixture config. Works with both fixed and varying mixture weights.
+    """
+    valid_components = {
+        name: step_to_lm_mixture_component(step, include_raw_paths=True) for name, step in validation_sets.items()
+    }
+    new_components = {
+        **config.components,
+        **{name: comp for name, comp in valid_components.items() if name not in config.components},
+    }
+
+    if isinstance(config.train_weights, dict):
+        # Handle fixed weights case
+        if any(name in config.train_weights for name in validation_sets):
+            overlap = set(config.train_weights) & set(validation_sets)
+            logger.warning(f"Validation sets {overlap} already present in mixture. Skipping.")
+
+        new_weights = {
+            **config.train_weights,
+            **{name: 0.0 for name in validation_sets if name not in config.train_weights},
+        }
+    elif isinstance(config.train_weights, list):
+        for step_idx, weights_dict in config.train_weights:
+            assert isinstance(step_idx, int)
+            assert isinstance(weights_dict, dict)
+
+        # Handle varying weights case
+        overlap_sets = set()
+        for _, weights_dict in config.train_weights:
+            overlap_sets.update(set(weights_dict) & set(validation_sets))
+
+        if overlap_sets:
+            logger.warning(f"Validation sets {overlap_sets} already present in mixture. Skipping.")
+
+        new_weights = []
+        for step_idx, weights_dict in config.train_weights:
+            new_weights_dict = {**weights_dict, **{name: 0.0 for name in validation_sets if name not in weights_dict}}
+            new_weights.append((step_idx, new_weights_dict))
+    else:
+        raise ValueError(f"Invalid train_weights type: {type(config.train_weights)}")
+
+    return dataclasses.replace(config, components=new_components, train_weights=new_weights)
+
+
+def mixture_for_evaluation(inputs: dict[str, ExecutorStep]) -> LmDataConfig:
+    """
+    Creates a mixture of datasets purely for evaluation purposes. Used mostly for visualizing log probabilities.
+
+    Args:
+        inputs (dict[str, ExecutorStep]): The inputs to the mixture.
+
+    Returns:
+        LmDataConfig: The mixture of datasets.
+    """
+    return lm_mixture_data_config(
+        {name: step for name, step in inputs.items()},
+        {name: 0.0 for name in inputs},
+        shuffle=False,
+        missing_weights_are_validation=True,
+    )
+
+
 @lru_cache(maxsize=128)
 def get_vocab_size_for_tokenizer(tokenizer_name: str) -> int:
     """Return the vocabulary size for a tokenizer name.
@@ -135,20 +440,24 @@ def get_vocab_size_for_tokenizer(tokenizer_name: str) -> int:
     Returns:
         Vocabulary size for the tokenizer.
     """
-    if tokenizer_name in _KNOWN_VOCAB_SIZES:
-        return _KNOWN_VOCAB_SIZES[tokenizer_name]
+    resolved_name = unwrap_versioned_value(tokenizer_name)
+    if resolved_name in _KNOWN_VOCAB_SIZES:
+        return _KNOWN_VOCAB_SIZES[resolved_name]
 
     logger.warning(
         "Tokenizer %r not found in _KNOWN_VOCAB_SIZES; loading from HuggingFace. "
         "Consider adding it to _KNOWN_VOCAB_SIZES in data_configs.py to avoid network calls during dry-runs.",
-        tokenizer_name,
+        resolved_name,
     )
-    tokenizer = load_tokenizer(tokenizer_name)
+    tokenizer = load_tokenizer(resolved_name)
     return tokenizer.vocab_size
 
 
 def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
     """Compare two tokenizers by loading them and comparing their vocabularies and token IDs"""
+    tokenizer1 = unwrap_versioned_value(tokenizer1)
+    tokenizer2 = unwrap_versioned_value(tokenizer2)
+
     # The marin tokenizer is a re-upload of the llama3 tokenizer with a custom chat template,
     # so they share the same vocabulary and token IDs.
     if tokenizer1 in _EQUIVALENT_TOKENIZERS and tokenizer2 in _EQUIVALENT_TOKENIZERS:
@@ -179,11 +488,17 @@ def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
     return True
 
 
-def _verify_tokenizers_same(components: dict[str, TokenizeConfig]):
+def _component_tokenizer(component: TokenizerConfigLike | TokenizedMixtureGroup) -> str:
+    if isinstance(component, TokenizedMixtureGroup):
+        return component.tokenizer
+    return component.config.tokenizer if isinstance(component, ExecutorStep) else component.tokenizer
+
+
+def _verify_tokenizers_same(components: dict[str, TokenizerConfigLike | TokenizedMixtureGroup]):
     first_name, first_step = next(iter(components.items()))
-    tokenizer = first_step.tokenizer
+    tokenizer = _component_tokenizer(first_step)
     for name, step in components.items():
-        step_tokenizer = step.tokenizer
+        step_tokenizer = _component_tokenizer(step)
         if step_tokenizer != tokenizer:
             if not _are_tokenizers_equivalent(step_tokenizer, tokenizer):
                 raise ValueError(

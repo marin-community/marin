@@ -21,7 +21,7 @@ import threading
 from collections.abc import Callable, Generator
 from typing import Any
 
-from rigging.filesystem.cluster_config import get_bucket_location, marin_region
+from rigging.filesystem.cluster_config import _regions_match, get_bucket_location, marin_region
 from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
@@ -39,16 +39,6 @@ def _transfer_limit_bytes() -> int:
 
 
 CROSS_REGION_TRANSFER_LIMIT_BYTES: int = _transfer_limit_bytes()
-
-# GCS multi-region bucket locations are returned as "us", "eu", or "asia"
-# rather than a specific region like "us-central1".  European regions use the
-# prefix "europe-" (e.g. "europe-west4") so we map the multi-region label to
-# the set of region prefixes it covers.
-_MULTI_REGION_TO_PREFIXES: dict[str, tuple[str, ...]] = {
-    "us": ("us-",),
-    "eu": ("europe-", "eu-"),
-    "asia": ("asia-",),
-}
 
 
 class TransferBudgetExceeded(Exception):
@@ -166,22 +156,6 @@ def _cached_bucket_location(bucket_name: str) -> str | None:
     except Exception:
         logger.debug("Could not determine location for bucket %s", bucket_name, exc_info=True)
         return None
-
-
-def _regions_match(vm_region: str, bucket_location: str) -> bool:
-    """Return True if *vm_region* and *bucket_location* are the same region.
-
-    Handles GCS multi-region buckets whose location is ``"us"``, ``"eu"``,
-    or ``"asia"`` rather than a specific zone.
-    """
-    vm = vm_region.lower()
-    bl = bucket_location.lower()
-    if vm == bl:
-        return True
-    prefixes = _MULTI_REGION_TO_PREFIXES.get(bl)
-    if prefixes is not None:
-        return any(vm.startswith(p) for p in prefixes)
-    return False
 
 
 def _fs_is_gcs(fs: Any) -> bool:

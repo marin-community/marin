@@ -1,0 +1,35 @@
+{
+  "description": "Grug-MoE proportional-to-v4 interpolation path test.",
+  "run_id_prefix": "grug_moe_mix_v4_path_r1",
+  "retry_reason": "r1 avoids stale executor statuses from the initial missing-asyncio failed launch.",
+  "t_values": [
+    0.25,
+    0.5,
+    0.75
+  ],
+  "num_training_specs": 15,
+  "scales": [
+    {
+      "budget": "2.19e+17",
+      "hidden_dim": 512
+    },
+    {
+      "budget": "1.70e+18",
+      "hidden_dim": 768
+    },
+    {
+      "budget": "9.00e+18",
+      "hidden_dim": 1024
+    },
+    {
+      "budget": "2.83e+19",
+      "hidden_dim": 1280
+    },
+    {
+      "budget": "9.00e+19",
+      "hidden_dim": 1536
+    }
+  ],
+  "target_budget": 6325183647689,
+  "target_steps_heuristic": 16384
+}
