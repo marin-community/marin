@@ -628,9 +628,9 @@ groups:
                 - evaluator: { type: gt, params: [0] }
 
   # This warning finds a reporting RL run whose last rollout or policy step is 30
-  # minutes old. Stall detection in this repo is per-producer and opt-in: the
-  # training-stall rule covers Levanter runs that opt in by job name, and this one
-  # covers MarinSkyRL. The bridge removes expired producers, so a finished run stops
+  # minutes old. Stall detection in this repo is per-producer and opt-in: the hero
+  # rules cover Levanter runs that opt in by job name, and this one covers
+  # MarinSkyRL. The bridge removes expired producers, so a finished run stops
   # alerting rather than alerting forever.
   - orgId: 1
     name: rl-progress
@@ -644,11 +644,6 @@ groups:
         noDataState: Alerting
         execErrState: Alerting
         labels:
-          severity: critical
-          notification: hero-run
-        annotations:
-          summary: "{{ $labels.cluster }}: {{ $labels.run }} training loss is {{ $labels.reason }}"
-          runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/training-loss-spike-alert.md
           severity: warning
         annotations:
           summary: "{{ $labels.cluster }}: RL run {{ $labels.run }} execution {{ $labels.execution }} has stale rollout progress"
@@ -664,12 +659,6 @@ groups:
               source: url
               parser: backend
               format: table
-              url: /alerts/loss_spikes
-              url_options: { method: GET }
-              columns:
-                - { selector: cluster, text: cluster, type: string }
-                - { selector: job, text: job, type: string }
-                - { selector: run, text: run, type: string }
               url: /alerts/rl_stalls
               url_options: { method: GET }
               columns:
