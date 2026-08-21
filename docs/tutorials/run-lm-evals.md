@@ -267,7 +267,7 @@ documents how to register a Hugging Face model or object-store checkpoint.
 - `--accelerator v6e-8` or `--accelerator H100x8` requests an exact compatible slice.
 - `--federated_cluster cw-rno2a` overrides the GPU fleet profile's target cluster. The launcher
   always submits through the `marin` Iris controller.
-- `--priority system|production|interactive|batch` sets the orchestrator and serve priority band. Omitting
+- `--priority production|interactive|batch` sets the orchestrator and serve priority band. Omitting
   it preserves Iris priority inheritance.
 - `--version` and `--description` attach run metadata.
 - `--records-prefix` changes the result store.
