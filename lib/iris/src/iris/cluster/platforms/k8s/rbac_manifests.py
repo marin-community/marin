@@ -38,7 +38,7 @@ CLUSTER_ROLE_RULES = [
         "verbs": ["get", "list", "watch", "delete"],
     },
     {
-        # Iris creates iris-{production,priority,interactive,batch} PriorityClass objects at
+        # Iris creates iris-{system,production,interactive,batch} PriorityClass objects at
         # startup so pods can be stamped without manual setup.
         "apiGroups": ["scheduling.k8s.io"],
         "resources": ["priorityclasses"],

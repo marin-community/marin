@@ -624,8 +624,8 @@ def run_preemption_pass(
     preemptor to the worker(s) its victims free.
 
     Rules:
-    - PRODUCTION preempts PRIORITY, INTERACTIVE, and BATCH.
-    - PRIORITY preempts INTERACTIVE and BATCH.
+    - SYSTEM preempts PRODUCTION, INTERACTIVE, and BATCH.
+    - PRODUCTION preempts INTERACTIVE and BATCH.
     - INTERACTIVE preempts BATCH only.
     - BATCH never preempts.
     - Within same band, no preemption (compete via scheduling order only).

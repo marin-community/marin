@@ -162,7 +162,7 @@ def test_run_iris_job_adds_region_and_zone_constraints(recorded_job_submissions)
 @pytest.mark.parametrize(
     "name, band",
     [
-        ("priority", job_pb2.PRIORITY_BAND_PRIORITY),
+        ("production", job_pb2.PRIORITY_BAND_PRODUCTION),
         ("batch", job_pb2.PRIORITY_BAND_BATCH),
     ],
 )
@@ -172,28 +172,40 @@ def test_run_iris_job_passes_priority_band(recorded_job_submissions, name, band)
     assert recorded_job_submissions[0]["priority_band"] == band
 
 
-def test_run_iris_job_requires_production_reason(recorded_job_submissions):
-    result = _invoke_run(["--priority", "production"])
+def test_run_iris_job_requires_system_reason(recorded_job_submissions):
+    result = _invoke_run(["--priority", "system"])
     assert result.exit_code != 0
     assert recorded_job_submissions == []
 
 
-def test_run_iris_job_rejects_production_reason_for_other_bands(recorded_job_submissions):
-    result = _invoke_run(["--priority", "priority", "--production-needed=not production"])
+def test_run_iris_job_rejects_unrecognized_system_reason(recorded_job_submissions):
+    result = _invoke_run(["--priority", "system", "--system-reason=urgent heroic recovery"])
     assert result.exit_code != 0
     assert recorded_job_submissions == []
 
 
-def test_run_iris_job_persists_production_reason_in_submit_argv(recorded_job_submissions, monkeypatch):
+def test_run_iris_job_rejects_system_reason_for_other_bands(recorded_job_submissions):
+    result = _invoke_run(["--priority", "production", "--system-reason=iris recovery"])
+    assert result.exit_code != 0
+    assert recorded_job_submissions == []
+
+
+@pytest.mark.parametrize("reason", ["hero recovery", "Finelog outage", "Iris controller restart"])
+def test_run_iris_job_accepts_system_reasons(recorded_job_submissions, reason):
+    result = _invoke_run(["--priority", "system", f"--system-reason={reason}"])
+    assert result.exit_code == 0, result.output
+    assert recorded_job_submissions[0]["priority_band"] == job_pb2.PRIORITY_BAND_SYSTEM
+
+
+def test_run_iris_job_persists_system_reason_in_submit_argv(recorded_job_submissions, monkeypatch):
     monkeypatch.setattr(
         sys,
         "argv",
-        ["iris", "job", "run", "--priority", "production", "--production-needed=hero run recovery"],
+        ["iris", "job", "run", "--priority", "system", "--system-reason=hero run recovery"],
     )
-    result = _invoke_run(["--priority", "production", "--production-needed=hero run recovery"])
+    result = _invoke_run(["--priority", "system", "--system-reason=hero run recovery"])
     assert result.exit_code == 0, result.output
-    assert recorded_job_submissions[0]["priority_band"] == job_pb2.PRIORITY_BAND_PRODUCTION
-    assert "--production-needed=hero run recovery" in recorded_job_submissions[0]["submit_argv"]
+    assert "--system-reason=hero run recovery" in recorded_job_submissions[0]["submit_argv"]
 
 
 def test_run_iris_job_default_priority_inherit(recorded_job_submissions):

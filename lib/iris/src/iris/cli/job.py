@@ -70,7 +70,8 @@ logger = logging.getLogger(__name__)
 # descending, so this fetches the most recent jobs rather than walking the whole
 # jobs table (which would hit the controller's deep-offset cap on a busy cluster).
 DEFAULT_JOB_LIST_LIMIT = 50
-_PRODUCTION_PRIORITY_NAME = "production"
+_SYSTEM_PRIORITY_NAME = "system"
+_SYSTEM_REASON_PATTERN = re.compile(r"\b(?:hero|finelog|iris)\b", re.IGNORECASE)
 
 
 def _remote_client(ctx: click.Context) -> IrisClient:
@@ -805,12 +806,16 @@ def _submit_and_wait_job(
         raise
 
 
-def validate_production_reason(priority: str | None, production_needed: str | None) -> None:
-    """Require an explicit reason when a CLI selects production priority."""
-    if priority == _PRODUCTION_PRIORITY_NAME and not (production_needed and production_needed.strip()):
-        raise click.UsageError("--priority production requires --production-needed=<reason>.")
-    if production_needed is not None and priority != _PRODUCTION_PRIORITY_NAME:
-        raise click.UsageError("--production-needed is only valid with --priority production.")
+def validate_system_reason(priority: str | None, system_reason: str | None) -> None:
+    """Restrict CLI system submissions to named critical workload classes."""
+    if priority == _SYSTEM_PRIORITY_NAME:
+        if system_reason is None or _SYSTEM_REASON_PATTERN.search(system_reason) is None:
+            raise click.UsageError(
+                "--priority system requires --system-reason=<reason> containing hero, finelog, or iris."
+            )
+        return
+    if system_reason is not None:
+        raise click.UsageError("--system-reason is only valid with --priority system.")
 
 
 @click.group("job")
@@ -930,11 +935,11 @@ Examples:
     help="Priority band for scheduling (default: interactive).",
 )
 @click.option(
-    "--production-needed",
+    "--system-reason",
     type=str,
     default=None,
     metavar="REASON",
-    help="Required justification for CLI submissions using --priority production.",
+    help="Required justification for --priority system; must contain hero, finelog, or iris.",
 )
 @click.option(
     "--preemptible/--no-preemptible",
@@ -1003,7 +1008,7 @@ def run(
     no_sync: bool,
     reserve: tuple[str, ...],
     priority: str | None,
-    production_needed: str | None,
+    system_reason: str | None,
     preemptible: bool | None,
     task_image: str | None,
     container_profile: str | None,
@@ -1019,7 +1024,7 @@ def run(
     validate_region_zone(region or None, zone, ctx.obj.get("config"))
     if no_sync and sync_package:
         raise click.UsageError("--no-sync skips setup entirely; it cannot be combined with --sync-package.")
-    validate_production_reason(priority, production_needed)
+    validate_system_reason(priority, system_reason)
 
     command = list(cmd)
     if not command:

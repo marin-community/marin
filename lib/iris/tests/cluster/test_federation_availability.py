@@ -185,7 +185,8 @@ def test_unreachable_peer_hosts_nothing():
 
 # --- priority-aware placement ----------------------------------------------
 
-_PRIORITY = job_pb2.PRIORITY_BAND_PRIORITY
+_SYSTEM = job_pb2.PRIORITY_BAND_SYSTEM
+_PRODUCTION = job_pb2.PRIORITY_BAND_PRODUCTION
 _INTERACTIVE = job_pb2.PRIORITY_BAND_INTERACTIVE
 _BATCH = job_pb2.PRIORITY_BAND_BATCH
 
@@ -193,7 +194,8 @@ _BATCH = job_pb2.PRIORITY_BAND_BATCH
 @pytest.mark.parametrize(
     "candidate_band, held_band",
     [
-        (_PRIORITY, _INTERACTIVE),
+        (_SYSTEM, _PRODUCTION),
+        (_PRODUCTION, _INTERACTIVE),
         (_INTERACTIVE, _BATCH),
     ],
 )

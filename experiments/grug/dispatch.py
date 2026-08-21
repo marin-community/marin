@@ -20,7 +20,6 @@ ConfigT = TypeVar("ConfigT")
 
 # `JobRequest.priority` is the Iris priority band as a bare int. INHERIT is Iris's own default.
 INHERIT_PRIORITY = priority_band_value("inherit")
-PRODUCTION_PRIORITY = priority_band_value("production")
 
 # Runtime-tuning env vars forwarded from the dispatcher to the train tasks.
 # Iris tasks don't inherit the submitter's shell, so anything the launcher was
