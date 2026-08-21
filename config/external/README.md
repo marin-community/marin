@@ -39,7 +39,7 @@ uv run config/update-external.py vllm
 ```
 
 The generated module also carries the isolated TPU-vLLM requirements from
-`vllm/tpu.toml`; those forks are not part of the nightly upgrade set.
+`vllm/tpu_wheels.toml`; those wheels are not part of the nightly upgrade set.
 Verify that all generated state is current without contacting the repositories:
 
 ```bash

@@ -29,7 +29,7 @@ from rigging.telemetry.probes import nccl
 from rigging.telemetry.probes.runner import PeriodicProbe
 from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper, prefixed_metric_snapshots
 
-from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
+from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.config import WORKER_PYTHON_VERSION, InferenceModelConfig, VllmCompilationCacheMode
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_release import (
@@ -159,7 +159,7 @@ class PreinstalledVllm:
         return {}
 
     def cache_identity(self) -> str:
-        return f"preinstalled:{VLLM_FORK_REQUIREMENT}:{TPU_INFERENCE_FORK_REQUIREMENT}:{WORKER_PYTHON_VERSION}"
+        return f"preinstalled:{VLLM_GPU_RELEASE.release_tag}:{WORKER_PYTHON_VERSION}"
 
 
 class VllmType(StrEnum):
@@ -267,19 +267,17 @@ def _write_virtual_hosted_s3_config() -> str:
 
 @dataclass(frozen=True)
 class IsolatedTpuVllm:
-    """Run Marin's forked TPU vLLM from a throwaway uv-managed environment via ``uvx``.
+    """Run Marin's qualified TPU wheel pair in a throwaway uv environment.
 
-    The TPU counterpart to :class:`IsolatedCudaVllm`. ``vllm`` and its ``tpu-inference``
-    runtime are two git forks pinned by SHA in ``marin.external_dependencies``; this
-    provisions them in an isolated uv-tool env rather than the workspace lock, so
-    ``marin-serve iris --tpu`` runs from outside a checkout.
+    Each wheel is downloaded and checked against its pinned digest before uv sees
+    its local path, so the resolver cannot substitute different public artifacts.
     """
 
-    vllm_ref: str
-    """``uvx --from`` spec for the vLLM fork, e.g.
-    ``vllm @ git+https://github.com/marin-community/vllm.git@<sha>``."""
-    tpu_inference_ref: str
-    """``uvx --with`` spec for the tpu-inference fork (vLLM's TPU runtime dependency)."""
+    vllm_wheel_url: str
+    vllm_wheel_sha256: str
+    tpu_inference_wheel_url: str
+    tpu_inference_wheel_sha256: str
+    exclude_newer: str
     # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
     python_version: str = WORKER_PYTHON_VERSION
     # torch is only a dependency here (jax/libtpu do TPU compute), so resolve it from the
@@ -288,11 +286,18 @@ class IsolatedTpuVllm:
 
     def command(self) -> list[str]:
         return [
-            "uvx",
-            "--from",
-            self.vllm_ref,
-            "--with",
-            self.tpu_inference_ref,
+            sys.executable,
+            "-m",
+            "marin.inference.verified_uvx",
+            "--from-wheel",
+            self.vllm_wheel_url,
+            self.vllm_wheel_sha256,
+            "--with-wheel",
+            self.tpu_inference_wheel_url,
+            self.tpu_inference_wheel_sha256,
+            "--",
+            "--exclude-newer",
+            self.exclude_newer,
             "--python",
             self.python_version,
             "--torch-backend",
@@ -303,10 +308,21 @@ class IsolatedTpuVllm:
     def env(self) -> dict[str, str]:
         # vLLM targets CUDA unless VLLM_TARGET_DEVICE is set; the uvx build subprocess
         # inherits this from the launch environment.
-        return {"VLLM_TARGET_DEVICE": "tpu"}
+        # Iris mounts its temporary directory no-exec, so uvx's executable tool env
+        # must live under the task work directory.
+        cache_root = os.environ.get("IRIS_WORKDIR", tempfile.gettempdir())
+        wheel_pair = f"{self.vllm_wheel_sha256[:16]}-{self.tpu_inference_wheel_sha256[:16]}"
+        return {
+            "VLLM_TARGET_DEVICE": "tpu",
+            "UV_CACHE_DIR": os.path.join(cache_root, f".marin-vllm-tpu-{wheel_pair}"),
+        }
 
     def cache_identity(self) -> str:
-        return f"tpu:{self.vllm_ref}:{self.tpu_inference_ref}:{self.python_version}:{self.torch_backend}"
+        return (
+            f"tpu:{self.vllm_wheel_url}:{self.vllm_wheel_sha256}:"
+            f"{self.tpu_inference_wheel_url}:{self.tpu_inference_wheel_sha256}:{self.exclude_newer}:"
+            f"{self.python_version}:{self.torch_backend}"
+        )
 
 
 def _starts_nccl_ras_probe(launcher: VllmLauncher) -> bool:

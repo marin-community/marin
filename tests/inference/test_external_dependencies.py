@@ -5,11 +5,10 @@
 
 import importlib.util
 import json
-import tomllib
 from pathlib import Path
 
 import pytest
-from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
+from marin.external_dependencies import VLLM_GPU_RELEASE
 from rigging.config_discovery import find_project_root
 
 
@@ -18,12 +17,6 @@ def _workspace_root() -> Path:
     if root is None:
         pytest.skip("no Marin workspace checkout; nothing to compare against")
     return root
-
-
-def _descriptor_requirement(name: str) -> str:
-    config = tomllib.loads((_workspace_root() / "config" / "external" / "vllm" / "tpu.toml").read_text())
-    entry = config[name]
-    return f"{name} @ git+{entry['repository']}@{entry['commit']}"
 
 
 def _update_external():
@@ -57,11 +50,6 @@ def _promoted_manifest() -> dict:
             },
         ],
     }
-
-
-def test_tpu_vllm_requirements_match_fork_descriptor():
-    assert VLLM_FORK_REQUIREMENT == _descriptor_requirement("vllm")
-    assert TPU_INFERENCE_FORK_REQUIREMENT == _descriptor_requirement("tpu-inference")
 
 
 def test_gpu_release_pin_matches_its_descriptor():
