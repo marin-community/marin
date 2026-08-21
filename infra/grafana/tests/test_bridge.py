@@ -385,8 +385,7 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
 
     stalled_at = now - timedelta(minutes=20)
     # Levanter publishes phase every minute, so a wedged run keeps a fresh
-    # heartbeat while its progress timestamp ages. A run that stops publishing
-    # altogether is TrainingTelemetryGone's case, not this rule's.
+    # heartbeat while its progress timestamp ages.
     phase_at = now - timedelta(seconds=30)
     progressing_at = now - timedelta(seconds=30)
     database.executemany(
@@ -663,7 +662,7 @@ def _reasons(rows: list[dict]) -> set[str]:
 
 def test_run_health_watches_a_run_whose_iris_state_row_went_stale():
     # The stall and loss rules enroll from iris.task_state alone, so a break in
-    # that path silently stops watching a run that is plainly still training.
+    # that path silently stops watching a run that is still training.
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
     task_states = finelog_result(
         cluster=["cw-a"],
@@ -683,8 +682,7 @@ def test_run_health_watches_a_run_whose_iris_state_row_went_stale():
 
 
 def test_telemetry_gone_pages_only_while_iris_still_runs_the_tasks():
-    # Telemetry that stops when Iris also stops reporting the tasks is a run that
-    # ended. Telemetry that stops while Iris keeps counting them is an incident.
+    # Telemetry that stops when Iris stops counting the tasks is a run that ended.
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
     silent = _signals(now, {"phase": {"latest": 1.0, "observed_at": now - timedelta(minutes=20)}})
 
@@ -693,8 +691,8 @@ def test_telemetry_gone_pages_only_while_iris_still_runs_the_tasks():
 
 
 def test_telemetry_alert_leaves_a_run_that_has_published_nothing_to_the_stall_rule():
-    # Before Levanter's first sample there is no evidence of a lost telemetry
-    # path, and TrainingProgressStalled allows the full initialization budget.
+    # Before Levanter's first sample there is no lost path to report, and
+    # TrainingProgressStalled allows the full initialization budget.
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
     rows = telemetry_alert_rows((_watched(),), {}, now)
 
@@ -752,8 +750,8 @@ def test_optimizer_alert_reads_the_loss_jump_gradient_norm_and_skipped_steps():
         },
     )
 
-    # A trailing spread of 0.3 puts the six-sigma band at 4.2, well above the new
-    # floor, so this level shift is the one TrainingLossSpike cannot see.
+    # A trailing spread of 0.3 puts the six-sigma band at 4.2, above the new
+    # floor, so this is the level shift TrainingLossSpike cannot see.
     assert _reasons(optimizer_alert_rows(runs, signals, _loss_window_row(stddev=0.3), now)) == {
         "loss_jump",
         "grad_norm_high",
@@ -762,8 +760,8 @@ def test_optimizer_alert_reads_the_loss_jump_gradient_norm_and_skipped_steps():
 
 
 def test_loss_jump_defers_to_the_spike_rule_on_the_same_rise():
-    # A tight trailing spread puts the same rise outside the six-sigma band, so
-    # TrainingLossSpike already pages for it and this rule stays quiet.
+    # A tight trailing spread puts the same rise outside the band, so
+    # TrainingLossSpike pages for it and this rule stays quiet.
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
     windows = _loss_window_row(stddev=0.02)
 
@@ -772,8 +770,7 @@ def test_loss_jump_defers_to_the_spike_rule_on_the_same_rise():
 
 
 def test_optimizer_alert_ignores_a_gradient_norm_the_previous_attempt_left_behind():
-    # A restarted run inherits its predecessor's last sample. Only a fresh one
-    # describes the attempt that is training now.
+    # A restarted run inherits its predecessor's last sample.
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
     stale = _signals(now, {"grad_norm_total": {"latest": 9.0, "observed_at": now - timedelta(minutes=40)}})
 
@@ -805,8 +802,8 @@ def test_health_alert_reads_routing_throughput_and_evaluation():
 
 
 def test_throughput_floor_needs_most_of_the_window_below_it():
-    # The hero monitor compares a median, so one restart step at zero must not
-    # read as a slow run, and a window too short to have a median says nothing.
+    # One restart step at zero is not a slow run, and a window too short to have
+    # a median says nothing.
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
     one_slow_step = {"latest": 2.4e6, "recent_samples": 100, "recent_below_floor": 1}
     barely_sampled = {"latest": 1.0e6, "recent_samples": 8, "recent_below_floor": 8}
@@ -828,9 +825,8 @@ def test_health_alert_announces_a_controller_retry_on_the_run_that_owns_the_task
 
 
 def test_run_health_alerts_stay_quiet_for_a_run_that_is_not_training():
-    # A finished run leaves its last samples behind for a while, an initializing
-    # attempt has published none of these metrics, and a silent one belongs to
-    # TrainingTelemetryGone. None of the three is a health signal.
+    # A finished run leaves its last samples behind, an initializing attempt has
+    # published none, and a silent one belongs to TrainingTelemetryGone.
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
     drops = {"moe_drop_fraction": {"latest": 0.4}}
     phases = (
@@ -845,8 +841,8 @@ def test_run_health_alerts_stay_quiet_for_a_run_that_is_not_training():
 
 
 def test_iris_state_stale_needs_a_state_row_that_went_stale():
-    # A controller that publishes no task-state rollup at all, which is how the
-    # GCE clusters run, is not a rollup that broke.
+    # The GCE clusters publish no task-state rollup at all, which is not a
+    # rollup that broke.
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
     signals = _signals(now, {})
 
@@ -855,8 +851,7 @@ def test_iris_state_stale_needs_a_state_row_that_went_stale():
 
 
 def test_run_health_alerts_return_an_explicit_zero_without_a_watched_run():
-    # Grafana reserves noDataState for a monitoring-path failure, so an empty
-    # fleet still answers each rule.
+    # noDataState is reserved for a monitoring-path failure.
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
     fleet = {"cluster": "fleet", "job": "", "run": "", "reason": "healthy", "value": 0}
 
@@ -920,8 +915,7 @@ def test_signal_query_reduces_the_newest_sample_and_the_health_window():
 
 def test_signal_query_reduces_one_task_attempt_at_a_time():
     # A retry keeps the run ID and takes a new execution_uid. Summing across both
-    # would charge the new attempt with the skipped steps that killed the old one,
-    # and let the old attempt's last gradient norm fire against a fresh phase.
+    # would charge the new attempt with the steps the old one skipped.
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
     database = _signal_database(
         [

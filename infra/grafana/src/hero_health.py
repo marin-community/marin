@@ -3,15 +3,11 @@
 
 """Bounded finelog queries and alert projections for hero-run health.
 
-`TrainingProgressStalled` and `TrainingLossSpike` watch whether a hero run makes
-progress and whether its loss diverges. These projections watch the rest of the
-hero on-call policy: the telemetry path itself, the optimizer, MoE routing,
-throughput, evaluation, and Iris retries. One scan of `telemetry_v1` per bridge
-cache interval feeds all three. See docs/ops/hero-run-health-alerts.md.
-
-The critical projections page. The health projection announces in Slack without
-opening a triage session, which is what the hero on-call policy asks of a signal
-an operator reads rather than acts on within the hour.
+Beyond the progress and loss rules: the telemetry path itself, the optimizer, MoE
+routing, throughput, evaluation, and Iris retries. One `telemetry_v1` scan per
+bridge cache interval feeds all three projections. The telemetry and optimizer
+ones page; the health one announces in Slack without opening a triage session.
+See docs/ops/hero-run-health-alerts.md.
 """
 
 from collections.abc import Callable
@@ -37,8 +33,7 @@ from hero_runs import (
 )
 from loss_spikes import LossWindows, loss_spike_reason, windows_by_run
 
-# Past this the `iris.task_state` rollup no longer enrolls a run, so every hero
-# rule that reads it goes blind.
+# Past this the rollup no longer enrolls a run, so the rules that read it go blind.
 IRIS_STATE_STALE_AGE = timedelta(minutes=5)
 
 LOSS_JUMP = 1.0
@@ -74,18 +69,15 @@ _SIGNAL_METRICS = (
     _MFU,
     _EVAL_LOSS,
 )
-# Metrics whose median the throughput checks read, with the floor each falls below.
+# The floor each throughput check compares its window against.
 _FLOORS = {_TOKENS_PER_SECOND: TOKENS_PER_SECOND_MIN, _MFU: MFU_MIN}
 
 _SIGNAL_LOOKBACK = timedelta(minutes=65)
 # Evaluations are hours apart, so the previous macro loss needs its own window.
 _EVAL_LOOKBACK = timedelta(hours=24)
-# The window the throughput medians and the skipped-step count cover.
 HEALTH_WINDOW = timedelta(minutes=15)
 # Below this a median says more about sampling than about the run.
 _MIN_HEALTH_SAMPLES = 10
-# A restart leaves the previous attempt's last sample behind; only a fresh one is
-# evidence about the run as it is now.
 _LATEST_FRESHNESS = HEALTH_WINDOW
 _EVAL_FRESHNESS = timedelta(minutes=30)
 RETRY_WINDOW = timedelta(minutes=15)
@@ -122,12 +114,10 @@ Signals = dict[tuple[str, str], dict[str, MetricSignal]]
 def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
     """Return the newest sample and health-window reductions per run and metric.
 
-    Everything reduces over one execution: the newest attempt JAX process zero
-    reports. A retry keeps the run ID and takes a new `execution_uid`, so a scan
-    that partitioned on the run alone would sum one attempt's skipped steps into
-    the next and let the predecessor's last gradient norm fire against a fresh
-    phase. Process zero is the stable choice because Levanter publishes tracker
-    metrics only from it.
+    Everything reduces over one execution: the newest attempt process zero
+    reports. A retry keeps the run ID and takes a new `execution_uid`, so
+    partitioning on the run alone would sum one attempt's skipped steps into the
+    next. Process zero because Levanter publishes tracker metrics only from it.
     """
     run_predicate = run_id_predicate(runs)
     signal_since = sql_epoch_ms(now - _SIGNAL_LOOKBACK)
@@ -206,8 +196,8 @@ def retry_event_query(now: datetime) -> str:
 def watched_runs(task_states: pa.Table, phase_runs: pa.Table, now: datetime) -> tuple[WatchedRun, ...]:
     """Return every hero run the Iris rollup or Levanter telemetry still reports.
 
-    Watching the union means an outage on one path does not also silence the
-    checks the other path can still answer.
+    Watching the union means an outage on one path does not silence the checks
+    the other path can still answer.
     """
     now = as_utc(now)
     states: dict[tuple[str, str], tuple[timedelta, bool]] = {}
@@ -279,8 +269,7 @@ def _row(run: WatchedRun | None, reason: str, value: int) -> dict:
 def _project(runs: tuple[WatchedRun, ...], reasons_for: Callable[[WatchedRun], list[str]]) -> list[dict]:
     """Return one row per firing reason, a healthy row per quiet run, and a fleet row.
 
-    Every row carries an explicit value, so a resolved check clears its instance
-    and an empty fleet still answers the rule rather than entering NoData.
+    The explicit zeros clear a resolved instance and keep an empty fleet out of NoData.
     """
     rows = []
     for run in runs:
@@ -297,8 +286,8 @@ def telemetry_alert_rows(runs: tuple[WatchedRun, ...], signals: Signals, now: da
 
     def reasons_for(run: WatchedRun) -> list[str]:
         phase = signals.get((run.cluster, run.run_id), {}).get(PHASE_METRIC)
-        # A run that has published nothing yet is TrainingProgressStalled's
-        # initialization case, which allows the full startup budget.
+        # A run that has published nothing yet is TrainingProgressStalled's, which
+        # allows the full startup budget.
         if phase is None or not isfinite(phase.latest) or int(phase.latest) == FINISHED_PHASE:
             return []
         if now - phase.observed_at <= TELEMETRY_GONE_AGE or not run.iris_running:
@@ -311,9 +300,8 @@ def telemetry_alert_rows(runs: tuple[WatchedRun, ...], signals: Signals, now: da
 def _is_training(metrics: dict[str, MetricSignal], now: datetime) -> bool:
     """True while the run's own telemetry is fresh and reports the training phase.
 
-    Nothing below describes a run in another phase. An initializing attempt has
-    published none of these metrics, a finished one leaves its last samples
-    behind for a while, and a silent one is TrainingTelemetryGone's.
+    An initializing attempt has published none of these metrics, a finished one
+    leaves its last samples behind, and a silent one is TrainingTelemetryGone's.
     """
     phase = _fresh(metrics.get(PHASE_METRIC), now, TELEMETRY_GONE_AGE)
     return phase is not None and int(phase.latest) == TRAINING_PHASE
@@ -347,9 +335,8 @@ def optimizer_alert_rows(
 def _loss_jumped(windows: LossWindows | None) -> bool:
     """True when the recent loss floor sits a whole unit above the trailing floor.
 
-    A run whose own six-sigma band already caught the rise is TrainingLossSpike's,
-    and a run still warming up has no floor worth comparing. What is left is the
-    level shift a wide trailing spread hides, which is what this catches.
+    A rise the six-sigma band already caught is TrainingLossSpike's. What is left
+    is the level shift a wide trailing spread hides.
     """
     if windows is None or loss_spike_reason(windows) != ("healthy", 0):
         return False
@@ -386,9 +373,8 @@ def health_alert_rows(
             reasons.append("mfu_low")
         if _evaluation_regressed(metrics.get(_EVAL_LOSS), now):
             reasons.append("eval_regressed")
-        # A run with no state row at all is on a controller that publishes no
-        # rollup, not one whose rollup broke, and the row it did publish stays
-        # readable for an hour. Both make the absence of a row uninformative.
+        # No row at all means a controller that publishes no rollup (the GCE
+        # clusters), not a rollup that broke.
         if run.iris_state_age is not None and run.iris_state_age > IRIS_STATE_STALE_AGE:
             reasons.append("iris_state_stale")
         if retries.get((run.cluster, run.root_job), 0) > 0:
@@ -422,8 +408,8 @@ def _router_bias_magnitude(metrics: dict[str, MetricSignal], now: datetime) -> f
 def _mostly_below_floor(signal: MetricSignal | None) -> bool:
     """True when most of the health window sat below the metric's floor.
 
-    This is the median comparison the hero monitor makes, expressed as a count so
-    one restart step at zero cannot drag the whole window under the floor.
+    A count rather than a mean, so one restart step at zero cannot drag the
+    window under.
     """
     if signal is None or signal.recent_samples < _MIN_HEALTH_SAMPLES:
         return False

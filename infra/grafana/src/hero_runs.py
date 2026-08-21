@@ -9,10 +9,9 @@ reports a running task. Its last path component is `<run-id>-coord` or
 contract also gives the exact `run_id` in its Levanter telemetry. See
 docs/ops/training-stall-alert-contract.md.
 
-`phase_enrollment_query` is the second, independent path: a run that still
-publishes Levanter `phase` telemetry. The run-health projections watch the union
-of the two, so an outage on either side leaves the other side watching. See
-docs/ops/hero-run-health-alerts.md.
+`phase_enrollment_query` is the second path: a run that still publishes Levanter
+`phase` telemetry. The run-health projections watch the union, so an outage on
+one side leaves the other watching. See docs/ops/hero-run-health-alerts.md.
 """
 
 from collections.abc import Sequence
@@ -26,9 +25,8 @@ from vllm_observability import sql_string
 TASK_STATE_FRESHNESS = timedelta(seconds=90)
 TASK_STATE_LOOKBACK = timedelta(hours=1)
 PHASE_ENROLLMENT_LOOKBACK = timedelta(minutes=15)
-# A run that published telemetry and then went silent this long has lost the
-# telemetry path or the process. `TrainingTelemetryGone` owns that case, and the
-# progress and health projections defer to it rather than page for it again.
+# Silence this long is the telemetry path or the process. `TrainingTelemetryGone`
+# owns that case; the other projections defer rather than page for it again.
 TELEMETRY_GONE_AGE = timedelta(minutes=10)
 
 HERO_RUN_PREFIX = "hero-"
@@ -87,8 +85,7 @@ def task_state_query(now: datetime) -> str:
     """Return the newest root-job state row for every run name that opts into hero alerts.
 
     `active_hero_runs` applies the freshness and running-task filters, so the
-    run-health projections can also read the age of a state row that has gone
-    stale.
+    run-health projections can also read the age of a row that went stale.
     """
     start = sql_timestamp(now - TASK_STATE_LOOKBACK)
     end = sql_timestamp(now)
@@ -157,8 +154,8 @@ def hero_run_id(root_job: str) -> str | None:
 def root_job_for(telemetry_job: str) -> str | None:
     """Return the hero coordinator root that owns a Levanter telemetry job ID.
 
-    Levanter reports the leaf task (`<root>/train`), so the root is its longest
-    prefix that still names a hero run.
+    Levanter reports the leaf task, so the root is the job's longest prefix that
+    still names a hero run.
     """
     parts = telemetry_job.split("/")
     for depth in range(len(parts), 0, -1):

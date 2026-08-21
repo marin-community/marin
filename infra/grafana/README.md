@@ -350,28 +350,21 @@ Three more rules carry the rest of the hero on-call policy, the checks the
 standalone Pushover monitor applies — see
 [the run-health contract](../../docs/ops/hero-run-health-alerts.md).
 `TrainingTelemetryGone` and `TrainingOptimizerUnstable` page on the same
-`notification=hero-run` route: a run that published telemetry and then went silent
-for ten minutes while Iris still counts its tasks running, a loss floor a whole
-unit above its trailing floor that the six-sigma band did not already catch, a
-gradient norm above 2 on a run with no clipping, or three skipped steps in
-fifteen minutes. `TrainingRunHealthDegraded` takes the
-announce-only `notification=slack` exception for token drops above 7%, routing
-entropy below 5.92, a router bias past 400, a throughput or MFU floor, a worse
-evaluation, a stale `iris.task_state` row, and controller retries. The split is
-what the on-call policy asks: the first two put the run at risk within the hour,
-the third an operator reads beside the dashboard.
+`notification=hero-run` route: telemetry silent for ten minutes while Iris still
+counts the tasks running, a loss floor a whole unit above its trailing floor that
+the six-sigma band did not catch, a gradient norm above 2, or three skipped steps
+in fifteen minutes. `TrainingRunHealthDegraded` takes the announce-only
+`notification=slack` exception for token drops, router collapse, a throughput or
+MFU floor, a worse evaluation, a stale `iris.task_state` row, and retries.
 
 These three watch a wider enrolment: a run that either the Iris rollup or fresh
-Levanter `phase` telemetry still reports. The stall and loss rules enroll from
+Levanter `phase` telemetry reports. The stall and loss rules enroll from
 `iris.task_state` alone, so a break in that path stops them watching a training
-run with no signal that it happened — which is what `iris_state_stale` reports.
-One scan of `telemetry_v1` per cache interval feeds all three, and a check reads
-the newest sample only while it is under fifteen minutes old, so a restart cannot
-fire from the previous attempt's last value. The throughput checks count how much
-of the window sat below the floor instead of averaging it, which is the median
-comparison the Pushover monitor makes. `TrainingProgressStalled` labels a silent
-run `telemetry_gone` and emits a zero rather than firing beside
-`TrainingTelemetryGone`, so one outage stays one page.
+run with no signal that it happened, which is what `iris_state_stale` reports.
+One `telemetry_v1` scan per cache interval feeds all three, reduced over the
+newest execution process zero reports so a retry cannot mix two attempts.
+`TrainingProgressStalled` labels a silent run `telemetry_gone` and emits a zero
+rather than firing beside `TrainingTelemetryGone`, so one outage stays one page.
 A warning-only Zephyr rule reads fresh
 `progress_time_seconds` rows from `service=zephyr` telemetry. It waits 45 minutes after a
 stage start or shard completion, then remains pending for five minutes. The

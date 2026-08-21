@@ -628,18 +628,17 @@ groups:
                 - evaluator: { type: gt, params: [0] }
 
   # Hero run health beyond progress and loss: the telemetry path, the optimizer,
-  # MoE routing, throughput, evaluation, and Iris retries. These rules watch every
-  # run the Iris rollup or Levanter telemetry reports, so an outage on one path
-  # leaves the other path watching. See docs/ops/hero-run-health-alerts.md.
+  # MoE routing, throughput, evaluation, and Iris retries. These watch every run
+  # the Iris rollup or Levanter telemetry reports, so an outage on one path
+  # leaves the other watching. See docs/ops/hero-run-health-alerts.md.
   - orgId: 1
     name: training-health
     folder: Alerts
     interval: 1m
     rules:
-      # A run that published telemetry, then went silent for ten minutes while
-      # Iris still reports its tasks running. Levanter publishes phase every
-      # minute, so this is the telemetry path or the process, not a slow step.
-      # TrainingProgressStalled defers to this rule rather than page again for it.
+      # Silent for ten minutes while Iris still reports the tasks running.
+      # Levanter publishes phase every minute, so this is the telemetry path or
+      # the process. TrainingProgressStalled defers rather than page again.
       - uid: training-telemetry-gone
         title: TrainingTelemetryGone
         condition: C
@@ -682,8 +681,8 @@ groups:
                 - evaluator: { type: gt, params: [0] }
 
       # The optimizer signals that precede a divergence TrainingLossSpike catches
-      # later: a loss floor a whole unit above its trailing floor, a gradient norm
-      # above the band this run has no clipping for, and skipped steps.
+      # later: a loss floor a whole unit above its trailing floor, a gradient
+      # norm above the band this run has no clipping for, and skipped steps.
       - uid: training-optimizer-unstable
         title: TrainingOptimizerUnstable
         condition: C
@@ -725,11 +724,10 @@ groups:
               conditions:
                 - evaluator: { type: gt, params: [0] }
 
-      # Token drops, router collapse, a throughput or MFU floor, an evaluation
-      # that came back worse, a stale Iris state row, and controller retries.
-      # These take the explicit notification=slack exception: an operator reads
-      # them beside the run dashboard, so they announce without opening a triage
-      # session and without waking anyone.
+      # Token drops, router collapse, a throughput or MFU floor, a worse
+      # evaluation, a stale Iris state row, and controller retries. These take
+      # the explicit notification=slack exception: an operator reads them beside
+      # the run dashboard, so they announce without opening a triage session.
       - uid: training-run-health-degraded
         title: TrainingRunHealthDegraded
         condition: C
