@@ -58,15 +58,16 @@ _DEFAULT_STAGED_CHUNKS = 32
 _STAGED_BYTE_OVERHEAD = 4
 
 
-def _malloc_trim() -> bool:
-    """Return unused glibc heap pages to the OS."""
+def _malloc_trim() -> None:
+    """Ask glibc to return unused heap pages to the OS."""
     if sys.platform != "linux":
-        return False
+        return
 
     libc = ctypes.CDLL("libc.so.6")
     libc.malloc_trim.argtypes = [ctypes.c_size_t]
     libc.malloc_trim.restype = ctypes.c_int
-    return bool(libc.malloc_trim(0))
+    released = libc.malloc_trim(0)
+    logger.info("malloc_trim after checkpoint commits returned %d", released)
 
 
 def _trim_host_memory_after_commits(commit_futures: Sequence[ts.Future]) -> None:
@@ -82,8 +83,8 @@ def _trim_host_memory_after_commits(commit_futures: Sequence[ts.Future]) -> None
         with lock:
             remaining -= 1
             all_finished = remaining == 0
-        if all_finished and _malloc_trim():
-            logger.info("Released unused host memory after checkpoint commits")
+        if all_finished:
+            _malloc_trim()
 
     for future in commit_futures:
         future.add_done_callback(commit_finished)
