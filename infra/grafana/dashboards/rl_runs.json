@@ -672,7 +672,7 @@
       "interval": "1m"
     },
     {
-      "id": 11,
+      "id": 7,
       "type": "timeseries",
       "title": "Ray spilled objects by state",
       "description": "Bytes the Ray spill manager holds, split by its own state label. The states are distinct quantities and are never summed or averaged together.",
@@ -759,7 +759,7 @@
       "interval": "1m"
     },
     {
-      "id": 7,
+      "id": 8,
       "type": "timeseries",
       "title": "GPU utilisation on this run's nodes",
       "description": "Accelerator utilisation from the Iris node agent, attributed to the run occupying each node in each bucket. The node agent reports no run identity, so this is joined through node_name, the same way the Levanter run view does it.",
@@ -842,7 +842,7 @@
       "interval": "1m"
     },
     {
-      "id": 8,
+      "id": 9,
       "type": "timeseries",
       "title": "Engine throughput",
       "description": "Prompt and generation tokens per second across the run's inference engines, from the stats the rollout callback reads by RPC. These rows come from the trainer's own process, so they carry the run's identity directly; `role` is read from the metric attributes because the process resource says driver or trainer while the series says inference.",
@@ -929,7 +929,7 @@
       "interval": "1m"
     },
     {
-      "id": 9,
+      "id": 10,
       "type": "timeseries",
       "title": "Engine queue and cache",
       "description": "Requests running and waiting, KV-cache occupancy and prefix-cache hit rate, median across engines. Waiting climbing while running is flat is the engine saturated; a collapsing prefix hit rate after a weight sync is the cache being invalidated.",
@@ -1026,7 +1026,7 @@
       "interval": "1m"
     },
     {
-      "id": 10,
+      "id": 11,
       "type": "timeseries",
       "title": "Engine request latency (p90)",
       "description": "Ninetieth-percentile latency by stage — queued, prefill, decode, time to first token, end to end. Queued dominating points at engine capacity; decode dominating points at generation length.",
@@ -1105,178 +1105,6 @@
             {
               "selector": "value",
               "text": "value",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "interval": "1m"
-    },
-    {
-      "id": 12,
-      "type": "timeseries",
-      "title": "Corrupted rollouts",
-      "description": "Share of returned requests the engine flagged as corrupted — NaNs in logits — per engine actor. A corrupted rollout that reaches the training batch is a correctness fault, not a slowdown, and nothing else records it. The counter reports zero on a clean batch, so a flat zero line means the engines are reporting and finding nothing; a gap means they stopped reporting.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 40
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false
-          },
-          "min": 0,
-          "unit": "percentunit",
-          "max": 1,
-          "decimals": 4
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
-          "url": "/query",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(json_get(resource_attributes_json, 'actor_uid'), 'unattributed') AS series, SUM(CASE WHEN name = 'corrupted_requests' THEN value END) / NULLIF(SUM(CASE WHEN name = 'requests_returned' THEN value END), 0) AS value FROM \"telemetry_v1\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'role') = 'inference' AND name IN ('corrupted_requests', 'requests_returned') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "interval": "1m"
-    },
-    {
-      "id": 13,
-      "type": "timeseries",
-      "title": "Prefix cache hit share",
-      "description": "Cached prompt tokens as a share of all tokens the engines handled, counted exactly from each request's cached-token count rather than approximated from a hit rate against total queries. A collapse right after a weight sync is the cache being invalidated by the new policy.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 48
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false
-          },
-          "min": 0,
-          "unit": "percentunit",
-          "max": 1
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
-          "url": "/query",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, SUM(CASE WHEN name = 'prefix_cache_hit_tokens' THEN value END) / NULLIF(SUM(CASE WHEN name = 'generation_tokens_total' THEN value END) + SUM(CASE WHEN name = 'prefix_cache_hit_tokens' THEN value END), 0) AS cached_fraction FROM \"telemetry_v1\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'role') = 'inference' AND name IN ('prefix_cache_hit_tokens', 'generation_tokens_total') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "cached_fraction",
-              "text": "cached_fraction",
               "type": "number"
             }
           ]

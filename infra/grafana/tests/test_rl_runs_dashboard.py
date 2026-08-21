@@ -431,46 +431,6 @@ def test_ray_panels_exclude_cumulative_snapshots_and_never_mix_states(store) -> 
     assert by_state == {"Spilled": pytest.approx(2.0e9), "Restored": pytest.approx(5.0e8)}
 
 
-def test_engine_correctness_and_cache_panels_report_per_actor(store) -> None:
-    # The four batch counters are native rigging counters, so every row is a delta and SUM is
-    # right. Each engine actor emits for itself, so actor_uid is the series and there is no
-    # `engine` attribute to group on.
-    for bucket in range(6):
-        moment = WINDOW_START + timedelta(minutes=5 * bucket)
-        for actor, corrupted in (("actor-a", 0.0), ("actor-b", 2.0)):
-            for name, value in (
-                ("requests_returned", 100.0),
-                ("corrupted_requests", corrupted),
-                ("prefix_cache_hit_tokens", 300.0),
-                ("generation_tokens_total", 700.0),
-            ):
-                row = list(
-                    _row(
-                        service="marinskyrl",
-                        name=name,
-                        value=value,
-                        moment=moment,
-                        seq=bucket,
-                        run_id=RUN_ID,
-                        job_id=JOB_ID,
-                        node_name=NODES[1],
-                        role="inference",
-                        attributes={"role": "inference"},
-                    )
-                )
-                row[11] = json.dumps({"role": "inference", "actor_uid": actor})
-                store.execute(f"INSERT INTO telemetry_v1 VALUES ({', '.join('?' for _ in row)})", row)
-
-    corruption = {row[1]: row[2] for row in store.execute(_panel_sql("Corrupted rollouts")).fetchall()}
-    # A clean actor reports a continuous zero rather than disappearing, which is what makes the
-    # panel distinguishable from an engine that stopped reporting.
-    assert corruption["actor-a"] == pytest.approx(0.0)
-    assert corruption["actor-b"] == pytest.approx(0.02)
-
-    cache = store.execute(_panel_sql("Prefix cache hit share")).fetchall()
-    assert [row[1] for row in cache] == [pytest.approx(0.3)] * 6
-
-
 def test_trainer_panels_exclude_harbors_vocabulary_under_the_same_service(store) -> None:
     # Harbor emits phase_duration_seconds and work_completed under its own phase, outcome and
     # work_kind vocabularies. If its telemetry is ever routed through the trainer's exporter it
