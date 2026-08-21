@@ -111,7 +111,7 @@ The store's maintenance thread flushes on its configured interval and uses bound
 leveled compaction. Level-zero shards are compacted after 16 active files, followed by
 limits of 4 shards at levels one and two. Level three is terminal, so one maintenance
 pass performs at most three compactions per table. `store.maintain()` exposes the same
-operation for deterministic callers. `compact(root, table)` compacts all active shards
+operation for deterministic callers. `compact_table(root, table)` compacts all active shards
 for explicit materialization and sealing.
 
 Compaction pins a manifest, streams an ordered merge of its exact input shards, writes

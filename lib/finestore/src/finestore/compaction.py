@@ -41,7 +41,7 @@ class CompactionResult:
     superseded: int = 0
 
 
-def compact(
+def compact_table(
     root: str,
     table: str,
     *,

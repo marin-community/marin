@@ -20,8 +20,7 @@ from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.timing import ExponentialBackoff
 
 from finestore.commit import ClearSeal, CommitCoordinator, CommitDelta, TableAddition, initialize_archive, write_schema
-from finestore.compaction import CompactionResult
-from finestore.compaction import compact as compact_table
+from finestore.compaction import CompactionResult, compact_table
 from finestore.layout import (
     CHUNKED_BLOBS_FEATURE,
     RESERVED_COLUMNS,

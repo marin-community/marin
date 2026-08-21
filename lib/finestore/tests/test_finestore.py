@@ -16,7 +16,7 @@ from botocore.exceptions import ClientError
 from finestore import shard_writer
 from finestore import store as store_module
 from finestore.commit import CommitConflict, CommitCoordinator, CommitDelta
-from finestore.compaction import CompactionResult, compact
+from finestore.compaction import CompactionResult, compact_table
 from finestore.layout import (
     CHUNKED_BLOBS_FEATURE,
     FORMAT_VERSION,
@@ -205,7 +205,7 @@ def test_later_commit_prevents_compaction_shadowing(tmp_path):
         store.flush()
         table.append({"task": "arc", "doc_id": "2", "score": 1.0})
         store.flush()
-    compact(root, "samples")
+    compact_table(root, "samples")
     assert ReadView(root).list_shards("samples")[0].generation == 1
 
     with DataStore.open(root, writer_id="w2") as store:
@@ -466,7 +466,7 @@ def test_compaction_replaces_sources_logically_and_retains_objects(tmp_path):
     before = ReadView(root).list_shards("samples")
     assert len(before) == 3
 
-    assert compact(root, "samples").written == 3
+    assert compact_table(root, "samples").written == 3
 
     after = ReadView(root).list_shards("samples")
     assert len(after) == 1
@@ -490,7 +490,7 @@ def test_manifest_binds_flush_and_compaction_shard_bytes(tmp_path):
     assert level_zero.size_bytes == len(level_zero_bytes)
     assert level_zero.content_sha256 == hashlib.sha256(level_zero_bytes).hexdigest()
 
-    compact(root, "samples")
+    compact_table(root, "samples")
     compacted = ReadView(root).list_shards("samples")[0]
     compacted_bytes = StoragePath(compacted.path).read_bytes()
     assert compacted.size_bytes == len(compacted_bytes)
@@ -507,7 +507,7 @@ def test_read_view_remains_valid_after_compaction(tmp_path):
         store.flush()
 
     pinned = ReadView(root)
-    compact(root, "samples")
+    compact_table(root, "samples")
     assert {s.generation for s in pinned.list_shards("samples")} == {0}
     assert {s.generation for s in ReadView(root).list_shards("samples")} == {1}
     assert {row["doc_id"] for row in _rows(pinned, "samples")} == {"0", "1", "2", "3"}
@@ -522,14 +522,14 @@ def test_recompaction_merges_all_generations(tmp_path):
         store.flush()
         table.extend([{"task": "arc", "doc_id": str(i), "score": float(i)} for i in range(2, 4)])
         store.flush()
-    compact(root, "samples")
+    compact_table(root, "samples")
     assert {s.generation for s in ReadView(root).list_shards("samples")} == {1}
 
     with DataStore.open(root, writer_id="w2") as store:
         store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "4", "score": 4.0})
         store.flush()
 
-    assert compact(root, "samples").written == 5
+    assert compact_table(root, "samples").written == 5
     assert {s.generation for s in ReadView(root).list_shards("samples")} == {2}
     rows = {r["doc_id"]: r["score"] for r in _rows(ReadView(root), "samples")}
     assert rows == {"0": 0.0, "1": 1.0, "2": 2.0, "3": 3.0, "4": 4.0}
@@ -543,14 +543,14 @@ def test_compaction_deduplicates_one_level_zero_shard_then_becomes_stable(tmp_pa
         table.append({"doc_id": "1", "score": 2})
         store.flush()
 
-    result = compact(root, "samples")
+    result = compact_table(root, "samples")
     assert result == CompactionResult(written=1, superseded=1)
     stable = ReadView(root)
     stable_token = stable.token
     stable_shards = stable.list_shards("samples")
     assert stable.scan("samples", columns=["doc_id", "score"]).to_pylist() == [{"doc_id": "1", "score": 2}]
 
-    assert compact(root, "samples").written == 0
+    assert compact_table(root, "samples").written == 0
     unchanged = ReadView(root)
     assert unchanged.token == stable_token
     assert unchanged.list_shards("samples") == stable_shards
@@ -567,7 +567,7 @@ def test_compaction_unifies_evolved_schema(tmp_path):
         store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "2", "b": 2})
         store.flush()
 
-    compact(root, "samples")
+    compact_table(root, "samples")
     rows = {r["doc_id"]: (r.get("a"), r.get("b")) for r in _rows(ReadView(root), "samples")}
     assert rows == {"1": (1, None), "2": (None, 2)}
 
@@ -584,7 +584,7 @@ def test_compaction_streams_multiple_row_groups(tmp_path, monkeypatch):
         store.flush()
         table.extend([{"task": "arc", "doc_id": f"{i:03d}", "score": float(i)} for i in range(4, 7)])
         store.flush()
-    compact(root, "samples")  # g1 spanning ceil(7/2) row groups
+    compact_table(root, "samples")  # g1 spanning ceil(7/2) row groups
 
     with DataStore.open(root, writer_id="w2") as store:
         store.table("samples", primary_key=("task", "doc_id")).extend(
@@ -592,7 +592,7 @@ def test_compaction_streams_multiple_row_groups(tmp_path, monkeypatch):
         )
         store.flush()
 
-    assert compact(root, "samples").written == 10
+    assert compact_table(root, "samples").written == 10
     assert {s.generation for s in ReadView(root).list_shards("samples")} == {2}
     rows = {r["doc_id"]: r["score"] for r in _rows(ReadView(root), "samples")}
     assert rows == {f"{i:03d}": float(i) for i in range(10)}
@@ -1070,7 +1070,7 @@ def test_compaction_losing_an_input_race_is_a_benign_noop(tmp_path):
         def commit(self, _delta, *, base=None):
             raise CommitConflict("inputs changed")
 
-    assert compact(root, "samples", coordinator=LosingCoordinator()).written == 0
+    assert compact_table(root, "samples", coordinator=LosingCoordinator()).written == 0
     assert len(ReadView(root).list_shards("samples")) == 2
 
 
