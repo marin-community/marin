@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import pyarrow as pa
-from hero_runs import TASK_STATE_LOOKBACK, HeroRun, as_utc, run_id_predicate, sql_timestamp
+from hero_runs import TASK_STATE_LOOKBACK, TELEMETRY_GONE_AGE, HeroRun, as_utc, run_id_predicate, sql_timestamp
 
 _TRAINING_STALL_AGE = timedelta(minutes=15)
 _INITIALIZING_STALL_AGE = timedelta(minutes=45)
@@ -98,6 +98,7 @@ class ExecutionMetrics:
 
     metrics: dict[str, float]
     execution_started: datetime | None
+    observed_at: datetime
 
 
 def _metrics_by_job(runs: tuple[HeroRun, ...], telemetry_metrics: pa.Table) -> dict[tuple[str, str], ExecutionMetrics]:
@@ -127,6 +128,7 @@ def _metrics_by_job(runs: tuple[HeroRun, ...], telemetry_metrics: pa.Table) -> d
         key: ExecutionMetrics(
             metrics={name: value for name, (_, value) in metrics.items()},
             execution_started=started.get(key),
+            observed_at=max(observed for observed, _ in metrics.values()),
         )
         for key, metrics in newest.items()
     }
@@ -145,7 +147,11 @@ def _classify(run: HeroRun, observed: ExecutionMetrics | None, now: datetime) ->
     reason = "healthy"
     value = 0
     is_training = phase == _TRAINING_PHASE or step > 0
-    if phase == _FINISHED_PHASE:
+    if observed is not None and now - observed.observed_at > TELEMETRY_GONE_AGE:
+        # A run that stopped publishing is TrainingTelemetryGone's, which names the
+        # failure precisely. Reporting a stall as well would page twice for it.
+        reason = "telemetry_gone"
+    elif phase == _FINISHED_PHASE:
         reason = "finished"
     elif is_training and progress_time > 0:
         progress_age = now - datetime.fromtimestamp(progress_time, tz=UTC)

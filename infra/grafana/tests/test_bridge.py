@@ -16,6 +16,16 @@ from conftest import FINELOG_DEPLOYMENTS_PATH, bridge_config, deployment, health
 from finelog.errors import QueryResultTooLargeError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
+from hero_health import (
+    MetricSignal,
+    WatchedRun,
+    health_alert_rows,
+    optimizer_alert_rows,
+    signal_query,
+    signals_by_run,
+    telemetry_alert_rows,
+    watched_runs,
+)
 from hero_runs import HeroRun, active_hero_runs, task_state_query
 from k8s_source import K8sFleet
 from loom_alerts import (
@@ -235,6 +245,7 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
             now - timedelta(minutes=30),
             now - timedelta(hours=1),
         ],
+        running=[64] * 5,
     )
     telemetry_metrics = finelog_result(
         cluster=["cw-a", "cw-a", "cw-b", "cw-b", "cw-b"],
@@ -258,7 +269,7 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
         execution_started_at=[now - timedelta(hours=1)] * 5,
     )
 
-    assert training_stall_alert_rows(active_hero_runs(task_states), telemetry_metrics, now) == [
+    assert training_stall_alert_rows(active_hero_runs(task_states, now), telemetry_metrics, now) == [
         {
             "cluster": "cw-a",
             "job": "/u/hero-stale-coord",
@@ -336,7 +347,7 @@ def test_hero_alerts_enroll_suffixed_retry_roots():
     )
 
     task_states = database.execute(task_state_query(now)).fetch_arrow_table()
-    assert {(run.root_job, run.run_id) for run in active_hero_runs(task_states)} == {
+    assert {(run.root_job, run.run_id) for run in active_hero_runs(task_states, now)} == {
         ("/power/hero-12d8b6f0-dee637-coord-slop85", "hero-12d8b6f0-dee637"),
         ("/power/hero-other-coord", "hero-other"),
     }
@@ -373,7 +384,10 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
     database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)")
 
     stalled_at = now - timedelta(minutes=20)
-    phase_at = stalled_at
+    # Levanter publishes phase every minute, so a wedged run keeps a fresh
+    # heartbeat while its progress timestamp ages. A run that stops publishing
+    # altogether is TrainingTelemetryGone's case, not this rule's.
+    phase_at = now - timedelta(seconds=30)
     progressing_at = now - timedelta(seconds=30)
     database.executemany(
         'INSERT INTO "iris.task_state" VALUES (?, ?, ?, ?)',
@@ -421,7 +435,7 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
     )
 
     task_states = database.execute(task_state_query(now)).fetch_arrow_table()
-    runs = active_hero_runs(task_states)
+    runs = active_hero_runs(task_states, now)
     assert [(run.cluster, run.root_job, run.run_id) for run in runs] == [
         ("cw-a", "/rav/hero-20260819-coord", "hero-20260819")
     ]
@@ -471,7 +485,9 @@ def test_training_stall_alert_gives_a_new_execution_its_own_initialization_windo
     task_states = finelog_result(
         cluster=["cw-a"],
         job=["/u/hero-retry-coord"],
+        state_at=[now],
         running_since=[now - timedelta(hours=1)],
+        running=[64],
     )
     telemetry_metrics = finelog_result(
         cluster=["cw-a"],
@@ -483,7 +499,7 @@ def test_training_stall_alert_gives_a_new_execution_its_own_initialization_windo
         execution_started_at=[now - timedelta(minutes=5)],
     )
 
-    assert training_stall_alert_rows(active_hero_runs(task_states), telemetry_metrics, now) == [
+    assert training_stall_alert_rows(active_hero_runs(task_states, now), telemetry_metrics, now) == [
         {
             "cluster": "cw-a",
             "job": "/u/hero-retry-coord",
@@ -603,6 +619,288 @@ def test_loss_spike_query_reads_one_bounded_window_per_evaluation():
     assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:00:00') * 1000 AS BIGINT)" in sql
     assert "timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 12:00:00') * 1000 AS BIGINT)" in sql
     assert "CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:55:00') * 1000 AS BIGINT)" in sql
+
+
+def _watched(
+    run_id: str = "hero-a",
+    *,
+    iris_running: bool = True,
+    iris_state_age: timedelta | None = timedelta(seconds=30),
+) -> WatchedRun:
+    return WatchedRun(
+        cluster="cw-a",
+        root_job=f"/u/{run_id}-coord",
+        run_id=run_id,
+        iris_running=iris_running,
+        iris_state_age=iris_state_age,
+    )
+
+
+def _signals(now: datetime, metrics: dict[str, dict], run_id: str = "hero-a") -> dict:
+    """Build the signal map the bridge folds out of one telemetry scan.
+
+    Every run carries a fresh training phase unless a test overrides it, since
+    the health checks describe a run that is training right now.
+    """
+    metrics = {"phase": {"latest": 1.0}} | metrics
+    rows = {
+        name: MetricSignal(
+            latest=values["latest"],
+            observed_at=values.get("observed_at", now - timedelta(seconds=30)),
+            previous=values.get("previous"),
+            recent_samples=values.get("recent_samples", 0),
+            recent_total=values.get("recent_total", 0.0),
+            recent_below_floor=values.get("recent_below_floor", 0),
+        )
+        for name, values in metrics.items()
+    }
+    return {("cw-a", run_id): rows}
+
+
+def _reasons(rows: list[dict]) -> set[str]:
+    return {row["reason"] for row in rows if row["value"] == 1}
+
+
+def test_run_health_watches_a_run_whose_iris_state_row_went_stale():
+    # The stall and loss rules enroll from iris.task_state alone, so a break in
+    # that path silently stops watching a run that is plainly still training.
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    task_states = finelog_result(
+        cluster=["cw-a"],
+        job=["/u/hero-a-coord"],
+        state_at=[now - timedelta(minutes=20)],
+        running_since=[now - timedelta(hours=3)],
+        running=[64],
+    )
+    phase_runs = finelog_result(cluster=["cw-a"], run_id=["hero-a"], telemetry_job=["/u/hero-a-coord/train"])
+
+    assert active_hero_runs(task_states, now) == ()
+    runs = watched_runs(task_states, phase_runs, now)
+    assert [(run.run_id, run.iris_running) for run in runs] == [("hero-a", False)]
+
+    signals = _signals(now, {"phase": {"latest": 1.0}})
+    assert "iris_state_stale" in _reasons(health_alert_rows(runs, signals, pa.table({}), now))
+
+
+def test_telemetry_gone_pages_only_while_iris_still_runs_the_tasks():
+    # Telemetry that stops when Iris also stops reporting the tasks is a run that
+    # ended. Telemetry that stops while Iris keeps counting them is an incident.
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    silent = _signals(now, {"phase": {"latest": 1.0, "observed_at": now - timedelta(minutes=20)}})
+
+    assert _reasons(telemetry_alert_rows((_watched(),), silent, now)) == {"telemetry_gone"}
+    assert _reasons(telemetry_alert_rows((_watched(iris_running=False),), silent, now)) == set()
+
+
+def test_telemetry_alert_leaves_a_run_that_has_published_nothing_to_the_stall_rule():
+    # Before Levanter's first sample there is no evidence of a lost telemetry
+    # path, and TrainingProgressStalled allows the full initialization budget.
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    rows = telemetry_alert_rows((_watched(),), {}, now)
+
+    assert rows == [{"cluster": "cw-a", "job": "/u/hero-a-coord", "run": "hero-a", "reason": "healthy", "value": 0}]
+
+
+def test_training_stall_alert_defers_a_silent_run_to_the_telemetry_rule():
+    # One outage, one page: the stall rule reports the silence without firing.
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    task_states = finelog_result(
+        cluster=["cw-a"],
+        job=["/u/hero-a-coord"],
+        state_at=[now],
+        running_since=[now - timedelta(hours=3)],
+        running=[64],
+    )
+    telemetry_metrics = finelog_result(
+        cluster=["cw-a"] * 2,
+        run_id=["hero-a"] * 2,
+        telemetry_job=["/u/hero-a-coord/train"] * 2,
+        name=["phase", "progress_time_seconds"],
+        value=[1.0, (now - timedelta(minutes=25)).timestamp()],
+        ts=[now - timedelta(minutes=25)] * 2,
+        execution_started_at=[now - timedelta(hours=3)] * 2,
+    )
+
+    (row,) = training_stall_alert_rows(active_hero_runs(task_states, now), telemetry_metrics, now)
+    assert (row["reason"], row["value"]) == ("telemetry_gone", 0)
+
+
+def _loss_window_row(*, stddev: float) -> pa.Table:
+    """A run whose loss floor climbed 1.2 between its trailing and recent windows."""
+    return finelog_result(
+        cluster=["cw-a"],
+        run_id=["hero-a"],
+        baseline_samples=[240],
+        baseline_loss=[2.4],
+        baseline_stddev=[stddev],
+        baseline_floor=[2.1],
+        recent_samples=[20],
+        recent_loss=[3.4],
+        recent_floor=[3.3],
+        recent_peak=[3.5],
+    )
+
+
+def test_optimizer_alert_reads_the_loss_jump_gradient_norm_and_skipped_steps():
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    runs = (_watched(),)
+    signals = _signals(
+        now,
+        {
+            "grad_norm_total": {"latest": 2.4},
+            "optim_skipped_step": {"latest": 1.0, "recent_samples": 4, "recent_total": 4.0},
+        },
+    )
+
+    # A trailing spread of 0.3 puts the six-sigma band at 4.2, well above the new
+    # floor, so this level shift is the one TrainingLossSpike cannot see.
+    assert _reasons(optimizer_alert_rows(runs, signals, _loss_window_row(stddev=0.3), now)) == {
+        "loss_jump",
+        "grad_norm_high",
+        "steps_skipped",
+    }
+
+
+def test_loss_jump_defers_to_the_spike_rule_on_the_same_rise():
+    # A tight trailing spread puts the same rise outside the six-sigma band, so
+    # TrainingLossSpike already pages for it and this rule stays quiet.
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    windows = _loss_window_row(stddev=0.02)
+
+    assert _reasons(optimizer_alert_rows((_watched(),), {}, windows, now)) == set()
+    assert _reasons(loss_spike_alert_rows((_hero_run("hero-a"),), windows)) == {"spiking"}
+
+
+def test_optimizer_alert_ignores_a_gradient_norm_the_previous_attempt_left_behind():
+    # A restarted run inherits its predecessor's last sample. Only a fresh one
+    # describes the attempt that is training now.
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    stale = _signals(now, {"grad_norm_total": {"latest": 9.0, "observed_at": now - timedelta(minutes=40)}})
+
+    assert _reasons(optimizer_alert_rows((_watched(),), stale, pa.table({}), now)) == set()
+
+
+def test_health_alert_reads_routing_throughput_and_evaluation():
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    signals = _signals(
+        now,
+        {
+            "moe_drop_fraction": {"latest": 0.09},
+            "train_router_routing_entropy_mean": {"latest": 5.4},
+            "train_router_bias_min": {"latest": -460.0},
+            "train_router_bias_max": {"latest": 120.0},
+            "throughput_tokens_per_second": {"latest": 1.4e6, "recent_samples": 100, "recent_below_floor": 62},
+            "throughput_mfu": {"latest": 31.0, "recent_samples": 100, "recent_below_floor": 4},
+            "eval_paloma_macro_loss": {"latest": 2.31, "previous": 2.17},
+        },
+    )
+
+    assert _reasons(health_alert_rows((_watched(),), signals, pa.table({}), now)) == {
+        "token_drops",
+        "router_entropy",
+        "router_bias",
+        "throughput_low",
+        "eval_regressed",
+    }
+
+
+def test_throughput_floor_needs_most_of_the_window_below_it():
+    # The hero monitor compares a median, so one restart step at zero must not
+    # read as a slow run, and a window too short to have a median says nothing.
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    one_slow_step = {"latest": 2.4e6, "recent_samples": 100, "recent_below_floor": 1}
+    barely_sampled = {"latest": 1.0e6, "recent_samples": 8, "recent_below_floor": 8}
+
+    for tokens_per_second in (one_slow_step, barely_sampled):
+        signals = _signals(now, {"throughput_tokens_per_second": tokens_per_second})
+        assert _reasons(health_alert_rows((_watched(),), signals, pa.table({}), now)) == set()
+
+
+def test_health_alert_announces_a_controller_retry_on_the_run_that_owns_the_task():
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    retries = finelog_result(
+        cluster=["cw-a", "cw-a"],
+        task_id=["/u/hero-a-coord/train/17", "/u/other-coord/train/0"],
+    )
+    signals = _signals(now, {"phase": {"latest": 1.0}})
+
+    assert _reasons(health_alert_rows((_watched(),), signals, retries, now)) == {"task_retried"}
+
+
+def test_run_health_alerts_stay_quiet_for_a_run_that_is_not_training():
+    # A finished run leaves its last samples behind for a while, and a run that
+    # went silent belongs to TrainingTelemetryGone. Neither is a health signal.
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    drops = {"moe_drop_fraction": {"latest": 0.4}}
+    finished = _signals(now, {"phase": {"latest": 2.0}, **drops})
+    silent = _signals(now, {"phase": {"latest": 1.0, "observed_at": now - timedelta(minutes=20)}, **drops})
+
+    for signals in (finished, silent):
+        assert _reasons(health_alert_rows((_watched(),), signals, pa.table({}), now)) == set()
+
+
+def test_iris_state_stale_needs_a_state_row_that_went_stale():
+    # A controller that publishes no task-state rollup at all, which is how the
+    # GCE clusters run, is not a rollup that broke.
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    signals = _signals(now, {})
+
+    never_published = _watched(iris_running=False, iris_state_age=None)
+    assert _reasons(health_alert_rows((never_published,), signals, pa.table({}), now)) == set()
+
+
+def test_run_health_alerts_return_an_explicit_zero_without_a_watched_run():
+    # Grafana reserves noDataState for a monitoring-path failure, so an empty
+    # fleet still answers each rule.
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    fleet = {"cluster": "fleet", "job": "", "run": "", "reason": "healthy", "value": 0}
+
+    assert telemetry_alert_rows((), {}, now) == [fleet]
+    assert optimizer_alert_rows((), {}, pa.table({}), now) == [fleet]
+    assert health_alert_rows((), {}, pa.table({}), now) == [fleet]
+
+
+def test_signal_query_reduces_the_newest_sample_and_the_health_window():
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    database = duckdb.connect()
+    database.execute(
+        """
+        CREATE TABLE telemetry_v1(
+            cluster VARCHAR,
+            service VARCHAR,
+            run_id VARCHAR,
+            name VARCHAR,
+            value DOUBLE,
+            timestamp_ms BIGINT,
+            seq BIGINT
+        )
+        """
+    )
+    database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)")
+    samples = [
+        ("throughput_tokens_per_second", 1.0e6, now - timedelta(minutes=10), 1),
+        ("throughput_tokens_per_second", 1.2e6, now - timedelta(minutes=5), 2),
+        ("throughput_tokens_per_second", 2.6e6, now - timedelta(minutes=1), 3),
+        # Outside the fifteen-minute health window, so the reductions ignore it.
+        ("throughput_tokens_per_second", 0.1e6, now - timedelta(minutes=40), 0),
+        ("optim_skipped_step", 1.0, now - timedelta(minutes=9), 4),
+        ("optim_skipped_step", 1.0, now - timedelta(minutes=2), 5),
+        # Hours apart, so only the eval lookback keeps the previous value.
+        ("eval_paloma_macro_loss", 2.17, now - timedelta(hours=6), 6),
+        ("eval_paloma_macro_loss", 2.31, now - timedelta(minutes=12), 7),
+    ]
+    database.executemany(
+        "INSERT INTO telemetry_v1 VALUES ('cw-a', 'levanter', 'hero-a', ?, ?, ?, ?)",
+        [(name, value, int(at.timestamp() * 1000), seq) for name, value, at, seq in samples],
+    )
+
+    signals = signals_by_run(database.execute(signal_query(now, (_watched(),))).fetch_arrow_table())["cw-a", "hero-a"]
+
+    throughput = signals["throughput_tokens_per_second"]
+    assert (throughput.latest, throughput.recent_samples, throughput.recent_below_floor) == (2.6e6, 3, 2)
+    assert signals["optim_skipped_step"].recent_total == 2.0
+    evaluation = signals["eval_paloma_macro_loss"]
+    assert (evaluation.latest, evaluation.previous) == (2.31, 2.17)
 
 
 def test_zephyr_stall_alert_distinguishes_stale_healthy_and_expired_producers():

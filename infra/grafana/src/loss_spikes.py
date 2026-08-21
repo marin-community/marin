@@ -10,12 +10,13 @@ has to be above the band, so a single excursion, the case skip-step already
 discards, does not fire.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from math import isfinite
 
 import pyarrow as pa
-from hero_runs import HeroRun, run_id_predicate, sql_timestamp
+from hero_runs import HeroRun, RunIdentity, run_id_predicate, sql_timestamp
 
 _LOSS_METRIC = "train_loss"
 
@@ -43,13 +44,14 @@ class LossWindows:
     baseline_samples: int
     baseline_loss: float | None
     baseline_stddev: float | None
+    baseline_floor: float | None
     recent_samples: int
     recent_loss: float | None
     recent_floor: float | None
     recent_peak: float | None
 
 
-def loss_window_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
+def loss_window_query(now: datetime, runs: Sequence[RunIdentity]) -> str:
     """Return baseline and recent loss statistics for exact active hero run IDs."""
     run_predicate = run_id_predicate(runs)
     start = sql_timestamp(now - _BASELINE_LOOKBACK)
@@ -69,6 +71,7 @@ def loss_window_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
         f"SUM(CASE WHEN timestamp_ms < {recent_ms} THEN 1 ELSE 0 END) AS baseline_samples, "
         f"AVG(CASE WHEN timestamp_ms < {recent_ms} THEN value END) AS baseline_loss, "
         f"STDDEV(CASE WHEN timestamp_ms < {recent_ms} THEN value END) AS baseline_stddev, "
+        f"MIN(CASE WHEN timestamp_ms < {recent_ms} THEN value END) AS baseline_floor, "
         f"SUM(CASE WHEN timestamp_ms >= {recent_ms} THEN 1 ELSE 0 END) AS recent_samples, "
         f"AVG(CASE WHEN timestamp_ms >= {recent_ms} THEN value END) AS recent_loss, "
         f"MIN(CASE WHEN timestamp_ms >= {recent_ms} THEN value END) AS recent_floor, "
@@ -86,7 +89,8 @@ def _diverged(value: float | None) -> bool:
     return value is not None and not isfinite(value)
 
 
-def _windows_by_run(loss_windows: pa.Table) -> dict[tuple[str, str], LossWindows]:
+def windows_by_run(loss_windows: pa.Table) -> dict[tuple[str, str], LossWindows]:
+    """Return each run's loss windows, keyed by cluster and run ID."""
     windows = {}
     for row in loss_windows.to_pylist():
         key = (str(row["cluster"]), str(row["run_id"]))
@@ -94,6 +98,7 @@ def _windows_by_run(loss_windows: pa.Table) -> dict[tuple[str, str], LossWindows
             baseline_samples=int(row["baseline_samples"] or 0),
             baseline_loss=_number(row["baseline_loss"]),
             baseline_stddev=_number(row["baseline_stddev"]),
+            baseline_floor=_number(row["baseline_floor"]),
             recent_samples=int(row["recent_samples"] or 0),
             recent_loss=_number(row["recent_loss"]),
             recent_floor=_number(row["recent_floor"]),
@@ -102,7 +107,7 @@ def _windows_by_run(loss_windows: pa.Table) -> dict[tuple[str, str], LossWindows
     return windows
 
 
-def _classify(windows: LossWindows | None) -> tuple[str, int]:
+def loss_spike_reason(windows: LossWindows | None) -> tuple[str, int]:
     """Return the alert reason and firing value for one run's loss windows."""
     if windows is None:
         return "warming_up", 0
@@ -132,10 +137,10 @@ def _row(cluster: str, job: str, run: str, reason: str, value: int) -> dict:
 
 def loss_spike_alert_rows(runs: tuple[HeroRun, ...], loss_windows: pa.Table) -> list[dict]:
     """Project each enrolled hero run's loss windows into alert rows."""
-    windows = _windows_by_run(loss_windows)
+    windows = windows_by_run(loss_windows)
     rows: list[dict] = []
     for run in runs:
-        reason, value = _classify(windows.get((run.cluster, run.run_id)))
+        reason, value = loss_spike_reason(windows.get((run.cluster, run.run_id)))
         rows.append(_row(run.cluster, run.root_job, run.run_id, reason, value))
     if rows:
         return rows

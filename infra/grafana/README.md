@@ -34,6 +34,9 @@ GET /finelog/marin/fleet_health                  main query probe + k8s mirror r
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
 GET /finelog/marin/alerts/training_stalls        active jobs + stalled-progress value(0|1)
 GET /finelog/marin/alerts/loss_spikes            active hero runs + loss-spike value(0|1)
+GET /finelog/marin/alerts/training_telemetry     watched hero runs + silent-telemetry value(0|1)
+GET /finelog/marin/alerts/training_optimizer     watched hero runs + optimizer-fault value(0|1)
+GET /finelog/marin/alerts/training_health        watched hero runs + degraded-signal value(0|1)
 GET /finelog/marin/alerts/zephyr_stalls          active pipelines + stalled-progress value(0|1)
 GET /iris/{cluster}/jobs | workers | health      live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
@@ -174,6 +177,8 @@ is the exception — it returns `reachable=false` so the panel can render the ou
 ```
 src/server.py          the bridge routes (Starlette): finelog SQL, Iris, GitHub, k8s
 src/finelog_source.py  finelog query over its internal IP (LogClient)
+src/hero_runs.py       hero-run enrollment from Iris state and Levanter telemetry
+src/hero_health.py     run-health signal scan and the telemetry/optimizer/health projections
 src/iris_source.py     live controller RPCs: jobs, workers, health, federation peers, ad-hoc query
 src/github_source.py   ferry runs and CI build rollup, precomputed
 src/wandb_source.py    public W&B report runset, and whole-run history for one metric
@@ -317,8 +322,8 @@ redeploy.
 Critical rules notify operators immediately: an unreachable cluster or
 federation peer, a crash-looping watched component, an admission webhook with no ready endpoints, a
 dead production Iris controller, an unhealthy finelog hub or mirror, CoreWeave
-storage above 80 percent of quota, or stalled training or a loss spike on an
-enrolled hero run.
+storage above 80 percent of quota, or stalled training, a loss spike, silent
+telemetry, or an unstable optimizer on an enrolled hero run.
 Warning rules remain in Grafana's home alert list without sending email, Slack,
 or Loom notifications: a degraded component, a GPU pod that stays node-bound and
 nonterminal without finalizers for five minutes after the bridge's two-minute
@@ -340,14 +345,42 @@ window to its floor is what separates a divergence from the single excursion
 skip-step already absorbs. It takes the `notification=hero-run` route as well: a
 hero run diverging unwatched costs more than a false page, which a silence
 answers. Both hero rules share one enrolment query per cache interval.
+
+Three more rules carry the rest of the hero on-call policy, the checks the
+standalone Pushover monitor applies — see
+[the run-health contract](../../docs/ops/hero-run-health-alerts.md).
+`TrainingTelemetryGone` and `TrainingOptimizerUnstable` page on the same
+`notification=hero-run` route: a run that published telemetry and then went silent
+for ten minutes while Iris still counts its tasks running, a loss floor a whole
+unit above its trailing floor that the six-sigma band did not already catch, a
+gradient norm above 2 on a run with no clipping, or three skipped steps in
+fifteen minutes. `TrainingRunHealthDegraded` takes the
+announce-only `notification=slack` exception for token drops above 7%, routing
+entropy below 5.92, a router bias past 400, a throughput or MFU floor, a worse
+evaluation, a stale `iris.task_state` row, and controller retries. The split is
+what the on-call policy asks: the first two put the run at risk within the hour,
+the third an operator reads beside the dashboard.
+
+These three watch a wider enrolment: a run that either the Iris rollup or fresh
+Levanter `phase` telemetry still reports. The stall and loss rules enroll from
+`iris.task_state` alone, so a break in that path stops them watching a training
+run with no signal that it happened — which is what `iris_state_stale` reports.
+One scan of `telemetry_v1` per cache interval feeds all three, and a check reads
+the newest sample only while it is under fifteen minutes old, so a restart cannot
+fire from the previous attempt's last value. The throughput checks count how much
+of the window sat below the floor instead of averaging it, which is the median
+comparison the Pushover monitor makes. `TrainingProgressStalled` labels a silent
+run `telemetry_gone` and emits a zero rather than firing beside
+`TrainingTelemetryGone`, so one outage stays one page.
 A warning-only Zephyr rule reads fresh
 `progress_time_seconds` rows from `service=zephyr` telemetry. It waits 45 minutes after a
 stage start or shard completion, then remains pending for five minutes. The
 execution ID separates concurrent pipelines under one root job. The stuck-pod
 rule groups by node and links the cordon-first
 recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
-The CoreWeave storage-telemetry freshness warning carries the explicit
-`notification=slack` exception, so it announces without launching an ops agent.
+The CoreWeave storage-telemetry freshness warning and `TrainingRunHealthDegraded`
+carry the explicit `notification=slack` exception, so they announce without
+launching an ops agent.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
 dashboard panels rather than alert rules because they have expected benign
 causes. `severity=critical` routes to `ops-critical` (email
