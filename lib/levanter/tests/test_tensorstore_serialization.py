@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import threading
 from tempfile import TemporaryDirectory
 from typing import Any
 
@@ -18,6 +19,7 @@ from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.testing.helpers import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
+import levanter.tensorstore_serialization as tensorstore_serialization
 from levanter.checkpoint import load_checkpoint, save_checkpoint
 from levanter.checkpoint_manifest import CHECKPOINT_FORMAT_VERSION, manifest_path, read_manifest
 from levanter.models.gpt2 import Gpt2Mlp
@@ -41,6 +43,35 @@ def test_pageable_checkpoint_staging_detaches_from_donated_jax_buffer():
     source_host = np.asarray(source)
     np.testing.assert_array_equal(staged, source_host)
     assert not np.shares_memory(staged, source_host)
+
+
+def test_s3_checkpoint_prefetch_heads_every_object_from_a_daemon_thread(monkeypatch):
+    checkpoint_path = "s3://checkpoints/run/step-10"
+    plain_path = "checkpoints/run/step-10"
+    objects = [f"{plain_path}/manifest.json", f"{plain_path}/d/0000000000000001"]
+    heads = []
+    completed = threading.Event()
+
+    class RecordingS3FileSystem:
+        def find(self, path):
+            assert path == plain_path
+            return objects
+
+        def info(self, path, *, refresh):
+            heads.append((path, refresh, threading.current_thread().daemon))
+            if len(heads) == len(objects):
+                completed.set()
+
+    monkeypatch.setattr(
+        tensorstore_serialization,
+        "url_to_fs",
+        lambda path: (RecordingS3FileSystem(), plain_path),
+    )
+
+    tensorstore_serialization._start_s3_checkpoint_prefetch(checkpoint_path)
+
+    assert completed.wait(timeout=5)
+    assert heads == [(path, True, True) for path in objects]
 
 
 def test_tensorstore_checkpoint_simple():

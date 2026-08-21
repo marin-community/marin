@@ -8,6 +8,7 @@ import collections
 import logging
 import math
 import os
+import threading
 import urllib.parse
 import zlib
 from dataclasses import dataclass
@@ -32,6 +33,7 @@ from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
 
 from rigging.filesystem.cross_region import record_transfer
+from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from levanter._debug_logging import flush_debug_output
@@ -56,6 +58,7 @@ _STAGED_BYTE_OVERHEAD = 4
 # Host memory each process may hold in flight while a restore reads shards. JAX defaults to 32 GB
 # and the legacy path asked for 300, both far above what a save allows itself on the same node.
 _RESTORE_CONCURRENT_GB = 8
+_S3_PREFETCH_THREAD_NAME = "levanter-s3-checkpoint-prefetch"
 
 
 def _format_gib(num_bytes: int) -> str:
@@ -437,6 +440,49 @@ async def _list_ocdbt_keys(checkpoint_root: str) -> list[str]:
     return [key.decode("utf-8") for key in keys_bytes]
 
 
+def _prefetch_s3_checkpoint(checkpoint_root: str) -> None:
+    """Issue an S3 HEAD for every object in a completed checkpoint."""
+    try:
+        fs, path = url_to_fs(checkpoint_root)
+        objects = fs.find(path)
+    except Exception:
+        logger.exception("Failed to list S3 checkpoint objects for cache prefetch: %s", checkpoint_root)
+        return
+
+    failures = 0
+    for object_path in objects:
+        try:
+            # S3FS may satisfy info from its listing cache unless refresh is explicit.
+            fs.info(object_path, refresh=True)
+        except Exception:
+            if failures == 0:
+                logger.exception("Failed to HEAD S3 checkpoint object %s; continuing prefetch", object_path)
+            failures += 1
+
+    if failures:
+        logger.warning(
+            "Failed to prefetch %d of %d S3 checkpoint objects under %s",
+            failures,
+            len(objects),
+            checkpoint_root,
+        )
+    else:
+        logger.info("Prefetched %d S3 checkpoint objects under %s", len(objects), checkpoint_root)
+
+
+def _start_s3_checkpoint_prefetch(checkpoint_root: str) -> None:
+    checkpoint_root = str(checkpoint_root)
+    if jax.process_index() != 0 or urllib.parse.urlparse(checkpoint_root).scheme != "s3":
+        return
+
+    threading.Thread(
+        target=_prefetch_s3_checkpoint,
+        args=(checkpoint_root,),
+        name=_S3_PREFETCH_THREAD_NAME,
+        daemon=True,
+    ).start()
+
+
 def _is_named_or_none(x):
     return x is None or is_named_array(x)
 
@@ -537,6 +583,10 @@ def tree_serialize_leaves_tensorstore(
     if commit_callback is None:
         commit_callback = lambda: logger.info("Committed checkpoint to Tensorstore")  # noqa
 
+    def commit_and_prefetch() -> None:
+        commit_callback()
+        _start_s3_checkpoint_prefetch(checkpoint_dir)
+
     if debug_checkpointer:
         logger.info(
             "Checkpoint tensorstore serialize start: dir=%s arrays=%d total=%s largest=%s (%s)",
@@ -580,7 +630,7 @@ def tree_serialize_leaves_tensorstore(
         )
         flush_debug_output(logger)
 
-    _serialize_arrays(arrays, tspecs, plans, manager, write_config, commit_callback)
+    _serialize_arrays(arrays, tspecs, plans, manager, write_config, commit_and_prefetch)
 
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize handed off async commit for %s", checkpoint_dir)
