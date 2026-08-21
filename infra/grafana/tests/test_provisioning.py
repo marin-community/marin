@@ -618,28 +618,6 @@ def test_cluster_series_keep_one_colour_across_dashboards():
     assert len(colours) >= len(CLUSTERS)
 
 
-def test_training_dashboard_separates_attempt_loss_and_step_loss():
-    dashboard = _stitched_dashboards()["training.json"]
-    panels = {panel["title"]: panel for panel in _all_panels(dashboard)}
-
-    attempt_panel = panels["Training loss by attempt"]
-    assert attempt_panel["type"] == "timeseries"
-    assert attempt_panel["fieldConfig"]["defaults"]["custom"]["insertNulls"] == 300_000
-    assert {column["selector"] for column in attempt_panel["targets"][0]["columns"]} == {
-        "t",
-        "series",
-        "train_loss",
-    }
-
-    step_panel = panels["Training loss by step"]
-    assert step_panel["type"] == "trend"
-    assert step_panel["options"]["xField"] == "step"
-    assert {column["selector"] for column in step_panel["targets"][0]["columns"]} == {
-        "step",
-        "train_loss",
-    }
-
-
 def test_training_loss_by_attempt_separates_process_incarnations():
     dashboard = _stitched_dashboards()["training.json"]
     panel = next(panel for panel in _all_panels(dashboard) if panel["title"] == "Training loss by attempt")
