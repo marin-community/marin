@@ -521,21 +521,19 @@ and its image build come from the reusable `iac.gcp.cloud_run.CloudRunService` c
 and shares `infra/pulumi`'s state backend.
 
 ```bash
-uv sync --all-packages --extra deploy                    # once: iac + Pulumi providers on the venv
 gcloud auth configure-docker us-central1-docker.pkg.dev  # once: let buildx push to Artifact Registry
+uv run --all-packages --extra deploy deploy grafana rollout
+```
 
-# The grafana.oa.dev DNS record lives in the oa.dev Cloudflare zone; the provider
-# reads this token from the environment.
-export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
-  --secret=cloudflare-oa-dns-token --project=hai-gcp-models)"
+The deploy command loads the Cloudflare provider token from Secret Manager and
+Pulumi previews the update before asking for confirmation.
 
-# Extra viewers beyond the shared Cloud Run IAP baseline — a bare email, a *@domain wildcard,
-# or a qualified IAM member. Editing this and re-running updates only the grant, never the
-# service.
+Extra viewers beyond the shared Cloud Run IAP baseline are durable stack config. A
+viewer may be a bare email, a `*@domain` wildcard, or a qualified IAM member. Change
+the config before deploying when a grant needs to be updated:
+
+```bash
 pulumi -C infra/grafana config set --stack marin-grafana --path 'viewers[0]' you@example.com
-
-pulumi -C infra/grafana preview --stack marin-grafana
-uv run deploy grafana rollout
 ```
 
 Production reads the `grafana-alerts` URL and profile from the `marin-loom`

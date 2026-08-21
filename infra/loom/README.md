@@ -21,12 +21,11 @@ Its private key, webhook secret, and client secret belong only in the
 Authenticate Pulumi's providers and the local Docker client:
 
 ```sh
-export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
-  --project=hai-gcp-models --secret=cloudflare-oa-dns-token)"
 gcloud auth configure-docker us-central1-docker.pkg.dev
 ```
 
-The local Docker builder must support `linux/amd64`.
+The deploy command loads the Cloudflare provider token from Secret Manager. The
+local Docker builder must support `linux/amd64`.
 
 Activation restarts the host's startup script over SSH. Create the Compute
 Engine key pair once so the key is present and propagated before deploying;
@@ -47,19 +46,18 @@ for `https://loom.oa.dev/api/ready` after activation.
 
 ```sh
 cd /path/to/marin
-pulumi -C infra/loom preview --stack marin-loom --diff
-uv run deploy loom rollout
-curl -fsS https://loom.oa.dev/api/ready
+uv run --all-packages --extra deploy deploy loom rollout
 ```
 
 Set `buildContext` to a Loom worktree to deploy local changes instead. The local
 build includes tracked and untracked files allowed by that worktree's
-`.dockerignore`; review its diff before deployment. Pulumi saves `-c` values in
-the stack configuration, so remove the override to return to the remote HEAD.
+`.dockerignore`; review its diff before deployment. The deploy command applies the
+override through a temporary stack config, so later deployments return to the remote
+HEAD automatically.
 
 ```sh
-uv run deploy loom rollout --config buildContext=/path/to/loom
-pulumi -C infra/loom config rm --stack marin-loom buildContext
+uv run --all-packages --extra deploy deploy loom rollout \
+  --config buildContext=/path/to/loom
 ```
 
 Pulumi renders the Compose and Caddy configuration into VM metadata. The GCE

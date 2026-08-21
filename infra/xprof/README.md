@@ -25,9 +25,11 @@ computes exclusive-time and breakdown data in one pass.
 ## Deploy
 
 Changes deploy automatically from `main` through
-`.github/workflows/ops-pulumi-rollout.yaml`. From the repository root, a manual
-deployment requires `CW_KEY_ID` and `CW_KEY_SECRET` in the environment:
+`.github/workflows/ops-pulumi-rollout.yaml`. Dispatch that workflow to redeploy the
+current `main` revision with its GitHub-held credentials. A local deploy is for an
+unmerged checkout and requires `CW_KEY_ID` and `CW_KEY_SECRET` in the operator
+environment:
 
 ```bash
-uv run deploy xprof rollout
+uv run --all-packages --extra deploy deploy xprof rollout
 ```

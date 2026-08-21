@@ -4,8 +4,9 @@ This directory contains thin trigger YAML around behavior implemented in `script
 
 ## Pulumi service rollouts
 
-`ops-pulumi-rollout.yaml` runs `uv run deploy <service> rollout` for registered
-service projects after their source paths change on `main`.
+`ops-pulumi-rollout.yaml` runs
+`uv run --all-packages --extra deploy --frozen deploy <service> rollout` for
+registered service projects after their source paths change on `main`.
 `scripts/ci/pulumi_rollouts.py` maps each service to its Pulumi directory, deploy
 identity, tests, and additional source roots.
 The registry currently covers Ducky, Echo, EvalDash, Grafana, and XProf. Add one `Rollout` entry when

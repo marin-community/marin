@@ -344,12 +344,11 @@ minutes and then advances one globally serialized repository turn. Database migr
 `infra/echo/migrations/` create tables and apply PostgreSQL grants.
 `infra/echo/migrate.py` records applied migrations in `schema_migrations`.
 
-Preview the production stack from the repository root, then deploy through the
-shared command:
+Deploy the production stack from the repository root through the shared command.
+Pulumi previews the update before asking for confirmation:
 
 ```bash
-pulumi -C infra/echo preview --stack marin-echo
-uv run deploy echo rollout
+uv run --all-packages --extra deploy deploy echo rollout
 ```
 
 The rollout applies pending migrations from the operator's machine. It requires ADC

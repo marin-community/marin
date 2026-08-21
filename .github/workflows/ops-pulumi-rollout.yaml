@@ -107,4 +107,3 @@ jobs:
           service-account: ${{ matrix.service_account }}
           gcp-project-id: hai-gcp-models
           config: ${{ matrix.config }}
-          cloudflare-secret-name: ${{ matrix.cloudflare_secret_name }}

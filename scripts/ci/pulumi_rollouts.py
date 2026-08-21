@@ -17,14 +17,12 @@ class Rollout:
     service_account: str
     source_roots: tuple[str, ...] = ()
     timeout_minutes: int = 60
-    cloudflare_secret_name: str = ""
     deploy_generation_key: str = ""
     test_path: str = ""
 
 
 CLOUD_RUN_DEPLOY_SERVICE_ACCOUNT = "marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com"
 IRIS_DEPLOY_SERVICE_ACCOUNT = "iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com"
-CLOUDFLARE_DNS_SECRET = "cloudflare-oa-dns-token"
 CLOUD_RUN_SOURCE_ROOTS = (
     "infra/pulumi/src/iac/gcp/cloud_run.py",
     "lib/rigging/src/rigging/auth.py",
@@ -47,7 +45,6 @@ ROLLOUTS = (
         service_account=CLOUD_RUN_DEPLOY_SERVICE_ACCOUNT,
         source_roots=(*CLOUD_RUN_SOURCE_ROOTS, "infra/pulumi/src/iac/gcp/cloud_run_job.py"),
         timeout_minutes=90,
-        cloudflare_secret_name=CLOUDFLARE_DNS_SECRET,
     ),
     Rollout(
         name="evaldash",
@@ -69,14 +66,12 @@ ROLLOUTS = (
             "lib/marin/src/marin/evaluation/records.py",
             "lib/rigging",
         ),
-        cloudflare_secret_name=CLOUDFLARE_DNS_SECRET,
     ),
     Rollout(
         name="grafana",
         work_dir="infra/grafana",
         service_account=CLOUD_RUN_DEPLOY_SERVICE_ACCOUNT,
         source_roots=CLOUD_RUN_SOURCE_ROOTS,
-        cloudflare_secret_name=CLOUDFLARE_DNS_SECRET,
         test_path="infra/grafana",
     ),
     Rollout(
