@@ -83,40 +83,55 @@ class WandbSource:
             raise UpstreamError("wandb", "report pins no runs", status_code=502)
         return view.get("displayName") or "W&B report", runs
 
+    def _sampled_history(
+        self, *, project: str, run: str, x_key: str, y_key: str, samples: int
+    ) -> list[tuple[float, float]] | None:
+        """Numeric (x, y) pairs from one run's sampled history, or None if it is absent.
+
+        A point missing either key is dropped: W&B writes a null wherever a metric
+        was not logged on that step. Callers decide what an absent run means.
+        """
+        spec = json.dumps({"keys": [x_key, y_key], "samples": samples})
+        run_data = (
+            self._graphql(
+                _HISTORY_QUERY,
+                {"entity": _ENTITY, "project": project, "run": run, "specs": [spec]},
+            ).get("project")
+            or {}
+        ).get("run")
+        if not run_data:
+            return None
+        histories = run_data.get("sampledHistory") or []
+        pairs: list[tuple[float, float]] = []
+        for point in histories[0] if histories else []:
+            x_value = point.get(x_key)
+            y_value = point.get(y_key)
+            if isinstance(x_value, int | float) and isinstance(y_value, int | float):
+                pairs.append((x_value, y_value))
+        return pairs
+
     def points(self, chart_key: str) -> list[dict]:
         """Return one row per sampled point for a configured report chart."""
         if chart_key not in WANDB_CHARTS:
             raise ValueError(f"unknown W&B chart {chart_key!r}; configured: {sorted(WANDB_CHARTS)}")
         chart_title, metric = WANDB_CHARTS[chart_key]
         report_title, runs = self._report()
-        spec = json.dumps({"keys": [_X_KEY, metric], "samples": _SAMPLES})
         rows: list[dict] = []
         for run in runs:
-            project = (
-                self._graphql(
-                    _HISTORY_QUERY,
-                    {"entity": _ENTITY, "project": _PROJECT, "run": run, "specs": [spec]},
-                ).get("project")
-                or {}
-            )
-            run_data = project.get("run") or {}
-            if not run_data:
+            pairs = self._sampled_history(project=_PROJECT, run=run, x_key=_X_KEY, y_key=metric, samples=_SAMPLES)
+            if pairs is None:
                 raise UpstreamError("wandb", f"run {run!r} not found", status_code=502)
-            histories = run_data.get("sampledHistory") or []
-            for point in histories[0] if histories else []:
-                tokens = point.get(_X_KEY)
-                value = point.get(metric)
-                if isinstance(tokens, int | float) and isinstance(value, int | float):
-                    rows.append(
-                        {
-                            "chart": chart_title,
-                            "run": run,
-                            "tokens": tokens,
-                            "value": value,
-                            "report_title": report_title,
-                            "report_url": _REPORT_URL,
-                        }
-                    )
+            rows.extend(
+                {
+                    "chart": chart_title,
+                    "run": run,
+                    "tokens": tokens,
+                    "value": value,
+                    "report_title": report_title,
+                    "report_url": _REPORT_URL,
+                }
+                for tokens, value in pairs
+            )
         return rows
 
     def run_history(self, run: str, *, metric: str, project: str | None = None) -> list[dict]:
@@ -129,32 +144,15 @@ class WandbSource:
         project fails loud rather than rendering as an empty panel.
         """
         projects = (project,) if project else RUN_HISTORY_PROJECTS
-        spec = json.dumps({"keys": [_STEP_KEY, metric], "samples": _RUN_HISTORY_SAMPLES})
         for candidate in projects:
-            run_data = (
-                self._graphql(
-                    _HISTORY_QUERY,
-                    {"entity": _ENTITY, "project": candidate, "run": run, "specs": [spec]},
-                ).get("project")
-                or {}
-            ).get("run")
-            if not run_data:
+            pairs = self._sampled_history(
+                project=candidate, run=run, x_key=_STEP_KEY, y_key=metric, samples=_RUN_HISTORY_SAMPLES
+            )
+            if pairs is None:
                 continue
-            histories = run_data.get("sampledHistory") or []
             run_url = _RUN_URL.format(entity=_ENTITY, project=candidate, run=run)
-            rows: list[dict] = []
-            for point in histories[0] if histories else []:
-                step = point.get(_STEP_KEY)
-                value = point.get(metric)
-                if isinstance(step, int | float) and isinstance(value, int | float):
-                    rows.append(
-                        {
-                            "run": run,
-                            "project": candidate,
-                            "run_url": run_url,
-                            "step": step,
-                            "value": value,
-                        }
-                    )
-            return rows
+            return [
+                {"run": run, "project": candidate, "run_url": run_url, "step": step, "value": value}
+                for step, value in pairs
+            ]
         raise UpstreamError("wandb", f"run {run!r} not found in {', '.join(projects)}", status_code=404)

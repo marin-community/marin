@@ -553,11 +553,12 @@ def create_app(
         return wandb_endpoint(("report", chart), lambda: wandb_source.points(chart))
 
     def wandb_run_history(request: Request) -> JSONResponse:
-        run = request.query_params.get("run", "")
-        metric = request.query_params.get("metric", "")
+        try:
+            run = _require(request.query_params, "run")
+            metric = _require(request.query_params, "metric")
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
         project = request.query_params.get("project") or None
-        if not run or not metric:
-            return JSONResponse({"error": "run and metric are required"}, status_code=400)
         return wandb_endpoint(
             ("history", run, metric, project),
             lambda: wandb_source.run_history(run, metric=metric, project=project),
