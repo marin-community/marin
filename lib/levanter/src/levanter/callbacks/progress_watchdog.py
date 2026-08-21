@@ -76,9 +76,10 @@ def _deadline(
     elapsed: float,
     timeout: float | None,
     *,
-    healthy: ProgressState = ProgressState.PROGRESSING,
+    within: ProgressState = ProgressState.PROGRESSING,
 ) -> ProgressHealth:
-    state = ProgressState.STALLED if timeout is not None and elapsed >= timeout else healthy
+    """Classify one wait. ``within`` is the state to report while it is inside ``timeout``."""
+    state = ProgressState.STALLED if timeout is not None and elapsed >= timeout else within
     return ProgressHealth(state, event=event, elapsed=elapsed, timeout=timeout)
 
 
@@ -187,7 +188,7 @@ class ProgressWatchdog(Callback[Any]):
                 ProgressEvent.PROCESS_STARTED,
                 now - self._created_at,
                 self._startup_timeout,
-                healthy=ProgressState.STARTING,
+                within=ProgressState.STARTING,
             )
 
         if training_started_at is None:
