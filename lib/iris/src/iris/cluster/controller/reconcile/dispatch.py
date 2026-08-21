@@ -248,7 +248,7 @@ def _select_within_cap(
         if promoted >= max_promotions:
             break
         band = effective_bands[unit[0].job_id]
-        if barrier_band is not None and band > barrier_band:
+        if barrier_band is not None and priority_band_rank(band) > priority_band_rank(barrier_band):
             break
         if len(unit) <= max_promotions - promoted or len(unit) > max_promotions:
             selected.append(unit)

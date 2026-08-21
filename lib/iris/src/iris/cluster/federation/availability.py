@@ -59,7 +59,8 @@ logger = logging.getLogger(__name__)
 # v1: free amounts only, computed from every non-terminal pod.
 # v2: free amounts count only capacity admitted work holds (queued, unadmitted work
 #     no longer subtracts), plus the ``held_by_band`` split of the held remainder.
-AVAILABILITY_METRIC_VERSION = 2
+# v3: held-band ordering follows the explicit PriorityBand rank rather than wire values.
+AVAILABILITY_METRIC_VERSION = 3
 
 
 @dataclass(frozen=True)
