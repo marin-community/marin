@@ -17,6 +17,7 @@ from levanter.infra.cli_helpers import CliConfig
 from levanter.main import train_lm
 from levanter.main.train_dpo import TrainDpoConfig
 from levanter.trainer import TrainerConfig
+from marin.execution.lazy import StepContext
 from marin.processing.tokenize import tokenized_cache_stats_path
 from marin.training.training import (
     GPU_NCCL_TERMINATION_TIMEOUT_FLAG,
@@ -25,6 +26,7 @@ from marin.training.training import (
     _maybe_auto_resolve_dpo_schedule,
     _resolve_run_id,
     apply_output_path,
+    derive_run_id,
     doublecheck_paths,
     resolve_training_env,
     temporary_checkpoint_base_path,
@@ -204,11 +206,46 @@ def test_tokenized_cache_stats_path_handles_local_and_gcs_paths():
     )
 
 
-def test_resolve_run_id_imputes_basename_of_output_path(trainer_config):
+def test_resolve_run_id_imputes_name_and_version_from_output_path(trainer_config):
     config = train_lm.TrainLmConfig(trainer=dataclasses.replace(trainer_config, id=None))
-    updated, run_id = _resolve_run_id(config, output_path="gs://bucket/checkpoints/dpo/example-run", env_run_id=None)
-    assert run_id == "example-run"
-    assert updated.trainer.id == "example-run"
+    updated, run_id = _resolve_run_id(config, output_path="gs://bucket/checkpoints/dpo/2026.08.20", env_run_id=None)
+    assert run_id == "dpo-2026.08.20"
+    assert updated.trainer.id == "dpo-2026.08.20"
+
+
+def test_resolve_run_id_distinguishes_artifacts_built_at_one_version(trainer_config):
+    """Artifact output paths end ``<name>/<version>``, so every artifact built at a version shares
+    its final segment and an id taken from that segment alone cannot identify the run."""
+
+    def imputed(output_path: str) -> str:
+        config = train_lm.TrainLmConfig(trainer=dataclasses.replace(trainer_config, id=None))
+        return _resolve_run_id(config, output_path=output_path, env_run_id=None)[1]
+
+    assert imputed("gs://bucket/checkpoints/sft/2026.08.20") != imputed("gs://bucket/checkpoints/pretrain/2026.08.20")
+
+
+def test_derive_run_id_separates_two_authors_of_one_sweep():
+    """A mutable version namespaces the artifact by prefixing ``users/{username}/``, so an id taken
+    from the trailing name segment collapses two authors iterating the same sweep onto one run."""
+
+    def derived(name: str) -> str:
+        return derive_run_id(StepContext.for_run(output_path=f"gs://bucket/{name}/dev", prefix="gs://bucket"))
+
+    assert derived("users/alice/sweep-lr") != derived("users/bob/sweep-lr")
+
+
+def test_derive_run_id_is_constant_at_fingerprint_time():
+    """A run id that varied with the storage prefix would fork the artifact's identity."""
+    assert derive_run_id(StepContext.for_fingerprint()) == "<output_path>"
+
+
+def test_resolve_run_id_imputes_over_an_empty_run_id_env_var(monkeypatch):
+    """An empty ``RUN_ID`` is absent, not chosen: falling through to a random id would lose the
+    stable id that resumption after preemption depends on."""
+    monkeypatch.setenv("RUN_ID", "")
+    config = train_lm.TrainLmConfig(trainer=TrainerConfig(id=None, checkpointer=CheckpointerConfig()))
+    _, run_id = _resolve_run_id(config, output_path="gs://bucket/checkpoints/sft/2026.08.20", env_run_id=None)
+    assert run_id == "sft-2026.08.20"
 
 
 def test_resolve_run_id_prefers_explicit_id_over_output_path(trainer_config):

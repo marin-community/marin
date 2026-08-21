@@ -46,6 +46,7 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import (
     LevanterCheckpoint,
     TrainLmOnPodConfig,
+    derive_run_id,
     resolve_training_env,
     run_levanter_train_lm,
 )
@@ -196,7 +197,7 @@ def train_lm(
         inner = TrainLmConfig(
             data=mixture(ctx, datasets, validation=validation),
             trainer=TrainerConfig(
-                id=run_id,
+                id=run_id or derive_run_id(ctx),
                 tracker=WandbConfig(
                     project=wandb_project,
                     name=run_id,

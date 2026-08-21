@@ -90,7 +90,7 @@ from marin.execution.step_runner import StepRunner
 from marin.experiment.checkpoints import HfToLevanterCheckpoint
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache
 from marin.processing.tokenize.tokenize import tokenize as run_tokenize
-from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
+from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, derive_run_id, run_levanter_train_lm
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.instruction import (
@@ -174,6 +174,7 @@ class ModelSource(Protocol):
 def _levanter_train_config(
     spec: SFTSpec,
     *,
+    run_id: str,
     model_config: LmConfig,
     data_config: LmDataConfig,
     num_train_steps: int,
@@ -194,7 +195,7 @@ def _levanter_train_config(
         data=data_config,
         model=model_config,
         optimizer=spec.optimizer,
-        trainer=_trainer(spec, num_train_steps=num_train_steps, gpu_allocator=gpu_allocator),
+        trainer=_trainer(spec, run_id=run_id, num_train_steps=num_train_steps, gpu_allocator=gpu_allocator),
         train_seq_len=spec.seq_len,
         initialize_from_hf=initialize_from_hf,
         initialize_model_from_checkpoint_path=initialize_model_from_checkpoint_path,
@@ -233,6 +234,7 @@ def _levanter_pod_config(
     return TrainLmOnPodConfig(
         train_config=_levanter_train_config(
             spec,
+            run_id=derive_run_id(ctx),
             model_config=model_config,
             data_config=data_config,
             num_train_steps=num_train_steps,
@@ -636,7 +638,7 @@ def _prebuilt_chat_data_config(spec: SFTSpec, cache_paths: Sequence[str], tokeni
     )
 
 
-def _trainer(spec: SFTSpec, *, num_train_steps: int, gpu_allocator: bool) -> TrainerConfig:
+def _trainer(spec: SFTSpec, *, run_id: str, num_train_steps: int, gpu_allocator: bool) -> TrainerConfig:
     """Trainer config. ``gpu_allocator`` adds the GPU-only cuda_async PJRT allocator."""
     jax_config = dict(DEFAULT_JAX_CONFIG)
     if gpu_allocator:
@@ -644,6 +646,7 @@ def _trainer(spec: SFTSpec, *, num_train_steps: int, gpu_allocator: bool) -> Tra
         # allocator:... to PJRT_Client_Create aborts the TPU backend and JAX falls back to CPU.
         jax_config["jax_pjrt_client_create_options"] = "allocator:cuda_async"
     return TrainerConfig(
+        id=run_id,
         train_batch_size=spec.batch_size,
         num_train_steps=num_train_steps,
         steps_per_eval=500,

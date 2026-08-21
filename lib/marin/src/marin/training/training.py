@@ -27,6 +27,7 @@ from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.execution.artifact import Artifact
+from marin.execution.lazy import StepContext
 from marin.processing.tokenize import read_tokenized_cache_stats
 from marin.training.run_environment import add_run_env_variables
 
@@ -211,19 +212,25 @@ def apply_output_path(train_config: TrainConfigT, output_path: str) -> TrainConf
     return config
 
 
+def derive_run_id(ctx: StepContext) -> str:
+    """The step's prefix-relative storage address, as a run id. Pulled from the context, so it
+    stays out of the artifact's fingerprint."""
+    return ctx.output_path.removeprefix(ctx.prefix.rstrip("/")).strip("/").replace("/", "-")
+
+
 def _resolve_run_id(
     train_config: TrainConfigT, *, output_path: str | None, env_run_id: str | None
 ) -> tuple[TrainConfigT, str]:
     """Pick a stable run id and stamp it into ``train_config.trainer.id``.
 
-    A stable id is required so a run resumes into the same W&B run and checkpoint directory after
-    preemption. Priority: ``trainer.id`` already set by the caller, then ``env_run_id`` (from
-    ``env_vars["RUN_ID"]``), then the ``RUN_ID`` environment variable, then ``basename(output_path)``,
-    and finally a random UID as a last resort.
+    Priority: ``trainer.id`` set by the caller (a step sets it from :func:`derive_run_id`), then
+    ``env_run_id``, then ``RUN_ID``, then ``<name>-<version>`` from ``output_path``, then a random
+    UID. Output paths end ``<name>/<version>``, so the version alone cannot identify the run.
     """
     run_id = train_config.trainer.id or env_run_id or os.environ.get("RUN_ID")
-    if run_id is None and output_path is not None:
-        run_id = os.path.basename(output_path.rstrip("/"))
+    if not run_id and output_path is not None:
+        name, _, version = output_path.rstrip("/").rpartition("/")
+        run_id = f"{os.path.basename(name)}-{version}" if name else version
         logger.info("Imputing run ID from output path: %s", run_id)
     if not run_id:
         run_id = _cli_helpers_module().default_run_id()
