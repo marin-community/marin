@@ -798,7 +798,10 @@ def test_offloaded_optimizer_scalar_state_uses_the_active_mesh():
             )
         )
 
-    assert state.opt_state[0].count.sharding == NamedSharding(mesh, P())
+    count_sharding = state.opt_state[0].count.sharding
+    assert isinstance(count_sharding, NamedSharding)
+    assert count_sharding.mesh == mesh
+    assert count_sharding.spec == P()
 
 
 def test_fp32_host_master_accumulates_updates_before_bfloat16_cast(monkeypatch):
