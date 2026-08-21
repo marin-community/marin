@@ -46,10 +46,13 @@ def test_pageable_checkpoint_staging_detaches_from_donated_jax_buffer():
     assert not np.shares_memory(staged, source_host)
 
 
-def test_s3_checkpoint_prefetch_heads_every_object_from_a_daemon_thread(monkeypatch):
+@pytest.mark.parametrize("process_index", [0, 1])
+def test_s3_checkpoint_prefetch_shards_ranged_heads_after_commit(monkeypatch, process_index):
     checkpoint_path = "s3://checkpoints/run/step-10"
     plain_path = "checkpoints/run/step-10"
     objects = [f"{plain_path}/manifest.json", f"{plain_path}/d/0000000000000001"]
+    assigned_objects = sorted(objects)[process_index::2]
+    events = []
     heads = []
     completed = threading.Event()
 
@@ -58,21 +61,71 @@ def test_s3_checkpoint_prefetch_heads_every_object_from_a_daemon_thread(monkeypa
             assert path == plain_path
             return objects
 
-        def info(self, path, *, refresh):
-            heads.append((path, refresh, threading.current_thread().daemon))
-            if len(heads) == len(objects):
+        def split_path(self, path):
+            bucket, key = path.split("/", 1)
+            return bucket, key, None
+
+        def call_s3(self, method, **kwargs):
+            events.append("head")
+            heads.append((method, kwargs, threading.current_thread().daemon))
+            if len(heads) == len(assigned_objects):
                 completed.set()
 
+    class RecordingClient:
+        def blocking_key_value_get(self, key, timeout):
+            assert process_index == 1
+            assert key == "tensorstore_checkpoint_7"
+            assert timeout == 1_000
+            events.append("commit")
+
+    class RecordingManager:
+        _client = RecordingClient()
+        _count = 7
+        _timeout_in_ms = 1_000
+
+    def record_serialize(_arrays, _tspecs, _plans, _manager, _config, commit_callback):
+        events.append("serialize")
+        if process_index == 0:
+            commit_callback()
+
+    monkeypatch.delenv("AWS_ENDPOINT_URL_S3", raising=False)
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://cwlota.com")
+    monkeypatch.setattr(tensorstore_serialization.jax, "process_index", lambda: process_index)
+    monkeypatch.setattr(tensorstore_serialization.jax, "process_count", lambda: 2)
+    monkeypatch.setattr(tensorstore_serialization, "write_manifest", lambda *_: None)
+    monkeypatch.setattr(tensorstore_serialization, "record_transfer", lambda *_: None)
+    monkeypatch.setattr(tensorstore_serialization, "_serialize_arrays", record_serialize)
     monkeypatch.setattr(
         tensorstore_serialization,
         "url_to_fs",
         lambda _: (RecordingS3FileSystem(), plain_path),
     )
 
-    tensorstore_serialization._start_s3_checkpoint_prefetch(checkpoint_path)
+    tree_serialize_leaves_tensorstore(
+        checkpoint_path,
+        {"weights": np.arange(4, dtype=np.float32)},
+        manager=RecordingManager(),
+        commit_callback=lambda: events.append("commit"),
+    )
 
     assert completed.wait(timeout=5)
-    assert heads == [(path, True, True) for path in objects]
+    assert events == ["serialize", "commit", "head"]
+    assert heads == [
+        (
+            "head_object",
+            {"Bucket": "checkpoints", "Key": object_path.removeprefix("checkpoints/"), "Range": "bytes=0-0"},
+            True,
+        )
+        for object_path in assigned_objects
+    ]
+
+
+def test_s3_checkpoint_prefetch_skips_non_lota_endpoint(monkeypatch):
+    monkeypatch.delenv("AWS_ENDPOINT_URL_S3", raising=False)
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "https://cwobject.com")
+    monkeypatch.setattr(tensorstore_serialization, "url_to_fs", lambda _: pytest.fail("unexpected S3 request"))
+
+    tensorstore_serialization._start_s3_checkpoint_prefetch("s3://checkpoints/run/step-10", 0, 1)
 
 
 def test_tensorstore_checkpoint_simple():
