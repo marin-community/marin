@@ -1,0 +1,39 @@
+{
+  "analysis_scope": "operational_only_no_endpoint_metrics",
+  "decision": {
+    "next_on_fail": "do not launch the production-cadence C64 recovery gate",
+    "next_on_pass": "seek independent review before accepting Gen19"
+  },
+  "endpoint_metrics_read": false,
+  "implementation_sha256": {
+    "experiments/domain_phase_mix/exploratory/two_phase_many/analyze_starcoder_wsd80_gradient_conflict_resume_canary_20260813.py": "3c0abfa1826268885f7c1c05d6aba91e274a855c7fd93a78b8d87d8567c59a1c",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/analyze_starcoder_wsd80_gradient_conflict_resume_canary_revision2_20260813.py": "495623b2211f56c31df2fd73e9327651ccab77aca579d001a708326e573a51d6",
+    "lib/levanter/src/levanter/callbacks/_core.py": "6426a886379b9743036dc4fa1bce665b252d24142f8bc3bfc79d583812619677",
+    "lib/levanter/src/levanter/main/train_lm.py": "a616284fec862e970c59a9227594a8481d7d34a7c25efa4a53f2047007593ed0",
+    "lib/levanter/src/levanter/trainer.py": "7c549fd71aa998f1a9d3543fb353e94bfb63c0c1a3f659c173831b1a019bb925",
+    "tests/test_starcoder_wsd80_gradient_conflict_resume_analyzer_revision2.py": "de64404c6b84bfaef04b0d9e1f531fd6d317104e5f82a4ff0885e8dd3af3e01a"
+  },
+  "original_failed_report_path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/starcoder_wsd80_gradient_conflict_resume_canary_20260813/runtime_gate.json",
+  "original_failed_report_sha256": "d4271cd8c904cd695269cdf3aba539eacafe46834930cd9a347ca985a14810ea",
+  "original_preregistration_path": "experiments/domain_phase_mix/starcoder_wsd80_gradient_conflict_resume_canary_preregistration_generation19_20260813.json",
+  "original_preregistration_sha256": "1c3a125f2521116db8a10ebb87a7e52e3bfe6128539af55da1ee9308f45b418f",
+  "rationale": {
+    "checkpoint": "StepInfo.step is the completed step N, while the checkpointed TrainerState.step is next_step N+1.",
+    "wandb": "TrainerHooks suppresses ordinary hooks for info.step <= 1, so complete operational history is global steps 2..3327."
+  },
+  "semantic_corrections": {
+    "checkpoint_metadata_step_to_restored_state_step": "N_to_N_plus_1",
+    "operational_wandb_global_steps": [
+      2,
+      3327
+    ]
+  },
+  "unchanged_contract": {
+    "all_original_operational_gates_preserved": true,
+    "endpoint_metrics_remain_unread": true,
+    "fault_plan_unchanged": true,
+    "no_threshold_changed": true,
+    "runtime_evidence_unchanged": true
+  },
+  "version": "2026-08-13-gen19-analyzer-semantic-correction-v2"
+}
