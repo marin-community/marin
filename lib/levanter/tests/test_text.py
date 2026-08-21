@@ -14,13 +14,17 @@ import pytest
 
 import haliax as hax
 
+from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.data.text.cache import build_lm_dataset_cache
 from levanter.data.text.datasets import (
     ChatDataset,
+    DEFAULT_LM_DATA_SHUFFLE,
     DatasetComponent,
+    DirectDatasetComponent,
     LmDataConfig,
     UrlDatasetSourceConfig,
+    _stable_simulated_epoch_subset_key,
     count_corpus_sizes,
     dataset_for_component,
 )
@@ -472,6 +476,152 @@ def test_train_set_last_mile_wraps_to_named(tmp_path):
     named_train_set = config.train_set(Pos, BatchSchedule(1), key=jax.random.PRNGKey(0)).as_sync_dataset()
     named_example = named_train_set[0]
     assert isinstance(named_example, LmExample)
+
+
+def test_max_train_batches_fixed_subset_is_independent_of_training_shuffle():
+    Pos = hax.Axis("position", 4)
+    components = {
+        name: DirectDatasetComponent(
+            datasets={
+                "train": ListAsyncDataset(
+                    [
+                        GrugLmExample.causal(jnp.full((Pos.size,), offset + value, dtype=jnp.int32))
+                        for value in range(size)
+                    ]
+                )
+            }
+        )
+        for name, offset, size in (("first", 0, 4_096), ("second", 5_000, 4_096), ("uncapped", 10_000, 1_024))
+    }
+
+    def token_orders(subset_seed: int, training_seed: int) -> dict[str, list[int]]:
+        config = LmDataConfig(
+            components=components,
+            tokenizer="passthrough",
+            vocab_size=16_384,
+            shuffle=DEFAULT_LM_DATA_SHUFFLE,
+            max_train_batches={"first": 1_024, "second": 1_024},
+            max_train_batches_subset_seed=subset_seed,
+        )
+        dataset = config.train_sets(
+            Pos,
+            initial_batch_size=1,
+            key=jax.random.PRNGKey(training_seed),
+        )
+        return {
+            name: [int(np.asarray(row.tokens)[0]) for row in component.as_sync_dataset()]
+            for name, component in dataset.items()
+        }
+
+    first_order = token_orders(subset_seed=123, training_seed=1)
+    second_order = token_orders(subset_seed=123, training_seed=2)
+    different_support = token_orders(subset_seed=456, training_seed=1)
+    for name in ("first", "second"):
+        assert set(first_order[name]) == set(second_order[name])
+        assert first_order[name] != second_order[name]
+        assert set(first_order[name]) != set(different_support[name])
+    assert len(first_order["uncapped"]) == 1_024
+
+
+def test_train_holdout_precedes_fixed_support_and_training_shuffle():
+    Pos = hax.Axis("position", 4)
+    source = ListAsyncDataset(
+        [GrugLmExample.causal(jnp.full((Pos.size,), value, dtype=jnp.int32)) for value in range(4_096)]
+    )
+    components = {"source": DirectDatasetComponent(datasets={"train": source})}
+
+    _, expected_holdout = source.random_holdout_split(
+        128,
+        key=_stable_simulated_epoch_subset_key("source", "train_holdout", 123),
+        perm_type=DEFAULT_LM_DATA_SHUFFLE.perm_type,
+    )
+    expected_holdout_sync = expected_holdout.as_sync_dataset()
+    expected_holdout_tokens = {
+        int(np.asarray(expected_holdout_sync[index].tokens)[0]) for index in range(len(expected_holdout_sync))
+    }
+
+    def selected_tokens(*, support_seed: int | None, training_seed: int) -> list[int]:
+        config = LmDataConfig(
+            components=components,
+            tokenizer="passthrough",
+            vocab_size=4_096,
+            shuffle=DEFAULT_LM_DATA_SHUFFLE,
+            max_train_batches={"source": 1_024} if support_seed is not None else None,
+            max_train_batches_subset_seed=support_seed,
+            train_holdout_sequences={"source": 128},
+            train_holdout_seed=123,
+            train_holdout_partition="random_sparse_swap",
+        )
+        datasets = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(training_seed))
+        sync_dataset = datasets["source"].as_sync_dataset()
+        return [int(np.asarray(sync_dataset[index].tokens)[0]) for index in range(len(sync_dataset))]
+
+    capped_first = selected_tokens(support_seed=456, training_seed=1)
+    capped_second = selected_tokens(support_seed=456, training_seed=2)
+    capped_other_support = selected_tokens(support_seed=789, training_seed=1)
+    full = selected_tokens(support_seed=None, training_seed=1)
+    holdout_config = LmDataConfig(
+        components=components,
+        tokenizer="passthrough",
+        vocab_size=4_096,
+        shuffle=False,
+        train_holdout_sequences={"source": 128},
+        train_holdout_seed=123,
+        train_holdout_partition="random_sparse_swap",
+    )
+    exposed_holdout = holdout_config.holdout_sets(Pos)["source"].as_sync_dataset()
+    exposed_holdout_tokens = {
+        int(np.asarray(exposed_holdout[index].tokens)[0]) for index in range(len(exposed_holdout))
+    }
+
+    assert exposed_holdout_tokens == expected_holdout_tokens
+    assert expected_holdout_tokens.isdisjoint(full)
+    assert expected_holdout_tokens.isdisjoint(capped_first)
+    assert set(capped_first).issubset(full)
+    assert set(capped_first) == set(capped_second)
+    assert capped_first != capped_second
+    assert set(capped_first) != set(capped_other_support)
+    assert len(full) == 4_096 - 128
+
+
+def test_fixed_support_offsets_produce_disjoint_slices_after_holdout():
+    Pos = hax.Axis("position", 4)
+    source = ListAsyncDataset(
+        [GrugLmExample.causal(jnp.full((Pos.size,), value, dtype=jnp.int32)) for value in range(5_000)]
+    )
+    components = {"source": DirectDatasetComponent(datasets={"train": source})}
+
+    def selected_tokens(start_batch: int, training_seed: int) -> list[int]:
+        config = LmDataConfig(
+            components=components,
+            tokenizer="passthrough",
+            vocab_size=5_000,
+            shuffle=DEFAULT_LM_DATA_SHUFFLE,
+            max_train_batches={"source": 1_024},
+            max_train_batches_subset_seed=456,
+            max_train_batches_start={"source": start_batch},
+            train_holdout_sequences={"source": 128},
+            train_holdout_seed=123,
+            train_holdout_partition="random_sparse_swap",
+        )
+        datasets = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(training_seed))
+        sync_dataset = datasets["source"].as_sync_dataset()
+        return [int(np.asarray(sync_dataset[index].tokens)[0]) for index in range(len(sync_dataset))]
+
+    first = selected_tokens(start_batch=0, training_seed=1)
+    first_other_shuffle = selected_tokens(start_batch=0, training_seed=2)
+    second = selected_tokens(start_batch=1_024, training_seed=1)
+
+    assert set(first) == set(first_other_shuffle)
+    assert first != first_other_shuffle
+    assert set(first).isdisjoint(second)
+
+
+def test_train_holdout_contract_is_explicit():
+    with pytest.raises(ValueError, match="must be specified together"):
+        LmDataConfig(train_holdout_sequences={"source": 128}, train_holdout_seed=123)
+    with pytest.raises(ValueError, match="must be specified together"):
+        LmDataConfig(train_holdout_partition="random_sparse_swap")
 
 
 def test_dataset_for_component_rejects_preference_format():

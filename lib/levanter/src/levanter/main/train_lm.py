@@ -3,12 +3,16 @@
 
 import dataclasses
 import gc
+import json
 import logging
 import os
+import posixpath
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Optional
 
 import equinox as eqx
+import fsspec
 import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
@@ -45,6 +49,39 @@ from levanter.utils.jax_utils import parameter_count
 logger = logging.getLogger(__name__)
 
 
+def _write_initial_state_evidence(
+    path: str,
+    *,
+    checkpoint_search_paths: list[str],
+    run_id: str,
+    state_step: int,
+) -> None:
+    """Persist the initialized trainer step for an operational recovery audit."""
+    expected = {
+        "checkpoint_search_paths": checkpoint_search_paths,
+        "run_id": run_id,
+        "state_step": state_step,
+    }
+    evidence = {**expected, "written_at": datetime.now(UTC).isoformat()}
+    payload = (json.dumps(evidence, sort_keys=True) + "\n").encode()
+    fs, plain_path = fsspec.core.url_to_fs(path)
+    parent = posixpath.dirname(plain_path)
+    if parent:
+        fs.makedirs(parent, exist_ok=True)
+    try:
+        with fs.open(plain_path, "xb") as handle:
+            handle.write(payload)
+    except FileExistsError as error:
+        with fs.open(plain_path, "rb") as handle:
+            existing = json.load(handle)
+            if {key: existing.get(key) for key in expected} != expected or not existing.get("written_at"):
+                raise RuntimeError(f"Initial-state evidence path is already claimed: {path}") from error
+        return
+    with fs.open(plain_path, "rb") as handle:
+        if handle.read() != payload:
+            raise RuntimeError(f"Initial-state evidence did not persist exactly: {path}")
+
+
 @dataclass
 class TrainLmConfig:
     data: LmDataConfig = field(default_factory=LmDataConfig)
@@ -52,6 +89,10 @@ class TrainLmConfig:
     model: LmConfig = field(default_factory=LlamaConfig)
     train_seq_len: int | None = None
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
+    optimizer_schedule_num_train_steps: int | None = None
+    """Build the optimizer schedule for this horizon while allowing a shorter exact-state continuation."""
+    initial_state_evidence_path: str | None = None
+    """Optional create-only JSON evidence for the trainer state after checkpoint initialization."""
 
     # config related to continued pretraining
     initialize_from_hf: bool | str = False
@@ -200,7 +241,15 @@ def main(config: TrainLmConfig):
         converter = None
 
     levanter.trainer.initialize(config)
-    optimizer = config.optimizer.build(config.trainer.num_train_steps)
+    optimizer_schedule_num_train_steps = config.optimizer_schedule_num_train_steps
+    if optimizer_schedule_num_train_steps is None:
+        optimizer_schedule_num_train_steps = config.trainer.num_train_steps
+    if optimizer_schedule_num_train_steps < config.trainer.num_train_steps:
+        raise ValueError(
+            "optimizer_schedule_num_train_steps must be at least trainer.num_train_steps, got "
+            f"{optimizer_schedule_num_train_steps} < {config.trainer.num_train_steps}"
+        )
+    optimizer = config.optimizer.build(optimizer_schedule_num_train_steps)
 
     def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
         return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
@@ -341,6 +390,14 @@ def main(config: TrainLmConfig):
                     source_model,
                     config.adapter.trainable_filter(source_model),
                 ),
+            )
+
+        if config.initial_state_evidence_path is not None:
+            _write_initial_state_evidence(
+                config.initial_state_evidence_path,
+                checkpoint_search_paths=trainer.checkpoint_search_paths,
+                run_id=trainer.run_id,
+                state_step=int(state.step),
             )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.model)})

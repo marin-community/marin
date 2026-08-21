@@ -619,6 +619,7 @@ def run_iris_job(
     job_name: str | None = None,
     replicas: int | None = None,
     max_retries: int = 0,
+    max_preemption_retries: int = 1000,
     timeout: int = 0,
     extras: list[str] | None = None,
     setup_scripts: list[str] | None = None,
@@ -735,6 +736,7 @@ def run_iris_job(
         env_vars=env_vars,
         replicas=replicas,
         max_retries=max_retries,
+        max_preemption_retries=max_preemption_retries,
         timeout=timeout,
         wait=wait,
         extras=extras,
@@ -761,6 +763,7 @@ def _submit_and_wait_job(
     env_vars: dict[str, str],
     replicas: int,
     max_retries: int,
+    max_preemption_retries: int,
     timeout: int,
     wait: bool,
     extras: list[str] | None = None,
@@ -799,6 +802,7 @@ def _submit_and_wait_job(
         coscheduling=coscheduling,
         replicas=replicas,
         max_retries_failure=max_retries,
+        max_retries_preemption=max_preemption_retries,
         max_task_failures=max_retries,
         timeout=Duration.from_seconds(timeout) if timeout else None,
         user=user,
@@ -915,6 +919,13 @@ Examples:
     "--replicas", type=int, default=None, help="Number of tasks for gang scheduling (auto-detected for multinode TPUs)"
 )
 @click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
+@click.option(
+    "--max-preemption-retries",
+    type=int,
+    default=1000,
+    show_default=True,
+    help="Max retries on preemption.",
+)
 @click.option("--timeout", type=int, default=0, show_default=True, help="Job timeout in seconds (0 = no timeout)")
 @click.option("--region", multiple=True, help="Restrict to region(s) (e.g., --region us-central2). Can be repeated.")
 @click.option("--zone", type=str, help="Restrict to zone (e.g., --zone us-central2-b).")
@@ -1008,6 +1019,7 @@ def run(
     user: str | None,
     replicas: int | None,
     max_retries: int,
+    max_preemption_retries: int,
     timeout: int,
     region: tuple[str, ...],
     zone: str | None,
@@ -1066,6 +1078,7 @@ def run(
             user=user,
             replicas=replicas,
             max_retries=max_retries,
+            max_preemption_retries=max_preemption_retries,
             timeout=timeout,
             extras=list(extra),
             setup_scripts=[] if no_sync else None,

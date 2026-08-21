@@ -277,19 +277,34 @@ def _adopt_noop(_config: Any) -> None:
     raise AssertionError("adopted artifacts are registered, not computed")
 
 
-def materialized_config(handle: "ArtifactStep", prefix: str) -> Any:
+def materialized_config(
+    handle: "ArtifactStep",
+    prefix: str,
+    *,
+    artifact_cache: dict[int, Artifact] | None = None,
+) -> Any:
     """The concrete config a run would receive, for inspection/golden tests.
 
     Resolves ``ctx.output_path`` / ``ctx.artifact_path(dep)`` against ``prefix`` and passes the
     handle's real ``runtime_args`` (so a ``build_config`` that reads ``ctx.runtime_arg(...)`` does
     not ``KeyError``) without running anything. Region is ``None``, so this is not identical to the
     run-time config, which also binds a real region.
+
+    ``artifact_cache`` may be shared across calls that resolve the same immutable dependency
+    handles. This keeps a panel audit from rereading identical artifact records for every row;
+    each row's ``build_config`` still runs independently.
     """
-    return handle.build_config(
-        StepContext.for_run(
-            output_path=handle.path(prefix), prefix=prefix, runtime_args=handle.runtime_args, deps=handle.deps
-        )
+    context = StepContext(
+        output_path=handle.path(prefix),
+        prefix=prefix,
+        region=None,
+        is_fingerprint=False,
+        _dep_ref=lambda dependency: dependency.path(prefix),
+        _runtime_args=handle.runtime_args,
+        _deps=handle.deps,
+        _loaded={} if artifact_cache is None else artifact_cache,
     )
+    return handle.build_config(context)
 
 
 def _output_path_spec(handle: "ArtifactStep") -> str:

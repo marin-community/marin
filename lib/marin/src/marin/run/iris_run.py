@@ -92,6 +92,21 @@ def _should_exclude(relative_path: str, patterns: list[str]) -> bool:
     return any(_matches_exclude(relative_path, pattern) for pattern in patterns)
 
 
+def _should_stage(relative_path: str, exclude_patterns: list[str], include_patterns: list[str]) -> bool:
+    if any(_matches_exclude(relative_path, pattern) for pattern in include_patterns):
+        return True
+    return not _should_exclude(relative_path, exclude_patterns)
+
+
+def _extra_include_globs(include_patterns: list[str]) -> list[str]:
+    globs: list[str] = []
+    for pattern in include_patterns:
+        globs.append(pattern)
+        if not any(character in pattern for character in "*?["):
+            globs.append(f"{pattern.rstrip('/')}/**/*")
+    return globs
+
+
 def _iris_revision_date(workspace: Path) -> str:
     """Return the ISO commit date of the Iris source tree, or "" if git cannot answer."""
     try:
@@ -131,14 +146,15 @@ def _stamp_iris_build_date(staged_workspace: Path, revision_date: str) -> None:
 def _create_filtered_workspace(
     workspace: Path,
     exclude_patterns: list[str],
+    include_patterns: list[str],
 ) -> Path:
-    files = collect_workspace_files(workspace)
+    files = collect_workspace_files(workspace, extra_includes=_extra_include_globs(include_patterns))
     temp_workspace = Path(tempfile.mkdtemp(prefix="iris_workspace_"))
 
     copied_count = 0
     for file_path in files:
         relative_path = file_path.relative_to(workspace).as_posix()
-        if _should_exclude(relative_path, exclude_patterns):
+        if not _should_stage(relative_path, exclude_patterns, include_patterns):
             continue
         destination = temp_workspace / relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -172,6 +188,12 @@ def _parse_args() -> argparse.Namespace:
         action="append",
         default=[],
         help="Additional glob-style path pattern to exclude from the staged workspace.",
+    )
+    parser.add_argument(
+        "--working-dir-include",
+        action="append",
+        default=[],
+        help="Glob-style path to retain even when an exclude pattern matches it.",
     )
     parser.add_argument(
         "--no-default-working-dir-excludes",
@@ -219,7 +241,7 @@ def main() -> int:
 
     logger.info("Running Iris job submission via filtered workspace")
     logger.info("Command: %s", _redacted_command(iris_cmd))
-    temp_workspace = _create_filtered_workspace(workspace_root, exclude_patterns)
+    temp_workspace = _create_filtered_workspace(workspace_root, exclude_patterns, args.working_dir_include)
     try:
         result = subprocess.run(
             iris_cmd,

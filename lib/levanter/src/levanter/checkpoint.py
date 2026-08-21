@@ -480,6 +480,7 @@ class Checkpointer:
         self._dt_now_injection = dt_now_injection or datetime.datetime.now
         self._last_save_time = self._dt_now_injection()
         self._last_save_step = 0
+        self._last_save_was_permanent = False
         self.keep_last_temporary_checkpoints = keep_last_temporary_checkpoints
         self.debug = debug or CheckpointDebugConfig()
         self._temporary_checkpoints = []
@@ -549,9 +550,15 @@ class Checkpointer:
             if not force:
                 return  # don't save checkpoint at step 0 unless forced
 
-        if step == self._last_save_step and not force:
-            # we've already saved a checkpoint at this step
-            return
+        if step == self._last_save_step:
+            if not force:
+                return
+            if self._last_save_was_permanent:
+                # A permanent step-policy save may immediately precede the trainer's
+                # forced-final hook. Wait for that write instead of writing the same
+                # OCDBT root twice and leaving unreachable physical objects behind.
+                self.wait_until_finished()
+                return
 
         # two reasons we can save: time or step
         # they have different behaviors for retention.
@@ -721,6 +728,7 @@ class Checkpointer:
             debug=self.debug,
         )
         self._last_save_step = step
+        self._last_save_was_permanent = not is_temporary
         self._last_save_time = self._dt_now_injection()
 
     def _async_checkpoint_remover(self):
