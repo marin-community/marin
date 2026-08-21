@@ -126,10 +126,10 @@ All arguments except `--run-tag` must match across the control and treatments.
 
 ### Choose a benchmark scale preset
 
-| Preset | Sample | `--sources` / `--source-fraction` | `--pool-workers` | `--pool-cpu` | `--pool-ram` | `--pool-disk` | `--max-concurrent` | `--dedup-max-parallelism` |
-|---|---|---|---:|---:|---:|---:|---:|---:|
-| Full (matches the nemotron ferry) | `sample_100b_8ae7a94f` (measured: 256 GB, 768 parquet shards across 115 sources — the closest pre-built size to the ferry's ~350 GB) | `--sources all` | 512 | 16 | 160g | 32g | 8 | 1000 |
-| Light (~10% data, faster) | `sample_100b_8ae7a94f`, auto-selected subset | `--source-fraction 0.1` (measured: 77 sources, ~27 GB, 165 shards) | 128 | 16 | 160g | 32g | 4 | 500 |
+| Preset | Sample | `--sources` / `--source-fraction` | `--pool-workers` | `--pool-cpu` | `--pool-ram` | `--pool-disk` | `--max-concurrent` | `--dedup-max-parallelism` | `--dedup-cc-max-iterations` |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Full (matches the nemotron ferry) | `sample_100b_8ae7a94f` (measured: 256 GB, 768 parquet shards across 115 sources — the closest pre-built size to the ferry's ~350 GB) | `--sources all` | 512 | 16 | 160g | 32g | 64 | 1000 | 3 |
+| Light (~10% data, faster) | `sample_100b_8ae7a94f`, auto-selected subset | `--source-fraction 0.1` (measured: 77 sources, ~27 GB, 165 shards) | 128 | 16 | 160g | 32g | 32 | 500 | 3 |
 
 Use the full preset for a change that could regress the shared pool at
 production scale (shuffle, partitioning, spill, buffer, or scheduling
@@ -146,6 +146,32 @@ the resulting source count, bytes, and shard count.
 `zephyr_benchmark.py` fails with a clear error if `--pool-workers` exceeds the
 parquet shard count of the selected sources (whether from `--sources` or
 `--source-fraction`), rather than silently leaving workers idle.
+
+### Why `--max-concurrent` and `--dedup-cc-max-iterations` are set this way
+
+A light-preset run measured at 2h20m against these two settings, diagnosed via
+Finelog (`zephyr.stage`) and Iris job logs:
+
+- **`--max-concurrent`** limits how many StepRunner steps run at once, sharing
+  one Zephyr pool (`zephyr_benchmark.py` enters one `ZephyrContext` around the
+  whole DAG). During the tokenize/minhash phase, summed stage `elapsed` divided
+  by wall time showed effective concurrency tracking `--max-concurrent` almost
+  exactly (~3.8x observed against a limit of 4) — the pool sat mostly idle
+  because too few of the 154 independent per-source pipelines were in flight at
+  once, not because the pool itself was saturated. Raise `--max-concurrent`
+  well past its old value (4/8, sized for a since-fixed per-step-dedicated-pool
+  architecture) so more pipelines can draw on the shared pool simultaneously;
+  `ZephyrContext`'s own `max_concurrent_pipelines` is set to match, since its
+  default (`MAX_CONCURRENT_PIPELINES` = 16) would otherwise silently re-cap it.
+- **`--dedup-cc-max-iterations`** bounds fuzzy dedup's connected-components
+  rounds. Each round is a full scatter/reduce pass over the whole bucket graph
+  regardless of how little remains to resolve; the same run showed 11
+  sequential rounds at ~350s each — about 65 of the 140 minutes after
+  tokenize/minhash finished — because `zephyr_datakit_steps` left
+  `cc_max_iterations` at the library default of 10 instead of the 3 both
+  datakit ferries use. Set it to 3 to match ferry behavior and cut this phase
+  by roughly 3x; dedup completeness in the benchmark's output does not matter
+  for a performance comparison.
 
 Set exactly one data-locality argument before launching:
 
@@ -188,7 +214,8 @@ uv run iris --config=lib/iris/config/marin.yaml job run --no-wait \
     --first-stage <exact|tokenize|minhash|fuzzy> \
     --last-stage <exact|tokenize|minhash|fuzzy> \
     --max-concurrent <PIPELINES> \
-    --dedup-max-parallelism <SHARDS>
+    --dedup-max-parallelism <SHARDS> \
+    --dedup-cc-max-iterations <ROUNDS>
 ```
 
 Record this workload fingerprint for every arm:
@@ -197,7 +224,7 @@ Record this workload fingerprint for every arm:
 - sample prefix and source selection
 - first and last stage
 - pool workers, CPU, RAM, and disk
-- maximum concurrent pipelines and dedup parallelism
+- maximum concurrent pipelines, dedup parallelism, and dedup CC max iterations
 - Iris controller, data-local target cluster or region, priority, and preemptibility
 - run tag
 

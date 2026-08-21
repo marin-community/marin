@@ -100,6 +100,7 @@ from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import (
+    DEFAULT_CC_MAX_ITERATIONS,
     FUZZY_DUPS_ATTR_DATA_VERSION,
     FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs,
@@ -316,6 +317,12 @@ class PipelineScale:
     # stage's coordinator; kept modest so it isn't overwhelmed.
     sample_parallel_sources: int = 4
     dedup_max_parallelism: int = 4096
+    # Both datakit ferries pin this to 3 (see datakit_ferry.py /
+    # datakit_nemotron_ferry.py); a caller benchmarking against ferry behavior
+    # should match that rather than inherit the library's default of 10, which
+    # runs the full iteration budget -- each iteration a full scatter/reduce
+    # pass -- on graphs that don't converge early.
+    cc_max_iterations: int = DEFAULT_CC_MAX_ITERATIONS
     # Centroid training is single-process FAISS K-means, not a pool stage.
     train_centroids_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_cpu(cpu=32, ram="64g"))
 
@@ -640,12 +647,23 @@ def zephyr_datakit_steps(
     fuzzy_dedup = StepSpec(
         name="datakit/dedup",
         deps=list(minhash_steps.values()),
-        hash_attrs={"v": FUZZY_DUPS_ATTR_DATA_VERSION},
+        # Omit cc_max_iterations at its default to match compute_fuzzy_dups_attrs_step's
+        # identity convention -- a step built there for the same inputs must resolve to
+        # the artifacts this graph already produced, not recompute under a fresh hash.
+        hash_attrs={
+            "v": FUZZY_DUPS_ATTR_DATA_VERSION,
+            **(
+                {"cc_max_iterations": scale.cc_max_iterations}
+                if scale.cc_max_iterations != DEFAULT_CC_MAX_ITERATIONS
+                else {}
+            ),
+        },
         output_path_prefix=output_path_prefix,
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(step.output_path, MinHashAttrData) for step in minhash_steps.values()],
             output_path=output_path,
             max_parallelism=scale.dedup_max_parallelism,
+            cc_max_iterations=scale.cc_max_iterations,
             cc_resume=True,
             worker_resources=scale.pool.worker,
             zephyr_context=zephyr_context,
