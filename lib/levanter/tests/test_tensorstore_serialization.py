@@ -65,7 +65,7 @@ def test_s3_checkpoint_prefetch_heads_every_object_from_a_daemon_thread(monkeypa
     monkeypatch.setattr(
         tensorstore_serialization,
         "url_to_fs",
-        lambda path: (RecordingS3FileSystem(), plain_path),
+        lambda _: (RecordingS3FileSystem(), plain_path),
     )
 
     tensorstore_serialization._start_s3_checkpoint_prefetch(checkpoint_path)

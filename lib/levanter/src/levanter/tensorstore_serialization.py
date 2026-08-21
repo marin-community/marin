@@ -32,6 +32,7 @@ from jax._src.sharding import IndivisibleError
 from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
 
+from rigging import telemetry
 from rigging.filesystem.cross_region import record_transfer
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -59,6 +60,7 @@ _STAGED_BYTE_OVERHEAD = 4
 # and the legacy path asked for 300, both far above what a save allows itself on the same node.
 _RESTORE_CONCURRENT_GB = 8
 _S3_PREFETCH_THREAD_NAME = "levanter-s3-checkpoint-prefetch"
+_S3_PREFETCH_FAILURES = telemetry.counter("levanter_s3_checkpoint_prefetch_failures", unit="{failure}")
 
 
 def _format_gib(num_bytes: int) -> str:
@@ -446,6 +448,7 @@ def _prefetch_s3_checkpoint(checkpoint_root: str) -> None:
         fs, path = url_to_fs(checkpoint_root)
         objects = fs.find(path)
     except Exception:
+        _S3_PREFETCH_FAILURES.add(attributes={"operation": "list"})
         logger.exception("Failed to list S3 checkpoint objects for cache prefetch: %s", checkpoint_root)
         return
 
@@ -460,6 +463,7 @@ def _prefetch_s3_checkpoint(checkpoint_root: str) -> None:
             failures += 1
 
     if failures:
+        _S3_PREFETCH_FAILURES.add(failures, attributes={"operation": "head"})
         logger.warning(
             "Failed to prefetch %d of %d S3 checkpoint objects under %s",
             failures,
