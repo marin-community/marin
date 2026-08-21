@@ -82,7 +82,7 @@ def compute_effective_band(
         return task_band
     limit = user_budgets.get(user_id, defaults.budget_limit)
     if limit > 0 and user_spend.get(user_id, 0) > limit:
-        return max(task_band, job_pb2.PRIORITY_BAND_BATCH)
+        return job_pb2.PRIORITY_BAND_BATCH
     return task_band
 
 
@@ -126,6 +126,7 @@ def interleave_by_user(
 _VALID_TIER_BANDS = frozenset(
     (
         job_pb2.PRIORITY_BAND_PRODUCTION,
+        job_pb2.PRIORITY_BAND_PRIORITY,
         job_pb2.PRIORITY_BAND_INTERACTIVE,
         job_pb2.PRIORITY_BAND_BATCH,
     )
@@ -159,7 +160,7 @@ def reconcile_user_budget_tiers(
         for tier in tiers:
             if tier.max_band not in _VALID_TIER_BANDS:
                 raise ValueError(
-                    f"UserBudgetTier.max_band must be one of PRODUCTION/INTERACTIVE/BATCH; "
+                    f"UserBudgetTier.max_band must be one of PRODUCTION/PRIORITY/INTERACTIVE/BATCH; "
                     f"got {tier.max_band} for users {list(tier.user_ids)}"
                 )
             for user_id in tier.user_ids:

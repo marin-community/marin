@@ -184,6 +184,7 @@ def test_unreachable_peer_hosts_nothing():
 
 # --- priority-aware placement ----------------------------------------------
 
+_PRIORITY = job_pb2.PRIORITY_BAND_PRIORITY
 _INTERACTIVE = job_pb2.PRIORITY_BAND_INTERACTIVE
 _BATCH = job_pb2.PRIORITY_BAND_BATCH
 
@@ -194,6 +195,15 @@ def test_interactive_job_reaches_a_peer_saturated_by_preemptible_batch_work():
     peers = [_peer("cw", [_backend("b", free=0, held={_BATCH: 64})])]
     [promotion] = assign_queued(
         [_candidate("j", count=32, band=_INTERACTIVE)], peers, ReservationLedger(), max_per_peer_per_cycle=8
+    )
+    assert promotion.peer_id == "cw"
+    assert promotion.reserved == {"h100": 32}
+
+
+def test_priority_job_reaches_a_peer_saturated_by_interactive_work():
+    peers = [_peer("cw", [_backend("b", free=0, held={_INTERACTIVE: 64})])]
+    [promotion] = assign_queued(
+        [_candidate("j", count=32, band=_PRIORITY)], peers, ReservationLedger(), max_per_peer_per_cycle=8
     )
     assert promotion.peer_id == "cw"
     assert promotion.reserved == {"h100": 32}

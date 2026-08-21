@@ -18,6 +18,7 @@ from enum import Enum
 # lower-priority pod to stay scheduled when that node is full.
 IRIS_PRIORITY_CLASS_SYSTEM = "iris-system"
 IRIS_PRIORITY_CLASS_PRODUCTION = "iris-production"
+IRIS_PRIORITY_CLASS_PRIORITY = "iris-priority"
 IRIS_PRIORITY_CLASS_INTERACTIVE = "iris-interactive"
 IRIS_PRIORITY_CLASS_BATCH = "iris-batch"
 
@@ -39,6 +40,7 @@ IRIS_TASK_CONTAINER_NAME = "task"
 IRIS_PRIORITY_CLASSES: tuple[tuple[str, int, str], ...] = (
     (IRIS_PRIORITY_CLASS_SYSTEM, 10000, "PreemptLowerPriority"),
     (IRIS_PRIORITY_CLASS_PRODUCTION, 1000, "PreemptLowerPriority"),
+    (IRIS_PRIORITY_CLASS_PRIORITY, 100, "PreemptLowerPriority"),
     (IRIS_PRIORITY_CLASS_INTERACTIVE, 10, "PreemptLowerPriority"),
     (IRIS_PRIORITY_CLASS_BATCH, 0, "Never"),
 )

@@ -11,6 +11,7 @@ import logging
 import os
 import shlex
 import subprocess
+import sys
 import tarfile
 import tempfile
 import threading
@@ -24,10 +25,12 @@ from urllib.parse import urlsplit
 
 import click
 import yaml
+from iris.cli.job import validate_production_reason
 from iris.client.client import IrisClient, JobAlreadyExists
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.constraints import zone_constraint
+from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.types import Entrypoint, JobName, ResourceSpec, tpu_device
 from iris.resources.state import TERMINAL_JOB_STATES, JobState, TaskState
 from iris.rpc import controller_pb2, job_pb2
@@ -700,6 +703,13 @@ def cli(ctx, config: str | None, tpu_name: str | None, verbose: bool) -> None:
     default=None,
     help="Iris priority band for the holder job (default: interactive; production requires authorization).",
 )
+@click.option(
+    "--production-needed",
+    type=str,
+    default=None,
+    metavar="REASON",
+    help="Required justification for allocations using --priority production.",
+)
 @click.option("--sync-path", default=".", show_default=True, help="Local path to sync to the remote host(s).")
 @click.option("--no-sync", is_flag=True, help="Skip the initial sync after allocation.")
 @click.option("--setup-env/--no-setup-env", default=True, help="Install/update the remote uv environment after sync.")
@@ -713,6 +723,7 @@ def allocate(
     ctx,
     tpu_type: str,
     priority: str | None,
+    production_needed: str | None,
     sync_path: str,
     no_sync: bool,
     setup_env: bool,
@@ -725,6 +736,7 @@ def allocate(
     """Allocate a dev TPU session and hold it until Ctrl-C."""
     if not ctx.obj.config_file:
         raise click.ClickException("--config is required")
+    validate_production_reason(priority, production_needed)
 
     local_path = Path(sync_path).resolve()
     if not local_path.exists():
@@ -759,6 +771,7 @@ def allocate(
                 resources=resources,
                 constraints=constraints or None,
                 priority_band=priority_band,
+                submit_argv=redact_submit_argv(list(sys.argv)),
             )
         except JobAlreadyExists as exc:
             raise click.ClickException(f"Job already exists for session '{session_name}': {exc}") from exc

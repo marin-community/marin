@@ -10,6 +10,7 @@ import logging
 import os
 import shlex
 import subprocess
+import sys
 import time
 from collections.abc import Iterable
 from contextlib import contextmanager
@@ -19,11 +20,13 @@ from pathlib import Path
 from types import MappingProxyType
 
 import click
+from iris.cli.job import validate_production_reason
 from iris.client.client import IrisClient, Job, JobAlreadyExists
 from iris.cluster.backends.k8s.tasks import _LABEL_TASK_ID, _sanitize_label_value
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE, gpu_gang_coscheduling_level
+from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.types import CoschedulingConfig, Entrypoint, JobName, ResourceSpec, gpu_device
 from iris.resources.state import TERMINAL_JOB_STATES, JobState, TaskState
 from iris.rpc import job_pb2
@@ -45,6 +48,7 @@ DEFAULT_GPU_VARIANT = "H100"
 
 class Priority(StrEnum):
     PRODUCTION = "production"
+    PRIORITY = "priority"
     INTERACTIVE = "interactive"
     BATCH = "batch"
 
@@ -52,6 +56,7 @@ class Priority(StrEnum):
 PRIORITY_BANDS = MappingProxyType(
     {
         Priority.PRODUCTION: job_pb2.PRIORITY_BAND_PRODUCTION,
+        Priority.PRIORITY: job_pb2.PRIORITY_BAND_PRIORITY,
         Priority.INTERACTIVE: job_pb2.PRIORITY_BAND_INTERACTIVE,
         Priority.BATCH: job_pb2.PRIORITY_BAND_BATCH,
     }
@@ -363,6 +368,13 @@ def cli(ctx, config: str | None, session_name: str | None, verbose: bool) -> Non
     help="Iris scheduling priority for the holder job.",
 )
 @click.option(
+    "--production-needed",
+    type=str,
+    default=None,
+    metavar="REASON",
+    help="Required justification for allocations using --priority production.",
+)
+@click.option(
     "--cpu",
     type=click.FloatRange(min=0, min_open=True),
     default=DEFAULT_CPU,
@@ -390,6 +402,7 @@ def allocate(
     gpus_per_node: int | None,
     node_count: int,
     priority: str,
+    production_needed: str | None,
     cpu: float,
     memory: str,
     disk: str,
@@ -406,6 +419,7 @@ def allocate(
         gpus_per_node = GPUS_PER_NODE[gpu_variant]
     coscheduling = resolve_coscheduling(gpu_variant, gpus_per_node, node_count)
     resolved_priority = Priority(priority)
+    validate_production_reason(priority, production_needed)
 
     session_name = ctx.obj.session_name
     state_file = state_path(ctx.obj.state_dir, session_name)
@@ -425,6 +439,7 @@ def allocate(
                 name=f"dev-gpu-{session_name}",
                 resources=resources,
                 priority_band=PRIORITY_BANDS[resolved_priority],
+                submit_argv=redact_submit_argv(list(sys.argv)),
                 replicas=node_count,
                 coscheduling=coscheduling,
             )

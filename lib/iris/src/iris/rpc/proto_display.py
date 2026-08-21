@@ -87,11 +87,21 @@ def priority_band_value(name: str) -> int:
 
 PRIORITY_BAND_VALUES: list[int] = [
     job_pb2.PRIORITY_BAND_PRODUCTION,
+    job_pb2.PRIORITY_BAND_PRIORITY,
     job_pb2.PRIORITY_BAND_INTERACTIVE,
     job_pb2.PRIORITY_BAND_BATCH,
 ]
 
 PRIORITY_BAND_NAMES: list[str] = [priority_band_name(b) for b in PRIORITY_BAND_VALUES]
+_PRIORITY_BAND_RANKS = {band: rank for rank, band in enumerate(PRIORITY_BAND_VALUES)}
+
+
+def priority_band_rank(band: int) -> int:
+    """Scheduling rank for a real PriorityBand; lower ranks run first."""
+    try:
+        return _PRIORITY_BAND_RANKS[band]
+    except KeyError as err:
+        raise ValueError(f"Unknown priority band {band}") from err
 
 
 # ---------------------------------------------------------------------------

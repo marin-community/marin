@@ -1,27 +1,31 @@
 # Priority Bands
 
-Iris ranks pending tasks by **priority band** before per-user fairness. Three
-bands exist (defined in
-[`job.proto`](../src/iris/rpc/job.proto)): `PRODUCTION`, `INTERACTIVE`, and
-`BATCH`. Choose the right band for what you are running — picking the wrong one
-either delays your work or disrupts other people's.
+Iris ranks pending tasks by **priority band** before per-user fairness. Four
+bands exist (defined in [`job.proto`](../src/iris/rpc/job.proto)):
+`PRODUCTION`, `PRIORITY`, `INTERACTIVE`, and `BATCH`. Choose the right band for
+what you are running; higher bands can disrupt running work below them.
 
 | Band | Selected via | Behavior |
 |---|---|---|
-| `PRODUCTION` | `--priority production` | Always scheduled before lower bands. Can preempt INTERACTIVE/BATCH. Some clusters also order production GPU Workloads by requested size. Never downgraded by the budget system. |
-| `INTERACTIVE` | default (or `--priority interactive`) | Normal work. Yields to PRODUCTION; preempts BATCH. |
-| `BATCH` | `--priority batch` | Opportunistic. Yields to INTERACTIVE and PRODUCTION. Safe to launch in bulk. |
+| `PRODUCTION` | `--priority production --production-needed=<reason>` | Admin-only operational and hero work. Runs before and can preempt every other user band. Never downgraded by the budget system. |
+| `PRIORITY` | `--priority priority` | Important time-sensitive work. Yields to PRODUCTION; preempts INTERACTIVE/BATCH. |
+| `INTERACTIVE` | default (or `--priority interactive`) | Normal work. Yields to PRODUCTION/PRIORITY; preempts BATCH. |
+| `BATCH` | `--priority batch` | Opportunistic. Yields to every higher band. Safe to launch in bulk. |
 
 ## When to use each band
 
 ### PRODUCTION
 
-Use **only** for work that has been discussed at a weekly meeting or directly
-with the PI (Percy) as high priority for the whole org and blocked on compute.
-For Stanford folks: equivalent to `sphinx` queues on the NLP cluster.
+Use **only** for Iris and Finelog infrastructure, hero runs, or similarly
+critical organizational work. Production submission requires admin
+authorization. The CLI also requires `--production-needed=<reason>` and stores
+that reason in the job's submission argv for audit.
 
-Submitting to PRODUCTION without a prior conversation is antisocial — you are
-preempting other researchers' running jobs.
+### PRIORITY
+
+Use for important, time-sensitive research that should reclaim ordinary cluster
+capacity but must still yield to infrastructure and hero runs. This is the
+appropriate replacement for most historical uses of PRODUCTION.
 
 ### INTERACTIVE
 
@@ -43,8 +47,8 @@ BATCH jobs are the polite default when you don't strictly need a result soon.
 ## How preemption is enforced
 
 The band a job runs at maps to a Kubernetes PriorityClass
-(`iris-{production,interactive,batch}`, values 1000/10/0) stamped on every pod. How
-that band turns into actual preemption depends on the backend:
+(`iris-{production,priority,interactive,batch}`, values 1000/100/10/0) stamped
+on every pod. How that band turns into actual preemption depends on the backend:
 
 - **K8s GPU clusters (CoreWeave).** Every pod is admitted through Kueue. Kueue reads
   the pod's PriorityClass as the Workload priority and, with the ClusterQueue's
@@ -54,14 +58,6 @@ that band turns into actual preemption depends on the backend:
   higher-priority multi-host gang reclaim capacity from running `batch` gangs.
   Preemption is whole-Workload (gang-aware): Kueue evicts a full lower-priority gang,
   not a stray pod out of it.
-
-  A cluster can set
-  `kubernetes_provider.kueue.production_priority.policy: gpu_count` to add one
-  Kueue priority point per GPU requested by a production Workload, up to the
-  configured `max_gpu_count`. Larger production GPU Workloads can then preempt
-  smaller production Workloads. The Kubernetes Pod PriorityClass stays at
-  `iris-production`, so this ordering remains within Kueue's whole-Workload
-  preemption path.
 - **VM/TPU clusters.** There is no Kueue; the Iris controller's own scheduler ranks
   pending tasks by band and reclaims slices directly.
 
@@ -71,21 +67,21 @@ requeued for retry.
 On Kubernetes, single-task CPU coordinators have a PodDisruptionBudget whose
 availability policy follows the job's band. PRODUCTION coordinators use
 `minAvailable: 1`, so a voluntary node drain waits for operator action.
-INTERACTIVE and BATCH coordinators use `maxUnavailable: 1`, so a drain may evict
-the singleton pod. Iris records that eviction as `PREEMPTED` and retries it
-within `max_retries_preemption`.
+PRIORITY, INTERACTIVE, and BATCH coordinators use `maxUnavailable: 1`, so a
+drain may evict the singleton pod. Iris records that eviction as `PREEMPTED`
+and retries it within `max_retries_preemption`.
 
-An evicted coordinator loses in-memory and node-local state. INTERACTIVE and
-BATCH coordinators must keep durable progress outside the pod and make repeated
-external writes safe. Use PRODUCTION only when the coordinator must block
-voluntary maintenance; a PDB cannot protect it from a hard node failure.
+An evicted coordinator loses in-memory and node-local state. PRIORITY,
+INTERACTIVE, and BATCH coordinators must keep durable progress outside the pod
+and make repeated external writes safe. Use PRODUCTION only when the coordinator
+must block voluntary maintenance; a PDB cannot protect it from a hard node failure.
 
 ## How band selection interacts with budgets
 
 Per-user budget tracking lives in
 [`controller/budget.py`](../src/iris/cluster/controller/budget.py). When a user
-exceeds their budget, INTERACTIVE submissions are silently downgraded to BATCH.
-PRODUCTION is exempt — another reason to reserve it for vetted work.
+exceeds their budget, PRIORITY and INTERACTIVE submissions are silently
+downgraded to BATCH. PRODUCTION is exempt.
 
 ### Max-band caps and unlisted users
 
@@ -98,22 +94,23 @@ downgraded) with `PERMISSION_DENIED`. The tiers reconciled from the cluster
 config at startup are:
 
 - Admins — `PRODUCTION` (and everything below), large budget.
-- Listed researchers — `INTERACTIVE` (plus `BATCH`), large budget.
+- Listed researchers — `INTERACTIVE` (plus `BATCH`), large budget. Operators
+  can grant `PRIORITY` through `max_band` without granting PRODUCTION.
 - Everyone else (including new/unlisted users) — `INTERACTIVE` with a small
   default budget; jobs run INTERACTIVE while within budget and degrade to
   BATCH once exceeded. PRODUCTION submissions are rejected.
 
 If you hit `User <name> cannot submit PRODUCTION jobs (max band: INTERACTIVE)`:
 
-1. **Retry without `--priority production`.** Most research workloads do not
-   need PRODUCTION and run fine at INTERACTIVE (or opportunistically at BATCH).
+1. **Use the appropriate lower band.** Important research can use
+   `--priority priority`; ordinary work should run at INTERACTIVE or BATCH.
 2. **Check your username.** The `max_band` cap is keyed on the verified
    identity the controller sees. If the username in the error message isn't
    what you expect — e.g. it's an email local-part or an SSO id rather than
    your GitHub handle — your identity probably doesn't match the `user_id`
    listed in the cluster config, and you'll land on the default tier.
 3. **Request an uplift.** If your work needs INTERACTIVE budget headroom or
-   PRODUCTION, ping [@Helw150](https://github.com/Helw150) to be added to the
+   PRIORITY or PRODUCTION, ping [@Helw150](https://github.com/Helw150) to be added to the
    appropriate tier in `marin.yaml`.
 
 ## See also

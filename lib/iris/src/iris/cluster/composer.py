@@ -54,6 +54,7 @@ logger = logging.getLogger(__name__)
 # Maps kubernetes_provider.priority_classes keys to the PriorityBand enum stamped on Pods.
 _PRIORITY_BANDS = {
     "production": job_pb2.PRIORITY_BAND_PRODUCTION,
+    "priority": job_pb2.PRIORITY_BAND_PRIORITY,
     "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
     "batch": job_pb2.PRIORITY_BAND_BATCH,
 }
@@ -135,8 +136,6 @@ def make_task_backend(
                 local_queue=local_queue,
                 kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
                 priority_class_names=pod_priority_classes,
-                production_priority_policy=kp.kueue.production_priority.policy,
-                production_priority_max_gpu_count=kp.kueue.production_priority.max_gpu_count,
             ),
             preempt_namespaces=list(kp.preempt_namespaces),
             task_event_table=task_event_table,
