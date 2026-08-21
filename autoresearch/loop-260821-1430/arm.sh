@@ -83,4 +83,12 @@ uv run iris --config lib/iris/config/marin.yaml job run \
      "${EXTRA[@]}" \
      --version "${VERSION}" --run >/dev/null 2>&1
 
-echo "submitted ${RID} at ${PRIORITY} priority (timeout ${ARM_TIMEOUT}s, impl ${MOE_IMPL}, restore ${RESTORE_FROM:-none}, extra: ${EXTRA_LAUNCH_ARGS:-none})"
+# Every knob that can change a number, recorded per arm. An arm is reproducible only if it can be
+# reissued from this row: the commit fixes the code, the wheel URL is an immutable object, the
+# synthetic batch is a pure function of the seed, and the schedule length fixes the learning rate.
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  "${RID}" "$(git -C "$REPO" rev-parse --short HEAD)" "${VERSION}" "${MOE_IMPL}" "${TRAINING_DATA}" \
+  "${MASTER_PARAMS}" "${SCHEDULE_STEPS}" "${ARM_TIMEOUT}" "${RESTORE_FROM:-none}" \
+  "${EXTRA_LAUNCH_ARGS:-none}" >> "${LOOP_DIR}/arms.tsv"
+
+echo "submitted ${RID} at ${PRIORITY} priority (timeout ${ARM_TIMEOUT}s, impl ${MOE_IMPL}, data ${TRAINING_DATA}, restore ${RESTORE_FROM:-none}, extra: ${EXTRA_LAUNCH_ARGS:-none})"

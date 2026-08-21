@@ -29,16 +29,28 @@ Iterations 0-2 ran from scratch on synthetic data. That regime turned out not to
 the goal is about: at step 15 the router is still near-uniform, so capacity never clips and both
 transports measured dropless (pooled 7.4e-6, ragged 0.0). The hero in production sits near 4.9%.
 
-From `r01` on, arms restore the live hero's checkpoint (`hero-12d8b6f0-dee637`), read-only, and
-train on the harrier mixture. A trained router routes real tokens by content, which is what
-produces real clipping; a repeated synthetic batch under a trained router would produce a routing
-distribution no real run ever sees. The hero's per-rack batch is 1024 -- the same as this loop's
-single-rack batch -- so its clipping pressure transfers rather than diluting.
+Restoring a trained checkpoint was tried and abandoned. The hero writes permanent checkpoints only
+every 6000 steps and is at ~4000, so the only trained d6144 state that exists is an hourly rolling
+temporary the hero deletes as soon as the next one commits. An arm restored from it could not be
+re-run against the same state, which makes its number unfalsifiable the next day. Reproducibility
+wins over regime fidelity here.
 
-The checkpoint carries a pinned-host fp32 master. `--restore-master-params fp32_pinned_host`
-restores that tree and folds it into fp32 device parameters, so arms train the configuration the
-PR ships rather than the one the checkpoint was written under. The fold is exact: `params` under a
-master is a bf16 copy cast from it, and `opt_state` is already built on the master's fp32 tree.
+The machinery stays in the tree (`--restore-from`, `--restore-master-params`) for when a permanent
+checkpoint exists at step 6000. Neither restore arm produced a measurement: `r01` failed fast on
+the wrong path, `r02` died on task 0 at 8 minutes with only a coordination-service cascade in its
+diagnostic, so whether the restore itself works is still unestablished.
+
+**What this regime does not measure.** Both transports are dropless from scratch, so the loop
+optimizes transport speed at balanced routing only. The goal's drop-rate claim -- comparable
+throughput at a lower drop rate in the trained-router regime -- is not tested by any number here
+and needs the permanent checkpoint or `small_scale_abl_launch.py` to settle.
+
+## Reproducibility
+
+Every arm is reissuable from its row in `arms.tsv`: commit, artifact version, backend, data mode,
+parameter storage, schedule length, timeout, and any extra launcher arguments. The inputs that
+could otherwise drift are pinned -- the synthetic batch is a pure function of the seed, the PJRT
+wheel is an immutable object URL, and the schedule length fixes the learning rate at every step.
 
 Budget: 20 iterations.
 
