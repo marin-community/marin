@@ -25,6 +25,7 @@ DEFAULT_EXCLUDE = re.compile(
     | \.egg-info(/|$)               # egg metadata
     | (^|/)__pycache__(/|$)         # pycache at any depth
     | (^|/)\.git(/|$)               # .git at any depth
+    | (^|/)gha-creds-[^/]+\.json$   # GitHub Actions credentials
     | (^|/)\.mypy_cache(/|$)
     | (^|/)\.pytest_cache(/|$)
     | (^|/)\.ruff_cache(/|$)
