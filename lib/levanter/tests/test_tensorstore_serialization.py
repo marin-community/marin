@@ -88,8 +88,7 @@ def test_s3_checkpoint_prefetch_shards_ranged_heads_after_commit(monkeypatch, pr
         if process_index == 0:
             commit_callback()
 
-    monkeypatch.delenv("AWS_ENDPOINT_URL_S3", raising=False)
-    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://cwlota.com")
+    monkeypatch.setattr(tensorstore_serialization, "s3_endpoint", lambda _: "http://cwlota.com")
     monkeypatch.setattr(tensorstore_serialization.jax, "process_index", lambda: process_index)
     monkeypatch.setattr(tensorstore_serialization.jax, "process_count", lambda: 2)
     monkeypatch.setattr(tensorstore_serialization, "write_manifest", lambda *_: None)
@@ -120,12 +119,13 @@ def test_s3_checkpoint_prefetch_shards_ranged_heads_after_commit(monkeypatch, pr
     ]
 
 
-def test_s3_checkpoint_prefetch_skips_non_lota_endpoint(monkeypatch):
-    monkeypatch.delenv("AWS_ENDPOINT_URL_S3", raising=False)
-    monkeypatch.setenv("AWS_ENDPOINT_URL", "https://cwobject.com")
-    monkeypatch.setattr(tensorstore_serialization, "url_to_fs", lambda _: pytest.fail("unexpected S3 request"))
+def test_s3_checkpoint_prefetch_only_targets_lota_s3(monkeypatch):
+    monkeypatch.setattr(tensorstore_serialization, "s3_endpoint", lambda _: "https://cwobject.com")
+    assert tensorstore_serialization._s3_checkpoint_prefetch_shard("s3://checkpoints/run", 0, 1) is None
 
-    tensorstore_serialization._start_s3_checkpoint_prefetch("s3://checkpoints/run/step-10", 0, 1)
+    monkeypatch.setattr(tensorstore_serialization, "s3_endpoint", lambda _: "http://cwlota.com")
+    assert tensorstore_serialization._s3_checkpoint_prefetch_shard("s3://checkpoints/run", 0, 1) is not None
+    assert tensorstore_serialization._s3_checkpoint_prefetch_shard("gs://checkpoints/run", 0, 1) is None
 
 
 def test_tensorstore_checkpoint_simple():

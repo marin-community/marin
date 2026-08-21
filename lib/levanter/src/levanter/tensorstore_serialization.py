@@ -34,8 +34,10 @@ from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
 
 from rigging import telemetry
+from rigging.filesystem.cluster_config import StoreType
 from rigging.filesystem.cross_region import record_transfer
 from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.s3_compat import s3_endpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from levanter._debug_logging import flush_debug_output
@@ -60,6 +62,13 @@ _LOTA_ENDPOINT_HOST = "cwlota.com"
 _LOTA_PREFETCH_RANGE = "bytes=0-0"
 _S3_PREFETCH_THREAD_NAME = "levanter-s3-checkpoint-prefetch"
 _S3_PREFETCH_FAILURES = telemetry.counter("levanter_s3_checkpoint_prefetch_failures", unit="{failure}")
+
+
+@dataclass(frozen=True)
+class _S3PrefetchShard:
+    checkpoint_root: str
+    process_index: int
+    process_count: int
 
 
 def _format_gib(num_bytes: int) -> str:
@@ -473,18 +482,18 @@ async def _list_ocdbt_keys(checkpoint_root: str) -> list[str]:
     return [key.decode("utf-8") for key in keys_bytes]
 
 
-def _prefetch_s3_checkpoint(checkpoint_root: str, process_index: int, process_count: int) -> None:
+def _prefetch_s3_checkpoint(shard: _S3PrefetchShard) -> None:
     """Pre-stage this process's shard of a completed checkpoint through LOTA."""
     try:
-        fs, path = url_to_fs(checkpoint_root)
+        fs, path = url_to_fs(shard.checkpoint_root)
         objects = sorted(fs.find(path))
     except Exception:
         _S3_PREFETCH_FAILURES.add(attributes={"operation": "list"})
-        logger.exception("Failed to list S3 checkpoint objects for cache prefetch: %s", checkpoint_root)
+        logger.exception("Failed to list S3 checkpoint objects for cache prefetch: %s", shard.checkpoint_root)
         return
 
     failures = 0
-    assigned_objects = objects[process_index::process_count]
+    assigned_objects = objects[shard.process_index :: shard.process_count]
     for object_path in assigned_objects:
         try:
             bucket, key, version_id = fs.split_path(object_path)
@@ -503,46 +512,45 @@ def _prefetch_s3_checkpoint(checkpoint_root: str, process_index: int, process_co
             "Failed to prefetch %d of %d assigned S3 checkpoint objects under %s on process %d",
             failures,
             len(assigned_objects),
-            checkpoint_root,
-            process_index,
+            shard.checkpoint_root,
+            shard.process_index,
         )
     else:
         logger.info(
             "Prefetched %d of %d S3 checkpoint objects under %s on process %d",
             len(assigned_objects),
             len(objects),
-            checkpoint_root,
-            process_index,
+            shard.checkpoint_root,
+            shard.process_index,
         )
 
 
-def _uses_lota_endpoint() -> bool:
-    endpoint = os.environ.get("AWS_ENDPOINT_URL_S3") or os.environ.get("AWS_ENDPOINT_URL", "")
+def _uses_lota_endpoint(endpoint: str) -> bool:
     hostname = urllib.parse.urlparse(endpoint).hostname or ""
     return hostname == _LOTA_ENDPOINT_HOST or hostname.endswith(f".{_LOTA_ENDPOINT_HOST}")
 
 
-def _should_prefetch_s3_checkpoint(checkpoint_root: str) -> bool:
-    return urllib.parse.urlparse(checkpoint_root).scheme == "s3" and _uses_lota_endpoint()
+def _s3_checkpoint_prefetch_shard(
+    checkpoint_root: str, process_index: int, process_count: int
+) -> _S3PrefetchShard | None:
+    if urllib.parse.urlparse(checkpoint_root).scheme != "s3":
+        return None
+    if not _uses_lota_endpoint(s3_endpoint(StoreType.COREWEAVE)):
+        return None
+    return _S3PrefetchShard(checkpoint_root, process_index, process_count)
 
 
-def _start_s3_checkpoint_prefetch(checkpoint_root: str, process_index: int, process_count: int) -> None:
-    if not _should_prefetch_s3_checkpoint(checkpoint_root):
-        return
-
+def _start_s3_checkpoint_prefetch(operation: Callable[[], None]) -> None:
     threading.Thread(
-        target=_prefetch_s3_checkpoint,
-        args=(checkpoint_root, process_index, process_count),
+        target=operation,
         name=_S3_PREFETCH_THREAD_NAME,
         daemon=True,
     ).start()
 
 
 def _wait_for_global_commit_and_prefetch(
-    checkpoint_root: str,
     manager: array_ser.GlobalAsyncCheckpointManager,
-    process_index: int,
-    process_count: int,
+    shard: _S3PrefetchShard,
 ) -> None:
     try:
         assert manager._client is not None
@@ -552,27 +560,12 @@ def _wait_for_global_commit_and_prefetch(
         manager._client.blocking_key_value_get(success_key, manager._timeout_in_ms)
     except Exception:
         _S3_PREFETCH_FAILURES.add(attributes={"operation": "commit_wait"})
-        logger.exception("Failed waiting for global checkpoint commit before S3 cache prefetch: %s", checkpoint_root)
+        logger.exception(
+            "Failed waiting for global checkpoint commit before S3 cache prefetch: %s", shard.checkpoint_root
+        )
         return
 
-    _prefetch_s3_checkpoint(checkpoint_root, process_index, process_count)
-
-
-def _start_s3_checkpoint_prefetch_waiter(
-    checkpoint_root: str,
-    manager: array_ser.GlobalAsyncCheckpointManager,
-    process_index: int,
-    process_count: int,
-) -> None:
-    if not _should_prefetch_s3_checkpoint(checkpoint_root):
-        return
-
-    threading.Thread(
-        target=_wait_for_global_commit_and_prefetch,
-        args=(checkpoint_root, manager, process_index, process_count),
-        name=_S3_PREFETCH_THREAD_NAME,
-        daemon=True,
-    ).start()
+    _prefetch_s3_checkpoint(shard)
 
 
 def _is_named_or_none(x):
@@ -678,11 +671,12 @@ def tree_serialize_leaves_tensorstore(
     checkpoint_root = str(checkpoint_dir)
     process_index = jax.process_index()
     process_count = jax.process_count()
+    prefetch_shard = _s3_checkpoint_prefetch_shard(checkpoint_root, process_index, process_count)
 
     def commit_and_prefetch() -> None:
         commit_callback()
-        if process_index == 0:
-            _start_s3_checkpoint_prefetch(checkpoint_root, process_index, process_count)
+        if process_index == 0 and prefetch_shard is not None:
+            _start_s3_checkpoint_prefetch(partial(_prefetch_s3_checkpoint, prefetch_shard))
 
     if debug_checkpointer:
         logger.info(
@@ -728,8 +722,8 @@ def tree_serialize_leaves_tensorstore(
         flush_debug_output(logger)
 
     _serialize_arrays(arrays, tspecs, plans, manager, write_config, commit_and_prefetch)
-    if process_index != 0:
-        _start_s3_checkpoint_prefetch_waiter(checkpoint_root, manager, process_index, process_count)
+    if process_index != 0 and prefetch_shard is not None:
+        _start_s3_checkpoint_prefetch(partial(_wait_for_global_commit_and_prefetch, manager, prefetch_shard))
 
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize handed off async commit for %s", checkpoint_dir)
