@@ -146,10 +146,10 @@ class IrisWorkerStat:
 class IrisTaskStat:
     """One row per attempt resource update."""
 
-    # Dashboard hot path is ``WHERE task_id IN (...) ORDER BY ts DESC LIMIT 1``
-    # per task. Sorting compacted segments by task_id (with seq as the
-    # secondary key, monotonic with ts because seq is allocated at the
-    # insertion lock) gives parquet row-group pruning on task_id while
+    # The dashboard's latest-per-task query exposes the task IDs' shared prefix
+    # alongside its exact IN list. Sorting compacted segments by task_id (with
+    # seq as the secondary key, monotonic with ts because seq is allocated at
+    # the insertion lock) lets that prefix range prune parquet row groups while
     # preserving in-task time order within each group.
     key_column: ClassVar[str] = "task_id"
 

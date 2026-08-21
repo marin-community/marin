@@ -15,6 +15,7 @@ import {
 import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
 import { getLeafJobName } from '@/utils/jobTree'
+import { sqlString } from '@/utils/sql'
 import { batchSummarySql } from '@/utils/taskStatus'
 import { openSpeedscopeWindow } from '@/utils/speedscope'
 import PageShell from '@/components/layout/PageShell.vue'
@@ -131,10 +132,28 @@ interface TaskStatRow {
   memory_peak_bytes?: number
 }
 
+function commonTaskIdPrefix(taskIds: readonly string[]): string {
+  if (taskIds.length === 0) return ''
+  const first = Array.from(taskIds[0])
+  let length = first.length
+  for (const taskId of taskIds.slice(1)) {
+    const current = Array.from(taskId)
+    length = Math.min(length, current.length)
+    let index = 0
+    while (index < length && first[index] === current[index]) index++
+    length = index
+    if (length === 0) return ''
+  }
+  return first.slice(0, length).join('')
+}
+
 function buildTaskStatsSql(taskIds: readonly string[]): string {
   if (taskIds.length === 0) return ''
-  // QueryRequest has no param binding; manual DuckDB single-quote escape.
-  const list = taskIds.map(t => `'${t.replace(/'/g, "''")}'`).join(',')
+  const list = taskIds.map(sqlString).join(',')
+  const prefix = commonTaskIdPrefix(taskIds)
+  // iris.task is compacted in task_id order. Exposing the shared prefix lets
+  // Finelog turn it into a Parquet min/max range; IN remains the exact filter.
+  const prefixFilter = prefix ? `prefix(task_id, ${sqlString(prefix)}) AND\n  ` : ''
   return `
 SELECT
   task_id,
@@ -143,7 +162,7 @@ SELECT
   memory_mb * 1024 * 1024 AS memory_bytes,
   memory_peak_mb * 1024 * 1024 AS memory_peak_bytes
 FROM "iris.task"
-WHERE task_id IN (${list})
+WHERE ${prefixFilter}task_id IN (${list})
 QUALIFY row_number() OVER (PARTITION BY task_id ORDER BY ts DESC) = 1
 `.trim()
 }
