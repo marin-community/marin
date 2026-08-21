@@ -58,6 +58,8 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 logger = logging.getLogger(__name__)
 
 HERO_EP_RUNTIME_ENV = {
+    "LD_PRELOAD": "libjemalloc.so.2",
+    "MALLOC_CONF": "background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2",
     "JAX_ENABLE_PGLE": "false",
     "XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB": "192",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
