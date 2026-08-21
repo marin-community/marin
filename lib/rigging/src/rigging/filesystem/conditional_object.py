@@ -30,7 +30,9 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 _MAX_READ_ATTEMPTS = 8
-_MAX_S3_WRITE_ATTEMPTS = 4
+_MAX_S3_WRITE_ATTEMPTS = 8
+_S3_WRITE_BACKOFF_INITIAL = 1.0
+_S3_WRITE_BACKOFF_MAXIMUM = 10 * 60.0
 _S3_MISSING_CODES = frozenset({"NotFound", "NoSuchKey", "404"})
 
 
@@ -218,8 +220,18 @@ class S3ConditionalObject:
         client = self._client(self.endpoint_url)
         bucket, key = self._parts()
         condition = {"IfNoneMatch": "*"} if expected_version is None else {"IfMatch": expected_version}
+        reconcile = False
 
         def put() -> dict:
+            nonlocal reconcile
+            if reconcile:
+                current = self.read()
+                if current is not None and current.data == data:
+                    return {"ETag": current.version}
+                current_version = None if current is None else current.version
+                if current_version != expected_version:
+                    raise ConditionalWriteError(f"conditional write failed for {self.path}")
+                reconcile = False
             try:
                 return client.put_object(Bucket=bucket, Key=key, Body=data, **condition)
             except ClientError as exc:
@@ -230,13 +242,24 @@ class S3ConditionalObject:
                     "412",
                 ):
                     raise ConditionalWriteError(f"conditional write failed for {self.path}") from exc
+                if is_transient_s3_error(exc):
+                    reconcile = True
+                raise
+            except Exception as exc:
+                if is_transient_s3_error(exc):
+                    reconcile = True
                 raise
 
         response = retry_with_backoff(
             put,
             retryable=is_transient_s3_error,
             max_attempts=_MAX_S3_WRITE_ATTEMPTS,
-            backoff=ExponentialBackoff(initial=0.5, maximum=5.0, factor=2.0, jitter=0.25),
+            backoff=ExponentialBackoff(
+                initial=_S3_WRITE_BACKOFF_INITIAL,
+                maximum=_S3_WRITE_BACKOFF_MAXIMUM,
+                factor=2.0,
+                jitter=0.25,
+            ),
             operation=f"conditional S3 write {self.path}",
         )
         return response["ETag"]

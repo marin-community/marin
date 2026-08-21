@@ -16,7 +16,7 @@ from botocore.exceptions import ClientError
 from finestore import shard_writer
 from finestore import store as store_module
 from finestore.commit import CommitConflict, CommitCoordinator, CommitDelta
-from finestore.compaction import compact
+from finestore.compaction import CompactionResult, compact
 from finestore.layout import (
     CHUNKED_BLOBS_FEATURE,
     FORMAT_VERSION,
@@ -31,6 +31,8 @@ from finestore.layout import (
 from finestore.migrations import LegacyReadView, migrate
 from finestore.reader import BlobCorruptionError, ReadView
 from finestore.store import OBJECT_PART_BYTES, DataStore, DataTable, PrimaryKeyConflict, TransactionTooLarge
+from rigging import timing
+from rigging.filesystem.conditional_object import ConditionalWriteError
 from rigging.filesystem.storage_path import StoragePath
 
 
@@ -533,15 +535,20 @@ def test_recompaction_merges_all_generations(tmp_path):
     assert rows == {"0": 0.0, "1": 1.0, "2": 2.0, "3": 3.0, "4": 4.0}
 
 
-def test_compaction_of_stable_shard_is_a_noop(tmp_path):
+def test_compaction_deduplicates_one_level_zero_shard_then_becomes_stable(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        store.table("samples", primary_key=("doc_id",)).append({"doc_id": "1"})
+        table = store.table("samples", primary_key=("doc_id",), on_conflict=OnConflict.SUPERSEDE)
+        table.append({"doc_id": "1", "score": 1})
+        table.append({"doc_id": "1", "score": 2})
         store.flush()
 
+    result = compact(root, "samples")
+    assert result == CompactionResult(written=1, superseded=1)
     stable = ReadView(root)
     stable_token = stable.token
     stable_shards = stable.list_shards("samples")
+    assert stable.scan("samples", columns=["doc_id", "score"]).to_pylist() == [{"doc_id": "1", "score": 2}]
 
     assert compact(root, "samples").written == 0
     unchanged = ReadView(root)
@@ -665,6 +672,43 @@ def test_required_feature_survives_commit_rebase(tmp_path):
     assert view.token is not None
     manifest = json.loads(StoragePath(view.token.manifest_path).read_text())
     assert manifest["required_features"] == [CHUNKED_BLOBS_FEATURE]
+
+
+def test_commit_refreshes_head_after_conflict_backoff(tmp_path, monkeypatch):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="initializer", flush_interval=3600):
+        pass
+
+    layout = FineStoreLayout(root)
+    coordinator = CommitCoordinator(layout)
+    competitor = CommitCoordinator(layout)
+    real_head = coordinator._head
+    head_type = type(real_head)
+    real_write = head_type.write
+    first_write = True
+
+    def first_write_conflicts(head, data, *, expected_version):
+        nonlocal first_write
+        if head is real_head and first_write:
+            first_write = False
+            raise ConditionalWriteError("injected conflict")
+        return real_write(head, data, expected_version=expected_version)
+
+    monkeypatch.setattr(head_type, "write", first_write_conflicts)
+    sleeps = 0
+
+    def advance_head(_delay):
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps == 1:
+            competitor.commit(CommitDelta())
+
+    monkeypatch.setattr(timing.time, "sleep", advance_head)
+
+    token = coordinator.commit(CommitDelta())
+
+    assert sleeps == 1
+    assert token.sequence == 2
 
 
 def test_commit_preserves_unknown_optional_manifest_fields(tmp_path):
@@ -941,7 +985,7 @@ def test_failed_multi_table_flush_restores_every_buffer(tmp_path, monkeypatch):
 
 def test_maintenance_compacts_after_shard_threshold(tmp_path):
     root = str(tmp_path / "run")
-    with DataStore.open(root, writer_id="w1", flush_interval=3600, compaction_shards=3) as store:
+    with DataStore.open(root, writer_id="w1", flush_interval=3600, compaction_levels=(2,)) as store:
         table = store.table("samples", primary_key=("doc_id",))
         for index in range(3):
             table.append({"doc_id": str(index)})
@@ -954,26 +998,58 @@ def test_maintenance_compacts_after_shard_threshold(tmp_path):
         assert shards[0].generation == 1
 
 
+def test_maintenance_compaction_levels_are_terminal(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1", flush_interval=3600, compaction_levels=(2, 1, 1)) as store:
+        table = store.table("samples", primary_key=("doc_id",))
+        next_id = 0
+        for _ in range(4):
+            for _ in range(3):
+                table.append({"doc_id": str(next_id)})
+                next_id += 1
+                store.flush()
+            store.maintain()
+
+        terminal = ReadView(root)
+        terminal_token = terminal.token
+        terminal_shards = terminal.list_shards("samples")
+        assert len(terminal_shards) == 1
+        assert terminal_shards[0].generation == 3
+
+        store.maintain()
+        store.maintain()
+        stable = ReadView(root)
+        assert stable.token == terminal_token
+        assert stable.list_shards("samples") == terminal_shards
+
+
 def test_background_maintenance_recovers_from_transient_s3_failure(tmp_path, monkeypatch):
     root = str(tmp_path / "run")
-    completed = threading.Event()
+    persisted = threading.Event()
     attempts = 0
     slowdown = ClientError({"Error": {"Code": "SlowDown", "Message": "reduce request rate"}}, "PutObject")
     monkeypatch.setattr(store_module, "_MAINTENANCE_BACKOFF_INITIAL", 0.001)
     monkeypatch.setattr(store_module, "_MAINTENANCE_BACKOFF_MAXIMUM", 0.001)
 
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+        table = store.table("samples", primary_key=("doc_id",))
+        head_type = type(store._commits._head)
+        real_write = head_type.write
 
-        def flaky_maintenance():
+        def flaky_write(head, data, *, expected_version):
             nonlocal attempts
             attempts += 1
             if attempts < 3:
                 raise slowdown
-            completed.set()
+            version = real_write(head, data, expected_version=expected_version)
+            persisted.set()
+            return version
 
-        monkeypatch.setattr(store, "maintain", flaky_maintenance)
+        monkeypatch.setattr(head_type, "write", flaky_write)
+        table.append({"doc_id": "1"})
         store.request_flush()
-        assert completed.wait(timeout=3)
+        assert persisted.wait(timeout=3)
+        assert ReadView(root).point("samples", doc_id="1") is not None
 
 
 def test_compaction_losing_an_input_race_is_a_benign_noop(tmp_path):
