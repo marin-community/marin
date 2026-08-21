@@ -17,7 +17,7 @@ from pathlib import Path
 
 import marin.inference.vllm_server as vllm_server
 import pytest
-from marin.inference.config import VllmCompilationCacheMode
+from marin.inference.config import WORKER_PYTHON_VERSION, VllmCompilationCacheMode
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
@@ -48,6 +48,12 @@ def test_nccl_ras_probe_supports_direct_and_wrapped_cuda_launchers() -> None:
     assert _starts_nccl_ras_probe(VllmLauncherWithEnvironment(cuda, {"VLLM_HOST_IP": "10.0.0.2"}))
     assert not _starts_nccl_ras_probe(preinstalled)
     assert not _starts_nccl_ras_probe(VllmLauncherWithEnvironment(preinstalled, {"VLLM_HOST_IP": "10.0.0.2"}))
+
+
+def test_preinstalled_cache_identity_is_independent_of_external_releases() -> None:
+    preinstalled = PreinstalledVllm()
+
+    assert preinstalled.cache_identity() == f"preinstalled:{WORKER_PYTHON_VERSION}"
 
 
 def _spawn(script: str, *, start_new_session: bool = False) -> subprocess.Popen[str]:

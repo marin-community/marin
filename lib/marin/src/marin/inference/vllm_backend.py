@@ -10,7 +10,13 @@ import tempfile
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
-from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT
+from marin.external_dependencies import (
+    TPU_INFERENCE_REQUIREMENT,
+    VLLM_TPU_EXCLUDE_NEWER,
+    VLLM_TPU_PYTHON_VERSION,
+    VLLM_TPU_RELEASE_TAG,
+    VLLM_TPU_REQUIREMENT,
+)
 from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
@@ -35,8 +41,11 @@ def vllm_launcher(config: VllmEngineConfig) -> VllmLauncher:
         return PreinstalledVllm()
     if config.launcher is VllmLauncherType.TPU:
         return IsolatedTpuVllm(
-            vllm_ref=VLLM_FORK_REQUIREMENT,
-            tpu_inference_ref=TPU_INFERENCE_FORK_REQUIREMENT,
+            vllm_requirement=VLLM_TPU_REQUIREMENT,
+            tpu_inference_requirement=TPU_INFERENCE_REQUIREMENT,
+            release_tag=VLLM_TPU_RELEASE_TAG,
+            exclude_newer=VLLM_TPU_EXCLUDE_NEWER,
+            python_version=VLLM_TPU_PYTHON_VERSION,
         )
     source = VllmType.MARIN_FORK if config.source is VllmSource.MARIN_FORK else VllmType.UPSTREAM
     version = config.version if source is VllmType.UPSTREAM else None
