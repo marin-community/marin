@@ -56,6 +56,7 @@ _HOST_MEMORY_KIND = "pinned_host"
 _DEFAULT_STAGED_CHUNKS = 32
 # Host memory a staged byte occupies while its write is in flight, for reporting only.
 _STAGED_BYTE_OVERHEAD = 4
+_JEMALLOC_LIBRARY_NAME = "jemalloc"
 
 
 def _malloc_trim() -> None:
@@ -72,6 +73,9 @@ def _malloc_trim() -> None:
 
 def _trim_host_memory_after_commits(commit_futures: Sequence[ts.Future]) -> None:
     """Schedule one heap trim after every local TensorStore commit finishes."""
+    if _JEMALLOC_LIBRARY_NAME in os.environ.get("LD_PRELOAD", ""):
+        return
+
     remaining = len(commit_futures)
     if remaining == 0:
         return
