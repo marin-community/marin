@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
-from typing import cast
+from typing import Generic, TypeVar, cast
 from urllib.parse import parse_qs
 
 import draccus
@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 TRAINING_CONTROL_ENDPOINT = "training-control"
 _REDACTED_ENVIRONMENT_VARIABLES = ("IRIS_JOB_ENV", "IRIS_JOB_SETUP_SCRIPTS", "MARIN_PROVENANCE")
+ConfigT = TypeVar("ConfigT")
 
 
 @dataclass(frozen=True)
@@ -47,7 +48,7 @@ class _TrainingSnapshot:
     @classmethod
     def capture(
         cls,
-        config: object,
+        config: ConfigT,
         *,
         run_id: str,
         job_id: str,
@@ -174,10 +175,10 @@ def _serve_status_page(snapshot: _TrainingSnapshot, request_checkpoint: Callable
             thread.join()
 
 
-class TrainingDashboard:
+class TrainingDashboard(Generic[ConfigT]):
     """Publish the process-zero training status page through Iris."""
 
-    def __init__(self, config: object, request_checkpoint: Callable[[], None], run_id: str):
+    def __init__(self, config: ConfigT, request_checkpoint: Callable[[], None], run_id: str):
         self._config = config
         self._request_checkpoint = request_checkpoint
         self._run_id = run_id
