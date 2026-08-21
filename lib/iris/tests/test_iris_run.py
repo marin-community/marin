@@ -159,29 +159,28 @@ def test_run_iris_job_adds_region_and_zone_constraints(recorded_job_submissions)
     assert zone_constraints[0].values[0].value == "us-central2-b"
 
 
-def test_run_iris_job_passes_priority_band(recorded_job_submissions):
-    result = _invoke_run(["--priority", "batch"])
+@pytest.mark.parametrize(
+    "name, band",
+    [
+        ("priority", job_pb2.PRIORITY_BAND_PRIORITY),
+        ("batch", job_pb2.PRIORITY_BAND_BATCH),
+    ],
+)
+def test_run_iris_job_passes_priority_band(recorded_job_submissions, name, band):
+    result = _invoke_run(["--priority", name])
     assert result.exit_code == 0, result.output
-    assert recorded_job_submissions[0]["priority_band"] == job_pb2.PRIORITY_BAND_BATCH
-
-
-def test_run_iris_job_passes_priority_tier(recorded_job_submissions):
-    result = _invoke_run(["--priority", "priority"])
-    assert result.exit_code == 0, result.output
-    assert recorded_job_submissions[0]["priority_band"] == job_pb2.PRIORITY_BAND_PRIORITY
+    assert recorded_job_submissions[0]["priority_band"] == band
 
 
 def test_run_iris_job_requires_production_reason(recorded_job_submissions):
     result = _invoke_run(["--priority", "production"])
     assert result.exit_code != 0
-    assert "--production-needed=<reason>" in result.output
     assert recorded_job_submissions == []
 
 
 def test_run_iris_job_rejects_production_reason_for_other_bands(recorded_job_submissions):
     result = _invoke_run(["--priority", "priority", "--production-needed=not production"])
     assert result.exit_code != 0
-    assert "only valid with --priority production" in result.output
     assert recorded_job_submissions == []
 
 

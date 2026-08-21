@@ -112,6 +112,7 @@ from iris.cluster.types import (
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authorize_resource_owner
 from iris.rpc.proto_display import (
+    PRIORITY_BAND_VALUES,
     job_state_friendly,
     priority_band_name,
     priority_band_rank,
@@ -186,15 +187,7 @@ _LOCAL_ADMIN_FEDERATION_DENIED = (
 
 # What LaunchJob accepts in priority_band: the real bands, plus INHERIT for a
 # client that wants the parent's band (or the INTERACTIVE default at a root).
-_SUBMITTABLE_PRIORITY_BANDS = frozenset(
-    {
-        job_pb2.PRIORITY_BAND_INHERIT,
-        job_pb2.PRIORITY_BAND_PRODUCTION,
-        job_pb2.PRIORITY_BAND_PRIORITY,
-        job_pb2.PRIORITY_BAND_INTERACTIVE,
-        job_pb2.PRIORITY_BAND_BATCH,
-    }
-)
+_SUBMITTABLE_PRIORITY_BANDS = frozenset((job_pb2.PRIORITY_BAND_INHERIT, *PRIORITY_BAND_VALUES))
 
 
 def _child_federation_refusal(job_id: JobName, peer_id: str) -> str:
@@ -3122,12 +3115,7 @@ class ControllerServiceImpl:
         if not request.user_id:
             raise ConnectError(Code.INVALID_ARGUMENT, "user_id is required")
         max_band = request.max_band or job_pb2.PRIORITY_BAND_INTERACTIVE
-        if max_band not in (
-            job_pb2.PRIORITY_BAND_PRODUCTION,
-            job_pb2.PRIORITY_BAND_PRIORITY,
-            job_pb2.PRIORITY_BAND_INTERACTIVE,
-            job_pb2.PRIORITY_BAND_BATCH,
-        ):
+        if max_band not in PRIORITY_BAND_VALUES:
             raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid max_band: {request.max_band}")
         now = Timestamp.now()
         with self._db.transaction() as _tx:

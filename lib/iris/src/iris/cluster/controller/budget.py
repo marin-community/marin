@@ -17,6 +17,7 @@ from iris.cluster.controller.codec import device_counts_from_json
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.types import UserBudgetDefaults
 from iris.rpc import job_pb2
+from iris.rpc.proto_display import PRIORITY_BAND_VALUES
 
 logger = logging.getLogger(__name__)
 
@@ -121,16 +122,9 @@ def interleave_by_user(
 
 
 # Bands accepted in user_budgets config entries. UNSPECIFIED is kept out of the
-# set so a missing/zeroed max_band field surfaces as a config error rather than
-# silently granting BATCH; callers must pick a real band.
-_VALID_TIER_BANDS = frozenset(
-    (
-        job_pb2.PRIORITY_BAND_PRODUCTION,
-        job_pb2.PRIORITY_BAND_PRIORITY,
-        job_pb2.PRIORITY_BAND_INTERACTIVE,
-        job_pb2.PRIORITY_BAND_BATCH,
-    )
-)
+# set so a missing/zeroed max_band field surfaces as a config error; callers
+# must pick a real band.
+_VALID_TIER_BANDS = frozenset(PRIORITY_BAND_VALUES)
 
 
 def reconcile_user_budget_tiers(

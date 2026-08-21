@@ -4,6 +4,7 @@
 """Unit tests for federated availability: the job→gate translation, the
 generation-keyed reservation ledger, and the pure queued-assignment pass."""
 
+import pytest
 from iris.cluster.constraints import (
     Constraint,
     ConstraintOp,
@@ -189,21 +190,19 @@ _INTERACTIVE = job_pb2.PRIORITY_BAND_INTERACTIVE
 _BATCH = job_pb2.PRIORITY_BAND_BATCH
 
 
-def test_interactive_job_reaches_a_peer_saturated_by_preemptible_batch_work():
-    # The peer advertises nothing free, but every chip is held by batch work the
+@pytest.mark.parametrize(
+    "candidate_band, held_band",
+    [
+        (_PRIORITY, _INTERACTIVE),
+        (_INTERACTIVE, _BATCH),
+    ],
+)
+def test_job_reaches_a_peer_saturated_by_lower_priority_work(candidate_band, held_band):
+    # The peer advertises nothing free, but every chip is held by work the
     # candidate outranks: it is placed so the peer's own scheduler can preempt.
-    peers = [_peer("cw", [_backend("b", free=0, held={_BATCH: 64})])]
+    peers = [_peer("cw", [_backend("b", free=0, held={held_band: 64})])]
     [promotion] = assign_queued(
-        [_candidate("j", count=32, band=_INTERACTIVE)], peers, ReservationLedger(), max_per_peer_per_cycle=8
-    )
-    assert promotion.peer_id == "cw"
-    assert promotion.reserved == {"h100": 32}
-
-
-def test_priority_job_reaches_a_peer_saturated_by_interactive_work():
-    peers = [_peer("cw", [_backend("b", free=0, held={_INTERACTIVE: 64})])]
-    [promotion] = assign_queued(
-        [_candidate("j", count=32, band=_PRIORITY)], peers, ReservationLedger(), max_per_peer_per_cycle=8
+        [_candidate("j", count=32, band=candidate_band)], peers, ReservationLedger(), max_per_peer_per_cycle=8
     )
     assert promotion.peer_id == "cw"
     assert promotion.reserved == {"h100": 32}
