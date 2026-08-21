@@ -246,6 +246,7 @@ def build_ladder_run(
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
+            # Existing 02A temporaries remain valid resume candidates for this lineage.
             load_checkpoint_fallback_paths=[
                 data_local_temporary_checkpoint_base_path(ctx.output_path),
             ],

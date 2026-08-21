@@ -578,16 +578,9 @@ def marin_cluster_temp_bucket(
 ) -> str:
     """Return shared temporary storage local to the execution cluster.
 
-    A cluster advertises its shared scratch root through
-    ``MARIN_CLUSTER_TEMP_PREFIX``. This is intentionally distinct from
-    :func:`marin_temp_bucket`'s data-local routing: durable output may live in a
-    different region from the compute running the job. The advertised bucket
-    must be declared in ``data.region_buckets`` so its lifecycle rules,
-    endpoint, credentials, and signing region remain configuration-owned.
-
-    When the cluster has no explicit scratch root, ``fallback_source_prefix`` is
-    forwarded to :func:`marin_temp_bucket`. This preserves data-local routing
-    for callers that predate cluster-level scratch configuration.
+    ``MARIN_CLUSTER_TEMP_PREFIX`` selects the managed scratch bucket independently
+    of durable data location. When it is unset, ``fallback_source_prefix`` selects
+    the data-local temp bucket; an absent fallback uses ambient Marin storage.
     """
     cluster_prefix = os.environ.get(_MARIN_CLUSTER_TEMP_PREFIX_ENV)
     source_prefix = cluster_prefix or fallback_source_prefix

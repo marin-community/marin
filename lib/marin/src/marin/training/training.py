@@ -165,22 +165,13 @@ def temporary_storage_base_path(output_path: str, *, ttl_days: int, category: st
     )
 
 
-def _cluster_temporary_storage_base_path(output_path: str, *, ttl_days: int, category: str) -> str:
-    """Return execution-cluster-local temporary storage keyed by an executor output path."""
-    output_component = _output_path_temp_component(output_path)
-    return marin_cluster_temp_bucket(
-        ttl_days=ttl_days,
-        prefix=os.path.join(category, output_component),
-        fallback_source_prefix=output_path,
-    )
-
-
 def temporary_checkpoint_base_path(output_path: str) -> str:
     """Return the region-local temporary checkpoint base for an executor output path."""
-    temporary_root = _cluster_temporary_storage_base_path(
-        output_path,
+    output_component = _output_path_temp_component(output_path)
+    temporary_root = marin_cluster_temp_bucket(
         ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
-        category=TEMPORARY_CHECKPOINTS_PATH,
+        prefix=prefix_join(TEMPORARY_CHECKPOINTS_PATH, output_component),
+        fallback_source_prefix=output_path,
     )
     return prefix_join(temporary_root, DEFAULT_CHECKPOINTS_PATH)
 

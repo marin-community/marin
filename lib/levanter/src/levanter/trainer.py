@@ -909,8 +909,8 @@ class TrainerConfig:
     load_checkpoint_fallback_paths: list[str] = field(default_factory=list)
     """Additional checkpoint roots searched after the configured permanent and temporary roots.
 
-    Ignored when ``load_checkpoint_path`` pins one explicit checkpoint. Intended for storage
-    migrations where the previous temporary root must remain readable during a transition.
+    Ignored when ``load_checkpoint_path`` pins one explicit checkpoint. This keeps checkpoints
+    discoverable when one run lineage spans more than one storage root.
     """
 
     def checkpoint_search_paths(self, run_id: str) -> list[str]:

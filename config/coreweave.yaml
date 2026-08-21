@@ -25,5 +25,4 @@ data:
       endpoint_env: R2_S3_ENDPOINT
       key_id_env: R2_KEY_ID
       key_secret_env: R2_KEY_SECRET
-  temp: { path: tmp, ttl_days: [1, 2, 3, 4, 5, 6, 7, 14, 30] }
   root: s3://marin-na/marin

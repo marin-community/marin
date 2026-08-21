@@ -180,7 +180,6 @@ def test_marin_temp_bucket_unknown_s3_bucket_falls_back(monkeypatch):
 
 
 def test_marin_cluster_temp_bucket_prefers_cluster_scratch(monkeypatch):
-    """Execution-cluster scratch wins even when durable data lives in another region."""
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
     monkeypatch.setenv("MARIN_CLUSTER_TEMP_PREFIX", "s3://hero-checkpoints")
     cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 14, 30))
@@ -190,7 +189,6 @@ def test_marin_cluster_temp_bucket_prefers_cluster_scratch(monkeypatch):
 
 
 def test_marin_cluster_temp_bucket_falls_back_to_data_local_scratch(monkeypatch):
-    """Clusters without an advertised scratch root retain existing routing."""
     monkeypatch.delenv("MARIN_CLUSTER_TEMP_PREFIX", raising=False)
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
     cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 14, 30))
