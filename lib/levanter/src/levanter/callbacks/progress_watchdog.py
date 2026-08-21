@@ -8,7 +8,7 @@ import os
 import threading
 from dataclasses import dataclass
 from datetime import timedelta
-from enum import StrEnum
+from enum import StrEnum, auto
 from time import monotonic
 from typing import Any, Callable
 
@@ -34,16 +34,16 @@ class ProgressTimeout:
 class ProgressState(StrEnum):
     """Where a run sits relative to its progress deadlines."""
 
-    STARTING = "starting"
+    STARTING = auto()
     """No step has completed yet, or the startup grace period is still open."""
 
-    PROGRESSING = "progressing"
+    PROGRESSING = auto()
     """The current wait is inside the deadline that governs it."""
 
-    STALLED = "stalled"
+    STALLED = auto()
     """The current wait has passed its deadline. The watchdog terminates on it."""
 
-    FINISHED = "finished"
+    FINISHED = auto()
     """Training ended and the watchdog no longer holds a deadline."""
 
 
