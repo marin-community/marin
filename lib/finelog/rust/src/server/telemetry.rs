@@ -53,6 +53,7 @@ const EXECUTION_UID_COLUMN: &str = "execution_uid";
 const REGION_COLUMN: &str = "region";
 const NODE_NAME_COLUMN: &str = "node_name";
 const PROCESS_INDEX_COLUMN: &str = "process_index";
+const PRIMARY_PROCESS_INDEX: &str = "0";
 const TRAINING_STATUS_NAMES: [&str; 3] = ["phase", "progress_time_seconds", "step"];
 const TRAINING_LOSS_NAMES: [&str; 1] = ["train_loss"];
 const TRAINING_RUN_NAMES: [&str; 1] = ["global_step"];
@@ -831,7 +832,7 @@ pub(crate) fn telemetry_schema() -> Schema {
             Column::new(REGION_COLUMN, ColumnType::COLUMN_TYPE_STRING, true),
             Column::new(NODE_NAME_COLUMN, ColumnType::COLUMN_TYPE_STRING, true),
             Column::new(PROCESS_INDEX_COLUMN, ColumnType::COLUMN_TYPE_STRING, true)
-                .with_exact_values(["0"]),
+                .with_exact_values([PRIMARY_PROCESS_INDEX]),
             Column::new("kind", ColumnType::COLUMN_TYPE_STRING, false).with_value_counts(),
             // Metric names are the primary substring-search target
             // (`name LIKE '%nccl%'`), so this column carries the trigram index.
@@ -880,7 +881,7 @@ pub(crate) fn telemetry_schema() -> Schema {
     .with_covering_projection(CoveringProjection::new(
         "training-process-zero",
         PROCESS_INDEX_COLUMN,
-        ["0"],
+        [PRIMARY_PROCESS_INDEX],
         [
             "seq",
             "timestamp_ms",
