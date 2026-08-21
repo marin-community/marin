@@ -108,7 +108,15 @@ class MetricSignal:
     recent_below_floor: int
 
 
-Signals = dict[tuple[str, str], dict[str, MetricSignal]]
+@dataclass(frozen=True)
+class RunSignals:
+    """One run's metrics and the execution every reduction covers."""
+
+    execution_uid: str
+    metrics: dict[str, MetricSignal]
+
+
+Signals = dict[tuple[str, str], RunSignals]
 
 
 def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
@@ -140,7 +148,7 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         "), execution AS ("
         "SELECT origin_cluster, run_id, execution_uid FROM attempts WHERE rn = 1"
         "), samples AS ("
-        "SELECT execution.origin_cluster, execution.run_id, "
+        "SELECT execution.origin_cluster, execution.run_id, execution.execution_uid, "
         "telemetry.name, telemetry.value, telemetry.timestamp_ms, telemetry.seq "
         'FROM "telemetry_v1" AS telemetry JOIN execution '
         "ON COALESCE(NULLIF(telemetry.cluster,''),'unknown') = execution.origin_cluster "
@@ -150,16 +158,16 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         f"AND telemetry.timestamp_ms >= {eval_since} AND telemetry.timestamp_ms < {end} "
         f"AND (telemetry.name = '{_EVAL_LOSS}' OR telemetry.timestamp_ms >= {signal_since})"
         "), ranked AS ("
-        "SELECT origin_cluster, run_id, name, value, timestamp_ms, "
+        "SELECT origin_cluster, run_id, execution_uid, name, value, timestamp_ms, "
         "ROW_NUMBER() OVER ("
         "PARTITION BY origin_cluster, run_id, name ORDER BY timestamp_ms DESC, seq DESC"
         ") AS rn FROM samples"
         "), newest AS ("
-        "SELECT origin_cluster, run_id, name, "
+        "SELECT origin_cluster, run_id, execution_uid, name, "
         "MAX(CASE WHEN rn = 1 THEN value END) AS latest_value, "
         "MAX(CASE WHEN rn = 1 THEN timestamp_ms END) AS latest_at, "
         "MAX(CASE WHEN rn = 2 THEN value END) AS previous_value "
-        "FROM ranked WHERE rn <= 2 GROUP BY origin_cluster, run_id, name"
+        "FROM ranked WHERE rn <= 2 GROUP BY origin_cluster, run_id, execution_uid, name"
         "), health_window AS ("
         "SELECT origin_cluster, run_id, name, COUNT(*) AS recent_samples, "
         "SUM(value) AS recent_total, "
@@ -167,7 +175,7 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         f"FROM samples WHERE timestamp_ms >= {health_since} "
         "GROUP BY origin_cluster, run_id, name"
         ") "
-        "SELECT newest.origin_cluster AS cluster, newest.run_id, newest.name, "
+        "SELECT newest.origin_cluster AS cluster, newest.run_id, newest.execution_uid, newest.name, "
         "newest.latest_value, to_timestamp_millis(newest.latest_at) AS observed_at, "
         "newest.previous_value, "
         "COALESCE(health_window.recent_samples, 0) AS recent_samples, "
@@ -242,7 +250,9 @@ def signals_by_run(signal_rows: pa.Table) -> Signals:
         latest = as_number(row["latest_value"])
         if latest is None:
             continue
-        signals.setdefault((str(row["cluster"]), str(row["run_id"])), {})[str(row["name"])] = MetricSignal(
+        key = (str(row["cluster"]), str(row["run_id"]))
+        run = signals.setdefault(key, RunSignals(execution_uid=str(row["execution_uid"]), metrics={}))
+        run.metrics[str(row["name"])] = MetricSignal(
             latest=latest,
             observed_at=as_utc(row["observed_at"]),
             previous=as_number(row["previous_value"]),
@@ -251,6 +261,11 @@ def signals_by_run(signal_rows: pa.Table) -> Signals:
             recent_below_floor=int(row["recent_below_floor"] or 0),
         )
     return signals
+
+
+def selected_executions(signals: Signals) -> tuple[str, ...]:
+    """The execution UIDs the signal scan selected, for a query that must match them."""
+    return tuple(sorted({run.execution_uid for run in signals.values()}))
 
 
 def _fresh(signal: MetricSignal | None, now: datetime, within: timedelta) -> MetricSignal | None:
@@ -281,20 +296,30 @@ def _project(runs: tuple[WatchedRun, ...], reasons_for: Callable[[WatchedRun], l
 
 
 def telemetry_alert_rows(runs: tuple[WatchedRun, ...], signals: Signals, now: datetime) -> list[dict]:
-    """Project runs that published telemetry and then went silent while Iris ran them."""
+    """Project runs that published telemetry and then went silent.
+
+    The reason separates the two causes an operator acts on differently: Iris
+    still counting the tasks points at the telemetry path or a wedged process,
+    while Iris no longer counting them points at a job that exited.
+    """
     now = as_utc(now)
 
     def reasons_for(run: WatchedRun) -> list[str]:
-        phase = signals.get((run.cluster, run.run_id), {}).get(PHASE_METRIC)
+        phase = _metrics(signals, run).get(PHASE_METRIC)
         # A run that has published nothing yet is TrainingProgressStalled's, which
-        # allows the full startup budget.
+        # allows the full startup budget. A finished tracker ended on purpose.
         if phase is None or not isfinite(phase.latest) or int(phase.latest) == FINISHED_PHASE:
             return []
-        if now - phase.observed_at <= TELEMETRY_GONE_AGE or not run.iris_running:
+        if now - phase.observed_at <= TELEMETRY_GONE_AGE:
             return []
-        return ["telemetry_gone"]
+        return ["telemetry_gone" if run.iris_running else "run_down"]
 
     return _project(runs, reasons_for)
+
+
+def _metrics(signals: Signals, run: WatchedRun) -> dict[str, MetricSignal]:
+    found = signals.get((run.cluster, run.run_id))
+    return found.metrics if found is not None else {}
 
 
 def _is_training(metrics: dict[str, MetricSignal], now: datetime) -> bool:
@@ -315,7 +340,7 @@ def optimizer_alert_rows(
     windows = windows_by_run(loss_windows)
 
     def reasons_for(run: WatchedRun) -> list[str]:
-        metrics = signals.get((run.cluster, run.run_id), {})
+        metrics = _metrics(signals, run)
         if not _is_training(metrics, now):
             return []
         reasons = []
@@ -355,7 +380,7 @@ def health_alert_rows(
     retries = _retries_by_root(retry_events)
 
     def reasons_for(run: WatchedRun) -> list[str]:
-        metrics = signals.get((run.cluster, run.run_id), {})
+        metrics = _metrics(signals, run)
         if not _is_training(metrics, now):
             return []
         reasons = []

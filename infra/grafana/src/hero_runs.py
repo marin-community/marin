@@ -24,7 +24,9 @@ from vllm_observability import sql_string
 
 TASK_STATE_FRESHNESS = timedelta(seconds=90)
 TASK_STATE_LOOKBACK = timedelta(hours=1)
-PHASE_ENROLLMENT_LOOKBACK = timedelta(minutes=15)
+# Long enough that a run which goes silent stays watched while
+# `TrainingTelemetryGone` counts out its threshold and pending period.
+PHASE_ENROLLMENT_LOOKBACK = timedelta(minutes=60)
 # Silence this long is the telemetry path or the process. `TrainingTelemetryGone`
 # owns that case; the other projections defer rather than page for it again.
 TELEMETRY_GONE_AGE = timedelta(minutes=10)

@@ -7,7 +7,7 @@ Pushover monitor applies.
 
 | Rule | Route | Fires on |
 |---|---|---|
-| `TrainingTelemetryGone` | `notification=hero-run`: Slack, a Loom triage session, email | `telemetry_gone` |
+| `TrainingTelemetryGone` | `notification=hero-run`: Slack, a Loom triage session, email | `telemetry_gone`, `run_down` |
 | `TrainingOptimizerUnstable` | `notification=hero-run` | `loss_jump`, `grad_norm_high`, `steps_skipped` |
 | `TrainingRunHealthDegraded` | `notification=slack`: one Slack message, no triage session | `token_drops`, `router_entropy`, `router_bias`, `throughput_low`, `mfu_low`, `eval_regressed`, `iris_state_stale`, `task_retried` |
 
@@ -18,7 +18,7 @@ instance labeled with its `reason`; the hero-run route groups them by logical ru
 
 A run is watched while either an `iris.task_state` row fresh within 90 seconds reports running tasks
 (the [`TrainingProgressStalled`](training-stall-alert-contract.md) contract) or a `hero-`-prefixed
-`run_id` published `phase` telemetry in the last 15 minutes. The Levanter side takes the longest
+`run_id` published `phase` telemetry in the last hour. The Levanter side takes the longest
 prefix of its `job_id` that is a hero coordinator root, so
 `/rav/hero-20260819-coord/grug-train-hero-20260819` is watched as `/rav/hero-20260819-coord`.
 
@@ -30,7 +30,8 @@ a training run with no signal that it happened. That is what `iris_state_stale` 
 | Reason | Condition | Metric |
 |---|---|---|
 | `telemetry_gone` | Newest sample over 10 minutes old while Iris still reports the tasks running | `phase` |
-| `loss_jump` | Recent five-minute loss floor over 1.0 above the trailing floor, where the six-sigma band did not already catch it | `train_loss` |
+| `run_down` | Newest sample over 10 minutes old and Iris no longer reports them running | `phase` |
+| `loss_jump` | Recent five-minute loss floor over 1.0 above the trailing floor of the same attempt, where the six-sigma band did not already catch it | `train_loss` |
 | `grad_norm_high` | Newest value above 2.0 | `grad_norm_total` |
 | `steps_skipped` | 3 or more skipped steps in 15 minutes | `optim_skipped_step` |
 | `token_drops` | Newest value above 7% | `moe_drop_fraction` |
@@ -46,7 +47,8 @@ Uniform routing over the hero rung's experts is 5.951 entropy, so falling entrop
 The 7% drop limit sits above the intermittent 5% spikes a healthy MoE run shows.
 
 One bounded `telemetry_v1` scan per bridge cache interval feeds all three rules, reduced over a
-single execution: the newest attempt JAX process zero reports. A retry keeps the run ID and takes a
+single execution: the newest attempt process zero reports. `loss_jump` reads its two loss windows
+against each other, so it filters them to that same execution. A retry keeps the run ID and takes a
 new `execution_uid`, so partitioning on the run alone would sum one attempt's skipped steps into the
 next and compare evaluations across a restore that redid steps. Process zero is the stable choice
 because Levanter publishes tracker metrics only from it. A check reads a newest sample only while it
@@ -56,9 +58,15 @@ The throughput checks count how much of the window sat below the floor rather th
 the median comparison the Pushover monitor makes, which keeps one restart step at zero from reading
 as a slow run. Fewer than 10 samples fires nothing.
 
-`telemetry_gone` requires Iris to still report running tasks; telemetry that stops when Iris also
-stops counting is a run that ended. A run that has published nothing at all stays with
+Silence pages either way; the Iris state only picks the reason. `telemetry_gone` means Iris still
+counts the tasks, so the telemetry path or the process is the suspect. `run_down` means it no longer
+does, so the job probably exited — the most severe case, and one neither this run's `phase` nor
+`TrainingProgressStalled` reports on its own, since both enrollments need running tasks. A finished
+tracker ended on purpose and pages for neither. A run that has published nothing at all stays with
 `TrainingProgressStalled`, which allows the full initialization budget.
+
+Levanter enrollment runs an hour so a silent run stays watched while the rule counts out its ten
+minutes and its five-minute pending period; the alert resolves when the run leaves that window.
 
 Every other check needs fresh phase telemetry reporting the training phase, so an initializing,
 finished, or silent attempt announces nothing. `iris_state_stale` additionally needs a row that went
@@ -74,9 +82,9 @@ Quiet runs emit zero-valued `healthy` rows and an empty fleet emits one `fleet` 
 1. Open the [Training run dashboard](https://grafana.oa.dev/d/marin-training) and select the run.
    Execution health carries the attempt age, Iris task counts, and retry events; Token drops and
    Router health draw the same limits these rules use.
-2. `telemetry_gone`: separate a dead run from a dead telemetry path. Healthy Iris task counts with no
-   Levanter samples point at the telemetry path or a wedged process — check `iris job describe` and
-   the task logs.
+2. `telemetry_gone` or `run_down`: start from `iris job describe` and the task logs. Healthy Iris
+   task counts with no Levanter samples point at the telemetry path or a wedged process; no running
+   tasks means the job exited and the question is why.
 3. `grad_norm_high` or `steps_skipped`: read the Optimizer and Loss spike panels together. A gradient
    norm climbing while the schedule holds the learning rate flat precedes a spike. Skipped steps mean
    the optimizer rejected the update, so the weights did not take it.

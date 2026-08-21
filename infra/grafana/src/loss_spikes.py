@@ -17,6 +17,7 @@ from math import isfinite
 
 import pyarrow as pa
 from hero_runs import HeroRun, RunIdentity, as_number, run_id_predicate, sql_epoch_ms
+from vllm_observability import sql_string
 
 _LOSS_METRIC = "train_loss"
 
@@ -51,9 +52,18 @@ class LossWindows:
     recent_peak: float | None
 
 
-def loss_window_query(now: datetime, runs: Sequence[RunIdentity]) -> str:
-    """Return baseline and recent loss statistics for exact active hero run IDs."""
+def loss_window_query(now: datetime, runs: Sequence[RunIdentity], executions: Sequence[str] = ()) -> str:
+    """Return baseline and recent loss statistics for exact active hero run IDs.
+
+    `executions` narrows both windows to the given attempts. Without it the
+    windows span whatever the run published in the hour, which is what the spike
+    rule compares; a check that reads the two windows against each other needs
+    them to describe one attempt.
+    """
     run_predicate = run_id_predicate(runs)
+    execution_predicate = (
+        f"AND execution_uid IN ({', '.join(sql_string(uid) for uid in executions)}) " if executions else ""
+    )
     start = sql_epoch_ms(now - _BASELINE_LOOKBACK)
     end = sql_epoch_ms(now)
     recent_ms = sql_epoch_ms(now - _RECENT_WINDOW)
@@ -63,6 +73,7 @@ def loss_window_query(now: datetime, runs: Sequence[RunIdentity]) -> str:
         'FROM "telemetry_v1" '
         f"WHERE service = 'levanter' AND name = '{_LOSS_METRIC}' "
         f"AND {run_predicate} "
+        f"{execution_predicate}"
         f"AND timestamp_ms >= {start} AND timestamp_ms < {end}"
         ") "
         "SELECT origin_cluster AS cluster, run_id, "

@@ -96,6 +96,7 @@ from hero_health import (
     health_alert_rows,
     optimizer_alert_rows,
     retry_event_query,
+    selected_executions,
     signal_query,
     signals_by_run,
     telemetry_alert_rows,
@@ -483,15 +484,17 @@ def create_app(
         rows = hero_query("hero_signals", now, target, lambda: signal_query(now, runs))
         return signals_by_run(rows)
 
-    def hero_loss_windows(target: ClusterTarget, now: datetime, runs: Sequence[RunIdentity]) -> pa.Table:
-        """Loss windows for one run set, shared by the spike and optimizer rules."""
+    def hero_loss_windows(
+        target: ClusterTarget, now: datetime, runs: Sequence[RunIdentity], executions: tuple[str, ...] = ()
+    ) -> pa.Table:
+        """Loss windows for one run set, optionally narrowed to the given attempts."""
         run_ids = tuple(sorted({run.run_id for run in runs}))
         if not run_ids:
             return pa.table({})
         source = finelog_sources[target.name]
         return finelog_cache.get_or_compute(
-            ("hero_loss_windows", run_ids, _bucket(now, config.cache_ttl)),
-            lambda: source.query(loss_window_query(now, runs), max_rows=config.max_rows),
+            ("hero_loss_windows", run_ids, executions, _bucket(now, config.cache_ttl)),
+            lambda: source.query(loss_window_query(now, runs, executions), max_rows=config.max_rows),
         )
 
     def finelog_alert_endpoint(name: str, project) -> JSONResponse:
@@ -535,8 +538,11 @@ def create_app(
     def finelog_alerts_training_optimizer(_: Request) -> JSONResponse:
         def project(target: ClusterTarget, now: datetime) -> list[dict]:
             runs = hero_watched_runs(target, now)
-            loss_windows = hero_loss_windows(target, now, runs)
-            return optimizer_alert_rows(runs, hero_signals(target, now, runs), loss_windows, now)
+            signals = hero_signals(target, now, runs)
+            # The loss-jump check reads the two windows against each other, so
+            # both have to describe the attempt the signal scan selected.
+            loss_windows = hero_loss_windows(target, now, runs, selected_executions(signals))
+            return optimizer_alert_rows(runs, signals, loss_windows, now)
 
         return finelog_alert_endpoint("training_optimizer", project)
 

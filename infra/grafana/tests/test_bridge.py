@@ -18,6 +18,7 @@ from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from hero_health import (
     MetricSignal,
+    RunSignals,
     WatchedRun,
     health_alert_rows,
     optimizer_alert_rows,
@@ -653,7 +654,7 @@ def _signals(now: datetime, metrics: dict[str, dict], run_id: str = "hero-a") ->
         )
         for name, values in metrics.items()
     }
-    return {("cw-a", run_id): rows}
+    return {("cw-a", run_id): RunSignals(execution_uid="attempt-1", metrics=rows)}
 
 
 def _reasons(rows: list[dict]) -> set[str]:
@@ -681,13 +682,21 @@ def test_run_health_watches_a_run_whose_iris_state_row_went_stale():
     assert "iris_state_stale" in _reasons(health_alert_rows(runs, signals, pa.table({}), now))
 
 
-def test_telemetry_gone_pages_only_while_iris_still_runs_the_tasks():
-    # Telemetry that stops when Iris stops counting the tasks is a run that ended.
+def test_silent_telemetry_pages_whether_or_not_iris_still_runs_the_tasks():
+    # A crashed run stops publishing and stops being counted, which is the most
+    # severe case, so the Iris state picks the reason rather than the firing.
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
     silent = _signals(now, {"phase": {"latest": 1.0, "observed_at": now - timedelta(minutes=20)}})
 
     assert _reasons(telemetry_alert_rows((_watched(),), silent, now)) == {"telemetry_gone"}
-    assert _reasons(telemetry_alert_rows((_watched(iris_running=False),), silent, now)) == set()
+    assert _reasons(telemetry_alert_rows((_watched(iris_running=False),), silent, now)) == {"run_down"}
+
+
+def test_a_finished_run_going_quiet_is_not_a_page():
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    done = _signals(now, {"phase": {"latest": 2.0, "observed_at": now - timedelta(minutes=20)}})
+
+    assert _reasons(telemetry_alert_rows((_watched(iris_running=False),), done, now)) == set()
 
 
 def test_telemetry_alert_leaves_a_run_that_has_published_nothing_to_the_stall_rule():
@@ -757,6 +766,42 @@ def test_optimizer_alert_reads_the_loss_jump_gradient_norm_and_skipped_steps():
         "grad_norm_high",
         "steps_skipped",
     }
+
+
+def test_loss_jump_reads_one_attempt_so_a_restore_is_not_a_rise():
+    # A restore rewinds to a checkpoint, so the new attempt's loss sits above
+    # where the old one left off. Windows spanning both would read that as a jump.
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    database = duckdb.connect()
+    database.execute(
+        """
+        CREATE TABLE telemetry_v1(
+            cluster VARCHAR, service VARCHAR, run_id VARCHAR,
+            execution_uid VARCHAR, name VARCHAR, value DOUBLE, timestamp_ms BIGINT
+        )
+        """
+    )
+
+    def at(minutes: float) -> int:
+        return int((now - timedelta(minutes=minutes)).timestamp() * 1000)
+
+    database.executemany(
+        "INSERT INTO telemetry_v1 VALUES ('cw-a', 'levanter', 'hero-a', ?, 'train_loss', ?, ?)",
+        [
+            # The retry sits inside the hour, so both attempts land in the baseline.
+            *(("attempt-1", 2.1, at(50 - i * 0.5)) for i in range(30)),
+            *(("attempt-2", 3.4, at(20 - i * 0.5)) for i in range(30)),
+            *(("attempt-2", 3.4, at(4 - i * 0.15)) for i in range(25)),
+        ],
+    )
+    runs = (_watched(),)
+
+    mixed = database.execute(loss_window_query(now, runs)).fetch_arrow_table()
+    scoped = database.execute(loss_window_query(now, runs, ("attempt-2",))).fetch_arrow_table()
+    signals = _signals(now, {})
+
+    assert _reasons(optimizer_alert_rows(runs, signals, mixed, now)) == {"loss_jump"}
+    assert _reasons(optimizer_alert_rows(runs, signals, scoped, now)) == set()
 
 
 def test_loss_jump_defers_to_the_spike_rule_on_the_same_rise():
@@ -904,7 +949,8 @@ def test_signal_query_reduces_the_newest_sample_and_the_health_window():
         ]
     )
 
-    signals = signals_by_run(database.execute(signal_query(now, (_watched(),))).fetch_arrow_table())["cw-a", "hero-a"]
+    run = signals_by_run(database.execute(signal_query(now, (_watched(),))).fetch_arrow_table())["cw-a", "hero-a"]
+    signals = run.metrics
 
     throughput = signals["throughput_tokens_per_second"]
     assert (throughput.latest, throughput.recent_samples, throughput.recent_below_floor) == (2.6e6, 3, 2)
@@ -928,11 +974,12 @@ def test_signal_query_reduces_one_task_attempt_at_a_time():
         ]
     )
 
-    signals = signals_by_run(database.execute(signal_query(now, (_watched(),))).fetch_arrow_table())["cw-a", "hero-a"]
+    run = signals_by_run(database.execute(signal_query(now, (_watched(),))).fetch_arrow_table())["cw-a", "hero-a"]
 
-    assert signals["optim_skipped_step"].recent_total == 1.0
-    assert "grad_norm_total" not in signals
-    assert _reasons(optimizer_alert_rows((_watched(),), {("cw-a", "hero-a"): signals}, pa.table({}), now)) == set()
+    assert run.execution_uid == "attempt-2"
+    assert run.metrics["optim_skipped_step"].recent_total == 1.0
+    assert "grad_norm_total" not in run.metrics
+    assert _reasons(optimizer_alert_rows((_watched(),), {("cw-a", "hero-a"): run}, pa.table({}), now)) == set()
 
 
 def test_zephyr_stall_alert_distinguishes_stale_healthy_and_expired_producers():
