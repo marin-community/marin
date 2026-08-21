@@ -287,10 +287,14 @@ monitor uses. The dashboard uses a 7% drop limit. The router limits are 5.92
 entropy and 400 bias.
 
 One loss panel uses step as its x-axis and keeps the newest sample for a repeated
-step. The wall-clock loss panel separates each `execution_uid` and disconnects
-gaps longer than five minutes. Iris forms this identity from the controller-minted
-`attempt_uid`. Thus, a new controller process cannot join loss from a prior
-process with the same numeric task attempt.
+step. It reads the selected run without a Grafana time bound. The inner scan
+selects process 0 because Levanter publishes tracker metrics only from that
+process. For a series longer than 10,000 points, the query keeps the minimum and
+maximum loss in each group, plus the first and last points. The wall-clock loss
+panel separates each `execution_uid` and disconnects gaps longer than five
+minutes. Iris forms this identity from the controller-minted `attempt_uid`. Thus,
+a new controller process cannot join loss from a prior process with the same
+numeric task attempt.
 
 ## Alerting
 
@@ -657,17 +661,17 @@ Four things about the data will bite you:
   fails to parse. Qualifying or wrapping it is enough for the parser, but panels
   always write `"cluster"`, and a test rejects every other spelling so nobody has
   to remember which positions are safe.
-- **Bound every `telemetry_v1` query, and fold the boundary.** The namespace is
-  sorted on `timestamp_ms` alone, so write
-  `timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT)`, never
-  `timestamp_ms >= {{from}}`. An unbounded query exceeds the bridge's 20s deadline.
-- **Cost tracks the window, not the rows.** A `telemetry_v1` panel costs roughly
-  3s over 3h and 10s over 24h no matter how selective its `name` filter is, so a
-  second scan of the same window nearly doubles a panel. Prefer one scan with
-  `CASE WHEN name = …` over joining two scans, and keep the accelerator and run
-  dashboards on a short default range. Per-row `json_get` is the other cost: the
-  host memory and disk ratios ran 8.6s grouped per node and 3.4s summed straight
-  to the cluster, for the same numbers to three decimal places.
+- **Give every `telemetry_v1` query a prunable scope.** For a time scope, write
+  `timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT)`. The
+  loss-by-step panel is the only unbounded query. Its process-0 predicate selects
+  the `training-process-zero` projection. The run and metric-name predicates then
+  prune that data. On 2026-08-21, its full retained query for
+  `hero-12d8b6f0-dee637` took 3.785s from a new job and 1.019s on the next
+  request for approximately 2,600 points.
+- **Cost tracks selected history, not returned rows.** The loss query samples
+  after its window functions. This limits the response and Grafana render cost,
+  but it does not lower the Finelog scan cost. Prefer one scan with conditional
+  aggregation to several tidy single-metric queries.
 - **Clusters forward in bursts.** A cluster minutes behind makes the right edge of
   a fleet chart dip. That is why `accelerators.json` carries a freshness panel, and
   why the power stat reduces to the latest sample per GPU rather than a bucketed sum.

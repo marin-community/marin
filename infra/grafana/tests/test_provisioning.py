@@ -557,16 +557,23 @@ def test_stat_panels_use_grafana_reduce_options_schema():
 
 
 def test_telemetry_queries_bound_their_window_with_foldable_macros():
-    # telemetry_v1 is sorted on timestamp_ms alone, so the boundary has to fold to a
-    # constant for segment pruning to happen at all. `timestamp_ms >= {{from}}` compares
-    # a bigint against a timestamp and turns every panel into a full namespace scan.
+    # Time-scoped queries need foldable bounds for segment pruning. A direct bigint-to-
+    # timestamp comparison such as `timestamp_ms >= {{from}}` cannot prune segments.
+    training = _stitched_dashboards()["training.json"]
+    step_panel = next(panel for panel in _all_panels(training) if panel["id"] == 10)
+    (step_sql,) = _panel_sql({"panels": [step_panel]})
+    unbounded: list[tuple[str, str]] = []
     for name, dashboard in _stitched_dashboards().items():
         for sql in _panel_sql(dashboard):
             if '"telemetry_v1"' not in sql:
                 continue
-            assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM" in sql, name
+            if "timestamp_ms >= CAST(EXTRACT(EPOCH FROM" not in sql:
+                unbounded.append((name, sql))
+                continue
             assert "timestamp_ms < CAST(EXTRACT(EPOCH FROM" in sql, name
             assert "timestamp_ms >= {{from}}" not in sql, name
+
+    assert unbounded == [("training.json", step_sql)]
 
 
 def test_cluster_column_is_only_referenced_quoted_or_as_an_alias():
@@ -675,8 +682,6 @@ def test_training_loss_by_step_uses_the_newest_retry_sample():
     panel = next(panel for panel in _all_panels(dashboard) if panel["title"] == "Training loss by step")
     sql = _panel_sql({**dashboard, "panels": [panel]})[0]
     sql = sql.replace("${run:sqlstring}", "'hero-run'")
-    sql = sql.replace("{{from}}", "TIMESTAMP '2026-08-20 00:00:00'")
-    sql = sql.replace("{{to}}", "TIMESTAMP '2026-08-21 00:00:00'")
 
     database = duckdb.connect()
     database.execute(
