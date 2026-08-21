@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 
 import click
 import yaml
-from iris.cli.job import validate_production_reason
+from iris.cli.job import validate_system_reason
 from iris.client.client import IrisClient, JobAlreadyExists
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import IrisClusterConfig, load_config
@@ -701,14 +701,14 @@ def cli(ctx, config: str | None, tpu_name: str | None, verbose: bool) -> None:
     "--priority",
     type=click.Choice(PRIORITY_BAND_NAMES, case_sensitive=False),
     default=None,
-    help="Iris priority band for the holder job (default: interactive; production requires authorization).",
+    help="Iris priority band for the holder job (default: interactive).",
 )
 @click.option(
-    "--production-needed",
+    "--system-reason",
     type=str,
     default=None,
     metavar="REASON",
-    help="Required justification for allocations using --priority production.",
+    help="Required justification for --priority system; must contain hero, finelog, or iris.",
 )
 @click.option("--sync-path", default=".", show_default=True, help="Local path to sync to the remote host(s).")
 @click.option("--no-sync", is_flag=True, help="Skip the initial sync after allocation.")
@@ -723,7 +723,7 @@ def allocate(
     ctx,
     tpu_type: str,
     priority: str | None,
-    production_needed: str | None,
+    system_reason: str | None,
     sync_path: str,
     no_sync: bool,
     setup_env: bool,
@@ -736,7 +736,7 @@ def allocate(
     """Allocate a dev TPU session and hold it until Ctrl-C."""
     if not ctx.obj.config_file:
         raise click.ClickException("--config is required")
-    validate_production_reason(priority, production_needed)
+    validate_system_reason(priority, system_reason)
 
     local_path = Path(sync_path).resolve()
     if not local_path.exists():

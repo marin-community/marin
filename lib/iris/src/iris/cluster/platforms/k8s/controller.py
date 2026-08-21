@@ -233,8 +233,8 @@ def _build_controller_deployment(
             "metadata": {"labels": {"app": "iris-controller"}},
             "spec": {
                 "serviceAccountName": "iris-controller",
-                # Pin the controller above every user band so a user pod can never
-                # preempt it off the shared control node (see IRIS_PRIORITY_CLASSES).
+                # Keep the controller at SYSTEM so lower-band pods cannot preempt
+                # it off the shared control node (see IRIS_PRIORITY_CLASSES).
                 "priorityClassName": IRIS_PRIORITY_CLASS_SYSTEM,
                 "nodeSelector": node_selector,
                 # Tolerate the NVIDIA GPU taint (so the controller can run on
@@ -843,9 +843,8 @@ class K8sControllerProvider:
         running Iris gets them so pods are stamped without manual admin setup.
 
         Priority values (see IRIS_PRIORITY_CLASSES):
-          iris-system     10000  — control plane (controller, finelog, Kueue); never preempted by user work
-          iris-production  1000  — preempts every user band; never preempted
-          iris-priority     100  — important work; below production, above interactive
+          iris-system     10000  — control plane, Iris, Finelog, and hero work
+          iris-production  1000  — admin production work; below system
           iris-interactive   10  — normal user work
           iris-batch          0  — opportunistic; below interactive, above CoreWeave NHC
         """

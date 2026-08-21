@@ -1330,6 +1330,23 @@ def test_build_pdb_manifest_selector_and_cleanup_labels():
     assert pdb["metadata"]["labels"][_LABEL_TASK_HASH] == pod_hash
 
 
+@pytest.mark.parametrize(
+    "band, expected_availability",
+    [
+        (job_pb2.PRIORITY_BAND_SYSTEM, {"minAvailable": 1}),
+        (job_pb2.PRIORITY_BAND_PRODUCTION, {"minAvailable": 1}),
+        (job_pb2.PRIORITY_BAND_INTERACTIVE, {"maxUnavailable": 1}),
+        (job_pb2.PRIORITY_BAND_BATCH, {"maxUnavailable": 1}),
+    ],
+)
+def test_build_pdb_manifest_applies_band_availability_policy(band, expected_availability):
+    request = make_run_req("/coord-job/0", num_tasks=1, priority=band)
+    _updates, resources = _dispatch(request, pod_config())
+    spec = resources[K8sResource.PDBS][0]["spec"]
+    availability = {key: spec[key] for key in ("minAvailable", "maxUnavailable") if key in spec}
+    assert availability == expected_availability
+
+
 # ---------------------------------------------------------------------------
 # Kueue gang admission (coscheduled jobs)
 # ---------------------------------------------------------------------------
@@ -1386,7 +1403,7 @@ def test_kueue_priority_class_orders_cpu_below_standalone_accelerator(device, ex
 @pytest.mark.parametrize(
     "band, workload_class, pod_class",
     [
-        (job_pb2.PRIORITY_BAND_PRIORITY, "iris-coscheduled-priority", "iris-priority"),
+        (job_pb2.PRIORITY_BAND_SYSTEM, "iris-coscheduled-system", "iris-system"),
         (job_pb2.PRIORITY_BAND_BATCH, "iris-coscheduled-batch", "iris-batch"),
     ],
 )

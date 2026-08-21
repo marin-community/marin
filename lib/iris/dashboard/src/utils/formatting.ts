@@ -149,8 +149,8 @@ export function bandDisplayName(band: string | undefined): string {
 export function bandColor(band: string | undefined): string {
   if (!band) return 'text-text-muted'
   const name = band.replace(/^PRIORITY_BAND_/, '')
-  if (name === 'PRODUCTION') return 'text-status-danger'
-  if (name === 'PRIORITY') return 'text-status-warning'
+  if (name === 'SYSTEM') return 'text-status-danger'
+  if (name === 'PRODUCTION') return 'text-status-warning'
   if (name === 'INTERACTIVE') return 'text-accent'
   if (name === 'BATCH') return 'text-text-muted'
   return 'text-text-muted'

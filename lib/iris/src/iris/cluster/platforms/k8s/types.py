@@ -11,14 +11,11 @@ from enum import Enum
 # the cluster config does not override priority_class_names. Override via
 # kubernetes_provider.priority_classes.
 #
-# iris-system is the control plane band (controller, finelog, Kueue manager). It
-# is NOT a user band and is never mapped from a PriorityBand — user jobs cannot
-# request it. It sits above every user band so a user pod can never preempt the
-# control plane off the shared control node; PreemptLowerPriority lets it evict a
-# lower-priority pod to stay scheduled when that node is full.
+# iris-system is used by the control plane and the SYSTEM PriorityBand. It sits
+# above every other band so Iris, Finelog, and hero workloads can reclaim
+# capacity when the cluster is full.
 IRIS_PRIORITY_CLASS_SYSTEM = "iris-system"
 IRIS_PRIORITY_CLASS_PRODUCTION = "iris-production"
-IRIS_PRIORITY_CLASS_PRIORITY = "iris-priority"
 IRIS_PRIORITY_CLASS_INTERACTIVE = "iris-interactive"
 IRIS_PRIORITY_CLASS_BATCH = "iris-batch"
 
@@ -40,7 +37,6 @@ IRIS_TASK_CONTAINER_NAME = "task"
 IRIS_PRIORITY_CLASSES: tuple[tuple[str, int, str], ...] = (
     (IRIS_PRIORITY_CLASS_SYSTEM, 10000, "PreemptLowerPriority"),
     (IRIS_PRIORITY_CLASS_PRODUCTION, 1000, "PreemptLowerPriority"),
-    (IRIS_PRIORITY_CLASS_PRIORITY, 100, "PreemptLowerPriority"),
     (IRIS_PRIORITY_CLASS_INTERACTIVE, 10, "PreemptLowerPriority"),
     (IRIS_PRIORITY_CLASS_BATCH, 0, "Never"),
 )

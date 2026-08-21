@@ -53,8 +53,8 @@ logger = logging.getLogger(__name__)
 
 # Maps kubernetes_provider.priority_classes keys to the PriorityBand enum stamped on Pods.
 _PRIORITY_BANDS = {
+    "system": job_pb2.PRIORITY_BAND_SYSTEM,
     "production": job_pb2.PRIORITY_BAND_PRODUCTION,
-    "priority": job_pb2.PRIORITY_BAND_PRIORITY,
     "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
     "batch": job_pb2.PRIORITY_BAND_BATCH,
 }

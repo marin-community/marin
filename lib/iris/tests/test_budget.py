@@ -26,8 +26,8 @@ from iris.testing.controller import (
 )
 from rigging.server_auth import VerifiedIdentity, identity_scope
 
+SYSTEM = job_pb2.PRIORITY_BAND_SYSTEM
 PRODUCTION = job_pb2.PRIORITY_BAND_PRODUCTION
-PRIORITY = job_pb2.PRIORITY_BAND_PRIORITY
 INTERACTIVE = job_pb2.PRIORITY_BAND_INTERACTIVE
 BATCH = job_pb2.PRIORITY_BAND_BATCH
 
@@ -122,8 +122,7 @@ _UNLIMITED_DEFAULTS = UserBudgetDefaults(budget_limit=0, max_band=INTERACTIVE)
     [
         (INTERACTIVE, 10000, 5000, BATCH),  # over budget → demoted
         (INTERACTIVE, 3000, 5000, INTERACTIVE),  # within budget → kept
-        (PRIORITY, 10000, 5000, BATCH),  # over budget → demoted
-        (PRIORITY, 3000, 5000, PRIORITY),  # within budget → kept
+        (SYSTEM, 10000, 5000, SYSTEM),  # system never demoted
         (PRODUCTION, 10000, 5000, PRODUCTION),  # production never demoted
         (INTERACTIVE, 999999, 0, INTERACTIVE),  # limit=0 means unlimited
         (BATCH, 10000, 5000, BATCH),  # batch stays batch
@@ -237,7 +236,7 @@ def test_list_user_budgets(service):
     for user_id, limit, band in [
         ("alice", 5000, INTERACTIVE),
         ("bob", 3000, BATCH),
-        ("charlie", 0, PRIORITY),
+        ("charlie", 0, SYSTEM),
         ("dana", 0, PRODUCTION),
     ]:
         _as_admin(service.set_user_budget, _set_budget(user_id, limit, band), None)
@@ -251,19 +250,21 @@ def test_list_user_budgets(service):
     assert set(by_user) == {"alice", "bob", "charlie", "dana"}
     assert by_user["alice"].budget_limit == 5000
     assert by_user["bob"].max_band == BATCH
-    assert by_user["charlie"].max_band == PRIORITY
+    assert by_user["charlie"].max_band == SYSTEM
     assert by_user["dana"].max_band == PRODUCTION
 
 
-def test_non_admin_cannot_submit_production(service):
+@pytest.mark.parametrize("band", [SYSTEM, PRODUCTION])
+def test_non_admin_cannot_submit_admin_band(service, band):
     with pytest.raises(ConnectError) as exc:
-        _as_user(service.launch_job, "alice", _launch("/alice/prod-job", band=PRODUCTION), None)
+        _as_user(service.launch_job, "alice", _launch("/alice/admin-job", band=band), None)
     assert exc.value.code == Code.PERMISSION_DENIED
 
 
-def test_admin_can_submit_production(service):
-    resp = _as_admin(service.launch_job, _launch("/admin/prod-job", band=PRODUCTION), None)
-    assert resp.job_id == "/admin/prod-job"
+@pytest.mark.parametrize("band", [SYSTEM, PRODUCTION])
+def test_admin_can_submit_admin_band(service, band):
+    resp = _as_admin(service.launch_job, _launch("/admin/admin-job", band=band), None)
+    assert resp.job_id == "/admin/admin-job"
 
 
 def test_launch_job_rejects_band_above_user_max(service):
@@ -278,17 +279,6 @@ def test_launch_job_rejects_band_above_user_max(service):
         )
     assert exc.value.code == Code.PERMISSION_DENIED
     assert "cannot submit" in str(exc.value.message).lower()
-
-
-def test_priority_user_can_submit_priority_but_not_production(service):
-    _as_admin(service.set_user_budget, _set_budget("alice", 0, PRIORITY), None)
-
-    response = _as_user(service.launch_job, "alice", _launch("/alice/priority-job", band=PRIORITY), None)
-    assert response.job_id == "/alice/priority-job"
-
-    with pytest.raises(ConnectError) as exc:
-        _as_user(service.launch_job, "alice", _launch("/alice/production-job", band=PRODUCTION), None)
-    assert exc.value.code == Code.PERMISSION_DENIED
 
 
 def test_launch_job_unspecified_band_accepted(service):

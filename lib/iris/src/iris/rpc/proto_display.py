@@ -86,8 +86,8 @@ def priority_band_value(name: str) -> int:
 
 
 PRIORITY_BAND_VALUES: tuple[int, ...] = (
+    job_pb2.PRIORITY_BAND_SYSTEM,
     job_pb2.PRIORITY_BAND_PRODUCTION,
-    job_pb2.PRIORITY_BAND_PRIORITY,
     job_pb2.PRIORITY_BAND_INTERACTIVE,
     job_pb2.PRIORITY_BAND_BATCH,
 )

@@ -1489,14 +1489,14 @@ class ControllerServiceImpl:
 
         # Priority band validation.
         #
-        # - PRODUCTION additionally requires MANAGE_BUDGETS when auth is on;
-        #   admins pass here and skip the max_band cap below.
+        # - SYSTEM and PRODUCTION additionally require MANAGE_BUDGETS when auth
+        #   is on; admins pass here and skip the max_band cap below.
         # - The max_band cap fires regardless of auth mode, keyed on the
         #   claimed job_id.user. In anonymous mode this doesn't guarantee the
         #   user is who they claim to be, but it ensures the cluster's
         #   configured tiers and UserBudgetDefaults still bite — an unlisted
         #   submitter hits the INTERACTIVE default cap and can't punch up to
-        #   PRODUCTION just by skipping auth.
+        #   SYSTEM or PRODUCTION just by skipping auth.
         # A received handoff's band was authorized by the parent against the original
         # submitter and their budget tier; the receiving cluster does not manage that
         # user, so it trusts the parent rather than re-gating on its own tiers (the
@@ -1504,7 +1504,7 @@ class ControllerServiceImpl:
         #
         # This is the one place INHERIT becomes a real band: resolve it here, gate that
         # result, and store it. Everything behind this point — the scheduler, spend, the
-        # k8s mapping, a federated handoff — only ever sees PRODUCTION, PRIORITY,
+        # k8s mapping, a federated handoff — only ever sees SYSTEM, PRODUCTION,
         # INTERACTIVE, or BATCH, so none of them re-derive a band of their own.
         #
         # Gating the resolved band rather than the request matters because the client
@@ -1529,7 +1529,7 @@ class ControllerServiceImpl:
         # reads the same real band without re-deriving one.
         request.priority_band = band
         if not is_received_handoff:
-            if band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
+            if band in (job_pb2.PRIORITY_BAND_SYSTEM, job_pb2.PRIORITY_BAND_PRODUCTION) and self._auth.provider:
                 authorize(AuthzAction.MANAGE_BUDGETS)
             else:
                 with self._db.read_snapshot() as _snap:

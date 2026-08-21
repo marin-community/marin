@@ -166,18 +166,17 @@ twelve `WorkloadPriorityClass` objects at startup.
 | --- | ---: | ---: | ---: |
 | batch | 0 | 1 | 2 |
 | interactive | 10 | 11 | 12 |
-| priority | 100 | 101 | 102 |
 | production | 1000 | 1000 | 1000 |
+| system | 10000 | 10000 | 10000 |
 
-Batch, interactive, and priority workloads are ordered CPU < accelerator <
-co-scheduled group within their band. Kueue can reclaim same-band CPU
-reservations for one accelerator Pod, or both lower tiers for a co-scheduled GPU
-group. Production workloads share one Kueue priority, so one production
-workload cannot preempt another based on request shape. A user-selected higher
-band still outranks every tier in the band below it. Pod `priorityClassName`
-remains the ordinary Iris band, so this ordering affects Kueue admission and
-preemption but does not change kube-scheduler priority within an admitted
-workload.
+Batch and interactive workloads are ordered CPU < accelerator < co-scheduled
+group within their band. Kueue can reclaim same-band CPU reservations for one
+accelerator Pod, or both lower tiers for a co-scheduled GPU group. SYSTEM and
+PRODUCTION workloads share one Kueue priority within their respective bands, so
+request shape cannot cause same-band preemption. A higher band still outranks
+every tier in the band below it. Pod `priorityClassName` remains the ordinary
+Iris band, so this ordering affects Kueue admission and preemption but does not
+change kube-scheduler priority within an admitted workload.
 
 For example, a `batch` CPU coordinator uses tier `0`, its separately admitted
 accelerator child uses tier `1`, and a co-scheduled CPU/GPU group uses tier `2`.
@@ -191,14 +190,14 @@ domains, but neither representation places Iris work below the health checker.
 
 ```mermaid
 flowchart TD
-    request[RunTaskRequest] --> production{Production band?}
-    production -- Yes --> prod[Use production priority 1000]
-    production -- No --> gang
+    request[RunTaskRequest] --> protected{System or production band?}
+    protected -- Yes --> fixed[Use the band's fixed priority]
+    protected -- No --> gang
     gang -- Yes --> native[Use band plus 2<br/>co-scheduled tier]
     gang -- No --> accelerator{Accelerator requested?}
     accelerator -- Yes --> gpu[Use band plus 1<br/>accelerator tier]
     accelerator -- No --> cpu[Use native Iris band<br/>CPU tier]
-    prod --> queue[Kueue LocalQueue and shared ClusterQueue]
+    fixed --> queue[Kueue LocalQueue and shared ClusterQueue]
     native --> queue[Kueue LocalQueue and shared ClusterQueue]
     gpu --> queue
     cpu --> queue

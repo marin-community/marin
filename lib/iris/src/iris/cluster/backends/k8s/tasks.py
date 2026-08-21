@@ -71,8 +71,8 @@ from iris.cluster.platforms.k8s.types import (
     IRIS_MANAGED_LABEL,
     IRIS_PRIORITY_CLASS_BATCH,
     IRIS_PRIORITY_CLASS_INTERACTIVE,
-    IRIS_PRIORITY_CLASS_PRIORITY,
     IRIS_PRIORITY_CLASS_PRODUCTION,
+    IRIS_PRIORITY_CLASS_SYSTEM,
     IRIS_RUNTIME_LABEL,
     IRIS_TASK_CONTAINER_NAME,
     IRIS_TASK_ID_ANNOTATION,
@@ -278,8 +278,8 @@ _CW_DEFAULT_TOPOLOGIES: dict[str, KueueTopologyBinding] = {
 _KUEUE_SINGLE_POD_TOPOLOGY = "kubernetes.io/hostname"
 
 _DEFAULT_PRIORITY_CLASS_NAMES: dict[int, str] = {
+    job_pb2.PRIORITY_BAND_SYSTEM: IRIS_PRIORITY_CLASS_SYSTEM,
     job_pb2.PRIORITY_BAND_PRODUCTION: IRIS_PRIORITY_CLASS_PRODUCTION,
-    job_pb2.PRIORITY_BAND_PRIORITY: IRIS_PRIORITY_CLASS_PRIORITY,
     job_pb2.PRIORITY_BAND_INTERACTIVE: IRIS_PRIORITY_CLASS_INTERACTIVE,
     job_pb2.PRIORITY_BAND_BATCH: IRIS_PRIORITY_CLASS_BATCH,
 }
@@ -675,7 +675,8 @@ def _build_pdb_manifest(
     }
     if managed_label:
         labels[managed_label] = "true"
-    availability = {"minAvailable": 1} if priority_band == job_pb2.PRIORITY_BAND_PRODUCTION else {"maxUnavailable": 1}
+    protected_bands = (job_pb2.PRIORITY_BAND_SYSTEM, job_pb2.PRIORITY_BAND_PRODUCTION)
+    availability = {"minAvailable": 1} if priority_band in protected_bands else {"maxUnavailable": 1}
     return {
         "apiVersion": "policy/v1",
         "kind": "PodDisruptionBudget",

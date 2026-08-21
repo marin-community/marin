@@ -97,14 +97,14 @@ def test_all_priority_bands_are_scheduled_in_policy_order():
             ("alice", "interactive-job", job_pb2.PRIORITY_BAND_INTERACTIVE),
             ("bob", "batch-job", job_pb2.PRIORITY_BAND_BATCH),
             ("charlie", "production-job", job_pb2.PRIORITY_BAND_PRODUCTION),
-            ("dana", "priority-job", job_pb2.PRIORITY_BAND_PRIORITY),
+            ("dana", "system-job", job_pb2.PRIORITY_BAND_SYSTEM),
         ]:
             [task] = _submit_user_job(state, user, name, band=band)
             task_bands[task.task_id] = band
 
         assert [task_bands[task.task_id] for task in _pending_sorted(state)] == [
+            job_pb2.PRIORITY_BAND_SYSTEM,
             job_pb2.PRIORITY_BAND_PRODUCTION,
-            job_pb2.PRIORITY_BAND_PRIORITY,
             job_pb2.PRIORITY_BAND_INTERACTIVE,
             job_pb2.PRIORITY_BAND_BATCH,
         ]

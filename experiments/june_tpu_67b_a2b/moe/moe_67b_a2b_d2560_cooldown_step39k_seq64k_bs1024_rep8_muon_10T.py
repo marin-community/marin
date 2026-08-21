@@ -31,11 +31,11 @@ chip gets **1 sequence of length 64 k** per step. Full-attention "long"
 layers (every 4th + last, 7 of 26) at seq=64 k are the memory tight spot;
 short (sliding-window) layers stay bounded by ``sliding_window=2048``.
 
-Submit (us-central2, production, --no-preemptible)::
+Submit (us-central2, system, --no-preemptible)::
 
     WANDB_KEY=$(python3 -c "import os; print(os.environ['WANDB_API_KEY'])") && \\
     .venv/bin/iris --cluster=marin job run --no-wait --region us-central2 \\
-        --priority production --production-needed="67B cooldown" --no-preemptible \\
+        --priority system --system-reason="hero 67B cooldown" --no-preemptible \\
         -e WANDB_API_KEY "$WANDB_KEY" \\
         -- python -m experiments.june_tpu_67b_a2b.moe.moe_67b_a2b_d2560_cooldown_step39k_seq64k_bs1024_rep8_muon_10T \\
            --version 2026.07.16 --run

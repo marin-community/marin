@@ -79,7 +79,7 @@ def compute_effective_band(
     ``task_band`` is a real band: ``LaunchJob`` resolves INHERIT once at ingestion (see
     :func:`iris.cluster.controller.ops.job.resolve_priority_band`).
     """
-    if task_band == job_pb2.PRIORITY_BAND_PRODUCTION:
+    if task_band in (job_pb2.PRIORITY_BAND_SYSTEM, job_pb2.PRIORITY_BAND_PRODUCTION):
         return task_band
     limit = user_budgets.get(user_id, defaults.budget_limit)
     if limit > 0 and user_spend.get(user_id, 0) > limit:
@@ -154,7 +154,7 @@ def reconcile_user_budget_tiers(
         for tier in tiers:
             if tier.max_band not in _VALID_TIER_BANDS:
                 raise ValueError(
-                    f"UserBudgetTier.max_band must be one of PRODUCTION/PRIORITY/INTERACTIVE/BATCH; "
+                    f"UserBudgetTier.max_band must be one of SYSTEM/PRODUCTION/INTERACTIVE/BATCH; "
                     f"got {tier.max_band} for users {list(tier.user_ids)}"
                 )
             for user_id in tier.user_ids:
