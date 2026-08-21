@@ -167,7 +167,6 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
         target_tokens = env_int("CANARY_TARGET_TOKENS", 250_000_000)
         name = "canary-ferry-moe"
         resources = ResourceConfig.with_tpu(_tpu_types_from_env())
-        eval_config = None
         wandb_group = "canary-ferry-moe"
         wandb_tags = ["canary", "ferry", "grug", "moe"]
 
@@ -234,8 +233,6 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
         name = f"canary-ferry-cw-{gpu_type.lower()}x{gpu_count}-r{gpu_replicas}-d{hidden_dim}-{attention_tag}"
         wandb_group = f"canary-ferry-moe-gpu-{gpu_type.lower()}-r{gpu_replicas}-{attention_tag}"
         wandb_tags = ["canary", "ferry", "grug", "moe", "gpu", gpu_type.lower(), f"d{hidden_dim}", attention_tag]
-        eval_config = None
-
         slimpajama = slimpajama_6b_dataset()
         deps = (slimpajama,)
 
@@ -305,7 +302,7 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
             tracker=build_tracker(ctx),
             optimizer=CANARY_OPTIMIZER,
             grug_trainer=CANARY_TRAINER,
-            eval=eval_config,
+            eval=None,
             profiler=ProfilerConfig(
                 enabled=profiler_enabled,
                 start_step=profiler_start_step,
