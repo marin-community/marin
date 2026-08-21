@@ -227,6 +227,12 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
         .find(|column| column.name == "name")
         .unwrap();
     assert!(name.index.trigram);
+    let process_index = schema
+        .columns
+        .iter()
+        .find(|column| column.name == "process_index")
+        .unwrap();
+    assert_eq!(process_index.index.exact_values, ["0"]);
     for column in [
         "run_id",
         "job_id",
@@ -273,6 +279,7 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
             "phase",
             "progress_time_seconds",
             "step",
+            "train_loss",
         ]
     );
     let projections: BTreeMap<_, _> = schema
@@ -294,6 +301,7 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
             "accelerator-utilization",
             "node-host-network",
             "node-host-utilization",
+            "training-process-zero",
             "training-run-attribution",
             "training-status",
         ]
@@ -330,8 +338,20 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
         .columns
         .iter()
         .any(|column| column == "attributes_json"));
+    assert_eq!(
+        training_status.predicate_values,
+        ["phase", "progress_time_seconds", "step"]
+    );
     for column in ["run_id", "job_id"] {
         assert!(training_status.columns.iter().any(|item| item == column));
+    }
+    let process_zero = projections
+        .get("training-process-zero")
+        .expect("process-zero training projection");
+    assert_eq!(process_zero.predicate_column, "process_index");
+    assert_eq!(process_zero.predicate_values, ["0"]);
+    for column in ["run_id", "execution_uid", "process_index", "name", "value"] {
+        assert!(process_zero.columns.iter().any(|item| item == column));
     }
     assert_eq!(schema.grouped_extrema.len(), 1);
     let grouped = &schema.grouped_extrema[0];

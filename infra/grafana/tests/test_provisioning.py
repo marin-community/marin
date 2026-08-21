@@ -685,6 +685,7 @@ def test_training_loss_by_step_uses_the_newest_retry_sample():
             service VARCHAR,
             run_id VARCHAR,
             execution_uid VARCHAR,
+            process_index VARCHAR,
             name VARCHAR,
             value DOUBLE,
             timestamp_ms BIGINT,
@@ -694,14 +695,16 @@ def test_training_loss_by_step_uses_the_newest_retry_sample():
     )
     at = int(datetime(2026, 8, 20, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
-        "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, ?, ?, ?, ?)",
+        "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, ?, ?, ?, ?, ?)",
         [
-            ("attempt-1", "step", 10, at, 1),
-            ("attempt-1", "train_loss", 2.0, at, 2),
-            ("attempt-1", "step", 11, at + 1_000, 3),
-            ("attempt-1", "train_loss", 1.9, at + 1_000, 4),
-            ("attempt-2", "step", 10, at + 2_000, 1),
-            ("attempt-2", "train_loss", 2.2, at + 2_000, 2),
+            ("attempt-1", "0", "step", 10, at, 1),
+            ("attempt-1", "0", "train_loss", 2.0, at, 2),
+            ("attempt-1", "0", "step", 11, at + 1_000, 3),
+            ("attempt-1", "0", "train_loss", 1.9, at + 1_000, 4),
+            ("attempt-2", "0", "step", 10, at + 2_000, 1),
+            ("attempt-2", "0", "train_loss", 2.2, at + 2_000, 2),
+            ("attempt-rank-1", "1", "step", 12, at + 3_000, 1),
+            ("attempt-rank-1", "1", "train_loss", 9.9, at + 3_000, 2),
         ],
     )
 
