@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from unittest.mock import patch
 
 import pytest
-from iris.client import IrisClient, IrisContext, iris_ctx_scope
+from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
@@ -63,13 +63,11 @@ def parent_context(capturing_client):
 def _parent_job_info(
     env: dict[str, str],
     constraints: list[Constraint] | None = None,
-    worker_region: str | None = None,
 ) -> JobInfo:
     return JobInfo(
         task_id=JobName.from_wire("/parent-job/0"),
         env=env,
         constraints=constraints or [],
-        worker_region=worker_region,
     )
 
 
@@ -166,58 +164,6 @@ def test_child_explicit_constraints_override_parent(capturing_client, parent_con
     )
 
 
-def test_child_inherits_parent_worker_region(capturing_client, parent_context):
-    """Children co-locate with the parent worker's region by default."""
-    client, stub = capturing_client
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
-
-    with (
-        iris_ctx_scope(parent_context),
-        patch("iris.client.client.get_job_info", return_value=_parent_job_info({}, worker_region="us-central2")),
-    ):
-        client.submit(entrypoint, "child-inherits-region", resources)
-
-    assert any(
-        c.key == WellKnownAttribute.REGION and c.value.string_value == "us-central2" for c in stub.captured_constraints
-    )
-
-
-def test_child_explicit_region_overrides_parent_worker_region(capturing_client, parent_context):
-    """An explicit region constraint on the child wins over the inherited worker_region."""
-    client, stub = capturing_client
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
-    child_constraints = [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="europe-west4")]
-
-    with (
-        iris_ctx_scope(parent_context),
-        patch("iris.client.client.get_job_info", return_value=_parent_job_info({}, worker_region="us-central2")),
-    ):
-        client.submit(entrypoint, "child-explicit-region", resources, constraints=child_constraints)
-
-    region_constraints = [c for c in stub.captured_constraints if c.key == WellKnownAttribute.REGION]
-    assert len(region_constraints) == 1
-    assert region_constraints[0].value.string_value == "europe-west4"
-
-
-def test_child_any_region_marker_suppresses_inherited_worker_region(capturing_client, parent_context):
-    """A child carrying the ANY marker submits with no region constraint, even when the
-    parent worker has a region to inherit."""
-    client, stub = capturing_client
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
-
-    with (
-        iris_ctx_scope(parent_context),
-        patch("iris.client.client.get_job_info", return_value=_parent_job_info({}, worker_region="us-central2")),
-    ):
-        client.submit(entrypoint, "child-any-region", resources, constraints=[any_region_constraint()])
-
-    region_constraints = [c for c in stub.captured_constraints if c.key == WellKnownAttribute.REGION]
-    assert region_constraints == []
-
-
 def test_child_any_region_marker_clears_inherited_region_constraint(capturing_client, parent_context):
     """A child carrying the ANY marker submits with no region constraint, even when the
     parent job is pinned to a region."""
@@ -230,7 +176,7 @@ def test_child_any_region_marker_clears_inherited_region_constraint(capturing_cl
         iris_ctx_scope(parent_context),
         patch(
             "iris.client.client.get_job_info",
-            return_value=_parent_job_info({}, constraints=parent_constraints, worker_region="us-west4"),
+            return_value=_parent_job_info({}, constraints=parent_constraints),
         ),
     ):
         client.submit(entrypoint, "child-any-clears-pin", resources, constraints=[any_region_constraint()])

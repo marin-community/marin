@@ -14,9 +14,16 @@ import json
 
 import pytest
 from marin.execution.step_spec import StepSpec
+from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs_step
+from marin.processing.classification.deduplication.fuzzy_minhash import compute_minhash_attrs_step
 
 from experiments.datakit import reference_pipeline
-from experiments.datakit.reference_pipeline import SMOKE_SCALE, PoolConfig, StoreConfig, reference_datakit_steps
+from experiments.datakit.reference_pipeline import (
+    SMOKE_SCALE,
+    PoolConfig,
+    reference_datakit_steps,
+    zephyr_datakit_steps,
+)
 from experiments.datakit.zephyr_benchmark import _route_outputs
 
 
@@ -82,23 +89,23 @@ def test_store_hash_tracks_content_not_resources():
     # cluster_view is read by the store fn and NOT captured by any dep -> must re-key.
     cv = dataclasses.replace(SMOKE_SCALE.cluster, cluster_view=16)
     changed = _build(scale=dataclasses.replace(SMOKE_SCALE, cluster=cv)).output_buckets.hash_id
-    layout = dataclasses.replace(SMOKE_SCALE.store, default_subshards=2)
+    layout = dataclasses.replace(SMOKE_SCALE.store, task_count=2)
     relaid = _build(scale=dataclasses.replace(SMOKE_SCALE, store=layout)).output_buckets.hash_id
     # The worker fleet is execution policy -> must NOT re-key.
     pool = dataclasses.replace(SMOKE_SCALE, pool=PoolConfig(n_workers=999))
     resourced = _build(scale=pool).output_buckets.hash_id
-    execution = StoreConfig(
-        shards_per_task=99,
-        reduce_shards=7,
-        target_tokens_per_subshard=SMOKE_SCALE.store.target_tokens_per_subshard,
-        max_subshards=SMOKE_SCALE.store.max_subshards,
-        default_subshards=SMOKE_SCALE.store.default_subshards,
-    )
+    execution = dataclasses.replace(SMOKE_SCALE.store, max_parallel_bucket_writes=1)
     rescheduled = _build(scale=dataclasses.replace(SMOKE_SCALE, store=execution)).output_buckets.hash_id
+    spill_execution = dataclasses.replace(SMOKE_SCALE.store, partition_processes=2)
+    respilled = _build(scale=dataclasses.replace(SMOKE_SCALE, store=spill_execution)).output_buckets.hash_id
+    store_worker = dataclasses.replace(SMOKE_SCALE.store, worker=PoolConfig().worker)
+    resized = _build(scale=dataclasses.replace(SMOKE_SCALE, store=store_worker)).output_buckets.hash_id
     assert changed != base
     assert relaid != base
     assert resourced == base
     assert rescheduled == base
+    assert respilled == base
+    assert resized == base
 
 
 def test_minhash_params_rekey_minhash_and_dedup():
@@ -172,3 +179,35 @@ def test_centroids_version_not_path_drives_identity():
         return _steps_by_name(result)["datakit/cluster_assign/a"].hash_id
 
     assert assign_hash("gs://region-a/centroids") == assign_hash("gs://region-b/centroids")
+
+
+def test_dedup_step_builders_match_the_datakit_graph_identity():
+    """A step built by the helpers must resolve to the artifacts the DAG produced.
+
+    The two constructions hashed different key names, so a helper-built step
+    pointed at a fresh output tree and would recompute every MinHash source.
+    """
+    sources = _sources()
+    graph = zephyr_datakit_steps(sources, SMOKE_SCALE)
+    minhash = {
+        name: compute_minhash_attrs_step(
+            name=f"datakit/minhash/{name}",
+            normalize=step,
+            num_perms=SMOKE_SCALE.minhash.num_perms,
+            num_bands=SMOKE_SCALE.minhash.num_bands,
+            ngram_size=SMOKE_SCALE.minhash.ngram_size,
+            text_cap_chars=SMOKE_SCALE.minhash.text_cap_chars,
+            seed=SMOKE_SCALE.minhash.seed,
+        )
+        for name, step in sources.items()
+    }
+    dedup = compute_fuzzy_dups_attrs_step(
+        name="datakit/dedup",
+        minhash_steps=list(minhash.values()),
+        max_parallelism=SMOKE_SCALE.dedup_max_parallelism,
+    )
+
+    assert {name: step.hash_id for name, step in minhash.items()} == {
+        name: step.hash_id for name, step in graph.minhash.items()
+    }
+    assert dedup.hash_id == graph.fuzzy_dedup.hash_id

@@ -50,6 +50,7 @@ from marin.execution.lazy import ArtifactStep
 from marin.execution.remote import remote
 from marin.experiment.cli import build_options
 from marin.experiment.data import tokenized
+from marin.experiment.namespacing import user_owned_name
 from marin.experiment.train import train_lm
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.rl.skyrl import (
@@ -59,6 +60,7 @@ from marin.rl.skyrl import (
     IrisSkyRLExecution,
     SkyRLEvaluationModel,
     SkyRLModel,
+    SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRuntime,
     SkyRLRuntimeProfile,
@@ -67,7 +69,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.writers import write_parquet_file
 
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
@@ -175,7 +177,6 @@ trainer:
   eval_before_train: false
   eval_interval: -1
   ckpt_interval: 2
-  hf_save_interval: 8
   resume_mode: latest
   logger: wandb
   project_name: {ICEBALL_WANDB_PROJECT}
@@ -421,11 +422,12 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
     sft = sft_step(sft_spec, resources_from_accelerator(ICEBALL_TRAIN_ACCELERATOR))
 
     gsm8k = _gsm8k_step(version or resolve_version(GSM8K_ARTIFACT_NAME, None), data_resources)
-    rl_name = f"checkpoints/{ICEBALL_MODEL_NAME}-rl"
+    rl_base_name = f"checkpoints/{ICEBALL_MODEL_NAME}-rl"
+    rl_name = user_owned_name(rl_base_name)
     rl = skyrl_step(
         SkyRLSpec(
             name=rl_name,
-            version=version or resolve_version(rl_name, None),
+            version=version or resolve_version(rl_base_name, None),
             config_yaml=ICEBALL_RL_CONFIG,
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
             model=ArtifactHfModel(
@@ -441,6 +443,7 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
                 gpu_variant=ICEBALL_GPU_VARIANT,
                 role_plan=ICEBALL_RL_ROLE_PLAN,
             ),
+            retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
             seed=17,
         ),
         IrisSkyRLExecution(

@@ -13,10 +13,11 @@ from typing import Any, Generic, Literal, TypeVar, cast, overload
 import fsspec
 from braceexpand import braceexpand
 from pyarrow import RecordBatch
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 from zephyr.expr import Expr
-from zephyr.readers import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
+from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
 
 logger = logging.getLogger(__name__)
 

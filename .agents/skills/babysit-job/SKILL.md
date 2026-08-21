@@ -137,7 +137,7 @@ part of the setup. The state file allows resume after context reset.
 3a. ON TERMINAL STATE / OOM-LIKE SIGNAL — get a structured per-task summary
    (final state, exit, duration, peak memory) instead of grepping logs:
 
-   uv run iris --config <CONFIG> job summary <JOB_ID>
+   uv run iris --config <CONFIG> job describe <JOB_ID>
 
    Fast postmortem: e.g. "13/14 shards peaked near the container memory limit
    and failed with exit 137" → cgroup OOM, raise `--memory` on resubmit.
@@ -158,7 +158,7 @@ part of the setup. The state file allows resume after context reset.
 
 7. RECOVER (STOP -> RESUBMIT)
    - If current job is still non-terminal, stop it first:
-     uv run iris --config <CONFIG> job stop <JOB_ID>
+     uv run iris --config <CONFIG> job cancel --exact <JOB_ID>
    - Then resubmit:
      <RESUBMIT_COMMAND>
    - Capture `job_id` from output (line like `Job submitted: /<user>/<job>`).

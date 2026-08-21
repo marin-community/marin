@@ -22,7 +22,9 @@ from levanter.main.train_lm import TrainLmConfig
 from levanter.schedule import BatchSchedule
 from mergedeep import mergedeep
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, check_gcs_paths_same_region, marin_temp_bucket, prefix_join, url_to_fs
+from rigging.filesystem.cluster_config import check_gcs_paths_same_region, marin_temp_bucket
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.execution.artifact import Artifact
 from marin.processing.tokenize import read_tokenized_cache_stats
@@ -149,15 +151,24 @@ def _output_path_temp_component(output_path: str) -> str:
     return output_path.strip("/")
 
 
-def temporary_checkpoint_base_path(output_path: str) -> str:
-    """Return the region-local temporary checkpoint base for an executor output path."""
+def temporary_storage_base_path(output_path: str, *, ttl_days: int, category: str) -> str:
+    """Return region-local temporary storage keyed by an executor output path."""
     output_component = _output_path_temp_component(output_path)
-    temp_prefix = os.path.join(TEMPORARY_CHECKPOINTS_PATH, output_component, DEFAULT_CHECKPOINTS_PATH)
     return marin_temp_bucket(
-        ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
-        prefix=temp_prefix,
+        ttl_days=ttl_days,
+        prefix=os.path.join(category, output_component),
         source_prefix=output_path,
     )
+
+
+def temporary_checkpoint_base_path(output_path: str) -> str:
+    """Return the region-local temporary checkpoint base for an executor output path."""
+    temporary_root = temporary_storage_base_path(
+        output_path,
+        ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
+        category=TEMPORARY_CHECKPOINTS_PATH,
+    )
+    return prefix_join(temporary_root, DEFAULT_CHECKPOINTS_PATH)
 
 
 def resolve_checkpointer_output_path(checkpointer: CheckpointerConfig, output_path: str) -> CheckpointerConfig:

@@ -11,9 +11,9 @@ live next to their mechanism (the worker daemon, the k8s backend's task collecto
 the autoscaler, the controller's task-state emitter) and import their row types
 from here; ``LogStack`` resolves every table from this catalog.
 
-- ``iris.worker`` / ``iris.task`` — worker-emitted host and per-attempt resource
-  rows. Kubernetes task rows come from metrics-server; physical-node hardware
-  readings use the normalized telemetry stream.
+- ``iris.worker`` / ``iris.task`` — host and per-attempt resource rows. Worker
+  daemons emit both on VM/TPU backends; Kubernetes node agents derive task rows
+  from kubelet resource metrics and publish hardware through normalized telemetry.
 - ``iris.task_status`` — markdown status text pushed from inside a running task
   via ``RemoteClusterClient.report_task_status_text``.
 - ``iris.task_event`` — backend events and controller actions per task attempt.
@@ -146,11 +146,10 @@ class IrisWorkerStat:
 class IrisTaskStat:
     """One row per attempt resource update."""
 
-    # Dashboard hot path is ``WHERE task_id IN (...) ORDER BY ts DESC LIMIT 1``
-    # per task. Sorting compacted segments by task_id (with seq as the
-    # secondary key, monotonic with ts because seq is allocated at the
-    # insertion lock) gives parquet row-group pruning on task_id while
-    # preserving in-task time order within each group.
+    # Finelog derives the dashboard IN list's shared task prefix into a range.
+    # Sorting compacted segments by task_id (with seq as the secondary key,
+    # monotonic with ts because seq is allocated at the insertion lock) lets
+    # that range prune parquet row groups while preserving in-task time order.
     key_column: ClassVar[str] = "task_id"
 
     task_id: str

@@ -1,7 +1,7 @@
 {
   "uid": "infra",
   "title": "Infra",
-  "description": "Marin infrastructure status: nightly regressions, GitHub CI, workers, provisioning, and hero training.",
+  "description": "Marin infrastructure status: nightly regressions, GitHub CI, workers, and hero training.",
   "tags": [
     "marin"
   ],
@@ -28,14 +28,27 @@
       "url": "/d/marin-home"
     },
     {
+      "linkRef": "fleet_accelerators_without_vars"
+    },
+    {
       "asDropdown": false,
       "icon": "dashboard",
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Accelerators",
+      "title": "Node details",
       "type": "link",
-      "url": "/d/marin-accel"
+      "url": "/d/marin-nodes"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Node pools",
+      "type": "link",
+      "url": "/d/marin-node-pools"
     },
     {
       "asDropdown": false,
@@ -58,14 +71,10 @@
       "url": "/d/marin-runs"
     },
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": false,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Clusters",
-      "type": "link",
-      "url": "/d/marin-clusters"
+      "linkRef": "fleet_health_without_vars"
+    },
+    {
+      "linkRef": "cluster_capacity_without_vars"
     },
     {
       "asDropdown": false,
@@ -73,9 +82,9 @@
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Pipelines",
+      "title": "Training run",
       "type": "link",
-      "url": "/d/marin-pipelines"
+      "url": "/d/marin-training"
     },
     {
       "asDropdown": false,
@@ -86,6 +95,16 @@
       "title": "Inference",
       "type": "link",
       "url": "/d/marin-inference"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": false,
+      "targetBlank": false,
+      "title": "Storage",
+      "type": "link",
+      "url": "/d/marin-storage"
     },
     {
       "asDropdown": false,
@@ -310,174 +329,6 @@
             {
               "selector": "tpu_chips",
               "text": "tpu_chips",
-              "type": "number"
-            }
-          ]
-        },
-        {
-          "refId": "P",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/overview/provisioning",
-          "url_options": {
-            "method": "GET",
-            "params": []
-          },
-          "columns": [
-            {
-              "selector": "scope",
-              "text": "scope",
-              "type": "string"
-            },
-            {
-              "selector": "collected_at",
-              "text": "collected_at",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "zone",
-              "text": "zone",
-              "type": "string"
-            },
-            {
-              "selector": "ready",
-              "text": "ready",
-              "type": "number"
-            },
-            {
-              "selector": "stockout",
-              "text": "stockout",
-              "type": "number"
-            },
-            {
-              "selector": "error",
-              "text": "error",
-              "type": "number"
-            },
-            {
-              "selector": "preempted",
-              "text": "preempted",
-              "type": "number"
-            },
-            {
-              "selector": "outcomes",
-              "text": "outcomes",
-              "type": "number"
-            },
-            {
-              "selector": "success_ratio",
-              "text": "success_ratio",
-              "type": "number"
-            },
-            {
-              "selector": "pools_placing",
-              "text": "pools_placing",
-              "type": "number"
-            },
-            {
-              "selector": "pools_no_ready_outcome",
-              "text": "pools_no_ready_outcome",
-              "type": "number"
-            },
-            {
-              "selector": "latency_p50_seconds",
-              "text": "latency_p50_seconds",
-              "type": "number"
-            },
-            {
-              "selector": "latency_p95_seconds",
-              "text": "latency_p95_seconds",
-              "type": "number"
-            },
-            {
-              "selector": "window_hours",
-              "text": "window_hours",
-              "type": "number"
-            }
-          ]
-        },
-        {
-          "refId": "H",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/finelog/marin/query",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "sql",
-                "value": "SELECT collected_at AS t, value, labels FROM \"infra.canary.metrics\" WHERE metric = 'worker_healthy' AND contains(labels, '\"region\"') AND collected_at >= {{from}} AND collected_at < {{to}} ORDER BY collected_at"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "label_region",
-              "text": "region",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "workers",
-              "type": "number"
-            }
-          ]
-        },
-        {
-          "refId": "R",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/finelog/marin/query",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "sql",
-                "value": "WITH region_counts AS (SELECT collected_at AS t, CASE WHEN regexp_matches(json_get(labels, 'zone'), '^[a-z]+-[a-z]+[0-9]+-[a-z]$') THEN regexp_replace(json_get(labels, 'zone'), '-[a-z]$', '') ELSE json_get(labels, 'zone') END AS series, SUM(CASE WHEN metric = 'provision_ready' THEN value ELSE 0 END) AS ready, SUM(CASE WHEN metric = 'provision_outcomes' THEN value ELSE 0 END) AS outcomes FROM \"infra.canary.metrics\" WHERE metric IN ('provision_ready', 'provision_outcomes') AND COALESCE(json_get(labels, 'zone'), '') <> '' AND collected_at >= {{from}} AND collected_at < {{to}} GROUP BY 1, 2), regional AS (SELECT t, series, ready / NULLIF(outcomes, 0) AS value FROM region_counts WHERE outcomes > 0), fleet AS (SELECT collected_at AS t, 'fleet' AS series, value FROM \"infra.canary.metrics\" WHERE metric = 'provision_success_ratio' AND contains(labels, '\"scope\": \"fleet\"') AND collected_at >= {{from}} AND collected_at < {{to}}) SELECT t, series, value FROM fleet UNION ALL SELECT t, series, value FROM regional ORDER BY t, series"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "region",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "success_ratio",
               "type": "number"
             }
           ]

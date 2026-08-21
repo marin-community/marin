@@ -264,3 +264,6 @@ experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_
 .cw_env
 .fieldbook.session
 .localbin/
+
+# Stamped into built artifacts by lib/iris/hatch_build.py; never tracked.
+lib/iris/src/iris/_build_info.py

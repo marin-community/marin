@@ -19,7 +19,7 @@ from typing import Any, cast
 import fsspec
 import wandb
 from fray.iris_backend import convert_constraints, convert_resources
-from iris.client import iris_ctx
+from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import preemptible_constraint
 from iris.cluster.types import Entrypoint, JobName, TaskAttempt

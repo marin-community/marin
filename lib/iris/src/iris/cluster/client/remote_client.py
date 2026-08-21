@@ -4,6 +4,7 @@
 """RPC-based cluster client implementation."""
 
 import logging
+import re
 import time
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
@@ -85,6 +86,7 @@ class RemoteClusterClient:
         interceptors: Iterable[InterceptorSync] = (),
         use_controller_proxy: bool = True,
         extra_bundle_includes: Sequence[str] = (),
+        bundle_exclude: re.Pattern[str] | None = None,
     ):
         """Initialize RPC cluster operations.
 
@@ -106,6 +108,7 @@ class RemoteClusterClient:
         self._bundle_id = bundle_id
         self._workspace = workspace.resolve() if workspace is not None else None
         self._extra_bundle_includes = extra_bundle_includes
+        self._bundle_exclude = bundle_exclude
         self._bundle_blob: bytes | None = None
         self._timeout_ms = timeout_ms
         self._use_controller_proxy = use_controller_proxy
@@ -199,7 +202,9 @@ class RemoteClusterClient:
             request.bundle_id = self._bundle_id
         else:
             if self._bundle_blob is None and self._workspace is not None:
-                self._bundle_blob = create_workspace_zip(self._workspace, extra_includes=self._extra_bundle_includes)
+                self._bundle_blob = create_workspace_zip(
+                    self._workspace, exclude=self._bundle_exclude, extra_includes=self._extra_bundle_includes
+                )
                 logger.info(f"Workspace bundle size: {len(self._bundle_blob) / 1024 / 1024:.1f} MB")
             request.bundle_blob = self._bundle_blob or b""
 
@@ -310,6 +315,7 @@ class RemoteClusterClient:
         poll_interval: float = MAX_STATE_POLL_INTERVAL,
         since_ms: int = 0,
         min_level: str = "",
+        substring: str = "",
     ) -> job_pb2.JobStatus:
         """Wait for job completion while streaming task logs via the controller RPC.
 
@@ -352,6 +358,7 @@ class RemoteClusterClient:
                     since_ms=since_ms,
                     cursor=cursor,
                     min_level=min_level,
+                    substring=substring,
                 )
             except Exception as e:
                 msg = format_connect_error(e) if isinstance(e, ConnectError) else str(e)
@@ -393,6 +400,10 @@ class RemoteClusterClient:
     def terminate_job(self, job_id: JobName) -> None:
         request = controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire())
         self._client.terminate_job(request)
+
+    def complete_job(self, job_id: JobName) -> None:
+        request = controller_pb2.Controller.CompleteJobRequest(job_id=job_id.to_wire())
+        self._client.complete_job(request)
 
     def register_endpoint(
         self,
@@ -505,7 +516,7 @@ class RemoteClusterClient:
         self._log_client.close()
         self._client.close()
 
-    def get_task_status(self, task_name: JobName) -> job_pb2.TaskStatus:
+    def get_task_status(self, task_name: JobName, *, deadline: Deadline | None = None) -> job_pb2.TaskStatus:
         """Get status of a specific task within a job.
 
         Args:
@@ -514,14 +525,29 @@ class RemoteClusterClient:
         Returns:
             TaskStatus proto for the requested task
         """
+        return self.get_task_description(task_name, deadline=deadline).task
+
+    def get_task_description(
+        self,
+        task_name: JobName,
+        *,
+        deadline: Deadline | None = None,
+    ) -> controller_pb2.Controller.GetTaskStatusResponse:
+        """Get a Task snapshot with submitted resources and failure diagnostics."""
         task_name.require_task()
 
         def _call():
             request = controller_pb2.Controller.GetTaskStatusRequest(task_id=task_name.to_wire())
-            response = self._client.get_task_status(request)
-            return response.task
+            timeout_ms = min(self._timeout_ms, max(1, deadline.remaining_ms())) if deadline is not None else None
+            return self._client.get_task_status(request, timeout_ms=timeout_ms)
 
-        return call_with_retry(f"get_task_status({task_name})", _call)
+        if deadline is None:
+            return call_with_retry(f"get_task_description({task_name})", _call)
+        return call_with_retry(
+            f"get_task_description({task_name})",
+            _call,
+            max_elapsed=deadline.remaining_seconds(),
+        )
 
     def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
         """List all tasks for a job.

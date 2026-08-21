@@ -139,23 +139,3 @@ def canonicalize_batch(batch: Union[dict, list[dict], pa.RecordBatch]) -> list[d
         return [{key: values[i][j] for i, key in enumerate(keys)} for j in range(num_rows)]
 
     return list(batch)
-
-
-class IdentityProcessor(BatchProcessor[T, T]):
-    def __init__(self, exemplar):
-        self.exemplar = exemplar
-
-    def __call__(self, batch: Sequence[T]) -> Sequence[T]:
-        return batch
-
-    @property
-    def output_exemplar(self):
-        return self.exemplar
-
-    @property
-    def num_cpus(self) -> float:
-        return 0.1
-
-    @property
-    def metadata(self) -> Dict[str, Any]:
-        return {}

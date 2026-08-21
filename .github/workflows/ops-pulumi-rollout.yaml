@@ -1,0 +1,111 @@
+name: "Ops - Pulumi Rollout"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Registered service to deploy"
+        required: true
+        type: string
+      deploy_generation:
+        description: "Optional forced-redeploy generation for services that support it"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.rollouts.outputs.deploy }}
+      test: ${{ steps.rollouts.outputs.test }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Select rollouts
+        id: rollouts
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SERVICE: ${{ inputs.service }}
+          DEPLOY_GENERATION: ${{ inputs.deploy_generation }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            payload="$(python3 scripts/ci/pulumi_rollouts.py \
+              --service "$SERVICE" --deploy-generation "$DEPLOY_GENERATION")"
+          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
+            payload="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" | python3 scripts/ci/pulumi_rollouts.py)"
+          else
+            payload="$(git diff --name-only "$BEFORE_SHA" "$HEAD_SHA" | python3 scripts/ci/pulumi_rollouts.py)"
+          fi
+          echo "deploy=$(jq -c .deploy <<<"$payload")" >> "$GITHUB_OUTPUT"
+          echo "test=$(jq -c .test <<<"$payload")" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: discover
+    if: github.event_name == 'pull_request' && needs.discover.outputs.test != '{"include":[]}'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover.outputs.test) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Test the service
+        working-directory: ${{ matrix.test_path }}
+        run: uv run pytest
+
+  deploy:
+    needs: discover
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.event_name != 'pull_request' &&
+      needs.discover.outputs.deploy != '{"include":[]}'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover.outputs.deploy) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout_minutes }}
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: pulumi-rollout-${{ matrix.name }}
+      cancel-in-progress: false
+    env:
+      DUCKY_GCS_HMAC_KEY_ID: ${{ matrix.name == 'ducky' && secrets.DUCKY_GCS_HMAC_KEY_ID || '' }}
+      DUCKY_GCS_HMAC_SECRET: ${{ matrix.name == 'ducky' && secrets.DUCKY_GCS_HMAC_SECRET || '' }}
+      R2_KEY_ID: ${{ matrix.name == 'ducky' && secrets.R2_ACCESS_KEY_ID || '' }}
+      R2_KEY_SECRET: ${{ matrix.name == 'ducky' && secrets.R2_SECRET_ACCESS_KEY || '' }}
+      DUCKY_CW_SECRET_KEY: ${{ matrix.name == 'ducky' && secrets.DUCKY_CW_SECRET_KEY || '' }}
+      CW_KEY_ID: ${{ matrix.name == 'xprof' && secrets.CW_ACCESS_KEY_ID || '' }}
+      CW_KEY_SECRET: ${{ matrix.name == 'xprof' && secrets.CW_SECRET_ACCESS_KEY || '' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Apply Pulumi stack
+        uses: ./.github/actions/pulumi-deploy
+        with:
+          stack: ${{ matrix.stack }}
+          work-dir: ${{ matrix.work_dir }}
+          service-account: ${{ matrix.service_account }}
+          gcp-project-id: hai-gcp-models
+          config-map: ${{ matrix.config_map }}
+          cloudflare-secret-name: ${{ matrix.cloudflare_secret_name }}

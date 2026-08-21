@@ -10,15 +10,17 @@ JAX is imported at call time — iris does not depend on jax.
 """
 
 import atexit
+import enum
 import logging
 import os
 import time
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from rigging.cache import sync_kv_cache
-from rigging.filesystem import marin_prefix, prefix_join
-from rigging.provenance import LAUNCH_PROVENANCE_ENV
+from finestore.fileset import FineStoreDirectory, fetch_file_set
+from rigging.filesystem.cluster_config import marin_prefix, marin_temp_bucket
+from rigging.filesystem.storage_path import prefix_join
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.actor.resolver import Resolver
@@ -38,8 +40,9 @@ logger = logging.getLogger(__name__)
 _COMPILATION_CACHE_SUBDIR = "compilation-cache"
 _XLA_AUTOTUNE_CACHE_SUBDIR = "xla/per-fusion-autotune"
 _XLA_AUTOTUNE_CACHE_DIR_FLAG = "--xla_gpu_per_fusion_autotune_cache_dir"
-# Object-store home (per build) that sync_kv_cache mirrors the node-local dir against.
+# Object-store home for the per-build FineStore file set.
 _XLA_AUTOTUNE_REMOTE_PREFIX = "xla-per-fusion-autotune"
+_XLA_AUTOTUNE_CACHE_TTL_DAYS = 30
 # JAX's RegisterTask barrier defaults to 300s. On a large gang (e.g. v5p-64 = 8 hosts) a
 # preemption-driven cold restart can have a random subset of hosts still doing uv-sync/import/
 # GCS-read setup past 300s, so the already-registered hosts hit DEADLINE_EXCEEDED and abort the
@@ -50,6 +53,13 @@ _JAX_DIST_INIT_TIMEOUT = 1800
 # This bounds how long healthy ranks wait after a peer process disappears before
 # JAX fate sharing tears the distributed world down and Iris can retry the gang.
 _JAX_DIST_HEARTBEAT_TIMEOUT = 100
+
+
+class _AutotuneCacheRole(enum.StrEnum):
+    UPLOADER = "uploader"
+    FETCHER = "fetcher"
+    NONE = "none"
+
 
 _JAX_ENV_KEYS = (
     "IRIS_TASK_ID",
@@ -137,7 +147,7 @@ def _enable_xla_autotune_cache() -> None:
     cache dir, which is remote. The flag is on ``xla_flags_to_exclude_from_cache_key``,
     so it stays out of the compilation cache key. XLA opens the directory from C++
     through ``tsl::Env``, which cannot read an object store, so the live directory
-    is always node-local and :func:`rigging.cache.sync_kv_cache` mirrors it.
+    is always node-local and FineStore publishes its files as transaction batches.
 
     GPU only: a TPU or CPU jaxlib aborts on an unknown ``--xla_gpu`` flag.
 
@@ -166,11 +176,65 @@ def _enable_xla_autotune_cache() -> None:
     os.environ["XLA_FLAGS"] = f"{xla_flags} {_XLA_AUTOTUNE_CACHE_DIR_FLAG}={autotune_dir}".strip()
     logger.info("XLA per-fusion autotune cache: %s", autotune_dir)
 
-    # Mirror the node-local cache to per-build object storage only on a real launch;
-    # off one (local dev, unit tests) the published provenance is absent and the
-    # cache stays node-local. sync_kv_cache namespaces it by the launch tree hash.
+    # One process per task populates its node-local mount before distributed init's
+    # barrier; only global process 0 uploads additions shared by all equivalent ranks.
+    # Off a real launch the published provenance is absent and the cache stays local.
     if os.environ.get(LAUNCH_PROVENANCE_ENV):
-        sync_kv_cache(_XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)
+        role = _autotune_cache_role()
+        if role is _AutotuneCacheRole.UPLOADER:
+            sync_file_set_cache(_XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)
+        elif role is _AutotuneCacheRole.FETCHER:
+            fetch_file_set_cache(_XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)
+
+
+def _file_set_cache_root(prefix: str) -> str | None:
+    tree_hash = launch_provenance().tree_hash
+    if not tree_hash:
+        return None
+    return prefix_join(marin_temp_bucket(_XLA_AUTOTUNE_CACHE_TTL_DAYS, prefix), tree_hash)
+
+
+def sync_file_set_cache(prefix: str, local: str) -> FineStoreDirectory | None:
+    """Start a file-set synchronizer, or return ``None`` when remote caching is unavailable."""
+    root = _file_set_cache_root(prefix)
+    if root is None:
+        return None
+    try:
+        return FineStoreDirectory(root, local)
+    except OSError as exc:
+        logger.warning("XLA autotune cache is unavailable; continuing with the node-local cache: %s", exc)
+        return None
+
+
+def fetch_file_set_cache(prefix: str, local: str) -> None:
+    """Fetch one build's committed file set without starting an uploader."""
+    root = _file_set_cache_root(prefix)
+    if root is not None:
+        try:
+            fetch_file_set(root, local)
+        except OSError as exc:
+            logger.warning("XLA autotune cache fetch failed; starting cold: %s", exc)
+
+
+def _autotune_cache_role() -> _AutotuneCacheRole:
+    """Select one cache fetcher per task and one uploader for the whole job."""
+    job_info = get_job_info()
+    raw_process_index = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV)
+    if raw_process_index is None:
+        if job_info is None or job_info.task_index == 0:
+            return _AutotuneCacheRole.UPLOADER
+        return _AutotuneCacheRole.FETCHER
+
+    process_index = int(raw_process_index)
+    if process_index == 0:
+        return _AutotuneCacheRole.UPLOADER
+
+    process_count = int(os.environ[IRIS_MULTIGPU_PROCESS_COUNT_ENV])
+    num_tasks = job_info.num_tasks if job_info is not None else 1
+    processes_per_task = process_count // num_tasks
+    if process_index % processes_per_task == 0:
+        return _AutotuneCacheRole.FETCHER
+    return _AutotuneCacheRole.NONE
 
 
 # An endpoint name that has not been registered yet surfaces differently across

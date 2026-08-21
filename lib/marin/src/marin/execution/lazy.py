@@ -35,7 +35,9 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Final, Generic, TypeVar, cast
 
-from rigging.filesystem import marin_prefix, marin_region, prefix_join, url_to_fs
+from rigging.filesystem.cluster_config import marin_prefix, marin_region
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import prefix_join
 from rigging.provenance import Provenance
 
 from marin.execution.artifact import (
@@ -312,7 +314,7 @@ def _output_path_spec(handle: "ArtifactStep") -> str:
     return handle.override_path or f"{handle.name}/{handle.version}"
 
 
-def _lower(handle: "ArtifactStep", provenance: Provenance) -> StepSpec:
+def _lower(handle: "ArtifactStep", provenance: Provenance, memo: dict[int, StepSpec] | None = None) -> StepSpec:
     """Lower a handle graph into a ``StepSpec`` graph, recording ``provenance`` on every step.
 
     Each handle becomes a step addressed by its explicit ``{name}/{version}`` (or its pin); the
@@ -321,10 +323,19 @@ def _lower(handle: "ArtifactStep", provenance: Provenance) -> StepSpec:
     :class:`ArtifactRecord` on success (unless pinned). Pure transform of *structure* — it never
     inspects ``handle.run``.
 
+    ``memo`` caches the spec of each handle by identity, so a handle several consumers share is
+    lowered once. Without it a diamond re-walks the shared subgraph — and re-runs its
+    ``build_config`` — once per path through it. Pass one ``memo`` across a whole ``run`` to share
+    it between terminals.
+
     Raises :class:`FingerprintMismatchError` if ``expected_fingerprint`` is set and differs;
     :class:`ValueError` if a fixed (non-``dev``) handle has a ``dev`` dep.
     """
-    dep_specs = [_lower(dep, provenance) for dep in handle.deps]
+    memo = {} if memo is None else memo
+    cached = memo.get(id(handle))
+    if cached is not None:
+        return cached
+    dep_specs = [_lower(dep, provenance, memo) for dep in handle.deps]
     payload = handle.fingerprint_payload()
     fingerprint = fingerprint_hash(payload)
     if handle.expected_fingerprint is not None and fingerprint != handle.expected_fingerprint:
@@ -398,7 +409,7 @@ def _lower(handle: "ArtifactStep", provenance: Provenance) -> StepSpec:
     if handle.expected_fingerprint is not None:
         hash_attrs[EXPECTED_FINGERPRINT_KEY] = handle.expected_fingerprint
 
-    return StepSpec(
+    spec = StepSpec(
         name=handle.name,
         override_output_path=_output_path_spec(handle),
         deps=dep_specs,
@@ -407,6 +418,8 @@ def _lower(handle: "ArtifactStep", provenance: Provenance) -> StepSpec:
         fn=fn,
         writes_record=True,
     )
+    memo[id(handle)] = spec
+    return spec
 
 
 def run(*handles: "ArtifactStep[T]", max_concurrent: int = 8, force_run_failed: bool = True) -> list[T]:
@@ -419,8 +432,9 @@ def run(*handles: "ArtifactStep[T]", max_concurrent: int = 8, force_run_failed: 
     ``force_run_failed`` reruns a previously-FAILED step instead of raising.
     """
     provenance = Provenance.capture()
+    memo: dict[int, StepSpec] = {}
     StepRunner().run(
-        [_lower(h, provenance) for h in handles],
+        [_lower(h, provenance, memo) for h in handles],
         force_run_failed=force_run_failed,
         max_concurrent=max_concurrent,
     )

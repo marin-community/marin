@@ -6,36 +6,22 @@
 import textwrap
 from pathlib import Path
 
+import pytest
+
 from infra.ci.select_tests import (
-    MIN_FILES_PER_SHARD,
     SCOPES,
-    SHARD_COUNT,
     UV_PACKAGE,
+    MatrixLeg,
     classify,
-    compute_matrix,
-    dependencies_by_test_file,
-    extra_suites,
-    full_matrix,
-    is_test_module,
     matrix_leg,
-    scope_legs,
-    shard_files,
+    select_changed_tests,
+    select_local_tests,
 )
 
 
-def select_matrix(changed_files: list[str], repo_root: Path) -> list[dict[str, str | int]]:
-    """Mirror the diff-driven branch of select_tests.main without git."""
-    classification = classify(changed_files, repo_root)
-    source_build_scopes = set(classification.native_changed)
-    if classification.broad:
-        return full_matrix(repo_root, source_build_scopes)
-    return compute_matrix(
-        classification.src_modules,
-        classification.direct_tests,
-        classification.forced,
-        source_build_scopes,
-        repo_root,
-    )
+def select_matrix(changed_files: list[str], repo_root: Path) -> list[MatrixLeg]:
+    """Return the selector's diff-driven matrix without invoking git."""
+    return select_changed_tests(changed_files, repo_root).matrix
 
 
 def write(repo_root: Path, relative: str, body: str = "") -> Path:
@@ -45,13 +31,13 @@ def write(repo_root: Path, relative: str, body: str = "") -> Path:
     return path
 
 
-def leg_paths(matrix: list[dict[str, str | int]], scope: str) -> list[str]:
-    leg = next(entry for entry in matrix if entry["package"] == UV_PACKAGE[scope])
-    return str(leg["test_paths"]).split()
+def leg_paths(matrix: list[MatrixLeg], scope: str) -> list[str]:
+    leg = next(entry for entry in matrix if entry.package == UV_PACKAGE[scope])
+    return leg.test_paths.split()
 
 
-def scopes_in(matrix: list[dict[str, str | int]]) -> set[str]:
-    packages = {entry["package"] for entry in matrix}
+def scopes_in(matrix: list[MatrixLeg]) -> set[str]:
+    packages = {entry.package for entry in matrix}
     return {scope for scope in SCOPES if UV_PACKAGE[scope] in packages}
 
 
@@ -134,12 +120,28 @@ def test_experiments_changes_select_dependent_marin_tests(tmp_path: Path) -> Non
     assert leg_paths(matrix, "marin") == ["tests/test_tokenizer_sweep.py"]
 
 
+@pytest.mark.parametrize(
+    "changed_file",
+    ["lib/iris/src/iris/client.py", "lib/ducky/src/ducky/server.py"],
+)
+def test_iris_and_ducky_changes_select_dependent_ducky_test(tmp_path: Path, changed_file: str) -> None:
+    write(tmp_path, "lib/iris/src/iris/__init__.py")
+    write(tmp_path, "lib/iris/src/iris/client.py", "class IrisClient: ...\n")
+    write(tmp_path, "lib/ducky/src/ducky/__init__.py")
+    write(tmp_path, "lib/ducky/src/ducky/server.py", "from iris.client import IrisClient\n")
+    write(tmp_path, "lib/ducky/tests/test_server.py", "from ducky.server import IrisClient\n")
+
+    matrix = select_matrix([changed_file], tmp_path)
+
+    assert leg_paths(matrix, "ducky") == ["lib/ducky/tests/test_server.py"]
+
+
 def test_test_helper_module_propagates_source_changes(tmp_path: Path) -> None:
     """A test reaching source only through a shared helper is still selected."""
     write(tmp_path, "lib/iris/src/iris/__init__.py")
     write(tmp_path, "lib/iris/src/iris/scheduler.py", "SCHED = 1\n")
     write(tmp_path, "lib/iris/tests/support.py", "from iris.scheduler import SCHED\n")
-    write(tmp_path, "lib/iris/tests/test_via_helper.py", "from tests.support import SCHED\n")
+    write(tmp_path, "lib/iris/tests/test_via_helper.py", "from lib.iris.tests.support import SCHED\n")
     write(tmp_path, "lib/iris/tests/test_relative_helper.py", "from .support import SCHED\n")
     write(tmp_path, "lib/iris/tests/test_direct.py", "def test_x():\n    pass\n")
 
@@ -168,32 +170,34 @@ def test_deleted_test_module_is_not_handed_to_pytest(tmp_path: Path) -> None:
 
 
 def test_changed_helper_module_forces_full_scope(tmp_path: Path) -> None:
-    """A changed non-collectable .py under tests/ runs the full scope, not the file itself."""
+    """A changed helper under tests/ runs the full scope, even when named test_*.py."""
+    write(tmp_path, "lib/iris/tests/test_utils.py", "def helper():\n    pass\n")
     result = classify(
-        ["lib/iris/tests/e2e/gang_jax_smoke_workload.py", "lib/iris/tests/cluster/test_types.py"],
+        ["lib/iris/tests/e2e/gang_jax_smoke_workload.py", "lib/iris/tests/test_utils.py"],
         tmp_path,
     )
 
     assert result.forced == {"iris"}
-    assert result.direct_tests == {}, "the changed test module does not exist on disk"
+    assert result.direct_tests == {}
 
 
-def test_conftest_and_package_metadata_force_full_scope(tmp_path: Path) -> None:
-    assert "iris" in classify(["lib/iris/conftest.py"], tmp_path).forced
-    assert "iris" in classify(["lib/iris/tests/conftest.py"], tmp_path).forced
-    assert "iris" in classify(["lib/iris/pyproject.toml"], tmp_path).forced
-    assert "marin" in classify(["tests/snapshots/expected/simple.md"], tmp_path).forced
+def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
+    write(tmp_path, "infra/ci/__init__.py")
+    write(tmp_path, "infra/ci/select_tests.py", "def select():\n    pass\n")
+    write(tmp_path, "infra/ci/analyze_import_graph.py", "from infra.ci.select_tests import select\n")
+    write(tmp_path, "tests/infra/ci/test_analyze_import_graph.py", "from infra.ci.analyze_import_graph import select\n")
+    write(tmp_path, "tests/infra/ci/test_select_tests.py", "from infra.ci.select_tests import select\n")
 
+    selection = select_local_tests(
+        ["infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"],
+        tmp_path,
+    )
 
-def test_classify_broad_triggers(tmp_path: Path) -> None:
-    for path in ("uv.lock", "pyproject.toml", "infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"):
-        assert classify([path], tmp_path).broad, path
-
-    ignored = classify(["docs/index.md", "lib/iris/docs/coreweave.md"], tmp_path)
-    assert not ignored.broad
-    assert not ignored.src_modules
-    assert not ignored.direct_tests
-    assert not ignored.forced
+    assert selection.reason == "diff-driven"
+    assert leg_paths(selection.matrix, "marin") == [
+        "tests/infra/ci/test_analyze_import_graph.py",
+        "tests/infra/ci/test_select_tests.py",
+    ]
 
 
 def test_source_files_map_to_dotted_modules(tmp_path: Path) -> None:
@@ -204,175 +208,13 @@ def test_source_files_map_to_dotted_modules(tmp_path: Path) -> None:
     assert classify(["experiments/grug/moe/model.py"], tmp_path).src_modules == {"experiments.grug.moe.model"}
 
 
-def test_extra_suites_follow_the_owning_package_directory() -> None:
-    """Accelerator and browser suites drive whole subsystems, so directory membership gates them."""
-    assert extra_suites(["lib/iris/dashboard/src/App.vue"]) == ["iris-e2e-smoke"]
-    assert extra_suites(["lib/haliax/src/haliax/core.py"]) == ["levanter-torch", "levanter-tpu"]
-    assert extra_suites(["lib/levanter/tests/test_attention.py"]) == ["levanter-torch", "levanter-tpu"]
-    assert extra_suites(["lib/zephyr/src/zephyr/writers.py"]) == []
-    assert extra_suites(["docs/index.md"]) == []
-    assert extra_suites(["uv.lock"]) == ["iris-e2e-smoke", "levanter-torch", "levanter-tpu"]
-
-
-def test_selector_changes_do_not_wake_the_accelerator_suites() -> None:
-    """A broad trigger reruns every unit test, but the TPU runner is serialized and scarce:
-    only a dependency or in-package change can move what those suites exercise."""
-    assert classify(["infra/ci/select_tests.py"], Path("/unused")).broad
-    assert extra_suites(["infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"]) == []
-
-
-def test_only_pytest_collectable_modules_are_selectable(tmp_path: Path) -> None:
-    """Helper modules under tests/ must never be handed to pytest explicitly -- an explicit
-    path is imported even when it does not match the collection convention, crashing the
-    lane when the helper's deps are absent."""
-    write(tmp_path, "lib/iris/src/iris/__init__.py")
-    write(tmp_path, "lib/iris/src/iris/scheduler.py", "SCHED = 1\n")
-    for name in ("test_client.py", "actor_test.py", "gang_jax_smoke_workload.py", "conftest.py"):
-        write(tmp_path, f"lib/iris/tests/{name}", "from iris.scheduler import SCHED\n")
-
-    selected = dependencies_by_test_file("iris", tmp_path, {"iris", "iris.scheduler"})
-
-    assert sorted(selected) == ["lib/iris/tests/actor_test.py", "lib/iris/tests/test_client.py"]
-
-
-def test_is_test_module_matches_pytest_defaults() -> None:
-    assert is_test_module("test_client.py")
-    assert is_test_module("gpt2_test.py")
-    assert not is_test_module("conftest.py")
-    assert not is_test_module("openai_stub.py")
-    assert not is_test_module("test_data.json")
-
-
-def test_shard_files_splits_into_balanced_contiguous_chunks() -> None:
-    assert shard_files(list(range(10)), 4) == [[0, 1, 2], [3, 4, 5], [6, 7], [8, 9]]
-    assert shard_files(list(range(4)), 4) == [[0], [1], [2], [3]]
-    # No file is dropped or duplicated, and order is preserved.
-    files = [f"t{i}" for i in range(23)]
-    chunks = shard_files(files, 4)
-    assert [f for chunk in chunks for f in chunk] == files
-
-
-def _levanter_suite(repo_root: Path, count: int) -> list[str]:
-    write(repo_root, "lib/levanter/src/levanter/__init__.py", '"""levanter."""\n')
-    write(repo_root, "lib/levanter/src/levanter/core.py", "X = 1\n")
-    files = []
-    for i in range(count):
-        path = f"lib/levanter/tests/test_mod_{i:03d}.py"
-        write(repo_root, path, "from levanter.core import X\n")
-        files.append(path)
-    return sorted(files)
-
-
-def test_scope_legs_shards_a_large_levanter_selection(tmp_path: Path) -> None:
-    files = _levanter_suite(tmp_path, 60)
-
-    legs = scope_legs("levanter", files, tmp_path)
-
-    assert len(legs) == SHARD_COUNT["levanter"]
-    assert [leg["label"] for leg in legs] == ["levanter 1/4", "levanter 2/4", "levanter 3/4", "levanter 4/4"]
-    # Every selected file runs exactly once across the shards.
-    covered = [path for leg in legs for path in leg["test_paths"].split()]
-    assert sorted(covered) == files
-    assert len(covered) == len(set(covered))
-
-
-def test_scope_legs_keeps_a_small_selection_in_one_leg(tmp_path: Path) -> None:
-    files = _levanter_suite(tmp_path, MIN_FILES_PER_SHARD)
-
-    legs = scope_legs("levanter", files, tmp_path)
-
-    assert len(legs) == 1
-    assert legs[0]["label"] == "levanter"
-
-
-def test_scope_legs_never_shards_below_the_minimum(tmp_path: Path) -> None:
-    """A medium selection stays one leg rather than splitting into sub-minimum runners."""
-    # Just over the threshold and just under two full shards both stay a single leg...
-    for count in (MIN_FILES_PER_SHARD + 1, 2 * MIN_FILES_PER_SHARD - 1):
-        legs = scope_legs("levanter", _levanter_suite(tmp_path, count), tmp_path)
-        assert [leg["label"] for leg in legs] == ["levanter"], count
-
-    # ...and two full shards' worth is the first size that fans out, each at/above the minimum.
-    legs = scope_legs("levanter", _levanter_suite(tmp_path, 2 * MIN_FILES_PER_SHARD), tmp_path)
-    assert len(legs) == 2
-    assert all(len(leg["test_paths"].split()) >= MIN_FILES_PER_SHARD for leg in legs)
-
-
-def test_scope_legs_shards_the_full_levanter_suite(tmp_path: Path) -> None:
-    """A full-suite (tests=None) sharded scope expands its directory to the file list."""
-    files = _levanter_suite(tmp_path, 60)
-
-    legs = scope_legs("levanter", None, tmp_path)
-
-    assert len(legs) == SHARD_COUNT["levanter"]
-    covered = sorted(path for leg in legs for path in leg["test_paths"].split())
-    assert covered == files
-
-
-def test_scope_legs_does_not_shard_other_scopes(tmp_path: Path) -> None:
-    write(tmp_path, "lib/iris/src/iris/__init__.py", '"""iris."""\n')
-    write(tmp_path, "lib/iris/src/iris/core.py", "X = 1\n")
-    files = [f"lib/iris/tests/test_{i:03d}.py" for i in range(60)]
-    for path in files:
-        write(tmp_path, path, "from iris.core import X\n")
-
-    legs = scope_legs("iris", sorted(files), tmp_path)
-
-    assert len(legs) == 1
-    assert legs[0]["label"] == "iris"
-    assert legs[0]["test_paths"].split() == sorted(files)
-
-
-def test_broad_trigger_runs_every_scope() -> None:
-    assert matrix_leg("marin", []) == {
-        "label": "marin",
-        "package": "marin-core",
-        "extras": "--extra cpu --extra dedup",
-        "test_paths": "tests",
-        "setup": "",
-        "timeout": 15,
-    }
-    assert select_matrix(["uv.lock"], Path("/unused")) == full_matrix(Path("/unused"), set())
-
-
-def _leg(matrix: list[dict[str, str | int]], label: str) -> dict[str, str | int]:
-    return next(entry for entry in matrix if entry["label"] == label)
-
-
-def test_native_rust_change_forces_the_owning_scope(tmp_path: Path) -> None:
-    """A rust/ change is invisible to the import graph, so it force-selects its owning scope
-    and marks it for a source build."""
-    result = classify(["lib/dupekit/rust/src/lib.rs"], tmp_path)
-    assert result.forced == {"dupekit"}
-    assert result.native_changed == {"dupekit"}
-    # A Cargo.lock under the crate counts as a native change too.
-    assert classify(["lib/finelog/rust/Cargo.lock"], tmp_path).native_changed == {"finelog"}
-
-
-def test_native_rust_only_change_runs_just_the_owning_scope(tmp_path: Path) -> None:
-    """A rust-only change runs the owning scope from source; its own tests cover the native,
-    and consumers are not pulled in."""
-    matrix = select_matrix(["lib/dupekit/rust/src/lib.rs"], tmp_path)
-    assert scopes_in(matrix) == {"dupekit"}
-    assert _leg(matrix, "dupekit")["setup"] == "rust"
-    assert _leg(matrix, "dupekit")["timeout"] == 30
-
-
-def test_native_change_source_builds_only_the_owning_scope(tmp_path: Path) -> None:
-    """A finelog rust change source-builds only the finelog leg; a co-changed consumer (iris)
-    is selected by its own Python change and runs against the prebuilt wheel."""
-    write(tmp_path, "lib/iris/src/iris/__init__.py")
-    write(tmp_path, "lib/iris/src/iris/log.py", "X = 1\n")
-    write(tmp_path, "lib/iris/tests/test_log.py", "from iris.log import X\n")
-
-    matrix = select_matrix(["lib/finelog/rust/pyext/src/lib.rs", "lib/iris/src/iris/log.py"], tmp_path)
-
-    assert _leg(matrix, "finelog")["setup"] == "rust"
-    assert _leg(matrix, "iris")["setup"] == ""
+def test_evaldash_source_maps_to_dotted_module(tmp_path: Path) -> None:
+    write(tmp_path, "infra/evaldash/src/metrics.py")
+    assert classify(["infra/evaldash/src/metrics.py"], tmp_path).src_modules == {"infra.evaldash.src.metrics"}
 
 
 def test_broad_trigger_does_not_source_build(tmp_path: Path) -> None:
     """A uv.lock bump reruns the full matrix but keeps every leg on the prebuilt wheel."""
     matrix = select_matrix(["uv.lock"], tmp_path)
     assert matrix, "broad trigger emits the full matrix"
-    assert all(leg["setup"] == "" for leg in matrix)
+    assert all(leg.setup == "" for leg in matrix)

@@ -26,6 +26,7 @@ S3 lock backend — off a plain ``import rigging.filesystem``.
 
 import fsspec
 
+from rigging.filesystem.atomic import atomic_rename, fetch_file_atomic, unique_temp_path
 from rigging.filesystem.buckets import (
     MissingCredentials,
     filesystem_for,
@@ -71,12 +72,9 @@ from rigging.filesystem.cross_region import (
     set_mirror_budget,
 )
 from rigging.filesystem.factory import (
-    atomic_rename,
-    fetch_file_atomic,
     filesystem,
     is_remote_path,
     open_url,
-    unique_temp_path,
     url_to_fs,
 )
 from rigging.filesystem.storage_path import (

@@ -8,7 +8,7 @@ from typing import TypedDict
 
 import pyarrow as pa
 from fray.types import ResourceConfig
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 from zephyr.readers import load_parquet

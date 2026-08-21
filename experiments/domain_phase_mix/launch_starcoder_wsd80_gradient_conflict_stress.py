@@ -23,7 +23,8 @@ from typing import Any, cast
 import fsspec
 from fray.iris_backend import convert_constraints, convert_resources
 from fray.types import ResourceConfig
-from iris.client import Job, JobAlreadyExists, iris_ctx
+from iris.client import Job, JobAlreadyExists
+from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import WellKnownAttribute, preemptible_constraint, region_constraint, zone_constraint
 from iris.cluster.types import CoschedulingConfig, Entrypoint, TaskAttempt

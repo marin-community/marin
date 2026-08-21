@@ -7,19 +7,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import shlex
+import time
 import urllib.error
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 from harbor.agents.base import BaseAgent  # pyrefly: ignore[missing-import]
 from harbor.environments.base import BaseEnvironment  # pyrefly: ignore[missing-import]
 from harbor.models.agent.context import AgentContext  # pyrefly: ignore[missing-import]
-from rigging.timing import ExponentialBackoff, retry_with_backoff
 from upath import UPath  # pyrefly: ignore[missing-import]
+
+logger = logging.getLogger(__name__)
 
 _BOXED_ANSWER = re.compile(r"\\boxed\s*\{\s*([0-9]{1,3})\s*\}")
 _STANDALONE_INTEGER = re.compile(r"(?<![0-9])([0-9]{1,3})(?![0-9])")
@@ -33,6 +36,32 @@ def _model_request_should_retry(exc: Exception) -> bool:
     if isinstance(exc, urllib.error.HTTPError):
         return exc.code in _RETRYABLE_HTTP_STATUS
     return isinstance(exc, (TimeoutError, urllib.error.URLError))
+
+
+def _request_with_retry(call: Callable[[], object], *, max_attempts: int, retry_initial: float) -> object:
+    """Call ``call``, retrying transient endpoint failures with capped exponential backoff.
+
+    The backoff doubles each attempt with no jitter and is clamped to ``_MAX_RETRY_DELAY`` so a
+    disappearing endpoint cannot stall the smoke past its bounded budget. Inlined rather than pulled
+    from ``rigging`` so the agent imports cleanly in the isolated Harbor driver environment, which
+    does not install ``marin-rigging``.
+    """
+    for attempt in range(max_attempts):
+        try:
+            return call()
+        except Exception as exc:
+            if attempt + 1 >= max_attempts or not _model_request_should_retry(exc):
+                raise
+            delay = min(retry_initial * 2.0**attempt, _MAX_RETRY_DELAY)
+            logger.warning(
+                "Harbor model request failed (attempt %d/%d), retrying in %.2fs: %s",
+                attempt + 1,
+                max_attempts,
+                delay,
+                exc,
+            )
+            time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 def _completion_content(
@@ -71,18 +100,7 @@ def _completion_content(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.load(response)
 
-    payload = retry_with_backoff(
-        request_payload,
-        retryable=_model_request_should_retry,
-        max_attempts=max_attempts,
-        backoff=ExponentialBackoff(
-            initial=min(retry_initial, _MAX_RETRY_DELAY),
-            maximum=_MAX_RETRY_DELAY,
-            factor=2.0,
-            jitter=0,
-        ),
-        operation="Harbor model request",
-    )
+    payload = _request_with_retry(request_payload, max_attempts=max_attempts, retry_initial=retry_initial)
     if not isinstance(payload, Mapping):
         raise ValueError("model response must be a JSON object")
     choices = payload.get("choices")
@@ -149,14 +167,14 @@ class SingleTurnAimeAgent(BaseAgent):
     def version(self) -> str:
         return "1.1.0"
 
-    async def setup(self, _environment: BaseEnvironment) -> None:
+    async def setup(self, environment: BaseEnvironment) -> None:
         return
 
     async def run(
         self,
         instruction: str,
         environment: BaseEnvironment,
-        _context: AgentContext,
+        context: AgentContext,
     ) -> None:
         assert self.model_name is not None
         served_model = self.model_name.split("/", maxsplit=1)[-1]

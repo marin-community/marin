@@ -48,7 +48,6 @@ class ServingInfo:
     max_model_len: int | None
     dtype: str
     has_chat_template: bool
-    tpu_type: str
     endpoint: str
     streaming: bool = True
 

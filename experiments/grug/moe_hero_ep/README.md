@@ -1,43 +1,75 @@
 # Grug MoE EP Hero
 
-This self-contained variant is the one-rack EP64 baseline for GB200 NVL72.
+This self-contained variant is the selected EP64 configuration for GB200 NVL72. Each
+data-parallel rack uses one 64-device expert mesh.
 
 ## Configuration
 
-- Model: d6144, 48 layers, 128 routed experts, top-4 routing, and two shared experts of width 3072.
-  This is 359.6 B total parameters and 20.9 B active per token.
+- Model: d6144, 48 layers, 384 routed experts of width 3072, top-8 routing, latent width 3072, and
+  two shared experts of width 3072. Depth rounds up to the nearest even count.
 - Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 4096,
-  sliding window 512, and every sixth layer full-causal. SConv and fused RoPE are on.
-- Mesh: 64-way expert parallelism across 16 workers with four GB200 GPUs each. Two whole experts
-  land on each device.
-- Batch: 1024 sequences.
-- Router: top-4 quantile balancing with next-step, stop-gradient expert biases and no auxiliary
+  sliding window 2048, and every fourth layer full-causal with the final layer also global. SConv
+  and fused RoPE are on.
+- Mesh: 64-way expert parallelism across 16 workers with four GB200 GPUs each. Additional racks use
+  the `replica_dcn` axis. Six experts are on each GPU in each rack.
+- Batch: 1024 global sequences. The launcher does not scale the batch with the rack count.
+- Router: top-8 quantile balancing with next-step, stop-gradient expert biases and no auxiliary
   balancing loss.
-- MoE backend: `fixed_all_to_all` with gather dispatch, structured custom VJPs, and capacity
-  factor 1.0.
+- MoE backend: `fixed_pooled_wave_all_to_all`. Each sender uses one fixed pool per
+  destination and stripes it over three static waves. The receiver runs all six local experts in
+  each wave and drops rows above the fixed expert capacity. Expert IDs travel in the activation
+  payload, so the method does not use a metadata collective. The receiver capacity factor is 1.15,
+  and the sender capacity factor is 1.10.
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
-- Runtime: GPU command buffers off, `cuda_async`, PGLE off, and collective overlap limit 4.
-- Output: Metrics only. This throughput run does not write a checkpoint.
+- Runtime: one JAX process per four-GPU worker, BF16 parameters and compute, GPU command buffers
+  off, `cuda_async`, PGLE off, and collective overlap limit 4.
+- Output: Metrics only by default. `--save-checkpoints` writes checkpoints and resumes from the
+  newest complete checkpoint below `--checkpoint-path`. PR
+  [#8480](https://github.com/marin-community/marin/pull/8480) bounded pinned-host restore memory;
+  its d6144 run restored step 164 and continued training with a 735 GiB fleet peak against a
+  940 GiB request. Drop metrics include the sender and receiver shares of all assignments. The
+  receiver also reports its drop share of assignments that reached it.
 
 The attention, shared-expert, language-model-head, and optimizer states use the combined `data` and
 `expert` axes. The expert axis stays sharded during Newton-Schulz.
 
-## Result
+## Results
 
-A 200-step gate on one rack measures 26.2835% median MFU, 309,091 tokens/s, 7.2280% MoE drops, and
-3.2971 final loss over 201 samples with a 2.3460 deviation. A 25-step gate at the same shape
-measures 26 samples with a 6.5623 deviation, thus its 27.5501% median runs about 1.3 points high.
-Use the 200-step number.
+The current 1.10 sender and 1.15 receiver configuration completed a 20-step, one-rack gate. Median
+throughput over steps 2 through 19 was 250,691 tokens/s, and final throughput was 246,947 tokens/s.
+The final loss was 6.3224. The final total drop rate was 19.33%: 7.14% at the sender and 12.19% at
+the receiver. The receiver dropped 13.12% of assignments that reached it. This short gate validates
+memory use and metric reporting. It does not estimate the steady drop rate. All 16 workers completed
+without an OOM, nonfinite value, failure, or preemption. See the
+[W&B run](https://wandb.ai/marin-community/rav_moe/runs/mhep-118-recv-metrics-send110-recv115-smoke).
 
-The same model under FSDP-64 on one rack measures 19.3951% median MFU and 235,125 tokens/s. Both
-arms share one analytic FLOP count of 44.491 GFLOP per token, because that count depends only on the
-model config, so their MFU values share a denominator. They do not do equal work at capacity 1.0:
-EP discards 9.97% of assignments against 1.88%. At capacity factor 1.5 the EP drop rate falls to
-1.5719%, below the FSDP rate, and EP still measures 22.9037%.
+The prior 1.05 sender and 1.33 receiver configuration completed 200 steps on one rack. Over steps
+150 through 199, median throughput was 256,818 tokens/s and median MFU was 24.03%. Median routing
+drop rate was 2.41%, and the final drop rate was 2.21%. The final loss was 3.2510. All 16 workers
+completed without an OOM, nonfinite value, failure, or preemption. See the
+[W&B run](https://wandb.ai/marin-community/rav_moe/runs/mhep-103-bf16params-pooled-striped-wave2-send105-recv133-200-20260814)
+and the [XProf trace](https://iris.oa.dev/proxy/xprof/open?uri=s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D30d%2Fxprof%2Fmhep-101-bf16params-pooled-striped-wave2-send105-recv133-profile-20260814&tool=trace_viewer).
+
+### EP ablation ladder (4k context)
+
+The default EP configuration — histogram QB, standard init, latent MoE — trained across the
+downsized d768–d2048 ladder at 4096 sequence length and 750 tokens per active parameter. Final
+Paloma macro loss, both as trained (with capacity drops) and re-scored dropless
+(`sonic_cute` at one chunk), against issue [#8062](https://github.com/marin-community/marin/issues/8062):
+
+| size | drop % (last 50) | Paloma (with drop) | Paloma (dropless) |
+| --- | --- | --- | --- |
+| d768 | 5.50% | [3.2326](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d768) | [3.0331](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d768-dropless-eval) |
+| d1024 | 5.94% | [2.9849](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d1024) | [2.7930](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d1024-dropless-eval) |
+| d1536 | 6.61% | [2.7487](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d1536) | [2.5710](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d1536-dropless-eval) |
+| d2048 | 7.11% | [2.5858](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d2048) | [2.4106](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d2048-dropless-eval) |
+
+The drop-free re-eval is the fair comparison to a dropless FSDP run; the training-time drops grow
+with width and are recovered by scoring dropless.
 
 ## Sweeps
 
-Four launcher options move the shape from the hero spec. They keep the hidden dimension, so the
+Five launcher options move the shape from the hero spec. They keep the hidden dimension, so the
 compute-scaled optimizer values stay constant across a sweep.
 
 | option | effect |
@@ -45,59 +77,138 @@ compute-scaled optimizer values stay constant across a sweep.
 | `--num-experts` | routed expert count. Must divide the 64-way expert axis. |
 | `--intermediate-dim` | routed expert width |
 | `--num-experts-per-token` | routed top-k |
-| `--capacity-factor` | fixed all-to-all capacity factor |
+| `--latent-dim` | routed input and output width |
+| `--capacity-factor` | pooled receiver capacity factor |
 
-Three quantities move independently, which sets what a sweep can afford on one rack:
+Three quantities set what a sweep can fit on one rack:
 
 - Active routed neurons are top-k multiplied by width.
 - Parameters are expert count multiplied by width.
-- The all-to-all buffers are tokens multiplied by top-k.
+- The sender pool is token assignments multiplied by the sender capacity factor and divided across
+  three waves.
 
-Width appears in the first two and not the third, thus width is the cheap way to buy active compute
-and top-k is the expensive way. Six buffers scale with top-k, and one of them is float32: top-6
-costs 30.75 GiB against 20.50 GiB for top-4 at this shape.
+The selected E384 model runs at expert width 3072 and receiver capacity factor 1.15.
 
-Measured limits on one rack: 591.6 B total parameters runs at 24.0032% median MFU (256 experts of
-width 2560), and 641.4 B fails with `NCCL operation ncclAlltoAll` and a CUDA out-of-memory. Lower
-top-k does not lift that limit, so parameters bind rather than the communicator. A capacity sweep at
-the hero shape measures 27.5501% MFU at 9.97% drops, 26.1065% at 5.3984%, 25.2283% at 3.2571%, and
-22.9037% at 1.5719%, or about 0.9 points of MFU for each point of drops recovered.
+## Run Controls
+
+| option | effect |
+| --- | --- |
+| `--dp-racks` | sets the data-parallel rack count; `--batch-size` stays global |
+| `--batch-size` | sets global sequences per step and the optimizer token budget |
+| `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
+| `--eval-every` | adds Paloma evaluation at the selected interval |
+| `--save-checkpoints` | writes periodic and final checkpoints |
+| `--checkpoint-minutes` | sets the wall-clock checkpoint interval |
+| `--checkpoint-path` | places checkpoints at an explicit storage prefix |
+| `--training-data synthetic` | reuses a deterministic batch without opening TensorStore |
+| `--watch-interval`, `--watch-mode` | select inline or diagnostic norm collection |
+| `--profile-start-step`, `--profile-steps` | select the rank-0 XProf window |
+| `--seed` | sets the trainer seed |
 
 ## Launch
+
+### Hero
 
 Print the plan without a GPU run:
 
 ```bash
-python -m experiments.grug.moe_hero_ep.launch \
-  --run-id mhep-017-200 \
+python -m experiments.grug.moe_hero_ep.launch_mfu_test \
+  --run-id mhep-pooled-wave \
   --num-steps 200 \
-  --version 2026.08.05
-
-python -m experiments.grug.moe_hero_ep.launch \
-  --run-id mhep-011-e256-i2560 \
-  --num-steps 25 \
-  --num-experts 256 --intermediate-dim 2560 \
-  --version 2026.08.05
+  --version 2026.08.14
 ```
 
 Submit the one-rack gate through the Marin Iris controller:
 
 ```bash
-run_id="mhep-017-200"
+run_id="mhep-pooled-wave"
 uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources \
   --target-cluster cw-us-east-08a --priority interactive \
-  --cpu 2 --memory 8GB --disk 32GB --timeout 21600 \
+  --cpu 2 --memory 8GB --disk 32GB \
   --job-name "${run_id}-coord" \
   -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
   -e IRIS_PORT_JAX 32575 \
-  -- python -m experiments.grug.moe_hero_ep.launch \
-    --run-id "$run_id" --num-steps 200 --version 2026.08.05 --run
+  -- python -m experiments.grug.moe_hero_ep.launch_mfu_test \
+    --run-id "$run_id" --num-steps 200 --version 2026.08.14 --run
 ```
 
 W&B uses the `WANDB_PROJECT` environment variable, or project `marin_moe` when it is unset, with
 group `moe-hero-ep` and the supplied run ID. The run output includes the durable W&B metrics
 artifact. Give each concurrent gang its own `IRIS_PORT_JAX`: rank 0 binds and registers that port
 for the JAX coordinator, and the default 8476 is shared by every run on the cluster.
+
+### Small-scale hero-shape ablations
+
+`small_scale_abl_launch.py` runs the hero shape — pooled-wave transport, 384 experts / top-8,
+hidden/2-wide experts in a hidden/2 latent, receiver/sender capacity 1.15 with 3 waves — at a
+downsized width (`--size` in `d768`…`d2048`) on one GB200 rack. It fixes the batch at ~4M tokens per
+step per rack to hold the pooled-wave drop dynamics, and sizes the step count from the model's
+active-parameter count: `num_steps` trains `--tokens-per-active-param` (default 750) tokens per
+active parameter. `--flavor ep` keeps the 64-way expert axis; `--flavor fsdp-nodrop` runs the same
+shape dropless, and `--flavor fsdp-chunk4` runs it with four-chunk capacity. Both pooled-wave gates
+are tunable: `--capacity-factor` (receiver) and `--transport-capacity-factor` (sender). Print the
+plan without a GPU run:
+
+```bash
+python -m experiments.grug.moe_hero_ep.small_scale_abl_launch \
+  --run-id mhep-abl-d1024-ep \
+  --size d1024 \
+  --flavor ep \
+  --version 2026.08.10
+```
+
+Submit one rung through the Marin Iris controller:
+
+```bash
+run_id="mhep-abl-d1024-ep"
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources \
+  --target-cluster cw-us-east-08a --priority interactive \
+  --cpu 2 --memory 8GB --disk 32GB \
+  --job-name "${run_id}-coord" \
+  -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
+  -e IRIS_PORT_JAX 32576 \
+  -- python -m experiments.grug.moe_hero_ep.small_scale_abl_launch \
+    --run-id "$run_id" --size d1024 --flavor ep --version 2026.08.10 --run
+```
+
+The wider rungs need more than one rack to hold their batch: `--dp-racks N` replicates the run
+across `N` racks, and the launcher sizes the fleet request accordingly. Ablation runs report to W&B
+group `moe-hero-ep-small-abl` and carry Paloma and uncheatable evaluation at `--steps-per-eval`.
+
+### Scaling ladder
+
+`launch_scaling_ladder.py` trains one uniform hero recipe at five widths so a narrow rung predicts
+the `d6144` hero (which is the hero itself). Every rung shares the hero data (the Harrier
+2026.08.18 two-phase mixture on the Marin tokenizer, simulated against the 18.75T target budget),
+the offloaded MuonH optimizer on FP32 pinned-host master params, the hero mixed precision, 384
+experts / top-8, pooled-wave transport, the QB histogram estimator at 10k bins, and a dropless
+held-out eval. Only the width and the rack count vary; the rack count, batch, step budget, eval
+cadence, and checkpoint policy all follow `--size`:
+
+| size | racks | batch | steps | eval | checkpoints |
+|---|---|---|---|---|---|
+| d768 | 1 | 1024 | 11,420 | every 5% | final only |
+| d1024 | 2 | 2048 | 15,276 | every 5% | final only |
+| d1536 | 6 | 6144 | 15,128 | every 5% | final only |
+| d2048 | 11 | 11264 | 20,072 | every 5% | final only |
+| d6144 | 11 | 11264 | 390,251 | every 3000 | every 6k |
+
+Train batch is 1024 × racks; eval batch is 64 × racks (one sequence per device). The step budget is
+791 tokens per active parameter (18T at d6144); pass `--num-steps` to override.
+
+A rung resumes from the newest checkpoint it finds. The permanent checkpoints above go to the
+durable output root, and a rolling temporary checkpoint every hour goes to region-local temp
+storage with the shared 14-day lifecycle TTL. One temporary checkpoint is kept. A hardware fault, a
+host out-of-memory, or a preemption thus costs at most one hour of training. The training job
+retries 1000 times on failure and 100 times on preemption.
+
+```bash
+python -m experiments.grug.moe_hero_ep.launch_scaling_ladder \
+  --run-id ladder-d768 --size d768 --version dev
+```
+
+Submit a rung through the Marin Iris controller as with the launchers above, swapping the module and
+passing `--size`. Runs report to W&B group `moe-hero-ep-scaling-ladder`.
 
 ## Result Record
 

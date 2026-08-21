@@ -14,6 +14,7 @@ from levanter.kernels.pallas.fused_cross_entropy_loss import api as fused_api
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_tpu
 from levanter.kernels.pallas.fused_cross_entropy_loss import tuned_block_sizes
 from levanter.kernels.pallas.fused_cross_entropy_loss import xla as fused_xla
+from levanter.kernels.pallas.fused_cross_entropy_loss.config import BlockSizes
 from levanter.kernels.pallas.fused_cross_entropy_loss.reference import (
     linear_softmax_cross_entropy_loss_reference,
     linear_softmax_cross_entropy_loss_streaming,
@@ -212,6 +213,9 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():
             jnp.float32,
             logit_soft_cap,
             None,
+            False,
+            None,
+            None,
             x_raw.reshape(6, 4),
             y.reshape(6),
             w_raw,
@@ -236,6 +240,81 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():
     assert jnp.allclose(gw_custom, gw_stream, atol=1e-5, rtol=1e-5)
 
 
+@pytest.mark.parametrize("activation_scale", [1.0, 30.0, 1000.0])
+def test_xla_streaming_custom_vjp_grad_matches_reference_in_bfloat16(activation_scale):
+    """Gradient parity for bfloat16 activations and a bfloat16 head, across logit magnitudes.
+
+    The streaming backward recomputes logits in float32 and forms `exp(logits - lse)`. If the
+    forward accumulates those logits in a narrower dtype, the two logit sets disagree and the
+    exponential turns that disagreement into an unbounded gradient error: at bf16 logits of
+    magnitude ~4000 the peak probability came out ~2.5e3 times too large. Float32 inputs cannot
+    see this, because there both sides accumulate in float32.
+
+    XLA:CPU folds the bfloat16 narrowing away, so the mismatch is unobservable there and this
+    test passes with or without the fix. `test_streaming_lse_is_float32_for_bfloat16_inputs`
+    is the backend-independent guard.
+    """
+    if jax.default_backend() == "cpu":
+        pytest.skip("XLA:CPU folds the bfloat16 logit narrowing; the mismatch cannot be observed")
+
+    key = jax.random.PRNGKey(11)
+    key_x, key_w, key_y, key_c = jax.random.split(key, 4)
+
+    b_dim, h_dim, v_dim, v_block = 64, 64, 1024, 128
+    x = (jax.random.normal(key_x, (b_dim, h_dim), dtype=jnp.float32) * activation_scale).astype(jnp.bfloat16)
+    w = (jax.random.normal(key_w, (h_dim, v_dim), dtype=jnp.float32) * 0.1).astype(jnp.bfloat16)
+    y = jax.random.randint(key_y, (b_dim,), 0, v_dim, dtype=jnp.int32)
+    cotangent = jax.random.normal(key_c, (b_dim,), dtype=jnp.float32)
+
+    def weighted(loss, lse):
+        return jnp.sum(loss * cotangent) + 0.3 * jnp.sum(lse * cotangent)
+
+    def loss_custom(x_raw, w_raw):
+        loss, lse = fused_xla.linear_softmax_cross_entropy_loss_xla(
+            x_raw, y, w_raw, block_sizes=BlockSizes(v_block_size=v_block), dtype=jnp.float32
+        )
+        return weighted(loss, lse)
+
+    def loss_ref(x_raw, w_raw):
+        # Independent dense oracle: exact float32 logits from the same bfloat16 inputs.
+        logits = jnp.einsum(
+            "bh,hv->bv", x_raw.astype(jnp.float32), w_raw.astype(jnp.float32), precision=jax.lax.Precision.HIGHEST
+        )
+        lse = jax.nn.logsumexp(logits, axis=-1)
+        picked = jnp.take_along_axis(logits, y[:, None], axis=-1)[:, 0]
+        return weighted(lse - picked, lse)
+
+    gx_custom, gw_custom = jax.grad(loss_custom, argnums=(0, 1))(x, w)
+    gx_ref, gw_ref = jax.grad(loss_ref, argnums=(0, 1))(x, w)
+
+    for actual, expected, name in ((gx_custom, gx_ref, "gx"), (gw_custom, gw_ref, "gw")):
+        actual = np.asarray(actual, dtype=np.float32)
+        expected = np.asarray(expected, dtype=np.float32)
+        scale = max(float(np.abs(expected).max()), 1e-30)
+        assert np.abs(actual - expected).max() <= 0.05 * scale, (
+            f"{name} at activation_scale={activation_scale}: "
+            f"max|delta|={np.abs(actual - expected).max():.4g} vs 5% of max|expected|={scale:.4g}"
+        )
+
+
+def test_streaming_lse_is_float32_for_bfloat16_inputs():
+    """The streaming forward holds logits and the logsumexp carry in float32, not the input dtype.
+
+    The backward recomputes logits in float32, so a bfloat16 carry desynchronizes the two. This
+    checks the dtype contract rather than the numerics because XLA:CPU folds the narrowing away.
+    """
+    b_dim, h_dim, v_dim = 8, 16, 256
+    key_x, key_w, key_y = jax.random.split(jax.random.PRNGKey(3), 3)
+    x = jax.random.normal(key_x, (b_dim, h_dim), dtype=jnp.float32).astype(jnp.bfloat16)
+    w = jax.random.normal(key_w, (h_dim, v_dim), dtype=jnp.float32).astype(jnp.bfloat16)
+    y = jax.random.randint(key_y, (b_dim,), 0, v_dim, dtype=jnp.int32)
+
+    loss, lse = linear_softmax_cross_entropy_loss_streaming(x, y, w, block_size=64, dtype=None)
+
+    assert loss.dtype == jnp.float32
+    assert lse.dtype == jnp.float32
+
+
 def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff_with_batch_blocking(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -257,6 +336,9 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff_with_batch_blo
             64,
             jnp.float32,
             logit_soft_cap,
+            None,
+            False,
+            None,
             None,
             x_raw,
             y,
@@ -290,8 +372,21 @@ def test_fused_cross_entropy_xla_uses_explicit_batch_block_size(monkeypatch: pyt
 
     monkeypatch.setattr(fused_xla, "infer_xla_b_block_size", lambda b, v_block_size: 6)
 
-    def fake_custom_vjp(block_size, batch_block_size, dtype, logit_soft_cap, precision, x_arg, labels_arg, w_arg):
-        del dtype, logit_soft_cap, precision, x_arg, labels_arg, w_arg
+    def fake_custom_vjp(
+        block_size,
+        batch_block_size,
+        dtype,
+        logit_soft_cap,
+        precision,
+        fast_backward,
+        bwd_batch_block_size,
+        bwd_v_block_size,
+        x_arg,
+        labels_arg,
+        w_arg,
+    ):
+        del dtype, logit_soft_cap, precision, fast_backward, bwd_batch_block_size, bwd_v_block_size
+        del x_arg, labels_arg, w_arg
         captured["block_size"] = block_size
         captured["batch_block_size"] = batch_block_size
         return jnp.zeros((6,), dtype=jnp.float32), jnp.zeros((6,), dtype=jnp.float32)
@@ -319,8 +414,21 @@ def test_fused_cross_entropy_xla_caps_requested_batch_block_size_to_legal_diviso
 
     monkeypatch.setattr(fused_xla, "infer_xla_b_block_size", lambda b, v_block_size: 6)
 
-    def fake_custom_vjp(block_size, batch_block_size, dtype, logit_soft_cap, precision, x_arg, labels_arg, w_arg):
-        del dtype, logit_soft_cap, precision, x_arg, labels_arg, w_arg
+    def fake_custom_vjp(
+        block_size,
+        batch_block_size,
+        dtype,
+        logit_soft_cap,
+        precision,
+        fast_backward,
+        bwd_batch_block_size,
+        bwd_v_block_size,
+        x_arg,
+        labels_arg,
+        w_arg,
+    ):
+        del dtype, logit_soft_cap, precision, fast_backward, bwd_batch_block_size, bwd_v_block_size
+        del x_arg, labels_arg, w_arg
         captured["block_size"] = block_size
         captured["batch_block_size"] = batch_block_size
         return jnp.zeros((6,), dtype=jnp.float32), jnp.zeros((6,), dtype=jnp.float32)
@@ -354,8 +462,21 @@ def test_fused_cross_entropy_xla_infer_uses_tuned_batch_block_size_when_availabl
         lambda *args, **kwargs: (fused_api.BlockSizes(b_block_size=3, h_block_size=4, v_block_size=8), True),
     )
 
-    def fake_custom_vjp(block_size, batch_block_size, dtype, logit_soft_cap, precision, x_arg, labels_arg, w_arg):
-        del dtype, logit_soft_cap, precision, x_arg, labels_arg, w_arg
+    def fake_custom_vjp(
+        block_size,
+        batch_block_size,
+        dtype,
+        logit_soft_cap,
+        precision,
+        fast_backward,
+        bwd_batch_block_size,
+        bwd_v_block_size,
+        x_arg,
+        labels_arg,
+        w_arg,
+    ):
+        del dtype, logit_soft_cap, precision, fast_backward, bwd_batch_block_size, bwd_v_block_size
+        del x_arg, labels_arg, w_arg
         captured["block_size"] = block_size
         captured["batch_block_size"] = batch_block_size
         return jnp.zeros((6,), dtype=jnp.float32), jnp.zeros((6,), dtype=jnp.float32)
@@ -710,23 +831,26 @@ def test_fused_cross_entropy_default_grad_matches_reference():
 
 
 @pytest.mark.parametrize(
-    ("implementation", "required_backend", "block_sizes"),
+    ("implementation", "required_backend", "vocab_size", "block_sizes"),
     [
-        ("pallas_tpu", "tpu", fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)),
-        ("batched_xla", "gpu", None),
+        ("pallas_tpu", "tpu", 256, fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256)),
+        ("batched_xla", "gpu", 128, None),
     ],
 )
 def test_fused_cross_entropy_named_implementation_matches_reference(
     implementation: str,
     required_backend: str,
+    vocab_size: int,
     block_sizes: fused_api.BlockSizes | None,
 ):
     if jax.default_backend() != required_backend:
         pytest.skip(f"requires {required_backend.upper()} backend")
 
-    x = jnp.zeros((128, 128), dtype=jnp.float32)
-    w = jnp.zeros((128, 128), dtype=jnp.float32)
-    y = jnp.zeros((128,), dtype=jnp.int32)
+    x = jnp.eye(128, dtype=jnp.float32)
+    rows = jnp.arange(128, dtype=jnp.int32)[:, None]
+    columns = jnp.arange(vocab_size, dtype=jnp.int32)[None, :]
+    w = (((rows + columns) % 17 - 8) / 8).astype(jnp.float32)
+    y = jnp.arange(128, dtype=jnp.int32) * (vocab_size // 128)
 
     loss = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
         x,
@@ -869,9 +993,17 @@ def test_batched_xla_full_vocab_b_tiled_forward_matches_reference():
 
 
 def test_batched_xla_backward_b_tiled_from_lse_matches_reference_gradients():
+    """Gradient algebra of the b-tiled backward, against autodiff through the dense reference.
+
+    Both sides are pinned to HIGHEST because they contract in different orders. Under the
+    default precision, TF32 on GPU rounds the two paths apart by ~5e-4 while float32 inputs
+    imply a ~1e-7 answer, which failed this test's 1e-5 tolerance on every TF32 device. That
+    measured matmul rounding rather than the algebra under test; HIGHEST measures the algebra.
+    """
     if jax.default_backend() == "tpu":
         pytest.skip("batched_xla custom backward helper is covered by CPU/GPU precision paths")
 
+    precision = jax.lax.Precision.HIGHEST
     key = jax.random.PRNGKey(43)
     key_x, key_w, key_y, key_loss, key_lse = jax.random.split(key, 5)
     x = jax.random.normal(key_x, (7, 5), dtype=jnp.float32)
@@ -880,7 +1012,9 @@ def test_batched_xla_backward_b_tiled_from_lse_matches_reference_gradients():
     g_loss = jax.random.normal(key_loss, (7,), dtype=jnp.float32)
     g_lse = jax.random.normal(key_lse, (7,), dtype=jnp.float32)
 
-    _, lse = linear_softmax_cross_entropy_loss_reference(x, y, w, dtype=jnp.float32, logit_soft_cap=1.7)
+    _, lse = linear_softmax_cross_entropy_loss_reference(
+        x, y, w, dtype=jnp.float32, logit_soft_cap=1.7, precision=precision
+    )
 
     def reference_cotangent_loss(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
         loss, logsumexp = linear_softmax_cross_entropy_loss_reference(
@@ -889,6 +1023,7 @@ def test_batched_xla_backward_b_tiled_from_lse_matches_reference_gradients():
             w_raw,
             dtype=jnp.float32,
             logit_soft_cap=1.7,
+            precision=precision,
         )
         return jnp.sum(loss * g_loss + logsumexp * g_lse)
 
@@ -902,7 +1037,7 @@ def test_batched_xla_backward_b_tiled_from_lse_matches_reference_gradients():
         g_lse,
         b_block_size=4,
         logit_soft_cap=1.7,
-        precision=None,
+        precision=precision,
     )
 
     np.testing.assert_allclose(actual_x, expected_x, rtol=1e-5, atol=1e-5)
@@ -1227,7 +1362,7 @@ def test_pallas_tpu_vmem_compile_error_falls_back_to_xla_when_requested(monkeypa
     called = {"pallas": 0, "xla": 0}
     inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
     vmem_error = RuntimeError(
-        "RESOURCE_EXHAUSTED: XLA:TPU compile permanent error. " "Ran out of memory in memory space vmem."
+        "RESOURCE_EXHAUSTED: XLA:TPU compile permanent error. Ran out of memory in memory space vmem."
     )
 
     def fake_pallas(*args, **kwargs):
@@ -1271,7 +1406,7 @@ def test_pallas_tpu_vmem_compile_error_uses_remaining_requested_order(monkeypatc
     called = {"pallas": 0, "reference": 0, "xla": 0}
     block_sizes = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256)
     vmem_error = RuntimeError(
-        "RESOURCE_EXHAUSTED: XLA:TPU compile permanent error. " "Ran out of memory in memory space vmem."
+        "RESOURCE_EXHAUSTED: XLA:TPU compile permanent error. Ran out of memory in memory space vmem."
     )
 
     def fake_pallas(*args, **kwargs):
@@ -2148,3 +2283,205 @@ def test_fused_cross_entropy_pallas_backward_matches_xla_infer_blocks(implementa
 
     assert jnp.allclose(gx_linear_ce, gx_xla, atol=1e-4, rtol=1e-4)
     assert jnp.allclose(gw_linear_ce, gw_xla, atol=1e-4, rtol=1e-4)
+
+
+def _fast_bwd_case(dtype, *, b=512, h=64, v=1000, b_block=64, v_block=256, logit_soft_cap=None):
+    key = jax.random.PRNGKey(7)
+    key_x, key_w, key_y, key_g = jax.random.split(key, 4)
+    x = (jax.random.normal(key_x, (b, h), dtype=jnp.float32) * 0.5).astype(dtype)
+    w = (jax.random.normal(key_w, (h, v), dtype=jnp.float32) * 0.05).astype(dtype)
+    labels = jax.random.randint(key_y, (b,), 0, v, dtype=jnp.int32)
+    cotangent = jax.random.normal(key_g, (b,), dtype=jnp.float32)
+    block_sizes = BlockSizes(b_block_size=b_block, v_block_size=v_block)
+
+    def make(fast_backward, bwd_batch_block_size=None):
+        def objective(x_arg, w_arg):
+            loss, lse = fused_xla.linear_softmax_cross_entropy_loss_xla(
+                x_arg,
+                labels,
+                w_arg,
+                block_sizes=block_sizes,
+                dtype=jnp.float32,
+                logit_soft_cap=logit_soft_cap,
+                precision=None,
+                fast_backward=fast_backward,
+                bwd_batch_block_size=bwd_batch_block_size,
+            )
+            return jnp.sum(loss * cotangent) + 0.25 * jnp.sum(lse * cotangent)
+
+        return jax.jit(jax.value_and_grad(objective, argnums=(0, 1)))
+
+    return x, w, make
+
+
+@pytest.mark.parametrize("logit_soft_cap", [None, 1.5])
+def test_xla_fast_backward_leaves_forward_bitwise_identical(logit_soft_cap):
+    x, w, make = _fast_bwd_case(jnp.bfloat16, logit_soft_cap=logit_soft_cap)
+    value_slow, _ = make(False)(x, w)
+    value_fast, _ = make(True)(x, w)
+    # The fast path only replaces the backward, so the primal must be bit-identical.
+    assert np.array_equal(np.asarray(value_slow), np.asarray(value_fast))
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+def test_xla_fast_backward_matches_default_backward(dtype):
+    x, w, make = _fast_bwd_case(dtype)
+    _, (gx_slow, gw_slow) = make(False)(x, w)
+    _, (gx_fast, gw_fast) = make(True)(x, w)
+    atol = 1e-5 if dtype == jnp.float32 else 5e-2
+    rtol = 1e-5 if dtype == jnp.float32 else 5e-2
+    assert jnp.allclose(gx_fast.astype(jnp.float32), gx_slow.astype(jnp.float32), atol=atol, rtol=rtol)
+    assert jnp.allclose(gw_fast.astype(jnp.float32), gw_slow.astype(jnp.float32), atol=atol, rtol=rtol)
+
+
+def test_xla_fast_backward_batch_tiling_is_equivalent():
+    x, w, make = _fast_bwd_case(jnp.float32, b=512, b_block=64)
+    _, (gx_untiled, gw_untiled) = make(True, None)(x, w)
+    _, (gx_tiled, gw_tiled) = make(True, 64)(x, w)
+    # grad_x is computed per batch tile either way, so it must match exactly.
+    assert np.array_equal(np.asarray(gx_untiled), np.asarray(gx_tiled))
+    # grad_w differs only in float32 summation order across batch tiles.
+    assert jnp.allclose(gw_untiled, gw_tiled, atol=1e-4, rtol=1e-4)
+
+
+def test_xla_fast_backward_is_no_worse_than_default_against_float32_reference():
+    """At the hero loop ratio (many batch blocks per vocab block) the default backward
+    accumulates grad_w in the activation dtype; the fast backward must not be worse."""
+    dtype = jnp.bfloat16
+    x, w, make = _fast_bwd_case(dtype, b=2048, h=128, v=1024, b_block=32, v_block=256)
+    key = jax.random.PRNGKey(7)
+    _, _, key_y, key_g = jax.random.split(key, 4)
+    labels = jax.random.randint(key_y, (2048,), 0, 1024, dtype=jnp.int32)
+    cotangent = jax.random.normal(key_g, (2048,), dtype=jnp.float32)
+
+    def reference(x_arg, w_arg):
+        logits = x_arg.astype(jnp.float32) @ w_arg.astype(jnp.float32)
+        lse = jax.nn.logsumexp(logits, axis=-1)
+        label_logits = jnp.take_along_axis(logits, labels[:, None], axis=1).squeeze(-1)
+        loss = lse - label_logits
+        return jnp.sum(loss * cotangent) + 0.25 * jnp.sum(lse * cotangent)
+
+    _, (gx_ref, gw_ref) = jax.jit(jax.value_and_grad(reference, argnums=(0, 1)))(x, w)
+    _, (gx_slow, gw_slow) = make(False)(x, w)
+    _, (gx_fast, gw_fast) = make(True)(x, w)
+
+    def rms_error(actual, expected):
+        diff = actual.astype(jnp.float32) - expected.astype(jnp.float32)
+        return float(jnp.sqrt(jnp.mean(diff**2)))
+
+    assert rms_error(gx_fast, gx_ref) <= rms_error(gx_slow, gx_ref) * 1.05
+    assert rms_error(gw_fast, gw_ref) <= rms_error(gw_slow, gw_ref) * 1.05
+
+
+def test_xla_fast_backward_env_var_overrides_call_site_in_both_directions(monkeypatch):
+    """The env var is the A/B kill switch: when set it wins over the call site."""
+    monkeypatch.delenv(fused_xla._FAST_BWD_ENV_VAR, raising=False)
+    # Unset: the call site decides, and the library default is off.
+    assert fused_xla._resolve_fast_backward(None) is False
+    assert fused_xla._resolve_fast_backward(True) is True
+    assert fused_xla._resolve_fast_backward(False) is False
+    # Set to on: forces the fast backward even where the call site asked for the old one.
+    monkeypatch.setenv(fused_xla._FAST_BWD_ENV_VAR, "1")
+    assert fused_xla._resolve_fast_backward(None) is True
+    assert fused_xla._resolve_fast_backward(False) is True
+    # Set to off: forces the old backward even where the call site asked for the fast one.
+    monkeypatch.setenv(fused_xla._FAST_BWD_ENV_VAR, "0")
+    assert fused_xla._resolve_fast_backward(None) is False
+    assert fused_xla._resolve_fast_backward(True) is False
+    # A set-but-unrecognised value raises rather than silently falling through to the
+    # call-site default -- a typo in the kill switch must not leave the hero on the new
+    # gradient path when the operator meant to disable it.
+    monkeypatch.setenv(fused_xla._FAST_BWD_ENV_VAR, "fasle")
+    with pytest.raises(ValueError, match="not a recognised boolean"):
+        fused_xla._resolve_fast_backward(True)
+    with pytest.raises(ValueError, match="not a recognised boolean"):
+        fused_xla._resolve_fast_backward(None)
+
+
+def test_xla_fast_bwd_implementation_is_registered_and_opt_in(monkeypatch):
+    """`xla_fast_bwd` must exist, be explicit-only, and leave `xla` untouched."""
+    monkeypatch.delenv(fused_xla._FAST_BWD_ENV_VAR, raising=False)
+    assert "xla_fast_bwd" in fused_api.IMPLEMENTATIONS
+    # The plain "xla" entry must still be the unmodified function.
+    assert fused_api.IMPLEMENTATIONS["xla"] is fused_xla.linear_softmax_cross_entropy_loss_xla
+
+    # Never auto-selected: with no implementation= the default path is the old scatter
+    # backward, so the new (scatter-free) gradient is not silently in force.
+    x, w, _ = _fast_bwd_case(jnp.bfloat16, b=256, h=64, v=300, b_block=64, v_block=128)
+    labels = jnp.zeros((256,), dtype=jnp.int32)
+
+    def objective(x_arg, w_arg):
+        loss = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+            x_arg, labels, w_arg, reduction="mean", logsumexp_weight=None, dtype=jnp.float32
+        )
+        return jnp.sum(loss)
+
+    default_text = jax.jit(jax.grad(objective, argnums=(0, 1))).lower(x, w).as_text()
+    assert "stablehlo.scatter" in default_text
+
+
+def test_xla_fast_bwd_implementation_matches_xla_forward_and_fast_backward(monkeypatch):
+    monkeypatch.delenv(fused_xla._FAST_BWD_ENV_VAR, raising=False)
+    key = jax.random.PRNGKey(11)
+    key_x, key_w, key_y = jax.random.split(key, 3)
+    b, h, v = 512, 64, 2048
+    x = (jax.random.normal(key_x, (b, h), dtype=jnp.float32) * 0.5).astype(jnp.bfloat16)
+    w = (jax.random.normal(key_w, (h, v), dtype=jnp.float32) * 0.05).astype(jnp.bfloat16)
+    labels = jax.random.randint(key_y, (b,), 0, v, dtype=jnp.int32)
+    block_sizes = BlockSizes(b_block_size=b, v_block_size=512)
+
+    def make(impl):
+        def objective(x_arg, w_arg):
+            loss = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+                x_arg,
+                labels,
+                w_arg,
+                reduction="mean",
+                logsumexp_weight=None,
+                dtype=jnp.float32,
+                block_sizes=block_sizes,
+                logit_soft_cap=None,
+                implementation=impl,
+            )
+            return loss
+
+        return jax.jit(jax.value_and_grad(objective, argnums=(0, 1)))
+
+    value_xla, (gx_xla, gw_xla) = make("xla")(x, w)
+    value_fast, (gx_fast, gw_fast) = make("xla_fast_bwd")(x, w)
+
+    # Forward is the same code path, so the loss must be bitwise identical.
+    assert np.array_equal(np.asarray(value_xla), np.asarray(value_fast))
+    # Backward differs only in rounding.
+    assert jnp.allclose(gx_fast.astype(jnp.float32), gx_xla.astype(jnp.float32), atol=5e-2, rtol=5e-2)
+    assert jnp.allclose(gw_fast.astype(jnp.float32), gw_xla.astype(jnp.float32), atol=5e-2, rtol=5e-2)
+
+    # And it really is the fast backward: no scatter in the lowered gradient.
+    text = make("xla_fast_bwd").lower(x, w).as_text()
+    assert "stablehlo.scatter" not in text
+    assert "stablehlo.scatter" in make("xla").lower(x, w).as_text()
+
+
+def test_xla_fast_backward_emits_no_scatter():
+    """Structural gate: the fast backward must not regress to a scatter or upcast its GEMMs."""
+    x, w, _ = _fast_bwd_case(jnp.bfloat16, b=256, h=64, v=300, b_block=64, v_block=128)
+    labels = jnp.zeros((256,), dtype=jnp.int32)
+
+    def objective(x_arg, w_arg):
+        loss, _ = fused_xla.linear_softmax_cross_entropy_loss_xla(
+            x_arg,
+            labels,
+            w_arg,
+            block_sizes=BlockSizes(b_block_size=64, v_block_size=128),
+            dtype=jnp.float32,
+            precision=None,
+            fast_backward=True,
+        )
+        return jnp.sum(loss)
+
+    text = jax.jit(jax.grad(objective, argnums=(0, 1))).lower(x, w).as_text()
+    # The one-hot rewrite must not regress to a scatter; this is a stable semantic
+    # distinction (unlike an exact loop count, which pins the forward's lowering).
+    assert "stablehlo.scatter" not in text
+    # Both backward GEMMs must stay on bf16 operands (tensor cores), not upcast to f32.
+    assert "tensor<256x128xf32>, tensor<64x128xf32>" not in text

@@ -22,8 +22,7 @@ from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     EXECUTING_TASK_STATES,
     ActiveTaskRow,
-    TaskDetailRow,
-    task_is_finished,
+    task_is_finished_row,
 )
 from iris.cluster.types import (
     TERMINAL_TASK_STATES,
@@ -92,16 +91,6 @@ class TransitionOutcome:
 # ─── Snapshot lookups ───
 
 
-def task_is_finished_row(task: TaskDetailRow) -> bool:
-    return task_is_finished(
-        task.state,
-        task.failure_count,
-        task.max_retries_failure,
-        task.preemption_count,
-        task.max_retries_preemption,
-    )
-
-
 def active_row_from_snapshot(snapshot: TransitionSnapshot, task_id: JobName) -> ActiveTaskRow | None:
     """Resolve the snapshot's active-task row for ``task_id``."""
     task = snapshot.tasks.get(task_id)
@@ -146,6 +135,7 @@ def merge_task_termination(
     *,
     stamp_attempt_finished: bool,
     attempt_state: int | None = None,
+    exit_code: int | None = None,
 ) -> None:
     """Move a task to ``task_state`` and record its attempt.
 
@@ -178,6 +168,7 @@ def merge_task_termination(
                     attempt_id=attempt_id,
                     state=effective_attempt_state,
                     finished_at=now if stamp_attempt_finished else None,
+                    exit_code=exit_code,
                     error=error,
                 )
             )
@@ -187,6 +178,7 @@ def merge_task_termination(
             task_id=task_name,
             state=task_state,
             error=error,
+            exit_code=exit_code,
             finished_at=task_finished_at,
         )
     )

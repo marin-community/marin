@@ -91,6 +91,10 @@ class Overlay:
     def job_config(self, job_id: JobName) -> JobConfigRow | None:
         return self._snapshot.job_configs.get(job_id)
 
+    def job_delta_error(self, job_id: JobName) -> str | None:
+        delta = self._effects.jobs.get(job_id)
+        return delta.error if delta is not None else None
+
     def _job_state(self, job_id: JobName, fallback: int) -> int:
         delta = self._effects.jobs.get(job_id)
         return delta.state if delta is not None else fallback

@@ -9,7 +9,7 @@ import haliax as hax
 import jax.numpy as jnp
 import numpy as np
 from jax import random
-from test_utils import skip_if_no_torch, use_test_mesh
+from levanter.testing.helpers import skip_if_no_torch, use_test_mesh
 from transformers import AutoTokenizer
 from transformers.models.qwen3 import Qwen3Config as HFQwen3Config
 

@@ -32,11 +32,14 @@ import functools
 import logging
 import os
 import secrets
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from rigging.credentials import ClientCredentials
 from rigging.server_auth import (
     PolicyAuthInterceptor,
@@ -85,6 +88,17 @@ from iris.rpc.interceptors import RequestTimingInterceptor
 logger = logging.getLogger(__name__)
 
 FederationOwnerCheck = Callable[[JobName, str], bool]
+CONTROLLER_SHUTTING_DOWN = "Controller is shutting down"
+
+
+class _ControllerDrainingInterceptor:
+    def __init__(self, draining: threading.Event):
+        self._draining = draining
+
+    async def intercept_unary(self, call_next, request, ctx):
+        if self._draining.is_set():
+            raise ConnectError(Code.UNAVAILABLE, CONTROLLER_SHUTTING_DOWN)
+        return await call_next(request, ctx)
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +217,7 @@ class ControllerDashboard:
         # cluster that receives federation, None otherwise.
         self._federation_owner_check = federation_owner_check
         self._proxy_decision_secret = proxy_decision_secret
+        self._draining = threading.Event()
         self._app = self._create_app()
 
     @property
@@ -216,6 +231,10 @@ class ControllerDashboard:
             raise RuntimeError("native proxy decisions are not configured")
         return self._proxy_decision_secret
 
+    def begin_shutdown(self) -> None:
+        """Reject new control-plane requests while the controller shuts down."""
+        self._draining.set()
+
     def _create_app(self) -> ASGIApp:
         include_tb = bool(os.environ.get("IRIS_DEBUG"))
         controller_timing = RequestTimingInterceptor(include_traceback=include_tb)
@@ -225,7 +244,7 @@ class ControllerDashboard:
             unauthenticated_methods=_UNAUTHENTICATED_RPCS,
             authorize=authorize_method,
         )
-        controller_interceptors = [auth_interceptor, controller_timing]
+        controller_interceptors = [_ControllerDrainingInterceptor(self._draining), auth_interceptor, controller_timing]
         # @on_loop handlers run inline on the event loop; everything else
         # is dispatched to a thread by AsyncServiceAdapter.
         rpc_asgi_app = ControllerServiceASGIApplication(
@@ -420,10 +439,15 @@ class ControllerDashboard:
         return response
 
     @public
-    def _health(self, _request: Request) -> JSONResponse:
+    async def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""
+        if self._draining.is_set():
+            return JSONResponse(
+                {"status": "unavailable", "reason": CONTROLLER_SHUTTING_DOWN},
+                status_code=503,
+            )
         try:
-            checkpoint_epoch_ms = self._service.probe_database()
+            checkpoint_epoch_ms = await run_in_threadpool(self._service.probe_database)
         except SQLAlchemyError:
             logger.exception("Controller database health probe failed")
             return JSONResponse({"status": "unhealthy", "database": "error"}, status_code=503)

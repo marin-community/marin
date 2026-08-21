@@ -78,6 +78,12 @@ const isActive = computed(() => {
 // Drives the Events panel so it follows the same attempt as the log viewer.
 const selectedAttemptId = ref<number | undefined>(undefined)
 const effectiveAttemptId = computed(() => selectedAttemptId.value ?? task.value?.currentAttemptId)
+const effectiveAttemptUid = computed(() => {
+  const attempts = task.value?.attempts ?? []
+  const attemptId = effectiveAttemptId.value
+  if (attemptId === undefined) return attempts[attempts.length - 1]?.attemptUid
+  return attempts.find((attempt) => (attempt.attemptId ?? 0) === attemptId)?.attemptUid
+})
 
 const startedMs = computed(() => timestampMs(task.value?.startedAt))
 const finishedMs = computed(() => timestampMs(task.value?.finishedAt))
@@ -159,10 +165,10 @@ const statusTextDetail = computed<string>(() => {
 // --- Scheduling / lifecycle events from finelog stats (iris.task_event) ---
 //
 // One row per Kubernetes event the worker relayed for this task (pod, kueue,
-// container). Newest-first and filtered by attempt so a retry does not show the
-// prior attempt's events. This is the primary signal for a task wedged in
-// BUILDING/pending: it surfaces the k8s reasons (SchedulingGated,
-// ImagePullBackOff, quota/topology denials) behind the wait.
+// container). Newest-first and filtered by attempt UID so a recreated task does
+// not show events retained from an earlier job incarnation. This is the primary
+// signal for a task wedged in BUILDING/pending: it surfaces the k8s reasons
+// (SchedulingGated, ImagePullBackOff, quota/topology denials) behind the wait.
 const TASK_EVENT_NAMESPACE = 'iris.task_event'
 
 interface TaskEventRow {
@@ -174,13 +180,12 @@ interface TaskEventRow {
   count?: number
 }
 
-function buildTaskEventsSql(taskId: string, attemptId: number | undefined): string {
+function buildTaskEventsSql(taskId: string, attemptUid: string | undefined): string {
   // QueryRequest has no param binding; manual DuckDB single-quote escape.
   const escaped = taskId.replace(/'/g, "''")
-  const attemptPredicate =
-    attemptId !== undefined && attemptId !== null
-      ? `AND attempt_id = ${Number(attemptId)}`
-      : ''
+  const attemptPredicate = attemptUid
+    ? `AND attempt_uid = '${attemptUid.replace(/'/g, "''")}'`
+    : 'AND 1 = 0'
   return `
 SELECT ts, type, reason, message, source, count
 FROM "${TASK_EVENT_NAMESPACE}"
@@ -193,7 +198,7 @@ LIMIT 200
 
 const { data: taskEventsData, refresh: fetchTaskEvents } = useLogServerStatsRpc<QueryResponse>(
   'Query',
-  () => ({ sql: buildTaskEventsSql(props.taskId, effectiveAttemptId.value) }),
+  () => ({ sql: buildTaskEventsSql(props.taskId, effectiveAttemptUid.value) }),
 )
 
 const taskEvents = computed<TaskEventRow[]>(() => {
@@ -281,7 +286,7 @@ const { start: startEndpointsRefresh, stop: stopEndpointsRefresh } = useAutoRefr
 
 // Re-query events as soon as the focused attempt changes so a manual attempt
 // pick (or a new attempt appearing) reflects immediately, not on the next poll.
-watch(effectiveAttemptId, () => {
+watch(effectiveAttemptUid, () => {
   fetchTaskEvents()
 })
 
@@ -487,10 +492,11 @@ watch(() => props.taskId, async () => {
           <div v-else class="text-sm text-text-muted py-2">No resource data</div>
         </InfoCard>
 
-        <!-- Build info card -->
-        <InfoCard title="Build Info">
+        <!-- Container provenance. Worker-daemon builds include timing/cache data;
+             direct Kubernetes tasks use the selected prebuilt runtime image. -->
+        <InfoCard title="Build / Runtime">
           <template v-if="task.buildMetrics">
-            <InfoRow label="Image Tag">
+            <InfoRow label="Runtime Image">
               <span class="font-mono text-xs break-all">
                 {{ task.buildMetrics.imageTag ?? '-' }}
               </span>
@@ -498,13 +504,13 @@ watch(() => props.taskId, async () => {
             <InfoRow v-if="buildDuration" label="Build Time">
               <span class="font-mono">{{ buildDuration }}</span>
             </InfoRow>
-            <InfoRow label="From Cache">
+            <InfoRow v-if="task.buildMetrics.buildStarted || task.buildMetrics.buildFinished" label="From Cache">
               <span :class="task.buildMetrics.fromCache ? 'text-status-success' : 'text-text-muted'">
                 {{ task.buildMetrics.fromCache ? 'Yes' : 'No' }}
               </span>
             </InfoRow>
           </template>
-          <div v-else class="text-sm text-text-muted py-2">No build data</div>
+          <div v-else class="text-sm text-text-muted py-2">No runtime image data</div>
         </InfoCard>
       </div>
 

@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 _RESERVED_RESOURCE_ATTRIBUTES = frozenset(
     {
-        "root_run_uid",
         "execution_uid",
         "job_id",
         "task_id",
@@ -43,8 +42,6 @@ def _identity(job_info: JobInfo, process_index: int | None) -> dict[str, str]:
     }
     if job_info.worker_id:
         identity["worker"] = job_info.worker_id
-    if job_info.worker_region:
-        identity["region"] = job_info.worker_region
     env_process_index = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV)
     if process_index is not None:
         if isinstance(process_index, bool) or process_index < 0:
@@ -70,7 +67,7 @@ def _execution_uid(job_info: JobInfo) -> str:
 def configure(
     service: str,
     *,
-    root_run_uid: str | None = None,
+    run_id: str | None = None,
     execution_uid: str | None = None,
     process_index: int | None = None,
     attributes: Mapping[str, str] | None = None,
@@ -89,7 +86,7 @@ def configure(
             raise ValueError(f"Iris owns canonical telemetry attributes: {names}")
         resource = _identity(job_info, process_index)
         resource.update(extra)
-        resource["root_run_uid"] = root_run_uid or str(job_info.job_id)
+        resource["run_id"] = run_id or str(job_info.job_id)
         resource["execution_uid"] = execution_uid or _execution_uid(job_info)
         if service == "vllm":
             resource["serving_job_id"] = str(job_info.job_id)

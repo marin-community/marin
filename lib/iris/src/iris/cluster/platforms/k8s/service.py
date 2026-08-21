@@ -40,9 +40,6 @@ from iris.cluster.platforms.k8s.types import (
     KubectlError,
     KubectlLogLine,
     KubectlLogResult,
-    PodResourceUsage,
-    parse_k8s_cpu,
-    parse_k8s_quantity,
     parse_k8s_timestamp,
 )
 from iris.cluster.platforms.types import find_free_port
@@ -65,6 +62,11 @@ _LIST_PAGE_LIMIT: int = 500
 # API error bodies quote the offending manifest; keep enough to identify the
 # verdict without flooding logs.
 _ERROR_BODY_MAX_LEN: int = 500
+
+# GNU timeout's conventional exit status. K8s exec consumers already model
+# process completion as an integer exit code, so preserve that contract when
+# the websocket remains open past the caller's deadline.
+_COMMAND_TIMEOUT_EXIT_CODE: int = 124
 
 
 @runtime_checkable
@@ -155,7 +157,7 @@ class K8sService(Protocol):
         field_selector: str | None = None,
     ) -> list[dict]: ...
 
-    def top_pods(self, *, labels: dict[str, str] | None = None) -> dict[str, PodResourceUsage]: ...
+    def node_resource_metrics(self, node_name: str) -> str: ...
 
     def read_file(
         self,
@@ -734,9 +736,23 @@ class CloudK8sService:
                 with self.create_api_client() as exec_api_client:
                     resp = kubernetes.stream.stream(
                         kubernetes.client.CoreV1Api(exec_api_client).connect_get_namespaced_pod_exec,
+                        _preload_content=False,
                         **kwargs,
                     )
-                return ExecResult(returncode=0, stdout=resp, stderr="")
+                    try:
+                        resp.run_forever(timeout=effective_timeout)
+                        stdout = resp.read_stdout(timeout=0) or ""
+                        stderr = resp.read_stderr(timeout=0) or ""
+                        if resp.is_open():
+                            timeout_error = f"Command timed out after {effective_timeout:g} seconds"
+                            return ExecResult(
+                                returncode=_COMMAND_TIMEOUT_EXIT_CODE,
+                                stdout=stdout,
+                                stderr="\n".join(part for part in (stderr, timeout_error) if part),
+                            )
+                        return ExecResult(returncode=resp.returncode, stdout=stdout, stderr=stderr)
+                    finally:
+                        resp.close()
             except ApiException as e:
                 return ExecResult(returncode=1, stdout="", stderr=str(e))
 
@@ -753,50 +769,22 @@ class CloudK8sService:
         """Remove files inside a Pod container. Ignores missing files."""
         self.exec(pod_name, ["rm", "-f", *paths], container=container, timeout=10)
 
-    # -- top_pods ------------------------------------------------------------
+    # -- node metrics ---------------------------------------------------------
 
-    def top_pods(self, *, labels: dict[str, str] | None = None) -> dict[str, PodResourceUsage]:
-        """Return CPU/memory usage for every pod, keyed by pod name.
-
-        Lists ``PodMetrics`` for the namespace (optionally scoped by ``labels``)
-        via the metrics.k8s.io list endpoint. A 404 means the metrics API is
-        unavailable (metrics-server absent); returns an empty map rather than
-        raising so callers degrade quietly.
-        """
-        logger.info("k8s: top_pods labels=%s", labels)
-        kwargs = self._request_timeout_kwargs()
-        if labels:
-            kwargs["label_selector"] = _label_selector(labels)
-        with slow_log(logger, "top_pods", threshold_ms=_SLOW_THRESHOLD_MS):
+    def node_resource_metrics(self, node_name: str) -> str:
+        """Return kubelet ``metrics/resource`` text for one node."""
+        logger.debug("k8s: node resource metrics node=%s", node_name)
+        with slow_log(logger, "node_resource_metrics", threshold_ms=_SLOW_THRESHOLD_MS):
             try:
-                result = self._custom.list_namespaced_custom_object(
-                    group="metrics.k8s.io",
-                    version="v1beta1",
-                    namespace=self.namespace,
-                    plural="pods",
-                    **kwargs,
+                return self._core_v1.connect_get_node_proxy_with_path(
+                    name=node_name,
+                    path="metrics/resource",
+                    **self._request_timeout_kwargs(),
                 )
-            except ApiException as e:
-                if e.status == 404:
-                    return {}
-                raise
-
-        usage_by_pod: dict[str, PodResourceUsage] = {}
-        for item in result.get("items", []):
-            name = item.get("metadata", {}).get("name", "")
-            containers = item.get("containers", [])
-            if not name or not containers:
-                continue
-            total_cpu = 0
-            total_mem = 0
-            for c in containers:
-                usage = c.get("usage", {})
-                if "cpu" in usage:
-                    total_cpu += parse_k8s_cpu(usage["cpu"])
-                if "memory" in usage:
-                    total_mem += parse_k8s_quantity(usage["memory"])
-            usage_by_pod[name] = PodResourceUsage(cpu_millicores=total_cpu, memory_bytes=total_mem)
-        return usage_by_pod
+            except ApiException as error:
+                raise KubectlError(
+                    f"get nodes/{node_name}/proxy/metrics/resource failed ({error.status}): {error.reason}"
+                ) from error
 
     # -- port_forward (subprocess-based) -------------------------------------
 

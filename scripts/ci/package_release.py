@@ -20,8 +20,9 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
+from datetime import date
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
@@ -30,6 +31,10 @@ PYPI_PROJECT_JSON_URL = "https://pypi.org/pypi/{distribution}/json"
 PYPI_VERSION_JSON_URL = "https://pypi.org/pypi/{distribution}/{version}/json"
 LOCK_RETRY_DELAYS = (0, 5, 15, 30, 60, 120)
 PYTHON_LIBS_FAMILY = "python-libs"
+IRIS_DISTRIBUTION = "marin-iris"
+# `iris.version` reads this first, so it has to be cleared to prove the date came
+# out of the artifact rather than out of the environment running the check.
+IRIS_REVISION_DATE_ENV = "IRIS_REVISION_DATE"
 _VERSION_RE = re.compile(r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)(?:[.-]dev\.?(?P<dev>\d+))?$")
 
 
@@ -129,7 +134,7 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                 }
             ),
             tag_prefix="marin-libs-v",
-            source_patterns=("scripts/python_libs_package.py",),
+            source_patterns=("scripts/python_libs_package.py", "lib/iris/hatch_build.py"),
             build_legs=(("ubuntu-latest", BuildOperation.PYTHON),),
             build=PythonBundle(script_path=Path("scripts/python_libs_package.py")),
         ),
@@ -359,6 +364,22 @@ def latest_family_version(package: PackageFamily) -> str | None:
     return max(versions, key=_version_key) if versions else None
 
 
+def latest_native_release_versions(
+    latest_version: Callable[[str], str | None] = latest_pypi_version,
+) -> Mapping[str, str]:
+    """Return the newest published wheel version consumed by each native family."""
+    versions = {}
+    for name, package in sorted(PACKAGES.items()):
+        build = package.build
+        if not isinstance(build, NativeBuild):
+            continue
+        version = latest_version(build.requirement_distribution)
+        if version is None:
+            raise ValueError(f"No published release found for {build.requirement_distribution}")
+        versions[name] = version
+    return MappingProxyType(versions)
+
+
 def resolve_version(
     package_name: str,
     mode: str,
@@ -564,7 +585,8 @@ def validate_targeted_lock_change(
         raise ValueError(f"Expected {distribution}=={expected} to resolve from a registry")
 
 
-def _emit_github_output(path: Path | None, **values: str) -> None:
+def emit_github_output(path: Path | None, **values: str) -> None:
+    """Append single-line values to a GitHub Actions output file when configured."""
     if path is None:
         return
     with path.open("a", encoding="utf-8") as output:
@@ -805,6 +827,68 @@ def validate_native_wheel(package_name: str, version: str, dist_dir: Path) -> No
         )
 
 
+def iris_release_artifacts(version: str, dist_dir: Path) -> dict[str, Path]:
+    """The marin-iris wheel and sdist built for `version`, keyed by kind."""
+    prefix = f"{_normalized_distribution(IRIS_DISTRIBUTION)}-{python_compatible_version(version)}"
+    artifacts = {}
+    for kind, pattern in (("wheel", f"{prefix}-*.whl"), ("sdist", f"{prefix}.tar.gz")):
+        matches = sorted(dist_dir.glob(pattern))
+        if len(matches) != 1:
+            raise ValueError(f"Expected one {IRIS_DISTRIBUTION} {kind} in {dist_dir}, found {[p.name for p in matches]}")
+        artifacts[kind] = matches[0]
+    return artifacts
+
+
+def installed_revision_date(artifact: Path) -> str:
+    """Revision date reported by marin-iris installed alone from one artifact.
+
+    Asks the installed package rather than reading the archive, so the answer
+    comes from the code path a user's client runs. Installing the sdist rebuilds
+    the wheel outside any checkout, the way `pip install --no-binary` and an
+    install from a git URL do; that build has no repository to read and has to
+    carry the sdist's own stamp forward.
+    """
+    with tempfile.TemporaryDirectory(prefix="iris-revision-") as temporary:
+        environment = Path(temporary) / "venv"
+        subprocess.run(["uv", "venv", str(environment)], check=True)
+        python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        subprocess.run(
+            ["uv", "pip", "install", "--python", str(python), "--no-deps", str(artifact.resolve())],
+            check=True,
+        )
+        probe = subprocess.run(
+            [str(python), "-c", "from iris.version import client_revision_date; print(client_revision_date())"],
+            check=True,
+            capture_output=True,
+            text=True,
+            # Outside the repository, so a checkout cannot supply the date either.
+            cwd=temporary,
+            env={key: value for key, value in os.environ.items() if key != IRIS_REVISION_DATE_ENV},
+        )
+    return probe.stdout.strip()
+
+
+def validate_revision_stamp(version: str, dist_dir: Path) -> dict[str, str]:
+    """Fail unless both marin-iris distributions report their own revision date.
+
+    The controller gates client submissions on this date and falls back to
+    wall-clock time for a build that cannot report one, so an unstamped release
+    would loosen the gate for everyone who installs it without failing anything.
+    """
+    dates = {
+        kind: installed_revision_date(artifact) for kind, artifact in iris_release_artifacts(version, dist_dir).items()
+    }
+    for kind, value in dates.items():
+        try:
+            date.fromisoformat(value)
+        except ValueError:
+            raise ValueError(
+                f"{IRIS_DISTRIBUTION} {version} {kind} reports revision date {value!r}, "
+                f"expected ISO YYYY-MM-DD from lib/iris/hatch_build.py"
+            ) from None
+    return dates
+
+
 def release_plan(
     *,
     event_name: str,
@@ -902,11 +986,20 @@ def _bump_releases_command(args: argparse.Namespace) -> None:
     for name in selected:
         bump_native_requirement(name, versions[name]["version"], args.repo_root)
     changed_paths = [path for path in requirement_paths if (args.repo_root / path).read_text() != before[path]]
-    _emit_github_output(
+    emit_github_output(
         args.github_output,
         changed=str(bool(changed_paths)).lower(),
         requirement_paths=" ".join(path.as_posix() for path in changed_paths),
     )
+
+
+def _latest_native_releases_command(args: argparse.Namespace) -> None:
+    versions = json.dumps(
+        {name: {"version": version} for name, version in latest_native_release_versions().items()},
+        separators=(",", ":"),
+    )
+    print(versions)
+    emit_github_output(args.github_output, versions=versions)
 
 
 def _plan_command(args: argparse.Namespace) -> None:
@@ -933,7 +1026,7 @@ def _plan_command(args: argparse.Namespace) -> None:
         "publish": str(next(iter(plan.versions.values())).mode != ReleaseMode.MANUAL).lower(),
     }
     print(json.dumps(values, indent=2, sort_keys=True))
-    _emit_github_output(args.github_output, **values)
+    emit_github_output(args.github_output, **values)
 
 
 def _build_command(args: argparse.Namespace) -> None:
@@ -942,6 +1035,10 @@ def _build_command(args: argparse.Namespace) -> None:
 
 def _validate_wheel_command(args: argparse.Namespace) -> None:
     validate_native_wheel(args.package, args.version, args.dist_dir)
+
+
+def _validate_revision_stamp_command(args: argparse.Namespace) -> None:
+    print(json.dumps(validate_revision_stamp(args.version, args.dist_dir), indent=2, sort_keys=True))
 
 
 def main() -> None:
@@ -959,6 +1056,10 @@ def main() -> None:
     bump_releases.add_argument("--repo-root", type=Path, default=Path.cwd())
     bump_releases.add_argument("--github-output", type=Path)
     bump_releases.set_defaults(func=_bump_releases_command)
+
+    latest_native_releases = subparsers.add_parser("latest-native-releases")
+    latest_native_releases.add_argument("--github-output", type=Path)
+    latest_native_releases.set_defaults(func=_latest_native_releases_command)
 
     plan = subparsers.add_parser("plan")
     plan.add_argument("--event-name", required=True)
@@ -985,6 +1086,11 @@ def main() -> None:
     validate_wheel.add_argument("--version", required=True)
     validate_wheel.add_argument("--dist-dir", type=Path, default=Path("dist"))
     validate_wheel.set_defaults(func=_validate_wheel_command)
+
+    validate_revision_stamp_parser = subparsers.add_parser("validate-revision-stamp")
+    validate_revision_stamp_parser.add_argument("--version", required=True)
+    validate_revision_stamp_parser.add_argument("--dist-dir", type=Path, default=Path("dist"))
+    validate_revision_stamp_parser.set_defaults(func=_validate_revision_stamp_command)
 
     args = parser.parse_args()
     args.func(args)

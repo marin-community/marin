@@ -1,16 +1,20 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import atexit
 import itertools
 import logging
 import os
 import re
+import sys
 from dataclasses import dataclass
 from typing import List, Optional, Union
 
 import jax
 from jax._src import clusters
+from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.types import JobName
 from iris.runtime.jax_init import initialize_jax as initialize_iris_jax
 
 from levanter.megascale import configure_megascale_from_iris
@@ -26,6 +30,17 @@ _NUM_NODES = "SLURM_STEP_NUM_NODES"
 _TASKS_PER_NODE = "SLURM_STEP_TASKS_PER_NODE"
 _VISIBLE_DEVICES = "CUDA_VISIBLE_DEVICES"
 _NODE_NAME = "SLURMD_NODENAME"
+
+
+def _complete_iris_job_after_clean_exit(client: IrisClient, job_id: JobName) -> None:
+    # Preserve retries for genuine failures; the successful rank-0 exit owns completed-job teardown.
+    if getattr(sys, "last_exc", None) is not None:
+        return
+    client.complete_job(job_id)
+
+
+def _unregister_iris_job_completion() -> None:
+    atexit.unregister(_complete_iris_job_after_clean_exit)
 
 
 class LevanterSlurmCluster(clusters.SlurmCluster):
@@ -230,9 +245,13 @@ class DistributedConfig:
             logger.info("Detected Iris job context; initializing jax.distributed via iris.runtime.jax_init.")
             configure_megascale_from_iris()
             initialize_iris_jax()
-            return
-
-        if self._is_distributed():
+            if jax.process_index() == 0:
+                ctx = iris_ctx()
+                if ctx.client is None:
+                    raise RuntimeError("Iris context has no client for completing the current job")
+                # Tracker exit hooks register later and therefore run before job completion.
+                atexit.register(_complete_iris_job_after_clean_exit, ctx.client, job_info.job_id)
+        elif self._is_distributed():
             device_ids = self.local_device_ids
             coordinator_address = self.coordinator_address
 
@@ -267,3 +286,4 @@ class DistributedConfig:
                 "Not initializing jax.distributed because no distributed config "
                 "was provided, and no cluster was detected."
             )
+            return

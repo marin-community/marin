@@ -64,18 +64,90 @@ export function formatDuration(startMs: number, endMs?: number): string {
 }
 
 /**
- * Format epoch ms as "HH:MM:SS.mmm" in the browser's local zone, or in UTC when
- * `utc` is set. UTC matches the timestamps most processes embed in their raw log
+ * Which clock a log panel renders timestamps on and reads typed instants
+ * against. UTC matches the timestamps most processes embed in their raw log
  * lines, so the rendered prefix lines up with the line text.
  */
-export function formatLogTime(epochMs: number, utc = false): string {
-  if (!epochMs) return ''
-  const d = new Date(epochMs)
+export type TimeZoneName = 'local' | 'utc'
+
+/** "HH:MM:SS.mmm" for a date already resolved, with no absent-value guard. */
+function clockTime(d: Date, zone: TimeZoneName): string {
+  const utc = zone === 'utc'
   const hh = String(utc ? d.getUTCHours() : d.getHours()).padStart(2, '0')
   const mm = String(utc ? d.getUTCMinutes() : d.getMinutes()).padStart(2, '0')
   const ss = String(utc ? d.getUTCSeconds() : d.getSeconds()).padStart(2, '0')
   const ms = String(utc ? d.getUTCMilliseconds() : d.getMilliseconds()).padStart(3, '0')
   return `${hh}:${mm}:${ss}.${ms}`
+}
+
+/** Format epoch ms as "HH:MM:SS.mmm" on `zone`'s clock; blank when absent. */
+export function formatLogTime(epochMs: number, zone: TimeZoneName = 'local'): string {
+  if (!epochMs) return ''
+  return clockTime(new Date(epochMs), zone)
+}
+
+/**
+ * Format epoch ms as "YYYY-MM-DD HH:MM:SS.mmm" on `zone`'s clock.
+ *
+ * Unlike `formatLogTime` this has no absent-value guard: it labels a bound the
+ * operator chose, where epoch 0 is a real instant rather than a missing one.
+ */
+export function formatLogTimestamp(epochMs: number, zone: TimeZoneName): string {
+  const utc = zone === 'utc'
+  const d = new Date(epochMs)
+  const year = String(utc ? d.getUTCFullYear() : d.getFullYear()).padStart(4, '0')
+  const month = String((utc ? d.getUTCMonth() : d.getMonth()) + 1).padStart(2, '0')
+  const day = String(utc ? d.getUTCDate() : d.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day} ${clockTime(d, zone)}`
+}
+
+// Every field is optional so that a date alone, a time alone, or both parse. The
+// separators are loose because the point is to accept whatever an operator
+// copied: a rendered dashboard timestamp, an ISO string, a glog datestamp.
+const LOG_TIMESTAMP = /^(?:(\d{4})-?(\d{2})-?(\d{2}))?(?:[ T]*(\d{1,2}):(\d{2})(?::(\d{2}))?(?:[.,](\d{1,3}))?)?\s*(Z|UTC)?$/i
+
+/**
+ * Read a typed or pasted instant as epoch ms, or null when it makes no sense.
+ *
+ * Accepts a date, a time, or both, plus bare epoch seconds and milliseconds. A
+ * value with no date is read as today and one with no time as midnight, both on
+ * `zone`'s clock; a trailing `Z` overrides `zone` and forces UTC.
+ */
+export function parseLogTimestamp(value: string, zone: TimeZoneName): number | null {
+  const text = value.trim()
+  if (!text) return null
+  if (/^\d{10}$/.test(text)) return Number(text) * 1000
+  if (/^\d{13}$/.test(text)) return Number(text)
+
+  const match = LOG_TIMESTAMP.exec(text)
+  if (!match) return null
+  // Destructuring defaults stand in for the unmatched groups, which TypeScript
+  // types as `string` even though the runtime leaves them undefined.
+  const [, year = '', month = '', day = '', hour = '', minute = '', second = '', fraction = '', utcMark = ''] = match
+  // Every group is optional, so a string of only separators matches nothing.
+  if (!year && !hour) return null
+
+  const utc = zone === 'utc' || utcMark !== ''
+  const now = new Date()
+  const y = year ? Number(year) : utc ? now.getUTCFullYear() : now.getFullYear()
+  const mo = month ? Number(month) : (utc ? now.getUTCMonth() : now.getMonth()) + 1
+  const d = day ? Number(day) : utc ? now.getUTCDate() : now.getDate()
+  const h = hour ? Number(hour) : 0
+  const mi = minute ? Number(minute) : 0
+  const s = second ? Number(second) : 0
+  const ms = fraction ? Number(fraction.padEnd(3, '0')) : 0
+  // Reject out-of-range fields rather than letting Date roll them over, so a
+  // typo lands as "unrecognized" instead of silently moving the window.
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || s > 59) return null
+  const date = utc
+    ? new Date(Date.UTC(y, mo - 1, d, h, mi, s, ms))
+    : new Date(y, mo - 1, d, h, mi, s, ms)
+  // A day past the end of its month (Feb 31) is in range for every field yet
+  // still not a date; Date rolls it forward instead of refusing it. Only the
+  // calendar knows which those are, so ask it whether the day survived.
+  const sameDay = utc ? date.getUTCDate() === d : date.getDate() === d
+  if (!sameDay) return null
+  return date.getTime()
 }
 
 /** Format an uptime duration in milliseconds as a human-readable string. */

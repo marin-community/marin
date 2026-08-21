@@ -6,8 +6,8 @@ from pathlib import Path
 
 import huggingface_hub
 import pytest
-from rigging.filesystem import StoragePath
-from test_utils import skip_if_hf_model_not_accessible
+from levanter.testing.helpers import skip_if_hf_model_not_accessible
+from rigging.filesystem.storage_path import StoragePath
 from transformers import GPT2Config as HfGpt2Config
 
 from levanter.compat.hf_checkpoints import (

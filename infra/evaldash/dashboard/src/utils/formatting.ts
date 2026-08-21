@@ -55,14 +55,21 @@ export function formatClock(d: Date): string {
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
-// A ±standard-error string in the same percentage units as formatScore, or '' when absent.
-export function formatStderr(value: number | null | undefined, stderr: number | null | undefined): string {
-  if (stderr === null || stderr === undefined || Number.isNaN(stderr)) return ''
-  const scaled = value !== null && value !== undefined && value >= 0 && value <= 1 ? stderr * 100 : stderr
-  return `±${scaled.toFixed(1)}`
+// A 95% interval in the same percentage units as formatScore, e.g. '48.2–69.1'. Every displayed
+// score carries one: a point estimate alone hides both sampling error and any items a run never
+// graded.
+export function formatInterval(low: number, high: number): string {
+  return `${formatScore(low)}\u2013${formatScore(high)}`
 }
 
-// A signed delta against a reference score (e.g. a leaderboard leader), in the same
+// The share of attempted items a run graded, e.g. '92.5% graded', or '' when it reports no attempted
+// count at all (in which case completeness is unknown, not complete).
+export function formatCoverage(coverage: number | null | undefined): string {
+  if (coverage === null || coverage === undefined || Number.isNaN(coverage)) return ''
+  return `${(coverage * 100).toFixed(1)}% graded`
+}
+
+// A signed delta against a reference score (e.g. the fleet best on a benchmark), in the same
 // percentage-point scale formatScore displays, e.g. '-3.1'. Empty string when there is
 // nothing to compare (no value, or the value is the reference itself).
 export function formatDelta(value: number | null | undefined): string {

@@ -16,7 +16,6 @@ from levanter.utils.jax_utils import local_cpu_mesh
 
 from levanter.data.dataset import AsyncDataset
 from levanter.schedule import BatchSchedule
-from levanter.utils.index import Index
 from levanter.utils.thread_utils import blocking_wait, future_from_value
 
 logger = logging.getLogger(__name__)
@@ -87,7 +86,7 @@ class MixtureDataset(AsyncDataset[T]):
             for name, dataset in datasets.items()
             if any(weights.get(name, 0) > 0 for _, weights in self.weight_stages)
         }
-        self.dataset_index = Index(self.datasets.keys())
+        self.dataset_index: list[str] = list(self.datasets.keys())
         self.block_size = block_size
         # we pack index and ds id into a single 32 bit, so block size must be at most 2^16
         if block_size >= 2**16:

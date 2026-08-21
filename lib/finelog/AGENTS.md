@@ -61,14 +61,24 @@ of a table with a `cluster` column are stamped with the origin and skipped if th
 already carry a foreign one, so a hub's own relayed rows never loop. The cursor is
 durable, so a restart resumes rather than replays.
 
+`telemetry_v1` is server-owned at both ends of federation. A JWT sender's
+`RegisterTable` cannot evolve an existing hub telemetry schema or its physical layout.
+If the sender is ahead by an optional column, the hub reports the ignored column once,
+drops that column from forwarded batches, and appends the compatible fields. Required
+unknown columns and shared-column type changes remain errors. Other namespaces retain
+ordinary additive registration.
+
 Forwarding is **best-effort by construction**: the sending store holds the record,
 the hub a convenience copy. A backlog is a durable cursor into the sender's bounded
 local retention rather than a separate queue, so the forwarder drains it without an
 age or row-count cap. Non-log chunks from one read turn may wait for hub durability
 concurrently; log chunks stay serial to preserve line order. Rows are skipped only
-after local eviction makes them unreadable or the hub permanently rejects a malformed
-batch. A hub outage therefore cannot consume extra sender memory, but a long enough
-outage can still outlive local retention.
+after local eviction makes them unreadable. A rejected write preserves its cursor and
+invalidates the cached hub registration; the next sweep re-registers the current source
+schema and retries while other namespaces continue forwarding. Transient failures get
+three attempts before the namespace yields for the sweep, without advancing its cursor.
+A hub outage therefore cannot consume extra sender memory, but a long enough outage can
+still outlive local retention.
 
 Only the k8s backend can forward — it projects the key through a Secret. The gcp
 backend refuses, because its only channel to the server is world-readable
@@ -100,8 +110,8 @@ committing.
 ## Development
 
 ```bash
-cd lib/finelog
-uv run --group dev pytest --tb=short tests/
+# Full safe Finelog suite
+uv run --package marin-finelog --group test pytest --tb=short lib/finelog/tests/
 ```
 
 Regenerate protos after editing `proto/logging.proto`:
@@ -208,8 +218,9 @@ typed enum variant, format version, validation, planner rule, and copied-shard
 benchmark; there is no free-form plugin registry.
 
 A column declared with `ColumnIndex.trigram` gets a span-granular substring
-section. That index makes `contains(col, …)` and `col LIKE '%…%'` prune instead
-of full-scan. Today it is on `log.key`, `log.data`, and `telemetry_v1.name`.
+section. That index makes `contains(col, …)`, `col LIKE '%…%'`, and regexes with
+required literal runs prune instead of full-scan. Today it is on `log.key`,
+`log.data`, and `telemetry_v1.name`.
 
 Sorting by a column does not cover substring search of it. A log key is
 `/user/<job>-coord/<job>/<task>:<attempt>`, so the job an operator searches for
@@ -221,6 +232,13 @@ required: `%CUDA_ERROR%` prunes on `CUDA` and `ERROR` separately, while the
 escaped `%CUDA\_ERROR%` prunes on the single run `CUDA_ERROR`. Runs under three
 bytes carry no trigram and drop out. `NOT LIKE`, `ILIKE`, and an explicit
 `ESCAPE` never prune.
+
+`regexp_matches(col, pattern)` contributes only literals that every match must
+contain. Concatenated and mandatory repeated literals prune; optional text and
+branch-specific alternatives do not. Case-insensitive patterns without a safe
+literal scan unpruned; invalid patterns fail when the exact predicate compiles.
+The regex predicate remains in the physical plan to check surviving rows
+exactly.
 
 Enabling an index is additive and can be done on a live namespace. Maintenance
 backfills L≥1 segments a few at a time, reading all required index columns once
@@ -286,8 +304,10 @@ No segment carries a parquet bloom filter. Writing them for every column cost 15
 of each segment and pruned nothing measurable; the key-column bloom that outlived
 that only served exact-key lookups against unsorted L0, which is a few hundred
 KiB that compaction consumes within a tick or two, against a write cost on every
-flush. L1+ is sorted by `(key, seq)` and prunes the key band from min/max
-statistics; substring queries prune from the trigram bundle section.
+flush. L1+ is sorted by the schema's configured columns plus `seq`; schemas
+without an explicit order retain `(key, seq)`. Min/max statistics prune the
+clustered dimensions and key band, while substring queries prune from the
+trigram bundle section.
 
 A starts-with predicate — `prefix(col, P)`, `col LIKE 'P%'`, or
 `regexp_matches(col, '^P…')` — prunes only because `PrefixRangeRewrite` ANDs the

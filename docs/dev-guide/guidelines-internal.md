@@ -81,8 +81,8 @@ uv run iris --cluster=marin job list
 # Follow logs (includes child-job task logs by default).
 uv run iris --cluster=marin job logs /<user>/<job-name>
 
-# Kill / Stop Job (if necessary / error / bug) -- kills the job and all its child tasks.
-uv run iris --cluster=marin job stop /<user>/<job-name>
+# Cancel Job (if necessary / error / bug) -- cancels the job and all its child tasks.
+uv run iris --cluster=marin job cancel /<user>/<job-name>
 ```
 
 Notes:

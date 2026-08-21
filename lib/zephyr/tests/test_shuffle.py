@@ -14,20 +14,25 @@ from collections.abc import Iterator
 from unittest.mock import patch
 
 import cloudpickle
+import fsspec
 import polars as pl
+import pyarrow.parquet as pq
 import pytest
+from fsspec.implementations.local import LocalFileSystem
 from iris.env_resources import TaskResources
 from zephyr.external_sort import external_sort_merge
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
 from zephyr.shuffle import (
     _PAYLOAD_COL,
+    _SCATTER_MAX_ROW_GROUPS_PER_CHUNK,
     _SHARD_COL,
     _SORT_KEY_COL,
     ScatterReader,
     ScatterWriter,
     _dataframe_to_items,
     _items_to_dataframe,
+    _read_sidecar_slices_parallel,
     _write_scatter,
 )
 from zephyr.worker_context import _worker_ctx_var
@@ -388,6 +393,32 @@ def test_scatter_byte_budget_preserves_all_items(tmp_path):
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
 
 
+def test_scatter_bounds_parquet_row_groups(tmp_path):
+    num_targets = 1024
+    data_path = f"{tmp_path}/shard-0000/scatter/"
+    frame = pl.DataFrame(
+        {
+            _PAYLOAD_COL: pl.Series(
+                [cloudpickle.dumps({"k": target}) for target in range(num_targets)],
+                dtype=pl.Binary,
+            ),
+            _SHARD_COL: pl.Series(range(num_targets), dtype=pl.Int32),
+            _SORT_KEY_COL: [
+                OrderedDict([("key", target.to_bytes(4, "big")), ("sort_value", None)]) for target in range(num_targets)
+            ],
+        }
+    )
+    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=0)
+    writer.write(frame)
+    writer.close()
+
+    parquet = pq.ParquetFile(f"{data_path}c0000.parquet")
+    assert parquet.metadata.num_row_groups <= _SCATTER_MAX_ROW_GROUPS_PER_CHUNK
+
+    reader = ScatterReader(files=[(data_path, [f"{data_path}c0000.parquet"])], target_shard=513, avg_item_bytes=1)
+    assert _read_shard(reader) == [{"k": 513}]
+
+
 def test_scatter_auto_flush_uses_task_memory_budget(tmp_path):
     """A multiplexed shard flushes against its task budget, not the worker pod limit."""
     items = [{"k": 0, "v": i} for i in range(100)]
@@ -551,3 +582,42 @@ def test_external_sort_merge_across_source_shards(tmp_path):
         shard=0,
     )
     assert [r["k"] for r in rows] == [1, 2, 3]
+
+
+class _CountingFileSystem(LocalFileSystem):
+    """Counts how many filesystem instances a read builds."""
+
+    protocol = "counting"
+    clients_built = 0
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        type(self).clients_built += 1
+
+    @classmethod
+    def _strip_protocol(cls, path):
+        return super()._strip_protocol(str(path).removeprefix("counting://"))
+
+
+def test_sidecar_reads_build_one_client(tmp_path):
+    """Reading many sidecars concurrently builds one client (#8402).
+
+    fsspec keys its instance cache on the calling thread, so resolving inside
+    a pool worker builds a client, and a connection pool, per thread.
+    """
+    fsspec.register_implementation("counting", _CountingFileSystem, clobber=True)
+    paths = []
+    for shard_idx in range(8):
+        data_path = f"{tmp_path}/shard-{shard_idx:04d}/scatter/"
+        writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=shard_idx)
+        writer.write(_items_to_dataframe([{"k": shard_idx}], _key, None, 1))
+        writer.close()
+        paths.append(f"counting://{data_path}")
+
+    _CountingFileSystem.clear_instance_cache()
+    _CountingFileSystem.clients_built = 0
+
+    slices = _read_sidecar_slices_parallel(paths, target_shard=0)
+
+    assert [s.path for s in slices] == paths
+    assert _CountingFileSystem.clients_built == 1

@@ -37,6 +37,45 @@ def _sort_activations_custom_bwd(
 _sort_activations_custom.defvjp(_sort_activations_custom_fwd, _sort_activations_custom_bwd)
 
 
+def _ranks_within_groups(group_ids: Int[Array, "N"], *, num_groups: int) -> Int[Array, "N"]:
+    """Return the zero-based rank of each item in its group."""
+    order = jnp.argsort(group_ids, stable=True)
+    inverse_order = jnp.argsort(order)
+    counts = jnp.bincount(group_ids, length=num_groups).astype(jnp.int32)
+    starts = jnp.cumsum(counts) - counts
+    sorted_ranks = jnp.arange(group_ids.shape[0], dtype=jnp.int32) - starts[group_ids[order]]
+    return sorted_ranks[inverse_order]
+
+
+def _assignment_sources(
+    linear_indices: Int[Array, "N"],
+    *,
+    send_size: int,
+) -> Int[Array, "send"]:
+    """Map each fixed send slot to its source assignment."""
+    assignments = linear_indices.shape[0]
+    return (
+        jnp.full((send_size,), assignments, dtype=jnp.int32)
+        .at[linear_indices]
+        .set(jnp.arange(assignments, dtype=jnp.int32), mode="drop")
+    )
+
+
+def _token_sources(
+    assignment_sources: Int[Array, "send"],
+    *,
+    assignments: int,
+    topk: int,
+    tokens: int,
+) -> Int[Array, "send"]:
+    """Map send slots to token rows and use the padding row for empty slots."""
+    return jnp.where(
+        assignment_sources < assignments,
+        assignment_sources // topk,
+        tokens,
+    )
+
+
 def _prefix_cap_counts(counts: Int[Array, "E"], *, capacity: int) -> Int[Array, "E"]:
     accepted = []
     remaining = jnp.array(capacity, dtype=jnp.int32)

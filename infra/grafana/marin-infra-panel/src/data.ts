@@ -1,11 +1,14 @@
 import { DataFrame, Field } from '@grafana/data';
 import {
   CommitRow,
+  ClusterNode,
   NightlyCell,
-  ProvisioningRegion,
-  ProvisioningRow,
-  SeriesPoint,
+  NodeMetric,
+  SmUtilizationPoint,
+  SmUtilizationRasterData,
+  TaskUsage,
   WandbPoint,
+  WorkloadAllocation,
   WorkerRegion,
 } from './types';
 
@@ -114,68 +117,110 @@ export function workerRegions(frame: DataFrame): WorkerRegion[] {
   }));
 }
 
-export function provisioningStatus(frame: DataFrame): ProvisioningRow[] {
-  return rows(frame).map((row) => ({
-    scope: requiredString(row, 'scope'),
-    collectedAt: requiredNumber(row, 'collected_at'),
-    zone: optionalString(row, 'zone') ?? '',
-    ready: requiredNumber(row, 'ready'),
-    stockout: requiredNumber(row, 'stockout'),
-    error: requiredNumber(row, 'error'),
-    preempted: requiredNumber(row, 'preempted'),
-    outcomes: requiredNumber(row, 'outcomes'),
-    successRatio: optionalNumber(row, 'success_ratio'),
-    poolsPlacing: requiredNumber(row, 'pools_placing'),
-    poolsNoReadyOutcome: requiredNumber(row, 'pools_no_ready_outcome'),
-    latencyP50Seconds: optionalNumber(row, 'latency_p50_seconds'),
-    latencyP95Seconds: optionalNumber(row, 'latency_p95_seconds'),
-    windowHours: optionalNumber(row, 'window_hours'),
-  }));
-}
-
-type ProvisioningRegionSource = Pick<ProvisioningRow, 'scope' | 'zone' | 'ready' | 'outcomes'>;
-
-function regionFromProvisioningZone(zone: string): string {
-  return /^[a-z]+-[a-z]+\d+-[a-z]$/.test(zone) ? zone.replace(/-[a-z]$/, '') : zone;
-}
-
-export function provisioningRegions(provisioning: ProvisioningRegionSource[]): ProvisioningRegion[] {
-  const totals = new Map<string, { ready: number; outcomes: number }>();
-  for (const pool of provisioning) {
-    if (pool.scope !== 'pool' || !pool.zone || pool.outcomes <= 0) {
-      continue;
-    }
-    const region = regionFromProvisioningZone(pool.zone);
-    const counts = totals.get(region);
-    if (counts) {
-      counts.ready += pool.ready;
-      counts.outcomes += pool.outcomes;
-    } else {
-      totals.set(region, { ready: pool.ready, outcomes: pool.outcomes });
-    }
-  }
-  return [...totals.entries()].map(([region, counts]) => ({
-    region,
-    ready: counts.ready,
-    outcomes: counts.outcomes,
-    successRatio: counts.ready / counts.outcomes,
-  }));
-}
-
-export function seriesPoints(frame: DataFrame, seriesField: string, valueField: string): SeriesPoint[] {
-  return rows(frame).map((row) => ({
-    time: requiredNumber(row, 'time'),
-    series: requiredString(row, seriesField),
-    value: requiredNumber(row, valueField),
-  }));
-}
-
 export function frameByRefId(frames: DataFrame[], refId: string): DataFrame | undefined {
   const matching = frames.filter((frame) => frame.refId === refId);
   if (matching.length > 1) {
     throw new Error(`Expected one data frame for ${refId}; received ${matching.length}`);
   }
   return matching[0];
+}
+
+export function workloadAllocations(frame: DataFrame): WorkloadAllocation[] {
+  return rows(frame).filter((row) => optionalString(row, 'task')).map((row) => ({
+    cluster: requiredString(row, 'cluster'),
+    namespace: requiredString(row, 'namespace'),
+    pod: requiredString(row, 'pod'),
+    node: optionalString(row, 'node') ?? '',
+    job: requiredString(row, 'job'),
+    task: requiredString(row, 'task'),
+    phase: requiredString(row, 'phase'),
+    ready: booleanValue(row, 'ready'),
+    priorityClass: optionalString(row, 'priority_class') ?? '',
+    ageSeconds: requiredNumber(row, 'age_seconds'),
+    cpuRequestMillicores: requiredNumber(row, 'cpu_request_millicores'),
+    memoryRequestBytes: requiredNumber(row, 'memory_request_bytes'),
+    gpuRequestCount: requiredNumber(row, 'gpu_request_count'),
+    gpuVariant: optionalString(row, 'gpu_variant') ?? '',
+  }));
+}
+
+export function clusterNodes(frame: DataFrame): ClusterNode[] {
+  return rows(frame).filter((row) => optionalString(row, 'node')).map((row) => ({
+    cluster: requiredString(row, 'cluster'),
+    node: requiredString(row, 'node'),
+    instanceType: optionalString(row, 'instance_type') ?? '',
+    nodePool: optionalString(row, 'node_pool') ?? '',
+    gpuModel: optionalString(row, 'gpu_model') ?? '',
+    gpuCapacity: requiredNumber(row, 'gpu_capacity'),
+    gpuAllocatable: requiredNumber(row, 'gpu_allocatable'),
+    cpuAllocatable: optionalString(row, 'cpu_allocatable') ?? '',
+    memoryAllocatable: optionalString(row, 'memory_allocatable') ?? '',
+    ready: booleanValue(row, 'ready'),
+    unschedulable: booleanValue(row, 'unschedulable'),
+  }));
+}
+
+export function taskUsage(frame: DataFrame): TaskUsage[] {
+  return rows(frame).filter((row) => optionalString(row, 'task')).map((row) => ({
+    cluster: requiredString(row, 'cluster'),
+    task: requiredString(row, 'task'),
+    pod: requiredString(row, 'pod'),
+    cpuMillicores: requiredNumber(row, 'cpu_millicores'),
+    memoryBytes: requiredNumber(row, 'memory_bytes'),
+    sampledAt: requiredNumber(row, 'sampled_at'),
+  }));
+}
+
+export function nodeMetrics(frame: DataFrame): NodeMetric[] {
+  return rows(frame).filter((row) => optionalString(row, 'node')).map((row) => ({
+    cluster: requiredString(row, 'cluster'),
+    node: requiredString(row, 'node'),
+    name: requiredString(row, 'name'),
+    value: requiredNumber(row, 'value'),
+    sampledAt: requiredNumber(row, 'sampled_at'),
+  }));
+}
+
+export function smUtilizationPoints(frame: DataFrame): SmUtilizationPoint[] {
+  return rows(frame).map((row) => ({
+    cluster: requiredString(row, 'cluster'),
+    node: requiredString(row, 'node'),
+    gpu: requiredString(row, 'gpu'),
+    sampledAt: requiredNumber(row, 'time'),
+    percent: requiredNumber(row, 'sm_utilization'),
+  }));
+}
+
+export function smUtilizationRasterData(points: SmUtilizationPoint[]): SmUtilizationRasterData {
+  const devicesByKey = new Map<string, SmUtilizationPoint>();
+  const timestampSet = new Set<number>();
+  for (const point of points) {
+    devicesByKey.set(`${point.cluster}\u0000${point.node}\u0000${point.gpu}`, point);
+    timestampSet.add(point.sampledAt);
+  }
+
+  const devices = [...devicesByKey.values()]
+    .map(({ cluster, node, gpu }) => ({ cluster, node, gpu }))
+    .sort((left, right) =>
+      left.cluster.localeCompare(right.cluster, undefined, { numeric: true })
+      || left.node.localeCompare(right.node, undefined, { numeric: true })
+      || left.gpu.localeCompare(right.gpu, undefined, { numeric: true })
+    );
+  const timestamps = [...timestampSet].sort((left, right) => left - right);
+  const deviceIndexes = new Map(
+    devices.map((device, index) => [`${device.cluster}\u0000${device.node}\u0000${device.gpu}`, index])
+  );
+  const timestampIndexes = new Map(timestamps.map((timestamp, index) => [timestamp, index]));
+  const values = new Float32Array(devices.length * timestamps.length);
+  values.fill(Number.NaN);
+  for (const point of points) {
+    const deviceIndex = deviceIndexes.get(`${point.cluster}\u0000${point.node}\u0000${point.gpu}`);
+    const timestampIndex = timestampIndexes.get(point.sampledAt);
+    if (deviceIndex !== undefined && timestampIndex !== undefined) {
+      values[deviceIndex * timestamps.length + timestampIndex] = point.percent;
+    }
+  }
+  return { devices, timestamps, values };
 }
 
 /**

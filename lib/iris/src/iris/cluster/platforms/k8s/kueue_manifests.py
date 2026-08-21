@@ -10,6 +10,8 @@ functions return plain dicts and do no I/O.
 """
 
 from collections.abc import Sequence
+from dataclasses import dataclass
+from enum import StrEnum
 
 import yaml
 
@@ -18,6 +20,11 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     CW_MULTINODE_TOPOLOGY_LABELS,
 )
 from iris.cluster.platforms.k8s.nodepool_manifests import KUEUE_NODE_LABEL
+from iris.cluster.platforms.k8s.types import (
+    IRIS_PRIORITY_CLASS_PRODUCTION,
+    IRIS_PRIORITY_CLASS_SYSTEM,
+    IRIS_PRIORITY_CLASSES,
+)
 
 # --------------------------------------------------------------------------
 # Variants
@@ -114,6 +121,47 @@ NON_BINDING_QUOTA = {
     "rdma/ib": "1G",
 }
 COVERED_RESOURCES = list(NON_BINDING_QUOTA)
+
+
+# Kueue-only priorities within each Iris band. Batch and interactive Workloads
+# order ordinary, standalone-accelerator, and co-scheduled work consecutively.
+# Production Workloads share one value so their request shape cannot preempt
+# other production work. The lowest batch Workload priority remains 0, above
+# CoreWeave's priority -1 node-health-check Pods even though Kueue and Pod
+# priority are separate scheduling domains.
+class WorkloadPriorityKind(StrEnum):
+    CPU = "cpu"
+    ACCELERATOR = "accelerator"
+    COSCHEDULED = "coscheduled"
+
+
+@dataclass(frozen=True)
+class IrisWorkloadPriorityClass:
+    band: str
+    kind: WorkloadPriorityKind
+    name: str
+    value: int
+
+
+def workload_priority_class_name(band: str, kind: WorkloadPriorityKind) -> str:
+    return f"iris-{kind.value}-{band}"
+
+
+IRIS_WORKLOAD_PRIORITY_CLASSES = tuple(
+    IrisWorkloadPriorityClass(
+        band=class_name.removeprefix("iris-"),
+        kind=kind,
+        name=workload_priority_class_name(class_name.removeprefix("iris-"), kind),
+        value=value if class_name == IRIS_PRIORITY_CLASS_PRODUCTION else value + offset,
+    )
+    for class_name, value, _ in IRIS_PRIORITY_CLASSES
+    if class_name != IRIS_PRIORITY_CLASS_SYSTEM
+    for kind, offset in (
+        (WorkloadPriorityKind.CPU, 0),
+        (WorkloadPriorityKind.ACCELERATOR, 1),
+        (WorkloadPriorityKind.COSCHEDULED, 2),
+    )
+)
 
 
 # --------------------------------------------------------------------------
@@ -282,6 +330,17 @@ def build_resource_flavor(topology_name: str = INFINIBAND_TOPOLOGY_NAME) -> dict
             # Tie the flavor to the Topology so podset-topology annotations resolve.
             "topologyName": topology_name,
         },
+    }
+
+
+def build_workload_priority_class(name: str, value: int) -> dict:
+    """Return a Kueue WorkloadPriorityClass for Iris admission ordering."""
+    return {
+        "apiVersion": "kueue.x-k8s.io/v1beta1",
+        "kind": "WorkloadPriorityClass",
+        "metadata": {"name": name},
+        "value": value,
+        "description": "Iris workload admission priority within its user-selected band",
     }
 
 

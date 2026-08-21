@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.cluster.config import load_config
 from marin.evaluation.evalchemy.config import load_evalchemy_config
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor
@@ -41,7 +41,7 @@ from marin.evaluation.runner import (
     submit_evaluation_batch,
 )
 from rigging.config_discovery import resolve_cluster_config
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import SecretSpec
 
 from experiments.evaluation.evals import (

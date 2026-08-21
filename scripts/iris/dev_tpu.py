@@ -24,11 +24,12 @@ from urllib.parse import urlsplit
 
 import click
 import yaml
-from iris.client import IrisClient, JobAlreadyExists
+from iris.client.client import IrisClient, JobAlreadyExists
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.constraints import zone_constraint
 from iris.cluster.types import Entrypoint, JobName, ResourceSpec, tpu_device
+from iris.resources.state import TERMINAL_JOB_STATES, JobState, TaskState
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from marin.cluster import gcp
@@ -523,13 +524,8 @@ def wait_for_workers(job, client: IrisClient, *, timeout: float, project: str) -
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         status = job.status()
-        if status.state in (
-            job_pb2.JOB_STATE_FAILED,
-            job_pb2.JOB_STATE_KILLED,
-            job_pb2.JOB_STATE_UNSCHEDULABLE,
-            job_pb2.JOB_STATE_WORKER_FAILED,
-        ):
-            error = status.error or job_pb2.JobState.Name(status.state)
+        if status.state in (JobState.FAILED, JobState.KILLED, JobState.UNSCHEDULABLE, JobState.WORKER_FAILED):
+            error = status.error_message or status.state.name
             raise click.ClickException(f"Dev TPU allocation failed: {error}")
 
         tasks = job.tasks()
@@ -538,7 +534,7 @@ def wait_for_workers(job, client: IrisClient, *, timeout: float, project: str) -
             all_running = True
             for task in tasks:
                 task_status = task.status()
-                if task_status.state != job_pb2.TASK_STATE_RUNNING or not task_status.worker_address:
+                if task_status.state is not TaskState.RUNNING or not task_status.worker_address:
                     all_running = False
                     break
                 rpc_host = parse_worker_host(task_status.worker_address)
@@ -584,14 +580,8 @@ def wait_for_workers(job, client: IrisClient, *, timeout: float, project: str) -
 
 
 def is_job_active(client: IrisClient, job_id: str) -> bool:
-    status = client.status(JobName.from_wire(job_id))
-    return status.state not in {
-        job_pb2.JOB_STATE_SUCCEEDED,
-        job_pb2.JOB_STATE_FAILED,
-        job_pb2.JOB_STATE_KILLED,
-        job_pb2.JOB_STATE_WORKER_FAILED,
-        job_pb2.JOB_STATE_UNSCHEDULABLE,
-    }
+    status = client.job_status(JobName.from_wire(job_id))
+    return status.state not in TERMINAL_JOB_STATES
 
 
 def sync_all_workers(workers: list[DevTpuWorker], local_path: Path) -> None:
@@ -815,7 +805,7 @@ def allocate(
     finally:
         if client is not None and job is not None:
             try:
-                client.terminate(JobName.from_wire(str(job.job_id)))
+                client.cancel_job(JobName.from_wire(str(job.job_id)))
             except Exception:
                 logger.warning("Failed to terminate holder job %s", job.job_id, exc_info=True)
         if client_cm is not None:
@@ -865,7 +855,7 @@ def release(ctx) -> None:
     state = load_state(state_file)
     try:
         with controller_client(state.config_file) as client:
-            client.terminate(JobName.from_wire(state.job_id))
+            client.cancel_job(JobName.from_wire(state.job_id))
     finally:
         state_file.unlink(missing_ok=True)
 

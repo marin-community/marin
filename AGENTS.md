@@ -62,14 +62,19 @@ indexed repository documentation could inform a task:
 
 ```bash
 uv run infra/echo/cli.py search "how do I deploy Iris"
+uv run infra/echo/cli.py search "compare cache implementations" --repository all
 uv run infra/echo/cli.py get <domain:id>
 ```
 
 Search covers wiki, repository files, pull requests, and issues by default.
-Repeat `--domain` to select a subset; add `--domain discord` only when discussion
-history is relevant. Use `grep` for exact strings in remote activity and `rg`
-for the current checkout, including branch-only or uncommitted files. Echo's
-file results follow the periodically refreshed GitHub head rather than the local
+File search infers the configured Marin-community repository from the current
+Git checkout, including ordinary contributor forks. Pass `--repository
+<owner/repo>` for one configured repository or `--repository all` for all six.
+Repeat `--domain` to select a subset; searches without the file domain do not
+need a Git checkout. Add `--domain discord` only when discussion history is
+relevant. Use `grep` for exact strings in remote activity and `rg` for the
+current checkout, including branch-only or uncommitted files. Echo's file
+results follow the periodically refreshed GitHub head rather than the local
 working tree. See the `consult-echo` skill for the complete workflow.
 
 ## Development
@@ -81,23 +86,21 @@ working tree. See the `consult-echo` skill for the complete workflow.
 - Do not replace it with `uv run pre-commit ...`!
 
 # Type checking (also done by pre-commit.py)
-uv run pyrefly
-- Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
+uv run pyrefly check
+- Keep type hints passing under `uv run pyrefly check`; configuration lives in `pyproject.toml`.
 
-# Safe local test suite
-uv run pytest
-- Pytest's repository defaults exclude slow, integration, data-integration,
-  live-cluster, Docker, and manual tests. Keep those defaults for local runs.
+# Safe tests affected by the current branch and working tree
+uv run --no-project infra/ci/run_tests.py
 
 # Lint review — agentic pass over the branch diff against the infra/lint/ catalog
 ./infra/pre-commit.py --review
 - Run this once before opening or updating a PR, and fix or respond to every
   finding it reports (see the `commit` skill). Do not rerun it after small,
   targeted touch-ups made in response to its findings. Rerun only when the
-  follow-up materially changes the design or scope.
+  follow-up materially changes the implementation approach or scope.
 ```
 
-- Python >=3.12. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
+- Python >=3.12. Use `uv run` for entry points.
 - Do not replace pytest's default marker expression with a partial expression
   such as `-m "not slow"`; `-m` overrides the whole default and can select live
   cluster tests. Run excluded markers only when the user or a dedicated task
@@ -133,11 +136,14 @@ uv run pytest
   reader needs to understand the behavior and rationale, including measured
   results and caveats when they affect review. Remove headings, diff narration,
   and implementation inventories; put extended history in a linked issue,
-  design doc, logbook, or artifact. Follow the `commit` skill
+  logbook, or artifact. Follow the `commit` skill
   (`.agents/skills/commit/SKILL.md`) when committing, pushing, or opening a PR.
 - PR monitoring is part of the `commit` skill. After opening or updating a PR,
   follow its `wait_for.py` loop through an exit condition. Do not substitute
   `gh pr checks --watch`, repeated `gh pr view` calls, or handoff at green CI.
+  Invoke `wait_for.py` once as a foreground blocking call and let it resume the
+  task when an event fires; do not poll a yielded process handle or narrate
+  unchanged state while it waits.
 - When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
 
 ## Code Style
@@ -225,6 +231,9 @@ Watch for and eliminate these patterns in generated code:
 
 ## Planning
 
+- The `write-design-doc` skill owns design-doc creation and runs only when the
+  user explicitly asks for one. Diff size and implementation complexity do not
+  require a design artifact.
 - Planning applies to change-mode work. Produce a detailed plan, with code
   snippets when they clarify a concrete implementation, for non-trivial
   changes. Resolve context from the repository and prior work first; ask only

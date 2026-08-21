@@ -108,6 +108,25 @@ def test_evalchemy_result_namespaces_group_subtasks(tmp_path, monkeypatch):
     }
 
 
+def test_evalchemy_result_reads_the_published_tree_not_the_retry_scratch(tmp_path, monkeypatch):
+    """A retried evaluation copies its temp working directory into the results tree, leaving a second
+    complete scoring of the same items. Reading both keys one benchmark's panel twice, which doubles
+    its item count and averages the benchmark against itself."""
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    files = {
+        "mmlu_5shot/vllm/results_2026-07-16T00-00-00.json": _MMLU,
+        "mmlu_5shot/tmp6jnnx8cc/vllm/results_2026-07-16T00-05-00.json": {
+            "results": {"mmlu": {"acc,none": 0.409, "alias": "mmlu"}}
+        },
+    }
+    result = resolve(_step("evaluation/toy-retried", EvalchemyResult, files))
+
+    assert result.task_metrics() == {
+        "mmlu_5shot/mmlu": {"acc,none": 0.41},
+        "mmlu_5shot/mmlu_stem": {"acc,none": 0.38},
+    }
+
+
 def test_evalchemy_result_missing_results_raises(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     # A step that writes nothing under its output dir: the accessor must fail loudly, not return {}.

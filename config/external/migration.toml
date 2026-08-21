@@ -1,32 +1,43 @@
 # Fork migration descriptors.
 #
-# One section per fork Marin pins under config/external/. Every fork is a marin-community fork: our
+# One section per pin Marin holds under config/external/. Every fork is a marin-community fork: our
 # commits on top of an upstream project. This file records *how* to migrate each — the base to rebase
 # onto, the e2e that validates it, and the constraints to respect. It holds no pins; the actual
 # SHA/version lives in the source named by `pin` (an isolated project's uv.lock, or a vllm/*.toml
 # descriptor).
 #
-# Migrating a fork means rebasing our commits onto a newer upstream base, validating, and re-pinning.
-# MarinSkyRL is marin-native (no upstream), so its refresh only advances to its own latest main.
+# Migrating a pin rebases our commits onto a newer upstream base on a `<branch>-next` staging branch,
+# validates with the fork's e2e against that branch, re-pins Marin at the exact staged tip, and opens
+# a draft PR. The refresh creates rollback and date tags; an admin promotes the protected stable
+# `branch` before merging the Marin PR. Some forks have drifted too far for a mechanical rebase (see
+# their nuances); a refresh files a blocker for those until a one-time manual catch-up brings them
+# close to upstream again.
 #
-# The `refresh-fork` skill reads a section to drive one fork's refresh. A weekly coordinator that
-# walks all sections in `depends_on` order is planned but not yet built. Keep every section consistent
-# with its pin source and with EXTERNAL_PROJECTS in config/update-external.py;
-# tests/inference/test_migration_descriptors.py checks that against the on-disk fork layout.
+# The `refresh-fork` skill reads a section to drive one pin's refresh. `ops-fork-ferry.yaml` asks
+# Weaver to run that skill weekly for each supported pin or group. Keep every section consistent with
+# its pin source and with EXTERNAL_PROJECTS in config/update-external.py.
 #
-# A section's name is the fork; its pin source holds the fork's repository URL and pinned revision.
+# A section's name is the pin; its pin source holds the fork's repository URL and pinned revision. A
+# fork with more than one pin has one section per pin (the vllm fork has `vllm` and `vllm-gpu`).
 # Fields:
-#   upstream         Repo we rebase onto. Omitted for marin-native forks with no upstream.
+#   upstream         Repo we rebase our commits onto. Every fork has one.
 #   group            Sections sharing a group refresh together and land in one atomic Marin PR (each
 #                    still rebases onto its own base). The vllm/tpu-inference pair must move together:
 #                    the TPU launcher installs both pins at once and vllm's base derives from the
 #                    tpu-inference release, so a split refresh could pin a mixed, unblessed stack.
-#                    Omitted for forks that refresh alone.
+#                    Omitted for pins that refresh alone.
 #   pin              Where the resolved pin is recorded: "isolated_project" (config/external/<name>/
-#                    uv.lock, follows the fork's main branch) or "descriptor:<path>#<section>" (a SHA).
+#                    uv.lock, follows the fork's main branch), "descriptor:<path>#<section>" (a SHA in a
+#                    vllm/*.toml section), or "release:<path>" (a prebuilt-wheel release: a release tag +
+#                    source commit + per-arch wheels, for a pin too expensive to build at job time).
+#   branch           The fork branch this pin tracks. A single-pin fork tracks "main". The vllm fork
+#                    carries two pins on different upstream bases, so it splits them across two stable
+#                    branches: the GPU wheel builds from "main" and the TPU source pin lives on "tpu".
+#                    The refresh stages on "<branch>-next"; an admin promotes it onto "<branch>" after
+#                    reviewing the draft Marin PR.
 #   base_select      Which upstream base to rebase onto: "upstream_main" (upstream default branch),
-#                    "latest_release", "derived" (with `derived_from`), or "fork_main" (marin-native:
-#                    no upstream, advance our own main).
+#                    "latest_release" (newest stable GitHub release), or "derived" (a SHA read from
+#                    another fork, with `derived_from`).
 #   derived_from     For base_select="derived": "<fork>:<path>" giving the SHA the base is read from.
 #   depends_on       Forks resolved before this one (base/derivation order; the coordinator's DAG
 #                    edges). Within a group this orders the refresh, not a separate landing.
@@ -38,7 +49,8 @@
 [tpu-inference]
 upstream = "https://github.com/vllm-project/tpu-inference.git"
 group = "tpu-vllm"
-pin = "descriptor:vllm/tpu-forks.toml#tpu-inference"
+pin = "descriptor:vllm/tpu.toml#tpu-inference"
+branch = "main"
 base_select = "latest_release"
 e2e = "experiments/evals/served_qwen3.py::QWEN3_TPU_INFERENCE"
 blocker_assignee = "yonromai"
@@ -49,7 +61,8 @@ nuances = [
 [vllm]
 upstream = "https://github.com/vllm-project/vllm.git"
 group = "tpu-vllm"
-pin = "descriptor:vllm/tpu-forks.toml#vllm"
+pin = "descriptor:vllm/tpu.toml#vllm"
+branch = "tpu"
 base_select = "derived"
 derived_from = "tpu-inference:.buildkite/vllm_lkg.version"
 depends_on = ["tpu-inference"]
@@ -57,11 +70,26 @@ e2e = "experiments/evals/served_qwen3.py::QWEN3_TPU_INFERENCE"
 blocker_assignee = "yonromai"
 nuances = [
     "Do not advance past the vLLM known-good commit the selected tpu-inference release blessed.",
+    "The vllm fork carries a second, independent pin (vllm-gpu). Keep this one on its own `tpu` branch; the fork's `main` carries the vllm-gpu overlay.",
+]
+
+[vllm-gpu]
+upstream = "https://github.com/vllm-project/vllm.git"
+pin = "release:vllm/gpu.toml"
+branch = "main"
+base_select = "upstream_main"
+e2e = "tests/cluster/vllm/test_snowball_backend_parity.py"
+blocker_assignee = "yonromai"
+nuances = [
+    "The pin is a prebuilt wheel. The fork's release pipeline compiles `main` into an immutable wheel under a release tag; gpu.toml records the tag, source commit, and per-arch url+sha256. A refresh rebuilds and re-promotes the wheel, then re-pins with `uv run config/update-external.py --promote-gpu-release <manifest>`, which reads the promoted marin-vllm-gpu-manifest.json.",
+    "This GPU pin refreshes on its own (no shared group). It tracks upstream head on `main`, which the release candidate build triggers on. The [vllm] pin tracks the tpu-inference-blessed base on the separate `tpu` branch.",
+    "A base that crosses a CUDA/torch or vLLM stable-ABI boundary is a migration. The wheel verifier and the fork release gate both name the extension (vllm._C_stable_libtorch on CUDA 13); audit them when the base moves across such a boundary.",
 ]
 
 [evalchemy]
 upstream = "https://github.com/mlfoundations/evalchemy.git"
 pin = "isolated_project"
+branch = "main"
 base_select = "upstream_main"
 e2e = "experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml"
 blocker_assignee = "yonromai"
@@ -69,19 +97,23 @@ blocker_assignee = "yonromai"
 [harbor]
 upstream = "https://github.com/harbor-framework/harbor.git"
 pin = "isolated_project"
+branch = "main"
 base_select = "upstream_main"
 e2e = "experiments/evaluation/configs/harbor/aime-smoke.yaml"
 blocker_assignee = "yonromai"
 nuances = [
-    "Fork main is hundreds of commits behind upstream, so the first rebase onto upstream will be large and conflict-heavy.",
+    "Fork main is hundreds of commits behind upstream with a non-linear overlay and an upstream package refactor; auto-rebase is intractable until a one-time manual catch-up brings it close, so a refresh files a blocker until then.",
 ]
 
 [MarinSkyRL]
+upstream = "https://github.com/NovaSky-AI/SkyRL.git"
 pin = "isolated_project"
-base_select = "fork_main"
+branch = "main"
+base_select = "upstream_main"
 e2e = "experiments/post_training/iceball_micro.py"
 blocker_assignee = "yonromai"
 nuances = [
-    "Marin-native today: only the root marinskyrl distribution is tracked, not skyrl-train.",
-    "#7920 will give it an upstream (FSDP/Megatron/FlashAttention/vLLM); add upstream and switch base_select off fork_main then.",
+    "Shares history with NovaSky-AI/SkyRL (merge-base 8e132edc, Dec 2025), but NovaSky's later monolith->package restructure (skyrl-train/ -> skyrl/) moved or deleted 684 of the 718 files Marin touched, so a mechanical rebase is intractable.",
+    "Needs a one-time re-fork onto current NovaSky main with Marin's work re-homed into the new package layout (#7920) before it can auto-migrate; until then a refresh files a blocker.",
+    "Marin consumes only the root marinskyrl package; the forked skyrl-train is unused. The GitHub compare API 404s because the repo was pushed as a standalone (its fork network is unlinked), which does not affect git-level rebasing.",
 ]

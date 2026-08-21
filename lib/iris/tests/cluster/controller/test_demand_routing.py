@@ -29,22 +29,22 @@ from iris.cluster.controller.autoscaler.routing import (
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
 from iris.cluster.types import AcceleratorType, CapacityType
 from iris.rpc import job_pb2
-from rigging.timing import Duration, Timestamp
-from tests.cluster.backends.conftest import (
+from iris.testing.backends import (
     make_mock_platform,
     make_mock_slice_handle,
 )
-from tests.cluster.controller.conftest import (
+from iris.testing.controller import (
     DEFAULT_RESOURCES,
     make_demand_entries,
     make_scale_group_config,
 )
-from tests.cluster.controller.conftest import (
+from iris.testing.controller import (
     make_big_demand_entries as _make_big_demand_entries,
 )
-from tests.cluster.controller.conftest import (
+from iris.testing.controller import (
     mark_discovered_ready as _mark_discovered_ready,
 )
+from rigging.timing import Duration, Timestamp
 
 # ---------------------------------------------------------------------------
 # group_required_slices via route_demand

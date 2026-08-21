@@ -186,8 +186,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("finelog-server draining background tasks");
 
     // Stop the forwarder first: it reads the store, so it must be off the segments
-    // before the namespaces drain. It latches on the watch and interrupts its own
-    // retry backoff, so the join is prompt; the bound is defense in depth.
+    // before the namespaces drain. It observes the latch between bounded outbound
+    // requests and interrupts retry delays; the join timeout is defense in depth.
     if let (Some(stop), Some(task)) = (forward_stop, forward_task) {
         let _ = stop.send(true);
         let _ = tokio::time::timeout(Duration::from_secs(10), task).await;

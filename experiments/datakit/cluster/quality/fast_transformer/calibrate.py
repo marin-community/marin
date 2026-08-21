@@ -26,7 +26,7 @@ import logging
 
 import numpy as np
 import pyarrow.parquet as pq
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES

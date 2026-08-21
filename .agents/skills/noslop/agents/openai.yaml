@@ -1,0 +1,4 @@
+interface:
+  display_name: "No-Slop Review"
+  short_description: "Delete low-value tests and prose from diffs"
+  default_prompt: "Use $noslop to review this branch diff and remove low-value tests, prose, and leftover complexity."

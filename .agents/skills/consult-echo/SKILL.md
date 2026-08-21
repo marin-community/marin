@@ -26,6 +26,12 @@ uv run infra/echo/cli.py search "stalled TPU collective" \
   --domain wiki --domain file --domain issue
 ```
 
+File search infers the configured Marin-community repository from the current
+Git checkout, including ordinary contributor forks. Pass `--repository
+<owner/repo>` to choose one configured repository or `--repository all` to
+search all six. The CLI prints the resolved file scope once. Searches that omit
+the file domain work outside a Git checkout.
+
 Discord is excluded by default because messages may be noisy or untrusted. Add
 `--domain discord` only when discussion history is relevant, and open the
 canonical URL when surrounding thread context matters.
@@ -36,6 +42,20 @@ raw-source detail with the printed ID:
 ```bash
 uv run infra/echo/cli.py get <domain:id>
 ```
+
+When a result materially helps, is irrelevant, or the result set fails the task,
+submit a compact judgment using the exact query and printed grading keys:
+
+```bash
+uv run infra/echo/cli.py feedback --query "stalled TPU collective" \
+  --grade wiki:730=0 --grade file:731=10 \
+  <<< "The file result answered the task; wiki results were off-topic."
+```
+
+Use 0 for an irrelevant result and 10 for one that directly changes or answers the
+task. Grade only results you evaluated. Always add a short stdin explanation of the
+overall result quality without restating each score. Explanation-only feedback is valid
+for an empty result set.
 
 Use `grep` for exact strings in GitHub or Discord activity, with `--source` or
 `--kind` when needed:

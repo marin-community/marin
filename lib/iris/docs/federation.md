@@ -212,6 +212,6 @@ request against the peer's advertised `amounts` plus the `held_by_band` entries 
 own band — those together are what it can reach. A job cancelled while queued never reaches the
 peer and terminates as `Cancelled before handoff`.
 
-A federated job's tasks live on the peer and are mirrored back, so `iris job summary` reports
+A federated job's tasks live on the peer and are mirrored back, so `iris job describe` reports
 its state from `marin`. Its logs are relayed asynchronously into `marin`'s finelog and lag
-behind a log-heavy job; `job summary` is the reliable liveness answer.
+behind a log-heavy job; `job describe` is the reliable liveness answer.

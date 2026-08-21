@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 from fray.types import ResourceConfig
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext

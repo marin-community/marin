@@ -18,8 +18,11 @@ CONTAINER_NAME = "finelog"
 CACHE_DIR = "/var/cache/finelog"
 
 # `/health` answers 200 whenever the process is listening; the body says whether
-# its namespaces accept rows (`rust/src/server/ingest_health.rs`).
+# its namespaces accept rows (`rust/src/server/ingest_health.rs`). A namespace
+# whose registration is `pending` is still starting up; `failed` is terminal for
+# the running binary, so a deploy gate stops waiting on it.
 HEALTH_OK = "ok"
+REGISTRATION_FAILED = "registration failed"
 
 
 def health_probe_command(port: int) -> str:

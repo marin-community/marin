@@ -111,6 +111,22 @@ def test_external_sigterm_returns_128_plus_signum() -> None:
     assert proc.returncode == 128 + signal.SIGTERM
 
 
+def test_child_streams_stay_separate_and_rank_tagged(capfd: pytest.CaptureFixture[str]) -> None:
+    # Each stream keeps its identity so iris still classifies an unprefixed
+    # stderr line as an error rather than as INFO on stdout.
+    code = "import sys; print('hello out'); print('hello err', file=sys.stderr)"
+    assert run(nproc=2, devices_per_proc=1, child_argv=_py(code)) == 0
+    captured = capfd.readouterr()
+    assert sorted(line for line in captured.out.splitlines() if "hello" in line) == [
+        "[rank0] hello out",
+        "[rank1] hello out",
+    ]
+    assert sorted(line for line in captured.err.splitlines() if "hello" in line) == [
+        "[rank0] hello err",
+        "[rank1] hello err",
+    ]
+
+
 def test_run_rejects_empty_command() -> None:
     with pytest.raises(ValueError, match="no child command"):
         run(nproc=2, devices_per_proc=1, child_argv=[])

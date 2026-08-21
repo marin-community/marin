@@ -105,110 +105,64 @@ def _wandb(chart: str) -> list[dict]:
     return rows
 
 
-def _provisioning() -> list[dict]:
-    common = {
-        "collected_at": round(_NOW.timestamp() * 1000),
-        "pools_placing": 0,
-        "pools_no_ready_outcome": 0,
-        "latency_p95_seconds": None,
-        "window_hours": None,
-    }
-    return [
-        {
-            **common,
-            "scope": "fleet",
-            "resource_type": "",
-            "scale_group": "",
-            "zone": "",
-            "ready": 18,
-            "stockout": 3,
-            "error": 1,
-            "preempted": 2,
-            "outcomes": 22,
-            "success_ratio": 18 / 22,
-            "pools_placing": 5,
-            "pools_no_ready_outcome": 1,
-            "latency_p50_seconds": 48,
-            "latency_p95_seconds": 132,
-            "window_hours": 3,
-        },
-        {
-            **common,
-            "scope": "pool",
-            "resource_type": "v5p-8",
-            "scale_group": "reserved",
-            "zone": "us-east5-a",
-            "ready": 6,
-            "stockout": 1,
-            "error": 0,
-            "preempted": 1,
-            "outcomes": 7,
-            "success_ratio": 6 / 7,
-            "latency_p50_seconds": 42,
-        },
-        {
-            **common,
-            "scope": "pool",
-            "resource_type": "h100-8",
-            "scale_group": "gpu",
-            "zone": "cw-us-east-08a",
-            "ready": 4,
-            "stockout": 2,
-            "error": 1,
-            "preempted": 1,
-            "outcomes": 7,
-            "success_ratio": 4 / 7,
-            "latency_p50_seconds": 65,
-        },
-    ]
-
-
 def _finelog(query: str) -> list[dict]:
     sql = parse_qs(query).get("sql", [""])[0]
-    if "probe_latency_ms" in sql and "ROW_NUMBER" not in sql:
+    if 'FROM "iris.task"' in sql:
         return [
             {
-                "t": round((_NOW - timedelta(minutes=5 * index)).timestamp() * 1000),
-                "label_probe": probe,
-                "value": 22 + index % 8,
+                "cluster": "cw-us-east-02a",
+                "task": task,
+                "pod": pod,
+                "cpu_millicores": cpu,
+                "memory_bytes": memory,
+                "sampled_at": round((_NOW - timedelta(seconds=20)).timestamp() * 1000),
             }
-            for probe in ("iris", "finelog", "kueue")
-            for index in range(24)
-        ]
-    if "probe_up" in sql and "metric IN" not in sql:
-        return [{"value": 1}, {"value": 1}, {"value": 1}]
-    if "metric IN" in sql and "provision_success_ratio" not in sql:
-        return [
-            {"probe": probe, "metric": metric, "value": value}
-            for probe in ("iris", "finelog", "kueue")
-            for metric, value in (("probe_up", 1), ("probe_latency_ms", 24))
-        ]
-    if "worker_healthy" in sql:
-        return [
-            {
-                "t": round((_NOW - timedelta(minutes=10 * index)).timestamp() * 1000),
-                "label_region": region,
-                "value": base + index % 3,
-            }
-            for region, base in (("us-east5", 84), ("us-central2", 51), ("cw-us-east", 37))
-            for index in range(24)
-        ]
-    if "provision_success_ratio" in sql:
-        return [
-            {
-                "t": round((_NOW - timedelta(minutes=10 * index)).timestamp() * 1000),
-                "series": series,
-                "value": base + (index % 4) * 0.008,
-            }
-            for series, base in (
-                ("fleet", 0.81),
-                ("europe-west4", 0.72),
-                ("us-central1", 0.94),
-                ("us-east1", 0.78),
-                ("us-east5", 0.86),
-                ("us-west4", 0.75),
+            for task, pod, cpu, memory in (
+                ("/alice/llama/0", "llama-0", 29_000, 310_000_000_000),
+                ("/alice/llama/1", "llama-1", 14_000, 180_000_000_000),
+                ("/bob/eval/0", "eval-0", 9_500, 92_000_000_000),
+                ("/carol/embed/0", "embed-0", 5_200, 48_000_000_000),
+                ("/ops/loader/0", "loader-0", 1_800, 12_000_000_000),
             )
-            for index in range(24)
+        ]
+    if "gpu_memory_total_bytes" in sql and "ROW_NUMBER" in sql:
+        sampled_at = round((_NOW - timedelta(seconds=15)).timestamp() * 1000)
+        values = {
+            "gpu-a": {
+                "node_cpu_utilization_percent": 61,
+                "node_memory_used_bytes": 760_000_000_000,
+                "node_memory_total_bytes": 1_100_000_000_000,
+                "gpu_utilization_percent": 88,
+                "gpu_memory_used_bytes": 590_000_000_000,
+                "gpu_memory_total_bytes": 640_000_000_000,
+            },
+            "gpu-b": {
+                "node_cpu_utilization_percent": 44,
+                "node_memory_used_bytes": 430_000_000_000,
+                "node_memory_total_bytes": 1_100_000_000_000,
+                "gpu_utilization_percent": 55,
+                "gpu_memory_used_bytes": 350_000_000_000,
+                "gpu_memory_total_bytes": 640_000_000_000,
+            },
+            "gpu-c": {
+                "node_cpu_utilization_percent": 28,
+                "node_memory_used_bytes": 190_000_000_000,
+                "node_memory_total_bytes": 550_000_000_000,
+                "gpu_utilization_percent": 36,
+                "gpu_memory_used_bytes": 91_000_000_000,
+                "gpu_memory_total_bytes": 320_000_000_000,
+            },
+        }
+        return [
+            {
+                "cluster": "cw-us-east-02a",
+                "node": node,
+                "name": name,
+                "value": value,
+                "sampled_at": sampled_at,
+            }
+            for node, metrics in values.items()
+            for name, value in metrics.items()
         ]
     return []
 
@@ -294,8 +248,6 @@ def _rows(path: str, query: str) -> list[dict] | dict:
                 )
             )
         ]
-    if path == "/overview/provisioning":
-        return _provisioning()
     if path == "/iris/marin/health":
         return [{"reachable": True, "up": 1, "latency_ms": 18}]
     if path == "/iris/marin/peers":
@@ -374,11 +326,18 @@ def _rows(path: str, query: str) -> list[dict] | dict:
             for component in ("iris/iris-controller", "kueue-system/kueue-controller-manager")
         ]
     if path == "/k8s/nodes":
-        return [
+        selected = parse_qs(query).get("cluster", [""])[0]
+        rows = [
             {
                 "cluster": cluster,
-                "node": "g8fd930" if cluster == _CW_NODE_WITH_DEADLOCK else f"{cluster}-node-1",
-                "instance_type": "cd-gp-i64-erapids",
+                "node": node_name,
+                "instance_type": instance_type,
+                "node_pool": "training",
+                "gpu_model": gpu_model,
+                "gpu_capacity": gpu_count,
+                "gpu_allocatable": gpu_count,
+                "cpu_allocatable": cpu,
+                "memory_allocatable": memory,
                 "ready": True,
                 "unschedulable": cluster == _CW_NODE_WITH_DEADLOCK,
                 "kernel_deadlock": cluster == _CW_NODE_WITH_DEADLOCK,
@@ -387,8 +346,44 @@ def _rows(path: str, query: str) -> list[dict] | dict:
                 "pending_phase": "production-reboot" if cluster == _CW_NODE_WITH_DEADLOCK else "",
                 "deadlock_message": "watchdog: CPU stuck" if cluster == _CW_NODE_WITH_DEADLOCK else "",
             }
-            for cluster in _CW_K8S_CLUSTERS
+            for cluster, node_name, instance_type, gpu_model, gpu_count, cpu, memory in (
+                ("cw-us-east-02a", "gpu-a", "h100-8", "NVIDIA H100 80GB HBM3", 8, "96", "1Ti"),
+                ("cw-us-east-02a", "gpu-b", "h100-8", "NVIDIA H100 80GB HBM3", 8, "96", "1Ti"),
+                ("cw-us-east-02a", "gpu-c", "h100-4", "NVIDIA H100 80GB HBM3", 4, "48", "512Gi"),
+                ("cw-us-east-08a", "g8fd930", "gb200-4", "NVIDIA GB200", 4, "72", "768Gi"),
+                ("cw-rno2a", "cw-rno2a-node-1", "h100-8", "NVIDIA H100 80GB HBM3", 8, "96", "1Ti"),
+            )
         ]
+        return [row for row in rows if not selected or row["cluster"] == selected]
+    if path == "/k8s/workloads":
+        selected = parse_qs(query).get("cluster", [""])[0]
+        rows = [
+            {
+                "cluster": "cw-us-east-02a",
+                "namespace": "iris",
+                "pod": pod,
+                "node": node_name,
+                "job": job,
+                "task": task,
+                "phase": phase,
+                "ready": phase == "Running",
+                "priority_class": "iris-production",
+                "age_seconds": age,
+                "cpu_request_millicores": cpu,
+                "memory_request_bytes": memory,
+                "gpu_request_count": gpu,
+                "gpu_variant": "H100" if gpu else "",
+            }
+            for pod, node_name, job, task, phase, age, cpu, memory, gpu in (
+                ("llama-0", "gpu-a", "/alice/llama", "/alice/llama/0", "Running", 7300, 32_000, 343_597_383_680, 8),
+                ("llama-1", "gpu-b", "/alice/llama", "/alice/llama/1", "Running", 7200, 16_000, 206_158_430_208, 4),
+                ("eval-0", "gpu-b", "/bob/eval", "/bob/eval/0", "Running", 2800, 12_000, 103_079_215_104, 2),
+                ("embed-0", "gpu-c", "/carol/embed", "/carol/embed/0", "Running", 1500, 8000, 68_719_476_736, 2),
+                ("loader-0", "gpu-a", "/ops/loader", "/ops/loader/0", "Running", 600, 4000, 17_179_869_184, 0),
+                ("train-queued", "", "/dave/train", "/dave/train/0", "Pending", 420, 16_000, 137_438_953_472, 4),
+            )
+        ]
+        return [row for row in rows if not selected or row["cluster"] == selected]
     if path == "/k8s/pending":
         return [
             {
