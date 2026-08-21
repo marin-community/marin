@@ -528,10 +528,10 @@
       "id": 10,
       "type": "trend",
       "title": "Training loss by step",
-      "description": "Training loss against Levanter step for all retained samples from the selected run. This panel ignores the Grafana time range and keeps the minimum and maximum loss in each sample group for series longer than 10,000 points. For a repeated step, the newest sample wins. Use this panel for the continuous curve. Use the attempt panel for outages and restarts.",
+      "description": "Training loss against Levanter step for the whole run, read from W&B rather than finelog. Finelog evicts telemetry segments once the namespace passes its storage policy, so a finelog query starts at the oldest retained step; the W&B run spans every restart back to step 0. The series is sampled server-side and the bridge caches it for a minute, so it lags the attempt panel. This panel ignores the Grafana time range. Use it for the continuous curve, and the attempt panel for outages and restarts.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
+        "uid": "wandb"
       },
       "gridPos": {
         "h": 9,
@@ -572,13 +572,17 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/query",
+          "url": "/history",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH paired AS (SELECT timestamp_ms, seq, execution_uid, name, value, MAX(CASE WHEN name = 'step' THEN value END) OVER (PARTITION BY execution_uid ORDER BY timestamp_ms, seq ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS step FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('step', 'train_loss') AND run_id IN (${run:sqlstring}) AND execution_uid IS NOT NULL AND process_index = '0'), losses AS (SELECT step, value AS train_loss, timestamp_ms, seq, ROW_NUMBER() OVER (PARTITION BY step ORDER BY timestamp_ms DESC, seq DESC) AS rn FROM paired WHERE name = 'train_loss' AND step IS NOT NULL), numbered AS (SELECT step, train_loss, ROW_NUMBER() OVER (ORDER BY step) AS point_index, COUNT(*) OVER () AS point_count FROM losses WHERE rn = 1), bucketed AS (SELECT step, train_loss, point_index, point_count, CAST(FLOOR(CAST(point_index - 1 AS DOUBLE) * 4999.0 / CAST(point_count AS DOUBLE)) AS BIGINT) AS point_bucket FROM numbered), ranked AS (SELECT step, train_loss, point_index, point_count, ROW_NUMBER() OVER (PARTITION BY point_bucket ORDER BY train_loss, step) AS min_rank, ROW_NUMBER() OVER (PARTITION BY point_bucket ORDER BY train_loss DESC, step DESC) AS max_rank FROM bucketed) SELECT step, train_loss FROM ranked WHERE point_index = 1 OR point_index = point_count OR min_rank = 1 OR max_rank = 1 ORDER BY step"
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "metric",
+                "value": "train/loss"
               }
             ]
           },
@@ -589,7 +593,7 @@
               "type": "number"
             },
             {
-              "selector": "train_loss",
+              "selector": "value",
               "text": "train loss",
               "type": "number"
             }
