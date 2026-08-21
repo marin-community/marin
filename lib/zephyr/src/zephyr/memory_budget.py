@@ -105,9 +105,16 @@ def read_merge_growth_bytes(
     total_chunks: int,
     shard_payload_bytes: float,
     polars_threads: int,
+    streaming_chunk_size_rows: int = STREAMING_CHUNK_SIZE_ROWS,
 ) -> float:
-    """Predict RSS growth for one sorted-merge plan."""
-    active_rows = min(fan_in * STREAMING_CHUNK_SIZE_ROWS, shard_payload_bytes / avg_item_bytes)
+    """Predict RSS growth for one sorted-merge plan.
+
+    ``streaming_chunk_size_rows`` defaults to the module constant that
+    production also uses to configure Polars. Pass it explicitly only when
+    the merge is actually configured with a different streaming chunk size,
+    so the prediction matches the batch size the merge runs with.
+    """
+    active_rows = min(fan_in * streaming_chunk_size_rows, shard_payload_bytes / avg_item_bytes)
     batch_bytes = active_rows * avg_item_bytes
     expanded_batch_bytes = min(
         R_READ_MAX * batch_bytes,
@@ -134,6 +141,7 @@ def read_merge_fan_in(
     total_chunks: int,
     shard_payload_bytes: float,
     polars_threads: int,
+    streaming_chunk_size_rows: int = STREAMING_CHUNK_SIZE_ROWS,
 ) -> int:
     """Return the maximum frames a merge may combine within the task budget."""
     if avg_item_bytes <= 0:
@@ -149,30 +157,22 @@ def read_merge_fan_in(
     if baseline_rss_bytes < 0:
         raise ValueError(f"baseline_rss_bytes must be nonnegative, got {baseline_rss_bytes}")
 
+    def predicted_growth_bytes(fan_in: int) -> float:
+        return read_merge_growth_bytes(
+            fan_in,
+            avg_item_bytes,
+            total_chunks,
+            shard_payload_bytes,
+            polars_threads,
+            streaming_chunk_size_rows,
+        )
+
     growth_budget = int(task_memory_bytes * SAFETY_FRACTION_READ) - baseline_rss_bytes
     direct_fan_in = max(MIN_MERGE_FAN_IN, total_chunks)
-    if (
-        read_merge_growth_bytes(
-            direct_fan_in,
-            avg_item_bytes,
-            total_chunks,
-            shard_payload_bytes,
-            polars_threads,
-        )
-        <= growth_budget
-    ):
+    if predicted_growth_bytes(direct_fan_in) <= growth_budget:
         return direct_fan_in
 
-    if (
-        read_merge_growth_bytes(
-            MIN_MERGE_FAN_IN,
-            avg_item_bytes,
-            total_chunks,
-            shard_payload_bytes,
-            polars_threads,
-        )
-        > growth_budget
-    ):
+    if predicted_growth_bytes(MIN_MERGE_FAN_IN) > growth_budget:
         # A merge cannot use fewer than two inputs. Below the fitted envelope,
         # use that minimum so small shuffles still make progress.
         return MIN_MERGE_FAN_IN
@@ -181,14 +181,7 @@ def read_merge_fan_in(
     high = max(MIN_MERGE_FAN_IN, total_chunks - 1)
     while low < high:
         candidate = (low + high + 1) // 2
-        predicted_growth = read_merge_growth_bytes(
-            candidate,
-            avg_item_bytes,
-            total_chunks,
-            shard_payload_bytes,
-            polars_threads,
-        )
-        if predicted_growth <= growth_budget:
+        if predicted_growth_bytes(candidate) <= growth_budget:
             low = candidate
         else:
             high = candidate - 1
