@@ -12,6 +12,13 @@ dependencies = [
     "marin-finelog",
 ]
 
+[dependency-groups]
+test = [
+    "pytest>=8.4",
+    "pytest-timeout",
+    "pytest-xdist",
+]
+
 [project.scripts]
 deploy = "marin_deploy.cli:cli"
 
