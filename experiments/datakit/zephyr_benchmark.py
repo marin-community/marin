@@ -210,17 +210,6 @@ def _resolve_sources(
     return selected_sources
 
 
-def _route_outputs(steps: ZephyrDatakitSteps, output_prefix: str) -> ZephyrDatakitSteps:
-    tokenize = {name: replace(step, output_path_prefix=output_prefix) for name, step in steps.tokenize.items()}
-    minhash = {name: replace(step, output_path_prefix=output_prefix) for name, step in steps.minhash.items()}
-    return ZephyrDatakitSteps(
-        exact_dedup=replace(steps.exact_dedup, output_path_prefix=output_prefix),
-        tokenize=tokenize,
-        minhash=minhash,
-        fuzzy_dedup=replace(steps.fuzzy_dedup, output_path_prefix=output_prefix, deps=list(minhash.values())),
-    )
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -273,7 +262,7 @@ def main() -> None:
         max_workers=scale.pool.n_workers,
         stage_runner_factory=SubprocessRunner,
     ) as zephyr_context:
-        steps = _route_outputs(zephyr_datakit_steps(sources, scale, zephyr_context), output_prefix)
+        steps = zephyr_datakit_steps(sources, scale, zephyr_context, output_path_prefix=output_prefix)
         StepRunner().run(
             _steps_between(steps, args.first_stage, args.last_stage),
             max_concurrent=args.max_concurrent,

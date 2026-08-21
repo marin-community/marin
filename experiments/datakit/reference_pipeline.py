@@ -569,13 +569,23 @@ def zephyr_datakit_steps(
     sources: dict[str, StepSpec],
     scale: PipelineScale = DEFAULT_SCALE,
     zephyr_context: ZephyrContext | None = None,
+    output_path_prefix: str | None = None,
 ) -> ZephyrDatakitSteps:
-    """Build exact-dedup, tokenize, MinHash, and fuzzy-dedup stages."""
+    """Build exact-dedup, tokenize, MinHash, and fuzzy-dedup stages.
+
+    ``output_path_prefix``, when set, routes every step's output under it
+    instead of ``marin_prefix()``. It must be applied here rather than by a
+    caller patching the returned StepSpecs afterward: ``fuzzy_dedup.fn`` reads
+    each minhash step's ``output_path`` through a closure over ``minhash_steps``,
+    so a step rerouted after construction leaves that closure -- and therefore
+    fuzzy_dedup's reads -- pointed at the unrerouted default path.
+    """
     source_names = sorted(sources)
     exact_dedup = StepSpec(
         name="datakit/global_exact_dedup",
         deps=[sources[name] for name in source_names],
         hash_attrs={"sources": source_names, "v": GLOBAL_EXACT_DEDUP_DATA_VERSION},
+        output_path_prefix=output_path_prefix,
         fn=lambda output_path: global_exact_deduplicate(
             sources={name: read_artifact(sources[name].output_path, NormalizedData) for name in source_names},
             output_path=output_path,
@@ -589,15 +599,18 @@ def zephyr_datakit_steps(
     tokenize_steps: dict[str, StepSpec] = {}
     minhash_steps: dict[str, StepSpec] = {}
     for name, normalize_step in sources.items():
-        tokenize_steps[name] = tokenize_attributes_step(
-            name=f"datakit/tokenize/{name}",
-            train_normalize=normalize_step,
-            tokenizer=TOKENIZER,
-            tokenizer_backend=TOKENIZER_BACKEND,
-            tokenizer_revision=TOKENIZER_REVISION,
-            max_workers=scale.pool.n_workers,
-            worker_resources=scale.pool.worker,
-            zephyr_context=zephyr_context,
+        tokenize_steps[name] = replace(
+            tokenize_attributes_step(
+                name=f"datakit/tokenize/{name}",
+                train_normalize=normalize_step,
+                tokenizer=TOKENIZER,
+                tokenizer_backend=TOKENIZER_BACKEND,
+                tokenizer_revision=TOKENIZER_REVISION,
+                max_workers=scale.pool.n_workers,
+                worker_resources=scale.pool.worker,
+                zephyr_context=zephyr_context,
+            ),
+            output_path_prefix=output_path_prefix,
         )
         minhash_steps[name] = StepSpec(
             name=f"datakit/minhash/{name}",
@@ -610,6 +623,7 @@ def zephyr_datakit_steps(
                 "seed": mh.seed,
                 "v": MINHASH_ATTR_DATA_VERSION,
             },
+            output_path_prefix=output_path_prefix,
             fn=lambda output_path, n=normalize_step: compute_minhash_attrs(
                 source=read_artifact(n.output_path, NormalizedData),
                 output_path=output_path,
@@ -627,6 +641,7 @@ def zephyr_datakit_steps(
         name="datakit/dedup",
         deps=list(minhash_steps.values()),
         hash_attrs={"v": FUZZY_DUPS_ATTR_DATA_VERSION},
+        output_path_prefix=output_path_prefix,
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(step.output_path, MinHashAttrData) for step in minhash_steps.values()],
             output_path=output_path,
