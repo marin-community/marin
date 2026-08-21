@@ -61,15 +61,26 @@ HERO_EP_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "false",
     "XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB": "192",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
-    # `cuda_async` uses this fraction as the mempool release threshold. JAX's 0.75 default is
-    # 138.2 GiB of the 184.3 GiB part, below the 143.8 GiB the step reaches, so the pool unmaps
-    # after every step and has to re-form the 125.7 GiB train-step slab against the ~12 GiB the
-    # run leaves free. 0.83 is 153.0 GiB: it holds the high-water mark and still leaves 31.3 GiB
-    # outside the pool for NCCL, cuBLAS, and the CUDA context. Rematerialization is budgeted by
-    # `--xla_gpu_memory_limit_slop_factor` against physical memory, not by this ceiling.
-    "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.83",
+    # `cuda_async` reads this fraction as the mempool release threshold, and PJRT sizes the
+    # collective pool at the remaining `(1 - fraction) x 184.3 GiB`. 0.75 sets a 138.2 GiB
+    # threshold and leaves ~46 GiB for collectives, above the ~28.5 GiB NCCL, cuBLAS, and the
+    # CUDA context hold outside the allocator. A higher fraction strands memory the step never
+    # uses, because the startup preallocation probe commits the whole threshold at once: 0.83
+    # pins 153.0 GiB in the pool and leaves under 3 GiB free on the device, so the arena
+    # allocation below has no room to remap into.
+    "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.75",
 }
-_XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
+# The scheduler sizes the single `jit_train_step` temp arena against this percentage of its
+# memory budget, roughly `133.6 GiB x percentage`. The pool holds 138.2 GiB and persistent state
+# occupies 18.1 GiB of it, so an arena above 120.2 GiB cannot be served from pool free space and
+# forces a fresh mapping against the ~17 GiB of physical memory outside the pool. The default 95
+# asks for 125.7 GiB and fails that way. 85 sizes the arena at 113.6 GiB, leaving enough slack
+# for per-node variation in fragmentation. A lower percentage costs throughput, because a
+# smaller arena makes `HloRematerialization` recompute more of the step.
+_XLA_FLAG_DEFAULTS = (
+    "--xla_gpu_enable_latency_hiding_scheduler=true",
+    "--xla_gpu_memory_limit_slop_factor=85",
+)
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
