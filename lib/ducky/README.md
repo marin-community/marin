@@ -176,18 +176,21 @@ Ducky deploys through Pulumi: the `infra/ducky` project declares it as an always
 job (`iac.iris.service.IrisService`), with the job shape and `DUCKY_*` task environment in
 the committed `infra/ducky/Pulumi.ducky-marin.yaml`. CI supplies the five repository secrets
 to the deploy process, which resolves their `env:` references only when submitting the Iris
-job. CI rolls the stack on merge to main (`ops-ducky.yaml`); to force a redeploy with unchanged
-code, dispatch that workflow with a `deploy_generation` override. The deploy builds the Vue
-dashboard itself on every roll (node/npm required on the deploying machine).
+job. CI rolls the stack on merge to main (`ops-pulumi-rollout.yaml`); to force a redeploy with
+unchanged code, dispatch that workflow with a `deploy_generation` override. The deploy builds
+the Vue dashboard itself on every roll (node/npm required on the deploying machine).
+
+```bash
+gh workflow run ops-pulumi-rollout.yaml --ref main \
+  -f service=ducky -f deploy_generation=1
+```
 
 A manual deploy must export `DUCKY_GCS_HMAC_KEY_ID`, `DUCKY_GCS_HMAC_SECRET`,
 `R2_KEY_ID`, `R2_KEY_SECRET`, and `DUCKY_CW_SECRET_KEY` before rolling the stack:
 
 ```bash
 uv sync --all-packages --extra deploy
-cd infra/ducky
-pulumi stack select ducky-marin
-pulumi up
+uv run deploy ducky rollout
 ```
 
 The stack uses the shared `marin-iac-key` KMS secrets provider. The operator needs

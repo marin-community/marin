@@ -10,12 +10,8 @@ Loom worktree and runs as a Docker Compose application on the GCE host.
 
 ## Prerequisites
 
-`Pulumi.yaml` selects the shared Marin state backend. Select the production
-stack before deploying:
-
-```sh
-pulumi stack select marin-loom --cwd /path/to/marin/infra/loom
-```
+`Pulumi.yaml` selects the shared Marin state backend. The deploy command selects
+the production stack explicitly.
 
 The `loom-oa-dev` GitHub App must be installed on the repositories Loom serves.
 Its private key, webhook secret, and client secret belong only in the
@@ -50,8 +46,9 @@ the changed image, places the provider-produced digest in VM metadata, and waits
 for `https://loom.oa.dev/api/ready` after activation.
 
 ```sh
-pulumi preview --cwd /path/to/marin/infra/loom --stack marin-loom --diff
-pulumi up --cwd /path/to/marin/infra/loom --stack marin-loom
+cd /path/to/marin
+pulumi -C infra/loom preview --stack marin-loom --diff
+uv run deploy loom rollout
 curl -fsS https://loom.oa.dev/api/ready
 ```
 
@@ -61,9 +58,8 @@ build includes tracked and untracked files allowed by that worktree's
 the stack configuration, so remove the override to return to the remote HEAD.
 
 ```sh
-pulumi up --cwd /path/to/marin/infra/loom --stack marin-loom \
-  -c buildContext=/path/to/loom
-pulumi config rm --cwd /path/to/marin/infra/loom --stack marin-loom buildContext
+uv run deploy loom rollout --config buildContext=/path/to/loom
+pulumi -C infra/loom config rm --stack marin-loom buildContext
 ```
 
 Pulumi renders the Compose and Caddy configuration into VM metadata. The GCE

@@ -1,10 +1,27 @@
 # Marin deploy
 
 `deploy` is the operator entry point for application rollouts and rollbacks. Each
-service owns its deployment implementation; this package provides one command tree
-that can grow as services move to the shared interface.
+service owns its deployment implementation; this package provides one command tree.
 
-Finelog Kubernetes deployments are the first supported service:
+Pulumi-managed application services use the same rollout interface:
+
+```bash
+uv sync --all-packages --extra deploy
+uv run deploy ducky rollout
+uv run deploy echo rollout
+uv run deploy evaldash rollout
+uv run deploy grafana rollout
+uv run deploy loom rollout
+uv run deploy xprof rollout
+```
+
+Run these commands from the repository root with the Pulumi CLI installed. Each
+command applies the production stack from its project under `infra/`. Pass
+`--yes` to skip Pulumi confirmation and repeat `--config KEY=VALUE` for update-time
+configuration overrides. Continue to use the Pulumi CLI directly for previews,
+stack configuration, imports, and infrastructure or SaaS projects.
+
+Finelog Kubernetes deployments add revision rollback support:
 
 ```bash
 uv run deploy finelog rollout <cluster>

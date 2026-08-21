@@ -262,3 +262,9 @@ current `main` revision manually:
 ```bash
 gh workflow run ops-pulumi-rollout.yaml --ref main -f service=evaldash
 ```
+
+To deploy the current checkout with local credentials:
+
+```bash
+uv run deploy evaldash rollout
+```

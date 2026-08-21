@@ -103,9 +103,8 @@ jobs:
       - name: Apply Pulumi stack
         uses: ./.github/actions/pulumi-deploy
         with:
-          stack: ${{ matrix.stack }}
-          work-dir: ${{ matrix.work_dir }}
+          service: ${{ matrix.name }}
           service-account: ${{ matrix.service_account }}
           gcp-project-id: hai-gcp-models
-          config-map: ${{ matrix.config_map }}
+          config: ${{ matrix.config }}
           cloudflare-secret-name: ${{ matrix.cloudflare_secret_name }}
