@@ -41,8 +41,14 @@ class CompactionResult:
     superseded: int = 0
 
 
-def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None = None) -> CompactionResult:
-    """Replace the currently active shards for ``table`` through one manifest commit.
+def compact_table(
+    root: str,
+    table: str,
+    *,
+    generation: int | None = None,
+    coordinator: CompactionCoordinator | None = None,
+) -> CompactionResult:
+    """Replace one generation, or all active shards, through one manifest commit.
 
     Source objects remain immutable and reachable by older read views. Garbage collection is
     deliberately separate from compaction because the store does not yet track reader leases.
@@ -51,11 +57,27 @@ def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None 
     commits = coordinator or CommitCoordinator(layout)
     snapshot = commits.snapshot()
     view = ReadView(root, snapshot)
-    shards = view.list_shards(table)
+    active_shards = view.list_shards(table)
+    shards = active_shards if generation is None else tuple(s for s in active_shards if s.generation == generation)
     if not shards:
+        return CompactionResult(written=0)
+    if len(shards) == 1 and shards[0].writer == _COMPACTOR:
         return CompactionResult(written=0)
     primary_key = view.primary_key(table)
     next_generation = max(shard.generation for shard in shards) + 1
+    input_rows = sum(shard.rows for shard in shards)
+    input_bytes = sum(shard.size_bytes for shard in shards)
+    logger.info(
+        "FineStore compacting %s table=%s input_generation=%s input_shards=%d input_rows=%d "
+        "input_bytes=%d output_generation=%d",
+        root,
+        table,
+        "all" if generation is None else generation,
+        len(shards),
+        input_rows,
+        input_bytes,
+        next_generation,
+    )
 
     fs, _ = factory.url_to_fs(root)
     pa_fs = PyFileSystem(FSSpecHandler(fs))
@@ -76,7 +98,7 @@ def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None 
     survivors = survivor_rows()
     first = next(survivors, None)
     if first is None:
-        return CompactionResult(written=0)
+        raise ValueError(f"FineStore table {table!r} has {len(shards)} non-empty shard descriptors but no rows")
 
     output_path = layout.shard_path(table, _COMPACTOR, next_generation, 0, uuid.uuid4().hex[:8])
     written = 0
@@ -116,11 +138,20 @@ def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None 
             base=snapshot,
         )
     except CommitConflict:
-        logger.info("FineStore abandoned compaction for %s because its inputs changed", table)
+        logger.info(
+            "FineStore abandoned compaction for %s table=%s input_shards=%d because its inputs changed",
+            root,
+            table,
+            len(shards),
+        )
         return CompactionResult(written=0)
     logger.info(
-        "FineStore compacted %s to generation %d (%d rows, %d superseded)",
+        "FineStore compacted %s table=%s input_generation=%s input_shards=%d output_shards=1 "
+        "output_generation=%d rows=%d superseded=%d",
+        root,
         table,
+        "all" if generation is None else generation,
+        len(shards),
         next_generation,
         written,
         superseded[0],
