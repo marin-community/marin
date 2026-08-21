@@ -27,8 +27,11 @@ data-parallel rack uses one 64-device expert mesh.
   newest complete checkpoint below `--checkpoint-path`. PR
   [#8480](https://github.com/marin-community/marin/pull/8480) bounded pinned-host restore memory;
   its d6144 run restored step 164 and continued training with a 735 GiB fleet peak against a
-  940 GiB request. Drop metrics include the sender and receiver shares of all assignments. The
-  receiver also reports its drop share of assignments that reached it.
+  940 GiB request. The experimental `--checkpoint-restore-mode donated_init_slots` mode retains
+  initialized device buffers, restores their values through pinned host memory, and requires XLA
+  to reuse every donated buffer. Initialized optimizer and master-parameter leaves are still
+  released before restore. Drop metrics include the sender and receiver shares of all assignments.
+  The receiver also reports its drop share of assignments that reached it.
 
 The attention, shared-expert, language-model-head, and optimizer states use the combined `data` and
 `expert` axes. The expert axis stays sharded during Newton-Schulz.
@@ -100,6 +103,7 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--save-checkpoints` | writes periodic and final checkpoints |
 | `--checkpoint-minutes` | sets the wall-clock checkpoint interval |
 | `--checkpoint-path` | places checkpoints at an explicit storage prefix |
+| `--checkpoint-restore-mode` | optionally restores device leaves into donated initialization buffers |
 | `--training-data synthetic` | reuses a deterministic batch without opening TensorStore |
 | `--watch-interval`, `--watch-mode` | select inline or diagnostic norm collection |
 | `--profile-start-step`, `--profile-steps` | select the rank-0 XProf window |

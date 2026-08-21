@@ -89,6 +89,8 @@ INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 _FP32_POLICY = jmp.get_policy("params=float32,compute=float32,output=float32")
+_DEVICE_MEMORY_KIND = "device"
+_PINNED_HOST_MEMORY_KIND = "pinned_host"
 
 
 class WatchMode(StrEnum):
@@ -103,6 +105,13 @@ class MasterParamMode(StrEnum):
 
     DISABLED = "disabled"
     FP32_PINNED_HOST = "fp32_pinned_host"
+
+
+class CheckpointRestoreMode(StrEnum):
+    """How checkpointed device leaves replace the initialized state."""
+
+    DIRECT = "direct"
+    DONATED_INIT_SLOTS = "donated_init_slots"
 
 
 class TrainingDataMode(StrEnum):
@@ -146,6 +155,7 @@ class GrugTrainerConfig:
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
     master_param_mode: MasterParamMode = MasterParamMode.DISABLED
+    checkpoint_restore_mode: CheckpointRestoreMode = CheckpointRestoreMode.DIRECT
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE
     # Inline watch computes statistics on every step and uses the watch interval only for logging.
     # This keeps one training executable resident. A diagnostic watch repeats forward and backward
@@ -535,6 +545,74 @@ def _tree_to_memory_kind(tree, memory_kind: str):
     return jax.tree.map(_move, tree)
 
 
+def _is_device_array(leaf: object) -> bool:
+    return isinstance(leaf, jax.Array) and leaf.sharding.memory_kind in (None, _DEVICE_MEMORY_KIND)
+
+
+def _checkpoint_template_on_host(state):
+    """Build a restore template that keeps checkpoint I/O out of device memory."""
+
+    def _template(leaf):
+        if not isinstance(leaf, jax.Array):
+            return leaf
+        sharding = leaf.sharding
+        if sharding.memory_kind in (None, _DEVICE_MEMORY_KIND):
+            sharding = sharding.with_memory_kind(_PINNED_HOST_MEMORY_KIND)
+        return jax.ShapeDtypeStruct(leaf.shape, leaf.dtype, sharding=sharding)
+
+    return jax.tree.map(_template, state)
+
+
+def _device_shard_pointers(array: jax.Array) -> tuple[tuple[str, int], ...]:
+    return tuple((str(shard.device), shard.data.unsafe_buffer_pointer()) for shard in array.addressable_shards)
+
+
+def _install_restored_device_leaves(initial_state, restored_state):
+    """Copy restored host leaves into donated device buffers from initialization."""
+    initial_leaves, initial_treedef = jax.tree.flatten(initial_state)
+    restored_leaves, restored_treedef = jax.tree.flatten(restored_state)
+    if initial_treedef != restored_treedef:
+        raise ValueError("initialized and restored checkpoint states must have the same structure")
+
+    device_indices = [i for i, leaf in enumerate(initial_leaves) if _is_device_array(leaf)]
+    slots = tuple(initial_leaves[i] for i in device_indices)
+    restored = tuple(restored_leaves[i] for i in device_indices)
+    if not all(isinstance(leaf, jax.Array) for leaf in restored):
+        raise ValueError("restored device state must contain materialized arrays")
+
+    slot_pointers = tuple(_device_shard_pointers(slot) for slot in slots)
+
+    slot_shardings = tuple(slot.sharding for slot in slots)
+
+    def _copy_into_slots(slot_leaves, restored_leaves):
+        return jax.tree.map(
+            lambda slot, value, sharding: jax.lax.dynamic_update_slice(
+                slot,
+                jax.device_put(value, sharding),
+                (0,) * slot.ndim,
+            ),
+            slot_leaves,
+            restored_leaves,
+            slot_shardings,
+        )
+
+    install = jax.jit(
+        _copy_into_slots,
+        donate_argnums=(0,),
+        out_shardings=slot_shardings,
+    )
+    installed = install(slots, restored)
+    jax.block_until_ready(installed)
+
+    installed_pointers = tuple(_device_shard_pointers(array) for array in installed)
+    if installed_pointers != slot_pointers:
+        raise RuntimeError("checkpoint restore did not reuse every donated initialization buffer")
+
+    for i, leaf in zip(device_indices, installed, strict=True):
+        restored_leaves[i] = leaf
+    return jax.tree.unflatten(restored_treedef, restored_leaves)
+
+
 def initial_state(
     model_config: GrugModelConfig,
     *,
@@ -803,21 +881,32 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 master_param_mode=config.trainer.master_param_mode,
             )
 
-        state = _init_state(model_key)
+        initial_state = _init_state(model_key)
         released_initial_state = trainer.load_checkpoint is not False and not trainer.allow_partial_checkpoint
+        restore_into_init_slots = (
+            released_initial_state and config.trainer.checkpoint_restore_mode == CheckpointRestoreMode.DONATED_INIT_SLOTS
+        )
         if released_initial_state:
-            restore_template = jax.tree.map(
-                lambda leaf: (
-                    jax.ShapeDtypeStruct(leaf.shape, leaf.dtype, sharding=leaf.sharding)
-                    if isinstance(leaf, jax.Array)
-                    else leaf
-                ),
-                state,
-            )
-            jax.tree.map(lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) else None, state)
-            del state
+            if restore_into_init_slots:
+                restore_template = _checkpoint_template_on_host(initial_state)
+                jax.tree.map(
+                    lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) and not _is_device_array(leaf) else None,
+                    initial_state,
+                )
+            else:
+                restore_template = jax.tree.map(
+                    lambda leaf: (
+                        jax.ShapeDtypeStruct(leaf.shape, leaf.dtype, sharding=leaf.sharding)
+                        if isinstance(leaf, jax.Array)
+                        else leaf
+                    ),
+                    initial_state,
+                )
+                jax.tree.map(lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) else None, initial_state)
             gc.collect()
             state = restore_template
+        else:
+            state = initial_state
 
         checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
         state = restore_grug_state_from_checkpoint(
@@ -827,8 +916,17 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
-        if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
-            state = _init_state(model_key)
+        if released_initial_state:
+            checkpoint_not_found = any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state))
+            if checkpoint_not_found:
+                if restore_into_init_slots:
+                    jax.tree.map(
+                        lambda leaf: leaf.delete() if _is_device_array(leaf) else None,
+                        initial_state,
+                    )
+                state = _init_state(model_key)
+            elif restore_into_init_slots:
+                state = _install_restored_device_leaves(initial_state, state)
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
@@ -1108,6 +1206,7 @@ def run_grug(config: GrugRunConfig) -> None:
 
 
 __all__ = [
+    "CheckpointRestoreMode",
     "GrugEvalConfig",
     "GrugRunConfig",
     "GrugTrainState",

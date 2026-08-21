@@ -108,6 +108,31 @@ def test_checkpoint_path_defaults_under_the_step_output_path():
     assert config.trainer.trainer.checkpointer.base_path == f"{ctx.output_path}/checkpoints"
 
 
+def test_donated_checkpoint_restore_preserves_initialized_device_buffers():
+    device = jax.devices()[0]
+    device_sharding = jax.sharding.SingleDeviceSharding(device)
+    host_sharding = device_sharding.with_memory_kind("pinned_host")
+    initial = {
+        "device": jax.device_put(jnp.zeros(8, dtype=jnp.float32), device_sharding),
+        "host": jax.device_put(jnp.zeros(4, dtype=jnp.float32), host_sharding),
+    }
+    template = train._checkpoint_template_on_host(initial)
+    restored = {
+        "device": jax.device_put(jnp.arange(8, dtype=jnp.float32), template["device"].sharding),
+        "host": jax.device_put(jnp.arange(4, dtype=jnp.float32) + 10, template["host"].sharding),
+    }
+    initial_pointer = initial["device"].unsafe_buffer_pointer()
+    initial["host"].delete()
+
+    installed = train._install_restored_device_leaves(initial, restored)
+
+    assert installed["device"].unsafe_buffer_pointer() == initial_pointer
+    np.testing.assert_array_equal(np.asarray(installed["device"]), np.asarray(restored["device"]))
+    np.testing.assert_array_equal(np.asarray(installed["host"]), np.asarray(restored["host"]))
+    assert initial["device"].is_deleted()
+    assert initial["host"].is_deleted()
+
+
 def test_checkpoint_interval_must_be_positive():
     with pytest.raises(ValueError, match="checkpoint_interval must be positive"):
         launch.build_hero_run(

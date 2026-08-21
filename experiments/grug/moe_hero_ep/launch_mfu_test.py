@@ -31,6 +31,7 @@ from experiments.grug.moe_hero_ep.harrier_mix_2026_08_17_1 import (
 )
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, build_hero_configs
 from experiments.grug.moe_hero_ep.train import (
+    CheckpointRestoreMode,
     GrugEvalConfig,
     GrugRunConfig,
     GrugTrainerConfig,
@@ -85,6 +86,7 @@ def build_hero_run(
     save_checkpoints: bool = False,
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
     checkpoint_path: str | None = None,
+    checkpoint_restore_mode: CheckpointRestoreMode = CheckpointRestoreMode.DIRECT,
     watch_interval: int = HERO_WATCH_INTERVAL,
     watch_mode: WatchMode = WatchMode.INLINE,
     profile_steps: int = 0,
@@ -170,6 +172,7 @@ def build_hero_run(
         z_loss_weight=1e-4,
         offload_opt_state=HERO_OFFLOAD_OPT_STATE,
         master_param_mode=MasterParamMode.FP32_PINNED_HOST,
+        checkpoint_restore_mode=checkpoint_restore_mode,
         training_data_mode=training_data_mode,
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
@@ -363,6 +366,13 @@ def build_hero_run(
     help="Checkpoint output path, e.g. a marin_temp_bucket() path. Defaults to the step output path.",
 )
 @click.option(
+    "--checkpoint-restore-mode",
+    type=click.Choice([mode.value for mode in CheckpointRestoreMode]),
+    default=CheckpointRestoreMode.DIRECT.value,
+    show_default=True,
+    help="Restore device leaves directly or copy them into donated buffers allocated by initialization.",
+)
+@click.option(
     "--eval-every",
     type=click.IntRange(min=0),
     default=0,
@@ -427,6 +437,7 @@ def main(
     save_checkpoints: bool,
     checkpoint_minutes: float,
     checkpoint_path: str | None,
+    checkpoint_restore_mode: str,
     eval_every: int,
     watch_interval: int,
     watch_mode: str,
@@ -449,6 +460,7 @@ def main(
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),
         checkpoint_path=checkpoint_path,
+        checkpoint_restore_mode=CheckpointRestoreMode(checkpoint_restore_mode),
         eval_every=eval_every,
         watch_interval=watch_interval,
         watch_mode=WatchMode(watch_mode),
