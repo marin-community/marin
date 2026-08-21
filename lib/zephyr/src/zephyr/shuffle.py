@@ -6,10 +6,13 @@
 Each source-shard's scatter output is a set of zstd-compressed Parquet files,
 one combined file per flush (``c{chunk:04d}.parquet``) containing all target
 shards' data sorted by ``(_SHARD_COL, _SORT_KEY_COL)``.  A msgpack sidecar
-(``metadata.msgpack``) records ``files -> [path, ...]``, a global
-``avg_item_bytes`` estimate used to size the external-sort decision, and
-exact per-target-shard payload bytes (``shard_bytes``) fed into
-:func:`zephyr.memory_budget.read_merge_fan_in` to size the merge plan.
+(``metadata.msgpack``) records ``files -> [path, ...]`` plus exact
+per-target-shard payload bytes and row counts (``shard_bytes``,
+``shard_rows``). A reducer's :class:`ScatterReader` sums those across every
+source shard's sidecar to get its own target's exact payload bytes and
+``avg_item_bytes``, fed into :func:`zephyr.memory_budget.read_merge_fan_in`
+to size the merge plan. Row width can vary sharply by target shard, so this
+average is computed per target rather than across a mapper's whole output.
 
 On the read side, each reducer scans only its target shard via
 ``pl.scan_parquet(path).filter(pl.col(_SHARD_COL) == target).drop(_SHARD_COL)``.
@@ -253,15 +256,15 @@ class _SidecarSlice:
 
     Each entry in ``chunk_paths`` is one combined Parquet file written during a
     flush; the file contains data for all target shards sorted by
-    ``(_SHARD_COL, _SORT_KEY_COL)``. ``target_bytes`` is the exact payload
-    bytes this mapper wrote for the reader's target shard, summed across all
-    chunks.
+    ``(_SHARD_COL, _SORT_KEY_COL)``. ``target_bytes`` and ``target_rows`` are
+    the exact payload bytes and row count this mapper wrote for the reader's
+    target shard, summed across all chunks.
     """
 
     path: str
     chunk_paths: list[str]  # GCS parquet paths, one per flush event
-    avg_item_bytes: float
     target_bytes: int
+    target_rows: int
 
 
 class _SidecarFilesystem(Protocol):
@@ -290,8 +293,8 @@ def _read_sidecar_slice(fs: _SidecarFilesystem, path: str, target_shard: int) ->
     return _SidecarSlice(
         path=path,
         chunk_paths=[str(f) for f in files],
-        avg_item_bytes=float(meta.get("avg_item_bytes", 0)),
         target_bytes=int(meta.get("shard_bytes", {}).get(str(target_shard), 0)),
+        target_rows=int(meta.get("shard_rows", {}).get(str(target_shard), 0)),
     )
 
 
@@ -334,6 +337,11 @@ def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
         return frames
     unified = pl.concat([f.limit(0) for f in frames], how="diagonal_relaxed").collect_schema()
     return [f.cast(dict(unified)) for f in frames]
+
+
+def _fan_in_groups(frames: list[pl.LazyFrame], fan_in: int) -> list[list[pl.LazyFrame]]:
+    """Split frames into consecutive groups of at most fan_in, preserving order."""
+    return [frames[i : i + fan_in] for i in range(0, len(frames), fan_in)]
 
 
 def _merge_sorted_frames(
@@ -393,7 +401,7 @@ def _merge_sorted_frames(
                 len(frames),
                 fan_in,
             )
-            groups = [frames[i : i + fan_in] for i in range(0, len(frames), fan_in)]
+            groups = _fan_in_groups(frames, fan_in)
             runs: list[StoragePath] = []
             for run_index, group in enumerate(groups):
                 run_name = f"pass-{pass_index:04d}-run-{run_index:04d}.spill"
@@ -460,9 +468,9 @@ class ScatterReader:
         thousands of mappers.
         """
         files: list[tuple[str, list[str]]] = []
-        weighted_bytes = 0.0
         total_chunks = 0
         shard_payload_bytes = 0.0
+        shard_payload_rows = 0
 
         with log_time(
             f"Building ScatterReader for target shard {target_shard} "
@@ -470,11 +478,14 @@ class ScatterReader:
         ):
             for slice_ in _read_sidecar_slices_parallel(scatter_paths, target_shard):
                 files.append((slice_.path, slice_.chunk_paths))
-                weighted_bytes += slice_.avg_item_bytes * len(slice_.chunk_paths)
                 total_chunks += len(slice_.chunk_paths)
                 shard_payload_bytes += slice_.target_bytes
+                shard_payload_rows += slice_.target_rows
 
-        avg_item_bytes = weighted_bytes / total_chunks if total_chunks > 0 else 0.0
+        # Computed from this target's own exact bytes and row count, not a
+        # mapper-wide average, so row width that varies by target (e.g. a
+        # skewed shuffle key) doesn't bias the merge-memory prediction.
+        avg_item_bytes = shard_payload_bytes / shard_payload_rows if shard_payload_rows > 0 else 0.0
 
         logger.info(
             "ScatterReader for shard %d: %d source files, %d total chunks, "
@@ -618,11 +629,11 @@ class ScatterWriter:
         # RecordBatch/DataFrame-native pipeline can feed frames directly.
         self._frames: list[pl.DataFrame] = []
         self._chunk_paths: list[str] = []
-        # Payload bytes written per target shard, recorded in the sidecar so
-        # reducers know their shard's exact data size for the external-sort
-        # decision without opening any chunk files.
+        # Payload bytes and row counts written per target shard, recorded in
+        # the sidecar so reducers know their own shard's exact data size and
+        # row width for the merge-memory plan without opening any chunk files.
         self._shard_bytes: defaultdict[int, int] = defaultdict(int)
-        self._avg_item_bytes: float = 0.0
+        self._shard_rows: defaultdict[int, int] = defaultdict(int)
         self._total_bytes_written: int = 0
         self._total_rows_written: int = 0
         self._n_chunks_written = 0
@@ -662,9 +673,12 @@ class ScatterWriter:
         flushed_bytes = int(buffer_sorted.estimated_size())
         self._total_bytes_written += flushed_bytes
         self._total_rows_written += len(buffer_sorted)
-        shard_sizes = buffer_sorted.group_by(_SHARD_COL).agg(pl.col(_PAYLOAD_COL).bin.size().sum().alias("bytes"))
-        for shard_val, nbytes in shard_sizes.iter_rows():
+        shard_sizes = buffer_sorted.group_by(_SHARD_COL).agg(
+            pl.col(_PAYLOAD_COL).bin.size().sum().alias("bytes"), pl.len().alias("rows")
+        )
+        for shard_val, nbytes, nrows in shard_sizes.iter_rows():
             self._shard_bytes[shard_val] += int(nbytes)
+            self._shard_rows[shard_val] += int(nrows)
 
         # Keep target shards local to as few row groups as practical so Polars
         # predicate pushdown can skip unrelated data. Cap the group count because
@@ -740,7 +754,7 @@ class ScatterWriter:
         with log_time(f"Flushing remaining buffer for {self._data_path}"):
             self._flush()
 
-        self._avg_item_bytes = (
+        mapper_avg_item_bytes = (
             self._total_bytes_written / self._total_rows_written if self._total_rows_written > 0 else 0.0
         )
 
@@ -750,13 +764,13 @@ class ScatterWriter:
             pre_close_flushes,
             self._n_chunks_written - pre_close_flushes,
             self._n_chunks_written,
-            self._avg_item_bytes,
+            mapper_avg_item_bytes,
         )
 
         sidecar: dict = {
             "files": list(self._chunk_paths),
-            "avg_item_bytes": round(self._avg_item_bytes, 1),
             "shard_bytes": {str(k): v for k, v in self._shard_bytes.items()},
+            "shard_rows": {str(k): v for k, v in self._shard_rows.items()},
         }
 
         with log_time(f"Writing scatter meta for {self._data_path}"):

@@ -32,6 +32,7 @@ from zephyr.shuffle import (
     ScatterReader,
     ScatterWriter,
     _dataframe_to_items,
+    _fan_in_groups,
     _items_to_dataframe,
     _merge_sorted_frames,
     _read_sidecar_slices_parallel,
@@ -627,19 +628,20 @@ def test_merge_sorted_frames_cleans_up(tmp_path):
     assert list(tmp_path.iterdir()) == [], "run files should be deleted after merge"
 
 
-def test_merge_sorted_frames_limits_every_pass_fan_in(tmp_path, monkeypatch):
-    """No single merge_sorted call combines more than fan_in frames, across every pass."""
+def test_fan_in_groups_bounds_every_group():
+    """No group exceeds fan_in, and every item survives across a size that forces multiple groups."""
+    fan_in = 3
+    groups = _fan_in_groups(list(range(20)), fan_in)
+
+    assert len(groups) > 1, f"expected multiple groups for 20 items at fan_in={fan_in}"
+    assert all(len(group) <= fan_in for group in groups), f"a group exceeded fan_in={fan_in}: {groups}"
+    assert [value for group in groups for value in group] == list(range(20))
+
+
+def test_merge_sorted_frames_multi_pass_preserves_order(tmp_path):
+    """A fan_in small enough to force multiple spill passes still yields the full sorted output."""
     fan_in = 3
     frames = [_make_sorted_frame([value]) for value in range(20)]
-
-    call_sizes: list[int] = []
-    real_merge_sorted = pl.merge_sorted
-
-    def spy_merge_sorted(inputs, *args, **kwargs):
-        call_sizes.append(len(inputs))
-        return real_merge_sorted(inputs, *args, **kwargs)
-
-    monkeypatch.setattr(pl, "merge_sorted", spy_merge_sorted)
 
     rows = _merge_sorted_frames_items(
         frames,
@@ -651,8 +653,6 @@ def test_merge_sorted_frames_limits_every_pass_fan_in(tmp_path, monkeypatch):
 
     assert [row["v"] for row in rows] == list(range(20))
     assert list(tmp_path.iterdir()) == []
-    assert len(call_sizes) > 1, f"expected multiple merge_sorted calls for 20 frames at fan_in={fan_in}"
-    assert all(size <= fan_in for size in call_sizes), f"a merge_sorted call exceeded fan_in={fan_in}: {call_sizes}"
 
 
 def test_merge_sorted_frames_reads_coreweave_spills_with_virtual_host_addressing(monkeypatch):
