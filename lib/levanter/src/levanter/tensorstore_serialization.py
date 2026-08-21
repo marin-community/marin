@@ -8,6 +8,7 @@ import collections
 import logging
 import math
 import os
+import time
 import urllib.parse
 import zlib
 from dataclasses import dataclass
@@ -44,8 +45,6 @@ ARRAY_DRIVER = "zarr3"
 KVSTORE_DRIVER = "ocdbt"
 # JAX's memory kind for host memory a device can address. Offloaded optimizer state lives here.
 _HOST_MEMORY_KIND = "pinned_host"
-# JAX's default memory kind: buffers live in device (HBM) memory.
-_DEVICE_MEMORY_KIND = "device"
 # Chunks a save stages at once. The budget is per process, so a node holds it once per local
 # process. Four processes at 32 GiB each exhausted a GB200 node, and 16 GiB each still did: a
 # process carries about four times its budget in flight (_STAGED_BYTE_OVERHEAD) on top of its
@@ -53,9 +52,6 @@ _DEVICE_MEMORY_KIND = "device"
 _DEFAULT_STAGED_CHUNKS = 16
 # Host memory a staged byte occupies while its write is in flight, for reporting only.
 _STAGED_BYTE_OVERHEAD = 4
-# Host memory each process may hold in flight while a restore reads shards. JAX defaults to 32 GB
-# and the legacy path asked for 300, both far above what a save allows itself on the same node.
-_RESTORE_CONCURRENT_GB = 8
 
 
 def _format_gib(num_bytes: int) -> str:
@@ -170,6 +166,37 @@ class TensorStoreWriteConfig:
             raise ValueError(f"cache_pool_bytes must be non-negative, got {self.cache_pool_bytes}")
 
 
+# Every TensorStore concurrency knob a checkpoint read can reach, across kvstore drivers.
+_CONCURRENCY_RESOURCES = (
+    "data_copy_concurrency",
+    "s3_request_concurrency",
+    "gcs_request_concurrency",
+    "http_request_concurrency",
+    "file_io_concurrency",
+)
+
+
+@dataclass(frozen=True)
+class TensorStoreReadConfig:
+    """How a restore reads shards back."""
+
+    max_in_flight_bytes: int = 16 * 1024**3
+    """Host memory this process may hold in shards whose transfer has not drained."""
+
+    request_concurrency: int = 128
+    """Concurrent object-store requests. TensorStore defaults to 32, which on one GB200 rack
+    read a hero checkpoint in 125.6s against 96.9s at 128."""
+
+
+def _tensorstore_read_context(config: TensorStoreReadConfig) -> ts.Context:
+    """JAX's default context carrying this restore's concurrency."""
+    spec = ts_impl._TS_CONTEXT.spec.to_json()
+    # A driver ignores a resource it does not use, so set every store's knob together.
+    for resource in _CONCURRENCY_RESOURCES:
+        spec[resource] = {"limit": config.request_concurrency}
+    return ts.Context(spec)
+
+
 def _tensorstore_write_context(config: TensorStoreWriteConfig) -> ts.Context:
     spec = ts_impl._TS_CONTEXT.spec.to_json()
     spec["cache_pool"] = {"total_bytes_limit": config.cache_pool_bytes}
@@ -215,11 +242,12 @@ class _ShardWrite:
         return self.slice_axis, self.slice_start, self.slice_limit
 
 
-class _HostStagingGate:
-    """Track staged bytes until TensorStore has committed and released them.
+class _HostByteBudget:
+    """Bound the host memory one process holds in flight, for a save or a restore.
 
-    Shard writes pass ``can_reference_source_data_indefinitely=True``. The copy future
-    resolves while the snapshot is still referenced.
+    A save charges each staged snapshot until TensorStore commits it: shard writes pass
+    ``can_reference_source_data_indefinitely=True``, so the copy future resolves while the
+    snapshot is still referenced. A restore charges each shard until its transfer drains.
     """
 
     def __init__(self, limit_bytes: int):
@@ -234,7 +262,7 @@ class _HostStagingGate:
         return self._peak
 
     async def acquire(self, num_bytes: int) -> None:
-        # Built before the save's loop exists, so bind on first use.
+        # Built before its loop exists, so bind on first use.
         self._loop = asyncio.get_running_loop()
         # A snapshot larger than the whole budget proceeds alone; it can never be admitted.
         while self._in_flight and self._in_flight + num_bytes > self._limit:
@@ -608,7 +636,7 @@ def _serialize_arrays(
     # JAX's process-lifetime context accumulates caches across saves, since each save writes a
     # new OCDBT database (#6785). Give each save bounded caches and copy concurrency of its own.
     context = _tensorstore_write_context(config)
-    gate = _HostStagingGate(config.max_staged_host_bytes)
+    gate = _HostByteBudget(config.max_staged_host_bytes)
     commit_futures: list[ts.Future] = []
 
     async def issue_write(num_bytes: int, stage):
@@ -707,54 +735,87 @@ def _fully_replicated_sharding(mesh):
     return hax.partitioning.sharding_for_axis((), {}, mesh)
 
 
-async def _deserialize_leaf_to_memory_kind(sharding: Sharding, tensorstore_spec: dict) -> jax.Array:
-    """Read one array shard directly into its target memory kind."""
-    store = await ts.open(tensorstore_spec, open=True)
+async def _deserialize_leaf(
+    sharding: Sharding,
+    tensorstore_spec: dict,
+    *,
+    context: ts.Context,
+    budget: "_HostByteBudget",
+) -> jax.Array:
+    """Read every addressable shard of one array into its target memory kind."""
+    store = await ts.open(tensorstore_spec, open=True, context=context)
     shape = tuple(store.shape)
     dtype = jax.dtypes.canonicalize_dtype(store.dtype.numpy_dtype)
-    shard_shape = sharding.shard_shape(shape)
-    arrays = []
+    shard_shape = tuple(sharding.shard_shape(shape))
 
-    for device, index in sharding.addressable_devices_indices_map(shape).items():
+    async def read_shard(device: jax.Device, index) -> jax.Array:
         requested_domain = ts.IndexTransform(input_shape=shape)[index].domain
         restricted_domain = store.domain.intersect(requested_domain)
-        host_array = np.zeros(shard_shape, dtype=store.dtype.numpy_dtype)
-        await ts.array(host_array)[ts.d[:].translate_to[requested_domain.origin]][restricted_domain].write(
-            store[restricted_domain]
-        )
-        if host_array.dtype != dtype:
-            host_array = host_array.astype(dtype)
-        target = jax.sharding.SingleDeviceSharding(device, memory_kind=sharding.memory_kind)
-        array = jax.device_put(host_array, target)
-        array.block_until_ready()
-        arrays.append(array)
+        # Chunks arrive whole, so a shard off the chunk grid materializes more than its own size.
+        charge = ts_impl.estimate_read_memory_footprint(store, restricted_domain)
+        if store.dtype.numpy_dtype != dtype:
+            # The cast allocates a second buffer while the first is still alive.
+            charge += math.prod(shard_shape) * np.dtype(dtype).itemsize
 
-    return jax.make_array_from_single_device_arrays(shape, sharding, arrays)
+        await budget.acquire(charge)
+        try:
+            # The shard shape comes from the store's own shape, so the read covers every
+            # element and the buffer needs no fill first.
+            host_array = np.empty(shard_shape, dtype=store.dtype.numpy_dtype)
+            await ts.array(host_array)[ts.d[:].translate_to[requested_domain.origin]][restricted_domain].write(
+                store[restricted_domain]
+            )
+            if host_array.dtype != dtype:
+                host_array = host_array.astype(dtype)
+            target = jax.sharding.SingleDeviceSharding(device, memory_kind=sharding.memory_kind)
+            array = jax.device_put(host_array, target)
+            # Hold the charge until the transfer drains, so the budget bounds live host memory.
+            array.block_until_ready()
+            return array
+        finally:
+            budget.release(charge)
+
+    shards = await asyncio.gather(
+        *(read_shard(device, index) for device, index in sharding.addressable_devices_indices_map(shape).items())
+    )
+    return jax.make_array_from_single_device_arrays(shape, sharding, list(shards))
 
 
 def _deserialize_leaves(
-    manager: array_ser.GlobalAsyncCheckpointManager,
     shardings: list[Sharding],
     tensorstore_specs: list[dict],
+    config: TensorStoreReadConfig,
 ) -> list:
-    """Deserialize device leaves together and non-device leaves one at a time."""
-    leaves: list = [None] * len(shardings)
-    device_indices = [i for i, sharding in enumerate(shardings) if sharding.memory_kind in (None, _DEVICE_MEMORY_KIND)]
-    if device_indices:
-        device_leaves = manager.deserialize(
-            shardings=[shardings[i] for i in device_indices],
-            tensorstore_specs=[tensorstore_specs[i] for i in device_indices],
-            concurrent_gb=_RESTORE_CONCURRENT_GB,
+    """Read every leaf, concurrently, into the memory kind each leaf's sharding names.
+
+    One shared TensorStore context and one budget cover all the reads, so the budget bounds
+    this process's live shard bytes across the whole restore.
+    """
+    context = _tensorstore_read_context(config)
+    budget = _HostByteBudget(config.max_in_flight_bytes)
+
+    async def read_all():
+        return await asyncio.gather(
+            *(
+                _deserialize_leaf(sharding, spec, context=context, budget=budget)
+                for sharding, spec in zip(shardings, tensorstore_specs)
+            )
         )
-        for i, leaf in zip(device_indices, device_leaves):
-            leaves[i] = leaf
 
-    async def deserialize_non_device_leaves():
-        for i, sharding in enumerate(shardings):
-            if sharding.memory_kind not in (None, _DEVICE_MEMORY_KIND):
-                leaves[i] = await _deserialize_leaf_to_memory_kind(sharding, tensorstore_specs[i])
-
-    asyncio.run(deserialize_non_device_leaves())
+    started = time.time()
+    leaves = asyncio.run(read_all())
+    elapsed = time.time() - started
+    # `leaf.nbytes` is the global array; this process only read the shards it addresses.
+    read_bytes = sum(shard.data.nbytes for leaf in leaves for shard in leaf.addressable_shards)
+    logger.info(
+        "Restore read %s across %d arrays in %.1fs (%.2f GiB/s), peak %s of a %s budget",
+        _format_gib(read_bytes),
+        len(leaves),
+        elapsed,
+        read_bytes / 1024**3 / max(elapsed, 1e-9),
+        _format_gib(budget.peak_bytes),
+        _format_gib(config.max_in_flight_bytes),
+    )
     return leaves
 
 
@@ -764,7 +825,7 @@ def _restore_ocdbt(
     real_indices: list[int],
     shardings_leaves: list,
     leaf_key_paths,
-    manager: array_ser.GlobalAsyncCheckpointManager,
+    read_config: TensorStoreReadConfig,
     allow_missing: bool,
 ) -> tuple[list, list[int]]:
     """Restore arrays from an OCDBT checkpoint."""
@@ -813,7 +874,7 @@ def _restore_ocdbt(
         spec = _create_ocdbt_spec(checkpoint_root, path)
         tspecs_to_load.append(spec)
 
-    deser_leaves = _deserialize_leaves(manager, shardings_to_load, tspecs_to_load)
+    deser_leaves = _deserialize_leaves(shardings_to_load, tspecs_to_load, read_config)
     return deser_leaves, indices_to_load
 
 
@@ -823,7 +884,7 @@ def _restore_old_ts(
     real_indices: list[int],
     shardings_leaves: list,
     leaf_key_paths,
-    manager: array_ser.GlobalAsyncCheckpointManager,
+    read_config: TensorStoreReadConfig,
     allow_missing: bool,
 ) -> tuple[list, list[int]]:
     """Restore arrays from an old (non-OCDBT) tensorstore checkpoint."""
@@ -860,7 +921,7 @@ def _restore_old_ts(
             logger.warning(to_log)
 
     tspecs_to_load = [array_ser.get_tensorstore_spec(path) for path in paths_to_load]
-    deser_leaves = _deserialize_leaves(manager, shardings_to_load, tspecs_to_load)
+    deser_leaves = _deserialize_leaves(shardings_to_load, tspecs_to_load, read_config)
     return deser_leaves, indices_to_load
 
 
@@ -869,17 +930,16 @@ def tree_deserialize_leaves_tensorstore(
     pytree,
     axis_mapping: Optional[ResourceMapping] = None,
     mesh: Optional[Mesh] = None,
-    manager: Optional[array_ser.GlobalAsyncCheckpointManager] = None,
     *,
     allow_missing: bool = False,
+    read_config: Optional[TensorStoreReadConfig] = None,
 ):
     """Deserialize a checkpoint into the shape of ``pytree``.
 
     ``pytree`` may hold ShapeDtypeStructs from ``eval_shape``; ``axis_mapping`` and ``mesh``
     supply the shardings. ``allow_missing`` keeps absent leaves as they are.
     """
-    if manager is None:
-        manager = array_ser.GlobalAsyncCheckpointManager()
+    read_config = read_config or TensorStoreReadConfig()
 
     # Pre-charge the cross-region budget from the exemplar pytree, an upper bound under
     # `allow_missing=True`. See the save path.
@@ -936,11 +996,11 @@ def tree_deserialize_leaves_tensorstore(
             logger.info("Adjusting paths for OCDBT checkpoint with subpath: %s", subpath)
             paths = [os.path.join(subpath, p) for p in paths]
         deser_leaves, indices_to_load = _restore_ocdbt(
-            checkpoint_root, paths, real_indices, shardings_leaves, leaf_key_paths, manager, allow_missing
+            checkpoint_root, paths, real_indices, shardings_leaves, leaf_key_paths, read_config, allow_missing
         )
     else:
         deser_leaves, indices_to_load = _restore_old_ts(
-            checkpoint_dir, paths, real_indices, shardings_leaves, leaf_key_paths, manager, allow_missing
+            checkpoint_dir, paths, real_indices, shardings_leaves, leaf_key_paths, read_config, allow_missing
         )
 
     # now we need to recreate the original structure

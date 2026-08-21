@@ -101,6 +101,24 @@ class TrainingDataMode(StrEnum):
     SYNTHETIC = "synthetic"
 
 
+def restore_template_from(state):
+    """ShapeDtypeStructs carrying each leaf's concrete sharding, releasing the leaves.
+
+    `jax.eval_shape` drops the `pinned_host` memory kind that `initial_state` puts on
+    offloaded optimizer state, which is most of a hero checkpoint. Reading the sharding off a
+    built state keeps it.
+    """
+    template = jax.tree.map(
+        lambda leaf: (
+            jax.ShapeDtypeStruct(leaf.shape, leaf.dtype, sharding=leaf.sharding) if isinstance(leaf, jax.Array) else leaf
+        ),
+        state,
+    )
+    jax.tree.map(lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) else None, state)
+    gc.collect()
+    return template
+
+
 def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per_task: int = 1) -> None:
     env_defaults = dict(HERO_EP_RUNTIME_ENV)
     if processes_per_task > 1:
@@ -790,18 +808,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state = _init_state(model_key)
         released_initial_state = trainer.load_checkpoint is not False and not trainer.allow_partial_checkpoint
         if released_initial_state:
-            restore_template = jax.tree.map(
-                lambda leaf: (
-                    jax.ShapeDtypeStruct(leaf.shape, leaf.dtype, sharding=leaf.sharding)
-                    if isinstance(leaf, jax.Array)
-                    else leaf
-                ),
-                state,
-            )
-            jax.tree.map(lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) else None, state)
-            del state
-            gc.collect()
-            state = restore_template
+            state = restore_template_from(state)
 
         checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
         state = restore_grug_state_from_checkpoint(
