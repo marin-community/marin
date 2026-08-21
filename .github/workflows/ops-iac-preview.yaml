@@ -1,13 +1,12 @@
 name: "Ops - IaC preview"
 
 # Runs `pulumi preview` for each infra/pulumi (marin-iac) stack in parallel and
-# posts one aggregated PR comment. workflow_dispatch can take an optional PR
-# number to preview that PR's head and comment there; omit it for a drift check
-# against the selected ref with no comment.
+# posts one aggregated PR comment. After a matching PR merges, the workflow
+# checks whether every affected stack has had a successful update.
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, closed]
     paths:
       - "config/**"
       - "infra/pulumi/**"
@@ -30,9 +29,11 @@ env:
 
 jobs:
   preview-coreweave:
-    # Fork PRs can't reach repo secrets (WIF, kubeconfig); skip rather than fail.
-    # Manual dispatch has no PR to check and is already gated to repo collaborators by GitHub.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Fork PRs cannot reach repo secrets. Closed PRs are handled by deployment-check.
+    if: >-
+      github.event_name != 'pull_request'
+      || (github.event.action != 'closed'
+          && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -78,7 +79,10 @@ jobs:
           gcp-project-id: ${{ env.PULUMI_CI_PROJECT }}
 
   preview-gcp:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      github.event_name != 'pull_request'
+      || (github.event.action != 'closed'
+          && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -101,11 +105,13 @@ jobs:
           service-account: ${{ env.PULUMI_CI_SERVICE_ACCOUNT }}
           gcp-project-id: ${{ env.PULUMI_CI_PROJECT }}
 
-  comment:
+  preview-comment:
     if: >-
       always()
+      && (github.event_name == 'workflow_dispatch' || github.event.action != 'closed')
+      && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository)
       && (github.event_name == 'pull_request' || inputs.pr_number != '')
-      && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     needs: [preview-coreweave, preview-gcp]
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -116,7 +122,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha || (inputs.pr_number != '' && format('refs/pull/{0}/head', inputs.pr_number)) || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pr_number) }}
 
       - name: Download preview artifacts
         uses: actions/download-artifact@v8
@@ -126,9 +132,15 @@ jobs:
           merge-multiple: false
 
       - name: Assemble comment body
+        env:
+          WORKFLOW_OK: >-
+            ${{ needs.preview-coreweave.result == 'success'
+                && needs.preview-gcp.result == 'success' }}
         run: |
           python3 .github/actions/pulumi-preview/assemble_comment.py \
             --previews-dir iac-previews \
+            --head-sha "$(git rev-parse HEAD)" \
+            --workflow-ok "$WORKFLOW_OK" \
             --out iac-preview-comment.md \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
@@ -142,7 +154,7 @@ jobs:
             const body = fs.readFileSync('iac-preview-comment.md', 'utf8');
             const marker = body.split('\n', 1)[0];
             if (!marker.startsWith('<!--')) {
-              throw new Error(`assemble_comment.py must start the body with an HTML marker; got: ${marker}`);
+              throw new Error(`comment body must start with an HTML marker; got: ${marker}`);
             }
             const { owner, repo } = context.repo;
             const issue_number = Number(process.env.PR_NUMBER);
@@ -171,3 +183,93 @@ jobs:
                 body,
               });
             }
+
+  deployment-check-1:
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.action == 'closed'
+      && github.event.pull_request.merged == true
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      needs_retry: ${{ steps.check.outputs.needs_retry }}
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    steps:
+      - name: Checkout automation code
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Check deployment
+        id: check
+        uses: ./.github/actions/pulumi-deployment-check
+        with:
+          attempt: 1
+          delay-minutes: 30
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          merged-at: ${{ github.event.pull_request.merged_at }}
+          merger: ${{ github.event.pull_request.merged_by.login }}
+          pr-number: ${{ github.event.pull_request.number }}
+          service-account: ${{ env.PULUMI_CI_SERVICE_ACCOUNT }}
+          gcp-project-id: ${{ env.PULUMI_CI_PROJECT }}
+
+  deployment-check-2:
+    if: needs.deployment-check-1.outputs.needs_retry == 'true'
+    needs: deployment-check-1
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    outputs:
+      needs_retry: ${{ steps.check.outputs.needs_retry }}
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    steps:
+      - name: Checkout automation code
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Check deployment
+        id: check
+        uses: ./.github/actions/pulumi-deployment-check
+        with:
+          attempt: 2
+          delay-minutes: 60
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          merged-at: ${{ github.event.pull_request.merged_at }}
+          merger: ${{ github.event.pull_request.merged_by.login }}
+          pr-number: ${{ github.event.pull_request.number }}
+          service-account: ${{ env.PULUMI_CI_SERVICE_ACCOUNT }}
+          gcp-project-id: ${{ env.PULUMI_CI_PROJECT }}
+
+  deployment-check-3:
+    if: needs.deployment-check-2.outputs.needs_retry == 'true'
+    needs: deployment-check-2
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    steps:
+      - name: Checkout automation code
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Check deployment
+        uses: ./.github/actions/pulumi-deployment-check
+        with:
+          attempt: 3
+          delay-minutes: 120
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          merged-at: ${{ github.event.pull_request.merged_at }}
+          merger: ${{ github.event.pull_request.merged_by.login }}
+          pr-number: ${{ github.event.pull_request.number }}
+          service-account: ${{ env.PULUMI_CI_SERVICE_ACCOUNT }}
+          gcp-project-id: ${{ env.PULUMI_CI_PROJECT }}

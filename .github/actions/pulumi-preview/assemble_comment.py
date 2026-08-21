@@ -5,10 +5,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 MARKER = "<!-- iac-preview -->"
+METADATA_PREFIX = "<!-- iac-preview-metadata: "
+METADATA_SUFFIX = " -->"
+_HEAD_SHA_RE = re.compile(r"[0-9a-f]{40}")
 
 # GitHub rejects an issue/PR comment body over 65536 characters. This repo previews at
 # most 5 stacks in one comment, so capping each stack's embedded diff at 10k chars keeps
@@ -56,8 +60,32 @@ def _truncate_diff(diff: str, run_url: str | None) -> str:
     return f"{diff[:_MAX_DIFF_CHARS]}\n... ({omitted} more characters truncated{where})"
 
 
-def render_comment(stacks: list[StackPreview], run_url: str | None) -> str:
-    lines = [MARKER, "## IaC preview", ""]
+def render_comment(
+    stacks: list[StackPreview],
+    run_url: str | None,
+    head_sha: str,
+    workflow_ok: bool,
+) -> str:
+    if _HEAD_SHA_RE.fullmatch(head_sha) is None:
+        raise ValueError(f"invalid preview head SHA: {head_sha}")
+    preview_ok = (
+        workflow_ok
+        and len({stack.stack for stack in stacks}) == len(stacks)
+        and all(stack.severity in _SEVERITY_ICON and stack.severity != "error" for stack in stacks)
+    )
+    affected_stacks = sorted(
+        stack.stack for stack in stacks if preview_ok and stack.severity in {"change", "delete"}
+    )
+    metadata = json.dumps(
+        {
+            "affected_stacks": affected_stacks,
+            "head_sha": head_sha,
+            "ok": preview_ok,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    lines = [MARKER, f"{METADATA_PREFIX}{metadata}{METADATA_SUFFIX}", "## IaC preview", ""]
     for item in stacks:
         icon = _SEVERITY_ICON.get(item.severity, "🚨")
         lines.append(f"- {icon} `{item.stack}`")
@@ -88,6 +116,13 @@ def main() -> None:
         help="Directory containing downloaded iac-preview-* artifacts.",
     )
     parser.add_argument("--out", type=Path, required=True, help="Write comment body here.")
+    parser.add_argument("--head-sha", required=True, help="Commit SHA represented by the preview.")
+    parser.add_argument(
+        "--workflow-ok",
+        required=True,
+        choices=("true", "false"),
+        help="Whether every preview producer job succeeded.",
+    )
     parser.add_argument(
         "--run-url",
         default=None,
@@ -98,7 +133,10 @@ def main() -> None:
     stacks = load_stacks(args.previews_dir)
     if not stacks:
         raise SystemExit(f"no preview artifacts under {args.previews_dir}")
-    args.out.write_text(render_comment(stacks, args.run_url), encoding="utf-8")
+    args.out.write_text(
+        render_comment(stacks, args.run_url, args.head_sha, args.workflow_ok == "true"),
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":
