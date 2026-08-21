@@ -14,10 +14,8 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Event
-from types import TracebackType
+from threading import Thread
 from typing import cast
-from urllib.parse import urlsplit
 
 import draccus
 import jax
@@ -27,14 +25,13 @@ from rigging.redaction import REDACTED_VALUE, redact_value
 from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import EndpointAccess
-from iris.managed_thread import ThreadContainer
 from levanter.trainer import AllConfig
 
 logger = logging.getLogger(__name__)
 
 TRAINING_CONTROL_ENDPOINT = "training-control"
 TRAINING_CONTROL_PORT = "training_control"
-_REDACTED_ENVIRONMENT_VARIABLES = frozenset({"IRIS_JOB_ENV", "IRIS_JOB_SETUP_SCRIPTS", "MARIN_PROVENANCE"})
+_REDACTED_ENVIRONMENT_VARIABLES = ("IRIS_JOB_ENV", "IRIS_JOB_SETUP_SCRIPTS", "MARIN_PROVENANCE")
 
 
 @dataclass(frozen=True)
@@ -68,45 +65,31 @@ class _TrainingSnapshot:
         )
 
 
-def _table_row(name: str, value: str) -> str:
-    return f"<tr><th>{html.escape(name)}</th><td>{html.escape(value)}</td></tr>"
-
-
 def _render_page(snapshot: _TrainingSnapshot) -> str:
-    metadata = "".join(
-        (
-            _table_row("Run ID", snapshot.run_id),
-            _table_row("Iris job", snapshot.job_id),
-            _table_row("Iris task", snapshot.task_id),
-        )
-    )
-    environment = "".join(_table_row(name, value) for name, value in snapshot.environment.items())
     configuration = html.escape(snapshot.configuration)
+    environment = html.escape(json.dumps(snapshot.environment, indent=2))
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Levanter training: {html.escape(snapshot.run_id)}</title>
   <style>
-    body {{ color: #1f2933; font: 14px/1.45 system-ui, sans-serif; margin: 2rem auto; max-width: 1100px; padding: 0 1rem; }}
-    h1, h2 {{ line-height: 1.2; }}
-    table {{ border-collapse: collapse; width: 100%; }}
-    th, td {{ border-bottom: 1px solid #d8dee4; padding: .45rem .6rem; text-align: left; vertical-align: top; }}
-    th {{ width: 16rem; }}
-    td, pre {{ overflow-wrap: anywhere; white-space: pre-wrap; }}
-    pre {{ background: #f6f8fa; border: 1px solid #d8dee4; border-radius: 4px; padding: 1rem; }}
+    body {{ font-family: sans-serif; margin: 2rem; }}
+    pre {{ white-space: pre-wrap; }}
   </style>
 </head>
 <body>
   <h1>Levanter training</h1>
-  <p>Secret-like values are shown as [REDACTED].</p>
-  <h2>Run</h2>
-  <table>{metadata}</table>
+  <p>Detected secret values are shown as [REDACTED].</p>
+  <ul>
+    <li>Run ID: {html.escape(snapshot.run_id)}</li>
+    <li>Iris job: {html.escape(snapshot.job_id)}</li>
+    <li>Iris task: {html.escape(snapshot.task_id)}</li>
+  </ul>
   <h2>Resolved configuration</h2>
   <pre>{configuration}</pre>
   <h2>Environment</h2>
-  <table>{environment}</table>
+  <pre>{environment}</pre>
 </body>
 </html>
 """
@@ -120,13 +103,6 @@ class _TrainingControlRequestHandler(BaseHTTPRequestHandler):
         super().__init__(*args, **kwargs)
 
     def do_GET(self) -> None:
-        if urlsplit(self.path).path != "/":
-            self.send_response(404)
-            self.send_header("Content-Length", "0")
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            return
-
         body = _render_page(self._snapshot).encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -141,28 +117,17 @@ class _TrainingControlRequestHandler(BaseHTTPRequestHandler):
         logger.debug("Training control HTTP request: " + format, *args)
 
 
-class _TrainingControlHttpServer(ThreadingHTTPServer):
-    allow_reuse_address = True
-    daemon_threads = True
-
-
 @contextmanager
 def _serve_status_page(snapshot: _TrainingSnapshot, port: int) -> Iterator[int]:
     handler = partial(_TrainingControlRequestHandler, snapshot=snapshot)
-    server = _TrainingControlHttpServer(("0.0.0.0", port), handler)
-    server.timeout = 0.2
-    threads = ThreadContainer("levanter-training-control")
-
-    def serve(stop_event: Event) -> None:
-        while not stop_event.is_set():
-            server.handle_request()
-
-    try:
-        threads.spawn(serve, name=f"training-control-{server.server_address[1]}")
-        yield int(server.server_address[1])
-    finally:
-        threads.stop()
-        server.server_close()
+    with ThreadingHTTPServer(("0.0.0.0", port), handler) as server:
+        thread = Thread(target=server.serve_forever, name=f"training-control-{server.server_address[1]}", daemon=True)
+        thread.start()
+        try:
+            yield int(server.server_address[1])
+        finally:
+            server.shutdown()
+            thread.join()
 
 
 class TrainingControl:
@@ -215,18 +180,12 @@ class TrainingControl:
         self._stack = stack
         logger.info("Training control page: %s/", proxy_path(endpoint_name))
 
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> bool:
+    def __exit__(self, *_: object) -> None:
         if self._stack is None:
-            return False
+            return
         stack = self._stack
         self._stack = None
         try:
-            return bool(stack.__exit__(exc_type, exc_value, traceback))
+            stack.close()
         except Exception:
             logger.warning("Training control page failed to stop", exc_info=True)
-            return False

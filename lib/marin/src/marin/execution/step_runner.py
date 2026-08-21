@@ -11,6 +11,7 @@ easy to follow and debug.
 """
 
 import contextvars
+import dataclasses
 import json
 import logging
 import os
@@ -455,7 +456,7 @@ def run_step(step: StepSpec) -> None:
                 if step.resources is not None:
                     _run_iris_job(step, output_path)
                 elif isinstance(step.fn, RemoteCallable):
-                    _run_remote_step(step, output_path)
+                    _run_remote_step(step, output_path, step.fn)
                 else:
                     result = step.fn(output_path)  # pyrefly: ignore[not-callable]
                     # A lazy step writes its own full record; a plain step's return is saved
@@ -513,48 +514,24 @@ def _submit_iris_job(
 
 
 def _run_iris_job(step: StepSpec, output_path: str) -> None:
-    """Dispatch a step with explicit ``resources`` as a Fray job.
-
-    When ``step.fn`` is a :class:`RemoteCallable`, its inner callable is
-    unwrapped — ``step.resources`` takes precedence over any resources
-    carried by the wrapper.
-    """
+    """Dispatch a step with explicit ``resources`` as a Fray job."""
     assert step.resources is not None
     if isinstance(step.fn, RemoteCallable):
-        raw_fn = step.fn.fn
-        env_vars = step.fn.env_vars
-        pip_dependency_groups = step.fn.pip_dependency_groups
-        ports = step.fn.ports
+        remote_fn = dataclasses.replace(step.fn, resources=step.resources)
     else:
-        raw_fn = step.fn
-        env_vars = None
-        pip_dependency_groups = None
-        ports = ()
-    assert raw_fn is not None, f"Step {step.name} has no callable"
+        assert step.fn is not None, f"Step {step.name} has no callable"
+        remote_fn = RemoteCallable(step.fn, resources=step.resources)
+    _run_remote_step(step, output_path, remote_fn)
+
+
+def _run_remote_step(step: StepSpec, output_path: str, remote_fn: RemoteCallable[..., Any]) -> None:
+    """Submit a remote step to Fray."""
     _submit_iris_job(
         step,
         output_path,
-        raw_fn,
-        step.resources,
-        env_vars=env_vars,
-        pip_dependency_groups=pip_dependency_groups,
-        ports=ports,
-    )
-
-
-def _run_remote_step(step: StepSpec, output_path: str) -> None:
-    """Submit the step's ``RemoteCallable`` to Fray.
-
-    Carries the wrapper's ``env_vars`` and ``pip_dependency_groups`` through
-    to the submitted job's environment.
-    """
-    assert isinstance(step.fn, RemoteCallable)
-    _submit_iris_job(
-        step,
-        output_path,
-        step.fn.fn,
-        step.fn.resources,
-        env_vars=step.fn.env_vars,
-        pip_dependency_groups=step.fn.pip_dependency_groups,
-        ports=step.fn.ports,
+        remote_fn.fn,
+        remote_fn.resources,
+        env_vars=remote_fn.env_vars,
+        pip_dependency_groups=remote_fn.pip_dependency_groups,
+        ports=remote_fn.ports,
     )

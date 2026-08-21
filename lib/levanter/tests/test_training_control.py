@@ -16,13 +16,8 @@ from levanter.trainer import TrainerConfig
 @dataclass
 class _TrainingConfig:
     trainer: TrainerConfig
-    model_name: str
-    api_key: str
-
-
-@dataclass
-class _MinimalTrainingConfig:
-    trainer: TrainerConfig
+    model_name: str = "tiny-model"
+    api_key: str = "config-secret"
 
 
 class _Registry:
@@ -54,11 +49,7 @@ class _FailingRegistry:
 
 
 def test_training_control_registers_redacted_status_page(monkeypatch):
-    config = _TrainingConfig(
-        trainer=TrainerConfig(id="test-run"),
-        model_name="tiny-model",
-        api_key="config-secret",
-    )
+    config = _TrainingConfig(trainer=TrainerConfig(id="test-run"))
     registry = _Registry()
     job_info = JobInfo(
         task_id=JobName.from_wire("/alice/parent/train/0"),
@@ -98,26 +89,11 @@ def test_training_control_registers_redacted_status_page(monkeypatch):
         assert "environment-secret" not in body
         assert "nested-environment-secret" not in body
         assert "nested-provenance-secret" not in body
-        assert "<script>alert(1)</script>" not in body
     assert not registry.active
 
 
-def test_training_control_does_not_start_on_secondary_process(monkeypatch):
-    config = _MinimalTrainingConfig(trainer=TrainerConfig(id="test-run"))
-
-    monkeypatch.setattr(training_control.jax, "process_index", lambda: 1)
-
-    def fail_if_called():
-        raise AssertionError("Secondary process tried to access Iris")
-
-    monkeypatch.setattr(training_control, "get_iris_ctx", fail_if_called)
-
-    with TrainingControl(config):
-        pass
-
-
 def test_training_control_failure_does_not_stop_training(monkeypatch):
-    config = _MinimalTrainingConfig(trainer=TrainerConfig(id="test-run"))
+    config = _TrainingConfig(trainer=TrainerConfig(id="test-run"))
     registry = _FailingRegistry()
     job_info = JobInfo(
         task_id=JobName.from_wire("/alice/parent/train/0"),

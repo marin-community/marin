@@ -42,12 +42,7 @@ def sanitize_job_name(name: str) -> str:
 
 @dataclass(frozen=True)
 class RemoteCallable(Generic[P, R]):
-    """A callable wrapper that submits its function to Fray when called.
-
-    Carries Fray-specific execution config: resources, environment variables,
-    pip dependency groups, and named ports. When called, submits the wrapped
-    function to Fray and blocks until completion.
-    """
+    """Submit a callable to Fray with its execution configuration."""
 
     fn: Callable[P, R]
     resources: ResourceConfig
@@ -124,8 +119,7 @@ def remote(
 
     When applied without arguments (``@remote``), the function will run with
     default CPU resources. When called with ``resources=``, the supplied
-    ``ResourceConfig`` is used instead. ``ports=`` requests named Iris task
-    ports. Local jobs do not allocate these ports.
+    ``ResourceConfig`` is used instead. Named ports apply to Iris jobs only.
     """
     if resources is None:
         resources = ResourceConfig.with_cpu()

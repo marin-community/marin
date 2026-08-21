@@ -208,8 +208,7 @@ def main(config: TrainLmConfig):
     # 1. Sets the device mesh
     # 2. Sets the axis mapping (for fsdp)
     # 3. Sets the global metrics tracker
-    training_control = TrainingControl(config)
-    with training_control, Trainer(config.trainer, optimizer, loss_function) as trainer:
+    with TrainingControl(config), Trainer(config.trainer, optimizer, loss_function) as trainer:
         # randomness in jax is tightly controlled by "keys" which are the states of the random number generators
         # this makes deterministic training pretty easy
         seed = config.trainer.seed
