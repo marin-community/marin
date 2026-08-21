@@ -9,13 +9,12 @@ import json
 import subprocess
 import sys
 import tempfile
-import threading
 import uuid
 from collections import deque
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import IO, cast
+from typing import cast
 
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.utils import discover_hf_checkpoints
@@ -31,8 +30,6 @@ _LAUNCHER_PYTHON = "3.12"
 _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
 _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
-_LAUNCHER_DIAGNOSTIC_WIDTH = 2000
-_LAUNCHER_DRAIN_TIMEOUT = 30.0
 SKYRL_POLICY_LOCATION = "<skyrl-policy>"
 
 
@@ -294,47 +291,24 @@ def _launcher_command(requirement: str, request_path: str) -> list[str]:
 
 
 def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
-    """Run the launcher, forwarding its log stream while retaining enough of it to diagnose a failure.
-
-    The launcher reserves stdout for its single terminal JSON response and writes human-readable logs
-    to stderr, so stderr has to keep reaching this process's own stderr while the run is live:
-    capturing it wholesale would silence a multi-hour run, and discarding it leaves a failure with no
-    stated cause. Forward every line and keep both ends of the stream — a launcher that dies during
-    validation explains itself in the first lines, one that dies hours later in the last.
-    """
-    head: list[str] = []
+    """Run the launcher, forwarding its live logs and keeping a tail to explain a failure."""
     tail: deque[str] = deque(maxlen=_LAUNCHER_DIAGNOSTIC_LINES)
-
-    def forward(stream: IO[str]) -> None:
-        # A decode error or a closed sink must not abandon the pipe: an undrained stderr blocks the
-        # launcher once the pipe buffer fills, which would hang the read below indefinitely.
+    with (
+        tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as response,
+        subprocess.Popen(command, stdout=response, stderr=subprocess.PIPE, text=True, errors="replace") as process,
+    ):
         try:
-            for line in stream:
+            assert process.stderr is not None
+            for line in process.stderr:
                 sys.stderr.write(line)
-                (head if len(head) < _LAUNCHER_DIAGNOSTIC_LINES else tail).append(line[:_LAUNCHER_DIAGNOSTIC_WIDTH])
-        except Exception:
-            for _ in stream:
-                pass
-
-    with subprocess.Popen(
-        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace"
-    ) as process:
-        try:
-            assert process.stdout is not None and process.stderr is not None
-            drain = threading.Thread(target=forward, args=(process.stderr,), daemon=True)
-            drain.start()
-            stdout = process.stdout.read()
-            process.wait()
-            # The launcher spawns its own children; if one inherited stderr the pipe stays open after
-            # the launcher exits, so bound the wait rather than adopting the grandchild's lifetime.
-            drain.join(timeout=_LAUNCHER_DRAIN_TIMEOUT)
+                tail.append(line)
+            returncode = process.wait()
         except BaseException:
-            # Popen.__exit__ waits but never kills, so without this an interrupt orphans the launcher
-            # and an unrelated error blocks for the run's full remaining lifetime.
+            # Popen.__exit__ waits but never kills, so without this an interrupt orphans the launcher.
             process.kill()
             raise
-    elided = "\n...\n" if len(tail) == tail.maxlen else "\n"
-    return subprocess.CompletedProcess(command, process.returncode, stdout, "".join(head) + elided + "".join(tail))
+        response.seek(0)
+        return subprocess.CompletedProcess(command, returncode, response.read(), "".join(tail))
 
 
 def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:

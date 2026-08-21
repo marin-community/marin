@@ -10,7 +10,7 @@ import subprocess
 import sys
 from dataclasses import asdict
 from pathlib import Path
-from typing import cast
+from typing import IO, cast
 
 import pytest
 from marin.evaluation.model_config import ModelConfig, ResourceHint
@@ -62,11 +62,12 @@ def _data_step() -> ArtifactStep[Artifact]:
 
 
 class _FakeLauncherProcess:
-    """A launcher subprocess that writes to stderr and exits non-zero without a JSON response."""
+    """A launcher subprocess: its terminal response lands in the caller's file, its logs on stderr."""
 
-    def __init__(self, *, stdout: str, stderr: str = "", returncode: int = 1) -> None:
-        self.stdout = io.StringIO(stdout)
-        self.stderr = io.StringIO(stderr)
+    def __init__(self, *, response: str, logs: str = "", returncode: int = 1, stdout: IO[str] | None = None) -> None:
+        if stdout is not None:
+            stdout.write(response)
+        self.stderr = io.StringIO(logs)
         self.returncode = returncode
 
     def wait(self) -> int:
@@ -328,7 +329,7 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
     def fake_popen(command, **_kwargs) -> _FakeLauncherProcess:
         request_path = command[command.index("--request") + 1]
         launch_envelopes.append(json.loads(Path(request_path).read_text()))
-        return _FakeLauncherProcess(stdout=json.dumps(response), returncode=0)
+        return _FakeLauncherProcess(response=json.dumps(response), returncode=0, stdout=_kwargs["stdout"])
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
 
@@ -356,7 +357,7 @@ def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.Monkey
     monkeypatch.setattr(
         subprocess,
         "Popen",
-        lambda command, **_kwargs: _FakeLauncherProcess(stdout="", stderr="entrypoint must be a registered name\n"),
+        lambda command, **_kwargs: _FakeLauncherProcess(response="", logs="entrypoint must be a registered name\n"),
     )
     step = skyrl_step(_spec(), _execution())
     config = step.build_config(
@@ -372,27 +373,40 @@ def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.Monkey
         run_skyrl(config)
 
 
-def test_launcher_logs_reach_stderr_while_the_run_is_live(capfd: pytest.CaptureFixture[str]) -> None:
-    """The launcher's log stream must keep flowing, not be swallowed into the failure message.
+def test_launcher_logs_reach_stderr_while_the_run_is_live(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Buffering the launcher's logs until it exits would silence a multi-hour run."""
+    observed = tmp_path / "observed"
 
-    Capturing stderr instead of forwarding it would silence a multi-hour run, so this asserts the
-    line reached this process's stderr as well as the retained diagnostic.
-    """
-    completed = run_launcher_for_test(
-        [sys.executable, "-c", "import sys; sys.stderr.write('launcher line\\n'); sys.exit(3)"]
+    class MarkFirstWrite:
+        def write(self, text: str) -> int:
+            observed.touch()
+            return len(text)
+
+        def flush(self) -> None:
+            return None
+
+    # The child reports whether the parent had already forwarded its line while it was still
+    # running, so an implementation that replays stderr after exit fails here.
+    child = (
+        "import pathlib, sys, time\n"
+        "marker = pathlib.Path(sys.argv[1])\n"
+        "sys.stderr.write('launcher line\\n')\n"
+        "sys.stderr.flush()\n"
+        "deadline = time.monotonic() + 5\n"
+        "while time.monotonic() < deadline and not marker.exists():\n"
+        "    time.sleep(0.01)\n"
+        "sys.stdout.write('saw' if marker.exists() else 'missed')\n"
     )
+    monkeypatch.setattr(sys, "stderr", MarkFirstWrite())
 
-    assert "launcher line" in capfd.readouterr().err
+    completed = run_launcher_for_test([sys.executable, "-c", child, str(observed)])
+
+    assert completed.stdout == "saw"
     assert "launcher line" in completed.stderr
-    assert completed.returncode == 3
 
 
 def test_launcher_survives_undecodable_bytes_on_stderr() -> None:
-    """A non-UTF-8 byte must not kill the drain thread and wedge the run.
-
-    An abandoned stderr pipe blocks the launcher once its buffer fills, which would hang the read of
-    stdout forever. Native CUDA and NCCL layers can emit such bytes.
-    """
+    """Native CUDA and NCCL layers emit non-UTF-8 bytes; strict decoding would wedge the run."""
     completed = run_launcher_for_test(
         [sys.executable, "-c", "import sys; sys.stderr.buffer.write(b'\\xff bad\\n'); sys.exit(4)"]
     )
