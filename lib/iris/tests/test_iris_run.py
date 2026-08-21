@@ -3,6 +3,8 @@
 
 """Behavior tests for the Iris job command and its public parsing helpers."""
 
+import sys
+
 import click
 import pytest
 from click.testing import CliRunner
@@ -161,6 +163,38 @@ def test_run_iris_job_passes_priority_band(recorded_job_submissions):
     result = _invoke_run(["--priority", "batch"])
     assert result.exit_code == 0, result.output
     assert recorded_job_submissions[0]["priority_band"] == job_pb2.PRIORITY_BAND_BATCH
+
+
+def test_run_iris_job_passes_priority_tier(recorded_job_submissions):
+    result = _invoke_run(["--priority", "priority"])
+    assert result.exit_code == 0, result.output
+    assert recorded_job_submissions[0]["priority_band"] == job_pb2.PRIORITY_BAND_PRIORITY
+
+
+def test_run_iris_job_requires_production_reason(recorded_job_submissions):
+    result = _invoke_run(["--priority", "production"])
+    assert result.exit_code != 0
+    assert "--production-needed=<reason>" in result.output
+    assert recorded_job_submissions == []
+
+
+def test_run_iris_job_rejects_production_reason_for_other_bands(recorded_job_submissions):
+    result = _invoke_run(["--priority", "priority", "--production-needed=not production"])
+    assert result.exit_code != 0
+    assert "only valid with --priority production" in result.output
+    assert recorded_job_submissions == []
+
+
+def test_run_iris_job_persists_production_reason_in_submit_argv(recorded_job_submissions, monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["iris", "job", "run", "--priority", "production", "--production-needed=hero run recovery"],
+    )
+    result = _invoke_run(["--priority", "production", "--production-needed=hero run recovery"])
+    assert result.exit_code == 0, result.output
+    assert recorded_job_submissions[0]["priority_band"] == job_pb2.PRIORITY_BAND_PRODUCTION
+    assert "--production-needed=hero run recovery" in recorded_job_submissions[0]["submit_argv"]
 
 
 def test_run_iris_job_default_priority_inherit(recorded_job_submissions):

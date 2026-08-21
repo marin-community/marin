@@ -23,7 +23,6 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     TopologyMode,
 )
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
-from iris.cluster.platforms.k8s.kueue_manifests import ProductionPriorityPolicy
 from iris.cluster.platforms.k8s.types import K8sResource, parse_k8s_quantity
 from iris.cluster.runtime.env import STANDARD_MOUNTS
 from iris.cluster.runtime.types import MountKind
@@ -72,12 +71,7 @@ def _dispatch(
         updates = provider.sync(make_batch(tasks_to_run=[request]))
         resources = {
             resource: deepcopy(k8s.list_json(resource))
-            for resource in (
-                K8sResource.PODS,
-                K8sResource.CONFIGMAPS,
-                K8sResource.PDBS,
-                K8sResource.WORKLOAD_PRIORITY_CLASSES,
-            )
+            for resource in (K8sResource.PODS, K8sResource.CONFIGMAPS, K8sResource.PDBS)
         }
     finally:
         provider.close()
@@ -1399,59 +1393,14 @@ def test_kueue_coscheduled_gang_is_above_standalone_accelerator():
     assert manifest["spec"]["priorityClassName"] == "iris-batch"
 
 
-@pytest.mark.parametrize(
-    "num_tasks, max_gpu_count, expected_gpu_count",
-    [(64, 864, 256), (300, 864, 864)],
-)
-def test_production_gpu_count_policy_sets_capped_workload_priority(
-    num_tasks,
-    max_gpu_count,
-    expected_gpu_count,
-):
-    req = _cosched_req(
-        "/job/task/0",
-        num_tasks=num_tasks,
-        priority=job_pb2.PRIORITY_BAND_PRODUCTION,
-    )
-    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="GB200", count=4))
-    config = pod_config(
-        local_queue="iris-lq",
-        production_priority_policy=ProductionPriorityPolicy.GPU_COUNT,
-        production_priority_max_gpu_count=max_gpu_count,
-    )
+def test_kueue_priority_band_maps_to_priority_classes():
+    req = _cosched_req("/job/task/0", num_tasks=64, priority=job_pb2.PRIORITY_BAND_PRIORITY)
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
 
-    updates, resources = _dispatch(req, config)
+    manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
 
-    assert updates == []
-    pod = resources[K8sResource.PODS][0]
-    priority_class_name = f"iris-gpu-{expected_gpu_count}-production"
-    assert pod["metadata"]["labels"][_KUEUE_PRIORITY_CLASS] == priority_class_name
-    assert pod["spec"]["priorityClassName"] == "iris-production"
-    priority_classes = resources[K8sResource.WORKLOAD_PRIORITY_CLASSES]
-    assert len(priority_classes) == 1
-    assert priority_classes[0]["metadata"]["name"] == priority_class_name
-    assert priority_classes[0]["value"] == 1000 + expected_gpu_count
-
-
-def test_production_gpu_count_policy_does_not_change_interactive_priority():
-    req = _cosched_req(
-        "/job/task/0",
-        num_tasks=64,
-        priority=job_pb2.PRIORITY_BAND_INTERACTIVE,
-    )
-    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="GB200", count=4))
-    config = pod_config(
-        local_queue="iris-lq",
-        production_priority_policy=ProductionPriorityPolicy.GPU_COUNT,
-        production_priority_max_gpu_count=864,
-    )
-
-    updates, resources = _dispatch(req, config)
-
-    assert updates == []
-    pod = resources[K8sResource.PODS][0]
-    assert pod["metadata"]["labels"][_KUEUE_PRIORITY_CLASS] == "iris-coscheduled-interactive"
-    assert resources[K8sResource.WORKLOAD_PRIORITY_CLASSES] == []
+    assert manifest["metadata"]["labels"][_KUEUE_PRIORITY_CLASS] == "iris-coscheduled-priority"
+    assert manifest["spec"]["priorityClassName"] == "iris-priority"
 
 
 def test_kueue_required_topology_for_nvlink_domain():

@@ -48,10 +48,10 @@ constraints the scheduler already uses for reservations, but the `available:<tok
 
 A peer reports the resources available per band: alongside `amounts` it reports `held_by_band`,
 what its *admitted* work holds at each priority band. A candidate's effective capacity on a
-backend is that backend's free amount plus everything held **below** its own band (a
-numerically higher band is lower priority) — the work the peer's scheduler would preempt to
-admit the job. Placement spends idle capacity first, reclaims from the lowest-priority band
-upward, and prefers a peer that needs no preemption at all. A peer that reports no band split
+backend is that backend's free amount plus everything held **below** its own band — the work
+the peer's scheduler would preempt to admit the job. Placement spends idle capacity first,
+reclaims from the lowest-priority band upward, and prefers a peer that needs no preemption at
+all. A peer that reports no band split
 (a worker-daemon backend, or one predating the field) reclaims nothing and is gated on its free
 amount alone.
 

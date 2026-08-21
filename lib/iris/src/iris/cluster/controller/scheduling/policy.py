@@ -68,6 +68,7 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import job_pb2
+from iris.rpc.proto_display import priority_band_rank
 
 logger = logging.getLogger(__name__)
 
@@ -428,7 +429,7 @@ def _preempt_solo(
         # `solo_victims` is sorted by descending band_sort_key, so once this
         # gate trips every later victim also fails — break, don't continue,
         # to avoid scanning the unpreemptible tail (issue #5888).
-        if victim.band_sort_key <= candidate.band:
+        if priority_band_rank(victim.band_sort_key) <= priority_band_rank(candidate.band):
             break
 
         cap = context.capacities.get(victim.worker_id)
@@ -488,7 +489,7 @@ def _preempt_coscheduled(
         if members[0].device_variant != wanted_variant:
             continue
         # Strict band: every sibling must be lower priority than the preemptor.
-        if any(m.band_sort_key <= candidate.band for m in members):
+        if any(priority_band_rank(m.band_sort_key) <= priority_band_rank(candidate.band) for m in members):
             continue
         if len(members) < n_required:
             continue
@@ -513,8 +514,8 @@ def _solo_victims_freeing_host(
 ) -> list[RunningTaskInfo] | None:
     """Lowest-priority solo victims whose eviction lets the gang's req fit on
     ``cap``'s host, or None if the host cannot be freed. Only victims strictly
-    lower band than the candidate are eligible; ``host_victims`` must be ordered
-    lowest-priority-first.
+    lower-priority than the candidate are eligible; ``host_victims`` must be
+    ordered lowest-priority-first.
 
     The host's build-slot count is treated as fixed: a long-running squatter
     holds no build slot, so a host blocked solely by the build limit is not
@@ -530,7 +531,7 @@ def _solo_victims_freeing_host(
         if victim.already_preempted:
             continue
         # Only strictly lower priority (higher band_sort_key) victims are eligible.
-        if victim.band_sort_key <= candidate.band:
+        if priority_band_rank(victim.band_sort_key) <= priority_band_rank(candidate.band):
             continue
         chosen.append(victim)
         available_cpu += victim.cpu_millicores
@@ -625,7 +626,8 @@ def run_preemption_pass(
     preemptor to the worker(s) its victims free.
 
     Rules:
-    - PRODUCTION preempts INTERACTIVE and BATCH.
+    - PRODUCTION preempts PRIORITY, INTERACTIVE, and BATCH.
+    - PRIORITY preempts INTERACTIVE and BATCH.
     - INTERACTIVE preempts BATCH only.
     - BATCH never preempts.
     - Within same band, no preemption (compete via scheduling order only).
@@ -658,7 +660,7 @@ def run_preemption_pass(
     # Solo victims: existing per-worker preemption path (same-variant gated).
     solo_victims = sorted(
         (v for v in running_tasks_info if not v.is_coscheduled),
-        key=lambda t: (-t.band_sort_key, t.resource_value),
+        key=lambda t: (-priority_band_rank(t.band_sort_key), t.resource_value),
     )
 
     # Same solo victims bucketed by host for the gang partial-host fallback. Holds
@@ -688,7 +690,7 @@ def run_preemption_pass(
         sorted_groups = sorted(
             grouped.items(),
             key=lambda kv: (
-                -max(t.band_sort_key for t in kv[1]),
+                -max(priority_band_rank(t.band_sort_key) for t in kv[1]),
                 sum(t.resource_value for t in kv[1]),
             ),
         )
@@ -708,7 +710,7 @@ def run_preemption_pass(
 
     for candidate in unscheduled_tasks:
         # Batch never preempts
-        if candidate.band >= job_pb2.PRIORITY_BAND_BATCH:
+        if candidate.band == job_pb2.PRIORITY_BAND_BATCH:
             continue
 
         parent = candidate.job_name.parent
@@ -759,7 +761,7 @@ def _sort_pending_tasks_by_resolved_band(
     return sorted(
         pending_tasks,
         key=lambda task: (
-            requested_bands.get(task.job_id, job_pb2.PRIORITY_BAND_INTERACTIVE),
+            priority_band_rank(requested_bands.get(task.job_id, job_pb2.PRIORITY_BAND_INTERACTIVE)),
             task.priority_neg_depth,
             task.priority_root_submitted_ms,
             task.submitted_at_ms.epoch_ms(),
@@ -921,7 +923,7 @@ def compute_scheduling_order(
         tasks_by_band[band].append(task_id)
 
     interleaved: list[JobName] = []
-    for band_key in sorted(tasks_by_band.keys()):
+    for band_key in sorted(tasks_by_band, key=priority_band_rank):
         band_tasks = tasks_by_band[band_key]
         user_tasks = [UserTask(user_id=tid.user, task=tid) for tid in band_tasks]
         interleaved.extend(interleave_by_user(user_tasks, user_spend))

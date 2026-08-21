@@ -322,7 +322,7 @@ class RunningTaskInfo:
 
     task_id: JobName
     worker_id: WorkerId
-    band_sort_key: int  # 1=production, 2=interactive, 3=batch
+    band_sort_key: int  # proto PriorityBand value; order through priority_band_rank
     resource_value: int
     is_coscheduled: bool
     cpu_millicores: int

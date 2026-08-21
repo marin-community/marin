@@ -114,6 +114,7 @@ from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authoriz
 from iris.rpc.proto_display import (
     job_state_friendly,
     priority_band_name,
+    priority_band_rank,
     resolve_container_profile,
     task_state_friendly,
 )
@@ -183,12 +184,13 @@ _LOCAL_ADMIN_FEDERATION_DENIED = (
     "IAP or present a user token so the submission carries your identity."
 )
 
-# What LaunchJob accepts in priority_band: the three real bands, plus INHERIT for a
+# What LaunchJob accepts in priority_band: the real bands, plus INHERIT for a
 # client that wants the parent's band (or the INTERACTIVE default at a root).
 _SUBMITTABLE_PRIORITY_BANDS = frozenset(
     {
         job_pb2.PRIORITY_BAND_INHERIT,
         job_pb2.PRIORITY_BAND_PRODUCTION,
+        job_pb2.PRIORITY_BAND_PRIORITY,
         job_pb2.PRIORITY_BAND_INTERACTIVE,
         job_pb2.PRIORITY_BAND_BATCH,
     }
@@ -1509,8 +1511,8 @@ class ControllerServiceImpl:
         #
         # This is the one place INHERIT becomes a real band: resolve it here, gate that
         # result, and store it. Everything behind this point — the scheduler, spend, the
-        # k8s mapping, a federated handoff — only ever sees PRODUCTION, INTERACTIVE, or
-        # BATCH, so none of them re-derive a band of their own.
+        # k8s mapping, a federated handoff — only ever sees PRODUCTION, PRIORITY,
+        # INTERACTIVE, or BATCH, so none of them re-derive a band of their own.
         #
         # Gating the resolved band rather than the request matters because the client
         # chooses whether to send the field; gating the request would let it pick whether
@@ -1540,7 +1542,7 @@ class ControllerServiceImpl:
                 with self._db.read_snapshot() as _snap:
                     user_budget = reads.get_user_budget(_snap, job_id.user)
                 max_band = user_budget.max_band if user_budget is not None else self._user_budget_defaults.max_band
-                if band < max_band:
+                if priority_band_rank(band) < priority_band_rank(max_band):
                     raise ConnectError(
                         Code.PERMISSION_DENIED,
                         f"User {job_id.user} cannot submit {priority_band_name(band)} jobs "
@@ -3122,6 +3124,7 @@ class ControllerServiceImpl:
         max_band = request.max_band or job_pb2.PRIORITY_BAND_INTERACTIVE
         if max_band not in (
             job_pb2.PRIORITY_BAND_PRODUCTION,
+            job_pb2.PRIORITY_BAND_PRIORITY,
             job_pb2.PRIORITY_BAND_INTERACTIVE,
             job_pb2.PRIORITY_BAND_BATCH,
         ):
@@ -3422,7 +3425,7 @@ class ControllerServiceImpl:
                     summary.availability.total_amounts[token] = device_capacity.total
                     for band, amount in device_capacity.held_by_band.items():
                         held_by_band.setdefault(band, {})[token] = amount
-                for band, amounts in sorted(held_by_band.items()):
+                for band, amounts in sorted(held_by_band.items(), key=lambda item: priority_band_rank(item[0])):
                     summary.availability.held_by_band.add(band=band, amounts=amounts)
 
             if variant == "kubernetes":

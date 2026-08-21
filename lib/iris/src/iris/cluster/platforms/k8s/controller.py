@@ -844,7 +844,8 @@ class K8sControllerProvider:
 
         Priority values (see IRIS_PRIORITY_CLASSES):
           iris-system     10000  — control plane (controller, finelog, Kueue); never preempted by user work
-          iris-production  1000  — preempts interactive/batch; never preempted
+          iris-production  1000  — preempts every user band; never preempted
+          iris-priority     100  — important work; below production, above interactive
           iris-interactive   10  — normal user work
           iris-batch          0  — opportunistic; below interactive, above CoreWeave NHC
         """

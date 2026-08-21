@@ -804,6 +804,14 @@ def _submit_and_wait_job(
         raise
 
 
+def validate_production_reason(priority: str | None, production_needed: str | None) -> None:
+    """Require an explicit reason when a CLI selects production priority."""
+    if priority == "production" and not (production_needed and production_needed.strip()):
+        raise click.UsageError("--priority production requires --production-needed=<reason>.")
+    if production_needed is not None and priority != "production":
+        raise click.UsageError("--production-needed is only valid with --priority production.")
+
+
 @click.group("job")
 def job() -> None:
     """Manage Iris jobs."""
@@ -918,7 +926,14 @@ Examples:
     "--priority",
     type=click.Choice(PRIORITY_BAND_NAMES, case_sensitive=False),
     default=None,
-    help="Priority band for scheduling (default: interactive). Lower bands run first; batch jobs yield to interactive.",
+    help="Priority band for scheduling (default: interactive).",
+)
+@click.option(
+    "--production-needed",
+    type=str,
+    default=None,
+    metavar="REASON",
+    help="Required justification for CLI submissions using --priority production.",
 )
 @click.option(
     "--preemptible/--no-preemptible",
@@ -987,6 +1002,7 @@ def run(
     no_sync: bool,
     reserve: tuple[str, ...],
     priority: str | None,
+    production_needed: str | None,
     preemptible: bool | None,
     task_image: str | None,
     container_profile: str | None,
@@ -1002,6 +1018,7 @@ def run(
     validate_region_zone(region or None, zone, ctx.obj.get("config"))
     if no_sync and sync_package:
         raise click.UsageError("--no-sync skips setup entirely; it cannot be combined with --sync-package.")
+    validate_production_reason(priority, production_needed)
 
     command = list(cmd)
     if not command:

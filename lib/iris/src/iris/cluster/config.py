@@ -31,7 +31,6 @@ from rigging.secrets import as_secret_spec, is_secret_reference, resolve_secret_
 from rigging.timing import Duration
 
 from iris.cluster.platforms.k8s.coreweave_topology import TopologyMode
-from iris.cluster.platforms.k8s.kueue_manifests import ProductionPriorityPolicy
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
     AUTO_DEVICE_VARIANT,
@@ -619,23 +618,9 @@ class KueueTopology(_Config):
     coarse_preferred_label: str = ""  # optional soft coarse pairing for a sliced binding
 
 
-class KueueProductionPriorityConfig(_Config):
-    policy: ProductionPriorityPolicy = ProductionPriorityPolicy.FIXED
-    max_gpu_count: int = 0
-
-    @model_validator(mode="after")
-    def _validate_gpu_count_policy(self) -> KueueProductionPriorityConfig:
-        if self.policy is ProductionPriorityPolicy.GPU_COUNT and self.max_gpu_count <= 0:
-            raise ValueError("max_gpu_count must be positive when policy is gpu_count")
-        if self.policy is ProductionPriorityPolicy.FIXED and self.max_gpu_count != 0:
-            raise ValueError("max_gpu_count is only valid when policy is gpu_count")
-        return self
-
-
 class KueueConfig(_Config):
     cluster_queue: str = ""  # setting this ENABLES Kueue gang admission
     topologies: dict[str, KueueTopology] = Field(default_factory=dict)  # group_by -> topo
-    production_priority: KueueProductionPriorityConfig = Field(default_factory=KueueProductionPriorityConfig)
 
 
 class KubernetesProviderConfig(_Config):
