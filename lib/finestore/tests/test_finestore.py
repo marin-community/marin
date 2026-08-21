@@ -32,7 +32,6 @@ from finestore.migrations import LegacyReadView, migrate
 from finestore.reader import BlobCorruptionError, ReadView
 from finestore.store import OBJECT_PART_BYTES, DataStore, DataTable, PrimaryKeyConflict, TransactionTooLarge
 from rigging.filesystem.storage_path import StoragePath
-from rigging.timing import ExponentialBackoff
 
 
 def _rows(reader: ReadView, table: str, **kwargs) -> list[dict]:
@@ -960,11 +959,8 @@ def test_background_maintenance_recovers_from_transient_s3_failure(tmp_path, mon
     completed = threading.Event()
     attempts = 0
     slowdown = ClientError({"Error": {"Code": "SlowDown", "Message": "reduce request rate"}}, "PutObject")
-    monkeypatch.setattr(
-        store_module,
-        "_MAINTENANCE_BACKOFF",
-        ExponentialBackoff(initial=0.001, maximum=0.001, jitter=0.0),
-    )
+    monkeypatch.setattr(store_module, "_MAINTENANCE_BACKOFF_INITIAL", 0.001)
+    monkeypatch.setattr(store_module, "_MAINTENANCE_BACKOFF_MAXIMUM", 0.001)
 
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
 

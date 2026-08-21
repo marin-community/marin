@@ -5,7 +5,6 @@ from io import BytesIO
 from unittest.mock import MagicMock, patch
 
 import pytest
-import rigging.filesystem.conditional_object as conditional_object_module
 from botocore.exceptions import ClientError
 from rigging.filesystem.conditional_object import (
     ConditionalWriteError,
@@ -14,7 +13,6 @@ from rigging.filesystem.conditional_object import (
     UnsupportedConditionalWrite,
     conditional_object,
 )
-from rigging.timing import ExponentialBackoff
 
 
 def test_local_conditional_object_rejects_stale_version(tmp_path):
@@ -107,11 +105,6 @@ def test_s3_conditional_object_retries_slow_down(monkeypatch):
         {"ETag": '"v2"'},
     ]
     monkeypatch.setattr(S3ConditionalObject, "_client", staticmethod(lambda _path: client))
-    monkeypatch.setattr(
-        conditional_object_module,
-        "_S3_WRITE_BACKOFF",
-        ExponentialBackoff(initial=0.001, maximum=0.001, jitter=0.0),
-    )
     monkeypatch.setattr("rigging.timing.time.sleep", lambda _delay: None)
 
     version = S3ConditionalObject("s3://bucket/HEAD").write(b"two", expected_version='"v1"')

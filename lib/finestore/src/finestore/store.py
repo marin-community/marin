@@ -47,7 +47,8 @@ DEFAULT_MAX_BUFFER_BYTES = ROW_GROUP_TARGET_BYTES
 DEFAULT_COMPACTION_SHARDS = 8
 OBJECT_PART_BYTES = 8 * 1024 * 1024
 _MAX_MAINTENANCE_ATTEMPTS = 5
-_MAINTENANCE_BACKOFF = ExponentialBackoff(initial=0.5, maximum=5.0, factor=2.0, jitter=0.25)
+_MAINTENANCE_BACKOFF_INITIAL = 0.5
+_MAINTENANCE_BACKOFF_MAXIMUM = 5.0
 
 _BLOB_SCHEMA = pa.schema(
     [
@@ -393,7 +394,12 @@ class DataStore:
             self._wake.clear()
             if self._stop.is_set():
                 return
-            backoff = _MAINTENANCE_BACKOFF.copy()
+            backoff = ExponentialBackoff(
+                initial=_MAINTENANCE_BACKOFF_INITIAL,
+                maximum=_MAINTENANCE_BACKOFF_MAXIMUM,
+                factor=2.0,
+                jitter=0.25,
+            )
             for attempt in range(_MAX_MAINTENANCE_ATTEMPTS):
                 try:
                     self.maintain()

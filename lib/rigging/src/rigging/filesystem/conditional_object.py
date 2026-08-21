@@ -32,7 +32,6 @@ from rigging.timing import ExponentialBackoff, retry_with_backoff
 _MAX_READ_ATTEMPTS = 8
 _MAX_S3_WRITE_ATTEMPTS = 4
 _S3_MISSING_CODES = frozenset({"NotFound", "NoSuchKey", "404"})
-_S3_WRITE_BACKOFF = ExponentialBackoff(initial=0.5, maximum=5.0, factor=2.0, jitter=0.25)
 
 
 class ConditionalWriteError(RuntimeError):
@@ -237,7 +236,7 @@ class S3ConditionalObject:
             put,
             retryable=is_transient_s3_error,
             max_attempts=_MAX_S3_WRITE_ATTEMPTS,
-            backoff=_S3_WRITE_BACKOFF,
+            backoff=ExponentialBackoff(initial=0.5, maximum=5.0, factor=2.0, jitter=0.25),
             operation=f"conditional S3 write {self.path}",
         )
         return response["ETag"]

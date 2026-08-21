@@ -33,7 +33,6 @@ from finestore.layout import (
 
 _MAX_COMMIT_ATTEMPTS = 32
 _ROOT_COMMIT_ID = "root"
-_COMMIT_BACKOFF = ExponentialBackoff(initial=0.05, maximum=2.0, factor=2.0, jitter=0.25)
 
 logger = logging.getLogger(__name__)
 
@@ -236,7 +235,7 @@ class CommitCoordinator:
         """Publish ``delta`` and return the new durable commit token."""
         with self._lock:
             current = base or read_snapshot(self._layout)
-            backoff = _COMMIT_BACKOFF.copy()
+            backoff = ExponentialBackoff(initial=0.05, maximum=2.0, factor=2.0, jitter=0.25)
             for attempt in range(_MAX_COMMIT_ATTEMPTS):
                 manifest = _apply_delta(current.manifest, delta)
                 manifest_path = self._layout.manifest_path(manifest.commit_id)
