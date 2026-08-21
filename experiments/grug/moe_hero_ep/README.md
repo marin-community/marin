@@ -23,8 +23,8 @@ data-parallel rack uses one 64-device expert mesh.
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
 - Runtime: one JAX process per four-GPU worker, BF16 parameters and compute, GPU command buffers
   off, `cuda_async`, PGLE off, and collective overlap limit 4.
-- Output: Metrics only by default. `--save-checkpoints` writes checkpoints and resumes from the
-  newest complete checkpoint below `--checkpoint-path`. PR
+- Output: Metrics only by default. `--save-checkpoints` writes checkpoints below
+  `--checkpoint-path`. `--load-checkpoint-path` selects a separate read-only restore source. PR
   [#8480](https://github.com/marin-community/marin/pull/8480) bounded pinned-host restore memory;
   its d6144 run restored step 164 and continued training with a 735 GiB fleet peak against a
   940 GiB request. The experimental `--checkpoint-restore-mode donated_init_slots` mode retains
@@ -104,6 +104,7 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--save-checkpoints` | writes periodic and final checkpoints |
 | `--checkpoint-minutes` | sets the wall-clock checkpoint interval |
 | `--checkpoint-path` | places checkpoints at an explicit storage prefix |
+| `--load-checkpoint-path` | restores from a source without using it as the checkpoint output prefix |
 | `--checkpoint-restore-mode` | optionally restores device leaves into donated initialization buffers |
 | `--training-data synthetic` | reuses a deterministic batch without opening TensorStore |
 | `--watch-interval`, `--watch-mode` | select inline or diagnostic norm collection |

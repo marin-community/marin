@@ -108,6 +108,23 @@ def test_checkpoint_path_defaults_under_the_step_output_path():
     assert config.trainer.trainer.checkpointer.base_path == f"{ctx.output_path}/checkpoints"
 
 
+def test_checkpoint_restore_source_is_separate_from_checkpoint_output():
+    source_path = "s3://marin-us-east-02a/checkpoints/source/step-3249"
+    step = launch.build_hero_run(
+        run_id="restore-source",
+        dp_racks=1,
+        num_steps=1,
+        load_checkpoint_path=source_path,
+        version="dev",
+    )
+    ctx = StepContext.for_fingerprint(step.runtime_args, step.deps)
+    trainer = step.build_config(ctx).trainer.trainer
+
+    assert trainer.load_checkpoint is True
+    assert trainer.load_checkpoint_path == source_path
+    assert trainer.checkpointer.base_path == f"{ctx.output_path}/checkpoints"
+
+
 def test_donated_checkpoint_restore_preserves_initialized_device_buffers():
     device = jax.devices()[0]
     device_sharding = jax.sharding.SingleDeviceSharding(device)

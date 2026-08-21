@@ -90,6 +90,7 @@ def build_hero_run(
     save_checkpoints: bool = False,
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
     checkpoint_path: str | None = None,
+    load_checkpoint_path: str | None = None,
     checkpoint_restore_mode: CheckpointRestoreMode = CheckpointRestoreMode.DIRECT,
     watch_interval: int = HERO_WATCH_INTERVAL,
     watch_mode: WatchMode = WatchMode.INLINE,
@@ -242,6 +243,8 @@ def build_hero_run(
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
+            load_checkpoint=load_checkpoint_path is not None,
+            load_checkpoint_path=load_checkpoint_path,
             # Levanter's default base path is pod-local, so a preempted run would have nothing to
             # resume from. `checkpoint_path` overrides this for runs targeting disposable storage.
             checkpointer=CheckpointerConfig(
@@ -396,6 +399,11 @@ def build_hero_run(
     help="Checkpoint output path, e.g. a marin_temp_bucket() path. Defaults to the step output path.",
 )
 @click.option(
+    "--load-checkpoint-path",
+    default=None,
+    help="Read-only checkpoint source. Writes always use --checkpoint-path or the step output path.",
+)
+@click.option(
     "--checkpoint-restore-mode",
     type=click.Choice([mode.value for mode in CheckpointRestoreMode]),
     default=CheckpointRestoreMode.DIRECT.value,
@@ -470,6 +478,7 @@ def main(
     save_checkpoints: bool,
     checkpoint_minutes: float,
     checkpoint_path: str | None,
+    load_checkpoint_path: str | None,
     checkpoint_restore_mode: str,
     eval_every: int,
     watch_interval: int,
@@ -496,6 +505,7 @@ def main(
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),
         checkpoint_path=checkpoint_path,
+        load_checkpoint_path=load_checkpoint_path,
         checkpoint_restore_mode=CheckpointRestoreMode(checkpoint_restore_mode),
         eval_every=eval_every,
         watch_interval=watch_interval,
