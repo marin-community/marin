@@ -92,6 +92,9 @@ RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
+# #5675 bisected the CUDA graph failure to COLLECTIVES capture, so capture fusions only. The
+# ragged transport's collectives stay outside any graph and keep the behavior that TODO covers.
+RAGGED_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer=FUSION"
 _FP32_POLICY = jmp.get_policy("params=float32,compute=float32,output=float32")
 
 
@@ -157,7 +160,7 @@ def _apply_hero_ep_runtime_defaults(
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
         f"{XLA_LATENCY_HIDING_FLAG}={'false' if ragged else 'true'}",
         XLA_MEMORY_LIMIT_SLOP_FLAG,
-        XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
+        RAGGED_COMMAND_BUFFER_FLAG if ragged else XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
