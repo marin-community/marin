@@ -22,7 +22,6 @@
 !lib/zephyr/pyproject.toml
 
 !lib/iris/pyproject.toml
-!lib/iris/hatch_build.py
 !lib/iris/rust/
 !lib/iris/src/
 !lib/iris/config/

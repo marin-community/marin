@@ -246,6 +246,3 @@ scr/*
 .obsidian
 .cw_env
 .localbin/
-
-# Stamped into built artifacts by lib/iris/hatch_build.py; never tracked.
-lib/iris/src/iris/_build_info.py

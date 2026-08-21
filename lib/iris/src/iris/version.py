@@ -1,46 +1,27 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resolve the revision date of this marin-iris build.
+"""Resolve the marin-iris client revision date.
 
-`LaunchJob` sends it as the client's date; the controller resolves it for itself
-too, and gates root submissions on the gap between the two. Both sides must
-measure the same thing — the date of the last commit touching the iris tree — or
-the comparison is meaningless.
-
-Resolution order: `IRIS_REVISION_DATE`, baked into container images at build time
-by `iris cluster build` (an image carries no `.git`, so this is the only way a
-controller can identify itself); then the `BUILD_DATE` stamped into wheels and
-sdists by `hatch_build.py`; then `git log` on the iris source tree, for a
-checkout. A build that resolves to the empty string cannot identify itself.
+Used by `LaunchJob` to gate root submissions against a server-side floor.
+Resolution order: build-time stamp (set in wheels by the wheel builder), then
+`git log` on the iris source tree (for editable installs), then empty string.
+The server treats empty as the feature's introduction date so old clients get
+a grace window after rollout.
 """
 
-import os
 import subprocess
 from pathlib import Path
 
-try:
-    # Generated into built artifacts by hatch_build.py, and absent from a
-    # checkout — an editable install resolves its date from git instead.
-    from iris._build_info import BUILD_DATE  # pyrefly: ignore[missing-import]
-except ImportError:
-    BUILD_DATE = ""
-
-# Set on container images by `iris.cli.build`, which resolves the date on the
-# operator's machine, where the repository is present.
-REVISION_DATE_ENV = "IRIS_REVISION_DATE"
+from iris._build_info import BUILD_DATE
 
 _CACHED: str | None = None
 
 
-def iris_tree_date(iris_root: Path) -> str:
-    """ISO date (YYYY-MM-DD) of the last commit touching `iris_root`, or "" if unavailable.
-
-    Empty when the path has no commits, is outside a checkout, or `git` is absent —
-    all of which are ordinary for an installed package rather than a checkout.
-    """
+def _git_iris_date() -> str:
+    iris_root = Path(__file__).resolve().parents[2]
     try:
-        # %cs is the short committer date.
+        # %cs is short committer date (YYYY-MM-DD); empty if path has no commits.
         out = subprocess.check_output(
             ["git", "log", "-1", "--format=%cs", "--", iris_root.as_posix()],
             cwd=iris_root,
@@ -54,12 +35,10 @@ def iris_tree_date(iris_root: Path) -> str:
 
 
 def client_revision_date() -> str:
-    """Return ISO date (YYYY-MM-DD) of this marin-iris build, or "" if unknown."""
+    """Return ISO date (YYYY-MM-DD) of this client build, or "" if unknown."""
     global _CACHED
     if _CACHED is None:
-        _CACHED = (
-            os.environ.get(REVISION_DATE_ENV, "") or BUILD_DATE or iris_tree_date(Path(__file__).resolve().parents[2])
-        )
+        _CACHED = BUILD_DATE or _git_iris_date()
     return _CACHED
 
 

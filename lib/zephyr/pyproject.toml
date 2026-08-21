@@ -41,10 +41,7 @@ dev = [
 packages = ["src/zephyr"]
 
 [tool.hatch.build.targets.sdist]
-# only-include rather than packages: packages would relocate src/zephyr to
-# zephyr/, and the wheel target inside the unpacked sdist looks for src/zephyr,
-# so every wheel built from the sdist came out with no Python modules at all.
-only-include = ["src/zephyr"]
+packages = ["src/zephyr"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "tests"]

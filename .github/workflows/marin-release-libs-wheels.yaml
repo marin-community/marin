@@ -33,7 +33,6 @@ on:
       - "lib/finelog/config/**"
       - "lib/finelog/src/**"
       - "lib/finelog/rust/**"
-      - "lib/iris/hatch_build.py"
       - "lib/iris/rust/**"
       - "rust/**"
       - "scripts/python_libs_package.py"
@@ -45,7 +44,6 @@ on:
       - "lib/finelog/config/**"
       - "lib/finelog/src/**"
       - "lib/finelog/rust/**"
-      - "lib/iris/hatch_build.py"
       - "lib/iris/rust/**"
       - "rust/**"
       - "scripts/ci/package_release.py"
@@ -125,18 +123,6 @@ jobs:
             --package "${{ matrix.package }}" \
             --version "$VERSION" \
             --operation "${{ matrix.operation }}"
-
-      # An unstamped marin-iris makes the controller fall back to wall-clock time
-      # for every client that installs it, which loosens the freshness gate
-      # without failing anything. Catch it before the artifact is uploaded.
-      - name: Validate iris revision stamp
-        if: matrix.package == 'python-libs'
-        env:
-          VERSION: ${{ fromJSON(needs.plan.outputs.versions)[matrix.package].version }}
-        run: |
-          python scripts/ci/package_release.py validate-revision-stamp \
-            --version "$VERSION" \
-            --dist-dir dist
 
       - name: Validate compatible native wheel
         if: matrix.operation == 'linux' || matrix.operation == 'macos'
