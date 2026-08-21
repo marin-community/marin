@@ -513,9 +513,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
     )
-    # Armed before the state is built or restored, so its startup deadline covers a stall in
-    # initialization, checkpoint restore, cache construction or compilation. The step and process
-    # deadlines only arm once a step reports progress.
+    # Armed before the state is built or restored, so its startup deadline bounds a stall in the
+    # checkpoint restore, cache construction or the first compile. Anything earlier than this call,
+    # including `trainer.initialize`, is still unbounded.
     progress_watchdog = trainer.progress_watchdog.create(
         process_index=jax.process_index(),
         diagnostic=capture_stall_diagnostics,

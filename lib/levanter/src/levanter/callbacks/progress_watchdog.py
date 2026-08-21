@@ -79,7 +79,14 @@ class ProgressWatchdog(Callback[Any]):
         self._thread.start()
 
     def on_step(self, info: StepInfo[Any], force: bool = False) -> None:
+        """Treat a callback pass as a step that ran to completion.
+
+        Report both events. A finish alone marks the step complete and leaves the start unset,
+        which disarms every deadline rather than handing over to the process one.
+        """
         del info, force
+        self.on_event(ProgressEvent.TRAIN_STEP_STARTED)
+        self.on_event(ProgressEvent.TRAIN_STEP_FINISHED)
 
     def on_event(self, event: ProgressEvent) -> None:
         if event is ProgressEvent.TRAINING_FINISHED:
@@ -208,15 +215,16 @@ class ProgressWatchdogConfig:
     ) -> ProgressWatchdog | None:
         if self.step_timeout is None and self.process_timeout is None and self.startup_timeout is None:
             return None
-        if self.diagnostic_timeout is not None and process_index != 0:
-            return None
-        if self.diagnostic_timeout is not None and diagnostic is None:
+        # One process captures diagnostics; every process still needs its deadlines, or a stall on
+        # any other rank is terminated only if process zero happens to block behind it.
+        captures_diagnostics = self.diagnostic_timeout is not None and process_index == 0
+        if captures_diagnostics and diagnostic is None:
             raise ValueError("diagnostic is required when diagnostic_timeout is set")
         return ProgressWatchdog(
             step_timeout=self.step_timeout,
             process_timeout=self.process_timeout,
             startup_timeout=self.startup_timeout,
             startup_grace_period=self.startup_grace_period,
-            diagnostic=diagnostic if self.diagnostic_timeout is not None else None,
-            diagnostic_timeout=self.diagnostic_timeout,
+            diagnostic=diagnostic if captures_diagnostics else None,
+            diagnostic_timeout=self.diagnostic_timeout if captures_diagnostics else None,
         )

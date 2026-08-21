@@ -806,9 +806,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
     )
-    # Armed before the state is built or restored. The watchdog's step and process deadlines only
-    # arm once a step reports progress, so its startup deadline is the only thing bounding a stall
-    # in initialization, checkpoint restore, cache construction or compilation.
+    # Armed before the state is built or restored, so its startup deadline bounds a stall in the
+    # checkpoint restore, cache construction or the first compile. Anything earlier than this call,
+    # including `trainer.initialize`, is still unbounded.
     progress_watchdog = trainer.progress_watchdog.create(process_index=jax.process_index())
 
     with set_mesh(mesh):
