@@ -667,6 +667,7 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     assert env["JOB_ONLY"] == "from_job"
     # Iris system vars are always injected.
     assert "IRIS_TASK_ID" in env
+    assert env["IRIS_ATTEMPT_UID"] == "uid-env-test"
 
 
 def test_task_image_override_uses_request_value(mock_bundle_store, mock_runtime, tmp_path):

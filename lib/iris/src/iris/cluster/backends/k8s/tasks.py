@@ -786,6 +786,7 @@ def _build_pod_manifest(
     iris_env = build_common_iris_env(
         task_id=run_req.task_id,
         attempt_id=run_req.attempt_id,
+        attempt_uid=run_req.attempt_uid,
         num_tasks=run_req.num_tasks,
         bundle_id=run_req.bundle_id,
         controller_address=config.controller_address,

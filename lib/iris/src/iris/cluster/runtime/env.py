@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 IRIS_SLICE_COUNT = "IRIS_SLICE_COUNT"
 IRIS_TASKS_PER_SLICE = "IRIS_TASKS_PER_SLICE"
+IRIS_ATTEMPT_UID_ENV = "IRIS_ATTEMPT_UID"
 IRIS_NODE_NAME_ENV = "IRIS_NODE_NAME"
 IRIS_NAMESPACE_ENV = "IRIS_NAMESPACE"
 
@@ -164,6 +165,7 @@ def build_common_iris_env(
     *,
     task_id: str,
     attempt_id: int,
+    attempt_uid: str,
     num_tasks: int,
     bundle_id: str,
     controller_address: str | None,
@@ -189,6 +191,8 @@ def build_common_iris_env(
     # backend.
     wire_task_id = f"{task_id}:{attempt_id}"
     env["IRIS_TASK_ID"] = wire_task_id
+    if attempt_uid:
+        env[IRIS_ATTEMPT_UID_ENV] = attempt_uid
     env["IRIS_NUM_TASKS"] = str(num_tasks)
     env["IRIS_BUNDLE_ID"] = bundle_id
 

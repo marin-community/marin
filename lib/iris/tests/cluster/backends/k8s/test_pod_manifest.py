@@ -1007,13 +1007,14 @@ def test_host_network_omitted_when_disabled():
 
 def test_iris_env_vars_injected():
     """Pod manifest includes IRIS_TASK_ID, IRIS_NUM_TASKS, and other system vars."""
-    req = make_run_req("/test-job/0")
+    req = make_run_req("/test-job/0", attempt_uid="controller-attempt-abc123")
     req.num_tasks = 4
     req.bundle_id = "bundle-abc"
     manifest = _build_pod_manifest(req, pod_config(controller_address="http://ctrl:8080"))
 
     env_by_name = {e["name"]: e for e in manifest["spec"]["containers"][0]["env"]}
     assert env_by_name["IRIS_TASK_ID"]["value"] == "/test-job/0:0"
+    assert env_by_name["IRIS_ATTEMPT_UID"]["value"] == "controller-attempt-abc123"
     assert env_by_name["IRIS_NUM_TASKS"]["value"] == "4"
     assert env_by_name["IRIS_BUNDLE_ID"]["value"] == "bundle-abc"
     assert env_by_name["IRIS_CONTROLLER_ADDRESS"]["value"] == "http://ctrl:8080"

@@ -623,11 +623,8 @@ def test_training_dashboard_separates_attempt_loss_and_step_loss():
     panels = {panel["title"]: panel for panel in _all_panels(dashboard)}
 
     attempt_panel = panels["Training loss by attempt"]
-    attempt_sql = _panel_sql({**dashboard, "panels": [attempt_panel]})[0]
     assert attempt_panel["type"] == "timeseries"
     assert attempt_panel["fieldConfig"]["defaults"]["custom"]["insertNulls"] == 300_000
-    assert "execution_uid AS series" in attempt_sql
-    assert "GROUP BY 1, 2" in attempt_sql
     assert {column["selector"] for column in attempt_panel["targets"][0]["columns"]} == {
         "t",
         "series",
@@ -635,15 +632,52 @@ def test_training_dashboard_separates_attempt_loss_and_step_loss():
     }
 
     step_panel = panels["Training loss by step"]
-    step_sql = _panel_sql({**dashboard, "panels": [step_panel]})[0]
     assert step_panel["type"] == "trend"
     assert step_panel["options"]["xField"] == "step"
-    assert "PARTITION BY execution_uid" in step_sql
-    assert "PARTITION BY step ORDER BY timestamp_ms DESC, seq DESC" in step_sql
     assert {column["selector"] for column in step_panel["targets"][0]["columns"]} == {
         "step",
         "train_loss",
     }
+
+
+def test_training_loss_by_attempt_separates_process_incarnations():
+    dashboard = _stitched_dashboards()["training.json"]
+    panel = next(panel for panel in _all_panels(dashboard) if panel["title"] == "Training loss by attempt")
+    sql = _panel_sql({**dashboard, "panels": [panel]})[0]
+    sql = sql.replace("${__interval_ms}", "60000")
+    sql = sql.replace("${run:sqlstring}", "'hero-run'")
+    sql = sql.replace("{{from}}", "TIMESTAMP '2026-08-20 00:00:00'")
+    sql = sql.replace("{{to}}", "TIMESTAMP '2026-08-21 00:00:00'")
+
+    database = duckdb.connect()
+    database.execute("CREATE MACRO to_timestamp_millis(value) AS epoch_ms(value)")
+    database.execute("CREATE MACRO date_bin(bucket, value) AS time_bucket(bucket, value)")
+    database.execute(
+        """
+        CREATE TABLE telemetry_v1(
+            service VARCHAR,
+            run_id VARCHAR,
+            execution_uid VARCHAR,
+            name VARCHAR,
+            value DOUBLE,
+            timestamp_ms BIGINT
+        )
+        """
+    )
+    at = int(datetime(2026, 8, 20, 12, tzinfo=UTC).timestamp() * 1000)
+    database.executemany(
+        "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, 'train_loss', ?, ?)",
+        [
+            ("iris:controller-attempt-first", 2.0, at),
+            ("iris:controller-attempt-first", 1.8, at + 10_000),
+            ("iris:controller-attempt-second", 2.4, at + 20_000),
+        ],
+    )
+
+    assert database.execute(sql).fetchall() == [
+        (datetime(2026, 8, 20, 12), "iris:controller-attempt-first", 1.9),
+        (datetime(2026, 8, 20, 12), "iris:controller-attempt-second", 2.4),
+    ]
 
 
 def test_training_loss_by_step_uses_the_newest_retry_sample():

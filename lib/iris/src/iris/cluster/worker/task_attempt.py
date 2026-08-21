@@ -142,6 +142,7 @@ def build_iris_env(
     env = build_common_iris_env(
         task_id=req.task_id,
         attempt_id=task.attempt_id,
+        attempt_uid=str(task.attempt_uid),
         num_tasks=task.num_tasks,
         bundle_id=req.bundle_id,
         controller_address=controller_address,

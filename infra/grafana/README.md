@@ -273,6 +273,9 @@ last completed step and train loss — beside step time, throughput, schedule
 progress, skip-step rejections, eval loss, and device memory. One loss panel uses
 step as its x-axis and keeps the newest sample for a repeated step. The wall-clock
 panel separates each `execution_uid` and disconnects gaps longer than five minutes.
+Iris forms this identity from the controller-minted `attempt_uid`. Thus, a new
+controller process cannot join loss from a prior process that used the same
+numeric task attempt.
 
 ## Alerting
 
@@ -377,17 +380,20 @@ The session link is threaded under the announcement.
 Distinct firing groups feed one live `Grafana operator` session; the operator can
 delegate independent incidents to child Loom sessions. Repeated notifications for
 the same alert fingerprint and start time reuse the same Loom run, and thread a
-short "still firing" note under the original announcement rather than posting
-again. Resolved notifications create no run and are noted on that same thread.
+short "still firing" note under the original announcement. The Slack thread key is
+the Grafana notification group key. A replacement alert instance in the same group
+therefore keeps the thread even when the prior instance first resolves. Resolved
+notifications create no run and are noted on that same thread.
 Ordering is deliberate: Slack first, so an alert reaches people even when Loom is
 unreachable, and that failure is reported into the thread instead of only into
 Grafana's notification history. A Slack failure is logged and still opens the
 triage session.
 
-Open threads are tracked in the bridge's memory, which is sound because Cloud Run
-runs this service at `min=max=1`. A revision rollover forgets them: the next
-notification for a still-firing alert announces afresh, and a resolution for an
-alert this revision never announced is dropped rather than posted bare.
+Open threads are tracked for six hours in the bridge's memory, which is sound
+because Cloud Run runs this service at `min=max=1`. A revision rollover forgets
+them: the next notification for a still-firing alert announces afresh, and a
+resolution for an alert this revision never announced is dropped rather than
+posted bare.
 
 The Loom Pulumi stack binds the exact `marin-grafana`
 service-account email and numeric subject to this profile. The Grafana stack

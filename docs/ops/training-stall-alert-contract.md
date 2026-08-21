@@ -15,7 +15,7 @@ An eligible job alerts when either condition holds:
 
 The first case is labeled `training_stalled`; the second is `initializing_stale`. Missing and stale optimizer progress share one label so a delayed sample cannot replace one firing alert instance with another. Finished and progressing jobs emit zero-valued rows, which removes the firing series and resolves its original fingerprint. An idle fleet also emits an explicit zero.
 
-The bridge derives `hero-20260819` from the root job, then queries the structured `telemetry_v1.run_id` column with exact equality. With concurrent hero runs it emits one `run_id IN (...)` predicate rather than a broad pattern scan. The newest `phase` row in the trailing hour selects one `execution_uid`; `step` and `progress_time_seconds` from older task attempts cannot keep the run healthy. Progress spans 30 minutes so a sample remains observable after crossing the 15-minute stall threshold.
+The bridge derives `hero-20260819` from the root job, then queries the structured `telemetry_v1.run_id` column with exact equality. With concurrent hero runs it emits one `run_id IN (...)` predicate rather than a broad pattern scan. The newest `phase` row in the trailing hour selects one `execution_uid`; `step` and `progress_time_seconds` from older task attempts cannot keep the run healthy. Iris derives `execution_uid` from the controller-minted `attempt_uid`, which stays unique if a new controller uses the same numeric task attempt. Progress spans 30 minutes so a sample remains observable after crossing the 15-minute stall threshold.
 
 Initialization and missing-progress grace start at the later of the current contiguous Iris running interval and the selected telemetry execution. A coordinator restart or trainer retry therefore receives a new initialization window. A hard hang retains its training execution anchor for one hour. All states remain instances of `TrainingProgressStalled`, and notification grouping excludes phase and reason, so later reclassification cannot open a second Slack group.
 
@@ -47,7 +47,7 @@ For an unsuffixed root, remove `-coord` to get `<hero-run-id>`. For a suffixed r
 
 Levanter republishes phase every minute. A current phase row binds progress to one execution. Finelog and telemetry health alerts cover loss of the durable telemetry path. Launcher-specific process watchdogs provide additional coverage where configured.
 
-Grafana routes `notification=hero-run` through `ops-critical`. It groups notifications by alert name and logical run. Thus, a new retry root stays in the same alert group. The bridge posts one Slack message and opens one Loom session. A four-hour repeat notification keeps the thread active. A resolution uses the same Slack thread. An idle fleet returns an explicit zero-valued `fleet/idle/healthy` row. The `noDataState: Alerting` state identifies an invalid or unavailable response.
+Grafana routes `notification=hero-run` through `ops-critical`. It groups notifications by alert name and logical run. Thus, a new retry root stays in the same alert group. The bridge keys the Slack thread on this group and retains it for six hours after a resolution. A replacement retry that finishes its pending period joins the existing thread. A four-hour repeat notification also keeps the thread active. An idle fleet returns an explicit zero-valued `fleet/idle/healthy` row. The `noDataState: Alerting` state identifies an invalid or unavailable response.
 
 ## NCCL RAS snapshots
 
