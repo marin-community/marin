@@ -1,2 +1,3 @@
 # metric_direction: higher_is_better
 iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
+0	2026-08-21T21:54Z	e98852ae3b	18.9570	0.0	pass	drops=0.0,loss=11.8044	baseline	ragged_all_to_all at the PR head, synthetic data, window 5-15

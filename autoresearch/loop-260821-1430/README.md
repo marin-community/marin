@@ -25,9 +25,18 @@ former and NixOS ships no `crontab` — so layer 2 is a detached shell loop rath
 
 ## Metric and guards
 
-Metric: mean `throughput/mfu` over a fixed step window, higher is better. The window is chosen once
-from the baseline arm's reachable step count and then held for the whole loop; `score.py` reports
+Metric: mean `throughput/mfu` over **steps 5-15**, higher is better. `score.py` reports
 `window_complete: false` rather than averaging a window with holes in it.
+
+The window comes from what the baseline arm actually reached. Compile, not the step rate, is what
+eats the budget: step 1 landed at 3:21 elapsed and step 2 at 5:56 (a second XLA compile sits
+between them), after which steps settle at ~20.7 s. The baseline reached step 22 by the cap, so a
+5-19 window is reachable but with no margin; 5-15 leaves about 80 s of slack for a slower compile.
+MFU is flat across that window (stdev 0.14), so the shorter window costs nothing in precision.
+
+Numbers here are not comparable to the pre-loop campaign's: that scored 5-19 on real data with the
+profiler on. The baseline measures 18.96% where the same code measured 21.88% under the old
+protocol. Only within-loop comparisons mean anything.
 
 Guards, all three of which must pass or the iteration is discarded regardless of MFU:
 
