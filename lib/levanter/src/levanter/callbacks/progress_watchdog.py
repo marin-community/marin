@@ -123,6 +123,7 @@ class ProgressWatchdog(Callback[Any]):
         self._poll_interval = poll_interval
         self._lock = threading.Lock()
         self._created_at = monotonic()
+        self._terminal: ProgressHealth | None = None
         self._completed_training_step = False
         self._training_started_at: float | None = None
         self._active_step_started_at: float | None = None
@@ -172,6 +173,11 @@ class ProgressWatchdog(Callback[Any]):
 
     def _evaluate(self, now: float) -> ProgressHealth:
         with self._lock:
+            # _terminate sets _stop before it runs diagnostics, so the stalled verdict has to
+            # outlive it. Otherwise the process reports FINISHED for the diagnostic budget while
+            # it is stalled and on its way out.
+            if self._terminal is not None:
+                return self._terminal
             if self._stop.is_set():
                 return ProgressHealth(ProgressState.FINISHED)
             completed_training_step = self._completed_training_step
@@ -221,11 +227,14 @@ class ProgressWatchdog(Callback[Any]):
         while not self._stop.wait(self._poll_interval):
             health = self._evaluate(monotonic())
             if health.state is ProgressState.STALLED:
-                self._terminate(health.as_timeout())
+                self._terminate(health)
                 return
 
-    def _terminate(self, timeout: ProgressTimeout) -> None:
+    def _terminate(self, health: ProgressHealth) -> None:
+        with self._lock:
+            self._terminal = health
         self._stop.set()
+        timeout = health.as_timeout()
         try:
             logger.critical(
                 "No progress after %s for %.1f seconds (timeout %.1f); terminating with exit code %d",
