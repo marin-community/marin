@@ -75,6 +75,8 @@ def test_training_control_registers_redacted_status_page(monkeypatch):
         {
             "VISIBLE_VALUE": "value <script>alert(1)</script>",
             "HF_TOKEN": "environment-secret",
+            "IRIS_JOB_ENV": '{"HF_TOKEN": "nested-environment-secret"}',
+            "MARIN_PROVENANCE": '{"argv": ["--token", "nested-provenance-secret"]}',
         },
     )
     with TrainingControl(config):
@@ -94,6 +96,8 @@ def test_training_control_registers_redacted_status_page(monkeypatch):
         assert "HF_TOKEN" in body
         assert "config-secret" not in body
         assert "environment-secret" not in body
+        assert "nested-environment-secret" not in body
+        assert "nested-provenance-secret" not in body
         assert "<script>alert(1)</script>" not in body
     assert not registry.active
 

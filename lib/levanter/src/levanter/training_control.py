@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 import draccus
 import jax
 from rigging.connect import proxy_path
-from rigging.redaction import redact_value
+from rigging.redaction import REDACTED_VALUE, redact_value
 
 from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 TRAINING_CONTROL_ENDPOINT = "training-control"
 TRAINING_CONTROL_PORT = "training_control"
+_REDACTED_ENVIRONMENT_VARIABLES = frozenset({"IRIS_JOB_ENV", "IRIS_JOB_SETUP_SCRIPTS", "MARIN_PROVENANCE"})
 
 
 @dataclass(frozen=True)
@@ -52,7 +53,11 @@ class _TrainingSnapshot:
         job_id: str,
         task_id: str,
     ) -> _TrainingSnapshot:
-        redacted_environment = cast(dict[str, str], redact_value(dict(os.environ)))
+        environment = dict(os.environ)
+        for name in _REDACTED_ENVIRONMENT_VARIABLES:
+            if name in environment:
+                environment[name] = REDACTED_VALUE
+        redacted_environment = cast(dict[str, str], redact_value(environment))
         encoded_config = redact_value(draccus.encode(config))
         return cls(
             run_id=config.trainer.id or "unknown",
