@@ -204,17 +204,71 @@ def test_tokenized_cache_stats_path_handles_local_and_gcs_paths():
     )
 
 
-def test_resolve_run_id_imputes_basename_of_output_path(trainer_config):
-    config = train_lm.TrainLmConfig(trainer=dataclasses.replace(trainer_config, id=None))
-    updated, run_id = _resolve_run_id(config, output_path="gs://bucket/checkpoints/dpo/example-run", env_run_id=None)
-    assert run_id == "example-run"
-    assert updated.trainer.id == "example-run"
+def _no_id(trainer_config):
+    return train_lm.TrainLmConfig(trainer=dataclasses.replace(trainer_config, id=None))
 
 
-def test_resolve_run_id_prefers_explicit_id_over_output_path(trainer_config):
+def test_resolve_run_id_names_the_artifact_address(trainer_config):
+    updated, run_id = _resolve_run_id(
+        _no_id(trainer_config),
+        output_path="gs://bucket/checkpoints/dpo/2026.08.21",
+        prefix="gs://bucket",
+        env_run_id=None,
+    )
+    assert run_id == "checkpoints-dpo-2026.08.21"
+    assert updated.trainer.id == "checkpoints-dpo-2026.08.21"
+
+
+def test_resolve_run_id_distinguishes_artifacts_built_at_one_version(trainer_config):
+    """Output paths end ``<name>/<version>``, so an id taken from the tail alone is shared by every
+    artifact built at that version."""
+
+    def resolved(output_path: str) -> str:
+        return _resolve_run_id(_no_id(trainer_config), output_path=output_path, prefix="gs://bucket", env_run_id=None)[1]
+
+    assert resolved("gs://bucket/checkpoints/sft/2026.08.21") != resolved("gs://bucket/evaluation/sft/2026.08.21")
+    assert resolved("gs://bucket/users/alice/sweep/dev") != resolved("gs://bucket/users/bob/sweep/dev")
+
+
+def test_resolve_run_id_prefers_the_address_over_the_environment(trainer_config, monkeypatch):
+    """Iris forwards RUN_ID transitively to child jobs, so an inherited value must not collapse
+    every step in a run onto one id."""
+    monkeypatch.setenv("RUN_ID", "inherited")
+    _, run_id = _resolve_run_id(
+        _no_id(trainer_config),
+        output_path="gs://bucket/checkpoints/sft/2026.08.21",
+        prefix="gs://bucket",
+        env_run_id="inherited",
+    )
+    assert run_id == "checkpoints-sft-2026.08.21"
+
+
+def test_resolve_run_id_declines_a_path_outside_the_prefix(trainer_config):
+    """An absolute override path has no address relative to the prefix; deriving one anyway would
+    fold the URL scheme into the id."""
+    _, run_id = _resolve_run_id(
+        _no_id(trainer_config),
+        output_path="gs://other-bucket/pinned/dir",
+        prefix="gs://bucket",
+        env_run_id="from-env",
+    )
+    assert run_id == "from-env"
+
+
+def test_both_pod_configs_carry_the_prefix(trainer_config):
+    """``_prepare_training_run`` is generic over both pod configs and reads ``config.prefix``, so a
+    field on only one of them raises AttributeError on every DPO run."""
+    for pod_config in (
+        TrainLmOnPodConfig(train_config=object(), resources=ResourceConfig.with_cpu(), prefix="gs://bucket"),
+        TrainDpoOnPodConfig(train_config=object(), resources=ResourceConfig.with_cpu(), prefix="gs://bucket"),
+    ):
+        assert pod_config.prefix == "gs://bucket"
+
+
+def test_resolve_run_id_prefers_explicit_id_over_the_address(trainer_config):
     config = train_lm.TrainLmConfig(trainer=dataclasses.replace(trainer_config, id="explicit-run"))
     updated, run_id = _resolve_run_id(
-        config, output_path="gs://bucket/checkpoints/dpo/example-run", env_run_id="from-env"
+        config, output_path="gs://bucket/checkpoints/dpo/2026.08.21", prefix="gs://bucket", env_run_id="from-env"
     )
     assert run_id == "explicit-run"
     assert updated.trainer.id == "explicit-run"

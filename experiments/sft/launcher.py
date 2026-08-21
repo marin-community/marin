@@ -244,6 +244,7 @@ def _levanter_pod_config(
         ),
         resources=resources,
         output_path=ctx.output_path,
+        prefix=ctx.prefix,
         auto_build_caches=data_config.auto_build_caches,
     )
 
