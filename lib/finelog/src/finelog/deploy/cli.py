@@ -23,11 +23,15 @@ from rigging.credentials import iap_edge_provider
 from rigging.log_setup import configure_logging
 from rigging.tunnel import open_tunnel
 
-from finelog.client.log_client import LogClient
+from finelog.client.log_client import LogClient, NamespaceInfo
 from finelog.deploy import _gcp, _k8s
 from finelog.deploy.build import DEFAULT_PLATFORM
 from finelog.deploy.build import build_image as build_finelog_image
 from finelog.deploy.config import FinelogConfig, load_finelog_config, tunnel_target_for
+from finelog.errors import StatsError
+from finelog.policy import StoragePolicy
+from finelog.rpc import finelog_stats_pb2 as stats_pb2
+from finelog.schema import IMPLICIT_SEQ_COLUMN, Column, GroupedExtrema, Schema
 
 _SEGMENT_FILENAME_RE = re.compile(r"seg_L\d+_\d+\.parquet$")
 
@@ -66,6 +70,18 @@ def _log_client(
                 yield client
             finally:
                 client.close()
+
+
+@contextmanager
+def _open_cli_client(name: str, tunnel_timeout: float, request_timeout: float) -> Generator[LogClient, None, None]:
+    """Open a configured client and present expected connection/query failures as CLI errors."""
+    configure_logging(level=logging.INFO)
+    cfg = load_finelog_config(name)
+    try:
+        with _log_client(cfg, name, tunnel_timeout, request_timeout) as client:
+            yield client
+    except (IapLoginRequired, StatsError, ConnectionError, OSError, TimeoutError) as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 def _require_gcp_mutation(cfg: FinelogConfig) -> None:
@@ -267,9 +283,94 @@ _PRINTERS = {
 }
 
 
+def _read_sql_argument(sql: str | None) -> str:
+    if sql not in (None, "-"):
+        return sql
+    if sys.stdin.isatty():
+        raise click.UsageError("pass SQL as an argument, pipe it on stdin, or use '-' to read stdin")
+    value = sys.stdin.read()
+    if not value.strip():
+        raise click.UsageError("SQL input is empty")
+    return value
+
+
+def _column_record(column: Column) -> dict[str, object]:
+    column_type = stats_pb2.ColumnType.Name(column.type).removeprefix("COLUMN_TYPE_").lower()
+    return {
+        "name": column.name,
+        "type": column_type,
+        "nullable": column.nullable,
+        "trigram_index": column.trigram_index,
+        "exact_values": list(column.exact_values),
+        "value_counts": column.value_counts,
+    }
+
+
+def _grouped_extrema_record(config: GroupedExtrema) -> dict[str, str]:
+    return {
+        "filter_column": config.filter_column,
+        "group_json_column": config.group_json_column,
+        "group_json_key": config.group_json_key,
+        "extrema_column": config.extrema_column,
+    }
+
+
+def _schema_record(schema: Schema) -> dict[str, object]:
+    return {
+        "columns": [_column_record(column) for column in schema.columns],
+        "implicit_columns": [
+            {
+                "name": IMPLICIT_SEQ_COLUMN,
+                "type": "int64",
+                "nullable": False,
+                "server_assigned": True,
+            }
+        ],
+        "key_column": schema.key_column,
+        "sort_columns": list(schema.sort_columns),
+        "max_row_group_rows": schema.max_row_group_rows,
+        "projections": [
+            {
+                "name": projection.name,
+                "predicate_column": projection.predicate_column,
+                "predicate_values": list(projection.predicate_values),
+                "columns": list(projection.columns),
+            }
+            for projection in schema.projections
+        ],
+        "grouped_extrema": [_grouped_extrema_record(config) for config in schema.grouped_extrema],
+    }
+
+
+def _storage_policy_record(policy: StoragePolicy) -> dict[str, int | None]:
+    return {
+        "max_segments": policy.max_segments,
+        "max_bytes": policy.max_bytes,
+        "max_age_seconds": policy.max_age_seconds,
+    }
+
+
+def _namespace_record(info: NamespaceInfo) -> dict[str, object]:
+    return {
+        "namespace": info.namespace,
+        "row_count": info.row_count,
+        "byte_size": info.byte_size,
+        "min_seq": info.min_seq,
+        "max_seq": info.max_seq,
+        "segment_count": info.segment_count,
+        "storage_policy": _storage_policy_record(info.storage_policy),
+        "schema": _schema_record(info.schema),
+    }
+
+
+def _print_record(record: dict[str, object], *, indent: int | None = None) -> None:
+    json.dump(record, sys.stdout, indent=indent)
+    sys.stdout.write("\n")
+
+
 @cli.command("query")
 @click.argument("name")
-@click.argument("sql")
+@click.argument("sql", required=False)
 @click.option(
     "--format",
     "output_format",
@@ -302,7 +403,7 @@ _PRINTERS = {
 )
 def query_cmd(
     name: str,
-    sql: str,
+    sql: str | None,
     output_format: str,
     max_rows: int,
     tunnel_timeout: float,
@@ -313,16 +414,38 @@ def query_cmd(
     Connects via the controller IAP proxy when ``client_url`` is configured in
     the finelog config, otherwise opens an SSH (GCP) or ``kubectl port-forward``
     (k8s) tunnel to the configured finelog server. Runs ``<sql>`` through
-    ``StatsService.Query`` and prints results in ``--format`` (table/json/csv).
+    ``StatsService.Query`` and prints results in ``--format``. Omit ``<sql>``
+    or pass ``-`` to read SQL from stdin, which is safest for multiline queries
+    and quoted namespace names.
     """
-    configure_logging(level=logging.INFO)
-    cfg = load_finelog_config(name)
-    try:
-        with _log_client(cfg, name, tunnel_timeout, request_timeout) as client:
-            table = client.query(sql, max_rows=max_rows)
-    except IapLoginRequired as exc:
-        raise click.ClickException(str(exc)) from exc
+    query = _read_sql_argument(sql)
+    with _open_cli_client(name, tunnel_timeout, request_timeout) as client:
+        table = client.query(query, max_rows=max_rows)
     _PRINTERS[OutputFormat(output_format)](table)
+
+
+@cli.command("namespaces")
+@click.argument("name")
+@click.option("--tunnel-timeout", type=float, default=60.0, show_default=True)
+@click.option("--timeout", "request_timeout", type=float, default=DEFAULT_REQUEST_TIMEOUT, show_default=True)
+def namespaces_cmd(name: str, tunnel_timeout: float, request_timeout: float) -> None:
+    """List queryable namespaces, schemas, indexes, and storage statistics as JSONL."""
+    with _open_cli_client(name, tunnel_timeout, request_timeout) as client:
+        namespaces = client.list_namespaces()
+    for namespace in namespaces:
+        _print_record(_namespace_record(namespace))
+
+
+@cli.command("schema")
+@click.argument("name")
+@click.argument("namespace")
+@click.option("--tunnel-timeout", type=float, default=60.0, show_default=True)
+@click.option("--timeout", "request_timeout", type=float, default=DEFAULT_REQUEST_TIMEOUT, show_default=True)
+def schema_cmd(name: str, namespace: str, tunnel_timeout: float, request_timeout: float) -> None:
+    """Print one registered namespace schema as JSON."""
+    with _open_cli_client(name, tunnel_timeout, request_timeout) as client:
+        schema = client.get_table_schema(namespace)
+    _print_record({"namespace": namespace, "schema": _schema_record(schema)}, indent=2)
 
 
 def _list_namespace_dirs(remote_log_dir: str, fs: fsspec.AbstractFileSystem) -> list[str]:
