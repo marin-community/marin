@@ -18,7 +18,7 @@ Usage::
 import dataclasses
 import re
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Generic, ParamSpec, TypeVar, overload
 
@@ -42,13 +42,17 @@ def sanitize_job_name(name: str) -> str:
 
 @dataclass(frozen=True)
 class RemoteCallable(Generic[P, R]):
-    """Submit a callable to Fray with its execution configuration."""
+    """A callable wrapper that submits its function to Fray when called.
+
+    Carries Fray-specific execution config: resources, environment variables,
+    and pip dependency groups. When called, submits the wrapped function to
+    Fray and blocks until completion.
+    """
 
     fn: Callable[P, R]
     resources: ResourceConfig
     env_vars: dict[str, str] = field(default_factory=dict)
     pip_dependency_groups: list[str] | None = None
-    ports: tuple[str, ...] = ()
     name: str | None = None
 
     def named(self, name: str) -> "RemoteCallable":
@@ -77,7 +81,6 @@ class RemoteCallable(Generic[P, R]):
                     extras=dependency_groups,
                     env_vars=self.env_vars,
                 ),
-                ports=self.ports,
             )
         )
         handle.wait(raise_on_failure=True)
@@ -91,7 +94,6 @@ def remote(
     resources: ResourceConfig | None = None,
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
-    ports: Sequence[str] = (),
 ) -> RemoteCallable[P, R]: ...
 
 
@@ -102,7 +104,6 @@ def remote(
     resources: ResourceConfig | None = None,
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
-    ports: Sequence[str] = (),
 ) -> Callable[[Callable[P, R]], RemoteCallable[P, R]]: ...
 
 
@@ -113,13 +114,12 @@ def remote(
     resources: ResourceConfig | None = None,
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
-    ports: Sequence[str] = (),
 ) -> RemoteCallable[P, R] | Callable[[Callable[P, R]], RemoteCallable[P, R]]:
     """Mark a step function for remote execution via Fray.
 
     When applied without arguments (``@remote``), the function will run with
     default CPU resources. When called with ``resources=``, the supplied
-    ``ResourceConfig`` is used instead. Named ports apply to Iris jobs only.
+    ``ResourceConfig`` is used instead.
     """
     if resources is None:
         resources = ResourceConfig.with_cpu()
@@ -130,7 +130,6 @@ def remote(
             resources=resources,
             env_vars=env_vars or {},
             pip_dependency_groups=pip_dependency_groups,
-            ports=tuple(ports),
             name=name,
         )
 

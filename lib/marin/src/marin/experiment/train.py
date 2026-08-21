@@ -34,7 +34,6 @@ from levanter.models.lm_model import LmConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from levanter.training_control import TRAINING_CONTROL_PORT
 from levanter.utils.mesh import MeshConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
@@ -96,12 +95,7 @@ def _train_job(pod_config: TrainLmOnPodConfig) -> None:
         if isinstance(pod_config.resources.device, GpuConfig)
         else {}
     )
-    remote(
-        run_levanter_train_lm,
-        resources=pod_config.resources,
-        env_vars=env_vars,
-        ports=(TRAINING_CONTROL_PORT,),
-    )(pod_config)
+    remote(run_levanter_train_lm, resources=pod_config.resources, env_vars=env_vars)(pod_config)
 
 
 def train_lm(

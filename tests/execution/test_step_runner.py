@@ -734,7 +734,6 @@ def test_step_resources_dispatches_via_fray(tmp_path: Path, fray_client):
 
     custom = ResourceConfig.with_cpu(cpu=2, ram="8g")
 
-    @remote(ports=("training_control",))
     def my_step(output_path: str) -> Artifact:
         return Artifact(path=output_path)
 
@@ -750,7 +749,6 @@ def test_step_resources_dispatches_via_fray(tmp_path: Path, fray_client):
 
     assert len(spy.requests) == 1
     assert spy.requests[0].resources == custom
-    assert spy.requests[0].ports == ("training_control",)
     loaded = read_artifact(tmp_path.as_posix(), Artifact)
     assert loaded.path == tmp_path.as_posix()
 

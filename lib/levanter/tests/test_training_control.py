@@ -9,7 +9,7 @@ from urllib.request import urlopen
 import levanter.training_control as training_control
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import EndpointAccess, JobName
-from levanter.training_control import TrainingControl
+from levanter.training_control import TrainingDashboard
 from levanter.trainer import TrainerConfig
 
 
@@ -48,13 +48,12 @@ class _FailingRegistry:
         raise RuntimeError("controller unavailable")
 
 
-def test_training_control_registers_redacted_status_page(monkeypatch):
+def test_training_dashboard_registers_redacted_status_page(monkeypatch):
     config = _TrainingConfig(trainer=TrainerConfig(id="test-run"))
     registry = _Registry()
     job_info = JobInfo(
         task_id=JobName.from_wire("/alice/parent/train/0"),
         advertise_host="127.0.0.1",
-        ports={training_control.TRAINING_CONTROL_PORT: 0},
     )
 
     monkeypatch.setattr(training_control.jax, "process_index", lambda: 0)
@@ -70,7 +69,7 @@ def test_training_control_registers_redacted_status_page(monkeypatch):
             "MARIN_PROVENANCE": '{"argv": ["--token", "nested-provenance-secret"]}',
         },
     )
-    with TrainingControl(config):
+    with TrainingDashboard(config):
         assert registry.active
         assert registry.address is not None
         with urlopen(registry.address, timeout=2) as response:
@@ -92,20 +91,19 @@ def test_training_control_registers_redacted_status_page(monkeypatch):
     assert not registry.active
 
 
-def test_training_control_failure_does_not_stop_training(monkeypatch):
+def test_training_dashboard_failure_does_not_stop_training(monkeypatch):
     config = _TrainingConfig(trainer=TrainerConfig(id="test-run"))
     registry = _FailingRegistry()
     job_info = JobInfo(
         task_id=JobName.from_wire("/alice/parent/train/0"),
         advertise_host="127.0.0.1",
-        ports={training_control.TRAINING_CONTROL_PORT: 0},
     )
 
     monkeypatch.setattr(training_control.jax, "process_index", lambda: 0)
     monkeypatch.setattr(training_control, "get_iris_ctx", lambda: SimpleNamespace(registry=registry))
     monkeypatch.setattr(training_control, "get_job_info", lambda: job_info)
 
-    with TrainingControl(config):
+    with TrainingDashboard(config):
         pass
 
     assert registry.called

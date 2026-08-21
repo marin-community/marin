@@ -30,7 +30,6 @@ from levanter.trainer import AllConfig
 logger = logging.getLogger(__name__)
 
 TRAINING_CONTROL_ENDPOINT = "training-control"
-TRAINING_CONTROL_PORT = "training_control"
 _REDACTED_ENVIRONMENT_VARIABLES = ("IRIS_JOB_ENV", "IRIS_JOB_SETUP_SCRIPTS", "MARIN_PROVENANCE")
 
 
@@ -95,7 +94,7 @@ def _render_page(snapshot: _TrainingSnapshot) -> str:
 """
 
 
-class _TrainingControlRequestHandler(BaseHTTPRequestHandler):
+class _TrainingDashboardRequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def __init__(self, *args, snapshot: _TrainingSnapshot, **kwargs):
@@ -114,14 +113,16 @@ class _TrainingControlRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, format: str, *args) -> None:
-        logger.debug("Training control HTTP request: " + format, *args)
+        logger.debug("Training dashboard HTTP request: " + format, *args)
 
 
 @contextmanager
-def _serve_status_page(snapshot: _TrainingSnapshot, port: int) -> Iterator[int]:
-    handler = partial(_TrainingControlRequestHandler, snapshot=snapshot)
-    with ThreadingHTTPServer(("0.0.0.0", port), handler) as server:
-        thread = Thread(target=server.serve_forever, name=f"training-control-{server.server_address[1]}", daemon=True)
+def _serve_status_page(snapshot: _TrainingSnapshot) -> Iterator[int]:
+    handler = partial(_TrainingDashboardRequestHandler, snapshot=snapshot)
+    with ThreadingHTTPServer(("0.0.0.0", 0), handler) as server:
+        thread = Thread(
+            target=server.serve_forever, name=f"training-dashboard-{server.server_address[1]}", daemon=True
+        )
         thread.start()
         try:
             yield int(server.server_address[1])
@@ -130,21 +131,21 @@ def _serve_status_page(snapshot: _TrainingSnapshot, port: int) -> Iterator[int]:
             thread.join()
 
 
-class TrainingControl:
+class TrainingDashboard:
     """Publish the process-zero training status page through Iris."""
 
     def __init__(self, config: AllConfig):
         self._config = config
         self._stack: ExitStack | None = None
 
-    def __enter__(self) -> TrainingControl:
+    def __enter__(self) -> TrainingDashboard:
         if jax.process_index() != 0:
             return self
 
         try:
             self._publish()
         except Exception:
-            logger.warning("Training control page failed to start; training will continue", exc_info=True)
+            logger.warning("Training dashboard failed to start; training will continue", exc_info=True)
         return self
 
     def _publish(self) -> None:
@@ -152,10 +153,6 @@ class TrainingControl:
         job_info = get_job_info()
         if context is None or job_info is None:
             return
-        if TRAINING_CONTROL_PORT not in job_info.ports:
-            logger.info("Training control page is disabled because the Iris job has no %s port", TRAINING_CONTROL_PORT)
-            return
-
         snapshot = _TrainingSnapshot.capture(
             self._config,
             job_id=str(job_info.job_id),
@@ -163,7 +160,7 @@ class TrainingControl:
         )
         stack = ExitStack()
         try:
-            port = stack.enter_context(_serve_status_page(snapshot, job_info.ports[TRAINING_CONTROL_PORT]))
+            port = stack.enter_context(_serve_status_page(snapshot))
             endpoint_name = f"{job_info.job_id}/{TRAINING_CONTROL_ENDPOINT}"
             address = f"http://{job_info.advertise_host}:{port}"
             stack.enter_context(
@@ -178,7 +175,7 @@ class TrainingControl:
             raise
 
         self._stack = stack
-        logger.info("Training control page: %s/", proxy_path(endpoint_name))
+        logger.info("Training dashboard: %s/", proxy_path(endpoint_name))
 
     def __exit__(self, *_: object) -> None:
         if self._stack is None:
@@ -188,4 +185,4 @@ class TrainingControl:
         try:
             stack.close()
         except Exception:
-            logger.warning("Training control page failed to stop", exc_info=True)
+            logger.warning("Training dashboard failed to stop", exc_info=True)
