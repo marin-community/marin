@@ -106,6 +106,33 @@ Resolver options:
 The actor system also provides `ActorPool` for round-robin calls and broadcast
 RPCs across all resolved endpoints.
 
+An actor can supply a Starlette application on the actor server port. The actor
+must implement the `ActorWebApplication` protocol from `iris.actor.server`.
+Register the actor before the server starts. One actor server accepts one web
+application.
+
+The RPC application keeps the `/iris.actor.ActorService/...` path. The web
+application receives the remaining paths. The two applications use the same
+actor instance and can share state.
+
+Run the local counter demo:
+
+```bash
+uv run --package marin-iris python lib/iris/examples/actor_dashboard.py
+```
+
+The command calls `increment` through `ActorClient` and prints the dashboard
+URL. RPC and HTTP actions update the same counter.
+
+The controller serves a registered actor named `/alice/job/counter` at
+`<controller>/proxy/alice.job.counter/`. Keep the trailing slash so relative
+browser URLs stay inside the actor endpoint. Proxy requests include the
+`X-Forwarded-Prefix` header. Use this header for root-relative asset URLs.
+State-changing HTTP routes require application CSRF protection.
+
+The current Uvicorn listener supports Connect RPC and ordinary HTTP. Native
+gRPC requires an HTTP/2 listener with trailer support.
+
 Example:
 
 ```python

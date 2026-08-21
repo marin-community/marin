@@ -11,6 +11,7 @@ actor name lives in the URL path.
 import json
 from dataclasses import asdict
 
+import httpx
 import pytest
 from connectrpc.errors import ConnectError
 from iris.actor.client import ActorClient
@@ -19,6 +20,12 @@ from iris.actor.server import ActorServer
 from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.native_proxy import NativeProxy
 from iris.managed_thread import ThreadContainer
+from rigging.connect import proxy_path
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+from starlette.types import ASGIApp
 
 
 class StatusActor:
@@ -33,6 +40,19 @@ class StatusActor:
 
     def echo(self, message: str) -> str:
         return f"echo: {message}"
+
+
+class DashboardStatusActor(StatusActor):
+    def __init__(self):
+        super().__init__()
+        self._web_application = Starlette(routes=[Route("/", self._dashboard)])
+
+    @property
+    def web_application(self) -> ASGIApp:
+        return self._web_application
+
+    async def _dashboard(self, request: Request) -> JSONResponse:
+        return JSONResponse({"proxy_prefix": request.headers.get("x-forwarded-prefix", "")})
 
 
 def _start_proxy(
@@ -96,6 +116,28 @@ def test_proxy_round_trip(permissive_native_proxy_auth_json: str):
         # Second call increments the counter.
         result = client.get_status()
         assert result["documents_processed"] == 2
+    finally:
+        proxy.stop()
+        threads.stop()
+
+
+def test_proxy_forwards_actor_web_application(permissive_native_proxy_auth_json: str):
+    threads = ThreadContainer()
+    actor_name = "test-ns/dashboard"
+    actor_server = ActorServer(host="127.0.0.1", threads=threads)
+    actor_server.register(actor_name, DashboardStatusActor())
+    actor_port = actor_server.serve_background()
+
+    try:
+        proxy_url, proxy = _start_proxy(
+            permissive_native_proxy_auth_json,
+            endpoints={actor_name: f"127.0.0.1:{actor_port}"},
+        )
+        endpoint_path = proxy_path(actor_name)
+
+        dashboard = httpx.get(f"{proxy_url}{endpoint_path}/", timeout=2)
+
+        assert dashboard.json() == {"proxy_prefix": endpoint_path}
     finally:
         proxy.stop()
         threads.stop()
