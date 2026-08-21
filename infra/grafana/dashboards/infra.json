@@ -339,7 +339,7 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/wandb/train-loss",
+          "url": "/wandb/report/train-loss",
           "url_options": {
             "method": "GET",
             "params": []
@@ -383,7 +383,7 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/wandb/paloma-macro-loss",
+          "url": "/wandb/report/paloma-macro-loss",
           "url_options": {
             "method": "GET",
             "params": []
@@ -427,7 +427,7 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/wandb/mfu",
+          "url": "/wandb/report/mfu",
           "url_options": {
             "method": "GET",
             "params": []

@@ -333,6 +333,64 @@ def test_wandb_rejects_unknown_chart_without_network():
         _wandb(lambda request: pytest.fail("unexpected request")).points("nope")
 
 
+def _history_handler(found_in: str, points: list[dict], asked: list[tuple[str, list[str]]]):
+    """Serve `points` from the project named `found_in`; record each project asked."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        variables = json.loads(request.content)["variables"]
+        asked.append((variables["project"], json.loads(variables["specs"][0])["keys"]))
+        if variables["project"] != found_in:
+            return httpx.Response(200, json={"data": {"project": None}})
+        return httpx.Response(
+            200,
+            json={"data": {"project": {"run": {"state": "running", "sampledHistory": [points]}}}},
+        )
+
+    return handler
+
+
+def test_wandb_run_history_searches_projects_and_drops_null_metric_rows():
+    asked: list[tuple[str, list[str]]] = []
+    points = [{"_step": 0, "train/loss": 3.1}, {"_step": 1, "train/loss": None}, {"_step": 2, "train/loss": 2.7}]
+
+    rows = _wandb(_history_handler("marin", points, asked)).run_history("hero-run", metric="train/loss")
+
+    # `_step` is the x axis because levanter logs through wandb.log(..., step=<step>).
+    assert asked == [("marin_moe", ["_step", "train/loss"]), ("marin", ["_step", "train/loss"])]
+    assert rows == [
+        {
+            "run": "hero-run",
+            "project": "marin",
+            "run_url": "https://wandb.ai/marin-community/marin/runs/hero-run",
+            "step": step,
+            "value": value,
+        }
+        for step, value in ((0, 3.1), (2, 2.7))
+    ]
+
+
+def test_wandb_run_history_pins_an_explicit_project_without_searching():
+    asked: list[tuple[str, list[str]]] = []
+    handler = _history_handler("marin_moe", [{"_step": 7, "train/loss": 2.5}], asked)
+
+    rows = _wandb(handler).run_history("hero-run", metric="train/loss", project="marin_moe")
+
+    assert [project for project, _ in asked] == ["marin_moe"]
+    assert [row["step"] for row in rows] == [7]
+
+
+def test_wandb_run_history_fails_loud_when_no_project_has_the_run():
+    asked: list[tuple[str, list[str]]] = []
+    handler = _history_handler("nowhere", [], asked)
+
+    with pytest.raises(UpstreamError) as excinfo:
+        _wandb(handler).run_history("hero-run", metric="train/loss")
+
+    assert excinfo.value.source == "wandb"
+    assert excinfo.value.status_code == 404
+    assert [project for project, _ in asked] == ["marin_moe", "marin"]
+
+
 # --- endpoint routing / fail-loud ------------------------------------------
 
 

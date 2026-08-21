@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import duckdb
+import httpx
 import pyarrow as pa
 import yaml
 from config import CLUSTERS, K8S_CLUSTERS, ClusterTarget
@@ -540,9 +541,9 @@ def test_status_page_has_each_required_source():
         "N": "/github/nightlies",
         "G": "/github/builds",
         "W": "/iris/marin/workers",
-        "T": "/wandb/train-loss",
-        "L": "/wandb/paloma-macro-loss",
-        "M": "/wandb/mfu",
+        "T": "/wandb/report/train-loss",
+        "L": "/wandb/report/paloma-macro-loss",
+        "M": "/wandb/report/mfu",
     }
 
 
@@ -558,10 +559,8 @@ def test_stat_panels_use_grafana_reduce_options_schema():
 
 def test_telemetry_queries_bound_their_window_with_foldable_macros():
     # Time-scoped queries need foldable bounds for segment pruning. A direct bigint-to-
-    # timestamp comparison such as `timestamp_ms >= {{from}}` cannot prune segments.
-    training = _stitched_dashboards()["training.json"]
-    step_panel = next(panel for panel in _all_panels(training) if panel["id"] == 10)
-    (step_sql,) = _panel_sql({"panels": [step_panel]})
+    # timestamp comparison such as `timestamp_ms >= {{from}}` cannot prune segments. No
+    # panel is exempt: whole-run history comes from W&B, not from an unbounded scan.
     unbounded: list[tuple[str, str]] = []
     for name, dashboard in _stitched_dashboards().items():
         for sql in _panel_sql(dashboard):
@@ -573,7 +572,7 @@ def test_telemetry_queries_bound_their_window_with_foldable_macros():
             assert "timestamp_ms < CAST(EXTRACT(EPOCH FROM" in sql, name
             assert "timestamp_ms >= {{from}}" not in sql, name
 
-    assert unbounded == [("training.json", step_sql)]
+    assert unbounded == []
 
 
 def test_cluster_column_is_only_referenced_quoted_or_as_an_alias():
@@ -677,43 +676,35 @@ def test_training_loss_by_attempt_separates_process_incarnations():
     ]
 
 
-def test_training_loss_by_step_uses_the_newest_retry_sample():
+def test_training_loss_by_step_reads_the_whole_run_from_wandb():
+    # finelog evicts telemetry segments once telemetry_v1 passes its storage policy, so
+    # no finelog query reaches step 0. Join the panel's datasource base path with its
+    # URL and GET it for real, against a stubbed W&B.
     dashboard = _stitched_dashboards()["training.json"]
     panel = next(panel for panel in _all_panels(dashboard) if panel["title"] == "Training loss by step")
-    sql = _panel_sql({**dashboard, "panels": [panel]})[0]
-    sql = sql.replace("${run:sqlstring}", "'hero-run'")
+    (target,) = panel["targets"]
+    params = {param["key"]: param["value"] for param in target["url_options"]["params"]}
+    params["run"] = "hero-run"  # Grafana interpolates ${run} before the request leaves it
 
-    database = duckdb.connect()
-    database.execute(
-        """
-        CREATE TABLE telemetry_v1(
-            service VARCHAR,
-            run_id VARCHAR,
-            execution_uid VARCHAR,
-            process_index VARCHAR,
-            name VARCHAR,
-            value DOUBLE,
-            timestamp_ms BIGINT,
-            seq BIGINT
-        )
-        """
+    history = {"data": {"project": {"run": {"sampledHistory": [[{"_step": 0, "train/loss": 3.1}]]}}}}
+    wandb_source = WandbSource(timeout=5.0)
+    wandb_source._client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=history)),
+        headers={"content-type": "application/json"},
     )
-    at = int(datetime(2026, 8, 20, 12, tzinfo=UTC).timestamp() * 1000)
-    database.executemany(
-        "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, ?, ?, ?, ?, ?)",
-        [
-            ("attempt-1", "0", "step", 10, at, 1),
-            ("attempt-1", "0", "train_loss", 2.0, at, 2),
-            ("attempt-1", "0", "step", 11, at + 1_000, 3),
-            ("attempt-1", "0", "train_loss", 1.9, at + 1_000, 4),
-            ("attempt-2", "0", "step", 10, at + 2_000, 1),
-            ("attempt-2", "0", "train_loss", 2.2, at + 2_000, 2),
-            ("attempt-rank-1", "1", "step", 12, at + 3_000, 1),
-            ("attempt-rank-1", "1", "train_loss", 9.9, at + 3_000, 2),
-        ],
+    client = TestClient(
+        create_app(bridge_config(), {}, {}, GithubSource(auth=None, timeout=5.0), K8sFleet(()), wandb_source)
     )
 
-    assert database.execute(sql).fetchall() == [(10.0, 2.2), (11.0, 1.9)]
+    response = client.get(_datasources()[panel["datasource"]["uid"]] + target["url"], params=params)
+
+    assert response.status_code == 200
+    (row,) = response.json()
+    assert (row["run"], row["step"], row["value"]) == ("hero-run", 0, 3.1)
+    # Infinity renames each selector to its text, and the trend panel plots that name.
+    columns = {column["selector"]: column["text"] for column in target["columns"]}
+    assert set(columns) <= set(row)
+    assert panel["options"]["xField"] in columns.values()
 
 
 def test_training_execution_health_uses_the_current_attempt_and_iris_state():

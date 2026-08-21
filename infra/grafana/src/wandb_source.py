@@ -1,7 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Public W&B report series as flat chart rows for Grafana."""
+"""W&B series as flat chart rows for Grafana.
+
+Two readers over the same public GraphQL API. `points` follows the runset pinned
+by Marin's public hero-run report. `run_history` reads one named run's whole
+logged history for one metric, which is what lets a step-axis panel start at step
+0: finelog evicts telemetry segments once the namespace passes its storage policy,
+while W&B keeps the run.
+"""
 
 import json
 
@@ -23,6 +30,17 @@ WANDB_CHARTS = {
     "mfu": ("MFU (%)", "throughput/mfu"),
 }
 
+_RUN_URL = "https://wandb.ai/{entity}/{project}/runs/{run}"
+_RUN_HISTORY_SAMPLES = 2000
+# W&B's own step counter. Levanter logs every training metric through
+# `wandb.log(..., step=<training step>)`, so this column is the Levanter step.
+_STEP_KEY = "_step"
+
+# The projects a run named by the training dashboard can live in, searched in this
+# order. The grug hero launchers default to marin_moe and marin.experiment.train
+# defaults to marin. A caller that knows the project pins it and skips the search.
+RUN_HISTORY_PROJECTS = ("marin_moe", "marin")
+
 _REPORT_QUERY = """
 query Report($id: ID!) {
   view(id: $id) { displayName spec }
@@ -39,7 +57,7 @@ query RunSampledHistory($entity: String!, $project: String!, $run: String!, $spe
 
 
 class WandbSource:
-    """Reads the runset pinned by Marin's public hero-run report."""
+    """Reads the public hero-run report's runset, and any single run's history."""
 
     def __init__(self, *, timeout: float) -> None:
         self._client = httpx.Client(timeout=timeout, headers={"content-type": "application/json"})
@@ -100,3 +118,43 @@ class WandbSource:
                         }
                     )
         return rows
+
+    def run_history(self, run: str, *, metric: str, project: str | None = None) -> list[dict]:
+        """Return one row per sampled point of `metric` across the whole of `run`.
+
+        `run` is the Levanter run id: marin names the W&B run after it, and
+        `resume="allow"` keeps one W&B run across restarts, so this covers the run
+        from step 0 however many times it was resumed. W&B samples server-side, so
+        the response stays small on a long run. A run absent from every searched
+        project fails loud rather than rendering as an empty panel.
+        """
+        projects = (project,) if project else RUN_HISTORY_PROJECTS
+        spec = json.dumps({"keys": [_STEP_KEY, metric], "samples": _RUN_HISTORY_SAMPLES})
+        for candidate in projects:
+            run_data = (
+                self._graphql(
+                    _HISTORY_QUERY,
+                    {"entity": _ENTITY, "project": candidate, "run": run, "specs": [spec]},
+                ).get("project")
+                or {}
+            ).get("run")
+            if not run_data:
+                continue
+            histories = run_data.get("sampledHistory") or []
+            run_url = _RUN_URL.format(entity=_ENTITY, project=candidate, run=run)
+            rows: list[dict] = []
+            for point in histories[0] if histories else []:
+                step = point.get(_STEP_KEY)
+                value = point.get(metric)
+                if isinstance(step, int | float) and isinstance(value, int | float):
+                    rows.append(
+                        {
+                            "run": run,
+                            "project": candidate,
+                            "run_url": run_url,
+                            "step": step,
+                            "value": value,
+                        }
+                    )
+            return rows
+        raise UpstreamError("wandb", f"run {run!r} not found in {', '.join(projects)}", status_code=404)
