@@ -142,6 +142,20 @@ def test_rejects_central_gcs_paths_in_comma_joined_values() -> None:
     assert any("gs://marin-us-central1" in error for error in result.errors)
 
 
+def test_rejects_non_marin_gcs_bucket() -> None:
+    command = (
+        "uv run iris --cluster=marin job run --no-wait "
+        "--job-name dm-unsafe --region us-east5 --zone us-east5-a -- "
+        "python -m experiments.domain_phase_mix.launch_300m_raw_ppl_evals "
+        "--state-csv gs://unrelated-bucket/pinlin/state.csv"
+    )
+
+    result = validate_east5_iris_command(command)
+
+    assert not result.ok
+    assert any("gs://unrelated-bucket" in error for error in result.errors)
+
+
 def test_rejects_child_tpu_region_mismatch() -> None:
     command = (
         "uv run iris --cluster=marin job run --no-wait "
@@ -193,6 +207,30 @@ def test_accepts_central1_parent_children_and_paths_when_expected() -> None:
 
     assert result.ok
     assert result.errors == []
+
+
+def test_accepts_filtered_workspace_wrapper_with_central1_parent_and_child() -> None:
+    command = (
+        "uv run python -m marin.run.iris_run --config lib/iris/config/marin.yaml "
+        "--working-dir-exclude experiments/domain_phase_mix/exploratory -- "
+        "--no-wait --job-name dm-starcoder --region us-central1 --zone us-central1-a "
+        "-e MARIN_PREFIX gs://marin-us-central1 -- "
+        "python -m experiments.domain_phase_mix.launch_starcoder_heteroskedastic_snr "
+        "--tpu-region us-central1 --tpu-zone us-central1-a"
+    )
+
+    result = validate_regional_iris_command(
+        command,
+        expected_region="us-central1",
+        expected_zone="us-central1-a",
+        expected_bucket_prefix="gs://marin-us-central1",
+    )
+
+    assert result.ok
+    assert result.parent_regions == ["us-central1"]
+    assert result.parent_zone == "us-central1-a"
+    assert result.child_tpu_regions == ["us-central1"]
+    assert result.child_tpu_zone == "us-central1-a"
 
 
 def test_rejects_mixed_east5_paths_for_central1_expected_region() -> None:

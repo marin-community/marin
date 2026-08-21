@@ -6,7 +6,9 @@
 The model architecture and 80/20 WSD schedule are the same as the Delphi 3e18
 fit swarm. Only the training horizon changes. The token-aware AdamH schedule is
 recomputed for the longer horizon, while source coordinates and random seeds
-remain matched to the original 280-row panel.
+remain matched to the original 280-row panel. A distinct output namespace
+deliberately retrains all rows and permanently retains the state immediately
+after phase 0 for shared-prefix continuation experiments.
 """
 
 from __future__ import annotations
@@ -30,11 +32,15 @@ from experiments.llama import llama3_tokenizer
 logger = logging.getLogger(__name__)
 
 TOTAL_TOKENS_PER_PARAMETER = 40.0
-EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_augmented_swarm_tpp40_20260803"
-LOCAL_ARTIFACT_DIR = base.REFERENCE_OUTPUT_DIR / "delphi_augmented_swarm_tpp40_20260803" / "launch_dry_run"
+EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_augmented_swarm_tpp40_phase0_checkpoint_20260815"
+LOCAL_ARTIFACT_DIR = (
+    base.REFERENCE_OUTPUT_DIR / "delphi_augmented_swarm_tpp40_phase0_checkpoint_20260815" / "launch_dry_run"
+)
+EXPECTED_SOURCE_PANEL_SHA256 = "4f283bacb4ef269c396277cbd518ef74212a51741c909a1e1e9ace040751d507"
+EXPECTED_SOURCE_COORDINATE_HASH = "4db8e7f70dda72f2bc8a04fa4b8271f1a5959aa27e7119ad4f62f951cd1b2864"
+EXPECTED_FIXED_IDENTITY_HASH = "f626888135ba77cd55fea69fedc6ebaaa24066d225be7c33aba218f2f7816171"
 DEFAULT_MAX_CONCURRENT = 56
 STEPS_PER_EVAL = 5000
-PERMANENT_CHECKPOINT_INTERVAL = None
 HORIZON_FIELDS = frozenset(
     {
         "target_flops",
@@ -43,6 +49,21 @@ HORIZON_FIELDS = frozenset(
         "expected_checkpoint_step",
     }
 )
+
+
+def _phase_0_checkpoint_step(train_steps: int) -> tuple[int, int]:
+    """Return the last phase-0 update and the first phase-1 update."""
+    late_phase_start_step = base.PHASE_SCHEDULE.phases[1].get_start_step_aligned(
+        train_steps,
+        base.TARGET_BATCH_SIZE,
+        base.MIXTURE_BLOCK_SIZE,
+    )
+    checkpoint_step = late_phase_start_step - 1
+    if checkpoint_step <= 0:
+        raise ValueError(f"Invalid phase-0 checkpoint step {checkpoint_step} for {train_steps} train steps")
+    if 2 * checkpoint_step <= train_steps - 1:
+        raise ValueError("Phase-0 checkpoint interval would create an unintended second intermediate checkpoint")
+    return checkpoint_step, late_phase_start_step
 
 
 def _panel_hash(run_specs: list[base.DelphiSwarmRunSpec]) -> str:
@@ -81,6 +102,11 @@ def build_run_specs(
         tpu_region=tpu_region,
         tpu_zone=tpu_zone,
     )
+    source_coordinate_hash = _panel_hash(source_specs)
+    if base.SOURCE_PANEL_SHA256 != EXPECTED_SOURCE_PANEL_SHA256:
+        raise ValueError(f"Unexpected source panel hash: {base.SOURCE_PANEL_SHA256}")
+    if source_coordinate_hash != EXPECTED_SOURCE_COORDINATE_HASH:
+        raise ValueError(f"Unexpected source coordinate hash: {source_coordinate_hash}")
     total_params = {spec.total_trainable_params for spec in source_specs}
     if len(total_params) != 1:
         raise ValueError(f"Source panel has inconsistent parameter counts: {sorted(total_params)}")
@@ -107,25 +133,23 @@ def build_run_specs(
         )
         for spec in source_specs
     ]
-    if _panel_hash(run_specs) != _panel_hash(source_specs):
+    if _panel_hash(run_specs) != source_coordinate_hash:
         raise ValueError("TPP-40 materialization changed a source coordinate")
     source_identity_hash = _fixed_identity_hash(source_specs)
+    if source_identity_hash != EXPECTED_FIXED_IDENTITY_HASH:
+        raise ValueError(f"Unexpected fixed source identity hash: {source_identity_hash}")
     if _fixed_identity_hash(run_specs) != source_identity_hash:
         raise ValueError("TPP-40 materialization changed a fixed source identity field")
     data_seeds_matched = [spec.data_seed for spec in run_specs] == [spec.data_seed for spec in source_specs]
     if not data_seeds_matched:
         raise ValueError("TPP-40 materialization changed source data seeds")
-    late_phase_start_step = base.PHASE_SCHEDULE.phases[1].get_start_step_aligned(
-        train_steps,
-        base.TARGET_BATCH_SIZE,
-        base.MIXTURE_BLOCK_SIZE,
-    )
+    phase_0_checkpoint_step, late_phase_start_step = _phase_0_checkpoint_step(train_steps)
     audit: dict[str, object] = {
         "experiment_name": EXPERIMENT_NAME,
         "source_panel": source_panel,
         "source_panel_sha256": base.SOURCE_PANEL_SHA256,
         "run_count": len(run_specs),
-        "source_coordinate_hash": _panel_hash(source_specs),
+        "source_coordinate_hash": source_coordinate_hash,
         "fixed_identity_hash": source_identity_hash,
         "architecture_target_flops": base.TARGET_FLOPS,
         "actual_approximate_flops_per_run": actual_approximate_flops,
@@ -144,7 +168,9 @@ def build_run_specs(
         "data_seeds_matched_to_original_swarm": data_seeds_matched,
         "steps_per_eval": STEPS_PER_EVAL,
         "temporary_checkpoint_interval_minutes": 10,
-        "permanent_checkpoint_interval": PERMANENT_CHECKPOINT_INTERVAL,
+        "phase_0_checkpoint_step": phase_0_checkpoint_step,
+        "phase_0_checkpoint_state_next_step": late_phase_start_step,
+        "permanent_checkpoint_interval": phase_0_checkpoint_step,
         "native_table9_scheduled": True,
     }
     return run_specs, audit
@@ -204,6 +230,7 @@ def main() -> None:
         tpu_region=args.tpu_region,
         tpu_zone=args.tpu_zone,
     )
+    phase_0_checkpoint_step, _ = _phase_0_checkpoint_step(run_specs[0].train_steps)
     if args.dry_run:
         _write_local_dry_run(
             source_panel=args.source_panel,
@@ -237,7 +264,7 @@ def main() -> None:
             provenance_panel="delphi_tpp40_augmented_fit_swarm",
             provenance_scale="fixed_n_total_tpp40",
             steps_per_eval=STEPS_PER_EVAL,
-            permanent_checkpoint_interval=PERMANENT_CHECKPOINT_INTERVAL,
+            permanent_checkpoint_interval=phase_0_checkpoint_step,
         )
     if os.getenv("CI") is not None:
         logger.info(
