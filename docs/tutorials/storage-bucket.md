@@ -70,17 +70,17 @@ gcloud storage buckets describe "$BUCKET" \
 
 Clearing the policy ensures that once a training job deletes temporary files they disappear immediately, preventing runaway storage bills. You can still enable backups via lifecycle rules or replication if you need recovery.
 
-## Step 4: TTL Scratch Prefix on Main Buckets (`marin-{region}/tmp/ttl=Nd/`)
+## Step 4: TTL Scratch Prefixes (`tmp/ttl=Nd/`)
 
-For intermediate checkpoints and other short-lived data, Marin reserves a `tmp/` prefix on each `marin-{region}` bucket with lifecycle rules that delete objects based on a `tmp/ttl=Nd/` path prefix — for example, objects under `gs://marin-us-central2/tmp/ttl=3d/my-job/` are deleted three days after they are written.
+For intermediate checkpoints and other short-lived data, Marin reserves a `tmp/` prefix on each managed data bucket with lifecycle rules that delete objects based on a `tmp/ttl=Nd/` path prefix — for example, objects under `gs://marin-us-central2/tmp/ttl=3d/my-job/` are deleted three days after they are written.
 
-Supported TTLs: 1, 2, 3, 4, 5, 6, 7, 14, and 30 days. The canonical list lives in `config/marin.yaml` (`data.temp.ttl_days`); call `marin_temp_bucket(ttl_days=N, prefix=...)` to build a path.
+Supported TTLs: 1, 2, 3, 4, 5, 6, 7, 14, and 30 days. The canonical list lives in `config/marin.yaml` (`data.temp.ttl_days`). Use `marin_temp_bucket` for general scratch co-located with an input or output prefix. `marin_cluster_temp_bucket` is an explicit opt-in for specialized shared scratch such as the hero's rolling checkpoints; clusters advertise that bucket through `MARIN_CLUSTER_TEMP_PREFIX`.
 
-The shared `marin-*` buckets on GCS, CoreWeave, and R2 are declared by `DataBuckets` in
+The shared data buckets on GCS, CoreWeave, and R2 are declared by `DataBuckets` in
 [`infra/buckets`](https://github.com/marin-community/marin/blob/main/infra/buckets/README.md).
 Their names and regions come from `config/marin.yaml` and `config/coreweave.yaml`; Pulumi owns
 the complete lifecycle policy on every backend and GCS soft-delete disablement.
-To add a region, add its GCS bucket entry to the reviewed `data.region_buckets` map and preview
+To add a region or specialized bucket, add its entry to the reviewed `data.region_buckets` map and preview
 the manually operated `marin-buckets` stack:
 
 ```bash

@@ -906,6 +906,12 @@ class TrainerConfig:
     """if None (default), we'll load a checkpoint if it exists. If true, we must load a checkpoint"""
     load_checkpoint_path: Optional[str] = None
     """can be a parent (to find latest) or a specific checkpoint. if None, will set to checkpointer.base_path."""
+    load_checkpoint_fallback_paths: list[str] = field(default_factory=list)
+    """Additional checkpoint roots searched after the configured permanent and temporary roots.
+
+    Ignored when ``load_checkpoint_path`` pins one explicit checkpoint. Intended for storage
+    migrations where the previous temporary root must remain readable during a transition.
+    """
 
     def checkpoint_search_paths(self, run_id: str) -> list[str]:
         if self.load_checkpoint_path is not None:
@@ -915,6 +921,7 @@ class TrainerConfig:
         temp_path = self.checkpointer.expanded_temporary_path(run_id)
         if temp_path is not None:
             paths.append(temp_path)
+        paths.extend(path for path in self.load_checkpoint_fallback_paths if path not in paths)
         return paths
 
     initialize_from: Optional[str] = None  # Levanter trainer checkpoint to initialize from

@@ -12,6 +12,7 @@ from rigging.filesystem.cluster_config import (
     StoreType,
     data_config,
     load_cluster_config,
+    marin_cluster_temp_bucket,
     marin_prefix,
     marin_temp_bucket,
     reset_data_config_cache,
@@ -176,6 +177,26 @@ def test_marin_temp_bucket_unknown_s3_bucket_falls_back(monkeypatch):
     with use_data_config(cfg):
         path = marin_temp_bucket(3, source_prefix="s3://random-bucket/marin")
     assert path == "s3://random-bucket/marin/tmp"
+
+
+def test_marin_cluster_temp_bucket_prefers_cluster_scratch(monkeypatch):
+    """Execution-cluster scratch wins even when durable data lives in another region."""
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
+    monkeypatch.setenv("MARIN_CLUSTER_TEMP_PREFIX", "s3://hero-checkpoints")
+    cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 14, 30))
+    with use_data_config(cfg):
+        path = marin_cluster_temp_bucket(14, "checkpoints/run")
+    assert path == "s3://hero-checkpoints/tmp/ttl=14d/checkpoints/run"
+
+
+def test_marin_cluster_temp_bucket_falls_back_to_data_local_scratch(monkeypatch):
+    """Clusters without an advertised scratch root retain existing routing."""
+    monkeypatch.delenv("MARIN_CLUSTER_TEMP_PREFIX", raising=False)
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
+    cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 14, 30))
+    with use_data_config(cfg):
+        path = marin_cluster_temp_bucket(14, "checkpoints/run")
+    assert path == "s3://marin-us-east-02a/tmp/ttl=14d/checkpoints/run"
 
 
 # --- config-driven S3 bucket registry --------------------------------------

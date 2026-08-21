@@ -10,8 +10,9 @@ region-to-bucket mirror set, the URL scheme, and the temp TTL policy.
 :func:`use_data_config`, else the cluster named by ``MARIN_CLUSTER`` (default
 ``marin``), loaded from ``config/<cluster>.yaml``. Every "where does data live"
 answer flows through it: :func:`marin_prefix` is ``data_config().resolved_root()``,
-and :func:`marin_temp_bucket` and the region helpers all read its fields.
-Lifecycle rules on every configured data bucket are managed by ``infra/buckets``.
+while :func:`marin_temp_bucket` and :func:`marin_cluster_temp_bucket` resolve
+data-local and execution-cluster-local scratch respectively. Lifecycle rules on
+every configured data bucket are managed by ``infra/buckets``.
 """
 
 import contextlib
@@ -78,6 +79,7 @@ MARIN_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
 
 _MARIN_PREFIX_ENV = "MARIN_PREFIX"
 _MARIN_CLUSTER_ENV = "MARIN_CLUSTER"
+_MARIN_CLUSTER_TEMP_PREFIX_ENV = "MARIN_CLUSTER_TEMP_PREFIX"
 _GCP_METADATA_ZONE_URL = "http://metadata.google.internal/computeMetadata/v1/instance/zone"
 _DEFAULT_LOCAL_PREFIX = "/tmp/marin"
 
@@ -566,6 +568,30 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
         mp = f"file://{mp}"
     path = f"{mp}/{cfg.temp_path}"
     return _append_path_prefix(path, prefix)
+
+
+def marin_cluster_temp_bucket(
+    ttl_days: int,
+    prefix: str = "",
+    *,
+    fallback_source_prefix: str | None = None,
+) -> str:
+    """Return shared temporary storage local to the execution cluster.
+
+    A cluster advertises its shared scratch root through
+    ``MARIN_CLUSTER_TEMP_PREFIX``. This is intentionally distinct from
+    :func:`marin_temp_bucket`'s data-local routing: durable output may live in a
+    different region from the compute running the job. The advertised bucket
+    must be declared in ``data.region_buckets`` so its lifecycle rules,
+    endpoint, credentials, and signing region remain configuration-owned.
+
+    When the cluster has no explicit scratch root, ``fallback_source_prefix`` is
+    forwarded to :func:`marin_temp_bucket`. This preserves data-local routing
+    for callers that predate cluster-level scratch configuration.
+    """
+    cluster_prefix = os.environ.get(_MARIN_CLUSTER_TEMP_PREFIX_ENV)
+    source_prefix = cluster_prefix or fallback_source_prefix
+    return marin_temp_bucket(ttl_days, prefix, source_prefix=source_prefix)
 
 
 # ---------------------------------------------------------------------------

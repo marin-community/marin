@@ -22,7 +22,11 @@ from levanter.main.train_lm import TrainLmConfig
 from levanter.schedule import BatchSchedule
 from mergedeep import mergedeep
 from pydantic import BaseModel
-from rigging.filesystem.cluster_config import check_gcs_paths_same_region, marin_temp_bucket
+from rigging.filesystem.cluster_config import (
+    check_gcs_paths_same_region,
+    marin_cluster_temp_bucket,
+    marin_temp_bucket,
+)
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -161,8 +165,28 @@ def temporary_storage_base_path(output_path: str, *, ttl_days: int, category: st
     )
 
 
+def _cluster_temporary_storage_base_path(output_path: str, *, ttl_days: int, category: str) -> str:
+    """Return execution-cluster-local temporary storage keyed by an executor output path."""
+    output_component = _output_path_temp_component(output_path)
+    return marin_cluster_temp_bucket(
+        ttl_days=ttl_days,
+        prefix=os.path.join(category, output_component),
+        fallback_source_prefix=output_path,
+    )
+
+
 def temporary_checkpoint_base_path(output_path: str) -> str:
     """Return the region-local temporary checkpoint base for an executor output path."""
+    temporary_root = _cluster_temporary_storage_base_path(
+        output_path,
+        ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
+        category=TEMPORARY_CHECKPOINTS_PATH,
+    )
+    return prefix_join(temporary_root, DEFAULT_CHECKPOINTS_PATH)
+
+
+def data_local_temporary_checkpoint_base_path(output_path: str) -> str:
+    """Return the checkpoint temp path selected from the durable output location."""
     temporary_root = temporary_storage_base_path(
         output_path,
         ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
@@ -173,7 +197,7 @@ def temporary_checkpoint_base_path(output_path: str) -> str:
 
 def resolve_checkpointer_output_path(checkpointer: CheckpointerConfig, output_path: str) -> CheckpointerConfig:
     """Point ``checkpointer`` at ``output_path``: rolling checkpoints under ``<output_path>/checkpoints``
-    and time-policy (temporary) checkpoints on region-local storage keyed off ``output_path``.
+    and time-policy (temporary) checkpoints on region-local storage keyed by ``output_path``.
 
     ``append_run_id_to_base_path`` is ``False`` because ``output_path`` already encodes the run's
     identity, so a run id suffix would double it up. Every other checkpointer field is preserved.

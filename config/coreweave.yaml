@@ -8,6 +8,7 @@ data:
   region_buckets:
     na:          { bucket: marin-na,          store: r2 }
     us-east-02a: { bucket: marin-us-east-02a, store: coreweave, signing_region: US-EAST-02A }
+    us-east-08a-hero-checkpoints: { bucket: hero-checkpoints, store: coreweave, signing_region: US-EAST-08A }
     us-west-04a: { bucket: marin-us-west-04a, store: coreweave, signing_region: US-WEST-04A }
   # How to reach each S3-compatible backend. `endpoint` is the account-level endpoint
   # reachable from outside the cluster; `*_env` name the environment variables that
@@ -24,5 +25,5 @@ data:
       endpoint_env: R2_S3_ENDPOINT
       key_id_env: R2_KEY_ID
       key_secret_env: R2_KEY_SECRET
-  temp: { path: tmp, ttl_days: [1, 2, 3, 7] }
+  temp: { path: tmp, ttl_days: [1, 2, 3, 4, 5, 6, 7, 14, 30] }
   root: s3://marin-na/marin

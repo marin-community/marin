@@ -37,7 +37,10 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
-from marin.training.training import temporary_checkpoint_base_path
+from marin.training.training import (
+    data_local_temporary_checkpoint_base_path,
+    temporary_checkpoint_base_path,
+)
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -243,6 +246,9 @@ def build_ladder_run(
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
+            load_checkpoint_fallback_paths=[
+                data_local_temporary_checkpoint_base_path(ctx.output_path),
+            ],
             # load_checkpoint stays None: the trainer resumes from the newest checkpoint that
             # exists, so a retry after a hardware or memory fault continues the run.
             checkpointer=CheckpointerConfig(
