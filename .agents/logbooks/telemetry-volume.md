@@ -71,6 +71,10 @@ author: power
 - 2026-08-21: select the newest immutable Parquets by sequence until the copy reaches at least 10 GiB. This samples the current writer mix and avoids GCS-side mutation.
 - 2026-08-21: require every client sample to name a finite semantic group;
   generic probes receive the owning application's group explicitly.
+- 2026-08-21: include client-registered `telemetry_v1.*` children in the
+  composite view when required columns and types are compatible. Align fields
+  by name and null-fill optional additions; an incompatible child disables the
+  composite view without affecting direct or unrelated queries.
 - 2026-08-21: evaluate compaction downsampling, but require a metric-kind-aware
   policy before production use because imported counters and histograms are
   stored as gauges with their source semantics in attributes.
@@ -147,3 +151,26 @@ author: power
   horizon.
 - Next action: publish the report and implementation PR; keep downsampling as a
   follow-up design rather than part of this rollout.
+
+### 2026-08-21 23:37 - staged Finelog rollout
+
+- Hypothesis: the semantic namespace and 50 GiB policies can be introduced
+  without interrupting ingest or existing composite queries.
+- Commit Hash: `5ec73d87df`.
+- Command: `uv run python lib/finelog/scripts/safe_deploy.py rollout marin-dev`,
+  then promote the verified digest with `rollout marin --no-build`.
+- Config: release image
+  `ghcr.io/marin-community/finelog@sha256:3e2e2c4d19871801df0dc73fa6e7df86bdd10fef8077d5e3e1e62e4991032d2c`;
+  prior production digest `29f9b266acb42b39aa2c0190b94ef46f37378a5bd934409b586ab3f65f79af0f`.
+- Result: the first dev gate exposed a legacy-only nullable `alert_tag` column
+  and a different column order. Production remained untouched while the
+  rollup was changed to align compatible schemas by name. The corrected image
+  passed health, namespace-policy, direct-child, and composite-query checks on
+  `marin-dev`, then on `marin`. Production's bounded one-minute composite query
+  returned 182,997 rows. The parent policy is 50 GiB; the seven server-owned
+  child budgets sum to 50 GiB.
+- Interpretation: the retention change is active before client cadence changes
+  percolate, and schema evolution no longer requires identical physical column
+  order across semantic children.
+- Next action: monitor PR #8571 and watch child namespaces populate as updated
+  clients launch.
