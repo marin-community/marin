@@ -187,8 +187,8 @@ NIGHTLY_LANES: tuple[NightlyLane, ...] = (
         active_from="2026-07-14",
         active_until=None,
         overdue_grace_minutes=240,
-        expected_min_seconds=14 * 60,
-        expected_max_seconds=20 * 60,
+        expected_min_seconds=None,
+        expected_max_seconds=None,
     ),
     NightlyLane(
         id="harbor",
