@@ -709,3 +709,189 @@ def test_training_loss_by_step_uses_the_newest_retry_sample():
     )
 
     assert database.execute(sql).fetchall() == [(10.0, 2.2), (11.0, 1.9)]
+
+
+def test_training_execution_health_uses_the_current_attempt_and_iris_state():
+    dashboard = _stitched_dashboards()["training.json"]
+    panel = next(panel for panel in _all_panels(dashboard) if panel["title"] == "Execution health")
+    initialization_age = next(
+        override
+        for override in panel["fieldConfig"]["overrides"]
+        if override["matcher"]["options"] == "initialization age"
+    )
+    thresholds = next(field for field in initialization_age["properties"] if field["id"] == "thresholds")
+    assert [step["value"] for step in thresholds["value"]["steps"]] == [None, 2700, 3600]
+    sql_by_ref = {
+        target["refId"]: next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
+        for target in panel["targets"]
+    }
+    fixed_now = "TIMESTAMP '2026-08-21 12:00:00+00:00'"
+    sql_by_ref = {
+        ref: (
+            sql.replace("${run:sqlstring}", "'hero-run'")
+            .replace("{{from}}", "TIMESTAMP '2026-08-21 10:30:00+00:00'")
+            .replace("{{to}}", fixed_now)
+            .replace("now()", fixed_now)
+        )
+        for ref, sql in sql_by_ref.items()
+    }
+
+    database = duckdb.connect()
+    database.execute(
+        """
+        CREATE TABLE telemetry_v1(
+            service VARCHAR,
+            run_id VARCHAR,
+            cluster VARCHAR,
+            job_id VARCHAR,
+            execution_uid VARCHAR,
+            process_index VARCHAR,
+            name VARCHAR,
+            value DOUBLE,
+            timestamp_ms BIGINT,
+            seq BIGINT
+        )
+        """
+    )
+    fixed_now_ms = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
+    database.executemany(
+        "INSERT INTO telemetry_v1 VALUES ('levanter', ?, 'cw-a', ?, ?, ?, 'phase', ?, ?, ?)",
+        [
+            ("hero-run", "/u/hero-run-coord/train", "attempt-old", "0", 1, fixed_now_ms - 80 * 60_000, 1),
+            ("hero-run", "/u/hero-run-coord/train", "attempt-old", "0", 1, fixed_now_ms - 2 * 60_000, 2),
+            (
+                "hero-run",
+                "/u/hero-run-coord/train",
+                "attempt-current",
+                "0",
+                0,
+                fixed_now_ms - 4 * 60 * 60_000,
+                1,
+            ),
+            ("hero-run", "/u/hero-run-coord/train", "attempt-current", "0", 1, fixed_now_ms - 60_000, 3),
+            ("hero-run", "/u/hero-run-coord/train", "attempt-replica", "1", 1, fixed_now_ms - 30_000, 4),
+            ("other-run", "/u/other-run-coord/train", "other-attempt", "0", 1, fixed_now_ms - 20_000, 5),
+        ],
+    )
+    database.execute(
+        """
+        CREATE TABLE "iris.task_state"(
+            cluster VARCHAR,
+            root_job_id VARCHAR,
+            ts TIMESTAMPTZ,
+            pending BIGINT,
+            assigned BIGINT,
+            building BIGINT,
+            running BIGINT
+        )
+        """
+    )
+    database.executemany(
+        'INSERT INTO "iris.task_state" VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [
+            ("cw-a", "/u/hero-run-coord", datetime(2026, 8, 21, 11, 50, tzinfo=UTC), 4, 3, 2, 160),
+            ("cw-a", "/u/hero-run-coord-1", datetime(2026, 8, 21, 11, 59, 30, tzinfo=UTC), 1, 2, 3, 170),
+            ("cw-b", "/u/hero-run-coord", datetime(2026, 8, 21, 11, 59, 40, tzinfo=UTC), 0, 0, 0, 176),
+            ("cw-a", "/u/other-run-coord", datetime(2026, 8, 21, 11, 59, 45, tzinfo=UTC), 0, 0, 0, 176),
+        ],
+    )
+    database.execute(
+        """
+        CREATE TABLE "iris.task_event"(
+            cluster VARCHAR,
+            task_id VARCHAR,
+            attempt_id BIGINT,
+            reason VARCHAR,
+            ts TIMESTAMPTZ
+        )
+        """
+    )
+    database.executemany(
+        'INSERT INTO "iris.task_event" VALUES (?, ?, ?, ?, ?)',
+        [
+            (
+                "cw-a",
+                "/u/hero-run-coord/train/0",
+                0,
+                "TaskRetryScheduled",
+                datetime(2026, 8, 21, 11, 50, tzinfo=UTC),
+            ),
+            (
+                "cw-a",
+                "/u/hero-run-coord-1/train/1",
+                1,
+                "CoscheduledSiblingRequeued",
+                datetime(2026, 8, 21, 11, 59, tzinfo=UTC),
+            ),
+            (
+                "cw-a",
+                "/u/hero-run-coord/train/2",
+                0,
+                "TaskRunning",
+                datetime(2026, 8, 21, 11, 59, 30, tzinfo=UTC),
+            ),
+            (
+                "cw-b",
+                "/u/hero-run-coord/train/3",
+                0,
+                "TaskRetryScheduled",
+                datetime(2026, 8, 21, 11, 59, 40, tzinfo=UTC),
+            ),
+            (
+                "cw-a",
+                "/u/other-run-coord/train/0",
+                0,
+                "TaskRetryScheduled",
+                datetime(2026, 8, 21, 11, 59, 45, tzinfo=UTC),
+            ),
+        ],
+    )
+
+    assert database.execute(sql_by_ref["A"]).fetchall() == [(14_400.0, None)]
+    assert database.execute(sql_by_ref["B"]).fetchall() == [(169, 160, 4, 3, 2, 600.0)]
+    assert database.execute(sql_by_ref["C"]).fetchall() == [(1, 600.0)]
+
+    database.execute("UPDATE telemetry_v1 SET value = 0 WHERE execution_uid = 'attempt-current' AND seq = 3")
+    assert database.execute(sql_by_ref["A"]).fetchall() == [(14_400.0, 14_400.0)]
+
+
+def test_training_moe_health_queries_show_routing_signals():
+    dashboard = _stitched_dashboards()["training.json"]
+    panels = {panel["title"]: panel for panel in _all_panels(dashboard)}
+    database = duckdb.connect()
+    database.execute("CREATE MACRO to_timestamp_millis(value) AS epoch_ms(value)")
+    database.execute("CREATE MACRO date_bin(bucket, value) AS time_bucket(bucket, value)")
+    database.execute(
+        """
+        CREATE TABLE telemetry_v1(
+            service VARCHAR,
+            run_id VARCHAR,
+            name VARCHAR,
+            value DOUBLE,
+            timestamp_ms BIGINT
+        )
+        """
+    )
+    at = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
+    database.executemany(
+        "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, ?, ?)",
+        [
+            ("moe_drop_fraction", 0.04, at),
+            ("moe_sender_drop_fraction", 0.03, at),
+            ("moe_receiver_drop_fraction", 0.02, at),
+            ("train_router_routing_entropy_mean", 5.93, at),
+            ("train_router_bias_max", 390.0, at),
+            ("train_router_bias_min", -380.0, at),
+        ],
+    )
+
+    def query(title: str) -> list[tuple]:
+        sql = _panel_sql({**dashboard, "panels": [panels[title]]})[0]
+        sql = sql.replace("${__interval_ms}", "60000")
+        sql = sql.replace("${run:sqlstring}", "'hero-run'")
+        sql = sql.replace("{{from}}", "TIMESTAMP '2026-08-21 11:00:00+00:00'")
+        sql = sql.replace("{{to}}", "TIMESTAMP '2026-08-21 13:00:00+00:00'")
+        return database.execute(sql).fetchall()
+
+    assert query("Token drops") == [(datetime(2026, 8, 21, 12), 0.04, 0.03, 0.02, 0.07)]
+    assert query("Router health") == [(datetime(2026, 8, 21, 12), 5.93, 390.0, -380.0, 5.92, 400.0, -400.0)]

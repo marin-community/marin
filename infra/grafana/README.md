@@ -269,19 +269,28 @@ selector scopes the active-jobs table and the waiting-task series; with every jo
 selected the latter is the fleet backlog broken out by job, and narrowed to one
 job it is that job's queue over time.
 
-`training.json` answers "is this run on track" for one run, where `runs.json`
-answers the across-runs question; its selector is single-valued and orders hero
-runs first so the board opens on the current one, and scopes by `run_id` alone so
-a run that moves between clusters keeps one set of series. The status strip is a
-single ten-field stat panel because a `telemetry_v1` scan costs what its window
-costs whatever it selects, and it carries both hero alert inputs — time since the
-last completed step and train loss — beside step time, throughput, schedule
-progress, skip-step rejections, eval loss, and device memory. One loss panel uses
-step as its x-axis and keeps the newest sample for a repeated step. The wall-clock
-panel separates each `execution_uid` and disconnects gaps longer than five minutes.
-Iris forms this identity from the controller-minted `attempt_uid`. Thus, a new
-controller process cannot join loss from a prior process that used the same
-numeric task attempt.
+`training.json` shows whether one run is on track. `runs.json` compares runs. The
+single-value selector puts the newest hero run first. It uses `run_id` across
+clusters. The status strip uses one 15-minute `telemetry_v1` query for ten fields.
+It includes the two hero alert inputs: time since the last completed step and
+train loss. It also includes step time, throughput, schedule progress, and token
+count.
+
+The execution-health strip shows the current attempt age, Iris task counts,
+task-state age, and retained retry events. Initialization age appears only before
+training progress. Its orange 45-minute band matches the initialization alert.
+Its red 60-minute band matches the GPU startup supervisor. The Iris values match
+the current execution cluster and job root. The JAX process-zero phase heartbeat
+selects one stable replica for the attempt age.
+The Token drops and Router health panels show the MoE signals that the hero
+monitor uses. The dashboard uses a 7% drop limit. The router limits are 5.92
+entropy and 400 bias.
+
+One loss panel uses step as its x-axis and keeps the newest sample for a repeated
+step. The wall-clock loss panel separates each `execution_uid` and disconnects
+gaps longer than five minutes. Iris forms this identity from the controller-minted
+`attempt_uid`. Thus, a new controller process cannot join loss from a prior
+process with the same numeric task attempt.
 
 ## Alerting
 
