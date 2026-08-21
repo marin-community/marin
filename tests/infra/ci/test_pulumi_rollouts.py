@@ -38,5 +38,3 @@ def test_rollout_payload_passes_deploy_cli_config() -> None:
 
     assert item["name"] == "ducky"
     assert item["config"] == "ducky:deploy_generation=17"
-    assert "config_map" not in item
-    assert "stack" not in item

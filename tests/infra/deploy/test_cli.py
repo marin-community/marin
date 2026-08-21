@@ -14,7 +14,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 
 @pytest.fixture
-def fake_pulumi(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def pulumi_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     executable = tmp_path / "pulumi"
     executable.write_text(
         """#!/bin/sh
@@ -43,16 +43,14 @@ exit "${PULUMI_EXIT:-0}"
         ("xprof", "xprof-marin"),
     ],
 )
-def test_service_rollout_applies_stack_from_project_directory(
-    fake_pulumi: Path, service: str, stack: str
-) -> None:
+def test_service_rollout_applies_stack_from_project_directory(pulumi_record: Path, service: str, stack: str) -> None:
     result = CliRunner().invoke(
         cli,
         [service, "rollout", "--yes", "--config", "first=value", "--config", "second=other"],
     )
 
     assert result.exit_code == 0, result.output
-    assert fake_pulumi.read_text().splitlines() == [
+    assert pulumi_record.read_text().splitlines() == [
         str(REPOSITORY_ROOT / "infra" / service),
         "up",
         "--stack",
@@ -66,7 +64,7 @@ def test_service_rollout_applies_stack_from_project_directory(
 
 
 def test_service_rollout_preserves_pulumi_failure_exit_code(
-    fake_pulumi: Path, monkeypatch: pytest.MonkeyPatch
+    pulumi_record: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("PULUMI_EXIT", "42")
 
