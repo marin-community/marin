@@ -19,7 +19,8 @@ Stacks: one per cluster, each a `Pulumi.<cluster>.yaml` pointer to the cluster n
 `gs://marin-iac-state/`. GCP — `marin`, which declares the reserved federation-egress static
 IPs (`GcpStaticAddresses`), shared GCE load-balancer ingress (`GcpGclbIap`), and every
 repository-managed GCP IAM grant on `hai-gcp-models` (`GcpIam`, driven by
-`src/iac/gcp/iam_data.yaml`; see "User grants" below). The manually operated
+`src/iac/gcp/iam_data.yaml` and the adjacent deploy-target modules; see "User grants" below).
+The manually operated
 [`infra/buckets`](../buckets/README.md) project owns the shared GCS, CoreWeave AI Object
 Storage, and Cloudflare R2 buckets.
 
@@ -35,8 +36,8 @@ client remains a component-owned IAP setting.
 
 ### Cloud Run IAP access
 
-For an access report, compare the live IAP policy and settings with the service entry in
-`src/iac/gcp/iam_data.yaml`:
+For an access report, compare the live IAP policy and settings with the service declaration in
+`src/iac/gcp/{echo,evaldash,grafana}.py`:
 
 ```bash
 gcloud iap web get-iam-policy \
@@ -65,12 +66,12 @@ redirect trace and follow [Google's IAP troubleshooting guide](https://cloud.goo
 
 ### User grants
 
-A GCP user grant belongs in `src/iac/gcp/iam_data.yaml` and is applied by the `marin` stack.
-This includes IAP access to application stacks; service stack config must not contain IAM
-members. The IAM YAML declares each human principal's
-KMS ciphertext once under an opaque `human-NNN` ID; grants reference that ID so one person's
-ciphertext cannot drift across roles. Two agent skills drive the flow so no personal email
-lands in this public repo unencrypted:
+A GCP user grant is applied by the `marin` stack. Shared grants and the encrypted principal
+registry live in `src/iac/gcp/iam_data.yaml`; Echo, EvalDash, Grafana, and Loom grants live in
+the adjacent deploy-target modules. Service stack config must not contain IAM members. The IAM
+YAML declares each human principal's KMS ciphertext once under an opaque `human-NNN` ID, and
+deploy-target modules reference that ID so one person's ciphertext cannot drift across roles.
+Two agent skills drive the flow so no personal email lands in this public repo unencrypted:
 
 - **`add-grant`** — collect the request (locally or from a GitHub issue), encrypt the
   principal, edit the right surface, and open a reviewable PR.
@@ -84,20 +85,12 @@ review. `iam_audit.py` bulk-rotates the principals declared in `iam_data.yaml`. 
 decrypting, or applying needs `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the marin-iac
 key ("Backend").
 
-The `marin` stack is the sole repository owner of grants on `hai-gcp-models`. This ownership
-boundary is the prerequisite for authoritative reconciliation: application stacks and deploy
-scripts must not create or mutate IAM policy. The resources remain additive `*IAMMember`
-resources until the separately reviewed authoritative-binding cutover. Import only grants
-confirmed by the live-policy audit. Record code-declared grants that are absent live for a
-separate policy review instead of creating them during the transfer. Before applying a leaf
-stack that has relinquished a live grant, adopt the central resource and remove the old resource
-from the leaf stack's state without deleting the live binding.
-
-Automatic Echo, EvalDash, and Grafana rollouts are blocked in
-`scripts/ci/pulumi_rollouts.py` while their leaf states retain the transferred IAM resources.
-After adopting the central resources and detaching those leaf-state entries, remove the gate
-before resuming merge-triggered rollouts. Manual workflow dispatch remains available for the
-coordinated migration.
+The `marin` stack is the sole repository owner of grants on `hai-gcp-models`; application
+stacks and deploy scripts must not create or mutate IAM policy. The resources remain additive
+`*IAMMember` resources. Issue #8455 tracks the rollout: import only grants confirmed by the
+live-policy audit, then convert them to authoritative role bindings in a separately reviewed
+change. Record code-declared grants that are absent live for a separate policy review instead
+of creating them during import.
 
 GitHub organization and repository resources live in the independent
 [`github`](github/README.md) Pulumi project. Its stack YAML declares existing Actions secrets

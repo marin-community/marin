@@ -406,6 +406,12 @@ class DeploymentConfig:
             ("dotenvSecretVersion", self.dotenv_secret_version),
         ):
             _positive_config_int(value, name)
+        for profile in self.profiles:
+            for environment in profile.env:
+                if isinstance(environment, ProfileSecretConfig) and not environment.secret_ref.startswith(
+                    f"projects/{self.project}/"
+                ):
+                    raise ValueError(f"profile {profile.name!r} secretRef must use project {self.project!r}")
         profile_names = {profile.name for profile in self.profiles}
         workload_names: set[str] = set()
         for workload in self.workloads:

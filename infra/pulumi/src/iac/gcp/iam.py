@@ -6,8 +6,8 @@
 Covers every human, service account, and Google-managed service-agent binding on the project,
 the shared KMS key, every secret, every bucket, every Artifact Registry repo, Cloud Run IAP
 policies, and who can impersonate each service account. This is the sole Pulumi owner
-for GCP IAM grants. The current resources remain additive ``*IAMMember`` grants until the
-inventory has passed its final drift review and is converted to role-authoritative bindings.
+for GCP IAM grants. The current resources remain additive ``*IAMMember`` grants; issue #8455
+tracks their reviewed conversion to role-authoritative bindings.
 
 Replaces infra/permissions's `GcpDeployPermissions`, which covered only additive deploy-account
 grants; those accounts' grants are folded into `project_grants`/`kms_grants`/etc. here rather
@@ -94,7 +94,7 @@ class GcpServiceAccountIam:
 
 
 @dataclass(frozen=True)
-class GcpCloudRunServiceIam:
+class GcpCloudRunIapIam:
     location: str
     service: str
     iap_grants: tuple[GcpRoleGrant, ...]
@@ -126,6 +126,19 @@ class GcpCustomRole:
 
 
 @dataclass(frozen=True)
+class GcpIamGrantSet:
+    """IAM declarations owned by one deploy target and applied by the global stack."""
+
+    project_grants: tuple[GcpRoleGrant, ...] = ()
+    kms_grants: tuple[GcpRoleGrant, ...] = ()
+    secrets: tuple[GcpSecretIam, ...] = ()
+    buckets: tuple[GcpBucketIam, ...] = ()
+    artifact_repositories: tuple[GcpArtifactRepositoryIam, ...] = ()
+    service_accounts: tuple[GcpServiceAccountIam, ...] = ()
+    cloud_run_iap: tuple[GcpCloudRunIapIam, ...] = ()
+
+
+@dataclass(frozen=True)
 class GcpIamArgs:
     project: str
     kms_location: str
@@ -139,7 +152,25 @@ class GcpIamArgs:
     buckets: tuple[GcpBucketIam, ...]
     artifact_repositories: tuple[GcpArtifactRepositoryIam, ...]
     service_accounts: tuple[GcpServiceAccountIam, ...]
-    cloud_run_services: tuple[GcpCloudRunServiceIam, ...]
+    cloud_run_iap: tuple[GcpCloudRunIapIam, ...]
+
+
+def merge_iam_grant_sets(args: GcpIamArgs, grant_sets: tuple[GcpIamGrantSet, ...]) -> GcpIamArgs:
+    """Add deploy-target declarations to the global IAM resource graph."""
+    return replace(
+        args,
+        project_grants=args.project_grants
+        + tuple(grant for grant_set in grant_sets for grant in grant_set.project_grants),
+        kms_grants=args.kms_grants + tuple(grant for grant_set in grant_sets for grant in grant_set.kms_grants),
+        secrets=args.secrets + tuple(secret for grant_set in grant_sets for secret in grant_set.secrets),
+        buckets=args.buckets + tuple(bucket for grant_set in grant_sets for bucket in grant_set.buckets),
+        artifact_repositories=args.artifact_repositories
+        + tuple(repository for grant_set in grant_sets for repository in grant_set.artifact_repositories),
+        service_accounts=args.service_accounts
+        + tuple(account for grant_set in grant_sets for account in grant_set.service_accounts),
+        cloud_run_iap=args.cloud_run_iap
+        + tuple(service for grant_set in grant_sets for service in grant_set.cloud_run_iap),
+    )
 
 
 @dataclass(frozen=True)
@@ -228,12 +259,12 @@ def _resolve_encrypted_members(args: GcpIamArgs, decrypt: _KmsMemberDecryptor) -
             replace(r, grants=_resolve_grants(r.grants, decrypt)) for r in args.artifact_repositories
         ),
         service_accounts=tuple(replace(a, grants=_resolve_grants(a.grants, decrypt)) for a in args.service_accounts),
-        cloud_run_services=tuple(
+        cloud_run_iap=tuple(
             replace(
                 service,
                 iap_grants=_resolve_grants(service.iap_grants, decrypt),
             )
-            for service in args.cloud_run_services
+            for service in args.cloud_run_iap
         ),
     )
 
@@ -398,7 +429,7 @@ def _grant_service_account_iam(context: _GcpIamContext) -> None:
 
 
 def _grant_cloud_run_iap(context: _GcpIamContext) -> None:
-    for service in context.args.cloud_run_services:
+    for service in context.args.cloud_run_iap:
         iap_service_id = (
             f"projects/{context.args.project}/iap_web/cloud_run-{service.location}/services/{service.service}"
         )

@@ -9,8 +9,8 @@ it on Cloud Run v2 with Direct VPC egress so it reaches cluster-internal IPs, ga
 Identity-Aware Proxy.
 
 The component owns the runtime service account, Artifact Registry repo and image, service,
-and IAP settings. The ``marin`` infrastructure stack owns every IAM grant for the service
-and runtime account. The project-level OAuth consent screen remains external.
+and IAP settings. It does not mutate IAM; the ``marin`` infrastructure stack declares grants
+confirmed by the live-policy inventory. The project-level OAuth consent screen remains external.
 """
 
 import re
@@ -30,9 +30,9 @@ class SecretEnv:
     """A Secret Manager secret exposed to the container as an environment variable.
 
     ``name`` is the variable the container reads; ``secret`` is the Secret Manager secret id
-    in the service's project; ``version`` is the version to mount ("latest" or a number). The
-    ``iam_data.yaml`` grants the runtime service account access. This component references the
-    secret and never creates it or holds its value.
+    in the service's project; ``version`` is the version to mount ("latest" or a number). This
+    component references the secret and never creates it, holds its value, or mutates its IAM
+    policy. Deploy targets declare grants confirmed by the live-policy inventory separately.
 
     When the same stack creates the secret (or its version), pass those resources in
     ``wait_for``: the string id carries no dependency edge, so the service/job that mounts

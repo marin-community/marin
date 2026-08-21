@@ -116,8 +116,9 @@ their federation mapping.
 
 A profile's `env` block declares the environment every session of that profile
 receives. Each entry sets either an inline `value` for non-secret configuration
-or a `secretRef` that the host resolves from Secret Manager at launch; Pulumi
-grants the VM service account read access to each referenced secret. Profile
+or a same-project `secretRef` that the host resolves from Secret Manager at launch. Declare
+`roles/secretmanager.secretAccessor` for each reference in
+`infra/pulumi/src/iac/gcp/loom.py` before applying the profile. Profile
 environment is applied after `envClear`, so strict automation profiles receive
 it too. All profiles set `IRIS_USER=loom`, which makes Iris jobs submitted from
 a session land under `/loom/<job>` instead of inheriting the session container's
@@ -163,7 +164,7 @@ to bind the new service account, then enable Loom alerts and redeploy Grafana.
 ## VM permissions
 
 The Loom VM service account runs interactive agent sessions. Its project, secret, and KMS
-grants are declared in `infra/pulumi/src/iac/gcp/iam_data.yaml` and applied by the `marin`
+grants are declared in `infra/pulumi/src/iac/gcp/loom.py` and applied by the `marin`
 infrastructure stack. `Pulumi.marin-loom.yaml` contains runtime configuration only; do not add
 IAM bindings to this application stack or deployment scripts. Cloud SQL database users and
 PostgreSQL table privileges are database resources, so Echo continues to own the `loom-vm`

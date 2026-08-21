@@ -1,6 +1,6 @@
 ---
 name: review-grant
-description: Review an explicitly identified marin-iac grant PR, confirm its decrypted principals and roles, then apply only the confirmed grant.
+description: Review an explicitly identified marin-iac grant PR that edits IAM data or a deploy-target module, confirm its decrypted principals and roles, then apply only the confirmed grant.
 ---
 
 # Skill: Review a user grant
@@ -14,7 +14,7 @@ Read first:
 
 - `infra/pulumi/README.md` — the marin-iac stacks and the `pulumi up`
   prerequisites (you need `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the key
-  and, for a `viewers` change, access to that service's stack).
+  and permission to update the `marin` stack).
 
 **Never approve or merge before the user confirms the decrypted grant.** The
 whole point is that a second person sees the actual identity and access before it
@@ -28,18 +28,17 @@ gh pr checkout <n>          # pull the branch into the worktree
 git fetch origin main
 ```
 
-Confirm the diff only touches grant surfaces — `infra/pulumi/src/iac/gcp/iam_data.yaml`
-and/or a `infra/<service>/Pulumi.marin-<service>.yaml` `viewers` list. If it
+Confirm the diff only touches grant surfaces under `infra/pulumi/src/iac/gcp/`:
+`iam_data.yaml` and/or a deploy-target IAM module. If it
 changes anything else (code, other Pulumi resources), stop and review it as an
 ordinary PR, not a grant.
 
 ## 2. Decrypt the changed principals
 
-For the `iam_data.yaml` changes, turn the opaque principal references into real
-emails:
+Turn the changed opaque principal references into real emails:
 
 ```bash
-git diff origin/main...HEAD -- infra/pulumi/src/iac/gcp/iam_data.yaml \
+git diff origin/main...HEAD -- infra/pulumi/src/iac/gcp \
   | uv run --package marin-iac --extra deploy \
       python infra/pulumi/iam_principal.py decrypt --diff
 ```
@@ -47,9 +46,8 @@ git diff origin/main...HEAD -- infra/pulumi/src/iac/gcp/iam_data.yaml \
 Each output line is `+ user:<email>` (added) or `- user:<email>` (removed). Map
 each back to the role and resource it sits under in the diff. The decryptor
 shows the principal; read the surrounding `role` and container
-(`project_grants`, a specific bucket/secret/repository/service account) from the
-diff hunk. For a `viewers` change, the emails are already plaintext in the YAML
-diff; read them directly.
+(`project_grants`, a specific bucket/secret/repository/service account, or a
+deploy-target module) from the diff hunk.
 
 ## 3. Present the grant and get confirmation
 
@@ -65,7 +63,7 @@ Apply this? (yes/no)
 ```
 
 Call out anything that looks off: a broader role than the resource needs, a
-principal you do not recognize, a `viewers` wildcard, or a revocation that might
+principal you do not recognize, a domain wildcard, or a revocation that might
 cut off active access. If the user does not clearly approve, stop and report
 back — do not merge.
 
@@ -87,9 +85,8 @@ runs against the committed state.
 The change is not live until `pulumi up` runs — CI never applies. Identify the
 affected stack(s) from the diff:
 
-- `iam_data.yaml` → the **`marin`** stack in `infra/pulumi`.
-- a `viewers` change → that service's stack, e.g. **`marin-evaldash`** in
-  `infra/evaldash` or **`marin-grafana`** in `infra/grafana`.
+- Any grant surface under `infra/pulumi/src/iac/gcp/` → the **`marin`** stack in
+  `infra/pulumi`.
 
 Prompt the user: they can run it themselves, or ask you to. If you run it, per
 stack:

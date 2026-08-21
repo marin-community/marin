@@ -8,8 +8,9 @@ push it digest-pinned to a per-job Artifact Registry repo, run it as a Cloud Run
 and trigger it on a cron schedule through Cloud Scheduler.
 
 The component owns the runtime service account, Artifact Registry repo and image, job, and
-Scheduler trigger. The ``marin`` infrastructure stack owns every IAM grant for the job and
-runtime account. Secret Manager secrets are referenced and mounted without entering state.
+Scheduler trigger. It does not mutate IAM; the ``marin`` infrastructure stack declares grants
+confirmed by the live-policy inventory. Secret Manager secrets are referenced and mounted
+without entering state.
 """
 
 from dataclasses import dataclass, field
@@ -171,7 +172,6 @@ class ScheduledCloudRunJob(pulumi.ComponentResource):
                     service_account_email=service_account.email,
                 ),
             ),
-            # The centrally managed invoker grant must exist before the first tick.
             opts=pulumi.ResourceOptions(parent=self, provider=gcp_provider, depends_on=[job]),
         )
 
