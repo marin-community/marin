@@ -106,7 +106,7 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--checkpoint-path` | places checkpoints at an explicit storage prefix |
 | `--load-checkpoint-path` | restores from a source without using it as the checkpoint output prefix |
 | `--checkpoint-restore-mode` | optionally restores device leaves into donated initialization buffers |
-| `--training-data synthetic` | reuses a deterministic batch without opening TensorStore |
+| `--training-data synthetic` | reuses a deterministic batch without resolving a training-data artifact |
 | `--watch-interval`, `--watch-mode` | select inline or diagnostic norm collection |
 | `--profile-start-step`, `--profile-steps` | select the rank-0 XProf window |
 | `--seed` | sets the trainer seed |

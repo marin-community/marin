@@ -125,6 +125,18 @@ def test_checkpoint_restore_source_is_separate_from_checkpoint_output():
     assert trainer.checkpointer.base_path == f"{ctx.output_path}/checkpoints"
 
 
+def test_synthetic_run_does_not_resolve_training_data_artifacts():
+    step = launch.build_hero_run(
+        run_id="synthetic-no-data-dependency",
+        dp_racks=1,
+        num_steps=1,
+        training_data_mode=train.TrainingDataMode.SYNTHETIC,
+        version="dev",
+    )
+
+    assert step.deps == ()
+
+
 def test_donated_checkpoint_restore_preserves_initialized_device_buffers():
     device = jax.devices()[0]
     device_sharding = jax.sharding.SingleDeviceSharding(device)

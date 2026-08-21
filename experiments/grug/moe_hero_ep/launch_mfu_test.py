@@ -13,6 +13,7 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
+from levanter.data.text.datasets import LmDataConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.artifact import Artifact
@@ -257,13 +258,16 @@ def build_hero_run(
                 keep_last_temporary_checkpoints=1,
             ),
         )
-        data = harrier_mix_2026_08_17_1_data_config(
-            ctx=ctx,
-            total_steps=total_schedule_steps,
-            batch_size=batch_size,
-            max_seq_len=model.max_seq_len,
-            validation=validation,
-        )
+        if training_data_mode == TrainingDataMode.SYNTHETIC and not validation:
+            data = LmDataConfig(tokenizer=marin_tokenizer)
+        else:
+            data = harrier_mix_2026_08_17_1_data_config(
+                ctx=ctx,
+                total_steps=total_schedule_steps,
+                batch_size=batch_size,
+                max_seq_len=model.max_seq_len,
+                validation=validation,
+            )
         return GrugRunConfig(
             model=model,
             data=data,
@@ -285,7 +289,11 @@ def build_hero_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(HARRIER_MIX_2026_08_17_1_STORE, *validation),
+        deps=(
+            tuple(validation)
+            if training_data_mode == TrainingDataMode.SYNTHETIC and not validation
+            else (HARRIER_MIX_2026_08_17_1_STORE, *validation)
+        ),
         runtime_args={"train_resources": train_resources},
     )
 
