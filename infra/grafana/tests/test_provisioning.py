@@ -867,5 +867,5 @@ def test_training_moe_health_queries_show_routing_signals():
         sql = sql.replace("{{to}}", "TIMESTAMP '2026-08-21 13:00:00+00:00'")
         return database.execute(sql).fetchall()
 
-    assert query("Token drops") == [(datetime(2026, 8, 21, 12), 0.04, 0.03, 0.02, 0.05)]
+    assert query("Token drops") == [(datetime(2026, 8, 21, 12), 0.04, 0.03, 0.02, 0.07)]
     assert query("Router health") == [(datetime(2026, 8, 21, 12), 5.93, 390.0, -380.0, 5.92, 400.0, -400.0)]

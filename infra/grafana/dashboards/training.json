@@ -1608,7 +1608,7 @@
       "id": 12,
       "type": "timeseries",
       "title": "Token drops",
-      "description": "The total, sender, and receiver token-drop fractions. The hero monitor warns when the total fraction is above 5%.",
+      "description": "The total, sender, and receiver token-drop fractions. The run-health limit is 7%, above intermittent 5% spikes.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1635,7 +1635,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "5% limit"
+              "options": "7% limit"
             },
             "properties": [
               {
@@ -1684,7 +1684,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'moe_drop_fraction' THEN value END) AS drop_fraction, AVG(CASE WHEN name = 'moe_sender_drop_fraction' THEN value END) AS sender_drop_fraction, AVG(CASE WHEN name = 'moe_receiver_drop_fraction' THEN value END) AS receiver_drop_fraction, CAST(0.05 AS DOUBLE) AS alert_threshold FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('moe_drop_fraction', 'moe_sender_drop_fraction', 'moe_receiver_drop_fraction') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'moe_drop_fraction' THEN value END) AS drop_fraction, AVG(CASE WHEN name = 'moe_sender_drop_fraction' THEN value END) AS sender_drop_fraction, AVG(CASE WHEN name = 'moe_receiver_drop_fraction' THEN value END) AS receiver_drop_fraction, CAST(0.07 AS DOUBLE) AS alert_threshold FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('moe_drop_fraction', 'moe_sender_drop_fraction', 'moe_receiver_drop_fraction') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -1719,7 +1719,7 @@
             },
             {
               "selector": "alert_threshold",
-              "text": "5% limit",
+              "text": "7% limit",
               "type": "number"
             }
           ]

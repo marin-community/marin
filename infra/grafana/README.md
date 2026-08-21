@@ -278,9 +278,10 @@ count.
 
 The execution-health strip shows the current attempt age, Iris task counts,
 task-state age, and retained retry events. Its orange 45-minute band matches the
-initialization alert. Its red 80-minute band matches the hero startup watchdog.
-The Token drops and Router health panels show the MoE signals from the hero
-monitor. They include the 5% drop, 5.92 entropy, and 400 bias limits.
+initialization alert. Its red 60-minute band matches the GPU startup supervisor.
+The Token drops and Router health panels show the MoE signals that the hero
+monitor uses. The dashboard uses a 7% drop limit. The router limits are 5.92
+entropy and 400 bias.
 
 One loss panel uses step as its x-axis and keeps the newest sample for a repeated
 step. The wall-clock loss panel separates each `execution_uid` and disconnects
