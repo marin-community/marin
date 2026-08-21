@@ -194,12 +194,16 @@ def _process_peak_bytes() -> int:
     return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * scale)
 
 
-def _cgroup_memory_bytes(name: str) -> int | None:
-    candidates = (
+def _cgroup_memory_candidates(name: str) -> tuple[Path, Path]:
+    """cgroup v2 and cgroup v1 paths for a memory accounting file, e.g. ``memory.peak``."""
+    return (
         Path(f"/sys/fs/cgroup/{name}"),
         Path(f"/sys/fs/cgroup/memory/{name.replace('.', '_in_bytes')}"),
     )
-    for path in candidates:
+
+
+def _cgroup_memory_bytes(name: str) -> int | None:
+    for path in _cgroup_memory_candidates(name):
         try:
             value = path.read_text().strip()
         except OSError:
@@ -207,6 +211,25 @@ def _cgroup_memory_bytes(name: str) -> int | None:
         if value and value != "max":
             return int(value)
     return None
+
+
+def _reset_cgroup_peak(name: str) -> None:
+    """Best-effort peak-watermark reset before a repetition starts.
+
+    Repetitions run as separate subprocesses of the same Iris task, so they
+    share one cgroup; without a reset, ``memory.peak`` is a cumulative
+    lifetime high-water mark and a later, smaller repetition can report an
+    earlier repetition's larger peak as its own. Writing resets the
+    watermark on cgroup v2 kernels >= 6.12 (``memory.peak``) and on cgroup v1
+    (``max_usage_in_bytes``, resettable by any write); a no-op elsewhere, in
+    which case ``cgroup_peak_bytes`` reflects the task's lifetime maximum.
+    """
+    for path in _cgroup_memory_candidates(name):
+        try:
+            path.write_text("0")
+            return
+        except OSError:
+            continue
 
 
 def _common_result(
@@ -513,6 +536,7 @@ def _read_child(
             len(frames),
             total_payload_bytes,
             pl.thread_pool_size(),
+            streaming_rows,
         )
     effective_fan_in = min(len(frames), fan_in) if operation in {"read-external", "read-planned"} else len(frames)
     bytes_at_risk = effective_fan_in * streaming_rows * avg_item_bytes
@@ -523,6 +547,7 @@ def _read_child(
         len(frames),
         total_payload_bytes,
         pl.thread_pool_size(),
+        streaming_rows,
     )
     started = time.monotonic()
     with pl.Config() as polars_config, RssSampler() as sampler:
@@ -666,6 +691,8 @@ def main(
     if repetition is None:
         _run_children(repetitions, threads, ChildFailureMode(child_failure))
         return
+
+    _reset_cgroup_peak("memory.peak")
 
     if operation == "write":
         result = _write_child(
