@@ -513,6 +513,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
     )
+    # Armed before the state is built or restored, so its startup deadline covers a stall in
+    # initialization, checkpoint restore, cache construction or compilation. The step and process
+    # deadlines only arm once a step reports progress.
+    progress_watchdog = trainer.progress_watchdog.create(
+        process_index=jax.process_index(),
+        diagnostic=capture_stall_diagnostics,
+    )
+
     with set_mesh(mesh):
         batch_schedule = trainer.batch_schedule
 
@@ -583,10 +591,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             model_getter=lambda s: s.params,
             eval_model_getter=lambda s: s.ema_params if s.ema_params is not None else s.params,
             opt_state_getter=lambda s: s.opt_state,
-        )
-        progress_watchdog = trainer.progress_watchdog.create(
-            process_index=jax.process_index(),
-            diagnostic=capture_stall_diagnostics,
         )
         if progress_watchdog is not None:
             state_callbacks.add_hook(progress_watchdog, every=1)
