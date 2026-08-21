@@ -338,7 +338,7 @@
             "properties": [
               {
                 "id": "decimals",
-                "value": 3
+                "value": 4
               }
             ]
           }
@@ -456,6 +456,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
+          "decimals": 4,
           "custom": {
             "drawStyle": "line",
             "lineWidth": 2,
@@ -542,6 +543,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
+          "decimals": 4,
           "custom": {
             "drawStyle": "line",
             "lineWidth": 2,
@@ -550,7 +552,20 @@
             "spanNulls": false
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "step"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "xField": "step",
@@ -619,6 +634,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
+          "decimals": 4,
           "custom": {
             "drawStyle": "line",
             "lineWidth": 2,
@@ -645,6 +661,10 @@
               {
                 "id": "custom.axisPlacement",
                 "value": "right"
+              },
+              {
+                "id": "decimals",
+                "value": 0
               },
               {
                 "id": "color",
@@ -1179,6 +1199,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
+          "decimals": 4,
           "custom": {
             "drawStyle": "line",
             "lineWidth": 0,
