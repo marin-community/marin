@@ -29,7 +29,7 @@ from rigging.telemetry.probes import nccl
 from rigging.telemetry.probes.runner import PeriodicProbe
 from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper, prefixed_metric_snapshots
 
-from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
+from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.config import WORKER_PYTHON_VERSION, InferenceModelConfig, VllmCompilationCacheMode
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_release import (
@@ -159,7 +159,7 @@ class PreinstalledVllm:
         return {}
 
     def cache_identity(self) -> str:
-        return f"preinstalled:{VLLM_FORK_REQUIREMENT}:{TPU_INFERENCE_FORK_REQUIREMENT}:{WORKER_PYTHON_VERSION}"
+        return f"preinstalled:{WORKER_PYTHON_VERSION}"
 
 
 class VllmType(StrEnum):
@@ -267,21 +267,16 @@ def _write_virtual_hosted_s3_config() -> str:
 
 @dataclass(frozen=True)
 class IsolatedTpuVllm:
-    """Run Marin's forked TPU vLLM from a throwaway uv-managed environment via ``uvx``.
+    """Run Marin's selected TPU vLLM release in a throwaway uv-managed environment.
 
-    The TPU counterpart to :class:`IsolatedCudaVllm`. ``vllm`` and its ``tpu-inference``
-    runtime are two git forks pinned by SHA in ``marin.external_dependencies``; this
-    provisions them in an isolated uv-tool env rather than the workspace lock, so
-    ``marin-serve iris --tpu`` runs from outside a checkout.
+    The vLLM wheel declares its companion packages. It stays outside the workspace
+    lock so ``marin-serve iris --tpu`` works without a checkout.
     """
 
-    vllm_ref: str
-    """``uvx --from`` spec for the vLLM fork, e.g.
-    ``vllm @ git+https://github.com/marin-community/vllm.git@<sha>``."""
-    tpu_inference_ref: str
-    """``uvx --with`` spec for the tpu-inference fork (vLLM's TPU runtime dependency)."""
-    # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
-    python_version: str = WORKER_PYTHON_VERSION
+    requirement: str
+    release_tag: str
+    exclude_newer: str
+    python_version: str
     # torch is only a dependency here (jax/libtpu do TPU compute), so resolve it from the
     # CPU index rather than dragging in a CUDA tree.
     torch_backend: str = "cpu"
@@ -290,9 +285,9 @@ class IsolatedTpuVllm:
         return [
             "uvx",
             "--from",
-            self.vllm_ref,
-            "--with",
-            self.tpu_inference_ref,
+            self.requirement,
+            "--exclude-newer",
+            self.exclude_newer,
             "--python",
             self.python_version,
             "--torch-backend",
@@ -301,12 +296,17 @@ class IsolatedTpuVllm:
         ]
 
     def env(self) -> dict[str, str]:
-        # vLLM targets CUDA unless VLLM_TARGET_DEVICE is set; the uvx build subprocess
-        # inherits this from the launch environment.
-        return {"VLLM_TARGET_DEVICE": "tpu"}
+        # vLLM otherwise targets CUDA; the uvx-launched process inherits this environment.
+        # Iris mounts its system temporary directory no-exec, so uvx's executable tool env
+        # must live under the task work directory.
+        cache_root = os.environ.get("IRIS_WORKDIR", tempfile.gettempdir())
+        return {
+            "VLLM_TARGET_DEVICE": "tpu",
+            "UV_CACHE_DIR": os.path.join(cache_root, f".marin-vllm-tpu-{self.release_tag}"),
+        }
 
     def cache_identity(self) -> str:
-        return f"tpu:{self.vllm_ref}:{self.tpu_inference_ref}:{self.python_version}:{self.torch_backend}"
+        return f"tpu:{self.requirement}"
 
 
 def _starts_nccl_ras_probe(launcher: VllmLauncher) -> bool:
