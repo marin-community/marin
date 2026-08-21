@@ -384,7 +384,7 @@ def _running_tasks_with_band_and_value(tx: Tx) -> list[RunningTaskInfo]:
             RunningTaskInfo(
                 task_id=row.task_id,
                 worker_id=wid,
-                band_sort_key=row.priority_band,
+                priority_band=row.priority_band,
                 resource_value=resource_value(
                     row.res_cpu_millicores,
                     row.res_memory_bytes,
@@ -425,11 +425,9 @@ def _preempt_solo(
             continue
         if victim.device_variant != wanted_variant:
             continue
-        # Can only preempt strictly lower priority (higher band_sort_key).
-        # `solo_victims` is sorted by descending band_sort_key, so once this
-        # gate trips every later victim also fails — break, don't continue,
-        # to avoid scanning the unpreemptible tail (issue #5888).
-        if priority_band_rank(victim.band_sort_key) <= priority_band_rank(candidate.band):
+        # Victims are sorted lowest-priority first. Once a victim does not rank
+        # below the candidate, every later victim is also ineligible (issue #5888).
+        if priority_band_rank(victim.priority_band) <= priority_band_rank(candidate.band):
             break
 
         cap = context.capacities.get(victim.worker_id)
@@ -489,7 +487,7 @@ def _preempt_coscheduled(
         if members[0].device_variant != wanted_variant:
             continue
         # Strict band: every sibling must be lower priority than the preemptor.
-        if any(priority_band_rank(m.band_sort_key) <= priority_band_rank(candidate.band) for m in members):
+        if any(priority_band_rank(m.priority_band) <= priority_band_rank(candidate.band) for m in members):
             continue
         if len(members) < n_required:
             continue
@@ -530,8 +528,8 @@ def _solo_victims_freeing_host(
     for victim in host_victims:
         if victim.already_preempted:
             continue
-        # Only strictly lower priority (higher band_sort_key) victims are eligible.
-        if priority_band_rank(victim.band_sort_key) <= priority_band_rank(candidate.band):
+        # Only strictly lower-priority victims are eligible.
+        if priority_band_rank(victim.priority_band) <= priority_band_rank(candidate.band):
             continue
         chosen.append(victim)
         available_cpu += victim.cpu_millicores
@@ -660,7 +658,7 @@ def run_preemption_pass(
     # Solo victims: existing per-worker preemption path (same-variant gated).
     solo_victims = sorted(
         (v for v in running_tasks_info if not v.is_coscheduled),
-        key=lambda t: (-priority_band_rank(t.band_sort_key), t.resource_value),
+        key=lambda t: (-priority_band_rank(t.priority_band), t.resource_value),
     )
 
     # Same solo victims bucketed by host for the gang partial-host fallback. Holds
@@ -690,7 +688,7 @@ def run_preemption_pass(
         sorted_groups = sorted(
             grouped.items(),
             key=lambda kv: (
-                -max(priority_band_rank(t.band_sort_key) for t in kv[1]),
+                -max(priority_band_rank(t.priority_band) for t in kv[1]),
                 sum(t.resource_value for t in kv[1]),
             ),
         )

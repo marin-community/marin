@@ -133,7 +133,7 @@ def test_production_preempts_batch():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-job:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -167,7 +167,7 @@ def test_interactive_preempts_batch():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-job:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -198,7 +198,7 @@ def test_priority_preempts_interactive_but_not_production():
     interactive_victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/interactive-job:0"),
         worker_id=interactive_worker,
-        band_sort_key=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -209,7 +209,7 @@ def test_priority_preempts_interactive_but_not_production():
     production_victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/production-job:0"),
         worker_id=production_worker,
-        band_sort_key=job_pb2.PRIORITY_BAND_PRODUCTION,
+        priority_band=job_pb2.PRIORITY_BAND_PRODUCTION,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -243,7 +243,7 @@ def test_interactive_does_not_preempt_production():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/prod-job:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_PRODUCTION,
+        priority_band=job_pb2.PRIORITY_BAND_PRODUCTION,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -277,7 +277,7 @@ def test_batch_never_preempts():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/interactive-job:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -310,7 +310,7 @@ def test_same_band_no_preemption():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/job-a:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -343,7 +343,7 @@ def test_coscheduled_not_preempted():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/gang-job:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=True,
         cpu_millicores=1000,
@@ -374,7 +374,7 @@ def test_solo_preempts_same_variant_tpu():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-job:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -401,7 +401,7 @@ def test_solo_does_not_preempt_different_variant():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-job:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -431,7 +431,7 @@ def test_coscheduled_preemptor_evicts_same_variant_slice():
         RunningTaskInfo(
             task_id=victim_job.child(str(i)),
             worker_id=workers[i],
-            band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+            priority_band=job_pb2.PRIORITY_BAND_BATCH,
             resource_value=1000,
             is_coscheduled=True,
             cpu_millicores=1000,
@@ -470,7 +470,7 @@ def test_coscheduled_preemptor_is_placed_on_the_freed_slice():
         RunningTaskInfo(
             task_id=victim_job.child(str(i)),
             worker_id=workers[i],
-            band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+            priority_band=job_pb2.PRIORITY_BAND_BATCH,
             resource_value=1000,
             is_coscheduled=True,
             cpu_millicores=1000,
@@ -504,7 +504,7 @@ def test_coscheduled_preemptor_does_not_evict_different_variant_slice():
         RunningTaskInfo(
             task_id=victim_job.child(str(i)),
             worker_id=workers[i],
-            band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+            priority_band=job_pb2.PRIORITY_BAND_BATCH,
             resource_value=1000,
             is_coscheduled=True,
             cpu_millicores=1000,
@@ -544,7 +544,7 @@ def test_coscheduled_preemptor_skips_slice_failing_hard_constraint():
         RunningTaskInfo(
             task_id=victim_job.child(str(i)),
             worker_id=workers[i],
-            band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+            priority_band=job_pb2.PRIORITY_BAND_BATCH,
             resource_value=1000,
             is_coscheduled=True,
             cpu_millicores=1000,
@@ -582,7 +582,7 @@ def test_coscheduled_preemptor_evicts_slice_satisfying_hard_constraint():
         RunningTaskInfo(
             task_id=victim_job.child(str(i)),
             worker_id=workers[i],
-            band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+            priority_band=job_pb2.PRIORITY_BAND_BATCH,
             resource_value=1000,
             is_coscheduled=True,
             cpu_millicores=1000,
@@ -624,7 +624,7 @@ def test_coscheduled_preemptor_skips_undersized_slice():
         RunningTaskInfo(
             task_id=victim_job.child(str(i)),
             worker_id=workers[i],
-            band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+            priority_band=job_pb2.PRIORITY_BAND_BATCH,
             resource_value=1000,
             is_coscheduled=True,
             cpu_millicores=1000,
@@ -657,7 +657,7 @@ def test_solo_preemptor_does_not_tear_down_slice():
         RunningTaskInfo(
             task_id=victim_job.child(str(i)),
             worker_id=workers[i],
-            band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+            priority_band=job_pb2.PRIORITY_BAND_BATCH,
             resource_value=1000,
             is_coscheduled=True,
             cpu_millicores=1000,
@@ -744,7 +744,7 @@ def _solo_victim(
     return RunningTaskInfo(
         task_id=task_id,
         worker_id=worker_id,
-        band_sort_key=band,
+        priority_band=band,
         resource_value=resource_value,
         is_coscheduled=False,
         cpu_millicores=cpu_millicores,
@@ -944,7 +944,7 @@ def test_gang_partial_host_ignores_coscheduled_cotenant():
     cosched_cotenant = RunningTaskInfo(
         task_id=JobName.from_wire("/other/cosched-batch").child("0"),
         worker_id=workers[1],
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=True,
         cpu_millicores=0,
@@ -1035,7 +1035,7 @@ def test_preemption_skips_if_capacity_available():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-job:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -1069,7 +1069,7 @@ def test_preemption_picks_cheapest_victim():
     expensive_victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/big-batch:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=5000,
         is_coscheduled=False,
         cpu_millicores=4000,
@@ -1080,7 +1080,7 @@ def test_preemption_picks_cheapest_victim():
     cheap_victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/small-batch:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -1123,7 +1123,7 @@ def test_over_budget_user_tasks_preemptible():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/interactive-job:0"),
         worker_id=w1,
-        band_sort_key=effective,  # BATCH due to budget
+        priority_band=effective,  # BATCH due to budget
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -1175,7 +1175,7 @@ def test_running_tasks_report_stamped_band():
         _dispatch_with_band(state, tasks_alice[0], w1, job_pb2.PRIORITY_BAND_INTERACTIVE)
         _dispatch_with_band(state, tasks_bob[0], w2, job_pb2.PRIORITY_BAND_BATCH)
 
-        running = {r.task_id: r.band_sort_key for r in get_running_tasks_with_band_and_value(state._db)}
+        running = {r.task_id: r.priority_band for r in get_running_tasks_with_band_and_value(state._db)}
         assert running == {
             tasks_alice[0].task_id: job_pb2.PRIORITY_BAND_INTERACTIVE,
             tasks_bob[0].task_id: job_pb2.PRIORITY_BAND_BATCH,
@@ -1354,7 +1354,7 @@ def test_preemption_multiple_victims_one_pass():
     victim1 = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-job-1:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -1365,7 +1365,7 @@ def test_preemption_multiple_victims_one_pass():
     victim2 = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-job-2:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=2000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -1415,7 +1415,7 @@ def test_preemption_across_multiple_workers():
     victim_w1 = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-w1:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -1426,7 +1426,7 @@ def test_preemption_across_multiple_workers():
     victim_w2 = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-w2:0"),
         worker_id=w2,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=500,
         is_coscheduled=False,
         cpu_millicores=1000,

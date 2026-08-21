@@ -70,6 +70,7 @@ logger = logging.getLogger(__name__)
 # descending, so this fetches the most recent jobs rather than walking the whole
 # jobs table (which would hit the controller's deep-offset cap on a busy cluster).
 DEFAULT_JOB_LIST_LIMIT = 50
+_PRODUCTION_PRIORITY_NAME = "production"
 
 
 def _remote_client(ctx: click.Context) -> IrisClient:
@@ -806,9 +807,9 @@ def _submit_and_wait_job(
 
 def validate_production_reason(priority: str | None, production_needed: str | None) -> None:
     """Require an explicit reason when a CLI selects production priority."""
-    if priority == "production" and not (production_needed and production_needed.strip()):
+    if priority == _PRODUCTION_PRIORITY_NAME and not (production_needed and production_needed.strip()):
         raise click.UsageError("--priority production requires --production-needed=<reason>.")
-    if production_needed is not None and priority != "production":
+    if production_needed is not None and priority != _PRODUCTION_PRIORITY_NAME:
         raise click.UsageError("--production-needed is only valid with --priority production.")
 
 
