@@ -520,9 +520,26 @@ def _run_iris_job(step: StepSpec, output_path: str) -> None:
     carried by the wrapper.
     """
     assert step.resources is not None
-    raw_fn = step.fn.fn if isinstance(step.fn, RemoteCallable) else step.fn
+    if isinstance(step.fn, RemoteCallable):
+        raw_fn = step.fn.fn
+        env_vars = step.fn.env_vars
+        pip_dependency_groups = step.fn.pip_dependency_groups
+        ports = step.fn.ports
+    else:
+        raw_fn = step.fn
+        env_vars = None
+        pip_dependency_groups = None
+        ports = ()
     assert raw_fn is not None, f"Step {step.name} has no callable"
-    _submit_iris_job(step, output_path, raw_fn, step.resources)
+    _submit_iris_job(
+        step,
+        output_path,
+        raw_fn,
+        step.resources,
+        env_vars=env_vars,
+        pip_dependency_groups=pip_dependency_groups,
+        ports=ports,
+    )
 
 
 def _run_remote_step(step: StepSpec, output_path: str) -> None:
