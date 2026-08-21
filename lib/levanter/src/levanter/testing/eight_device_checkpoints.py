@@ -4,9 +4,9 @@
 """Checkpoint-write scenarios that need more devices than the test process has.
 
 An array needs eight devices to have more than one replica, and the XLA device count is
-fixed for the life of a process, so :func:`run_on_eight_devices` spawns one. The scenarios
-live here because a spawned child imports the module its target came from, and the test
-module's name under xdist is not importable from a fresh interpreter.
+fixed for the life of a process, so :func:`run_on_eight_devices` spawns one. A spawned child
+imports the module its target came from, so the scenarios live on the installed package,
+where any interpreter can import them regardless of its working directory.
 """
 
 import multiprocessing
