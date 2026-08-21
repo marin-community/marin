@@ -37,6 +37,7 @@ from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_act
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
+from levanter.training_control import TrainingDashboard
 from levanter.utils.jax_utils import parameter_count
 
 logger = logging.getLogger(__name__)
@@ -207,7 +208,7 @@ def main(config: TrainLmConfig):
     # 1. Sets the device mesh
     # 2. Sets the axis mapping (for fsdp)
     # 3. Sets the global metrics tracker
-    with Trainer(config.trainer, optimizer, loss_function) as trainer:
+    with TrainingDashboard(config), Trainer(config.trainer, optimizer, loss_function) as trainer:
         # randomness in jax is tightly controlled by "keys" which are the states of the random number generators
         # this makes deterministic training pretty easy
         seed = config.trainer.seed

@@ -187,6 +187,9 @@ W&B receives metrics throughout training. The run name defaults to the `run_id` 
 (when omitted, `train_lm` derives one from the artifact name). Checkpoints are written to
 `{prefix}/{name}/{version}/checkpoints/`.
 
+Iris shows a private `training-control` endpoint for Marin `train_lm` jobs. It contains the run ID,
+resolved Levanter configuration, and redacted process environment.
+
 ## Memory pressure
 
 If training OOMs, see [Making Things Fit in HBM](../references/hbm-optimization.md) for a
