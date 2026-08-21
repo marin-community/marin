@@ -26,6 +26,7 @@ from hero_runs import (
     PHASE_METRIC,
     TASK_STATE_FRESHNESS,
     TELEMETRY_GONE_AGE,
+    TRAINING_PHASE,
     as_number,
     as_utc,
     hero_run_id,
@@ -119,7 +120,15 @@ Signals = dict[tuple[str, str], dict[str, MetricSignal]]
 
 
 def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
-    """Return the newest sample and health-window reductions per run and metric."""
+    """Return the newest sample and health-window reductions per run and metric.
+
+    Everything reduces over one execution: the newest attempt JAX process zero
+    reports. A retry keeps the run ID and takes a new `execution_uid`, so a scan
+    that partitioned on the run alone would sum one attempt's skipped steps into
+    the next and let the predecessor's last gradient norm fire against a fresh
+    phase. Process zero is the stable choice because Levanter publishes tracker
+    metrics only from it.
+    """
     run_predicate = run_id_predicate(runs)
     signal_since = sql_epoch_ms(now - _SIGNAL_LOOKBACK)
     eval_since = sql_epoch_ms(now - _EVAL_LOOKBACK)
@@ -128,14 +137,28 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
     metric_names = ", ".join(f"'{name}'" for name in _SIGNAL_METRICS)
     below_floor = " OR ".join(f"(name = '{name}' AND value < {floor})" for name, floor in _FLOORS.items())
     return (
-        "WITH samples AS ("
-        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
-        "run_id, name, value, timestamp_ms, seq "
+        "WITH attempts AS ("
+        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, run_id, execution_uid, "
+        "ROW_NUMBER() OVER ("
+        "PARTITION BY COALESCE(NULLIF(cluster,''),'unknown'), run_id "
+        "ORDER BY timestamp_ms DESC, seq DESC"
+        ") AS rn "
         'FROM "telemetry_v1" '
-        f"WHERE service = 'levanter' AND name IN ({metric_names}) "
-        f"AND {run_predicate} "
-        f"AND timestamp_ms >= {eval_since} AND timestamp_ms < {end} "
-        f"AND (name = '{_EVAL_LOSS}' OR timestamp_ms >= {signal_since})"
+        f"WHERE service = 'levanter' AND name = '{PHASE_METRIC}' AND process_index = '0' "
+        f"AND {run_predicate} AND execution_uid IS NOT NULL "
+        f"AND timestamp_ms >= {signal_since} AND timestamp_ms < {end}"
+        "), execution AS ("
+        "SELECT origin_cluster, run_id, execution_uid FROM attempts WHERE rn = 1"
+        "), samples AS ("
+        "SELECT execution.origin_cluster, execution.run_id, "
+        "telemetry.name, telemetry.value, telemetry.timestamp_ms, telemetry.seq "
+        'FROM "telemetry_v1" AS telemetry JOIN execution '
+        "ON COALESCE(NULLIF(telemetry.cluster,''),'unknown') = execution.origin_cluster "
+        "AND telemetry.run_id = execution.run_id "
+        "AND telemetry.execution_uid = execution.execution_uid "
+        f"WHERE telemetry.service = 'levanter' AND telemetry.name IN ({metric_names}) "
+        f"AND telemetry.timestamp_ms >= {eval_since} AND telemetry.timestamp_ms < {end} "
+        f"AND (telemetry.name = '{_EVAL_LOSS}' OR telemetry.timestamp_ms >= {signal_since})"
         "), ranked AS ("
         "SELECT origin_cluster, run_id, name, value, timestamp_ms, "
         "ROW_NUMBER() OVER ("
@@ -286,14 +309,14 @@ def telemetry_alert_rows(runs: tuple[WatchedRun, ...], signals: Signals, now: da
 
 
 def _is_training(metrics: dict[str, MetricSignal], now: datetime) -> bool:
-    """True while the run's own telemetry is fresh and its tracker is not finished.
+    """True while the run's own telemetry is fresh and reports the training phase.
 
-    Nothing below describes a run that is not training right now: an initializing
-    run has published none of it, a finished one leaves its last samples behind
-    for a while, and a silent one is TrainingTelemetryGone's.
+    Nothing below describes a run in another phase. An initializing attempt has
+    published none of these metrics, a finished one leaves its last samples
+    behind for a while, and a silent one is TrainingTelemetryGone's.
     """
     phase = _fresh(metrics.get(PHASE_METRIC), now, TELEMETRY_GONE_AGE)
-    return phase is not None and int(phase.latest) != FINISHED_PHASE
+    return phase is not None and int(phase.latest) == TRAINING_PHASE
 
 
 def optimizer_alert_rows(

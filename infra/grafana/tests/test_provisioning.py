@@ -20,6 +20,7 @@ from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
 from dashboard_stitch import stitch_all
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
+from hero_health import DROP_FRACTION_MAX, ROUTER_BIAS_MAX, ROUTER_ENTROPY_MIN
 from k8s_source import K8sFleet
 from server import create_app
 from starlette.testclient import TestClient
@@ -369,6 +370,19 @@ def test_announcing_run_health_reaches_slack_without_a_triage_session():
     assert route["object_matchers"] == [["notification", "=", "slack"]]
     assert route["receiver"] == "ops-slack"
     assert "mute_time_intervals" not in route
+
+
+def test_run_health_dashboard_bands_match_the_alert_thresholds():
+    # The alert links the operator to these panels, so a limit tuned in one place
+    # and not the other would draw a band the rule does not fire on.
+    dashboard = _stitched_dashboards()["training.json"]
+    panels = {panel["title"]: panel for panel in _all_panels(dashboard)}
+    bands = " ".join(_panel_sql({**dashboard, "panels": [panels["Token drops"], panels["Router health"]]}))
+
+    assert f"CAST({DROP_FRACTION_MAX} AS DOUBLE) AS alert_threshold" in bands
+    assert f"CAST({ROUTER_ENTROPY_MIN} AS DOUBLE) AS entropy_minimum" in bands
+    assert f"CAST({ROUTER_BIAS_MAX} AS DOUBLE) AS bias_upper_limit" in bands
+    assert f"CAST({-ROUTER_BIAS_MAX} AS DOUBLE) AS bias_lower_limit" in bands
 
 
 def test_clusters_dashboard_shows_finelog_fleet_health():

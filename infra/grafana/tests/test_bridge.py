@@ -828,14 +828,19 @@ def test_health_alert_announces_a_controller_retry_on_the_run_that_owns_the_task
 
 
 def test_run_health_alerts_stay_quiet_for_a_run_that_is_not_training():
-    # A finished run leaves its last samples behind for a while, and a run that
-    # went silent belongs to TrainingTelemetryGone. Neither is a health signal.
+    # A finished run leaves its last samples behind for a while, an initializing
+    # attempt has published none of these metrics, and a silent one belongs to
+    # TrainingTelemetryGone. None of the three is a health signal.
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
     drops = {"moe_drop_fraction": {"latest": 0.4}}
-    finished = _signals(now, {"phase": {"latest": 2.0}, **drops})
-    silent = _signals(now, {"phase": {"latest": 1.0, "observed_at": now - timedelta(minutes=20)}, **drops})
+    phases = (
+        {"phase": {"latest": 2.0}},
+        {"phase": {"latest": 0.0}},
+        {"phase": {"latest": 1.0, "observed_at": now - timedelta(minutes=20)}},
+    )
 
-    for signals in (finished, silent):
+    for phase in phases:
+        signals = _signals(now, {**phase, **drops})
         assert _reasons(health_alert_rows((_watched(),), signals, pa.table({}), now)) == set()
 
 
@@ -860,8 +865,8 @@ def test_run_health_alerts_return_an_explicit_zero_without_a_watched_run():
     assert health_alert_rows((), {}, pa.table({}), now) == [fleet]
 
 
-def test_signal_query_reduces_the_newest_sample_and_the_health_window():
-    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+def _signal_database(samples: list[tuple[str, str, float, datetime, int]]) -> duckdb.DuckDBPyConnection:
+    """A telemetry table of (execution_uid, name, value, observed_at, seq) rows for hero-a."""
     database = duckdb.connect()
     database.execute(
         """
@@ -869,6 +874,8 @@ def test_signal_query_reduces_the_newest_sample_and_the_health_window():
             cluster VARCHAR,
             service VARCHAR,
             run_id VARCHAR,
+            execution_uid VARCHAR,
+            process_index VARCHAR,
             name VARCHAR,
             value DOUBLE,
             timestamp_ms BIGINT,
@@ -877,21 +884,29 @@ def test_signal_query_reduces_the_newest_sample_and_the_health_window():
         """
     )
     database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)")
-    samples = [
-        ("throughput_tokens_per_second", 1.0e6, now - timedelta(minutes=10), 1),
-        ("throughput_tokens_per_second", 1.2e6, now - timedelta(minutes=5), 2),
-        ("throughput_tokens_per_second", 2.6e6, now - timedelta(minutes=1), 3),
-        # Outside the fifteen-minute health window, so the reductions ignore it.
-        ("throughput_tokens_per_second", 0.1e6, now - timedelta(minutes=40), 0),
-        ("optim_skipped_step", 1.0, now - timedelta(minutes=9), 4),
-        ("optim_skipped_step", 1.0, now - timedelta(minutes=2), 5),
-        # Hours apart, so only the eval lookback keeps the previous value.
-        ("eval_paloma_macro_loss", 2.17, now - timedelta(hours=6), 6),
-        ("eval_paloma_macro_loss", 2.31, now - timedelta(minutes=12), 7),
-    ]
     database.executemany(
-        "INSERT INTO telemetry_v1 VALUES ('cw-a', 'levanter', 'hero-a', ?, ?, ?, ?)",
-        [(name, value, int(at.timestamp() * 1000), seq) for name, value, at, seq in samples],
+        "INSERT INTO telemetry_v1 VALUES ('cw-a', 'levanter', 'hero-a', ?, '0', ?, ?, ?, ?)",
+        [(execution, name, value, int(at.timestamp() * 1000), seq) for execution, name, value, at, seq in samples],
+    )
+    return database
+
+
+def test_signal_query_reduces_the_newest_sample_and_the_health_window():
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    database = _signal_database(
+        [
+            ("attempt-1", "phase", 1.0, now - timedelta(seconds=30), 8),
+            ("attempt-1", "throughput_tokens_per_second", 1.0e6, now - timedelta(minutes=10), 1),
+            ("attempt-1", "throughput_tokens_per_second", 1.2e6, now - timedelta(minutes=5), 2),
+            ("attempt-1", "throughput_tokens_per_second", 2.6e6, now - timedelta(minutes=1), 3),
+            # Outside the fifteen-minute health window, so the reductions ignore it.
+            ("attempt-1", "throughput_tokens_per_second", 0.1e6, now - timedelta(minutes=40), 0),
+            ("attempt-1", "optim_skipped_step", 1.0, now - timedelta(minutes=9), 4),
+            ("attempt-1", "optim_skipped_step", 1.0, now - timedelta(minutes=2), 5),
+            # Hours apart, so only the eval lookback keeps the previous value.
+            ("attempt-1", "eval_paloma_macro_loss", 2.17, now - timedelta(hours=6), 6),
+            ("attempt-1", "eval_paloma_macro_loss", 2.31, now - timedelta(minutes=12), 7),
+        ]
     )
 
     signals = signals_by_run(database.execute(signal_query(now, (_watched(),))).fetch_arrow_table())["cw-a", "hero-a"]
@@ -901,6 +916,29 @@ def test_signal_query_reduces_the_newest_sample_and_the_health_window():
     assert signals["optim_skipped_step"].recent_total == 2.0
     evaluation = signals["eval_paloma_macro_loss"]
     assert (evaluation.latest, evaluation.previous) == (2.31, 2.17)
+
+
+def test_signal_query_reduces_one_task_attempt_at_a_time():
+    # A retry keeps the run ID and takes a new execution_uid. Summing across both
+    # would charge the new attempt with the skipped steps that killed the old one,
+    # and let the old attempt's last gradient norm fire against a fresh phase.
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    database = _signal_database(
+        [
+            ("attempt-1", "phase", 1.0, now - timedelta(minutes=9), 1),
+            ("attempt-1", "optim_skipped_step", 1.0, now - timedelta(minutes=10), 2),
+            ("attempt-1", "optim_skipped_step", 1.0, now - timedelta(minutes=9), 3),
+            ("attempt-1", "grad_norm_total", 9.0, now - timedelta(minutes=9), 4),
+            ("attempt-2", "phase", 1.0, now - timedelta(seconds=30), 5),
+            ("attempt-2", "optim_skipped_step", 1.0, now - timedelta(seconds=40), 6),
+        ]
+    )
+
+    signals = signals_by_run(database.execute(signal_query(now, (_watched(),))).fetch_arrow_table())["cw-a", "hero-a"]
+
+    assert signals["optim_skipped_step"].recent_total == 1.0
+    assert "grad_norm_total" not in signals
+    assert _reasons(optimizer_alert_rows((_watched(),), {("cw-a", "hero-a"): signals}, pa.table({}), now)) == set()
 
 
 def test_zephyr_stall_alert_distinguishes_stale_healthy_and_expired_producers():

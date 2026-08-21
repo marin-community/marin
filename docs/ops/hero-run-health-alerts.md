@@ -39,8 +39,11 @@ still a hero coordinator root, so `/rav/hero-20260819-coord/grug-train-hero-2026
 
 One bounded scan of `telemetry_v1` per bridge cache interval feeds all three rules. It reads the
 newest sample of each metric, the one before it, and the reductions the 15-minute health window
-needs. A check reads the newest sample only while that sample is under 15 minutes old, so a restart
-cannot fire an alert from the previous attempt's last value.
+needs. Every reduction covers one execution: the newest attempt JAX process zero reports. A retry
+keeps the run ID and takes a new `execution_uid`, so a scan partitioned on the run alone would sum
+one attempt's skipped steps into the next and compare an evaluation across a checkpoint restore that
+redid steps. Process zero is the stable choice because Levanter publishes tracker metrics only from
+it. A check also reads the newest sample only while that sample is under 15 minutes old.
 
 | Reason | Condition | Metric |
 |---|---|---|
@@ -71,9 +74,11 @@ Iris also stops counting the tasks is a run that ended, not an incident. A run t
 nothing at all is left to `TrainingProgressStalled`, which allows the full initialization budget
 before it fires — that is the "Levanter never started" case, not a lost telemetry path.
 
-Every other check needs a fresh training phase from the run itself. An initializing run has
-published none of these metrics, a finished one leaves its last samples behind for a while, and a
-silent one is `TrainingTelemetryGone`'s, so none of the three announces. `iris_state_stale` also
+Every other check needs the run's own phase telemetry to be fresh and to report training. An
+initializing attempt has published none of these metrics, a finished one leaves its last samples
+behind for a while, and a silent one is `TrainingTelemetryGone`'s, so none of the three announces —
+including `task_retried`, so a gang that bounces before training starts stays quiet here and shows
+up on the dashboard's retry counter instead. `iris_state_stale` also
 needs a state row that went stale rather than one that never existed: the GCE controllers publish no
 `iris.task_state` rollup at all, and a rollup that breaks leaves its last row readable for an hour.
 An outage longer than that stops being visible here, which is the limit of this check.
@@ -126,9 +131,9 @@ LIMIT 50;
 
 Every threshold and window is a constant at the top of `infra/grafana/src/hero_health.py`, and
 `TELEMETRY_GONE_AGE` is in `infra/grafana/src/hero_runs.py` because the stall rule defers on the
-same number. Changing one takes a redeploy of the Grafana service. Keep the drop and router limits
-equal to the bands `infra/grafana/dashboards/training.json` draws, so the panel an operator opens
-from the alert agrees with the alert.
+same number. Changing one takes a redeploy of the Grafana service. The drop and router limits are
+also drawn as bands by `infra/grafana/dashboards/training.json`; a test asserts the two agree, so
+tuning one without the other fails locally rather than after a deploy.
 
 A benign firing that repeats across runs is the case for changing a constant. One run's stage
 boundary is the case for silencing that run.
