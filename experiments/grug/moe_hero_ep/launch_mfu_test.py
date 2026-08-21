@@ -31,6 +31,7 @@ from experiments.grug.moe_hero_ep.harrier_mix_2026_08_17_1 import (
 )
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, build_hero_configs
 from experiments.grug.moe_hero_ep.train import (
+    RAGGED_MOE_IMPLEMENTATION,
     GrugEvalConfig,
     GrugRunConfig,
     GrugTrainerConfig,
@@ -48,6 +49,9 @@ HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
 HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
 HERO_PROCESSES_PER_TASK = 1
+# Updates per peer for the ragged transport at the hero shape. The one-shot kernel's grid is
+# `num_ranks x splits`, so at EP64 this is 2048 CTAs; 32 measured best there.
+HERO_RAGGED_SPLITS_PER_PEER = 32
 HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
 # Weight storage that goes with each master-parameter mode. The pooled-wave hero needs the
 # pinned-host master to fit at all. The ragged transport does fit with fp32 weights on device,
@@ -66,6 +70,17 @@ HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 # Held-out sets are added at weight 0 so they surface as tagged eval sets.
 def _validation_datasets() -> list[ArtifactStep[TokenizedCache]]:
     return list(paloma_datasets(tokenizer=marin_tokenizer).values())
+
+
+def resolve_splits_per_peer(requested: int | None, moe_implementation: str) -> int:
+    """Updates per peer for ``moe_implementation``, honoring an explicit ``requested`` value.
+
+    Only the ragged transport accepts a split count -- the model config rejects anything but 1 on
+    the others -- so the default follows the backend instead of sitting at a single number.
+    """
+    if requested is not None:
+        return requested
+    return HERO_RAGGED_SPLITS_PER_PEER if moe_implementation == RAGGED_MOE_IMPLEMENTATION else 1
 
 
 class HeroThroughputResult(Artifact):
@@ -90,7 +105,7 @@ def build_hero_run(
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
     moe_implementation: str | None = None,
-    ragged_all_to_all_splits_per_peer: int = 1,
+    ragged_all_to_all_splits_per_peer: int | None = None,
     master_param_mode: MasterParamMode = MasterParamMode.FP32_PINNED_HOST,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
@@ -157,7 +172,12 @@ def build_hero_run(
     }
     if overrides:
         model = dataclasses.replace(model, **overrides)
-    model = dataclasses.replace(model, ragged_all_to_all_splits_per_peer=ragged_all_to_all_splits_per_peer)
+    model = dataclasses.replace(
+        model,
+        ragged_all_to_all_splits_per_peer=resolve_splits_per_peer(
+            ragged_all_to_all_splits_per_peer, model.moe_implementation
+        ),
+    )
     # A bank that is not divisible by the expert axis fails inside `moe_mlp`, which is after the rack
     # is already allocated and the workspace is built. Reject it here instead.
     if model.num_experts % HERO_EP_EXPERT_AXIS_SIZE != 0:
@@ -434,11 +454,12 @@ def build_hero_run(
 @click.option(
     "--ragged-all-to-all-splits-per-peer",
     type=click.IntRange(min=1),
-    default=32,
-    show_default=True,
+    default=None,
     help=(
         "Split each peer transfer into this many ragged updates. Ragged backend only. The one-shot "
-        "kernel launches num_ranks x splits CTAs, so this also sets the transport's grid."
+        "kernel launches num_ranks x splits CTAs, so this also sets the transport's grid. Defaults "
+        f"to {HERO_RAGGED_SPLITS_PER_PEER} on the ragged backend, the measured best at EP64, and to "
+        "1 elsewhere."
     ),
 )
 @click.option(
@@ -481,7 +502,7 @@ def main(
     profile_start_step: int,
     training_data: str,
     moe_implementation: str | None,
-    ragged_all_to_all_splits_per_peer: int,
+    ragged_all_to_all_splits_per_peer: int | None,
     master_params: str,
     processes_per_task: int,
 ) -> ArtifactStep[HeroThroughputResult]:

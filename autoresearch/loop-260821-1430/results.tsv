@@ -2,3 +2,4 @@
 iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
 0	2026-08-21T21:54Z	e98852ae3b	18.9570	0.0	pass	drops=0.0,loss=11.8044	baseline	ragged_all_to_all at the PR head, synthetic data, window 5-15
 -	2026-08-21T22:04Z	5430b1c9f0	22.3126	3.3556	pass	drops=7.4e-6,loss=11.8044	reference	fixed_pooled_wave_all_to_all, same protocol -- the line to beat
+1	2026-08-21T22:19Z	2241e3c569	21.3156	2.3586	pass	drops=0.0,loss=11.8044	keep	splits_per_peer 32 -- the loop baseline re-established at the value the PR now ships
