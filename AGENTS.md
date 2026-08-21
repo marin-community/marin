@@ -121,9 +121,9 @@ uv run --no-project infra/ci/run_tests.py
   Keep one `wait_for.py` process attached in the foreground until it exits.
   Never background it or give the shell, tool, or agent a separate timeout;
   `wait_for.py --timeout` owns the deadline. If the execution interface yields
-  a process handle, use its blocking wait/resume facility and remain silent
-  until the process exits. Do not periodically poll the handle or narrate
-  unchanged state.
+  a process handle, keep making blocking wait/resume calls on that same handle
+  until the process exits. A runner yield is not a monitoring event: do not
+  narrate it or inspect GitHub while the process is still running.
 - When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
 
 ## Code Style

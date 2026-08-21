@@ -214,7 +214,8 @@ The command's `--timeout 12h` is the only timeout. Do not background or detach
 the process, wrap it in a shell `timeout`, or give the command runner or agent a
 shorter deadline. A tool reporting that the command is still running does not
 end the foreground wait. Give the process handle back to the runtime's blocking
-wait/resume facility and continue waiting for that same process to exit.
+wait/resume facility and continue waiting for that same process to exit. Repeat
+the blocking resume as often as the execution interface requires.
 
 `github.pr` covers terminal merged/closed state, merge conflicts,
 ready-for-review transitions, and review-decision changes. It does not inspect
@@ -228,7 +229,8 @@ The wait owns its exponential backoff. While it is running:
 - do not poll GitHub manually;
 - do not launch another `wait_for.py`;
 - do not narrate unchanged CI, review, or merge state;
-- do not periodically poll or resume a yielded process handle.
+- resume a yielded process handle only with another blocking wait on that same
+  handle; do not treat the yield as an event.
 
 The command prints one JSON object and exits: `0` means an arm fired, `2` means
 the overall timeout elapsed, and `1` means the wait failed. An event is not
