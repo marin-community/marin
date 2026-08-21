@@ -37,7 +37,11 @@ HERO_ROOT_PATTERNS = (
     f"%/{HERO_RUN_PREFIX}%{_COORDINATOR_MARKER}",
     f"%/{HERO_RUN_PREFIX}%{_COORDINATOR_MARKER}-%",
 )
-_PHASE_METRIC = "phase"
+# Levanter's tracker phase, republished every minute.
+PHASE_METRIC = "phase"
+INITIALIZING_PHASE = 0
+TRAINING_PHASE = 1
+FINISHED_PHASE = 2
 
 
 class RunIdentity(Protocol):
@@ -61,12 +65,22 @@ def sql_timestamp(at: datetime) -> str:
     return at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def sql_epoch_ms(at: datetime) -> str:
+    """Return the epoch-millisecond expression finelog compares `timestamp_ms` against."""
+    return f"CAST(EXTRACT(EPOCH FROM TIMESTAMP '{sql_timestamp(at)}') * 1000 AS BIGINT)"
+
+
 def as_utc(value: object) -> datetime:
     if not isinstance(value, datetime):
         raise ValueError(f"expected timestamp, got {value!r}")
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def as_number(value: object) -> float | None:
+    """Return a numeric cell as a float, or None when the reduction came back NULL."""
+    return float(value) if isinstance(value, int | float) else None
 
 
 def task_state_query(now: datetime) -> str:
@@ -108,17 +122,16 @@ def task_state_query(now: datetime) -> str:
 
 def phase_enrollment_query(now: datetime) -> str:
     """Return each hero run that still publishes Levanter phase telemetry."""
-    start = sql_timestamp(now - PHASE_ENROLLMENT_LOOKBACK)
-    end = sql_timestamp(now)
+    start = sql_epoch_ms(now - PHASE_ENROLLMENT_LOOKBACK)
+    end = sql_epoch_ms(now)
     return (
         "WITH samples AS ("
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
         "run_id, job_id, timestamp_ms, seq "
         'FROM "telemetry_v1" '
-        f"WHERE service = 'levanter' AND name = '{_PHASE_METRIC}' "
+        f"WHERE service = 'levanter' AND name = '{PHASE_METRIC}' "
         f"AND run_id LIKE '{HERO_RUN_PREFIX}%' AND job_id IS NOT NULL "
-        f"AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '{start}') * 1000 AS BIGINT) "
-        f"AND timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '{end}') * 1000 AS BIGINT)"
+        f"AND timestamp_ms >= {start} AND timestamp_ms < {end}"
         "), ranked AS ("
         "SELECT origin_cluster, run_id, job_id, "
         "ROW_NUMBER() OVER ("

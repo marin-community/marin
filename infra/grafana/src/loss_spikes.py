@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from math import isfinite
 
 import pyarrow as pa
-from hero_runs import HeroRun, RunIdentity, run_id_predicate, sql_timestamp
+from hero_runs import HeroRun, RunIdentity, as_number, run_id_predicate, sql_epoch_ms
 
 _LOSS_METRIC = "train_loss"
 
@@ -54,18 +54,16 @@ class LossWindows:
 def loss_window_query(now: datetime, runs: Sequence[RunIdentity]) -> str:
     """Return baseline and recent loss statistics for exact active hero run IDs."""
     run_predicate = run_id_predicate(runs)
-    start = sql_timestamp(now - _BASELINE_LOOKBACK)
-    recent = sql_timestamp(now - _RECENT_WINDOW)
-    end = sql_timestamp(now)
-    recent_ms = f"CAST(EXTRACT(EPOCH FROM TIMESTAMP '{recent}') * 1000 AS BIGINT)"
+    start = sql_epoch_ms(now - _BASELINE_LOOKBACK)
+    end = sql_epoch_ms(now)
+    recent_ms = sql_epoch_ms(now - _RECENT_WINDOW)
     return (
         "WITH samples AS ("
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, run_id, value, timestamp_ms "
         'FROM "telemetry_v1" '
         f"WHERE service = 'levanter' AND name = '{_LOSS_METRIC}' "
         f"AND {run_predicate} "
-        f"AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '{start}') * 1000 AS BIGINT) "
-        f"AND timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '{end}') * 1000 AS BIGINT)"
+        f"AND timestamp_ms >= {start} AND timestamp_ms < {end}"
         ") "
         "SELECT origin_cluster AS cluster, run_id, "
         f"SUM(CASE WHEN timestamp_ms < {recent_ms} THEN 1 ELSE 0 END) AS baseline_samples, "
@@ -80,10 +78,6 @@ def loss_window_query(now: datetime, runs: Sequence[RunIdentity]) -> str:
     )
 
 
-def _number(value: object) -> float | None:
-    return float(value) if isinstance(value, int | float) else None
-
-
 def _diverged(value: float | None) -> bool:
     """True when a reduction came back NaN or infinite. A missing one has not diverged."""
     return value is not None and not isfinite(value)
@@ -96,13 +90,13 @@ def windows_by_run(loss_windows: pa.Table) -> dict[tuple[str, str], LossWindows]
         key = (str(row["cluster"]), str(row["run_id"]))
         windows[key] = LossWindows(
             baseline_samples=int(row["baseline_samples"] or 0),
-            baseline_loss=_number(row["baseline_loss"]),
-            baseline_stddev=_number(row["baseline_stddev"]),
-            baseline_floor=_number(row["baseline_floor"]),
+            baseline_loss=as_number(row["baseline_loss"]),
+            baseline_stddev=as_number(row["baseline_stddev"]),
+            baseline_floor=as_number(row["baseline_floor"]),
             recent_samples=int(row["recent_samples"] or 0),
-            recent_loss=_number(row["recent_loss"]),
-            recent_floor=_number(row["recent_floor"]),
-            recent_peak=_number(row["recent_peak"]),
+            recent_loss=as_number(row["recent_loss"]),
+            recent_floor=as_number(row["recent_floor"]),
+            recent_peak=as_number(row["recent_peak"]),
         )
     return windows
 

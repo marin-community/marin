@@ -14,19 +14,24 @@ opening a triage session, which is what the hero on-call policy asks of a signal
 an operator reads rather than acts on within the hour.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from math import isfinite
 
 import pyarrow as pa
 from hero_runs import (
+    FINISHED_PHASE,
     HERO_ROOT_PATTERNS,
+    PHASE_METRIC,
     TASK_STATE_FRESHNESS,
     TELEMETRY_GONE_AGE,
+    as_number,
     as_utc,
     hero_run_id,
     root_job_for,
     run_id_predicate,
+    sql_epoch_ms,
     sql_timestamp,
 )
 from loss_spikes import LossWindows, loss_spike_reason, windows_by_run
@@ -46,7 +51,6 @@ ROUTER_BIAS_MAX = 400.0
 TOKENS_PER_SECOND_MIN = 2.0e6
 MFU_MIN = 15.0
 
-_PHASE = "phase"
 _GRAD_NORM = "grad_norm_total"
 _SKIPPED_STEP = "optim_skipped_step"
 _DROP_FRACTION = "moe_drop_fraction"
@@ -58,7 +62,7 @@ _MFU = "throughput_mfu"
 _EVAL_LOSS = "eval_paloma_macro_loss"
 
 _SIGNAL_METRICS = (
-    _PHASE,
+    PHASE_METRIC,
     _GRAD_NORM,
     _SKIPPED_STEP,
     _DROP_FRACTION,
@@ -86,8 +90,6 @@ _EVAL_FRESHNESS = timedelta(minutes=30)
 RETRY_WINDOW = timedelta(minutes=15)
 
 _RETRY_REASONS = ("TaskRetryScheduled", "CoscheduledSiblingRequeued")
-
-_FINISHED_PHASE = 2
 
 
 @dataclass(frozen=True)
@@ -119,10 +121,10 @@ Signals = dict[tuple[str, str], dict[str, MetricSignal]]
 def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
     """Return the newest sample and health-window reductions per run and metric."""
     run_predicate = run_id_predicate(runs)
-    signal_since = _epoch_ms(now - _SIGNAL_LOOKBACK)
-    eval_since = _epoch_ms(now - _EVAL_LOOKBACK)
-    health_since = _epoch_ms(now - HEALTH_WINDOW)
-    end = _epoch_ms(now)
+    signal_since = sql_epoch_ms(now - _SIGNAL_LOOKBACK)
+    eval_since = sql_epoch_ms(now - _EVAL_LOOKBACK)
+    health_since = sql_epoch_ms(now - HEALTH_WINDOW)
+    end = sql_epoch_ms(now)
     metric_names = ", ".join(f"'{name}'" for name in _SIGNAL_METRICS)
     below_floor = " OR ".join(f"(name = '{name}' AND value < {floor})" for name, floor in _FLOORS.items())
     return (
@@ -178,10 +180,6 @@ def retry_event_query(now: datetime) -> str:
     )
 
 
-def _epoch_ms(at: datetime) -> str:
-    return f"CAST(EXTRACT(EPOCH FROM TIMESTAMP '{sql_timestamp(at)}') * 1000 AS BIGINT)"
-
-
 def watched_runs(task_states: pa.Table, phase_runs: pa.Table, now: datetime) -> tuple[WatchedRun, ...]:
     """Return every hero run the Iris rollup or Levanter telemetry still reports.
 
@@ -228,22 +226,18 @@ def signals_by_run(signal_rows: pa.Table) -> Signals:
     """Fold signal rows into one metric map per run."""
     signals: Signals = {}
     for row in signal_rows.to_pylist():
-        latest = _number(row["latest_value"])
+        latest = as_number(row["latest_value"])
         if latest is None:
             continue
         signals.setdefault((str(row["cluster"]), str(row["run_id"])), {})[str(row["name"])] = MetricSignal(
             latest=latest,
             observed_at=as_utc(row["observed_at"]),
-            previous=_number(row["previous_value"]),
+            previous=as_number(row["previous_value"]),
             recent_samples=int(row["recent_samples"] or 0),
             recent_total=float(row["recent_total"] or 0.0),
             recent_below_floor=int(row["recent_below_floor"] or 0),
         )
     return signals
-
-
-def _number(value: object) -> float | None:
-    return float(value) if isinstance(value, int | float) else None
 
 
 def _fresh(signal: MetricSignal | None, now: datetime, within: timedelta) -> MetricSignal | None:
@@ -259,7 +253,7 @@ def _row(run: WatchedRun | None, reason: str, value: int) -> dict:
     return {"cluster": run.cluster, "job": run.root_job, "run": run.run_id, "reason": reason, "value": value}
 
 
-def _project(runs: tuple[WatchedRun, ...], reasons_for) -> list[dict]:
+def _project(runs: tuple[WatchedRun, ...], reasons_for: Callable[[WatchedRun], list[str]]) -> list[dict]:
     """Return one row per firing reason, a healthy row per quiet run, and a fleet row.
 
     Every row carries an explicit value, so a resolved check clears its instance
@@ -279,10 +273,10 @@ def telemetry_alert_rows(runs: tuple[WatchedRun, ...], signals: Signals, now: da
     now = as_utc(now)
 
     def reasons_for(run: WatchedRun) -> list[str]:
-        phase = signals.get((run.cluster, run.run_id), {}).get(_PHASE)
+        phase = signals.get((run.cluster, run.run_id), {}).get(PHASE_METRIC)
         # A run that has published nothing yet is TrainingProgressStalled's
         # initialization case, which allows the full startup budget.
-        if phase is None or not isfinite(phase.latest) or int(phase.latest) == _FINISHED_PHASE:
+        if phase is None or not isfinite(phase.latest) or int(phase.latest) == FINISHED_PHASE:
             return []
         if now - phase.observed_at <= TELEMETRY_GONE_AGE or not run.iris_running:
             return []
@@ -298,8 +292,8 @@ def _is_training(metrics: dict[str, MetricSignal], now: datetime) -> bool:
     run has published none of it, a finished one leaves its last samples behind
     for a while, and a silent one is TrainingTelemetryGone's.
     """
-    phase = _fresh(metrics.get(_PHASE), now, TELEMETRY_GONE_AGE)
-    return phase is not None and int(phase.latest) != _FINISHED_PHASE
+    phase = _fresh(metrics.get(PHASE_METRIC), now, TELEMETRY_GONE_AGE)
+    return phase is not None and int(phase.latest) != FINISHED_PHASE
 
 
 def optimizer_alert_rows(

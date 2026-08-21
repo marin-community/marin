@@ -7,7 +7,19 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import pyarrow as pa
-from hero_runs import TASK_STATE_LOOKBACK, TELEMETRY_GONE_AGE, HeroRun, as_utc, run_id_predicate, sql_timestamp
+from hero_runs import (
+    FINISHED_PHASE,
+    INITIALIZING_PHASE,
+    PHASE_METRIC,
+    TASK_STATE_LOOKBACK,
+    TELEMETRY_GONE_AGE,
+    TRAINING_PHASE,
+    HeroRun,
+    as_utc,
+    run_id_predicate,
+    sql_epoch_ms,
+    sql_timestamp,
+)
 
 _TRAINING_STALL_AGE = timedelta(minutes=15)
 _INITIALIZING_STALL_AGE = timedelta(minutes=45)
@@ -20,21 +32,16 @@ _ENROLLMENT_LOOKBACK = _EXECUTION_LOOKBACK
 
 _STEP_METRIC = "step"
 _PROGRESS_TIME_METRIC = "progress_time_seconds"
-_PHASE_METRIC = "phase"
-
-_INITIALIZING_PHASE = 0
-_TRAINING_PHASE = 1
-_FINISHED_PHASE = 2
 
 
 def telemetry_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
     """Return current execution metrics for exact active hero run IDs."""
     run_predicate = run_id_predicate(runs)
-    execution_since = sql_timestamp(now - _EXECUTION_LOOKBACK)
-    progress_since = sql_timestamp(now - _PROGRESS_LOOKBACK)
+    execution_since = sql_epoch_ms(now - _EXECUTION_LOOKBACK)
+    progress_since = sql_epoch_ms(now - _PROGRESS_LOOKBACK)
     enrolled_since = sql_timestamp(now - _ENROLLMENT_LOOKBACK)
-    end = sql_timestamp(now)
-    metric_names = f"'{_PHASE_METRIC}', '{_STEP_METRIC}', '{_PROGRESS_TIME_METRIC}'"
+    end = sql_epoch_ms(now)
+    metric_names = f"'{PHASE_METRIC}', '{_STEP_METRIC}', '{_PROGRESS_TIME_METRIC}'"
     return (
         "WITH filtered AS ("
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
@@ -44,16 +51,14 @@ def telemetry_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
         f"WHERE service = 'levanter' AND name IN ({metric_names}) "
         f"AND {run_predicate} "
         "AND job_id IS NOT NULL AND execution_uid IS NOT NULL "
-        f"AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '{execution_since}') * 1000 AS BIGINT) "
-        f"AND timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '{end}') * 1000 AS BIGINT) "
-        f"AND (name = '{_PHASE_METRIC}' OR timestamp_ms >= "
-        f"CAST(EXTRACT(EPOCH FROM TIMESTAMP '{progress_since}') * 1000 AS BIGINT))"
+        f"AND timestamp_ms >= {execution_since} AND timestamp_ms < {end} "
+        f"AND (name = '{PHASE_METRIC}' OR timestamp_ms >= {progress_since})"
         "), phase_history AS ("
         "SELECT origin_cluster, run_id, telemetry_job, execution_uid, ts, "
         "ROW_NUMBER() OVER ("
         "PARTITION BY origin_cluster, run_id, telemetry_job ORDER BY timestamp_ms DESC, seq DESC"
         ") AS rn FROM filtered "
-        f"WHERE name = '{_PHASE_METRIC}' AND ts >= TIMESTAMP '{enrolled_since}'"
+        f"WHERE name = '{PHASE_METRIC}' AND ts >= TIMESTAMP '{enrolled_since}'"
         "), enrolled AS ("
         "SELECT origin_cluster, run_id, telemetry_job, execution_uid FROM phase_history WHERE rn = 1"
         "), execution AS ("
@@ -62,7 +67,7 @@ def telemetry_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
         "ON filtered.origin_cluster = enrolled.origin_cluster AND filtered.run_id = enrolled.run_id "
         "AND filtered.telemetry_job = enrolled.telemetry_job "
         "AND filtered.execution_uid = enrolled.execution_uid "
-        f"WHERE filtered.name = '{_PHASE_METRIC}' "
+        f"WHERE filtered.name = '{PHASE_METRIC}' "
         "GROUP BY enrolled.origin_cluster, enrolled.run_id, enrolled.telemetry_job, enrolled.execution_uid"
         "), recent AS ("
         "SELECT filtered.origin_cluster, filtered.run_id, filtered.telemetry_job, "
@@ -82,9 +87,9 @@ def telemetry_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
 
 def _phase_name(phase: int | None) -> str:
     return {
-        _INITIALIZING_PHASE: "initializing",
-        _TRAINING_PHASE: "training",
-        _FINISHED_PHASE: "finished",
+        INITIALIZING_PHASE: "initializing",
+        TRAINING_PHASE: "training",
+        FINISHED_PHASE: "finished",
     }.get(phase, "unknown")
 
 
@@ -137,7 +142,7 @@ def _metrics_by_job(runs: tuple[HeroRun, ...], telemetry_metrics: pa.Table) -> d
 def _classify(run: HeroRun, observed: ExecutionMetrics | None, now: datetime) -> tuple[str, str, int]:
     """Return the phase name, alert reason, and firing value for one enrolled root."""
     metrics = observed.metrics if observed is not None else {}
-    raw_phase = metrics.get(_PHASE_METRIC)
+    raw_phase = metrics.get(PHASE_METRIC)
     phase = int(raw_phase) if raw_phase is not None else None
     step = metrics.get(_STEP_METRIC, 0.0)
     progress_time = metrics.get(_PROGRESS_TIME_METRIC, 0.0)
@@ -146,12 +151,12 @@ def _classify(run: HeroRun, observed: ExecutionMetrics | None, now: datetime) ->
 
     reason = "healthy"
     value = 0
-    is_training = phase == _TRAINING_PHASE or step > 0
+    is_training = phase == TRAINING_PHASE or step > 0
     if observed is not None and now - observed.observed_at > TELEMETRY_GONE_AGE:
         # A run that stopped publishing is TrainingTelemetryGone's, which names the
         # failure precisely. Reporting a stall as well would page twice for it.
         reason = "telemetry_gone"
-    elif phase == _FINISHED_PHASE:
+    elif phase == FINISHED_PHASE:
         reason = "finished"
     elif is_training and progress_time > 0:
         progress_age = now - datetime.fromtimestamp(progress_time, tz=UTC)

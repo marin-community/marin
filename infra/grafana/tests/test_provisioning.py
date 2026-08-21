@@ -81,6 +81,18 @@ def _rules() -> list[dict]:
     return [rule for group in _load(ALERTING / "rules.yaml")["groups"] for rule in group["rules"]]
 
 
+def _route_for(rule: dict) -> dict:
+    """The first notification-policy route whose matchers all hold for this rule's labels."""
+    (policy,) = _load(ALERTING / "policies.yaml")["policies"]
+    return next(
+        route
+        for route in policy["routes"]
+        if all(
+            operator == "=" and rule["labels"].get(label) == value for label, operator, value in route["object_matchers"]
+        )
+    )
+
+
 def test_alert_rules_have_resolvable_datasources_and_refids():
     datasource_uids = set(_datasources())
     for rule in _rules():
@@ -324,14 +336,7 @@ def test_training_stall_alert_pages_each_hero_run_after_five_minutes():
     assert rule["labels"] == {"severity": "critical", "notification": "hero-run"}
     assert rule["data"][0]["model"]["url"] == "/alerts/training_stalls"
 
-    (policy,) = _load(ALERTING / "policies.yaml")["policies"]
-    route = next(
-        route
-        for route in policy["routes"]
-        if all(
-            operator == "=" and rule["labels"].get(label) == value for label, operator, value in route["object_matchers"]
-        )
-    )
+    route = _route_for(rule)
     assert route["receiver"] == "ops-critical"
     assert route["group_by"] == ["alertname", "run"]
     assert {column["selector"] for column in rule["data"][0]["model"]["columns"]} >= {"run", "job"}
@@ -358,15 +363,8 @@ def test_run_health_alerts_split_paging_from_announcing():
 def test_announcing_run_health_reaches_slack_without_a_triage_session():
     # severity=warning alone is muted by dashboard-only, so the announcing rule
     # needs the notification=slack route, which is matched first and unmuted.
-    (policy,) = _load(ALERTING / "policies.yaml")["policies"]
     (rule,) = [rule for rule in _rules() if rule["uid"] == "training-run-health-degraded"]
-    route = next(
-        route
-        for route in policy["routes"]
-        if all(
-            operator == "=" and rule["labels"].get(label) == value for label, operator, value in route["object_matchers"]
-        )
-    )
+    route = _route_for(rule)
 
     assert route["object_matchers"] == [["notification", "=", "slack"]]
     assert route["receiver"] == "ops-slack"
