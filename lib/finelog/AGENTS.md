@@ -18,7 +18,9 @@ Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
 - `src/finelog/client/` — `LogClient` (single user-facing entry; covers logs and stats),
   `RemoteLogHandler`, error types in `errors.py`.
 - `tests/` — store + server tests
-- `deploy/` — Dockerfile, k8s manifests, GCP snippets
+- `deploy/` — Docker image definition; deployment helpers live under `src/finelog/deploy/`,
+  the shared operator CLI lives in `infra/deploy/`, and the Kubernetes Pulumi project
+  lives in `infra/finelog/`
 
 ## Boundaries
 
@@ -181,9 +183,9 @@ each namespace this process registers for itself that is not registered.
 carries the per-namespace error, first-failure time, and attempt count, and the
 dashboard's System page renders it.
 
-The deploy paths gate on the body: the VM bootstrap loop, `_wait_health_via_ssh`
-(which is what makes `safe_deploy` auto-rollback fire), and `k8s_up` /
-`k8s_restart` via a post-rollout `kubectl exec`. A binary that cannot register
+The deploy paths gate on the body: the VM bootstrap loop and `_wait_health_via_ssh`
+(which is what makes `safe_deploy` auto-rollback fire), plus the `infra/finelog`
+Pulumi stack's post-rollout `finelog deploy verify`. A binary that cannot register
 `telemetry_v1` fails its own deploy.
 
 ## Changing a server-owned schema

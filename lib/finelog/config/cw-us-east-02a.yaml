@@ -1,5 +1,5 @@
 # finelog log server for the CoreWeave US-EAST-02A cluster (cw-us-east-02a): k8s
-# Deployment in the `iris` namespace, archiving to Cloudflare R2. See OPS.md to deploy.
+# Deployment in the `iris` namespace, archiving to Cloudflare R2. See infra/finelog/README.md.
 name: finelog-cw-use02a
 port: 10001
 image: ghcr.io/marin-community/finelog:latest
@@ -14,10 +14,8 @@ deployment:
     storage_gb: 250
     # R2 endpoint for the s3:// archive.
     object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
-    # Control-plane priority, shared with the iris controller; keep in sync
-    # with iris's IRIS_PRIORITY_CLASSES.
+    # Control-plane priority owned by the cluster substrate stack.
     priority_class_name: iris-system
-    priority_class_value: 10000
 # cidr admits this cluster's private network and loopback; no jwt layer, since this
 # server only sends to the hub and accepts no pushes.
 auth:

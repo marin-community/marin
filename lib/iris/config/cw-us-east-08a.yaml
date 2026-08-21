@@ -36,7 +36,7 @@ name: cw-us-east-08a
 # finelog log forwarding: this cluster's server (lib/finelog/config/cw-us-east-08a.yaml)
 # relays its rows to the marin hub, signed by finelog-cw-us-east-08a-signing-key whose public
 # half is registered in the hub's jwt layer (lib/finelog/config/marin.yaml). Deploy it with
-# `finelog deploy up cw-us-east-08a`.
+# the `infra/finelog` Pulumi stack; see `infra/finelog/README.md`.
 finelog:
   config: cw-us-east-08a
 
