@@ -12,7 +12,12 @@ import pytest
 from jax.tree_util import register_dataclass
 from levanter.checkpoint import Checkpointer, CheckpointInterval, latest_checkpoint_path
 
-from experiments.grug.checkpointing import init_weights_only_from_checkpoint, restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import (
+    GrugCheckpointRestoreMode,
+    init_weights_only_from_checkpoint,
+    prepare_grug_checkpoint_restore,
+    restore_grug_state_from_checkpoint,
+)
 
 
 @register_dataclass
@@ -146,15 +151,18 @@ def test_restore_prefers_highest_step_over_latest_timestamp(tmp_path: Path):
         attempted.append(path)
         return {"loaded_from": path}
 
+    restore_plan = prepare_grug_checkpoint_restore([str(checkpoint_root)], GrugCheckpointRestoreMode.REQUIRED)
     loaded = restore_grug_state_from_checkpoint(
         {"state": "init"},
         checkpoint_search_paths=[str(checkpoint_root)],
         load_checkpoint_setting=True,
         mesh=None,
         allow_partial=False,
+        restore_plan=restore_plan,
         _load_fn=fake_load,
     )
 
+    assert restore_plan.expected_step == 100
     assert attempted == [str(checkpoint_root / "step-100")]
     assert loaded == {"loaded_from": str(checkpoint_root / "step-100")}
 

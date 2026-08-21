@@ -48,6 +48,9 @@ class BackgroundIterator(Iterator[Ex]):
         else:
             self._producer_fn = producer_fn
         self._stop_event = threading.Event()
+        self._async_producer_lock = threading.Lock()
+        self._async_producer_loop: asyncio.AbstractEventLoop | None = None
+        self._async_producer_task: asyncio.Task[None] | None = None
 
         if self.max_capacity is None or self.max_capacity >= 0:
             self.q: queue.Queue = queue.Queue(self.max_capacity or 0)
@@ -91,6 +94,9 @@ class BackgroundIterator(Iterator[Ex]):
 
     def stop(self, wait: bool = True):
         self._stop_event.set()
+        with self._async_producer_lock:
+            if self._async_producer_loop is not None and self._async_producer_task is not None:
+                self._async_producer_loop.call_soon_threadsafe(self._async_producer_task.cancel)
         # I'm getting an error that the thread is threading.current_thread(), which seems impossible
         if self.thread is not None and wait and self.thread != threading.current_thread():
             self.thread.join()
@@ -130,13 +136,27 @@ class BackgroundIterator(Iterator[Ex]):
             self.q.put(_ExceptionWrapper(sys.exc_info()))
 
     async def _produce_batches_async(self, iterator):
+        task = asyncio.current_task()
+        assert task is not None
+        with self._async_producer_lock:
+            self._async_producer_loop = asyncio.get_running_loop()
+            self._async_producer_task = task
+
         try:
+            if self._stop_event.is_set():
+                return
             async for batch in iterator:
                 if not self._enqueue(batch):
                     return
             self._enqueue(_SENTINEL)
+        except asyncio.CancelledError:
+            return
         except Exception:
             self.q.put(_ExceptionWrapper(sys.exc_info()))
+        finally:
+            with self._async_producer_lock:
+                self._async_producer_loop = None
+                self._async_producer_task = None
 
 
 class _Sentinel:
