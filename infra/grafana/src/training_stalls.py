@@ -25,10 +25,11 @@ _TRAINING_STALL_AGE = timedelta(minutes=15)
 _INITIALIZING_STALL_AGE = timedelta(minutes=45)
 _PROGRESS_LOOKBACK = 2 * _TRAINING_STALL_AGE
 _EXECUTION_LOOKBACK = TASK_STATE_LOOKBACK
-# Keep the selected execution visible after its last heartbeat crosses the stall
-# threshold. The exact run predicate and training-status projection keep this
-# bounded scan below Finelog's deadline.
-_ENROLLMENT_LOOKBACK = _EXECUTION_LOOKBACK
+# The phase heartbeat reaches back a day so a run that went silent hours ago is
+# still recognisable as one that stopped publishing, which is TrainingTelemetryGone's
+# case. Without the reach this rule calls a silent training run `initializing_stale`
+# and pages beside it. Phase is one row a minute for one process.
+_PHASE_LOOKBACK = timedelta(hours=24)
 
 _STEP_METRIC = "step"
 _PROGRESS_TIME_METRIC = "progress_time_seconds"
@@ -37,9 +38,9 @@ _PROGRESS_TIME_METRIC = "progress_time_seconds"
 def telemetry_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
     """Return current execution metrics for exact active hero run IDs."""
     run_predicate = run_id_predicate(runs)
-    execution_since = sql_epoch_ms(now - _EXECUTION_LOOKBACK)
+    phase_since = sql_epoch_ms(now - _PHASE_LOOKBACK)
     progress_since = sql_epoch_ms(now - _PROGRESS_LOOKBACK)
-    enrolled_since = sql_timestamp(now - _ENROLLMENT_LOOKBACK)
+    enrolled_since = sql_timestamp(now - _PHASE_LOOKBACK)
     end = sql_epoch_ms(now)
     metric_names = f"'{PHASE_METRIC}', '{_STEP_METRIC}', '{_PROGRESS_TIME_METRIC}'"
     return (
@@ -51,7 +52,7 @@ def telemetry_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
         f"WHERE service = 'levanter' AND name IN ({metric_names}) "
         f"AND {run_predicate} "
         "AND job_id IS NOT NULL AND execution_uid IS NOT NULL "
-        f"AND timestamp_ms >= {execution_since} AND timestamp_ms < {end} "
+        f"AND timestamp_ms >= {phase_since} AND timestamp_ms < {end} "
         f"AND (name = '{PHASE_METRIC}' OR timestamp_ms >= {progress_since})"
         "), phase_history AS ("
         "SELECT origin_cluster, run_id, telemetry_job, execution_uid, ts, "

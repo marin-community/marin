@@ -17,7 +17,6 @@ from math import isfinite
 
 import pyarrow as pa
 from hero_runs import (
-    FINISHED_PHASE,
     HERO_ROOT_PATTERNS,
     PHASE_METRIC,
     TASK_STATE_FRESHNESS,
@@ -73,8 +72,10 @@ _SIGNAL_METRICS = (
 _FLOORS = {_TOKENS_PER_SECOND: TOKENS_PER_SECOND_MIN, _MFU: MFU_MIN}
 
 _SIGNAL_LOOKBACK = timedelta(minutes=65)
-# Evaluations are hours apart, so the previous macro loss needs its own window.
-_EVAL_LOOKBACK = timedelta(hours=24)
+# The phase heartbeat and the evaluations need their own window: an outage is
+# measured from the last heartbeat however long ago it was, and evaluations are
+# hours apart. Both are one row at a time, so the wider scan stays cheap.
+_LIVENESS_LOOKBACK = timedelta(hours=24)
 HEALTH_WINDOW = timedelta(minutes=15)
 # Below this a median says more about sampling than about the run.
 _MIN_HEALTH_SAMPLES = 10
@@ -129,7 +130,7 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
     """
     run_predicate = run_id_predicate(runs)
     signal_since = sql_epoch_ms(now - _SIGNAL_LOOKBACK)
-    eval_since = sql_epoch_ms(now - _EVAL_LOOKBACK)
+    liveness_since = sql_epoch_ms(now - _LIVENESS_LOOKBACK)
     health_since = sql_epoch_ms(now - HEALTH_WINDOW)
     end = sql_epoch_ms(now)
     metric_names = ", ".join(f"'{name}'" for name in _SIGNAL_METRICS)
@@ -144,7 +145,7 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         'FROM "telemetry_v1" '
         f"WHERE service = 'levanter' AND name = '{PHASE_METRIC}' AND process_index = '0' "
         f"AND {run_predicate} AND execution_uid IS NOT NULL "
-        f"AND timestamp_ms >= {signal_since} AND timestamp_ms < {end}"
+        f"AND timestamp_ms >= {liveness_since} AND timestamp_ms < {end}"
         "), execution AS ("
         "SELECT origin_cluster, run_id, execution_uid FROM attempts WHERE rn = 1"
         "), samples AS ("
@@ -155,8 +156,9 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         "AND telemetry.run_id = execution.run_id "
         "AND telemetry.execution_uid = execution.execution_uid "
         f"WHERE telemetry.service = 'levanter' AND telemetry.name IN ({metric_names}) "
-        f"AND telemetry.timestamp_ms >= {eval_since} AND telemetry.timestamp_ms < {end} "
-        f"AND (telemetry.name = '{_EVAL_LOSS}' OR telemetry.timestamp_ms >= {signal_since})"
+        f"AND telemetry.timestamp_ms >= {liveness_since} AND telemetry.timestamp_ms < {end} "
+        f"AND (telemetry.name IN ('{PHASE_METRIC}', '{_EVAL_LOSS}') "
+        f"OR telemetry.timestamp_ms >= {signal_since})"
         "), ranked AS ("
         "SELECT origin_cluster, run_id, execution_uid, name, value, timestamp_ms, "
         "ROW_NUMBER() OVER ("
@@ -306,9 +308,13 @@ def telemetry_alert_rows(runs: tuple[WatchedRun, ...], signals: Signals, now: da
 
     def reasons_for(run: WatchedRun) -> list[str]:
         phase = _metrics(signals, run).get(PHASE_METRIC)
-        # A run that has published nothing yet is TrainingProgressStalled's, which
-        # allows the full startup budget. A finished tracker ended on purpose.
-        if phase is None or not isfinite(phase.latest) or int(phase.latest) == FINISHED_PHASE:
+        # Only a run whose last word was that it is training. A finished tracker
+        # ended on purpose, and one that never left initialization is
+        # TrainingProgressStalled's, which allows the full startup budget. That
+        # last case is most of the traffic: `hero-` names a smoke test as often
+        # as a production run, and a smoke test that dies in restore is not an
+        # incident.
+        if phase is None or not isfinite(phase.latest) or int(phase.latest) != TRAINING_PHASE:
             return []
         if now - phase.observed_at <= TELEMETRY_GONE_AGE:
             return []

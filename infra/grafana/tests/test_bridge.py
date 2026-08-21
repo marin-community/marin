@@ -1093,8 +1093,10 @@ def test_zephyr_alert_query_keeps_job_identity_across_the_schema_transition():
 def test_training_stall_query_bounds_each_metric_family_to_its_detection_window():
     """Wide scans read telemetry_v1 once a minute and can saturate Finelog.
 
-    Levanter republishes `phase` every 60s. Progress needs one extra stall window
-    so a metric that just became stale remains observable.
+    Progress needs one extra stall window so a metric that just became stale
+    remains observable. Levanter republishes `phase` every 60s, and it reaches
+    back a day so a run silent for hours is still recognisable as one that
+    stopped publishing rather than one that never started.
     """
     now = datetime(2026, 7, 28, 12, tzinfo=UTC)
     run = HeroRun("cw-a", "/u/hero-prod-coord", "hero-prod", now - timedelta(hours=1))
@@ -1103,12 +1105,12 @@ def test_training_stall_query_bounds_each_metric_family_to_its_detection_window(
     assert sql.count('FROM "telemetry_v1"') == 1
     assert "name IN ('phase', 'step', 'progress_time_seconds')" in sql
     assert "run_id = 'hero-prod'" in sql
-    assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:00:00') * 1000 AS BIGINT)" in sql
+    assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-27 12:00:00') * 1000 AS BIGINT)" in sql
     assert (
         "name = 'phase' OR timestamp_ms >= "
         "CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:30:00') * 1000 AS BIGINT)" in sql
     )
-    assert "WHERE name = 'phase' AND ts >= TIMESTAMP '2026-07-28 11:00:00'" in sql
+    assert "WHERE name = 'phase' AND ts >= TIMESTAMP '2026-07-27 12:00:00'" in sql
     assert "root_job_id LIKE '%/hero-%-coord'" in task_state_query(now)
 
 
