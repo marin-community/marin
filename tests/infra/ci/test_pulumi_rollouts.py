@@ -5,7 +5,7 @@
 
 import pytest
 
-from scripts.ci.pulumi_rollouts import automatic_rollouts_for_paths, rollouts_for_paths
+from scripts.ci.pulumi_rollouts import rollouts_for_paths
 
 
 @pytest.mark.parametrize(
@@ -27,9 +27,3 @@ def test_evaldash_rollout_ignores_marin_modules_outside_the_image() -> None:
     assert "evaldash" not in {
         rollout.name for rollout in rollouts_for_paths(["lib/marin/src/marin/training/training.py"])
     }
-
-
-def test_cloud_run_rollouts_wait_for_iam_state_transfer() -> None:
-    selected = {rollout.name for rollout in automatic_rollouts_for_paths(["infra/pulumi/src/iac/gcp/cloud_run.py"])}
-
-    assert {"echo", "evaldash", "grafana"}.isdisjoint(selected)

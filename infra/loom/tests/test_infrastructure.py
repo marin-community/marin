@@ -124,6 +124,16 @@ def test_domain_is_a_canonical_hostname() -> None:
         replace(deployment_config(), domain="https://loom.example.com/")
 
 
+def test_profile_secrets_must_share_the_deployment_project() -> None:
+    profile = ProfileConfig.parse(
+        "ops",
+        {"agent": "codex", "env": {"TOKEN": {"secretRef": "projects/other/secrets/token/versions/latest"}}},
+    )
+
+    with pytest.raises(ValueError, match="secretRef must use project 'example'"):
+        replace(deployment_config(), profiles=(profile,))
+
+
 def test_github_federations_require_unique_names_and_known_profiles() -> None:
     base = deployment_config()
     unknown = GitHubFederationConfig.parse(

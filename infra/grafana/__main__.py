@@ -57,7 +57,7 @@ SMTP_SECRET = "marin-grafana-smtp-credentials"
 # bridge mints short-lived installation tokens from it (github_app.py), so nothing
 # long-lived expires under the GitHub panels. Hand-placed like the other runtime
 # secrets — the Cloud Run deploy account is fail-closed on secret creation — and
-# declared for IAM binding in infra/pulumi/src/iac/gcp/iam_data.yaml.
+# declared for IAM binding in infra/pulumi/src/iac/gcp/grafana.py.
 GITHUB_APP_PRIVATE_KEY_SECRET = "marin-grafana-github-app-private-key"
 
 
@@ -86,7 +86,7 @@ def main() -> None:
     connection_name = cloudsql.get_output("connection_name")
     database_socket_dir = connection_name.apply(lambda name: f"/cloudsql/{name}")
 
-    # Secret values stay hand-placed in Secret Manager; IAM access lives in iam_data.yaml.
+    # Secret values stay hand-placed in Secret Manager; IAM access lives in iac/gcp/grafana.py.
     # CW_READ_TOKEN is the CoreWeave read-role token behind the k8s source;
     # GF_DATABASE_PASSWORD is the Grafana Postgres user's password. GF_SMTP_PASSWORD,
     # the GitHub App key, and the Slack bot token are appended when their feature is on.
@@ -129,7 +129,7 @@ def main() -> None:
     # not secret and rides stack config. Optional like SMTP: unset, the panels deploy
     # unauthenticated (build panel shows no data), so the merge deploy never blocks.
     #   gcloud secrets create marin-grafana-github-app-private-key \
-    #     --project=hai-gcp-models --data-file=key.pem   # (grants live in iam_data.yaml)
+    #     --project=hai-gcp-models --data-file=key.pem   # (grants live in iac/gcp/grafana.py)
     #   pulumi config set marin-grafana:github_app_client_id <client-id>
     github_app_client_id = config.get("github_app_client_id")
     if github_app_client_id and secret_exists(provider, GITHUB_APP_PRIVATE_KEY_SECRET):

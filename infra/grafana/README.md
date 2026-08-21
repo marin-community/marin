@@ -412,7 +412,7 @@ All secrets live in Secret Manager, hand-placed, and reach the container as env
 vars via the `CloudRunService` `secrets` field; the values never enter Pulumi or
 git. The deploy account is fail-closed on secret creation, so the program only
 references secrets — each must exist and be declared in
-`infra/pulumi/src/iac/gcp/iam_data.yaml` for the deploy account to bind IAM on it.
+`infra/pulumi/src/iac/gcp/grafana.py` before the `marin` stack grants access.
 
 Loom itself needs no secret: the bridge authenticates with the Cloud Run service
 account and short-lived Google/Loom tokens, and Pulumi owns the
@@ -474,8 +474,8 @@ Creating the secrets:
    `printf '%s' "xoxb-..." | gcloud secrets create marin-grafana-slack-bot-token --project=hai-gcp-models --data-file=-`
 3. Apply the `marin` GCP stack, which grants the deploy account IAM management on
    that secret and the runtime account access to it (declared in
-   `infra/pulumi/src/iac/gcp/iam_data.yaml`). Without it the grafana deploy fails
-   granting the runtime account access, even once the value exists.
+   `infra/pulumi/src/iac/gcp/grafana.py`). Without it the Grafana deploy fails
+   Cloud Run's secret-access validation, even once the value exists.
 4. Confirm `slack_alerts_channel` names the channel you want and that `@russbot`
    is in it. It is `#marin-alerts` (`C0BN20081CH`); to move it, take the id from
    the channel's Copy link and `/invite @russbot` there. `pulumi up` fails naming
@@ -536,8 +536,8 @@ pulumi preview                                            # plan; then, once it 
 pulumi up
 ```
 
-Add IAP viewers through `infra/pulumi/src/iac/gcp/iam_data.yaml` and apply the `marin` stack.
-The Grafana stack does not own IAM grants.
+Add IAP viewers through `infra/pulumi/src/iac/gcp/grafana.py`, referencing encrypted principals
+from `iam_data.yaml`, and apply the `marin` stack. The Grafana stack does not own IAM grants.
 
 Production reads the `grafana-alerts` URL and profile from the `marin-loom`
 stack. Apply that stack before rolling a Grafana revision with
@@ -604,7 +604,7 @@ so the merge-triggered deploy never blocks. The client id is already set, so
 enabling auth is one step (plus its permissions grant):
 
 ```bash
-# Its grants are declared in infra/pulumi/src/iac/gcp/iam_data.yaml, so:
+# Its grants are declared in infra/pulumi/src/iac/gcp/grafana.py, so:
 gcloud secrets create marin-grafana-github-app-private-key \
   --project=hai-gcp-models --data-file=key.pem
 ```

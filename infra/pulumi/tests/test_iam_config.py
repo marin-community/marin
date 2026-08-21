@@ -1,12 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import yaml
-from iac.gcp.iam import GcpCloudRunServiceIam, GcpEncryptedMember, GcpRoleGrant
+from iac.gcp.iam import GcpEncryptedMember, GcpRoleGrant
 from iac.gcp.iam_config import (
     IAM_DATA_PATH,
     GcpIamConfig,
@@ -37,7 +36,6 @@ def _config(*, principals: tuple[GcpPrincipal, ...] = ()) -> GcpIamConfig:
         buckets=(),
         artifact_repositories=(),
         service_accounts=(),
-        cloud_run_services=(),
     )
 
 
@@ -108,29 +106,6 @@ def test_replace_principals_preserves_grant_references(tmp_path: Path) -> None:
     assert loaded.project_grants[0].members[-1] == GcpEncryptedMember("new-ciphertext")
 
 
-def test_cloud_run_iap_grants_round_trip_encrypted_members(tmp_path: Path) -> None:
-    encrypted_member = GcpEncryptedMember("ciphertext")
-    config = replace(
-        _config(principals=(GcpPrincipal(principal_id="human-001", ciphertext="ciphertext"),)),
-        cloud_run_services=(
-            GcpCloudRunServiceIam(
-                location="us-central1",
-                service="dashboard",
-                iap_grants=(GcpRoleGrant(role="roles/iap.httpsResourceAccessor", members=(encrypted_member,)),),
-            ),
-        ),
-    )
-    output_path = tmp_path / "iam_data.yaml"
-
-    rotated = replace_principals(
-        config,
-        (GcpPrincipal(principal_id="human-001", ciphertext="rotated-ciphertext"),),
-    )
-    write_iam_config(rotated, output_path)
-
-    assert load_iam_config(output_path) == rotated
-
-
 def test_load_iam_config_rejects_dangling_principal_reference(tmp_path: Path) -> None:
     path = tmp_path / "iam_data.yaml"
     write_iam_config(_config(), path)
@@ -176,35 +151,6 @@ def test_load_iam_config_rejects_unknown_schema_fields(tmp_path: Path) -> None:
     path.write_text(yaml.safe_dump(raw), encoding="utf-8")
 
     with pytest.raises(ValueError, match=r"unknown field.*unexpected"):
-        load_iam_config(path)
-
-
-def test_load_iam_config_rejects_cloud_run_service_grants(tmp_path: Path) -> None:
-    path = tmp_path / "iam_data.yaml"
-    write_iam_config(_config(), path)
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    raw["cloud_run_services"] = [
-        {
-            "location": "us-central1",
-            "service": "dashboard",
-            "grants": [],
-            "iap_grants": [],
-        }
-    ]
-    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
-
-    with pytest.raises(ValueError, match=r"unknown field.*grants"):
-        load_iam_config(path)
-
-
-def test_load_iam_config_rejects_cloud_run_jobs(tmp_path: Path) -> None:
-    path = tmp_path / "iam_data.yaml"
-    write_iam_config(_config(), path)
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    raw["cloud_run_jobs"] = []
-    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
-
-    with pytest.raises(ValueError, match=r"unknown field.*cloud_run_jobs"):
         load_iam_config(path)
 
 

@@ -9,7 +9,7 @@ from iac.gcp import iam as iam_module
 from iac.gcp.iam import (
     GcpArtifactRepositoryIam,
     GcpBucketIam,
-    GcpCloudRunServiceIam,
+    GcpCloudRunIapIam,
     GcpCustomRole,
     GcpIam,
     GcpIamArgs,
@@ -72,8 +72,8 @@ def _args() -> GcpIamArgs:
             GcpArtifactRepositoryIam(location="us-central1", repository="test-repository", grants=(_grant(),)),
         ),
         service_accounts=(GcpServiceAccountIam(email="target@example.iam.gserviceaccount.com", grants=(_grant(),)),),
-        cloud_run_services=(
-            GcpCloudRunServiceIam(
+        cloud_run_iap=(
+            GcpCloudRunIapIam(
                 location="us-central1",
                 service="test-service",
                 iap_grants=(_grant(),),
