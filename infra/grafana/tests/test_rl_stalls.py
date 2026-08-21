@@ -11,12 +11,15 @@ column rather than on a JSON attribute.
 """
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import duckdb
 import pyarrow as pa
 import pytest
+import yaml
 from rl_stalls import rl_progress_query, rl_stall_alert_rows
 
+ROOT = Path(__file__).resolve().parent.parent
 NOW = datetime(2026, 8, 20, 12, tzinfo=UTC)
 
 
@@ -141,3 +144,62 @@ def test_the_query_drops_rows_without_a_run_identity(store) -> None:
     )
 
     assert store.execute(rl_progress_query(NOW)).fetchall() == []
+
+
+def _strict_rules() -> dict:
+    """Parse rules.yaml rejecting duplicate keys, the way Grafana's Go parser does.
+
+    PyYAML takes the last value for a repeated key and reports nothing. `yaml.v3` errors, so a
+    duplicate does not misconfigure one rule — it fails the whole file to load and takes every
+    other alert with it. A permissive parser is why a half-finished copy-paste survived review.
+    """
+
+    class _Strict(yaml.SafeLoader):
+        pass
+
+    def _no_duplicates(loader, node, deep=False):
+        seen = set()
+        for key_node, _ in node.value:
+            key = loader.construct_object(key_node, deep=deep)
+            if key in seen:
+                raise AssertionError(f"duplicate key {key!r} in rules.yaml")
+            seen.add(key)
+        return yaml.SafeLoader.construct_mapping(loader, node, deep)
+
+    _Strict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicates)
+    return yaml.load((ROOT / "provisioning" / "alerting" / "rules.yaml").read_text(), Loader=_Strict)
+
+
+def _rl_rule() -> dict:
+    rules = [rule for group in _strict_rules()["groups"] for rule in group["rules"]]
+    (rule,) = [rule for rule in rules if rule["uid"] == "rl-run-progress-stalled"]
+    return rule
+
+
+def test_the_rules_file_has_no_duplicate_keys() -> None:
+    _strict_rules()
+
+
+def test_the_rl_rule_is_warning_only_and_does_not_page() -> None:
+    # `notification: hero-run` routes to ops-critical — email, Slack and Loom. This rule fires on
+    # noDataState as well, so paging on it would page for an absent producer.
+    rule = _rl_rule()
+
+    assert rule["labels"] == {"severity": "warning"}
+    assert "notification" not in rule["labels"]
+
+
+def test_the_rl_rule_queries_its_own_endpoint() -> None:
+    rule = _rl_rule()
+
+    (query,) = [node for node in rule["data"] if node["refId"] == "A"]
+    assert query["model"]["url"] == "/alerts/rl_stalls"
+    assert [column["selector"] for column in query["model"]["columns"]] == [
+        "cluster",
+        "run",
+        "execution",
+        "reason",
+        "value",
+    ]
+    assert set(rule["annotations"]) == {"summary", "runbook_url"}
+    assert "loss" not in rule["annotations"]["summary"]
