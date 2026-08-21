@@ -23,6 +23,25 @@ synthetic data, no profiler, no checkpoints, no eval, `--master-params disabled`
 `systemd-run` and `crontab` are both unavailable in this sandbox — the classifier blocks the
 former and NixOS ships no `crontab` — so layer 2 is a detached shell loop rather than a timer unit.
 
+## Regime
+
+Iterations 0-2 ran from scratch on synthetic data. That regime turned out not to test the thing
+the goal is about: at step 15 the router is still near-uniform, so capacity never clips and both
+transports measured dropless (pooled 7.4e-6, ragged 0.0). The hero in production sits near 4.9%.
+
+From `r01` on, arms restore the live hero's checkpoint (`hero-12d8b6f0-dee637`), read-only, and
+train on the harrier mixture. A trained router routes real tokens by content, which is what
+produces real clipping; a repeated synthetic batch under a trained router would produce a routing
+distribution no real run ever sees. The hero's per-rack batch is 1024 -- the same as this loop's
+single-rack batch -- so its clipping pressure transfers rather than diluting.
+
+The checkpoint carries a pinned-host fp32 master. `--restore-master-params fp32_pinned_host`
+restores that tree and folds it into fp32 device parameters, so arms train the configuration the
+PR ships rather than the one the checkpoint was written under. The fold is exact: `params` under a
+master is a bf16 copy cast from it, and `opt_state` is already built on the master's fp32 tree.
+
+Budget: 20 iterations.
+
 ## Metric and guards
 
 Metric: mean `throughput/mfu` over **steps 5-15**, higher is better. `score.py` reports
@@ -38,9 +57,13 @@ Numbers here are not comparable to the pre-loop campaign's: that scored 5-19 on 
 profiler on. The baseline measures 18.96% where the same code measured 21.88% under the old
 protocol. Only within-loop comparisons mean anything.
 
+Drop fraction is reported alongside MFU on every arm, as an outcome rather than only a guard: the
+ragged transport exists to move tokens the pooled one clips, so a throughput win bought with drops
+is not a win.
+
 Guards, all three of which must pass or the iteration is discarded regardless of MFU:
 
-- `moe/drop_fraction` stays at the baseline's level (the baseline is dropless).
+- `moe/drop_fraction` does not rise above the arm it is being compared against.
 - `train/loss` at the window's last step matches the baseline to four decimals. Synthetic data is a
   deterministic batch, so any real change to the model or the transport's arithmetic shows up here.
 - The 4-GPU `ragged_all_to_all` vs `ring` forward and gradient check passes, for any change that

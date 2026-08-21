@@ -73,7 +73,10 @@ def main() -> None:
         "mfu_mean": round(statistics.fmean(mfu), 4) if mfu else None,
         "mfu_stdev": round(statistics.stdev(mfu), 4) if len(mfu) > 1 else None,
         "tokens_per_second_mean": round(statistics.fmean(tokens), 1) if tokens else None,
+        # Drops are an outcome here, not only a guard: the whole point of the ragged transport is
+        # moving tokens the pooled one clips, so a throughput win that costs drops is not a win.
         "drop_fraction_max": max(drops) if drops else None,
+        "drop_fraction_mean": round(statistics.fmean(drops), 6) if drops else None,
         "loss_last": float(losses[-1][1]) if losses else None,
         "loss_last_step": losses[-1][0] if losses else None,
     }
