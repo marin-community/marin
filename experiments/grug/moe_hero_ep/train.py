@@ -613,6 +613,65 @@ def _install_restored_device_leaves(initial_state, restored_state):
     return jax.tree.unflatten(restored_treedef, restored_leaves)
 
 
+def _restore_or_initialize_train_state(
+    init_state: Callable[[PRNGKeyArray], GrugTrainState],
+    model_key: PRNGKeyArray,
+    *,
+    trainer: TrainerConfig,
+    grug_trainer: GrugTrainerConfig,
+    mesh: Mesh,
+    run_id: str,
+) -> GrugTrainState:
+    initial_state = init_state(model_key)
+    released_initial_state = trainer.load_checkpoint is not False and not trainer.allow_partial_checkpoint
+    restore_into_init_slots = (
+        released_initial_state and grug_trainer.checkpoint_restore_mode == CheckpointRestoreMode.DONATED_INIT_SLOTS
+    )
+    if released_initial_state:
+        if restore_into_init_slots:
+            restore_template = _checkpoint_template_on_host(initial_state)
+            jax.tree.map(
+                lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) and not _is_device_array(leaf) else None,
+                initial_state,
+            )
+        else:
+            restore_template = jax.tree.map(
+                lambda leaf: (
+                    jax.ShapeDtypeStruct(leaf.shape, leaf.dtype, sharding=leaf.sharding)
+                    if isinstance(leaf, jax.Array)
+                    else leaf
+                ),
+                initial_state,
+            )
+            jax.tree.map(lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) else None, initial_state)
+        gc.collect()
+        state = restore_template
+    else:
+        state = initial_state
+
+    state = restore_grug_state_from_checkpoint(
+        state,
+        checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
+        load_checkpoint_setting=trainer.load_checkpoint,
+        mesh=mesh,
+        allow_partial=trainer.allow_partial_checkpoint,
+    )
+    if not released_initial_state:
+        return state
+
+    checkpoint_not_found = any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state))
+    if checkpoint_not_found:
+        if restore_into_init_slots:
+            jax.tree.map(
+                lambda leaf: leaf.delete() if _is_device_array(leaf) else None,
+                initial_state,
+            )
+        return init_state(model_key)
+    if restore_into_init_slots:
+        return _install_restored_device_leaves(initial_state, state)
+    return state
+
+
 def initial_state(
     model_config: GrugModelConfig,
     *,
@@ -881,52 +940,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 master_param_mode=config.trainer.master_param_mode,
             )
 
-        initial_state = _init_state(model_key)
-        released_initial_state = trainer.load_checkpoint is not False and not trainer.allow_partial_checkpoint
-        restore_into_init_slots = (
-            released_initial_state and config.trainer.checkpoint_restore_mode == CheckpointRestoreMode.DONATED_INIT_SLOTS
-        )
-        if released_initial_state:
-            if restore_into_init_slots:
-                restore_template = _checkpoint_template_on_host(initial_state)
-                jax.tree.map(
-                    lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) and not _is_device_array(leaf) else None,
-                    initial_state,
-                )
-            else:
-                restore_template = jax.tree.map(
-                    lambda leaf: (
-                        jax.ShapeDtypeStruct(leaf.shape, leaf.dtype, sharding=leaf.sharding)
-                        if isinstance(leaf, jax.Array)
-                        else leaf
-                    ),
-                    initial_state,
-                )
-                jax.tree.map(lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) else None, initial_state)
-            gc.collect()
-            state = restore_template
-        else:
-            state = initial_state
-
         checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
-        state = restore_grug_state_from_checkpoint(
-            state,
-            checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
-            load_checkpoint_setting=trainer.load_checkpoint,
+        state = _restore_or_initialize_train_state(
+            _init_state,
+            model_key,
+            trainer=trainer,
+            grug_trainer=config.trainer,
             mesh=mesh,
-            allow_partial=trainer.allow_partial_checkpoint,
+            run_id=run_id,
         )
-        if released_initial_state:
-            checkpoint_not_found = any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state))
-            if checkpoint_not_found:
-                if restore_into_init_slots:
-                    jax.tree.map(
-                        lambda leaf: leaf.delete() if _is_device_array(leaf) else None,
-                        initial_state,
-                    )
-                state = _init_state(model_key)
-            elif restore_into_init_slots:
-                state = _install_restored_device_leaves(initial_state, state)
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,

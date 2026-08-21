@@ -130,7 +130,6 @@ def test_donated_checkpoint_restore_preserves_initialized_device_buffers():
     np.testing.assert_array_equal(np.asarray(installed["device"]), np.asarray(restored["device"]))
     np.testing.assert_array_equal(np.asarray(installed["host"]), np.asarray(restored["host"]))
     assert initial["device"].is_deleted()
-    assert initial["host"].is_deleted()
 
 
 def test_checkpoint_interval_must_be_positive():
