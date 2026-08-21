@@ -16,10 +16,10 @@ revision directly. There are three pin kinds:
 - Isolated uv lock (`evalchemy`, `harbor`, `MarinSkyRL`): the fork is a git
   dependency in `config/external/<fork>/uv.lock`. `uv run
   config/update-external.py <fork>` advances the lock and regenerates the pins.
-- Descriptor SHA (`vllm` TPU stack, `tpu-inference`): the fork tips live in
-  `config/external/vllm/tpu.toml`. This stack runs from an isolated `uvx`
-  environment, so its `jax`/`jaxlib`/`libtpu`/`torch` come from the forks' own
-  dependencies and there is no workspace lock change.
+- Paired release wheel (`vllm` TPU stack, `tpu-inference`): `tpu.toml` selects
+  both source revisions, and `tpu_wheels.toml` pins the qualified public wheel
+  pair. The pair runs in an isolated `uvx` environment, with no workspace lock
+  change.
 - Release wheel (`vllm` GPU): `config/external/vllm/gpu.toml` records a
   promoted, immutable wheel per architecture. See the GPU release pipeline below.
 
@@ -42,6 +42,10 @@ result on a `<branch>-next` branch, re-pin Marin, run the fork's declared
 end-to-end test, and on green open one draft Marin PR requesting the descriptor's
 reviewer. On an unresolved external blocker it files a "can't migrate" issue
 instead of a PR.
+
+The TPU group adds one release boundary: its draft PR pins a qualified candidate.
+After review, promotion reuses those wheel bytes and updates the same PR to the
+final release tag.
 
 `config/external/migration.toml` is the per-fork descriptor. It records the
 upstream repository, the pin kind, the fork branch the pin tracks, how to select a
@@ -91,17 +95,17 @@ loader validates.
 
 The refresh never force-moves a fork's stable branch. It stages on `<branch>-next`
 and leaves the protected stable branch at the old tip; the draft Marin PR names
-the `<branch>-next` to `<branch>` hard swap an admin performs after review. Because
-the staged tip and the eventual stable tip are the same commit, the pins need no
-change after promotion.
+the `<branch>-next` to `<branch>` hard swap an admin performs after review. Source
+revisions stay fixed after that promotion. For the TPU group, the final release
+tag changes but the qualified wheel hashes must not.
 
 ## Existing forks
 
 | Fork | Repository | Tracks upstream | Pin |
 |------|-----------|-----------------|-----|
-| vllm (TPU) | [`marin-community/vllm`](https://github.com/marin-community/vllm) | [`vllm-project/vllm`](https://github.com/vllm-project/vllm) | descriptor SHA on the `tpu` branch (`tpu.toml`) |
+| vllm (TPU) | [`marin-community/vllm`](https://github.com/marin-community/vllm) | [`vllm-project/vllm`](https://github.com/vllm-project/vllm) | paired wheel release (`tpu_wheels.toml`) |
 | vllm (GPU) | [`marin-community/vllm`](https://github.com/marin-community/vllm) | [`vllm-project/vllm`](https://github.com/vllm-project/vllm) | release wheel from `main` (`gpu.toml`) |
-| tpu-inference | [`marin-community/tpu-inference`](https://github.com/marin-community/tpu-inference) | [`vllm-project/tpu-inference`](https://github.com/vllm-project/tpu-inference) | descriptor SHA (`tpu.toml`) |
+| tpu-inference | [`marin-community/tpu-inference`](https://github.com/marin-community/tpu-inference) | [`vllm-project/tpu-inference`](https://github.com/vllm-project/tpu-inference) | paired wheel release (`tpu_wheels.toml`) |
 | evalchemy | [`marin-community/evalchemy`](https://github.com/marin-community/evalchemy) | [`mlfoundations/evalchemy`](https://github.com/mlfoundations/evalchemy) | isolated uv lock |
 | harbor | [`marin-community/harbor`](https://github.com/marin-community/harbor) | [`harbor-framework/harbor`](https://github.com/harbor-framework/harbor) | isolated uv lock |
 | MarinSkyRL | [`marin-community/MarinSkyRL`](https://github.com/marin-community/MarinSkyRL) | [`NovaSky-AI/SkyRL`](https://github.com/NovaSky-AI/SkyRL) | isolated uv lock |
