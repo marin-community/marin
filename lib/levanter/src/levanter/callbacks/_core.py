@@ -6,7 +6,7 @@ import inspect
 from abc import ABC
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from enum import StrEnum
+from enum import StrEnum, auto
 from typing import Any, Callable, Generic, Iterator, TypeVar
 
 from jaxtyping import PyTree
@@ -23,14 +23,14 @@ CBInfo = TypeVar("CBInfo")
 class ProgressEvent(StrEnum):
     """Lifecycle events that represent forward progress through training."""
 
-    PROCESS_STARTED = "process_started"
-    TRAIN_STEP_STARTED = "train_step_started"
-    TRAIN_STEP_FINISHED = "train_step_finished"
-    EVALUATION_STARTED = "evaluation_started"
-    EVALUATION_FINISHED = "evaluation_finished"
-    CHECKPOINT_STARTED = "checkpoint_started"
-    CHECKPOINT_FINISHED = "checkpoint_finished"
-    TRAINING_FINISHED = "training_finished"
+    PROCESS_STARTED = auto()
+    TRAIN_STEP_STARTED = auto()
+    TRAIN_STEP_FINISHED = auto()
+    EVALUATION_STARTED = auto()
+    EVALUATION_FINISHED = auto()
+    CHECKPOINT_STARTED = auto()
+    CHECKPOINT_FINISHED = auto()
+    TRAINING_FINISHED = auto()
 
 
 def _ignore_progress_event(event: ProgressEvent) -> None:
