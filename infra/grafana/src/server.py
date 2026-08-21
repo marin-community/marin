@@ -17,6 +17,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/marin/alerts/fleet_health       alert rows: server labels + value(0|1)
     GET /finelog/marin/alerts/training_stalls    active jobs + stalled-progress value(0|1)
     GET /finelog/marin/alerts/loss_spikes        active hero runs + loss-spike value(0|1)
+    GET /finelog/marin/alerts/rl_stalls          reporting RL runs + stalled-progress value(0|1)
     GET /finelog/marin/alerts/zephyr_stalls      active pipelines + stalled-progress value(0|1)
     GET /iris/{cluster}/jobs                     root-job counts by state (in-flight + 24h terminal)
     GET /iris/{cluster}/workers                  healthy worker counts + resource totals per region
@@ -98,6 +99,7 @@ from loom_alerts import (
 )
 from loss_spikes import loss_spike_alert_rows, loss_window_query
 from nightly_config import NIGHTLY_LANES
+from rl_stalls import rl_progress_query, rl_stall_alert_rows
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -485,6 +487,13 @@ def create_app(
 
         return finelog_alert_endpoint("loss_spikes", project)
 
+    def finelog_alerts_rl_stalls(_: Request) -> JSONResponse:
+        def project(target: ClusterTarget, now: datetime) -> list[dict]:
+            progress_metrics = finelog_sources[target.name].query(rl_progress_query(now), max_rows=config.max_rows)
+            return rl_stall_alert_rows(progress_metrics, now)
+
+        return finelog_alert_endpoint("rl_stalls", project)
+
     def finelog_alerts_zephyr_stalls(_: Request) -> JSONResponse:
         def project(target: ClusterTarget, now: datetime) -> list[dict]:
             progress_metrics = finelog_sources[target.name].query(zephyr_progress_query(now), max_rows=config.max_rows)
@@ -705,6 +714,7 @@ def create_app(
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_stalls", finelog_alerts_training_stalls),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/loss_spikes", finelog_alerts_loss_spikes),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/rl_stalls", finelog_alerts_rl_stalls),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/zephyr_stalls", finelog_alerts_zephyr_stalls),
             Route("/iris/{cluster}/jobs", iris_jobs),
             Route("/iris/{cluster}/workers", iris_workers),
