@@ -172,6 +172,7 @@ COPY lib/finestore/src/ ./lib/finestore/src/
 COPY config/ ./config/
 COPY lib/finelog/src/ ./lib/finelog/src/
 COPY lib/finelog/config/ ./lib/finelog/config/
+COPY lib/iris/hatch_build.py ./lib/iris/hatch_build.py
 COPY lib/iris/src/ ./lib/iris/src/
 COPY lib/iris/config/ ./lib/iris/config/
 RUN --mount=type=cache,target=/root/.cache/uv \

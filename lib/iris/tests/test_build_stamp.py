@@ -30,8 +30,10 @@ SDIST_BUILD_INFO = "src/iris/_build_info.py"
 def uv_build(source: Path, out_dir: Path, *kinds: str) -> Path:
     """Build `source` into `out_dir` and return the single artifact produced."""
     subprocess.run(["uv", "build", *kinds, "--out-dir", str(out_dir), str(source)], check=True)
-    # uv drops a .gitignore beside whatever it built.
     (artifact,) = out_dir.glob("marin_iris-*")
+    # Exactly the artifact plus uv's .gitignore: the build hook once leaked its
+    # generated _build_info.py here, which failed the release manifest check.
+    assert sorted(path.name for path in out_dir.iterdir()) == sorted([".gitignore", artifact.name])
     return artifact
 
 
