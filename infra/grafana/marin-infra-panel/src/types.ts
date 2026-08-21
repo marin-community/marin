@@ -1,4 +1,4 @@
-export type InfraPanelView = 'status' | 'cluster' | 'nightlies' | 'commits' | 'wandb';
+export type InfraPanelView = 'status' | 'cluster' | 'nightlies' | 'commits' | 'wandb' | 'sm';
 
 export interface InfraPanelOptions {
   view: InfraPanelView;
@@ -98,4 +98,24 @@ export interface NodeMetric {
   name: string;
   value: number;
   sampledAt: number;
+}
+
+export interface SmUtilizationPoint {
+  cluster: string;
+  node: string;
+  gpu: string;
+  sampledAt: number;
+  percent: number;
+}
+
+export interface SmUtilizationDevice {
+  cluster: string;
+  node: string;
+  gpu: string;
+}
+
+export interface SmUtilizationRasterData {
+  devices: SmUtilizationDevice[];
+  timestamps: number[];
+  values: Float32Array;
 }

@@ -8,8 +8,10 @@ Grafana. The `status` view combines these sections:
 - Current worker capacity by region.
 - W&B hero-training series against cumulative tokens.
 
-The separate `nightlies`, `commits`, and `wandb` views remain available. The panel
-receives Grafana data frames. The Python bridge owns credentials, queries, and caches.
+The `cluster` view renders live cluster packing and observed resource usage. The
+`sm` view renders the fleet's per-GPU SM activity as a time raster. The separate
+`nightlies`, `commits`, and `wandb` views remain available. The panel receives
+Grafana data frames. The Python bridge owns credentials, queries, and caches.
 
 ```bash
 npm ci

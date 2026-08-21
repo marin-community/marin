@@ -1,6 +1,6 @@
 {
   "uid": "marin-accel",
-  "title": "Accelerators",
+  "title": "Fleet accelerators",
   "description": "Where the fleet's power goes and whether it is doing work. Sourced from each CoreWeave node's dcgm-exporter via the iris-node-agent telemetry stream, so it covers GPU clusters only -- TPU hosts report no power. telemetry_v1 is time-ordered and unindexed, so keep the window short: a 3h range costs about 3s per panel, 24h about 10s against a 20s deadline.",
   "tags": [
     "marin",
@@ -117,14 +117,7 @@
       "url": "/d/marin-runs"
     },
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": true,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Clusters",
-      "type": "link",
-      "url": "/d/marin-clusters"
+      "linkRef": "fleet_health"
     },
     {
       "asDropdown": false,
@@ -1645,80 +1638,32 @@
     },
     {
       "id": 17,
-      "type": "heatmap",
-      "title": "SM utilization distribution",
-      "description": "Distribution across every reporting GPU in the selected clusters. SM activity is the fraction of time at least one warp was active on a streaming multiprocessor; 80% is necessary but not sufficient for effective use.",
+      "type": "marin-infra-panel",
+      "title": "SM utilization by GPU",
+      "description": "One time raster lane per reporting GPU, ordered by cluster, node, and device. Green is low activity, orange is high activity, and dark gaps are missing samples. SM activity is the fraction of time at least one warp was active on a streaming multiprocessor; hover for the exact GPU and value.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
+        "h": 14,
+        "w": 24,
         "x": 0,
         "y": 46
       },
       "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "scaleDistribution": {
-              "type": "linear"
-            }
-          }
-        },
+        "defaults": {},
         "overrides": []
       },
       "options": {
-        "calculate": true,
-        "calculation": {
-          "yBuckets": {
-            "mode": "count",
-            "value": ""
-          }
-        },
-        "cellGap": 1,
-        "color": {
-          "exponent": 0.5,
-          "fill": "red",
-          "max": 100,
-          "min": 0,
-          "mode": "scheme",
-          "reverse": false,
-          "scale": "linear",
-          "scheme": "RdYlGn",
-          "steps": 24
-        },
-        "exemplars": {
-          "color": "rgba(255,0,255,0.7)"
-        },
-        "legend": {
-          "show": false
-        },
-        "rowsFrame": {
-          "layout": "auto"
-        },
-        "tooltip": {
-          "mode": "single",
-          "showColorScale": false,
-          "yHistogram": false
-        },
-        "yAxis": {
-          "axisPlacement": "hidden",
-          "reverse": false,
-          "unit": "percent"
-        }
+        "view": "sm"
       },
       "targets": [
         {
           "refId": "A",
           "type": "json",
           "source": "url",
-          "format": "timeseries",
+          "format": "table",
           "parser": "backend",
           "url": "/query",
           "url_options": {
@@ -1726,7 +1671,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, json_get(attributes_json, 'node_name') || '/gpu' || json_get(attributes_json, 'gpu_index') AS series, AVG(value) * 100.0 AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_sm_active_ratio' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cluster, node_name AS node, json_get(attributes_json, 'gpu_index') AS gpu, AVG(value) * 100.0 AS sm_utilization FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_sm_active_ratio' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4 ORDER BY 2, 3, 4, 1"
               },
               {
                 "key": "from",
@@ -1745,18 +1690,29 @@
               "type": "timestamp_epoch"
             },
             {
-              "selector": "series",
-              "text": "series",
+              "selector": "cluster",
+              "text": "cluster",
               "type": "string"
             },
             {
-              "selector": "value",
-              "text": "value",
+              "selector": "node",
+              "text": "node",
+              "type": "string"
+            },
+            {
+              "selector": "gpu",
+              "text": "gpu",
+              "type": "string"
+            },
+            {
+              "selector": "sm_utilization",
+              "text": "sm_utilization",
               "type": "number"
             }
           ]
         }
       ],
+      "maxDataPoints": 100,
       "interval": "1m"
     },
     {
@@ -1770,9 +1726,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 46
+        "w": 24,
+        "x": 0,
+        "y": 60
       },
       "fieldConfig": {
         "defaults": {

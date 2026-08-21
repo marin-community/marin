@@ -26,14 +26,7 @@
       "url": "/d/marin-home"
     },
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": true,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Accelerators",
-      "type": "link",
-      "url": "/d/marin-accel"
+      "linkRef": "fleet_accelerators"
     },
     {
       "asDropdown": false,
@@ -66,14 +59,7 @@
       "url": "/d/marin-runs"
     },
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": true,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Clusters",
-      "type": "link",
-      "url": "/d/marin-clusters"
+      "linkRef": "fleet_health"
     },
     {
       "asDropdown": false,

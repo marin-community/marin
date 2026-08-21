@@ -186,21 +186,24 @@ __main__.py            Pulumi entry point — the Cloud Run service (iac.gcp.clo
 Pulumi.yaml            Pulumi project, run on the shared repo venv
 ```
 
-Each dashboard answers one question, and they link to each other in a fixed nav bar:
+The infrastructure hierarchy is fleet → cluster → NodePool → node → GPU. Jobs and
+runs cross that hierarchy: a job asks a cluster for capacity, and its tasks occupy
+nodes from one or more NodePools. Dashboard titles name the view and scope instead
+of repeating the Kubernetes object name.
 
-| Dashboard | Question | Selectors |
-|---|---|---|
-| `home.json` | Is anything wrong right now? | none (fleet-wide) |
-| `accelerators.json` | Where is the fleet's power going, and is it doing work? | cluster |
-| `nodes.json` | What is happening on one physical GPU node? | cluster, node |
-| `node_pools.json` | Is CoreWeave capacity at target? | cluster |
-| `jobs.json` | What is running, queued, and stuck — and why? | cluster, job |
-| `cluster_capacity.json` | What jobs and requests occupy one cluster and node? | cluster |
-| `runs.json` | How is each Levanter training run doing? | cluster, run |
-| `training.json` | Is one training run — by default the hero run — on track? | run |
-| `clusters.json` | Is the infrastructure under the jobs healthy? | cluster |
-| `inference.json` | How did one vLLM serve behave? | identity kind, serve |
-| `infra.json` | The custom React status page: nightly regressions, main CI, worker capacity, hero training. | none |
+| Scope | Dashboard title | Source file | Question | Selectors |
+|---|---|---|---|---|
+| Fleet | Home | `home.json` | Is anything wrong right now? | none |
+| Fleet | Fleet health | `clusters.json` | Are the cluster control planes, nodes, racks, and telemetry paths healthy? | cluster |
+| Fleet | Fleet accelerators | `accelerators.json` | Where is GPU power going, and are the GPUs doing work? | cluster |
+| Cluster | Cluster capacity | `cluster_capacity.json` | What jobs and requests occupy one cluster and its nodes? | cluster |
+| Cluster | Node pools | `node_pools.json` | Is CoreWeave capacity at target? | cluster |
+| Node | Node details | `nodes.json` | What is happening on one physical GPU node? | cluster, node |
+| Workload | Jobs | `jobs.json` | What is running, queued, and stuck? | cluster, job |
+| Workload | Runs | `runs.json` | How is each Levanter training run doing? | cluster, run |
+| Workload | Training run | `training.json` | Is one training run on track? | run |
+| Workload | Inference telemetry | `inference.json` | How did one vLLM serve behave? | identity kind, serve |
+| Services | Infra | `infra.json` | Are nightly runs, main CI, workers, and hero training healthy? | none |
 
 `home.json` is provisioned as the default home dashboard
 (`GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/home.json`,
@@ -215,10 +218,13 @@ independently of the dashboards those fragments also serve.
 `accelerators.json` is the GPU fleet view: total watts per cluster, the same watts
 attributed to the training run occupying each node, utilization against
 tensor-core activity, HBM, temperature, and the hardware-fault counters
-(XID, row remap, PCIe replay). SM-utilization and temperature heatmaps retain the
-fleet distribution, so one node or device can separate from the band without first
-changing the fleet maximum. It reads the `iris-node-agent` telemetry stream,
-which each CoreWeave node's agent fills from that cluster's `dcgm-exporter`.
+(XID, row remap, PCIe replay). The SM-utilization raster keeps one lane per GPU,
+ordered by cluster, node, and device; hover identifies the device and exact value.
+It fixes the query at 100 time buckets, keeping the default fleet-wide
+result below the bridge's 200,000-row limit. The temperature heatmap retains the
+fleet distribution without carrying per-device labels. Both read the
+`iris-node-agent` telemetry stream, which each CoreWeave node's agent fills from
+that cluster's `dcgm-exporter`.
 TPU hosts report no power, so this dashboard covers the GPU clusters only.
 Power is attributed to a run by joining the node agent's `node_name` to the
 `node_name` on Levanter's resource attributes, per time bucket — the residue is
