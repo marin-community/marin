@@ -223,6 +223,8 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     assert os.environ["JAX_ENABLE_PGLE"] == "false"
     assert os.environ["XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB"] == "192"
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "cuda_async"
+    assert os.environ["LD_PRELOAD"] == "libjemalloc.so.2"
+    assert os.environ["MALLOC_CONF"] == "background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2"
 
 
 def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
@@ -249,6 +251,8 @@ def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
 def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
     monkeypatch.setenv("JAX_ENABLE_PGLE", "false")
     monkeypatch.setenv("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
+    monkeypatch.setenv("LD_PRELOAD", "/opt/custom/liballocator.so")
+    monkeypatch.setenv("MALLOC_CONF", "narenas:8")
     monkeypatch.delenv("XLA_FLAGS", raising=False)
     config = _runtime_env_config()
 
@@ -257,6 +261,8 @@ def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
 
     assert os.environ["JAX_ENABLE_PGLE"] == "false"
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "platform"
+    assert os.environ["LD_PRELOAD"] == "/opt/custom/liballocator.so"
+    assert os.environ["MALLOC_CONF"] == "narenas:8"
 
 
 @pytest.mark.parametrize(

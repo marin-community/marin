@@ -126,6 +126,15 @@ def test_query_substitutes_window_macros_before_running():
     ]
 
 
+def test_wandb_routes_reject_an_incomplete_request_without_calling_wandb():
+    # The two W&B routes are distinct paths, so a report chart key can never shadow
+    # the run-history route. Neither bad request reaches the network.
+    client = _client(FakeSource(_ONE_ROW))
+    assert client.get("/wandb/history", params={"metric": "train/loss"}).status_code == 400
+    assert client.get("/wandb/history", params={"run": "hero-run"}).status_code == 400
+    assert client.get("/wandb/report/nope").status_code == 400
+
+
 def test_missing_sql_is_a_400():
     resp = _client(FakeSource()).get("/finelog/marin/query", params={"from": FROM_MS, "to": TO_MS})
     assert resp.status_code == 400

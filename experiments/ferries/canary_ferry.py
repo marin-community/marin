@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Canary ferry: Grug MoE daily pretraining canary.
+"""Canary ferry: Grug MoE daily accelerator smoke canary.
 
-Supports TPU (v5p-8, Nemotron, ~0.25B tokens) and GPU (8x H100, SlimPajama, ~50 steps).
+Supports TPU (v5p-8, FineWeb-Edu 10M, ~0.25B tokens) and GPU (8x H100, SlimPajama, ~50 steps).
 Config is driven by env vars set in the GH Actions workflow env: block and forwarded
 to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
 
@@ -35,6 +35,7 @@ from typing import cast
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.data.text.datasets import DatasetComponent
 from levanter.grug.attention import GrugAttentionImplementation
 from levanter.optim.config import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -46,11 +47,7 @@ from marin.processing.tokenize.data_configs import with_pack
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.cluster_config import marin_prefix, marin_temp_bucket
 
-from experiments.datasets.nemotron import nemotron_datasets
-from experiments.datasets.paloma import paloma_datasets
-from experiments.datasets.proofpile import proofpile_dataset
-from experiments.datasets.starcoder import starcoder_dataset
-from experiments.datasets.uncheatable import uncheatable_datasets
+from experiments.datasets.prebuilt_caches import fineweb_edu_10M_dataset
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.launch import (
     GRUG_MOE_TRIAL_MODEL,
@@ -59,8 +56,7 @@ from experiments.grug.moe.launch import (
     run_grug_moe_trial,
     slimpajama_6b_dataset,
 )
-from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
-from experiments.llama import llama3_tokenizer
+from experiments.grug.moe.train import GrugTrainerConfig
 
 CANARY_OPTIMIZER = AdamConfig(
     learning_rate=3e-3,
@@ -110,20 +106,6 @@ CANARY_OUTPUT_SUBDIR = "canary"
 # TTL for R2 canary outputs. Lifecycle rules on the bucket delete them after this
 # many days; must be one of config/marin.yaml (data.temp.ttl_days).
 CANARY_OUTPUT_TTL_DAYS = 7
-
-# Nemotron CC mixture weights: the corpus's TiB proportions, plus starcoder and
-# proof-pile at their published weights. Policy lives here, in the experiment.
-_NEMOTRON_WEIGHTS = {
-    "hq_actual": 0.91351,
-    "hq_synth": 2.72,
-    "medium_high": 0.82471,
-    "medium": 3.38,
-    "medium_low": 1.54,
-    "low_actual": 0.70123,
-    "low_synth": 0.62771,
-}
-_STARCODER_WEIGHT = 0.25
-_PROOFPILE_WEIGHT = 0.055
 
 
 def _env_bool(key: str, default: bool) -> bool:
@@ -185,28 +167,24 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
         target_tokens = env_int("CANARY_TARGET_TOKENS", 250_000_000)
         name = "canary-ferry-moe"
         resources = ResourceConfig.with_tpu(_tpu_types_from_env())
-        eval_config: GrugEvalConfig | None = GrugEvalConfig(
-            eval_batch_size=batch_size,
-            steps_per_eval=240,
-            max_eval_batches=8,
-            eval_current=True,
-            eval_ema=False,
-        )
         wandb_group = "canary-ferry-moe"
         wandb_tags = ["canary", "ferry", "grug", "moe"]
 
-        nem = nemotron_datasets(tokenizer=llama3_tokenizer)
-        train = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
-        train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
-        train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
-        validation = [
-            *paloma_datasets(tokenizer=llama3_tokenizer).values(),
-            *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
-        ]
-        deps = (*train, *validation)
+        # This hardware smoke canary uses a ~21 MB prebuilt cache; restart sampling
+        # repeats it for the configured token budget.
+        # The launcher and TPU may be in different regions, so make the training
+        # process localize that small cache through the mirrored filesystem.
+        train = fineweb_edu_10M_dataset()
+        deps = (train,)
 
         def build_data(ctx: StepContext):
-            return mixture(ctx, train, validation=validation)
+            data = mixture(ctx, {train: 1.0})
+            component = data.components[train.name]
+            assert isinstance(component, DatasetComponent)
+            return dataclasses.replace(
+                data,
+                components={train.name: dataclasses.replace(component, cache_dir=train.path("mirror://"))},
+            )
 
     else:
         gpu_type = os.environ.get("CANARY_GPU_TYPE", "H100")
@@ -255,8 +233,6 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
         name = f"canary-ferry-cw-{gpu_type.lower()}x{gpu_count}-r{gpu_replicas}-d{hidden_dim}-{attention_tag}"
         wandb_group = f"canary-ferry-moe-gpu-{gpu_type.lower()}-r{gpu_replicas}-{attention_tag}"
         wandb_tags = ["canary", "ferry", "grug", "moe", "gpu", gpu_type.lower(), f"d{hidden_dim}", attention_tag]
-        eval_config = None
-
         slimpajama = slimpajama_6b_dataset()
         deps = (slimpajama,)
 
@@ -326,7 +302,7 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
             tracker=build_tracker(ctx),
             optimizer=CANARY_OPTIMIZER,
             grug_trainer=CANARY_TRAINER,
-            eval=eval_config,
+            eval=None,
             profiler=ProfilerConfig(
                 enabled=profiler_enabled,
                 start_step=profiler_start_step,

@@ -26,7 +26,8 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /github/ferries                          recent ferry runs per tier, with success rate
     GET /github/builds                           recent main commits with CI rollup state
     GET /github/nightlies                        7-day nightly-lane matrix (one row per lane/day)
-    GET /wandb/{chart}                           sampled public hero-report series by chart key
+    GET /wandb/report/{chart}                    sampled public hero-report series by chart key
+    GET /wandb/history?run=&metric=&project=     one run's full logged history for one metric
     GET /k8s/control_plane                       watched components + webhook endpoints, all clusters
     GET /k8s/crashloops                          containers in backoff waiting states
     GET /k8s/pending                             Pending / SchedulingGated pods with age
@@ -64,7 +65,7 @@ Loom one also exchanges tokens and creates a run over HTTP.
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Hashable, Mapping
 from dataclasses import asdict
 from datetime import UTC, datetime
 
@@ -539,14 +540,29 @@ def create_app(
     def github_nightlies(_: Request) -> JSONResponse:
         return github_endpoint("nightlies", github_source.nightlies)
 
-    def wandb_chart(request: Request) -> JSONResponse:
-        chart = request.path_params["chart"]
+    def wandb_endpoint(key: Hashable, run) -> JSONResponse:
         try:
-            return JSONResponse(wandb_cache.get_or_compute(chart, lambda: wandb_source.points(chart)))
+            return JSONResponse(wandb_cache.get_or_compute(key, run))
         except ValueError as err:
             return JSONResponse({"error": str(err)}, status_code=400)
         except UpstreamError as err:
             return JSONResponse({"error": str(err), "source": err.source}, status_code=err.status_code)
+
+    def wandb_report_chart(request: Request) -> JSONResponse:
+        chart = request.path_params["chart"]
+        return wandb_endpoint(("report", chart), lambda: wandb_source.points(chart))
+
+    def wandb_run_history(request: Request) -> JSONResponse:
+        try:
+            run = _require(request.query_params, "run")
+            metric = _require(request.query_params, "metric")
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        project = request.query_params.get("project") or None
+        return wandb_endpoint(
+            ("history", run, metric, project),
+            lambda: wandb_source.run_history(run, metric=metric, project=project),
+        )
 
     def k8s_endpoint(key: str, run) -> JSONResponse:
         # Per-cluster failures are labeled rows inside the response; only a bridge
@@ -698,7 +714,8 @@ def create_app(
             Route("/github/ferries", github_ferries),
             Route("/github/builds", github_builds),
             Route("/github/nightlies", github_nightlies),
-            Route("/wandb/{chart}", wandb_chart),
+            Route("/wandb/history", wandb_run_history),
+            Route("/wandb/report/{chart}", wandb_report_chart),
             Route("/finelog/{cluster}/query", query),
             Route("/finelog/{cluster}/v1/vllm/overview", vllm_overview),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),

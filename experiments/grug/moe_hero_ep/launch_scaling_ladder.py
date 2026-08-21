@@ -29,6 +29,7 @@ import click
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.tracker.wandb import WandbConfig
@@ -44,6 +45,7 @@ from marin.training.training import (
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.uncheatable import uncheatable_datasets
+from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
@@ -81,6 +83,14 @@ from experiments.marin_tokenizer import marin_tokenizer
 
 # Ladder rungs, each pinned to the rack count that holds its batch. d6144 is the hero, reusing
 # HERO_MODEL; the narrower rungs reuse the ablation's `_small_model` at the same hero routing geometry.
+# Deadlines for the progress watchdog. A stalled process exits so the scheduler can replace the
+# gang rather than leaving every rank blocked on it.
+HERO_STEP_TIMEOUT = timedelta(minutes=15)
+HERO_PROCESS_STALL_TIMEOUT = timedelta(hours=1)
+# Twice the restore barrier, which keeps a barrier expiry ahead of this deadline: the barrier
+# names the ranks that never arrived, while this one only reports that nothing progressed.
+HERO_STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
+
 LADDER_RACKS: dict[str, int] = {"d768": 1, "d1024": 2, "d1536": 6, "d2048": 11, "d6144": 11}
 QB_HIST_BINS = 10_000
 # Gradient and parameter norm logs every 10 steps on every rung.
@@ -246,6 +256,11 @@ def build_ladder_run(
                 replicate_path=ctx.output_path,
             ),
             watch=WatchConfig(interval=WATCH_INTERVAL),
+            progress_watchdog=ProgressWatchdogConfig(
+                step_timeout=HERO_STEP_TIMEOUT,
+                process_timeout=HERO_PROCESS_STALL_TIMEOUT,
+                startup_timeout=HERO_STARTUP_TIMEOUT,
+            ),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,

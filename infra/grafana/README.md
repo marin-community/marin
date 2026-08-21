@@ -38,7 +38,9 @@ GET /finelog/marin/alerts/zephyr_stalls          active pipelines + stalled-prog
 GET /iris/{cluster}/jobs | workers | health      live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
 GET /github/ferries | builds | nightlies          GitHub REST / GraphQL
-GET /wandb/{train-loss,paloma-macro-loss,mfu}      public report runset and sampled history
+GET /wandb/report/{train-loss,paloma-macro-loss,mfu}
+                                                    public report runset and sampled history
+GET /wandb/history?run=&metric=&project=          one run's whole logged history for one metric
 GET /k8s/control_plane | crashloops | pending     CW control-plane state, all clusters
 GET /k8s/termination_candidates | kueue | events | health
                                                     ... one response, `cluster` column
@@ -94,9 +96,14 @@ repos), classifies each (lane, day) cell server-side — health, overdue, and du
 and serves one linked, duration-aware row per lane and UTC day. The internal panel plugin
 groups those rows into the compact trailing-week matrix.
 
-W&B: the bridge reads the public hero-training report anonymously, follows the runset
-pinned in its report spec, and samples train cross-entropy, Paloma macro loss, and MFU
-against cumulative training tokens. Grafana receives flat rows and never needs a W&B key.
+W&B: the bridge reads public W&B anonymously, so Grafana never needs a W&B key. It
+serves two shapes. `/wandb/report/{chart}` follows the runset pinned in the public
+hero-training report spec and samples train cross-entropy, Paloma macro loss, and MFU
+against cumulative training tokens. `/wandb/history` samples one metric across one
+named run, keyed on W&B's own `_step`, which is the Levanter step because Levanter
+logs through `wandb.log(..., step=<training step>)`. Without an explicit `project`
+the bridge searches `RUN_HISTORY_PROJECTS` in order and fails with a 404 when no
+project holds the run.
 
 k8s: the bridge polls the three production CoreWeave clusters' public CKS API servers with plain
 httpx GETs (paginated LISTs, bounded timeouts, one 429 retry) and a single org-wide CW
@@ -169,7 +176,7 @@ src/server.py          the bridge routes (Starlette): finelog SQL, Iris, GitHub,
 src/finelog_source.py  finelog query over its internal IP (LogClient)
 src/iris_source.py     live controller RPCs: jobs, workers, health, federation peers, ad-hoc query
 src/github_source.py   ferry runs and CI build rollup, precomputed
-src/wandb_source.py    public W&B report runset and token-axis samples
+src/wandb_source.py    public W&B report runset, and whole-run history for one metric
 src/k8s_source.py      CW k8s API reads + the per-cluster fan-out and alert rows
 src/discovery.py       GCE label -> internal IP
 src/config.py          cluster targets, watched components, and bridge settings
@@ -269,19 +276,35 @@ selector scopes the active-jobs table and the waiting-task series; with every jo
 selected the latter is the fleet backlog broken out by job, and narrowed to one
 job it is that job's queue over time.
 
-`training.json` answers "is this run on track" for one run, where `runs.json`
-answers the across-runs question; its selector is single-valued and orders hero
-runs first so the board opens on the current one, and scopes by `run_id` alone so
-a run that moves between clusters keeps one set of series. The status strip is a
-single ten-field stat panel because a `telemetry_v1` scan costs what its window
-costs whatever it selects, and it carries both hero alert inputs — time since the
-last completed step and train loss — beside step time, throughput, schedule
-progress, skip-step rejections, eval loss, and device memory. One loss panel uses
-step as its x-axis and keeps the newest sample for a repeated step. The wall-clock
-panel separates each `execution_uid` and disconnects gaps longer than five minutes.
-Iris forms this identity from the controller-minted `attempt_uid`. Thus, a new
-controller process cannot join loss from a prior process that used the same
-numeric task attempt.
+`training.json` shows whether one run is on track. `runs.json` compares runs. The
+single-value selector puts the newest hero run first. It uses `run_id` across
+clusters. The status strip uses one 15-minute `telemetry_v1` query for ten fields.
+It includes the two hero alert inputs: time since the last completed step and
+train loss. It also includes step time, throughput, schedule progress, and token
+count.
+
+The execution-health strip shows the current attempt age, Iris task counts,
+task-state age, and retained retry events. Initialization age appears only before
+training progress. Its orange 45-minute band matches the initialization alert.
+Its red 60-minute band matches the GPU startup supervisor. The Iris values match
+the current execution cluster and job root. The JAX process-zero phase heartbeat
+selects one stable replica for the attempt age.
+The Token drops and Router health panels show the MoE signals that the hero
+monitor uses. The dashboard uses a 7% drop limit. The router limits are 5.92
+entropy and 400 bias.
+
+The two loss panels read different stores on purpose. The step-axis panel reads
+W&B through `/wandb/history`, because finelog evicts telemetry segments once
+`telemetry_v1` passes its storage policy and a finelog query only scans locally
+resident segments. A run that outlives that window therefore has no step 0 left in
+finelog, while its W&B run keeps the whole history and spans every restart under
+one id. W&B samples the series and the bridge caches it for a minute, so this
+panel lags the wall-clock panel and ignores the Grafana time range.
+
+The wall-clock loss panel stays on finelog for live detail. It separates each
+`execution_uid` and disconnects gaps longer than five minutes. Iris forms this
+identity from the controller-minted `attempt_uid`. Thus, a new controller process
+cannot join loss from a prior process with the same numeric task attempt.
 
 ## Alerting
 
@@ -648,17 +671,17 @@ Four things about the data will bite you:
   fails to parse. Qualifying or wrapping it is enough for the parser, but panels
   always write `"cluster"`, and a test rejects every other spelling so nobody has
   to remember which positions are safe.
-- **Bound every `telemetry_v1` query, and fold the boundary.** The namespace is
-  sorted on `timestamp_ms` alone, so write
+- **Bound every `telemetry_v1` query, and fold the boundary.** Write
   `timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT)`, never
-  `timestamp_ms >= {{from}}`. An unbounded query exceeds the bridge's 20s deadline.
-- **Cost tracks the window, not the rows.** A `telemetry_v1` panel costs roughly
-  3s over 3h and 10s over 24h no matter how selective its `name` filter is, so a
-  second scan of the same window nearly doubles a panel. Prefer one scan with
-  `CASE WHEN name = …` over joining two scans, and keep the accelerator and run
-  dashboards on a short default range. Per-row `json_get` is the other cost: the
-  host memory and disk ratios ran 8.6s grouped per node and 3.4s summed straight
-  to the cluster, for the same numbers to three decimal places.
+  `timestamp_ms >= {{from}}`, which cannot prune segments. A test asserts that no
+  panel is exempt. An unbounded scan is both slow and a lie about coverage: on
+  2026-08-21 the full retained `hero-12d8b6f0-dee637` loss series took 3.785s
+  from a new job and still began at step 1050, because eviction had already taken
+  everything before it. Whole-run history belongs to `/wandb/history`.
+- **Cost tracks the selected window, not the returned rows.** Sampling after a
+  window function limits the response and the Grafana render, but it does not
+  lower the finelog scan. Prefer one scan with conditional aggregation to several
+  tidy single-metric queries.
 - **Clusters forward in bursts.** A cluster minutes behind makes the right edge of
   a fleet chart dip. That is why `accelerators.json` carries a freshness panel, and
   why the power stat reduces to the latest sample per GPU rather than a bucketed sum.
