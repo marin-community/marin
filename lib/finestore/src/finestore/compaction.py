@@ -52,10 +52,21 @@ def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None 
     snapshot = commits.snapshot()
     view = ReadView(root, snapshot)
     shards = view.list_shards(table)
-    if not shards:
+    if not shards or (len(shards) == 1 and shards[0].primary_key_sorted):
         return CompactionResult(written=0)
     primary_key = view.primary_key(table)
     next_generation = max(shard.generation for shard in shards) + 1
+    input_rows = sum(shard.rows for shard in shards)
+    input_bytes = sum(shard.size_bytes for shard in shards)
+    logger.info(
+        "FineStore compacting %s table=%s input_shards=%d input_rows=%d input_bytes=%d generation=%d",
+        root,
+        table,
+        len(shards),
+        input_rows,
+        input_bytes,
+        next_generation,
+    )
 
     fs, _ = factory.url_to_fs(root)
     pa_fs = PyFileSystem(FSSpecHandler(fs))
@@ -76,7 +87,7 @@ def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None 
     survivors = survivor_rows()
     first = next(survivors, None)
     if first is None:
-        return CompactionResult(written=0)
+        raise ValueError(f"FineStore table {table!r} has {len(shards)} non-empty shard descriptors but no rows")
 
     output_path = layout.shard_path(table, _COMPACTOR, next_generation, 0, uuid.uuid4().hex[:8])
     written = 0
@@ -116,11 +127,18 @@ def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None 
             base=snapshot,
         )
     except CommitConflict:
-        logger.info("FineStore abandoned compaction for %s because its inputs changed", table)
+        logger.info(
+            "FineStore abandoned compaction for %s table=%s input_shards=%d because its inputs changed",
+            root,
+            table,
+            len(shards),
+        )
         return CompactionResult(written=0)
     logger.info(
-        "FineStore compacted %s to generation %d (%d rows, %d superseded)",
+        "FineStore compacted %s table=%s input_shards=%d output_shards=1 generation=%d rows=%d superseded=%d",
+        root,
         table,
+        len(shards),
         next_generation,
         written,
         superseded[0],

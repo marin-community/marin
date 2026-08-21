@@ -25,10 +25,14 @@ from google.api_core.exceptions import NotFound, PreconditionFailed
 from google.cloud import storage
 
 import rigging.filesystem.factory as factory
+from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 _MAX_READ_ATTEMPTS = 8
+_MAX_S3_WRITE_ATTEMPTS = 4
 _S3_MISSING_CODES = frozenset({"NotFound", "NoSuchKey", "404"})
+_S3_WRITE_BACKOFF = ExponentialBackoff(initial=0.5, maximum=5.0, factor=2.0, jitter=0.25)
 
 
 class ConditionalWriteError(RuntimeError):
@@ -215,17 +219,27 @@ class S3ConditionalObject:
         client = self._client(self.endpoint_url)
         bucket, key = self._parts()
         condition = {"IfNoneMatch": "*"} if expected_version is None else {"IfMatch": expected_version}
-        try:
-            response = client.put_object(Bucket=bucket, Key=key, Body=data, **condition)
-        except ClientError as exc:
-            if exc.response["Error"]["Code"] in (
-                "PreconditionFailed",
-                "ConditionalRequestConflict",
-                "409",
-                "412",
-            ):
-                raise ConditionalWriteError(f"conditional write failed for {self.path}") from exc
-            raise
+
+        def put() -> dict:
+            try:
+                return client.put_object(Bucket=bucket, Key=key, Body=data, **condition)
+            except ClientError as exc:
+                if exc.response["Error"]["Code"] in (
+                    "PreconditionFailed",
+                    "ConditionalRequestConflict",
+                    "409",
+                    "412",
+                ):
+                    raise ConditionalWriteError(f"conditional write failed for {self.path}") from exc
+                raise
+
+        response = retry_with_backoff(
+            put,
+            retryable=is_transient_s3_error,
+            max_attempts=_MAX_S3_WRITE_ATTEMPTS,
+            backoff=_S3_WRITE_BACKOFF,
+            operation=f"conditional S3 write {self.path}",
+        )
         return response["ETag"]
 
 

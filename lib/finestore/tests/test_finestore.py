@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from botocore.exceptions import ClientError
 from finestore import shard_writer
+from finestore import store as store_module
 from finestore.commit import CommitConflict, CommitCoordinator, CommitDelta
 from finestore.compaction import compact
 from finestore.layout import (
@@ -29,6 +32,7 @@ from finestore.migrations import LegacyReadView, migrate
 from finestore.reader import BlobCorruptionError, ReadView
 from finestore.store import OBJECT_PART_BYTES, DataStore, DataTable, PrimaryKeyConflict, TransactionTooLarge
 from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import ExponentialBackoff
 
 
 def _rows(reader: ReadView, table: str, **kwargs) -> list[dict]:
@@ -195,15 +199,18 @@ def test_later_commit_prevents_compaction_shadowing(tmp_path):
     # append. The user commit sequence ranks before compaction generation.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "score": 1.0})
+        table = store.table("samples", primary_key=("task", "doc_id"))
+        table.append({"task": "arc", "doc_id": "1", "score": 1.0})
+        store.flush()
+        table.append({"task": "arc", "doc_id": "2", "score": 1.0})
+        store.flush()
     compact(root, "samples")
     assert ReadView(root).list_shards("samples")[0].generation == 1
 
     with DataStore.open(root, writer_id="w2") as store:
         store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "score": 2.0})
     rows = _rows(ReadView(root), "samples")
-    assert len(rows) == 1
-    assert rows[0]["score"] == 2.0
+    assert {row["doc_id"]: row["score"] for row in rows} == {"1": 2.0, "2": 1.0}
 
 
 def test_keys_lists_deduped_primary_keys(tmp_path):
@@ -471,7 +478,10 @@ def test_compaction_replaces_sources_logically_and_retains_objects(tmp_path):
 def test_manifest_binds_flush_and_compaction_shard_bytes(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        store.table("samples", primary_key=("doc_id",)).append({"doc_id": "1"})
+        table = store.table("samples", primary_key=("doc_id",))
+        table.append({"doc_id": "1"})
+        store.flush()
+        table.append({"doc_id": "2"})
         store.flush()
 
     level_zero = ReadView(root).list_shards("samples")[0]
@@ -490,7 +500,9 @@ def test_read_view_remains_valid_after_compaction(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"))
-        table.extend([{"task": "arc", "doc_id": str(i)} for i in range(4)])
+        table.extend([{"task": "arc", "doc_id": str(i)} for i in range(2)])
+        store.flush()
+        table.extend([{"task": "arc", "doc_id": str(i)} for i in range(2, 4)])
         store.flush()
 
     pinned = ReadView(root)
@@ -501,20 +513,41 @@ def test_read_view_remains_valid_after_compaction(tmp_path):
 
 
 def test_recompaction_merges_all_generations(tmp_path):
-    # Recompaction must stream an already compacted shard and advance its generation without changing
-    # the visible rows.
+    # Recompaction must merge an already compacted shard with a later level-zero shard.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"))
-        table.extend([{"task": "arc", "doc_id": str(i), "score": float(i)} for i in range(4)])
+        table.extend([{"task": "arc", "doc_id": str(i), "score": float(i)} for i in range(2)])
+        store.flush()
+        table.extend([{"task": "arc", "doc_id": str(i), "score": float(i)} for i in range(2, 4)])
         store.flush()
     compact(root, "samples")
     assert {s.generation for s in ReadView(root).list_shards("samples")} == {1}
 
-    assert compact(root, "samples").written == 4
+    with DataStore.open(root, writer_id="w2") as store:
+        store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "4", "score": 4.0})
+        store.flush()
+
+    assert compact(root, "samples").written == 5
     assert {s.generation for s in ReadView(root).list_shards("samples")} == {2}
     rows = {r["doc_id"]: r["score"] for r in _rows(ReadView(root), "samples")}
-    assert rows == {"0": 0.0, "1": 1.0, "2": 2.0, "3": 3.0}
+    assert rows == {"0": 0.0, "1": 1.0, "2": 2.0, "3": 3.0, "4": 4.0}
+
+
+def test_compaction_of_stable_shard_is_a_noop(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        store.table("samples", primary_key=("doc_id",)).append({"doc_id": "1"})
+        store.flush()
+
+    stable = ReadView(root)
+    stable_token = stable.token
+    stable_shards = stable.list_shards("samples")
+
+    assert compact(root, "samples").written == 0
+    unchanged = ReadView(root)
+    assert unchanged.token == stable_token
+    assert unchanged.list_shards("samples") == stable_shards
 
 
 def test_compaction_unifies_evolved_schema(tmp_path):
@@ -541,7 +574,9 @@ def test_compaction_streams_multiple_row_groups(tmp_path, monkeypatch):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"))
-        table.extend([{"task": "arc", "doc_id": f"{i:03d}", "score": float(i)} for i in range(7)])
+        table.extend([{"task": "arc", "doc_id": f"{i:03d}", "score": float(i)} for i in range(4)])
+        store.flush()
+        table.extend([{"task": "arc", "doc_id": f"{i:03d}", "score": float(i)} for i in range(4, 7)])
         store.flush()
     compact(root, "samples")  # g1 spanning ceil(7/2) row groups
 
@@ -918,6 +953,31 @@ def test_maintenance_compacts_after_shard_threshold(tmp_path):
         shards = ReadView(root).list_shards("samples")
         assert len(shards) == 1
         assert shards[0].generation == 1
+
+
+def test_background_maintenance_recovers_from_transient_s3_failure(tmp_path, monkeypatch):
+    root = str(tmp_path / "run")
+    completed = threading.Event()
+    attempts = 0
+    slowdown = ClientError({"Error": {"Code": "SlowDown", "Message": "reduce request rate"}}, "PutObject")
+    monkeypatch.setattr(
+        store_module,
+        "_MAINTENANCE_BACKOFF",
+        ExponentialBackoff(initial=0.001, maximum=0.001, jitter=0.0),
+    )
+
+    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+
+        def flaky_maintenance():
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise slowdown
+            completed.set()
+
+        monkeypatch.setattr(store, "maintain", flaky_maintenance)
+        store.request_flush()
+        assert completed.wait(timeout=3)
 
 
 def test_compaction_losing_an_input_race_is_a_benign_noop(tmp_path):

@@ -16,6 +16,8 @@ from types import TracebackType
 from typing import Protocol
 
 import pyarrow as pa
+from rigging.filesystem.s3_errors import is_transient_s3_error
+from rigging.timing import ExponentialBackoff
 
 from finestore.commit import ClearSeal, CommitCoordinator, CommitDelta, TableAddition, initialize_archive, write_schema
 from finestore.compaction import CompactionResult
@@ -44,6 +46,8 @@ DEFAULT_FLUSH_INTERVAL = 5.0
 DEFAULT_MAX_BUFFER_BYTES = ROW_GROUP_TARGET_BYTES
 DEFAULT_COMPACTION_SHARDS = 8
 OBJECT_PART_BYTES = 8 * 1024 * 1024
+_MAX_MAINTENANCE_ATTEMPTS = 5
+_MAINTENANCE_BACKOFF = ExponentialBackoff(initial=0.5, maximum=5.0, factor=2.0, jitter=0.25)
 
 _BLOB_SCHEMA = pa.schema(
     [
@@ -389,12 +393,31 @@ class DataStore:
             self._wake.clear()
             if self._stop.is_set():
                 return
-            try:
-                self.maintain()
-            except BaseException as exc:
-                self._error = exc
-                logger.exception("FineStore background maintenance failed")
-                return
+            backoff = _MAINTENANCE_BACKOFF.copy()
+            for attempt in range(_MAX_MAINTENANCE_ATTEMPTS):
+                try:
+                    self.maintain()
+                    break
+                except Exception as exc:
+                    final_attempt = attempt + 1 == _MAX_MAINTENANCE_ATTEMPTS
+                    if final_attempt or not is_transient_s3_error(exc):
+                        self._error = exc
+                        logger.exception(
+                            "FineStore background maintenance failed after %d attempt(s)",
+                            attempt + 1,
+                        )
+                        return
+                    delay = backoff.next_interval()
+                    logger.warning(
+                        "FineStore background maintenance failed for %s (attempt %d/%d); retrying in %.2fs: %s",
+                        self.root,
+                        attempt + 1,
+                        _MAX_MAINTENANCE_ATTEMPTS,
+                        delay,
+                        exc,
+                    )
+                    if self._stop.wait(delay):
+                        return
 
     def request_flush(self) -> None:
         self._wake.set()
