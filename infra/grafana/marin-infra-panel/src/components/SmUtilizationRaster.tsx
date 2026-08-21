@@ -104,19 +104,20 @@ function formatUtc(timestamp: number): string {
   }).format(new Date(timestamp));
 }
 
-function nearestTimestampIndex(timestamps: number[], target: number): number {
+function timestampBucketIndex(timestamps: number[], target: number, interval: number): number | undefined {
   let low = 0;
-  let high = timestamps.length - 1;
+  let high = timestamps.length;
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
-    if (timestamps[middle] < target) {
+    if (timestamps[middle] <= target) {
       low = middle + 1;
     } else {
       high = middle;
     }
   }
-  if (low === 0) {return low;}
-  return target - timestamps[low - 1] <= timestamps[low] - target ? low - 1 : low;
+  const index = low - 1;
+  if (index < 0 || target >= timestamps[index] + interval) {return undefined;}
+  return index;
 }
 
 function drawRaster(
@@ -230,9 +231,13 @@ export function SmUtilizationRaster({ frames, width, height }: Props) {
     }
     const deviceIndex = Math.min(raster.devices.length - 1, Math.floor((y - scale.top) / scale.rowHeight));
     const timestamp = scale.timeStart + (x - scale.left) / scale.plotWidth * scale.timeSpan;
-    const timestampIndex = nearestTimestampIndex(raster.timestamps, timestamp);
+    const timestampIndex = timestampBucketIndex(raster.timestamps, timestamp, scale.interval);
+    if (timestampIndex === undefined) {
+      setHovered(null);
+      return;
+    }
     const percent = raster.values[deviceIndex * raster.timestamps.length + timestampIndex];
-    if (!Number.isFinite(percent) || Math.abs(raster.timestamps[timestampIndex] - timestamp) > scale.interval / 2) {
+    if (!Number.isFinite(percent)) {
       setHovered(null);
       return;
     }

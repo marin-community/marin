@@ -92,7 +92,7 @@ test('status page keeps worker status visible when another source has no data', 
   expect(screen.getAllByText('No W&B data')).toHaveLength(3);
 });
 
-test('SM raster identifies the device and value under the pointer', () => {
+test('SM raster hover matches the painted time bucket', () => {
   const context = {
     setTransform: jest.fn(), clearRect: jest.fn(), fillRect: jest.fn(), beginPath: jest.fn(),
     moveTo: jest.fn(), lineTo: jest.fn(), stroke: jest.fn(), fillText: jest.fn(),
@@ -110,7 +110,9 @@ test('SM raster identifies the device and value under the pointer', () => {
     x: 0, y: 0, left: 0, top: 0, right: 700, bottom: 240, width: 700, height: 240, toJSON: () => ({}),
   });
 
-  fireEvent.mouseMove(canvas, { clientX: 110, clientY: 10 });
+  // The first bucket spans x=100..399. This point is past its midpoint, where
+  // nearest-sample hit testing would incorrectly select the second bucket.
+  fireEvent.mouseMove(canvas, { clientX: 330, clientY: 10 });
 
   expect(screen.getByRole('tooltip')).toHaveTextContent('25.0%');
   expect(screen.getByRole('tooltip')).toHaveTextContent('node-1');
