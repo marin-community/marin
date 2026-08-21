@@ -151,7 +151,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: package-${{ matrix.package }}-${{ matrix.operation }}
-          path: dist/*
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
           if-no-files-found: error
 
   publish:
