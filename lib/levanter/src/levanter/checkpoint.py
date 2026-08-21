@@ -37,6 +37,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from levanter._debug_logging import flush_debug_output
 from levanter.tensorstore_serialization import (
+    DtypeSource,
     TensorStoreWriteConfig,
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
@@ -847,6 +848,7 @@ def load_checkpoint(
     axis_mapping: Optional[haliax.partitioning.ResourceMapping] = None,
     mesh: Optional[jax.sharding.Mesh] = None,
     allow_partial: bool = False,
+    dtype_source: DtypeSource = DtypeSource.CHECKPOINT,
 ) -> M:
     """
     Load a checkpoint from a given path using TensorStore.
@@ -865,6 +867,7 @@ def load_checkpoint(
         axis_mapping: the axis mapping to use for loading the checkpoint
         mesh: the mesh to use for loading the checkpoint
         allow_partial: if True, allow partial loading of the checkpoint. If False, all parameters must be present in the checkpoint.
+        dtype_source: whether restored arrays keep their checkpoint dtype or are cast directly to the exemplar dtype
     Returns:
         the loaded checkpoint, with the same structure as the exemplar tree
 
@@ -884,7 +887,12 @@ def load_checkpoint(
 
     ser, non_ser = equinox.partition(tree, is_jax_array_like)
     tree = tree_deserialize_leaves_tensorstore(
-        checkpoint_path, ser, axis_mapping=axis_mapping, mesh=mesh, allow_missing=allow_partial
+        checkpoint_path,
+        ser,
+        axis_mapping=axis_mapping,
+        mesh=mesh,
+        allow_missing=allow_partial,
+        dtype_source=dtype_source,
     )
     tree = equinox.combine(tree, non_ser)
     return tree
