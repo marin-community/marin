@@ -148,6 +148,13 @@ def _apply_hero_ep_runtime_defaults(
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
     ragged = moe_implementation == RAGGED_MOE_IMPLEMENTATION
     if ragged:
+        # The one-shot transport registers NCCL symmetric-memory windows, and once windows exist
+        # NCCL's chooser routes the ordinary collectives onto its symmetric kernels too. Profiled
+        # at the hero shape those are slower than ring: reduce-scatter runs on LDMC at 0.52 s/step
+        # against ring's 0.19 on the pooled twin, all-gather splits across STMC and ring at 0.74
+        # against 0.65. Forcing ring restores the pooled collective behavior; the transport and
+        # its barrier are stream_executor kernels that never consult NCCL_ALGO.
+        env_defaults["NCCL_ALGO"] = "Ring"
         overlap_limit = RAGGED_COLLECTIVE_OVERLAP_LIMIT
     elif inline_watch_enabled:
         overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT
