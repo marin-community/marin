@@ -425,8 +425,8 @@ def _preempt_solo(
             continue
         if victim.device_variant != wanted_variant:
             continue
-        # Victims are sorted lowest-priority first. Once a victim does not rank
-        # below the candidate, every later victim is also ineligible (issue #5888).
+        # Victims are sorted lowest-priority first, so every victim after an
+        # ineligible band is also ineligible.
         if priority_band_rank(victim.priority_band) <= priority_band_rank(candidate.band):
             break
 
@@ -528,7 +528,6 @@ def _solo_victims_freeing_host(
     for victim in host_victims:
         if victim.already_preempted:
             continue
-        # Only strictly lower-priority victims are eligible.
         if priority_band_rank(victim.priority_band) <= priority_band_rank(candidate.band):
             continue
         chosen.append(victim)

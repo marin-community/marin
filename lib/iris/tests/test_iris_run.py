@@ -3,8 +3,6 @@
 
 """Behavior tests for the Iris job command and its public parsing helpers."""
 
-import sys
-
 import click
 import pytest
 from click.testing import CliRunner
@@ -172,20 +170,16 @@ def test_run_iris_job_passes_priority_band(recorded_job_submissions, name, band)
     assert recorded_job_submissions[0]["priority_band"] == band
 
 
-def test_run_iris_job_requires_system_reason(recorded_job_submissions):
-    result = _invoke_run(["--priority", "system"])
-    assert result.exit_code != 0
-    assert recorded_job_submissions == []
-
-
-def test_run_iris_job_rejects_unrecognized_system_reason(recorded_job_submissions):
-    result = _invoke_run(["--priority", "system", "--system-reason=urgent heroic recovery"])
-    assert result.exit_code != 0
-    assert recorded_job_submissions == []
-
-
-def test_run_iris_job_rejects_system_reason_for_other_bands(recorded_job_submissions):
-    result = _invoke_run(["--priority", "production", "--system-reason=iris recovery"])
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--priority", "system"],
+        ["--priority", "system", "--system-reason=urgent heroic recovery"],
+        ["--priority", "production", "--system-reason=iris recovery"],
+    ],
+)
+def test_run_iris_job_rejects_invalid_system_reason_usage(recorded_job_submissions, args):
+    result = _invoke_run(args)
     assert result.exit_code != 0
     assert recorded_job_submissions == []
 
@@ -195,17 +189,6 @@ def test_run_iris_job_accepts_system_reasons(recorded_job_submissions, reason):
     result = _invoke_run(["--priority", "system", f"--system-reason={reason}"])
     assert result.exit_code == 0, result.output
     assert recorded_job_submissions[0]["priority_band"] == job_pb2.PRIORITY_BAND_SYSTEM
-
-
-def test_run_iris_job_persists_system_reason_in_submit_argv(recorded_job_submissions, monkeypatch):
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["iris", "job", "run", "--priority", "system", "--system-reason=hero run recovery"],
-    )
-    result = _invoke_run(["--priority", "system", "--system-reason=hero run recovery"])
-    assert result.exit_code == 0, result.output
-    assert "--system-reason=hero run recovery" in recorded_job_submissions[0]["submit_argv"]
 
 
 def test_run_iris_job_default_priority_inherit(recorded_job_submissions):

@@ -1407,7 +1407,7 @@ def test_kueue_priority_class_orders_cpu_below_standalone_accelerator(device, ex
         (job_pb2.PRIORITY_BAND_BATCH, "iris-coscheduled-batch", "iris-batch"),
     ],
 )
-def test_kueue_coscheduled_gang_is_above_standalone_accelerator(band, workload_class, pod_class):
+def test_kueue_coscheduled_gang_uses_band_priority_classes(band, workload_class, pod_class):
     req = _cosched_req("/job/task/0", num_tasks=64, priority=band)
     req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
 
