@@ -359,6 +359,11 @@ def _fan_in_groups(frames: list[pl.LazyFrame], fan_in: int) -> list[list[pl.Lazy
     return [frames[i : i + fan_in] for i in range(0, len(frames), fan_in)]
 
 
+def _fan_in_groups(frames: list[pl.LazyFrame], fan_in: int) -> list[list[pl.LazyFrame]]:
+    """Split frames into consecutive groups of at most fan_in, preserving order."""
+    return [frames[i : i + fan_in] for i in range(0, len(frames), fan_in)]
+
+
 def _merge_sorted_frames(
     frames: list[pl.LazyFrame],
     sort_key: str,
