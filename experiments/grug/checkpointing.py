@@ -12,13 +12,16 @@ from typing import ClassVar, Protocol, TypeVar, cast
 import fsspec
 import jax
 from fsspec import AbstractFileSystem
-from jax.experimental import multihost_utils
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
+from levanter.utils.jax_utils import barrier_sync_named
 
 logger = logging.getLogger(__name__)
 
 StateT = TypeVar("StateT")
 RESTORE_COMPLETE_BARRIER = "grug_checkpoint_restore_complete"
+# Well clear of a cold restore, which reads for tens of minutes. Expiring aborts the attempt for
+# the scheduler to retry, rather than holding every rank behind one that may never arrive.
+RESTORE_BARRIER_TIMEOUT = 90 * 60
 
 
 class _GrugState(Protocol):
@@ -124,7 +127,7 @@ def restore_grug_state_from_checkpoint(
                 allow_partial=allow_partial,
                 load_fn=_load_fn,
             )
-            multihost_utils.sync_global_devices(RESTORE_COMPLETE_BARRIER)
+            barrier_sync_named(RESTORE_COMPLETE_BARRIER, timeout=RESTORE_BARRIER_TIMEOUT)
             if candidate not in checkpoint_search_paths:
                 logger.info("Loaded checkpoint from %s while searching %s", candidate, checkpoint_search_paths)
             return loaded
