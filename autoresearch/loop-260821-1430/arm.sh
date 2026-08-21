@@ -27,9 +27,24 @@ REPO="$(cd "${LOOP_DIR}/../.." && pwd)"
 PRIORITY="${PRIORITY:-production}"
 # Hard runtime limit. Iris enforces it on the coord job; watchdog.sh enforces it out of process.
 ARM_TIMEOUT="${ARM_TIMEOUT:-900}"
+# `stop_after_steps` is an absolute step, not a count, so a restored arm resuming at the
+# checkpoint's step would exit immediately against a small value. Restore arms set this high and
+# let the runtime cap end them instead.
 NUM_STEPS="${NUM_STEPS:-30}"
+# Synthetic data is a single deterministic batch, which is fine for an untrained router but not
+# for a restored one: a trained router routes real tokens by content, and repeating one degenerate
+# batch would produce a routing distribution -- and a drop rate -- that no real run ever sees.
+TRAINING_DATA="${TRAINING_DATA:-synthetic}"
 MASTER_PARAMS="${MASTER_PARAMS:-disabled}"
 MOE_IMPL="${MOE_IMPL:-ragged_all_to_all}"
+# Restore arms initialize from the live hero's checkpoint so the router is trained and capacity
+# clipping is real. The hero writes its master in fp32 on pinned host; the run folds that into
+# fp32 device parameters, so it trains in the configuration the PR ships.
+RESTORE_FROM="${RESTORE_FROM:-}"
+RESTORE_ARGS=()
+if [ -n "$RESTORE_FROM" ]; then
+  RESTORE_ARGS=(--restore-from "$RESTORE_FROM" --restore-master-params fp32_pinned_host)
+fi
 WHEEL="${WHEEL:-s3://marin-us-east-02a/marin/research/mcwitt-ra2a/pjrt-kmax128-devkernel-merge47263-20260817/jax_cuda13_pjrt-0.11.1.dev0+selfbuilt-py3-none-manylinux_2_27_aarch64.whl}"
 # The learning-rate schedule's length. The harrier mix rejects a schedule whose token budget
 # exceeds the mix's own (18.75T at 4.19M tokens/step, so 4.47M steps), and the check runs at
@@ -60,11 +75,12 @@ uv run iris --config lib/iris/config/marin.yaml job run \
      --moe-implementation "${MOE_IMPL}" \
      --processes-per-task 4 \
      --master-params "${MASTER_PARAMS}" \
-     --training-data synthetic \
+     --training-data "${TRAINING_DATA}" \
      --profile-steps 0 \
      --watch-interval 0 --eval-every 0 \
      --no-save-checkpoints \
+     "${RESTORE_ARGS[@]}" \
      "${EXTRA[@]}" \
      --version "${VERSION}" --run >/dev/null 2>&1
 
-echo "submitted ${RID} at ${PRIORITY} priority (timeout ${ARM_TIMEOUT}s, extra: ${EXTRA_LAUNCH_ARGS:-none})"
+echo "submitted ${RID} at ${PRIORITY} priority (timeout ${ARM_TIMEOUT}s, impl ${MOE_IMPL}, restore ${RESTORE_FROM:-none}, extra: ${EXTRA_LAUNCH_ARGS:-none})"

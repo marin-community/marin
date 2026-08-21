@@ -31,6 +31,12 @@ def main() -> None:
     parser.add_argument("--lo", type=int, default=5, help="first scored step")
     parser.add_argument("--hi", type=int, default=19, help="last scored step")
     parser.add_argument("--project", default="marin-community/marin_moe")
+    parser.add_argument(
+        "--relative",
+        action="store_true",
+        help="Read lo/hi as offsets from the run's first logged step. A restored run resumes at "
+        "the checkpoint's step, so an absolute window would miss it entirely.",
+    )
     args = parser.parse_args()
 
     run = wandb.Api().run(f"{args.project}/{args.run_id}")
@@ -43,23 +49,27 @@ def main() -> None:
             continue
         by_step.setdefault(int(step), {}).update({k: v for k, v in row.items() if v is not None})
 
+    first_step = min(by_step) if by_step else 0
+    lo, hi = (first_step + args.lo, first_step + args.hi) if args.relative else (args.lo, args.hi)
+
     def series(key: str) -> list[float]:
-        return [float(by_step[s][key]) for s in sorted(by_step) if args.lo <= s <= args.hi and key in by_step[s]]
+        return [float(by_step[s][key]) for s in sorted(by_step) if lo <= s <= hi and key in by_step[s]]
 
     mfu = series(MFU_KEY)
     drops = series(DROP_KEY)
-    losses = [(s, by_step[s][LOSS_KEY]) for s in sorted(by_step) if args.lo <= s <= args.hi and LOSS_KEY in by_step[s]]
+    losses = [(s, by_step[s][LOSS_KEY]) for s in sorted(by_step) if lo <= s <= hi and LOSS_KEY in by_step[s]]
     tokens = series(TOKENS_KEY)
 
     result = {
         "run_id": args.run_id,
         "state": run.state,
         "max_step": max(steps) if steps else -1,
-        "window": [args.lo, args.hi],
+        "window": [lo, hi],
+        "first_step": first_step,
         "scored_points": len(mfu),
         # A window with holes in it is not the window the loop agreed to compare, so say so loudly
         # rather than averaging whatever happens to be there.
-        "window_complete": len(mfu) == args.hi - args.lo + 1,
+        "window_complete": len(mfu) == hi - lo + 1,
         "mfu_mean": round(statistics.fmean(mfu), 4) if mfu else None,
         "mfu_stdev": round(statistics.stdev(mfu), 4) if len(mfu) > 1 else None,
         "tokens_per_second_mean": round(statistics.fmean(tokens), 1) if tokens else None,

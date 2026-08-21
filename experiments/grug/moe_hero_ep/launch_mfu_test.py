@@ -107,6 +107,8 @@ def build_hero_run(
     moe_implementation: str | None = None,
     ragged_all_to_all_splits_per_peer: int | None = None,
     master_param_mode: MasterParamMode = MasterParamMode.FP32_PINNED_HOST,
+    restore_from: str | None = None,
+    restore_master_param_mode: MasterParamMode | None = None,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
     save_checkpoints: bool = False,
@@ -204,6 +206,7 @@ def build_hero_run(
         z_loss_weight=1e-4,
         offload_opt_state=HERO_OFFLOAD_OPT_STATE,
         master_param_mode=master_param_mode,
+        restore_master_param_mode=restore_master_param_mode,
         training_data_mode=training_data_mode,
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
@@ -229,6 +232,11 @@ def build_hero_run(
             seed=seed,
             train_batch_size=batch_size,
             num_train_steps=total_schedule_steps,
+            # Read another run's checkpoint without ever writing to it: this is a search path, and
+            # the checkpointer below still points at this run's own output. `True` fails fast when
+            # the path is gone, which matters when the source is a live run's rolling temporary.
+            load_checkpoint_path=restore_from,
+            load_checkpoint=True if restore_from else None,
             profiler=ProfilerConfig(
                 enabled=profile_steps > 0,
                 start_step=profile_start_step,
@@ -463,6 +471,23 @@ def build_hero_run(
     ),
 )
 @click.option(
+    "--restore-from",
+    default=None,
+    help=(
+        "Initialize from another run's checkpoint directory, read-only. Use it to measure a "
+        "trained router, where capacity clipping is real: a run from scratch drops nothing."
+    ),
+)
+@click.option(
+    "--restore-master-params",
+    type=click.Choice([mode.value for mode in MasterParamMode]),
+    default=None,
+    help=(
+        "Parameter storage the restored checkpoint was written under, when it differs from "
+        "--master-params. The master is folded into fp32 device parameters after the load."
+    ),
+)
+@click.option(
     "--master-params",
     type=click.Choice([mode.value for mode in MasterParamMode]),
     default=MasterParamMode.FP32_PINNED_HOST.value,
@@ -504,6 +529,8 @@ def main(
     moe_implementation: str | None,
     ragged_all_to_all_splits_per_peer: int | None,
     master_params: str,
+    restore_from: str | None,
+    restore_master_params: str | None,
     processes_per_task: int,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
@@ -530,6 +557,8 @@ def main(
         moe_implementation=moe_implementation,
         ragged_all_to_all_splits_per_peer=ragged_all_to_all_splits_per_peer,
         master_param_mode=MasterParamMode(master_params),
+        restore_from=restore_from,
+        restore_master_param_mode=MasterParamMode(restore_master_params) if restore_master_params else None,
         processes_per_task=processes_per_task,
     )
 

@@ -177,6 +177,10 @@ class GrugTrainerConfig:
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
     master_param_mode: MasterParamMode = MasterParamMode.DISABLED
+    # Research knob: the checkpoint was written under this mode, and the restored state is folded
+    # into `master_param_mode` afterwards. It lets a run restore the hero's pinned-host master and
+    # then train the way it would have without one. `None` restores in the run's own mode.
+    restore_master_param_mode: MasterParamMode | None = None
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE
     # Inline watch computes statistics on every step and uses the watch interval only for logging.
     # This keeps one training executable resident. A diagnostic watch repeats forward and backward
@@ -538,6 +542,29 @@ class GrugTrainState:
     pending_qb_betas: jax.Array
 
 
+def restore_template_policy(mp: jmp.Policy) -> jmp.Policy:
+    """``mp`` with bf16 parameters, the dtype a pinned-host master writes its device copy in."""
+    return jmp.Policy(param_dtype=jnp.bfloat16, compute_dtype=mp.compute_dtype, output_dtype=mp.output_dtype)
+
+
+def fold_master_into_params(state: "GrugTrainState") -> "GrugTrainState":
+    """Move a pinned-host fp32 master on device as the parameters and drop the master.
+
+    The master is authoritative and already fp32, and `params` under a master is a bf16 copy cast
+    from it, so nothing survives in `params` that the master does not already carry. `opt_state`
+    was initialized on the master's fp32 tree, which is the same tree the disabled mode optimizes.
+    The conversion is therefore exact, and it lets a run restore a checkpoint written with a
+    master and then train without one.
+    """
+    if state.master_params is None:
+        return state
+    return dataclasses.replace(
+        state,
+        params=_tree_to_memory_kind(state.master_params, "device"),
+        master_params=None,
+    )
+
+
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     """Set router biases from QB betas (computed on previous step)."""
     new_bias = -qb_betas
@@ -822,6 +849,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     with set_mesh(mesh):
         batch_schedule = trainer.batch_schedule
 
+        # The restore template has to match the tree the checkpoint was written from, which is not
+        # always the tree this run trains: `restore_master_param_mode` restores a checkpoint that
+        # carries a pinned-host master and `fold_master_into_params` converts it afterwards.
+        restore_mode = config.trainer.restore_master_param_mode or config.trainer.master_param_mode
+        restore_mp = (
+            restore_template_policy(trainer.mp) if restore_mode != config.trainer.master_param_mode else trainer.mp
+        )
+
         @jax.jit
         def _init_state(model_rng):
             return initial_state(
@@ -834,7 +869,19 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 master_param_mode=config.trainer.master_param_mode,
             )
 
-        state = _init_state(model_key)
+        @jax.jit
+        def _init_restore_template(model_rng):
+            return initial_state(
+                config.model,
+                optimizer=optimizer,
+                mp=restore_mp,
+                key=model_rng,
+                ema_beta=config.trainer.ema_beta,
+                offload_opt_state=config.trainer.offload_opt_state,
+                master_param_mode=restore_mode,
+            )
+
+        state = _init_restore_template(model_key)
         released_initial_state = trainer.load_checkpoint is not False and not trainer.allow_partial_checkpoint
         if released_initial_state:
             state = restore_template_from(state)
@@ -848,7 +895,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             allow_partial=trainer.allow_partial_checkpoint,
         )
         if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
+            # Nothing was restored, so the template is unused and the run starts from its own mode.
             state = _init_state(model_key)
+        elif restore_mode != config.trainer.master_param_mode:
+            if config.trainer.master_param_mode != MasterParamMode.DISABLED:
+                raise ValueError(
+                    "restore_master_param_mode only converts to the disabled mode, got "
+                    f"{config.trainer.master_param_mode}"
+                )
+            state = fold_master_into_params(state)
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,

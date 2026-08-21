@@ -26,6 +26,7 @@ REPO="$(cd "${LOOP_DIR}/../.." && pwd)"
 IRIS=(uv run iris --config lib/iris/config/marin.yaml)
 COORD="/mwittmann/${RID}-coord"
 deadline=$(( $(date +%s) + ARM_TIMEOUT ))
+first_step=-1
 
 cancel_arm() {  # cancel_arm <reason>
   echo "$(date -u +%H:%M:%S) cancelling ${COORD}: $1"
@@ -70,9 +71,16 @@ while :; do
     succeeded|killed|cancelled|*failed)
       echo "WATCHDOG terminal train=${train_state} step=${steps}"; exit 0;;
   esac
-  if [ "${steps:--1}" -ge "$SCORE_MAX_STEP" ] 2>/dev/null; then
-    cancel_arm "scored through step ${steps}"
-    echo "WATCHDOG scored step=${steps}"
+  # A restored arm resumes at the checkpoint's step, so progress is counted from the first step
+  # this watch actually observed rather than from zero. Without that, an absolute threshold fires
+  # on the very first reading and cancels a run that has trained nothing.
+  if [ "${first_step:--1}" -lt 0 ] && [ "${steps:--1}" -ge 0 ] 2>/dev/null; then
+    first_step="$steps"
+    echo "$(date -u +%H:%M:%S) first observed step=${first_step}"
+  fi
+  if [ "${first_step:--1}" -ge 0 ] 2>/dev/null && [ $(( steps - first_step )) -ge "$SCORE_MAX_STEP" ]; then
+    cancel_arm "scored through step ${steps} (${SCORE_MAX_STEP} past first)"
+    echo "WATCHDOG scored step=${steps} first=${first_step}"
     exit 0
   fi
   sleep "$POLL"
