@@ -24,3 +24,7 @@ deploy = "marin_deploy.cli:cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/marin_deploy"]
+
+[tool.pytest.ini_options]
+timeout = 60
+addopts = "--import-mode=importlib"
