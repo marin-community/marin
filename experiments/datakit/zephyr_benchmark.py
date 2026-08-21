@@ -12,13 +12,16 @@ the required run tag. ``--sample-prefix`` defaults to the 100B GCS sample in
 the equivalent S3 path to run on CoreWeave.
 
 Example (the "full" preset from the `ab-test-zephyr` skill, sized to match
-`datakit_nemotron_ferry.py`'s data volume and worker pool):
+`datakit_nemotron_ferry.py`'s data volume and worker pool). ``--max-concurrent``
+is high because every per-source stage now shares one pool (see
+``zephyr_datakit_steps``'s ``zephyr_context``) -- StepRunner's dispatch ceiling,
+not pod-provisioning cost, is what should limit it:
 
     python -m experiments.datakit.zephyr_benchmark \
         --sources all --run-tag zephyr-100b-v1 \
         --pool-workers 512 --pool-cpu 16 --pool-ram 160g --pool-disk 32g \
         --first-stage exact --last-stage fuzzy \
-        --max-concurrent 8 --dedup-max-parallelism 1000
+        --max-concurrent 64 --dedup-max-parallelism 1000 --dedup-cc-max-iterations 3
 
 The "light" preset uses ``--source-fraction`` instead of ``--sources`` to
 auto-select a byte-budgeted subset of sources, favoring shard-dense sources so
@@ -28,7 +31,7 @@ the reduced ``--pool-workers`` still has enough parquet shards to fill:
         --source-fraction 0.1 --run-tag zephyr-100b-light-v1 \
         --pool-workers 128 --pool-cpu 16 --pool-ram 160g --pool-disk 32g \
         --first-stage exact --last-stage fuzzy \
-        --max-concurrent 4 --dedup-max-parallelism 500
+        --max-concurrent 32 --dedup-max-parallelism 500 --dedup-cc-max-iterations 3
 """
 
 import argparse
@@ -237,6 +240,18 @@ def main() -> None:
     parser.add_argument("--last-stage", required=True, type=BenchmarkStage, choices=list(BenchmarkStage))
     parser.add_argument("--max-concurrent", required=True, type=int)
     parser.add_argument("--dedup-max-parallelism", required=True, type=int)
+    parser.add_argument(
+        "--dedup-cc-max-iterations",
+        required=True,
+        type=int,
+        help=(
+            "Max connected-components rounds for fuzzy dedup. Both datakit ferries pin this "
+            "to 3; each extra round is a full scatter/reduce pass over the whole bucket graph "
+            "(~5-6 minutes observed at the light preset's scale), so the library default of 10 "
+            "makes fuzzy dedup dominate the benchmark's wall time without adding representative "
+            "signal."
+        ),
+    )
     args = parser.parse_args()
 
     configure_logging(logging.INFO)
@@ -247,6 +262,7 @@ def main() -> None:
         SMOKE_SCALE,
         pool=PoolConfig(n_workers=args.pool_workers, worker=worker),
         dedup_max_parallelism=args.dedup_max_parallelism,
+        cc_max_iterations=args.dedup_cc_max_iterations,
     )
     output_prefix = marin_temp_bucket(
         ttl_days=BENCHMARK_OUTPUT_TTL_DAYS,
@@ -256,10 +272,14 @@ def main() -> None:
     # Every per-source stage must share this pool, or each falls back to its own
     # dedicated pool capped at that one source's shard count -- silently
     # defeating --pool-workers for every stage but exact_dedup and fuzzy_dedup.
+    # max_concurrent_pipelines defaults to 16 (MAX_CONCURRENT_PIPELINES); raising
+    # it to match --max-concurrent keeps StepRunner's dispatch ceiling from being
+    # silently re-capped by the pool's own default.
     with ZephyrContext(
         name="zephyr-benchmark",
         resources=scale.pool.worker,
         max_workers=scale.pool.n_workers,
+        max_concurrent_pipelines=args.max_concurrent,
         stage_runner_factory=SubprocessRunner,
     ) as zephyr_context:
         steps = zephyr_datakit_steps(sources, scale, zephyr_context, output_path_prefix=output_prefix)
