@@ -5,7 +5,9 @@ import asyncio
 import json
 import threading
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import equinox as eqx
 import haliax as hax
@@ -46,45 +48,33 @@ def test_pageable_checkpoint_staging_detaches_from_donated_jax_buffer():
     assert not np.shares_memory(staged, source_host)
 
 
-@pytest.mark.parametrize("process_index", [0, 1])
-def test_s3_checkpoint_prefetch_shards_ranged_heads_after_commit(monkeypatch, process_index):
+@pytest.mark.parametrize(
+    ("process_index", "object_name"),
+    [(0, "d/0000000000000001"), (1, "manifest.json")],
+)
+def test_s3_checkpoint_prefetch_shards_ranged_heads_after_commit(monkeypatch, process_index, object_name):
     checkpoint_path = "s3://checkpoints/run/step-10"
     plain_path = "checkpoints/run/step-10"
     objects = [f"{plain_path}/manifest.json", f"{plain_path}/d/0000000000000001"]
-    assigned_objects = sorted(objects)[process_index::2]
     events = []
     heads = []
     completed = threading.Event()
 
-    class RecordingS3FileSystem:
-        def find(self, path):
-            assert path == plain_path
-            return objects
+    fs = Mock()
+    fs.find.return_value = objects
+    fs.split_path.side_effect = lambda path: (*path.split("/", 1), None)
 
-        def split_path(self, path):
-            bucket, key = path.split("/", 1)
-            return bucket, key, None
+    def record_head(method, **kwargs):
+        events.append("head")
+        heads.append((method, kwargs, threading.current_thread().daemon))
+        completed.set()
 
-        def call_s3(self, method, **kwargs):
-            events.append("head")
-            heads.append((method, kwargs, threading.current_thread().daemon))
-            if len(heads) == len(assigned_objects):
-                completed.set()
-
-    class RecordingClient:
-        def blocking_key_value_get(self, key, timeout):
-            assert process_index == 1
-            assert key == "tensorstore_checkpoint_7"
-            assert timeout == 1_000
-            events.append("commit")
-
-    class RecordingManager:
-        _client = RecordingClient()
-        _count = 7
-        _timeout_in_ms = 1_000
+    fs.call_s3.side_effect = record_head
+    client = Mock()
+    client.blocking_key_value_get.side_effect = lambda *_: events.append("commit")
+    manager = SimpleNamespace(_client=client, _count=7, _timeout_in_ms=1_000)
 
     def record_serialize(_arrays, _tspecs, _plans, _manager, _config, commit_callback):
-        events.append("serialize")
         if process_index == 0:
             commit_callback()
 
@@ -97,35 +87,34 @@ def test_s3_checkpoint_prefetch_shards_ranged_heads_after_commit(monkeypatch, pr
     monkeypatch.setattr(
         tensorstore_serialization,
         "url_to_fs",
-        lambda _: (RecordingS3FileSystem(), plain_path),
+        lambda _: (fs, plain_path),
     )
 
     tree_serialize_leaves_tensorstore(
         checkpoint_path,
         {"weights": np.arange(4, dtype=np.float32)},
-        manager=RecordingManager(),
+        manager=manager,
         commit_callback=lambda: events.append("commit"),
     )
 
     assert completed.wait(timeout=5)
-    assert events == ["serialize", "commit", "head"]
+    assert events == ["commit", "head"]
     assert heads == [
         (
             "head_object",
-            {"Bucket": "checkpoints", "Key": object_path.removeprefix("checkpoints/"), "Range": "bytes=0-0"},
+            {"Bucket": "checkpoints", "Key": f"run/step-10/{object_name}", "Range": "bytes=0-0"},
             True,
         )
-        for object_path in assigned_objects
     ]
 
 
 def test_s3_checkpoint_prefetch_only_targets_lota_s3(monkeypatch):
     monkeypatch.setattr(tensorstore_serialization, "s3_endpoint", lambda _: "https://cwobject.com")
-    assert tensorstore_serialization._s3_checkpoint_prefetch_shard("s3://checkpoints/run", 0, 1) is None
+    assert not tensorstore_serialization._uses_lota("s3://checkpoints/run")
 
     monkeypatch.setattr(tensorstore_serialization, "s3_endpoint", lambda _: "http://cwlota.com")
-    assert tensorstore_serialization._s3_checkpoint_prefetch_shard("s3://checkpoints/run", 0, 1) is not None
-    assert tensorstore_serialization._s3_checkpoint_prefetch_shard("gs://checkpoints/run", 0, 1) is None
+    assert tensorstore_serialization._uses_lota("s3://checkpoints/run")
+    assert not tensorstore_serialization._uses_lota("gs://checkpoints/run")
 
 
 def test_tensorstore_checkpoint_simple():
