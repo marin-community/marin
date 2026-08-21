@@ -47,6 +47,7 @@ for entry in (str(SCRIPT_DIR), str(REPO_ROOT)):
     if entry not in sys.path:
         sys.path.insert(0, entry)
 
+import fit_swarm39_split_damage_20260817 as split_damage  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import swarm39_harness_20260725 as swarm39  # noqa: E402
@@ -61,6 +62,7 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E
 )
 
 ARMS = ("endpoint", "endpoint+y0", "trajectory", "scale-separated")
+ADVERSARIAL_SERIES = "delphi_3e18_adversarial_stress_panel_20260716"
 
 
 def load(scale: str):
@@ -77,6 +79,7 @@ def load(scale: str):
     if scale == "delphi_3e18":
         merged = panel.merge(readouts, on="heldout_id", how="inner")
         merged = merged[merged["phase0_uncheatable_bpb"].notna()].reset_index(drop=True)
+        development = merged["training_series"].astype(str).to_numpy() != ADVERSARIAL_SERIES
 
         def vector(payload: str) -> np.ndarray:
             mapping = json.loads(payload)
@@ -94,6 +97,7 @@ def load(scale: str):
         phase_0 = merged[[f"phase_0_{b}" for b in fit.buckets]].to_numpy(float)
         phase_1 = merged[[f"phase_1_{b}" for b in fit.buckets]].to_numpy(float)
         endpoint = merged["uncheatable_bpb"].to_numpy(float)
+        development = np.ones(len(merged), dtype=bool)
     else:
         # The 300M audit supplies run names and mixtures but only per-component evaluations, and a plain
         # mean of those reproduces the canonical macro only to 4.2e-3 -- above this target's run noise of
@@ -126,6 +130,7 @@ def load(scale: str):
         phase_0 = merged[columns_0].to_numpy(float)
         phase_1 = merged[columns_1].to_numpy(float)
         endpoint = canonical.iloc[canonical_rows]["uncheatable_bpb"].to_numpy(float)
+        development = np.ones(len(merged), dtype=bool)
 
     keep = np.isfinite(endpoint)
     phase_0, phase_1, endpoint = phase_0[keep], phase_1[keep], endpoint[keep]
@@ -135,20 +140,21 @@ def load(scale: str):
         endpoint,
         merged["phase0_uncheatable_bpb"].to_numpy(float)[keep],
         fit.alpha * phase_0 + (1.0 - fit.alpha) * phase_1,
+        development[keep],
     )
 
 
-def columns(panel: gen.Panel, shape, readout: np.ndarray | None):
+def columns(panel: gen.Panel, shape, readout: np.ndarray | None, variant: str):
     """The committed design, with the readout inserted at the head of the SHRUNK region when used."""
-    free, constrained = gen.design(panel, shape, "blended")
+    free, constrained = gen.design(panel, shape, variant)
+    pooled = gen.pooled_width(panel, variant)
     if readout is None:
-        return free, constrained, gen.pooled_width(panel)
-    pooled = gen.pooled_width(panel)
+        return free, constrained, pooled
     extended = np.column_stack([constrained[:, :pooled], readout, -readout, constrained[:, pooled:]])
     return free, extended, pooled
 
 
-def fit_arm(panel, endpoint, readout, arm, folds, seed, between=None):
+def fit_arm(panel, endpoint, readout, arm, folds, seed, variant, between=None):
     """Leave-cell-out predictions of the ENDPOINT, whatever the arm's internal target is.
 
     `scale-separated` is the arm the measurements actually point at. Differencing pins the readout's
@@ -168,14 +174,29 @@ def fit_arm(panel, endpoint, readout, arm, folds, seed, between=None):
 
     def build(rows, shape):
         subset = gen.Panel(panel.weights[rows], panel.epochs_early, panel.epochs_late, panel.family_index)
-        return columns(subset, shape, None if use is None else use[rows])
+        return columns(subset, shape, None if use is None else use[rows], variant)
+
+    def unpack(vector):
+        if variant == "split":
+            shape, ridge = gen.unpack(vector[:-1], panel.n_families)
+            return shape, ridge, 10.0 ** vector[-1]
+        shape, ridge = gen.unpack(vector, panel.n_families)
+        return shape, ridge, 0.0
 
     def objective(vector):
-        shape, ridge = gen.unpack(vector, panel.n_families)
+        shape, ridge, departure_weight = unpack(vector)
         total = 0.0
         for train, test in folds:
             free, constrained, pooled = build(train, shape)
-            offsets, amplitudes = gen.fit_head(free, constrained, target[train], ridge, pooled)
+            offsets, amplitudes = gen.fit_head(
+                free,
+                constrained,
+                target[train],
+                ridge,
+                pooled,
+                split_damage.departure_pairs(panel, variant),
+                departure_weight,
+            )
             free_t, constrained_t, _ = build(test, shape)
             residual = free_t @ offsets + constrained_t @ amplitudes - target[test]
             if not np.isfinite(residual).all():
@@ -183,9 +204,12 @@ def fit_arm(panel, endpoint, readout, arm, folds, seed, between=None):
             total += float(residual @ residual)
         return total
 
+    box = list(gen.bounds(panel.n_families))
+    if variant == "split":
+        box.append(split_damage.DEPARTURE_BOUND)
     vector = differential_evolution(
         objective,
-        list(gen.bounds(panel.n_families)),
+        box,
         rng=np.random.default_rng(20260817 + seed),
         popsize=8,
         maxiter=12,
@@ -193,11 +217,19 @@ def fit_arm(panel, endpoint, readout, arm, folds, seed, between=None):
         polish=True,
         init="sobol",
     ).x
-    shape, ridge = gen.unpack(vector, panel.n_families)
+    shape, ridge, departure_weight = unpack(vector)
     predicted = np.empty(len(endpoint))
     for train, test in folds:
         free, constrained, pooled = build(train, shape)
-        offsets, amplitudes = gen.fit_head(free, constrained, target[train], ridge, pooled)
+        offsets, amplitudes = gen.fit_head(
+            free,
+            constrained,
+            target[train],
+            ridge,
+            pooled,
+            split_damage.departure_pairs(panel, variant),
+            departure_weight,
+        )
         free_t, constrained_t, _ = build(test, shape)
         predicted[test] = free_t @ offsets + constrained_t @ amplitudes
     if arm == "trajectory":
@@ -212,9 +244,25 @@ def main() -> None:
     parser.add_argument("--scale", default="delphi_3e18")
     parser.add_argument("--folds", type=int, default=5)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--variant", choices=("blended", "split"), default="blended")
+    parser.add_argument(
+        "--exclude-adversarial",
+        action="store_true",
+        help="Exclude the frozen Delphi adversarial panel from every fit and fold.",
+    )
     args = parser.parse_args()
 
-    panel, endpoint, readout, aggregate = load(args.scale)
+    panel, endpoint, readout, aggregate, development = load(args.scale)
+    if args.exclude_adversarial:
+        panel = gen.Panel(
+            panel.weights[development],
+            panel.epochs_early,
+            panel.epochs_late,
+            panel.family_index,
+        )
+        endpoint = endpoint[development]
+        readout = readout[development]
+        aggregate = aggregate[development]
     cells = collections.defaultdict(list)
     for index, row in enumerate(np.round(aggregate, 6)):
         cells[tuple(row)].append(index)
@@ -226,7 +274,10 @@ def main() -> None:
         folds.append((np.setdiff1d(np.arange(len(endpoint)), test), test))
 
     untied = 0.5 * np.abs(panel.weights[:, 1] - panel.weights[:, 0]).sum(axis=1) > 1e-9
-    print(f"ATOM-023 trajectory head: {args.scale}, {len(endpoint)} rows, {len(blocks)} aggregate cells")
+    print(
+        f"ATOM-023 trajectory head: {args.scale}, variant {args.variant}, "
+        f"{len(endpoint)} rows, {len(blocks)} aggregate cells"
+    )
     print(f"{int(untied.sum())} untied; endpoint sd {endpoint.std():.5f}, readout sd {readout.std():.5f}\n")
     print(f"{'arm':14s} {'leave-cell-out RMSE on y1':>26s} {'vs endpoint':>12s} {'within-cell rho':>16s}")
 
@@ -236,7 +287,7 @@ def main() -> None:
 
     baseline = None
     for arm in ARMS:
-        predicted = fit_arm(panel, endpoint, readout, arm, folds, args.seed, between)
+        predicted = fit_arm(panel, endpoint, readout, arm, folds, args.seed, args.variant, between)
         rmse = float(np.sqrt(np.mean((predicted - endpoint) ** 2)))
         baseline = rmse if baseline is None else baseline
         rhos = []
