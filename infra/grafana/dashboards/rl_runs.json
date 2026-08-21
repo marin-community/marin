@@ -845,7 +845,7 @@
       "id": 9,
       "type": "timeseries",
       "title": "Engine throughput",
-      "description": "Prompt and generation tokens per second across the run's inference engines, from the stats the rollout callback reads by RPC. These rows come from the trainer's own process, so they carry the run's identity directly; `role` is read from the metric attributes because the process resource says driver or trainer while the series says inference.",
+      "description": "Prompt and generation tokens per second across the run's inference engines, from the stats the rollout callback reads by RPC. These rows come from the trainer's own process, so they carry the run's identity directly; The metric names select the engine path on their own — no other MarinSkyRL producer emits them — so the series is identified by name rather than by a role attribute.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -895,7 +895,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'generation_throughput_tokens_per_second' THEN value END) AS generation, AVG(CASE WHEN name = 'prompt_throughput_tokens_per_second' THEN value END) AS prompt FROM \"telemetry_v1\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'role') = 'inference' AND json_get(attributes_json, 'engine') = 'all' AND json_get(attributes_json, 'statistic') = 'median' AND name IN ('generation_throughput_tokens_per_second', 'prompt_throughput_tokens_per_second') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'generation_throughput_tokens_per_second' THEN value END) AS generation, AVG(CASE WHEN name = 'prompt_throughput_tokens_per_second' THEN value END) AS prompt FROM \"telemetry_v1\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'engine') = 'all' AND json_get(attributes_json, 'statistic') = 'median' AND name IN ('generation_throughput_tokens_per_second', 'prompt_throughput_tokens_per_second') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -932,7 +932,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Engine queue and cache",
-      "description": "Requests running and waiting, KV-cache occupancy and prefix-cache hit rate, median across engines. Waiting climbing while running is flat is the engine saturated; a collapsing prefix hit rate after a weight sync is the cache being invalidated.",
+      "description": "Requests running and waiting, KV-cache occupancy and prefix-cache hit rate, median across engines. Waiting climbing while running is flat is the engine saturated; a collapsing prefix hit rate after a weight sync is the cache being invalidated. The metric names select the engine path on their own — no other MarinSkyRL producer emits them — so the series is identified by name rather than by a role attribute.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -982,7 +982,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'num_requests_running' THEN value END) AS running, AVG(CASE WHEN name = 'num_requests_waiting' THEN value END) AS waiting, AVG(CASE WHEN name = 'gpu_cache_usage_perc' THEN value END) AS kv_cache, AVG(CASE WHEN name = 'prefix_cache_hit_rate' THEN value END) AS prefix_hit_rate FROM \"telemetry_v1\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'role') = 'inference' AND json_get(attributes_json, 'engine') = 'all' AND json_get(attributes_json, 'statistic') = 'median' AND name IN ('num_requests_running', 'num_requests_waiting', 'gpu_cache_usage_perc', 'prefix_cache_hit_rate') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'num_requests_running' THEN value END) AS running, AVG(CASE WHEN name = 'num_requests_waiting' THEN value END) AS waiting, AVG(CASE WHEN name = 'gpu_cache_usage_perc' THEN value END) AS kv_cache, AVG(CASE WHEN name = 'prefix_cache_hit_rate' THEN value END) AS prefix_hit_rate FROM \"telemetry_v1\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'engine') = 'all' AND json_get(attributes_json, 'statistic') = 'median' AND name IN ('num_requests_running', 'num_requests_waiting', 'gpu_cache_usage_perc', 'prefix_cache_hit_rate') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -1029,7 +1029,7 @@
       "id": 11,
       "type": "timeseries",
       "title": "Engine request latency (p90)",
-      "description": "Ninetieth-percentile latency by stage — queued, prefill, decode, time to first token, end to end. Queued dominating points at engine capacity; decode dominating points at generation length.",
+      "description": "Ninetieth-percentile latency by stage — queued, prefill, decode, time to first token, end to end. Queued dominating points at engine capacity; decode dominating points at generation length. The metric names select the engine path on their own — no other MarinSkyRL producer emits them — so the series is identified by name rather than by a role attribute.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1079,7 +1079,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, json_get(attributes_json, 'stage') AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'role') = 'inference' AND json_get(attributes_json, 'engine') = 'all' AND json_get(attributes_json, 'statistic') = 'p90' AND name = 'request_latency_seconds' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, json_get(attributes_json, 'stage') AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'engine') = 'all' AND json_get(attributes_json, 'statistic') = 'p90' AND name = 'request_latency_seconds' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",

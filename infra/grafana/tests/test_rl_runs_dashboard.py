@@ -248,7 +248,7 @@ def _run_rows() -> list[tuple]:
                     job_id=JOB_ID,
                     node_name=NODES[1],
                     role="driver",
-                    attributes={"role": "inference", "engine": "all", "statistic": "median"},
+                    attributes={"engine": "all", "statistic": "median"},
                 )
             )
         rows.append(
@@ -262,7 +262,7 @@ def _run_rows() -> list[tuple]:
                 job_id=JOB_ID,
                 node_name=NODES[1],
                 role="driver",
-                attributes={"role": "inference", "engine": "all", "statistic": "p90", "stage": "decode"},
+                attributes={"engine": "all", "statistic": "p90", "stage": "decode"},
             )
         )
     return rows
@@ -369,9 +369,10 @@ def test_the_node_agent_joins_through_node_name_without_a_run_id(store) -> None:
     assert rows[0][2] == pytest.approx(71.0)
 
 
-def test_the_engine_panels_read_role_from_the_series_not_the_resource(store) -> None:
-    # `role` is on both the resource and the series and they disagree: the process is a
-    # driver, the measurement is inference. A panel that reads the resource finds nothing.
+def test_the_engine_panels_select_by_metric_name_alone(store) -> None:
+    # No other MarinSkyRL producer emits these names, so the name identifies the engine path.
+    # A `role` predicate here would assert that a measurement is a kind of process, and `role`
+    # on the resource says `driver` for these very rows.
     throughput = store.execute(_panel_sql("Engine throughput")).fetchall()
     assert [row[1] for row in throughput] == [1024.0 + bucket for bucket in range(6)]
 
@@ -385,7 +386,10 @@ def test_the_engine_panels_read_role_from_the_series_not_the_resource(store) -> 
 def test_the_engines_inherit_the_run_id_rather_than_carrying_their_own(store) -> None:
     # The engine series exist only because the trainer process stamped the run identity onto
     # its own resource. Drop it and the engine panels go with it.
-    store.execute("UPDATE telemetry_v1 SET run_id = NULL " "WHERE json_get(attributes_json, 'role') = 'inference'")
+    store.execute(
+        "UPDATE telemetry_v1 SET run_id = NULL WHERE name IN "
+        "('generation_throughput_tokens_per_second', 'prompt_throughput_tokens_per_second')"
+    )
 
     assert store.execute(_panel_sql("Engine throughput")).fetchall() == []
 
