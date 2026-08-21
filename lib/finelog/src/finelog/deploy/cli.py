@@ -39,6 +39,7 @@ _SEGMENT_FILENAME_RE = re.compile(r"seg_L\d+_\d+\.parquet$")
 # the server, which reports why, rather than by a client-side timeout that
 # reports only that time ran out.
 DEFAULT_REQUEST_TIMEOUT = 15.0
+DEFAULT_TUNNEL_TIMEOUT = 60.0
 
 
 @contextmanager
@@ -389,7 +390,7 @@ def _print_record(record: dict[str, object], *, indent: int | None = None) -> No
 @click.option(
     "--tunnel-timeout",
     type=float,
-    default=60.0,
+    default=DEFAULT_TUNNEL_TIMEOUT,
     show_default=True,
     help="Seconds to wait for the local tunnel to become reachable.",
 )
@@ -426,7 +427,7 @@ def query_cmd(
 
 @cli.command("namespaces")
 @click.argument("name")
-@click.option("--tunnel-timeout", type=float, default=60.0, show_default=True)
+@click.option("--tunnel-timeout", type=float, default=DEFAULT_TUNNEL_TIMEOUT, show_default=True)
 @click.option("--timeout", "request_timeout", type=float, default=DEFAULT_REQUEST_TIMEOUT, show_default=True)
 def namespaces_cmd(name: str, tunnel_timeout: float, request_timeout: float) -> None:
     """List queryable namespaces, schemas, indexes, and storage statistics as JSONL."""
@@ -439,7 +440,7 @@ def namespaces_cmd(name: str, tunnel_timeout: float, request_timeout: float) -> 
 @cli.command("schema")
 @click.argument("name")
 @click.argument("namespace")
-@click.option("--tunnel-timeout", type=float, default=60.0, show_default=True)
+@click.option("--tunnel-timeout", type=float, default=DEFAULT_TUNNEL_TIMEOUT, show_default=True)
 @click.option("--timeout", "request_timeout", type=float, default=DEFAULT_REQUEST_TIMEOUT, show_default=True)
 def schema_cmd(name: str, namespace: str, tunnel_timeout: float, request_timeout: float) -> None:
     """Print one registered namespace schema as JSON."""

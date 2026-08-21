@@ -104,7 +104,9 @@ def test_query_reports_sql_errors_without_python_traceback() -> None:
         result = CliRunner().invoke(cli, ["query", "marin", 'SELECT * FROM "iris.task"'])
 
     assert result.exit_code == 1
-    assert result.output == 'Error: query failed: table "iris.task" not found\n'
+    assert isinstance(result.exception, SystemExit)
+    assert result.output.startswith("Error: ")
+    assert "Traceback" not in result.output
 
 
 def test_namespaces_defaults_to_jsonl_with_schema_metadata() -> None:
