@@ -711,10 +711,12 @@ def test_training_loss_by_step_uses_the_newest_retry_sample():
 def test_training_execution_health_uses_the_current_attempt_and_iris_state():
     dashboard = _stitched_dashboards()["training.json"]
     panel = next(panel for panel in _all_panels(dashboard) if panel["title"] == "Execution health")
-    attempt_age = next(
-        override for override in panel["fieldConfig"]["overrides"] if override["matcher"]["options"] == "attempt age"
+    initialization_age = next(
+        override
+        for override in panel["fieldConfig"]["overrides"]
+        if override["matcher"]["options"] == "initialization age"
     )
-    thresholds = next(field for field in attempt_age["properties"] if field["id"] == "thresholds")
+    thresholds = next(field for field in initialization_age["properties"] if field["id"] == "thresholds")
     assert [step["value"] for step in thresholds["value"]["steps"]] == [None, 2700, 3600]
     sql_by_ref = {
         target["refId"]: next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
@@ -754,7 +756,7 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
             ("hero-run", "/u/hero-run-coord/train", "attempt-old", 1, fixed_now_ms - 80 * 60_000, 1),
             ("hero-run", "/u/hero-run-coord/train", "attempt-old", 1, fixed_now_ms - 2 * 60_000, 2),
             ("hero-run", "/u/hero-run-coord/train", "attempt-current", 0, fixed_now_ms - 4 * 60 * 60_000, 1),
-            ("hero-run", "/u/hero-run-coord/train", "attempt-current", 0, fixed_now_ms - 60_000, 3),
+            ("hero-run", "/u/hero-run-coord/train", "attempt-current", 1, fixed_now_ms - 60_000, 3),
             ("other-run", "/u/other-run-coord/train", "other-attempt", 1, fixed_now_ms - 30_000, 4),
         ],
     )
@@ -776,6 +778,7 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
         [
             ("cw-a", "/u/hero-run-coord", datetime(2026, 8, 21, 11, 50, tzinfo=UTC), 4, 3, 2, 160),
             ("cw-a", "/u/hero-run-coord-1", datetime(2026, 8, 21, 11, 59, 30, tzinfo=UTC), 1, 2, 3, 170),
+            ("cw-b", "/u/hero-run-coord", datetime(2026, 8, 21, 11, 59, 40, tzinfo=UTC), 0, 0, 0, 176),
             ("cw-a", "/u/other-run-coord", datetime(2026, 8, 21, 11, 59, 45, tzinfo=UTC), 0, 0, 0, 176),
         ],
     )
@@ -815,6 +818,13 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
                 datetime(2026, 8, 21, 11, 59, 30, tzinfo=UTC),
             ),
             (
+                "cw-b",
+                "/u/hero-run-coord/train/3",
+                0,
+                "TaskRetryScheduled",
+                datetime(2026, 8, 21, 11, 59, 40, tzinfo=UTC),
+            ),
+            (
                 "cw-a",
                 "/u/other-run-coord/train/0",
                 0,
@@ -824,9 +834,12 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
         ],
     )
 
-    assert database.execute(sql_by_ref["A"]).fetchall() == [(14_400.0,)]
-    assert database.execute(sql_by_ref["B"]).fetchall() == [(176, 170, 1, 2, 3, 30.0)]
-    assert database.execute(sql_by_ref["C"]).fetchall() == [(2, 60.0)]
+    assert database.execute(sql_by_ref["A"]).fetchall() == [(14_400.0, None)]
+    assert database.execute(sql_by_ref["B"]).fetchall() == [(169, 160, 4, 3, 2, 600.0)]
+    assert database.execute(sql_by_ref["C"]).fetchall() == [(1, 600.0)]
+
+    database.execute("UPDATE telemetry_v1 SET value = 0 WHERE execution_uid = 'attempt-current' AND seq = 3")
+    assert database.execute(sql_by_ref["A"]).fetchall() == [(14_400.0, 14_400.0)]
 
 
 def test_training_moe_health_queries_show_routing_signals():

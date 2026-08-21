@@ -277,8 +277,10 @@ train loss. It also includes step time, throughput, schedule progress, and token
 count.
 
 The execution-health strip shows the current attempt age, Iris task counts,
-task-state age, and retained retry events. Its orange 45-minute band matches the
-initialization alert. Its red 60-minute band matches the GPU startup supervisor.
+task-state age, and retained retry events. Initialization age appears only before
+training progress. Its orange 45-minute band matches the initialization alert.
+Its red 60-minute band matches the GPU startup supervisor. The Iris values match
+the current execution cluster and job root.
 The Token drops and Router health panels show the MoE signals that the hero
 monitor uses. The dashboard uses a 7% drop limit. The router limits are 5.92
 entropy and 400 bias.
