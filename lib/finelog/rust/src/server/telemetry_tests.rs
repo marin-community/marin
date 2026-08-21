@@ -445,13 +445,11 @@ async fn process_zero_training_query_uses_projection_without_changing_results() 
           AND execution_uid IS NOT NULL \
           AND process_index = '0' \
         ORDER BY seq";
-    let projection_sql = format!(
-        "SELECT seq, timestamp_ms, execution_uid, name, value {FILTER_AND_ORDER}"
-    );
+    let projection_sql =
+        format!("SELECT seq, timestamp_ms, execution_uid, name, value {FILTER_AND_ORDER}");
     // `kind` is absent from the projection, forcing this query to use source Parquet.
-    let source_sql = format!(
-        "SELECT seq, timestamp_ms, execution_uid, name, value, kind {FILTER_AND_ORDER}"
-    );
+    let source_sql =
+        format!("SELECT seq, timestamp_ms, execution_uid, name, value, kind {FILTER_AND_ORDER}");
 
     let result_rows = |batches: &[arrow::array::RecordBatch]| {
         let mut rows = Vec::new();
