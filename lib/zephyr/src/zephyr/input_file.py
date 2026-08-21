@@ -13,7 +13,11 @@ DEFAULT_FILE_PATH_COLUMN = "__file_path"
 
 @dataclass
 class InputFileSpec:
-    """Describe a file or row range for a Zephyr reader."""
+    """Describe a file or row range for a Zephyr reader.
+
+    ``format`` selects which reader handles the file; ``auto`` infers it from the
+    path extension.
+    """
 
     path: str
     format: Literal["parquet", "jsonl", "vortex", "auto"] = "auto"

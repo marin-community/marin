@@ -20,7 +20,7 @@ Example:
 import logging
 import re
 from collections.abc import Callable, Generator, Sequence
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -600,46 +600,6 @@ class Job:
 # =============================================================================
 # Context Management
 # =============================================================================
-
-
-class EndpointRegistry(Protocol):
-    def register(
-        self,
-        name: str,
-        address: str,
-        metadata: dict[str, str] | None = None,
-        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
-    ) -> str:
-        """Register an endpoint for actor discovery.
-
-        Args:
-            name: Actor name for discovery
-            address: Address where actor is listening (host:port)
-            metadata: Optional metadata for the endpoint
-            access: Proxy access mode — PRIVATE (default), PUBLIC, or BEARER.
-
-        Returns:
-            Unique endpoint ID for later unregistration
-        """
-        ...
-
-    def unregister(self, endpoint_id: str) -> None:
-        """Unregister a previously registered endpoint.
-
-        Args:
-            endpoint_id: ID returned from register()
-        """
-        ...
-
-    def registered(
-        self,
-        name: str,
-        address: str,
-        metadata: dict[str, str] | None = None,
-        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
-    ) -> AbstractContextManager[str]:
-        """Own one renewable endpoint registration for a context lifetime."""
-        ...
 
 
 class NamespacedEndpointRegistry:
