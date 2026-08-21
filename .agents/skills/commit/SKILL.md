@@ -201,14 +201,20 @@ Set one honest status immediately before waiting, for example:
 weaver status ok "waiting for PR #<N> events"
 ```
 
-Do not refresh that status while nothing changes. Invoke `wait_for.py` as a
-foreground, genuinely blocking call:
+Do not refresh that status while nothing changes. Invoke one `wait_for.py`
+process in the foreground and keep it attached until it exits:
 
 ```bash
 uv run scripts/ci/wait_for.py --timeout 12h \
   "github.ci <N>" "github.pr <N>" \
   "github.pr_comment <N>" "github.review <N>"
 ```
+
+The command's `--timeout 12h` is the only timeout. Do not background or detach
+the process, wrap it in a shell `timeout`, or give the command runner or agent a
+shorter deadline. A tool reporting that the command is still running does not
+end the foreground wait. Give the process handle back to the runtime's blocking
+wait/resume facility and continue waiting for that same process to exit.
 
 `github.pr` covers terminal merged/closed state, merge conflicts,
 ready-for-review transitions, and review-decision changes. It does not inspect
@@ -222,8 +228,7 @@ The wait owns its exponential backoff. While it is running:
 - do not poll GitHub manually;
 - do not launch another `wait_for.py`;
 - do not narrate unchanged CI, review, or merge state;
-- do not repeatedly poll a yielded process handle. Give it back to the runtime's
-  blocking wait/resume facility.
+- do not periodically poll or resume a yielded process handle.
 
 The command prints one JSON object and exits: `0` means an arm fired, `2` means
 the overall timeout elapsed, and `1` means the wait failed. An event is not
