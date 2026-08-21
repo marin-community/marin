@@ -1,23 +1,29 @@
 #!/usr/bin/env bash
 # Out-of-process runtime cap and early release for one arm.
 #
-# Two jobs, both of which end with `iris job cancel` on the coord path (Iris cancels descendants,
+# Three jobs, all of which end with `iris job cancel` on the coord path (Iris cancels descendants,
 # so the 16-node train job goes with it):
-#   1. Hard cap: cancel at ARM_TIMEOUT seconds from submission, whatever the arm is doing. This is
-#      the layer that guarantees a production rack is never held longer than the budget. Iris's own
-#      --timeout on the coord job is the first layer; this is the second, and it runs in a separate
-#      process so a wedged CLI or a lost session cannot defeat it.
-#   2. Early release: cancel as soon as W&B shows the last step the scoring window needs. A scored
+#   1. Step budget: cancel STEP_BUDGET seconds after the first step this watch observes. Compile
+#      time varies run to run (~8 min so far) and an arm that pays a slow compile should still get
+#      its full measurement window; an arm whose change makes *steps* slow should not get extra
+#      rack time to compensate.
+#   2. Compile ceiling: cancel if no step has appeared COMPILE_CEILING seconds after submission.
+#      This bounds the total hold when startup wedges before step 0.
+#   3. Early release: cancel as soon as W&B shows the last step the scoring window needs. A scored
 #      arm has no reason to keep 64 GB200s.
+# Iris's own --timeout on the coord job is the outer backstop; it must cover
+# COMPILE_CEILING + STEP_BUDGET. This watchdog runs in a separate process so a wedged CLI or a
+# lost session cannot defeat it.
 #
 # systemd-run and crontab are both unavailable in this sandbox, so this is a plain detached poll
 # loop rather than a timer unit.
 #
-# usage: RID=<run-id> [ARM_TIMEOUT=900] [SCORE_MAX_STEP=19] watchdog.sh
+# usage: RID=<run-id> [STEP_BUDGET=900] [COMPILE_CEILING=1200] [SCORE_MAX_STEP=19] watchdog.sh
 set -uo pipefail
 
 RID="${RID:?set RID}"
-ARM_TIMEOUT="${ARM_TIMEOUT:-900}"
+STEP_BUDGET="${STEP_BUDGET:-900}"
+COMPILE_CEILING="${COMPILE_CEILING:-1200}"
 SCORE_MAX_STEP="${SCORE_MAX_STEP:-19}"
 POLL="${POLL:-60}"
 
@@ -25,7 +31,10 @@ LOOP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${LOOP_DIR}/../.." && pwd)"
 IRIS=(uv run iris --config lib/iris/config/marin.yaml)
 COORD="/mwittmann/${RID}-coord"
-deadline=$(( $(date +%s) + ARM_TIMEOUT ))
+start=$(date +%s)
+# Until a step appears the deadline is the compile ceiling; the first observed step rebases it to
+# STEP_BUDGET from that moment.
+deadline=$(( start + COMPILE_CEILING ))
 first_step=-1
 
 cancel_arm() {  # cancel_arm <reason>
@@ -58,13 +67,18 @@ PY
 while :; do
   now=$(date +%s)
   if [ "$now" -ge "$deadline" ]; then
-    cancel_arm "hard cap ${ARM_TIMEOUT}s reached"
-    echo "WATCHDOG hard-cap"
+    if [ "${first_step:--1}" -ge 0 ] 2>/dev/null; then
+      cancel_arm "step budget ${STEP_BUDGET}s past first step reached"
+      echo "WATCHDOG hard-cap step-budget"
+    else
+      cancel_arm "no step within the ${COMPILE_CEILING}s compile ceiling"
+      echo "WATCHDOG hard-cap compile-ceiling"
+    fi
     exit 0
   fi
   train_state="$(state_of "${COORD}/grug-train-${RID}")"
   steps="$(max_step)"
-  echo "$(date -u +%H:%M:%S) t=$(( now - deadline + ARM_TIMEOUT ))s train=${train_state:-none} step=${steps}"
+  echo "$(date -u +%H:%M:%S) t=$(( now - start ))s train=${train_state:-none} step=${steps}"
   # Iris has several terminal failure states beyond a bare `failed` (worker_failed, cosched_failed
   # among them), so match the suffix rather than enumerating them.
   case "$train_state" in
@@ -76,7 +90,8 @@ while :; do
   # on the very first reading and cancels a run that has trained nothing.
   if [ "${first_step:--1}" -lt 0 ] && [ "${steps:--1}" -ge 0 ] 2>/dev/null; then
     first_step="$steps"
-    echo "$(date -u +%H:%M:%S) first observed step=${first_step}"
+    deadline=$(( now + STEP_BUDGET ))
+    echo "$(date -u +%H:%M:%S) first observed step=${first_step}, step budget ${STEP_BUDGET}s starts now"
   fi
   if [ "${first_step:--1}" -ge 0 ] 2>/dev/null && [ $(( steps - first_step )) -ge "$SCORE_MAX_STEP" ]; then
     cancel_arm "scored through step ${steps} (${SCORE_MAX_STEP} past first)"

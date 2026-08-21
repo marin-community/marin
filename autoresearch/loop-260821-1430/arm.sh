@@ -25,8 +25,10 @@ LOOP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${LOOP_DIR}/../.." && pwd)"
 
 PRIORITY="${PRIORITY:-production}"
-# Hard runtime limit. Iris enforces it on the coord job; watchdog.sh enforces it out of process.
-ARM_TIMEOUT="${ARM_TIMEOUT:-900}"
+# Outer runtime backstop, enforced by Iris on the coord job. The real limit lives in watchdog.sh:
+# a 15-minute step budget counted from the first observed step, plus a 20-minute compile ceiling.
+# This value must cover their sum, so it only fires if the watchdog itself is dead.
+ARM_TIMEOUT="${ARM_TIMEOUT:-2100}"
 # `stop_after_steps` is an absolute step, not a count, so a restored arm resuming at the
 # checkpoint's step would exit immediately against a small value. Restore arms set this high and
 # let the runtime cap end them instead.

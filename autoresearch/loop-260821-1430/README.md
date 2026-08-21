@@ -13,12 +13,17 @@ Every arm: one NVL72 rack on `cw-us-east-08a`, **production** priority, one rack
 synthetic data, no profiler, no checkpoints, no eval, `--master-params disabled`, capacity 1.15,
 4 processes per node, the kmax128 PJRT wheel.
 
-**Hard 15-minute runtime cap**, enforced in two layers:
+**Hard runtime cap: compile time + 15 minutes** (changed after iteration 3; through iteration 3 the
+cap was a flat 15 minutes from submission). Enforced in two layers:
 
-1. `iris job run --timeout 900` on the coord job.
-2. `watchdog.sh`, a detached out-of-process poll loop that runs `iris job cancel` on the coord path
-   (Iris cancels descendants) at the deadline. It also releases the rack early, as soon as W&B
-   shows the last step the scoring window needs.
+1. `watchdog.sh`, a detached out-of-process poll loop that runs `iris job cancel` on the coord path
+   (Iris cancels descendants). It cancels 900 s after the first step it observes, or 1200 s after
+   submission if no step ever appears, and it releases the rack early as soon as W&B shows the last
+   step the scoring window needs. The step budget starts at the first step so a slow *compile*
+   cannot eat the measurement window, while a change that makes *steps* slow still gets no extra
+   rack time.
+2. `iris job run --timeout 2100` on the coord job, the backstop that fires only if the watchdog
+   process is dead.
 
 `systemd-run` and `crontab` are both unavailable in this sandbox — the classifier blocks the
 former and NixOS ships no `crontab` — so layer 2 is a detached shell loop rather than a timer unit.
