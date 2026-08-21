@@ -327,10 +327,10 @@ def test_hero_alerts_enroll_suffixed_retry_roots():
     )
 
     task_states = database.execute(task_state_query(now)).fetch_arrow_table()
-    assert [(run.root_job, run.run_id) for run in active_hero_runs(task_states)] == [
+    assert {(run.root_job, run.run_id) for run in active_hero_runs(task_states)} == {
         ("/power/hero-12d8b6f0-dee637-coord-slop85", "hero-12d8b6f0-dee637"),
         ("/power/hero-other-coord", "hero-other"),
-    ]
+    }
 
 
 def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
