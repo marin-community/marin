@@ -35,7 +35,7 @@ CURRENT_SNAPSHOT = "current_snapshot"
 CUMULATIVE_SNAPSHOT = "cumulative_snapshot"
 _MAX_REQUEST_BYTES = 4 << 20
 _MAX_SHUTDOWN_TIMEOUT = 5.0
-_WARNING_INTERVAL = 60.0
+_REJECTION_WARNING_INTERVAL = 60.0
 _EVENT_KIND = "event"
 
 
@@ -277,6 +277,7 @@ class _Runtime:
         self._export_failures = 0
         self._export_retries = 0
         self._rejected_records = 0
+        self._last_rejection_warning_time: float | None = None
         self._last_success_time_seconds: float | None = None
         self._oldest_queued_at: float | None = None
         self._stop = False
@@ -436,7 +437,7 @@ class _Runtime:
                 if 400 <= response.status_code < 500 and response.status_code != 429:
                     with self._condition:
                         self._rejected_records += batch.record_count
-                    _warn(f"telemetry batch rejected with HTTP {response.status_code}")
+                    self._warn_rejected_batch(response.status_code)
                     return _DeliveryOutcome.REJECTED
             except Exception:
                 with self._condition:
@@ -446,6 +447,17 @@ class _Runtime:
             delay = backoff.next_interval()
             with self._condition:
                 self._condition.wait_for(lambda: self._stop, timeout=delay)
+
+    def _warn_rejected_batch(self, status_code: int) -> None:
+        now = time.monotonic()
+        with self._condition:
+            if (
+                self._last_rejection_warning_time is not None
+                and now - self._last_rejection_warning_time < _REJECTION_WARNING_INTERVAL
+            ):
+                return
+            self._last_rejection_warning_time = now
+        _warn(f"telemetry batch rejected with HTTP {status_code}")
 
     def _settle(self, batch: _PendingBatch, *, lost: bool) -> None:
         with self._condition:
@@ -475,8 +487,6 @@ class _Runtime:
 # module-level handles without passing runtime state through every call site.
 _configuration_lock = threading.Lock()
 _runtime: _Runtime | None = None
-_last_warning: float | None = None
-_warning_lock = threading.Lock()
 
 
 def counter(
@@ -699,12 +709,6 @@ def _valid_ack(response: _Response, batch_id: str) -> bool:
 
 
 def _warn(message: str) -> None:
-    global _last_warning
-    now = time.monotonic()
-    with _warning_lock:
-        if _last_warning is not None and now - _last_warning < _WARNING_INTERVAL:
-            return
-        _last_warning = now
     try:
         logger.warning(message)
     except Exception:
