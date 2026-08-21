@@ -162,6 +162,13 @@ same row schema. Query a child when its producer is known. Query `telemetry_v1`
 for a logical `UNION ALL` of every child plus rows retained in the pre-split
 physical table.
 
+Clients using Finelog's generic table registration may add another semantically
+named `telemetry_v1.*` child. A client-defined child participates in the rollup
+when its schema is union-compatible with the other telemetry children. If any
+child has an incompatible schema, Finelog leaves the composite `telemetry_v1`
+view unavailable for that query while direct child and unrelated namespace
+queries continue to work; it never returns a silently partial rollup.
+
 The child retention budgets sum to 50 GiB: 20 GiB for Levanter core, 10 GiB
 each for Levanter extra and node-agent telemetry, 6 GiB for vLLM, 2 GiB for Iris
 RPC, and 1 GiB for each Zephyr child. The legacy physical table keeps a 50 GiB

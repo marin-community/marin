@@ -540,18 +540,32 @@ async fn register_query_providers(
             .table(TableReference::bare(first.as_str()))
             .await?
             .into_unoptimized_plan();
+        let mut compatible = true;
         for source in telemetry_sources.iter().skip(1) {
             let child = ctx
                 .table(TableReference::bare(source.as_str()))
                 .await?
                 .into_unoptimized_plan();
-            rollup = LogicalPlanBuilder::from(rollup).union(child)?.build()?;
+            match LogicalPlanBuilder::from(rollup.clone()).union(child) {
+                Ok(builder) => rollup = builder.build()?,
+                Err(error) => {
+                    tracing::warn!(
+                        source,
+                        %error,
+                        "telemetry rollup disabled because a child schema is incompatible"
+                    );
+                    compatible = false;
+                    break;
+                }
+            }
         }
-        ctx.register_table(
-            TableReference::bare(TELEMETRY_ROLLUP_NAMESPACE),
-            Arc::new(ViewTable::new(rollup, None)),
-        )?;
-        names.push(TELEMETRY_ROLLUP_NAMESPACE.to_string());
+        if compatible {
+            ctx.register_table(
+                TableReference::bare(TELEMETRY_ROLLUP_NAMESPACE),
+                Arc::new(ViewTable::new(rollup, None)),
+            )?;
+            names.push(TELEMETRY_ROLLUP_NAMESPACE.to_string());
+        }
     }
     Ok(QueryRegistrations {
         names,

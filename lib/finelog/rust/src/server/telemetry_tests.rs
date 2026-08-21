@@ -220,13 +220,17 @@ fn training_metrics_batch(
     .unwrap()
 }
 
-async fn query(store: &Store, sql: &str) -> Vec<arrow::array::RecordBatch> {
+async fn query_result(
+    store: &Store,
+    sql: &str,
+) -> datafusion::error::Result<crate::query::QueryResult> {
     let _guard = store.query_visibility().read().await;
     let providers = store.query_providers().unwrap();
-    run_query_over(&make_ctx(), providers, sql)
-        .await
-        .unwrap()
-        .batches
+    run_query_over(&make_ctx(), providers, sql).await
+}
+
+async fn query(store: &Store, sql: &str) -> Vec<arrow::array::RecordBatch> {
+    query_result(store, sql).await.unwrap().batches
 }
 
 #[tokio::test]
@@ -714,13 +718,47 @@ async fn semantic_groups_route_to_children_and_roll_up() {
             .values(),
         &[1, 2]
     );
+
+    let telemetry_schema = store
+        .get_table_schema("telemetry_v1.levanter.core")
+        .unwrap();
+    store
+        .register_table(
+            "telemetry_v1.client_defined",
+            telemetry_schema,
+            StoragePolicy::default(),
+        )
+        .unwrap();
+    let compatible_rollup = query(&store, "SELECT name FROM telemetry_v1 ORDER BY name").await;
     assert_eq!(
-        store
-            .get_policy("telemetry_v1.levanter.core")
-            .unwrap()
-            .max_bytes,
-        Some(20 * 1024 * 1024 * 1024)
+        compatible_rollup
+            .iter()
+            .map(|batch| batch.num_rows())
+            .sum::<usize>(),
+        2
     );
+
+    store
+        .register_table(
+            "telemetry_v1.invalid",
+            Schema::new(
+                vec![Column::new("other", ColumnType::COLUMN_TYPE_STRING, false)],
+                "other",
+            ),
+            StoragePolicy::default(),
+        )
+        .unwrap();
+    let direct = query(&store, "SELECT name FROM \"telemetry_v1.levanter.core\"").await;
+    assert_eq!(
+        direct[0].column(0).as_string::<i32>().value(0),
+        "train_loss"
+    );
+    assert_eq!(query(&store, "SELECT 1 AS value").await[0].num_rows(), 1);
+    let error = match query_result(&store, "SELECT name FROM telemetry_v1").await {
+        Ok(_) => panic!("incompatible telemetry child should disable the rollup"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("telemetry_v1"), "{error}");
 }
 
 #[tokio::test]
