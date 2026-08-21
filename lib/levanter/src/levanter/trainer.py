@@ -359,6 +359,12 @@ class Trainer:
     def run_hooks(self, info: StepInfo, force: bool = False):
         self.hooks.run_hooks(info, force=force)
 
+    def request_checkpoint(self) -> None:
+        """Request a permanent checkpoint after the current training step."""
+        if self._checkpointer is None:
+            raise RuntimeError("Checkpointing is not configured")
+        self._checkpointer.request_checkpoint()
+
     @property
     def parameter_axis_mapping(self) -> ResourceMapping:
         return self.config.parameter_axis_mapping

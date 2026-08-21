@@ -3,8 +3,13 @@
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+import re
 from types import SimpleNamespace
-from urllib.request import urlopen
+from urllib.error import HTTPError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+import pytest
 
 import levanter.training_control as training_control
 from iris.cluster.client.job_info import JobInfo
@@ -69,7 +74,13 @@ def test_training_dashboard_registers_redacted_status_page(monkeypatch):
             "MARIN_PROVENANCE": '{"argv": ["--token", "nested-provenance-secret"]}',
         },
     )
-    with TrainingDashboard(config):
+    checkpoint_requests = 0
+
+    def request_checkpoint():
+        nonlocal checkpoint_requests
+        checkpoint_requests += 1
+
+    with TrainingDashboard(config, request_checkpoint):
         assert registry.active
         assert registry.address is not None
         with urlopen(registry.address, timeout=2) as response:
@@ -88,6 +99,18 @@ def test_training_dashboard_registers_redacted_status_page(monkeypatch):
         assert "environment-secret" not in body
         assert "nested-environment-secret" not in body
         assert "nested-provenance-secret" not in body
+
+        token_match = re.search(r'name="token" value="([^"]+)"', body)
+        assert token_match is not None
+        request = Request(registry.address, data=urlencode({"token": token_match.group(1)}).encode(), method="POST")
+        with urlopen(request, timeout=2) as response:
+            assert response.status == 202
+        assert checkpoint_requests == 1
+
+        with pytest.raises(HTTPError) as error:
+            urlopen(Request(registry.address, data=b"token=invalid", method="POST"), timeout=2)
+        assert error.value.code == 403
+        assert checkpoint_requests == 1
     assert not registry.active
 
 
@@ -103,7 +126,7 @@ def test_training_dashboard_failure_does_not_stop_training(monkeypatch):
     monkeypatch.setattr(training_control, "get_iris_ctx", lambda: SimpleNamespace(registry=registry))
     monkeypatch.setattr(training_control, "get_job_info", lambda: job_info)
 
-    with TrainingDashboard(config):
+    with TrainingDashboard(config, lambda: None):
         pass
 
     assert registry.called

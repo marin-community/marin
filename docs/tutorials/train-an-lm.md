@@ -188,7 +188,8 @@ W&B receives metrics throughout training. The run name defaults to the `run_id` 
 `{prefix}/{name}/{version}/checkpoints/`.
 
 Iris shows a private `training-control` endpoint for Marin `train_lm` jobs. It contains the run ID,
-resolved Levanter configuration, and redacted process environment.
+resolved Levanter configuration, and redacted process environment. Select **Save checkpoint** to write a permanent
+checkpoint after the current training step.
 
 ## Memory pressure
 
