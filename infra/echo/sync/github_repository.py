@@ -8,10 +8,10 @@ import json
 import tarfile
 import time
 import urllib.request
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import PurePosixPath
 from urllib.parse import quote
@@ -21,20 +21,14 @@ import schema
 import search_config
 import sqlalchemy
 from fastembed import TextEmbedding
+from search_config import RepositoryTarget
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 REPOSITORY_FILE_BATCH = 10
 DATABASE_INSERT_BATCH = 100
-REPOSITORY_CHECK_INTERVAL = timedelta(hours=1)
 MAX_COMPARE_FILES = 300
 REPOSITORY_SYNC_LOCK_KEY = 0x65636872  # "echr"
 GITHUB_JSON_MEDIA_TYPE = "application/vnd.github+json"
-
-
-@dataclass(frozen=True)
-class RepositoryTarget:
-    repository: str
-    branch: str
 
 
 @dataclass(frozen=True)
@@ -226,10 +220,6 @@ def repository_build(conn: sqlalchemy.Connection, target: RepositoryTarget) -> R
     )
 
 
-def repository_check_due(state: RepositoryState | None, now: datetime) -> bool:
-    return state is None or now - state.checked_at >= REPOSITORY_CHECK_INTERVAL
-
-
 def repository_chunk_record(
     target: RepositoryTarget,
     chunk: repository_files.EmbeddedChunk,
@@ -391,6 +381,30 @@ def repository_sync_lock(engine: sqlalchemy.Engine) -> Iterator[bool]:
                 conn.commit()
 
 
+def claim_repository_turn(
+    engine: sqlalchemy.Engine,
+    targets: Sequence[RepositoryTarget] = search_config.REPOSITORY_TARGETS,
+) -> RepositoryTarget:
+    """Persist the next fair turn before returning its repository target."""
+    if not targets:
+        raise ValueError("at least one repository target is required")
+    with engine.begin() as conn:
+        conn.execute(
+            pg_insert(schema.repository_sync_turn)
+            .values(singleton=True, next_target=0)
+            .on_conflict_do_nothing(index_elements=[schema.repository_sync_turn.c.singleton])
+        )
+        row = conn.execute(sqlalchemy.select(schema.repository_sync_turn.c.next_target).with_for_update()).first()
+        assert row is not None
+        target_index = row.next_target % len(targets)
+        conn.execute(
+            sqlalchemy.update(schema.repository_sync_turn)
+            .where(schema.repository_sync_turn.c.singleton.is_(True))
+            .values(next_target=(target_index + 1) % len(targets))
+        )
+    return targets[target_index]
+
+
 def record_unchanged_repository(
     engine: sqlalchemy.Engine,
     target: RepositoryTarget,
@@ -407,19 +421,6 @@ def record_unchanged_repository(
             )
             .values(checked_at=checked_at)
         )
-
-
-def sync_repository(
-    engine: sqlalchemy.Engine,
-    target: RepositoryTarget,
-    token: str,
-    now: datetime,
-) -> None:
-    with repository_sync_lock(engine) as locked:
-        if not locked:
-            print("another repository sync is running; exiting")
-            return
-        sync_repository_locked(engine, target, token, now)
 
 
 def load_repository_changes(
@@ -547,9 +548,6 @@ def sync_repository_locked(
     with engine.connect() as conn:
         state = repository_state(conn, target)
         build = repository_build(conn, target)
-    if build is None and not repository_check_due(state, now):
-        return
-
     if build is None:
         head_sha = github_head(target, token)
         if state is not None and state.commit_sha == head_sha:

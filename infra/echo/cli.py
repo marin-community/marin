@@ -14,7 +14,8 @@ under ``~/.config/marin/credentials``) and this reuses that token; agents and CI
 ambient service-account credentials with no login. See ``infra/echo/README.md``.
 
     uv run infra/echo/cli.py search "expert parallel MoE MFU on B200" --limit 10
-    uv run infra/echo/cli.py get file:lib/iris/OPS.md
+    uv run infra/echo/cli.py search "compare cache implementations" --repository all
+    uv run infra/echo/cli.py get file:marin-community/marin@main:lib/iris/OPS.md
     uv run infra/echo/cli.py feedback --query "deploy iris" --grade file:731=10
     uv run infra/echo/cli.py grep ragged_all_to_all --source discord
     uv run infra/echo/cli.py wiki search "grafana access" --tag ops
@@ -29,12 +30,14 @@ import logging
 import os
 import shlex
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
 from urllib.parse import quote
 
 import okf
+import repository_identity
 import requests
 import search_config
 import search_feedback
@@ -220,13 +223,62 @@ def read_body(value: str) -> str:
     return value
 
 
+def github_remote_repository(url: str) -> str | None:
+    marker = "github.com"
+    if marker not in url:
+        return None
+    path = url.split(marker, 1)[1].lstrip("/:").rstrip("/")
+    parts = path.removesuffix(".git").split("/")
+    return "/".join(parts) if len(parts) == 2 and all(parts) else None
+
+
+def current_configured_repository() -> str:
+    remotes = subprocess.run(
+        ["git", "config", "--local", "--get-regexp", r"^remote\..*\.url$"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if remotes.returncode == 0:
+        repositories = {
+            repository
+            for line in remotes.stdout.splitlines()
+            if len(line.split(maxsplit=1)) == 2
+            for repository in [github_remote_repository(line.split(maxsplit=1)[1])]
+            if repository is not None
+        }
+        canonical = {target.repository.casefold(): target.repository for target in search_config.REPOSITORY_TARGETS}
+        exact_matches = {
+            canonical[repository.casefold()] for repository in repositories if repository.casefold() in canonical
+        }
+        if len(exact_matches) == 1:
+            return exact_matches.pop()
+        canonical_by_name = {repository.rsplit("/", 1)[1].casefold(): repository for repository in canonical.values()}
+        fork_matches = {
+            canonical_by_name[repository.rsplit("/", 1)[1].casefold()]
+            for repository in repositories
+            if repository.rsplit("/", 1)[1].casefold() in canonical_by_name
+        }
+        if len(fork_matches) == 1:
+            return fork_matches.pop()
+    raise SystemExit(
+        "cannot infer a configured repository from this Git checkout; "
+        "pass --repository <owner/repo> or --repository all"
+    )
+
+
 def cmd_search(args: argparse.Namespace) -> None:
     domains = list(dict.fromkeys(args.domain or DEFAULT_DOMAINS))
+    params: dict[str, object] = {"q": args.query, "domain": domains, "limit": args.limit}
+    if "file" in domains:
+        repository = args.repository or current_configured_repository()
+        params["repository"] = repository
+        print(f"File scope: {repository}")
     started_at = time.perf_counter()
     response = request_response(
         "GET",
         "/federated-search",
-        params={"q": args.query, "domain": domains, "limit": args.limit},
+        params=params,
     )
     remote_value = response_objects(response.json())
     results = [SearchResult.from_json(result) for result in remote_value]
@@ -299,7 +351,8 @@ def cmd_get(args: argparse.Namespace) -> None:
         url = wiki_link(int(value))
         text = entry["body"]
     elif domain == "file":
-        file = response_object(request("GET", f"/repository-files/{quote(value, safe='/')}"))
+        reference = repository_identity.parse_repository_file_id(args.id)
+        file = response_object(request("GET", f"/repository-files/{quote(reference.route_value, safe='/@:')}"))
         title, subtitle, url, text = file["title"], file["subtitle"], file["url"], file["text"]
     else:
         chunk = response_object(request("GET", f"/chunks/{value}"))
@@ -412,6 +465,16 @@ def artifact_id(value: str) -> str:
         raise argparse.ArgumentTypeError(str(error)) from error
 
 
+def detail_artifact_id(value: str) -> str:
+    checked = artifact_id(value)
+    if checked.startswith("file:"):
+        try:
+            repository_identity.parse_repository_file_id(checked)
+        except ValueError as error:
+            raise argparse.ArgumentTypeError(str(error)) from error
+    return checked
+
+
 def add_wiki_write_args(parser: argparse.ArgumentParser) -> None:
     # Either an OKF document (--file) or the three fields as flags.
     parser.add_argument("--file", help="OKF markdown file (frontmatter title/use_when + body), or - for stdin")
@@ -439,6 +502,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="search this domain; repeat to select several (default: wiki,file,pr,issue)",
     )
     search.add_argument("--limit", type=bounded_limit, default=10)
+    search.add_argument(
+        "--repository",
+        choices=(*(target.repository for target in search_config.REPOSITORY_TARGETS), search_config.ALL_REPOSITORIES),
+        help="file scope; omit to infer the configured repository from the current Git checkout",
+    )
     search.set_defaults(func=cmd_search)
     feedback = sub.add_parser("feedback", help="grade federated-search results")
     feedback.add_argument("--query", required=True, type=nonblank, help="the exact search query")
@@ -461,7 +529,7 @@ def build_parser() -> argparse.ArgumentParser:
     grep.set_defaults(func=cmd_grep)
 
     get = sub.add_parser("get", help="print full detail for a federated-search result ID")
-    get.add_argument("id", type=artifact_id)
+    get.add_argument("id", type=detail_artifact_id)
     get.set_defaults(func=cmd_get)
 
     history = sub.add_parser("history", help="export durable search executions").add_subparsers(

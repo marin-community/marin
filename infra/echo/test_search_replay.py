@@ -55,7 +55,7 @@ def test_replay_resumes_completed_cases_and_persists_each_execution(monkeypatch,
         (
             "GET",
             "/federated-search",
-            {"q": "restart iris", "domain": ["file"], "limit": 10},
+            {"q": "restart iris", "domain": ["file"], "repository": "all", "limit": 10},
             search_replay.REPLAY_REQUEST_TIMEOUT,
         )
     ]
@@ -107,10 +107,14 @@ def test_reconcile_recovers_matching_query_and_domains_once(tmp_path):
     history = tmp_path / "history.jsonl"
     output.write_text('{"execution_id":4,"id":"observed-a","returned_count":3}\n')
     history.write_text(
-        '{"id":7,"normalized_query":"deploy iris","domains":["file"],"returned_count":2}\n'
-        '{"id":8,"normalized_query":"inspect logs","domains":["wiki"],"returned_count":4}\n'
-        '{"id":9,"normalized_query":"inspect logs","domains":["file"],"returned_count":5}\n'
-        '{"id":10,"normalized_query":"inspect logs","domains":["file"],"returned_count":6}\n'
+        '{"id":7,"normalized_query":"deploy iris","domains":["file"],"filters":{"repository":"all"},'
+        '"returned_count":2}\n'
+        '{"id":8,"normalized_query":"inspect logs","domains":["file"],'
+        '"filters":{"repository":"marin-community/marin"},"returned_count":4}\n'
+        '{"id":9,"normalized_query":"inspect logs","domains":["file"],"filters":{"repository":"all"},'
+        '"returned_count":5}\n'
+        '{"id":10,"normalized_query":"inspect logs","domains":["file"],"filters":{"repository":"all"},'
+        '"returned_count":6}\n'
     )
     cases = [
         search_replay.ReplayCase("observed-a", "deploy iris", ("file",), "observed", 1),

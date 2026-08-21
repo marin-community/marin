@@ -152,6 +152,15 @@ repository_index_builds = Table(
     Column("started_at", DateTime(timezone=True), nullable=False),
 )
 
+repository_sync_turn = Table(
+    "repository_sync_turn",
+    metadata,
+    Column("singleton", Boolean, primary_key=True, server_default=text("true")),
+    Column("next_target", Integer, nullable=False, server_default=text("0")),
+    CheckConstraint("singleton", name="repository_sync_turn_singleton"),
+    CheckConstraint("next_target >= 0", name="repository_sync_turn_next_target_nonnegative"),
+)
+
 sync_state = Table(
     "sync_state",
     metadata,
