@@ -5,9 +5,12 @@
 # * Orbax: https://github.com/google/orbax/blob/11d2934ecfff77e86b5e07d0fef02b67eff4511b/orbax/checkpoint/pytree_checkpoint_handler.py#L312
 import asyncio
 import collections
+import ctypes
 import logging
 import math
 import os
+import sys
+import threading
 import time
 import urllib.parse
 import zlib
@@ -53,6 +56,37 @@ _HOST_MEMORY_KIND = "pinned_host"
 _DEFAULT_STAGED_CHUNKS = 32
 # Host memory a staged byte occupies while its write is in flight, for reporting only.
 _STAGED_BYTE_OVERHEAD = 4
+
+
+def _malloc_trim() -> bool:
+    """Return unused glibc heap pages to the OS."""
+    if sys.platform != "linux":
+        return False
+
+    libc = ctypes.CDLL("libc.so.6")
+    libc.malloc_trim.argtypes = [ctypes.c_size_t]
+    libc.malloc_trim.restype = ctypes.c_int
+    return bool(libc.malloc_trim(0))
+
+
+def _trim_host_memory_after_commits(commit_futures: Sequence[ts.Future]) -> None:
+    """Schedule one heap trim after every local TensorStore commit finishes."""
+    remaining = len(commit_futures)
+    if remaining == 0:
+        return
+
+    lock = threading.Lock()
+
+    def commit_finished(_: ts.Future) -> None:
+        nonlocal remaining
+        with lock:
+            remaining -= 1
+            all_finished = remaining == 0
+        if all_finished and _malloc_trim():
+            logger.info("Released unused host memory after checkpoint commits")
+
+    for future in commit_futures:
+        future.add_done_callback(commit_finished)
 
 
 def _format_gib(num_bytes: int) -> str:
@@ -695,6 +729,8 @@ def _serialize_arrays(
         len(commit_futures),
         _STAGED_BYTE_OVERHEAD * gate.peak_bytes / 1024**3,
     )
+
+    _trim_host_memory_after_commits(commit_futures)
 
     # Private to AsyncManager. Its own `serialize` calls these.
     manager._add_futures(commit_futures)
