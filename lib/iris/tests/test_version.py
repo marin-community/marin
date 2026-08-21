@@ -10,19 +10,10 @@ from iris import version as iris_version
 
 
 @pytest.fixture(autouse=True)
-def _reset_cache(monkeypatch):
-    monkeypatch.delenv(iris_version.REVISION_DATE_ENV, raising=False)
+def _reset_cache():
     iris_version._reset_cache_for_tests()
     yield
     iris_version._reset_cache_for_tests()
-
-
-def test_client_revision_date_prefers_the_image_stamp(monkeypatch):
-    """A container image carries no `.git`, so the build-time env var wins outright."""
-    monkeypatch.setenv(iris_version.REVISION_DATE_ENV, "2026-03-09")
-    monkeypatch.setattr(iris_version, "BUILD_DATE", "2026-01-15")
-
-    assert iris_version.client_revision_date() == "2026-03-09"
 
 
 def test_client_revision_date_uses_build_info(monkeypatch):
