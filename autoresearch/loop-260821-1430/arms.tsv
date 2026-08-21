@@ -1,2 +1,4 @@
 run_id	commit	version	moe_impl	data	master_params	schedule_steps	timeout	restore_from	extra
 ra2a-tune-i03-overlap2	e487cae9b8	2026.08.21.18	ragged_all_to_all	synthetic	disabled	4470000	900	none	none
+ra2a-tune-i04-prof-ragged	6d80ab27ee	2026.08.21.19	ragged_all_to_all	synthetic	disabled	4470000	2100	none	--profile-steps 3
+ra2a-tune-i04-prof-pooled	6d80ab27ee	2026.08.21.20	fixed_pooled_wave_all_to_all	synthetic	disabled	4470000	2100	none	--profile-steps 3

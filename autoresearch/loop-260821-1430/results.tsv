@@ -6,3 +6,4 @@ iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
 2	2026-08-21T22:44Z	ee5dc311b5	21.0650	-0.2506	pass	drops=0.0,loss=11.8044	discard	command buffers at FUSION scope on the ragged posture
 -	2026-08-21T22:59Z	754426bb65	-	-	n/a	no measurement	crash	r01/r02 restore arms: permanent checkpoint does not exist yet, rolling temporary is not reproducible
 3	2026-08-21T23:25Z	e487cae9b8	21.2584	-0.0572	pass	drops=0.0,loss=11.8044	discard	collective overlap limit 2 on the ragged posture -- no effect, reverted
+4	2026-08-21T23:58Z	-	21.2429	-	pass	drops=0.0,loss=11.8044	no-op	profiled ragged/pooled twins (21.24/22.34): transport kernel is cheaper than pooled a2a; gap = symmetric-kernel collectives (+0.43 s/step) + exposure (~0.7 s/step)
