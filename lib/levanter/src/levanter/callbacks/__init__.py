@@ -41,7 +41,12 @@ from levanter.callbacks.profiler import (
     profile,
     xprof_viewer_url as xprof_viewer_url,
 )
-from levanter.callbacks.progress_watchdog import ProgressWatchdog, ProgressWatchdogConfig
+from levanter.callbacks.progress_watchdog import (
+    ProgressHealth,
+    ProgressState,
+    ProgressWatchdog,
+    ProgressWatchdogConfig,
+)
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset
 from levanter.schedule import BatchSchedule
@@ -289,6 +294,8 @@ __all__ = [
     "JitCallback",
     "LambdaCallback",
     "ProgressEvent",
+    "ProgressHealth",
+    "ProgressState",
     "ProgressWatchdog",
     "ProgressWatchdogConfig",
     "StepInfo",

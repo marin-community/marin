@@ -8,6 +8,7 @@ import os
 import threading
 from dataclasses import dataclass
 from datetime import timedelta
+from enum import StrEnum
 from time import monotonic
 from typing import Any, Callable
 
@@ -28,6 +29,57 @@ class ProgressTimeout:
     event: ProgressEvent
     elapsed: float
     timeout: float
+
+
+class ProgressState(StrEnum):
+    """Where a run sits relative to its progress deadlines."""
+
+    STARTING = "starting"
+    """No step has completed yet, or the startup grace period is still open."""
+
+    PROGRESSING = "progressing"
+    """The current wait is inside the deadline that governs it."""
+
+    STALLED = "stalled"
+    """The current wait has passed its deadline. The watchdog terminates on it."""
+
+    FINISHED = "finished"
+    """Training ended and the watchdog no longer holds a deadline."""
+
+
+@dataclass(frozen=True)
+class ProgressHealth:
+    """One evaluation of the deadline that governs the current wait.
+
+    ``elapsed`` and ``timeout`` describe whichever wait is active: startup, the
+    in-flight train step, the gap since the last lifecycle event, or the startup
+    grace period. ``timeout`` is ``None`` when no deadline governs that wait.
+    """
+
+    state: ProgressState
+    event: ProgressEvent | None = None
+    elapsed: float | None = None
+    timeout: float | None = None
+
+    @property
+    def healthy(self) -> bool:
+        return self.state is not ProgressState.STALLED
+
+    def as_timeout(self) -> ProgressTimeout:
+        assert self.state is ProgressState.STALLED
+        assert self.event is not None and self.elapsed is not None and self.timeout is not None
+        return ProgressTimeout(self.event, self.elapsed, self.timeout)
+
+
+def _deadline(
+    event: ProgressEvent,
+    elapsed: float,
+    timeout: float | None,
+    *,
+    healthy: ProgressState = ProgressState.PROGRESSING,
+) -> ProgressHealth:
+    state = ProgressState.STALLED if timeout is not None and elapsed >= timeout else healthy
+    return ProgressHealth(state, event=event, elapsed=elapsed, timeout=timeout)
 
 
 class ProgressWatchdog(Callback[Any]):
@@ -109,57 +161,83 @@ class ProgressWatchdog(Callback[Any]):
         self._stop.set()
         self._thread.join(timeout=self._poll_interval * 2)
 
+    def health(self) -> ProgressHealth:
+        """Evaluate the deadline that governs the current wait, without acting on it.
+
+        Safe to call from another thread: it reads plain Python state the training
+        thread published, and never touches JAX or a device.
+        """
+        return self._evaluate(monotonic())
+
+    def _evaluate(self, now: float) -> ProgressHealth:
+        with self._lock:
+            if self._stop.is_set():
+                return ProgressHealth(ProgressState.FINISHED)
+            completed_training_step = self._completed_training_step
+            training_started_at = self._training_started_at
+            active_step_started_at = self._active_step_started_at
+            last_progress = self._last_progress
+
+        if not completed_training_step:
+            # No step has completed, so the process is still restoring, building caches, or
+            # compiling its first step. Elapsed time is all that bounds this: the step deadline
+            # stays unarmed until a step completes, and the process deadline has no progress
+            # event to measure from.
+            return _deadline(
+                ProgressEvent.PROCESS_STARTED,
+                now - self._created_at,
+                self._startup_timeout,
+                healthy=ProgressState.STARTING,
+            )
+
+        if training_started_at is None:
+            return ProgressHealth(ProgressState.STARTING, timeout=self._startup_grace_period)
+        startup_elapsed = now - training_started_at
+        if startup_elapsed < self._startup_grace_period:
+            return ProgressHealth(ProgressState.STARTING, elapsed=startup_elapsed, timeout=self._startup_grace_period)
+
+        # Both deadlines are evaluated, and a breach of either terminates. The step
+        # deadline comes first so an in-flight step reports the deadline it races.
+        deadlines: list[ProgressHealth] = []
+        if active_step_started_at is not None and self._step_timeout is not None:
+            deadlines.append(
+                _deadline(ProgressEvent.TRAIN_STEP_STARTED, now - active_step_started_at, self._step_timeout)
+            )
+        # A completed step always leaves a recorded progress event behind it.
+        assert last_progress is not None
+        event, event_time = last_progress
+        if self._process_timeout is not None:
+            deadlines.append(_deadline(event, now - event_time, self._process_timeout))
+
+        for deadline in deadlines:
+            if deadline.state is ProgressState.STALLED:
+                return deadline
+        if deadlines:
+            return deadlines[0]
+        return ProgressHealth(ProgressState.PROGRESSING, event=event, elapsed=now - event_time)
+
     def _run(self) -> None:
         while not self._stop.wait(self._poll_interval):
-            now = monotonic()
-            with self._lock:
-                completed_training_step = self._completed_training_step
-                training_started_at = self._training_started_at
-                active_step_started_at = self._active_step_started_at
-                last_progress = self._last_progress
-
-            if not completed_training_step:
-                # No step has completed, so the process is still restoring, building caches, or
-                # compiling its first step. Elapsed time is all that bounds this: the step deadline
-                # stays unarmed until a step completes, and the process deadline has no progress
-                # event to measure from.
-                if self._startup_timeout is not None and now - self._created_at >= self._startup_timeout:
-                    self._terminate(ProgressEvent.PROCESS_STARTED, now - self._created_at, self._startup_timeout)
-                    return
-                continue
-
-            if training_started_at is None or now - training_started_at < self._startup_grace_period:
-                continue
-
-            if (
-                active_step_started_at is not None
-                and self._step_timeout is not None
-                and now - active_step_started_at >= self._step_timeout
-            ):
-                self._terminate(ProgressEvent.TRAIN_STEP_STARTED, now - active_step_started_at, self._step_timeout)
+            health = self._evaluate(monotonic())
+            if health.state is ProgressState.STALLED:
+                self._terminate(health.as_timeout())
                 return
 
-            if last_progress is not None and self._process_timeout is not None:
-                event, event_time = last_progress
-                if now - event_time >= self._process_timeout:
-                    self._terminate(event, now - event_time, self._process_timeout)
-                    return
-
-    def _terminate(self, event: ProgressEvent, elapsed: float, timeout: float) -> None:
+    def _terminate(self, timeout: ProgressTimeout) -> None:
         self._stop.set()
         try:
             logger.critical(
                 "No progress after %s for %.1f seconds (timeout %.1f); terminating with exit code %d",
-                event.value,
-                elapsed,
-                timeout,
+                timeout.event.value,
+                timeout.elapsed,
+                timeout.timeout,
                 STALLED_TRAINING_EXIT_CODE,
             )
             if self._diagnostic is not None:
                 assert self._diagnostic_timeout is not None
                 diagnostic = threading.Thread(
                     target=self._run_diagnostic,
-                    args=(ProgressTimeout(event, elapsed, timeout),),
+                    args=(timeout,),
                     name="levanter-progress-diagnostic",
                     daemon=True,
                 )
