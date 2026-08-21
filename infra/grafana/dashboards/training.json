@@ -1,7 +1,7 @@
 {
   "uid": "marin-training",
   "title": "Training run",
-  "description": "The status of one training run, from the telemetry_v1 stream its JAX process 0 reports. The run selector lists every Levanter run that reported a step inside the dashboard window, hero runs first, so it opens on the current hero run. Runs are identified by run_id alone: a run that moves between clusters keeps one set of series here. Use the Runs dashboard to compare runs against each other.",
+  "description": "The status of one training run. The run selector lists Levanter runs that reported a step in the dashboard window. Hero runs come first. The current hero run is the initial selection. Run identity uses run_id, so a run keeps one series set across clusters. Use the Runs dashboard to compare runs.",
   "tags": [
     "marin",
     "generated"
@@ -1361,6 +1361,578 @@
             {
               "selector": "limit_gib",
               "text": "limit",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Execution health",
+      "description": "Attempt age starts at the first phase sample for the current execution. Orange marks the 45-minute initialization alert. Red marks the 80-minute startup-watchdog deadline. Task counts use the newest Iris root state from the last 15 minutes. Retry events use retained Iris controller decisions from the last seven days.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 40
+      },
+      "timeFrom": "90m",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "attempt age"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 2700
+                    },
+                    {
+                      "color": "red",
+                      "value": 4800
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "task state age"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 90
+                    },
+                    {
+                      "color": "red",
+                      "value": 300
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "since last retry"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH phase AS (SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS origin_cluster, job_id, execution_uid, timestamp_ms, seq FROM \"telemetry_v1\" WHERE service = 'levanter' AND name = 'phase' AND run_id IN (${run:sqlstring}) AND job_id IS NOT NULL AND execution_uid IS NOT NULL AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)), ranked AS (SELECT origin_cluster, job_id, execution_uid, timestamp_ms, seq, ROW_NUMBER() OVER (ORDER BY timestamp_ms DESC, seq DESC, origin_cluster, job_id, execution_uid) AS rn FROM phase) SELECT (CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) - MIN(phase.timestamp_ms)) / 1000.0 AS attempt_age_seconds FROM phase JOIN ranked ON phase.origin_cluster = ranked.origin_cluster AND phase.job_id = ranked.job_id AND phase.execution_uid = ranked.execution_uid WHERE ranked.rn = 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "attempt_age_seconds",
+              "text": "attempt age",
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "refId": "B",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH roots AS (SELECT ts, pending, assigned, building, running, ROW_NUMBER() OVER (ORDER BY ts DESC, root_job_id DESC) AS rn FROM \"iris.task_state\" WHERE root_job_id LIKE CONCAT('%/', ${run:sqlstring}, '-coord%') AND ts >= now() - INTERVAL '15 minutes') SELECT pending + assigned + building + running AS active_tasks, running, pending, assigned, building, (CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) - CAST(EXTRACT(EPOCH FROM ts) * 1000 AS BIGINT)) / 1000.0 AS task_state_age_seconds FROM roots WHERE rn = 1"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "active_tasks",
+              "text": "active tasks",
+              "type": "number"
+            },
+            {
+              "selector": "running",
+              "text": "running",
+              "type": "number"
+            },
+            {
+              "selector": "pending",
+              "text": "pending",
+              "type": "number"
+            },
+            {
+              "selector": "assigned",
+              "text": "assigned",
+              "type": "number"
+            },
+            {
+              "selector": "building",
+              "text": "building",
+              "type": "number"
+            },
+            {
+              "selector": "task_state_age_seconds",
+              "text": "task state age",
+              "type": "number"
+            }
+          ]
+        },
+        {
+          "refId": "C",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT COUNT(*) AS retry_events, (CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) - CAST(EXTRACT(EPOCH FROM MAX(ts)) * 1000 AS BIGINT)) / 1000.0 AS since_last_retry FROM \"iris.task_event\" WHERE task_id LIKE CONCAT('%/', ${run:sqlstring}, '-coord%/%') AND reason IN ('TaskRetryScheduled', 'CoscheduledSiblingRequeued') AND ts >= now() - INTERVAL '7 days'"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "retry_events",
+              "text": "retry events (7d)",
+              "type": "number"
+            },
+            {
+              "selector": "since_last_retry",
+              "text": "since last retry",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Token drops",
+      "description": "The total, sender, and receiver token-drop fractions. The hero monitor warns when the total fraction is above 5%.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 48
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "5% limit"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'moe_drop_fraction' THEN value END) AS drop_fraction, AVG(CASE WHEN name = 'moe_sender_drop_fraction' THEN value END) AS sender_drop_fraction, AVG(CASE WHEN name = 'moe_receiver_drop_fraction' THEN value END) AS receiver_drop_fraction, CAST(0.05 AS DOUBLE) AS alert_threshold FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('moe_drop_fraction', 'moe_sender_drop_fraction', 'moe_receiver_drop_fraction') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "drop_fraction",
+              "text": "total drop",
+              "type": "number"
+            },
+            {
+              "selector": "sender_drop_fraction",
+              "text": "sender drop",
+              "type": "number"
+            },
+            {
+              "selector": "receiver_drop_fraction",
+              "text": "receiver drop",
+              "type": "number"
+            },
+            {
+              "selector": "alert_threshold",
+              "text": "5% limit",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Router health",
+      "description": "Routing entropy and router-bias bounds. The hero monitor warns below 5.92 entropy or above a bias magnitude of 400.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 48
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bias max"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bias min"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "5.92 minimum"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "+400 limit"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "-400 limit"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'train_router_routing_entropy_mean' THEN value END) AS routing_entropy, MAX(CASE WHEN name = 'train_router_bias_max' THEN value END) AS router_bias_max, MIN(CASE WHEN name = 'train_router_bias_min' THEN value END) AS router_bias_min, CAST(5.92 AS DOUBLE) AS entropy_minimum, CAST(400.0 AS DOUBLE) AS bias_upper_limit, CAST(-400.0 AS DOUBLE) AS bias_lower_limit FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('train_router_routing_entropy_mean', 'train_router_bias_max', 'train_router_bias_min') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "routing_entropy",
+              "text": "routing entropy",
+              "type": "number"
+            },
+            {
+              "selector": "router_bias_max",
+              "text": "bias max",
+              "type": "number"
+            },
+            {
+              "selector": "router_bias_min",
+              "text": "bias min",
+              "type": "number"
+            },
+            {
+              "selector": "entropy_minimum",
+              "text": "5.92 minimum",
+              "type": "number"
+            },
+            {
+              "selector": "bias_upper_limit",
+              "text": "+400 limit",
+              "type": "number"
+            },
+            {
+              "selector": "bias_lower_limit",
+              "text": "-400 limit",
               "type": "number"
             }
           ]
