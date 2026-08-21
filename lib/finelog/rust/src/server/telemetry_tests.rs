@@ -719,9 +719,15 @@ async fn semantic_groups_route_to_children_and_roll_up() {
         &[1, 2]
     );
 
-    let telemetry_schema = store
+    let mut telemetry_schema = store
         .get_table_schema("telemetry_v1.levanter.core")
         .unwrap();
+    telemetry_schema.columns.rotate_left(5);
+    telemetry_schema.columns.push(Column::new(
+        "alert_tag",
+        ColumnType::COLUMN_TYPE_STRING,
+        true,
+    ));
     store
         .register_table(
             "telemetry_v1.client_defined",

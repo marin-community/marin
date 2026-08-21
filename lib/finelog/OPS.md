@@ -164,10 +164,12 @@ physical table.
 
 Clients using Finelog's generic table registration may add another semantically
 named `telemetry_v1.*` child. A client-defined child participates in the rollup
-when its schema is union-compatible with the other telemetry children. If any
-child has an incompatible schema, Finelog leaves the composite `telemetry_v1`
-view unavailable for that query while direct child and unrelated namespace
-queries continue to work; it never returns a silently partial rollup.
+when its columns have compatible types. Finelog aligns columns by name and fills
+missing nullable fields with nulls so additive schema evolution and column-order
+differences remain queryable. A type conflict or missing required field leaves
+the composite `telemetry_v1` view unavailable for that query while direct child
+and unrelated namespace queries continue to work; Finelog never returns a
+silently partial rollup.
 
 The child retention budgets sum to 50 GiB: 20 GiB for Levanter core, 10 GiB
 each for Levanter extra and node-agent telemetry, 6 GiB for vLLM, 2 GiB for Iris

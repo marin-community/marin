@@ -31,13 +31,13 @@ use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
 use datafusion::catalog::TableProvider;
 use datafusion::common::config::Dialect;
-use datafusion::common::TableReference;
+use datafusion::common::{ScalarValue, TableReference};
 use datafusion::datasource::ViewTable;
 use datafusion::error::Result as DFResult;
 use datafusion::execution::memory_pool::GreedyMemoryPool;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::logical_expr::LogicalPlanBuilder;
+use datafusion::logical_expr::{col, lit, LogicalPlan, LogicalPlanBuilder};
 use datafusion::prelude::{SQLOptions, SessionConfig, SessionContext};
 
 use crate::query::provider::NamespaceProvider;
@@ -61,6 +61,12 @@ pub fn is_telemetry_namespace(namespace: &str) -> bool {
 struct QueryRegistrations {
     names: Vec<String>,
     aggregate_sources: HashMap<String, exact_aggregate::AggregateSource>,
+}
+
+struct RollupColumn {
+    name: String,
+    data_type: DataType,
+    required: bool,
 }
 
 /// Floor for the query memory pool so a tiny/misreported cgroup can't strangle
@@ -535,31 +541,16 @@ async fn register_query_providers(
         )?;
         names.push(registered_name);
     }
-    if let Some(first) = telemetry_sources.first() {
-        let mut rollup = ctx
-            .table(TableReference::bare(first.as_str()))
-            .await?
-            .into_unoptimized_plan();
-        let mut compatible = true;
-        for source in telemetry_sources.iter().skip(1) {
-            let child = ctx
+    if !telemetry_sources.is_empty() {
+        let mut plans = Vec::with_capacity(telemetry_sources.len());
+        for source in telemetry_sources {
+            let plan = ctx
                 .table(TableReference::bare(source.as_str()))
                 .await?
                 .into_unoptimized_plan();
-            match LogicalPlanBuilder::from(rollup.clone()).union(child) {
-                Ok(builder) => rollup = builder.build()?,
-                Err(error) => {
-                    tracing::warn!(
-                        source,
-                        %error,
-                        "telemetry rollup disabled because a child schema is incompatible"
-                    );
-                    compatible = false;
-                    break;
-                }
-            }
+            plans.push((source, plan));
         }
-        if compatible {
+        if let Some(rollup) = aligned_telemetry_rollup(plans)? {
             ctx.register_table(
                 TableReference::bare(TELEMETRY_ROLLUP_NAMESPACE),
                 Arc::new(ViewTable::new(rollup, None)),
@@ -571,6 +562,82 @@ async fn register_query_providers(
         names,
         aggregate_sources,
     })
+}
+
+fn aligned_telemetry_rollup(sources: Vec<(String, LogicalPlan)>) -> DFResult<Option<LogicalPlan>> {
+    if sources.is_empty() {
+        return Ok(None);
+    }
+    let mut columns = Vec::<RollupColumn>::new();
+    let mut column_indices = HashMap::<String, usize>::new();
+    for (source, plan) in &sources {
+        for field in plan.schema().fields() {
+            if let Some(index) = column_indices.get(field.name()).copied() {
+                let column = &mut columns[index];
+                if column.data_type != *field.data_type() {
+                    tracing::warn!(
+                        source,
+                        column = field.name(),
+                        expected = ?column.data_type,
+                        actual = ?field.data_type(),
+                        "telemetry rollup disabled because a child column type is incompatible"
+                    );
+                    return Ok(None);
+                }
+                column.required |= !field.is_nullable();
+                continue;
+            }
+            column_indices.insert(field.name().clone(), columns.len());
+            columns.push(RollupColumn {
+                name: field.name().clone(),
+                data_type: field.data_type().clone(),
+                required: !field.is_nullable(),
+            });
+        }
+    }
+
+    let mut aligned = Vec::with_capacity(sources.len());
+    for (source, plan) in sources {
+        if let Some(column) = columns.iter().find(|column| {
+            column.required && !plan.schema().has_column_with_unqualified_name(&column.name)
+        }) {
+            tracing::warn!(
+                source,
+                column = column.name,
+                "telemetry rollup disabled because a child lacks a required column"
+            );
+            return Ok(None);
+        }
+        let expressions = columns
+            .iter()
+            .map(|column| {
+                if plan.schema().has_column_with_unqualified_name(&column.name) {
+                    return Ok(col(&column.name).alias(&column.name));
+                }
+                Ok(lit(ScalarValue::try_new_null(&column.data_type)?).alias(&column.name))
+            })
+            .collect::<DFResult<Vec<_>>>()?;
+        let plan = LogicalPlanBuilder::from(plan)
+            .project(expressions)?
+            .build()?;
+        aligned.push((source, plan));
+    }
+
+    let (_, mut rollup) = aligned.remove(0);
+    for (source, child) in aligned {
+        match LogicalPlanBuilder::from(rollup).union(child) {
+            Ok(builder) => rollup = builder.build()?,
+            Err(error) => {
+                tracing::warn!(
+                    source,
+                    %error,
+                    "telemetry rollup disabled because aligned child schemas are incompatible"
+                );
+                return Ok(None);
+            }
+        }
+    }
+    Ok(Some(rollup))
 }
 
 /// Read `log`-namespace rows matching `where_parts`, ordered by seq.
