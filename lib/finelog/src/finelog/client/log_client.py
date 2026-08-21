@@ -93,6 +93,20 @@ class FlushResult(StrEnum):
     TIMEOUT = "timeout"
 
 
+@dataclass(frozen=True)
+class NamespaceInfo:
+    """Registered namespace schema and current storage statistics."""
+
+    namespace: str
+    schema: Schema
+    row_count: int
+    byte_size: int
+    min_seq: int
+    max_seq: int
+    segment_count: int
+    storage_policy: StoragePolicy
+
+
 def _format_exc_summary(exc: BaseException) -> str:
     if isinstance(exc, ConnectError):
         # The server detail (e.g. "column \"ts\": nullable mismatch
@@ -474,6 +488,7 @@ class Table:
 
 
 _ClientT = TypeVar("_ClientT")
+_ResponseT = TypeVar("_ResponseT")
 
 
 class LogClient:
@@ -597,6 +612,30 @@ class LogClient:
                 f"(add a LIMIT or pass a higher max_rows)"
             )
         return result
+
+    def list_namespaces(self) -> list[NamespaceInfo]:
+        """Return every queryable namespace with its schema and storage statistics."""
+        response = self._stats_rpc(lambda client: client.list_namespaces(stats_pb2.ListNamespacesRequest()))
+        return [
+            NamespaceInfo(
+                namespace=info.namespace,
+                schema=schema_from_proto(info.schema),
+                row_count=info.row_count,
+                byte_size=info.byte_size,
+                min_seq=info.min_seq,
+                max_seq=info.max_seq,
+                segment_count=info.segment_count,
+                storage_policy=StoragePolicy.from_proto(info.storage_policy),
+            )
+            for info in response.namespaces
+        ]
+
+    def get_table_schema(self, namespace: str) -> Schema:
+        """Return the registered schema for ``namespace`` without creating a Table handle."""
+        response = self._stats_rpc(
+            lambda client: client.get_table_schema(stats_pb2.GetTableSchemaRequest(namespace=namespace))
+        )
+        return schema_from_proto(response.schema)
 
     def flush(self, timeout: float | None = None) -> FlushResult:
         """Flush the ``log`` namespace's Table, if any."""
@@ -792,9 +831,14 @@ class LogClient:
             log_service_client.close()
 
     def _stats_query(self, sql: str) -> pa.Table:
+        response = self._stats_rpc(lambda client: client.query(stats_pb2.QueryRequest(sql=sql)))
+        reader = paipc.open_stream(pa.BufferReader(bytes(response.arrow_ipc)))
+        return reader.read_all()
+
+    def _stats_rpc(self, call: Callable[[StatsServiceClientSync], _ResponseT]) -> _ResponseT:
         client = self._get_stats_client()
         try:
-            response = client.query(stats_pb2.QueryRequest(sql=sql))
+            return call(client)
         except ConnectError as exc:
             if is_retryable_error(exc):
                 self._invalidate(_format_exc_summary(exc))
@@ -802,8 +846,6 @@ class LogClient:
         except (ConnectionError, OSError, TimeoutError) as exc:
             self._invalidate(_format_exc_summary(exc))
             raise
-        reader = paipc.open_stream(pa.BufferReader(bytes(response.arrow_ipc)))
-        return reader.read_all()
 
     def _stats_flush(self, namespace: str, batch: pa.RecordBatch) -> None:
         sink = io.BytesIO()
