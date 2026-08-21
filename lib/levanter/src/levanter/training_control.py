@@ -18,7 +18,7 @@ from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from typing import Generic, TypeVar, cast
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 import draccus
 import jax
@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 TRAINING_CONTROL_ENDPOINT = "training-control"
 _REDACTED_ENVIRONMENT_VARIABLES = ("IRIS_JOB_ENV", "IRIS_JOB_SETUP_SCRIPTS", "MARIN_PROVENANCE")
+_PROGRAMMATIC_ACTION_HEADER = "X-Levanter-Training-Control"
+_PROGRAMMATIC_ACTION_VALUE = "request-checkpoint"
 ConfigT = TypeVar("ConfigT")
 
 
@@ -134,10 +136,19 @@ class _TrainingDashboardRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self) -> None:
-        content_length = int(self.headers.get("Content-Length", "0"))
-        token = parse_qs(self.rfile.read(content_length).decode()).get("token", [""])[0]
-        if not hmac.compare_digest(token, self._action_token):
-            self.send_error(403)
+        path = urlsplit(self.path).path.rstrip("/")
+        if path == "/checkpoint":
+            if self.headers.get(_PROGRAMMATIC_ACTION_HEADER) != _PROGRAMMATIC_ACTION_VALUE:
+                self.send_error(403)
+                return
+        elif path == "":
+            content_length = int(self.headers.get("Content-Length", "0"))
+            token = parse_qs(self.rfile.read(content_length).decode()).get("token", [""])[0]
+            if not hmac.compare_digest(token, self._action_token):
+                self.send_error(403)
+                return
+        else:
+            self.send_error(404)
             return
 
         self._request_checkpoint()

@@ -360,7 +360,7 @@ class Trainer:
         self.hooks.run_hooks(info, force=force)
 
     def request_checkpoint(self) -> None:
-        """Request a permanent checkpoint after the current training step."""
+        """Request a temporary checkpoint after the current training step."""
         if self._checkpointer is None:
             raise RuntimeError("Checkpointing is not configured")
         self._checkpointer.request_checkpoint()

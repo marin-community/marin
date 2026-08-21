@@ -188,8 +188,17 @@ W&B receives metrics throughout training. The run name defaults to the `run_id` 
 `{prefix}/{name}/{version}/checkpoints/`.
 
 Iris shows a private `training-control` endpoint for Marin `train_lm` jobs. It contains the run ID,
-resolved Levanter configuration, and redacted process environment. Select **Save checkpoint** to write a permanent
-checkpoint after the current training step.
+resolved Levanter configuration, and redacted process environment. Select **Save checkpoint** to write a temporary
+checkpoint after the current training step. Manual saves use `temporary_base_path` when it is configured. Otherwise,
+they use the main checkpoint path. Temporary retention applies in both cases.
+
+An authenticated client can request the same checkpoint without loading the dashboard page first:
+
+```bash
+curl -X POST \
+  -H 'X-Levanter-Training-Control: request-checkpoint' \
+  https://iris.oa.dev/proxy/<training-control-endpoint>/checkpoint
+```
 
 ## Memory pressure
 

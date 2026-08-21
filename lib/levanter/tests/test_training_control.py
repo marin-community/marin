@@ -109,14 +109,37 @@ def test_training_dashboard_registers_redacted_status_page(monkeypatch, tmp_path
 
         metadata = json.loads((tmp_path / "checkpoints" / "step-1" / "metadata.json").read_text())
         assert metadata["step"] == 1
-        assert metadata["is_temporary"] is False
+        assert metadata["is_temporary"] is True
+
+        programmatic_request = Request(
+            registry.address + "/checkpoint",
+            data=b"",
+            headers={"X-Levanter-Training-Control": "request-checkpoint"},
+            method="POST",
+        )
+        with urlopen(programmatic_request, timeout=2) as response:
+            assert response.status == 202
+        checkpointer.on_step(tree={"value": jnp.array(2)}, step=2)
+        checkpointer.wait_until_finished()
+        programmatic_metadata = json.loads((tmp_path / "checkpoints" / "step-2" / "metadata.json").read_text())
+        assert programmatic_metadata["step"] == 2
+        assert programmatic_metadata["is_temporary"] is True
 
         with pytest.raises(HTTPError) as error:
             urlopen(Request(registry.address, data=b"token=invalid", method="POST"), timeout=2)
         assert error.value.code == 403
-        checkpointer.on_step(tree={"value": jnp.array(2)}, step=2)
+        with pytest.raises(HTTPError) as error:
+            urlopen(Request(registry.address + "/checkpoint", data=b"", method="POST"), timeout=2)
+        assert error.value.code == 403
+        with pytest.raises(HTTPError) as error:
+            urlopen(
+                Request(registry.address + "/unknown", data=urlencode({"token": token_match.group(1)}).encode()),
+                timeout=2,
+            )
+        assert error.value.code == 404
+        checkpointer.on_step(tree={"value": jnp.array(3)}, step=3)
         checkpointer.wait_until_finished()
-        assert [path.name for path in (tmp_path / "checkpoints").iterdir()] == ["step-1"]
+        assert not (tmp_path / "checkpoints" / "step-3").exists()
     assert not registry.active
 
 

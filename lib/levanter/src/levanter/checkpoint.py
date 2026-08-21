@@ -569,15 +569,15 @@ class Checkpointer:
         # we fix by having process 0 make the decision
         checkpoint_requested = self._consume_checkpoint_request()
         my_should_save = force or checkpoint_requested
-        my_save_permanent_ckpt = force or checkpoint_requested
+        my_save_permanent_ckpt = force
 
-        if not force and not checkpoint_requested:
+        if not force:
             current_every = self._get_current_step_save_interval(step)
             last_save_time = self._dt_now_injection() - self._last_save_time
             if current_every is not None and step % current_every == 0:
                 my_should_save = True
                 my_save_permanent_ckpt = True
-            elif self.save_interval and last_save_time >= self.save_interval:
+            elif not checkpoint_requested and self.save_interval and last_save_time >= self.save_interval:
                 my_should_save = True
                 my_save_permanent_ckpt = False
 
@@ -623,7 +623,7 @@ class Checkpointer:
             )
 
     def request_checkpoint(self) -> None:
-        """Request a permanent checkpoint on the next step."""
+        """Request a temporary checkpoint on the next step."""
         with self._checkpoint_request_lock:
             self._checkpoint_requested = True
 
