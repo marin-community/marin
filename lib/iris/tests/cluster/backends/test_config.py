@@ -31,12 +31,10 @@ from iris.cluster.config import (
     ScaleGroupConfig,
     ScaleGroupResources,
     SliceConfig,
-    SshConfig,
     WorkerConfig,
     WorkerProviderConfig,
     WorkerSettings,
     backend_attribute_sets,
-    build_ssh_command_config,
     config_to_dict,
     load_config,
     make_local_config,
@@ -513,89 +511,6 @@ scale_groups:
         assert "tpu_v5e_8" in autoscaler.groups
 
 
-class TestSshConfigMerging:
-    """Tests for SSH config merging from cluster defaults and per-group overrides."""
-
-    def test_uses_cluster_default_ssh_config(self):
-        """build_ssh_command_config returns cluster defaults when no group override."""
-
-        config = IrisClusterConfig()
-        config.defaults.ssh = SshConfig(
-            user="ubuntu",
-            key_file="~/.ssh/cluster_key",
-            impersonate_service_account="iris-controller@test-project.iam.gserviceaccount.com",
-            connect_timeout=Duration.from_seconds(60),
-        )
-
-        ssh_config = build_ssh_command_config(config)
-
-        assert ssh_config.user == "ubuntu"
-        assert ssh_config.key_file == "~/.ssh/cluster_key"
-        assert ssh_config.port == 22  # DEFAULT_SSH_PORT
-        assert ssh_config.impersonate_service_account == "iris-controller@test-project.iam.gserviceaccount.com"
-        assert ssh_config.connect_timeout.to_ms() == 60_000
-
-    def test_applies_per_group_ssh_overrides(self):
-        """build_ssh_command_config applies per-group SSH overrides for manual slice template."""
-        config = IrisClusterConfig()
-        config.defaults.ssh.user = "ubuntu"
-        config.defaults.ssh.key_file = "~/.ssh/cluster_key"
-
-        config.scale_groups["manual_group"] = ScaleGroupConfig(
-            name="manual_group",
-            slice_template=SliceConfig(
-                manual=ManualSliceConfig(
-                    hosts=["10.0.0.1"],
-                    ssh_user="admin",
-                    ssh_key_file="~/.ssh/group_key",
-                )
-            ),
-        )
-
-        ssh_config = build_ssh_command_config(config, group_name="manual_group")
-
-        assert ssh_config.user == "admin"
-        assert ssh_config.key_file == "~/.ssh/group_key"
-        assert ssh_config.port == 22
-
-    def test_uses_defaults_when_cluster_ssh_config_empty(self):
-        """build_ssh_command_config uses built-in defaults when cluster config empty."""
-
-        config = IrisClusterConfig()
-
-        ssh_config = build_ssh_command_config(config)
-
-        assert ssh_config.user == "root"
-        assert ssh_config.key_file == ""
-        assert ssh_config.port == 22
-        assert ssh_config.impersonate_service_account == ""
-        assert ssh_config.connect_timeout.to_ms() == 30_000
-
-    def test_validate_config_requires_gcp_service_accounts(self):
-        config = IrisClusterConfig(
-            name="test-cluster",
-            platform=PlatformConfig(gcp=GcpPlatformConfig(project_id="test-project")),
-            controller=ControllerVmConfig(gcp=GcpControllerConfig(zone="us-central1-a")),
-        )
-        config.defaults.worker.docker_image = "ghcr.io/marin-community/iris-worker:latest"
-
-        config.scale_groups["tpu"] = ScaleGroupConfig(
-            name="tpu",
-            num_vms=1,
-            resources=ScaleGroupResources(
-                device_type=AcceleratorType.TPU,
-                device_variant="v5litepod-4",
-                capacity_type=CapacityType.PREEMPTIBLE,
-            ),
-            slice_template=SliceConfig(
-                gcp=GcpSliceConfig(zone="us-central1-a", runtime_version="tpu-ubuntu2204-base"),
-            ),
-        )
-
-        with pytest.raises(ValueError, match=r"controller\.gcp\.service_account"):
-            validate_config(config)
-
-
 class TestLocalConfigTransformation:
     """Tests for make_local_config transformation."""
 
@@ -850,6 +765,30 @@ class TestConfigValidation:
         # would collide with the sentinel in the cluster-id namespace.
         with pytest.raises(ValueError, match="reserved as the federation"):
             validate_config(IrisClusterConfig(name=LOCAL_CLUSTER))
+
+    def test_validate_config_requires_gcp_service_accounts(self):
+        config = IrisClusterConfig(
+            name="test-cluster",
+            platform=PlatformConfig(gcp=GcpPlatformConfig(project_id="test-project")),
+            controller=ControllerVmConfig(gcp=GcpControllerConfig(zone="us-central1-a")),
+        )
+        config.defaults.worker.docker_image = "ghcr.io/marin-community/iris-worker:latest"
+
+        config.scale_groups["tpu"] = ScaleGroupConfig(
+            name="tpu",
+            num_vms=1,
+            resources=ScaleGroupResources(
+                device_type=AcceleratorType.TPU,
+                device_variant="v5litepod-4",
+                capacity_type=CapacityType.PREEMPTIBLE,
+            ),
+            slice_template=SliceConfig(
+                gcp=GcpSliceConfig(zone="us-central1-a", runtime_version="tpu-ubuntu2204-base"),
+            ),
+        )
+
+        with pytest.raises(ValueError, match=r"controller\.gcp\.service_account"):
+            validate_config(config)
 
     def test_rejects_missing_resources(self):
         config = IrisClusterConfig(name="test-cluster", scale_groups={"test": ScaleGroupConfig(name="test", num_vms=1)})

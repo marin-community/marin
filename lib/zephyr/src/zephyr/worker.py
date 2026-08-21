@@ -22,7 +22,7 @@ from zephyr.memory_store import (
     MemoryTableRegistration,
     MemoryTableStatsResult,
 )
-from zephyr.stage_io import ShardTask, StageRunner, TaskResult, ZephyrTaskResources, _stage_throughput
+from zephyr.stage_io import ShardTask, StageRunner, TaskResult, ZephyrTaskResources
 from zephyr.stats import (
     WORKER_STATS_INTERVAL,
     ZEPHYR_WORKER_MEM_CURRENT_KEY,
@@ -383,16 +383,10 @@ class ZephyrWorker:
 
     def _report_worker_iris_status(self) -> None:
         """Push worker status text to Iris for UI display. Called on each heartbeat."""
-
-        def build_md() -> tuple[str, str]:
-            stage = self._current_stage_name
-            stage_values = {k: e.value for k, e in self._last_reported_counters.items() if e.stage == stage}
-            throughput = _stage_throughput(stage_values, 1.0) if stage else None
-            if throughput is not None:
-                logger.info("[%s] [%s] throughput: %s", self._worker_id, stage, throughput)
-            return _format_worker_status_md(self._active_task_count, stage)
-
-        _push_iris_task_status(self._iris_status_limiter, build_md)
+        _push_iris_task_status(
+            self._iris_status_limiter,
+            lambda: _format_worker_status_md(self._active_task_count, self._current_stage_name),
+        )
 
     def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
         """Aggregate live counters from all active runners; return None if unchanged."""

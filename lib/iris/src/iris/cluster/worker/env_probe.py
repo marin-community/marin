@@ -489,14 +489,6 @@ class FixedEnvironmentProvider:
         return self._metadata
 
 
-class DefaultEnvironmentProvider:
-    """Default implementation that probes real system resources."""
-
-    def probe(self) -> job_pb2.WorkerMetadata:
-        hardware = probe_hardware()
-        return build_worker_metadata(hardware)
-
-
 def _read_net_dev_bytes() -> tuple[int, int]:
     """Read cumulative network bytes from /proc/net/dev, summing all non-loopback interfaces.
 
