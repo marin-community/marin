@@ -10,7 +10,9 @@ Native vLLM `/metrics` snapshots are exported directly to Finelog every 15 secon
 Run SQL from a Marin checkout:
 
 ```sh
-uv run finelog query marin "<SQL>" --format table
+uv run finelog query marin --format table <<'SQL'
+<SQL>
+SQL
 ```
 
 Use the federated `marin` hub unless a task specifically requires a cluster-local view.

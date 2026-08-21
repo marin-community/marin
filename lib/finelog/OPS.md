@@ -38,6 +38,30 @@ sets `client_url`:
 uv run finelog query marin 'SELECT * FROM "iris.profile" LIMIT 10'
 ```
 
+`query` prints JSONL by default. Pass a short query as one shell-quoted
+argument. Feed multiline SQL on stdin so SQL quotes do not need shell escaping:
+
+```bash
+uv run finelog query cw-us-east-08a <<'SQL'
+SELECT task_id, attempt_id, max(memory_peak_mb) AS peak_mib
+FROM "iris.task"
+WHERE task_id LIKE '/power/example/%'
+GROUP BY task_id, attempt_id
+ORDER BY peak_mib DESC
+SQL
+```
+
+List every namespace with its schema, index policy, retention overrides, and
+current storage statistics as JSONL. Fetch one schema as formatted JSON:
+
+```bash
+uv run finelog namespaces cw-us-east-08a
+uv run finelog schema cw-us-east-08a iris.task
+```
+
+Schema output includes `seq` under `implicit_columns`. Finelog assigns this
+column to every row; producers do not declare it, but SQL queries can select it.
+
 ## Diagnosing query latency
 
 Inspect the namespace before changing its policy or resetting it. Record its row

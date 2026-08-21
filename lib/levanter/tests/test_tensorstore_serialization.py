@@ -24,9 +24,10 @@ from levanter.checkpoint import load_checkpoint, save_checkpoint
 from levanter.checkpoint_manifest import CHECKPOINT_FORMAT_VERSION, manifest_path, read_manifest
 from levanter.models.gpt2 import Gpt2Mlp
 from levanter.tensorstore_serialization import (
+    TensorStoreReadConfig,
     TensorStoreWriteConfig,
     _capped_chunk_shape,
-    _HostStagingGate,
+    _HostByteBudget,
     _transfer_shard_to_pageable_host,
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
@@ -310,7 +311,7 @@ def test_staged_bytes_stay_admitted_until_their_write_is_released():
     """TensorStore holds a shard snapshot until the commit, so admission must outlive the copy."""
 
     async def scenario():
-        gate = _HostStagingGate(100)
+        gate = _HostByteBudget(100)
         await gate.acquire(60)
 
         queued = asyncio.create_task(gate.acquire(60))
@@ -336,6 +337,33 @@ def test_a_save_larger_than_the_staging_budget_rolls_through_it():
                 tmpdir, state, write_config=TensorStoreWriteConfig(max_staged_host_bytes=32 * 1024)
             )
             restored = tree_deserialize_leaves_tensorstore(tmpdir, {name: hax.zeros(A) for name in state})
+
+        for name, expected in state.items():
+            assert hax.all(restored[name] == expected)
+
+
+@pytest.mark.parametrize(
+    "arrays, budget",
+    [
+        # One shard larger than the whole budget: it must be admitted anyway, or the read deadlocks.
+        (1, 1),
+        # Eight 16 KiB arrays through a budget admitting about two: the read rolls through it.
+        (8, 32 * 1024),
+    ],
+)
+def test_a_restore_completes_whatever_the_read_budget_admits(arrays, budget):
+    """Concurrent reads stay bounded by the budget and still return every array intact."""
+    with use_test_mesh():
+        A = hax.Axis("A", 4096)
+        state = {f"w{i}": hax.full(A, float(i)) for i in range(arrays)}
+
+        with TemporaryDirectory() as tmpdir:
+            tree_serialize_leaves_tensorstore(tmpdir, state)
+            restored = tree_deserialize_leaves_tensorstore(
+                tmpdir,
+                {name: hax.zeros(A) for name in state},
+                read_config=TensorStoreReadConfig(max_in_flight_bytes=budget),
+            )
 
         for name, expected in state.items():
             assert hax.all(restored[name] == expected)

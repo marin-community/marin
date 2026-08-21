@@ -1,0 +1,249 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Time a hero checkpoint save and restore on one rack.
+
+Builds the hero train state, writes it to a one-day temporary prefix, and reads it back into
+the same exemplar a resume restores into -- offloaded optimizer state and FP32 pinned-host
+master params included. It trains nothing, so a run measures the checkpoint paths alone.
+
+The save timing is what a training step is blocked for. The first read is the only one that
+can miss the node-local cache.
+
+Dispatch needs an Iris task to submit from, so launch it as a coordinator job:
+
+    iris --config lib/iris/config/marin.yaml job run --no-wait \\
+        --enable-extra-resources --target-cluster cw-us-east-08a --priority production \\
+        --cpu 2 --memory 8GB --disk 32GB --job-name restore-bench-coord \\
+        -- python -m experiments.grug.moe_hero_ep.restore_benchmark --run-id restore-bench-1
+"""
+
+import dataclasses
+import gc
+import logging
+import time
+from dataclasses import dataclass, field
+
+import click
+import equinox
+import jax
+import jax.experimental.array_serialization.serialization as array_ser
+import jmp
+from fray.cluster import ResourceConfig
+from haliax.jax_utils import is_jax_array_like
+from haliax.partitioning import set_mesh
+from jax.experimental import multihost_utils
+from levanter.checkpoint import save_checkpoint
+from levanter.grug.sharding import compact_grug_mesh
+from levanter.optim.config import OptimizerConfig
+from levanter.tensorstore_serialization import (
+    TensorStoreReadConfig,
+    TensorStoreWriteConfig,
+    tree_deserialize_leaves_tensorstore,
+)
+from levanter.tracker.telemetry import TelemetryConfig
+from levanter.trainer import TrainerConfig
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.storage_path import prefix_join
+
+from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
+from experiments.grug.moe_hero_ep.launch_mfu_test import (
+    HERO_EP_BATCH_SIZE,
+    HERO_EP_EXPERT_AXIS_SIZE,
+    HERO_EP_NODES,
+    HERO_GPUS_PER_NODE,
+    HERO_MIXED_PRECISION,
+)
+from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
+from experiments.grug.moe_hero_ep.train import (
+    MasterParamMode,
+    _apply_hero_ep_runtime_defaults,
+    initial_state,
+    restore_template_from,
+)
+
+logger = logging.getLogger(__name__)
+
+# The hero's own schedule length, so this pytree matches the one a hero resume restores into.
+HERO_SCHEDULE_STEPS = 390_251
+QB_HIST_BINS = 10_000
+CHECKPOINT_TTL_DAYS = 1
+GIB = 1024**3
+
+
+@dataclass(frozen=True)
+class RestoreBenchmarkConfig:
+    """What to restore, into what shape, and how many times."""
+
+    checkpoint_path: str
+    model: GrugModelConfig
+    optimizer: OptimizerConfig
+    trainer: TrainerConfig
+    read: TensorStoreReadConfig = field(default_factory=TensorStoreReadConfig)
+    write: TensorStoreWriteConfig = field(default_factory=TensorStoreWriteConfig)
+    repeats: int = 2
+    replica_axis_size: int = 1
+
+
+def _hero_state(config: RestoreBenchmarkConfig, mesh):
+    """The hero train state, offloaded exactly as a hero run builds it."""
+    optimizer = config.optimizer.build(config.trainer.num_train_steps)
+
+    @jax.jit
+    def build(key):
+        return initial_state(
+            config.model,
+            optimizer=optimizer,
+            mp=config.trainer.mp,
+            key=key,
+            ema_beta=None,
+            offload_opt_state=True,
+            master_param_mode=MasterParamMode.FP32_PINNED_HOST,
+        )
+
+    with set_mesh(mesh):
+        return build(jax.random.PRNGKey(config.trainer.seed))
+
+
+def _time_one_restore(config: RestoreBenchmarkConfig, template, mesh, attempt: int) -> None:
+    """Restore the checkpoint once and log the fleet-wide elapsed seconds."""
+    serializable, _ = equinox.partition(template, is_jax_array_like)
+    multihost_utils.sync_global_devices(f"restore-start-{attempt}")
+    started = time.time()
+    restored = tree_deserialize_leaves_tensorstore(
+        config.checkpoint_path, serializable, mesh=mesh, read_config=config.read
+    )
+    jax.block_until_ready(restored)
+    multihost_utils.sync_global_devices(f"restore-done-{attempt}")
+    elapsed = time.time() - started
+
+    jax.tree.map(lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) else None, restored)
+    del restored
+    gc.collect()
+    logger.info(
+        "RESULT attempt=%d seconds=%.1f budget=%.0fGiB requests=%d",
+        attempt,
+        elapsed,
+        config.read.max_in_flight_bytes / GIB,
+        config.read.request_concurrency,
+    )
+
+
+def _run_restore_benchmark_local(config: RestoreBenchmarkConfig) -> None:
+    """Entry point that runs on every rank of the benchmark job."""
+    config.trainer.initialize()
+    mesh = compact_grug_mesh(
+        expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
+        replica_axis_size=config.replica_axis_size,
+    )
+    state = _hero_state(config, mesh)
+    with set_mesh(mesh):
+        # A hero's rolling temporary checkpoint is pruned as soon as the next one commits, and
+        # a read racing that deletion fails on a zero-length OCDBT shard, so own the write.
+        # Handed no manager, `save_checkpoint` joins the commits itself; a training loop
+        # returns once its data is copied out. Only `blocked` is time a training step loses.
+        manager = array_ser.GlobalAsyncCheckpointManager()
+        multihost_utils.sync_global_devices("save-start")
+        started = time.time()
+        save_checkpoint(
+            state,
+            step=0,
+            checkpoint_path=config.checkpoint_path,
+            manager=manager,
+            is_temporary=True,
+            write_config=config.write,
+        )
+        blocked = time.time() - started
+        manager.wait_until_finished()
+        committed = time.time() - started
+        multihost_utils.sync_global_devices("save-done")
+        logger.info(
+            "RESULT save blocked=%.1fs committed=%.1fs stage_budget=%.0fGiB",
+            blocked,
+            committed,
+            config.write.max_staged_host_bytes / GIB,
+        )
+        template = restore_template_from(state)
+        for attempt in range(config.repeats):
+            _time_one_restore(config, template, mesh, attempt)
+
+
+@click.command()
+@click.option("--run-id", required=True, help="Run identifier for the benchmark job name.")
+@click.option(
+    "--dp-racks",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="GB200 racks to spread the restore across, at 16 nodes per rack.",
+)
+@click.option("--repeats", type=click.IntRange(min=1), default=2, show_default=True, help="Restores to time.")
+@click.option(
+    "--budget-gib",
+    type=click.IntRange(min=1),
+    default=TensorStoreReadConfig.max_in_flight_bytes // GIB,
+    show_default=True,
+    help="Host memory a process may hold in shards awaiting transfer. 48 OOM-kills a GB200 node.",
+)
+@click.option(
+    "--stage-gib",
+    type=click.IntRange(min=1),
+    default=TensorStoreWriteConfig.max_staged_host_bytes // GIB,
+    show_default=True,
+    help="Host memory a process may hold in staged snapshots. A save blocks training until its "
+    "whole share has been admitted, so a share above this waits on commits.",
+)
+@click.option(
+    "--requests",
+    type=click.IntRange(min=1),
+    default=TensorStoreReadConfig.request_concurrency,
+    show_default=True,
+    help="Concurrent object-store requests.",
+)
+def main(run_id: str, dp_racks: int, repeats: int, budget_gib: int, stage_gib: int, requests: int) -> None:
+    batch_size = HERO_EP_BATCH_SIZE * dp_racks
+    model, optimizer = build_hero_configs(num_train_steps=HERO_SCHEDULE_STEPS, batch_size=batch_size)
+    config = RestoreBenchmarkConfig(
+        checkpoint_path=prefix_join(
+            marin_temp_bucket(ttl_days=CHECKPOINT_TTL_DAYS, prefix=f"restore-benchmark/{run_id}"), "checkpoint"
+        ),
+        model=dataclasses.replace(model, qb_estimator=QbEstimator.HIST, qb_hist_bins=QB_HIST_BINS),
+        optimizer=optimizer,
+        trainer=TrainerConfig(
+            id=run_id,
+            seed=0,
+            train_batch_size=batch_size,
+            num_train_steps=HERO_SCHEDULE_STEPS,
+            mp=jmp.get_policy(HERO_MIXED_PRECISION),
+            tracker=TelemetryConfig(),
+            use_explicit_mesh_axes=True,
+            require_accelerator=True,
+        ),
+        read=TensorStoreReadConfig(max_in_flight_bytes=budget_gib * GIB, request_concurrency=requests),
+        write=TensorStoreWriteConfig(max_staged_host_bytes=stage_gib * GIB),
+        repeats=repeats,
+        replica_axis_size=dp_racks,
+    )
+
+    _apply_hero_ep_runtime_defaults(inline_watch_enabled=False, processes_per_task=HERO_GPUS_PER_NODE)
+    dispatch_grug_training_run(
+        run_id=run_id,
+        config=config,
+        local_entrypoint=_run_restore_benchmark_local,
+        resources=ResourceConfig.with_gpu(
+            "GB200",
+            count=HERO_GPUS_PER_NODE,
+            cpu=120,
+            ram="890g",
+            disk="1t",
+            replicas=HERO_EP_NODES * dp_racks,
+        ),
+        processes_per_task=HERO_GPUS_PER_NODE,
+        max_retries_failure=0,
+        max_task_failures=0,
+    )
+
+
+if __name__ == "__main__":
+    main()
