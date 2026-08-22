@@ -764,6 +764,19 @@ class Transformer(eqx.Module):
 
         # Short layers: sliding window. Long layers (every 4th + last): full causal.
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        # Match segment_id shardings to the (Q on context, KV replicated) split
+        # that CausalSelfAttention applies to q/k/v before splash. The splash
+        # kernel reads each shard's segment_ids at per-shard shape; if Q is
+        # context-sharded but its segment_ids arrive seq-replicated (shape
+        # ``(S,)`` instead of ``(S/context,)``), splash rejects it. When
+        # context_axis_size == 1 both spec sides fold to ``None`` and behavior
+        # matches the pre-CP path.
+        if segment_ids is not None:
+            q_seg_raw, kv_seg_raw = segment_ids
+            batch_axes = _BATCH_AXES if q_seg_raw.ndim == 2 else None
+            q_seg_spec = P(batch_axes, _seq_axis()) if q_seg_raw.ndim == 2 else P(_seq_axis())
+            kv_seg_spec = P(batch_axes, None) if kv_seg_raw.ndim == 2 else P(None)
+            segment_ids = (reshard(q_seg_raw, q_seg_spec), reshard(kv_seg_raw, kv_seg_spec))
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
