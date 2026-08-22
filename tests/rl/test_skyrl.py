@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import dataclasses
+import io
 import json
 import subprocess
+import sys
 from dataclasses import asdict
 from pathlib import Path
-from typing import cast
+from typing import IO, cast
 
 import pytest
 from marin.evaluation.model_config import ModelConfig, ResourceHint
@@ -36,6 +38,7 @@ from marin.rl.skyrl import (
     run_skyrl,
     skyrl_step,
 )
+from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.training.training import LevanterCheckpoint
 
 from experiments.evaluation.pipeline import eval_step
@@ -56,6 +59,28 @@ def _data_step() -> ArtifactStep[Artifact]:
         "2026.08.01",
         "s3://test/iceball-gsm8k",
     )
+
+
+class _FakeLauncherProcess:
+    """A launcher subprocess: its terminal response lands in the caller's file, its logs on stderr."""
+
+    def __init__(self, *, response: str, logs: str = "", returncode: int = 1, stdout: IO[str] | None = None) -> None:
+        if stdout is not None:
+            stdout.write(response)
+        self.stderr = io.StringIO(logs)
+        self.returncode = returncode
+
+    def wait(self) -> int:
+        return self.returncode
+
+    def kill(self) -> None:
+        return None
+
+    def __enter__(self) -> _FakeLauncherProcess:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
 
 
 def _role_plan() -> SkyRLRolePlan:
@@ -301,12 +326,12 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
 
     launch_envelopes = []
 
-    def fake_run(command, **_kwargs) -> subprocess.CompletedProcess[str]:
+    def fake_popen(command, **_kwargs) -> _FakeLauncherProcess:
         request_path = command[command.index("--request") + 1]
         launch_envelopes.append(json.loads(Path(request_path).read_text()))
-        return subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(response))
+        return _FakeLauncherProcess(response=json.dumps(response), returncode=0, stdout=_kwargs["stdout"])
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
 
     model = run_skyrl(
         SkyRLRunConfig(
@@ -324,3 +349,66 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
         "profile": SkyRLRuntimeProfile.FSDP.value,
     }
     assert launch_envelopes[0]["execution"]["job_name"] == "checkpoints-iceball-rl-2026.08.01-attempt-1"
+
+
+def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A launcher that dies before printing its terminal response must still say why."""
+
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda command, **_kwargs: _FakeLauncherProcess(response="", logs="entrypoint must be a registered name\n"),
+    )
+    step = skyrl_step(_spec(), _execution())
+    config = step.build_config(
+        StepContext.for_run(
+            output_path="s3://durable/users/alice/tests/iceball-rl/2026.08.01",
+            prefix="s3://durable",
+            runtime_args=step.runtime_args,
+            deps=step.deps,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="entrypoint must be a registered name"):
+        run_skyrl(config)
+
+
+def test_launcher_logs_reach_stderr_while_the_run_is_live(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Buffering the launcher's logs until it exits would silence a multi-hour run."""
+    observed = tmp_path / "observed"
+
+    class MarkFirstWrite:
+        def write(self, text: str) -> int:
+            observed.touch()
+            return len(text)
+
+        def flush(self) -> None:
+            return None
+
+    # The child reports whether the parent had already forwarded its line while it was still
+    # running, so an implementation that replays stderr after exit fails here.
+    child = (
+        "import pathlib, sys, time\n"
+        "marker = pathlib.Path(sys.argv[1])\n"
+        "sys.stderr.write('launcher line\\n')\n"
+        "sys.stderr.flush()\n"
+        "deadline = time.monotonic() + 5\n"
+        "while time.monotonic() < deadline and not marker.exists():\n"
+        "    time.sleep(0.01)\n"
+        "sys.stdout.write('saw' if marker.exists() else 'missed')\n"
+    )
+    monkeypatch.setattr(sys, "stderr", MarkFirstWrite())
+
+    completed = run_launcher_for_test([sys.executable, "-c", child, str(observed)])
+
+    assert completed.stdout == "saw"
+    assert "launcher line" in completed.stderr
+
+
+def test_launcher_survives_undecodable_bytes_on_stderr() -> None:
+    """Native CUDA and NCCL layers emit non-UTF-8 bytes; strict decoding would wedge the run."""
+    completed = run_launcher_for_test(
+        [sys.executable, "-c", "import sys; sys.stderr.buffer.write(b'\\xff bad\\n'); sys.exit(4)"]
+    )
+
+    assert completed.returncode == 4
