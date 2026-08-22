@@ -7,3 +7,4 @@ ra2a-tune-i06-lhs	266e696369	2026.08.21.22	ragged_all_to_all	synthetic	disabled	
 ra2a-tune-i06b-lhs-ov1	04ba1e6d1b	2026.08.21.23	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-tune-i06c-lhs-mem	178b638043	2026.08.21.24	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-tune-i07-symctas	5d1987030d	2026.08.21.25	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
+ra2a-tune-i08-slop87	3351bee63a	2026.08.21.26	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
