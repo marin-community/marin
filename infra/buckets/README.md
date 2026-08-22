@@ -63,14 +63,17 @@ curl -fsS \
   -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" | jq .result.rules
 ```
 
-The declared policy preserves seven-day incomplete-multipart cleanup and the nine
+The declared R2 policy preserves seven-day incomplete-multipart cleanup and the nine
 `tmp/ttl=Nd/` expiration prefixes from `config/marin.yaml`.
 
-CoreWeave bucket access policies deny every principal the `s3:DeleteObject` and
-`s3:DeleteObjectVersion` actions under `marin/grug/hero-*`. This protects permanent hero run
-checkpoints while leaving other runs and temporary checkpoint staging paths deletable. Before the
-first policy update, audit each bucket's live access policy; Pulumi replaces the complete bucket
-policy.
+CoreWeave bucket lifecycle configurations apply the same nine expiration prefixes and abort
+incomplete multipart uploads after seven days.
+
+CoreWeave bucket access policies preserve S3 access for principals in the Open Athena organization
+and deny every principal the `s3:DeleteObject` and `s3:DeleteObjectVersion` actions under
+`marin/grug/hero-*`. This protects permanent hero run checkpoints while leaving other runs and
+temporary checkpoint staging paths deletable. Before the first policy update, audit each bucket's
+live access policy; Pulumi replaces the complete bucket policy.
 
 ## Automation boundary
 
