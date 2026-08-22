@@ -390,7 +390,7 @@ iris rpc controller get-provider-status         # scheduling events, cluster cap
 iris cluster vm status                          # scale groups with slice counts
 ```
 
-Priority bands: `PRIORITY_BAND_INTERACTIVE` (default), `PRIORITY_BAND_PRODUCTION` (can preempt interactive), `PRIORITY_BAND_BATCH` (preemptible). See [`docs/priority-bands.md`](docs/priority-bands.md) for the user-facing guide on when to pick each band.
+Priority bands: `PRIORITY_BAND_SYSTEM` (admin-only Iris, Finelog, and hero work), `PRIORITY_BAND_PRODUCTION` (admin-only critical work), `PRIORITY_BAND_INTERACTIVE` (default), and `PRIORITY_BAND_BATCH` (opportunistic). CLI SYSTEM submissions require `--system-reason` containing `hero`, `finelog`, or `iris`. See [`docs/priority-bands.md`](docs/priority-bands.md).
 
 `get-scheduler-state`'s `running_buckets` is a **live DB projection** (tasks where
 `state=RUNNING AND current_worker_id IS NOT NULL`), not an independent in-memory set.
@@ -924,13 +924,13 @@ treat it as an explicit outage decision. Change one owner at a time and confirm
 that `CWActive` drops the blocker before continuing. Do not delete provider
 DaemonSets or use `kubectl drain --force`.
 
-Iris coordinator task PDBs follow the job's priority band. PRODUCTION uses
-`minAvailable: 1` and intentionally blocks voluntary eviction. INTERACTIVE and
-BATCH use `maxUnavailable: 1`; CoreWeave may evict those pods during a drain,
-and Iris records the disruption as `PREEMPTED` and retries it within the job's
-preemption budget. For a PRODUCTION blocker, follow the running-task procedure
-in the table above. Do not weaken its live PDB to recover a node without the
-job owner's approval.
+Iris coordinator task PDBs follow the job's priority band. SYSTEM and
+PRODUCTION use `minAvailable: 1` and intentionally block voluntary eviction.
+INTERACTIVE and BATCH use `maxUnavailable: 1`; CoreWeave may evict those pods
+during a drain, and Iris records the disruption as `PREEMPTED` and retries it
+within the job's preemption budget. For a SYSTEM or PRODUCTION blocker, follow
+the running-task procedure in the table above. Do not weaken its live PDB to
+recover a node without the job owner's approval.
 
 If a replacement remains Pending because no healthy node satisfies its required
 node affinity or pod anti-affinity, stop before deleting the original pod.
