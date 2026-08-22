@@ -174,3 +174,26 @@ author: power
   order across semantic children.
 - Next action: monitor PR #8571 and watch child namespaces populate as updated
   clients launch.
+
+### 2026-08-22 00:02 - legacy-client ingest roll-forward
+
+- Hypothesis: the empty Iris RPC panel after a controller restart from `main`
+  was caused by the server requiring the new per-record `group` field.
+- Commit Hash: `db84fb67d2`.
+- Command: post a version-1 main-format batch without `group` to `marin-dev`,
+  query its batch ID through `telemetry_v1`, then promote the same digest with
+  `safe_deploy.py rollout marin --no-build`.
+- Config: release image
+  `ghcr.io/marin-community/finelog@sha256:35ebffdd85ae7a90ed1dd8de3312456a4658b2a990049d77e05da27223264b0f`;
+  rollback target `sha256:3e2e2c4d19871801df0dc73fa6e7df86bdd10fef8077d5e3e1e62e4991032d2c`.
+- Result: the required `TelemetryRecord.group` rejected legacy batches between
+  the initial production rollout at 23:37 UTC and the fixed rollout at 00:02
+  UTC. The roll-forward routes missing groups to the physical legacy parent and
+  grouped records to semantic children. The exact production dashboard filter
+  returned 650 local RPC rows and 358 local proxy rows, latest at 00:02:34 UTC.
+- Interpretation: namespace migrations must preserve the prior HTTP envelope
+  until all best-effort clients have rolled; HTTP 4xx batches are not retried
+  after rejection and cannot be recovered.
+- Incident: https://echo.oa.dev/wiki/204
+- Next action: finish PR #8571 CI and monitor child population after client
+  deployment.
