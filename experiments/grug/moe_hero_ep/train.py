@@ -78,7 +78,7 @@ XLA_LATENCY_HIDING_FLAG = "--xla_gpu_enable_latency_hiding_scheduler"
 # asks for 125.7 GiB and fails that way. 85 sizes the arena at 113.6 GiB, leaving enough slack
 # for per-node variation in fragmentation. A lower percentage costs throughput, because a
 # smaller arena makes `HloRematerialization` recompute more of the step.
-XLA_MEMORY_LIMIT_SLOP_FLAG = "--xla_gpu_memory_limit_slop_factor=85"
+XLA_MEMORY_LIMIT_SLOP_FLAG = "--xla_gpu_memory_limit_slop_factor=87"
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.

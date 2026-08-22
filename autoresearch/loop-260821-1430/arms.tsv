@@ -6,3 +6,4 @@ ra2a-tune-i05-ncclring	f445bd51c1	2026.08.21.21	ragged_all_to_all	synthetic	disa
 ra2a-tune-i06-lhs	266e696369	2026.08.21.22	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-tune-i06b-lhs-ov1	04ba1e6d1b	2026.08.21.23	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-tune-i06c-lhs-mem	178b638043	2026.08.21.24	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
+ra2a-tune-i07-symctas	5d1987030d	2026.08.21.25	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
