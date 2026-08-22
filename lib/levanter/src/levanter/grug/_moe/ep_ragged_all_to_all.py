@@ -16,13 +16,8 @@ from haliax.nn.ragged_dot import ragged_dot
 from levanter.grug._moe.common import CapacityOverflow
 from levanter.grug._moe.ep_common import (
     _clip_receiver_group_sizes,
-    _compact_by_keep_mask,
-    _expand_from_keep_mask,
-    _expert_prefix_keep_mask,
-    _local_permute_from_counts,
-    _permute_by_global_expert,
-    _shard_a2a_params,
-    _sort_activations,
+    _expert_granular_a2a_params,
+    _gather_dispatch_rows,
     _unpermute_from_global_expert,
 )
 from levanter.grug.sharding import _batch_axes
@@ -133,46 +128,44 @@ def _moe_mlp_ep_ragged_a2a_local(
     local_capacity = max(local_experts, local_capacity)
     recv_capacity = local_capacity
 
+    # One a2a update per (peer, local expert, split): reuse the peer-granular splits knob as
+    # a per-expert-group split count with a comparable total update budget.
+    splits_per_group = max(1, splits_per_peer // local_experts)
+
     with jax.named_scope("dispatch"):
-        sorted_x, sorted_indices, group_sizes = _permute_by_global_expert(
-            x_local,
-            selected_experts_local,
-            num_experts=num_experts,
-        )
-        all_group_sizes = jax.lax.all_gather(group_sizes.astype(jnp.int32), "expert")
+        flat_selected = selected_experts_local.reshape(-1)
+        sorted_indices = jnp.argsort(flat_selected)
+        group_sizes = jnp.bincount(flat_selected, length=num_experts).astype(jnp.int32)
+        sorted_x = _gather_dispatch_rows(x_local, sorted_indices, topk=topk)
+        all_group_sizes = jax.lax.all_gather(group_sizes, "expert")
         clipped_group_sizes = _clip_receiver_group_sizes(
             all_group_sizes,
             local_expert_size=local_experts,
             receiver_capacity=local_capacity,
         )
         sender_group_sizes = clipped_group_sizes[shard_id]
-        keep_mask = _expert_prefix_keep_mask(
-            group_sizes.astype(jnp.int32),
-            sender_group_sizes,
-            total_size=assignments_per_shard,
-        )
-        sorted_x = _compact_by_keep_mask(sorted_x, keep_mask)
-
-        all_shard_counts = jnp.sum(clipped_group_sizes.reshape(ep_size, ep_size, local_experts), axis=2)
-        input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(
-            all_shard_counts, shard_id, splits_per_peer
+        dispatch_params, return_params = _expert_granular_a2a_params(
+            all_group_sizes,
+            clipped_group_sizes,
+            shard_id,
+            local_expert_size=local_experts,
+            splits_per_group=splits_per_group,
         )
         dispatch_out_shape = jnp.zeros((recv_capacity, x_local.shape[1]), dtype=x_local.dtype)
-        x_dispatched = jax.lax.ragged_all_to_all(
+        # Accepted rows are the prefix of each unclipped expert group and receiver offsets
+        # pack arrivals expert-major, so the received buffer feeds the grouped MLP directly:
+        # no sender compaction and no receiver-side permute.
+        x_dispatch = jax.lax.ragged_all_to_all(
             sorted_x,
             dispatch_out_shape,
-            input_offsets,
-            send_sizes,
-            output_offsets,
-            recv_sizes,
+            *dispatch_params,
             axis_name="expert",
         )
-        x_dispatch, local_sorted_indices, physical_group_sizes, active_group_sizes = _local_permute_from_counts(
-            x_dispatched,
-            clipped_group_sizes,
-            local_expert_size=local_experts,
-            shard_index=shard_id,
+        active_group_sizes = jnp.sum(
+            clipped_group_sizes.reshape(ep_size, ep_size, local_experts)[:, shard_id, :], axis=0
         )
+        total_valid = jnp.sum(active_group_sizes, dtype=jnp.int32)
+        physical_group_sizes = active_group_sizes.at[-1].add(recv_capacity - total_valid)
 
     with jax.named_scope("moe_up_down"):
         out_dispatch = _select_expert_mlp(activation_fn)(
@@ -185,21 +178,16 @@ def _moe_mlp_ep_ragged_a2a_local(
         )
 
     with jax.named_scope("combine"):
-        local_output = _sort_activations(out_dispatch, jnp.argsort(local_sorted_indices))
-        return_out_shape = jnp.zeros((assignments_per_shard, x_local.shape[1]), dtype=local_output.dtype)
-        return_input_offsets, return_send_sizes, return_output_offsets, return_recv_sizes = _shard_a2a_params(
-            all_shard_counts.T, shard_id, splits_per_peer
-        )
+        return_out_shape = jnp.zeros((assignments_per_shard, x_local.shape[1]), dtype=out_dispatch.dtype)
+        # The mirror of dispatch: valid prefixes land back at unclipped sorted positions,
+        # dropped rows keep the output operand's zeros, so no expansion is needed and the
+        # final gather-sum reads dropped slots as zero contributions.
         returned = jax.lax.ragged_all_to_all(
-            local_output,
+            out_dispatch,
             return_out_shape,
-            return_input_offsets,
-            return_send_sizes,
-            return_output_offsets,
-            return_recv_sizes,
+            *return_params,
             axis_name="expert",
         )
-        returned = _expand_from_keep_mask(returned, keep_mask)
         out_local = _unpermute_from_global_expert(
             returned,
             sorted_indices,
