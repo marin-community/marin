@@ -85,7 +85,6 @@ def _start_upstream(threads: ThreadContainer) -> tuple[str, list[bytes]]:
                 "body_bytes": len(body),
                 "authorization": request.headers.get("authorization"),
                 "cookie": request.headers.get("cookie"),
-                "endpoint_name": request.headers.get("x-iris-endpoint-name"),
                 "proxy_prefix": request.headers.get("x-forwarded-prefix"),
                 "verified_identity": request.headers.get(VERIFIED_IDENTITY_HEADER),
                 "decision_secret": request.headers.get("x-iris-decision-secret"),
@@ -149,7 +148,6 @@ def test_native_listener_preserves_public_routes_and_streams_to_endpoint(
                 headers={
                     "authorization": "Bearer browser-secret",
                     "cookie": "session=browser-secret",
-                    "x-iris-endpoint-name": "/caller/spoof",
                 },
             )
             controller_rpc = client.post("/iris.cluster.ControllerService/ListJobs", json={})
@@ -163,7 +161,6 @@ def test_native_listener_preserves_public_routes_and_streams_to_endpoint(
             "body_bytes": len(payload),
             "authorization": None,
             "cookie": None,
-            "endpoint_name": _ENDPOINT_NAME,
             "proxy_prefix": f"/proxy/{_ENCODED_NAME}",
             "verified_identity": None,
             "decision_secret": None,

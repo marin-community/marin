@@ -22,7 +22,6 @@ from dataclasses import dataclass, field
 from typing import Any, NewType
 
 import cloudpickle
-import iris_native as _native  # pyrefly: ignore[missing-import]
 import uvicorn
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -47,7 +46,9 @@ ACTOR_SERVER_STARTUP_TIMEOUT = Duration.from_seconds(5.0)
 # Type aliases
 ActorId = NewType("ActorId", str)
 _ACTOR_RPC_PATH = "/iris.actor.ActorService"
-_ENDPOINT_NAME_HEADER = _native.ENDPOINT_NAME_HEADER
+# Keep this wire value in sync with iris_proxy::ENDPOINT_NAME_HEADER.
+_ENDPOINT_NAME_HEADER = "x-iris-endpoint-name"
+_PROXY_PREFIX_HEADER = "x-forwarded-prefix"
 
 
 def _connect_error_response(error: ConnectError) -> actor_pb2.ActorResponse:
@@ -109,6 +110,20 @@ def _validate_web_endpoints(
     route_keys = [(endpoint.declaration.path, endpoint.declaration.method) for endpoint in web_endpoints]
     if len(route_keys) != len(set(route_keys)):
         raise ValueError(f"Actor '{actor_name}' has duplicate web endpoints")
+
+
+def _web_actor_name(request: Request, handlers: dict[str, Callable]) -> str | None:
+    proxy_prefix = request.headers.get(_PROXY_PREFIX_HEADER)
+    if proxy_prefix:
+        proxy_name = proxy_prefix.rsplit("/", maxsplit=1)[-1].replace(".", "/")
+        return next((name for name in (f"/{proxy_name}", proxy_name) if name in handlers), None)
+
+    actor_name = request.headers.get(_ENDPOINT_NAME_HEADER)
+    if actor_name is not None:
+        return actor_name if actor_name in handlers else None
+    if len(handlers) == 1:
+        return next(iter(handlers))
+    return None
 
 
 @dataclass
@@ -410,13 +425,10 @@ class ActorServer:
         request: Request,
         handlers: dict[str, Callable],
     ) -> Response:
-        actor_name = request.headers.get(_ENDPOINT_NAME_HEADER)
-        if actor_name is None and len(handlers) == 1:
-            method = next(iter(handlers.values()))
-        elif actor_name is not None and actor_name in handlers:
-            method = handlers[actor_name]
-        else:
+        actor_name = _web_actor_name(request, handlers)
+        if actor_name is None:
             return JSONResponse({"error": "Actor web endpoint not found"}, status_code=404)
+        method = handlers[actor_name]
 
         arguments = await self._web_arguments(request, method)
         result = await self._invoke(method, *arguments.args, **arguments.kwargs)

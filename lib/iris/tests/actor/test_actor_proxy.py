@@ -4,8 +4,7 @@
 """Integration tests for actor RPC through the native endpoint proxy.
 
 Tests the full round-trip: ActorClient → ProxyResolver → native listener →
-actor server → response. The proxy sends the selected actor name in an internal
-request header.
+actor server → response.
 """
 
 import json
@@ -48,7 +47,6 @@ class DashboardStatusActor(StatusActor):
     def _dashboard(self, request: Request) -> dict[str, str]:
         return {
             "actor": self._label,
-            "endpoint_name": request.headers.get("x-iris-endpoint-name", ""),
             "proxy_prefix": request.headers.get("x-forwarded-prefix", ""),
         }
 
@@ -138,6 +136,11 @@ def test_proxy_routes_web_endpoint_to_actor(permissive_native_proxy_auth_json: s
         second_path = proxy_path(second_actor_name)
 
         direct = httpx.get(f"http://{address}/", timeout=2)
+        header_routed = httpx.get(
+            f"http://{address}/",
+            headers={"x-iris-endpoint-name": second_actor_name},
+            timeout=2,
+        )
 
         first = httpx.get(
             f"{proxy_url}{first_path}/",
@@ -147,14 +150,13 @@ def test_proxy_routes_web_endpoint_to_actor(permissive_native_proxy_auth_json: s
         second = httpx.get(f"{proxy_url}{second_path}/", timeout=2)
 
         assert direct.status_code == 404
+        assert header_routed.json() == {"actor": "second", "proxy_prefix": ""}
         assert first.json() == {
             "actor": "first",
-            "endpoint_name": first_actor_name,
             "proxy_prefix": first_path,
         }
         assert second.json() == {
             "actor": "second",
-            "endpoint_name": second_actor_name,
             "proxy_prefix": second_path,
         }
     finally:

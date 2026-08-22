@@ -1537,6 +1537,10 @@ mod tests {
         let payload = serde_json::to_value(&decision).unwrap();
         assert!(payload.get("endpoint_name").is_none());
         let mut headers = HeaderMap::new();
+        headers.insert(
+            ENDPOINT_NAME_HEADER,
+            HeaderValue::from_static("/caller/spoof"),
+        );
         prepare_proxy_request(
             &mut headers,
             ProxyHandoff {
