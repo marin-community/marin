@@ -38,6 +38,10 @@ red-canary days ([incident record](https://echo.oa.dev/wiki/14)).
    a tool yields, poll the same task and read each new output block. Do not pipe
    a command to `tail -25` or an equivalent last-lines command. Such a pipeline
    hides earlier output and gives no useful progress while the command runs.
+7. Run every controller lifecycle command through Iris's `controller` extra:
+   `uv run --package marin-iris --extra controller iris ...`. The base
+   environment omits the Kubernetes client and can misreport every CoreWeave
+   prerequisite as missing.
 
 ## How to gate
 
@@ -144,7 +148,9 @@ Do this loop for one cluster. After a passed final gate, start the next cluster.
 2. **Snapshot gate.** Show the snapshot. State how many running jobs ride
    through the restart. State that the restart causes seconds of control-plane
    downtime. If the gate passes, restart without waiting for operator input.
-3. **Restart.** `iris --cluster=<name> cluster controller restart`. Add
+3. **Restart.**
+   `uv run --package marin-iris --extra controller iris --cluster=<name> cluster controller restart`.
+   Add
    `--skip-checkpoint` only if the checkpoint step times out. On a Kubernetes dev
    cluster with amd64 nodes only, add `--image-platform linux/amd64`. To reuse a
    build, pass `--prebuilt-tag <tag>`; the command requires amd64 and arm64
@@ -204,7 +210,8 @@ again so the final gate exercises the reconciled Kueue configuration.
 For a cluster that failed a gate while the controller is still reachable:
 
 ```bash
-iris --cluster=<name> cluster controller restart --rollback
+uv run --package marin-iris --extra controller iris \
+  --cluster=<name> cluster controller restart --rollback
 ```
 
 This restores the previous image **and** its pre-deploy checkpoint, because

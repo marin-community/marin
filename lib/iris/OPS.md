@@ -64,6 +64,17 @@ one-job smoke test.
 `iris cluster controller restart` restarts the controller only (seconds of downtime, workers unaffected).
 `iris cluster restart` tears down **everything** — controller + all workers. All jobs die. **Never run the full `iris cluster restart` without explicit user approval.**
 
+Run controller lifecycle commands with the `controller` extra, which supplies
+the Kubernetes client used by CoreWeave prerequisite checks:
+
+```bash
+uv run --package marin-iris --extra controller iris \
+  --cluster=<name> cluster controller restart
+```
+
+The base `uv run iris` environment omits this dependency and can report every
+CoreWeave prerequisite as missing even when the objects exist.
+
 Workflow: confirm the tree holds exactly the code to ship (`git status`, `git log -1`) -> capture baseline (`iris cluster status`) -> restart -> verify.
 
 The restart preflight resolves operator-side controller secrets before taking a checkpoint, building images, or writing a rollout record. CoreWeave keeps the resolved signing key in memory and uses that value when it projects `iris-controller-env`. A missing Secret Manager dependency or inaccessible secret leaves the running controller and rollout record unchanged.
@@ -77,7 +88,8 @@ If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (re
 Restarts default to the fast Rust profile, which skips LTO and reduces native link time. Kubernetes clusters build the controller and task images for amd64+arm64 because task Pods run the controller image as the log-shipper sidecar; they skip the unused worker image. VM clusters build amd64 controller, worker, and task images. `--image-platform` overrides only the task image, for example when a Kubernetes dev cluster has amd64 nodes only:
 
 ```bash
-iris --config path/to/dev.yaml cluster controller restart \
+uv run --package marin-iris --extra controller iris \
+  --config path/to/dev.yaml cluster controller restart \
   --image-platform linux/amd64
 ```
 
@@ -94,7 +106,8 @@ Pass `--cargo-profile release` for an LTO build. Keep the default task image pla
 **Roll back the last deploy.** `iris cluster controller restart --rollback` reads `rollout-record.json`, then redeploys the previous image and restores its pre-deploy checkpoint — no coordinates to look up. Run it while the controller is still reachable so it takes the in-place path.
 
 ```bash
-iris --cluster=marin cluster controller restart --rollback
+uv run --package marin-iris --extra controller iris \
+  --cluster=marin cluster controller restart --rollback
 ```
 
 **Why it restores a checkpoint, not just the old image.** A restart runs forward-only migrations in place on the on-VM state DB (`schema_migrations` tracks applied stems; there is no down-migration), and some are destructive — e.g. `0039_drop_api_keys`, `0040_drop_users`. Redeploying the old image alone would leave it loading a schema it does not understand, hitting missing-table errors at runtime. So a correct rollback must **also restore the pre-deploy (pre-migration) checkpoint** — the one taken while the old code was still running. `--rollback` does both from the record: it writes `rollback_requested` and restarts the previous image; on boot the controller restores that checkpoint over its migrated local DB, then marks the record `rolled_back`. That consume-once step is a one-shot — a later crash or VM reboot reuses the restored DB instead of rewinding to the checkpoint again.
