@@ -168,13 +168,24 @@ def _moe_mlp_ep_ragged_a2a_local(
         physical_group_sizes = active_group_sizes.at[-1].add(recv_capacity - total_valid)
 
     with jax.named_scope("moe_up_down"):
-        out_dispatch = _select_expert_mlp(activation_fn)(
+        expert_mlp = _select_expert_mlp(activation_fn)
+
+        def _mlp_call(x_d, w13, w2, physical, active):
+            return expert_mlp(x_d, w13, w2, physical, active, activation_fn)
+
+        # Recompute the [C, 2I]-class MLP intermediates in backward instead of saving them,
+        # like the pooled backend's per-wave remat. The lean data path removed the pure
+        # gather chains XLA's rematerializer used to trade away ~4 GiB of live buffers, and
+        # without this the step's live set no longer fits next to NCCL's pools.
+        remat = functools.partial(
+            jax.checkpoint, prevent_cse=False, policy=jax.checkpoint_policies.nothing_saveable
+        )
+        out_dispatch = remat(_mlp_call)(
             x_dispatch,
             moe_w13_local,
             moe_w2_local,
             physical_group_sizes,
             active_group_sizes,
-            activation_fn,
         )
 
     with jax.named_scope("combine"):
