@@ -1764,7 +1764,7 @@
       "id": 13,
       "type": "timeseries",
       "title": "Router health",
-      "description": "Routing entropy and router-bias bounds. The hero monitor warns below 5.92 entropy or above a bias magnitude of 400.",
+      "description": "Routing entropy, router margins, and router-bias bounds. The hero monitor warns below 5.92 entropy or above a bias magnitude of 400.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1803,6 +1803,30 @@
             "matcher": {
               "id": "byName",
               "options": "bias min"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "margin max"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "margin min"
             },
             "properties": [
               {
@@ -1921,7 +1945,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'train_router_routing_entropy_mean' THEN value END) AS routing_entropy, MAX(CASE WHEN name = 'train_router_bias_max' THEN value END) AS router_bias_max, MIN(CASE WHEN name = 'train_router_bias_min' THEN value END) AS router_bias_min, CAST(5.92 AS DOUBLE) AS entropy_minimum, CAST(400.0 AS DOUBLE) AS bias_upper_limit, CAST(-400.0 AS DOUBLE) AS bias_lower_limit FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('train_router_routing_entropy_mean', 'train_router_bias_max', 'train_router_bias_min') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'train_router_routing_entropy_mean' THEN value END) AS routing_entropy, MAX(CASE WHEN name = 'train_router_bias_max' THEN value END) AS router_bias_max, MIN(CASE WHEN name = 'train_router_bias_min' THEN value END) AS router_bias_min, MAX(CASE WHEN name = 'train_router_margin_max' THEN value END) AS margin_max, MIN(CASE WHEN name = 'train_router_margin_min' THEN value END) AS margin_min, CAST(5.92 AS DOUBLE) AS entropy_minimum, CAST(400.0 AS DOUBLE) AS bias_upper_limit, CAST(-400.0 AS DOUBLE) AS bias_lower_limit FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('train_router_routing_entropy_mean', 'train_router_bias_max', 'train_router_bias_min', 'train_router_margin_max', 'train_router_margin_min') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -1955,6 +1979,16 @@
               "type": "number"
             },
             {
+              "selector": "margin_max",
+              "text": "margin max",
+              "type": "number"
+            },
+            {
+              "selector": "margin_min",
+              "text": "margin min",
+              "type": "number"
+            },
+            {
               "selector": "entropy_minimum",
               "text": "5.92 minimum",
               "type": "number"
@@ -1967,6 +2001,104 @@
             {
               "selector": "bias_lower_limit",
               "text": "-400 limit",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Parameter norms",
+      "description": "The total parameter norm and the router-bias parameter norm.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 56
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "router bias norm"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'params_norm_total' THEN value END) AS total_norm, AVG(CASE WHEN name = 'params_norm_stacked_blocks_stacked_mlp_router_bias' THEN value END) AS router_bias_norm FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('params_norm_total', 'params_norm_stacked_blocks_stacked_mlp_router_bias') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "total_norm",
+              "text": "total norm",
+              "type": "number"
+            },
+            {
+              "selector": "router_bias_norm",
+              "text": "router bias norm",
               "type": "number"
             }
           ]

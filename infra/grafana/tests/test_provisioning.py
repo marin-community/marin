@@ -878,6 +878,10 @@ def test_training_moe_health_queries_show_routing_signals():
             ("train_router_routing_entropy_mean", 5.93, at),
             ("train_router_bias_max", 390.0, at),
             ("train_router_bias_min", -380.0, at),
+            ("train_router_margin_max", 25.0, at),
+            ("train_router_margin_min", -31.0, at),
+            ("params_norm_total", 4800.0, at),
+            ("params_norm_stacked_blocks_stacked_mlp_router_bias", 200.0, at),
         ],
     )
 
@@ -890,4 +894,5 @@ def test_training_moe_health_queries_show_routing_signals():
         return database.execute(sql).fetchall()
 
     assert query("Token drops") == [(datetime(2026, 8, 21, 12), 0.04, 0.03, 0.02, 0.07)]
-    assert query("Router health") == [(datetime(2026, 8, 21, 12), 5.93, 390.0, -380.0, 5.92, 400.0, -400.0)]
+    assert query("Router health") == [(datetime(2026, 8, 21, 12), 5.93, 390.0, -380.0, 25.0, -31.0, 5.92, 400.0, -400.0)]
+    assert query("Parameter norms") == [(datetime(2026, 8, 21, 12), 4800.0, 200.0)]
