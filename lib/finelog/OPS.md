@@ -154,6 +154,19 @@ result above 16,384 values use DataFusion.
 `telemetry_v1` enables this for `service`, `kind`, and `name`, while its
 training-status metric names also use an exact filtered projection.
 
+At query time, a namespace `x` is a composite view when the catalog contains
+physical namespaces below `x.*`. The view unions every descendant with the
+physical `x` table when it exists. For example, `telemetry_v1` combines the
+complete telemetry tree. Clients choose full namespace names;
+Rigging constructs one from the sample's group and includes it in the JSON
+envelope. The server does not interpret the group or maintain a child allowlist.
+An omitted namespace continues to write the physical `telemetry_v1` table.
+
+Composite views align columns by name and fill missing nullable fields with
+nulls. A type conflict or missing required field leaves that composite name
+unavailable for the query. Direct leaf namespaces and unrelated composites
+remain queryable, so Finelog does not return a partial union.
+
 `telemetry_v1` exposes stable resource dimensions as nullable columns:
 `run_id`, `job_id`, `execution_uid`, `region`, `node_name`, and `process_index`.
 Producers may send them directly in the request's `resource`
@@ -162,6 +175,8 @@ An explicit field wins over an attribute and replaces the same key in
 `resource_attributes_json`; the JSON map is canonicalized rather than retaining
 both conflicting values. Selectors and groupings should use the structured
 columns.
+
+The server-owned physical `telemetry_v1` table retains up to 50 GiB locally.
 
 `GET /api/segments?namespace=telemetry_v1&physical=true` reports each local
 segment identity and `.fidx` section directory. Use it to distinguish incomplete
@@ -196,8 +211,8 @@ Separately, each segment's footer carries the global layout revision it was
 written with. A revision bump causes a maintenance pass to re-encode segments
 still on an older revision, a couple per namespace per 30 s tick — otherwise a
 namespace's bulk would keep its old row groups until eviction aged it out, which
-for `telemetry_v1`'s 15 GiB is about four days and for `log`'s about eight. The
-rewrite keeps the filename and preserves the rows and their order, so it costs no
+occurs on a timescale set by the namespace's local-cache budget. The rewrite
+keeps the filename and preserves the rows and their order, so it costs no
 remote bandwidth: the archive keys objects by basename and only uploads segments
 still marked `Local`. A rewritten segment's remote copy keeps the old layout
 while holding the same rows. Schema-level sort-policy changes do not bump this
@@ -379,11 +394,11 @@ Kubernetes liveness, readiness, and startup probe, so it cannot fail on a
 condition a restart will not clear. The body carries the verdict: `ok`, or
 `degraded: <namespace>: registration failed: <reason>`.
 
-`telemetry_v1` must be registered before it accepts a row, and the registration
-is re-driven from the catalog's persisted schema on every boot. When the
-binary's schema and the catalog disagree in a way no merge can reconcile (a
-column type change), every write to that namespace fails until one of them
-changes, across restarts.
+The physical `telemetry_v1` table is registered on boot. A client-selected
+`telemetry_v1.*` namespace is registered against the same telemetry schema on
+its first request. When the binary's schema and the catalog disagree in a way
+no merge can reconcile (a column type change), writes to that namespace return
+400 until one of them changes, across restarts.
 
 ```bash
 curl -sf http://<host>:<port>/health          # ok | degraded: ...

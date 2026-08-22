@@ -617,7 +617,7 @@ async fn forwarded_rows_carry_the_origin_cluster_of_the_store_that_sent_them() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn forwarded_telemetry_ignores_candidate_only_nullable_columns() {
     let fx = Fixture::new("telemetry-schema-skew").await;
-    let namespace = "telemetry_v1";
+    let namespace = "telemetry_v1.iris.rpc";
     for store in [Arc::clone(&fx.source), Arc::clone(fx.target_store())] {
         tokio::task::spawn_blocking(move || {
             store.register_table(namespace, telemetry_schema(), StoragePolicy::default())

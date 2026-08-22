@@ -22,10 +22,13 @@ from rigging.telemetry.probes import nccl, nccl_client
 from levanter.callbacks.progress_watchdog import ProgressTimeout
 from levanter.tracker import Tracker, TrackerConfig, get_tracker
 from levanter.tracker.histogram import SummaryStats
+from levanter.tracker.tracker import NoopTracker
 
 logger = logging.getLogger(__name__)
 
 _CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
+_EVERY_STEP_METRICS = frozenset({"train_loss", "step", "phase", "progress_time_seconds", "global_step"})
+_EXTRA_LOG_INTERVAL = 10
 
 
 class TrainingPhase(IntEnum):
@@ -41,7 +44,9 @@ def _metric_name(name: str) -> str:
 
 
 def _set(name: str, value: float, *, attributes: dict[str, str] = _CURRENT) -> None:
-    telemetry.gauge(_metric_name(name)).set(value, attributes=attributes)
+    metric_name = _metric_name(name)
+    group = "levanter.core" if metric_name in _EVERY_STEP_METRICS else None
+    telemetry.gauge(metric_name, group=group).set(value, attributes=attributes)
 
 
 # Keep this well under the reader's enrollment window. Telemetry is best-effort and
@@ -76,6 +81,8 @@ class _PhaseHeartbeat:
 
     def publish(self, phase: TrainingPhase) -> None:
         with self._lock:
+            if self._phase == phase:
+                return
             self._phase = phase
         _set("phase", float(phase))
 
@@ -93,6 +100,8 @@ class _PhaseHeartbeat:
             self._stop.set()
         if thread is not None:
             thread.join(timeout=self._interval * 2)
+        with self._lock:
+            self._phase = None
 
     def _run(self) -> None:
         while not self._stop.wait(self._interval):
@@ -157,17 +166,17 @@ class TelemetryTracker(Tracker):
 
     name: str = "telemetry"
 
-    def __init__(self, *, publish_tracker_metrics: bool = True) -> None:
-        self._publish_tracker_metrics = publish_tracker_metrics
+    def __init__(self) -> None:
         self._nccl_ras_probe = _start_nccl_ras_probe()
         _set("progress_time_seconds", 0)
         set_training_phase(TrainingPhase.INITIALIZING)
         _HEARTBEAT.start()
 
-    def _publish(self, metrics: Mapping[str, object]) -> None:
-        if not self._publish_tracker_metrics:
-            return
+    def _publish(self, metrics: Mapping[str, object], *, include_extra: bool) -> None:
         for key, value in metrics.items():
+            metric_name = _metric_name(key)
+            if metric_name not in _EVERY_STEP_METRICS and not include_extra:
+                continue
             if isinstance(value, SummaryStats):
                 self._publish_summary(key, value)
                 continue
@@ -204,10 +213,10 @@ class TelemetryTracker(Tracker):
             if loss is not None:
                 _set("progress_time_seconds", time())
                 set_training_phase(TrainingPhase.TRAINING)
-        self._publish(metrics)
+        self._publish(metrics, include_extra=step is None or step % _EXTRA_LOG_INTERVAL == 0)
 
     def log_summary(self, metrics: dict[str, Any]):
-        self._publish(metrics)
+        self._publish(metrics, include_extra=True)
 
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
         pass
@@ -232,6 +241,10 @@ class TelemetryTracker(Tracker):
             logger.warning("Telemetry did not flush within the stalled-training diagnostic budget")
 
 
+class _NonPublishingTelemetryTracker(NoopTracker):
+    name = "telemetry"
+
+
 @TrackerConfig.register_subclass("telemetry")
 @dataclasses.dataclass
 class TelemetryConfig(TrackerConfig):
@@ -241,7 +254,10 @@ class TelemetryConfig(TrackerConfig):
         process_index = jax.process_index()
         runtime_telemetry.configure(
             "levanter",
+            group="levanter.extra",
             run_id=run_id,
             process_index=process_index,
         )
-        return TelemetryTracker(publish_tracker_metrics=process_index == 0)
+        if process_index == 0:
+            return TelemetryTracker()
+        return _NonPublishingTelemetryTracker()

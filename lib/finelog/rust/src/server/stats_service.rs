@@ -21,7 +21,7 @@ use crate::proto::finelog::stats::{
 };
 use crate::query::{make_ctx, query_timeout, run_query_over, truncate_sql_for_log};
 use crate::server::auth::{request_identity, AuthIdentity};
-use crate::server::telemetry::TELEMETRY_NAMESPACE;
+use crate::server::telemetry::{is_telemetry_namespace, TELEMETRY_NAMESPACE};
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::ipc::encode_ipc;
 use crate::store::namespace::DEFAULT_PERSIST_TIMEOUT;
@@ -62,7 +62,7 @@ impl StatsServiceImpl {
 }
 
 fn is_forwarded_telemetry(ctx: &RequestContext, namespace: &str) -> bool {
-    namespace == TELEMETRY_NAMESPACE
+    is_telemetry_namespace(namespace)
         && matches!(request_identity(ctx), Some(AuthIdentity::Jwt { .. }))
 }
 
@@ -185,7 +185,7 @@ impl StatsService for StatsServiceImpl {
         // Resolve the origin cluster from the credential before the blocking
         // hop so a forwarding writer's rows are stamped with its cluster.
         let origin_cluster = write_origin_cluster(&ctx)?;
-        let forwarded_telemetry = origin_cluster.is_some() && namespace == TELEMETRY_NAMESPACE;
+        let forwarded_telemetry = origin_cluster.is_some() && is_telemetry_namespace(&namespace);
 
         // Decode + validate + align + append on the blocking pool; the size/row
         // caps and IPC decode live in `Store::write_rows`.

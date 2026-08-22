@@ -27,7 +27,12 @@ def exported(monkeypatch):
     telemetry.shutdown(0)
     transport = RecordingTelemetryTransport()
     monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
-    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="levanter", attributes={"run": "run-42"})
+    telemetry.configure(
+        endpoint="http://finelog/v1/telemetry",
+        service="levanter",
+        group="levanter.extra",
+        attributes={"run": "run-42"},
+    )
     yield transport
     telemetry.shutdown(1)
 
@@ -51,13 +56,13 @@ def _install_fake_nccl_client(
 
 def test_log_exports_jax_scalar_snapshots_without_service_prefix(exported):
     tracker = TelemetryTracker()
-    tracker.log({"train/loss": jnp.float32(1.25), "throughput": np.float64(7)}, step=3)
+    tracker.log({"train/loss": jnp.float32(1.25), "throughput": np.float64(7)}, step=10)
 
     records = exported.wait_for(7)
     values = _values(records)
     assert values["train_loss"] == 1.25
     assert values["throughput"] == 7.0
-    assert values["step"] == 3.0
+    assert values["step"] == 10.0
     train_loss = next(record for record in records if record["name"] == "train_loss")
     assert train_loss["attributes"] == {"source_kind": "gauge", "source_temporality": "current_snapshot"}
 
@@ -84,7 +89,7 @@ def test_summary_stats_export_reduced_moments_and_no_histogram_buckets(exported)
     stats = SummaryStats.from_array(values, num_bins=64)
     assert stats.histogram is not None, "a summary carrying no histogram would pass this vacuously"
 
-    tracker.log({"grad": stats}, step=1)
+    tracker.log({"grad": stats}, step=10)
     telemetry.shutdown()  # bounded flush, so the exported set below is complete
 
     grad = [record for record in exported.records if record["name"].startswith("grad")]
@@ -110,12 +115,11 @@ def test_training_progress_and_phase_are_current_snapshots(exported, monkeypatch
     tracker.log({"train/loss": 1.25}, step=3)
     tracker.finish()
 
-    values = _values(exported.wait_for(7))
-    assert values["progress_time_seconds"] == 1234.5
-    assert values["phase"] == TrainingPhase.FINISHED
+    exported.wait_for_value("progress_time_seconds", {}, 1234.5)
+    exported.wait_for_value("phase", {}, TrainingPhase.FINISHED)
 
 
-def test_nonprimary_process_publishes_progress_but_not_replicated_tracker_metrics(exported, monkeypatch):
+def test_nonprimary_process_does_not_replicate_training_telemetry(exported, monkeypatch):
     monkeypatch.setattr(tracker_telemetry.jax, "process_index", lambda: 1)
     monkeypatch.setattr(tracker_telemetry.runtime_telemetry, "configure", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("levanter.tracker.telemetry.time", lambda: 1234.5)
@@ -124,11 +128,24 @@ def test_nonprimary_process_publishes_progress_but_not_replicated_tracker_metric
     tracker.log({"train/loss": 1.25, "throughput": 7.0}, step=3)
     telemetry.shutdown()
 
-    values = _values(exported.records)
-    assert values["step"] == 3.0
-    assert values["progress_time_seconds"] == 1234.5
-    assert "train_loss" not in values
-    assert "throughput" not in values
+    assert exported.records == []
+
+
+def test_extra_metrics_are_sampled_every_ten_steps_while_progress_metrics_are_not(exported):
+    tracker = TelemetryTracker()
+
+    tracker.log({"train/loss": 1.25, "throughput": 7.0}, step=1)
+    tracker.log({"train/loss": 1.0, "throughput": 8.0}, step=2)
+    tracker.log({"train/loss": 0.75, "throughput": 9.0}, step=10)
+    telemetry.shutdown()
+
+    records = exported.records
+    assert [record["value"] for record in records if record["name"] == "train_loss"] == [1.25, 1.0, 0.75]
+    assert [record["value"] for record in records if record["name"] == "throughput"] == [9.0]
+    assert [record["value"] for record in records if record["name"] == "phase"] == [
+        TrainingPhase.INITIALIZING,
+        TrainingPhase.TRAINING,
+    ]
 
 
 @pytest.fixture

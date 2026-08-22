@@ -113,6 +113,7 @@ def test_configure_stamps_canonical_resource_identity(
     with _iris_metadata(info, telemetry_receiver.endpoint):
         telemetry.configure(
             "levanter",
+            group="levanter.extra",
             run_id="pretrain-42",
             attributes={"model_revision": "abc123", "role": rigging_telemetry.TelemetryRole.TRAINER.value},
         )
@@ -142,7 +143,7 @@ def test_configure_separates_reused_numeric_attempts(telemetry_receiver: Telemet
         attempt_uid="controller-attempt-first",
     )
     with _iris_metadata(first, telemetry_receiver.endpoint):
-        telemetry.configure("levanter", run_id="run-42")
+        telemetry.configure("levanter", group="levanter.extra", run_id="run-42")
         rigging_telemetry.gauge("identity_probe").set(1)
     rigging_telemetry.shutdown(0.1)
     first_execution_uid = telemetry_receiver.latest_resource()["attributes"]["execution_uid"]
@@ -154,7 +155,7 @@ def test_configure_separates_reused_numeric_attempts(telemetry_receiver: Telemet
         attempt_uid="controller-attempt-second",
     )
     with _iris_metadata(second, telemetry_receiver.endpoint):
-        telemetry.configure("levanter", run_id="run-42")
+        telemetry.configure("levanter", group="levanter.extra", run_id="run-42")
         rigging_telemetry.gauge("identity_probe").set(1)
     rigging_telemetry.shutdown(0.1)
     second_execution_uid = telemetry_receiver.latest_resource()["attributes"]["execution_uid"]
@@ -166,7 +167,11 @@ def test_configure_separates_reused_numeric_attempts(telemetry_receiver: Telemet
 def test_vllm_resource_exposes_serving_job_join(telemetry_receiver: TelemetryReceiver) -> None:
     info = JobInfo(task_id=JobName.from_wire("/alice/serve/0"), worker_id="w-1", attempt_id=0)
     with _iris_metadata(info, telemetry_receiver.endpoint):
-        telemetry.configure("vllm", attributes={"role": rigging_telemetry.TelemetryRole.INFERENCE.value})
+        telemetry.configure(
+            "vllm",
+            group="vllm",
+            attributes={"role": rigging_telemetry.TelemetryRole.INFERENCE.value},
+        )
         rigging_telemetry.gauge("identity_probe").set(1)
 
     attributes = telemetry_receiver.latest_resource()["attributes"]
@@ -177,7 +182,7 @@ def test_vllm_resource_exposes_serving_job_join(telemetry_receiver: TelemetryRec
 def test_configure_stamps_explicit_distributed_process_index(telemetry_receiver: TelemetryReceiver) -> None:
     info = JobInfo(task_id=JobName.from_wire("/alice/train/7"), worker_id="w-1", attempt_id=2)
     with _iris_metadata(info, telemetry_receiver.endpoint):
-        telemetry.configure("levanter", run_id="run-42", process_index=0)
+        telemetry.configure("levanter", group="levanter.extra", run_id="run-42", process_index=0)
         rigging_telemetry.gauge("identity_probe").set(1)
 
     attributes = telemetry_receiver.latest_resource()["attributes"]
@@ -191,7 +196,7 @@ def test_configure_stamps_explicit_distributed_process_index(telemetry_receiver:
 def test_configure_rejects_ambiguous_identity(ambiguous_name: str) -> None:
     info = JobInfo(task_id=JobName.from_wire("/alice/train/0"), worker_id="w-1", attempt_id=0)
     with _iris_metadata(info, "http://127.0.0.1:1/"):
-        telemetry.configure("levanter", attributes={ambiguous_name: "ambiguous"})
+        telemetry.configure("levanter", group="levanter.extra", attributes={ambiguous_name: "ambiguous"})
         rigging_telemetry.gauge("identity_probe").set(1)
 
     assert rigging_telemetry.runtime_status().configured is False
@@ -203,9 +208,9 @@ def test_configure_contains_malformed_iris_metadata(monkeypatch: pytest.MonkeyPa
     if source == "job_env":
         monkeypatch.setenv("IRIS_TASK_ID", "not-a-task-id")
         # Malformed optional task metadata leaves telemetry inert and must not interrupt startup.
-        telemetry.configure("levanter")
+        telemetry.configure("levanter", group="levanter.extra")
     else:
         with _iris_metadata(info, "http://127.0.0.1:1/", malformed_endpoint=True):
-            telemetry.configure("levanter")
+            telemetry.configure("levanter", group="levanter.extra")
 
     assert rigging_telemetry.runtime_status().configured is False

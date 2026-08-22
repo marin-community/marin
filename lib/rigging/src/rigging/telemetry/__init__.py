@@ -7,6 +7,7 @@ import atexit
 import enum
 import logging
 import math
+import re
 import threading
 import time
 import uuid
@@ -35,8 +36,19 @@ CURRENT_SNAPSHOT = "current_snapshot"
 CUMULATIVE_SNAPSHOT = "cumulative_snapshot"
 _MAX_REQUEST_BYTES = 4 << 20
 _MAX_SHUTDOWN_TIMEOUT = 5.0
-_WARNING_INTERVAL = 60.0
+_REJECTION_WARNING_INTERVAL = 60.0
 _EVENT_KIND = "event"
+_TELEMETRY_NAMESPACE = "telemetry_v1"
+_GROUP_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
+
+
+def _namespace_for_group(group: str) -> str:
+    if not _GROUP_PATTERN.fullmatch(group):
+        raise ValueError("group must be one or more dotted lowercase namespace components")
+    namespace = f"{_TELEMETRY_NAMESPACE}.{group}"
+    if len(namespace) > 64:
+        raise ValueError("group produces a Finelog namespace longer than 64 characters")
+    return namespace
 
 
 class TelemetryRole(StrEnum):
@@ -75,6 +87,7 @@ class TelemetryStatus:
 class _Config:
     endpoint: str
     service: str
+    group: str
     attributes: dict[str, str]
     max_queue_records: int
     max_queue_bytes: int
@@ -89,6 +102,7 @@ class _Config:
         if not self.endpoint.startswith(("http://", "https://")):
             raise ValueError("endpoint must use http:// or https://")
         serialization.validate_string(self.service, "service")
+        _namespace_for_group(self.group)
         serialization.validate_attributes(self.attributes)
         limits = (
             self.max_queue_records,
@@ -116,30 +130,28 @@ class _Handle:
     name: str
     kind: str
     unit: str
-
-    def _emit(self, value: float) -> None:
-        _emit(self.kind, self.name, value=value, unit=self.unit)
+    group: str | None
 
 
 class Counter(_Handle):
     """A counter whose calls emit deltas."""
 
     def add(self, value: float = 1.0, *, attributes: Mapping[str, str] | None = None) -> None:
-        _emit(self.kind, self.name, value=value, unit=self.unit, attributes=attributes)
+        _emit(self.kind, self.name, value=value, unit=self.unit, attributes=attributes, group=self.group)
 
 
 class Gauge(_Handle):
     """A gauge whose calls emit current values."""
 
     def set(self, value: float, *, attributes: Mapping[str, str] | None = None) -> None:
-        _emit(self.kind, self.name, value=value, unit=self.unit, attributes=attributes)
+        _emit(self.kind, self.name, value=value, unit=self.unit, attributes=attributes, group=self.group)
 
 
 class Histogram(_Handle):
     """A histogram whose calls emit individual observations."""
 
     def record(self, value: float, *, attributes: Mapping[str, str] | None = None) -> None:
-        _emit(self.kind, self.name, value=value, unit=self.unit, attributes=attributes)
+        _emit(self.kind, self.name, value=value, unit=self.unit, attributes=attributes, group=self.group)
 
 
 def snapshot_attributes(source_kind: str, temporality: str) -> dict[str, str]:
@@ -241,6 +253,7 @@ class _PendingBatch:
 
 @dataclass(frozen=True)
 class _QueuedRecord:
+    group: str
     body: bytes
     enqueued_at: float
 
@@ -264,16 +277,18 @@ class _Runtime:
         self._export_failures = 0
         self._export_retries = 0
         self._rejected_records = 0
+        self._last_rejection_warning_time: float | None = None
         self._last_success_time_seconds: float | None = None
         self._oldest_queued_at: float | None = None
         self._stop = False
         self._thread = threading.Thread(target=self._run, name="rigging-telemetry", daemon=True)
         self._thread.start()
 
-    def emit(self, record: bytes) -> bool:
+    def emit(self, record: bytes, group: str | None) -> bool:
         """Return whether ``record`` was queued; a false result is counted as lost."""
+        resolved_group = group or self.config.group
         with self._condition:
-            if self._stop or len(record) + self._empty_envelope_size() > self.config.max_batch_bytes:
+            if self._stop or len(record) + self._empty_envelope_size(resolved_group) > self.config.max_batch_bytes:
                 self._lost_records += 1
                 return False
             if (
@@ -282,7 +297,7 @@ class _Runtime:
             ):
                 self._lost_records += 1
                 return False
-            queued = _QueuedRecord(record, time.monotonic())
+            queued = _QueuedRecord(resolved_group, record, time.monotonic())
             self._records.append(queued)
             if self._oldest_queued_at is None:
                 self._oldest_queued_at = queued.enqueued_at
@@ -353,8 +368,9 @@ class _Runtime:
                 return None
             batch_id = str(uuid.uuid4())
             selected: list[_QueuedRecord] = []
-            body_size = self._empty_envelope_size()
-            while self._records and len(selected) < self.config.max_batch_records:
+            group = self._records[0].group
+            body_size = self._empty_envelope_size(group)
+            while self._records and self._records[0].group == group and len(selected) < self.config.max_batch_records:
                 record = self._records[0]
                 extra = len(record.body) + (1 if selected else 0)
                 if selected and body_size + extra > self.config.max_batch_bytes:
@@ -370,15 +386,18 @@ class _Runtime:
             if not selected:
                 return None
         bodies = [record.body for record in selected]
-        body = self._batch_body(batch_id, bodies)
+        body = self._batch_body(batch_id, bodies, group)
         return _PendingBatch(batch_id, body, len(selected), sum(map(len, bodies)))
 
-    def _batch_body(self, batch_id: str, records: list[bytes]) -> bytes:
+    def _batch_body(self, batch_id: str, records: list[bytes], group: str) -> bytes:
         resource = serialization.json_bytes({"attributes": self.config.attributes, "service": self.config.service})
+        namespace = _namespace_for_group(group).encode()
         return b"".join(
             (
                 b'{"batch_id":"',
                 batch_id.encode(),
+                b'","namespace":"',
+                namespace,
                 b'","records":[',
                 b",".join(records),
                 b'],"resource":',
@@ -387,8 +406,8 @@ class _Runtime:
             )
         )
 
-    def _empty_envelope_size(self) -> int:
-        return len(self._batch_body(str(uuid.UUID(int=0)), []))
+    def _empty_envelope_size(self, group: str | None = None) -> int:
+        return len(self._batch_body(str(uuid.UUID(int=0)), [], group or self.config.group))
 
     def max_record_bytes(self) -> int:
         return min(self.config.max_queue_bytes, self.config.max_batch_bytes - self._empty_envelope_size())
@@ -423,7 +442,7 @@ class _Runtime:
                 if 400 <= response.status_code < 500 and response.status_code != 429:
                     with self._condition:
                         self._rejected_records += batch.record_count
-                    _warn(f"telemetry batch rejected with HTTP {response.status_code}")
+                    self._warn_rejected_batch(response.status_code)
                     return _DeliveryOutcome.REJECTED
             except Exception:
                 with self._condition:
@@ -433,6 +452,17 @@ class _Runtime:
             delay = backoff.next_interval()
             with self._condition:
                 self._condition.wait_for(lambda: self._stop, timeout=delay)
+
+    def _warn_rejected_batch(self, status_code: int) -> None:
+        now = time.monotonic()
+        with self._condition:
+            if (
+                self._last_rejection_warning_time is not None
+                and now - self._last_rejection_warning_time < _REJECTION_WARNING_INTERVAL
+            ):
+                return
+            self._last_rejection_warning_time = now
+        _warn(f"telemetry batch rejected with HTTP {status_code}")
 
     def _settle(self, batch: _PendingBatch, *, lost: bool) -> None:
         with self._condition:
@@ -462,23 +492,21 @@ class _Runtime:
 # module-level handles without passing runtime state through every call site.
 _configuration_lock = threading.Lock()
 _runtime: _Runtime | None = None
-_last_warning: float | None = None
-_warning_lock = threading.Lock()
 
 
-def counter(name: str, *, unit: str = "") -> Counter:
+def counter(name: str, *, unit: str = "", group: str | None = None) -> Counter:
     """Declare a counter that emits deltas when configured."""
-    return Counter(name, "counter", unit)
+    return Counter(name, "counter", unit, group)
 
 
-def gauge(name: str, *, unit: str = "") -> Gauge:
+def gauge(name: str, *, unit: str = "", group: str | None = None) -> Gauge:
     """Declare a gauge that emits current values when configured."""
-    return Gauge(name, "gauge", unit)
+    return Gauge(name, "gauge", unit, group)
 
 
-def histogram(name: str, *, unit: str = "") -> Histogram:
+def histogram(name: str, *, unit: str = "", group: str | None = None) -> Histogram:
     """Declare a histogram that emits individual observations when configured."""
-    return Histogram(name, "histogram", unit)
+    return Histogram(name, "histogram", unit, group)
 
 
 def event(
@@ -486,15 +514,17 @@ def event(
     body: serialization.EventBody,
     *,
     attributes: Mapping[str, str] | None = None,
+    group: str | None = None,
 ) -> None:
     """Emit one structured event when configured."""
-    _emit(_EVENT_KIND, name, body=body, attributes=attributes)
+    _emit(_EVENT_KIND, name, body=body, attributes=attributes, group=group)
 
 
 def configure(
     *,
     endpoint: str,
     service: str,
+    group: str,
     attributes: Mapping[str, str] | None = None,
     max_queue_records: int = DEFAULT_MAX_QUEUE_RECORDS,
     max_queue_bytes: int = DEFAULT_MAX_QUEUE_BYTES,
@@ -505,12 +535,18 @@ def configure(
     retry_initial: float = 0.1,
     retry_maximum: float = 5.0,
 ) -> None:
-    """Configure the process-wide exporter; the first valid configuration wins."""
+    """Configure the process-wide exporter; the first valid configuration wins.
+
+    ``group`` selects the default physical namespace suffix. Individual metric
+    handles and events may override it; the client sends each batch to
+    ``telemetry_v1.<group>``.
+    """
     global _runtime
     try:
         config = _Config(
             endpoint=endpoint,
             service=service,
+            group=group,
             attributes=dict(attributes or {}),
             max_queue_records=max_queue_records,
             max_queue_bytes=max_queue_bytes,
@@ -610,11 +646,12 @@ def _emit(
     body: serialization.EventBody | None = None,
     unit: str = "",
     attributes: Mapping[str, str] | None = None,
+    group: str | None = None,
 ) -> None:
     runtime = _runtime
     if runtime is None:
         return
-    _emit_to_runtime(runtime, kind, name, value=value, body=body, unit=unit, attributes=attributes)
+    _emit_to_runtime(runtime, kind, name, value=value, body=body, unit=unit, attributes=attributes, group=group)
 
 
 def _emit_to_runtime(
@@ -626,6 +663,7 @@ def _emit_to_runtime(
     body: serialization.EventBody | None = None,
     unit: str = "",
     attributes: Mapping[str, str] | None = None,
+    group: str | None = None,
 ) -> bool:
     """Return whether one validated record was queued in the selected runtime."""
     try:
@@ -652,7 +690,9 @@ def _emit_to_runtime(
                 raise ValueError("metric value must be finite")
             record["unit"] = unit
             record["value"] = numeric
-        return runtime.emit(serialization.json_bytes_bounded(record, runtime.max_record_bytes()))
+        resolved_group = group or runtime.config.group
+        _namespace_for_group(resolved_group)
+        return runtime.emit(serialization.json_bytes_bounded(record, runtime.max_record_bytes()), resolved_group)
     except Exception:
         runtime.count_lost()
         return False
@@ -667,12 +707,6 @@ def _valid_ack(response: _Response, batch_id: str) -> bool:
 
 
 def _warn(message: str) -> None:
-    global _last_warning
-    now = time.monotonic()
-    with _warning_lock:
-        if _last_warning is not None and now - _last_warning < _WARNING_INTERVAL:
-            return
-        _last_warning = now
     try:
         logger.warning(message)
     except Exception:

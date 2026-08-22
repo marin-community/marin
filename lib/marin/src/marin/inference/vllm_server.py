@@ -1093,6 +1093,7 @@ def _configure_vllm_telemetry(
     # direct telemetry so it reaches Finelog. The metrics endpoint sits at the root, not under /v1.
     runtime_telemetry.configure(
         _VLLM_METRICS_SERVICE,
+        group="vllm",
         attributes={"role": telemetry.TelemetryRole.INFERENCE.value},
     )
     if not telemetry.runtime_status().configured:

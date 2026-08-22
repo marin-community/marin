@@ -13,7 +13,7 @@ from rigging.telemetry.probes import nvidia
 
 from iris.cluster.config import WorkerConfig
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH
-from iris.cluster.node_agent import SERVICE_NAME
+from iris.cluster.node_agent import SERVICE_NAME, TELEMETRY_GROUP
 from iris.cluster.node_agent.metrics import NodeMetrics, NodeTarget, publish_node_telemetry
 from iris.cluster.types import AcceleratorType
 from iris.cluster.worker.env_probe import (
@@ -27,7 +27,7 @@ from iris.rpc import controller_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import EndpointServiceClientSync
 
-DEFAULT_COLLECTION_INTERVAL = 30.0
+DEFAULT_COLLECTION_INTERVAL = 60.0
 _BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
 
 
@@ -65,6 +65,7 @@ def _configure(endpoint: str, *, node_name: str, node_uid: str, worker: str | No
     telemetry.configure(
         endpoint=endpoint,
         service=SERVICE_NAME,
+        group=TELEMETRY_GROUP,
         attributes=attributes,
     )
 

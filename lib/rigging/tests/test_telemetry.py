@@ -125,6 +125,7 @@ def configure(monkeypatch: pytest.MonkeyPatch, transport: RecordingTransport, **
     options = {
         "endpoint": "http://finelog.test/v1/telemetry",
         "service": "test-service",
+        "group": "test",
         "retry_initial": 0.001,
         "retry_maximum": 0.002,
     }
@@ -178,12 +179,11 @@ def test_requests_transport_tracks_server_encoding_rollouts(monkeypatch: pytest.
         assert session.requests[index][1] == body
 
 
-def test_invalid_configuration_stays_inert(caplog: pytest.LogCaptureFixture) -> None:
-    telemetry.configure(endpoint="file:///tmp/telemetry", service="test")
+def test_invalid_configuration_stays_inert() -> None:
+    telemetry.configure(endpoint="file:///tmp/telemetry", service="test", group="test")
     telemetry.counter("requests").add()
 
     assert telemetry.runtime_status().configured is False
-    assert "invalid configuration" in caplog.text
 
 
 def test_custom_resource_role_is_exported(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -195,6 +195,20 @@ def test_custom_resource_role_is_exported(monkeypatch: pytest.MonkeyPatch) -> No
     assert transport.accepted.wait(1)
     payload = json.loads(transport.requests[0][1])
     assert payload["resource"]["attributes"]["role"] == "skyrl_driver"
+
+
+def test_groups_select_complete_namespaces_without_entering_records(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = RecordingTransport()
+    configure(monkeypatch, transport, group="iris.rpc")
+
+    telemetry.counter("calls").add()
+    telemetry.histogram("latency", group="iris.extra").record(0.5)
+    assert telemetry.flush(1.0)
+
+    payloads = [json.loads(request[1]) for request in transport.requests]
+    assert [payload["namespace"] for payload in payloads] == ["telemetry_v1.iris.rpc", "telemetry_v1.iris.extra"]
+    assert [record["name"] for payload in payloads for record in payload["records"]] == ["calls", "latency"]
+    assert all("group" not in record for payload in payloads for record in payload["records"])
 
 
 def test_retry_reuses_exact_batch_id_and_body(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -214,6 +228,7 @@ def test_retry_reuses_exact_batch_id_and_body(monkeypatch: pytest.MonkeyPatch) -
     assert len({request[1] for request in delivery_requests}) == 1
     payload = json.loads(transport.requests[0][1])
     assert payload["batch_id"] == transport.requests[0][2]
+    assert payload["namespace"] == "telemetry_v1.test"
     assert payload["records"][0]["value"] == 2
     assert status.export_attempts == 3
     assert status.export_failures == 2
@@ -389,9 +404,8 @@ def test_invalid_shutdown_budget_is_bounded(monkeypatch: pytest.MonkeyPatch, tim
 def test_raising_log_handler_cannot_escape_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     handler = RaisingHandler()
     telemetry.logger.addHandler(handler)
-    monkeypatch.setattr(telemetry, "_last_warning", None)
     try:
-        telemetry.configure(endpoint="invalid", service="test")
+        telemetry.configure(endpoint="invalid", service="test", group="test")
     finally:
         telemetry.logger.removeHandler(handler)
 
@@ -403,7 +417,6 @@ def test_raising_log_handler_cannot_stop_exporter_settlement(monkeypatch: pytest
     configure(monkeypatch, transport)
     handler = RaisingHandler()
     telemetry.logger.addHandler(handler)
-    monkeypatch.setattr(telemetry, "_last_warning", None)
     try:
         telemetry.event("rejected", telemetry.serialization.EventBody({}))
         assert transport.rejected.wait(1)
@@ -415,17 +428,6 @@ def test_raising_log_handler_cannot_stop_exporter_settlement(monkeypatch: pytest
 
     assert telemetry.runtime_status().queued_records == 0
     assert telemetry.runtime_status().lost_records == 1
-
-
-def test_first_warning_is_emitted_before_one_minute_of_process_uptime(monkeypatch: pytest.MonkeyPatch) -> None:
-    warnings: list[str] = []
-    monkeypatch.setattr(telemetry, "_last_warning", None)
-    monkeypatch.setattr(telemetry.time, "monotonic", lambda: 10.0)
-    monkeypatch.setattr(telemetry.logger, "warning", warnings.append)
-
-    telemetry.configure(endpoint="invalid", service="test")
-
-    assert warnings == ["telemetry export disabled by invalid configuration: endpoint must use http:// or https://"]
 
 
 def test_same_configuration_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -440,6 +442,7 @@ def test_same_configuration_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> No
     options = {
         "endpoint": "http://finelog.test/v1/telemetry",
         "service": "test-service",
+        "group": "test",
         "retry_initial": 0.001,
         "retry_maximum": 0.002,
     }

@@ -4,3 +4,4 @@
 """Iris-owned physical node telemetry."""
 
 SERVICE_NAME = "iris-node-agent"
+TELEMETRY_GROUP = "node_agent"

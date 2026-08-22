@@ -262,15 +262,15 @@ def test_query_reports_the_stalest_replica_and_bounded_replica_detail():
     records = [
         _record("stale", "num_requests_running", 1, 105_000, current),
         _record("stale", "num_requests_running", 1, 120_000, current),
-        _record("healthy", "num_requests_running", 1, 150_000, current),
-        _record("healthy", "num_requests_running", 1, 165_000, current),
+        _record("healthy", "num_requests_running", 1, 330_000, current),
+        _record("healthy", "num_requests_running", 1, 345_000, current),
     ]
-    rows = _query_rows(_database(records))
+    rows = _query_rows(_database(records), end_ms=360_000)
 
     summary = _one(rows, "freshness", "telemetry", "latest_sample_age")
     assert (summary["status"], summary["value"], summary["series"]) == (
         "stale_or_stopped",
-        60.0,
+        240.0,
         f"cw-a:vllm:{_resource('/serve', 'stale')}",
     )
     details = [row for row in rows if row["section"] == "freshness_detail"]
@@ -404,7 +404,7 @@ def test_query_quotes_identity_as_data():
         [
             _record("a", "generation_tokens_total", 0, 105_000, cumulative, job="job'quoted"),
             _record("a", "generation_tokens_total", 5, 135_000, cumulative, job="job'quoted"),
-            _record("a", "generation_tokens_total", 1_005, END_MS + 15_000, cumulative, job="job'quoted"),
+            _record("a", "generation_tokens_total", 1_005, END_MS + 60_000, cumulative, job="job'quoted"),
             _record("b", "generation_tokens_total", 0, 105_000, cumulative, job="other"),
             _record("b", "generation_tokens_total", 500, 135_000, cumulative, job="other"),
         ]
@@ -432,11 +432,11 @@ def test_query_uses_more_than_one_scrape_interval_for_predecessors():
 def test_query_computes_kv_peak_before_adaptive_bin_averaging():
     current = _attributes("current_snapshot")
     records = [
-        _record("a", "kv_cache_usage_perc", 1.0 if sample == 0 else 0.0, sample * 15_000, current)
+        _record("a", "kv_cache_usage_perc", 1.0 if sample == 0 else 0.0, sample * 60_000, current)
         for sample in range(56)
     ]
 
-    rows = _query_rows(_database(records), start_ms=0, end_ms=VLLM_MAX_WINDOW_MS, bucket_ms=15_000)
+    rows = _query_rows(_database(records), start_ms=0, end_ms=VLLM_MAX_WINDOW_MS, bucket_ms=60_000)
 
     assert _one(rows, "saturation_summary", "kv_cache_usage", "peak")["value"] == pytest.approx(1.0)
     assert _one(rows, "saturation_summary", "kv_cache_usage", "average")["value"] == pytest.approx(1 / 56)

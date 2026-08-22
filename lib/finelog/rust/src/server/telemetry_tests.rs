@@ -179,6 +179,12 @@ fn batch(batch_id: &str) -> Vec<u8> {
     .unwrap()
 }
 
+fn batch_in_namespace(batch_id: &str, namespace: &str) -> Vec<u8> {
+    let mut payload: Value = serde_json::from_slice(&batch(batch_id)).unwrap();
+    payload["namespace"] = json!(namespace);
+    serde_json::to_vec(&payload).unwrap()
+}
+
 fn training_metrics_batch(
     batch_id: &str,
     process_index: &str,
@@ -249,6 +255,10 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
     .await
     .expect("startup registration did not complete");
     let schema = store.get_table_schema("telemetry_v1").unwrap();
+    assert_eq!(
+        store.get_policy("telemetry_v1").unwrap().max_bytes,
+        Some(50 * 1024 * 1024 * 1024)
+    );
 
     for name in ["service", "kind", "name"] {
         let column = schema
@@ -539,7 +549,7 @@ async fn a_registration_the_catalog_rejects_shows_up_in_health_and_server_info()
         None,
     )
     .await;
-    assert_eq!(posted.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(posted.status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -617,6 +627,86 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
         2
     );
     assert_eq!(bounded[0].column(2).as_string::<i32>().value(0), "run-1");
+}
+
+#[tokio::test]
+async fn client_selected_namespace_is_registered_and_included_in_parent_queries() {
+    let store = disk_store("telemetry-client-namespace");
+    let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
+    let client = http_client();
+    let batch_id = "4f106a9c-b70d-445a-902d-529aab755aa7";
+
+    let response = post(
+        &client,
+        addr,
+        batch_in_namespace(batch_id, "telemetry_v1.iris.rpc"),
+        Some(batch_id),
+        Some("application/json"),
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status, StatusCode::OK);
+    store
+        .await_persisted("telemetry_v1.iris.rpc", 1, Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_policy("telemetry_v1.iris.rpc").unwrap().max_bytes,
+        None
+    );
+    for namespace in ["\"telemetry_v1.iris.rpc\"", "telemetry_v1"] {
+        let rows = query(
+            &store,
+            &format!("SELECT name FROM {namespace} ORDER BY record_index"),
+        )
+        .await;
+        assert_eq!(rows.iter().map(|batch| batch.num_rows()).sum::<usize>(), 2);
+    }
+}
+
+#[tokio::test]
+async fn client_namespace_must_be_a_compatible_telemetry_descendant() {
+    let store = disk_store("telemetry-client-namespace-rejection");
+    store
+        .register_table(
+            "telemetry_v1.bad_schema",
+            Schema::new(
+                vec![
+                    Column::new("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+                    Column::new("name", ColumnType::COLUMN_TYPE_INT64, false),
+                ],
+                "timestamp_ms",
+            ),
+            StoragePolicy::default(),
+        )
+        .unwrap();
+    let (addr, _) = serve(store, AuthPolicy::allow_localhost()).await;
+    let client = http_client();
+
+    for (batch_id, namespace) in [
+        ("3b52df80-e75d-4411-a976-dfd14f591c27", "other"),
+        (
+            "cfcd9bf0-df19-46c9-ae8b-34eec13c06f0",
+            "telemetry_v1..empty",
+        ),
+        (
+            "13ab225e-2bb9-4e96-a312-21cdaff3f139",
+            "telemetry_v1.bad_schema",
+        ),
+    ] {
+        let response = post(
+            &client,
+            addr,
+            batch_in_namespace(batch_id, namespace),
+            Some(batch_id),
+            Some("application/json"),
+            None,
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{namespace}");
+        assert_eq!(response.payload["error"]["code"], "invalid_request");
+    }
 }
 
 #[tokio::test]
