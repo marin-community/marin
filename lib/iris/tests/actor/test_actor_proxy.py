@@ -4,8 +4,8 @@
 """Integration tests for actor RPC through the native endpoint proxy.
 
 Tests the full round-trip: ActorClient → ProxyResolver → native listener →
-actor server → response. There is no special actor-routing header; the encoded
-actor name lives in the URL path.
+actor server → response. The proxy sends the selected actor name in an internal
+request header.
 """
 
 import json
@@ -17,15 +17,12 @@ from connectrpc.errors import ConnectError
 from iris.actor.client import ActorClient
 from iris.actor.resolver import ProxyResolver
 from iris.actor.server import ActorServer
+from iris.actor.web import web_endpoint
 from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.native_proxy import NativeProxy
 from iris.managed_thread import ThreadContainer
 from rigging.connect import proxy_path
-from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
-from starlette.routing import Route
-from starlette.types import ASGIApp
 
 
 class StatusActor:
@@ -43,16 +40,17 @@ class StatusActor:
 
 
 class DashboardStatusActor(StatusActor):
-    def __init__(self):
+    def __init__(self, label: str):
         super().__init__()
-        self._web_application = Starlette(routes=[Route("/", self._dashboard)])
+        self._label = label
 
-    @property
-    def web_application(self) -> ASGIApp:
-        return self._web_application
-
-    async def _dashboard(self, request: Request) -> JSONResponse:
-        return JSONResponse({"proxy_prefix": request.headers.get("x-forwarded-prefix", "")})
+    @web_endpoint("/")
+    def _dashboard(self, request: Request) -> dict[str, str]:
+        return {
+            "actor": self._label,
+            "endpoint_name": request.headers.get("x-iris-endpoint-name", ""),
+            "proxy_prefix": request.headers.get("x-forwarded-prefix", ""),
+        }
 
 
 def _start_proxy(
@@ -121,23 +119,44 @@ def test_proxy_round_trip(permissive_native_proxy_auth_json: str):
         threads.stop()
 
 
-def test_proxy_forwards_actor_web_application(permissive_native_proxy_auth_json: str):
+def test_proxy_routes_web_endpoint_to_actor(permissive_native_proxy_auth_json: str):
     threads = ThreadContainer()
-    actor_name = "test-ns/dashboard"
+    first_actor_name = "test-ns/first-dashboard"
+    second_actor_name = "test-ns/second-dashboard"
     actor_server = ActorServer(host="127.0.0.1", threads=threads)
-    actor_server.register(actor_name, DashboardStatusActor())
+    actor_server.register(first_actor_name, DashboardStatusActor("first"))
+    actor_server.register(second_actor_name, DashboardStatusActor("second"))
     actor_port = actor_server.serve_background()
 
     try:
+        address = f"127.0.0.1:{actor_port}"
         proxy_url, proxy = _start_proxy(
             permissive_native_proxy_auth_json,
-            endpoints={actor_name: f"127.0.0.1:{actor_port}"},
+            endpoints={first_actor_name: address, second_actor_name: address},
         )
-        endpoint_path = proxy_path(actor_name)
+        first_path = proxy_path(first_actor_name)
+        second_path = proxy_path(second_actor_name)
 
-        dashboard = httpx.get(f"{proxy_url}{endpoint_path}/", timeout=2)
+        direct = httpx.get(f"http://{address}/", timeout=2)
 
-        assert dashboard.json() == {"proxy_prefix": endpoint_path}
+        first = httpx.get(
+            f"{proxy_url}{first_path}/",
+            headers={"x-iris-endpoint-name": second_actor_name},
+            timeout=2,
+        )
+        second = httpx.get(f"{proxy_url}{second_path}/", timeout=2)
+
+        assert direct.status_code == 404
+        assert first.json() == {
+            "actor": "first",
+            "endpoint_name": first_actor_name,
+            "proxy_prefix": first_path,
+        }
+        assert second.json() == {
+            "actor": "second",
+            "endpoint_name": second_actor_name,
+            "proxy_prefix": second_path,
+        }
     finally:
         proxy.stop()
         threads.stop()
