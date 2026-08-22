@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Time a hero checkpoint save and restore on one rack.
+"""Time a hero checkpoint save and restore on one or more racks.
 
 Builds the hero train state, writes it to a one-day temporary prefix, and reads it back into
 the same exemplar a resume restores into -- offloaded optimizer state and FP32 pinned-host
@@ -37,6 +37,7 @@ from levanter.checkpoint import save_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.optim.config import OptimizerConfig
 from levanter.tensorstore_serialization import (
+    ReplicaRestoreMode,
     TensorStoreReadConfig,
     TensorStoreWriteConfig,
     tree_deserialize_leaves_tensorstore,
@@ -122,11 +123,12 @@ def _time_one_restore(config: RestoreBenchmarkConfig, template, mesh, attempt: i
     del restored
     gc.collect()
     logger.info(
-        "RESULT attempt=%d seconds=%.1f budget=%.0fGiB requests=%d",
+        "RESULT attempt=%d seconds=%.1f budget=%.0fGiB requests=%d replica_mode=%s",
         attempt,
         elapsed,
         config.read.max_in_flight_bytes / GIB,
         config.read.request_concurrency,
+        config.read.replica_mode,
     )
 
 
@@ -184,7 +186,7 @@ def _run_restore_benchmark_local(config: RestoreBenchmarkConfig) -> None:
     type=click.IntRange(min=1),
     default=TensorStoreReadConfig.max_in_flight_bytes // GIB,
     show_default=True,
-    help="Host memory a process may hold in shards awaiting transfer. 48 OOM-kills a GB200 node.",
+    help="Transient staging memory per process. 48 GiB OOM-kills a GB200 node.",
 )
 @click.option(
     "--stage-gib",
@@ -201,7 +203,22 @@ def _run_restore_benchmark_local(config: RestoreBenchmarkConfig) -> None:
     show_default=True,
     help="Concurrent object-store requests.",
 )
-def main(run_id: str, dp_racks: int, repeats: int, budget_gib: int, stage_gib: int, requests: int) -> None:
+@click.option(
+    "--replica-mode",
+    type=click.Choice([mode.value for mode in ReplicaRestoreMode]),
+    default=ReplicaRestoreMode.ONE_REPLICA.value,
+    show_default=True,
+    help="Read each shard on every replica, or read it once and distribute it with a collective.",
+)
+def main(
+    run_id: str,
+    dp_racks: int,
+    repeats: int,
+    budget_gib: int,
+    stage_gib: int,
+    requests: int,
+    replica_mode: str,
+) -> None:
     batch_size = HERO_EP_BATCH_SIZE * dp_racks
     model, optimizer = build_hero_configs(num_train_steps=HERO_SCHEDULE_STEPS, batch_size=batch_size)
     config = RestoreBenchmarkConfig(
@@ -220,7 +237,11 @@ def main(run_id: str, dp_racks: int, repeats: int, budget_gib: int, stage_gib: i
             use_explicit_mesh_axes=True,
             require_accelerator=True,
         ),
-        read=TensorStoreReadConfig(max_in_flight_bytes=budget_gib * GIB, request_concurrency=requests),
+        read=TensorStoreReadConfig(
+            max_in_flight_bytes=budget_gib * GIB,
+            request_concurrency=requests,
+            replica_mode=ReplicaRestoreMode(replica_mode),
+        ),
         write=TensorStoreWriteConfig(max_staged_host_bytes=stage_gib * GIB),
         repeats=repeats,
         replica_axis_size=dp_racks,

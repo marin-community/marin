@@ -385,6 +385,14 @@ def test_replicated_arrays_survive_a_replica_parallel_roundtrip():
     run_on_eight_devices(eight_device_checkpoints.replicated_arrays_survive_a_roundtrip)
 
 
+def test_replica_aware_restore_reads_each_shard_once():
+    run_on_eight_devices(eight_device_checkpoints.replica_aware_restore_reads_each_shard_once)
+
+
+def test_replica_aware_restore_broadcasts_across_processes():
+    eight_device_checkpoints.replica_aware_restore_across_processes()
+
+
 def test_checkpoint_written_on_one_mesh_loads_on_another():
     """Content must not depend on the mesh that wrote it, so writer layout can keep changing."""
     run_on_eight_devices(eight_device_checkpoints.a_checkpoint_loads_on_another_mesh)

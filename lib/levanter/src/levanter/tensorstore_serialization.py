@@ -15,7 +15,8 @@ import time
 import urllib.parse
 import zlib
 from dataclasses import dataclass
-from functools import partial
+from enum import StrEnum
+from functools import cache, partial
 from typing import Any, Callable, Optional, Sequence
 
 import equinox
@@ -32,7 +33,7 @@ from haliax.partitioning import ResourceMapping
 from haliax.util import is_named_array
 from jax._src.mesh import get_concrete_mesh
 from jax._src.sharding import IndivisibleError
-from jax.sharding import Mesh, Sharding
+from jax.sharding import Mesh, NamedSharding, PartitionSpec, Sharding, SingleDeviceSharding
 from jaxtyping import PyTree
 
 from rigging.filesystem.cross_region import record_transfer
@@ -217,16 +218,32 @@ _CONCURRENCY_RESOURCES = (
 )
 
 
+class ReplicaRestoreMode(StrEnum):
+    """How a restore obtains shards held by more than one device."""
+
+    EVERY_REPLICA = "every_replica"
+    ONE_REPLICA = "one_replica"
+
+
 @dataclass(frozen=True)
 class TensorStoreReadConfig:
     """How a restore reads shards back."""
 
     max_in_flight_bytes: int = 16 * 1024**3
-    """Host memory this process may hold in shards whose transfer has not drained."""
+    """Transient host and device staging memory this process may hold during restore."""
 
     request_concurrency: int = 128
     """Concurrent object-store requests. TensorStore defaults to 32, which on one GB200 rack
     read a hero checkpoint in 125.6s against 96.9s at 128."""
+
+    replica_mode: ReplicaRestoreMode = ReplicaRestoreMode.ONE_REPLICA
+    """Whether every replica reads its shard or one replica reads and distributes it."""
+
+    def __post_init__(self) -> None:
+        if self.max_in_flight_bytes <= 0:
+            raise ValueError(f"max_in_flight_bytes must be positive, got {self.max_in_flight_bytes}")
+        if self.request_concurrency <= 0:
+            raise ValueError(f"request_concurrency must be positive, got {self.request_concurrency}")
 
 
 def _tensorstore_read_context(config: TensorStoreReadConfig) -> ts.Context:
@@ -284,11 +301,11 @@ class _ShardWrite:
 
 
 class _HostByteBudget:
-    """Bound the host memory one process holds in flight, for a save or a restore.
+    """Bound the host memory one process holds in flight while saving.
 
-    A save charges each staged snapshot until TensorStore commits it: shard writes pass
+    Each staged snapshot stays charged until TensorStore commits it: shard writes pass
     ``can_reference_source_data_indefinitely=True``, so the copy future resolves while the
-    snapshot is still referenced. A restore charges each shard until its transfer drains.
+    snapshot is still referenced.
     """
 
     def __init__(self, limit_bytes: int):
@@ -303,7 +320,7 @@ class _HostByteBudget:
         return self._peak
 
     async def acquire(self, num_bytes: int) -> None:
-        # Built before its loop exists, so bind on first use.
+        # Built before the save's loop exists, so bind on first use.
         self._loop = asyncio.get_running_loop()
         # A snapshot larger than the whole budget proceeds alone; it can never be admitted.
         while self._in_flight and self._in_flight + num_bytes > self._limit:
@@ -778,85 +795,240 @@ def _fully_replicated_sharding(mesh):
     return hax.partitioning.sharding_for_axis((), {}, mesh)
 
 
-async def _deserialize_leaf(
+def _replica_staging_sharding(sharding: Sharding, shape: tuple[int, ...]) -> NamedSharding | None:
+    """Add a leading dimension that makes the target sharding's replicas addressable."""
+    if not isinstance(sharding, NamedSharding):
+        return None
+
+    used_axes = set()
+    for partition in sharding.spec:
+        if isinstance(partition, str):
+            used_axes.add(partition)
+        elif isinstance(partition, tuple):
+            used_axes.update(partition)
+    replica_axes = tuple(
+        axis for axis in sharding.mesh.axis_names if axis not in used_axes and sharding.mesh.shape[axis] > 1
+    )
+    if not replica_axes:
+        return None
+
+    replica_count = math.prod(sharding.mesh.shape[axis] for axis in replica_axes)
+    if _uniform_replica_count(sharding, shape) != replica_count:
+        return None
+
+    staging_spec = PartitionSpec(replica_axes, *sharding.spec)
+    return NamedSharding(sharding.mesh, staging_spec, memory_kind=sharding.memory_kind)
+
+
+def _replica_count(staging_sharding: NamedSharding) -> int:
+    replica_axes = staging_sharding.spec[0]
+    if isinstance(replica_axes, str):
+        replica_axes = (replica_axes,)
+    return math.prod(staging_sharding.mesh.shape[axis] for axis in replica_axes)
+
+
+@dataclass(frozen=True)
+class _LeafReadPlan:
+    path: str
+    store: ts.TensorStore
+    sharding: Sharding
+    shape: tuple[int, ...]
+    dtype: Any
+    shard_shape: tuple[int, ...]
+    temporary_bytes: int
+    staging_sharding: NamedSharding | None
+    replica_count: int
+
+
+async def _leaf_read_plan(
+    path: str,
     sharding: Sharding,
     tensorstore_spec: dict,
     *,
     context: ts.Context,
-    budget: "_HostByteBudget",
-) -> jax.Array:
-    """Read every addressable shard of one array into its target memory kind."""
+    config: TensorStoreReadConfig,
+) -> _LeafReadPlan:
     store = await ts.open(tensorstore_spec, open=True, context=context)
     shape = tuple(store.shape)
     dtype = jax.dtypes.canonicalize_dtype(store.dtype.numpy_dtype)
     shard_shape = tuple(sharding.shard_shape(shape))
-
-    async def read_shard(device: jax.Device, index) -> jax.Array:
+    shard_bytes = math.prod(shard_shape) * np.dtype(dtype).itemsize
+    max_read_bytes = shard_bytes
+    seen_indices = set()
+    # Use the maximum over global shard indices so every process forms identical batches.
+    for index in sharding.devices_indices_map(shape).values():
+        hashable_index = _hashable_index(index)
+        if hashable_index in seen_indices:
+            continue
+        seen_indices.add(hashable_index)
         requested_domain = ts.IndexTransform(input_shape=shape)[index].domain
         restricted_domain = store.domain.intersect(requested_domain)
-        # Chunks arrive whole, so a shard off the chunk grid materializes more than its own size.
-        charge = ts_impl.estimate_read_memory_footprint(store, restricted_domain)
-        if store.dtype.numpy_dtype != dtype:
-            # The cast allocates a second buffer while the first is still alive.
-            charge += math.prod(shard_shape) * np.dtype(dtype).itemsize
+        max_read_bytes = max(max_read_bytes, ts_impl.estimate_read_memory_footprint(store, restricted_domain))
+    if store.dtype.numpy_dtype != dtype:
+        max_read_bytes += shard_bytes
 
-        await budget.acquire(charge)
-        try:
-            # The shard shape comes from the store's own shape, so the read covers every
-            # element and the buffer needs no fill first.
-            host_array = np.empty(shard_shape, dtype=store.dtype.numpy_dtype)
-            await ts.array(host_array)[ts.d[:].translate_to[requested_domain.origin]][restricted_domain].write(
-                store[restricted_domain]
-            )
-            if host_array.dtype != dtype:
-                host_array = host_array.astype(dtype)
-            target = jax.sharding.SingleDeviceSharding(device, memory_kind=sharding.memory_kind)
-            array = jax.device_put(host_array, target)
-            # Hold the charge until the transfer drains, so the budget bounds live host memory.
-            array.block_until_ready()
-            return array
-        finally:
-            budget.release(charge)
-
-    shards = await asyncio.gather(
-        *(read_shard(device, index) for device, index in sharding.addressable_devices_indices_map(shape).items())
+    staging_sharding = None
+    if config.replica_mode == ReplicaRestoreMode.ONE_REPLICA:
+        staging_sharding = _replica_staging_sharding(sharding, shape)
+    replica_count = _replica_count(staging_sharding) if staging_sharding is not None else 1
+    temporary_bytes = max_read_bytes
+    if staging_sharding is not None:
+        # The collective input remains live after the pageable TensorStore destination is copied.
+        temporary_bytes += shard_bytes
+    return _LeafReadPlan(
+        path=path,
+        store=store,
+        sharding=sharding,
+        shape=shape,
+        dtype=dtype,
+        shard_shape=shard_shape,
+        temporary_bytes=temporary_bytes * len(sharding.addressable_devices),
+        staging_sharding=staging_sharding,
+        replica_count=replica_count,
     )
-    return jax.make_array_from_single_device_arrays(shape, sharding, list(shards))
+
+
+async def _read_store_shard(plan: _LeafReadPlan, index, host_array: np.ndarray) -> int:
+    requested_domain = ts.IndexTransform(input_shape=plan.shape)[index].domain
+    restricted_domain = plan.store.domain.intersect(requested_domain)
+    if plan.store.dtype.numpy_dtype == plan.dtype:
+        destination = host_array
+    else:
+        destination = np.empty(plan.shard_shape, dtype=plan.store.dtype.numpy_dtype)
+    await ts.array(destination)[ts.d[:].translate_to[requested_domain.origin]][restricted_domain].write(
+        plan.store[restricted_domain]
+    )
+    if destination is not host_array:
+        host_array[...] = destination.astype(plan.dtype)
+    return restricted_domain.size * np.dtype(plan.store.dtype.numpy_dtype).itemsize
+
+
+async def _stage_leaf(plan: _LeafReadPlan) -> tuple[jax.Array, int]:
+    target_indices = plan.sharding.addressable_devices_indices_map(plan.shape)
+    staging_sharding = plan.staging_sharding
+    replica_indices_by_device = {}
+    if staging_sharding is None:
+        local_shape = plan.shard_shape
+        output_shape = plan.shape
+        output_sharding = plan.sharding
+    else:
+        output_shape = (plan.replica_count, *plan.shape)
+        output_sharding = staging_sharding
+        for device, index in staging_sharding.addressable_devices_indices_map(output_shape).items():
+            assert index is not None
+            replica_indices_by_device[device] = index[0]
+        local_shape = tuple(staging_sharding.shard_shape(output_shape))
+        assert local_shape == (1, *plan.shard_shape)
+
+    async def stage_shard(device: jax.Device, index, replica_index) -> tuple[jax.Array, int]:
+        reader = True
+        if replica_index is not None:
+            assert isinstance(replica_index, slice)
+            replica_start = replica_index.start or 0
+            assert replica_index.stop - replica_start == 1
+            shard_key = f"{plan.path}:{_hashable_index(index)!r}".encode()
+            reader = replica_start == zlib.crc32(shard_key) % plan.replica_count
+
+        host_array = np.zeros(local_shape, dtype=plan.dtype)
+        store_bytes = 0
+        if reader:
+            destination = host_array if staging_sharding is None else host_array.reshape(plan.shard_shape)
+            store_bytes = await _read_store_shard(plan, index, destination)
+        target = SingleDeviceSharding(device, memory_kind=output_sharding.memory_kind)
+        array = jax.device_put(host_array, target)
+        array.block_until_ready()
+        return array, store_bytes
+
+    shard_args = [(device, index, replica_indices_by_device.get(device)) for device, index in target_indices.items()]
+    staged = await asyncio.gather(*(stage_shard(*args) for args in shard_args))
+    shards, store_bytes = zip(*staged)
+    array = jax.make_array_from_single_device_arrays(output_shape, output_sharding, list(shards))
+    return array, sum(store_bytes)
+
+
+def _sum_replica_axis(value: jax.Array) -> jax.Array:
+    return jnp.sum(value, axis=0, dtype=value.dtype)
+
+
+@cache
+def _replica_reducer(staging_sharding: NamedSharding, target_sharding: Sharding):
+    return jax.jit(_sum_replica_axis, in_shardings=staging_sharding, out_shardings=target_sharding)
+
+
+def _finish_leaf(plan: _LeafReadPlan, staged: jax.Array) -> jax.Array:
+    if plan.staging_sharding is None:
+        return staged
+    # The jit stages pinned-host inputs through device memory for the all-reduce, then honors
+    # the original memory kind on output. Only this leaf's shard needs to enter device memory.
+    restored = _replica_reducer(plan.staging_sharding, plan.sharding)(staged)
+    restored.block_until_ready()
+    return restored
+
+
+def _read_batches(plans: Sequence[_LeafReadPlan], limit_bytes: int) -> list[list[_LeafReadPlan]]:
+    batches: list[list[_LeafReadPlan]] = []
+    current: list[_LeafReadPlan] = []
+    current_bytes = 0
+    for plan in plans:
+        if current and current_bytes + plan.temporary_bytes > limit_bytes:
+            batches.append(current)
+            current = []
+            current_bytes = 0
+        current.append(plan)
+        current_bytes += plan.temporary_bytes
+    if current:
+        batches.append(current)
+    return batches
 
 
 def _deserialize_leaves(
+    paths: list[str],
     shardings: list[Sharding],
     tensorstore_specs: list[dict],
     config: TensorStoreReadConfig,
 ) -> list:
-    """Read every leaf, concurrently, into the memory kind each leaf's sharding names.
-
-    One shared TensorStore context and one budget cover all the reads, so the budget bounds
-    this process's live shard bytes across the whole restore.
-    """
+    """Read every leaf in bounded batches and distribute replica reads in a fixed order."""
     context = _tensorstore_read_context(config)
-    budget = _HostByteBudget(config.max_in_flight_bytes)
 
     async def read_all():
-        return await asyncio.gather(
+        plans = await asyncio.gather(
             *(
-                _deserialize_leaf(sharding, spec, context=context, budget=budget)
-                for sharding, spec in zip(shardings, tensorstore_specs)
+                _leaf_read_plan(path, sharding, spec, context=context, config=config)
+                for path, sharding, spec in zip(paths, shardings, tensorstore_specs)
             )
         )
+        leaves = []
+        store_bytes = 0
+        peak_bytes = 0
+        # Every process completes these collectives in path order. Issuing them as soon as each
+        # asynchronous read finishes would let ranks enter different all-reduces and deadlock.
+        for batch in _read_batches(plans, config.max_in_flight_bytes):
+            staged = await asyncio.gather(*(_stage_leaf(plan) for plan in batch))
+            peak_bytes = max(peak_bytes, sum(plan.temporary_bytes for plan in batch))
+            staged_arrays: list[jax.Array | None] = [array for array, _ in staged]
+            staged_store_bytes = [leaf_store_bytes for _, leaf_store_bytes in staged]
+            del staged
+            for index, plan in enumerate(batch):
+                array = staged_arrays[index]
+                assert array is not None
+                leaves.append(_finish_leaf(plan, array))
+                staged_arrays[index] = None
+                store_bytes += staged_store_bytes[index]
+        return leaves, store_bytes, peak_bytes
 
     started = time.time()
-    leaves = asyncio.run(read_all())
+    leaves, store_bytes, peak_bytes = asyncio.run(read_all())
     elapsed = time.time() - started
-    # `leaf.nbytes` is the global array; this process only read the shards it addresses.
-    read_bytes = sum(shard.data.nbytes for leaf in leaves for shard in leaf.addressable_shards)
+    materialized_bytes = sum(shard.data.nbytes for leaf in leaves for shard in leaf.addressable_shards)
     logger.info(
-        "Restore read %s across %d arrays in %.1fs (%.2f GiB/s), peak %s of a %s budget",
-        _format_gib(read_bytes),
+        "Restore read %s from TensorStore and materialized %s across %d arrays in %.1fs "
+        "(%.2f GiB/s), peak %s of a %s budget",
+        _format_gib(store_bytes),
+        _format_gib(materialized_bytes),
         len(leaves),
         elapsed,
-        read_bytes / 1024**3 / max(elapsed, 1e-9),
-        _format_gib(budget.peak_bytes),
+        store_bytes / 1024**3 / max(elapsed, 1e-9),
+        _format_gib(peak_bytes),
         _format_gib(config.max_in_flight_bytes),
     )
     return leaves
@@ -917,7 +1089,7 @@ def _restore_ocdbt(
         spec = _create_ocdbt_spec(checkpoint_root, path)
         tspecs_to_load.append(spec)
 
-    deser_leaves = _deserialize_leaves(shardings_to_load, tspecs_to_load, read_config)
+    deser_leaves = _deserialize_leaves(paths_to_load, shardings_to_load, tspecs_to_load, read_config)
     return deser_leaves, indices_to_load
 
 
@@ -964,7 +1136,7 @@ def _restore_old_ts(
             logger.warning(to_log)
 
     tspecs_to_load = [array_ser.get_tensorstore_spec(path) for path in paths_to_load]
-    deser_leaves = _deserialize_leaves(shardings_to_load, tspecs_to_load, read_config)
+    deser_leaves = _deserialize_leaves(paths_to_load, shardings_to_load, tspecs_to_load, read_config)
     return deser_leaves, indices_to_load
 
 
