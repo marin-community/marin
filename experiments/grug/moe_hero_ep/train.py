@@ -85,14 +85,10 @@ DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # Profiled ragged/pooled twins at the hero shape show the ragged run hiding none of its
 # 1.3 s/step of ordinary NCCL while the pooled posture (latency hiding on) hides 0.4 s of 0.9.
-# The no-LHS posture predates the 32-split transport. LHS raises device pressure on the ragged
-# graph -- at the 0.75/85 posture NCCL's alltoall OOMs on the first step at overlap 4 and 1
-# alike -- so the ragged posture pairs it with a rebalanced memory split: fraction 0.70 leaves
-# ~55 GiB outside the pool for NCCL, and slop 80 shrinks the temp arena to fit the smaller pool
-# (133.6 x 0.80 = 106.9 GiB + 18.1 persistent = 125.0 against a 129.0 GiB pool).
+# The no-LHS posture predates the 32-split transport. Overlap stays at 1: limit 4 admits enough
+# concurrent collective buffers that NCCL's alltoall hits CUDA OOM on the first step under this
+# memory posture, and 1 still lets each collective hide behind compute.
 RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
-RAGGED_MEM_FRACTION = "0.70"
-RAGGED_MEMORY_LIMIT_SLOP_FLAG = "--xla_gpu_memory_limit_slop_factor=80"
 RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
@@ -143,9 +139,6 @@ def _apply_hero_ep_runtime_defaults(
     *, inline_watch_enabled: bool, processes_per_task: int = 1, moe_implementation: str = ""
 ) -> None:
     env_defaults = dict(HERO_EP_RUNTIME_ENV)
-    ragged = moe_implementation == RAGGED_MOE_IMPLEMENTATION
-    if ragged:
-        env_defaults["XLA_PYTHON_CLIENT_MEM_FRACTION"] = RAGGED_MEM_FRACTION
     if processes_per_task > 1:
         # With one process per GPU, the per-process CUPTI sessions collide with each
         # other and with CoreWeave's DCGM, so PGLE cannot profile and its recompile
@@ -154,6 +147,7 @@ def _apply_hero_ep_runtime_defaults(
     for name, value in env_defaults.items():
         os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
+    ragged = moe_implementation == RAGGED_MOE_IMPLEMENTATION
     if ragged:
         overlap_limit = RAGGED_COLLECTIVE_OVERLAP_LIMIT
     elif inline_watch_enabled:
@@ -163,7 +157,7 @@ def _apply_hero_ep_runtime_defaults(
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
         f"{XLA_LATENCY_HIDING_FLAG}=true",
-        RAGGED_MEMORY_LIMIT_SLOP_FLAG if ragged else XLA_MEMORY_LIMIT_SLOP_FLAG,
+        XLA_MEMORY_LIMIT_SLOP_FLAG,
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
