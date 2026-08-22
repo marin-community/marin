@@ -3,8 +3,7 @@
 # One section per pin Marin holds under config/external/. Every fork is a marin-community fork: our
 # commits on top of an upstream project. This file records *how* to migrate each — the base to rebase
 # onto, the e2e that validates it, and the constraints to respect. It holds no pins; the actual
-# SHA/version lives in the source named by `pin` (an isolated project's uv.lock, or a vllm/*.toml
-# descriptor).
+# source revision and runtime selection live in the paths named by `source` and `pin`.
 #
 # Migrating a pin rebases our commits onto a newer upstream base on a `<branch>-next` staging branch,
 # validates with the fork's e2e against that branch, re-pins Marin at the exact staged tip, and opens
@@ -26,10 +25,11 @@
 #                    the TPU launcher installs both pins at once and vllm's base derives from the
 #                    tpu-inference release, so a split refresh could pin a mixed, unblessed stack.
 #                    Omitted for pins that refresh alone.
-#   pin              Where the resolved pin is recorded: "isolated_project" (config/external/<name>/
-#                    uv.lock, follows the fork's main branch), "descriptor:<path>#<section>" (a SHA in a
-#                    vllm/*.toml section), or "release:<path>" (a prebuilt-wheel release: a release tag +
-#                    source commit + per-arch wheels, for a pin too expensive to build at job time).
+#   source           Optional source-selection descriptor used to build a release.
+#   pin              Where the runtime pin is recorded: "isolated_project" (config/external/<name>/
+#                    uv.lock), "release:<path>" (one prebuilt wheel release), or
+#                    "paired_release:<path>" (one two-package release shared by every section in a
+#                    group).
 #   branch           The fork branch this pin tracks. A single-pin fork tracks "main". The vllm fork
 #                    carries two pins on different upstream bases, so it splits them across two stable
 #                    branches: the GPU wheel builds from "main" and the TPU source pin lives on "tpu".
@@ -49,7 +49,8 @@
 [tpu-inference]
 upstream = "https://github.com/vllm-project/tpu-inference.git"
 group = "tpu-vllm"
-pin = "descriptor:vllm/tpu.toml#tpu-inference"
+source = "descriptor:vllm/tpu.toml#tpu-inference"
+pin = "paired_release:vllm/tpu_wheels.toml"
 branch = "main"
 base_select = "latest_release"
 e2e = "experiments/evals/served_qwen3.py::QWEN3_TPU_INFERENCE"
@@ -61,7 +62,8 @@ nuances = [
 [vllm]
 upstream = "https://github.com/vllm-project/vllm.git"
 group = "tpu-vllm"
-pin = "descriptor:vllm/tpu.toml#vllm"
+source = "descriptor:vllm/tpu.toml#vllm"
+pin = "paired_release:vllm/tpu_wheels.toml"
 branch = "tpu"
 base_select = "derived"
 derived_from = "tpu-inference:.buildkite/vllm_lkg.version"

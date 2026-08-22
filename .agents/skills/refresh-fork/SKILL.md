@@ -19,15 +19,11 @@ preparing the stable-branch promotion with rollback and date tags. Fork stable
 branches are protected. An unattended run stops after opening the draft Marin PR
 and identifies the admin promotion it needs; it never force-moves the stable branch.
 
-Each pin refreshes independently. The one exception is a `group`, which refreshes as a
-unit: its sections refresh together on one run and re-pin in one PR (each still rebases
-onto its own base). Only the vllm/tpu-inference pair is grouped, because the TPU
-launcher installs both pins at once and vllm's TPU base derives from the tpu-inference
-release; splitting them could pin a mixed, unblessed stack. The vllm fork's GPU pin is
-not in that group — it tracks upstream head on the fork's `main`, independent of the
-`tpu` branch that carries the TPU pin. The weekly `ops-fork-ferry` workflow sends Weaver one request per
-supported pin or group. That request names this skill and the forks to update; this
-file owns the migration procedure.
+Each pin refreshes independently. A `group` refreshes all of its sections in one run
+and one Marin PR. The `tpu-vllm` group selects both sources in `tpu.toml`, builds and
+qualifies one public wheel candidate, and records the pair in `tpu_wheels.toml`; those
+steps may not move separately. The vLLM GPU pin is outside this group. The weekly
+workflow sends Weaver one request per supported pin or group.
 
 Use the same algorithm in CI and local runs. In local/manual mode, ask before
 external mutations: pushing fork branches, opening the Marin PR, or filing a GitHub
@@ -41,9 +37,9 @@ Read the target fork's section in `config/external/migration.toml`. It gives:
 - `group` — if present, refresh every section in the group together in one PR
   (read them all now); if absent, this pin refreshes alone.
 - `base_select` (+ `derived_from`) — how to choose the new upstream base.
-- `pin` — where the resolved pin is recorded (`isolated_project` uv.lock,
-  `descriptor:<path>#<section>` SHA, or `release:<path>` prebuilt wheel); drives the
-  re-pin step.
+- `source` — for a built release, where its source revision is selected.
+- `pin` — where the runtime pin is recorded (`isolated_project` uv.lock,
+  `release:<path>` wheel, or `paired_release:<path>` two-package wheel release).
 - `branch` — the fork branch this pin tracks (`main` for a single-pin fork and for the
   vllm GPU pin; `tpu` for the vllm fork's TPU pin). The refresh stages on `<branch>-next`;
   an admin promotes that validated tip after reviewing the draft Marin PR.
@@ -61,7 +57,7 @@ revision.
 - On success, create the rollback and date tags described in
   `docs/promotion-protocol.md`, then open exactly one draft PR in
   `marin-community/marin` for the fork or group after the e2e passes. A grouped
-  refresh re-pins every group section at its staged tip in that single PR. State the
+  refresh records every source and runtime pin in that single PR. State the
   exact `<branch>-next` to `<branch>` admin promotion still required, request the
   descriptor's `blocker_assignee` as reviewer, and monitor the PR per
   `.agents/skills/commit/SKILL.md`.
@@ -71,16 +67,20 @@ revision.
   base, branch names/SHAs if created, attempted fixes, the remaining failure, and
   artifacts.
 
+For `tpu-vllm`, stop the pre-review run with the qualified candidate pinned. Stable
+branch movement and release promotion require human approval; promotion must reuse
+the candidate wheel bytes and update the same Marin PR.
+
 ## Scratch setup
 
 - Scratch dir: `/tmp/marin-fork-refresh/<run-id>` (run id:
   `${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}` in Actions, else a UTC timestamp plus a
   short label).
 - Clone the fork and add its `upstream` remote. The fork URL is `repository` in the
-  pin source (`vllm/tpu.toml` for descriptor pins, the `[tool.uv.sources]` git
-  entry for isolated projects, the release-asset host in `vllm/gpu.toml` for the
-  `vllm-gpu` release pin — the same `marin-community/vllm` repo); `<upstream>` is this
-  section's `upstream`.
+  source selection (`vllm/tpu.toml` for the paired TPU release, the
+  `[tool.uv.sources]` git entry for isolated projects, the release-asset host in
+  `vllm/gpu.toml` for the `vllm-gpu` release pin — the same `marin-community/vllm`
+  repo); `<upstream>` is this section's `upstream`.
 
 ```sh
 git clone <repository> <fork>
@@ -191,19 +191,30 @@ behind the fork is.
 
 ## Pin at the staged tip
 
-Point Marin at `<branch>-next` so the e2e runs against the replayed code, then run
-`uv run config/update-external.py` to regenerate
-`lib/marin/src/marin/external_dependencies.py`; confirm only the intended pins change.
-The stable `<branch>` remains at the old tip until an admin hard-swaps it after reviewing
-the draft PR. Because `<branch>-next` and the eventual `<branch>` are the same commit,
-the pin set here needs no change after that promotion.
+Point Marin at the staged result, regenerate `external_dependencies.py`, and confirm
+only the intended pins change. Stable fork branches remain at their old tips until an
+admin promotes the reviewed staging tips.
 
-- `pin = descriptor:<path>#<section>` (`vllm`, `tpu-inference`): push `<branch>-next` to
-  the fork. Set the section's `commit` to its tip and `upstream_base` to the selected
-  base in `vllm/tpu.toml`. This stack resolves entirely inside the `uvx` env from
-  the two forks, so there are no `uv.lock` changes and `jax`/`jaxlib`/`libtpu`/`torch`
-  come from the forks' own dependencies — do not touch `marin-core`, `marin-levanter`,
-  or `marin-fray`.
+- `pin = paired_release:vllm/tpu_wheels.toml` (`tpu-vllm`):
+  1. Push `main-next` for tpu-inference and `tpu-next` for vLLM. Record both exact
+     tips and upstream bases in `tpu.toml`.
+  2. From one recorded vLLM producer SHA, build a candidate using both source SHAs,
+     Python 3.12, and a whole-second UTC `exclude_newer` cutoff. Require the workflow
+     and manifest producer SHAs to match. Never select a candidate by recency.
+  3. Download the public candidate assets. Check both wheel hashes and the flat-index
+     hash, then install the checked files together in a fresh Python 3.12 environment.
+  4. Run the producer's v6e-8 qualification for that candidate and download its
+     result. Pin it with `uv run config/update-external.py --pin-tpu-wheels
+     <manifest> --tpu-validation <result>`. The command binds qualification to the
+     candidate and its sources to `tpu.toml`.
+  5. Run the Marin e2e below and open one draft PR. Stop for human review.
+  6. After approval, promote the stable fork branches and candidate release. Download
+     the final manifest and run the same pin command. It accepts the new tag only when
+     the embedded qualification and both wheel hashes match the reviewed candidate.
+     Re-run the Marin e2e and update the same PR.
+
+  No `uv.lock` changes belong to this group. Serving later gives the two public wheel
+  requirements directly to `uvx`; Marin does no runtime download or digest check.
 - `pin = release:<path>` (`vllm-gpu`): the pin is a prebuilt wheel, so the refresh builds
   and promotes one through the fork's own release pipeline, then re-pins from the promoted
   manifest. Dispatching fork workflows needs `actions:write` on `marin-community/vllm`,
@@ -287,16 +298,16 @@ logs as artifacts.
 Run the descriptor's `e2e` before opening the PR:
 
 - **`experiments/evals/served_qwen3.py::QWEN3_TPU_INFERENCE`** (`vllm`,
-  `tpu-inference`) — a bounded brokered TPU serve+eval smoke. Run TPU workloads
-  through Iris on the `marin` cluster at interactive priority, `v6e-4` in GCP
-  `europe-west4`. Confirm the proxy served completions, lm-eval wrote metrics and
-  sample outputs, and no TPU/vLLM build, import, or runtime tracebacks occurred:
+  `tpu-inference`) — a bounded cold TPU serve+eval smoke from the public wheel pair.
+  Run on `v6e-4` in `us-east5`, with production priority on both the launcher and TPU
+  worker. Confirm `uvx` used the wheel URLs without a VCS checkout or custom verifier,
+  requests succeeded, and lm-eval saved metrics and samples:
 
 ```sh
 uv run iris --config lib/iris/config/marin.yaml job run \
   --job-name served-qwen3-<run-id> --cpu 1 --memory 2G --extra cpu \
-  --priority interactive --no-wait -- python -c \
-  "from dataclasses import replace; from fray.types import ResourceConfig; from marin.execution.lazy import lower; from marin.execution.step_runner import StepRunner; from experiments.evals.lm_eval_suite import lm_eval_suite; from experiments.evals.served_qwen3 import QWEN3_TPU_INFERENCE; inference = replace(QWEN3_TPU_INFERENCE, iris=replace(QWEN3_TPU_INFERENCE.iris, worker_resources=ResourceConfig.with_tpu('v6e-4', ram='96g', regions=['europe-west4']))); StepRunner().run([lower(lm_eval_suite(inference, model_name='qwen3-0.6b-refresh-smoke', version='<run-id>-dev', limit=8))])"
+  --priority production --no-wait -- python -c \
+  "from dataclasses import replace; from fray.types import ResourceConfig; from iris.rpc.proto_display import priority_band_value; from marin.execution.lazy import lower; from marin.execution.step_runner import StepRunner; from experiments.evals.lm_eval_suite import lm_eval_suite; from experiments.evals.served_qwen3 import QWEN3_TPU_INFERENCE; inference = replace(QWEN3_TPU_INFERENCE, iris=replace(QWEN3_TPU_INFERENCE.iris, worker_resources=ResourceConfig.with_tpu('v6e-4', ram='96g', regions=['us-east5']), priority=priority_band_value('production'))); StepRunner().run([lower(lm_eval_suite(inference, model_name='qwen3-0.6b-refresh-smoke', version='<run-id>-dev', limit=8))])"
 ```
 
 - **`tests/cluster/vllm/test_snowball_backend_parity.py`** (`vllm-gpu`) — the
@@ -356,6 +367,8 @@ stable branches (`main` and `tpu`) independently.
 Keep the Marin PR draft until every required admin promotion is complete. After an
 `isolated_project` promotion, restore its uv source from `main-next` to `main`, relock,
 and confirm the resolved SHA did not change before marking the PR ready.
+For `tpu-vllm`, promote only after review and keep the final wheel hashes equal to
+the candidate hashes before updating the same PR.
 
 ## Review and Open the PR
 
@@ -375,8 +388,8 @@ dropped-patch reasons.
 
 ## Done Means
 
-- The pin source named by `pin` carries the new revision (descriptor pins also carry
-  `upstream_base`); `external_dependencies.py` is regenerated.
+- The source and runtime pin named by the descriptor carry the reviewed result;
+  `external_dependencies.py` is regenerated.
 - `<branch>-next` points at the validated tip, the current stable tip has a rollback
   tag, and the validated tip has a date tag. The stable branch is unchanged, and the
   PR names the admin hard swap still required.

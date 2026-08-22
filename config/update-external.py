@@ -27,10 +27,12 @@ SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 GENERATED_STRING_CHUNK_WIDTH = 88
 VLLM_CONFIG_NAME = "vllm"
 VLLM_GPU_RELEASE_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "gpu.toml"
+TPU_FORKS_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "tpu.toml"
 TPU_WHEELS_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "tpu_wheels.toml"
 GPU_RELEASE_REPOSITORY = "marin-community/vllm"
 GPU_RELEASE_MANIFEST_NAME = "marin-vllm-gpu-manifest.json"
 TPU_RELEASE_REPOSITORY = "marin-community/vllm"
+TPU_RELEASE_MANIFEST_NAME = "marin-vllm-tpu-manifest.json"
 TPU_DISTRIBUTIONS = ("vllm", "tpu-inference")
 
 
@@ -132,6 +134,20 @@ def locked_git_source(lock_path: Path, distribution: str) -> LockedGitSource:
     if "subdirectory" in parse_qs(parsed.query):
         raise ValueError(f"{lock_path}: expected a root Git source, found {source!r}")
     repository = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    return LockedGitSource(repository=repository, commit=commit)
+
+
+def tpu_fork_source(path: Path, name: str) -> LockedGitSource:
+    """Read one selected TPU package source from the pair-refresh descriptor."""
+    config = tomllib.loads(path.read_text())
+    if name not in config:
+        raise ValueError(f"{path}: missing [{name}] section")
+    repository = config[name]["repository"]
+    commit = config[name]["commit"]
+    if not repository.endswith(GIT_SUFFIX):
+        raise ValueError(f"{path}: [{name}] repository must be a .git URL, found {repository!r}")
+    if GIT_COMMIT_PATTERN.fullmatch(commit) is None:
+        raise ValueError(f"{path}: [{name}] commit is not a full Git SHA, found {commit!r}")
     return LockedGitSource(repository=repository, commit=commit)
 
 
@@ -237,6 +253,76 @@ def load_vllm_tpu_release(path: Path) -> VllmTpuRelease:
         vllm_requirement=requirement("vllm"),
         tpu_inference_requirement=requirement("tpu-inference"),
     )
+
+
+def render_tpu_wheels_toml(
+    manifest: dict,
+    validation: dict,
+    *,
+    current_release_path: Path | None = None,
+) -> str:
+    """Render a qualified TPU candidate or its byte-identical promoted release."""
+    release = manifest["release"]
+    if release.get("repository") != TPU_RELEASE_REPOSITORY:
+        raise ValueError(f"expected a {TPU_RELEASE_REPOSITORY} TPU release")
+    if release.get("status") not in {"candidate", "released"}:
+        raise ValueError("TPU wheel manifest is neither a candidate nor a release")
+
+    if release["status"] == "candidate":
+        candidate_tag = release["tag"]
+    else:
+        candidate_tag = release.get("candidate_tag")
+        if manifest.get("validation") != validation:
+            raise ValueError("TPU release changed its embedded qualification")
+
+        current_path = current_release_path or TPU_WHEELS_CONFIG
+        current = tomllib.loads(current_path.read_text())
+        if current["release_tag"] not in {candidate_tag, release["tag"]}:
+            raise ValueError("pin the qualified TPU candidate before its promoted release")
+        current_hashes = {package["distribution"]: package["wheel_sha256"] for package in current["packages"]}
+        release_hashes = {package["distribution"]: package["wheel"]["sha256"] for package in manifest["packages"]}
+        if current_hashes != release_hashes:
+            raise ValueError("TPU promotion changed the qualified wheel bytes")
+
+    if validation.get("candidate_tag") != candidate_tag:
+        raise ValueError("TPU wheel qualification belongs to another candidate")
+    if validation.get("hardware") != "v6e-8":
+        raise ValueError("TPU wheel qualification did not run on v6e-8")
+    run_prefix = f"https://github.com/{TPU_RELEASE_REPOSITORY}/actions/runs/"
+    if not validation.get("run_url", "").startswith(run_prefix):
+        raise ValueError("TPU wheel qualification run URL is malformed")
+
+    compatibility = manifest["compatibility"]
+    lines = [
+        f"release_tag = {json.dumps(release['tag'])}",
+        f"validated_hardware = {json.dumps(validation['hardware'])}",
+        f"python_version = {json.dumps(compatibility['python_version'])}",
+        f"exclude_newer = {json.dumps(compatibility['exclude_newer'])}",
+    ]
+    for package in sorted(manifest["packages"], key=lambda package: package["distribution"]):
+        wheel = package["wheel"]
+        lines += [
+            "",
+            "[[packages]]",
+            f"distribution = {json.dumps(package['distribution'])}",
+            f"version = {json.dumps(package['version'])}",
+            f"wheel_filename = {json.dumps(wheel['filename'])}",
+            f"wheel_url = {json.dumps(wheel['url'])}",
+            f"wheel_sha256 = {json.dumps(wheel['sha256'])}",
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def validate_tpu_candidate_selection(manifest: dict, source_config: Path = TPU_FORKS_CONFIG) -> None:
+    """Require a TPU manifest to contain the source pair selected by Marin."""
+    selected = {distribution: tpu_fork_source(source_config, distribution) for distribution in TPU_DISTRIBUTIONS}
+    manifested = manifest.get("source", {})
+    if set(manifested) != set(selected):
+        raise ValueError("TPU wheel manifest does not contain the selected source pair")
+    for distribution, source in selected.items():
+        repository = urlsplit(source.repository).path.strip("/").removesuffix(GIT_SUFFIX)
+        if manifested[distribution] != {"repository": repository, "commit": source.commit}:
+            raise ValueError(f"TPU wheel manifest changed the selected {distribution} source")
 
 
 def render_gpu_release_toml(manifest: dict) -> str:
@@ -577,6 +663,28 @@ def promote_gpu_release(manifest_path: Path) -> None:
     print(f"re-pinned vllm GPU release {manifest['release']['tag']} from {manifest_path}")
 
 
+def pin_tpu_wheels(manifest_path: Path, validation_path: Path) -> None:
+    """Pin a qualified TPU wheel pair and regenerate external_dependencies.py."""
+    manifest = json.loads(manifest_path.read_text())
+    validation = json.loads(validation_path.read_text())
+    validate_tpu_candidate_selection(manifest)
+    rendered = render_tpu_wheels_toml(manifest, validation)
+    directory = TPU_WHEELS_CONFIG.parent
+    with tempfile.NamedTemporaryFile(
+        "w", dir=directory, prefix="tpu_wheels.", suffix=".toml.tmp", delete=False
+    ) as handle:
+        handle.write(rendered)
+        staging = Path(handle.name)
+    try:
+        load_vllm_tpu_release(staging)
+        staging.replace(TPU_WHEELS_CONFIG)
+    finally:
+        staging.unlink(missing_ok=True)
+    dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
+    regenerate_generated_pins(dependencies, check=False)
+    print(f"pinned vllm TPU {manifest['release']['tag']} from {manifest_path}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Upgrade external uv locks and package immutable external runtime inputs."
@@ -607,9 +715,26 @@ def parse_args() -> argparse.Namespace:
             f"{GPU_RELEASE_MANIFEST_NAME}, then regenerate the pins"
         ),
     )
+    parser.add_argument(
+        "--pin-tpu-wheels",
+        type=Path,
+        metavar="MANIFEST",
+        help=f"pin a qualified public TPU pair from {TPU_RELEASE_MANIFEST_NAME}",
+    )
+    parser.add_argument(
+        "--tpu-validation",
+        type=Path,
+        metavar="RESULT",
+        help="qualification result paired with --pin-tpu-wheels",
+    )
     args = parser.parse_args()
-    if args.promote_gpu_release is not None and (args.check or args.projects or args.summary_file):
-        parser.error("--promote-gpu-release runs on its own; drop --check, PROJECT, and --summary-file")
+    release_operations = sum(value is not None for value in (args.promote_gpu_release, args.pin_tpu_wheels))
+    if release_operations > 1:
+        parser.error("choose only one release pin operation")
+    if (args.pin_tpu_wheels is None) != (args.tpu_validation is None):
+        parser.error("--pin-tpu-wheels and --tpu-validation must be supplied together")
+    if release_operations and (args.check or args.projects or args.summary_file):
+        parser.error("release pin operations run alone; drop --check, PROJECT, and --summary-file")
     return args
 
 
@@ -617,6 +742,9 @@ def main() -> None:
     args = parse_args()
     if args.promote_gpu_release is not None:
         promote_gpu_release(args.promote_gpu_release)
+        return
+    if args.pin_tpu_wheels is not None:
+        pin_tpu_wheels(args.pin_tpu_wheels, args.tpu_validation)
         return
     selected = tuple(project_by_name(name) for name in args.projects if name != VLLM_CONFIG_NAME)
     if not args.projects:

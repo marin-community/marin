@@ -52,6 +52,101 @@ def _promoted_manifest() -> dict:
     }
 
 
+def _tpu_candidate() -> tuple[dict, dict]:
+    tag = "marin-vllm-tpu-candidate-test"
+    prefix = f"https://github.com/marin-community/vllm/releases/download/{tag}/"
+    manifest = {
+        "release": {"status": "candidate", "tag": tag, "repository": "marin-community/vllm"},
+        "source": {
+            "vllm": {"repository": "marin-community/vllm", "commit": "a" * 40},
+            "tpu-inference": {"repository": "marin-community/tpu-inference", "commit": "b" * 40},
+        },
+        "compatibility": {"python_version": "3.12", "exclude_newer": "2026-08-12T00:00:00Z"},
+        "packages": [
+            {
+                "distribution": "vllm",
+                "version": "0.20.1+test",
+                "wheel": {"filename": "vllm-test.whl", "url": prefix + "vllm-test.whl", "sha256": "c" * 64},
+            },
+            {
+                "distribution": "tpu-inference",
+                "version": "0.26.0+test",
+                "wheel": {
+                    "filename": "tpu_inference-test.whl",
+                    "url": prefix + "tpu_inference-test.whl",
+                    "sha256": "d" * 64,
+                },
+            },
+        ],
+    }
+    validation = {
+        "candidate_tag": tag,
+        "hardware": "v6e-8",
+        "run_url": "https://github.com/marin-community/vllm/actions/runs/123",
+    }
+    return manifest, validation
+
+
+def test_tpu_candidate_requires_its_own_qualification():
+    update_external = _update_external()
+    manifest, validation = _tpu_candidate()
+    validation["candidate_tag"] = "marin-vllm-tpu-candidate-other"
+
+    with pytest.raises(ValueError, match="another candidate"):
+        update_external.render_tpu_wheels_toml(manifest, validation)
+
+
+def test_tpu_promotion_preserves_the_qualified_candidate(tmp_path):
+    update_external = _update_external()
+    manifest, validation = _tpu_candidate()
+    candidate_path = tmp_path / "candidate.toml"
+    candidate_path.write_text(update_external.render_tpu_wheels_toml(manifest, validation))
+
+    candidate_tag = manifest["release"]["tag"]
+    release_tag = "marin-vllm-tpu-20260101-test"
+    release_prefix = f"https://github.com/marin-community/vllm/releases/download/{release_tag}/"
+    manifest["release"] = {
+        "status": "released",
+        "tag": release_tag,
+        "repository": "marin-community/vllm",
+        "candidate_tag": candidate_tag,
+    }
+    manifest["validation"] = validation
+    for package in manifest["packages"]:
+        package["wheel"]["url"] = release_prefix + package["wheel"]["filename"]
+
+    update_external.render_tpu_wheels_toml(manifest, validation, current_release_path=candidate_path)
+
+    manifest["validation"] = {**validation, "run_url": "https://github.com/marin-community/vllm/actions/runs/456"}
+    with pytest.raises(ValueError, match="changed its embedded qualification"):
+        update_external.render_tpu_wheels_toml(manifest, validation, current_release_path=candidate_path)
+
+    manifest["validation"] = validation
+    manifest["packages"][0]["wheel"]["sha256"] = "e" * 64
+    with pytest.raises(ValueError, match="changed the qualified wheel bytes"):
+        update_external.render_tpu_wheels_toml(manifest, validation, current_release_path=candidate_path)
+
+
+def test_tpu_candidate_requires_the_selected_source_pair(tmp_path):
+    update_external = _update_external()
+    source_config = tmp_path / "tpu.toml"
+    source_config.write_text(
+        f"""[vllm]
+repository = "https://github.com/marin-community/vllm.git"
+commit = "{'a' * 40}"
+
+[tpu-inference]
+repository = "https://github.com/marin-community/tpu-inference.git"
+commit = "{'b' * 40}"
+"""
+    )
+    manifest, _ = _tpu_candidate()
+    manifest["source"]["vllm"]["commit"] = "0" * 40
+
+    with pytest.raises(ValueError, match="selected vllm source"):
+        update_external.validate_tpu_candidate_selection(manifest, source_config)
+
+
 def test_gpu_release_pin_matches_its_descriptor():
     update_external = _update_external()
     descriptor = update_external.load_vllm_gpu_release(update_external.VLLM_GPU_RELEASE_CONFIG)
