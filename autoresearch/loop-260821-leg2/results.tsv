@@ -12,3 +12,5 @@ iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
 6	2026-08-22T08:45Z	c3e7137f1a	22.7163	+0.0339	pass	drops=0.0	discard	device kernel ties on the chunked structure (was -3 pre-47263); stock one-shot stands
 7	2026-08-22T09:04Z	578b36af69	22.6888	+0.0064	pass	drops=0.0	discard	FUSION command buffers null on chunked structure (leg-1 -0.25 and crash both gone)
 8	2026-08-22T09:25Z	b282cc0d3e	22.5722	-0.1102	pass	drops=0.0	discard	dropping the chunk barrier hurts; the D2D copy is inherent to chained a2a outputs, not the barrier
+9	2026-08-22T09:44Z	c9b18858ae	22.7974	+0.1150	pass	drops=0.0	candidate	splits 64 (k=10/group) borderline positive; bracketing with 128
+10	2026-08-22T10:01Z	-	22.7781	+0.0957	pass	drops=0.0	keep-64	splits 128 ties 64; both +0.1 over 32 under chunking; default moves to 64
