@@ -9,3 +9,4 @@ iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
 4	2026-08-21T23:58Z	-	21.2429	-	pass	drops=0.0,loss=11.8044	no-op	profiled ragged/pooled twins (21.24/22.34): transport kernel is cheaper than pooled a2a; gap = symmetric-kernel collectives (+0.43 s/step) + exposure (~0.7 s/step)
 5	2026-08-22T00:15Z	863eca154c	21.2362	-0.0794	pass	drops=0.0,loss=11.8044	discard	NCCL_ALGO=Ring -- null; the extra reduce-scatter time is 3 RS instructions per layer in the ragged graph, not symmetric-kernel algo choice
 6	2026-08-22T00:25Z	266e696369	-	-	n/a	no measurement	crash	LHS + overlap 4: NCCL alltoall CUDA OOM on first step -- overlap-4 collective buffers exceed the pool
+6b	2026-08-22T00:32Z	04ba1e6d1b	-	-	n/a	no measurement	crash	LHS + overlap 1: same NCCL alltoall CUDA OOM -- the blowup is LHS itself under the 0.75/85 memory posture
