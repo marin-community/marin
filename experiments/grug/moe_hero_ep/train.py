@@ -261,6 +261,10 @@ def build_train_dataset(
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+_TRAIN_LOADER_BUFFER_SIZE = 128
+# The Harrier mixture fans each request across up to 200 stores. Refill the deep queue one batch at a time so
+# source reads and host batchification are spread across steps instead of arriving in one periodic burst.
+_TRAIN_LOADER_FETCH_SIZE = 1
 
 
 def _make_synthetic_batch(
@@ -313,10 +317,10 @@ def build_train_loader(
     return DataLoader(
         dataset,
         batch_schedule.schedule,
-        max_buffered_batches=512,
+        max_buffered_batches=_TRAIN_LOADER_BUFFER_SIZE,
         mesh=mesh,
         axis_resources={"__BATCH__": _BATCH_AXES},
-        prefetch_size=256,
+        fetch_size=_TRAIN_LOADER_FETCH_SIZE,
         batch_axis_name="__BATCH__",
         allow_nondivisible_batch_size=False,
     )
