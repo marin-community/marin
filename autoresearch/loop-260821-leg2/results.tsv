@@ -19,3 +19,4 @@ abl	2026-08-22T13:49Z	5c5388d6c2	-	-	pass	ragged loss 1.9757/bpb 0.9749/drops 0.
 12	2026-08-22T21:52Z	e12dc963a9	-	-	crash	-	crash	nightly dev20260821 devkernel: ILLEGAL_ADDRESS step 1; hypothesis: symmetric-buffers off -> dk disengaged -> one-shot kMaxPeers fault
 12b	2026-08-22T22:11Z	9a94451d6a	19.3975	-3.3806	pass	drops=0.0,loss-band ok	answer	PATCH-FREE: nightly dev20260821 + devkernel + symmetric-buffers trains at 19.40 (vs 22.78 wheel'd one-shot); dk needs symbuf to engage
 13	2026-08-22T23:02Z	47850a5560	-	-	crash	-	crash	wheel+dk+symbuf: 3 attempts (S3 outage, unscheduled, silent task-61 death pre-step); deprioritized behind clean-main build
+14	2026-08-22T23:44Z	738535f5cc	19.1556	-	pass	drops=0.0	answer	clean-main selfbuilt PJRT + dk + symbuf: 19.16, matches nightly 19.40 not wheel 22.7; build config exonerated
