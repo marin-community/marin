@@ -314,6 +314,7 @@ class OptimalTrainingConfig:
     batch_size: int
     label: str
     output_path: str
+    prefix: str
     data: LmDataConfig
     seed: int = 0
 
@@ -399,6 +400,7 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
         train_config=inner_config,
         resources=config.resources,
         output_path=config.output_path,
+        prefix=config.prefix,
     )
     remote(run_levanter_train_lm, resources=config.resources)(pod_config)
 
@@ -450,6 +452,7 @@ def _optimal_step(
             batch_size=batch_size,
             label=LABEL,
             output_path=ctx.output_path,
+            prefix=ctx.prefix,
             data=mixture(ctx, _NEMOTRON_TRAIN, validation=_VALIDATION),
             seed=seed,
         )

@@ -95,6 +95,8 @@ class TrainLmOnPodConfig:
     resources: ResourceConfig
     output_path: str | None = None
     """Base output directory for the run. The checkpointer, HF export, and run id derive from it."""
+    prefix: str | None = None
+    """Storage prefix ``output_path`` sits under, so the run id can name the artifact's address."""
     env_vars: dict[str, str] | None = None
     """Environment variables to pass to the training task (e.g., WANDB_MODE, WANDB_API_KEY)."""
     auto_build_caches: bool = False
@@ -114,6 +116,8 @@ class TrainDpoOnPodConfig:
     resources: ResourceConfig
     output_path: str | None = None
     """Base output directory for the run. The checkpointer, HF export, and run id derive from it."""
+    prefix: str | None = None
+    """Storage prefix ``output_path`` sits under, so the run id can name the artifact's address."""
     env_vars: dict[str, str] | None = None
     """Environment variables to pass to the training task (e.g., WANDB_MODE, WANDB_API_KEY)."""
     auto_build_caches: bool = False
@@ -223,20 +227,37 @@ def apply_output_path(train_config: TrainConfigT, output_path: str) -> TrainConf
     return config
 
 
+def _address_run_id(output_path: str | None, prefix: str | None) -> str | None:
+    """The artifact's address under ``prefix``, as a run id. ``None`` when it cannot be derived.
+
+    Unique because the address is. A path outside ``prefix`` (an absolute ``override_path``) has no
+    address relative to it, so it derives nothing rather than a mangled id carrying the URL scheme.
+    """
+    if output_path is None or prefix is None:
+        return None
+    root = prefix.rstrip("/")
+    if not output_path.startswith(root):
+        logger.warning("Output path %s is not under prefix %s; cannot derive a run ID", output_path, prefix)
+        return None
+    return output_path.removeprefix(root).strip("/").replace("/", "-")
+
+
 def _resolve_run_id(
-    train_config: TrainConfigT, *, output_path: str | None, env_run_id: str | None
+    train_config: TrainConfigT, *, output_path: str | None, prefix: str | None, env_run_id: str | None
 ) -> tuple[TrainConfigT, str]:
     """Pick a stable run id and stamp it into ``train_config.trainer.id``.
 
-    A stable id is required so a run resumes into the same W&B run and checkpoint directory after
-    preemption. Priority: ``trainer.id`` already set by the caller, then ``env_run_id`` (from
-    ``env_vars["RUN_ID"]``), then the ``RUN_ID`` environment variable, then ``basename(output_path)``,
-    and finally a random UID as a last resort.
+    A stable id is required so a run resumes into the same W&B run after preemption, and it has to
+    identify the run: output paths end ``<name>/<version>``, so anything taken from the tail alone is
+    shared by every artifact built at that version. Priority: ``trainer.id`` set by the caller, then
+    the artifact's prefix-relative address, then ``env_run_id`` (from ``env_vars["RUN_ID"]``), then
+    the ``RUN_ID`` environment variable, then a random UID.
+
+    The address outranks the environment because Iris forwards ``RUN_ID`` transitively to child jobs,
+    where one exported value would collapse every step in a run onto a single id.
     """
-    run_id = train_config.trainer.id or env_run_id or os.environ.get("RUN_ID")
-    if run_id is None and output_path is not None:
-        run_id = os.path.basename(output_path.rstrip("/"))
-        logger.info("Imputing run ID from output path: %s", run_id)
+    run_id = train_config.trainer.id or _address_run_id(output_path, prefix)
+    run_id = run_id or env_run_id or os.environ.get("RUN_ID")
     if not run_id:
         run_id = _cli_helpers_module().default_run_id()
         logger.warning("Run ID not set. Using default: %s", run_id)
@@ -496,6 +517,7 @@ def _prepare_training_run(
     train_config, run_id = _resolve_run_id(
         train_config,
         output_path=config.output_path,
+        prefix=config.prefix,
         env_run_id=(config.env_vars or {}).get("RUN_ID"),
     )
     logger.info(f"Using run ID: {run_id}")

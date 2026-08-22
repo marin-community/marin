@@ -228,6 +228,7 @@ def train_lm(
             train_config=inner,
             resources=ctx.runtime_arg("train_resources"),
             output_path=ctx.output_path,
+            prefix=ctx.prefix,
             env_vars=env_vars,
         )
 
