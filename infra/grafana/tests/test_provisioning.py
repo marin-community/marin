@@ -20,6 +20,7 @@ from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
 from dashboard_stitch import stitch_all
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
+from hero_health import DROP_FRACTION_MAX, ROUTER_BIAS_MAX, ROUTER_ENTROPY_MIN
 from k8s_source import K8sFleet
 from server import create_app
 from starlette.testclient import TestClient
@@ -79,6 +80,18 @@ def _datasources() -> dict[str, str]:
 
 def _rules() -> list[dict]:
     return [rule for group in _load(ALERTING / "rules.yaml")["groups"] for rule in group["rules"]]
+
+
+def _route_for(rule: dict) -> dict:
+    """The first notification-policy route whose matchers all hold for this rule's labels."""
+    (policy,) = _load(ALERTING / "policies.yaml")["policies"]
+    return next(
+        route
+        for route in policy["routes"]
+        if all(
+            operator == "=" and rule["labels"].get(label) == value for label, operator, value in route["object_matchers"]
+        )
+    )
 
 
 def test_alert_rules_have_resolvable_datasources_and_refids():
@@ -324,17 +337,52 @@ def test_training_stall_alert_pages_each_hero_run_after_five_minutes():
     assert rule["labels"] == {"severity": "critical", "notification": "hero-run"}
     assert rule["data"][0]["model"]["url"] == "/alerts/training_stalls"
 
-    (policy,) = _load(ALERTING / "policies.yaml")["policies"]
-    route = next(
-        route
-        for route in policy["routes"]
-        if all(
-            operator == "=" and rule["labels"].get(label) == value for label, operator, value in route["object_matchers"]
-        )
-    )
+    route = _route_for(rule)
     assert route["receiver"] == "ops-critical"
     assert route["group_by"] == ["alertname", "run"]
     assert {column["selector"] for column in rule["data"][0]["model"]["columns"]} >= {"run", "job"}
+
+
+def test_run_health_alerts_split_paging_from_announcing():
+    # The hero on-call policy pages for a lost run or an unstable optimizer, and
+    # announces the routing, throughput, and Iris signals an operator reads.
+    rules = {rule["uid"]: rule for rule in _rules()}
+    paging = ("training-telemetry-gone", "training-optimizer-unstable")
+    for uid in paging:
+        assert rules[uid]["labels"] == {"severity": "critical", "notification": "hero-run"}
+        assert rules[uid]["for"] == "5m"
+    assert rules["training-run-health-degraded"]["labels"] == {"severity": "warning", "notification": "slack"}
+
+    urls = {uid: rules[uid]["data"][0]["model"]["url"] for uid in (*paging, "training-run-health-degraded")}
+    assert urls == {
+        "training-telemetry-gone": "/alerts/training_telemetry",
+        "training-optimizer-unstable": "/alerts/training_optimizer",
+        "training-run-health-degraded": "/alerts/training_health",
+    }
+
+
+def test_announcing_run_health_reaches_slack_without_a_triage_session():
+    # severity=warning alone is muted by dashboard-only, so the announcing rule
+    # needs the notification=slack route, which is matched first and unmuted.
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "training-run-health-degraded"]
+    route = _route_for(rule)
+
+    assert route["object_matchers"] == [["notification", "=", "slack"]]
+    assert route["receiver"] == "ops-slack"
+    assert "mute_time_intervals" not in route
+
+
+def test_run_health_dashboard_bands_match_the_alert_thresholds():
+    # The alert links the operator to these panels, so a limit tuned in one place
+    # and not the other would draw a band the rule does not fire on.
+    dashboard = _stitched_dashboards()["training.json"]
+    panels = {panel["title"]: panel for panel in _all_panels(dashboard)}
+    bands = " ".join(_panel_sql({**dashboard, "panels": [panels["Token drops"], panels["Router health"]]}))
+
+    assert f"CAST({DROP_FRACTION_MAX} AS DOUBLE) AS alert_threshold" in bands
+    assert f"CAST({ROUTER_ENTROPY_MIN} AS DOUBLE) AS entropy_minimum" in bands
+    assert f"CAST({ROUTER_BIAS_MAX} AS DOUBLE) AS bias_upper_limit" in bands
+    assert f"CAST({-ROUTER_BIAS_MAX} AS DOUBLE) AS bias_lower_limit" in bands
 
 
 def test_clusters_dashboard_shows_finelog_fleet_health():
