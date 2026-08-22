@@ -11,10 +11,20 @@ import jax.tree_util as jtu
 import numpy as np
 from haliax.jax_utils import is_jax_array_like
 from jaxtyping import PyTree
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 from .jagged_array import JaggedArrayStore, charge_store_read_budget
 
 T = TypeVar("T", bound=PyTree)
+
+
+def _materialized_read_path(path: str) -> str:
+    storage_path = StoragePath(path)
+    if storage_path.scheme != "mirror":
+        return path
+    mirror_fs, mirror_path = url_to_fs(path, skip_instance_cache=True)
+    return mirror_fs.materialize(mirror_path)
 
 
 # TODO at some point if we turn this into a real library, it would be nice to store the schema
@@ -57,6 +67,7 @@ class TreeStore(Generic[T]):
         """
         if mode == "r":
             charge_store_read_budget(path)
+            path = _materialized_read_path(path)
         tree = _construct_builder_tree(exemplar, path, mode, cache_metadata)
         return TreeStore(tree, path, mode)
 
@@ -67,6 +78,8 @@ class TreeStore(Generic[T]):
         """
         if mode == "r":
             charge_store_read_budget(path)
+            if StoragePath(path).scheme == "mirror":
+                path = await asyncio.to_thread(_materialized_read_path, path)
         tree = await _construct_builder_tree_async(exemplar, path, mode, cache_metadata)
         return TreeStore(tree, path, mode)
 
