@@ -69,6 +69,8 @@ BENCHMARK_RESOURCES = ResourceConfig.with_gpu("GB200", count=4, cpu=16, ram="256
 class SeedRow(BaseModel):
     seed: int
     max_out_vs_ring: float
+    ragged_vs_dense: float
+    ring_vs_dense: float
     max_grad_vs_ring: float
     median_grad_vs_ring: float
     dropped_no_drop_case: int
@@ -109,6 +111,26 @@ def _inputs(key, tokens, *, skew):
     w13 = jax.random.normal(k_w13, (NUM_EXPERTS, HIDDEN_DIM, 2 * INTERMEDIATE_DIM), dtype=jnp.bfloat16)
     w2 = jax.random.normal(k_w2, (NUM_EXPERTS, INTERMEDIATE_DIM, HIDDEN_DIM), dtype=jnp.bfloat16)
     return x, selected, combine_weights, w13, w2
+
+
+def _dense_reference(x, selected, combine_weights, w13, w2) -> np.ndarray:
+    """Exact fp32 dense MoE on host arrays: the arbiter when EP implementations disagree."""
+    xf = np.asarray(x, np.float32)
+    w13f = np.asarray(w13, np.float32)
+    w2f = np.asarray(w2, np.float32)
+    sel = np.asarray(selected)
+    cw = np.asarray(combine_weights, np.float32)
+    hidden = np.einsum("th,ehi->tei", xf, w13f)
+    gate, up = hidden[..., :INTERMEDIATE_DIM], hidden[..., INTERMEDIATE_DIM:]
+    silu = gate / (1 + np.exp(-gate)) * up
+    per_expert = np.einsum("tei,eih->teh", silu, w2f)
+    per_route = np.take_along_axis(per_expert, sel[..., None], axis=1)
+    return (per_route * cw[..., None]).sum(axis=1)
+
+
+def _maxdiff_vs_dense(out, dense) -> float:
+    denom = float(np.max(np.abs(dense))) + 1e-6
+    return float(np.max(np.abs(np.asarray(out, np.float32) - dense))) / denom
 
 
 def _graddiff(a, b) -> tuple[float, float]:
@@ -163,8 +185,11 @@ def _run() -> list[SeedRow]:
     rows: list[SeedRow] = []
     for seed in SEEDS:
         with jax.set_mesh(mesh):
-            # A. ground truth: balanced routing, no drops -- ragged must match ring.
-            xb, selb, cwb, w13b, w2b = reshard(*_inputs(jax.random.key(1000 + seed), tokens, skew=False))
+            # A. ground truth: balanced routing, no drops -- ragged must match ring, and both
+            # must match the exact fp32 dense MoE, which arbitrates when they disagree.
+            raw = _inputs(jax.random.key(1000 + seed), tokens, skew=False)
+            dense = _dense_reference(*raw)
+            xb, selb, cwb, w13b, w2b = reshard(*raw)
             o_ragged, g_ragged, dropped = loss_and_grad(
                 "ragged_all_to_all", xb, selb, cwb, w13b, w2b, capacity_factor=NO_DROP_CAPACITY
             )
@@ -190,6 +215,8 @@ def _run() -> list[SeedRow]:
             SeedRow(
                 seed=seed,
                 max_out_vs_ring=float(jnp.max(jnp.abs(o_ragged - o_ring))),
+                ragged_vs_dense=_maxdiff_vs_dense(o_ragged, dense),
+                ring_vs_dense=_maxdiff_vs_dense(o_ring, dense),
                 max_grad_vs_ring=max_g,
                 median_grad_vs_ring=med_g,
                 dropped_no_drop_case=dropped + dropped_ring,
