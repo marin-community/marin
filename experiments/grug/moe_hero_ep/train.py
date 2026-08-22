@@ -72,7 +72,7 @@ HERO_EP_RUNTIME_ENV = {
     # than the compact/permute path (192.33 vs 188.88 GiB achieved), and at 0.75 the first
     # train step starves NCCL's alltoall of device memory. Dropping the threshold releases
     # pool pages to the driver sooner and widens the collective headroom to ~55 GiB.
-    "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.70",
+    "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.68",
 }
 XLA_LATENCY_HIDING_FLAG = "--xla_gpu_enable_latency_hiding_scheduler"
 # The scheduler sizes the single `jit_train_step` temp arena against this percentage of its
@@ -82,7 +82,7 @@ XLA_LATENCY_HIDING_FLAG = "--xla_gpu_enable_latency_hiding_scheduler"
 # asks for 125.7 GiB and fails that way. 85 sizes the arena at 113.6 GiB, leaving enough slack
 # for per-node variation in fragmentation. A lower percentage costs throughput, because a
 # smaller arena makes `HloRematerialization` recompute more of the step.
-XLA_MEMORY_LIMIT_SLOP_FLAG = "--xla_gpu_memory_limit_slop_factor=80"
+XLA_MEMORY_LIMIT_SLOP_FLAG = "--xla_gpu_memory_limit_slop_factor=85"
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
@@ -91,7 +91,7 @@ INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # dispatch and combine form one long dependent chain, so admitting several concurrent collectives
 # only contends for the SMs the transport itself needs, and the latency-hiding scheduler reorders
 # around the ragged collectives without shortening them.
-RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
+RAGGED_COLLECTIVE_OVERLAP_LIMIT = 4
 RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
@@ -159,7 +159,7 @@ def _apply_hero_ep_runtime_defaults(
         overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
-        f"{XLA_LATENCY_HIDING_FLAG}={'false' if ragged else 'true'}",
+        f"{XLA_LATENCY_HIDING_FLAG}=true",
         XLA_MEMORY_LIMIT_SLOP_FLAG,
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
     )
