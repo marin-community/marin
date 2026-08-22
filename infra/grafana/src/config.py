@@ -33,6 +33,10 @@ GITHUB_REPO = "marin-community/marin"
 # stamp this one.
 GITHUB_USER_AGENT = "marin-grafana-bridge"
 
+# Grafana routes alert groups carrying this notification policy to the
+# dedicated hero operator and its first-pass evidence collector.
+HERO_NOTIFICATION = "hero-run"
+
 
 @dataclasses.dataclass(frozen=True)
 class GithubAppCredentials:
