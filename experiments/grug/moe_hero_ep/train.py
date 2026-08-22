@@ -9,7 +9,6 @@ import logging
 import os
 import time
 from collections.abc import Callable
-from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
@@ -22,6 +21,7 @@ import levanter.tracker
 import numpy as np
 import optax
 from fray.cluster import ResourceConfig
+from fray.types import TaskHealthCheck
 from haliax import Axis
 from haliax.partitioning import set_mesh
 from jax._src import config as jax_config
@@ -47,6 +47,7 @@ from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
+from rigging.timing import Duration
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -58,6 +59,13 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 # `.agents/skills/change-grug/`.
 
 logger = logging.getLogger(__name__)
+
+HERO_EP_TASK_HEALTH = TaskHealthCheck(
+    startup_timeout=Duration.from_minutes(30),
+    period=Duration.from_seconds(10),
+    request_timeout=Duration.from_seconds(3),
+    failure_threshold=13,
+)
 
 HERO_EP_RUNTIME_ENV = {
     "LD_PRELOAD": "libjemalloc.so.2",
@@ -816,8 +824,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     progress_watchdog = trainer.progress_watchdog.create(process_index=jax.process_index())
 
     checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
-    dashboard = (
-        TrainingDashboard(config, checkpointer.request_checkpoint, run_id) if checkpointer is not None else nullcontext()
+    dashboard = TrainingDashboard(
+        config,
+        checkpointer.request_checkpoint if checkpointer is not None else None,
+        run_id,
+        watchdog=progress_watchdog,
     )
     with set_mesh(mesh), dashboard:
         batch_schedule = trainer.batch_schedule
@@ -1127,6 +1138,7 @@ def run_grug(config: GrugRunConfig) -> None:
         processes_per_task=config.processes_per_task,
         max_retries_failure=config.max_retries_failure,
         max_task_failures=config.max_task_failures,
+        health_check=HERO_EP_TASK_HEALTH,
     )
 
 

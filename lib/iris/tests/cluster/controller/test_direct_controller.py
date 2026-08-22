@@ -170,6 +170,24 @@ def test_drain_default_task_image_is_empty(state):
     assert batch.tasks_to_run[0].task_image == ""
 
 
+def test_drain_propagates_task_health_and_reserves_its_port(state):
+    job_id = JobName.root("test-user", "drain-health")
+    request = make_direct_job_request("drain-health")
+    request.health_check.startup_timeout.milliseconds = 1_800_000
+    request.health_check.period.milliseconds = 10_000
+    request.health_check.request_timeout.milliseconds = 3_000
+    request.health_check.failure_threshold = 13
+    with state._db.transaction() as cur:
+        submit_job_in_tx(cur, job_id=job_id, request=request, ts=Timestamp.now())
+
+    with state._db.transaction() as cur:
+        batch = dispatch.drain_for_dispatch(cur)
+
+    [run_request] = batch.tasks_to_run
+    assert run_request.health_check == request.health_check
+    assert list(run_request.ports) == ["healthz"]
+
+
 @pytest.mark.parametrize(
     ("parent_band", "child_band", "expected_band"),
     [

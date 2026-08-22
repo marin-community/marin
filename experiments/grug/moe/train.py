@@ -33,6 +33,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
+from levanter.tracker.telemetry import capture_stall_diagnostics
 from levanter.trainer import TrainerConfig
 from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
@@ -407,8 +408,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
     )
+    progress_watchdog = trainer.progress_watchdog.create(
+        process_index=jax.process_index(), diagnostic=capture_stall_diagnostics
+    )
     checkpointer = trainer.checkpointer.create(run_id)
-    with set_mesh(mesh), TrainingDashboard(config, checkpointer.request_checkpoint, run_id):
+    with set_mesh(mesh), TrainingDashboard(config, checkpointer.request_checkpoint, run_id, watchdog=progress_watchdog):
         batch_schedule = trainer.batch_schedule
 
         train_dataset = build_train_dataset(
@@ -485,6 +489,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             eval_model_getter=lambda s: s.ema_params if s.ema_params is not None else s.params,
             opt_state_getter=lambda s: s.opt_state,
         )
+        if progress_watchdog is not None:
+            state_callbacks.add_hook(progress_watchdog, every=1)
         state_callbacks.add_hook(
             callbacks.log_performance_stats(config.model.max_seq_len, batch_schedule, flops_per_example),
             every=log_every,

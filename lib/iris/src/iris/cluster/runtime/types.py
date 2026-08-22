@@ -101,6 +101,7 @@ class ContainerConfig:
     worker_id: str | None = None
     worker_metadata: job_pb2.WorkerMetadata | None = None
     ports: dict[str, int] = field(default_factory=dict)
+    health_check_json: str = ""
 
     def get_cpu_millicores(self) -> int | None:
         if not self.resources or not self.resources.cpu_millicores:
@@ -285,6 +286,7 @@ class DiscoveredContainer:
     started_at: str  # ISO 8601 timestamp from Docker
     workdir_host_path: str  # host path of the /app mount
     ports: dict[str, int] = field(default_factory=dict)  # allocated host ports, name -> port
+    health_check_json: str = ""
 
 
 class ContainerRuntime(Protocol):

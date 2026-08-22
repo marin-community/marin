@@ -146,6 +146,35 @@ def test_launch_job_returns_job_id(service):
     assert status_response.job.state == job_pb2.JOB_STATE_PENDING
 
 
+def test_launch_job_rejects_the_reserved_health_port(service):
+    request = make_job_request("health-port")
+    request.ports.append("healthz")
+    request.health_check.startup_timeout.milliseconds = 30_000
+    request.health_check.period.milliseconds = 5_000
+    request.health_check.request_timeout.milliseconds = 1_000
+    request.health_check.failure_threshold = 3
+
+    with pytest.raises(ConnectError) as error:
+        service.launch_job(request, None)
+
+    assert error.value.code == Code.INVALID_ARGUMENT
+    assert "reserved" in str(error.value)
+
+
+def test_launch_job_rejects_a_request_timeout_that_reaches_the_probe_period(service):
+    request = make_job_request("invalid-health")
+    request.health_check.startup_timeout.milliseconds = 30_000
+    request.health_check.period.milliseconds = 5_000
+    request.health_check.request_timeout.milliseconds = 5_000
+    request.health_check.failure_threshold = 3
+
+    with pytest.raises(ConnectError) as error:
+        service.launch_job(request, None)
+
+    assert error.value.code == Code.INVALID_ARGUMENT
+    assert "less than period" in str(error.value)
+
+
 class _FeasibilityAutoscaler:
     """Autoscaler stub whose job_feasibility returns a fixed verdict."""
 

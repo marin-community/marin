@@ -31,12 +31,14 @@ from fray.types import (
     JobRequest,
     JobStatus,
     ResourceConfig,
+    TaskHealthCheck,
     TpuConfig,
 )
 from iris.cluster.constraints import ConstraintOp
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.cluster.types import JobName, ResourceSpec, gpu_device
 from iris.resources.state import JobState as IrisJobState
+from rigging.timing import Duration
 
 
 class TestConvertConstraints:
@@ -321,6 +323,25 @@ class TestImagePlumbing:
 
         kwargs = fake_iris.submit.call_args.kwargs
         assert kwargs["task_image"] == "custom/swetrace:dev"
+
+    def test_submit_job_converts_task_health_to_iris(self):
+        fake_iris = MagicMock()
+        fake_iris.submit.return_value = MagicMock(job_id="job-health")
+        client = FrayIrisClient.from_iris_client(fake_iris)
+        health = TaskHealthCheck(
+            startup_timeout=Duration.from_seconds(30),
+            period=Duration.from_seconds(5),
+            request_timeout=Duration.from_seconds(1),
+            failure_threshold=3,
+        )
+
+        client.submit(JobRequest(name="health", entrypoint=Entrypoint.from_callable(lambda: None), health_check=health))
+
+        converted = fake_iris.submit.call_args.kwargs["health_check"]
+        assert converted.startup_timeout == health.startup_timeout
+        assert converted.period == health.period
+        assert converted.request_timeout == health.request_timeout
+        assert converted.failure_threshold == health.failure_threshold
 
 
 class TestActorGroupEnvironment:

@@ -27,7 +27,11 @@ def _py(code: str) -> list[str]:
 
 def test_run_all_children_succeed_returns_zero() -> None:
     # Each child sees the global world size the supervisor stamped on it.
-    check = _py("import os; assert os.environ['IRIS_MULTIGPU_PROCESS_COUNT'] == '3'")
+    check = _py(
+        "import os; "
+        "assert os.environ['IRIS_MULTIGPU_PROCESS_COUNT'] == '3'; "
+        "assert os.environ['IRIS_MULTIGPU_LOCAL_PROCESS_INDEX'] == os.environ['IRIS_MULTIGPU_PROCESS_INDEX']"
+    )
     assert run(nproc=3, devices_per_proc=1, child_argv=check) == 0
 
 
