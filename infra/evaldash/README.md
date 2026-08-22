@@ -248,14 +248,14 @@ provisioning them.
 The stack uses the shared `marin-iac-key` KMS secrets provider. The operator needs
 `roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key; no passphrase is used.
 
-The shared Cloud Run component admits the OpenAthena Workspace domain and the Loom VM service
-account through IAP on every internal site. It registers the Marin desktop OAuth client as a
-programmatic audience. The stack's `viewers` list contains only additional accounts or groups
-needed by evaldash.
+The `marin` infrastructure stack owns EvalDash's Cloud Run, IAP, service-account, and secret
+IAM grants in `infra/pulumi/src/iac/gcp/evaldash.py`. Add viewers there by referencing an
+encrypted principal registered in `iam_data.yaml`. This service stack registers the Marin
+desktop OAuth client as a programmatic audience but does not mutate IAM policy.
 
 Changes to EvalDash or any source copied into its image deploy automatically from `main` through
 `.github/workflows/ops-pulumi-rollout.yaml`. The deploy identity's repository-scoped Artifact
-Registry writer grant is declared in `infra/pulumi/src/iac/gcp/iam_data.yaml`; apply the `marin`
+Registry writer grant is declared in `infra/pulumi/src/iac/gcp/evaldash.py`; apply the `marin`
 stack before the first rollout after adding or replacing an image repository. To redeploy the
 current `main` revision manually:
 

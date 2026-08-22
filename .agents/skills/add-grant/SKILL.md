@@ -5,9 +5,9 @@ description: Add a GCP IAM or IAP user grant to the marin-iac Pulumi stacks, enc
 
 # Skill: Add a user grant
 
-Turn an access request into a reviewable Pulumi change. Human principals in the
-project-IAM data are KMS-encrypted; IAP viewers on Cloud Run services are
-plaintext by design. The change is never applied here — a second person runs the
+Turn an access request into a reviewable Pulumi change. Every human principal is
+KMS-encrypted, including IAP viewers on Cloud Run services. The change is never
+applied here — a second person runs the
 `review-grant` skill, merges, and runs `pulumi up`.
 
 Read first:
@@ -17,12 +17,12 @@ Read first:
 - `infra/pulumi/src/iac/gcp/iam_data.yaml` header — why human `user:` principals
   are encrypted and this file is public.
 
-## Two grant surfaces
+## Grant surfaces
 
 Decide which one the request needs before editing anything. A single request can
 touch both.
 
-1. **Project / resource GCP IAM** — a role on the `hai-gcp-models` project, the
+1. **Shared project / resource GCP IAM** — a role on the `hai-gcp-models` project, the
    KMS key, a Secret Manager secret, a GCS bucket, an Artifact Registry repo, or
    a service account (who may impersonate it). Lives in
    `infra/pulumi/src/iac/gcp/iam_data.yaml`, applied by the **`marin`** stack in
@@ -30,13 +30,10 @@ touch both.
    the `principals` registry; grants reference its opaque `human-NNN` ID.
    Service accounts, groups, and domains stay plain strings.
 
-2. **IAP access to a Cloud Run web service** — admitting a person to
-   `evaldash.oa.dev`, Grafana, or a similar IAP-gated site. Lives in that
-   service's `infra/<service>/Pulumi.marin-<service>.yaml` under `viewers` (a
-   plaintext list of emails, `*@domain` wildcards, or qualified IAM members),
-   applied by that service's own stack. `domain:openathena.ai` and the Loom VM
-   are already admitted to every service; only add a `viewers` entry for someone
-   outside the OpenAthena Workspace.
+2. **Deploy-target IAM** — runtime, secret, repository, KMS, and IAP grants for
+   Echo, EvalDash, Grafana, or Loom. Lives in that target's Python module under
+   `infra/pulumi/src/iac/gcp/` and is composed into the **`marin`** stack.
+   Human grants reference the encrypted principal registry by opaque ID.
 
 If you are unsure which surface a request means (e.g. "give Alice access to eval
 results" could be an IAP viewer on evaldash, a `roles/storage.objectViewer`
@@ -56,8 +53,8 @@ You need, per grant:
   follow-up removal PR unless the requester asks for an expiry.
 
 Translate a capability into the narrowest role that satisfies it. Reuse a role
-already present in `iam_data.yaml` for the same resource class before reaching for
-a broader built-in role. If the request is vague or over-broad, ask for
+already present in the relevant shared or deploy-target declaration for the same
+resource class before reaching for a broader built-in role. If the request is vague or over-broad, ask for
 specifics instead of guessing — an IAM grant is hard to walk back once applied.
 
 ### Running against a GitHub issue
@@ -98,10 +95,10 @@ uv run --package marin-iac --extra deploy \
 ```
 
 The command prints the existing or new `human-NNN` ID. Add
-`principal: human-NNN` to the requested resource grant. Never write a personal
-email in plaintext into `iam_data.yaml`, a commit message, or the PR body — the
-repo is public. IAP `viewers` emails in `Pulumi.<service>.yaml` are the
-documented exception and stay plaintext.
+`principal: human-NNN` to a shared resource grant or
+`principals["human-NNN"]` to a deploy-target module. Never write a personal
+email in plaintext into either declaration, a commit message, or the PR body —
+the repo is public.
 
 ## Make the edit
 
@@ -117,9 +114,10 @@ documented exception and stay plaintext.
   reference. Add a plain member string for service accounts, groups, domains,
   workload identities, or other automation.
 
-**IAP viewer** — add the email to `viewers` in the service's
-`infra/<service>/Pulumi.marin-<service>.yaml`. Quote a `*@domain` wildcard (YAML
-reads a leading `*` as an alias).
+**Deploy-target or IAP grant** — add the registered `principals["human-NNN"]`
+reference to the target's `iam_grants()` declaration under
+`infra/pulumi/src/iac/gcp/`. Plain service-account, group, and domain members can
+be added directly.
 
 ## Verify and open the PR
 
@@ -133,8 +131,7 @@ reads a leading `*` as an alias).
   `[iac] Grant eval-bucket read to a new operator`, never the email. The body
   states the resource, the role, and the one-line justification — **no personal
   emails**. Note in the body that a reviewer should run `review-grant`, then
-  `pulumi up` on the affected stack(s): `marin` for `iam_data.yaml`,
-  `marin-<service>` for a `viewers` change.
+  `pulumi up` on the `marin` stack.
 - Assign the PR to the grant approvers so one of them picks up `review-grant`:
 
   ```bash

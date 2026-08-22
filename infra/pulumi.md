@@ -18,10 +18,25 @@ own image and deployment lifecycle.
 This project provisions cluster prerequisites and shared GCP infrastructure.
 Cluster-scoped resources use one stack per cluster, with configuration in
 `Pulumi.<cluster>.yaml`. Shared GCP resources, including IAM grants, belong to
-the `marin` stack and its `Pulumi.marin.yaml` configuration. Cross-cloud data
+the `marin` stack. Cross-cloud data
 buckets are the exception: `infra/buckets` owns the GCS, CoreWeave, and R2
 buckets in a manually operated project because its provider credentials are not
 available to CI. Bucket-scoped GCP IAM remains in `marin`.
+
+The `marin` stack is the sole repository owner of IAM grants on
+`hai-gcp-models`, including project, service-account, Secret Manager, KMS,
+bucket, and Cloud Run IAP grants. Declare grants in
+`infra/pulumi/src/iac/gcp/iam_data.yaml` or the adjacent Echo, EvalDash, Grafana,
+and Loom modules; application stacks and deployment scripts must not declare or
+mutate them. This central ownership is the policy boundary required for
+authoritative IAM reconciliation. The provider resources remain additive
+`*IAMMember` resources; issue #8455 tracks their conversion to authoritative
+bindings after the live-policy inventory is imported.
+
+When a grant targets a resource owned by another stack, create that resource
+before applying the global IAM stack. Omit code-declared grants that the
+live-policy audit cannot find and record them for separate review; importing the
+inventory must not create them.
 
 Resources often exist before a cluster or GCP resource is brought under Pulumi.
 Use the Program-first import command in `infra/pulumi/README.md` for a one-time
