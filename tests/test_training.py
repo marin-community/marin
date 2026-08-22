@@ -336,3 +336,27 @@ def test_resolve_training_env_adds_collective_watchdog_for_gpu():
     assert "--xla_gpu_enable_latency_hiding_scheduler=true" in gpu_flags
     assert GPU_NCCL_TERMINATION_TIMEOUT_FLAG in gpu_flags
     assert cpu_flags == base["XLA_FLAGS"]
+
+
+@pytest.mark.parametrize(
+    "overrides, expected_time, expected_limit",
+    [
+        ({}, "60", "125000"),
+        (
+            {
+                "TENSORSTORE_CURL_LOW_SPEED_TIME_SECONDS": "300",
+                "TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES": "1",
+            },
+            "300",
+            "1",
+        ),
+    ],
+)
+def test_resolve_training_env_bounds_stalled_tensorstore_requests(overrides, expected_time, expected_limit):
+    base = {"JAX_COMPILATION_CACHE_DIR": "/tmp/cache", **overrides}
+    with patch("marin.training.training._cli_helpers_module") as mod:
+        mod.return_value.load_config.return_value = CliConfig()
+        env = resolve_training_env(base, ResourceConfig.with_gpu("H100", count=8))
+
+    assert env["TENSORSTORE_CURL_LOW_SPEED_TIME_SECONDS"] == expected_time
+    assert env["TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES"] == expected_limit

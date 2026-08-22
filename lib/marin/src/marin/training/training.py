@@ -414,6 +414,11 @@ GPU_NCCL_TERMINATION_TIMEOUT_FLAG = "xla_gpu_nccl_termination_timeout_seconds"
 # or data loading. Set above the longest legitimate collective (cross-rank skew on
 # a cold start, checkpoint/eval barriers). Override per run via XLA_FLAGS.
 DEFAULT_GPU_NCCL_TERMINATION_TIMEOUT = 600
+TENSORSTORE_CURL_LOW_SPEED_TIME_ENV = "TENSORSTORE_CURL_LOW_SPEED_TIME_SECONDS"
+TENSORSTORE_CURL_LOW_SPEED_LIMIT_ENV = "TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES"
+DEFAULT_TENSORSTORE_CURL_LOW_SPEED_TIME = "60"
+# TensorStore passes this decimal bytes-per-second value directly to libcurl: 1 Mbit/s.
+DEFAULT_TENSORSTORE_CURL_LOW_SPEED_LIMIT = "125000"
 
 
 def _add_gpu_collective_watchdog_env(env: dict[str, str]) -> None:
@@ -440,8 +445,9 @@ def resolve_training_env(
     Combines the base env from the user (typically ``train_config.env_vars``)
     with hardware-specific defaults from ``levanter.infra.cli_helpers``, run
     metadata (GIT_COMMIT, FERRY_DATE, etc. via ``add_run_env_variables``), a
-    JAX compilation cache pointing at ``marin_temp_bucket``, and a guard
-    against XLA's autotune subcache when the cache lives on remote storage.
+    JAX compilation cache pointing at ``marin_temp_bucket``, a TensorStore
+    stalled-request watchdog, and a guard against XLA's autotune subcache when
+    the cache lives on remote storage.
     """
     default_launch_config = _cli_helpers_module().load_config()
 
@@ -456,6 +462,12 @@ def resolve_training_env(
 
     if isinstance(resources.device, GpuConfig):
         _add_gpu_collective_watchdog_env(env)
+
+    # TensorStore's S3 retry policy only activates after curl reports an error. Without this
+    # watchdog, a dead connection has no request deadline and can remain in flight until the
+    # operating system times it out.
+    env.setdefault(TENSORSTORE_CURL_LOW_SPEED_TIME_ENV, DEFAULT_TENSORSTORE_CURL_LOW_SPEED_TIME)
+    env.setdefault(TENSORSTORE_CURL_LOW_SPEED_LIMIT_ENV, DEFAULT_TENSORSTORE_CURL_LOW_SPEED_LIMIT)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
         env["JAX_COMPILATION_CACHE_DIR"] = _normalize_jax_compilation_cache_dir(
