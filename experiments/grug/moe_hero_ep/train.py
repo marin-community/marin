@@ -87,7 +87,7 @@ INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # dispatch and combine form one long dependent chain, so admitting several concurrent collectives
 # only contends for the SMs the transport itself needs, and the latency-hiding scheduler reorders
 # around the ragged collectives without shortening them.
-RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
+RAGGED_COLLECTIVE_OVERLAP_LIMIT = 2
 RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
