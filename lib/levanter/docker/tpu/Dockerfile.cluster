@@ -8,7 +8,7 @@ FROM ${IMAGE}:${TAG}
 RUN apt-get update && apt-get install -y docker.io
 
 ENV TENSORSTORE_CURL_LOW_SPEED_TIME_SECONDS=60\
-    TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES=1024\
+    TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES=125000\
     PATH=/opt/levanter/.venv/bin:$PATH\
     PYTHONPATH=/opt/levanter:/opt/levanter/src:/opt/levanter/examples:/opt/levanter/tests:src:.\
     HOME=/home/levanter

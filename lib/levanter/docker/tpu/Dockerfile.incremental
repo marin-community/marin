@@ -5,7 +5,7 @@ FROM ${IMAGE}:${TAG}
 
 # while uv discourages symlink, inside docker it seems to want to copy otherwise and that's annoying
 ENV TENSORSTORE_CURL_LOW_SPEED_TIME_SECONDS=60\
-    TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES=1024\
+    TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES=125000\
     PATH=/opt/marin/.venv/bin:$PATH\
     HOME=/home/levanter
 

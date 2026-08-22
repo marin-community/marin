@@ -73,7 +73,7 @@ if ! grep -q TENSORSTORE_CURL_LOW_SPEED_TIME_SECONDS /etc/environment; then
 fi
 
 if ! grep -q TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES /etc/environment; then
-  echo "TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES=1024" | sudo tee -a /etc/environment > /dev/null
+  echo "TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES=125000" | sudo tee -a /etc/environment > /dev/null
 fi
 
 # install python 3.12, latest git
