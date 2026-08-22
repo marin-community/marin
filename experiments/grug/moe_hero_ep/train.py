@@ -157,7 +157,7 @@ def _apply_hero_ep_runtime_defaults(
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
         f"{XLA_LATENCY_HIDING_FLAG}={'false' if ragged else 'true'}",
         XLA_MEMORY_LIMIT_SLOP_FLAG,
-        XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
+        "--xla_gpu_enable_command_buffer=FUSION",
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)

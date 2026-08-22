@@ -8,3 +8,4 @@ ra2a-l2-i01g-leanpath-chunk2	69dc015a9c	2026.08.21.42	ragged_all_to_all	syntheti
 ra2a-l2-i02-chunk3	4a1f8d3f56	2026.08.21.44	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-l2-i03-chunk2-lhs	f2fbdd04c5	2026.08.21.45	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-l2-i04-prof-chunk2	9503155c98	2026.08.21.46	ragged_all_to_all	synthetic	disabled	4470000	2100	none	--profile-steps 3
+ra2a-l2-i06-chunk2-devkernel	c3e7137f1a	2026.08.21.48	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none

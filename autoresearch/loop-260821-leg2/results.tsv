@@ -9,3 +9,4 @@ iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
 1g	2026-08-22T07:08Z	69dc015a9c	22.6824	+1.5186	pass	drops=0.0,loss=11.804399@15	keep	lean data path + 2 sequential expert chunks (ra2a-l2-i01g-leanpath-chunk2); beats pooled 22.31
 2	2026-08-22T07:31Z	4a1f8d3f56	22.5589	-0.1235	pass	drops=0.0	discard	chunks 3: serialization costs more than memory relief buys; 2 stands
 3	2026-08-22T07:41Z	f2fbdd04c5	-	-	crash	-	crash	LHS on chunked graph: pre-remat 206.19, achieved 201.37, NCCL OOM; LHS closed at every structure
+6	2026-08-22T08:45Z	c3e7137f1a	22.7163	+0.0339	pass	drops=0.0	discard	device kernel ties on the chunked structure (was -3 pre-47263); stock one-shot stands
