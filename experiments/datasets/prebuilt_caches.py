@@ -27,23 +27,25 @@ fineweb_edu_10B_repo_id = "marin-community/fineweb-edu-pretokenized-10B"
 fineweb_edu_10M_repo_id = "marin-community/fineweb-edu-pretokenized-10M"
 
 
-def fineweb_edu_10B_dataset() -> ArtifactStep[TokenizedCache]:
+def fineweb_edu_10B_dataset(*, pin: str | None = None) -> ArtifactStep[TokenizedCache]:
     """Pretokenized fineweb-edu 10B-token subcache as a lazy TokenizedCache handle."""
     return pretokenized(
         "fineweb-edu-10B",
         repo_id=fineweb_edu_10B_repo_id,
         tokenizer=marin_tokenizer,
         version="2026.06.28",
+        pin=pin,
     )
 
 
-def fineweb_edu_10M_dataset() -> ArtifactStep[TokenizedCache]:
+def fineweb_edu_10M_dataset(*, pin: str | None = None) -> ArtifactStep[TokenizedCache]:
     """Pretokenized fineweb-edu 10M-token subcache as a lazy TokenizedCache handle."""
     return pretokenized(
         "fineweb-edu-10M",
         repo_id=fineweb_edu_10M_repo_id,
         tokenizer=marin_tokenizer,
         version="2026.06.28",
+        pin=pin,
     )
 
 

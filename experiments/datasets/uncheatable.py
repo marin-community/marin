@@ -16,6 +16,7 @@ from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import dataset_main, raw_download, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
+from experiments.datasets.validation_cache_identity import VALIDATION_CACHE_VERSION, validation_tokenizer_suffix
 from experiments.llama import llama3_tokenizer
 
 # The English + code subsets included in the eval, mapped to their file globs.
@@ -52,9 +53,9 @@ def uncheatable_dataset(
     """One Uncheatable Eval subset as a validation handle."""
     raw = raw if raw is not None else uncheatable_raw()
     return tokenized(
-        f"uncheatable_eval/{subset}-llama3",
+        f"uncheatable_eval/{subset}-{validation_tokenizer_suffix(tokenizer)}",
         tokenizer=tokenizer,
-        version="2026.06.28",
+        version=VALIDATION_CACHE_VERSION,
         raw=raw,
         glob=UNCHEATABLE_SUBSETS[subset],
         validation=True,
