@@ -228,7 +228,6 @@ fn iris_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<NativeProxy>()?;
     module.add("PROXY_DECISION_PATH", iris_proxy::DECISION_PATH)?;
     module.add("DECISION_SECRET_HEADER", iris_proxy::DECISION_SECRET_HEADER)?;
-    module.add("ENDPOINT_NAME_HEADER", iris_proxy::ENDPOINT_NAME_HEADER)?;
     module.add("UPSTREAM_URL_HEADER", iris_proxy::UPSTREAM_URL_HEADER)?;
     module.add(
         "UPSTREAM_AUTHORIZATION_HEADER",
