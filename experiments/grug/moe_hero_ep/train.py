@@ -155,7 +155,7 @@ def _apply_hero_ep_runtime_defaults(
         overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
-        f"{XLA_LATENCY_HIDING_FLAG}=true",
+        f"{XLA_LATENCY_HIDING_FLAG}={'false' if ragged else 'true'}",
         XLA_MEMORY_LIMIT_SLOP_FLAG,
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
     )
