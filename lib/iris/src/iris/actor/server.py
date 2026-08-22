@@ -19,7 +19,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, NewType, Protocol, cast
+from typing import Any, NewType
 
 import cloudpickle
 import uvicorn
@@ -28,9 +28,12 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from starlette.applications import Starlette
-from starlette.routing import Mount
-from starlette.types import ASGIApp
+from starlette.exceptions import HTTPException
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from starlette.routing import Mount, Route
 
+from iris.actor.web import _actor_web_endpoints, _ActorWebEndpoint
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceASGIApplication
@@ -42,24 +45,8 @@ ACTOR_SERVER_STARTUP_TIMEOUT = Duration.from_seconds(5.0)
 
 # Type aliases
 ActorId = NewType("ActorId", str)
-_WEB_APPLICATION_PROPERTY = "web_application"
-
-
-class ActorWebApplication(Protocol):
-    """Actor that supplies an HTTP application on its RPC endpoint."""
-
-    @property
-    def web_application(self) -> ASGIApp: ...
-
-
-def _actor_web_application(actor: Any) -> ASGIApp | None:
-    descriptor = inspect.getattr_static(type(actor), _WEB_APPLICATION_PROPERTY, None)
-    if not isinstance(descriptor, property):
-        return None
-    application = actor.web_application
-    if not callable(application):
-        raise TypeError("Actor web_application must be an ASGI application")
-    return cast(ASGIApp, application)
+_ACTOR_RPC_PATH = "/iris.actor.ActorService"
+_ENDPOINT_NAME_HEADER = "x-iris-endpoint-name"
 
 
 def _connect_error_response(error: ConnectError) -> actor_pb2.ActorResponse:
@@ -74,6 +61,13 @@ class RegisteredActor:
     instance: Any
     methods: dict[str, Callable]
     registered_at: Timestamp = field(default_factory=Timestamp.now)
+
+
+@dataclass(frozen=True)
+class _RegisteredWebEndpoint:
+    actor_name: str
+    declaration: _ActorWebEndpoint
+    method: Callable[..., Any]
 
 
 @dataclass
@@ -133,7 +127,7 @@ class ActorServer:
         self._host = host
         self._port = port
         self._actors: dict[str, RegisteredActor] = {}
-        self._web_application: ASGIApp | None = None
+        self._web_endpoints: list[_RegisteredWebEndpoint] = []
         self._app: Starlette | None = None
         self._actual_port: int | None = None
         self._threads = threads if threads is not None else get_thread_container()
@@ -161,28 +155,47 @@ class ActorServer:
         """
         if name in self._actors:
             raise ValueError(f"Actor '{name}' is already registered")
-        web_application = _actor_web_application(actor)
-        if web_application is not None:
-            if self._app is not None:
-                raise RuntimeError("Register actor web applications before the actor server starts")
-            if self._web_application is not None:
-                raise RuntimeError("ActorServer supports one actor web application")
-            self._web_application = web_application
+
+        methods: dict[str, Callable] = {}
+        web_endpoints: list[_RegisteredWebEndpoint] = []
+        for method_name in dir(actor):
+            if method_name.startswith("__"):
+                continue
+            descriptor = inspect.getattr_static(actor, method_name)
+            declarations = _actor_web_endpoints(descriptor)
+            if method_name.startswith("_") and not declarations:
+                continue
+            method = getattr(actor, method_name)
+            if not callable(method):
+                continue
+            if not method_name.startswith("_"):
+                methods[method_name] = method
+            for declaration in declarations:
+                web_endpoints.append(_RegisteredWebEndpoint(actor_name=name, declaration=declaration, method=method))
+
+        if web_endpoints and self._app is not None:
+            raise RuntimeError("Register actor web endpoints before the actor server starts")
+        for endpoint in web_endpoints:
+            path = endpoint.declaration.path
+            if path == _ACTOR_RPC_PATH or path.startswith(f"{_ACTOR_RPC_PATH}/"):
+                raise ValueError(f"Actor web endpoint '{path}' conflicts with the actor RPC path")
+        route_keys = [(endpoint.declaration.path, endpoint.declaration.method) for endpoint in web_endpoints]
+        if len(route_keys) != len(set(route_keys)):
+            raise ValueError(f"Actor '{name}' has duplicate web endpoints")
+
         actor_id = ActorId(f"{name}-{uuid.uuid4().hex[:8]}")
-        methods = {
-            method_name: getattr(actor, method_name)
-            for method_name in dir(actor)
-            if (web_application is None or method_name != _WEB_APPLICATION_PROPERTY)
-            and not method_name.startswith("_")
-            and callable(getattr(actor, method_name))
-        }
         self._actors[name] = RegisteredActor(
             name=name,
             actor_id=actor_id,
             instance=actor,
             methods=methods,
         )
+        self._web_endpoints.extend(web_endpoints)
         return actor_id
+
+    async def _invoke(self, method: Callable, *args: Any, **kwargs: Any) -> Any:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._executor, functools.partial(method, *args, **kwargs))
 
     async def call(self, request: actor_pb2.ActorCall, ctx: RequestContext) -> actor_pb2.ActorResponse:
         """Handle actor RPC call."""
@@ -192,12 +205,7 @@ class ActorServer:
             return _connect_error_response(e)
 
         try:
-            # Run the method in our dedicated thread pool to avoid blocking the event loop.
-            # This allows actors to make outgoing RPC calls without deadlocking.
-            # We use our own executor instead of asyncio.to_thread() to avoid issues
-            # when asyncio's default executor is shut down during process cleanup.
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(self._executor, functools.partial(method, *args, **kwargs))
+            result = await self._invoke(method, *args, **kwargs)
 
             return actor_pb2.ActorResponse(serialized_value=cloudpickle.dumps(result))
 
@@ -343,12 +351,75 @@ class ActorServer:
         logger.info("Cancelled operation %s", request.operation_id)
         return op.to_proto()
 
+    async def _web_arguments(self, request: Request, method: Callable[..., Any]) -> inspect.BoundArguments:
+        values: dict[str, Any] = dict(request.path_params)
+        for name, value in request.query_params.items():
+            if name in values:
+                raise HTTPException(status_code=422, detail=f"Duplicate web argument '{name}'")
+            values[name] = value
+
+        body = await request.body()
+        if body:
+            try:
+                payload = await request.json()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Actor web endpoint body must be JSON") from None
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=422, detail="Actor web endpoint body must be a JSON object")
+            duplicate = values.keys() & payload.keys()
+            if duplicate:
+                name = sorted(duplicate)[0]
+                raise HTTPException(status_code=422, detail=f"Duplicate web argument '{name}'")
+            values.update(payload)
+
+        signature = inspect.signature(method)
+        if "request" in signature.parameters:
+            if "request" in values:
+                raise HTTPException(status_code=422, detail="The request argument is reserved")
+            values["request"] = request
+        try:
+            arguments = signature.bind(**values)
+        except TypeError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        arguments.apply_defaults()
+        return arguments
+
+    async def _dispatch_web_endpoint(
+        self,
+        request: Request,
+        handlers: dict[str, Callable],
+    ) -> Response:
+        actor_name = request.headers.get(_ENDPOINT_NAME_HEADER)
+        if actor_name is None and len(handlers) == 1:
+            method = next(iter(handlers.values()))
+        elif actor_name is not None and actor_name in handlers:
+            method = handlers[actor_name]
+        else:
+            return JSONResponse({"error": "Actor web endpoint not found"}, status_code=404)
+
+        arguments = await self._web_arguments(request, method)
+        result = await self._invoke(method, *arguments.args, **arguments.kwargs)
+        if isinstance(result, Response):
+            return result
+        return JSONResponse(result)
+
+    def _create_web_application(self) -> Starlette:
+        grouped: dict[tuple[str, str], dict[str, Callable]] = {}
+        for endpoint in self._web_endpoints:
+            key = (endpoint.declaration.path, endpoint.declaration.method)
+            grouped.setdefault(key, {})[endpoint.actor_name] = endpoint.method
+
+        routes: list[Route] = []
+        for (path, method), handlers in grouped.items():
+            dispatch = functools.partial(self._dispatch_web_endpoint, handlers=handlers)
+            routes.append(Route(path, dispatch, methods=[method]))
+        return Starlette(routes=routes)
+
     def _create_app(self) -> Starlette:
         rpc_app = ActorServiceASGIApplication(service=self, compressions=IRIS_RPC_COMPRESSIONS)
-        routes = [Mount(rpc_app.path, app=rpc_app)]
-        if self._web_application is not None:
-            routes.append(Mount("/", app=self._web_application))
-        return Starlette(routes=routes)
+        assert rpc_app.path == _ACTOR_RPC_PATH
+        web_app = self._create_web_application()
+        return Starlette(routes=[Mount(_ACTOR_RPC_PATH, app=rpc_app), Mount("/", app=web_app)])
 
     def serve_background(self, port: int | None = None) -> int:
         """Start server in background thread.
