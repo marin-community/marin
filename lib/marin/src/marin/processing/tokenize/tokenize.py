@@ -32,9 +32,11 @@ from levanter.data.text.datasets import (
 from levanter.data.text.formats import LmDatasetFormatBase, TextLmDatasetFormat
 from levanter.store.cache import ShardedCacheLayout
 from levanter.tokenizers import TokenizerBackend
+from rigging.filesystem.glob import glob_with_metadata
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.dataset import Dataset, FileEntry
 from zephyr.execution import ZephyrContext
+from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_file
 
 from marin.execution.artifact import Artifact
@@ -44,7 +46,6 @@ from marin.processing.tokenize._core import (
     compute_target_group_bytes,
     drop_sidecars,
     expand_tokenize_paths,
-    glob_with_sizes,
     parquet_window_hint,
     tokenize_pipeline,
 )
@@ -370,9 +371,15 @@ def tokenize(config: TokenizeConfigBase) -> None:
     else:
         raise ValueError(f"Unknown config type: {type(config)}")
 
-    # Resolve patterns → concrete files with sizes (single list-objects call per pattern)
-    train_files = drop_sidecars(glob_with_sizes(train_patterns))
-    validation_files = drop_sidecars(glob_with_sizes(validation_patterns))
+    train_files = drop_sidecars(
+        [FileEntry(spec=InputFileSpec(path=entry.path), size=entry.size) for entry in glob_with_metadata(train_patterns)]
+    )
+    validation_files = drop_sidecars(
+        [
+            FileEntry(spec=InputFileSpec(path=entry.path), size=entry.size)
+            for entry in glob_with_metadata(validation_patterns)
+        ]
+    )
 
     if isinstance(config, TokenizeConfig):
         _validate_train_urls([f.path for f in train_files], warn=config.allow_test_in_train)

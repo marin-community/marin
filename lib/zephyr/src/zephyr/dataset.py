@@ -5,15 +5,13 @@
 
 import functools
 import logging
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Generic, Literal, TypeVar, cast, overload
 
-import fsspec
-from braceexpand import braceexpand
 from pyarrow import RecordBatch
-from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.glob import glob_with_metadata
 from rigging.filesystem.storage_path import StoragePath
 
 from zephyr.expr import Expr
@@ -24,14 +22,11 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class GlobSource:
-    """Lazy file source resolved at plan time via a bulk list-objects call.
+    """File patterns and empty-match behavior for a lazy dataset source."""
 
-    Stores the glob pattern and defers expansion to compute_plan(), where
-    fsspec glob(detail=True) returns paths and sizes in a single RPC.
-    """
-
-    pattern: str
+    patterns: tuple[str, ...]
     empty_glob_ok: bool = False
+    minimum_file_size: int = 0
 
 
 @dataclass(frozen=True)
@@ -52,26 +47,15 @@ class FileEntry:
 
 
 def resolve_glob(source: GlobSource) -> list[FileEntry]:
-    """Expand a GlobSource into FileEntry objects with sizes.
-
-    Uses fsspec glob(detail=True) which returns file metadata from the same
-    list-objects API call — no extra per-file stat RPCs.
-    """
-    pattern = StoragePath.normalize(source.pattern)
-
-    fs, _ = url_to_fs(pattern)
-    protocol = fsspec.core.split_protocol(pattern)[0]
-
-    entries: list[FileEntry] = []
-    for expanded in braceexpand(pattern):
-        detail = fs.glob(expanded, detail=True)
-        for path, info in detail.items():
-            full = f"{protocol}://{path}" if protocol else path
-            entries.append(FileEntry(spec=InputFileSpec(path=full), size=info.get("size", 0)))
-    entries.sort(key=lambda e: e.path)
+    """Return the unique files and sizes matched by a GlobSource."""
+    entries = [
+        FileEntry(spec=InputFileSpec(path=entry.path), size=entry.size)
+        for entry in glob_with_metadata(source.patterns)
+        if entry.size >= source.minimum_file_size
+    ]
 
     if not entries and not source.empty_glob_ok:
-        raise FileNotFoundError(f"No files found matching pattern: {source.pattern}")
+        raise FileNotFoundError(f"No files found matching patterns: {source.patterns}")
 
     return entries
 
@@ -434,7 +418,24 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = ctx.execute(ds).results
         """
-        return Dataset(GlobSource(pattern, empty_glob_ok))
+        return Dataset.from_file_patterns((pattern,), empty_glob_ok=empty_glob_ok)
+
+    @staticmethod
+    def from_file_patterns(
+        patterns: Sequence[str],
+        empty_glob_ok: bool = False,
+        minimum_file_size: int = 0,
+    ) -> "Dataset[str]":
+        """Create a dataset from unique files matched by one or more patterns."""
+        if minimum_file_size < 0:
+            raise ValueError(f"minimum_file_size must be non-negative, got {minimum_file_size}")
+        return Dataset(
+            GlobSource(
+                patterns=tuple(patterns),
+                empty_glob_ok=empty_glob_ok,
+                minimum_file_size=minimum_file_size,
+            )
+        )
 
     def map(self, fn: Callable[[T], R]) -> "Dataset[R]":
         """Map a function over the dataset.

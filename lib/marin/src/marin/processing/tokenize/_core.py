@@ -15,21 +15,16 @@ Public API lives in those modules; helpers here are package-private.
 import json
 import logging
 import os
-import re
 import time
 from collections.abc import Iterator, Mapping, Sequence
 
-import braceexpand
-import fsspec
 import pyarrow.parquet as pq
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.text.formats import LmDatasetFormatBase, preprocessor_for_format
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
-from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
 from zephyr.dataset import Dataset, FileEntry
-from zephyr.input_file import InputFileSpec
 from zephyr.worker_context import zephyr_worker_ctx
 
 from marin.datakit.normalize import generate_id
@@ -78,25 +73,6 @@ def drop_sidecars(files: list[FileEntry]) -> list[FileEntry]:
     """Drop dot-prefixed files — Marin metadata sidecars (``.provenance.json``,
     ``.artifact.json``, …), never training data even with a data extension."""
     return [f for f in files if not os.path.basename(f.path).startswith(".")]
-
-
-def glob_with_sizes(patterns: list[str]) -> list[FileEntry]:
-    """Glob patterns and return FileEntry objects (spec + size).
-
-    Uses fsspec ``glob(detail=True)`` which returns file metadata from the same
-    list-objects API call — no per-file stat RPCs needed. Works for gs://, hf://, s3://, local.
-    """
-    results: list[FileEntry] = []
-    for pattern in patterns:
-        pattern = re.sub(r"(?<!:)//+", "/", pattern)
-        fs, _ = url_to_fs(pattern)
-        protocol = fsspec.core.split_protocol(pattern)[0]
-        for expanded in braceexpand.braceexpand(pattern):
-            detail = fs.glob(expanded, detail=True)
-            for path, info in detail.items():
-                full = f"{protocol}://{path}" if protocol else path
-                results.append(FileEntry(spec=InputFileSpec(path=full), size=info.get("size", 0)))
-    return results
 
 
 def expand_tokenize_paths(input_paths: list[str]) -> list[str]:

@@ -188,6 +188,21 @@ def test_subprocess_runner_isolates_native_crash(local_client, tmp_path):
     assert "exited with code 139" in rendered or "failed" in rendered
 
 
+def test_subprocess_runner_enforces_memory_limit(local_client, tmp_path):
+    ctx = _ctx(
+        local_client,
+        tmp_path,
+        stage_runner_factory=lambda: SubprocessRunner(memory_limit_bytes=1),
+    )
+    try:
+        with pytest.raises(ZephyrWorkerError) as exc_info:
+            ctx.execute(Dataset.from_list([0]).map(lambda value: value))
+    finally:
+        ctx.shutdown()
+
+    assert "RSS limit" in str(exc_info.value)
+
+
 @pytest.fixture()
 def finelog_server(tmp_path):
     """Start an embedded finelog server and yield its URL."""
