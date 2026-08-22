@@ -263,7 +263,8 @@ struct TelemetryRecord {
     unit: Option<String>,
     #[serde(default)]
     attributes: BTreeMap<String, String>,
-    group: TelemetryGroup,
+    #[serde(default)]
+    group: Option<TelemetryGroup>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -932,8 +933,13 @@ fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<PreparedWrite>, ApiErro
         ],
     )
     .map_err(|error| ApiError::bad_request(format!("could not normalize telemetry: {error}")))?;
-    let mut writes = Vec::with_capacity(TelemetryGroup::ALL.len());
-    for group in TelemetryGroup::ALL {
+    let targets = std::iter::once((TELEMETRY_NAMESPACE, None)).chain(
+        TelemetryGroup::ALL
+            .into_iter()
+            .map(|group| (group.namespace(), Some(group))),
+    );
+    let mut writes = Vec::with_capacity(TelemetryGroup::ALL.len() + 1);
+    for (namespace, group) in targets {
         let mask = BooleanArray::from(
             batch
                 .records
@@ -958,10 +964,7 @@ fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<PreparedWrite>, ApiErro
                 format!("could not encode telemetry: {error}"),
             )
         })?;
-        writes.push(PreparedWrite {
-            namespace: group.namespace(),
-            ipc,
-        });
+        writes.push(PreparedWrite { namespace, ipc });
     }
     Ok(writes)
 }

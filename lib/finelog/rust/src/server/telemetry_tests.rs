@@ -768,6 +768,59 @@ async fn semantic_groups_route_to_children_and_roll_up() {
 }
 
 #[tokio::test]
+async fn records_without_groups_continue_writing_to_the_legacy_parent() {
+    let store = disk_store("telemetry-legacy-client");
+    let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
+    let client = http_client();
+    let batch_id = "f8541931-aa0a-4450-aac3-f6964f392240";
+    let body = serde_json::to_vec(&json!({
+        "version": 1,
+        "batch_id": batch_id,
+        "resource": {"service": "iris-controller", "attributes": {}},
+        "records": [{
+            "timestamp_ms": 1_700_000_000_000_i64,
+            "kind": "gauge",
+            "name": "rpc_requests_total",
+            "value": 3.0,
+            "attributes": {"service": "iris.cluster.ControllerService", "method": "ListJobs"}
+        }]
+    }))
+    .unwrap();
+
+    let response = post(
+        &client,
+        addr,
+        body,
+        Some(batch_id),
+        Some("application/json"),
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status, StatusCode::OK);
+    store
+        .await_persisted("telemetry_v1", 1, Duration::from_secs(5))
+        .await
+        .unwrap();
+    let rollup = query(
+        &store,
+        "SELECT name, value FROM telemetry_v1 WHERE service = 'iris-controller'",
+    )
+    .await;
+    assert_eq!(
+        rollup[0].column(0).as_string::<i32>().value(0),
+        "rpc_requests_total"
+    );
+    assert_eq!(
+        rollup[0]
+            .column(1)
+            .as_primitive::<arrow::datatypes::Float64Type>()
+            .value(0),
+        3.0
+    );
+}
+
+#[tokio::test]
 async fn explicit_resource_dimensions_override_attribute_fallbacks() {
     let store = disk_store("telemetry-explicit-resource-dimensions");
     let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
