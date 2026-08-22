@@ -17,3 +17,6 @@ ra2a-l2-i11-stock-devkernel	90ef05fa67	2026.08.22.3	ragged_all_to_all	synthetic	
 ra2a-l2-i11-stock-sendrecv	dbd2628fa8	2026.08.22.3	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-l2-i12-nightly-devkernel	e12dc963a9	2026.08.22.4	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-l2-i12b-nightly-dk-symbuf	9a94451d6a	2026.08.22.5	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
+ra2a-l2-i13-wheel-dk-symbuf	4756eb7f41	2026.08.22.6	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
+ra2a-l2-i13b-wheel-dk-symbuf	4756eb7f41	2026.08.22.7	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
+ra2a-l2-i13c-wheel-dk-symbuf	4756eb7f41	2026.08.22.8	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
