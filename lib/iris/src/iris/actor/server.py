@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any, NewType
 
 import cloudpickle
+import iris_native as _native  # pyrefly: ignore[missing-import]
 import uvicorn
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -46,7 +47,7 @@ ACTOR_SERVER_STARTUP_TIMEOUT = Duration.from_seconds(5.0)
 # Type aliases
 ActorId = NewType("ActorId", str)
 _ACTOR_RPC_PATH = "/iris.actor.ActorService"
-_ENDPOINT_NAME_HEADER = "x-iris-endpoint-name"
+_ENDPOINT_NAME_HEADER = _native.ENDPOINT_NAME_HEADER
 
 
 def _connect_error_response(error: ConnectError) -> actor_pb2.ActorResponse:
@@ -68,6 +69,46 @@ class _RegisteredWebEndpoint:
     actor_name: str
     declaration: _ActorWebEndpoint
     method: Callable[..., Any]
+
+
+def _actor_methods_and_web_endpoints(
+    actor_name: str,
+    actor: Any,
+) -> tuple[dict[str, Callable], list[_RegisteredWebEndpoint]]:
+    methods: dict[str, Callable] = {}
+    web_endpoints: list[_RegisteredWebEndpoint] = []
+    for method_name in dir(actor):
+        if method_name.startswith("__"):
+            continue
+        descriptor = inspect.getattr_static(actor, method_name)
+        declarations = _actor_web_endpoints(descriptor)
+        if method_name.startswith("_") and not declarations:
+            continue
+        method = getattr(actor, method_name)
+        if not callable(method):
+            continue
+        if not method_name.startswith("_"):
+            methods[method_name] = method
+        for declaration in declarations:
+            web_endpoints.append(_RegisteredWebEndpoint(actor_name=actor_name, declaration=declaration, method=method))
+    return methods, web_endpoints
+
+
+def _validate_web_endpoints(
+    actor_name: str,
+    web_endpoints: list[_RegisteredWebEndpoint],
+    *,
+    server_started: bool,
+) -> None:
+    if web_endpoints and server_started:
+        raise RuntimeError("Register actor web endpoints before the actor server starts")
+    for endpoint in web_endpoints:
+        path = endpoint.declaration.path
+        if path == _ACTOR_RPC_PATH or path.startswith(f"{_ACTOR_RPC_PATH}/"):
+            raise ValueError(f"Actor web endpoint '{path}' conflicts with the actor RPC path")
+    route_keys = [(endpoint.declaration.path, endpoint.declaration.method) for endpoint in web_endpoints]
+    if len(route_keys) != len(set(route_keys)):
+        raise ValueError(f"Actor '{actor_name}' has duplicate web endpoints")
 
 
 @dataclass
@@ -148,40 +189,20 @@ class ActorServer:
 
         Args:
             name: Name for actor discovery
-            actor: Actor instance with public methods
+            actor: Actor instance with public RPC methods and decorated HTTP methods.
 
         Returns:
             Unique actor ID
+
+        Raises:
+            ValueError: The actor name is already registered or its HTTP routes conflict.
+            RuntimeError: The server has started and the actor has HTTP methods.
         """
         if name in self._actors:
             raise ValueError(f"Actor '{name}' is already registered")
 
-        methods: dict[str, Callable] = {}
-        web_endpoints: list[_RegisteredWebEndpoint] = []
-        for method_name in dir(actor):
-            if method_name.startswith("__"):
-                continue
-            descriptor = inspect.getattr_static(actor, method_name)
-            declarations = _actor_web_endpoints(descriptor)
-            if method_name.startswith("_") and not declarations:
-                continue
-            method = getattr(actor, method_name)
-            if not callable(method):
-                continue
-            if not method_name.startswith("_"):
-                methods[method_name] = method
-            for declaration in declarations:
-                web_endpoints.append(_RegisteredWebEndpoint(actor_name=name, declaration=declaration, method=method))
-
-        if web_endpoints and self._app is not None:
-            raise RuntimeError("Register actor web endpoints before the actor server starts")
-        for endpoint in web_endpoints:
-            path = endpoint.declaration.path
-            if path == _ACTOR_RPC_PATH or path.startswith(f"{_ACTOR_RPC_PATH}/"):
-                raise ValueError(f"Actor web endpoint '{path}' conflicts with the actor RPC path")
-        route_keys = [(endpoint.declaration.path, endpoint.declaration.method) for endpoint in web_endpoints]
-        if len(route_keys) != len(set(route_keys)):
-            raise ValueError(f"Actor '{name}' has duplicate web endpoints")
+        methods, web_endpoints = _actor_methods_and_web_endpoints(name, actor)
+        _validate_web_endpoints(name, web_endpoints, server_started=self._app is not None)
 
         actor_id = ActorId(f"{name}-{uuid.uuid4().hex[:8]}")
         self._actors[name] = RegisteredActor(
