@@ -10,3 +10,4 @@ iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
 5	2026-08-22T00:15Z	863eca154c	21.2362	-0.0794	pass	drops=0.0,loss=11.8044	discard	NCCL_ALGO=Ring -- null; the extra reduce-scatter time is 3 RS instructions per layer in the ragged graph, not symmetric-kernel algo choice
 6	2026-08-22T00:25Z	266e696369	-	-	n/a	no measurement	crash	LHS + overlap 4: NCCL alltoall CUDA OOM on first step -- overlap-4 collective buffers exceed the pool
 6b	2026-08-22T00:32Z	04ba1e6d1b	-	-	n/a	no measurement	crash	LHS + overlap 1: same NCCL alltoall CUDA OOM -- the blowup is LHS itself under the 0.75/85 memory posture
+6c	2026-08-22T00:40Z	178b638043	-	-	n/a	no measurement	crash	LHS + fraction 0.70 slop 80: same NCCL alltoall OOM; LHS lever closed as dead under this memory architecture (3 crashes)
