@@ -27,9 +27,11 @@ SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 GENERATED_STRING_CHUNK_WIDTH = 88
 VLLM_CONFIG_NAME = "vllm"
 VLLM_GPU_RELEASE_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "gpu.toml"
-TPU_FORKS_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "tpu.toml"
+TPU_WHEELS_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "tpu_wheels.toml"
 GPU_RELEASE_REPOSITORY = "marin-community/vllm"
 GPU_RELEASE_MANIFEST_NAME = "marin-vllm-gpu-manifest.json"
+TPU_RELEASE_REPOSITORY = "marin-community/vllm"
+TPU_DISTRIBUTIONS = ("vllm", "tpu-inference")
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,15 @@ class VllmGpuRelease:
     wheels: tuple[VllmGpuWheel, ...]
 
 
+@dataclass(frozen=True)
+class VllmTpuRelease:
+    release_tag: str
+    python_version: str
+    exclude_newer: str
+    vllm_requirement: str
+    tpu_inference_requirement: str
+
+
 EXTERNAL_PROJECTS = (
     ExternalProject("evalchemy", "evalchemy", "EVALCHEMY"),
     ExternalProject(
@@ -121,26 +132,6 @@ def locked_git_source(lock_path: Path, distribution: str) -> LockedGitSource:
     if "subdirectory" in parse_qs(parsed.query):
         raise ValueError(f"{lock_path}: expected a root Git source, found {source!r}")
     repository = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
-    return LockedGitSource(repository=repository, commit=commit)
-
-
-def tpu_fork_source(path: Path, name: str) -> LockedGitSource:
-    """Read one forked TPU vLLM pin (repository + commit) from the fork descriptor.
-
-    The TPU vLLM stack (``vllm`` + ``tpu-inference``) runs from an isolated uvx env rather than
-    the workspace lock, so its SHAs live in ``config/external/vllm/tpu.toml`` instead of
-    ``uv.lock``. See ``marin.inference.vllm_server.IsolatedTpuVllm``.
-    """
-    config = tomllib.loads(path.read_text())
-    if name not in config:
-        raise ValueError(f"{path}: missing [{name}] section")
-    entry = config[name]
-    repository = entry["repository"]
-    commit = entry["commit"]
-    if not repository.endswith(GIT_SUFFIX):
-        raise ValueError(f"{path}: [{name}] repository must be a .git URL, found {repository!r}")
-    if GIT_COMMIT_PATTERN.fullmatch(commit) is None:
-        raise ValueError(f"{path}: [{name}] commit is not a full Git SHA, found {commit!r}")
     return LockedGitSource(repository=repository, commit=commit)
 
 
@@ -213,6 +204,41 @@ def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
     return release
 
 
+def load_vllm_tpu_release(path: Path) -> VllmTpuRelease:
+    """Load the public wheel pair selected after TPU qualification."""
+    config = tomllib.loads(path.read_text())
+    if config["validated_hardware"] != "v6e-8":
+        raise ValueError(f"{path}: TPU pair was not qualified on v6e-8")
+    # Match Marin's worker interpreter so cloudpickled entrypoints remain compatible.
+    if config["python_version"] != "3.12":
+        raise ValueError(f"{path}: TPU pair must target Python 3.12")
+    exclude_newer = config["exclude_newer"]
+    if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", exclude_newer) is None:
+        raise ValueError(f"{path}: TPU dependency cutoff is malformed")
+
+    packages = {package["distribution"]: package for package in config["packages"]}
+    if len(packages) != len(config["packages"]) or set(packages) != set(TPU_DISTRIBUTIONS):
+        raise ValueError(f"{path}: expected the exact vllm/tpu-inference package pair")
+    release_tag = config["release_tag"]
+    release_prefix = f"https://github.com/{TPU_RELEASE_REPOSITORY}/releases/download/{release_tag}/"
+
+    def requirement(distribution: str) -> str:
+        package = packages[distribution]
+        if SHA256_PATTERN.fullmatch(package["wheel_sha256"]) is None:
+            raise ValueError(f"{path}: {distribution} wheel digest is malformed")
+        if package["wheel_url"] != release_prefix + package["wheel_filename"]:
+            raise ValueError(f"{path}: {distribution} wheel is not under {release_tag}")
+        return f"{distribution} @ {package['wheel_url']}"
+
+    return VllmTpuRelease(
+        release_tag=release_tag,
+        python_version=config["python_version"],
+        exclude_newer=exclude_newer,
+        vllm_requirement=requirement("vllm"),
+        tpu_inference_requirement=requirement("tpu-inference"),
+    )
+
+
 def render_gpu_release_toml(manifest: dict) -> str:
     """Return gpu.toml text for a promoted GPU release manifest, or raise if unpromoted.
 
@@ -254,8 +280,7 @@ def render_pins(
     dependencies: tuple[LockedDependency, ...],
     *,
     vllm_gpu_release: VllmGpuRelease,
-    vllm_fork_requirement: str,
-    tpu_inference_fork_requirement: str,
+    vllm_tpu_release: VllmTpuRelease,
 ) -> str:
     """Render the packaged pin table consumed by isolated Marin runtimes."""
 
@@ -306,6 +331,8 @@ def render_pins(
         "        ),"
         for wheel in vllm_gpu_release.wheels
     )
+    vllm_tpu_requirement = wrapped_string_literal(vllm_tpu_release.vllm_requirement, indent="    ")
+    tpu_inference_requirement = wrapped_string_literal(vllm_tpu_release.tpu_inference_requirement, indent="    ")
     return f'''# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -313,8 +340,8 @@ def render_pins(
 
 Do not edit this file directly. External project revisions come from their
 ``config/external/<name>/uv.lock`` files, the promoted GPU vLLM release comes
-from ``config/external/vllm/gpu.toml``, and TPU serving requirements
-come from the root ``uv.lock``.
+from ``config/external/vllm/gpu.toml``, and the qualified TPU wheel pair comes
+from ``config/external/vllm/tpu_wheels.toml``.
 """
 
 from dataclasses import dataclass
@@ -372,10 +399,11 @@ VLLM_GPU_RELEASE = VllmGpuRelease(
     ),
 )
 
-VLLM_FORK_REQUIREMENT = "{vllm_fork_requirement}"
-TPU_INFERENCE_FORK_REQUIREMENT = (
-    "{tpu_inference_fork_requirement}"
-)
+VLLM_TPU_RELEASE_TAG = "{vllm_tpu_release.release_tag}"
+VLLM_TPU_PYTHON_VERSION = "{vllm_tpu_release.python_version}"
+VLLM_TPU_EXCLUDE_NEWER = "{vllm_tpu_release.exclude_newer}"
+VLLM_TPU_REQUIREMENT = {vllm_tpu_requirement}
+TPU_INFERENCE_REQUIREMENT = {tpu_inference_requirement}
 
 EXTERNAL_DEPENDENCIES = (
 {constants}
@@ -508,22 +536,18 @@ def project_by_name(name: str) -> ExternalProject:
 
 
 def regenerate_generated_pins(dependencies: tuple[LockedDependency, ...], *, check: bool) -> bool:
-    """Render external_dependencies.py from the locks, TPU fork pins, and promoted GPU release.
+    """Render external_dependencies.py from the locks and accelerator wheel descriptors.
 
     Returns whether the generated file already matched (the drift signal `--check` reports on).
     """
     vllm_gpu_release = load_vllm_gpu_release(VLLM_GPU_RELEASE_CONFIG)
-    vllm_source = tpu_fork_source(TPU_FORKS_CONFIG, "vllm")
-    tpu_inference_source = tpu_fork_source(TPU_FORKS_CONFIG, "tpu-inference")
+    vllm_tpu_release = load_vllm_tpu_release(TPU_WHEELS_CONFIG)
     return synchronize_file(
         GENERATED_PINS,
         render_pins(
             dependencies,
             vllm_gpu_release=vllm_gpu_release,
-            vllm_fork_requirement=f"vllm @ git+{vllm_source.repository}@{vllm_source.commit}",
-            tpu_inference_fork_requirement=(
-                f"tpu-inference @ git+{tpu_inference_source.repository}@{tpu_inference_source.commit}"
-            ),
+            vllm_tpu_release=vllm_tpu_release,
         ),
         check=check,
     )

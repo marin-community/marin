@@ -226,6 +226,19 @@ def test_isolated_cuda_vllm_marin_fork_rejects_unpublished_architecture(monkeypa
         IsolatedCudaVllm(source=VllmType.MARIN_FORK).command()
 
 
+def test_tpu_uvx_cache_uses_iris_workdir(monkeypatch, tmp_path):
+    monkeypatch.setenv("IRIS_WORKDIR", str(tmp_path))
+    launcher = IsolatedTpuVllm(
+        vllm_requirement="vllm @ https://example.invalid/vllm.whl",
+        tpu_inference_requirement="tpu-inference @ https://example.invalid/tpu_inference.whl",
+        release_tag="qualified-pair",
+        exclude_newer="2026-08-12T00:00:00Z",
+        python_version="3.12",
+    )
+
+    assert Path(launcher.env()["UV_CACHE_DIR"]).parent == tmp_path
+
+
 def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
     site_packages = tmp_path / "site-packages"
     nvcc = site_packages / "nvidia" / "cu13" / "bin" / "nvcc"
