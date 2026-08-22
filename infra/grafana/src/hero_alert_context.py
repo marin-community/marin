@@ -17,8 +17,10 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol
+from typing import Protocol
 
+import pyarrow as pa
+from config import HERO_NOTIFICATION
 from hero_runs import hero_run_id, root_job_for, sql_epoch_ms, sql_timestamp
 from vllm_observability import sql_string
 
@@ -32,6 +34,8 @@ MAX_LOG_EXCERPTS = 20
 MAX_EVENT_GROUPS = 20
 MAX_STATE_ROWS = 12
 MAX_CONTEXT_BYTES = 24_000
+LOW_FANOUT_MAX_TASKS = 4
+LOW_FANOUT_FRACTION_DENOMINATOR = 3
 
 _CONTEXT_METRICS = (
     "phase",
@@ -58,9 +62,7 @@ _LOCAL_RANK = re.compile(r"\blocal rank \d+\b", re.IGNORECASE)
 _HEX = re.compile(r"\b0x[0-9a-fA-F]+\b")
 _UUID = re.compile(r"\b[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\b")
 _LONG_NUMBER = re.compile(r"\b\d{4,}\b")
-_SECRET_ASSIGNMENT = re.compile(
-    r"(?i)\b(token|password|passwd|secret|api[_-]?key|authorization)\s*[:=]\s*([^\s,;]+)"
-)
+_SECRET_ASSIGNMENT = re.compile(r"(?i)\b(token|password|passwd|secret|api[_-]?key|authorization)\s*[:=]\s*([^\s,;]+)")
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]+=*")
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
 _AWS_ACCESS_KEY = re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b")
@@ -68,7 +70,7 @@ _URL_CREDENTIALS = re.compile(r"(?P<scheme>https?://)[^\s/@:]+:[^\s/@]+@")
 
 
 class MetricSource(Protocol):
-    def query(self, sql: str, *, max_rows: int) -> Any: ...
+    def query(self, sql: str, *, max_rows: int) -> pa.Table: ...
 
 
 @dataclass(frozen=True)
@@ -91,7 +93,7 @@ def hero_alert_identity(alerts: Sequence[Mapping[str, object]]) -> HeroAlertIden
         cluster = str(labels.get("cluster", ""))
         run_id = str(labels.get("run", ""))
         root_job = str(labels.get("job", ""))
-        if notification != "hero-run" or not cluster or not run_id or not root_job:
+        if notification != HERO_NOTIFICATION or not cluster or not run_id or not root_job:
             raise ValueError("hero alerts require notification, cluster, run, and job labels")
         if (
             len(cluster) > 128
@@ -202,8 +204,9 @@ def log_context_query(identity: HeroAlertIdentity, anchors: Sequence[datetime]) 
         "ROW_NUMBER() OVER (PARTITION BY grouped.anchor_at ORDER BY grouped.task_attempts, "
         "ABS(grouped.first_ms - grouped.anchor_ms), grouped.occurrences, grouped.first_ms) AS candidate_rank "
         "FROM grouped JOIN cardinality ON grouped.anchor_at = cardinality.anchor_at "
-        "WHERE cardinality.total_task_attempts <= 4 "
-        "OR grouped.task_attempts * 3 <= cardinality.total_task_attempts"
+        f"WHERE cardinality.total_task_attempts <= {LOW_FANOUT_MAX_TASKS} "
+        f"OR grouped.task_attempts * {LOW_FANOUT_FRACTION_DENOMINATOR} "
+        "<= cardinality.total_task_attempts"
         ") "
         "SELECT anchor_at, to_timestamp_millis(first_ms) AS observed_at, source, level, data AS message, "
         "occurrences, task_attempts, total_task_attempts, sample_key "
@@ -260,7 +263,10 @@ def select_log_evidence(rows: Sequence[Mapping[str, object]]) -> list[dict[str, 
     for row in rows:
         task_attempts = int(row.get("task_attempts") or 0)
         total_task_attempts = int(row.get("total_task_attempts") or 0)
-        if total_task_attempts > 4 and task_attempts * 3 > total_task_attempts:
+        if (
+            total_task_attempts > LOW_FANOUT_MAX_TASKS
+            and task_attempts * LOW_FANOUT_FRACTION_DENOMINATOR > total_task_attempts
+        ):
             continue
         anchor = _iso(row.get("anchor_at"))
         message = _text(row.get("message"), 700)
@@ -288,9 +294,27 @@ def select_log_evidence(rows: Sequence[Mapping[str, object]]) -> list[dict[str, 
     return selected
 
 
-def _execution_context(
-    rows: Sequence[Mapping[str, object]], run_id: str
-) -> tuple[list[dict[str, object]], list[datetime], set[str]]:
+@dataclass(frozen=True)
+class _ExecutionContext:
+    executions: list[dict[str, object]]
+    anchors: list[datetime]
+    root_jobs: set[str]
+
+
+@dataclass(frozen=True)
+class _EventContext:
+    events: list[dict[str, object]]
+    anchors: list[datetime]
+
+
+@dataclass(frozen=True)
+class _QueryResult:
+    rows: list[dict[str, object]]
+    error: str | None
+
+
+def _execution_context(rows: Sequence[Mapping[str, object]], run_id: str) -> _ExecutionContext:
+    """Project telemetry into attempts, log anchors, and discovered Iris roots."""
     executions: dict[str, dict[str, object]] = {}
     anchors: list[datetime] = []
     root_jobs: set[str] = set()
@@ -321,10 +345,11 @@ def _execution_context(
         if isinstance(last_at, datetime):
             anchors.append(last_at.replace(tzinfo=UTC) if last_at.tzinfo is None else last_at.astimezone(UTC))
     ordered = sorted(executions.values(), key=lambda item: int(item["rank"]))
-    return ordered, anchors, root_jobs
+    return _ExecutionContext(executions=ordered, anchors=anchors, root_jobs=root_jobs)
 
 
-def _event_context(rows: Sequence[Mapping[str, object]]) -> tuple[list[dict[str, object]], list[datetime]]:
+def _event_context(rows: Sequence[Mapping[str, object]]) -> _EventContext:
+    """Project Iris event groups and retain their end times as log anchors."""
     events: list[dict[str, object]] = []
     anchors: list[datetime] = []
     for row in rows[:MAX_EVENT_GROUPS]:
@@ -344,7 +369,7 @@ def _event_context(rows: Sequence[Mapping[str, object]]) -> tuple[list[dict[str,
         last_at = row.get("last_at")
         if isinstance(last_at, datetime):
             anchors.append(last_at.replace(tzinfo=UTC) if last_at.tzinfo is None else last_at.astimezone(UTC))
-    return events, anchors
+    return _EventContext(events=events, anchors=anchors)
 
 
 def _dedupe_anchors(values: Sequence[datetime]) -> list[datetime]:
@@ -386,14 +411,16 @@ class HeroAlertContextAssembler:
         self._source = source
         self._max_rows = max_rows
 
-    async def _query(self, name: str, sql: str, max_rows: int) -> tuple[list[dict[str, object]], str | None]:
+    async def _query(self, name: str, sql: str, max_rows: int) -> _QueryResult:
+        """Return rows or an error-class sentinel so other evidence remains usable."""
         try:
             table = await asyncio.to_thread(self._source.query, sql, max_rows=min(max_rows, self._max_rows))
-            return table.to_pylist(), None
+            return _QueryResult(rows=table.to_pylist(), error=None)
         except Exception as err:
-            return [], f"{name}: {type(err).__name__}"
+            return _QueryResult(rows=[], error=f"{name}: {type(err).__name__}")
 
     async def assemble(self, alerts: list[Mapping[str, object]]) -> Mapping[str, object]:
+        """Build versioned, bounded context, marking individual query failures partial."""
         now = datetime.now(UTC)
         identity = hero_alert_identity(alerts)
         telemetry_result, state_result, event_result = await asyncio.gather(
@@ -401,34 +428,35 @@ class HeroAlertContextAssembler:
             self._query("task_state", task_state_context_query(identity, now), MAX_STATE_ROWS),
             self._query("task_event", task_event_context_query(identity, now), MAX_EVENT_GROUPS),
         )
-        telemetry_rows, telemetry_error = telemetry_result
-        state_rows, state_error = state_result
-        event_rows, event_error = event_result
-        executions, execution_anchors, execution_root_jobs = _execution_context(telemetry_rows, identity.run_id)
+        execution_context = _execution_context(telemetry_result.rows, identity.run_id)
         evidence_identity = HeroAlertIdentity(
             cluster=identity.cluster,
             run_id=identity.run_id,
-            root_jobs=tuple(sorted({*identity.root_jobs, *execution_root_jobs})),
+            root_jobs=tuple(sorted({*identity.root_jobs, *execution_context.root_jobs})),
         )
+        state_rows = state_result.rows
+        state_error = state_result.error
+        event_rows = event_result.rows
+        event_error = event_result.error
         if evidence_identity.root_jobs != identity.root_jobs:
             expanded_state, expanded_events = await asyncio.gather(
                 self._query("task_state", task_state_context_query(evidence_identity, now), MAX_STATE_ROWS),
                 self._query("task_event", task_event_context_query(evidence_identity, now), MAX_EVENT_GROUPS),
             )
-            expanded_state_rows, state_error = expanded_state
-            expanded_event_rows, event_error = expanded_events
+            state_error = expanded_state.error
+            event_error = expanded_events.error
             if state_error is None:
-                state_rows = expanded_state_rows
+                state_rows = expanded_state.rows
             if event_error is None:
-                event_rows = expanded_event_rows
-        events, event_anchors = _event_context(event_rows)
-        anchors = _dedupe_anchors([*execution_anchors, *event_anchors, now])
-        log_rows, log_error = await self._query(
+                event_rows = expanded_events.rows
+        event_context = _event_context(event_rows)
+        anchors = _dedupe_anchors([*execution_context.anchors, *event_context.anchors, now])
+        log_result = await self._query(
             "logs",
             log_context_query(evidence_identity, anchors),
             MAX_LOG_ANCHORS * MAX_LOG_ROWS_PER_ANCHOR,
         )
-        errors = [error for error in (telemetry_error, state_error, event_error, log_error) if error]
+        errors = [error for error in (telemetry_result.error, state_error, event_error, log_result.error) if error]
         context: dict[str, object] = {
             "schemaVersion": 1,
             "status": "partial" if errors else "complete",
@@ -440,7 +468,7 @@ class HeroAlertContextAssembler:
                 "evidenceRootJobs": list(evidence_identity.root_jobs),
                 "lookbackMinutes": round(CONTEXT_LOOKBACK.total_seconds() / 60),
             },
-            "recentExecutions": executions,
+            "recentExecutions": execution_context.executions,
             "taskStates": [
                 {
                     "job": _text(row.get("job"), 300),
@@ -449,14 +477,14 @@ class HeroAlertContextAssembler:
                 }
                 for row in state_rows[:MAX_STATE_ROWS]
             ],
-            "taskEvents": events,
+            "taskEvents": event_context.events,
             "logEvidence": {
                 "strategy": (
                     "warning/error output near recent execution and task-event boundaries, retaining messages "
                     "localized to a minority of task attempts and deduplicating volatile rank/time/address fields"
                 ),
                 "anchors": [_iso(anchor) for anchor in anchors],
-                "excerpts": select_log_evidence(log_rows),
+                "excerpts": select_log_evidence(log_result.rows),
             },
             "collectionErrors": errors,
             "caveat": (

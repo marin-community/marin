@@ -436,10 +436,11 @@ The session link is threaded under the announcement.
 
 Generic firing groups feed the live `Grafana operator` session. Every firing group
 whose alerts carry `notification=hero-run` instead goes to the separate `hero-ops`
-profile, including the older progress-stall and loss-spike rules as well as the
-newer run-health rules. That gives hero operations independent concurrency while
-leaving the general operator free. Either operator can delegate independent
-incidents to child Loom sessions. Repeated notifications for
+profile, including `TrainingProgressStalled`, `TrainingLossSpike`,
+`TrainingTelemetryGone`, and `TrainingOptimizerUnstable`. That gives hero
+operations independent concurrency while leaving the general operator free.
+Either operator can delegate independent incidents to child Loom sessions.
+Repeated notifications for
 the same alert fingerprint and start time reuse the same Loom run, and thread a
 short "still firing" note under the original announcement. The Slack thread key is
 the Grafana notification group key. A replacement alert instance in the same group

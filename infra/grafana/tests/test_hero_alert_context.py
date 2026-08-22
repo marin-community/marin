@@ -31,9 +31,7 @@ def alert(*, job: str = "/power/hero-example-coord", run: str = "hero-example") 
 
 
 def test_hero_alert_identity_keeps_replacement_jobs_in_one_logical_run():
-    identity = hero_alert_identity(
-        [alert(), alert(job="/power/hero-example-coord-1")]
-    )
+    identity = hero_alert_identity([alert(), alert(job="/power/hero-example-coord-1")])
 
     assert identity == HeroAlertIdentity(
         cluster="cw-a",
@@ -54,9 +52,7 @@ def test_hero_alert_identity_rejects_a_mixed_or_spoofed_group():
 
 def test_execution_uid_recovers_a_prior_coordinator_root():
     assert (
-        root_job_from_execution_uid(
-            "iris:/rav/hero-example-coord-prior/grug-train-hero-example/0:attempt:2"
-        )
+        root_job_from_execution_uid("iris:/rav/hero-example-coord-prior/grug-train-hero-example/0:attempt:2")
         == "/rav/hero-example-coord-prior"
     )
     assert root_job_from_execution_uid("opaque-attempt-id") is None
@@ -190,9 +186,7 @@ class _ContextSource:
             return pa.Table.from_pylist(
                 [
                     {
-                        "execution_uid": (
-                            "iris:/rav/hero-example-coord-prior/grug-train-hero-example/0:attempt:0"
-                        ),
+                        "execution_uid": "iris:/rav/hero-example-coord-prior/grug-train-hero-example/0:attempt:0",
                         "name": "progress_time_seconds",
                         "value": 600.0,
                         "observed_at": datetime(2026, 8, 21, 4, 6, tzinfo=UTC),
@@ -203,9 +197,7 @@ class _ContextSource:
                 ]
             )
         if 'FROM "iris.task_state"' in sql:
-            return pa.Table.from_pylist(
-                [{"observed_at": datetime(2026, 8, 21, 4, 12, tzinfo=UTC), "running": 0}]
-            )
+            return pa.Table.from_pylist([{"observed_at": datetime(2026, 8, 21, 4, 12, tzinfo=UTC), "running": 0}])
         if 'FROM "iris.task_event"' in sql:
             return pa.Table.from_pylist(
                 [
@@ -228,7 +220,7 @@ class _ContextSource:
                         "event_count": 1,
                         "affected_tasks": 1,
                         "sample_message": "retrying failed task",
-                    }
+                    },
                 ]
             )
         if 'FROM "log"' in sql:

@@ -230,7 +230,7 @@ def test_every_hero_run_notification_uses_the_dedicated_profile_and_first_pass_c
     assert "bounded first-pass snapshot" in request["session"]["goal"]
 
 
-def test_an_older_hero_rule_routes_by_notification_label_not_alert_name():
+def test_training_loss_spike_routes_by_notification_label_not_alert_name():
     runs: list[dict] = []
     payload = hero_stall_payload()
     payload["alerts"][0]["labels"]["alertname"] = "TrainingLossSpike"
