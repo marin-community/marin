@@ -3,9 +3,11 @@
 
 import asyncio
 import json
+import threading
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import equinox as eqx
 import haliax as hax
@@ -19,6 +21,7 @@ from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.testing.helpers import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
+import levanter.tensorstore_serialization as tensorstore_serialization
 from levanter.checkpoint import load_checkpoint, save_checkpoint
 from levanter.checkpoint_manifest import CHECKPOINT_FORMAT_VERSION, manifest_path, read_manifest
 from levanter.models.gpt2 import Gpt2Mlp
@@ -44,6 +47,75 @@ def test_pageable_checkpoint_staging_detaches_from_donated_jax_buffer():
     source_host = np.asarray(source)
     np.testing.assert_array_equal(staged, source_host)
     assert not np.shares_memory(staged, source_host)
+
+
+@pytest.mark.parametrize(
+    ("process_index", "object_name"),
+    [(0, "d/0000000000000001"), (1, "manifest.json")],
+)
+def test_s3_checkpoint_prefetch_shards_ranged_heads_after_commit(monkeypatch, process_index, object_name):
+    checkpoint_path = "s3://checkpoints/run/step-10"
+    plain_path = "checkpoints/run/step-10"
+    objects = [f"{plain_path}/manifest.json", f"{plain_path}/d/0000000000000001"]
+    events = []
+    heads = []
+    completed = threading.Event()
+
+    fs = Mock()
+    fs.find.return_value = objects
+    fs.split_path.side_effect = lambda path: (*path.split("/", 1), None)
+
+    def record_head(method, **kwargs):
+        events.append("head")
+        heads.append((method, kwargs, threading.current_thread().daemon))
+        completed.set()
+
+    fs.call_s3.side_effect = record_head
+    client = Mock()
+    client.blocking_key_value_get.side_effect = lambda *_: events.append("commit")
+    manager = SimpleNamespace(_client=client, _count=7, _timeout_in_ms=1_000)
+
+    def record_serialize(_arrays, _tspecs, _plans, _manager, _config, commit_callback):
+        if process_index == 0:
+            commit_callback()
+
+    monkeypatch.setattr(tensorstore_serialization, "s3_endpoint", lambda _: "http://cwlota.com")
+    monkeypatch.setattr(tensorstore_serialization.jax, "process_index", lambda: process_index)
+    monkeypatch.setattr(tensorstore_serialization.jax, "process_count", lambda: 2)
+    monkeypatch.setattr(tensorstore_serialization, "write_manifest", lambda *_: None)
+    monkeypatch.setattr(tensorstore_serialization, "record_transfer", lambda *_: None)
+    monkeypatch.setattr(tensorstore_serialization, "_serialize_arrays", record_serialize)
+    monkeypatch.setattr(
+        tensorstore_serialization,
+        "url_to_fs",
+        lambda _: (fs, plain_path),
+    )
+
+    tree_serialize_leaves_tensorstore(
+        checkpoint_path,
+        {"weights": np.arange(4, dtype=np.float32)},
+        manager=manager,
+        commit_callback=lambda: events.append("commit"),
+    )
+
+    assert completed.wait(timeout=5)
+    assert events == ["commit", "head"]
+    assert heads == [
+        (
+            "head_object",
+            {"Bucket": "checkpoints", "Key": f"run/step-10/{object_name}", "Range": "bytes=0-0"},
+            True,
+        )
+    ]
+
+
+def test_s3_checkpoint_prefetch_only_targets_lota_s3(monkeypatch):
+    monkeypatch.setattr(tensorstore_serialization, "s3_endpoint", lambda _: "https://cwobject.com")
+    assert not tensorstore_serialization._uses_lota("s3://checkpoints/run")
+
+    monkeypatch.setattr(tensorstore_serialization, "s3_endpoint", lambda _: "http://cwlota.com")
+    assert tensorstore_serialization._uses_lota("s3://checkpoints/run")
+    assert not tensorstore_serialization._uses_lota("gs://checkpoints/run")
 
 
 def test_jemalloc_checkpoint_skips_glibc_trim_callback(monkeypatch):

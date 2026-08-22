@@ -35,7 +35,10 @@ from jax._src.sharding import IndivisibleError
 from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
 
+from rigging.filesystem.cluster_config import StoreType
 from rigging.filesystem.cross_region import record_transfer
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.s3_compat import s3_endpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from levanter._debug_logging import flush_debug_output
@@ -56,6 +59,8 @@ _HOST_MEMORY_KIND = "pinned_host"
 _DEFAULT_STAGED_CHUNKS = 32
 # Host memory a staged byte occupies while its write is in flight, for reporting only.
 _STAGED_BYTE_OVERHEAD = 4
+_LOTA_ENDPOINT_HOST = "cwlota.com"
+_LOTA_PREFETCH_RANGE = "bytes=0-0"
 _JEMALLOC_LIBRARY_NAME = "jemalloc"
 
 
@@ -505,6 +510,50 @@ async def _list_ocdbt_keys(checkpoint_root: str) -> list[str]:
     return [key.decode("utf-8") for key in keys_bytes]
 
 
+def _prefetch_s3_checkpoint(checkpoint_root: str) -> None:
+    try:
+        fs, path = url_to_fs(checkpoint_root)
+        objects = sorted(fs.find(path))
+        process_index = jax.process_index()
+        assigned_objects = objects[process_index :: jax.process_count()]
+        for object_path in assigned_objects:
+            try:
+                bucket, key, _ = fs.split_path(object_path)
+                fs.call_s3("head_object", Bucket=bucket, Key=key, Range=_LOTA_PREFETCH_RANGE)
+            except Exception:
+                logger.exception("Failed to prefetch S3 checkpoint object through LOTA: %s", object_path)
+    except Exception:
+        logger.exception("Failed to prefetch S3 checkpoint through LOTA: %s", checkpoint_root)
+
+
+def _uses_lota(checkpoint_root: str) -> bool:
+    if urllib.parse.urlparse(checkpoint_root).scheme != "s3":
+        return False
+    hostname = urllib.parse.urlparse(s3_endpoint(StoreType.COREWEAVE)).hostname or ""
+    return hostname == _LOTA_ENDPOINT_HOST or hostname.endswith(f".{_LOTA_ENDPOINT_HOST}")
+
+
+def _start_s3_checkpoint_prefetch(operation: Callable[[], None]) -> None:
+    threading.Thread(target=operation, daemon=True).start()
+
+
+def _wait_for_global_commit_and_prefetch(
+    manager: array_ser.GlobalAsyncCheckpointManager,
+    checkpoint_root: str,
+) -> None:
+    try:
+        assert manager._client is not None
+        assert manager._count is not None
+        # JAX runs the commit callback only on process 0, then publishes this key for the other processes.
+        success_key = array_ser._get_key(manager._count)
+        manager._client.blocking_key_value_get(success_key, manager._timeout_in_ms)
+    except Exception:
+        logger.exception("Failed waiting for global checkpoint commit before LOTA prefetch: %s", checkpoint_root)
+        return
+
+    _prefetch_s3_checkpoint(checkpoint_root)
+
+
 def _is_named_or_none(x):
     return x is None or is_named_array(x)
 
@@ -605,6 +654,15 @@ def tree_serialize_leaves_tensorstore(
     if commit_callback is None:
         commit_callback = lambda: logger.info("Committed checkpoint to Tensorstore")  # noqa
 
+    checkpoint_root = str(checkpoint_dir)
+    process_index = jax.process_index()
+    uses_lota = _uses_lota(checkpoint_root)
+
+    def commit_and_prefetch() -> None:
+        commit_callback()
+        if process_index == 0 and uses_lota:
+            _start_s3_checkpoint_prefetch(partial(_prefetch_s3_checkpoint, checkpoint_root))
+
     if debug_checkpointer:
         logger.info(
             "Checkpoint tensorstore serialize start: dir=%s arrays=%d total=%s largest=%s (%s)",
@@ -629,7 +687,7 @@ def tree_serialize_leaves_tensorstore(
     ]
     tspecs = [_create_ocdbt_spec(checkpoint_dir, entry.path, entry=entry) for entry in entries]
 
-    if jax.process_index() == 0:
+    if process_index == 0:
         write_manifest(
             checkpoint_dir, build_manifest(entries, array_driver=ARRAY_DRIVER, kvstore_driver=KVSTORE_DRIVER)
         )
@@ -648,7 +706,9 @@ def tree_serialize_leaves_tensorstore(
         )
         flush_debug_output(logger)
 
-    _serialize_arrays(arrays, tspecs, plans, manager, write_config, commit_callback)
+    _serialize_arrays(arrays, tspecs, plans, manager, write_config, commit_and_prefetch)
+    if process_index != 0 and uses_lota:
+        _start_s3_checkpoint_prefetch(partial(_wait_for_global_commit_and_prefetch, manager, checkpoint_root))
 
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize handed off async commit for %s", checkpoint_dir)
