@@ -69,6 +69,80 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
     )
 
 
+def test_moe_backend_override_reaches_the_model_and_the_run_tags():
+    step = launch.build_hero_run(
+        run_id="ragged-backend",
+        dp_racks=1,
+        num_steps=1,
+        moe_implementation="ragged_all_to_all",
+        processes_per_task=4,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.model.moe_implementation == "ragged_all_to_all"
+    assert config.processes_per_task == 4
+    tags = config.trainer.trainer.tracker.tags
+    assert "ragged-all-to-all" in tags
+    # The pooled receiver capacity is the pooled transport's own knob; reporting it against a
+    # transport that has no such buffer would label the run with a setting it never read.
+    assert not [tag for tag in tags if tag.startswith("transport-capacity-")]
+
+
+@pytest.mark.parametrize(
+    ("moe_implementation", "expected_splits"),
+    [
+        ("ragged_all_to_all", launch.HERO_RAGGED_SPLITS_PER_PEER),
+        # The model config rejects any split count but 1 on the other transports, so a flat
+        # default would refuse to build the pooled-wave hero at all.
+        ("fixed_pooled_wave_all_to_all", 1),
+        ("fixed_all_to_all", 1),
+    ],
+)
+def test_splits_per_peer_defaults_to_the_backend(moe_implementation, expected_splits):
+    step = launch.build_hero_run(
+        run_id="splits-default",
+        dp_racks=1,
+        num_steps=1,
+        moe_implementation=moe_implementation,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.model.ragged_all_to_all_splits_per_peer == expected_splits
+
+
+def test_splits_per_peer_honors_an_explicit_value():
+    step = launch.build_hero_run(
+        run_id="splits-explicit",
+        dp_racks=1,
+        num_steps=1,
+        moe_implementation="ragged_all_to_all",
+        ragged_all_to_all_splits_per_peer=8,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.model.ragged_all_to_all_splits_per_peer == 8
+
+
+def test_disabling_the_master_keeps_fp32_weights_on_device():
+    step = launch.build_hero_run(
+        run_id="fp32-device-params",
+        dp_racks=1,
+        num_steps=1,
+        master_param_mode=train.MasterParamMode.DISABLED,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.master_param_mode is train.MasterParamMode.DISABLED
+    # Weights move to fp32 on device; the compute precision does not follow them there.
+    assert config.trainer.trainer.mp.param_dtype == jnp.float32
+    assert config.trainer.trainer.mp.compute_dtype == jnp.bfloat16
+    assert "master-params-disabled" in config.trainer.trainer.tracker.tags
+
+
 def test_full_bank_top_k_is_rejected_before_launch():
     # QB routing reads the (k+1)-th logit as its threshold, so a full-bank top-k asks `top_k` for
     # more entries than there are experts. Without this the job dies in the router, which is after
@@ -191,13 +265,20 @@ def test_expert_bank_override_must_support_three_waves():
         launch.build_hero_run(run_id="bad-waves", dp_racks=1, num_steps=1, num_experts=256, version="dev")
 
 
-def _runtime_env_config(*, processes_per_task=1, watch_mode=train.WatchMode.INLINE, watch_interval=1):
+def _runtime_env_config(
+    *,
+    processes_per_task=1,
+    watch_mode=train.WatchMode.INLINE,
+    watch_interval=1,
+    moe_implementation="fixed_pooled_wave_all_to_all",
+):
     """A stand-in for GrugRunConfig holding only the fields ``run_grug``'s env setup and dispatch read."""
     return SimpleNamespace(
         trainer=SimpleNamespace(
             trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
             watch_mode=watch_mode,
         ),
+        model=SimpleNamespace(moe_implementation=moe_implementation),
         resources=object(),
         processes_per_task=processes_per_task,
         max_retries_failure=0,
@@ -284,6 +365,20 @@ def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
 
     flags = os.environ["XLA_FLAGS"].split()
     assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={expected_overlap_limit}" in flags
+
+
+def test_run_grug_gives_the_ragged_transport_its_own_scheduling_posture(monkeypatch):
+    # A watch interval of 0 would otherwise select overlap 4, so the assertion below
+    # separates the ragged posture from the inline-watch one rather than aliasing it.
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = _runtime_env_config(watch_interval=0, moe_implementation=train.RAGGED_MOE_IMPLEMENTATION)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.RAGGED_COLLECTIVE_OVERLAP_LIMIT}" in flags
+    assert f"{train.XLA_LATENCY_HIDING_FLAG}=false" in flags
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():

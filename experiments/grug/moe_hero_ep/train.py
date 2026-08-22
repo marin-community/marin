@@ -74,6 +74,7 @@ HERO_EP_RUNTIME_ENV = {
     # allocation below has no room to remap into.
     "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.75",
 }
+XLA_LATENCY_HIDING_FLAG = "--xla_gpu_enable_latency_hiding_scheduler"
 # The scheduler sizes the single `jit_train_step` temp arena against this percentage of its
 # memory budget, roughly `133.6 GiB x percentage`. The pool holds 138.2 GiB and persistent state
 # occupies 18.1 GiB of it, so an arena above 120.2 GiB cannot be served from pool free space and
@@ -81,14 +82,17 @@ HERO_EP_RUNTIME_ENV = {
 # asks for 125.7 GiB and fails that way. 85 sizes the arena at 113.6 GiB, leaving enough slack
 # for per-node variation in fragmentation. A lower percentage costs throughput, because a
 # smaller arena makes `HloRematerialization` recompute more of the step.
-_XLA_FLAG_DEFAULTS = (
-    "--xla_gpu_enable_latency_hiding_scheduler=true",
-    "--xla_gpu_memory_limit_slop_factor=85",
-)
+XLA_MEMORY_LIMIT_SLOP_FLAG = "--xla_gpu_memory_limit_slop_factor=85"
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
+# The ragged transport wants the opposite scheduling posture from the fixed and pooled ones. Its
+# dispatch and combine form one long dependent chain, so admitting several concurrent collectives
+# only contends for the SMs the transport itself needs, and the latency-hiding scheduler reorders
+# around the ragged collectives without shortening them.
+RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
+RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
@@ -134,7 +138,9 @@ def restore_template_from(state):
     return template
 
 
-def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per_task: int = 1) -> None:
+def _apply_hero_ep_runtime_defaults(
+    *, inline_watch_enabled: bool, processes_per_task: int = 1, moe_implementation: str = ""
+) -> None:
     env_defaults = dict(HERO_EP_RUNTIME_ENV)
     if processes_per_task > 1:
         # With one process per GPU, the per-process CUPTI sessions collide with each
@@ -144,10 +150,17 @@ def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per
     for name, value in env_defaults.items():
         os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
-    overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT if inline_watch_enabled else DEFAULT_COLLECTIVE_OVERLAP_LIMIT
+    ragged = moe_implementation == RAGGED_MOE_IMPLEMENTATION
+    if ragged:
+        overlap_limit = RAGGED_COLLECTIVE_OVERLAP_LIMIT
+    elif inline_watch_enabled:
+        overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT
+    else:
+        overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
-        *_XLA_FLAG_DEFAULTS,
+        f"{XLA_LATENCY_HIDING_FLAG}={'false' if ragged else 'true'}",
+        XLA_MEMORY_LIMIT_SLOP_FLAG,
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
@@ -1117,7 +1130,9 @@ def run_grug(config: GrugRunConfig) -> None:
     # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
     inline_watch_enabled = trainer.watch.is_enabled and config.trainer.watch_mode == WatchMode.INLINE
     _apply_hero_ep_runtime_defaults(
-        inline_watch_enabled=inline_watch_enabled, processes_per_task=config.processes_per_task
+        inline_watch_enabled=inline_watch_enabled,
+        processes_per_task=config.processes_per_task,
+        moe_implementation=config.model.moe_implementation,
     )
     dispatch_grug_training_run(
         run_id=trainer.id,
