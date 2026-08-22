@@ -28,8 +28,12 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from starlette.applications import Starlette
-from starlette.routing import Mount
+from starlette.exceptions import HTTPException
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from starlette.routing import Mount, Route
 
+from iris.actor.web import _actor_web_endpoints, _ActorWebEndpoint
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceASGIApplication
@@ -41,6 +45,10 @@ ACTOR_SERVER_STARTUP_TIMEOUT = Duration.from_seconds(5.0)
 
 # Type aliases
 ActorId = NewType("ActorId", str)
+_ACTOR_RPC_PATH = "/iris.actor.ActorService"
+# Keep this wire value in sync with iris_proxy::ENDPOINT_NAME_HEADER.
+_ENDPOINT_NAME_HEADER = "x-iris-endpoint-name"
+_PROXY_PREFIX_HEADER = "x-forwarded-prefix"
 
 
 def _connect_error_response(error: ConnectError) -> actor_pb2.ActorResponse:
@@ -55,6 +63,67 @@ class RegisteredActor:
     instance: Any
     methods: dict[str, Callable]
     registered_at: Timestamp = field(default_factory=Timestamp.now)
+
+
+@dataclass(frozen=True)
+class _RegisteredWebEndpoint:
+    actor_name: str
+    declaration: _ActorWebEndpoint
+    method: Callable[..., Any]
+
+
+def _actor_methods_and_web_endpoints(
+    actor_name: str,
+    actor: Any,
+) -> tuple[dict[str, Callable], list[_RegisteredWebEndpoint]]:
+    methods: dict[str, Callable] = {}
+    web_endpoints: list[_RegisteredWebEndpoint] = []
+    for method_name in dir(actor):
+        if method_name.startswith("__"):
+            continue
+        descriptor = inspect.getattr_static(actor, method_name)
+        declarations = _actor_web_endpoints(descriptor)
+        if method_name.startswith("_") and not declarations:
+            continue
+        method = getattr(actor, method_name)
+        if not callable(method):
+            continue
+        if not method_name.startswith("_"):
+            methods[method_name] = method
+        for declaration in declarations:
+            web_endpoints.append(_RegisteredWebEndpoint(actor_name=actor_name, declaration=declaration, method=method))
+    return methods, web_endpoints
+
+
+def _validate_web_endpoints(
+    actor_name: str,
+    web_endpoints: list[_RegisteredWebEndpoint],
+    *,
+    server_started: bool,
+) -> None:
+    if web_endpoints and server_started:
+        raise RuntimeError("Register actor web endpoints before the actor server starts")
+    for endpoint in web_endpoints:
+        path = endpoint.declaration.path
+        if path == _ACTOR_RPC_PATH or path.startswith(f"{_ACTOR_RPC_PATH}/"):
+            raise ValueError(f"Actor web endpoint '{path}' conflicts with the actor RPC path")
+    route_keys = [(endpoint.declaration.path, endpoint.declaration.method) for endpoint in web_endpoints]
+    if len(route_keys) != len(set(route_keys)):
+        raise ValueError(f"Actor '{actor_name}' has duplicate web endpoints")
+
+
+def _web_actor_name(request: Request, handlers: dict[str, Callable]) -> str | None:
+    proxy_prefix = request.headers.get(_PROXY_PREFIX_HEADER)
+    if proxy_prefix:
+        proxy_name = proxy_prefix.rsplit("/", maxsplit=1)[-1].replace(".", "/")
+        return next((name for name in (f"/{proxy_name}", proxy_name) if name in handlers), None)
+
+    actor_name = request.headers.get(_ENDPOINT_NAME_HEADER)
+    if actor_name is not None:
+        return actor_name if actor_name in handlers else None
+    if len(handlers) == 1:
+        return next(iter(handlers))
+    return None
 
 
 @dataclass
@@ -114,6 +183,7 @@ class ActorServer:
         self._host = host
         self._port = port
         self._actors: dict[str, RegisteredActor] = {}
+        self._web_endpoints: list[_RegisteredWebEndpoint] = []
         self._app: Starlette | None = None
         self._actual_port: int | None = None
         self._threads = threads if threads is not None else get_thread_container()
@@ -134,22 +204,34 @@ class ActorServer:
 
         Args:
             name: Name for actor discovery
-            actor: Actor instance with public methods
+            actor: Actor instance with public RPC methods and decorated HTTP methods.
 
         Returns:
             Unique actor ID
+
+        Raises:
+            ValueError: The actor name is already registered or its HTTP routes conflict.
+            RuntimeError: The server has started and the actor has HTTP methods.
         """
         if name in self._actors:
             raise ValueError(f"Actor '{name}' is already registered")
+
+        methods, web_endpoints = _actor_methods_and_web_endpoints(name, actor)
+        _validate_web_endpoints(name, web_endpoints, server_started=self._app is not None)
+
         actor_id = ActorId(f"{name}-{uuid.uuid4().hex[:8]}")
-        methods = {m: getattr(actor, m) for m in dir(actor) if not m.startswith("_") and callable(getattr(actor, m))}
         self._actors[name] = RegisteredActor(
             name=name,
             actor_id=actor_id,
             instance=actor,
             methods=methods,
         )
+        self._web_endpoints.extend(web_endpoints)
         return actor_id
+
+    async def _invoke(self, method: Callable, *args: Any, **kwargs: Any) -> Any:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._executor, functools.partial(method, *args, **kwargs))
 
     async def call(self, request: actor_pb2.ActorCall, ctx: RequestContext) -> actor_pb2.ActorResponse:
         """Handle actor RPC call."""
@@ -159,12 +241,7 @@ class ActorServer:
             return _connect_error_response(e)
 
         try:
-            # Run the method in our dedicated thread pool to avoid blocking the event loop.
-            # This allows actors to make outgoing RPC calls without deadlocking.
-            # We use our own executor instead of asyncio.to_thread() to avoid issues
-            # when asyncio's default executor is shut down during process cleanup.
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(self._executor, functools.partial(method, *args, **kwargs))
+            result = await self._invoke(method, *args, **kwargs)
 
             return actor_pb2.ActorResponse(serialized_value=cloudpickle.dumps(result))
 
@@ -310,9 +387,72 @@ class ActorServer:
         logger.info("Cancelled operation %s", request.operation_id)
         return op.to_proto()
 
+    async def _web_arguments(self, request: Request, method: Callable[..., Any]) -> inspect.BoundArguments:
+        values: dict[str, Any] = dict(request.path_params)
+        for name, value in request.query_params.items():
+            if name in values:
+                raise HTTPException(status_code=422, detail=f"Duplicate web argument '{name}'")
+            values[name] = value
+
+        body = await request.body()
+        if body:
+            try:
+                payload = await request.json()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Actor web endpoint body must be JSON") from None
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=422, detail="Actor web endpoint body must be a JSON object")
+            duplicate = values.keys() & payload.keys()
+            if duplicate:
+                name = sorted(duplicate)[0]
+                raise HTTPException(status_code=422, detail=f"Duplicate web argument '{name}'")
+            values.update(payload)
+
+        signature = inspect.signature(method)
+        if "request" in signature.parameters:
+            if "request" in values:
+                raise HTTPException(status_code=422, detail="The request argument is reserved")
+            values["request"] = request
+        try:
+            arguments = signature.bind(**values)
+        except TypeError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        arguments.apply_defaults()
+        return arguments
+
+    async def _dispatch_web_endpoint(
+        self,
+        request: Request,
+        handlers: dict[str, Callable],
+    ) -> Response:
+        actor_name = _web_actor_name(request, handlers)
+        if actor_name is None:
+            return JSONResponse({"error": "Actor web endpoint not found"}, status_code=404)
+        method = handlers[actor_name]
+
+        arguments = await self._web_arguments(request, method)
+        result = await self._invoke(method, *arguments.args, **arguments.kwargs)
+        if isinstance(result, Response):
+            return result
+        return JSONResponse(result)
+
+    def _create_web_application(self) -> Starlette:
+        grouped: dict[tuple[str, str], dict[str, Callable]] = {}
+        for endpoint in self._web_endpoints:
+            key = (endpoint.declaration.path, endpoint.declaration.method)
+            grouped.setdefault(key, {})[endpoint.actor_name] = endpoint.method
+
+        routes: list[Route] = []
+        for (path, method), handlers in grouped.items():
+            dispatch = functools.partial(self._dispatch_web_endpoint, handlers=handlers)
+            routes.append(Route(path, dispatch, methods=[method]))
+        return Starlette(routes=routes)
+
     def _create_app(self) -> Starlette:
         rpc_app = ActorServiceASGIApplication(service=self, compressions=IRIS_RPC_COMPRESSIONS)
-        return Starlette(routes=[Mount(rpc_app.path, app=rpc_app)])
+        assert rpc_app.path == _ACTOR_RPC_PATH
+        web_app = self._create_web_application()
+        return Starlette(routes=[Mount(_ACTOR_RPC_PATH, app=rpc_app), Mount("/", app=web_app)])
 
     def serve_background(self, port: int | None = None) -> int:
         """Start server in background thread.

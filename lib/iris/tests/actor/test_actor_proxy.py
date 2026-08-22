@@ -4,21 +4,24 @@
 """Integration tests for actor RPC through the native endpoint proxy.
 
 Tests the full round-trip: ActorClient → ProxyResolver → native listener →
-actor server → response. There is no special actor-routing header; the encoded
-actor name lives in the URL path.
+actor server → response.
 """
 
 import json
 from dataclasses import asdict
 
+import httpx
 import pytest
 from connectrpc.errors import ConnectError
 from iris.actor.client import ActorClient
 from iris.actor.resolver import ProxyResolver
 from iris.actor.server import ActorServer
+from iris.actor.web import web_endpoint
 from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.native_proxy import NativeProxy
 from iris.managed_thread import ThreadContainer
+from rigging.connect import proxy_path
+from starlette.requests import Request
 
 
 class StatusActor:
@@ -33,6 +36,19 @@ class StatusActor:
 
     def echo(self, message: str) -> str:
         return f"echo: {message}"
+
+
+class DashboardStatusActor(StatusActor):
+    def __init__(self, label: str):
+        super().__init__()
+        self._label = label
+
+    @web_endpoint("/")
+    def _dashboard(self, request: Request) -> dict[str, str]:
+        return {
+            "actor": self._label,
+            "proxy_prefix": request.headers.get("x-forwarded-prefix", ""),
+        }
 
 
 def _start_proxy(
@@ -96,6 +112,53 @@ def test_proxy_round_trip(permissive_native_proxy_auth_json: str):
         # Second call increments the counter.
         result = client.get_status()
         assert result["documents_processed"] == 2
+    finally:
+        proxy.stop()
+        threads.stop()
+
+
+def test_proxy_routes_web_endpoint_to_actor(permissive_native_proxy_auth_json: str):
+    threads = ThreadContainer()
+    first_actor_name = "test-ns/first-dashboard"
+    second_actor_name = "test-ns/second-dashboard"
+    actor_server = ActorServer(host="127.0.0.1", threads=threads)
+    actor_server.register(first_actor_name, DashboardStatusActor("first"))
+    actor_server.register(second_actor_name, DashboardStatusActor("second"))
+    actor_port = actor_server.serve_background()
+
+    try:
+        address = f"127.0.0.1:{actor_port}"
+        proxy_url, proxy = _start_proxy(
+            permissive_native_proxy_auth_json,
+            endpoints={first_actor_name: address, second_actor_name: address},
+        )
+        first_path = proxy_path(first_actor_name)
+        second_path = proxy_path(second_actor_name)
+
+        direct = httpx.get(f"http://{address}/", timeout=2)
+        header_routed = httpx.get(
+            f"http://{address}/",
+            headers={"x-iris-endpoint-name": second_actor_name},
+            timeout=2,
+        )
+
+        first = httpx.get(
+            f"{proxy_url}{first_path}/",
+            headers={"x-iris-endpoint-name": second_actor_name},
+            timeout=2,
+        )
+        second = httpx.get(f"{proxy_url}{second_path}/", timeout=2)
+
+        assert direct.status_code == 404
+        assert header_routed.json() == {"actor": "second", "proxy_prefix": ""}
+        assert first.json() == {
+            "actor": "first",
+            "proxy_prefix": first_path,
+        }
+        assert second.json() == {
+            "actor": "second",
+            "proxy_prefix": second_path,
+        }
     finally:
         proxy.stop()
         threads.stop()
