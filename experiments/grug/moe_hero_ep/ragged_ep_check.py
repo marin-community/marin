@@ -49,7 +49,9 @@ TOPK = 2
 SEEDS = (0, 1, 2, 3)
 SPLITS_UNDER_TEST = (8, 32)
 # Capacity high enough that no assignment is clipped, which is what makes `ring` a ground truth.
-NO_DROP_CAPACITY = 4.0
+# At the 4-GPU mesh (EP size 2) this equals the entire global assignment count, so nothing can
+# drop; larger factors make `ring`'s top_k selection ask for more rows than exist and fail.
+NO_DROP_CAPACITY = 2.0
 SKEWED_CAPACITY = 1.0
 
 # Gradients are compared on the MEDIAN relative difference, not the max. Both paths compute the
