@@ -1,0 +1,7 @@
+# metric_direction: higher_is_better
+iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
+1	2026-08-22T05:34Z	62e15238b4	-	-	crash	-	crash	lean path at 0.75: NCCL alltoall CUDA OOM step 1; remat 192.33 vs old 188.88 GiB; retry at fraction 0.70
+1b	2026-08-22T05:41Z	6b39a2c2a2	-	-	crash	-	crash	fraction 0.70 alone insufficient: same NCCL alltoall OOM, remat floor 193.08 GiB; adding slop 80
+1c	2026-08-22T05:48Z	24ff7b01bc	-	-	crash	-	crash	slop 80 no help (194.03 GiB floor); knobs dead, adding MLP remat
+1d	2026-08-22T06:00Z	0c0bb5472a	-	-	crash	-	crash	MLP remat a no-op (194.03 byte-identical); pinned collective outputs are un-rematable; trying LHS+ov4+f0.68 (h17b posture)
+1e	2026-08-22T06:07Z	8117d49827	-	-	crash	-	crash	LHS posture raises pre-remat peak to 212.35 GiB; LHS closed for lean graph; moving to expert chunking

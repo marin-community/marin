@@ -25,6 +25,10 @@ from levanter.grug.sharding import _batch_axes
 # QuACK's grouped GEMMs are written for SM100 and ship only with the CUDA 13 GPU extra.
 _SM100_COMPUTE_CAPABILITY = 10.0
 
+# Sequential local-expert chunks per MoE layer; capacity splits evenly across chunks. Falls
+# back to a single chunk when the local expert count is not divisible.
+_EXPERT_CHUNKS = 2
+
 # An expert MLP takes both views of the receiver buffer's group sizes: the physical sizes,
 # which charge trailing padding to the last expert, and the active sizes, which count only
 # received rows. Which one a kernel needs depends on whether it covers the buffer or reads
@@ -132,62 +136,85 @@ def _moe_mlp_ep_ragged_a2a_local(
     # a per-expert-group split count with a comparable total update budget.
     splits_per_group = max(1, splits_per_peer // local_experts)
 
+    # Local experts are processed in sequential chunks so only one chunk's transport buffers
+    # are live at a time. The a2a outputs cannot be rematerialized (XLA never recomputes
+    # collectives), so unchunked they pin [capacity, H] + [TK, H] per block window and the
+    # hero step no longer fits next to NCCL's pools. Capacity splits evenly across chunks,
+    # which also makes drop clipping per-chunk.
+    chunks = _EXPERT_CHUNKS if local_experts % _EXPERT_CHUNKS == 0 and _EXPERT_CHUNKS > 1 else 1
+    chunk_experts = local_experts // chunks
+    chunk_capacity = max(chunk_experts, int(math.ceil(local_capacity / chunks)))
+    hidden_dim = x_local.shape[1]
+
     with jax.named_scope("dispatch"):
         flat_selected = selected_experts_local.reshape(-1)
         sorted_indices = jnp.argsort(flat_selected)
         group_sizes = jnp.bincount(flat_selected, length=num_experts).astype(jnp.int32)
         sorted_x = _gather_dispatch_rows(x_local, sorted_indices, topk=topk)
         all_group_sizes = jax.lax.all_gather(group_sizes, "expert")
-        clipped_group_sizes = _clip_receiver_group_sizes(
-            all_group_sizes,
-            local_expert_size=local_experts,
-            receiver_capacity=local_capacity,
-        )
-        sender_group_sizes = clipped_group_sizes[shard_id]
-        dispatch_params, return_params = _expert_granular_a2a_params(
-            all_group_sizes,
-            clipped_group_sizes,
-            shard_id,
-            local_expert_size=local_experts,
-            splits_per_group=splits_per_group,
-        )
-        dispatch_out_shape = jnp.zeros((recv_capacity, x_local.shape[1]), dtype=x_local.dtype)
-        # Accepted rows are the prefix of each unclipped expert group and receiver offsets
-        # pack arrivals expert-major, so the received buffer feeds the grouped MLP directly:
-        # no sender compaction and no receiver-side permute.
-        x_dispatch = jax.lax.ragged_all_to_all(
-            sorted_x,
-            dispatch_out_shape,
-            *dispatch_params,
-            axis_name="expert",
-        )
-        active_group_sizes = jnp.sum(
-            clipped_group_sizes.reshape(ep_size, ep_size, local_experts)[:, shard_id, :], axis=0
-        )
-        total_valid = jnp.sum(active_group_sizes, dtype=jnp.int32)
-        physical_group_sizes = active_group_sizes.at[-1].add(recv_capacity - total_valid)
 
-    with jax.named_scope("moe_up_down"):
-        out_dispatch = _select_expert_mlp(activation_fn)(
-            x_dispatch,
-            moe_w13_local,
-            moe_w2_local,
-            physical_group_sizes,
-            active_group_sizes,
-            activation_fn,
-        )
+    expert_mlp = _select_expert_mlp(activation_fn)
+    chunk_of_expert = (jnp.arange(num_experts, dtype=jnp.int32) % local_experts) // chunk_experts
+    returned = jnp.zeros((assignments_per_shard, hidden_dim), dtype=x_local.dtype)
+    accepted_local = jnp.zeros((), dtype=jnp.int32)
+    for chunk_index in range(chunks):
+        with jax.named_scope(f"moe_chunk_{chunk_index}"):
+            chunk_all_group_sizes = jnp.where(chunk_of_expert[None, :] == chunk_index, all_group_sizes, 0)
+            clipped_group_sizes = _clip_receiver_group_sizes(
+                chunk_all_group_sizes,
+                local_expert_size=local_experts,
+                receiver_capacity=chunk_capacity,
+            )
+            # Sender starts come from the full (unmasked) sizes, so each chunk reads its
+            # groups' accepted prefixes in place in the shared sorted buffer.
+            dispatch_params, return_params = _expert_granular_a2a_params(
+                all_group_sizes,
+                clipped_group_sizes,
+                shard_id,
+                local_expert_size=local_experts,
+                splits_per_group=splits_per_group,
+            )
+            # Serialize chunks: without this barrier the scheduler may issue every chunk's
+            # dispatch up front, which resurrects the simultaneous-buffer peak chunking
+            # exists to remove.
+            chunk_source, _ = jax.lax.optimization_barrier((sorted_x, returned))
+            dispatch_out_shape = jnp.zeros((chunk_capacity, hidden_dim), dtype=x_local.dtype)
+            # Accepted rows are the prefix of each unclipped expert group and receiver offsets
+            # pack arrivals expert-major, so the received buffer feeds the grouped MLP
+            # directly: no sender compaction and no receiver-side permute.
+            x_dispatch = jax.lax.ragged_all_to_all(
+                chunk_source,
+                dispatch_out_shape,
+                *dispatch_params,
+                axis_name="expert",
+            )
+            active_all = jnp.sum(
+                clipped_group_sizes.reshape(ep_size, ep_size, local_experts)[:, shard_id, :], axis=0
+            )
+            active_group_sizes = active_all[chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts]
+            total_valid = jnp.sum(active_group_sizes, dtype=jnp.int32)
+            physical_group_sizes = active_group_sizes.at[-1].add(chunk_capacity - total_valid)
+            out_dispatch = expert_mlp(
+                x_dispatch,
+                moe_w13_local[chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts],
+                moe_w2_local[chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts],
+                physical_group_sizes,
+                active_group_sizes,
+                activation_fn,
+            )
+            # The mirror of dispatch: valid prefixes land back at unclipped sorted positions.
+            # Chaining every chunk through one output buffer composes the disjoint writes;
+            # dropped rows keep the buffer's zeros, so the final gather-sum reads dropped
+            # slots as zero contributions with no expansion step.
+            returned = jax.lax.ragged_all_to_all(
+                out_dispatch,
+                returned,
+                *return_params,
+                axis_name="expert",
+            )
+            accepted_local = accepted_local + jnp.sum(clipped_group_sizes[shard_id], dtype=jnp.int32)
 
     with jax.named_scope("combine"):
-        return_out_shape = jnp.zeros((assignments_per_shard, x_local.shape[1]), dtype=out_dispatch.dtype)
-        # The mirror of dispatch: valid prefixes land back at unclipped sorted positions,
-        # dropped rows keep the output operand's zeros, so no expansion is needed and the
-        # final gather-sum reads dropped slots as zero contributions.
-        returned = jax.lax.ragged_all_to_all(
-            out_dispatch,
-            return_out_shape,
-            *return_params,
-            axis_name="expert",
-        )
         out_local = _unpermute_from_global_expert(
             returned,
             sorted_indices,
@@ -195,6 +222,6 @@ def _moe_mlp_ep_ragged_a2a_local(
             tokens_per_shard=tokens_per_shard,
             topk=topk,
         ).astype(x_local.dtype)
-        dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - jnp.sum(sender_group_sizes, dtype=jnp.int32)
+        dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - accepted_local
         dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     return out_local, CapacityOverflow(sender=dropped_total, receiver=jnp.zeros_like(dropped_total))

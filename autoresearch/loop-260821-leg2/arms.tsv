@@ -1,0 +1,6 @@
+run_id	commit	version	moe_impl	data	master_params	schedule_steps	timeout	restore_from	extra
+ra2a-l2-i01-leanpath	93a91c1489	2026.08.21.36	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
+ra2a-l2-i01b-leanpath-f070	6b39a2c2a2	2026.08.21.37	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
+ra2a-l2-i01c-leanpath-f070-s80	24ff7b01bc	2026.08.21.38	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
+ra2a-l2-i01d-leanpath-mlpremat	0c0bb5472a	2026.08.21.39	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
+ra2a-l2-i01f-leanpath-lhs068	8117d49827	2026.08.21.40	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none

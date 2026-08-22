@@ -88,3 +88,53 @@ for s in range(S):
 
 drop_fraction = 1 - clipped.sum() / group_sizes.sum()
 print(f"OK: dispatch layout, roundtrip, and drop semantics match (drop fraction {drop_fraction:.3f})")
+
+
+# --- chunked variant: masked clip per chunk, full sender starts, chained returns ---
+CHUNKS = 3  # EL=3 -> 1 expert per chunk, the most aggressive split
+CHUNK_EXPERTS = EL // CHUNKS
+CHUNK_CAP = int(np.ceil(CAPACITY / CHUNKS))
+chunk_of_expert = (np.arange(E) % EL) // CHUNK_EXPERTS
+
+ret2 = [np.zeros((ASSIGN, H), np.float32) for _ in range(S)]
+accepted = np.zeros((S, E), np.int32)
+for g in range(CHUNKS):
+    masked = np.where(chunk_of_expert[None, :] == g, group_sizes, 0)
+    clipped_g = np.asarray(
+        _clip_receiver_group_sizes(jnp.asarray(masked), local_expert_size=EL, receiver_capacity=CHUNK_CAP)
+    )
+    accepted += clipped_g
+    params_g = [
+        _expert_granular_a2a_params(
+            jnp.asarray(group_sizes),
+            jnp.asarray(clipped_g),
+            jnp.asarray(s),
+            local_expert_size=EL,
+            splits_per_group=SPLITS,
+        )
+        for s in range(S)
+    ]
+    recv_g = [np.zeros((CHUNK_CAP, H), np.float32) for _ in range(S)]
+    simulate_a2a(sorted_x, recv_g, lambda s: params_g[s][0])
+    # chunk receiver packs its experts from offset 0, sender-major within expert
+    for r in range(S):
+        rows = []
+        for e in range(EL):
+            gexp = r * EL + e
+            if chunk_of_expert[gexp] != g:
+                continue
+            for s in range(S):
+                start = int(np.cumsum(group_sizes[s])[gexp] - group_sizes[s][gexp])
+                rows.append(sorted_x[s][start : start + clipped_g[s, gexp]])
+        expected = np.concatenate(rows, axis=0) if rows else np.zeros((0, H), np.float32)
+        np.testing.assert_array_equal(recv_g[r][: len(expected)], expected)
+    simulate_a2a(recv_g, ret2, lambda s: params_g[s][1])
+
+for s in range(S):
+    keep = np.asarray(
+        _expert_prefix_keep_mask(jnp.asarray(group_sizes[s]), jnp.asarray(accepted[s]), total_size=ASSIGN)
+    )
+    np.testing.assert_array_equal(ret2[s], np.where(keep[:, None], sorted_x[s], 0))
+
+chunk_drop = 1 - accepted.sum() / group_sizes.sum()
+print(f"OK chunked: {CHUNKS} chunks roundtrip matches per-chunk keep semantics (drop fraction {chunk_drop:.3f})")
