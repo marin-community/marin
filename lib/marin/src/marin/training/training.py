@@ -171,9 +171,21 @@ def temporary_checkpoint_base_path(output_path: str) -> str:
     return prefix_join(temporary_root, DEFAULT_CHECKPOINTS_PATH)
 
 
+def data_local_temporary_checkpoint_base_path(output_path: str) -> str:
+    """Return the legacy data-local checkpoint path, bypassing the cluster temp override."""
+    output_component = _output_path_temp_component(output_path)
+    temporary_root = marin_temp_bucket(
+        ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
+        prefix=os.path.join(TEMPORARY_CHECKPOINTS_PATH, output_component),
+        source_prefix=output_path,
+        use_env_override=False,
+    )
+    return prefix_join(temporary_root, DEFAULT_CHECKPOINTS_PATH)
+
+
 def resolve_checkpointer_output_path(checkpointer: CheckpointerConfig, output_path: str) -> CheckpointerConfig:
     """Point ``checkpointer`` at ``output_path``: rolling checkpoints under ``<output_path>/checkpoints``
-    and time-policy (temporary) checkpoints on region-local storage keyed off ``output_path``.
+    and time-policy (temporary) checkpoints on region-local storage keyed by ``output_path``.
 
     ``append_run_id_to_base_path`` is ``False`` because ``output_path`` already encodes the run's
     identity, so a run id suffix would double it up. Every other checkpointer field is preserved.
