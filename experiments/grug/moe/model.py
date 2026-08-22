@@ -243,6 +243,18 @@ def _apply_half_rope(
     cos = jnp.cos(angles)[None, :, None, :]
     sin = jnp.sin(angles)[None, :, None, :]
 
+    # When Q/K have their seq axis sharded on "context" (CP), the compiler
+    # tries to lower the (cos, sin) * (q, k) multiply as a per-shard op --
+    # but cos/sin still carry the global seq extent and fail the per-shard
+    # broadcast (operand (S,) can't broadcast into target (S/context, ...)).
+    # Reshard cos/sin to match Q/K's context sharding on the seq dim; JAX
+    # will split the pre-computed cache across the "context" shards so the
+    # per-shard multiply lines up. No-op when seq axis is unsharded.
+    seq_shard = _seq_axis()
+    if seq_shard is not None:
+        cos = reshard(cos, P(None, seq_shard, None, None))
+        sin = reshard(sin, P(None, seq_shard, None, None))
+
     def _apply(x: jax.Array) -> jax.Array:
         dtype = x.dtype
         x1, x2 = jnp.split(x, 2, axis=-1)
