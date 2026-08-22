@@ -16,15 +16,16 @@ def lm_flops_per_token(
     num_experts_per_tok: int = 1,
     shared_intermediate_dim: int | None = None,
     sliding_window: int | None = None,
-    global_every: int | None = None,
+    num_long_layers: int | None = None,
     local_kv_heads: int | None = None,
     global_kv_heads: int | None = None,
 ):
     """Analytic forward FLOPs per token.
 
-    ``sliding_window`` + ``global_every`` model interleaved local/global attention: every
-    ``global_every``-th layer runs full attention over ``seq_len`` while the rest attend only a
-    ``sliding_window`` span. ``local_kv_heads`` / ``global_kv_heads`` give those two layer classes
+    ``sliding_window`` + ``num_long_layers`` model interleaved local/global attention:
+    ``num_long_layers`` layers run full attention over ``seq_len`` while the rest attend only a
+    ``sliding_window`` span. Derive ``num_long_layers`` from the same rule the forward pass uses,
+    so the count cannot drift from the executed schedule. ``local_kv_heads`` / ``global_kv_heads`` give those two layer classes
     different KV-head counts (heterogeneous GQA). Left at their defaults (``None``) every layer is full
     attention with ``num_kv_heads``, matching the original megatron-lm estimate exactly.
     """
@@ -47,8 +48,8 @@ def lm_flops_per_token(
         seq_flops += 2 * seq_len * attn_span * head_dim * num_heads
         return seq_flops / seq_len
 
-    if sliding_window is not None and global_every is not None and 0 < sliding_window < seq_len:
-        num_global_layers = num_layers // global_every
+    if sliding_window is not None and num_long_layers is not None and 0 < sliding_window < seq_len:
+        num_global_layers = num_long_layers
         num_local_layers = num_layers - num_global_layers
         local_kv = local_kv_heads if local_kv_heads is not None else num_kv_heads
         global_kv = global_kv_heads if global_kv_heads is not None else num_kv_heads
