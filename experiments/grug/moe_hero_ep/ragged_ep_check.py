@@ -147,7 +147,7 @@ def _run() -> list[SeedRow]:
             return (out * out).sum(), (out, dropped)
 
         (_v, (out, dropped)), grads = jax.value_and_grad(loss, argnums=(0, 1, 2), has_aux=True)(x, w13, w2)
-        return out, grads, int(dropped)
+        return out, grads, int(dropped.total)
 
     def reshard(x, sel, cw, w13, w2):
         return (
