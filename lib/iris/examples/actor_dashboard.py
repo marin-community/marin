@@ -8,28 +8,16 @@ import threading
 from iris.actor.client import ActorClient
 from iris.actor.resolver import FixedResolver
 from iris.actor.server import ActorServer
-from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.responses import HTMLResponse, RedirectResponse
-from starlette.routing import Route
-from starlette.types import ASGIApp
+from iris.actor.web import web_endpoint
+from starlette.responses import HTMLResponse
 
 
 class CounterActor:
     def __init__(self) -> None:
         self._value = 0
         self._lock = threading.Lock()
-        self._web_application = Starlette(
-            routes=[
-                Route("/", self._dashboard),
-                Route("/increment", self._increment_from_http, methods=["POST"]),
-            ]
-        )
 
-    @property
-    def web_application(self) -> ASGIApp:
-        return self._web_application
-
+    @web_endpoint("/increment", method="POST")
     def increment(self, amount: int = 1) -> int:
         with self._lock:
             self._value += amount
@@ -39,7 +27,8 @@ class CounterActor:
         with self._lock:
             return self._value
 
-    async def _dashboard(self, _request: Request) -> HTMLResponse:
+    @web_endpoint("/")
+    def _dashboard(self) -> HTMLResponse:
         value = self.counter_value()
         return HTMLResponse(
             f"""<!doctype html>
@@ -48,15 +37,17 @@ class CounterActor:
 <body>
   <h1>Iris actor dashboard</h1>
   <p>Counter value: {value}</p>
-  <form action="./increment" method="post"><button type="submit">Increment</button></form>
+  <button id="increment" type="button">Increment</button>
+  <script>
+    document.getElementById("increment").addEventListener("click", async () => {{
+      await fetch("./increment", {{method: "POST", headers: {{"content-type": "application/json"}}, body: "{{}}"}});
+      window.location.reload();
+    }});
+  </script>
 </body>
 </html>
 """
         )
-
-    async def _increment_from_http(self, _request: Request) -> RedirectResponse:
-        self.increment()
-        return RedirectResponse("./", status_code=303)
 
 
 def main() -> None:
