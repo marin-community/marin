@@ -1,0 +1,142 @@
+name: "Pulumi deployment check"
+description: "Check whether affected Pulumi stacks were updated after a PR merged."
+
+inputs:
+  attempt:
+    description: "One-based deployment check attempt."
+    required: true
+  delay-minutes:
+    description: "Minutes to wait before this attempt."
+    required: true
+  max-attempts:
+    description: "Total deployment check attempts."
+    default: "3"
+  head-sha:
+    description: "Merged pull request head SHA."
+    required: true
+  merged-at:
+    description: "Pull request merge timestamp."
+    required: true
+  merger:
+    description: "GitHub login to remind."
+    required: true
+  pr-number:
+    description: "Merged pull request number."
+    required: true
+  service-account:
+    description: "GCP service account used to read Pulumi state."
+    required: true
+  workload-identity-provider:
+    description: "GCP workload identity provider resource name."
+    default: "projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc"
+  gcp-project-id:
+    description: "GCP project id."
+    required: true
+
+outputs:
+  needs_retry:
+    description: "Whether another deployment check should run."
+    value: ${{ steps.check.outputs.needs_retry }}
+
+runs:
+  using: composite
+  steps:
+    - name: Wait before deployment check
+      shell: bash
+      env:
+        DELAY_MINUTES: ${{ inputs.delay-minutes }}
+      run: |
+        [[ "$DELAY_MINUTES" =~ ^[1-9][0-9]*$ ]]
+        sleep "${DELAY_MINUTES}m"
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v3
+      with:
+        project_id: ${{ inputs.gcp-project-id }}
+        workload_identity_provider: ${{ inputs.workload-identity-provider }}
+        service_account: ${{ inputs.service-account }}
+
+    - name: Set up Pulumi
+      uses: pulumi/setup-pulumi@v2
+
+    - name: Check successful update history
+      id: check
+      shell: bash
+      env:
+        ATTEMPT: ${{ inputs.attempt }}
+        GH_TOKEN: ${{ github.token }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        MAX_ATTEMPTS: ${{ inputs.max-attempts }}
+        MERGED_AT: ${{ inputs.merged-at }}
+        MERGER: ${{ inputs.merger }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+      run: |
+        set -euo pipefail
+        [[ "$ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+        [[ "$MAX_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]
+        [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+        [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
+        [[ -n "$MERGED_AT" ]]
+        [[ -n "$MERGER" ]]
+
+        comments="$RUNNER_TEMP/iac-comments-$ATTEMPT.json"
+        gh api --paginate --slurp \
+          "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" >"$comments"
+
+        preview_status="$RUNNER_TEMP/iac-preview-status-$ATTEMPT.json"
+        python3 .github/actions/pulumi-preview/summarize_deployment.py affected-stacks \
+          --comments "$comments" \
+          --head-sha "$HEAD_SHA" \
+          --out "$preview_status"
+        preview_ok=$(jq -r '.preview_ok' "$preview_status")
+        affected_stacks=$(jq -c '.affected_stacks' "$preview_status")
+
+        history_dir="$RUNNER_TEMP/iac-update-history-$ATTEMPT"
+        mkdir -p "$history_dir"
+        if [[ "$preview_ok" == "true" && $(jq 'length' <<<"$affected_stacks") -gt 0 ]]; then
+          mapfile -t stacks < <(jq -r '.[]' <<<"$affected_stacks")
+          if pulumi login gs://marin-iac-state; then
+            for stack in "${stacks[@]}"; do
+              raw_history="$history_dir/$stack.raw.json"
+              if pulumi -C infra/pulumi stack history \
+                --stack "$stack" --json --page-size 100 >"$raw_history" \
+                && jq '[.[] | {kind, result, startTime}]' "$raw_history" >"$history_dir/$stack.json"; then
+                rm "$raw_history"
+              else
+                echo "::warning::Could not read successful update history for $stack"
+                rm -f "$raw_history" "$history_dir/$stack.json"
+              fi
+            done
+          else
+            echo "::warning::Could not log in to the Pulumi state backend"
+          fi
+        fi
+
+        check_status="$RUNNER_TEMP/iac-deployment-status-$ATTEMPT.json"
+        comment_body="$RUNNER_TEMP/iac-deployment-comment-$ATTEMPT.md"
+        python3 .github/actions/pulumi-preview/summarize_deployment.py check \
+          --history-dir "$history_dir" \
+          --comments "$comments" \
+          --affected-stacks "$affected_stacks" \
+          --preview-ok "$preview_ok" \
+          --merged-at "$MERGED_AT" \
+          --attempt "$ATTEMPT" \
+          --max-attempts "$MAX_ATTEMPTS" \
+          --merger "$MERGER" \
+          --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+          --out "$comment_body" \
+          --status-out "$check_status"
+
+        comment_action=$(jq -r '.comment_action' "$check_status")
+        latest_comment_id=$(jq -r '.comment_id // empty' "$check_status")
+        jq -n --rawfile body "$comment_body" '{body: $body}' >"$RUNNER_TEMP/iac-comment-payload.json"
+
+        if [[ "$comment_action" == "create" ]]; then
+          gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+            --input "$RUNNER_TEMP/iac-comment-payload.json" >/dev/null
+        elif [[ "$comment_action" == "update" && -n "$latest_comment_id" ]]; then
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$latest_comment_id" \
+            --input "$RUNNER_TEMP/iac-comment-payload.json" >/dev/null
+        fi
+
+        echo "needs_retry=$(jq -r '.needs_retry' "$check_status")" >> "$GITHUB_OUTPUT"

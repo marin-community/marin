@@ -268,6 +268,16 @@ already provisioned:
 posts one aggregated PR comment (status list plus per-stack diffs). Manual
 `workflow_dispatch` accepts an optional `pr_number` to preview that PR's head and
 comment there; omit it for a drift check against the selected ref with no comment.
+
+After a same-repository PR matching the preview paths merges, the workflow checks the Pulumi
+history for each stack that the PR preview marked as changed. A successful update counts when
+it started after the PR merged. This relies on operators running without `--target` from current
+`main`. The first check runs after 30 minutes, followed by retries after 60 and 120 minutes.
+
+A missing update posts a new reminder on each check. A later successful check edits the newest
+reminder, while an initially successful check posts nothing. Preview and history errors are
+posted on the final attempt only when no earlier update check succeeded.
+
 **CI never runs `pulumi up`** — see `spec.md §9`. It authenticates as
 `pulumi-ci@hai-gcp-models.iam.gserviceaccount.com`, granted preview-only (decrypt/read, never
 write) access in [`iam_data.yaml`](src/iac/gcp/iam_data.yaml). Shared data buckets are excluded
