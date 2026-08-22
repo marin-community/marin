@@ -18,8 +18,8 @@ COREWEAVE_MULTIPART_ABORT_RULE_ID = "marin-abort-incomplete-mpu"
 COREWEAVE_MULTIPART_EXPIRATION = 7
 
 
-def hero_checkpoint_delete_policy(bucket_name: str) -> str:
-    """Return a bucket policy denying deletion from permanent hero run paths."""
+def coreweave_bucket_policy(bucket_name: str) -> str:
+    """Return organization access with permanent hero deletion denied."""
     return json.dumps(
         {
             "Version": "2012-10-17",
@@ -119,7 +119,7 @@ class CoreweaveDataBuckets(pulumi.ComponentResource):
             coreweave.ObjectStorageBucketPolicy(
                 f"policy-{bucket.name}",
                 bucket=resource.name,
-                policy=resource.name.apply(hero_checkpoint_delete_policy),
+                policy=resource.name.apply(coreweave_bucket_policy),
                 opts=pulumi.ResourceOptions(
                     parent=self,
                     provider=coreweave_provider,
