@@ -14,3 +14,4 @@ iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
 8	2026-08-22T09:25Z	b282cc0d3e	22.5722	-0.1102	pass	drops=0.0	discard	dropping the chunk barrier hurts; the D2D copy is inherent to chained a2a outputs, not the barrier
 9	2026-08-22T09:44Z	c9b18858ae	22.7974	+0.1150	pass	drops=0.0	candidate	splits 64 (k=10/group) borderline positive; bracketing with 128
 10	2026-08-22T10:01Z	-	22.7781	+0.0957	pass	drops=0.0	keep-64	splits 128 ties 64; both +0.1 over 32 under chunking; default moves to 64
+abl	2026-08-22T13:49Z	5c5388d6c2	-	-	pass	ragged loss 1.9757/bpb 0.9749/drops 0.031% vs ep 1.9918/1.0334/2.69%	validated	d768 gb200-rack 10827-step pair: ragged beats pooled on loss, evals, and drops

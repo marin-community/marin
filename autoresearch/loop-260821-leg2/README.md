@@ -83,7 +83,13 @@ sender gate), harrier 2026.08.17.1 mix, 10.8k steps:
 - `l2-abl-d768-ragged`: finished, final train loss 1.9393, steady-state drops 0.031%
   mean / 0.2% max over the last 500 steps -- the <2% criterion with ~60x margin, under a
   trained router and the stricter per-chunk capacity gate.
-- `l2-abl-d768-ep` (pooled-wave control, identical settings): running.
+- `l2-abl-d768-ep` (pooled-wave control, identical settings): finished, final train loss
+  1.9556 (tail-500 mean 1.9918), steady-state drops 2.69% mean / 3.65% max.
+
+The ragged flavor wins on every axis: train loss -0.016, eval/bpb 0.9749 vs 1.0334,
+eval/macro_bpb 1.0562 vs 1.1110, drops 87x lower. The goal's full criterion -- comparable
+or better throughput at the hero shape with <2% drops and no fidelity change -- is met:
+22.80 vs 22.31 MFU, 0.031% vs 2.69% drops, better loss and evals.
 
 ## Files
 
