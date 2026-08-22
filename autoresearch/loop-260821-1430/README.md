@@ -86,6 +86,32 @@ Guards, all three of which must pass or the iteration is discarded regardless of
 - The 4-GPU `ragged_all_to_all` vs `ring` forward and gradient check passes, for any change that
   touches transport offsets or expert kernels.
 
+## Conclusion (2026-08-22, stopped at 10 of 20 iterations)
+
+The loop stopped early: after the splits-32 keep, every arm measured within [21.18, 21.32] MFU
+-- protocol noise -- and every mechanism the i04 trace anatomy identified is closed:
+
+- **Splits per peer 32** is the one keep (+2.36 over the PR's old default of 1) and the bracket
+  24/32/48 is flat, so 32 stands. Already consolidated into PR #8549.
+- **The 1.0-pt gap to pooled decomposes as**: ~0.62 s/step extra permutation compute (sorts,
+  scatter fusions, dispatch copies), ~0.37 s/step slower ordinary collectives, ~0.7 s/step worse
+  exposure. The ragged transport kernel itself is *faster* than pooled's all-to-all (1.60 vs
+  2.23 s/step busy, 1.50 vs 1.83 exposed).
+- **Ordinary collectives run on NCCL symmetric kernels** (LDMC reduce-scatter 2.75x slower than
+  pooled's ring) because the transport's window registration makes their buffers Symk-eligible.
+  `NCCL_ALGO=Ring` cannot reach that selection path (null, confirmed against NCCL source);
+  `NCCL_SYM_CTAS=32` measured slightly negative. No runtime knob deselects Symk without
+  `NCCL_WIN_ENABLE=0`, which the transport needs.
+- **The latency-hiding scheduler is memory-walled**: at overlap 4, overlap 1, and overlap 1 with
+  fraction 0.70 / slop 80, NCCL's alltoall hits CUDA OOM on the first step. Hiding the 1.3 s/step
+  of exposed NCCL needs a different memory architecture, not a flag.
+- Memory slop 87, command buffers, and collective overlap 2 are nulls or regressions.
+
+Frontier under this protocol: **ragged 21.32 vs pooled 22.31 MFU**, both dropless from-scratch.
+The remaining gap is structural (fused permutation + transport work of the marin-ep line), which
+is out of scope for launch-flag arms. The remaining 10 iterations were declined rather than spent
+mining noise.
+
 ## Files
 
 | file | what it does |
