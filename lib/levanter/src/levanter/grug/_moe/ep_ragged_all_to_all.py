@@ -174,13 +174,11 @@ def _moe_mlp_ep_ragged_a2a_local(
                 local_expert_size=local_experts,
                 splits_per_group=splits_per_group,
             )
-            # Pipeline chunks one transport deep: chunk g's dispatch may start once chunk
-            # g-1's dispatch has landed (its transport can run under g-1's expert MLP), but
-            # never earlier, so at most two chunks' transport buffers are live at once.
-            if chunk_index == 0:
-                chunk_source = sorted_x
-            else:
-                chunk_source, _ = jax.lax.optimization_barrier((sorted_x, prev_dispatch))
+            # Serialize chunks: without this barrier the scheduler may issue every chunk's
+            # dispatch up front, which resurrects the simultaneous-buffer peak chunking
+            # exists to remove. (A one-transport-deep pipeline variant fit in memory but
+            # measured a null: transport and MLP contend for SMs.)
+            chunk_source, _ = jax.lax.optimization_barrier((sorted_x, returned))
             dispatch_out_shape = jnp.zeros((chunk_capacity, hidden_dim), dtype=x_local.dtype)
             # Accepted rows are the prefix of each unclipped expert group and receiver offsets
             # pack arrivals expert-major, so the received buffer feeds the grouped MLP
@@ -191,7 +189,6 @@ def _moe_mlp_ep_ragged_a2a_local(
                 *dispatch_params,
                 axis_name="expert",
             )
-            prev_dispatch = x_dispatch
             active_all = jnp.sum(
                 clipped_group_sizes.reshape(ep_size, ep_size, local_experts)[:, shard_id, :], axis=0
             )
