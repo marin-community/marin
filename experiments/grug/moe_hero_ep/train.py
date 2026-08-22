@@ -155,15 +155,6 @@ def _apply_hero_ep_runtime_defaults(
         overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
-        # Nightly-XLA viability arm: on current main the device-kernel path runs through the
-        # GpuCommunicator device comm (LSA copies within the domain, GIN for remote peers) with
-        # no MultiGpuBarrierKernel and no peer-access check, so a recent nightly may need no
-        # patches at an NVL72 clique.
-        "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
-        # The device-kernel branch engages only when FindSymmetricMemory resolves both operand
-        # buffers in the registered collective arena; without this flag it silently falls
-        # through to the one-shot barrier path, which #47283 faults at a 64-device clique.
-        "--xla_gpu_experimental_enable_nccl_symmetric_buffers=true",
         f"{XLA_LATENCY_HIDING_FLAG}={'false' if ragged else 'true'}",
         XLA_MEMORY_LIMIT_SLOP_FLAG,
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,

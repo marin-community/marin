@@ -16,3 +16,4 @@ ra2a-l2-i10-chunk2-splits128	c9b18858ae	2026.08.21.52	ragged_all_to_all	syntheti
 ra2a-l2-i11-stock-devkernel	90ef05fa67	2026.08.22.3	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-l2-i11-stock-sendrecv	dbd2628fa8	2026.08.22.3	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-l2-i12-nightly-devkernel	e12dc963a9	2026.08.22.4	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
+ra2a-l2-i12b-nightly-dk-symbuf	9a94451d6a	2026.08.22.5	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none

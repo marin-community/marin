@@ -17,3 +17,4 @@ iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
 abl	2026-08-22T13:49Z	5c5388d6c2	-	-	pass	ragged loss 1.9757/bpb 0.9749/drops 0.031% vs ep 1.9918/1.0334/2.69%	validated	d768 gb200-rack 10827-step pair: ragged beats pooled on loss, evals, and drops
 11	2026-08-22T21:44Z	dbd2628fa8	-	-	crash	-	crash	stock 0.11.0 send/recv fallback: compiles (remat 187.98, symmetric arena freed) then hangs 16 min at step 1; deadlock, not slowness
 12	2026-08-22T21:52Z	e12dc963a9	-	-	crash	-	crash	nightly dev20260821 devkernel: ILLEGAL_ADDRESS step 1; hypothesis: symmetric-buffers off -> dk disengaged -> one-shot kMaxPeers fault
+12b	2026-08-22T22:11Z	9a94451d6a	19.3975	-3.3806	pass	drops=0.0,loss-band ok	answer	PATCH-FREE: nightly dev20260821 + devkernel + symmetric-buffers trains at 19.40 (vs 22.78 wheel'd one-shot); dk needs symbuf to engage
