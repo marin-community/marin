@@ -13,3 +13,4 @@ iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
 6c	2026-08-22T00:40Z	178b638043	-	-	n/a	no measurement	crash	LHS + fraction 0.70 slop 80: same NCCL alltoall OOM; LHS lever closed as dead under this memory architecture (3 crashes)
 7	2026-08-22T01:00Z	980e35a7f4	21.1828	-0.1328	pass	drops=0.0,loss=11.8044	discard	NCCL_SYM_CTAS=32 -- slightly negative; NCCL-collectives thread closed (algo force, LHS, CTA budget all measured)
 8	2026-08-22T01:15Z	-	21.2848	-0.0308	pass	drops=0.0,loss=11.8044	discard	memory slop 87 -- null; 85 leaves no measurable remat on the table
+9	2026-08-22T01:30Z	-	21.3201	0.0045	pass	drops=0.0,loss=11.8044	discard	splits 48 -- exact tie with 32; transport grid saturated, keep 32
