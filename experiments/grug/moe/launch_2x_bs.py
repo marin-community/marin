@@ -250,7 +250,21 @@ def run_grug_moe_trial_2x_bs(config: GrugMoeLaunchConfig2xBS) -> None:
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
-        mesh=MeshConfig(axes={"expert": config.expert_parallel}),
+        # Pin trainer-side mesh axes so ``data_axis_size`` (= product of the
+        # batch-mapped axes: replica_dcn * replica * data) reflects only the
+        # actual batch shards. Without "context" here, the trainer sees all
+        # devices as "data" and the BS-divisibility check demands
+        # BS % total_devices == 0, breaking context-parallel runs where the
+        # true batch-shard count is total_devices / context_axis_size. The
+        # grug MoE model builds its own compact_grug_mesh via ``set_mesh``,
+        # which replaces this mesh once training loops start; this config
+        # only exists to feed TrainerConfig's divisibility checks.
+        mesh=MeshConfig(
+            axes={
+                "expert": config.expert_parallel,
+                "context": config.grug_trainer.context_axis_size,
+            }
+        ),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         checkpointer=config.checkpointer
