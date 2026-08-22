@@ -405,10 +405,21 @@ def _tpu_splash_attention(
         q_seq_shards=q_seq_shards,
     )
 
+    # Splash's mask_info (including q_sequence = np.arange(Sq_full)) is stored
+    # on the kernel object itself. If we capture the kernel in the shard_map
+    # closure, shard_map can't slice it per shard -- inside the kernel, the
+    # local q_seq_len becomes Sq/q_seq_shards but fwd_mask_info.q_sequence
+    # keeps its global (Sq,) shape, and splash's forward broadcast fails.
+    # Route the kernel THROUGH shard_map with its own manual_sharding_spec
+    # so its mask_info arrays get properly sharded on (heads, q_seq) axes.
+    # This matches the classical levanter splash entry (layers/attention.py).
+    kernel_sharding = NamedSharding(mesh, PartitionSpec(q_pspec[1], q_pspec[2]))
+    kernel_specs = splash_kernel.manual_sharding_spec(kernel_sharding)
+
     @functools.partial(
         shard_map,
         mesh=mesh,
-        in_specs=(q_pspec, k_pspec, v_pspec, segment_id_lowering.segment_ids_axes, None),
+        in_specs=(q_pspec, k_pspec, v_pspec, segment_id_lowering.segment_ids_axes, kernel_specs),
         out_specs=q_pspec,
         **_SHARD_MAP_CHECK_KWARGS,
     )
