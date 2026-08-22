@@ -84,7 +84,13 @@ _DIM: int = 2560
 _BS: int = 256  # 256 sequences * 262,144 tokens = 67,108,864 tokens/step
 _SEQ: int = 262_144  # 4x the step-141k cooldown's 65,536
 _EP: int = 1
-_REPLICA_AXIS: int = 8
+# replica=1 (not 8 like the step-141k cooldown): CP absorbs 4x the devices
+# that used to be batch shards, so pushing all remaining devices into "data"
+# maximises FSDP shard count. This gives data=256 -> 8x more FSDP than the
+# naive replica=8 config, and 2x more than the step-141k cooldown's 128-way
+# FSDP -- necessary to keep params + optim state per chip under HBM budget
+# once the batch shrinks from 1024 to 256 sequences.
+_REPLICA_AXIS: int = 1
 _CONTEXT_AXIS: int = 4  # seq shards; seq_per_device = 262144 / 4 = 65,536
 _SLICE: str = "v4-2048"
 _LOGIT_Z_LOSS_WEIGHT: float = 1e-4
@@ -109,9 +115,10 @@ _LR_END: float = 0.0000528  # = 0.000264 * 0.2 = 0.005281 * 0.01
 _MIN_LR_RATIO: float = 0.2  # so peak * 0.2 == _LR_END with peak = _LR_AT_RESUME
 _ADAMH_RATIO: float = 13.0 / 3.0
 
-# Batch-shard math -- mesh (8, 32, 4, 1, 1) on v4-2048 -> batch_shards
-# = replica * data * expert = 8 * 32 * 1 = 256, so per_device_parallelism = 1
-# sequence per chip at BS=256. Context axis splits the seq into 4 shards.
+# Batch-shard math -- mesh (replica=1, data=256, context=4, expert=1, model=1)
+# on v4-2048 -> batch_shards = replica * data * expert = 1 * 256 * 1 = 256, so
+# per_device_parallelism = 1 sequence per chip at BS=256. Context axis splits
+# the seq into 4 shards.
 _BATCH_SHARDS: int = _REPLICA_AXIS * (1024 // _REPLICA_AXIS // _CONTEXT_AXIS // _EP) * _EP  # = 256
 _PER_DEVICE_PARALLELISM: int = _BS // _BATCH_SHARDS  # = 1
 
