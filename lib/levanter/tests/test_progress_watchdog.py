@@ -163,13 +163,15 @@ def test_watchdog_diagnostic_cannot_postpone_exit(monkeypatch):
     watchdog.stop()
 
 
-def test_watchdog_config_with_diagnostic_timeout_only_arms_process_zero() -> None:
+def test_watchdog_config_arms_every_process_but_only_requires_rank_zero_diagnostics() -> None:
     config = ProgressWatchdogConfig(
         step_timeout=timedelta(seconds=1),
         diagnostic_timeout=timedelta(seconds=1),
     )
 
-    assert config.create(process_index=1, diagnostic=lambda _timeout: None) is None
+    worker_watchdog = config.create(process_index=1)
+    assert worker_watchdog is not None
+    worker_watchdog.stop()
     with pytest.raises(ValueError):
         config.create(process_index=0)
     watchdog = config.create(process_index=0, diagnostic=lambda _timeout: None)

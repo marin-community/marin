@@ -692,6 +692,16 @@ class Entrypoint:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True, slots=True)
+class TaskHealthCheck:
+    """Application health policy for each task attempt."""
+
+    startup_timeout: Duration
+    period: Duration
+    request_timeout: Duration
+    failure_threshold: int
+
+
 @dataclass
 class JobRequest:
     """Complete job specification for submission.
@@ -725,6 +735,7 @@ class JobRequest:
     max_task_failures: int = 0
     priority: int = 0
     timeout: Duration | None = None
+    health_check: TaskHealthCheck | None = None
 
     def __post_init__(self):
         if " " in self.name:

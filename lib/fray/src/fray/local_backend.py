@@ -123,6 +123,9 @@ class LocalClient:
                           LocalClient currently doesn't enforce unique names, so this
                           parameter has no effect but is included for API compatibility.
         """
+        if request.health_check is not None:
+            raise ValueError("The local backend does not support task health checks")
+
         # Copy the current context so that contextvars (e.g. set_current_client)
         # propagate into the executor thread. Without this, callables that call
         # current_client() would get a fresh auto-detected client instead of

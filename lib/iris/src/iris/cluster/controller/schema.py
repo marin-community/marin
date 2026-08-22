@@ -298,6 +298,7 @@ job_config_table = Table(
     Column("max_task_failures", Integer, nullable=False, server_default="0"),
     Column("entrypoint_json", String, nullable=False, server_default="{}"),
     Column("environment_json", String, nullable=False, server_default="{}"),
+    Column("health_check_json", String),
     Column("bundle_id", String, nullable=False, server_default=""),
     Column("ports_json", JSONList(), nullable=False, server_default="[]"),
     Column("max_retries_failure", Integer, nullable=False, server_default="0"),

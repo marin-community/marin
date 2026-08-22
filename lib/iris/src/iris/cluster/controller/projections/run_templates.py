@@ -48,6 +48,7 @@ def build_run_request_fields(
     entrypoint_json: str,
     workdir_files: dict[str, bytes],
     environment_json: str,
+    health_check_json: str | None,
     bundle_id: str,
     resources: job_pb2.ResourceSpecProto,
     ports_json: list,
@@ -87,6 +88,9 @@ def build_run_request_fields(
     )
     for filename, data in workdir_files.items():
         request.entrypoint.workdir_files[filename] = data
+    if health_check_json is not None:
+        request.health_check.CopyFrom(proto_from_json(health_check_json, job_pb2.TaskHealthCheck))
+        request.ports.append("healthz")
     return request
 
 
@@ -146,6 +150,7 @@ class RunTemplatesProjection(Projection):
             entrypoint_json=job.entrypoint_json,
             workdir_files=reads.get_workdir_files(tx, job_id),
             environment_json=job.environment_json,
+            health_check_json=job.health_check_json,
             bundle_id=job.bundle_id,
             resources=resources,
             ports_json=job.ports_json,

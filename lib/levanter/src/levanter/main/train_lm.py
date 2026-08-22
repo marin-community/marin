@@ -210,7 +210,12 @@ def main(config: TrainLmConfig):
     # 3. Sets the global metrics tracker
     with (
         Trainer(config.trainer, optimizer, loss_function) as trainer,
-        TrainingDashboard(config, trainer.request_checkpoint, config.trainer.id or "unknown"),
+        TrainingDashboard(
+            config,
+            trainer.request_checkpoint,
+            config.trainer.id or "unknown",
+            watchdog=trainer.progress_watchdog,
+        ),
     ):
         # randomness in jax is tightly controlled by "keys" which are the states of the random number generators
         # this makes deterministic training pretty easy

@@ -243,6 +243,7 @@ def insert_job_and_config(
     max_failures = int(request.max_task_failures)
     entrypoint_json = entrypoint_to_json(request.entrypoint)
     environment_json = proto_to_json(request.environment)
+    health_check_json = proto_to_json(request.health_check) if request.HasField("health_check") else None
     ports_json = list(request.ports)
     timeout_ms: int | None = int(request.timeout.milliseconds) if request.timeout.milliseconds > 0 else None
 
@@ -282,6 +283,7 @@ def insert_job_and_config(
         max_task_failures=max_failures,
         entrypoint_json=entrypoint_json,
         environment_json=environment_json,
+        health_check_json=health_check_json,
         bundle_id=request.bundle_id,
         ports_json=ports_json,
         max_retries_failure=int(request.max_retries_failure),
