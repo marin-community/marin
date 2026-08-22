@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
-from typing import Mapping, Sequence
+from typing import Literal, Mapping, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -17,6 +17,7 @@ from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmExample
 
 
+PaddingTargetLoss = Literal["mask", "include"]
 LOSS_IGNORE_LABEL = 0
 
 
@@ -131,6 +132,7 @@ class GrugLmExample:
         max_segments: int | None = None,
         sliding_window: int | None = None,
         block_cross_document_attention: bool = True,
+        padding_target_loss: PaddingTargetLoss = "mask",
     ) -> "GrugLmExample":
         if tokens.ndim != 1:
             raise ValueError("tokens must be a 1D array")
@@ -148,10 +150,14 @@ class GrugLmExample:
             dtype = jnp.float32
             loss_weight = causal_loss_mask.astype(dtype)
 
-        # Prepacked datasets mark padding positions with segment id -1. A position whose
-        # successor is padding predicts a pad token, so it must never contribute loss --
-        # otherwise the (arbitrary) padding value would leak into the objective.
-        if segment_ids is not None:
+        if padding_target_loss not in ("mask", "include"):
+            raise ValueError(f"padding_target_loss must be 'mask' or 'include', got {padding_target_loss!r}")
+
+        if padding_target_loss == "mask" and segment_ids is not None:
+            # Prepacked datasets mark padding positions with segment id -1. A position whose
+            # successor is padding predicts a pad token, so the default masks that artificial
+            # target. Use "include" only when predicting padding is intentionally part of the
+            # objective you want to measure or optimize.
             predicts_real_token = (jnp.roll(segment_ids, -1) >= 0).astype(dtype)
             loss_weight = loss_weight * predicts_real_token
 

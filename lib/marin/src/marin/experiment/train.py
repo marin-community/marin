@@ -28,6 +28,7 @@ from fray.types import GpuConfig, ResourceConfig
 from haliax.partitioning import ResourceAxis
 from levanter.adaptor import NoAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
+from levanter.data.text.examples import PaddingTargetLoss
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.lm_model import LmConfig
@@ -117,6 +118,7 @@ def train_lm(
     mp: str = MARIN_PRECISION,
     tensor_parallel_size: int = 1,
     steps_per_eval: int = 1000,
+    padding_target_loss: PaddingTargetLoss = "mask",
     wandb_project: str = "marin",
     wandb_group: str | None = None,
     run_id: str | None = None,
@@ -139,6 +141,8 @@ def train_lm(
     metadata, and ``resources`` (the TPU the job is dispatched onto — a runtime arg, so it
     never enters the checkpoint's fingerprint). ``init_from`` chains this run onto another
     checkpoint (it becomes a dep and seeds ``initialize_from_checkpoint_path``).
+    ``padding_target_loss="include"`` changes the loss objective by scoring positions
+    whose next token is padding; use it only when that behavior is intentional.
 
     Training length is set by exactly one of ``num_train_steps`` or ``num_train_epochs`` (setting
     both, or neither, is an error). ``num_train_epochs`` is a thin convenience over
@@ -194,7 +198,7 @@ def train_lm(
             LevanterCheckpoint(path=ctx.artifact_path(init_from)).checkpoint_dir if init_from is not None else None
         )
         inner = TrainLmConfig(
-            data=mixture(ctx, datasets, validation=validation),
+            data=mixture(ctx, datasets, validation=validation, padding_target_loss=padding_target_loss),
             trainer=TrainerConfig(
                 id=run_id,
                 tracker=WandbConfig(
