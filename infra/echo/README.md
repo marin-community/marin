@@ -344,18 +344,16 @@ minutes and then advances one globally serialized repository turn. Database migr
 `infra/echo/migrations/` create tables and apply PostgreSQL grants.
 `infra/echo/migrate.py` records applied migrations in `schema_migrations`.
 
-Preview or deploy from the service directory:
+Deploy the production stack from the repository root through the shared command.
+Pulumi previews the update before asking for confirmation:
 
 ```bash
-cd infra/echo
-pulumi stack select marin-echo
-pulumi preview
-pulumi up
+uv run --all-packages --extra deploy deploy echo rollout
 ```
 
-`pulumi up` applies pending migrations from the operator's machine. It requires ADC
+The rollout applies pending migrations from the operator's machine. It requires ADC
 with access to `cloudsql-pulumi-admin-password`. When a release adds tables queried by
-new API or sync images, run `infra/echo/migrate.py` before `pulumi up` to avoid a
+new API or sync images, run `infra/echo/migrate.py` before the rollout to avoid a
 missing-table window. The first repository build fetches a GitHub archive and embeds
 all eligible files in resumable ten-file batches; later hourly runs normally process
 only changed paths. Review database grant changes before deploying them.
