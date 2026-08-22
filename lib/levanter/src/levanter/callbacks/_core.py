@@ -56,8 +56,6 @@ class StepInfo(Generic[S]):
     """
     Information about a step that was just completed. This includes the trainer state, the loss, and the duration of the
     step.
-
-    Note that the step is 0-indexed, so if you want the next step, use `next_step`.
     """
 
     state: S
@@ -74,11 +72,13 @@ class StepInfo(Generic[S]):
     eval_model = property(lambda self: self.state.eval_model)
 
     step = property(lambda self: int(self.state.step) - 1)
-    """
-    The step that was just completed. If you want the next step, use `next_step`.
-    """
+    """The 0-indexed index of the step that just completed (= ``state.step - 1``)."""
 
     next_step = property(lambda self: int(self.state.step))
+    """The index of the next step to be taken. Equivalent to `state.step`. Also
+    equals the count of completed training steps so far — prefer this for any
+    "how many steps have run" use case (e.g. checkpoint naming, modulo-N save
+    triggers, user-facing step counters)."""
 
     def emit_event(self, event: ProgressEvent) -> None:
         """Notify event-aware callbacks about progress inside a step callback."""

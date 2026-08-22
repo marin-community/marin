@@ -139,8 +139,10 @@ class TrainerHooks:
         self.jit_hooks = []
 
     def run_hooks(self, info: StepInfo, force: bool = False):
+        # A hook with `every=k` fires when the completed-step count (info.next_step =
+        # state.step) is a positive multiple of k, matching the step-N artifact contract.
         for hook in self.hooks:
-            if force or (info.step > 1 and info.step % hook.every == 0):
+            if force or (info.next_step > 0 and info.next_step % hook.every == 0):
                 hook.fn.on_step(info, force=force)
 
     def emit_event(self, event: ProgressEvent) -> None:
@@ -149,7 +151,7 @@ class TrainerHooks:
 
     def run_jit_hooks_outside_step(self, info: StepInfo, cb_infos: Sequence[PyTree], force: bool = False):
         for s_hook, cb_info in zip(self.jit_hooks, cb_infos):
-            if force or (info.step > 1 and info.step % s_hook.every == 0):
+            if force or (info.next_step > 0 and info.next_step % s_hook.every == 0):
                 s_hook.fn.on_step(info, cb_info)
 
     def run_jit_hooks(self, state: TrainerState, jit_info: InsideJitInfo, force: bool = False) -> tuple[PyTree, ...]:
@@ -157,7 +159,9 @@ class TrainerHooks:
         hook_infos = []
         for hook in self.jit_hooks:
             hook_shape = eqx.filter_eval_shape(hook.fn.inside_step, state, jit_info)
-            fires = (state.step > 1) & (state.step % hook.every == 0)
+            # `state` is the pre-step state, so state.step + 1 is the completed-step
+            # count once this step lands — the same count run_hooks fires on.
+            fires = (state.step + 1) % hook.every == 0
             new_s = jax.lax.cond(
                 force or fires,
                 lambda: hook.fn.inside_step(state, jit_info),
@@ -521,7 +525,7 @@ class Trainer:
         # jit hooks impose a nontrivial cost even when they're not run (since they defeat some compiler optimizations)
         # so we avoid running them when they're not needed
         # this results in two compiles, but the cost of the second compile is worth it
-        hooks_this_time = any(state.step % h.every == 0 for h in self.hooks.jit_hooks)
+        hooks_this_time = any((state.step + 1) % h.every == 0 for h in self.hooks.jit_hooks)
 
         self.hooks.emit_event(ProgressEvent.TRAIN_STEP_STARTED)
         with capture_time() as step_time:
@@ -634,12 +638,16 @@ class Trainer:
         self._checkpointer = checkpointer
 
         def checkpoint_hook(info, force=False):
+            # next_step (= state.step) is the count of completed steps; using
+            # it here makes ckpt names match natural expectations: after N steps
+            # complete, save lands at `step-N`. Don't use `info.step` (= state.step - 1),
+            # which would produce `step-{N-1}` and shift all periodic saves by +1.
             with progress_event_scope(
                 info.emit_event,
                 ProgressEvent.CHECKPOINT_STARTED,
                 ProgressEvent.CHECKPOINT_FINISHED,
             ):
-                checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
+                checkpointer.on_step(tree=info.state.saveable_state, step=info.next_step, force=force)
 
         self.add_hook(checkpoint_hook, every=1)  # checkpointer manages its own frequency
 
