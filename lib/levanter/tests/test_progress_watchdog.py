@@ -7,7 +7,12 @@ from threading import Event
 import pytest
 
 from levanter.callbacks import ProgressEvent, progress_watchdog as progress_watchdog_module
-from levanter.callbacks.progress_watchdog import ProgressWatchdog, ProgressWatchdogConfig, STALLED_TRAINING_EXIT_CODE
+from levanter.callbacks.progress_watchdog import (
+    ProgressState,
+    ProgressWatchdog,
+    ProgressWatchdogConfig,
+    STALLED_TRAINING_EXIT_CODE,
+)
 
 
 def test_watchdog_ignores_first_compile_then_times_out_a_steady_state_step(monkeypatch):
@@ -158,13 +163,15 @@ def test_watchdog_diagnostic_cannot_postpone_exit(monkeypatch):
     watchdog.stop()
 
 
-def test_watchdog_config_with_diagnostic_timeout_only_arms_process_zero() -> None:
+def test_watchdog_config_arms_every_process_but_only_requires_rank_zero_diagnostics() -> None:
     config = ProgressWatchdogConfig(
         step_timeout=timedelta(seconds=1),
         diagnostic_timeout=timedelta(seconds=1),
     )
 
-    assert config.create(process_index=1, diagnostic=lambda _timeout: None) is None
+    worker_watchdog = config.create(process_index=1)
+    assert worker_watchdog is not None
+    worker_watchdog.stop()
     with pytest.raises(ValueError):
         config.create(process_index=0)
     watchdog = config.create(process_index=0, diagnostic=lambda _timeout: None)
@@ -241,3 +248,104 @@ def test_watchdog_startup_deadline_lapses_once_a_step_completes(monkeypatch):
 
     assert not terminated.wait(timeout=0.05)
     watchdog.stop()
+
+
+def test_health_tracks_the_deadline_governing_the_current_wait(monkeypatch) -> None:
+    current_time = 0.0
+    monkeypatch.setattr(progress_watchdog_module, "monotonic", lambda: current_time)
+    watchdog = ProgressWatchdog(
+        step_timeout=timedelta(seconds=600),
+        process_timeout=timedelta(seconds=900),
+        startup_timeout=timedelta(seconds=4800),
+        startup_grace_period=timedelta(seconds=60),
+        poll_interval=3600.0,
+    )
+
+    health = watchdog.health()
+    assert health.state is ProgressState.STARTING
+    assert (health.event, health.timeout) == (ProgressEvent.PROCESS_STARTED, 4800.0)
+
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_STARTED)
+    current_time = 3000.0
+    assert watchdog.health().state is ProgressState.STARTING, "a first step that still compiles is unarmed"
+
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_FINISHED)
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_STARTED)
+    current_time = 3599.0
+    health = watchdog.health()
+    assert health.state is ProgressState.PROGRESSING
+    assert (health.event, health.elapsed, health.timeout) == (ProgressEvent.TRAIN_STEP_STARTED, 599.0, 600.0)
+
+    current_time = 3600.0
+    assert watchdog.health().state is ProgressState.STALLED
+
+    watchdog.stop()
+    assert watchdog.health().state is ProgressState.FINISHED
+
+
+def test_health_reports_a_startup_that_outlives_its_deadline(monkeypatch) -> None:
+    current_time = 0.0
+    monkeypatch.setattr(progress_watchdog_module, "monotonic", lambda: current_time)
+    watchdog = ProgressWatchdog(
+        step_timeout=None,
+        process_timeout=None,
+        startup_timeout=timedelta(seconds=4800),
+        poll_interval=3600.0,
+    )
+
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_STARTED)
+    current_time = 4800.0
+
+    health = watchdog.health()
+    assert health.state is ProgressState.STALLED
+    assert health.event is ProgressEvent.PROCESS_STARTED
+
+    watchdog.stop()
+
+
+def test_health_reports_the_process_deadline_between_steps(monkeypatch) -> None:
+    current_time = 0.0
+    monkeypatch.setattr(progress_watchdog_module, "monotonic", lambda: current_time)
+    watchdog = ProgressWatchdog(
+        step_timeout=timedelta(seconds=600),
+        process_timeout=timedelta(seconds=900),
+        startup_grace_period=timedelta(0),
+        poll_interval=3600.0,
+    )
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_STARTED)
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_FINISHED)
+    watchdog.on_event(ProgressEvent.CHECKPOINT_STARTED)
+
+    current_time = 700.0
+    health = watchdog.health()
+    assert health.state is ProgressState.PROGRESSING, "a checkpoint must not inherit the train-step deadline"
+    assert (health.event, health.timeout) == (ProgressEvent.CHECKPOINT_STARTED, 900.0)
+
+    watchdog.stop()
+
+
+def test_health_stays_stalled_while_the_diagnostic_runs(monkeypatch) -> None:
+    """A terminating watchdog must not report FINISHED during its diagnostic budget."""
+    exited = Event()
+    current_time = 0.0
+
+    monkeypatch.setattr(progress_watchdog_module.os, "_exit", lambda _exit_code: exited.set())
+    monkeypatch.setattr(progress_watchdog_module, "monotonic", lambda: current_time)
+    watchdog = ProgressWatchdog(
+        step_timeout=timedelta(seconds=600),
+        process_timeout=timedelta(seconds=900),
+        startup_grace_period=timedelta(0),
+        diagnostic=lambda _timeout: None,
+        diagnostic_timeout=timedelta(seconds=20),
+        poll_interval=0.005,
+    )
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_STARTED)
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_FINISHED)
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_STARTED)
+
+    current_time = 600.0
+    assert exited.wait(timeout=1)
+
+    health = watchdog.health()
+    assert health.state is ProgressState.STALLED
+    assert health.event is ProgressEvent.TRAIN_STEP_STARTED

@@ -20,6 +20,7 @@ Each child inherits the supervisor's environment plus its rank::
 
     IRIS_MULTIGPU_PROCESS_COUNT    = num_tasks * nproc           (global world size)
     IRIS_MULTIGPU_PROCESS_INDEX    = task_index * nproc + local  (global rank)
+    IRIS_MULTIGPU_LOCAL_PROCESS_INDEX = local                    (task-local rank)
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS = the child's D device ids     ("0", or "2,3")
 
 ``iris.runtime.jax_init.initialize_jax`` reads these (their names are the contract
@@ -52,6 +53,7 @@ from iris.cluster.client.job_info import get_job_info
 from iris.cluster.log_highlights import rank_log_tag
 from iris.hooks.multigpu import (
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
+    IRIS_MULTIGPU_LOCAL_PROCESS_INDEX_ENV,
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
     IRIS_MULTIGPU_PROCESS_INDEX_ENV,
 )
@@ -79,6 +81,7 @@ def _child_rank_env(
     return {
         IRIS_MULTIGPU_PROCESS_COUNT_ENV: str(num_tasks * nproc),
         IRIS_MULTIGPU_PROCESS_INDEX_ENV: str(task_index * nproc + local_rank),
+        IRIS_MULTIGPU_LOCAL_PROCESS_INDEX_ENV: str(local_rank),
         IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV: device_ids,
     }
 

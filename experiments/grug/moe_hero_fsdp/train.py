@@ -6,7 +6,6 @@ import functools
 import logging
 import os
 import time
-from contextlib import nullcontext
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -526,8 +525,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     )
 
     checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
-    dashboard = (
-        TrainingDashboard(config, checkpointer.request_checkpoint, run_id) if checkpointer is not None else nullcontext()
+    dashboard = TrainingDashboard(
+        config,
+        checkpointer.request_checkpoint if checkpointer is not None else None,
+        run_id,
+        watchdog=progress_watchdog,
     )
     with set_mesh(mesh), dashboard:
         batch_schedule = trainer.batch_schedule

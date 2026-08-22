@@ -183,6 +183,8 @@ def reconstruct_launch_job_request(
     for filename, data in workdir_files.items():
         req.entrypoint.workdir_files[filename] = data
     req.environment.CopyFrom(proto_from_json(job.environment_json, job_pb2.EnvironmentConfig))
+    if job.health_check_json is not None:
+        req.health_check.CopyFrom(proto_from_json(job.health_check_json, job_pb2.TaskHealthCheck))
     req.resources.CopyFrom(
         resource_spec_from_scalars(job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json)
     )

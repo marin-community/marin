@@ -63,7 +63,7 @@ from levanter.callbacks import (
     progress_event_scope,
 )
 from levanter.callbacks.profiler import ProfilerConfig
-from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
+from levanter.callbacks.progress_watchdog import ProgressWatchdog, ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import Checkpointer, CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
 from levanter.config import JsonAtom
@@ -297,6 +297,7 @@ class Trainer:
         self.optimizer = optimizer
         self._raw_loss_function = loss_fn
         self._checkpointer: Optional[Checkpointer] = None
+        self._progress_watchdog: Optional[ProgressWatchdog] = None
 
         # Use existing global tracker if available (e.g., from levanter.initialize()),
         # otherwise create a new one. This avoids calling wandb.init() twice.
@@ -340,6 +341,11 @@ class Trainer:
     @property
     def num_train_steps(self) -> int:
         return self.config.num_train_steps
+
+    @property
+    def progress_watchdog(self) -> Optional[ProgressWatchdog]:
+        """The stall watchdog, or ``None`` when no progress deadline is configured."""
+        return self._progress_watchdog
 
     @typing.overload
     def add_hook(self, fn: Callable[[StepInfo], Any], *, every: int = 1): ...
@@ -623,6 +629,7 @@ class Trainer:
             diagnostic=capture_stall_diagnostics,
         )
         if progress_watchdog is not None:
+            self._progress_watchdog = progress_watchdog
             self.add_hook(progress_watchdog, every=1)
 
         self.add_hook(levanter.callbacks.pbar_logger(total=self.config.num_train_steps), every=1)

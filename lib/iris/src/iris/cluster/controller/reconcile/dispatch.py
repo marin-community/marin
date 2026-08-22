@@ -73,6 +73,7 @@ def build_run_request(
         entrypoint_json=row.entrypoint_json,
         workdir_files=reads.get_workdir_files(cur, row.job_id),
         environment_json=row.environment_json,
+        health_check_json=row.health_check_json,
         bundle_id=row.bundle_id,
         resources=row.resources,
         ports_json=row.ports_json,
