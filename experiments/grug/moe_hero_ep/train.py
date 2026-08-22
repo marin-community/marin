@@ -68,7 +68,11 @@ HERO_EP_RUNTIME_ENV = {
     # uses, because the startup preallocation probe commits the whole threshold at once: 0.83
     # pins 153.0 GiB in the pool and leaves under 3 GiB free on the device, so the arena
     # allocation below has no room to remap into.
-    "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.75",
+    # 0.70 (lean-ragged posture): the expert-granular data path rematerializes ~3.5 GiB worse
+    # than the compact/permute path (192.33 vs 188.88 GiB achieved), and at 0.75 the first
+    # train step starves NCCL's alltoall of device memory. Dropping the threshold releases
+    # pool pages to the driver sooner and widens the collective headroom to ~55 GiB.
+    "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.70",
 }
 XLA_LATENCY_HIDING_FLAG = "--xla_gpu_enable_latency_hiding_scheduler"
 # The scheduler sizes the single `jit_train_step` temp arena against this percentage of its
