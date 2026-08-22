@@ -13,3 +13,6 @@ ra2a-l2-i07-chunk2-cmdbuf	578b36af69	2026.08.21.49	ragged_all_to_all	synthetic	d
 ra2a-l2-i08-chunk2-nobarrier	b282cc0d3e	2026.08.21.50	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-l2-i09-chunk2-splits64	c9b18858ae	2026.08.21.51	ragged_all_to_all	synthetic	disabled	4470000	2100	none	--ragged-all-to-all-splits-per-peer 64
 ra2a-l2-i10-chunk2-splits128	c9b18858ae	2026.08.21.52	ragged_all_to_all	synthetic	disabled	4470000	2100	none	--ragged-all-to-all-splits-per-peer 128
+ra2a-l2-i11-stock-devkernel	90ef05fa67	2026.08.22.3	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
+ra2a-l2-i11-stock-sendrecv	dbd2628fa8	2026.08.22.3	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
+ra2a-l2-i12-nightly-devkernel	e12dc963a9	2026.08.22.4	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
