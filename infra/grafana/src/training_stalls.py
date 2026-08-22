@@ -23,6 +23,10 @@ from hero_runs import (
 
 _TRAINING_STALL_AGE = timedelta(minutes=15)
 _INITIALIZING_STALL_AGE = timedelta(minutes=45)
+# Every rank publishes `step` and `phase`, so an unfiltered scan of one hour of
+# the hero run reads about 1.4M rows a minute against the hub for the ~2k that
+# carry the tracker's own view. Process zero is that view, and the same replica
+# the training dashboard selects.
 _PROGRESS_LOOKBACK = 2 * _TRAINING_STALL_AGE
 _EXECUTION_LOOKBACK = TASK_STATE_LOOKBACK
 # The phase heartbeat reaches back a day so a run that went silent hours ago is
@@ -50,7 +54,7 @@ def telemetry_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
         "timestamp_ms, seq, to_timestamp_millis(timestamp_ms) AS ts "
         'FROM "telemetry_v1" '
         f"WHERE service = 'levanter' AND name IN ({metric_names}) "
-        f"AND {run_predicate} "
+        f"AND {run_predicate} AND process_index = '0' "
         "AND job_id IS NOT NULL AND execution_uid IS NOT NULL "
         f"AND timestamp_ms >= {phase_since} AND timestamp_ms < {end} "
         f"AND (name = '{PHASE_METRIC}' OR timestamp_ms >= {progress_since})"

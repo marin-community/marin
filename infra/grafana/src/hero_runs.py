@@ -128,7 +128,7 @@ def phase_enrollment_query(now: datetime) -> str:
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
         "run_id, job_id, timestamp_ms, seq "
         'FROM "telemetry_v1" '
-        f"WHERE service = 'levanter' AND name = '{PHASE_METRIC}' "
+        f"WHERE service = 'levanter' AND name = '{PHASE_METRIC}' AND process_index = '0' "
         f"AND run_id LIKE '{HERO_RUN_PREFIX}%' AND job_id IS NOT NULL "
         f"AND timestamp_ms >= {start} AND timestamp_ms < {end}"
         "), ranked AS ("

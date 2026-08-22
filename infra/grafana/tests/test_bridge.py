@@ -375,6 +375,7 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
             run_id VARCHAR,
             job_id VARCHAR,
             execution_uid VARCHAR,
+            process_index VARCHAR,
             name VARCHAR,
             value DOUBLE,
             timestamp_ms BIGINT,
@@ -399,7 +400,7 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
         ],
     )
     database.executemany(
-        "INSERT INTO telemetry_v1 VALUES (?, 'levanter', ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO telemetry_v1 VALUES (?, 'levanter', ?, ?, ?, '0', ?, ?, ?, ?)",
         [
             (
                 "cw-a",
@@ -454,7 +455,7 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
     ]
 
     database.execute(
-        "INSERT INTO telemetry_v1 VALUES (?, 'levanter', ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO telemetry_v1 VALUES (?, 'levanter', ?, ?, ?, '0', ?, ?, ?, ?)",
         (
             "cw-a",
             "hero-20260819",
