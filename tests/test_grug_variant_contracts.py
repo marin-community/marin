@@ -65,7 +65,7 @@ def test_compact_grug_mesh_shape_allows_expert_axis_to_span_processes():
         expert_axis_size=16,
         replica_axis_size=4,
         model_axis_size=1,
-    ) == (4, 2, 16, 1)
+    ) == (4, 2, 1, 16, 1)
 
 
 def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
@@ -81,7 +81,19 @@ def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
         expert_axis_size=1,
         replica_axis_size=1,
         model_axis_size=1,
-    ) == (1, 4, 1, 1)
+    ) == (1, 4, 1, 1, 1)
+
+
+def test_compact_grug_mesh_shape_allocates_context_axis():
+    """Contract: context_axis_size shards the sequence dim; data absorbs the remainder."""
+    assert _compact_grug_mesh_shape(
+        process_count=1,
+        local_device_count=8,
+        expert_axis_size=1,
+        replica_axis_size=1,
+        model_axis_size=1,
+        context_axis_size=2,
+    ) == (1, 4, 2, 1, 1)
 
 
 def _variant_has_noverify(variant_dir: Path) -> bool:

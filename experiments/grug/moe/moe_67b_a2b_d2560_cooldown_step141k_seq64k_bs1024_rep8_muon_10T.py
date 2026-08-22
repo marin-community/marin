@@ -16,10 +16,10 @@ and train ~1 T more tokens at extended context.
   ~10 T -- essentially the horizon's compute in the extended-context regime.
 - ``mixture``: datakit phase-1 (mix 2) weights from step 0, with **exact**
   token-position continuation from main run via ``resume_data_offset``.
-  Levanter's TokenSeqDataset uses ``offsets = indices × seq_len``, so
+  Levanter's TokenSeqDataset uses ``offsets = indices x seq_len``, so
   cooldown mixture-sample-index N (at seq=65,536) corresponds to token
-  offset N × 65,536 in each underlying bucket. Main run consumed
-  13,500 × 8,192 = 110,592,000 samples of mix-2 at seq=8,192 =
+  offset N x 65,536 in each underlying bucket. Main run consumed
+  13,500 x 8,192 = 110,592,000 samples of mix-2 at seq=8,192 =
   905,969,664,000 tokens. To land the cooldown at the same underlying
   token offset, we need cooldown sample-index 905,969,664,000 / 65,536 =
   13,824,000 at step 141,000. The launcher's ``resume_data_offset``
@@ -124,11 +124,11 @@ _RESUME_CKPT_PATH: str = (
 # _SOURCE_BS below (see the source_batch_size parameter on the launcher
 # config). Under the hood, TokenSeqDataset.get_batch uses
 # ``offsets = indices * seq_len``, so mixture-sample-index N in the
-# cooldown (at seq=65,536) corresponds to token offset N × 65,536 in the
-# underlying bucket. Main run consumed 13,500 × 8,192 = 110.592 M samples
+# cooldown (at seq=65,536) corresponds to token offset N x 65,536 in the
+# underlying bucket. Main run consumed 13,500 x 8,192 = 110.592 M samples
 # of mix-2 at seq=8,192 = 906 B tokens. To land the cooldown at that same
 # 906 B token position: cooldown mixture-sample-index at start = 906 B /
-# 65,536 = 13,824,000. We achieve this with source_batch_size × resume_step
+# 65,536 = 13,824,000. We achieve this with source_batch_size x resume_step
 # = 13,824,000, i.e. source_batch_size ≈ 98 (0.04% short of exact -- would
 # need a non-integer BS to hit exactly, and the tolerance is negligible).
 _data_train = LmDataConfig(
@@ -142,7 +142,7 @@ _data_train = LmDataConfig(
 _data = add_validation_sets_to_mixture(_data_train, default_validation_sets(tokenizer=marin_tokenizer))
 
 # EXACT continuation from main run's mix-2 finish position.
-# Main run consumed 13,500 × 8,192 = 110,592,000 samples of mix-2 at
+# Main run consumed 13,500 x 8,192 = 110,592,000 samples of mix-2 at
 # seq=8,192, i.e. 905,969,664,000 tokens. Cooldown at seq=65,536 wants
 # to start at the same underlying token offset, which is sample-index
 # 905,969,664,000 / 65,536 = 13,824,000. The launcher's new

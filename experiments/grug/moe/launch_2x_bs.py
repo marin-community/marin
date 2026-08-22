@@ -165,12 +165,12 @@ class GrugMoeLaunchConfig2xBS:
 
     Use this when a single integer ``source_batch_size`` can't hit the
     right target because the source and cooldown have different seq_len
-    (a source ``source_batch_size × resume_step`` product measures samples
+    (a source ``source_batch_size x resume_step`` product measures samples
     at cooldown seq_len, which are a different size than source's samples).
     Compute the target as ``source_tokens_consumed // cooldown_seq_len``:
     that's the cooldown-sample-index whose underlying token offset matches
     where the source left off (since Levanter's TokenSeqDataset uses
-    ``offsets = indices × seq_len``).
+    ``offsets = indices x seq_len``).
 
     Mutually exclusive with ``source_batch_size``. Requires
     ``resume_step > 0``."""

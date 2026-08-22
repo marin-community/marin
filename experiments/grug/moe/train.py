@@ -70,6 +70,12 @@ class GrugTrainerConfig:
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
     model_axis_size: int = 1
+    context_axis_size: int = 1
+    """Sequence-dim (context-parallel) shard count. When >1, ``compact_grug_mesh``
+    carries a ``context`` axis of this size; the grug MoE model shards the seq
+    axis of hidden activations across it. K/V still get all-gathered inside the
+    splash attention kernel (only Q's seq axis is sharded), so this is the
+    "all-gather-KV" flavor of CP, not ring attention."""
 
 
 @dataclass(frozen=True)
@@ -430,6 +436,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
         model_axis_size=config.trainer.model_axis_size,
+        context_axis_size=config.trainer.context_axis_size,
     )
     with set_mesh(mesh):
         batch_schedule = trainer.batch_schedule

@@ -78,10 +78,7 @@ _model = dataclasses.replace(
 _tokens = float(_STEPS * _BS * _SEQ)
 _optimizer = _heuristic.build_muonh_config(_BS, _tokens, _DIM, seq_len=_SEQ)
 
-_run_id = (
-    f"moe_smoke_d{_DIM}_L{_NUM_LAYERS}_ep{_EP}_rep{_REPLICA_AXIS}_"
-    f"bs{_BS}_seq{_SEQ}_v4_2048"
-)
+_run_id = f"moe_smoke_d{_DIM}_L{_NUM_LAYERS}_ep{_EP}_rep{_REPLICA_AXIS}_" f"bs{_BS}_seq{_SEQ}_v4_2048"
 step = ExecutorStep(
     name=f"grug/{_run_id}",
     fn=run_grug_moe_trial,

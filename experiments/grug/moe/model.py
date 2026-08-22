@@ -52,14 +52,16 @@ _ROUTING_RENORM_SUM = 2.5
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+_SEQ_AXIS_NAME: str = "context"
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
     if mesh is None or mesh.empty:
         raise ValueError("grug/moe requires a non-empty abstract mesh")
     if axis_name not in mesh.shape:
-        # compact_grug_mesh standardizes on (replica_dcn, data, expert, model) with length-1
-        # axes kept, so any missing axis is a caller bug rather than a "size 1" shortcut.
+        # compact_grug_mesh standardizes on (replica_dcn, data, context, expert, model) with
+        # length-1 axes kept, so any missing axis is a caller bug rather than a "size 1"
+        # shortcut.
         raise ValueError(f"grug/moe requires an abstract mesh with axis '{axis_name}'")
     return int(mesh.shape[axis_name])
 
@@ -67,12 +69,47 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
 RematMode = Literal["recompute_all", "save_moe"]
 
 
-def _batch_spec() -> P:
-    return P(_BATCH_AXES)
+def _seq_axis() -> str | None:
+    """Return the sequence-sharding axis name if the current mesh carries it.
+
+    Returns ``"context"`` when the compact grug mesh has that axis (always true
+    for meshes built by ``compact_grug_mesh`` after the CP change), else ``None``
+    for backwards compatibility with meshes lacking it.
+    """
+    mesh = get_abstract_mesh()
+    if mesh is None or mesh.empty:
+        return None
+    return _SEQ_AXIS_NAME if _SEQ_AXIS_NAME in mesh.shape else None
+
+
+def _token_axes() -> tuple[str, ...]:
+    """Axes that partition the flat token dim ``[B*S]`` after context sharding."""
+    seq = _seq_axis()
+    return (*_BATCH_AXES, seq) if seq is not None else _BATCH_AXES
+
+
+def _seq_spec_3d() -> P:
+    """PartitionSpec for ``[B, S, D]``: batch on batch axes, seq on context, D free."""
+    return P(_BATCH_AXES, _seq_axis(), None)
+
+
+def _seq_spec_4d(head_axis: str | None = "model") -> P:
+    """PartitionSpec for ``[B, S, N, D]``: seq on context, heads on ``head_axis``."""
+    return P(_BATCH_AXES, _seq_axis(), head_axis, None)
+
+
+def _kv_spec_4d() -> P:
+    """PartitionSpec for K/V ``[B, S, M, D]`` before splash: seq MUST be replicated."""
+    return P(_BATCH_AXES, None, "model", None)
+
+
+def _token_spec() -> P:
+    """PartitionSpec for ``[T=B*S, ...]`` fused-token tensors (includes context)."""
+    return P(_token_axes())
 
 
 def _batch_reshard(x: jax.Array) -> jax.Array:
-    return reshard(x, _batch_spec())
+    return reshard(x, _seq_spec_3d())
 
 
 def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
@@ -247,7 +284,7 @@ class CausalSelfAttention(eqx.Module):
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
-        batch_spec = _batch_spec()
+        seq_spec = _seq_spec_3d()
 
         q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
         k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
@@ -297,13 +334,25 @@ class CausalSelfAttention(eqx.Module):
             q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
             k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
         q = q * cfg.qk_mult
+        # Context parallelism: shard Q's seq axis on "context" (if the mesh
+        # carries it); K/V must be seq-replicated for splash. The splash entry
+        # in ``grug/attention/_core.py`` raises if K's seq axis is sharded, so
+        # we reshard K/V to seq=None before calling into attention -- this is
+        # the "all-gather KV" flavor of CP. When context_axis_size == 1 the
+        # ``"context"`` in ``_seq_spec_4d`` folds to a size-1 axis (no-op) and
+        # behavior matches the pre-CP fully-replicated seq case.
+        q = reshard(q, _seq_spec_4d())
+        k = reshard(k, _kv_spec_4d())
+        v = reshard(v, _kv_spec_4d())
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         # Half-RoPE's slice+concat on the head_dim axis can leave the explicit-mesh
         # propagator with ``model`` annotated on ``head_dim`` rather than
         # ``num_q_heads``; force the canonical TP layout so it matches ``aligned_v``.
-        attn_out = reshard(attn_out, P(_BATCH_AXES, None, "model", None))
+        attn_out = reshard(attn_out, _seq_spec_4d())
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
-        aligned_v = reshard(aligned_v, P(_BATCH_AXES, None, "model", None))
+        # aligned_v inherits v's seq=None; reshard onto the context-sharded seq
+        # so the subsequent per-token XSA math runs on a shard-local layout.
+        aligned_v = reshard(aligned_v, _seq_spec_4d())
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
@@ -313,7 +362,7 @@ class CausalSelfAttention(eqx.Module):
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=seq_spec)
 
 
 class RMSNorm(eqx.Module):
@@ -389,13 +438,14 @@ class DenseMLP(eqx.Module):
         x_flat = rearrange(x, "b s d -> (b s) d")
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
+        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_token_spec())
         # Reshard after the reshape so the shared-expert output carries the same
-        # canonical batch sharding as the routed MoE output (MoEMLP reshards its
-        # routed result identically). Splitting the fused
-        # ("replica_dcn", "data", "expert") token axis back into (b, s) otherwise
-        # leaks the `expert` mesh axis onto the seq dim, so the shared+routed
-        # residual add fails with a ShardingTypeError on a multi-node mesh.
+        # canonical batch-plus-context sharding as the routed MoE output (MoEMLP
+        # reshards its routed result identically). Splitting the fused
+        # ("replica_dcn", "data", "expert", "context") token axis back into
+        # (b, s) otherwise leaks a mesh axis onto the wrong dim, so the
+        # shared+routed residual add fails with a ShardingTypeError on a
+        # multi-node mesh.
         return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
 
 
@@ -545,11 +595,14 @@ class MoEMLP(eqx.Module):
             num_experts=self.cfg.num_experts,
             num_experts_per_token=self.cfg.num_experts_per_token,
         )
-        # Sharded QB: compute beta locally per device, then average.
+        # Sharded QB: compute beta locally per device, then average. Token axes
+        # include "context" when the current mesh carries it, so context-parallel
+        # shards contribute their local top-k and get pmean'd like data shards.
         mesh = get_abstract_mesh()
-        s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
+        token_axes = _token_axes()
+        s_minus_alpha = reshard(router_logits - qb_alpha, P(token_axes, None))
         num_devices = 1
-        for a in _BATCH_AXES:
+        for a in token_axes:
             num_devices *= mesh.shape[a]
         local_tokens = s_minus_alpha.shape[0] // num_devices
         qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
@@ -557,12 +610,12 @@ class MoEMLP(eqx.Module):
         def _local_qb_beta(s_ma):
             topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
             beta = topk_vals[:, -1]
-            return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
+            return jax.lax.pmean(beta, axis_name=token_axes)
 
         router_stats["qb_beta"] = shard_map(
             _local_qb_beta,
             mesh=mesh,
-            in_specs=(P(_BATCH_AXES, None),),
+            in_specs=(P(token_axes, None),),
             out_specs=P(),
         )(s_minus_alpha)
 
@@ -576,7 +629,7 @@ class MoEMLP(eqx.Module):
         router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        routed = reshard(routed, _batch_spec())
+        routed = reshard(routed, _seq_spec_3d())
         return routed, router_stats
 
 
@@ -703,9 +756,9 @@ class Transformer(eqx.Module):
         if mask is None:
             mask = AttentionMask.causal()
 
-        batch_spec = _batch_spec()
+        seq_spec = _seq_spec_3d()
         cfg = self.config
-        hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
+        hidden = self.token_embed.at[token_ids].get(out_sharding=seq_spec)
         hidden = self.embed_norm(hidden)
         hidden = self.embed_gated_norm(hidden)
 
@@ -773,9 +826,9 @@ class Transformer(eqx.Module):
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
     ) -> Float[Array, "B S V"]:
-        batch_spec = _batch_spec()
+        seq_spec = _seq_spec_3d()
         hidden, _ = self(token_ids, mask=mask)
-        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
+        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=seq_spec)
 
     def next_token_loss(
         self,
@@ -825,9 +878,10 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
     expert = 2 if num_devices % 2 == 0 else 1
     data = max(1, num_devices // expert)
     mesh = jax.sharding.AbstractMesh(
-        axis_sizes=(1, data, expert, 1),
-        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_sizes=(1, data, 1, expert, 1),
+        axis_names=("replica_dcn", "data", "context", "expert", "model"),
         axis_types=(
+            jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
             jax.sharding.AxisType.Explicit,
