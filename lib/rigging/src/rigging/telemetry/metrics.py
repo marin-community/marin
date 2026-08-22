@@ -49,7 +49,6 @@ class MetricSnapshotPublisher:
         self,
         *,
         max_records: int,
-        group: telemetry.TelemetryGroup,
         attributes: Mapping[str, str] | None = None,
     ) -> None:
         if max_records <= 0:
@@ -57,7 +56,6 @@ class MetricSnapshotPublisher:
         common_attributes = dict(attributes or {})
         serialization.validate_attributes(common_attributes)
         self._max_records = max_records
-        self._group = group
         self._attributes = common_attributes
 
     def publish(self, snapshots: Sequence[MetricSnapshot]) -> MetricPublishResult:
@@ -100,6 +98,5 @@ class MetricSnapshotPublisher:
                 value=snapshot.value,
                 unit=snapshot.unit,
                 attributes=attributes,
-                group=self._group,
             )
         )

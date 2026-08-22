@@ -27,7 +27,12 @@ def exported(monkeypatch):
     telemetry.shutdown(0)
     transport = RecordingTelemetryTransport()
     monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
-    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="levanter", attributes={"run": "run-42"})
+    telemetry.configure(
+        endpoint="http://finelog/v1/telemetry",
+        service="levanter",
+        group="levanter.extra",
+        attributes={"run": "run-42"},
+    )
     yield transport
     telemetry.shutdown(1)
 
@@ -126,7 +131,7 @@ def test_nonprimary_process_does_not_replicate_training_telemetry(exported, monk
     assert exported.records == []
 
 
-def test_extra_metrics_are_sampled_every_ten_steps_while_core_metrics_are_not(exported):
+def test_extra_metrics_are_sampled_every_ten_steps_while_progress_metrics_are_not(exported):
     tracker = TelemetryTracker()
 
     tracker.log({"train/loss": 1.25, "throughput": 7.0}, step=1)
@@ -141,8 +146,6 @@ def test_extra_metrics_are_sampled_every_ten_steps_while_core_metrics_are_not(ex
         TrainingPhase.INITIALIZING,
         TrainingPhase.TRAINING,
     ]
-    assert {record["group"] for record in records if record["name"] == "train_loss"} == {"levanter.core"}
-    assert {record["group"] for record in records if record["name"] == "throughput"} == {"levanter.extra"}
 
 
 @pytest.fixture

@@ -22,7 +22,7 @@ pub mod string_values;
 pub mod trigram_prune;
 pub mod udf;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -31,13 +31,13 @@ use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
 use datafusion::catalog::TableProvider;
 use datafusion::common::config::Dialect;
-use datafusion::common::{ScalarValue, TableReference};
+use datafusion::common::TableReference;
 use datafusion::datasource::ViewTable;
 use datafusion::error::Result as DFResult;
 use datafusion::execution::memory_pool::GreedyMemoryPool;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::logical_expr::{col, lit, LogicalPlan, LogicalPlanBuilder};
+use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use datafusion::prelude::{SQLOptions, SessionConfig, SessionContext};
 
 use crate::query::provider::NamespaceProvider;
@@ -48,14 +48,6 @@ use crate::query::string_values::StringValues;
 pub struct RegisteredProvider {
     pub name: String,
     pub provider: NamespaceProvider,
-}
-
-pub const TELEMETRY_ROLLUP_NAMESPACE: &str = "telemetry_v1";
-pub const TELEMETRY_NAMESPACE_PREFIX: &str = "telemetry_v1.";
-const TELEMETRY_LEGACY_NAMESPACE: &str = "__finelog_telemetry_v1_legacy";
-
-pub fn is_telemetry_namespace(namespace: &str) -> bool {
-    namespace == TELEMETRY_ROLLUP_NAMESPACE || namespace.starts_with(TELEMETRY_NAMESPACE_PREFIX)
 }
 
 struct QueryRegistrations {
@@ -501,61 +493,54 @@ async fn register_query_providers(
     ctx: &SessionContext,
     providers: Vec<RegisteredProvider>,
 ) -> DFResult<QueryRegistrations> {
-    let aggregate_sources: HashMap<String, exact_aggregate::AggregateSource> = providers
+    let physical_names = providers
         .iter()
-        .map(|provider| {
-            let name = if provider.name == TELEMETRY_ROLLUP_NAMESPACE {
-                TELEMETRY_LEGACY_NAMESPACE.to_string()
-            } else {
-                provider.name.clone()
-            };
-            (
-                name,
-                exact_aggregate::AggregateSource {
-                    segment_paths: provider.provider.segment_paths().to_vec(),
-                    index_cache: Arc::clone(provider.provider.index_cache()),
-                    schema: provider.provider.schema(),
-                },
-            )
-        })
-        .collect();
+        .map(|provider| provider.name.clone())
+        .collect::<BTreeSet<_>>();
+    let rollups = namespace_rollups(&physical_names);
+    let mut aggregate_sources = HashMap::with_capacity(providers.len());
+    let mut physical_registrations = BTreeMap::new();
     let mut names = Vec::with_capacity(providers.len() + 1);
-    let mut telemetry_sources = Vec::new();
-    for rp in providers {
-        // `TableReference::bare` keeps a dotted name (`iris.worker`) as ONE
-        // table identifier rather than a `schema.table` split, so the user's
-        // quoted `FROM "iris.worker"` resolves to exactly this registration.
-        let registered_name = if rp.name == TELEMETRY_ROLLUP_NAMESPACE {
-            TELEMETRY_LEGACY_NAMESPACE.to_string()
+    for (index, rp) in providers.into_iter().enumerate() {
+        // `TableReference::bare` keeps dotted physical names as one identifier.
+        // A physical parent uses an internal alias so its public name remains
+        // available for the composite view registered below.
+        let registered_name = if rollups.contains_key(&rp.name) {
+            format!("__finelog_rollup_source_{index}")
         } else {
-            rp.name
+            rp.name.clone()
         };
-        if registered_name == TELEMETRY_LEGACY_NAMESPACE
-            || registered_name.starts_with(TELEMETRY_NAMESPACE_PREFIX)
-        {
-            telemetry_sources.push(registered_name.clone());
-        }
+        aggregate_sources.insert(
+            registered_name.clone(),
+            exact_aggregate::AggregateSource {
+                segment_paths: rp.provider.segment_paths().to_vec(),
+                index_cache: Arc::clone(rp.provider.index_cache()),
+                schema: rp.provider.schema(),
+            },
+        );
         ctx.register_table(
             TableReference::bare(registered_name.clone()),
             Arc::new(rp.provider),
         )?;
+        physical_registrations.insert(rp.name, registered_name.clone());
         names.push(registered_name);
     }
-    if !telemetry_sources.is_empty() {
-        let mut plans = Vec::with_capacity(telemetry_sources.len());
-        for source in telemetry_sources {
+    for (rollup_name, sources) in rollups {
+        let mut plans = Vec::with_capacity(sources.len());
+        for source in sources {
+            let registered_source = &physical_registrations[&source];
             let plan = ctx
-                .table(TableReference::bare(source.as_str()))
+                .table(TableReference::bare(registered_source.as_str()))
                 .await?
                 .into_unoptimized_plan();
             plans.push((source, plan));
         }
-        if let Some(rollup) = aligned_telemetry_rollup(plans)? {
+        if let Some(rollup) = aligned_namespace_rollup(&rollup_name, plans)? {
             ctx.register_table(
-                TableReference::bare(TELEMETRY_ROLLUP_NAMESPACE),
+                TableReference::bare(rollup_name.clone()),
                 Arc::new(ViewTable::new(rollup, None)),
             )?;
-            names.push(TELEMETRY_ROLLUP_NAMESPACE.to_string());
+            names.push(rollup_name);
         }
     }
     Ok(QueryRegistrations {
@@ -564,7 +549,34 @@ async fn register_query_providers(
     })
 }
 
-fn aligned_telemetry_rollup(sources: Vec<(String, LogicalPlan)>) -> DFResult<Option<LogicalPlan>> {
+fn namespace_rollups(physical_names: &BTreeSet<String>) -> BTreeMap<String, Vec<String>> {
+    let mut parents = BTreeSet::new();
+    for namespace in physical_names {
+        let mut descendant = namespace.as_str();
+        while let Some((parent, _)) = descendant.rsplit_once('.') {
+            parents.insert(parent.to_string());
+            descendant = parent;
+        }
+    }
+
+    parents
+        .into_iter()
+        .map(|parent| {
+            let prefix = format!("{parent}.");
+            let sources = physical_names
+                .iter()
+                .filter(|namespace| **namespace == parent || namespace.starts_with(&prefix))
+                .cloned()
+                .collect::<Vec<_>>();
+            (parent, sources)
+        })
+        .collect()
+}
+
+fn aligned_namespace_rollup(
+    rollup_name: &str,
+    sources: Vec<(String, LogicalPlan)>,
+) -> DFResult<Option<LogicalPlan>> {
     if sources.is_empty() {
         return Ok(None);
     }
@@ -576,11 +588,12 @@ fn aligned_telemetry_rollup(sources: Vec<(String, LogicalPlan)>) -> DFResult<Opt
                 let column = &mut columns[index];
                 if column.data_type != *field.data_type() {
                     tracing::warn!(
+                        rollup = rollup_name,
                         source,
                         column = field.name(),
                         expected = ?column.data_type,
                         actual = ?field.data_type(),
-                        "telemetry rollup disabled because a child column type is incompatible"
+                        "namespace rollup disabled because a child column type is incompatible"
                     );
                     return Ok(None);
                 }
@@ -596,42 +609,31 @@ fn aligned_telemetry_rollup(sources: Vec<(String, LogicalPlan)>) -> DFResult<Opt
         }
     }
 
-    let mut aligned = Vec::with_capacity(sources.len());
-    for (source, plan) in sources {
+    for (source, plan) in &sources {
         if let Some(column) = columns.iter().find(|column| {
             column.required && !plan.schema().has_column_with_unqualified_name(&column.name)
         }) {
             tracing::warn!(
+                rollup = rollup_name,
                 source,
                 column = column.name,
-                "telemetry rollup disabled because a child lacks a required column"
+                "namespace rollup disabled because a child lacks a required column"
             );
             return Ok(None);
         }
-        let expressions = columns
-            .iter()
-            .map(|column| {
-                if plan.schema().has_column_with_unqualified_name(&column.name) {
-                    return Ok(col(&column.name).alias(&column.name));
-                }
-                Ok(lit(ScalarValue::try_new_null(&column.data_type)?).alias(&column.name))
-            })
-            .collect::<DFResult<Vec<_>>>()?;
-        let plan = LogicalPlanBuilder::from(plan)
-            .project(expressions)?
-            .build()?;
-        aligned.push((source, plan));
     }
 
-    let (_, mut rollup) = aligned.remove(0);
-    for (source, child) in aligned {
-        match LogicalPlanBuilder::from(rollup).union(child) {
+    let mut plans = sources.into_iter();
+    let (_, mut rollup) = plans.next().expect("sources is nonempty");
+    for (source, child) in plans {
+        match LogicalPlanBuilder::from(rollup).union_by_name(child) {
             Ok(builder) => rollup = builder.build()?,
             Err(error) => {
                 tracing::warn!(
+                    rollup = rollup_name,
                     source,
                     %error,
-                    "telemetry rollup disabled because aligned child schemas are incompatible"
+                    "namespace rollup disabled because aligned child schemas are incompatible"
                 );
                 return Ok(None);
             }
@@ -741,8 +743,57 @@ pub async fn fetch_log_rows(
 mod tests {
     use super::*;
     use crate::store::ipc::{decode_one_record_batch, encode_ipc};
+    use crate::store::segment::write_segment_to_dir;
     use crate::test_support::unique_dir;
-    use datafusion::arrow::array::Int64Array;
+    use datafusion::arrow::array::{ArrayRef, Int64Array, StringArray};
+
+    fn rollup_provider_with_name_column(
+        name: &str,
+        name_type: DataType,
+        name_column: ArrayRef,
+    ) -> RegisteredProvider {
+        let directory = unique_dir(&format!("rollup_{}", name.replace('.', "_")));
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("timestamp_ms", DataType::Int64, false),
+            Field::new("name", name_type, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![1])), name_column],
+        )
+        .unwrap();
+        let (path, _) = write_segment_to_dir(&directory, 1, 1, &batch).unwrap();
+        RegisteredProvider {
+            name: name.to_string(),
+            provider: NamespaceProvider::build(
+                schema,
+                &[path.to_string_lossy().into_owned()],
+                crate::query::index_cache::test_index_cache(),
+            )
+            .unwrap(),
+        }
+    }
+
+    fn rollup_provider(name: &str, metric_name: &str) -> RegisteredProvider {
+        rollup_provider_with_name_column(
+            name,
+            DataType::Utf8,
+            Arc::new(StringArray::from(vec![metric_name])),
+        )
+    }
+
+    fn incompatible_rollup_provider(name: &str) -> RegisteredProvider {
+        rollup_provider_with_name_column(name, DataType::Int64, Arc::new(Int64Array::from(vec![2])))
+    }
+
+    fn rollup_providers() -> Vec<RegisteredProvider> {
+        vec![
+            rollup_provider("metrics", "legacy"),
+            rollup_provider("metrics.node", "node"),
+            rollup_provider("metrics.training.core", "loss"),
+            rollup_provider("metrics.training.extra", "histogram"),
+        ]
+    }
 
     #[test]
     fn truncate_sql_caps_on_char_boundary() {
@@ -756,6 +807,78 @@ mod tests {
         let out = truncate_sql_for_log(&long);
         assert!(out.ends_with("…[truncated]"));
         assert_eq!(out.chars().filter(|&c| c == '✓').count(), 4000);
+    }
+
+    #[tokio::test]
+    async fn dotted_namespaces_roll_up_under_their_physical_parent() {
+        let result = run_query_over(
+            &make_ctx(),
+            rollup_providers(),
+            "SELECT name FROM metrics ORDER BY name",
+        )
+        .await
+        .unwrap();
+        let batch = &result.batches[0];
+        let names = StringValues::new(batch.column(0)).unwrap();
+        assert_eq!(
+            (0..batch.num_rows())
+                .map(|index| names.value(index))
+                .collect::<Vec<_>>(),
+            ["histogram", "legacy", "loss", "node"]
+        );
+
+        let result = run_query_over(
+            &make_ctx(),
+            rollup_providers(),
+            "SELECT name FROM \"metrics.node\"",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            StringValues::new(result.batches[0].column(0))
+                .unwrap()
+                .value(0),
+            "node"
+        );
+
+        let result = run_query_over(
+            &make_ctx(),
+            rollup_providers(),
+            "SELECT name FROM \"metrics.training\" ORDER BY name",
+        )
+        .await
+        .unwrap();
+        let batch = &result.batches[0];
+        let names = StringValues::new(batch.column(0)).unwrap();
+        assert_eq!(
+            (0..batch.num_rows())
+                .map(|index| names.value(index))
+                .collect::<Vec<_>>(),
+            ["histogram", "loss"]
+        );
+    }
+
+    #[tokio::test]
+    async fn incompatible_child_rejects_only_its_composite_namespace() {
+        let mut providers = rollup_providers();
+        providers.push(incompatible_rollup_provider("metrics.invalid"));
+        let error = match run_query_over(&make_ctx(), providers, "SELECT name FROM metrics").await {
+            Ok(_) => panic!("incompatible child should reject the composite namespace"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("metrics"), "{error}");
+
+        let mut providers = rollup_providers();
+        providers.push(incompatible_rollup_provider("metrics.invalid"));
+        let direct = run_query_over(&make_ctx(), providers, "SELECT name FROM \"metrics.node\"")
+            .await
+            .unwrap();
+        assert_eq!(
+            StringValues::new(direct.batches[0].column(0))
+                .unwrap()
+                .value(0),
+            "node"
+        );
     }
 
     #[test]

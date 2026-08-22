@@ -535,7 +535,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, AVG(value) AS value FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name = 'node_cpu_utilization_percent' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'node_cpu_utilization_percent' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -698,7 +698,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, SUM(CASE WHEN name = 'node_memory_used_bytes' THEN value END) / NULLIF(SUM(CASE WHEN name = 'node_memory_total_bytes' THEN value END), 0) AS value FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name IN ('node_memory_used_bytes', 'node_memory_total_bytes') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, SUM(CASE WHEN name = 'node_memory_used_bytes' THEN value END) / NULLIF(SUM(CASE WHEN name = 'node_memory_total_bytes' THEN value END), 0) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('node_memory_used_bytes', 'node_memory_total_bytes') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -861,7 +861,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, SUM(CASE WHEN name = 'node_disk_used_bytes' THEN value END) / NULLIF(SUM(CASE WHEN name = 'node_disk_total_bytes' THEN value END), 0) AS value FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name IN ('node_disk_used_bytes', 'node_disk_total_bytes') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, SUM(CASE WHEN name = 'node_disk_used_bytes' THEN value END) / NULLIF(SUM(CASE WHEN name = 'node_disk_total_bytes' THEN value END), 0) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('node_disk_used_bytes', 'node_disk_total_bytes') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",

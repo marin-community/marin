@@ -8,10 +8,6 @@ from dataclasses import dataclass
 from rigging import telemetry
 
 
-def _bulk_gauge(name: str, *, unit: str = "") -> telemetry.Gauge:
-    return telemetry.gauge(name, unit=unit, group=telemetry.TelemetryGroup.NODE_AGENT)
-
-
 @dataclass(frozen=True)
 class DeviceMetric:
     """One accelerator measurement with stable device identity."""
@@ -73,9 +69,9 @@ def publish_node_telemetry(target: NodeTarget, metrics: NodeMetrics, timestamp_s
         **node_identity,
         **telemetry.snapshot_attributes(metrics.host_source_kind, telemetry.CURRENT_SNAPSHOT),
     }
-    _bulk_gauge("hardware_source_available").set(float(metrics.host_available), attributes=host_current)
+    telemetry.gauge("hardware_source_available").set(float(metrics.host_available), attributes=host_current)
     if metrics.host_available:
-        _bulk_gauge("progress_time_seconds", unit="s").set(
+        telemetry.gauge("progress_time_seconds", unit="s").set(
             timestamp_seconds,
             attributes={**host_current, "progress_kind": "hardware_source"},
         )
@@ -88,14 +84,16 @@ def publish_node_telemetry(target: NodeTarget, metrics: NodeMetrics, timestamp_s
         )
         for name, value, unit in current_metrics:
             if value is not None:
-                _bulk_gauge(name, unit=unit).set(value, attributes=host_current)
+                telemetry.gauge(name, unit=unit).set(value, attributes=host_current)
         host_cumulative = {
             **node_identity,
             "source_replica_uid": metrics.host_source_replica_uid,
             **telemetry.snapshot_attributes(metrics.host_source_kind, telemetry.CUMULATIVE_SNAPSHOT),
         }
-        _bulk_gauge("node_network_receive_bytes", unit="By").set(metrics.net_recv_bytes or 0, attributes=host_cumulative)
-        _bulk_gauge("node_network_transmit_bytes", unit="By").set(
+        telemetry.gauge("node_network_receive_bytes", unit="By").set(
+            metrics.net_recv_bytes or 0, attributes=host_cumulative
+        )
+        telemetry.gauge("node_network_transmit_bytes", unit="By").set(
             metrics.net_sent_bytes or 0, attributes=host_cumulative
         )
 
@@ -105,9 +103,9 @@ def publish_node_telemetry(target: NodeTarget, metrics: NodeMetrics, timestamp_s
     dcgm_current = {**node_identity, **telemetry.snapshot_attributes("dcgm", telemetry.CURRENT_SNAPSHOT)}
     if metrics.dcgm_exporter_uid:
         dcgm_current["dcgm_exporter_uid"] = metrics.dcgm_exporter_uid
-    _bulk_gauge("hardware_source_available").set(float(metrics.dcgm_available), attributes=dcgm_current)
+    telemetry.gauge("hardware_source_available").set(float(metrics.dcgm_available), attributes=dcgm_current)
     if metrics.dcgm_available:
-        _bulk_gauge("progress_time_seconds", unit="s").set(
+        telemetry.gauge("progress_time_seconds", unit="s").set(
             timestamp_seconds,
             attributes={**dcgm_current, "progress_kind": "hardware_source"},
         )
@@ -122,4 +120,4 @@ def publish_node_telemetry(target: NodeTarget, metrics: NodeMetrics, timestamp_s
             **telemetry.snapshot_attributes("dcgm", metric.temporality),
             **metric.attributes,
         }
-        _bulk_gauge(metric.name, unit=metric.unit).set(metric.value, attributes=attributes)
+        telemetry.gauge(metric.name, unit=metric.unit).set(metric.value, attributes=attributes)

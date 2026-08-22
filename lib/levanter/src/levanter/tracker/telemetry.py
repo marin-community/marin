@@ -22,11 +22,12 @@ from rigging.telemetry.probes import nccl, nccl_client
 from levanter.callbacks.progress_watchdog import ProgressTimeout
 from levanter.tracker import Tracker, TrackerConfig, get_tracker
 from levanter.tracker.histogram import SummaryStats
+from levanter.tracker.tracker import NoopTracker
 
 logger = logging.getLogger(__name__)
 
 _CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
-_CORE_METRICS = frozenset({"train_loss", "step", "phase", "progress_time_seconds", "global_step"})
+_EVERY_STEP_METRICS = frozenset({"train_loss", "step", "phase", "progress_time_seconds", "global_step"})
 _EXTRA_LOG_INTERVAL = 10
 
 
@@ -42,18 +43,10 @@ def _metric_name(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_]", "_", name)
 
 
-def _set(
-    name: str,
-    value: float,
-    *,
-    attributes: dict[str, str] = _CURRENT,
-    group: telemetry.TelemetryGroup = telemetry.TelemetryGroup.LEVANTER_EXTRA,
-) -> None:
-    telemetry.gauge(_metric_name(name), group=group).set(value, attributes=attributes)
-
-
-def _set_core(name: str, value: float, *, attributes: dict[str, str] = _CURRENT) -> None:
-    _set(name, value, attributes=attributes, group=telemetry.TelemetryGroup.LEVANTER_CORE)
+def _set(name: str, value: float, *, attributes: dict[str, str] = _CURRENT) -> None:
+    metric_name = _metric_name(name)
+    group = "levanter.core" if metric_name in _EVERY_STEP_METRICS else None
+    telemetry.gauge(metric_name, group=group).set(value, attributes=attributes)
 
 
 # Keep this well under the reader's enrollment window. Telemetry is best-effort and
@@ -91,7 +84,7 @@ class _PhaseHeartbeat:
             if self._phase == phase:
                 return
             self._phase = phase
-        _set_core("phase", float(phase))
+        _set("phase", float(phase))
 
     def start(self) -> None:
         with self._lock:
@@ -115,7 +108,7 @@ class _PhaseHeartbeat:
             with self._lock:
                 phase = self._phase
             if phase is not None:
-                _set_core("phase", float(phase))
+                _set("phase", float(phase))
 
 
 _HEARTBEAT = _PhaseHeartbeat()
@@ -147,7 +140,7 @@ def _start_nccl_ras_probe() -> nccl.NcclRasSession | None:
             return None
         if jax.default_backend() != "gpu" or jax.process_index() != 0:
             return None
-        return nccl.start(group=telemetry.TelemetryGroup.LEVANTER_EXTRA, interval=_NCCL_RAS_POLL_SECONDS)
+        return nccl.start(interval=_NCCL_RAS_POLL_SECONDS)
     except RuntimeError:
         logger.warning("could not start NCCL RAS telemetry", exc_info=True)
         return None
@@ -173,32 +166,23 @@ class TelemetryTracker(Tracker):
 
     name: str = "telemetry"
 
-    def __init__(self, *, publish_tracker_metrics: bool = True) -> None:
-        self._publish_tracker_metrics = publish_tracker_metrics
+    def __init__(self) -> None:
         self._nccl_ras_probe = _start_nccl_ras_probe()
-        if self._publish_tracker_metrics:
-            _set_core("progress_time_seconds", 0)
-            set_training_phase(TrainingPhase.INITIALIZING)
-            _HEARTBEAT.start()
+        _set("progress_time_seconds", 0)
+        set_training_phase(TrainingPhase.INITIALIZING)
+        _HEARTBEAT.start()
 
     def _publish(self, metrics: Mapping[str, object], *, include_extra: bool) -> None:
-        if not self._publish_tracker_metrics:
-            return
         for key, value in metrics.items():
             metric_name = _metric_name(key)
-            group = (
-                telemetry.TelemetryGroup.LEVANTER_CORE
-                if metric_name in _CORE_METRICS
-                else telemetry.TelemetryGroup.LEVANTER_EXTRA
-            )
-            if group is telemetry.TelemetryGroup.LEVANTER_EXTRA and not include_extra:
+            if metric_name not in _EVERY_STEP_METRICS and not include_extra:
                 continue
             if isinstance(value, SummaryStats):
                 self._publish_summary(key, value)
                 continue
             scalar = _as_scalar(value)
             if scalar is not None:
-                _set(key, scalar, group=group)
+                _set(key, scalar)
 
     def _publish_summary(self, key: str, stats: SummaryStats) -> None:
         """Export a summary's reduced moments as gauges."""
@@ -223,13 +207,11 @@ class TelemetryTracker(Tracker):
         pass
 
     def log(self, metrics, *, step: Optional[int], commit: Optional[bool] = None):
-        if not self._publish_tracker_metrics:
-            return
         if step is not None:
-            _set_core("step", float(step))
+            _set("step", float(step))
             loss = _as_scalar(metrics.get("train/loss"))
             if loss is not None:
-                _set_core("progress_time_seconds", time())
+                _set("progress_time_seconds", time())
                 set_training_phase(TrainingPhase.TRAINING)
         self._publish(metrics, include_extra=step is None or step % _EXTRA_LOG_INTERVAL == 0)
 
@@ -245,8 +227,6 @@ class TelemetryTracker(Tracker):
                 self._nccl_ras_probe.shutdown()
             except Exception:
                 logger.warning("could not stop NCCL RAS telemetry", exc_info=True)
-        if not self._publish_tracker_metrics:
-            return
         set_training_phase(TrainingPhase.FINISHED)
         # The run is over, so there is nothing left to keep enrolled. FINISHED is
         # already published above, and republishing it for the process's remaining
@@ -261,6 +241,10 @@ class TelemetryTracker(Tracker):
             logger.warning("Telemetry did not flush within the stalled-training diagnostic budget")
 
 
+class _NonPublishingTelemetryTracker(NoopTracker):
+    name = "telemetry"
+
+
 @TrackerConfig.register_subclass("telemetry")
 @dataclasses.dataclass
 class TelemetryConfig(TrackerConfig):
@@ -270,7 +254,10 @@ class TelemetryConfig(TrackerConfig):
         process_index = jax.process_index()
         runtime_telemetry.configure(
             "levanter",
+            group="levanter.extra",
             run_id=run_id,
             process_index=process_index,
         )
-        return TelemetryTracker(publish_tracker_metrics=process_index == 0)
+        if process_index == 0:
+            return TelemetryTracker()
+        return _NonPublishingTelemetryTracker()

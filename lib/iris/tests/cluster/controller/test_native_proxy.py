@@ -273,7 +273,7 @@ def test_native_metrics_polling_recovers_after_initial_snapshot_failure(telemetr
                 }
             )
 
-    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="iris-controller")
+    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="iris-controller", group="iris.rpc")
     proxy = cast(NativeProxy, TransientMetricsProxy())
     publisher = NativeProxyTelemetry(interval=0.01)
     publisher.attach(proxy)
@@ -284,9 +284,7 @@ def test_native_metrics_polling_recovers_after_initial_snapshot_failure(telemetr
             labels,
             7,
         )
-        record = telemetry_transport.record("rpc_requests_total", labels)
-        assert record["value"] == 7
-        assert record["group"] == "iris.rpc"
+        assert telemetry_transport.record("rpc_requests_total", labels)["value"] == 7
     finally:
         publisher.detach(proxy)
 
@@ -348,7 +346,7 @@ def test_native_metrics_concurrent_detach_and_reattach_publishes_new_proxy_snaps
                 }
             )
 
-    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="iris-controller")
+    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="iris-controller", group="iris.rpc")
     fake = BlockingMetricsProxy()
     proxy = cast(NativeProxy, fake)
     publisher = NativeProxyTelemetry(interval=0.01)

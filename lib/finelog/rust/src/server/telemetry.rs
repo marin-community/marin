@@ -1,12 +1,11 @@
 //! Bounded JSON telemetry ingestion backed by the ordinary `Store::write_rows` path.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::error::Error;
 use std::future::Future;
 use std::sync::Arc;
 
-use arrow::array::{BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray};
-use arrow::compute::filter_record_batch;
+use arrow::array::{Float64Array, Int32Array, Int64Array, RecordBatch, StringArray};
 use axum::body::{to_bytes, Body};
 use axum::extract::{Request, State};
 use axum::http::header::{ACCEPT_ENCODING, CONTENT_TYPE, RETRY_AFTER};
@@ -26,11 +25,11 @@ use uuid::Uuid;
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::ColumnType;
-use crate::query::TELEMETRY_ROLLUP_NAMESPACE;
 use crate::server::auth::{auth_gate, AuthIdentity, AuthPolicy};
 use crate::server::ingest_health::IngestHealth;
 use crate::store::group_extrema::GroupExtremaConfig;
 use crate::store::ipc::encode_ipc;
+use crate::store::namespace_name::validate_namespace_name;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_to_arrow, Column, CoveringProjection, Schema};
 use crate::store::Store;
@@ -38,7 +37,8 @@ use crate::store::Store;
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 8;
 pub const DEFAULT_DEDUPE_CAPACITY: usize = 10_000;
 
-pub(crate) const TELEMETRY_NAMESPACE: &str = TELEMETRY_ROLLUP_NAMESPACE;
+pub(crate) const TELEMETRY_NAMESPACE: &str = "telemetry_v1";
+const TELEMETRY_NAMESPACE_PREFIX: &str = "telemetry_v1.";
 const GIBIBYTE: i64 = 1024 * 1024 * 1024;
 const MAX_BODY_BYTES: usize = 4 << 20;
 const MAX_NORMALIZED_BYTES: usize = 16 << 20;
@@ -57,6 +57,10 @@ const REGION_COLUMN: &str = "region";
 const NODE_NAME_COLUMN: &str = "node_name";
 const PROCESS_INDEX_COLUMN: &str = "process_index";
 const PRIMARY_PROCESS_INDEX: &str = "0";
+
+pub(crate) fn is_telemetry_namespace(namespace: &str) -> bool {
+    namespace == TELEMETRY_NAMESPACE || namespace.starts_with(TELEMETRY_NAMESPACE_PREFIX)
+}
 const TRAINING_STATUS_NAMES: [&str; 3] = ["phase", "progress_time_seconds", "step"];
 const TRAINING_LOSS_NAMES: [&str; 1] = ["train_loss"];
 const TRAINING_RUN_NAMES: [&str; 1] = ["global_step"];
@@ -102,6 +106,8 @@ const DEVICE_METRIC_PROJECTION_COLUMNS: [&str; 7] = [
 struct TelemetryBatch {
     version: u32,
     batch_id: String,
+    #[serde(default)]
+    namespace: Option<String>,
     resource: Resource,
     records: Vec<TelemetryRecord>,
 }
@@ -185,59 +191,6 @@ enum RecordKind {
     Event,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-enum TelemetryGroup {
-    #[serde(rename = "node_agent")]
-    NodeAgent,
-    #[serde(rename = "levanter.core")]
-    LevanterCore,
-    #[serde(rename = "levanter.extra")]
-    LevanterExtra,
-    #[serde(rename = "iris.rpc")]
-    IrisRpc,
-    #[serde(rename = "vllm")]
-    Vllm,
-    #[serde(rename = "zephyr.core")]
-    ZephyrCore,
-    #[serde(rename = "zephyr.extra")]
-    ZephyrExtra,
-}
-
-impl TelemetryGroup {
-    fn namespace(self) -> &'static str {
-        match self {
-            Self::NodeAgent => "telemetry_v1.node_agent",
-            Self::LevanterCore => "telemetry_v1.levanter.core",
-            Self::LevanterExtra => "telemetry_v1.levanter.extra",
-            Self::IrisRpc => "telemetry_v1.iris.rpc",
-            Self::Vllm => "telemetry_v1.vllm",
-            Self::ZephyrCore => "telemetry_v1.zephyr.core",
-            Self::ZephyrExtra => "telemetry_v1.zephyr.extra",
-        }
-    }
-
-    fn max_bytes(self) -> i64 {
-        match self {
-            Self::NodeAgent => 10 * GIBIBYTE,
-            Self::LevanterCore => 20 * GIBIBYTE,
-            Self::LevanterExtra => 10 * GIBIBYTE,
-            Self::IrisRpc => 2 * GIBIBYTE,
-            Self::Vllm => 6 * GIBIBYTE,
-            Self::ZephyrCore | Self::ZephyrExtra => GIBIBYTE,
-        }
-    }
-
-    const ALL: [Self; 7] = [
-        Self::NodeAgent,
-        Self::LevanterCore,
-        Self::LevanterExtra,
-        Self::IrisRpc,
-        Self::Vllm,
-        Self::ZephyrCore,
-        Self::ZephyrExtra,
-    ];
-}
-
 impl RecordKind {
     fn as_str(self) -> &'static str {
         match self {
@@ -263,8 +216,6 @@ struct TelemetryRecord {
     unit: Option<String>,
     #[serde(default)]
     attributes: BTreeMap<String, String>,
-    #[serde(default)]
-    group: Option<TelemetryGroup>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -351,8 +302,7 @@ impl IntoResponse for ApiError {
 #[derive(Clone)]
 struct CachedBatch {
     digest: [u8; 32],
-    ack: Option<TelemetryAck>,
-    completed_namespaces: BTreeSet<&'static str>,
+    ack: TelemetryAck,
 }
 
 struct DedupeCache {
@@ -370,63 +320,30 @@ impl DedupeCache {
         }
     }
 
-    fn begin(
-        &mut self,
-        batch_id: Uuid,
-        digest: [u8; 32],
-    ) -> Result<Option<TelemetryAck>, ApiError> {
-        if let Some(cached) = self.entries.get(&batch_id) {
-            if cached.digest != digest {
-                return Err(ApiError::new(
-                    StatusCode::CONFLICT,
-                    "idempotency_conflict",
-                    "batch_id was already used with different content",
-                ));
-            }
-            let Some(mut ack) = cached.ack.clone() else {
-                return Ok(None);
-            };
-            ack.deduplicated = true;
-            return Ok(Some(ack));
+    fn get(&self, batch_id: &Uuid, digest: &[u8; 32]) -> Result<Option<TelemetryAck>, ApiError> {
+        let Some(cached) = self.entries.get(batch_id) else {
+            return Ok(None);
+        };
+        if cached.digest != *digest {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "idempotency_conflict",
+                "batch_id was already used with different content",
+            ));
         }
+        let mut ack = cached.ack.clone();
+        ack.deduplicated = true;
+        Ok(Some(ack))
+    }
+
+    fn insert(&mut self, batch_id: Uuid, batch: CachedBatch) {
         while self.entries.len() >= self.capacity {
             if let Some(oldest) = self.order.pop_front() {
                 self.entries.remove(&oldest);
             }
         }
         self.order.push_back(batch_id);
-        self.entries.insert(
-            batch_id,
-            CachedBatch {
-                digest,
-                ack: None,
-                completed_namespaces: BTreeSet::new(),
-            },
-        );
-        Ok(None)
-    }
-
-    fn is_complete(&self, batch_id: &Uuid, namespace: &'static str) -> bool {
-        self.entries
-            .get(batch_id)
-            .expect("batch is inserted before writes")
-            .completed_namespaces
-            .contains(namespace)
-    }
-
-    fn mark_complete(&mut self, batch_id: &Uuid, namespace: &'static str) {
-        self.entries
-            .get_mut(batch_id)
-            .expect("batch is inserted before writes")
-            .completed_namespaces
-            .insert(namespace);
-    }
-
-    fn finish(&mut self, batch_id: &Uuid, ack: TelemetryAck) {
-        self.entries
-            .get_mut(batch_id)
-            .expect("batch is inserted before acknowledgement")
-            .ack = Some(ack);
+        self.entries.insert(batch_id, batch);
     }
 }
 
@@ -434,7 +351,7 @@ struct TelemetryState {
     store: Arc<Store>,
     admission: Arc<Semaphore>,
     dedupe: Mutex<DedupeCache>,
-    namespace_registration: OnceCell<()>,
+    namespace_registrations: Mutex<HashMap<String, Arc<OnceCell<()>>>>,
     health: Arc<IngestHealth>,
 }
 
@@ -442,70 +359,73 @@ struct PreparedBatch {
     batch_id: Uuid,
     batch_id_text: String,
     digest: [u8; 32],
-    writes: Vec<PreparedWrite>,
+    namespace: String,
+    ipc: Vec<u8>,
     record_count: usize,
 }
 
-struct PreparedWrite {
-    namespace: &'static str,
-    ipc: Vec<u8>,
-}
-
 impl TelemetryState {
-    async fn ensure_namespace_registered(&self) -> Result<(), ApiError> {
-        let result = self
-            .namespace_registration
+    async fn ensure_namespace_registered(&self, namespace: &str) -> Result<(), ApiError> {
+        let registration = {
+            let mut registrations = self.namespace_registrations.lock().await;
+            Arc::clone(
+                registrations
+                    .entry(namespace.to_string())
+                    .or_insert_with(|| Arc::new(OnceCell::new())),
+            )
+        };
+        self.health.declare_owned(namespace);
+        let result = registration
             .get_or_try_init(|| async {
                 let store = Arc::clone(&self.store);
+                let namespace = namespace.to_string();
+                let registered_namespace = namespace.clone();
                 match tokio::task::spawn_blocking(move || {
-                    // The rollup reads this physical source alongside semantic
-                    // children; HTTP ingest writes only to the children.
-                    store.register_table(
-                        TELEMETRY_NAMESPACE,
-                        telemetry_schema(),
+                    let policy = if namespace == TELEMETRY_NAMESPACE {
                         StoragePolicy {
                             max_bytes: Some(50 * GIBIBYTE),
                             ..StoragePolicy::default()
-                        },
-                    )?;
-                    for group in TelemetryGroup::ALL {
-                        store.register_table(
-                            group.namespace(),
-                            telemetry_schema(),
-                            StoragePolicy {
-                                max_bytes: Some(group.max_bytes()),
-                                ..StoragePolicy::default()
-                            },
-                        )?;
-                    }
-                    Ok::<(), StatsError>(())
+                        }
+                    } else {
+                        StoragePolicy::default()
+                    };
+                    store.register_table(&namespace, telemetry_schema(), policy)
                 })
                 .await
                 {
                     Ok(Ok(_)) => {
-                        self.health.record_registered(TELEMETRY_NAMESPACE);
-                        for group in TelemetryGroup::ALL {
-                            self.health.record_registered(group.namespace());
-                        }
+                        self.health.record_registered(&registered_namespace);
                         Ok(())
                     }
-                    Ok(Err(error)) => Err(error.to_string()),
-                    Err(join) => Err(format!("telemetry namespace task failed: {join}")),
+                    Ok(Err(error)) => Err(registration_error(&registered_namespace, error)),
+                    Err(join) => Err(ApiError::new(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "storage_unavailable",
+                        format!("telemetry namespace task failed: {join}"),
+                    )),
                 }
             })
             .await;
-        result.map_err(|error| {
-            self.health.record_failure(TELEMETRY_NAMESPACE, &error);
-            for group in TelemetryGroup::ALL {
-                self.health.record_failure(group.namespace(), &error);
-            }
-            ApiError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "storage_unavailable",
-                format!("telemetry namespaces are unavailable: {error}"),
-            )
-        })?;
+        if let Err(error) = result {
+            self.health.record_failure(namespace, &error.message);
+            return Err(error);
+        }
         Ok(())
+    }
+}
+
+fn registration_error(namespace: &str, error: StatsError) -> ApiError {
+    match error {
+        StatsError::SchemaConflict(message)
+        | StatsError::SchemaValidation(message)
+        | StatsError::InvalidNamespace(message) => ApiError::bad_request(format!(
+            "telemetry namespace {namespace:?} is incompatible: {message}"
+        )),
+        error => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "storage_unavailable",
+            format!("telemetry namespace {namespace:?} is unavailable: {error}"),
+        ),
     }
 }
 
@@ -519,14 +439,11 @@ pub fn router(
     health: Arc<IngestHealth>,
 ) -> Router {
     health.declare_owned(TELEMETRY_NAMESPACE);
-    for group in TelemetryGroup::ALL {
-        health.declare_owned(group.namespace());
-    }
     let state = Arc::new(TelemetryState {
         store,
         admission: Arc::new(Semaphore::new(max_concurrent)),
         dedupe: Mutex::new(DedupeCache::new(dedupe_capacity)),
-        namespace_registration: OnceCell::new(),
+        namespace_registrations: Mutex::new(HashMap::new()),
         health,
     });
     // The schema is server-owned, so apply additive index-policy evolution at
@@ -535,7 +452,10 @@ pub fn router(
     // and wait for this same registration if they arrive while it is running.
     let startup_registration = Arc::clone(&state);
     tokio::spawn(async move {
-        if let Err(error) = startup_registration.ensure_namespace_registered().await {
+        if let Err(error) = startup_registration
+            .ensure_namespace_registered(TELEMETRY_NAMESPACE)
+            .await
+        {
             tracing::warn!(error = %error.message, "telemetry namespace startup registration failed");
         }
     });
@@ -563,7 +483,6 @@ async fn post_telemetry(
                 "too many telemetry requests are active",
             )
         })?;
-    state.ensure_namespace_registered().await?;
     let batch_id_header = required_header(request.headers(), "idempotency-key", 64)?;
     let content_type = required_header(request.headers(), CONTENT_TYPE.as_str(), 128)?;
     if content_type
@@ -624,36 +543,32 @@ async fn complete_request(
                 format!("telemetry normalization task failed: {join}"),
             )
         })??;
+    state
+        .ensure_namespace_registered(&prepared.namespace)
+        .await?;
 
     // Holding this small process-local mutex through the append makes concurrent
     // same-ID requests share one decision. It is not durable state and vanishes
     // on restart by design.
     let mut dedupe = state.dedupe.lock().await;
-    if let Some(ack) = dedupe.begin(prepared.batch_id, prepared.digest)? {
+    if let Some(ack) = dedupe.get(&prepared.batch_id, &prepared.digest)? {
         return Ok(ack);
     }
-    for write in prepared.writes {
-        if dedupe.is_complete(&prepared.batch_id, write.namespace) {
-            continue;
-        }
-        let store = Arc::clone(&state.store);
-        let namespace = write.namespace;
-        let ipc = write.ipc;
-        let origin_cluster = origin_cluster.clone();
-        tokio::task::spawn_blocking(move || {
-            store.write_rows(namespace, &ipc, origin_cluster.as_deref())
-        })
-        .await
-        .map_err(|join| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                ERROR_CODE_INTERNAL,
-                format!("telemetry storage task failed: {join}"),
-            )
-        })?
-        .map_err(store_error)?;
-        dedupe.mark_complete(&prepared.batch_id, namespace);
-    }
+    let store = Arc::clone(&state.store);
+    let namespace = prepared.namespace;
+    let ipc = prepared.ipc;
+    tokio::task::spawn_blocking(move || {
+        store.write_rows(&namespace, &ipc, origin_cluster.as_deref())
+    })
+    .await
+    .map_err(|join| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ERROR_CODE_INTERNAL,
+            format!("telemetry storage task failed: {join}"),
+        )
+    })?
+    .map_err(store_error)?;
 
     let ack = TelemetryAck {
         version: TELEMETRY_VERSION,
@@ -662,7 +577,13 @@ async fn complete_request(
         deduplicated: false,
         record_count: prepared.record_count,
     };
-    dedupe.finish(&prepared.batch_id, ack.clone());
+    dedupe.insert(
+        prepared.batch_id,
+        CachedBatch {
+            digest: prepared.digest,
+            ack: ack.clone(),
+        },
+    );
     Ok(ack)
 }
 
@@ -708,15 +629,40 @@ fn prepare_batch(idempotency_key: &str, body: &[u8]) -> Result<PreparedBatch, Ap
             "Idempotency-Key must equal the body batch_id",
         ));
     }
+    let namespace = batch
+        .namespace
+        .clone()
+        .unwrap_or_else(|| TELEMETRY_NAMESPACE.to_string());
+    validate_telemetry_namespace(&namespace)?;
     validate_batch(&batch)?;
-    let writes = normalize_batch(&batch)?;
+    let ipc = normalize_batch(&batch)?;
     Ok(PreparedBatch {
         batch_id: body_id,
         batch_id_text: batch.batch_id,
         digest: Sha256::digest(body).into(),
-        writes,
+        namespace,
+        ipc,
         record_count: batch.records.len(),
     })
+}
+
+fn validate_telemetry_namespace(namespace: &str) -> Result<(), ApiError> {
+    validate_namespace_name(namespace, None)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    if !is_telemetry_namespace(namespace) {
+        return Err(ApiError::bad_request(format!(
+            "namespace must be {TELEMETRY_NAMESPACE:?} or one of its descendants"
+        )));
+    }
+    let Some(suffix) = namespace.strip_prefix(TELEMETRY_NAMESPACE_PREFIX) else {
+        return Ok(());
+    };
+    if suffix.split('.').any(str::is_empty) {
+        return Err(ApiError::bad_request(
+            "telemetry namespace components must not be empty",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_batch(batch: &TelemetryBatch) -> Result<(), ApiError> {
@@ -834,7 +780,7 @@ fn validate_json(root: &Value, record_index: usize) -> Result<(), ApiError> {
     Ok(())
 }
 
-fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<PreparedWrite>, ApiError> {
+fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<u8>, ApiError> {
     let resource_attributes = serde_json::to_string(&batch.resource.normalized_attributes())
         .map_err(|error| ApiError::bad_request(format!("invalid resource attributes: {error}")))?;
     let mut kinds = Vec::with_capacity(batch.records.len());
@@ -933,40 +879,13 @@ fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<PreparedWrite>, ApiErro
         ],
     )
     .map_err(|error| ApiError::bad_request(format!("could not normalize telemetry: {error}")))?;
-    let targets = std::iter::once((TELEMETRY_NAMESPACE, None)).chain(
-        TelemetryGroup::ALL
-            .into_iter()
-            .map(|group| (group.namespace(), Some(group))),
-    );
-    let mut writes = Vec::with_capacity(TelemetryGroup::ALL.len() + 1);
-    for (namespace, group) in targets {
-        let mask = BooleanArray::from(
-            batch
-                .records
-                .iter()
-                .map(|record| record.group == group)
-                .collect::<Vec<_>>(),
-        );
-        let selected = filter_record_batch(&record_batch, &mask).map_err(|error| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                ERROR_CODE_INTERNAL,
-                format!("could not group telemetry: {error}"),
-            )
-        })?;
-        if selected.num_rows() == 0 {
-            continue;
-        }
-        let ipc = encode_ipc(&arrow_schema, &[selected]).map_err(|error| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                ERROR_CODE_INTERNAL,
-                format!("could not encode telemetry: {error}"),
-            )
-        })?;
-        writes.push(PreparedWrite { namespace, ipc });
-    }
-    Ok(writes)
+    encode_ipc(&arrow_schema, &[record_batch]).map_err(|error| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ERROR_CODE_INTERNAL,
+            format!("could not encode telemetry: {error}"),
+        )
+    })
 }
 
 pub(crate) fn telemetry_schema() -> Schema {

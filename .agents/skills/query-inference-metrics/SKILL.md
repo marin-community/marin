@@ -5,7 +5,7 @@ description: Investigate a vLLM serve's performance (throughput, TTFT/TPOT laten
 
 # Query inference telemetry
 
-Native vLLM `/metrics` snapshots are exported directly to Finelog every 60 seconds with `service = 'vllm'`. They land in `telemetry_v1.vllm`; the redundant `vllm:` metric prefix is removed.
+Native vLLM `/metrics` snapshots are exported directly to Finelog every 60 seconds with `service = 'vllm'`. They land in `telemetry_v1`; the redundant `vllm:` metric prefix is removed.
 
 Run SQL from a Marin checkout:
 
@@ -39,7 +39,7 @@ WITH base AS (
   SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
          service, name, resource_attributes_json, attributes_json,
          timestamp_ms, seq, value
-  FROM "telemetry_v1.vllm"
+  FROM "telemetry_v1"
   WHERE service = 'vllm'
     AND name = 'generation_tokens_total'
     AND json_get(attributes_json, 'source_temporality') = 'cumulative_snapshot'
@@ -77,7 +77,7 @@ First list the signals for one job:
 
 ```sql
 SELECT name, json_get(attributes_json, 'source_kind') AS source_kind, COUNT(*) AS samples
-FROM "telemetry_v1.vllm"
+FROM "telemetry_v1"
 WHERE service = 'vllm'
   AND json_get(resource_attributes_json, 'job_id') = '/held/qwen3-evals-otbl-full-r2'
 GROUP BY 1, 2 ORDER BY 1
@@ -90,7 +90,7 @@ WITH lifetime_base AS (
   SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
          service, name, resource_attributes_json, attributes_json,
          timestamp_ms, seq, value
-  FROM "telemetry_v1.vllm"
+  FROM "telemetry_v1"
   WHERE service = 'vllm'
     AND json_get(resource_attributes_json, 'job_id') = '/held/qwen3-evals-otbl-full-r2'
     AND json_get(attributes_json, 'source_temporality') = 'cumulative_snapshot'
@@ -121,7 +121,7 @@ For `current_snapshot` saturation gauges, inspect peaks and averages rather than
 
 ```sql
 SELECT name, ROUND(MAX(value), 3) AS peak, ROUND(AVG(value), 3) AS average
-FROM "telemetry_v1.vllm"
+FROM "telemetry_v1"
 WHERE service = 'vllm'
   AND json_get(resource_attributes_json, 'job_id') = '/held/qwen3-evals-otbl-full-r2'
   AND name IN ('num_requests_running', 'num_requests_waiting', 'kv_cache_usage_perc')

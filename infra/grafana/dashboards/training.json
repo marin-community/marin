@@ -160,7 +160,7 @@
       "id": 1,
       "type": "stat",
       "title": "Run status",
-      "description": "Where the run is right now. The window is a fixed fifteen minutes; the dashboard time range does not reach this panel. One query serves every tile through the telemetry_v1 rollup. Time since last step is the stall alert's own input, the age of the wall-clock stamp Levanter writes after each completed step. Sample age is the age of any telemetry from the run, so the two together separate a stalled trainer from a broken telemetry path.",
+      "description": "Where the run is right now. The window is a fixed fifteen minutes; the dashboard time range does not reach this panel. One query serves every tile, because a telemetry_v1 scan costs what its window costs whatever it selects, and ten stat panels would cost ten scans. Time since last step is the stall alert's own input, the age of the wall-clock stamp Levanter writes after each completed step. Sample age is the age of any telemetry from the run, so the two together separate a stalled trainer from a broken telemetry path.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -370,7 +370,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT MAX(CASE WHEN name = 'phase' THEN value END) AS phase, MAX(CASE WHEN name = 'step' THEN value END) AS step, MAX(CASE WHEN name = 'run_progress' THEN value END) AS progress, (CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) - CAST(MAX(CASE WHEN name = 'progress_time_seconds' THEN value END) * 1000 AS BIGINT)) / 1000.0 AS since_last_step, AVG(CASE WHEN name = 'throughput_duration' THEN value END) AS step_time, AVG(CASE WHEN name = 'throughput_mfu' THEN value END) AS mfu, AVG(CASE WHEN name = 'throughput_tokens_per_second' THEN value END) AS tokens_per_second, MAX(CASE WHEN name = 'throughput_total_tokens' THEN value END) AS total_tokens, AVG(CASE WHEN name = 'train_loss' THEN value END) AS train_loss, (CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) - MAX(timestamp_ms)) / 1000.0 AS sample_age_seconds FROM \"telemetry_v1\" AS telemetry WHERE service = 'levanter' AND name IN ('phase', 'step', 'run_progress', 'progress_time_seconds', 'throughput_duration', 'throughput_mfu', 'throughput_tokens_per_second', 'throughput_total_tokens', 'train_loss') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)"
+                "value": "SELECT MAX(CASE WHEN name = 'phase' THEN value END) AS phase, MAX(CASE WHEN name = 'step' THEN value END) AS step, MAX(CASE WHEN name = 'run_progress' THEN value END) AS progress, (CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) - CAST(MAX(CASE WHEN name = 'progress_time_seconds' THEN value END) * 1000 AS BIGINT)) / 1000.0 AS since_last_step, AVG(CASE WHEN name = 'throughput_duration' THEN value END) AS step_time, AVG(CASE WHEN name = 'throughput_mfu' THEN value END) AS mfu, AVG(CASE WHEN name = 'throughput_tokens_per_second' THEN value END) AS tokens_per_second, MAX(CASE WHEN name = 'throughput_total_tokens' THEN value END) AS total_tokens, AVG(CASE WHEN name = 'train_loss' THEN value END) AS train_loss, (CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) - MAX(timestamp_ms)) / 1000.0 AS sample_age_seconds FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('phase', 'step', 'run_progress', 'progress_time_seconds', 'throughput_duration', 'throughput_mfu', 'throughput_tokens_per_second', 'throughput_total_tokens', 'train_loss') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)"
               },
               {
                 "key": "from",
@@ -493,7 +493,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, execution_uid AS series, AVG(value) AS train_loss FROM \"telemetry_v1\" WHERE service = 'levanter' AND name = 'train_loss' AND run_id IN (${run:sqlstring}) AND execution_uid IS NOT NULL AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1, 2"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, execution_uid AS series, AVG(value) AS train_loss FROM \"telemetry_v1\" WHERE service = 'levanter' AND name = 'train_loss' AND run_id IN (${run:sqlstring}) AND execution_uid IS NOT NULL AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -720,7 +720,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, MAX(CASE WHEN name = 'train_loss' THEN value END) AS peak_loss, AVG(CASE WHEN name = 'optim_skip_step_loss_threshold' THEN value END) AS reject_threshold, SUM(CASE WHEN name = 'optim_skipped_step' THEN value END) AS skipped_steps FROM \"telemetry_v1\" AS telemetry WHERE service = 'levanter' AND name IN ('train_loss', 'optim_skip_step_loss_threshold', 'optim_skipped_step') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, MAX(CASE WHEN name = 'train_loss' THEN value END) AS peak_loss, AVG(CASE WHEN name = 'optim_skip_step_loss_threshold' THEN value END) AS reject_threshold, SUM(CASE WHEN name = 'optim_skipped_step' THEN value END) AS skipped_steps FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('train_loss', 'optim_skip_step_loss_threshold', 'optim_skipped_step') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -834,7 +834,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'throughput_duration' THEN value END) AS step, MAX(CASE WHEN name = 'throughput_duration' THEN value END) AS slowest, AVG(CASE WHEN name = 'throughput_loading_time' THEN value END) AS loading, AVG(CASE WHEN name = 'throughput_hook_time' THEN value END) AS hooks FROM \"telemetry_v1.levanter.extra\" WHERE service = 'levanter' AND name IN ('throughput_duration', 'throughput_loading_time', 'throughput_hook_time') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'throughput_duration' THEN value END) AS step, MAX(CASE WHEN name = 'throughput_duration' THEN value END) AS slowest, AVG(CASE WHEN name = 'throughput_loading_time' THEN value END) AS loading, AVG(CASE WHEN name = 'throughput_hook_time' THEN value END) AS hooks FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('throughput_duration', 'throughput_loading_time', 'throughput_hook_time') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -947,7 +947,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'throughput_mfu' THEN value END) AS mfu, AVG(CASE WHEN name = 'throughput_tokens_per_second' THEN value END) AS tokens_per_second FROM \"telemetry_v1.levanter.extra\" WHERE service = 'levanter' AND name IN ('throughput_mfu', 'throughput_tokens_per_second') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'throughput_mfu' THEN value END) AS mfu, AVG(CASE WHEN name = 'throughput_tokens_per_second' THEN value END) AS tokens_per_second FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('throughput_mfu', 'throughput_tokens_per_second') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -1050,7 +1050,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, MAX(CASE WHEN name = 'run_progress' THEN value END) AS progress, MAX(CASE WHEN name = 'throughput_total_tokens' THEN value END) AS total_tokens FROM \"telemetry_v1.levanter.extra\" WHERE service = 'levanter' AND name IN ('run_progress', 'throughput_total_tokens') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, MAX(CASE WHEN name = 'run_progress' THEN value END) AS progress, MAX(CASE WHEN name = 'throughput_total_tokens' THEN value END) AS total_tokens FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('run_progress', 'throughput_total_tokens') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -1149,7 +1149,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'grad_norm_total' THEN value END) AS grad_norm, AVG(CASE WHEN name = 'optim_learning_rate' THEN value END) AS learning_rate FROM \"telemetry_v1.levanter.extra\" WHERE service = 'levanter' AND name IN ('grad_norm_total', 'optim_learning_rate') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'grad_norm_total' THEN value END) AS grad_norm, AVG(CASE WHEN name = 'optim_learning_rate' THEN value END) AS learning_rate FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('grad_norm_total', 'optim_learning_rate') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -1235,7 +1235,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, name AS series, AVG(value) AS value FROM \"telemetry_v1.levanter.extra\" WHERE service = 'levanter' AND name IN ('eval_loss', 'eval_macro_loss', 'eval_paloma_macro_loss') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, name AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('eval_loss', 'eval_macro_loss', 'eval_paloma_macro_loss') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -1347,7 +1347,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'memory_in_use_gib' THEN value END) AS in_use, MAX(CASE WHEN name = 'memory_peak_gib' THEN value END) AS peak, MAX(CASE WHEN name = 'memory_limit_gib' THEN value END) AS limit_gib FROM \"telemetry_v1.levanter.extra\" WHERE service = 'levanter' AND name IN ('memory_in_use_gib', 'memory_peak_gib', 'memory_limit_gib') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'memory_in_use_gib' THEN value END) AS in_use, MAX(CASE WHEN name = 'memory_peak_gib' THEN value END) AS peak, MAX(CASE WHEN name = 'memory_limit_gib' THEN value END) AS limit_gib FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('memory_in_use_gib', 'memory_peak_gib', 'memory_limit_gib') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -1718,7 +1718,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'moe_drop_fraction' THEN value END) AS drop_fraction, AVG(CASE WHEN name = 'moe_sender_drop_fraction' THEN value END) AS sender_drop_fraction, AVG(CASE WHEN name = 'moe_receiver_drop_fraction' THEN value END) AS receiver_drop_fraction, CAST(0.07 AS DOUBLE) AS alert_threshold FROM \"telemetry_v1.levanter.extra\" WHERE service = 'levanter' AND name IN ('moe_drop_fraction', 'moe_sender_drop_fraction', 'moe_receiver_drop_fraction') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'moe_drop_fraction' THEN value END) AS drop_fraction, AVG(CASE WHEN name = 'moe_sender_drop_fraction' THEN value END) AS sender_drop_fraction, AVG(CASE WHEN name = 'moe_receiver_drop_fraction' THEN value END) AS receiver_drop_fraction, CAST(0.07 AS DOUBLE) AS alert_threshold FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('moe_drop_fraction', 'moe_sender_drop_fraction', 'moe_receiver_drop_fraction') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -1921,7 +1921,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'train_router_routing_entropy_mean' THEN value END) AS routing_entropy, MAX(CASE WHEN name = 'train_router_bias_max' THEN value END) AS router_bias_max, MIN(CASE WHEN name = 'train_router_bias_min' THEN value END) AS router_bias_min, CAST(5.92 AS DOUBLE) AS entropy_minimum, CAST(400.0 AS DOUBLE) AS bias_upper_limit, CAST(-400.0 AS DOUBLE) AS bias_lower_limit FROM \"telemetry_v1.levanter.extra\" WHERE service = 'levanter' AND name IN ('train_router_routing_entropy_mean', 'train_router_bias_max', 'train_router_bias_min') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'train_router_routing_entropy_mean' THEN value END) AS routing_entropy, MAX(CASE WHEN name = 'train_router_bias_max' THEN value END) AS router_bias_max, MIN(CASE WHEN name = 'train_router_bias_min' THEN value END) AS router_bias_min, CAST(5.92 AS DOUBLE) AS entropy_minimum, CAST(400.0 AS DOUBLE) AS bias_upper_limit, CAST(-400.0 AS DOUBLE) AS bias_lower_limit FROM \"telemetry_v1\" WHERE service = 'levanter' AND name IN ('train_router_routing_entropy_mean', 'train_router_bias_max', 'train_router_bias_min') AND run_id IN (${run:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
               },
               {
                 "key": "from",

@@ -564,7 +564,7 @@ def test_telemetry_queries_bound_their_window_with_foldable_macros():
     unbounded: list[tuple[str, str]] = []
     for name, dashboard in _stitched_dashboards().items():
         for sql in _panel_sql(dashboard):
-            if '"telemetry_v1' not in sql:
+            if '"telemetry_v1"' not in sql:
                 continue
             if "timestamp_ms >= CAST(EXTRACT(EPOCH FROM" not in sql:
                 unbounded.append((name, sql))
@@ -859,7 +859,7 @@ def test_training_moe_health_queries_show_routing_signals():
     database.execute("CREATE MACRO date_bin(bucket, value) AS time_bucket(bucket, value)")
     database.execute(
         """
-        CREATE TABLE "telemetry_v1.levanter.extra"(
+        CREATE TABLE telemetry_v1(
             service VARCHAR,
             run_id VARCHAR,
             name VARCHAR,
@@ -870,7 +870,7 @@ def test_training_moe_health_queries_show_routing_signals():
     )
     at = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
-        "INSERT INTO \"telemetry_v1.levanter.extra\" VALUES ('levanter', 'hero-run', ?, ?, ?)",
+        "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, ?, ?)",
         [
             ("moe_drop_fraction", 0.04, at),
             ("moe_sender_drop_fraction", 0.03, at),

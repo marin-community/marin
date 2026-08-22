@@ -73,7 +73,7 @@ def _database(rows: list[TelemetryRow]) -> duckdb.DuckDBPyConnection:
     database = duckdb.connect()
     database.execute(
         """
-        CREATE TABLE "telemetry_v1.vllm"(
+        CREATE TABLE telemetry_v1(
             cluster VARCHAR,
             service VARCHAR,
             job_id VARCHAR,
@@ -94,7 +94,7 @@ def _database(rows: list[TelemetryRow]) -> duckdb.DuckDBPyConnection:
     )
     if rows:
         database.executemany(
-            'INSERT INTO "telemetry_v1.vllm" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            "INSERT INTO telemetry_v1 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [(*row, seq) for seq, row in enumerate(rows)],
         )
     return database

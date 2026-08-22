@@ -63,7 +63,12 @@ def reset_telemetry() -> Iterator[None]:
 def _transport(monkeypatch: pytest.MonkeyPatch) -> RecordingTelemetryTransport:
     transport = RecordingTelemetryTransport()
     monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
-    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="vllm", attributes={"job_id": "/serve"})
+    telemetry.configure(
+        endpoint="http://finelog/v1/telemetry",
+        service="vllm",
+        group="vllm",
+        attributes={"job_id": "/serve"},
+    )
     return transport
 
 
@@ -76,10 +81,8 @@ def _collector(
         metric_source="vllm",
         scraper=PrometheusScraper("http://vllm/metrics"),
         processor=processor,
-        group=telemetry.TelemetryGroup.VLLM,
         publisher=metrics.MetricSnapshotPublisher(
             max_records=max_records,
-            group=telemetry.TelemetryGroup.VLLM,
             attributes={"metric_source": "vllm"},
         ),
     )

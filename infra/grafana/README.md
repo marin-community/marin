@@ -278,10 +278,7 @@ job it is that job's queue over time.
 
 `training.json` shows whether one run is on track. `runs.json` compares runs. The
 single-value selector puts the newest hero run first. It uses `run_id` across
-clusters. Core training signals such as loss, step, and phase live in
-`telemetry_v1.levanter.core`; detailed training metrics live in
-`telemetry_v1.levanter.extra`. The status strip reads the `telemetry_v1` rollup
-because its fields span both children.
+clusters. The status strip uses one 15-minute `telemetry_v1` query for ten fields.
 It includes the two hero alert inputs: time since the last completed step and
 train loss. It also includes step time, throughput, schedule progress, and token
 count.
@@ -674,7 +671,7 @@ Four things about the data will bite you:
   fails to parse. Qualifying or wrapping it is enough for the parser, but panels
   always write `"cluster"`, and a test rejects every other spelling so nobody has
   to remember which positions are safe.
-- **Bound every telemetry query, and fold the boundary.** Write
+- **Bound every `telemetry_v1` query, and fold the boundary.** Write
   `timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT)`, never
   `timestamp_ms >= {{from}}`, which cannot prune segments. A test asserts that no
   panel is exempt. An unbounded scan is both slow and a lie about coverage: on

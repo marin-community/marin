@@ -69,6 +69,7 @@ def _execution_uid(job_info: JobInfo) -> str:
 def configure(
     service: str,
     *,
+    group: str,
     run_id: str | None = None,
     execution_uid: str | None = None,
     process_index: int | None = None,
@@ -92,7 +93,12 @@ def configure(
         resource["execution_uid"] = execution_uid or _execution_uid(job_info)
         if service == "vllm":
             resource["serving_job_id"] = str(job_info.job_id)
-        telemetry.configure(endpoint=endpoint, service=service, attributes=resource)
+        telemetry.configure(
+            endpoint=endpoint,
+            service=service,
+            group=group,
+            attributes=resource,
+        )
     except Exception:
         try:
             logger.warning("could not configure Finelog for %s telemetry", service, exc_info=True)

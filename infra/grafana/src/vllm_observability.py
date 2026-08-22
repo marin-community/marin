@@ -166,7 +166,7 @@ WITH base AS (
            attributes_json,
            timestamp_ms,
            seq
-    FROM "telemetry_v1.vllm"
+    FROM "telemetry_v1"
     WHERE service = 'vllm'
       AND {identity_field.value} = {identity_literal}
       AND name IN ({metric_names})

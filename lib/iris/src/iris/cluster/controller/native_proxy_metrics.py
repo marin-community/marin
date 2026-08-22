@@ -118,7 +118,7 @@ def _merge_shared_counters(
 
 def _publish(name: str, value: float, attributes: dict[str, str], source_kind: str) -> None:
     temporality = telemetry.CURRENT_SNAPSHOT if source_kind == "gauge" else telemetry.CUMULATIVE_SNAPSHOT
-    telemetry.gauge(name, group=telemetry.TelemetryGroup.IRIS_RPC).set(
+    telemetry.gauge(name).set(
         value,
         attributes={**attributes, **telemetry.snapshot_attributes(source_kind, temporality)},
     )

@@ -117,10 +117,9 @@ class NvidiaSample:
 
 
 class _NvidiaCollector:
-    def __init__(self, group: telemetry.TelemetryGroup) -> None:
-        self._group = group
+    def __init__(self) -> None:
         self._inventory_limiter = RateLimiter(_INVENTORY_INTERVAL)
-        self._publisher = MetricSnapshotPublisher(max_records=_MAX_METRICS, group=group)
+        self._publisher = MetricSnapshotPublisher(max_records=_MAX_METRICS)
 
     def collect(self, runner: BoundedCommandRunner) -> None:
         inventory_due = self._inventory_limiter.should_run()
@@ -129,7 +128,7 @@ class _NvidiaCollector:
             if inventory_due:
                 self._inventory_limiter.reset()
             return
-        _publish_summary(sample, self._group)
+        _publish_summary(sample)
         snapshots = [snapshot for device in sample.devices for snapshot in _error_snapshots(device)]
         if inventory_due:
             snapshots.extend(snapshot for device in sample.devices for snapshot in _inventory_snapshots(device))
@@ -138,21 +137,21 @@ class _NvidiaCollector:
             self._inventory_limiter.reset()
 
 
-def start(*, group: telemetry.TelemetryGroup) -> PeriodicProbe:
+def start() -> PeriodicProbe:
     """Collect NVIDIA summary health and sparse detail until shutdown."""
-    collector = _NvidiaCollector(group)
+    collector = _NvidiaCollector()
     return PeriodicProbe("nvidia_smi", collector.collect)
 
 
-def collect(runner: BoundedCommandRunner, *, group: telemetry.TelemetryGroup) -> None:
+def collect(runner: BoundedCommandRunner) -> None:
     """Collect one sample, including slow-changing inventory."""
     sample = _sample(runner)
     if sample is None:
         return
-    _publish_summary(sample, group)
+    _publish_summary(sample)
     snapshots = [snapshot for device in sample.devices for snapshot in _error_snapshots(device)]
     snapshots.extend(snapshot for device in sample.devices for snapshot in _inventory_snapshots(device))
-    MetricSnapshotPublisher(max_records=_MAX_METRICS, group=group).publish(snapshots)
+    MetricSnapshotPublisher(max_records=_MAX_METRICS).publish(snapshots)
 
 
 def _sample(runner: BoundedCommandRunner) -> NvidiaSample | None:
@@ -188,8 +187,8 @@ def _sample(runner: BoundedCommandRunner) -> NvidiaSample | None:
     return NvidiaSample(outcome, devices)
 
 
-def _publish_summary(sample: NvidiaSample, group: telemetry.TelemetryGroup) -> None:
-    _record_health(sample.outcome, group)
+def _publish_summary(sample: NvidiaSample) -> None:
+    _record_health(sample.outcome)
     if not sample.devices:
         return
     current = telemetry.snapshot_attributes("nvidia_smi", telemetry.CURRENT_SNAPSHOT)
@@ -200,9 +199,7 @@ def _publish_summary(sample: NvidiaSample, group: telemetry.TelemetryGroup) -> N
     if not extended:
         states["unknown"] = len(sample.devices)
     for state, count in states.items():
-        telemetry.gauge("gpu_devices", unit="{device}", group=group).set(
-            float(count), attributes={"device_state": state, **current}
-        )
+        telemetry.gauge("gpu_devices", unit="{device}").set(float(count), attributes={"device_state": state, **current})
 
 
 def _query(
@@ -405,15 +402,15 @@ def _error_snapshots(device: NvidiaDevice) -> list[MetricSnapshot]:
     return snapshots
 
 
-def _record_health(outcome: NvidiaOutcome, group: telemetry.TelemetryGroup) -> None:
+def _record_health(outcome: NvidiaOutcome) -> None:
     current = {
         "outcome": outcome.value,
         **telemetry.snapshot_attributes("nvidia_smi", telemetry.CURRENT_SNAPSHOT),
     }
     available = outcome in {NvidiaOutcome.SUCCESS, NvidiaOutcome.SUCCESS_BASELINE}
-    telemetry.gauge("nvidia_health_available", group=group).set(float(available), attributes=current)
+    telemetry.gauge("nvidia_health_available").set(float(available), attributes=current)
     if not available:
-        telemetry.counter("nvidia_health_failures", unit="{failure}", group=group).add(
+        telemetry.counter("nvidia_health_failures", unit="{failure}").add(
             1,
             attributes={
                 "failure_kind": outcome.value,
