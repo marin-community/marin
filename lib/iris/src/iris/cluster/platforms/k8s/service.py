@@ -776,11 +776,13 @@ class CloudK8sService:
         logger.debug("k8s: node resource metrics node=%s", node_name)
         with slow_log(logger, "node_resource_metrics", threshold_ms=_SLOW_THRESHOLD_MS):
             try:
-                return self._core_v1.connect_get_node_proxy_with_path(
+                response = self._core_v1.connect_get_node_proxy_with_path(
                     name=node_name,
                     path="metrics/resource",
+                    _preload_content=False,
                     **self._request_timeout_kwargs(),
                 )
+                return response.data.decode("utf-8")
             except ApiException as error:
                 raise KubectlError(
                     f"get nodes/{node_name}/proxy/metrics/resource failed ({error.status}): {error.reason}"
