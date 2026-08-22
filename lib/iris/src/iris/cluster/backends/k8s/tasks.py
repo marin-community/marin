@@ -2219,7 +2219,7 @@ class K8sTaskProvider:
     # from, passed by the composer at construction (a cluster backend has no
     # worker store, so it reads its dispatch drain through this).
     transition_reader: TransitionReader | None = field(default=None, repr=False)
-    _pod_unresolved_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    _pod_unresolved_counts: dict[RunningTaskEntry, int] = field(default_factory=dict, init=False, repr=False)
     # The disruption condition last seen on an attempt's pod, keyed by the
     # incarnation (a resubmit reuses task_id/attempt_id under a fresh uid) and
     # dropped once the attempt leaves the poll set.
@@ -2971,6 +2971,7 @@ class K8sTaskProvider:
                 self._periodic_profiler.set_pods({})
             if self._task_event_log is not None:
                 self._task_event_log.retain(set())
+            self._pod_unresolved_counts.clear()
             self._disruption_reasons.clear()
             return []
 
@@ -3015,30 +3016,20 @@ class K8sTaskProvider:
 
         for entry in running:
             pod_name, pod = self._lookup_entry_pod(pods_by_name, entry)
-            cursor_key = f"{entry.task_id.to_wire()}:{entry.attempt_id}"
             task_key = (entry.task_id.to_wire(), entry.attempt_id)
 
             phase = pod.get("status", {}).get("phase", "") if pod is not None else ""
+            workload = _workload_for_pod(pod, workload_index) if pod is not None else None
+            if pod is not None:
+                disruption = _disruption_condition(pod)
+                if disruption is not None:
+                    self._disruption_reasons[entry] = _format_disruption_reason(disruption)
             pod_unresolved = pod is None or phase not in _RESOLVED_POD_PHASES
             if pod_unresolved:
-                count = self._pod_unresolved_counts.get(cursor_key, 0) + 1
-                self._pod_unresolved_counts[cursor_key] = count
+                count = self._pod_unresolved_counts.get(entry, 0) + 1
+                self._pod_unresolved_counts[entry] = count
                 if count < _POD_UNRESOLVED_GRACE_CYCLES:
-                    if pod is not None:
-                        workload = _workload_for_pod(pod, workload_index)
-                        metadata = pod.get("metadata", {})
-                        updates.append(
-                            TaskUpdate(
-                                task_id=entry.task_id,
-                                attempt_id=entry.attempt_id,
-                                new_state=job_pb2.TASK_STATE_RUNNING,
-                                status_message=_pod_status_message(pod, workload),
-                                pod_name=metadata.get("name") or None,
-                                pod_uid=metadata.get("uid") or None,
-                                node_name=pod.get("spec", {}).get("nodeName") or None,
-                            )
-                        )
-                    else:
+                    if pod is None:
                         updates.append(
                             TaskUpdate(
                                 task_id=entry.task_id,
@@ -3048,7 +3039,7 @@ class K8sTaskProvider:
                             )
                         )
                     continue
-                self._pod_unresolved_counts.pop(cursor_key, None)
+                self._pod_unresolved_counts.pop(entry, None)
                 if pod is None:
                     # Grace exhausted — the pod is truly gone. Absence is not an
                     # application failure, so charge the preemption budget either
@@ -3074,13 +3065,18 @@ class K8sTaskProvider:
                         )
                     )
                 else:
-                    terminal_reason = _POD_UNKNOWN_TERMINAL_REASON
+                    disruption_reason = self._disruption_reasons.get(entry)
+                    terminal_reason = disruption_reason or _POD_UNKNOWN_TERMINAL_REASON
                     metadata = pod.get("metadata", {})
                     updates.append(
                         TaskUpdate(
                             task_id=entry.task_id,
                             attempt_id=entry.attempt_id,
-                            new_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                            new_state=(
+                                job_pb2.TASK_STATE_PREEMPTED
+                                if disruption_reason is not None
+                                else job_pb2.TASK_STATE_WORKER_FAILED
+                            ),
                             error=terminal_reason,
                             terminal_reason=terminal_reason,
                             status_message="",
@@ -3091,14 +3087,8 @@ class K8sTaskProvider:
                     )
                 continue
 
-            self._pod_unresolved_counts.pop(cursor_key, None)
-            workload = _workload_for_pod(pod, workload_index)
+            self._pod_unresolved_counts.pop(entry, None)
             update = _task_update_from_pod(entry, pod, workload)
-            # Readable only while the pod terminates; the vanished-pod path
-            # above has no pod left to read it from.
-            disruption = _disruption_condition(pod)
-            if disruption is not None:
-                self._disruption_reasons[entry] = _format_disruption_reason(disruption)
             phase = pod.get("status", {}).get("phase", "")
             if phase == "Running":
                 profile_targets[task_key] = _ProfileTarget(
@@ -3117,6 +3107,8 @@ class K8sTaskProvider:
             periodic_profiler.set_pods(profile_targets)
         if event_log is not None:
             event_log.retain(set(running))
+        for stale_entry in self._pod_unresolved_counts.keys() - set(running):
+            del self._pod_unresolved_counts[stale_entry]
         for stale_entry in self._disruption_reasons.keys() - set(running):
             del self._disruption_reasons[stale_entry]
 

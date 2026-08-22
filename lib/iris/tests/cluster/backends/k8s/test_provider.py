@@ -308,8 +308,7 @@ def test_sync_unknown_pod_phase_waits_then_marks_worker_failed(provider, k8s, ph
     batch = make_batch(running_tasks=[entry])
 
     for _ in range(_POD_UNRESOLVED_GRACE_CYCLES - 1):
-        result = provider.sync(batch)
-        assert result[0].new_state == job_pb2.TASK_STATE_RUNNING
+        assert provider.sync(batch) == []
 
     result = provider.sync(batch)
     assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
@@ -325,14 +324,31 @@ def test_sync_unknown_pod_phase_grace_resets_after_known_phase(provider, k8s):
     batch = make_batch(running_tasks=[entry])
 
     for _ in range(_POD_UNRESOLVED_GRACE_CYCLES - 1):
-        assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_RUNNING
+        assert provider.sync(batch) == []
 
     k8s.transition_pod(pod_name, "Running")
     assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_RUNNING
 
     k8s.transition_pod(pod_name, "Unknown")
     for _ in range(_POD_UNRESOLVED_GRACE_CYCLES - 1):
-        assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_RUNNING
+        assert provider.sync(batch) == []
+
+    assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
+
+
+def test_sync_unknown_pod_phase_grace_is_scoped_to_attempt_incarnation(provider, k8s):
+    task_id = JobName.from_wire("/job/unknown-phase-incarnation")
+    old_entry = RunningTaskEntry(task_id=task_id, attempt_id=0, attempt_uid="aaaabbbbccccdddd")
+    populate_pod(k8s, _pod_name(task_id, 0, old_entry.attempt_uid), "Unknown")
+
+    for _ in range(_POD_UNRESOLVED_GRACE_CYCLES - 1):
+        assert provider.sync(make_batch(running_tasks=[old_entry])) == []
+
+    new_entry = RunningTaskEntry(task_id=task_id, attempt_id=0, attempt_uid="1111222233334444")
+    populate_pod(k8s, _pod_name(task_id, 0, new_entry.attempt_uid), "Unknown")
+    batch = make_batch(running_tasks=[new_entry])
+    for _ in range(_POD_UNRESOLVED_GRACE_CYCLES - 1):
+        assert provider.sync(batch) == []
 
     assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
 
@@ -448,9 +464,9 @@ def test_sync_ignores_legacy_pod_for_an_attempt_this_process_dispatched(provider
 _EVICTION_REASON = "WorkloadEvictedDueToPreempted: Preempted to accommodate a higher priority Workload"
 
 
-def _populate_evicted_pod(k8s, pod_name: str) -> None:
-    """A running pod carrying the Kueue eviction condition it gets while terminating."""
-    populate_pod(k8s, pod_name, "Running")
+def _populate_evicted_pod(k8s, pod_name: str, phase: str = "Running") -> None:
+    """A pod carrying the Kueue eviction condition it gets while terminating."""
+    populate_pod(k8s, pod_name, phase)
     pod = k8s.get_json(K8sResource.PODS, pod_name)
     pod["status"]["conditions"] = [
         {
@@ -482,6 +498,21 @@ def test_sync_vanished_pod_reports_the_kueue_eviction_that_deleted_it(provider, 
     assert result[0].new_state == job_pb2.TASK_STATE_PREEMPTED
     assert result[0].terminal_reason == _EVICTION_REASON
     assert result[0].error == _EVICTION_REASON
+
+
+def test_sync_unknown_pod_phase_preserves_eviction_reason(provider, k8s):
+    task_id = JobName.from_wire("/gang/unknown-evicted/0")
+    pod_name = _pod_name(task_id, 0)
+    batch = make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=0)])
+
+    _populate_evicted_pod(k8s, pod_name, phase="Unknown")
+    assert provider.sync(batch) == []
+    k8s.delete(K8sResource.PODS, pod_name)
+
+    assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_RUNNING
+    result = provider.sync(batch)
+    assert result[0].new_state == job_pb2.TASK_STATE_PREEMPTED
+    assert result[0].terminal_reason == _EVICTION_REASON
 
 
 def test_sync_does_not_charge_a_new_incarnation_with_the_previous_eviction(provider, k8s):
