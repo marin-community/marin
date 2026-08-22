@@ -101,6 +101,7 @@ SECRET_REF = re.compile(
 class WorkloadIdentityConfig:
     name: str
     profile: str
+    additional_profiles: tuple[str, ...]
     service_tag: str
     service_account_id: str
     create_service_account: bool
@@ -109,6 +110,14 @@ class WorkloadIdentityConfig:
     def parse(cls, value: Mapping[str, object]) -> WorkloadIdentityConfig:
         name = str(value.get("name", "")).strip()
         profile = str(value.get("profile", "")).strip()
+        raw_additional_profiles = value.get("additionalProfiles", [])
+        if not isinstance(raw_additional_profiles, list) or not all(
+            isinstance(item, str) and item.strip() for item in raw_additional_profiles
+        ):
+            raise ValueError(f"additionalProfiles for workload {name!r} must be a list of profile names")
+        additional_profiles = tuple(item.strip() for item in raw_additional_profiles)
+        if profile in additional_profiles or len(set(additional_profiles)) != len(additional_profiles):
+            raise ValueError(f"profiles for workload {name!r} must be unique")
         service_tag = str(value.get("serviceTag", name)).strip()
         account_id = str(value.get("serviceAccountId", f"loom-{name}")).strip()
         create_account = value.get("createServiceAccount", True)
@@ -122,7 +131,7 @@ class WorkloadIdentityConfig:
             raise ValueError(f"invalid workload name {name!r}")
         if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", service_tag):
             raise ValueError(f"invalid serviceTag for workload {name!r}")
-        return cls(name, profile, service_tag, account_id, create_account)
+        return cls(name, profile, additional_profiles, service_tag, account_id, create_account)
 
 
 @dataclass(frozen=True)
@@ -391,7 +400,7 @@ def _google_federation_mapping(
         "subject": str(subject),
         "service_account": email,
         "service_tag": workload.service_tag,
-        "profiles": [workload.profile],
+        "profiles": [workload.profile, *workload.additional_profiles],
     }
 
 
@@ -439,6 +448,9 @@ class DeploymentConfig:
         workload_names: set[str] = set()
         for workload in self.workloads:
             _validate_profile_reference("workload", workload.name, workload.profile, workload_names, profile_names)
+            for additional_profile in workload.additional_profiles:
+                if additional_profile not in profile_names:
+                    raise ValueError(f"workload {workload.name!r} references unknown profile {additional_profile!r}")
         federation_names: set[str] = set()
         for federation in self.github_federations:
             _validate_profile_reference(
@@ -707,7 +719,7 @@ def _create_image(
 class RuntimePolicyResources:
     audience: str
     manifest: pulumi.Input[str]
-    workload_clients: list[pulumi.Output[dict[str, str]]]
+    workload_clients: list[pulumi.Output[dict[str, Any]]]
     profile_secret_refs: list[tuple[str, str]]
 
 
@@ -764,7 +776,7 @@ def _create_runtime_policy(
     profiles, profile_secret_refs = _deployment_profiles(config.profiles)
     audience = config.public_url
     workload_mappings: list[pulumi.Output[dict[str, Any]]] = []
-    workload_clients: list[pulumi.Output[dict[str, str]]] = []
+    workload_clients: list[pulumi.Output[dict[str, Any]]] = []
     for workload in config.workloads:
         email, unique_id = _workload_service_account(config, workload, api_options)
         workload_mappings.append(
@@ -780,6 +792,7 @@ def _create_runtime_policy(
                     "loomUrl": audience,
                     "tokenAudience": audience,
                     "profile": workload.profile,
+                    "profiles": [workload.profile, *workload.additional_profiles],
                     "serviceTag": workload.service_tag,
                 }
             )

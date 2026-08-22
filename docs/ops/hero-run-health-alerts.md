@@ -13,6 +13,13 @@ Pushover monitor applies.
 
 Each rule evaluates once a minute and stays pending for five. Each firing check is its own alert
 instance labeled with its `reason`; the hero-run route groups them by logical run.
+Every `notification=hero-run` group, including `TrainingProgressStalled` and
+`TrainingLossSpike`, opens on the dedicated Loom `hero-ops` profile. The bridge
+adds a bounded first-pass snapshot of recent executions, telemetry, Iris state
+and events, and low-fanout warning/error output near evidence-derived boundaries.
+It does not grep a fixed error-signature list, and the snapshot is not exhaustive;
+the coordinator must collect additional live evidence before concluding when the
+incident needs it.
 
 ## Enrollment
 
