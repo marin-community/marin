@@ -83,11 +83,11 @@ XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overla
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
-# Profiled ragged/pooled twins at the hero shape show the ragged run hiding none of its
-# 1.3 s/step of ordinary NCCL while the pooled posture (latency hiding on, overlap 4) hides
-# 0.4 s of 0.9. The no-LHS posture predates the 32-split transport; retest it under the
-# scheduler the other backends use.
-RAGGED_COLLECTIVE_OVERLAP_LIMIT = 4
+# The ragged transport wants the opposite scheduling posture from the fixed and pooled ones. Its
+# dispatch and combine form one long dependent chain, so admitting several concurrent collectives
+# only contends for the SMs the transport itself needs, and the latency-hiding scheduler reorders
+# around the ragged collectives without shortening them.
+RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
 RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
@@ -155,7 +155,7 @@ def _apply_hero_ep_runtime_defaults(
         overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
-        f"{XLA_LATENCY_HIDING_FLAG}=true",
+        f"{XLA_LATENCY_HIDING_FLAG}={'false' if ragged else 'true'}",
         XLA_MEMORY_LIMIT_SLOP_FLAG,
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
     )
