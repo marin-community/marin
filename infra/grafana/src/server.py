@@ -91,6 +91,7 @@ from finelog_health import FinelogHealth
 from finelog_source import FinelogSource, MetricSource
 from github_app import GithubAppAuth
 from github_source import GithubSource
+from hero_alert_context import HeroAlertContextAssembler
 from hero_health import (
     Signals,
     WatchedRun,
@@ -855,7 +856,10 @@ def main() -> None:
     github_source = GithubSource(auth=github_auth, timeout=config.http_timeout)
     k8s_fleet = K8sFleet([K8sSource(c, token=config.cw_read_token, timeout=config.http_timeout) for c in K8S_CLUSTERS])
     wandb_source = WandbSource(timeout=config.http_timeout)
-    loom_alerts = LoomAlertClient(config.loom_alerts) if config.loom_alerts is not None else None
+    loom_alerts = None
+    if config.loom_alerts is not None:
+        hero_context = HeroAlertContextAssembler(finelog_sources[_FINELOG_HUB_CLUSTER], max_rows=config.max_rows)
+        loom_alerts = LoomAlertClient(config.loom_alerts, hero_context=hero_context.assemble)
     slack_alerts = SlackAlertClient(config.loom_alerts) if config.loom_alerts is not None else None
     logger.info("grafana bridge serving %s on :%d", sorted(finelog_sources), BRIDGE_PORT)
     # Loopback only: Grafana fetches from the same container.

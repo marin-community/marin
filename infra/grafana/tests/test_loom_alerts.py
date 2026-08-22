@@ -26,6 +26,7 @@ def loom_config() -> LoomAlertConfig:
     return LoomAlertConfig(
         url="https://loom.example.com",
         profile="ops",
+        hero_profile="hero-ops",
         repository="marin-community/marin",
         http_timeout=5.0,
         slack=SlackAlertConfig(bot_token="xoxb-test", channel=SLACK_CHANNEL),
@@ -65,7 +66,13 @@ class FakeSlack:
         return [post["text"] for post in self.replies]
 
 
-def client_for(slack: FakeSlack, *, runs: list[dict] | None = None, loom_status: int | None = None):
+def client_for(
+    slack: FakeSlack,
+    *,
+    runs: list[dict] | None = None,
+    loom_status: int | None = None,
+    hero_context=None,
+):
     """A client whose Slack and Loom legs are both mocked.
 
     `runs` collects the run requests. `loom_status` fails every Loom-side call
@@ -94,7 +101,7 @@ def client_for(slack: FakeSlack, *, runs: list[dict] | None = None, loom_status:
             return httpx.Response(201, json={"id": "run-1", "session_id": "session-1"})
         raise AssertionError(f"unexpected request: {request.url}")
 
-    return LoomAlertClient(loom_config(), transport=httpx.MockTransport(handler))
+    return LoomAlertClient(loom_config(), transport=httpx.MockTransport(handler), hero_context=hero_context)
 
 
 def alert_payload(status: str = "firing") -> dict:
@@ -151,6 +158,7 @@ def hero_stall_payload(
         "reason": "training_stalled",
         "run": "hero-run",
         "severity": "critical",
+        "notification": "hero-run",
     }
     payload["groupKey"] = '{}:{alertname="TrainingProgressStalled", run="hero-run"}'
     payload["commonLabels"] = labels
@@ -201,6 +209,63 @@ def test_firing_alert_is_announced_then_delivered_on_that_thread():
             "thread_ts": "1700000000.000001",
         }
     ]
+
+
+def test_every_hero_run_notification_uses_the_dedicated_profile_and_first_pass_context():
+    runs: list[dict] = []
+    slack = FakeSlack()
+
+    async def context(alerts):
+        assert len(slack.roots) == 1, "Slack receives the alert before context collection starts"
+        assert alerts[0]["labels"]["notification"] == "hero-run"
+        return {"status": "complete", "evidence": ["bounded"]}
+
+    asyncio.run(client_for(slack, runs=runs, hero_context=context).submit(hero_stall_payload()))
+
+    request = runs[0]
+    assert request["profile"] == "hero-ops"
+    assert request["channel"] == "operator"
+    assert request["session"]["title"] == "Hero run operator"
+    assert '"heroContext"' in request["session"]["goal"]
+    assert "bounded first-pass snapshot" in request["session"]["goal"]
+
+
+def test_an_older_hero_rule_routes_by_notification_label_not_alert_name():
+    runs: list[dict] = []
+    payload = hero_stall_payload()
+    payload["alerts"][0]["labels"]["alertname"] = "TrainingLossSpike"
+    payload["commonLabels"]["alertname"] = "TrainingLossSpike"
+
+    asyncio.run(client_for(FakeSlack(), runs=runs).submit(payload))
+
+    assert runs[0]["profile"] == "hero-ops"
+
+
+def test_context_collection_failure_does_not_drop_the_hero_alert():
+    runs: list[dict] = []
+
+    async def unavailable(_alerts):
+        raise RuntimeError("finelog unavailable")
+
+    result = asyncio.run(client_for(FakeSlack(), runs=runs, hero_context=unavailable).submit(hero_stall_payload()))
+
+    assert result == {"id": "run-1", "session_id": "session-1"}
+    assert runs[0]["profile"] == "hero-ops"
+    assert '"status": "unavailable"' in runs[0]["session"]["goal"]
+    assert "finelog unavailable" not in runs[0]["session"]["goal"]
+
+
+def test_context_collection_timeout_does_not_hold_open_delivery(monkeypatch):
+    runs: list[dict] = []
+    monkeypatch.setattr(loom_alerts, "HERO_CONTEXT_TIMEOUT", 0.001)
+
+    async def never_finishes(_alerts):
+        await asyncio.Event().wait()
+
+    result = asyncio.run(client_for(FakeSlack(), runs=runs, hero_context=never_finishes).submit(hero_stall_payload()))
+
+    assert result == {"id": "run-1", "session_id": "session-1"}
+    assert '"error": "TimeoutError"' in runs[0]["session"]["goal"]
 
 
 def test_a_webhook_retry_reuses_the_thread_without_announcing_again():

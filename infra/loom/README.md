@@ -160,8 +160,12 @@ Loom credential belongs in the Grafana stack or Secret Manager.
 
 Apply the Loom stack before deploying a Grafana revision that enables a new
 federated caller. This ensures the identity mapping and profile exist before the
-contact point begins sending alerts. The Grafana stack consumes the URL and
-profile from this stack's `workloadClients` output. The `marin-grafana` service
+contact point begins sending alerts. The Grafana stack consumes the URL and granted
+profiles from this stack's `workloadClients` output. A workload has one default
+`profile` and may declare `additionalProfiles`; production grants
+`grafana-alerts` both general `ops` and the independently capacity-limited
+`hero-ops` coordinator without adding a second federation mapping for the same
+Google identity. The `marin-grafana` service
 account already exists in the production Grafana stack. In a new environment,
 deploy Grafana once with `marin-grafana:loom_alerts` set to `false`, deploy Loom
 to bind the new service account, then enable Loom alerts and redeploy Grafana.

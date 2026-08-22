@@ -190,6 +190,7 @@ class LoomAlertConfig:
 
     url: str
     profile: str
+    hero_profile: str
     repository: str
     http_timeout: float
     slack: SlackAlertConfig
@@ -228,9 +229,13 @@ class BridgeConfig:
         loom_alerts = None
         if loom_url:
             profile = os.environ.get("LOOM_ALERT_PROFILE")
+            hero_profile = os.environ.get("LOOM_HERO_ALERT_PROFILE")
             repository = os.environ.get("LOOM_ALERT_REPOSITORY")
-            if not profile or not repository:
-                raise ValueError("LOOM_ALERT_PROFILE and LOOM_ALERT_REPOSITORY are required when LOOM_ALERT_URL is set")
+            if not profile or not hero_profile or not repository:
+                raise ValueError(
+                    "LOOM_ALERT_PROFILE, LOOM_HERO_ALERT_PROFILE, and LOOM_ALERT_REPOSITORY are required "
+                    "when LOOM_ALERT_URL is set"
+                )
             # The bridge is the only thing that announces critical alerts now that
             # Grafana's own Slack receiver is gone, so a missing token would take
             # alerting down silently. Fail the boot instead.
@@ -246,6 +251,7 @@ class BridgeConfig:
             loom_alerts = LoomAlertConfig(
                 url=loom_url.rstrip("/"),
                 profile=profile,
+                hero_profile=hero_profile,
                 repository=repository,
                 http_timeout=http_timeout,
                 slack=SlackAlertConfig(bot_token=bot_token, channel=channel),
