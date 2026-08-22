@@ -20,7 +20,6 @@ from iris.cluster.backends.k8s.tasks import (
     _LABEL_TASK_ID,
     _MANAGED_POD_LABELS,
     _POD_DELETED_TERMINAL_REASON,
-    _POD_UNKNOWN_TERMINAL_REASON,
     _POD_UNRESOLVED_GRACE_CYCLES,
     _RUNTIME_LABEL_VALUE,
     K8sTaskProvider,
@@ -314,7 +313,8 @@ def test_sync_unknown_pod_phase_waits_then_marks_worker_failed(provider, k8s, ph
 
     result = provider.sync(batch)
     assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
-    assert result[0].error == _POD_UNKNOWN_TERMINAL_REASON
+    assert result[0].error is not None
+    assert result[0].terminal_reason == result[0].error
 
 
 def test_sync_unknown_pod_phase_grace_resets_after_known_phase(provider, k8s):

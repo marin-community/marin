@@ -1117,38 +1117,28 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
     — the reconcile kernel only re-persists (and re-federates) it when it changes.
     """
     phase = pod.get("status", {}).get("phase", "Unknown")
-    task_id = entry.task_id
-    attempt_id = entry.attempt_id
-    # Backend object identity is known once the pod exists; capture it on every
-    # update (not only the terminal one) so a later preemption that deletes the pod
-    # still leaves the identity persisted.
-    identity = _pod_identity(pod)
-
     if phase == "Pending":
-        return TaskUpdate(
-            task_id=task_id,
-            attempt_id=attempt_id,
+        return _pod_task_update(
+            entry,
+            pod,
             new_state=job_pb2.TASK_STATE_BUILDING,
             status_message=_pod_status_message(pod, workload),
-            **identity,
         )
 
     if phase == "Running":
-        return TaskUpdate(
-            task_id=task_id,
-            attempt_id=attempt_id,
+        return _pod_task_update(
+            entry,
+            pod,
             new_state=job_pb2.TASK_STATE_RUNNING,
             status_message="",
-            **identity,
         )
 
     if phase == "Succeeded":
-        return TaskUpdate(
-            task_id=task_id,
-            attempt_id=attempt_id,
+        return _pod_task_update(
+            entry,
+            pod,
             new_state=job_pb2.TASK_STATE_SUCCEEDED,
             status_message="",
-            **identity,
         )
 
     # _poll_pods holds unresolved phases through their grace period, so only a
@@ -1157,25 +1147,41 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
     exit_code = _extract_exit_code(pod)
     new_state = _pod_failure_state(pod)
     terminal_reason = _extract_terminal_reason(pod)
-    return TaskUpdate(
-        task_id=task_id,
-        attempt_id=attempt_id,
+    return _pod_task_update(
+        entry,
+        pod,
         new_state=new_state,
         exit_code=exit_code,
         error=terminal_reason if new_state == job_pb2.TASK_STATE_PREEMPTED else _extract_error(pod),
         status_message="",
         terminal_reason=terminal_reason,
-        **identity,
     )
 
 
-def _pod_identity(pod: dict) -> dict[str, str | None]:
+def _pod_task_update(
+    entry: RunningTaskEntry,
+    pod: dict,
+    *,
+    new_state: int,
+    error: str | None = None,
+    exit_code: int | None = None,
+    status_message: str | None = None,
+    terminal_reason: str | None = None,
+) -> TaskUpdate:
+    """Build an update that preserves the Kubernetes object identity."""
     metadata = pod.get("metadata", {})
-    return {
-        "pod_name": metadata.get("name") or None,
-        "pod_uid": metadata.get("uid") or None,
-        "node_name": pod.get("spec", {}).get("nodeName") or None,
-    }
+    return TaskUpdate(
+        task_id=entry.task_id,
+        attempt_id=entry.attempt_id,
+        new_state=new_state,
+        error=error,
+        exit_code=exit_code,
+        status_message=status_message,
+        pod_name=metadata.get("name") or None,
+        pod_uid=metadata.get("uid") or None,
+        node_name=pod.get("spec", {}).get("nodeName") or None,
+        terminal_reason=terminal_reason,
+    )
 
 
 def _extract_exit_code(pod: dict) -> int | None:
@@ -3028,21 +3034,25 @@ class K8sTaskProvider:
                 count = self._pod_unresolved_counts.get(cursor_key, 0) + 1
                 self._pod_unresolved_counts[cursor_key] = count
                 if count < _POD_UNRESOLVED_GRACE_CYCLES:
-                    status_message = ""
-                    identity: dict[str, str | None] = {}
                     if pod is not None:
                         workload = _workload_for_pod(pod, workload_index)
-                        status_message = _pod_status_message(pod, workload)
-                        identity = _pod_identity(pod)
-                    updates.append(
-                        TaskUpdate(
-                            task_id=entry.task_id,
-                            attempt_id=entry.attempt_id,
-                            new_state=job_pb2.TASK_STATE_RUNNING,
-                            status_message=status_message,
-                            **identity,
+                        updates.append(
+                            _pod_task_update(
+                                entry,
+                                pod,
+                                new_state=job_pb2.TASK_STATE_RUNNING,
+                                status_message=_pod_status_message(pod, workload),
+                            )
                         )
-                    )
+                    else:
+                        updates.append(
+                            TaskUpdate(
+                                task_id=entry.task_id,
+                                attempt_id=entry.attempt_id,
+                                new_state=job_pb2.TASK_STATE_RUNNING,
+                                status_message="",
+                            )
+                        )
                     continue
                 self._pod_unresolved_counts.pop(cursor_key, None)
                 if pod is None:
@@ -3059,22 +3069,28 @@ class K8sTaskProvider:
                         if disruption_reason is not None
                         else job_pb2.TASK_STATE_WORKER_FAILED
                     )
-                    identity = {}
+                    updates.append(
+                        TaskUpdate(
+                            task_id=entry.task_id,
+                            attempt_id=entry.attempt_id,
+                            new_state=new_state,
+                            error=terminal_reason,
+                            terminal_reason=terminal_reason,
+                            status_message="",
+                        )
+                    )
                 else:
                     terminal_reason = _POD_UNKNOWN_TERMINAL_REASON
-                    new_state = job_pb2.TASK_STATE_WORKER_FAILED
-                    identity = _pod_identity(pod)
-                updates.append(
-                    TaskUpdate(
-                        task_id=entry.task_id,
-                        attempt_id=entry.attempt_id,
-                        new_state=new_state,
-                        error=terminal_reason,
-                        terminal_reason=terminal_reason,
-                        status_message="",
-                        **identity,
+                    updates.append(
+                        _pod_task_update(
+                            entry,
+                            pod,
+                            new_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                            error=terminal_reason,
+                            terminal_reason=terminal_reason,
+                            status_message="",
+                        )
                     )
-                )
                 continue
 
             self._pod_unresolved_counts.pop(cursor_key, None)
