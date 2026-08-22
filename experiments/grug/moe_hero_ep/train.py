@@ -155,6 +155,9 @@ def _apply_hero_ep_runtime_defaults(
         overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
+        # Clean-main PJRT benchmark: same flags the nightly requires for the device kernel.
+        "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
+        "--xla_gpu_experimental_enable_nccl_symmetric_buffers=true",
         # Confound isolation for the patch-free probe: the i06 device-kernel tie ran without
         # symmetric buffers; the nightly requires them. Same wheel, same device kernel, flag on.
         "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
