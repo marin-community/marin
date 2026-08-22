@@ -78,7 +78,8 @@ class TreeStore(Generic[T]):
         """
         if mode == "r":
             charge_store_read_budget(path)
-            path = _materialized_read_path(path)
+            if StoragePath(path).scheme == "mirror":
+                path = await asyncio.to_thread(_materialized_read_path, path)
         tree = await _construct_builder_tree_async(exemplar, path, mode, cache_metadata)
         return TreeStore(tree, path, mode)
 

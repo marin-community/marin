@@ -141,7 +141,8 @@ def build_kvstore_spec(path: str) -> dict:
     elif parsed.scheme == "gs":
         return {"driver": "gcs", "bucket": parsed.netloc, "path": parsed.path.lstrip("/")}
     elif parsed.scheme in ("", "file"):
-        return {"driver": "file", "path": os.path.abspath(path)}
+        file_path = urllib.parse.unquote(parsed.path) if parsed.scheme == "file" else path
+        return {"driver": "file", "path": os.path.abspath(file_path)}
     else:
         raise ValueError(f"Unsupported URI scheme for tensorstore: {parsed.scheme!r} in {path!r}")
 
