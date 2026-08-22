@@ -3,11 +3,35 @@
 
 """CoreWeave AI Object Storage data buckets."""
 
+import json
+
 import pulumi
 import pulumi_coreweave as coreweave
 from rigging.filesystem.cluster_config import DataConfig, StoreType
 
 from iac.buckets.lifecycle import expiration_rules
+
+HERO_CHECKPOINT_PREFIX = "marin/grug/hero-"
+CHECKPOINT_DELETE_ACTIONS = ("s3:DeleteObject", "s3:DeleteObjectVersion")
+
+
+def hero_checkpoint_delete_policy(bucket_name: str) -> str:
+    """Return a bucket policy denying deletion from permanent hero run paths."""
+    return json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "DenyHeroCheckpointDeletion",
+                    "Effect": "Deny",
+                    "Principal": {"CW": "*"},
+                    "Action": list(CHECKPOINT_DELETE_ACTIONS),
+                    "Resource": f"arn:aws:s3:::{bucket_name}/{HERO_CHECKPOINT_PREFIX}*",
+                }
+            ],
+        },
+        sort_keys=True,
+    )
 
 
 class CoreweaveDataBuckets(pulumi.ComponentResource):
@@ -53,6 +77,18 @@ class CoreweaveDataBuckets(pulumi.ComponentResource):
                     )
                     for rule in expiration_rules(lifecycle_config)
                 ],
+                opts=pulumi.ResourceOptions(
+                    parent=self,
+                    provider=coreweave_provider,
+                    protect=True,
+                    retain_on_delete=True,
+                ),
+            )
+
+            coreweave.ObjectStorageBucketPolicy(
+                f"policy-{bucket.name}",
+                bucket=resource.name,
+                policy=resource.name.apply(hero_checkpoint_delete_policy),
                 opts=pulumi.ResourceOptions(
                     parent=self,
                     provider=coreweave_provider,
