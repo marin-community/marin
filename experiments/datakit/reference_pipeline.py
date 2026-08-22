@@ -100,6 +100,7 @@ from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import (
+    DEFAULT_CC_MAX_ITERATIONS,
     FUZZY_DUPS_ATTR_DATA_VERSION,
     FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs,
@@ -316,6 +317,12 @@ class PipelineScale:
     # stage's coordinator; kept modest so it isn't overwhelmed.
     sample_parallel_sources: int = 4
     dedup_max_parallelism: int = 4096
+    # Both datakit ferries pin this to 3 (see datakit_ferry.py /
+    # datakit_nemotron_ferry.py); a caller benchmarking against ferry behavior
+    # should match that rather than inherit the library's default of 10, which
+    # runs the full iteration budget -- each iteration a full scatter/reduce
+    # pass -- on graphs that don't converge early.
+    cc_max_iterations: int = DEFAULT_CC_MAX_ITERATIONS
     # Centroid training is single-process FAISS K-means, not a pool stage.
     train_centroids_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_cpu(cpu=32, ram="64g"))
 
@@ -565,17 +572,64 @@ class ZephyrDatakitSteps:
     fuzzy_dedup: StepSpec
 
 
+def pool_zephyr_context(
+    name: str,
+    scale: PipelineScale,
+    *,
+    max_concurrent_pipelines: int | None = None,
+) -> ZephyrContext:
+    """Build the shared pool every subprocess-compatible stage in this DAG must enter.
+
+    A caller that walks the DAG :func:`zephyr_datakit_steps` builds must enter this as a
+    context manager and thread the result through as ``zephyr_context``, or each per-source
+    tokenize/minhash step silently falls back to its own dedicated pool capped at that one
+    source's shard count instead of sharing ``scale.pool``.
+
+    ``max_concurrent_pipelines`` defaults to the pool's own default
+    (``MAX_CONCURRENT_PIPELINES``) when unset; pass a caller's step-level concurrency limit
+    to keep that default from silently re-capping it -- but don't raise it far past that
+    default. The coordinator is one actor with a fixed concurrent-call budget
+    (``ActorConfig(max_concurrency=100)`` in ``zephyr.execution``) shared between every
+    in-flight ``run_pipeline`` call (held for a whole pipeline's duration, not briefly) and
+    every worker's poll/heartbeat/registration call; raising concurrent pipelines without
+    headroom for worker traffic can starve worker calls of a slot entirely, deadlocking the
+    pool (pipelines wait on workers that can't report back). A caller that genuinely needs
+    more concurrent pipelines than this leaves headroom for should raise the coordinator's
+    own ``max_concurrency`` rather than push ``max_concurrent_pipelines`` close to it.
+    """
+    kwargs: dict[str, int] = {}
+    if max_concurrent_pipelines is not None:
+        kwargs["max_concurrent_pipelines"] = max_concurrent_pipelines
+    return ZephyrContext(
+        name=name,
+        resources=scale.pool.worker,
+        max_workers=scale.pool.n_workers,
+        stage_runner_factory=SubprocessRunner,
+        **kwargs,
+    )
+
+
 def zephyr_datakit_steps(
     sources: dict[str, StepSpec],
     scale: PipelineScale = DEFAULT_SCALE,
     zephyr_context: ZephyrContext | None = None,
+    output_path_prefix: str | None = None,
 ) -> ZephyrDatakitSteps:
-    """Build exact-dedup, tokenize, MinHash, and fuzzy-dedup stages."""
+    """Build exact-dedup, tokenize, MinHash, and fuzzy-dedup stages.
+
+    ``output_path_prefix``, when set, routes every step's output under it
+    instead of ``marin_prefix()``. It must be applied here rather than by a
+    caller patching the returned StepSpecs afterward: ``fuzzy_dedup.fn`` reads
+    each minhash step's ``output_path`` through a closure over ``minhash_steps``,
+    so a step rerouted after construction leaves that closure -- and therefore
+    fuzzy_dedup's reads -- pointed at the unrerouted default path.
+    """
     source_names = sorted(sources)
     exact_dedup = StepSpec(
         name="datakit/global_exact_dedup",
         deps=[sources[name] for name in source_names],
         hash_attrs={"sources": source_names, "v": GLOBAL_EXACT_DEDUP_DATA_VERSION},
+        output_path_prefix=output_path_prefix,
         fn=lambda output_path: global_exact_deduplicate(
             sources={name: read_artifact(sources[name].output_path, NormalizedData) for name in source_names},
             output_path=output_path,
@@ -589,15 +643,18 @@ def zephyr_datakit_steps(
     tokenize_steps: dict[str, StepSpec] = {}
     minhash_steps: dict[str, StepSpec] = {}
     for name, normalize_step in sources.items():
-        tokenize_steps[name] = tokenize_attributes_step(
-            name=f"datakit/tokenize/{name}",
-            train_normalize=normalize_step,
-            tokenizer=TOKENIZER,
-            tokenizer_backend=TOKENIZER_BACKEND,
-            tokenizer_revision=TOKENIZER_REVISION,
-            max_workers=scale.pool.n_workers,
-            worker_resources=scale.pool.worker,
-            zephyr_context=zephyr_context,
+        tokenize_steps[name] = replace(
+            tokenize_attributes_step(
+                name=f"datakit/tokenize/{name}",
+                train_normalize=normalize_step,
+                tokenizer=TOKENIZER,
+                tokenizer_backend=TOKENIZER_BACKEND,
+                tokenizer_revision=TOKENIZER_REVISION,
+                max_workers=scale.pool.n_workers,
+                worker_resources=scale.pool.worker,
+                zephyr_context=zephyr_context,
+            ),
+            output_path_prefix=output_path_prefix,
         )
         minhash_steps[name] = StepSpec(
             name=f"datakit/minhash/{name}",
@@ -610,6 +667,7 @@ def zephyr_datakit_steps(
                 "seed": mh.seed,
                 "v": MINHASH_ATTR_DATA_VERSION,
             },
+            output_path_prefix=output_path_prefix,
             fn=lambda output_path, n=normalize_step: compute_minhash_attrs(
                 source=read_artifact(n.output_path, NormalizedData),
                 output_path=output_path,
@@ -626,11 +684,23 @@ def zephyr_datakit_steps(
     fuzzy_dedup = StepSpec(
         name="datakit/dedup",
         deps=list(minhash_steps.values()),
-        hash_attrs={"v": FUZZY_DUPS_ATTR_DATA_VERSION},
+        # Omit cc_max_iterations at its default to match compute_fuzzy_dups_attrs_step's
+        # identity convention -- a step built there for the same inputs must resolve to
+        # the artifacts this graph already produced, not recompute under a fresh hash.
+        hash_attrs={
+            "v": FUZZY_DUPS_ATTR_DATA_VERSION,
+            **(
+                {"cc_max_iterations": scale.cc_max_iterations}
+                if scale.cc_max_iterations != DEFAULT_CC_MAX_ITERATIONS
+                else {}
+            ),
+        },
+        output_path_prefix=output_path_prefix,
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(step.output_path, MinHashAttrData) for step in minhash_steps.values()],
             output_path=output_path,
             max_parallelism=scale.dedup_max_parallelism,
+            cc_max_iterations=scale.cc_max_iterations,
             cc_resume=True,
             worker_resources=scale.pool.worker,
             zephyr_context=zephyr_context,
@@ -962,6 +1032,14 @@ def reference_datakit_steps(
 
 SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_0.1b_7d7d8fd7"
 
+SOURCE_DISCOVERY_DEPTHS = ("*", "*/*", "*/*/*")
+"""Glob depths :func:`sample_sources` searches for a source's ``.artifact.json``.
+
+A source name has at most ``len(SOURCE_DISCOVERY_DEPTHS)`` path segments; a caller
+that derives source names some other way (e.g. from shard paths) must respect the
+same bound or risk selecting a name :func:`sample_sources` cannot find.
+"""
+
 QUALITY_MODEL = "datakit/models/quality/pooled_junkgate2"
 """Pooled fast-transformer scorer directory, relative to ``MARIN_PREFIX``."""
 
@@ -1010,7 +1088,7 @@ def sample_sources(sample_prefix: str, names: list[str] | None = None, run_tag: 
     sample_id = posixpath.basename(prefix)
     discovered = [
         str(m)[len(prefix) + 1 : -len("/.artifact.json")]
-        for depth in ("*", "*/*", "*/*/*")
+        for depth in SOURCE_DISCOVERY_DEPTHS
         for m in StoragePath(f"{prefix}/{depth}/.artifact.json").glob()
     ]
     if names is None:
@@ -1109,12 +1187,7 @@ def main() -> None:
     scale = _apply_pool_overrides(SMOKE_SCALE if args.mode == "sample" else DEFAULT_SCALE, args)
     sources = _select_pipeline_sources(args)
 
-    with ZephyrContext(
-        name="datakit-reference",
-        resources=scale.pool.worker,
-        max_workers=scale.pool.n_workers,
-        stage_runner_factory=SubprocessRunner,
-    ) as zephyr_context:
+    with pool_zephyr_context("datakit-reference", scale) as zephyr_context:
         result = reference_datakit_steps(
             sources,
             quality_model=args.quality_model,
