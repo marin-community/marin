@@ -174,12 +174,11 @@ def _moe_mlp_ep_ragged_a2a_local(
                 local_expert_size=local_experts,
                 splits_per_group=splits_per_group,
             )
-            # No serialization barrier: the return-buffer chain already orders the chunks'
-            # combine writes, and a barrier that consumes `returned` adds a second use that
-            # defeats XLA's aliasing of the chained buffer -- the i04 trace showed ~0.4
-            # s/step of MemcpyD2D copying it per chunk. Dispatch-side concurrency was
-            # measured memory-safe by the one-transport-deep pipeline arm.
-            chunk_source = sorted_x
+            # Serialize chunks: without this barrier the scheduler may issue every chunk's
+            # dispatch up front, which resurrects the simultaneous-buffer peak chunking
+            # exists to remove. (A one-transport-deep pipeline variant fit in memory but
+            # measured a null: transport and MLP contend for SMs.)
+            chunk_source, _ = jax.lax.optimization_barrier((sorted_x, returned))
             dispatch_out_shape = jnp.zeros((chunk_capacity, hidden_dim), dtype=x_local.dtype)
             # Accepted rows are the prefix of each unclipped expert group and receiver offsets
             # pack arrivals expert-major, so the received buffer feeds the grouped MLP
