@@ -8,8 +8,10 @@ transport's offset arithmetic or expert kernels earns one only after this passes
 GPU-only, so this cannot run in CPU CI.
 
 A. Ground truth. At a capacity factor high enough that nothing is dropped, every token reaches
-   every expert it selected, so ``ragged_all_to_all`` computes exactly the MoE that the ``ring``
-   reference computes. Forward and gradients must agree.
+   every expert it selected, so the transport computes exactly the dense MoE. The gate compares
+   forward and gradients against an exact fp32 dense reference. The EP ``ring`` implementation is
+   recorded as a diagnostic only: measured 2026-08-21, it deviates from dense by 0.8-4.5x relative
+   at this shape (its gradients contain NaN), so it cannot serve as a reference.
 
 B. Split invariance. ``ragged_all_to_all_splits_per_peer`` divides each peer transfer into N
    ragged updates. It moves the same bytes to the same places, so the result must not depend on
@@ -68,11 +70,10 @@ BENCHMARK_RESOURCES = ResourceConfig.with_gpu("GB200", count=4, cpu=16, ram="256
 
 class SeedRow(BaseModel):
     seed: int
-    max_out_vs_ring: float
     ragged_vs_dense: float
     ring_vs_dense: float
-    max_grad_vs_ring: float
-    median_grad_vs_ring: float
+    max_grad_vs_dense: float
+    median_grad_vs_dense: float
     dropped_no_drop_case: int
     max_out_splits: dict[str, float]
     median_grad_splits: dict[str, float]
@@ -113,19 +114,27 @@ def _inputs(key, tokens, *, skew):
     return x, selected, combine_weights, w13, w2
 
 
-def _dense_reference(x, selected, combine_weights, w13, w2) -> np.ndarray:
-    """Exact fp32 dense MoE on host arrays: the arbiter when EP implementations disagree."""
-    xf = np.asarray(x, np.float32)
-    w13f = np.asarray(w13, np.float32)
-    w2f = np.asarray(w2, np.float32)
-    sel = np.asarray(selected)
-    cw = np.asarray(combine_weights, np.float32)
-    hidden = np.einsum("th,ehi->tei", xf, w13f)
-    gate, up = hidden[..., :INTERMEDIATE_DIM], hidden[..., INTERMEDIATE_DIM:]
-    silu = gate / (1 + np.exp(-gate)) * up
-    per_expert = np.einsum("tei,eih->teh", silu, w2f)
-    per_route = np.take_along_axis(per_expert, sel[..., None], axis=1)
-    return (per_route * cw[..., None]).sum(axis=1)
+def _dense_reference(x, selected, combine_weights, w13, w2):
+    """Exact fp32 dense MoE with the same scalar loss: forward output and gradients.
+
+    Uses replicated fp32 jnp ops (no capacity, no transport), so it is exact up to fp32
+    rounding and serves as the arbiter for every EP implementation.
+    """
+    sel = jnp.asarray(selected)
+    cw = jnp.asarray(combine_weights).astype(jnp.float32)
+
+    def loss(xf, w13f, w2f):
+        hidden = jnp.einsum("th,ehi->tei", xf, w13f)
+        gate, up = hidden[..., :INTERMEDIATE_DIM], hidden[..., INTERMEDIATE_DIM:]
+        per_expert = jnp.einsum("tei,eih->teh", jax.nn.silu(gate) * up, w2f)
+        per_route = jnp.take_along_axis(per_expert, sel[..., None], axis=1)
+        out = jnp.sum(per_route * cw[..., None], axis=1)
+        return jnp.sum(out * out), out
+
+    (_l, out), grads = jax.value_and_grad(loss, argnums=(0, 1, 2), has_aux=True)(
+        jnp.asarray(x, jnp.float32), jnp.asarray(w13, jnp.float32), jnp.asarray(w2, jnp.float32)
+    )
+    return np.asarray(out), grads
 
 
 def _maxdiff_vs_dense(out, dense) -> float:
@@ -188,12 +197,12 @@ def _run() -> list[SeedRow]:
             # A. ground truth: balanced routing, no drops -- ragged must match ring, and both
             # must match the exact fp32 dense MoE, which arbitrates when they disagree.
             raw = _inputs(jax.random.key(1000 + seed), tokens, skew=False)
-            dense = _dense_reference(*raw)
+            dense, g_dense = _dense_reference(*raw)
             xb, selb, cwb, w13b, w2b = reshard(*raw)
             o_ragged, g_ragged, dropped = loss_and_grad(
                 "ragged_all_to_all", xb, selb, cwb, w13b, w2b, capacity_factor=NO_DROP_CAPACITY
             )
-            o_ring, g_ring, dropped_ring = loss_and_grad(
+            o_ring, _g_ring, dropped_ring = loss_and_grad(
                 "ring", xb, selb, cwb, w13b, w2b, capacity_factor=NO_DROP_CAPACITY
             )
 
@@ -210,15 +219,14 @@ def _run() -> list[SeedRow]:
                 split_out[str(splits)] = float(jnp.max(jnp.abs(o_n - o1)))
                 split_grad[str(splits)] = _graddiff(g_n, g1)
 
-        max_g, med_g = _graddiff(g_ragged, g_ring)
+        max_g, med_g = _graddiff(g_ragged, g_dense)
         rows.append(
             SeedRow(
                 seed=seed,
-                max_out_vs_ring=float(jnp.max(jnp.abs(o_ragged - o_ring))),
                 ragged_vs_dense=_maxdiff_vs_dense(o_ragged, dense),
                 ring_vs_dense=_maxdiff_vs_dense(o_ring, dense),
-                max_grad_vs_ring=max_g,
-                median_grad_vs_ring=med_g,
+                max_grad_vs_dense=max_g,
+                median_grad_vs_dense=med_g,
                 dropped_no_drop_case=dropped + dropped_ring,
                 max_out_splits=split_out,
                 median_grad_splits={k: v[1] for k, v in split_grad.items()},
@@ -234,7 +242,7 @@ def run_benchmark(config: RaggedEpConfig) -> None:
     rows = _run()
     payload = [r.model_dump(mode="json") for r in rows]
     ground_truth_ok = all(
-        r.max_out_vs_ring <= TOLERANCE and r.median_grad_vs_ring <= TOLERANCE and r.dropped_no_drop_case == 0
+        r.ragged_vs_dense <= TOLERANCE and r.median_grad_vs_dense <= TOLERANCE and r.dropped_no_drop_case == 0
         for r in rows
     )
     splits_ok = all(
@@ -244,7 +252,7 @@ def run_benchmark(config: RaggedEpConfig) -> None:
     )
     verdict = {
         "ragged_correct": bool(ground_truth_ok and splits_ok),
-        "matches_ring_no_drop": ground_truth_ok,
+        "matches_dense_no_drop": ground_truth_ok,
         "split_invariant": splits_ok,
     }
     logger.info("ragged_ep_result %s verdict %s", json.dumps(payload), json.dumps(verdict))
