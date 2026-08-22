@@ -109,6 +109,28 @@ config:
       mcpAccess:
         mode: all
         groups: []
+    hero-ops:
+      agent: codex
+      description: Coordinate hero-run alerts and delegate evidence-backed training triage
+      model: gpt-5.6-sol
+      effort: xhigh
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 3600
+      maxConcurrent: 1
+      turnBudget: 100
+      prelude: weaver
+      instructionsFile: profiles/hero-ops/AGENTS.md
+      env: *loomIrisUser
+      restricted: false
+      allowedTools: []
+      mcpAccess:
+        mode: all
+        groups: []
     slack:
       agent: codex
       description: Slack-triggered Marin conversations and repository work
@@ -127,6 +149,8 @@ config:
   marin-loom:workloads:
     - name: grafana-alerts
       profile: ops
+      additionalProfiles:
+        - hero-ops
       serviceTag: grafana
       serviceAccountId: marin-grafana
       createServiceAccount: false
