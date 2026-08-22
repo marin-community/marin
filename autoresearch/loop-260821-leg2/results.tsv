@@ -5,3 +5,5 @@ iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
 1c	2026-08-22T05:48Z	24ff7b01bc	-	-	crash	-	crash	slop 80 no help (194.03 GiB floor); knobs dead, adding MLP remat
 1d	2026-08-22T06:00Z	0c0bb5472a	-	-	crash	-	crash	MLP remat a no-op (194.03 byte-identical); pinned collective outputs are un-rematable; trying LHS+ov4+f0.68 (h17b posture)
 1e	2026-08-22T06:07Z	8117d49827	-	-	crash	-	crash	LHS posture raises pre-remat peak to 212.35 GiB; LHS closed for lean graph; moving to expert chunking
+0	2026-08-22T07:08Z	c3f71b2fc9	21.1638	0.0	pass	drops=0.0,loss=11.8044@15	baseline	old code, same night (ra2a-l2-i00-base)
+1g	2026-08-22T07:08Z	69dc015a9c	22.6824	+1.5186	pass	drops=0.0,loss=11.804399@15	keep	lean data path + 2 sequential expert chunks (ra2a-l2-i01g-leanpath-chunk2); beats pooled 22.31

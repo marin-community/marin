@@ -27,7 +27,7 @@ _SM100_COMPUTE_CAPABILITY = 10.0
 
 # Sequential local-expert chunks per MoE layer; capacity splits evenly across chunks. Falls
 # back to a single chunk when the local expert count is not divisible.
-_EXPERT_CHUNKS = 2
+_EXPERT_CHUNKS = 3
 
 # An expert MLP takes both views of the receiver buffer's group sizes: the physical sizes,
 # which charge trailing padding to the last expert, and the active sizes, which count only
