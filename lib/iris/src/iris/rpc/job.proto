@@ -675,6 +675,15 @@ enum ContainerProfile {
 // TASK RUNTIME TYPES (shared between controller and worker)
 // ============================================================================
 
+// Application health contract for one task attempt. Iris allocates the fixed
+// named port "healthz" and sends GET /healthz to the task on that port.
+message TaskHealthCheck {
+  iris.time.Duration startup_timeout = 1;
+  iris.time.Duration period = 2;
+  iris.time.Duration request_timeout = 3;
+  int32 failure_threshold = 4;
+}
+
 // Task execution request sent from controller to worker.
 // Elevated from the Worker message namespace to break the circular dependency
 // between controller.proto and worker.proto.
@@ -719,4 +728,7 @@ message RunTaskRequest {
   // DEFAULT. Never set directly by a client — clients request a profile via
   // LaunchJobRequest.container_profile, which the controller authorizes.
   ContainerProfile container_profile = 15;
+
+  // Optional application health contract copied from the owning job.
+  TaskHealthCheck health_check = 16;
 }

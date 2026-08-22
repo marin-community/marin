@@ -296,15 +296,14 @@ class ProgressWatchdogConfig:
     ) -> ProgressWatchdog | None:
         if self.step_timeout is None and self.process_timeout is None and self.startup_timeout is None:
             return None
-        if self.diagnostic_timeout is not None and process_index != 0:
-            return None
-        if self.diagnostic_timeout is not None and diagnostic is None:
+        runs_diagnostic = self.diagnostic_timeout is not None and process_index == 0
+        if runs_diagnostic and diagnostic is None:
             raise ValueError("diagnostic is required when diagnostic_timeout is set")
         return ProgressWatchdog(
             step_timeout=self.step_timeout,
             process_timeout=self.process_timeout,
             startup_timeout=self.startup_timeout,
             startup_grace_period=self.startup_grace_period,
-            diagnostic=diagnostic if self.diagnostic_timeout is not None else None,
-            diagnostic_timeout=self.diagnostic_timeout,
+            diagnostic=diagnostic if runs_diagnostic else None,
+            diagnostic_timeout=self.diagnostic_timeout if runs_diagnostic else None,
         )

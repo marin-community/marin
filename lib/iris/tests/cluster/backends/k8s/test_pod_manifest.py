@@ -416,6 +416,31 @@ def test_build_pod_manifest_task_container_falls_back_to_logs_on_error():
     assert container["terminationMessagePolicy"] == "FallbackToLogsOnError"
 
 
+def test_build_pod_manifest_uses_native_task_health_probes():
+    request = make_run_req("/test-job/0")
+    request.health_check.startup_timeout.milliseconds = 30 * 60 * 1000
+    request.health_check.period.milliseconds = 10 * 1000
+    request.health_check.request_timeout.milliseconds = 3 * 1000
+    request.health_check.failure_threshold = 13
+
+    manifest = _build_pod_manifest(request, pod_config())
+    container = manifest["spec"]["containers"][0]
+    env = {item["name"]: item.get("value") for item in container["env"]}
+
+    assert env["IRIS_PORT_HEALTHZ"] == "0"
+    assert env["IRIS_HEALTH_PORT_FILE"] == "/tmp/iris/health-port"
+    assert container["startupProbe"]["periodSeconds"] == 10
+    assert container["startupProbe"]["timeoutSeconds"] == 4
+    assert container["startupProbe"]["failureThreshold"] == 181
+    assert "--phase startup" in container["startupProbe"]["exec"]["command"][2]
+    assert container["livenessProbe"]["periodSeconds"] == 10
+    assert container["livenessProbe"]["timeoutSeconds"] == 4
+    assert container["livenessProbe"]["failureThreshold"] == 13
+    assert "--failure-threshold 13" in container["livenessProbe"]["exec"]["command"][2]
+    assert container["terminationMessagePath"] == "/tmp/iris/health-termination-log"
+    assert container["terminationMessagePolicy"] == "FallbackToLogsOnError"
+
+
 def test_build_pod_manifest_gpu():
     req = make_run_req("/test-job/0")
     req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))

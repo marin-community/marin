@@ -730,6 +730,8 @@ exec {quoted_cmd}
         # and can be double-allocated to a new task).
         if config.ports:
             cmd.extend(["--label", f"iris.ports={json.dumps(config.ports)}"])
+        if config.health_check_json:
+            cmd.extend(["--label", f"iris.health_check={config.health_check_json}"])
 
         # Resource limits (cgroups v2) — always applied
         cpu_millicores = config.get_cpu_millicores()
@@ -1090,6 +1092,7 @@ class DockerRuntime:
                     started_at=state.get("StartedAt", ""),
                     workdir_host_path=workdir_host_path,
                     ports=json.loads(labels.get("iris.ports", "{}")),
+                    health_check_json=labels.get("iris.health_check", ""),
                 )
             )
 

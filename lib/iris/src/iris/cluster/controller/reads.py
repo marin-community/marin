@@ -105,6 +105,7 @@ class PendingDispatchRow:
     resources: "job_pb2.ResourceSpecProto"
     entrypoint_json: str
     environment_json: str
+    health_check_json: str | None
     bundle_id: str
     ports_json: list
     constraints_json: str | None
@@ -628,6 +629,7 @@ def get_job_detail(tx: Tx, job_id: JobName):
             job_config_table.c.max_task_failures,
             job_config_table.c.entrypoint_json,
             job_config_table.c.environment_json,
+            job_config_table.c.health_check_json,
             job_config_table.c.bundle_id,
             job_config_table.c.ports_json,
             job_config_table.c.max_retries_failure,
@@ -1671,6 +1673,7 @@ PENDING_DISPATCH_COLS = (
     job_config_table.c.res_device_json,
     job_config_table.c.entrypoint_json,
     job_config_table.c.environment_json,
+    job_config_table.c.health_check_json,
     job_config_table.c.bundle_id,
     job_config_table.c.ports_json,
     job_config_table.c.constraints_json,
@@ -1700,6 +1703,7 @@ def pending_dispatch_row(r) -> PendingDispatchRow:
         ),
         entrypoint_json=str(r.entrypoint_json),
         environment_json=str(r.environment_json),
+        health_check_json=r.health_check_json,
         bundle_id=str(r.bundle_id),
         ports_json=r.ports_json,
         constraints_json=r.constraints_json,

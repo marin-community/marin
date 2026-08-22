@@ -9,7 +9,8 @@ import time
 import pytest
 from fray.client import JobAlreadyExists, JobFailed, wait_all
 from fray.local_backend import LocalClient
-from fray.types import Entrypoint, JobRequest, JobStatus
+from fray.types import Entrypoint, JobRequest, JobStatus, TaskHealthCheck
+from rigging.timing import Duration
 
 
 @pytest.fixture
@@ -39,6 +40,22 @@ def test_submit_callable_succeeds(client: LocalClient):
     handle = client.submit(JobRequest(name="ok", entrypoint=Entrypoint.from_callable(_noop)))
     status = handle.wait()
     assert status == JobStatus.SUCCEEDED
+
+
+def test_local_submit_rejects_task_health(client: LocalClient):
+    request = JobRequest(
+        name="health",
+        entrypoint=Entrypoint.from_callable(_noop),
+        health_check=TaskHealthCheck(
+            startup_timeout=Duration.from_seconds(30),
+            period=Duration.from_seconds(5),
+            request_timeout=Duration.from_seconds(1),
+            failure_threshold=3,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="does not support task health checks"):
+        client.submit(request)
 
 
 def test_submit_callable_failure(client: LocalClient):

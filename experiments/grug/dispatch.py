@@ -9,7 +9,7 @@ from typing import TypeVar
 
 from fray.cluster import ResourceConfig
 from fray.current_client import current_client
-from fray.types import Entrypoint, JobRequest, create_environment
+from fray.types import Entrypoint, JobRequest, TaskHealthCheck, create_environment
 from iris.rpc.proto_display import priority_band_value
 from marin.training.run_environment import extras_for_resources
 from marin.training.training import resolve_training_env
@@ -54,6 +54,7 @@ def dispatch_grug_training_run(
     max_task_failures: int = 10,
     processes_per_task: int = 1,
     priority: int = INHERIT_PRIORITY,
+    health_check: TaskHealthCheck | None = None,
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.
 
@@ -75,6 +76,7 @@ def dispatch_grug_training_run(
         max_task_failures=max_task_failures,
         processes_per_task=processes_per_task,
         priority=priority,
+        health_check=health_check,
     )
     logger.info("Dispatching grug training via Fray: %s", request.name)
     job = current_client().submit(request)
