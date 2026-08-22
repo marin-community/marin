@@ -13,13 +13,18 @@ import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
+from fray.types import ResourceConfig
 from marin.datakit.decon import (
     EvalBloom,
     NGramConfig,
     _bloom_hash,
+    _document_overlap_matches_by_minimum,
     _extract_ngrams,
+    _extract_streaming_ngrams,
+    _extract_token_ngrams,
     _load_drop_set,
     _paragraph_overlap_and_matches,
+    _source_sample_shards,
     bloom_paths,
     build_all_source_drop_sets,
     build_eval_bloom,
@@ -28,6 +33,7 @@ from marin.datakit.decon import (
     merge_eval_blooms,
 )
 from marin.datakit.normalize import NormalizedData
+from zephyr.execution import ZephyrContext
 
 
 @pytest.fixture(autouse=True)
@@ -494,6 +500,159 @@ def test_decon_short_record_fallback_spans_tiny_paragraphs(tmp_path: Path):
     assert rows["doc"]["max_overlap"] == 1.0
 
 
+def test_decon_long_record_fallback_spans_short_paragraphs(tmp_path: Path):
+    text = "one two three four\n\nfive six seven eight\n\nnine ten eleven twelve\n\nthirteen fourteen"
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "eval", "text": text}],
+        input_records=[{"id": "doc", "text": text, "partition_id": 0}],
+        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5),
+    )
+
+    assert rows["doc"]["contaminated"] is True
+    assert rows["doc"]["max_overlap"] == 1.0
+
+
+def test_decon_complete_record_with_one_ngram_and_short_answer_matches(tmp_path: Path):
+    text = "In which fiscal quarter of 2024 did Atlassian record its second highest revenue?\n\nQ4"
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "eval", "text": text}],
+        input_records=[{"id": "doc", "text": text, "partition_id": 0}],
+        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5),
+    )
+
+    assert rows["doc"]["contaminated"] is True
+    assert len(rows["doc"]["matched_hashes"]) == 1
+
+
+@pytest.mark.parametrize("short_match", ["September 29, 2011", "2, 3 and 4"])
+def test_decon_does_not_mark_long_document_from_one_short_match(tmp_path: Path, short_match: str):
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "short_eval", "text": short_match}],
+        input_records=[
+            {
+                "id": "doc",
+                "text": (
+                    "This document has unrelated material before the short value.\n\n"
+                    f"{short_match}\n\n"
+                    "It also has unrelated material after the short value."
+                ),
+                "partition_id": 0,
+            }
+        ],
+        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5),
+    )
+
+    assert rows["doc"]["contaminated"] is False
+    assert rows["doc"]["max_overlap"] == 1.0
+    assert rows["doc"]["matched_hashes"] == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Distinctive alpha phrase",
+        "one two three four five six seven eight nine ten eleven twelve thirteen",
+    ],
+)
+def test_decon_keeps_one_feature_match_for_complete_document(tmp_path: Path, text: str):
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "short_eval", "text": text}],
+        input_records=[{"id": "doc", "text": text, "partition_id": 0}],
+        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5),
+    )
+
+    assert rows["doc"]["contaminated"] is True
+    assert rows["doc"]["matched_hashes"] == [_bloom_hash(text)]
+
+
+def test_decon_does_not_index_short_paragraph_from_long_eval_record(tmp_path: Path):
+    long_match = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
+    short_match = "See comment above."
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "eval", "text": f"{long_match}\n\n{short_match}"}],
+        input_records=[
+            {"id": "long", "text": long_match, "partition_id": 0},
+            {"id": "short", "text": short_match, "partition_id": 0},
+        ],
+        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5),
+    )
+
+    assert rows["long"]["contaminated"] is True
+    assert rows["short"]["contaminated"] is False
+    assert rows["short"]["matched_hashes"] == []
+
+
+def test_decon_uses_configured_minimum_distinct_features(tmp_path: Path):
+    text = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
+    eval_records = [{"id": "eval", "text": text}]
+    input_records = [{"id": "doc", "text": text, "partition_id": 0}]
+
+    two = _run_decon_one_shot(
+        tmp_path / "two",
+        eval_records=eval_records,
+        input_records=input_records,
+        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5, min_matched_features=2),
+    )
+    three = _run_decon_one_shot(
+        tmp_path / "three",
+        eval_records=eval_records,
+        input_records=input_records,
+        ngram=NGramConfig(ngram_length=13, overlap_threshold=0.5, min_matched_features=3),
+    )
+
+    assert two["doc"]["contaminated"] is True
+    assert three["doc"]["contaminated"] is False
+
+
+def test_ngram_config_rejects_zero_minimum_matched_features():
+    with pytest.raises(ValueError, match="min_matched_features must be at least 1"):
+        NGramConfig(min_matched_features=0)
+
+
+def test_document_overlap_scores_multiple_evidence_minimums_in_one_pass():
+    text = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
+    ngram = NGramConfig(ngram_length=13, overlap_threshold=0.5)
+    bloom = dupekit.Bloom(1_000, 1e-9)
+    for feature in _extract_ngrams(text, 13, 0):
+        bloom.add(_bloom_hash(feature))
+
+    score, matches = _document_overlap_matches_by_minimum(text, bloom, ngram, (1, 2, 3))
+
+    assert score == 1.0
+    assert len(matches[1]) == 2
+    assert len(matches[2]) == 2
+    assert matches[3] == []
+
+
+def test_decon_attributes_only_report_hashes_that_triggered_mark(tmp_path: Path):
+    strong_match = "alpha beta gamma delta epsilon zeta"
+    weak_match = "September 29, 2011"
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[
+            {"id": "strong_eval", "text": strong_match},
+            {"id": "weak_eval", "text": weak_match},
+        ],
+        input_records=[
+            {
+                "id": "doc",
+                "text": f"{strong_match}\n\n{weak_match}",
+                "partition_id": 0,
+            }
+        ],
+        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+    )
+
+    expected = {_bloom_hash(ngram) for ngram in _extract_ngrams(strong_match, 3, 0)}
+    assert rows["doc"]["contaminated"] is True
+    assert set(rows["doc"]["matched_hashes"]) == expected
+
+
 def test_double_newline_delimiter_spans_single_line_breaks(tmp_path: Path):
     """``paragraph_delimiter="\\n\\n"`` lets n-grams cross single ``\\n`` breaks.
 
@@ -849,6 +1008,42 @@ def test_build_eval_bloom_then_decon_matches_inline(fox_corpus):
         assert sorted(pre["matched_hashes"]) == sorted(inline["matched_hashes"])
 
 
+def test_build_eval_bloom_uses_shared_zephyr_context(tmp_path: Path):
+    eval_root = tmp_path / "evals"
+    _write_input_parquet(
+        eval_root / "eval-a.parquet",
+        [{"id": "eval-a", "text": "alpha beta gamma delta"}],
+    )
+    _write_input_parquet(
+        eval_root / "eval-b.parquet",
+        [{"id": "eval-b", "text": "one two three four"}],
+    )
+    resources = ResourceConfig(cpu=1, ram="512m")
+
+    with ZephyrContext(
+        name="parallel-bloom-test",
+        resources=resources,
+        max_workers=2,
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+    ) as zephyr_context:
+        result = build_eval_bloom(
+            eval_data_sources=str(eval_root),
+            output_path=str(tmp_path / "bloom"),
+            ngram=NGramConfig(ngram_length=3),
+            estimated_doc_count=1_000,
+            worker_resources=resources,
+            max_workers=2,
+            zephyr_context=zephyr_context,
+        )
+
+    assert result.n_eval_records == 2
+    index_rows = pq.read_table(result.eval_hash_index_path).to_pylist()
+    assert {row["eval_id"] for row in index_rows} == {"eval-a", "eval-b"}
+    bloom = dupekit.Bloom.load_bytes(Path(result.bloom_path).read_bytes())
+    assert _bloom_hash("alpha beta gamma") in bloom
+    assert _bloom_hash("one two three") in bloom
+
+
 def test_build_eval_bloom_requires_complete_eval_manifest(tmp_path: Path):
     eval_root = tmp_path / "evals"
     artifact_path = eval_root / "aa" / "required_eval" / "test.parquet"
@@ -945,6 +1140,41 @@ def test_build_eval_bloom_requires_features_for_every_required_record(tmp_path: 
             eval_data_sources=str(eval_root),
             output_path=str(tmp_path / "bloom"),
             ngram=NGramConfig(ngram_length=13),
+            required_eval_manifest_path=str(manifest_path),
+            required_eval_corpus_version="test-corpus-v1",
+            required_eval_names=("Required Eval",),
+        )
+
+
+def test_build_eval_bloom_requires_each_required_record_to_self_match(tmp_path: Path):
+    eval_root = tmp_path / "evals"
+    artifact_path = eval_root / "aa" / "required_eval" / "test.parquet"
+    text = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
+    _write_input_parquet(artifact_path, [{"id": "eval-1", "text": text}])
+    manifest_path = eval_root / "aa" / "_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "corpus_version": "test-corpus-v1",
+                "required": True,
+                "status": "complete",
+                "benchmarks": [
+                    {
+                        "name": "Required Eval",
+                        "artifact": "required_eval/test.parquet",
+                        "expected_records": 1,
+                    }
+                ],
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="1 of 1 required eval records do not match an exact copy"):
+        build_eval_bloom(
+            eval_data_sources=str(eval_root),
+            output_path=str(tmp_path / "bloom"),
+            ngram=NGramConfig(ngram_length=13, min_matched_features=3),
             required_eval_manifest_path=str(manifest_path),
             required_eval_corpus_version="test-corpus-v1",
             required_eval_names=("Required Eval",),
@@ -1196,6 +1426,21 @@ def test_extract_ngrams_drops_letterless_ngrams():
     # A single letter anywhere in the window keeps it (it now has real content).
     mixed = "x 2 3 4 5 6 7 8 9 10 11 12 13"
     assert list(_extract_ngrams(mixed, 13, 0)) == [mixed]
+
+
+@pytest.mark.parametrize(
+    ("text", "ngram_length", "stride"),
+    [
+        ("alpha beta gamma delta epsilon", 3, 0),
+        ("1 2\n3\talpha 5 6", 2, 1),
+        ("1 2 3 4", 2, 0),
+        ("alpha\u2003beta gamma\r\ndelta epsilon", 3, 2),
+    ],
+)
+def test_streaming_ngrams_match_materialized_ngrams(text: str, ngram_length: int, stride: int):
+    assert list(_extract_streaming_ngrams(text, ngram_length, stride)) == list(
+        _extract_token_ngrams(text.split(), ngram_length, stride)
+    )
 
 
 def test_decon_skips_numeric_only_contamination(tmp_path: Path):
@@ -1499,6 +1744,83 @@ def test_all_source_drop_sets_filters_diffuse_global_boilerplate(tmp_path: Path)
     rows = _read_attributes(marked)
     assert rows["common_0_0"]["contaminated"] is False
     assert rows["leak"]["contaminated"] is True
+
+
+def test_all_source_drop_sets_parallel_sample_respects_document_limits(tmp_path: Path):
+    common = "four score and seven years ago our fathers brought forth a new nation"
+    late_leak = "the platypus juggled seventeen luminous kumquats beside a silent observatory"
+    filler = "ordinary source material with no shared evaluation sequence"
+    eval_dir = tmp_path / "eval"
+    _write_eval_jsonl(
+        eval_dir / "eval.jsonl.gz",
+        [{"id": "common", "text": common}, {"id": "late", "text": late_leak}],
+    )
+    ngram = NGramConfig(ngram_length=4, overlap_threshold=0.5)
+    bloom_dir = tmp_path / "bloom"
+    build_eval_bloom(
+        eval_data_sources=str(eval_dir),
+        output_path=str(bloom_dir),
+        ngram=ngram,
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+
+    source_dir = tmp_path / "source"
+    texts = [common, common, common, filler, filler, filler, late_leak, late_leak]
+    for file_index in range(4):
+        rows = [
+            {"id": f"doc_{row_index}", "text": texts[row_index], "partition_id": file_index}
+            for row_index in range(file_index * 2, file_index * 2 + 2)
+        ]
+        _write_input_parquet(source_dir / f"part-{file_index:05d}-of-00004.parquet", rows)
+
+    out = tmp_path / "drops"
+    result = build_all_source_drop_sets(
+        sources=[("source", str(source_dir))],
+        prebuilt_bloom_dir=str(bloom_dir),
+        output_path=str(out),
+        ngram=ngram,
+        sample_docs=3,
+        common_frac=0.5,
+        common_min_abs=2,
+        global_sample_docs=6,
+        global_common_min_abs=2,
+        global_common_min_sources=1,
+    )
+    assert result.counters["decon_drop/sample_shards"] == 3
+    assert result.counters["decon_drop/nonempty_sampling_shards"] > 1
+    assert result.counters["decon_drop/global_documents_sampled"] == 6
+
+    marked = tmp_path / "marked"
+    decon_to_parquet(
+        normalized_data=_as_source(source_dir),
+        prebuilt_bloom_dir=str(bloom_dir),
+        output_path=str(marked),
+        ngram=ngram,
+        drop_set_dirs=[str(out / "source"), result.global_output_dir],
+    )
+    rows = _read_attributes(marked)
+    assert rows["doc_0"]["contaminated"] is False
+    assert rows["doc_6"]["contaminated"] is True
+
+
+def test_source_sample_shards_uses_512_shards_for_large_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    (source_dir / "part.parquet").touch()
+    planned_ranges = [(row, row + 1) for row in range(600)]
+    monkeypatch.setattr("marin.datakit.decon.compute_parquet_splits", lambda *_args: planned_ranges)
+
+    shards = _source_sample_shards(
+        ("source", str(source_dir)),
+        text_field="text",
+        sample_docs=len(planned_ranges),
+        global_sample_docs=len(planned_ranges),
+    )
+
+    assert len(shards) == 512
+    assert sum(len(shard["ranges"]) for shard in shards) == len(planned_ranges)
+    assert max(len(shard["ranges"]) for shard in shards) == 2
 
 
 def test_decon_flagged_sample_sidecar(fox_corpus):
