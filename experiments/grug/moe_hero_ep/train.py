@@ -148,11 +148,6 @@ def _apply_hero_ep_runtime_defaults(
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
     ragged = moe_implementation == RAGGED_MOE_IMPLEMENTATION
     if ragged:
-        # The transport's window registration makes the ordinary collectives eligible for NCCL's
-        # symmetric kernels, which the tuner sizes frugally in CTAs. On this posture they run
-        # fully exposed (LDMC reduce-scatter 2.75x slower than the pooled twin's ring), so SM
-        # frugality buys nothing; give them a full CTA budget instead.
-        os.environ.setdefault("NCCL_SYM_CTAS", "32")
         overlap_limit = RAGGED_COLLECTIVE_OVERLAP_LIMIT
     elif inline_watch_enabled:
         overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT
