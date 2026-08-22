@@ -166,10 +166,10 @@ _CONSTRAINT_KEY_TO_NODE_LABEL: dict[str, str] = {
 # Kubernetes label values: max 63 chars, alphanumeric plus [-_.], must start/end alphanumeric.
 _K8S_LABEL_MAX_LEN = 63
 
-# Number of consecutive sync cycles where a pod is missing from the k8s API
-# before declaring the attempt preempted. Avoids false positives from transient
-# API misses.
-_POD_NOT_FOUND_GRACE_CYCLES = 3
+# Number of consecutive sync cycles where a pod is missing or has no actionable
+# phase before declaring the attempt lost. Avoids false positives from
+# transiently stale Kubernetes observations.
+_POD_UNRESOLVED_GRACE_CYCLES = 3
 
 # A terminal reason can carry a full log tail (an init container running under
 # terminationMessagePolicy: FallbackToLogsOnError) or a Kueue eviction message,
@@ -179,6 +179,9 @@ _TERMINAL_REASON_MAX_CHARS = 500
 # Terminal reason for a vanished pod whose disruption was never observed — the
 # pod was deleted between two polls, so no condition survived to name the cause.
 _POD_DELETED_TERMINAL_REASON = "PodDeleted: pod was deleted while the attempt was active"
+_POD_UNKNOWN_TERMINAL_REASON = "PodUnknown: pod remained in an unknown phase while the attempt was active"
+
+_RESOLVED_POD_PHASES = frozenset({"Pending", "Running", "Succeeded", "Failed"})
 
 # Kubernetes terminated reasons that indicate infrastructure failure (not application error).
 # Evicted: kubelet evicted the pod due to resource pressure.
@@ -1119,12 +1122,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
     # Backend object identity is known once the pod exists; capture it on every
     # update (not only the terminal one) so a later preemption that deletes the pod
     # still leaves the identity persisted.
-    metadata = pod.get("metadata", {})
-    identity = {
-        "pod_name": metadata.get("name") or None,
-        "pod_uid": metadata.get("uid") or None,
-        "node_name": pod.get("spec", {}).get("nodeName") or None,
-    }
+    identity = _pod_identity(pod)
 
     if phase == "Pending":
         return TaskUpdate(
@@ -1153,8 +1151,9 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
             **identity,
         )
 
-    # Failed or Unknown -- distinguish infrastructure vs application failure. The
-    # error field carries the failure story, so clear the waiting one-liner.
+    # _poll_pods holds unresolved phases through their grace period, so only a
+    # definitive Failed phase can reach the failure classifier.
+    assert phase == "Failed", f"unresolved pod phase {phase!r} reached the failure classifier"
     exit_code = _extract_exit_code(pod)
     new_state = _pod_failure_state(pod)
     terminal_reason = _extract_terminal_reason(pod)
@@ -1168,6 +1167,15 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
         terminal_reason=terminal_reason,
         **identity,
     )
+
+
+def _pod_identity(pod: dict) -> dict[str, str | None]:
+    metadata = pod.get("metadata", {})
+    return {
+        "pod_name": metadata.get("name") or None,
+        "pod_uid": metadata.get("uid") or None,
+        "node_name": pod.get("spec", {}).get("nodeName") or None,
+    }
 
 
 def _extract_exit_code(pod: dict) -> int | None:
@@ -2215,7 +2223,7 @@ class K8sTaskProvider:
     # from, passed by the composer at construction (a cluster backend has no
     # worker store, so it reads its dispatch drain through this).
     transition_reader: TransitionReader | None = field(default=None, repr=False)
-    _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    _pod_unresolved_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     # The disruption condition last seen on an attempt's pod, keyed by the
     # incarnation (a resubmit reuses task_id/attempt_id under a fresh uid) and
     # dropped once the attempt leaves the poll set.
@@ -3014,44 +3022,62 @@ class K8sTaskProvider:
             cursor_key = f"{entry.task_id.to_wire()}:{entry.attempt_id}"
             task_key = (entry.task_id.to_wire(), entry.attempt_id)
 
-            if pod is None:
-                count = self._pod_not_found_counts.get(cursor_key, 0) + 1
-                self._pod_not_found_counts[cursor_key] = count
-                if count < _POD_NOT_FOUND_GRACE_CYCLES:
+            phase = pod.get("status", {}).get("phase", "") if pod is not None else ""
+            pod_unresolved = pod is None or phase not in _RESOLVED_POD_PHASES
+            if pod_unresolved:
+                count = self._pod_unresolved_counts.get(cursor_key, 0) + 1
+                self._pod_unresolved_counts[cursor_key] = count
+                if count < _POD_UNRESOLVED_GRACE_CYCLES:
+                    status_message = ""
+                    identity: dict[str, str | None] = {}
+                    if pod is not None:
+                        workload = _workload_for_pod(pod, workload_index)
+                        status_message = _pod_status_message(pod, workload)
+                        identity = _pod_identity(pod)
                     updates.append(
                         TaskUpdate(
                             task_id=entry.task_id,
                             attempt_id=entry.attempt_id,
                             new_state=job_pb2.TASK_STATE_RUNNING,
+                            status_message=status_message,
+                            **identity,
                         )
                     )
                     continue
-                # Grace exhausted — the pod is truly gone. Absence is not an
-                # application failure, so charge the preemption budget either
-                # way: PREEMPTED when the pod was seen terminating under a
-                # disruption (Kueue deletes every pod of a preempted Workload,
-                # leaving no terminal status), WORKER_FAILED when the cause was
-                # never observed.
-                self._pod_not_found_counts.pop(cursor_key, None)
-                disruption_reason = self._disruption_reasons.get(entry)
-                terminal_reason = disruption_reason or _POD_DELETED_TERMINAL_REASON
+                self._pod_unresolved_counts.pop(cursor_key, None)
+                if pod is None:
+                    # Grace exhausted — the pod is truly gone. Absence is not an
+                    # application failure, so charge the preemption budget either
+                    # way: PREEMPTED when the pod was seen terminating under a
+                    # disruption (Kueue deletes every pod of a preempted Workload,
+                    # leaving no terminal status), WORKER_FAILED when the cause was
+                    # never observed.
+                    disruption_reason = self._disruption_reasons.get(entry)
+                    terminal_reason = disruption_reason or _POD_DELETED_TERMINAL_REASON
+                    new_state = (
+                        job_pb2.TASK_STATE_PREEMPTED
+                        if disruption_reason is not None
+                        else job_pb2.TASK_STATE_WORKER_FAILED
+                    )
+                    identity = {}
+                else:
+                    terminal_reason = _POD_UNKNOWN_TERMINAL_REASON
+                    new_state = job_pb2.TASK_STATE_WORKER_FAILED
+                    identity = _pod_identity(pod)
                 updates.append(
                     TaskUpdate(
                         task_id=entry.task_id,
                         attempt_id=entry.attempt_id,
-                        new_state=(
-                            job_pb2.TASK_STATE_PREEMPTED
-                            if disruption_reason is not None
-                            else job_pb2.TASK_STATE_WORKER_FAILED
-                        ),
+                        new_state=new_state,
                         error=terminal_reason,
                         terminal_reason=terminal_reason,
                         status_message="",
+                        **identity,
                     )
                 )
                 continue
 
-            self._pod_not_found_counts.pop(cursor_key, None)
+            self._pod_unresolved_counts.pop(cursor_key, None)
             workload = _workload_for_pod(pod, workload_index)
             update = _task_update_from_pod(entry, pod, workload)
             # Readable only while the pod terminates; the vanished-pod path
