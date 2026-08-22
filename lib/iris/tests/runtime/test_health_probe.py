@@ -23,7 +23,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    def log_message(self, format: str, *args) -> None:
+    def log_message(self, _format: str, *args) -> None:
         pass
 
 

@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from rigging.timing import Duration
-
 from iris.cluster.health import TaskHealthCheck, publish_task_health, task_health_port
+from rigging.timing import Duration
 
 
 def test_task_health_check_requires_kubernetes_compatible_durations():
