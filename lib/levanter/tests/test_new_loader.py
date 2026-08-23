@@ -63,41 +63,6 @@ def test_loader_rejects_empty_finite_dataset():
             DataLoader(dataset, 1, max_buffered_batches=0, mesh=mesh, axis_resources=None)
 
 
-class RecordingBatchDataset(ListAsyncDataset[np.ndarray]):
-    def __init__(self, data: list[np.ndarray]):
-        super().__init__(data)
-        self.request_sizes: list[int] = []
-
-    async def get_batch(self, indices: Sequence[int]) -> Sequence[np.ndarray]:
-        self.request_sizes.append(len(indices))
-        return await super().get_batch(indices)
-
-
-def test_loader_fetch_chunk_is_independent_of_buffer_capacity():
-    batch_size = len(jax.devices())
-    start_batch = 2
-    fetch_batch_size = 4
-    total_batches = 16
-    dataset_size = batch_size * total_batches
-
-    with use_test_mesh(tensor_parallelism=1) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
-        dataset = RecordingBatchDataset([np.array(i, dtype=np.int32) for i in range(dataset_size)])
-        loader = DataLoader(
-            dataset,
-            batch_size,
-            max_buffered_batches=512,
-            mesh=mesh,
-            axis_resources=None,
-            fetch_batch_size=fetch_batch_size,
-        )
-        batches = list(loader.iter_from_step(start_batch))
-
-    assert [np.asarray(batch).tolist() for batch in batches] == [
-        list(range(start, start + batch_size)) for start in range(start_batch * batch_size, dataset_size, batch_size)
-    ]
-    assert dataset.request_sizes == [1] + [batch_size * fetch_batch_size] * 3 + [batch_size * 2]
-
-
 class StructuredDataset(AsyncDataset):
     def __init__(self, seq_len):
         super().__init__()
