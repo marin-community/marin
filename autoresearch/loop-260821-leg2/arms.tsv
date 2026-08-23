@@ -32,3 +32,4 @@ ra2a-l2-i17-oneshot-symbuf	b3cf55b7be	2026.08.23.1	ragged_all_to_all	synthetic	d
 ra2a-l2-i18-dk-scoped	02c55c3ac2	2026.08.23.2	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-l2-i19-dk-profile	b0ca131aea	2026.08.23.3	ragged_all_to_all	synthetic	disabled	4470000	2100	none	--profile-steps 3 --profile-start-step 8
 ra2a-l2-i20-dk-t1024	4c5d466ccd	2026.08.23.4	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
+ra2a-l2-i21-dk-g4x256	a168cb6a45	2026.08.23.5	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
