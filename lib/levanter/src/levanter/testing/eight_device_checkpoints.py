@@ -13,6 +13,7 @@ import multiprocessing
 import os
 import socket
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass
 from tempfile import TemporaryDirectory
 from unittest import mock
 
@@ -33,17 +34,21 @@ from levanter.tensorstore_serialization import (
     tree_serialize_leaves_tensorstore,
 )
 
-# Set in the parent, because spawn copies the environment into the child before it starts.
-EIGHT_DEVICE_ENV = {"XLA_FLAGS": "--xla_force_host_platform_device_count=8", "JAX_PLATFORMS": "cpu"}
-TWO_PROCESS_ENV = {"XLA_FLAGS": "--xla_force_host_platform_device_count=2", "JAX_PLATFORMS": "cpu"}
+EIGHT_DEVICE_COUNT = 8
+DISTRIBUTED_PROCESS_COUNT = 2
+DISTRIBUTED_ARRAY_SIZE = 4096
 _CHUNK_READ_METRIC = "/tensorstore/cache/chunk_cache/reads"
 # Small enough that every array is worth splitting, so these exercise the split path.
 SPLIT_CONFIG = TensorStoreWriteConfig(min_replica_slice_bytes=1, max_chunk_bytes=4096)
 
 
+def _cpu_device_environment(device_count: int) -> dict[str, str]:
+    return {"XLA_FLAGS": f"--xla_force_host_platform_device_count={device_count}", "JAX_PLATFORMS": "cpu"}
+
+
 def run_on_eight_devices(scenario):
     """Run ``scenario`` in a spawned interpreter, re-raising whatever it raises."""
-    with mock.patch.dict(os.environ, EIGHT_DEVICE_ENV):
+    with mock.patch.dict(os.environ, _cpu_device_environment(EIGHT_DEVICE_COUNT)):
         with ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn")) as pool:
             return pool.submit(scenario).result()
 
@@ -55,14 +60,19 @@ def _tensorstore_chunk_reads() -> int:
     )
 
 
-def _distributed_restore(
-    process_id: int, coordinator: str, checkpoint_path: str
-) -> tuple[dict[str, np.ndarray], set[str], int]:
+@dataclass(frozen=True)
+class _DistributedRestoreResult:
+    arrays: dict[str, np.ndarray]
+    memory_kinds: frozenset[str]
+    tensorstore_chunk_reads: int
+
+
+def _distributed_restore(process_id: int, coordinator: str, checkpoint_path: str) -> _DistributedRestoreResult:
     for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
         os.environ.pop(name, None)
     jax.distributed.initialize(
         coordinator_address=coordinator,
-        num_processes=2,
+        num_processes=DISTRIBUTED_PROCESS_COUNT,
         process_id=process_id,
         local_device_ids=[process_id],
     )
@@ -75,14 +85,17 @@ def _distributed_restore(
             before = _tensorstore_chunk_reads()
             restored = tree_deserialize_leaves_tensorstore(
                 checkpoint_path,
-                {name: jax.ShapeDtypeStruct((4096,), jnp.float32, sharding=pinned) for name in ("a", "c")},
+                {
+                    name: jax.ShapeDtypeStruct((DISTRIBUTED_ARRAY_SIZE,), jnp.float32, sharding=pinned)
+                    for name in ("a", "c")
+                },
             )
             after = _tensorstore_chunk_reads()
             on_device = {name: jax.device_put(array, sharding) for name, array in restored.items()}
-            return (
-                {name: np.asarray(array) for name, array in on_device.items()},
-                {array.sharding.memory_kind for array in restored.values()},
-                after - before,
+            return _DistributedRestoreResult(
+                arrays={name: np.asarray(array) for name, array in on_device.items()},
+                memory_kinds=frozenset(array.sharding.memory_kind for array in restored.values()),
+                tensorstore_chunk_reads=after - before,
             )
     finally:
         jax.distributed.shutdown()
@@ -91,8 +104,8 @@ def _distributed_restore(
 def replica_aware_restore_across_processes() -> None:
     with TemporaryDirectory() as tmpdir:
         expected = {
-            "a": np.arange(4096, dtype=np.float32),
-            "c": np.arange(4096, dtype=np.float32) + 1,
+            "a": np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32),
+            "c": np.arange(DISTRIBUTED_ARRAY_SIZE, dtype=np.float32) + 1,
         }
         tree_serialize_leaves_tensorstore(tmpdir, expected)
         with socket.socket() as listener:
@@ -100,22 +113,25 @@ def replica_aware_restore_across_processes() -> None:
             port = listener.getsockname()[1]
         coordinator = f"127.0.0.1:{port}"
 
-        with mock.patch.dict(os.environ, TWO_PROCESS_ENV):
-            with ProcessPoolExecutor(max_workers=2, mp_context=multiprocessing.get_context("spawn")) as pool:
+        with mock.patch.dict(os.environ, _cpu_device_environment(DISTRIBUTED_PROCESS_COUNT)):
+            with ProcessPoolExecutor(
+                max_workers=DISTRIBUTED_PROCESS_COUNT, mp_context=multiprocessing.get_context("spawn")
+            ) as pool:
                 futures = [
-                    pool.submit(_distributed_restore, process_id, coordinator, tmpdir) for process_id in range(2)
+                    pool.submit(_distributed_restore, process_id, coordinator, tmpdir)
+                    for process_id in range(DISTRIBUTED_PROCESS_COUNT)
                 ]
                 results = [future.result() for future in futures]
 
-    for restored, memory_kinds, _ in results:
+    for result in results:
         for name in expected:
-            np.testing.assert_array_equal(restored[name], expected[name])
-        assert memory_kinds == {"pinned_host"}
-    assert sum(chunk_reads for _, _, chunk_reads in results) == 2
+            np.testing.assert_array_equal(result.arrays[name], expected[name])
+        assert result.memory_kinds == {"pinned_host"}
+    assert sum(result.tensorstore_chunk_reads for result in results) == len(expected)
 
 
 def _mesh(shape: tuple[int, int] = (2, 4)) -> Mesh:
-    assert jax.device_count() == 8, jax.device_count()
+    assert jax.device_count() == EIGHT_DEVICE_COUNT, jax.device_count()
     return Mesh(np.array(jax.devices()).reshape(*shape), ("replica", "expert"))
 
 

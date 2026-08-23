@@ -16,7 +16,7 @@ import urllib.parse
 import zlib
 from dataclasses import dataclass
 from enum import StrEnum
-from functools import cache, partial
+from functools import lru_cache, partial
 from typing import Any, Callable, Optional, Sequence
 
 import equinox
@@ -230,7 +230,10 @@ class TensorStoreReadConfig:
     """How a restore reads shards back."""
 
     max_in_flight_bytes: int = 16 * 1024**3
-    """Transient host and device staging memory this process may hold during restore."""
+    """Target for transient staging memory per process.
+
+    One shard larger than this target proceeds alone so the restore cannot deadlock.
+    """
 
     request_concurrency: int = 128
     """Concurrent object-store requests. TensorStore defaults to 32, which on one GB200 rack
@@ -301,12 +304,7 @@ class _ShardWrite:
 
 
 class _HostByteBudget:
-    """Bound the host memory one process holds in flight while saving.
-
-    Each staged snapshot stays charged until TensorStore commits it: shard writes pass
-    ``can_reference_source_data_indefinitely=True``, so the copy future resolves while the
-    snapshot is still referenced.
-    """
+    """Bound one process's staged save bytes while writes remain in flight."""
 
     def __init__(self, limit_bytes: int):
         self._limit = limit_bytes
@@ -796,7 +794,7 @@ def _fully_replicated_sharding(mesh):
 
 
 def _replica_staging_sharding(sharding: Sharding, shape: tuple[int, ...]) -> NamedSharding | None:
-    """Add a leading dimension that makes the target sharding's replicas addressable."""
+    """Expose uniform NamedSharding replicas on a leading axis, if any."""
     if not isinstance(sharding, NamedSharding):
         return None
 
@@ -833,11 +831,18 @@ class _LeafReadPlan:
     store: ts.TensorStore
     sharding: Sharding
     shape: tuple[int, ...]
-    dtype: Any
+    dtype: np.dtype[Any]
     shard_shape: tuple[int, ...]
     temporary_bytes: int
     staging_sharding: NamedSharding | None
     replica_count: int
+
+
+@dataclass(frozen=True)
+class _RestoreReadResult:
+    leaves: list[jax.Array]
+    store_bytes: int
+    peak_bytes: int
 
 
 async def _leaf_read_plan(
@@ -850,7 +855,7 @@ async def _leaf_read_plan(
 ) -> _LeafReadPlan:
     store = await ts.open(tensorstore_spec, open=True, context=context)
     shape = tuple(store.shape)
-    dtype = jax.dtypes.canonicalize_dtype(store.dtype.numpy_dtype)
+    dtype = np.dtype(jax.dtypes.canonicalize_dtype(store.dtype.numpy_dtype))
     shard_shape = tuple(sharding.shard_shape(shape))
     shard_bytes = math.prod(shard_shape) * np.dtype(dtype).itemsize
     max_read_bytes = shard_bytes
@@ -950,7 +955,7 @@ def _sum_replica_axis(value: jax.Array) -> jax.Array:
     return jnp.sum(value, axis=0, dtype=value.dtype)
 
 
-@cache
+@lru_cache(maxsize=16)
 def _replica_reducer(staging_sharding: NamedSharding, target_sharding: Sharding):
     return jax.jit(_sum_replica_axis, in_shardings=staging_sharding, out_shardings=target_sharding)
 
@@ -987,7 +992,7 @@ def _deserialize_leaves(
     tensorstore_specs: list[dict],
     config: TensorStoreReadConfig,
 ) -> list:
-    """Read every leaf in bounded batches and distribute replica reads in a fixed order."""
+    """Restore leaves into their requested shardings and memory kinds."""
     context = _tensorstore_read_context(config)
 
     async def read_all():
@@ -1014,24 +1019,24 @@ def _deserialize_leaves(
                 leaves.append(_finish_leaf(plan, array))
                 staged_arrays[index] = None
                 store_bytes += staged_store_bytes[index]
-        return leaves, store_bytes, peak_bytes
+        return _RestoreReadResult(leaves=leaves, store_bytes=store_bytes, peak_bytes=peak_bytes)
 
     started = time.time()
-    leaves, store_bytes, peak_bytes = asyncio.run(read_all())
+    result = asyncio.run(read_all())
     elapsed = time.time() - started
-    materialized_bytes = sum(shard.data.nbytes for leaf in leaves for shard in leaf.addressable_shards)
+    materialized_bytes = sum(shard.data.nbytes for leaf in result.leaves for shard in leaf.addressable_shards)
     logger.info(
         "Restore read %s from TensorStore and materialized %s across %d arrays in %.1fs "
         "(%.2f GiB/s), peak %s of a %s budget",
-        _format_gib(store_bytes),
+        _format_gib(result.store_bytes),
         _format_gib(materialized_bytes),
-        len(leaves),
+        len(result.leaves),
         elapsed,
-        store_bytes / 1024**3 / max(elapsed, 1e-9),
-        _format_gib(peak_bytes),
+        result.store_bytes / 1024**3 / max(elapsed, 1e-9),
+        _format_gib(result.peak_bytes),
         _format_gib(config.max_in_flight_bytes),
     )
-    return leaves
+    return result.leaves
 
 
 def _restore_ocdbt(
