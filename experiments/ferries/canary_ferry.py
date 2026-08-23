@@ -3,7 +3,7 @@
 
 """Canary ferry: Grug MoE daily accelerator smoke canary.
 
-Supports TPU (v5p-8, FineWeb-Edu 10M, ~0.25B tokens) and GPU (8x H100, SlimPajama, ~50 steps).
+Supports TPU (v5p-8, FineWeb-Edu 10M, ~0.25B tokens) and GPU (8x H100, FineWeb-Edu 10M, ~50 steps).
 Config is driven by env vars set in the GH Actions workflow env: block and forwarded
 to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
 
@@ -54,7 +54,6 @@ from experiments.grug.moe.launch import (
     GrugMoeLaunchConfig,
     env_int,
     run_grug_moe_trial,
-    slimpajama_6b_dataset,
 )
 from experiments.grug.moe.train import GrugTrainerConfig
 
@@ -233,11 +232,11 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
         name = f"canary-ferry-cw-{gpu_type.lower()}x{gpu_count}-r{gpu_replicas}-d{hidden_dim}-{attention_tag}"
         wandb_group = f"canary-ferry-moe-gpu-{gpu_type.lower()}-r{gpu_replicas}-{attention_tag}"
         wandb_tags = ["canary", "ferry", "grug", "moe", "gpu", gpu_type.lower(), f"d{hidden_dim}", attention_tag]
-        slimpajama = slimpajama_6b_dataset()
-        deps = (slimpajama,)
+        train = fineweb_edu_10M_dataset()
+        deps = (train,)
 
         def build_data(ctx: StepContext):
-            data = mixture(ctx, {slimpajama: 1.0})
+            data = mixture(ctx, {train: 1.0})
             if attention_implementation == _GPU_FA4_THD_ATTENTION:
                 # THD attention only handles full causal windows; pack so each example is one.
                 data = with_pack(data, 1)
@@ -267,7 +266,7 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
     # the job and in validate_canary_metrics.py (which imports this same build()).
     # The GCS canary keeps outputs under MARIN_PREFIX: it lands in a variable
     # region and validate relies on mirror:// to find them across buckets, which
-    # an absolute pin would defeat. The SlimPajama tokenize cache is a separate
+    # an absolute pin would defeat. The prebuilt FineWeb cache is a separate
     # dependency, so it stays under MARIN_PREFIX either way.
     override_output_path = (
         marin_temp_bucket(ttl_days=CANARY_OUTPUT_TTL_DAYS, prefix=step_name)

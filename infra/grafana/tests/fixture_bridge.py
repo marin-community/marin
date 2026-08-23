@@ -20,7 +20,6 @@ _LANES = (
     ("datakit-t1", "Data T1", "marin", "data"),
     ("datakit-t2", "Data T2", "marin", "data"),
     ("datakit-t3", "Data T3", "marin", "data"),
-    ("cluster-smoke", "Cluster", "marin", "cluster"),
     ("evalchemy", "Evalchemy", "forks", "evaluation"),
     ("harbor", "Harbor", "forks", "evaluation"),
     ("marinskyrl", "SkyRL", "forks", "rl"),
