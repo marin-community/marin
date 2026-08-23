@@ -189,7 +189,10 @@ def replicated_arrays_survive_a_roundtrip():
 def replica_aware_restore_reads_each_shard_once():
     mesh = _mesh()
     sharding = NamedSharding(mesh, P("expert", None))
-    source = jax.device_put(jnp.arange(64 * 16, dtype=jnp.float32).reshape(64, 16), sharding)
+    # -0.0, a NaN payload, a subnormal, and 1.0 catch arithmetic restore reductions.
+    bit_patterns = np.array([0x80000000, 0x7FC00001, 0x00000001, 0x3F800000], dtype=np.uint32)
+    source_bits = np.tile(bit_patterns, 64 * 16 // len(bit_patterns)).reshape(64, 16)
+    source = jax.device_put(source_bits.view(np.float32), sharding)
     pinned = sharding.with_memory_kind("pinned_host")
 
     with jax.set_mesh(mesh), TemporaryDirectory() as tmpdir:
@@ -212,7 +215,7 @@ def replica_aware_restore_reads_each_shard_once():
     assert control_after - control_before == 16
     assert restored.sharding.memory_kind == "pinned_host"
     on_device = jax.device_put(restored, sharding)
-    assert jnp.array_equal(on_device, source)
+    np.testing.assert_array_equal(np.asarray(on_device).view(np.uint32), source_bits)
 
 
 def a_checkpoint_loads_on_another_mesh():

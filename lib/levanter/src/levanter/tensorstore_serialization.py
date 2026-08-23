@@ -954,13 +954,16 @@ async def _stage_leaf(plan: _LeafReadPlan) -> tuple[jax.Array, int]:
     return array, sum(store_bytes)
 
 
-def _sum_replica_axis(value: jax.Array) -> jax.Array:
-    return jnp.sum(value, axis=0, dtype=value.dtype)
+def _restore_replica_axis(value: jax.Array) -> jax.Array:
+    bits = jax.lax.bitcast_convert_type(value, jnp.uint8)
+    # Exactly one replica contributes each value, so bytewise sum preserves every checkpoint bit.
+    bits = jnp.sum(bits, axis=0, dtype=bits.dtype)
+    return jax.lax.bitcast_convert_type(bits, value.dtype)
 
 
 @lru_cache(maxsize=16)
 def _replica_reducer(staging_sharding: NamedSharding, target_sharding: Sharding):
-    return jax.jit(_sum_replica_axis, in_shardings=staging_sharding, out_shardings=target_sharding)
+    return jax.jit(_restore_replica_axis, in_shardings=staging_sharding, out_shardings=target_sharding)
 
 
 def _finish_leaf(plan: _LeafReadPlan, staged: jax.Array) -> jax.Array:
