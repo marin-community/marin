@@ -69,6 +69,10 @@ HERO_EP_RUNTIME_ENV = {
     # pins 153.0 GiB in the pool and leaves under 3 GiB free on the device, so the arena
     # allocation below has no room to remap into.
     "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.75",
+    # Symk escape hatch: an unrecognized kernel name empties NCCL's symmetric-kernel mask, so
+    # ordinary collectives fall back to ring/NVLS while windows stay registered -- which is
+    # what lets the device kernel engage without paying the symmetric-kernel tax.
+    "NCCL_SYM_KERNEL": "none",
 }
 XLA_LATENCY_HIDING_FLAG = "--xla_gpu_enable_latency_hiding_scheduler"
 # The scheduler sizes the single `jit_train_step` temp arena against this percentage of its
@@ -155,6 +159,8 @@ def _apply_hero_ep_runtime_defaults(
         overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
+        "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
+        "--xla_gpu_experimental_enable_nccl_symmetric_buffers=true",
         f"{XLA_LATENCY_HIDING_FLAG}={'false' if ragged else 'true'}",
         XLA_MEMORY_LIMIT_SLOP_FLAG,
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
