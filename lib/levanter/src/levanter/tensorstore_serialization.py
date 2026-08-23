@@ -797,6 +797,9 @@ def _replica_staging_sharding(sharding: Sharding, shape: tuple[int, ...]) -> Nam
     """Expose uniform NamedSharding replicas on a leading axis, if any."""
     if not isinstance(sharding, NamedSharding):
         return None
+    if any(device.platform == "tpu" for device in sharding.device_set):
+        # JAX 0.11 aborts when a TPU collective has a pinned-host input or output.
+        return None
 
     used_axes = set()
     for partition in sharding.spec:
