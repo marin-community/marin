@@ -69,6 +69,11 @@ HERO_EP_RUNTIME_ENV = {
     # pins 153.0 GiB in the pool and leaves under 3 GiB free on the device, so the arena
     # allocation below has no room to remap into.
     "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.75",
+    # Engagement audit for the scoped-registration device-kernel arm: the thunk logs
+    # "Device kernel: ..." vs "Performing one-shot ..." at VLOG(3), which is the only
+    # positive signal distinguishing a genuinely-engaged device kernel from a silent
+    # fall-through to the one-shot on the patched wheel (where both paths train).
+    "TF_CPP_VMODULE": "ragged_all_to_all_thunk=3",
 }
 XLA_LATENCY_HIDING_FLAG = "--xla_gpu_enable_latency_hiding_scheduler"
 # The scheduler sizes the single `jit_train_step` temp arena against this percentage of its
@@ -155,6 +160,13 @@ def _apply_hero_ep_runtime_defaults(
         overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
+        # Confound isolation, cell (device kernel, scoped registration): engagement requires
+        # use_symmetric_buffer on the ragged op, but the global symmetric-buffers flag registers
+        # every collective's buffers and hands reduce-scatter/all-gather to NCCL's symmetric
+        # kernels. The scoped list flag registers only the ragged all-to-all operands, so this
+        # cell runs a genuinely-engaged device kernel without the symk takeover.
+        "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
+        "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall",
         f"{XLA_LATENCY_HIDING_FLAG}={'false' if ragged else 'true'}",
         XLA_MEMORY_LIMIT_SLOP_FLAG,
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
