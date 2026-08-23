@@ -118,53 +118,96 @@ def selected_values(prediction: np.ndarray, values: np.ndarray) -> dict[str, flo
     return {f"selected@{k}": float(values[order[:k]].min()) for k in SELECTION_K}
 
 
-def panels(scale: str, target: str):
+POOLINGS = ("semantic", "strata")
+
+
+def bucket_pooling(fit, pooling: str) -> np.ndarray:
+    """Which buckets share readout parameters.
+
+    ``semantic`` is the hand-assigned family partition. ``strata`` cuts equal-count strata on log epochs
+    per unit weight, at the same ``n_strata`` the model already commits to for ``Shape.boundary_scale``,
+    so it needs no knowledge of what any bucket contains.
+    """
+    if pooling == "semantic":
+        return fit.family_index
+    probe = gen.Panel(np.stack([fit.phase0, fit.phase1], axis=1), fit.c0, fit.c1, fit.family_index)
+    return probe.exposure_stratum()
+
+
+def panels(scale: str, target: str, pooling: str = "semantic"):
     """Fit and held-out panels restricted to rows whose outcome exists."""
     fit, held = swarm39.load_scale(scale)
     fit_ok = np.isfinite(fit.targets[target])
     held_ok = np.isfinite(held.targets[target])
-    fit_panel = gen.Panel(np.stack([fit.phase0[fit_ok], fit.phase1[fit_ok]], axis=1), fit.c0, fit.c1, fit.family_index)
-    held_panel = gen.Panel(
-        np.stack([held.phase0[held_ok], held.phase1[held_ok]], axis=1), fit.c0, fit.c1, fit.family_index
-    )
+    index = bucket_pooling(fit, pooling)
+    fit_panel = gen.Panel(np.stack([fit.phase0[fit_ok], fit.phase1[fit_ok]], axis=1), fit.c0, fit.c1, index)
+    held_panel = gen.Panel(np.stack([held.phase0[held_ok], held.phase1[held_ok]], axis=1), fit.c0, fit.c1, index)
     return fit, held, fit_ok, held_ok, fit_panel, held_panel
 
 
-def report(scale: str, target: str, candidates: dict[str, np.ndarray]) -> None:
+def report(scale: str, target: str, candidates: dict[str, list[np.ndarray]]) -> None:
     fit, held, _fit_ok, held_ok, _fp, _hp = panels(scale, target)
     values = held.targets[target][held_ok]
     noise = run_noise(held, target)
     floor = selection_floor(noise, len(values))
     base = baselines(fit, held, held_ok, target)
 
+    single_phase = _total_variation(held.phase1[held_ok], held.phase0[held_ok]) <= 1e-9
+    headroom = float(values[single_phase].min() - values.min()) if single_phase.any() else float("nan")
+
     print(f"\n=== {scale} / {target} ===")
-    print(f"  heldout n={len(values)}  best observed {values.min():.5f}  panel mean {values.mean():.5f}")
+    print(f"  heldout n={len(values)}  of which single-phase {int(single_phase.sum())}")
+    print(f"  best observed {values.min():.5f}  best single-phase {values[single_phase].min():.5f}  ")
     print(f"  run noise {noise:.5f}  selection floor on the reference {floor:+.5f}")
+    ratio = headroom / noise if np.isfinite(noise) and noise > 0 else float("nan")
+    print(f"  TWO-PHASE HEADROOM in this panel {headroom:+.5f} = {ratio:.2f} run noises")
+    if not single_phase.all() and headroom <= 0:
+        print("      no two-phase row beats the best single-phase row: nothing here for a surrogate to find")
+    if single_phase.all():
+        print("      every held-out row is single-phase: this panel cannot test a two-phase claim at all")
+
     order = sorted(base.items(), key=lambda item: item[1])
     print("  baselines (selected-policy value, lower is better):")
     for name, value in order:
         print(f"      {name:16s} {value:.5f}")
-    incumbent = base.get("best_heldout_tied", base.get("best_fit_tied", base["proportional"]))
-    print(f"  candidates vs the one-phase bar ({incumbent:.5f}); positive margin = a frontier gain:")
-    for name, prediction in candidates.items():
-        picked = selected_values(prediction, values)
-        margin = incumbent - picked["selected@1"]
+
+    # The matched comparison. `best_heldout_tied` is an ORACLE over the single-phase rows -- it reads
+    # held-out outcomes -- so scoring a blind surrogate against it charges the surrogate for the oracle's
+    # selection advantage as well as for any modelling error. Letting the same surrogate, on the same
+    # information, pick first from every row and then from the single-phase rows alone isolates what the
+    # two-phase freedom is worth, with the selection floor common to both sides.
+    print("  same surrogate, candidate set restricted vs unrestricted; positive = two-phase freedom paid:")
+    for name, predictions in candidates.items():
+        unrestricted = np.array([selected_values(p, values)["selected@1"] for p in predictions])
+        restricted = np.array(
+            [selected_values(p[single_phase], values[single_phase])["selected@1"] for p in predictions]
+        )
+        gain = float(np.median(restricted) - np.median(unrestricted))
         print(
-            f"      {name:22s} @1 {picked['selected@1']:.5f} @3 {picked['selected@3']:.5f} "
-            f"@20 {picked['selected@20']:.5f}   margin@1 {margin:+.5f}"
+            f"      {name:22s} all {np.median(unrestricted):.5f} [{unrestricted.min():.5f},"
+            f"{unrestricted.max():.5f}]  single-phase-only {np.median(restricted):.5f}   realised {gain:+.5f}"
         )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--scales", default="300m,delphi_3e18")
+    parser.add_argument("--seeds", type=int, default=3)
     args = parser.parse_args()
 
     for scale in args.scales.split(","):
         for target in TARGETS:
-            fit, _held, fit_ok, _held_ok, fit_panel, held_panel = panels(scale, target)
-            fitted = split_damage.fit_variant(fit_panel, fit.targets[target][fit_ok], "split", 0)
-            report(scale, target, {"split (incumbent model)": split_damage.predict(held_panel, fitted, "split")})
+            candidates = {}
+            for pooling in POOLINGS:
+                fit, _held, fit_ok, _held_ok, fit_panel, held_panel = panels(scale, target, pooling)
+                response = fit.targets[target][fit_ok]
+                candidates[f"split / {pooling}"] = [
+                    split_damage.predict(
+                        held_panel, split_damage.fit_variant(fit_panel, response, "split", seed), "split"
+                    )
+                    for seed in range(args.seeds)
+                ]
+            report(scale, target, candidates)
 
 
 if __name__ == "__main__":
