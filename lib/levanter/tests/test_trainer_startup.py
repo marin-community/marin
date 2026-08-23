@@ -33,7 +33,7 @@ _DISTRIBUTED_STARTUP_PROCESS = textwrap.dedent(
     from levanter.tracker import NoopConfig
     from levanter.trainer import TrainerConfig
 
-    primitive = SimpleNamespace(get_or_compile_kernel=lambda fn, spec: None)
+    primitive = SimpleNamespace(get_or_compile_kernel=lambda _fn, _spec: None)
     compile_module = SimpleNamespace(_CUTLASS_COMPILE_CACHE={}, CompileResult=SimpleNamespace)
     real_import_module = importlib.import_module
 

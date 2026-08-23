@@ -24,7 +24,7 @@ _FILE_SET_EXIT_PROCESS = textwrap.dedent(
     writer = FineStoreDirectory(root, local, flush_interval=3600)
     pathlib.Path(local, "new-cache-entry").write_bytes(b"value")
 
-    def commit(store, rows):
+    def commit(_store, _rows):
         threading.Event().wait()
 
     DataStore._commit_transaction = commit
