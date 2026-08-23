@@ -60,12 +60,12 @@ TASK_STATUS_STORAGE_POLICY = StoragePolicy(
 )
 
 # Backend events and controller actions are a compact diagnostic history. The
-# producers only append when a verdict or controller decision changes, so seven
+# producers only append when a verdict or controller decision changes, so 30
 # days gives operators time to investigate without retaining high-volume pod
 # telemetry.
 TASK_EVENT_STORAGE_POLICY = StoragePolicy(
     max_bytes=1024 * 1024 * 1024,
-    max_age_seconds=7 * 24 * 60 * 60,
+    max_age_seconds=30 * 24 * 60 * 60,
 )
 
 
@@ -181,8 +181,29 @@ class TaskStatusRow:
     status_text_summary_md: str
 
 
+@dataclass(kw_only=True)
+class TaskEventDiagnostics:
+    """Pod and node evidence captured while a Kubernetes disruption is observable."""
+
+    pod_name: str | None = None
+    pod_uid: str | None = None
+    pod_deletion_timestamp: str | None = None
+    node_name: str | None = None
+    node_uid: str | None = None
+    node_provider_id: str | None = None
+    node_boot_id: str | None = None
+    node_system_uuid: str | None = None
+    node_unschedulable: bool | None = None
+    pod_tolerations_json: str | None = None
+    pod_conditions_json: str | None = None
+    node_taints_json: str | None = None
+    node_conditions_json: str | None = None
+    node_labels_json: str | None = None
+    node_annotations_json: str | None = None
+
+
 @dataclass
-class TaskEventRow:
+class TaskEventRow(TaskEventDiagnostics):
     """One backend event or controller action for a task attempt.
 
     The "event log for every job": producers append a row each time a backend
@@ -193,7 +214,9 @@ class TaskEventRow:
     Fields mirror a Kubernetes event so a future producer can relay real events
     unchanged: ``type`` is the severity (``Warning``/``Normal``), ``reason`` the
     short code, ``source`` the emitting layer (e.g. ``k8s/kueue``), ``count`` the
-    repeat multiplicity.
+    repeat multiplicity. Kubernetes disruption rows also carry stable pod/node
+    identity and compact JSON snapshots of the evidence that disappears when
+    the pod or node is garbage-collected.
     """
 
     key_column: ClassVar[str] = "task_id"
