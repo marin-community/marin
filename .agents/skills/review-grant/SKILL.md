@@ -1,6 +1,6 @@
 ---
 name: review-grant
-description: Review a marin-iac user-grant PR by decrypting the changed principals into the real emails and grants, confirm with the user, then approve, merge, and drive pulumi up. Use when reviewing a PR that edits iam_data.yaml or a service's IAP viewers.
+description: Review an explicitly identified marin-iac grant PR, confirm its decrypted principals and roles, then apply only the confirmed grant.
 ---
 
 # Skill: Review a user grant

@@ -1,6 +1,6 @@
 ---
 name: wandb-reporting
-description: "Use W&B runs, reports, and artifacts consistently for experiments, benchmarks, and task results with dense numeric output."
+description: Publish W&B runs, reports, or artifacts only when explicitly requested or required for a requested experiment's dense numeric results.
 ---
 
 # Skill: W&B Reporting

@@ -1,37 +1,22 @@
 ---
 name: refresh-fork
-description: Rebase one Marin fork onto newer upstream per its config/external/migration.toml descriptor, run the fork's e2e, and open the Marin PR or file a blocker issue.
+description: Refresh a named Marin external fork pin onto a newer upstream base using its configured descriptor and required end-to-end test.
 ---
 
-# Skill: Refresh a Fork
+# Refresh a fork
 
-Read first:
+Read `AGENTS.md`. Rebase the fork overlay onto `<branch>-next`, validate that
+staged tip, re-pin Marin, and prepare protected-branch promotion. An unattended
+run opens a draft Marin PR and names the required admin promotion; it never
+force-moves the stable branch.
 
-@AGENTS.md
+Refresh a `group` as one unit and one PR. The only current group is
+`vllm`/`tpu-inference`; `vllm-gpu` tracks the fork's independent `main` branch.
+The TPU launcher installs both grouped pins, and vLLM's TPU base derives from
+the tpu-inference release; splitting them can produce an unvalidated stack.
 
-## Mission
-
-Every fork Marin pins under `config/external/` is a `marin-community` fork: our
-commits on top of an upstream project. Refreshing a pin means rebasing our commits
-onto a newer upstream base on a `<branch>-next` staging branch, validating with the
-fork's e2e against that branch, re-pinning Marin at the exact staged tip, and
-preparing the stable-branch promotion with rollback and date tags. Fork stable
-branches are protected. An unattended run stops after opening the draft Marin PR
-and identifies the admin promotion it needs; it never force-moves the stable branch.
-
-Each pin refreshes independently. The one exception is a `group`, which refreshes as a
-unit: its sections refresh together on one run and re-pin in one PR (each still rebases
-onto its own base). Only the vllm/tpu-inference pair is grouped, because the TPU
-launcher installs both pins at once and vllm's TPU base derives from the tpu-inference
-release; splitting them could pin a mixed, unblessed stack. The vllm fork's GPU pin is
-not in that group — it tracks upstream head on the fork's `main`, independent of the
-`tpu` branch that carries the TPU pin. The weekly `ops-fork-ferry` workflow sends Weaver one request per
-supported pin or group. That request names this skill and the forks to update; this
-file owns the migration procedure.
-
-Use the same algorithm in CI and local runs. In local/manual mode, ask before
-external mutations: pushing fork branches, opening the Marin PR, or filing a GitHub
-issue. Do not ask before the fork's required e2e.
+In local mode, ask before pushing fork branches, opening the PR, or filing an
+issue. The required end-to-end test needs no extra confirmation.
 
 ## Read the Descriptor
 
@@ -89,10 +74,8 @@ git -C <fork> fetch --tags --multiple origin upstream   # --multiple fetches bot
 git -C <fork> remote set-head upstream -a                # so upstream/HEAD resolves
 ```
 
-- Keep working notes as you go — decisions, selected bases, branch SHAs, validation
-  outcomes, and sharp edges (surprising failures, compatibility traps). They feed the
-  PR body: base-selection evidence and the carry/drop/fix table in `<details>`, and
-  the unresolved risks above the fold.
+- Record selected bases, branch SHAs, carry/drop/fix decisions, validation, and
+  unresolved risks for the PR.
 
 ## Select the base
 
@@ -144,11 +127,8 @@ descriptor and release pins (the descriptor's `commit`, or `gpu.toml`'s
    implementation must change — re-author against the current layout when upstream
    moved or refactored the files it touches). Before carrying anything, check whether
    the new base already did it: grep the base for the symbols, APIs, or dependency
-   pins the patch introduces. If they are present it is a `drop` — a backport that has
-   landed, or a version ceiling the base now exceeds (a stale `<X` pin silently
-   downgrades upstream). On a fast-moving fork this "did upstream absorb this?" pass is
-   the highest-value step; it is what keeps the fork converging rather than re-adding
-   duplicate or obsolete code.
+   pins the patch introduces. Drop an absorbed backport or stale version ceiling;
+   do not re-add duplicate or obsolete code.
 3. Replay only `carry` and `fix` onto `new_base` in the old logical order: clean
    cherry-picks for carries; rewrite fixes as new commits referencing the original
    SHA(s). Separate genuine conflicts from cascade artifacts: a file the overlay
@@ -165,29 +145,21 @@ descriptor and release pins (the descriptor's `commit`, or `gpu.toml`'s
    clean cherry-pick applies textually but does not prove the upstream symbols the
    overlay imports or calls still exist: on a fast-moving fork a class becomes a
    factory function, a helper is deleted, a signature gains a required argument.
-   Statically cross-check every upstream symbol the overlay touches — constructor
-   kwargs, function signatures, attributes, removed helpers — against `new_base`,
-   including the overlay's tests. A vLLM refresh caught two breaks this way: a
-   `FusedMoE` class replaced by a `FusedMoEFactory` function, and a removed
-   `is_interleaved` config helper. A textual replay left both in place, and only a
-   multi-hour GPU build would otherwise have surfaced them.
+   Cross-check every touched constructor, signature, attribute, helper, and test
+   against `new_base` before a multi-hour build. A prior vLLM refresh caught
+   `FusedMoE` becoming `FusedMoEFactory` and removal of `is_interleaved` this way.
 7. Keep history reviewable — no conflict artifacts, unrelated refactors, or
    preserved commits whose behavior is now `drop`. Collapse fork-infra churn
    (CI, workflow, or prose commits that adopt then revise then disable) to its final
    state rather than replaying each hop.
 
-Stop and file a blocker instead of forcing a PR when the rebase is not a mechanical
-replay: our overlay is non-linear (merge commits weaving upstream in), upstream
-renamed or refactored files our `fix` commits touch (so they need re-authoring against
-the new layout), or conflicts hit many core files at once. A fork hundreds of commits
-behind upstream is usually in this state. The weekly cadence keeps a fork from ever
-drifting this far; one that already has (see `nuances`) needs a one-time manual
-catch-up outside this skill before it can be auto-migrated. That catch-up replays
-the fork's real commits onto the new base; it never reconstructs the overlay from a
-single net diff, which silently invents drift the fork never carried. Diff each
-hand-ported `fix` file against the fork's `main` to confirm it matches intent. The
-blocker issue carries the carry/drop/fix inventory, the conflict map, and how far
-behind the fork is.
+Stop and file a blocker when the overlay is non-linear, upstream refactored
+touched files that need substantial re-authoring, or many core files conflict.
+A fork hundreds of commits behind also needs a one-time manual catch-up outside
+this workflow. That catch-up replays the real commits; never reconstruct the
+overlay from a net diff. Diff each hand-ported `fix` against the fork's stable
+branch. Put the inventory, conflict map, and distance behind upstream in the
+blocker issue.
 
 ## Pin at the staged tip
 
@@ -244,10 +216,8 @@ workflow; see `docs/overlay-only-pr.md`.
 
 ## Check the fork's own suite
 
-Run the fork's own test suite on the rebased branch before the marin e2e. The e2e
-exercises one path; the fork suite is what catches re-porting drift across the whole
-patch set. Run it locally where the runner supports it, otherwise dispatch it on the
-fork's CI.
+Run the fork's suite before the Marin end-to-end test, locally when supported or
+through fork CI.
 
 Derive the command from the fork's CI config verbatim; do not invent a marker
 subset. A narrow marker such as `-m unit` can silently skip the thousands of unmarked
@@ -257,30 +227,20 @@ green while most of the suite never ran. CI steps run in order under an implicit
 earlier one is green, so its regressions stay hidden behind the first failure. Run
 every step's marker in order.
 
-Probe the runner before trusting a local run. This VM runs docker but its bind-mounts
-do not propagate into containers, so a container-environment trial (harbor's
-DOCKER-env golden tests) cannot complete here and has to run on the fork's CI. To
-dispatch the suite there when the review PR sits on an `upstream-base/<sha>` branch:
-gate workflows commonly filter `branches: ["main"]`, so such a PR gets no automatic
-CI; only a workflow declaring `workflow_dispatch` and present on the default branch
-can be dispatched against the branch ref; a workflow with neither `workflow_dispatch`
-nor a matching push trigger never runs on that PR, so verify it locally.
+On this VM, Docker bind mounts do not propagate into containers, so Harbor's
+DOCKER-env golden tests must run in fork CI. Confirm the workflow supports
+`workflow_dispatch` on the staged ref; otherwise it may silently skip a
+non-`main` review branch.
 
-A build-heavy fork raises a second ceiling. vLLM's suite needs its compiled CUDA/TPU
-stack, and `import` fails outright when the runner has no torch, so the pre-e2e check
-there is structural only: `py_compile` the replayed tree and sweep for leftover
-conflict markers. A green structural pass is not behavioral validation — say so.
+For vLLM without its compiled CUDA/TPU stack, `py_compile` and a conflict-marker
+sweep are structural checks only; do not call them behavioral validation.
 
-Deterministic golden tests are dependency-version fragile: an upstream-mandated
-dependency floor (an upstream `litellm>=1.92` bump) can stale a golden even when the
-fork source is byte-identical. Read the deciding code path rather than the golden
-diff, and separate the dependency floor from a real port defect — never downgrade
-below the floor to make a golden pass. Prefer making the fixture dependency-independent
-by patching every version-sensitive seam the trigger reads (the sync and async token
-counters both, not just one) over re-tuning the golden to a single version. Regenerate
-in one CI run: a `workflow_dispatch` that runs the suite in update mode and then a
-comparison-mode verify step, both non-failing, uploading the regenerated goldens and
-logs as artifacts.
+For a version-sensitive golden, inspect the deciding code path and distinguish a
+new dependency floor from a port defect. An upstream `litellm>=1.92` floor, for
+example, can stale a golden without a fork-source change. Never downgrade below
+the floor. Prefer a dependency-independent fixture that patches every seam the
+trigger reads, such as both sync and async token counters. Otherwise regenerate
+and verify it in one CI run with logs as artifacts.
 
 ## Validate
 
@@ -372,18 +332,3 @@ selected base, the staged tip SHA, its rollback and date tags, the pending admin
 promotion (and the wheel release tag for `vllm-gpu`), e2e outcome, and unresolved
 risks; in `<details>`, the base-selection evidence and the carry/drop/fix table with
 dropped-patch reasons.
-
-## Done Means
-
-- The pin source named by `pin` carries the new revision (descriptor pins also carry
-  `upstream_base`); `external_dependencies.py` is regenerated.
-- `<branch>-next` points at the validated tip, the current stable tip has a rollback
-  tag, and the validated tip has a date tag. The stable branch is unchanged, and the
-  PR names the admin hard swap still required.
-- A draft PR that temporarily follows `main-next` stays draft. After the admin
-  promotion, its source follows `main` again and its lock still records the validated
-  SHA before the PR is marked ready or merged.
-- Retained patches explain why they exist; dropped patches are called out.
-- The fork's e2e passed before the promotion tags and PR were created, or the blocker
-  is in a Marin issue assigned to `blocker_assignee`.
-- An opened Marin PR reaches a `commit` skill monitoring exit condition.

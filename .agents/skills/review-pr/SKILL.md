@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: Multi-agent correctness review of a pull request.
+description: Run a multi-agent correctness review only when explicitly requested for a pull request.
 allowed-tools: Bash(gh issue view:*), Bash(gh search:*), Bash(gh issue list:*), Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(uv run infra/codehealth/log_stats.py:*), mcp__github_inline_comment__create_inline_comment
 ---
 

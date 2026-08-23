@@ -1,33 +1,17 @@
 ---
 name: run-research
-description: "Multi-session research workflow: compose logbooks, experiment issues, documentation updates, and snapshot discipline for long-running investigations."
+description: Run a coordinated multi-session research program only when explicitly requested with a logbook, experiment issue, and durable snapshots.
 ---
 
-# Skill: Agent-Directed Research
-
-Use this for long-running research where an agent iterates on benchmarks,
-experiments, and hypotheses over multiple sessions. Domain skills such as
-`add-pallas-kernel` may add constraints.
-
-## General Principle: Open Development
+# Multi-session research
 
 Long-lived work should leave a durable record: a logbook, coordinating issue
 updates, and enough commands/config to reproduce results. Do not publish secrets
 or private work the user asks to hold back.
 
-## Subskills
-
-- `.agents/skills/background-research/SKILL.md` for prior-work foraging,
-  source ledgers, contradiction passes, and ranked hypothesis candidates.
-- `.agents/skills/task-logbook/SKILL.md` for logbooks and issue updates.
-- `.agents/skills/wandb-reporting/SKILL.md` for W&B project selection, run
-  naming, report links, and artifact hygiene.
-- `.agents/skills/task-snapshot/SKILL.md` for commit/tag snapshots and stable
-  artifact links.
-- `.agents/skills/update-docs/SKILL.md` for updating durable docs, runbooks,
-  reports, or skill guidance when research changes behavior or practice.
-
-Layer domain skills on top for task-specific constraints.
+Use `background-research`, `task-logbook`, `wandb-reporting`, `task-snapshot`,
+and `update-docs` for their named artifacts. Add a domain skill only when the
+research directly requires its workflow.
 
 ## Core Artifacts
 
@@ -42,35 +26,19 @@ Layer domain skills on top for task-specific constraints.
 5. One or more commit or tag snapshots for meaningful milestones.
 6. Often a "production" branch that gets PR'd and merged.
 
-## Research Logbook
-
-Use the term **logbook** consistently. Follow `.agents/skills/task-logbook/SKILL.md` for
-formatting and issue-update rules.
-
-## Branches
-
-Use a research branch for the logbook, one-off scripts, harnesses, and small
-artifacts. Extract a clean production branch only when the final code/docs shape
-is clear.
-
 ## Standard Workflow
 
 ### 1. Prologue
 
-1. Create or switch to a long-lived research branch. You may already be on one, or the user may have requested a specific branch name. Otherwise, pick a descriptive name like `research/<topic>` or `research/<user>/<issue>-<topic>`.
-2. Create an experiment issue with `file-issue` unless scope or visibility needs
-   human confirmation. If the user provides one, use it.
-3. Start the logbook and link both ways: logbook to issue URL, issue body to logbook path. See the skill.
-4. Pick a short experiment ID prefix for the series, for example `MOE-HC-001`, and
-   use IDs like `MOE-HC-001` in logbook entries, run names, and issue comments.
-5. Pick a set of tags to use for all experiments, to be used with W&B, etc.
-   Typically this is the ID prefix (without the number), the issue number, and
-   anything else reasonable. Try to keep to 2-4 shared tags. You may use more
-   tags to distinguish runs within a project as useful.
-6. Record, as applicable: motivation, problem statement, context, success
-   metrics, the initial hypothesis queue, first experiment matrix, relevant
-   code paths, references, stop criteria, and the fixed baseline case for
-   repeated comparison.
+1. Keep an existing user-specified branch; otherwise create or use a long-lived
+   `research/<topic>` or `research/<user>/<issue>-<topic>` branch.
+2. Create or use the experiment issue and link it bidirectionally with the
+   logbook. Confirm scope or visibility before creating it when either is
+   unclear.
+3. Choose one short experiment ID prefix and use IDs such as `MOE-HC-001` in
+   entries, runs, and comments; use two to four shared tags.
+4. Record the goal, success and stop criteria, baseline, initial hypothesis
+   queue and experiment matrix, relevant code, and references.
 
 ### 2. Research Loop
 
@@ -82,8 +50,6 @@ is clear.
 5. **Promote:** move only interesting, decision-relevant claims up the issue
    funnel.
 6. **Seal:** snapshot durable results or extract production work.
-
-Every cycle should leave the durable record better than it found it.
 
 ### 2.1 Forage: Background Research
 
@@ -114,7 +80,7 @@ For each non-trivial experiment:
 
 ### 3. Epilogue: Seal
 
-Sealing should ordinarily only happen if the user requests it or the research has reached the defined goal.
+Seal when requested or when the defined goal is reached.
 
 1. Update the issue body with the final TL;DR, conclusion, decision log, and negative-results index. Again, follow the `task-logbook` skill.
 2. Add a final issue comment covering what worked, what did not, confidence
@@ -125,16 +91,9 @@ Sealing should ordinarily only happen if the user requests it or the research ha
 5. Close the issue when the research thread is complete.
 
 If the research produced useful production changes, extract them into a clean
-branch that can link to the logbook but does not include it. Follow standard
-Marin development practices on that branch.
-
-Before closing the issue:
-
-- Final TL;DR is current.
-- Issue body includes a clear `Conclusion`.
-- Next steps are listed.
-- Final snapshot is linked.
-- If there's a final production PR, link to it from the issue summary.
+branch that links the research record without including it. Before closing,
+update the TL;DR and conclusion, list next steps, and link the final snapshot
+and production PR when one exists.
 
 ## Practical Rules
 
@@ -143,10 +102,3 @@ Before closing the issue:
 - Record exact command lines for every headline number.
 - Treat failures and negative results as first-class data. Record dead ends and
   excessive hyperparameter sensitivity; skip routine bugs or undertuning.
-
-## See Also
-
-- `.agents/skills/organize-experiments/SKILL.md`
-- `.agents/skills/add-pallas-kernel/SKILL.md`
-- `.agents/skills/task-logbook/SKILL.md`
-- `.agents/skills/update-docs/SKILL.md`
