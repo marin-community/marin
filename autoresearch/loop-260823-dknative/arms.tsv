@@ -6,3 +6,4 @@ ra2a-dkn-01-leanpath	66657d9889	2026.08.23.16	ragged_all_to_all	synthetic	disabl
 ra2a-dkn-01b-leanpath	66657d9889	2026.08.23.17	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-dkn-01c-leanpath	092af96532	2026.08.23.18	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-dkn-01d-leanpath	2041f6cb98	2026.08.23.19	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
+ra2a-dkn-02-splits32	885684f800	2026.08.23.20	ragged_all_to_all	synthetic	disabled	4470000	2100	none	--ragged-all-to-all-splits-per-peer 32

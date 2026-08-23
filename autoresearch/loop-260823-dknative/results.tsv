@@ -2,3 +2,4 @@
 iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
 00	2026-08-23T22:55Z	f9130923f1	18.3764	0.0	pass	drops=0.0,loss=11.8034	baseline	main old ragged backend + dk (g8x128 wheel, splits n/a): 18.38; refs on same compiler: lean-dk 21.69, one-shot 22.77
 01	2026-08-23T23:25Z	2041f6cb98	22.6228	+4.2464	pass	drops=0.0,loss=11.8034	keep	lean data path port (splits 1, chunks 2) under dk: 22.62 -- +4.24 over baseline, within 0.15 of one-shot 22.77; beats leg-2 lean-dk 21.69 whose only config delta was splits=64 -> splits likely HURTS the dk
+02	2026-08-23T23:55Z	885684f800	22.4126	-0.2102	pass	drops=0.0,loss=11.8034	discard	splits=32 under dk: 22.41 vs splits=1 22.62 -- splitting hurts the dk (one-shot optimum inverted); splits=1 stands
