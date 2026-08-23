@@ -23,6 +23,7 @@ from levanter.recovery.types import ChildSpec
 _COMPLETION_MARKER = "completed"
 _FAILURE_RELEASE_FIFO = "release-failure"
 _RANK_BARRIER_FIFO = "rank-barrier"
+_SHUTDOWN_MARKER_GLOB = "shutdown-*"
 
 
 def _run_with_iris_completion(marker: Path, outcome: str) -> None:
@@ -155,23 +156,25 @@ def test_multigpu_clean_teardown_exits_zero_after_every_rank_shuts_down(tmp_path
 
     assert result.returncode == 0
     assert (tmp_path / _COMPLETION_MARKER).exists()
-    assert {path.name for path in tmp_path.glob("shutdown-*")} == {"shutdown-0", "shutdown-1"}
+    assert {path.name for path in tmp_path.glob(_SHUTDOWN_MARKER_GLOB)} == {"shutdown-0", "shutdown-1"}
 
 
-def test_multigpu_late_rank_sigkill_does_not_complete_iris_job(tmp_path: Path) -> None:
-    result = _run_supervised_callable(tmp_path, _run_supervised_iris_rank, failing_rank=1)
+@pytest.mark.parametrize(
+    "rank_entrypoint",
+    [
+        pytest.param(_run_supervised_iris_rank, id="sigkill"),
+        pytest.param(_run_supervised_recovery_rank, id="mapped-recovery-exception"),
+    ],
+)
+def test_multigpu_rank_failure_does_not_complete_iris_job(
+    tmp_path: Path,
+    rank_entrypoint: Callable[[Path, int | None], None],
+) -> None:
+    result = _run_supervised_callable(tmp_path, rank_entrypoint, failing_rank=1)
 
     assert result.returncode != 0
     assert not (tmp_path / _COMPLETION_MARKER).exists()
-    assert {path.name for path in tmp_path.glob("shutdown-*")} == {"shutdown-0"}
-
-
-def test_multigpu_mapped_rank_failure_skips_shutdown(tmp_path: Path) -> None:
-    result = _run_supervised_callable(tmp_path, _run_supervised_recovery_rank, failing_rank=1)
-
-    assert result.returncode != 0
-    assert not (tmp_path / _COMPLETION_MARKER).exists()
-    assert {path.name for path in tmp_path.glob("shutdown-*")} == {"shutdown-0"}
+    assert {path.name for path in tmp_path.glob(_SHUTDOWN_MARKER_GLOB)} == {"shutdown-0"}
 
 
 def test_square_brace_expand():
