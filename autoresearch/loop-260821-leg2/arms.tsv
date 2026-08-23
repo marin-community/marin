@@ -38,3 +38,5 @@ ra2a-l2-i23-dk-g16x128	2dd567498f	2026.08.23.7	ragged_all_to_all	synthetic	disab
 ra2a-l2-i24-dk-g8x128mm	a20fcabb7f	2026.08.23.8	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-l2-i25-dk-g8x128-prof	a20fcabb7f	2026.08.23.9	ragged_all_to_all	synthetic	disabled	4470000	2100	none	--profile-steps 3 --profile-start-step 8
 ra2a-l2-i26-oneshot-main	25abdc6cc8	2026.08.23.10	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
+ra2a-l2-i27-oneshot-kmax-main	8180fb425b	2026.08.23.11	ragged_all_to_all	synthetic	disabled	4470000	2100	none	--profile-steps 3 --profile-start-step 8
+ra2a-l2-i28-dk-nochunk	751f52649c	2026.08.23.12	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
