@@ -240,7 +240,10 @@ class TensorStoreReadConfig:
     read a hero checkpoint in 125.6s against 96.9s at 128."""
 
     replica_mode: ReplicaRestoreMode = ReplicaRestoreMode.ONE_REPLICA
-    """Whether every replica reads its shard or one replica reads and distributes it."""
+    """Whether every replica reads or the restore attempts one reader per replicated shard.
+
+    The one-reader mode falls back to per-replica reads on TPU and unsupported shardings.
+    """
 
     def __post_init__(self) -> None:
         if self.max_in_flight_bytes <= 0:
@@ -897,6 +900,7 @@ async def _leaf_read_plan(
 
 
 async def _read_store_shard(plan: _LeafReadPlan, index, host_array: np.ndarray) -> int:
+    """Read one shard into host memory and return the TensorStore bytes fetched."""
     requested_domain = ts.IndexTransform(input_shape=plan.shape)[index].domain
     restricted_domain = plan.store.domain.intersect(requested_domain)
     if plan.store.dtype.numpy_dtype == plan.dtype:

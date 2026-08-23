@@ -3,10 +3,10 @@
 
 """Checkpoint scenarios that need more devices or processes than the test runtime has.
 
-An array needs eight devices to have more than one replica, and the XLA device count is
-fixed for the life of a process, so :func:`run_on_eight_devices` spawns one. A spawned child
-imports the module its target came from, so the scenarios live on the installed package,
-where any interpreter can import them regardless of its working directory.
+The XLA device count is fixed for the life of a process, so the scenarios spawn fresh
+interpreters for eight-device sharding and two-process distributed restores. A spawned child
+imports the module its target came from, so the scenarios live on the installed package where
+any interpreter can import them regardless of its working directory.
 """
 
 import multiprocessing
@@ -38,6 +38,8 @@ EIGHT_DEVICE_COUNT = 8
 DISTRIBUTED_PROCESS_COUNT = 2
 DISTRIBUTED_ARRAY_SIZE = 4096
 _CHUNK_READ_METRIC = "/tensorstore/cache/chunk_cache/reads"
+_LOOPBACK_ADDRESS = "127.0.0.1"
+_PINNED_HOST_MEMORY_KIND = "pinned_host"
 # Small enough that every array is worth splitting, so these exercise the split path.
 SPLIT_CONFIG = TensorStoreWriteConfig(min_replica_slice_bytes=1, max_chunk_bytes=4096)
 
@@ -79,7 +81,7 @@ def _distributed_restore(process_id: int, coordinator: str, checkpoint_path: str
     try:
         mesh = Mesh(np.array(jax.devices()), ("replica",))
         sharding = NamedSharding(mesh, P())
-        pinned = sharding.with_memory_kind("pinned_host")
+        pinned = sharding.with_memory_kind(_PINNED_HOST_MEMORY_KIND)
 
         with jax.set_mesh(mesh):
             before = _tensorstore_chunk_reads()
@@ -109,9 +111,9 @@ def replica_aware_restore_across_processes() -> None:
         }
         tree_serialize_leaves_tensorstore(tmpdir, expected)
         with socket.socket() as listener:
-            listener.bind(("127.0.0.1", 0))
+            listener.bind((_LOOPBACK_ADDRESS, 0))
             port = listener.getsockname()[1]
-        coordinator = f"127.0.0.1:{port}"
+        coordinator = f"{_LOOPBACK_ADDRESS}:{port}"
 
         with mock.patch.dict(os.environ, _cpu_device_environment(DISTRIBUTED_PROCESS_COUNT)):
             with ProcessPoolExecutor(
@@ -126,7 +128,7 @@ def replica_aware_restore_across_processes() -> None:
     for result in results:
         for name in expected:
             np.testing.assert_array_equal(result.arrays[name], expected[name])
-        assert result.memory_kinds == {"pinned_host"}
+        assert result.memory_kinds == {_PINNED_HOST_MEMORY_KIND}
     assert sum(result.tensorstore_chunk_reads for result in results) == len(expected)
 
 
@@ -193,7 +195,7 @@ def replica_aware_restore_reads_each_shard_once():
     bit_patterns = np.array([0x80000000, 0x7FC00001, 0x00000001, 0x3F800000], dtype=np.uint32)
     source_bits = np.tile(bit_patterns, 64 * 16 // len(bit_patterns)).reshape(64, 16)
     source = jax.device_put(source_bits.view(np.float32), sharding)
-    pinned = sharding.with_memory_kind("pinned_host")
+    pinned = sharding.with_memory_kind(_PINNED_HOST_MEMORY_KIND)
 
     with jax.set_mesh(mesh), TemporaryDirectory() as tmpdir:
         tree_serialize_leaves_tensorstore(tmpdir, {"expert": source}, write_config=SPLIT_CONFIG)
@@ -213,7 +215,7 @@ def replica_aware_restore_reads_each_shard_once():
 
     assert after - before == 8
     assert control_after - control_before == 16
-    assert restored.sharding.memory_kind == "pinned_host"
+    assert restored.sharding.memory_kind == _PINNED_HOST_MEMORY_KIND
     on_device = jax.device_put(restored, sharding)
     np.testing.assert_array_equal(np.asarray(on_device).view(np.uint32), source_bits)
 

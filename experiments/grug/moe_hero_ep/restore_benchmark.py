@@ -3,9 +3,10 @@
 
 """Time a hero-shaped checkpoint save and restore on one or more replica groups.
 
-Builds the hero train state, writes it to a one-day temporary prefix, and reads it back into
-the same exemplar a resume restores into -- offloaded optimizer state and FP32 pinned-host
-master params included. It trains nothing, so a run measures the checkpoint paths alone.
+Builds a hero or hero-shaped small train state, writes it to a one-day temporary prefix, and
+reads it back into the same exemplar a resume restores into. Offloaded optimizer state and
+FP32 pinned-host master params are included. It trains nothing, so a run measures the
+checkpoint paths alone.
 
 The save timing is what a training step is blocked for. The first read is the only one that
 can miss the node-local cache.
@@ -48,7 +49,7 @@ from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic, build_hero_configs
+from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, MoeHeuristic, build_hero_configs
 from experiments.grug.moe_hero_ep.launch_mfu_test import (
     HERO_EP_BATCH_SIZE,
     HERO_EP_EXPERT_AXIS_SIZE,
@@ -71,10 +72,7 @@ HERO_SCHEDULE_STEPS = 390_251
 QB_HIST_BINS = 10_000
 CHECKPOINT_TTL_DAYS = 1
 GIB = 1024**3
-SMALL_MODEL_CAPACITY_FACTOR = 1.15
-SMALL_MODEL_EXPERTS = 384
-SMALL_MODEL_EXPERTS_PER_TOKEN = 8
-SMALL_MODEL_EXPERT_WAVES = 3
+HERO_MODEL_SIZE = "hero"
 
 
 @dataclass(frozen=True)
@@ -92,8 +90,8 @@ class RestoreBenchmarkConfig:
     replica_axis_size: int = 1
 
 
-def _hero_state(config: RestoreBenchmarkConfig, mesh):
-    """The hero train state, offloaded exactly as a hero run builds it."""
+def _benchmark_state(config: RestoreBenchmarkConfig, mesh):
+    """Build the configured train state with the hero's checkpoint offloading."""
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
     @jax.jit
@@ -144,7 +142,7 @@ def _run_restore_benchmark_local(config: RestoreBenchmarkConfig) -> None:
         expert_axis_size=config.expert_axis_size,
         replica_axis_size=config.replica_axis_size,
     )
-    state = _hero_state(config, mesh)
+    state = _benchmark_state(config, mesh)
     with set_mesh(mesh):
         # A hero's rolling temporary checkpoint is pruned as soon as the next one commits, and
         # a read racing that deletion fails on a zero-length OCDBT shard, so own the write.
@@ -179,7 +177,7 @@ def _run_restore_benchmark_local(config: RestoreBenchmarkConfig) -> None:
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for the benchmark job name.")
 @click.option(
-    "--dp-racks",
+    "--replica-groups",
     type=click.IntRange(min=1),
     default=1,
     show_default=True,
@@ -187,8 +185,8 @@ def _run_restore_benchmark_local(config: RestoreBenchmarkConfig) -> None:
 )
 @click.option(
     "--model-size",
-    type=click.Choice(["hero", *sorted(SMALL_SHAPES)]),
-    default="hero",
+    type=click.Choice([HERO_MODEL_SIZE, *sorted(SMALL_SHAPES)]),
+    default=HERO_MODEL_SIZE,
     show_default=True,
     help="Hero model or a hero-shaped small-scale ablation model.",
 )
@@ -231,7 +229,7 @@ def _run_restore_benchmark_local(config: RestoreBenchmarkConfig) -> None:
 )
 def main(
     run_id: str,
-    dp_racks: int,
+    replica_groups: int,
     model_size: str,
     expert_axis_size: int,
     repeats: int,
@@ -240,24 +238,24 @@ def main(
     requests: int,
     replica_mode: str,
 ) -> None:
-    batch_size = HERO_EP_BATCH_SIZE * dp_racks
-    if model_size == "hero":
+    batch_size = HERO_EP_BATCH_SIZE * replica_groups
+    if model_size == HERO_MODEL_SIZE:
         model, optimizer = build_hero_configs(num_train_steps=HERO_SCHEDULE_STEPS, batch_size=batch_size)
     else:
         shape = SMALL_SHAPES[model_size]
         model = _small_model(
             shape=shape,
-            capacity_factor=SMALL_MODEL_CAPACITY_FACTOR,
-            attention_implementation="gpu_fa4_cute",
-            moe_implementation="fixed_pooled_wave_all_to_all",
-            expert_chunks=1,
-            seq_len=4096,
-            num_experts=SMALL_MODEL_EXPERTS,
-            num_experts_per_token=SMALL_MODEL_EXPERTS_PER_TOKEN,
+            capacity_factor=HERO_MODEL.capacity_factor,
+            attention_implementation=HERO_MODEL.attention_implementation,
+            moe_implementation=HERO_MODEL.moe_implementation,
+            expert_chunks=HERO_MODEL.expert_chunks,
+            seq_len=HERO_MODEL.max_seq_len,
+            num_experts=HERO_MODEL.num_experts,
+            num_experts_per_token=HERO_MODEL.num_experts_per_token,
             intermediate_dim=None,
             latent_dim=None,
-            pooled_transport_capacity_factor=SMALL_MODEL_CAPACITY_FACTOR,
-            num_expert_waves=SMALL_MODEL_EXPERT_WAVES,
+            pooled_transport_capacity_factor=HERO_MODEL.pooled_transport_capacity_factor,
+            num_expert_waves=HERO_MODEL.num_expert_waves,
             qb_use_histogram=True,
             qb_hist_bins=QB_HIST_BINS,
         )
@@ -275,10 +273,11 @@ def main(
         raise ValueError(
             f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
         )
-    device_count = expert_axis_size * dp_racks
+    device_count = expert_axis_size * replica_groups
     if device_count % HERO_GPUS_PER_NODE != 0:
         raise ValueError(
-            f"expert_axis_size * dp_racks must be divisible by {HERO_GPUS_PER_NODE} GPUs per node, got {device_count}"
+            f"expert_axis_size * replica_groups must be divisible by {HERO_GPUS_PER_NODE} GPUs per node, "
+            f"got {device_count}"
         )
 
     config = RestoreBenchmarkConfig(
@@ -305,7 +304,7 @@ def main(
         write=TensorStoreWriteConfig(max_staged_host_bytes=stage_gib * GIB),
         repeats=repeats,
         expert_axis_size=expert_axis_size,
-        replica_axis_size=dp_racks,
+        replica_axis_size=replica_groups,
     )
 
     _apply_hero_ep_runtime_defaults(inline_watch_enabled=False, processes_per_task=HERO_GPUS_PER_NODE)
