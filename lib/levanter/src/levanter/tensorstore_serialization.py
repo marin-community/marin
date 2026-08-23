@@ -49,6 +49,7 @@ ARRAY_DRIVER = "zarr3"
 KVSTORE_DRIVER = "ocdbt"
 # JAX's memory kind for host memory a device can address. Offloaded optimizer state lives here.
 _HOST_MEMORY_KIND = "pinned_host"
+_GPU_PLATFORM = "gpu"
 # Chunks a save stages at once. The budget is per process, so a node holds it once per local
 # process, and a process carries about four times what it holds in flight
 # (_STAGED_BYTE_OVERHEAD) on top of its resident shard of the offloaded state. A save blocks
@@ -163,8 +164,23 @@ async def _transfer_shard_to_pageable_host(shard, local_slice: tuple[int, int, i
 
     The TPU runtime never returns JAX's pinned staging to the OS (#6924). State already in
     host memory is snapshotted in place.
+
+    Materializing a shard runs ``ArrayImpl._value``, which caches the NumPy buffer it builds on
+    the array and holds it there for the array's lifetime. Materializing a shard training owns
+    leaves a second host copy behind until training replaces the array.
     """
     data = shard.data if local_slice is None else _slice_shard_on_device(shard.data, *local_slice)
+
+    if local_slice is None and data.device.platform == _GPU_PLATFORM:
+        # Move the host-value cache onto a transient array instead of the source array held by
+        # training. TPU keeps the direct path because its pinned staging is not returned to the OS.
+        staged = jax.device_put(data, SingleDeviceSharding(data.device, memory_kind=_HOST_MEMORY_KIND))
+        try:
+            await asyncio.sleep(0)
+            return np.array(staged, copy=True)
+        finally:
+            staged.delete()
+
     if getattr(data.sharding, "memory_kind", None) != _HOST_MEMORY_KIND:
         data.copy_to_host_async()
         # Yield so the remaining shards' copies can be enqueued before this one blocks.
