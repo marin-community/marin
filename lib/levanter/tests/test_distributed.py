@@ -26,24 +26,32 @@ _RANK_BARRIER_FIFO = "rank-barrier"
 _SHUTDOWN_MARKER_GLOB = "shutdown-*"
 
 
-def _run_with_iris_completion(marker: Path, outcome: str) -> None:
-    class RecordingClient:
-        def complete_job(self, _job_id: JobName) -> None:
-            marker.touch()
-
+def _initialize_iris_process(
+    process_index: int,
+    complete_job: Callable[[JobName], None],
+    shutdown: Callable[[], None],
+    *,
+    jax_initialized: bool,
+) -> None:
+    client = SimpleNamespace(complete_job=complete_job)
     distributed.get_job_info = lambda: JobInfo(task_id=JobName.from_wire("/test/training/0"))
     distributed.configure_megascale_from_iris = lambda: None
     distributed.initialize_iris_jax = lambda: None
-    distributed.iris_ctx = lambda: SimpleNamespace(client=RecordingClient())
-    distributed.jax.process_index = lambda: 0
-    distributed.jax.distributed.is_initialized = lambda: outcome == "shutdown-error"
+    distributed.iris_ctx = lambda: SimpleNamespace(client=client)
+    distributed.jax.process_index = lambda: process_index
+    distributed.jax.distributed.is_initialized = lambda: jax_initialized
+    distributed.jax.distributed.shutdown = shutdown
+    distributed.DistributedConfig().initialize()
+
+
+def _run_with_iris_completion(marker: Path, outcome: str) -> None:
+    def complete_job(_job_id: JobName) -> None:
+        marker.touch()
 
     def shutdown() -> None:
         raise RuntimeError("distributed teardown failed")
 
-    distributed.jax.distributed.shutdown = shutdown
-
-    distributed.DistributedConfig().initialize()
+    _initialize_iris_process(0, complete_job, shutdown, jax_initialized=outcome == "shutdown-error")
     if outcome == "exception":
         raise RuntimeError("training failed")
     if outcome == "system-exit":
@@ -55,9 +63,8 @@ def _initialize_supervised_iris_rank(output_dir: Path) -> tuple[int, Path]:
     release_fifo = output_dir / _FAILURE_RELEASE_FIFO
     rank_barrier_fifo = output_dir / _RANK_BARRIER_FIFO
 
-    class RecordingClient:
-        def complete_job(self, _job_id: JobName) -> None:
-            (output_dir / _COMPLETION_MARKER).touch()
+    def complete_job(_job_id: JobName) -> None:
+        (output_dir / _COMPLETION_MARKER).touch()
 
     def shutdown() -> None:
         (output_dir / f"shutdown-{process_index}").touch()
@@ -70,15 +77,7 @@ def _initialize_supervised_iris_rank(output_dir: Path) -> tuple[int, Path]:
             with rank_barrier_fifo.open("w") as stream:
                 stream.write("1")
 
-    distributed.get_job_info = lambda: JobInfo(task_id=JobName.from_wire("/test/training/0"))
-    distributed.configure_megascale_from_iris = lambda: None
-    distributed.initialize_iris_jax = lambda: None
-    distributed.iris_ctx = lambda: SimpleNamespace(client=RecordingClient())
-    distributed.jax.process_index = lambda: process_index
-    distributed.jax.distributed.is_initialized = lambda: True
-    distributed.jax.distributed.shutdown = shutdown
-
-    distributed.DistributedConfig().initialize()
+    _initialize_iris_process(process_index, complete_job, shutdown, jax_initialized=True)
     return process_index, release_fifo
 
 
