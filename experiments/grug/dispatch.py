@@ -14,6 +14,8 @@ from iris.rpc.proto_display import priority_band_value
 from marin.training.run_environment import extras_for_resources
 from marin.training.training import resolve_training_env
 
+from experiments.grug.pjrt_wheel import pjrt_wheel_setup_scripts
+
 logger = logging.getLogger(__name__)
 
 ConfigT = TypeVar("ConfigT")
@@ -27,16 +29,13 @@ PRODUCTION_PRIORITY = priority_band_value("production")
 # given (e.g. `iris job run -e XLA_FLAGS ...`) must be re-exported explicitly.
 # JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
 # not leak onto accelerator tasks.
-_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "MALLOC_")
-_FORWARDED_ENV_NAMES = ("LD_PRELOAD",)
+_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 
 
 def _forwarded_env_vars() -> dict[str, str]:
     return {
-        k: v
-        for k, v in os.environ.items()
-        if (k in _FORWARDED_ENV_NAMES or k.startswith(_FORWARDED_ENV_PREFIXES)) and k not in _FORWARDED_ENV_EXCLUDE
+        k: v for k, v in os.environ.items() if k.startswith(_FORWARDED_ENV_PREFIXES) and k not in _FORWARDED_ENV_EXCLUDE
     }
 
 
@@ -67,11 +66,16 @@ def dispatch_grug_training_run(
     """
     safe_run_id = _safe_job_suffix(run_id)
     env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
+    extras = extras_for_resources(resources)
     request = JobRequest(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
         resources=resources,
-        environment=create_environment(env_vars=env_vars, extras=extras_for_resources(resources)),
+        environment=create_environment(
+            env_vars=env_vars,
+            extras=extras,
+            setup_scripts=pjrt_wheel_setup_scripts(extras=extras) or None,
+        ),
         max_retries_failure=max_retries_failure,
         max_task_failures=max_task_failures,
         processes_per_task=processes_per_task,
