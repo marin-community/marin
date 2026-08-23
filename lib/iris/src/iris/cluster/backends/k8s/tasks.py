@@ -18,7 +18,7 @@ import time
 from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar, NamedTuple
@@ -106,6 +106,7 @@ from iris.cluster.stats.emitter import PeriodicEmitter
 from iris.cluster.stats.tables import (
     IrisProfile,
     ProfileTrigger,
+    TaskEventDiagnostics,
     TaskEventRow,
     TaskEventSeverity,
     stats_timestamp,
@@ -1522,21 +1523,7 @@ class _PodEvent:
     reason: str
     message: str
     severity: TaskEventSeverity
-    pod_name: str | None = None
-    pod_uid: str | None = None
-    pod_deletion_timestamp: str | None = None
-    node_name: str | None = None
-    node_uid: str | None = None
-    node_provider_id: str | None = None
-    node_boot_id: str | None = None
-    node_system_uuid: str | None = None
-    node_unschedulable: bool | None = None
-    pod_tolerations_json: str | None = None
-    pod_conditions_json: str | None = None
-    node_taints_json: str | None = None
-    node_conditions_json: str | None = None
-    node_labels_json: str | None = None
-    node_annotations_json: str | None = None
+    diagnostics: TaskEventDiagnostics = field(default_factory=TaskEventDiagnostics)
 
 
 def _diagnostic_metadata(values: dict, prefixes: tuple[str, ...]) -> dict:
@@ -1560,30 +1547,32 @@ def _disruption_event(pod: dict, node: dict | None, disruption: dict) -> _PodEve
         reason=disruption.get("reason", "") or _DISRUPTION_TARGET_CONDITION,
         message=disruption.get("message", ""),
         severity=TaskEventSeverity.WARNING,
-        pod_name=pod_metadata.get("name") or None,
-        pod_uid=pod_metadata.get("uid") or None,
-        pod_deletion_timestamp=pod_metadata.get("deletionTimestamp") or None,
-        node_name=pod_spec.get("nodeName") or None,
-        node_uid=node_metadata.get("uid") or None,
-        node_provider_id=node_spec.get("providerID") or None,
-        node_boot_id=node_info.get("bootID") or None,
-        node_system_uuid=node_info.get("systemUUID") or None,
-        node_unschedulable=bool(node_spec.get("unschedulable")) if node is not None else None,
-        pod_tolerations_json=_diagnostic_json(pod_spec.get("tolerations", [])),
-        pod_conditions_json=_diagnostic_json(pod.get("status", {}).get("conditions", [])),
-        node_taints_json=_diagnostic_json(node_spec.get("taints", [])) if node is not None else None,
-        node_conditions_json=_diagnostic_json(node_status.get("conditions", [])) if node is not None else None,
-        node_labels_json=(
-            _diagnostic_json(_diagnostic_metadata(node_metadata.get("labels", {}), _NODE_DIAGNOSTIC_LABEL_PREFIXES))
-            if node is not None
-            else None
-        ),
-        node_annotations_json=(
-            _diagnostic_json(
-                _diagnostic_metadata(node_metadata.get("annotations", {}), _NODE_DIAGNOSTIC_ANNOTATION_PREFIXES)
-            )
-            if node is not None
-            else None
+        diagnostics=TaskEventDiagnostics(
+            pod_name=pod_metadata.get("name") or None,
+            pod_uid=pod_metadata.get("uid") or None,
+            pod_deletion_timestamp=pod_metadata.get("deletionTimestamp") or None,
+            node_name=pod_spec.get("nodeName") or None,
+            node_uid=node_metadata.get("uid") or None,
+            node_provider_id=node_spec.get("providerID") or None,
+            node_boot_id=node_info.get("bootID") or None,
+            node_system_uuid=node_info.get("systemUUID") or None,
+            node_unschedulable=bool(node_spec.get("unschedulable")) if node is not None else None,
+            pod_tolerations_json=_diagnostic_json(pod_spec.get("tolerations", [])),
+            pod_conditions_json=_diagnostic_json(pod.get("status", {}).get("conditions", [])),
+            node_taints_json=_diagnostic_json(node_spec.get("taints", [])) if node is not None else None,
+            node_conditions_json=_diagnostic_json(node_status.get("conditions", [])) if node is not None else None,
+            node_labels_json=(
+                _diagnostic_json(_diagnostic_metadata(node_metadata.get("labels", {}), _NODE_DIAGNOSTIC_LABEL_PREFIXES))
+                if node is not None
+                else None
+            ),
+            node_annotations_json=(
+                _diagnostic_json(
+                    _diagnostic_metadata(node_metadata.get("annotations", {}), _NODE_DIAGNOSTIC_ANNOTATION_PREFIXES)
+                )
+                if node is not None
+                else None
+            ),
         ),
     )
 
@@ -1607,11 +1596,11 @@ def _workload_admission_blocked(workload: dict | None) -> bool:
 def _pod_event(pod: dict, workload: dict | None, node: dict | None = None) -> _PodEvent | None:
     """The current actionable backend event for a pod.
 
-    ``source`` attributes the verdict to the layer that produced it (the task
-    container, the Kueue gate, or the scheduler); ``severity`` is Warning for an
-    actionable failure (image pull, config error, Kueue eviction) or a
-    Kueue-declined admission, Normal for a transient wait. Returns ``None`` for a
-    running or otherwise quiet pod.
+    ``source`` attributes the verdict to the layer that produced it (a Kubernetes
+    disruption, the task container, the Kueue gate, or the scheduler);
+    ``severity`` is Warning for an actionable failure (image pull, config error,
+    disruption, Kueue eviction) or a Kueue-declined admission, Normal for a
+    transient wait. Returns ``None`` for a healthy running or otherwise quiet pod.
     """
     disruption = _disruption_condition(pod)
     if disruption is not None and disruption.get("type") == _DISRUPTION_TARGET_CONDITION:
@@ -2042,7 +2031,7 @@ class TaskEventLog:
         """Record ``event`` for ``attempt`` if its verdict has changed."""
         if event is None:
             return
-        has_node_evidence = event.node_uid is not None or event.node_conditions_json is not None
+        has_node_evidence = event.diagnostics.node_uid is not None or event.diagnostics.node_conditions_json is not None
         verdict = (event.source, event.reason, event.severity, has_node_evidence)
         if self._last_verdict.get(attempt) == verdict:
             return
@@ -2056,21 +2045,7 @@ class TaskEventLog:
             message=event.message,
             source=event.source,
             count=1,
-            pod_name=event.pod_name,
-            pod_uid=event.pod_uid,
-            pod_deletion_timestamp=event.pod_deletion_timestamp,
-            node_name=event.node_name,
-            node_uid=event.node_uid,
-            node_provider_id=event.node_provider_id,
-            node_boot_id=event.node_boot_id,
-            node_system_uuid=event.node_system_uuid,
-            node_unschedulable=event.node_unschedulable,
-            pod_tolerations_json=event.pod_tolerations_json,
-            pod_conditions_json=event.pod_conditions_json,
-            node_taints_json=event.node_taints_json,
-            node_conditions_json=event.node_conditions_json,
-            node_labels_json=event.node_labels_json,
-            node_annotations_json=event.node_annotations_json,
+            **asdict(event.diagnostics),
         )
         try:
             self._table.write([row])

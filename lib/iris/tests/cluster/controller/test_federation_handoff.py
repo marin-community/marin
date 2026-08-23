@@ -105,6 +105,35 @@ def _peer_status_of(service: ControllerServiceImpl, job_id: JobName) -> int:
     ).job.peer_status
 
 
+def _commit_peer_direct_update(
+    peer_state,
+    task,
+    worker,
+    *,
+    new_state: int,
+    error: str | None = None,
+    exit_code: int | None = None,
+    pod_name: str | None = None,
+    pod_uid: str | None = None,
+    node_name: str | None = None,
+    terminal_reason: str | None = None,
+) -> None:
+    assign_task(peer_state, task, worker)
+    update = TaskUpdate(
+        task_id=task.task_id,
+        attempt_id=query_task(peer_state, task.task_id).current_attempt_id,
+        new_state=new_state,
+        error=error,
+        exit_code=exit_code,
+        pod_name=pod_name,
+        pod_uid=pod_uid,
+        node_name=node_name,
+        terminal_reason=terminal_reason,
+    )
+    with peer_state._db.transaction() as cur:
+        commit_dispatch_updates(cur, [update], now=Timestamp.now())
+
+
 def _run_peer_task_to_success(
     peer_state: ControllerTestState,
     job_id: JobName,
@@ -119,22 +148,15 @@ def _run_peer_task_to_success(
     if pod_name is None:
         dispatch_task(peer_state, task, worker)
     else:
-        assign_task(peer_state, task, worker)
-        with peer_state._db.transaction() as cur:
-            commit_dispatch_updates(
-                cur,
-                [
-                    TaskUpdate(
-                        task_id=task.task_id,
-                        attempt_id=query_task(peer_state, task.task_id).current_attempt_id,
-                        new_state=job_pb2.TASK_STATE_RUNNING,
-                        pod_name=pod_name,
-                        pod_uid=pod_uid,
-                        node_name=node_name,
-                    )
-                ],
-                now=Timestamp.now(),
-            )
+        _commit_peer_direct_update(
+            peer_state,
+            task,
+            worker,
+            new_state=job_pb2.TASK_STATE_RUNNING,
+            pod_name=pod_name,
+            pod_uid=pod_uid,
+            node_name=node_name,
+        )
     transition_task(peer_state, task.task_id, job_pb2.TASK_STATE_SUCCEEDED)
 
 
@@ -151,22 +173,15 @@ def _run_peer_task_to_failure(
         dispatch_task(peer_state, task, worker)
         transition_task(peer_state, task.task_id, job_pb2.TASK_STATE_FAILED, error="boom", exit_code=1)
         return
-    assign_task(peer_state, task, worker)
-    with peer_state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [
-                TaskUpdate(
-                    task_id=task.task_id,
-                    attempt_id=query_task(peer_state, task.task_id).current_attempt_id,
-                    new_state=job_pb2.TASK_STATE_FAILED,
-                    error=terminal_reason,
-                    exit_code=1,
-                    terminal_reason=terminal_reason,
-                )
-            ],
-            now=Timestamp.now(),
-        )
+    _commit_peer_direct_update(
+        peer_state,
+        task,
+        worker,
+        new_state=job_pb2.TASK_STATE_FAILED,
+        error=terminal_reason,
+        exit_code=1,
+        terminal_reason=terminal_reason,
+    )
 
 
 # ---------------------------------------------------------------------------

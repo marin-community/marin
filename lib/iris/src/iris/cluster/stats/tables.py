@@ -181,8 +181,29 @@ class TaskStatusRow:
     status_text_summary_md: str
 
 
+@dataclass(kw_only=True)
+class TaskEventDiagnostics:
+    """Pod and node evidence captured while a Kubernetes disruption is observable."""
+
+    pod_name: str | None = None
+    pod_uid: str | None = None
+    pod_deletion_timestamp: str | None = None
+    node_name: str | None = None
+    node_uid: str | None = None
+    node_provider_id: str | None = None
+    node_boot_id: str | None = None
+    node_system_uuid: str | None = None
+    node_unschedulable: bool | None = None
+    pod_tolerations_json: str | None = None
+    pod_conditions_json: str | None = None
+    node_taints_json: str | None = None
+    node_conditions_json: str | None = None
+    node_labels_json: str | None = None
+    node_annotations_json: str | None = None
+
+
 @dataclass
-class TaskEventRow:
+class TaskEventRow(TaskEventDiagnostics):
     """One backend event or controller action for a task attempt.
 
     The "event log for every job": producers append a row each time a backend
@@ -209,21 +230,6 @@ class TaskEventRow:
     message: str
     source: str
     count: int
-    pod_name: str | None = None
-    pod_uid: str | None = None
-    pod_deletion_timestamp: str | None = None
-    node_name: str | None = None
-    node_uid: str | None = None
-    node_provider_id: str | None = None
-    node_boot_id: str | None = None
-    node_system_uuid: str | None = None
-    node_unschedulable: bool | None = None
-    pod_tolerations_json: str | None = None
-    pod_conditions_json: str | None = None
-    node_taints_json: str | None = None
-    node_conditions_json: str | None = None
-    node_labels_json: str | None = None
-    node_annotations_json: str | None = None
 
 
 class ProfileType(StrEnum):
