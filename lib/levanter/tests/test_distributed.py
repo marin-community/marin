@@ -17,6 +17,10 @@ from levanter import distributed
 from levanter.distributed import _square_brace_expand
 
 
+_COMPLETION_MARKER = "completed"
+_FAILURE_RELEASE_FIFO = "release-failure"
+
+
 def _run_with_iris_completion(marker: Path, outcome: str) -> None:
     class RecordingClient:
         def complete_job(self, _job_id: JobName) -> None:
@@ -37,7 +41,7 @@ def _run_with_iris_completion(marker: Path, outcome: str) -> None:
 
 def _run_supervised_iris_rank(output_dir: Path, failing_rank: int | None) -> None:
     process_index = int(os.environ[IRIS_MULTIGPU_PROCESS_INDEX_ENV])
-    release_fifo = output_dir / "release-failure"
+    release_fifo = output_dir / _FAILURE_RELEASE_FIFO
 
     def release_failure() -> None:
         if failing_rank is not None and process_index == 0:
@@ -46,7 +50,7 @@ def _run_supervised_iris_rank(output_dir: Path, failing_rank: int | None) -> Non
 
     class RecordingClient:
         def complete_job(self, _job_id: JobName) -> None:
-            (output_dir / "completed").touch()
+            (output_dir / _COMPLETION_MARKER).touch()
             release_failure()
 
     def shutdown() -> None:
@@ -68,7 +72,7 @@ def _run_supervised_iris_rank(output_dir: Path, failing_rank: int | None) -> Non
 
 
 def _run_supervised_callable(tmp_path: Path, failing_rank: int | None) -> subprocess.CompletedProcess:
-    os.mkfifo(tmp_path / "release-failure")
+    os.mkfifo(tmp_path / _FAILURE_RELEASE_FIFO)
     entrypoint = Entrypoint.from_callable(_run_supervised_iris_rank, tmp_path, failing_rank)
     for name, contents in entrypoint.workdir_files.items():
         (tmp_path / name).write_bytes(contents)
@@ -92,7 +96,7 @@ def test_callable_runner_only_completes_iris_job_after_clean_exit(
     expected_returncode: int,
     expected_completion: bool,
 ) -> None:
-    marker = tmp_path / "completed"
+    marker = tmp_path / _COMPLETION_MARKER
     entrypoint = Entrypoint.from_callable(_run_with_iris_completion, marker, outcome)
     for name, contents in entrypoint.workdir_files.items():
         (tmp_path / name).write_bytes(contents)
@@ -108,7 +112,7 @@ def test_multigpu_clean_teardown_exits_zero_after_every_rank_shuts_down(tmp_path
     result = _run_supervised_callable(tmp_path, failing_rank=None)
 
     assert result.returncode == 0
-    assert not (tmp_path / "completed").exists()
+    assert not (tmp_path / _COMPLETION_MARKER).exists()
     assert {path.name for path in tmp_path.glob("shutdown-*")} == {"shutdown-0", "shutdown-1"}
 
 
@@ -116,7 +120,7 @@ def test_multigpu_late_rank_sigkill_does_not_complete_iris_job(tmp_path: Path) -
     result = _run_supervised_callable(tmp_path, failing_rank=1)
 
     assert result.returncode != 0
-    assert not (tmp_path / "completed").exists()
+    assert not (tmp_path / _COMPLETION_MARKER).exists()
     assert {path.name for path in tmp_path.glob("shutdown-*")} == {"shutdown-0"}
 
 
