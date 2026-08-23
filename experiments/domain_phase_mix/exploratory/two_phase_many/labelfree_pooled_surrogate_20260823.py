@@ -213,6 +213,20 @@ def nested(scores: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+CANONICAL_POOLING = "strata n=3"
+"""The pooling to use, fixed a priori rather than selected.
+
+Selection is not affordable on this fiber. A paired bootstrap puts the standard error on one cell's
+capture at 0.166 against a total spread of 0.253, and the planned six-anchor extension trades pairs per
+anchor (48 to 20) for anchor count, moving the anchor-mean standard error only from 0.097 to 0.087.
+Resolving the ~0.05 gaps between the leading poolings would take roughly fifteen times the present pair
+count. So the count is taken from the model rather than from the data: `Shape.boundary_scale` already
+carries one parameter per exposure stratum at `n_strata = 3`, and `Panel.exposure_stratum` already cuts
+those strata from token counts alone. Reusing that same stratification for the readout introduces no new
+hyperparameter and no bucket labels.
+"""
+
+
 def family_of(pooling: str) -> str:
     """Which construction a pooling came from, so results can be read at family level."""
     return "semantic" if "semantic" in pooling else pooling.split()[0]
@@ -247,6 +261,9 @@ def main() -> None:
     capture["family"] = [family_of(name) for name in capture.index]
     print("\nworst-cell capture by construction:")
     print(capture.groupby("family")["worst"].agg(["min", "max", "count"]).to_string(float_format=lambda v: f"{v:+.3f}"))
+
+    print(f"\ncanonical pooling fixed a priori: {CANONICAL_POOLING} (see CANONICAL_POOLING)")
+    print(capture.loc[[CANONICAL_POOLING]].to_string(float_format=lambda v: f"{v:+.3f}"))
 
     print("\nrank agreement between contrast correlation and capture:")
     for cell in correlation.columns:
