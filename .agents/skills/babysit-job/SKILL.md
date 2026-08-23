@@ -1,6 +1,6 @@
 ---
 name: babysit-job
-description: Monitor and, when authorized, recover a specified non-Zephyr Iris job by stopping and resubmitting it.
+description: Continuously monitor a specified non-Zephyr Iris job only when asked to babysit it; stop and resubmit only with authorization.
 ---
 
 # Babysit an Iris job

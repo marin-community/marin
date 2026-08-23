@@ -1,6 +1,6 @@
 ---
 name: consult-echo
-description: Search or cite Echo when explicitly requested or required by repository policy or another selected workflow; do not invoke for routine repository research.
+description: Search or cite Echo when Marin's prior-work policy applies, another selected workflow requires it, or the user explicitly asks; do not substitute it for local code search.
 ---
 
 # Consult Echo
@@ -64,16 +64,14 @@ Run this search sequence before adding or editing a wiki note.
 
 ## Choose the durable home
 
-At resolution, choose the narrowest durable home:
+Every incident gets a standalone Echo record through `write-ops-log`, linked
+from its associated PR or issue. Also use the narrowest reusable home when the
+incident or other work changes durable guidance:
 
 - Update `OPS.md` for a recurring operational procedure, diagnostic workflow,
   or guardrail in one subsystem.
 - Update `docs/` for reusable product or user guidance that belongs with the
   repository.
-- Add one Echo entry for the evidence, decisions, and outcome of a specific
-  incident. Tag it `incident`, `debugging`, the subsystem, severity, and
-  resolution; add `ops` for infrastructure incidents. Link its canonical Echo
-  URL from the associated PR or issue.
 - Edit an existing Echo wiki note for a cross-cutting pattern or synthesis that
   has no single repository home.
 - Add a wiki note only when the searches find no near-duplicate.

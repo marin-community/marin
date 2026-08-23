@@ -1,6 +1,6 @@
 ---
 name: write-ops-log
-description: Publish an Echo incident record only when explicitly requested or delegated after an infrastructure incident or durable debugging session.
+description: Publish a tagged Echo record after every incident, then link its canonical URL from the associated pull request or issue.
 ---
 
 # Skill: Write an Ops Log

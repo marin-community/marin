@@ -1,14 +1,14 @@
 ---
 name: debug
-description: Diagnose an explicit code, JAX, Marin, Iris, Zephyr, or TPU fault or startup/performance regression; do not activate for ordinary implementation or optimization without a stated symptom.
+description: Diagnose a stated code, JAX, Marin, Iris, Zephyr, or TPU fault or startup/performance regression; do not activate for ordinary implementation or optimization without a symptom.
 ---
 
 # Debug
 
 Keep working notes in the active task. Do not add repository debug-log files.
-Use `consult-echo` only when repository policy requires prior-work search, and
-use `write-ops-log` when an infrastructure or durable multi-step incident needs
-a standalone Echo record.
+Use `consult-echo` when repository policy requires prior-work search. After
+every incident handled by this workflow, use `write-ops-log` to publish its
+standalone Echo record and link it from the associated PR or issue.
 
 ## Infrastructure faults
 

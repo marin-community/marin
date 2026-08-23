@@ -1,6 +1,6 @@
 ---
 name: babysit-zephyr
-description: Launch or continuously monitor a specified Zephyr pipeline job on Iris, and restart it only after explicit approval.
+description: Launch or continuously monitor a specified Zephyr pipeline on Iris only when asked to babysit it; restart only after explicit approval.
 ---
 
 # Babysit a Zephyr job

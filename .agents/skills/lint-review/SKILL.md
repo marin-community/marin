@@ -1,6 +1,6 @@
 ---
 name: lint-review
-description: Run the infra/lint catalog review only when invoked by CI or explicitly requested for a pull request.
+description: Run the read-only infra/lint PR reporter only when invoked by CI or explicitly requested; do not select it for the commit workflow's fix-and-respond review.
 allowed-tools: Bash(./infra/pre-commit.py:*), Bash(gh pr comment:*), Bash(gh pr view:*), Bash(gh pr diff:*), Bash(gh api:*), Bash(git diff:*), Bash(git log:*), Bash(git show:*), Bash(git merge-base:*), Bash(git rev-parse:*), Bash(git status:*), mcp__github_inline_comment__create_inline_comment
 ---
 
