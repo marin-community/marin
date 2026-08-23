@@ -15,7 +15,6 @@ from jax._src import clusters
 from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
-from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_COUNT_ENV
 from iris.runtime.jax_init import initialize_jax as initialize_iris_jax
 
 from levanter.megascale import configure_megascale_from_iris
@@ -33,23 +32,32 @@ _VISIBLE_DEVICES = "CUDA_VISIBLE_DEVICES"
 _NODE_NAME = "SLURMD_NODENAME"
 
 
+def _shutdown_jax() -> None:
+    if not jax.distributed.is_initialized():
+        return
+    try:
+        jax.distributed.shutdown()
+    except BaseException:  # noqa: BLE001 - atexit exceptions do not reliably affect the process exit code
+        logger.exception("JAX distributed shutdown failed")
+        os._exit(1)
+
+
+def _shutdown_jax_after_clean_exit() -> None:
+    if getattr(sys, "last_exc", None) is not None:
+        return
+    _shutdown_jax()
+
+
 def _complete_iris_job_after_clean_exit(client: IrisClient, job_id: JobName) -> None:
-    # Preserve retries for genuine failures; the successful rank-0 exit owns completed-job teardown.
     if getattr(sys, "last_exc", None) is not None:
         return
+    _shutdown_jax()
     client.complete_job(job_id)
-
-
-def _shutdown_supervised_jax_after_clean_exit() -> None:
-    """Wait for every supervised rank to leave JAX before this child exits."""
-    if getattr(sys, "last_exc", None) is not None:
-        return
-    jax.distributed.shutdown()
 
 
 def _unregister_iris_exit_handlers() -> None:
     atexit.unregister(_complete_iris_job_after_clean_exit)
-    atexit.unregister(_shutdown_supervised_jax_after_clean_exit)
+    atexit.unregister(_shutdown_jax_after_clean_exit)
 
 
 class LevanterSlurmCluster(clusters.SlurmCluster):
@@ -250,16 +258,14 @@ class DistributedConfig:
             logger.info("Detected Iris job context; initializing jax.distributed via iris.runtime.jax_init.")
             configure_megascale_from_iris()
             initialize_iris_jax()
-            if IRIS_MULTIGPU_PROCESS_COUNT_ENV in os.environ:
-                # The task supervisor owns the aggregate status. Let every child
-                # finish JAX teardown so it can observe each process exit code.
-                atexit.register(_shutdown_supervised_jax_after_clean_exit)
-            elif jax.process_index() == 0:
+            if jax.process_index() == 0:
                 ctx = iris_ctx()
                 if ctx.client is None:
                     raise RuntimeError("Iris context has no client for completing the current job")
-                # Tracker exit hooks register later and therefore run before job completion.
+                # Complete the job only after every rank finishes bounded JAX teardown.
                 atexit.register(_complete_iris_job_after_clean_exit, ctx.client, job_info.job_id)
+            else:
+                atexit.register(_shutdown_jax_after_clean_exit)
         elif self._is_distributed():
             device_ids = self.local_device_ids
             coordinator_address = self.coordinator_address

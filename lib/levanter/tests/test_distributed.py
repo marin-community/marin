@@ -22,6 +22,7 @@ from levanter.recovery.types import ChildSpec
 
 _COMPLETION_MARKER = "completed"
 _FAILURE_RELEASE_FIFO = "release-failure"
+_RANK_BARRIER_FIFO = "rank-barrier"
 
 
 def _run_with_iris_completion(marker: Path, outcome: str) -> None:
@@ -34,6 +35,12 @@ def _run_with_iris_completion(marker: Path, outcome: str) -> None:
     distributed.initialize_iris_jax = lambda: None
     distributed.iris_ctx = lambda: SimpleNamespace(client=RecordingClient())
     distributed.jax.process_index = lambda: 0
+    distributed.jax.distributed.is_initialized = lambda: outcome == "shutdown-error"
+
+    def shutdown() -> None:
+        raise RuntimeError("distributed teardown failed")
+
+    distributed.jax.distributed.shutdown = shutdown
 
     distributed.DistributedConfig().initialize()
     if outcome == "exception":
@@ -42,63 +49,56 @@ def _run_with_iris_completion(marker: Path, outcome: str) -> None:
         raise SystemExit(7)
 
 
-def _run_supervised_iris_rank(output_dir: Path, failing_rank: int | None) -> None:
+def _initialize_supervised_iris_rank(output_dir: Path) -> tuple[int, Path]:
     process_index = int(os.environ[IRIS_MULTIGPU_PROCESS_INDEX_ENV])
     release_fifo = output_dir / _FAILURE_RELEASE_FIFO
-
-    def release_failure() -> None:
-        if failing_rank is not None and process_index == 0:
-            with release_fifo.open("w") as stream:
-                stream.write("1")
+    rank_barrier_fifo = output_dir / _RANK_BARRIER_FIFO
 
     class RecordingClient:
         def complete_job(self, _job_id: JobName) -> None:
             (output_dir / _COMPLETION_MARKER).touch()
-            release_failure()
 
     def shutdown() -> None:
         (output_dir / f"shutdown-{process_index}").touch()
-        release_failure()
+        if process_index == 0:
+            with release_fifo.open("w") as stream:
+                stream.write("1")
+            with rank_barrier_fifo.open("r") as stream:
+                assert stream.read(1) == "1"
+        else:
+            with rank_barrier_fifo.open("w") as stream:
+                stream.write("1")
 
     distributed.get_job_info = lambda: JobInfo(task_id=JobName.from_wire("/test/training/0"))
     distributed.configure_megascale_from_iris = lambda: None
     distributed.initialize_iris_jax = lambda: None
     distributed.iris_ctx = lambda: SimpleNamespace(client=RecordingClient())
     distributed.jax.process_index = lambda: process_index
+    distributed.jax.distributed.is_initialized = lambda: True
     distributed.jax.distributed.shutdown = shutdown
 
     distributed.DistributedConfig().initialize()
-    if process_index == failing_rank:
+    return process_index, release_fifo
+
+
+def _run_supervised_iris_rank(output_dir: Path, failing_rank: int | None) -> None:
+    process_index, release_fifo = _initialize_supervised_iris_rank(output_dir)
+    if process_index == 1:
         with release_fifo.open("r") as stream:
             assert stream.read(1) == "1"
+    if process_index == failing_rank:
         os.kill(os.getpid(), signal.SIGKILL)
 
 
 def _run_supervised_recovery_rank(output_dir: Path, failing_rank: int | None) -> None:
-    process_index = int(os.environ[IRIS_MULTIGPU_PROCESS_INDEX_ENV])
-    release_fifo = output_dir / _FAILURE_RELEASE_FIFO
-
-    def release_failure() -> None:
-        if failing_rank is not None and process_index == 0:
-            with release_fifo.open("w") as stream:
-                stream.write("1")
-
-    def shutdown() -> None:
-        (output_dir / f"shutdown-{process_index}").touch()
-        release_failure()
+    process_index, release_fifo = _initialize_supervised_iris_rank(output_dir)
 
     def trainer(_config: object) -> None:
-        if process_index == failing_rank:
+        if process_index == 1:
             with release_fifo.open("r") as stream:
                 assert stream.read(1) == "1"
+        if process_index == failing_rank:
             raise RuntimeError("mapped trainer failure")
-
-    distributed.get_job_info = lambda: JobInfo(task_id=JobName.from_wire("/test/training/0"))
-    distributed.configure_megascale_from_iris = lambda: None
-    distributed.initialize_iris_jax = lambda: None
-    distributed.jax.process_index = lambda: process_index
-    distributed.jax.distributed.shutdown = shutdown
-    distributed.DistributedConfig().initialize()
 
     spec = ChildSpec(entry_module="test", entry_qualname="trainer", config=None)
     recovery_child._load_spec = lambda _path: spec
@@ -113,6 +113,7 @@ def _run_supervised_callable(
     failing_rank: int | None,
 ) -> subprocess.CompletedProcess:
     os.mkfifo(tmp_path / _FAILURE_RELEASE_FIFO)
+    os.mkfifo(tmp_path / _RANK_BARRIER_FIFO)
     entrypoint = Entrypoint.from_callable(rank_entrypoint, tmp_path, failing_rank)
     for name, contents in entrypoint.workdir_files.items():
         (tmp_path / name).write_bytes(contents)
@@ -128,6 +129,7 @@ def _run_supervised_callable(
         pytest.param("return", 0, True, id="clean-return"),
         pytest.param("exception", 1, False, id="uncaught-exception"),
         pytest.param("system-exit", 7, False, id="nonzero-system-exit"),
+        pytest.param("shutdown-error", 1, False, id="distributed-shutdown-error"),
     ],
 )
 def test_callable_runner_only_completes_iris_job_after_clean_exit(
@@ -152,7 +154,7 @@ def test_multigpu_clean_teardown_exits_zero_after_every_rank_shuts_down(tmp_path
     result = _run_supervised_callable(tmp_path, _run_supervised_iris_rank, failing_rank=None)
 
     assert result.returncode == 0
-    assert not (tmp_path / _COMPLETION_MARKER).exists()
+    assert (tmp_path / _COMPLETION_MARKER).exists()
     assert {path.name for path in tmp_path.glob("shutdown-*")} == {"shutdown-0", "shutdown-1"}
 
 

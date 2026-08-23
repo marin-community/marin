@@ -26,6 +26,7 @@ from iris.runtime.jax_init import configure_jax_compilation_cache, initialize_ja
 
 EXPECTED_JAX_INITIALIZATION_TIMEOUT = 1800
 EXPECTED_JAX_HEARTBEAT_TIMEOUT = 100
+EXPECTED_JAX_SHUTDOWN_TIMEOUT = 120
 INITIAL_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-0"
 RETRY_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-3"
 
@@ -149,6 +150,7 @@ def test_initialize_jax_single_task(
         "10.0.0.1:45678",
         num_processes=1,
         process_id=0,
+        shutdown_timeout_seconds=EXPECTED_JAX_SHUTDOWN_TIMEOUT,
     )
 
 
@@ -185,6 +187,7 @@ def test_initialize_jax_tpu_multitask_uses_iris_registry(
             0,
             initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
             heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
+            shutdown_timeout_seconds=EXPECTED_JAX_SHUTDOWN_TIMEOUT,
         ),
         call(
             "10.0.0.1:12345",
@@ -192,6 +195,7 @@ def test_initialize_jax_tpu_multitask_uses_iris_registry(
             1,
             initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
             heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
+            shutdown_timeout_seconds=EXPECTED_JAX_SHUTDOWN_TIMEOUT,
         ),
     ]
 
@@ -226,7 +230,7 @@ def test_initialize_jax_task0_registers(
     fake_ctx = FakeContext()
     mock_iris_ctx.return_value = fake_ctx
 
-    initialize_jax(port=9999, heartbeat_timeout=37)
+    initialize_jax(port=9999, heartbeat_timeout=37, shutdown_timeout=41)
 
     assert fake_ctx.registry.registered == [(INITIAL_ATTEMPT_ENDPOINT_NAME, "10.0.0.1:9999")]
     mock_jax_init.assert_called_once_with(
@@ -235,6 +239,7 @@ def test_initialize_jax_task0_registers(
         0,
         initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
         heartbeat_timeout_seconds=37,
+        shutdown_timeout_seconds=41,
     )
     exit_hooks.run()
     assert fake_ctx.registry.unregistered == ["endpoint-1"]
@@ -264,6 +269,7 @@ def test_initialize_jax_task0_uses_iris_port(
         0,
         initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
         heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
+        shutdown_timeout_seconds=EXPECTED_JAX_SHUTDOWN_TIMEOUT,
     )
 
 
@@ -295,6 +301,7 @@ def test_initialize_jax_taskN_polls(
         2,
         initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
         heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
+        shutdown_timeout_seconds=EXPECTED_JAX_SHUTDOWN_TIMEOUT,
     )
 
 
@@ -351,6 +358,7 @@ def test_initialize_jax_supervised_single_host(
         local_device_ids=[3],
         initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
         heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
+        shutdown_timeout_seconds=EXPECTED_JAX_SHUTDOWN_TIMEOUT,
     )
     assert fake_ctx.registry.registered == []
 
@@ -384,6 +392,7 @@ def test_initialize_jax_supervised_global_rank0_registers(
         local_device_ids=[0],
         initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
         heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
+        shutdown_timeout_seconds=EXPECTED_JAX_SHUTDOWN_TIMEOUT,
     )
 
 
@@ -416,6 +425,7 @@ def test_initialize_jax_supervised_global_rank0_picks_port(
         local_device_ids=[0],
         initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
         heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
+        shutdown_timeout_seconds=EXPECTED_JAX_SHUTDOWN_TIMEOUT,
     )
 
 
@@ -449,6 +459,7 @@ def test_initialize_jax_supervised_other_host_polls(
         local_device_ids=[0],
         initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
         heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
+        shutdown_timeout_seconds=EXPECTED_JAX_SHUTDOWN_TIMEOUT,
     )
     assert fake_ctx.registry.registered == []
 
@@ -494,6 +505,7 @@ def test_initialize_jax_retry_ignores_previous_attempt_coordinator(
         local_device_ids=[0],
         initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
         heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
+        shutdown_timeout_seconds=EXPECTED_JAX_SHUTDOWN_TIMEOUT,
     )
 
 

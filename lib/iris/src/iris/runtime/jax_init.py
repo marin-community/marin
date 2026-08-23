@@ -53,6 +53,9 @@ _JAX_DIST_INIT_TIMEOUT = 1800
 # This bounds how long healthy ranks wait after a peer process disappears before
 # JAX fate sharing tears the distributed world down and Iris can retry the gang.
 _JAX_DIST_HEARTBEAT_TIMEOUT = 100
+# Rank 0 can spend up to 60 seconds in tracker teardown before joining peers.
+# Leave the same margin again while bounding a rank stuck below Python.
+_JAX_DIST_SHUTDOWN_TIMEOUT = 120
 
 
 class _AutotuneCacheRole(enum.StrEnum):
@@ -312,6 +315,7 @@ def _initialize_supervised_jax(
     poll_timeout: float,
     poll_interval: float,
     heartbeat_timeout: int,
+    shutdown_timeout: int,
 ) -> None:
     """Join the JAX mesh for a process launched by ``iris.hooks.multigpu_main``.
 
@@ -331,6 +335,7 @@ def _initialize_supervised_jax(
             num_processes=1,
             process_id=0,
             local_device_ids=device_ids,
+            shutdown_timeout_seconds=shutdown_timeout,
         )
         return
 
@@ -357,6 +362,7 @@ def _initialize_supervised_jax(
         local_device_ids=device_ids,
         initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
         heartbeat_timeout_seconds=heartbeat_timeout,
+        shutdown_timeout_seconds=shutdown_timeout,
     )
 
 
@@ -366,6 +372,7 @@ def initialize_jax(
     poll_timeout: float = _JAX_DIST_INIT_TIMEOUT,
     poll_interval: float = 2.0,
     heartbeat_timeout: int = _JAX_DIST_HEARTBEAT_TIMEOUT,
+    shutdown_timeout: int = _JAX_DIST_SHUTDOWN_TIMEOUT,
 ) -> None:
     """Initialize JAX distributed runtime using Iris endpoint discovery.
 
@@ -392,6 +399,8 @@ def initialize_jax(
         poll_interval: Initial backoff delay for polling (seconds).
         heartbeat_timeout: Maximum seconds without a peer heartbeat before JAX
             declares the distributed world unhealthy and terminates it.
+        shutdown_timeout: Maximum seconds a terminating process waits for every
+            peer to enter JAX distributed shutdown.
     """
     import jax  # noqa: PLC0415  # optional dep: jax (iris does not depend on jax)
 
@@ -430,6 +439,7 @@ def initialize_jax(
             poll_timeout=poll_timeout,
             poll_interval=poll_interval,
             heartbeat_timeout=heartbeat_timeout,
+            shutdown_timeout=shutdown_timeout,
         )
         return
 
@@ -442,6 +452,7 @@ def initialize_jax(
             coordinator,
             num_processes=1,
             process_id=0,
+            shutdown_timeout_seconds=shutdown_timeout,
         )
         return
 
@@ -460,6 +471,7 @@ def initialize_jax(
             task_index,
             initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
             heartbeat_timeout_seconds=heartbeat_timeout,
+            shutdown_timeout_seconds=shutdown_timeout,
         )
     else:
         ctx = iris_ctx()
@@ -470,4 +482,5 @@ def initialize_jax(
             task_index,
             initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
             heartbeat_timeout_seconds=heartbeat_timeout,
+            shutdown_timeout_seconds=shutdown_timeout,
         )
