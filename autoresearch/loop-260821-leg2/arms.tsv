@@ -30,3 +30,4 @@ ra2a-l2-i16-nightly-dk-nosymk	e43db3a418	2026.08.22.15	ragged_all_to_all	synthet
 ra2a-l2-i16b-nightly-dk-symkar	3e53fc1b3c	2026.08.22.16	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-l2-i17-oneshot-symbuf	b3cf55b7be	2026.08.23.1	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-l2-i18-dk-scoped	02c55c3ac2	2026.08.23.2	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
+ra2a-l2-i19-dk-profile	b0ca131aea	2026.08.23.3	ragged_all_to_all	synthetic	disabled	4470000	2100	none	--profile-steps 3 --profile-start-step 8
