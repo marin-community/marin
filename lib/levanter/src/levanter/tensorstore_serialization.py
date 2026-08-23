@@ -170,6 +170,10 @@ async def _transfer_shard_to_pageable_host(shard, local_slice: tuple[int, int, i
     """
     data = shard.data if local_slice is None else _slice_shard_on_device(shard.data, *local_slice)
 
+    if getattr(data.sharding, "memory_kind", None) == _HOST_MEMORY_KIND:
+        # Already in host memory, and copying it to host again would alias rather than move.
+        return np.array(data, copy=True)
+
     if local_slice is None and data.device.platform == _GPU_PLATFORM:
         # Move the host-value cache onto a transient array instead of the source array held by
         # training. TPU keeps the direct path because its pinned staging is not returned to the OS.
@@ -180,10 +184,9 @@ async def _transfer_shard_to_pageable_host(shard, local_slice: tuple[int, int, i
         finally:
             staged.delete()
 
-    if getattr(data.sharding, "memory_kind", None) != _HOST_MEMORY_KIND:
-        data.copy_to_host_async()
-        # Yield so the remaining shards' copies can be enqueued before this one blocks.
-        await asyncio.sleep(0)
+    data.copy_to_host_async()
+    # Yield so the remaining shards' copies can be enqueued before this one blocks.
+    await asyncio.sleep(0)
     # TensorStore may retain this array. It must not reference the buffer training donates next.
     return np.array(data, copy=True)
 
