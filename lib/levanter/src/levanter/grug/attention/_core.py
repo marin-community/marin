@@ -415,6 +415,22 @@ def _tpu_splash_attention(
     # This matches the classical levanter splash entry (layers/attention.py).
     kernel_sharding = NamedSharding(mesh, PartitionSpec(q_pspec[1], q_pspec[2]))
     kernel_specs = splash_kernel.manual_sharding_spec(kernel_sharding)
+    # shard_map now rejects mismatched in_specs, so reshard each mask_info leaf
+    # of the kernel to the spec that ``manual_sharding_spec`` prescribes before
+    # calling shard_map. The pytree structure of ``kernel_specs`` mirrors
+    # ``splash_kernel`` (same SplashAttentionKernel wrapper), with PartitionSpec
+    # objects where the real kernel holds arrays; tree.map lets us pair leaves.
+    def _reshard_kernel_leaf(arr, spec):
+        if spec is None or not isinstance(arr, jax.Array):
+            return arr
+        return jax.reshard(arr, NamedSharding(mesh, spec))
+
+    splash_kernel = jax.tree.map(
+        _reshard_kernel_leaf,
+        splash_kernel,
+        kernel_specs,
+        is_leaf=lambda x: isinstance(x, PartitionSpec),
+    )
 
     @functools.partial(
         shard_map,
