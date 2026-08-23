@@ -185,3 +185,9 @@ def _chunk_capacity_drops(cu: Int[Array, "E1"], bounds: Sequence[int], caps: Seq
         count = cu[bounds[chunk + 1]] - cu[bounds[chunk]]
         total = total + jnp.maximum(count - cap, 0).astype(jnp.int32)
     return total
+
+
+def _zero_inactive_grouped_rows(values: jax.Array, cumulative_group_sizes: jax.Array) -> jax.Array:
+    """Zero the rows past the last expert group, which the grouped kernels never write."""
+    active_rows = cumulative_group_sizes[-1]
+    return jnp.where(jnp.arange(values.shape[0])[:, None] < active_rows, values, jnp.zeros((), values.dtype))
