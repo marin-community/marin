@@ -1478,8 +1478,24 @@ def _workload_for_pod(pod: dict, workloads: _KueueWorkloadIndex) -> dict | None:
 
 # The layer that produced a task-event verdict, recorded as the event ``source``.
 _EVENT_SOURCE_CONTAINER = "k8s/container"
+_EVENT_SOURCE_DISRUPTION = "k8s/disruption"
 _EVENT_SOURCE_KUEUE = "k8s/kueue"
 _EVENT_SOURCE_SCHEDULER = "k8s/scheduler"
+
+_NODE_DIAGNOSTIC_LABEL_PREFIXES = (
+    "compute.coreweave.com/",
+    "gpu.coreweave.cloud/",
+    "gpu.nvidia.com/",
+    "ib.coreweave.cloud/",
+    "node.coreweave.cloud/",
+    "node.kubernetes.io/",
+    "topology.kubernetes.io/",
+)
+_NODE_DIAGNOSTIC_ANNOTATION_PREFIXES = (
+    "cwnc.coreweave.com/",
+    "gpu.coreweave.cloud/",
+    "node.coreweave.cloud/",
+)
 
 # Pod/container reasons that are always operator-actionable failures (rather than
 # a transient wait), surfaced as Warning-severity events.
@@ -1506,6 +1522,70 @@ class _PodEvent:
     reason: str
     message: str
     severity: TaskEventSeverity
+    pod_name: str | None = None
+    pod_uid: str | None = None
+    pod_deletion_timestamp: str | None = None
+    node_name: str | None = None
+    node_uid: str | None = None
+    node_provider_id: str | None = None
+    node_boot_id: str | None = None
+    node_system_uuid: str | None = None
+    node_unschedulable: bool | None = None
+    pod_tolerations_json: str | None = None
+    pod_conditions_json: str | None = None
+    node_taints_json: str | None = None
+    node_conditions_json: str | None = None
+    node_labels_json: str | None = None
+    node_annotations_json: str | None = None
+
+
+def _diagnostic_metadata(values: dict, prefixes: tuple[str, ...]) -> dict:
+    return {key: value for key, value in values.items() if key.startswith(prefixes)}
+
+
+def _diagnostic_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _disruption_event(pod: dict, node: dict | None, disruption: dict) -> _PodEvent:
+    pod_metadata = pod.get("metadata", {})
+    pod_spec = pod.get("spec", {})
+    node_metadata = node.get("metadata", {}) if node is not None else {}
+    node_spec = node.get("spec", {}) if node is not None else {}
+    node_status = node.get("status", {}) if node is not None else {}
+    node_info = node_status.get("nodeInfo", {})
+
+    return _PodEvent(
+        source=_EVENT_SOURCE_DISRUPTION,
+        reason=disruption.get("reason", "") or _DISRUPTION_TARGET_CONDITION,
+        message=disruption.get("message", ""),
+        severity=TaskEventSeverity.WARNING,
+        pod_name=pod_metadata.get("name") or None,
+        pod_uid=pod_metadata.get("uid") or None,
+        pod_deletion_timestamp=pod_metadata.get("deletionTimestamp") or None,
+        node_name=pod_spec.get("nodeName") or None,
+        node_uid=node_metadata.get("uid") or None,
+        node_provider_id=node_spec.get("providerID") or None,
+        node_boot_id=node_info.get("bootID") or None,
+        node_system_uuid=node_info.get("systemUUID") or None,
+        node_unschedulable=bool(node_spec.get("unschedulable")) if node is not None else None,
+        pod_tolerations_json=_diagnostic_json(pod_spec.get("tolerations", [])),
+        pod_conditions_json=_diagnostic_json(pod.get("status", {}).get("conditions", [])),
+        node_taints_json=_diagnostic_json(node_spec.get("taints", [])) if node is not None else None,
+        node_conditions_json=_diagnostic_json(node_status.get("conditions", [])) if node is not None else None,
+        node_labels_json=(
+            _diagnostic_json(_diagnostic_metadata(node_metadata.get("labels", {}), _NODE_DIAGNOSTIC_LABEL_PREFIXES))
+            if node is not None
+            else None
+        ),
+        node_annotations_json=(
+            _diagnostic_json(
+                _diagnostic_metadata(node_metadata.get("annotations", {}), _NODE_DIAGNOSTIC_ANNOTATION_PREFIXES)
+            )
+            if node is not None
+            else None
+        ),
+    )
 
 
 def _workload_admission_blocked(workload: dict | None) -> bool:
@@ -1524,7 +1604,7 @@ def _workload_admission_blocked(workload: dict | None) -> bool:
     return False
 
 
-def _pod_event(pod: dict, workload: dict | None) -> _PodEvent | None:
+def _pod_event(pod: dict, workload: dict | None, node: dict | None = None) -> _PodEvent | None:
     """The current actionable backend event for a pod.
 
     ``source`` attributes the verdict to the layer that produced it (the task
@@ -1534,6 +1614,8 @@ def _pod_event(pod: dict, workload: dict | None) -> _PodEvent | None:
     running or otherwise quiet pod.
     """
     disruption = _disruption_condition(pod)
+    if disruption is not None and disruption.get("type") == _DISRUPTION_TARGET_CONDITION:
+        return _disruption_event(pod, node, disruption)
     if disruption is not None and disruption.get("type") == _KUEUE_TERMINATION_TARGET_CONDITION:
         return _PodEvent(
             source=_EVENT_SOURCE_KUEUE,
@@ -1943,26 +2025,27 @@ class TaskEventLog:
     verdicts come from the pod/workload lists ``sync`` already fetches.
     ``observe`` is called once per tracked attempt per cycle with the attempt's
     current verdict (or ``None`` when the pod is running/quiet); a row is written
-    only when the ``(source, reason, severity)`` verdict *changes*, so a pod
-    wedged in one state produces a single row, not one per poll — but a severity
-    upgrade (e.g. a gated pod Kueue later declines flips Normal→Warning under the
-    same source/reason) is a change and does record the actionable row. ``retain``
-    drops dedup state for attempts no longer polled so a retried attempt (new
-    ``attempt_id``) starts clean and the map stays bounded.
+    only when the ``(source, reason, severity)`` verdict *changes*, or when a
+    disruption first gains its node snapshot, so a pod wedged in one state
+    produces a single row, not one per poll. A severity upgrade (e.g. a gated
+    pod Kueue later declines flips Normal→Warning under the same source/reason)
+    records the actionable row. ``retain`` drops dedup state for attempts no
+    longer polled so a retried attempt (new ``attempt_id``) starts clean and the
+    map stays bounded.
     """
 
     def __init__(self, task_event_table: Table):
         self._table = task_event_table
-        self._last_verdict: dict[RunningTaskEntry, tuple[str, str, TaskEventSeverity]] = {}
+        self._last_verdict: dict[RunningTaskEntry, tuple[str, str, TaskEventSeverity, bool]] = {}
 
     def observe(self, attempt: RunningTaskEntry, event: _PodEvent | None) -> None:
         """Record ``event`` for ``attempt`` if its verdict has changed."""
         if event is None:
             return
-        verdict = (event.source, event.reason, event.severity)
+        has_node_evidence = event.node_uid is not None or event.node_conditions_json is not None
+        verdict = (event.source, event.reason, event.severity, has_node_evidence)
         if self._last_verdict.get(attempt) == verdict:
             return
-        self._last_verdict[attempt] = verdict
         row = TaskEventRow(
             task_id=attempt.task_id.to_wire(),
             attempt_id=attempt.attempt_id,
@@ -1973,11 +2056,28 @@ class TaskEventLog:
             message=event.message,
             source=event.source,
             count=1,
+            pod_name=event.pod_name,
+            pod_uid=event.pod_uid,
+            pod_deletion_timestamp=event.pod_deletion_timestamp,
+            node_name=event.node_name,
+            node_uid=event.node_uid,
+            node_provider_id=event.node_provider_id,
+            node_boot_id=event.node_boot_id,
+            node_system_uuid=event.node_system_uuid,
+            node_unschedulable=event.node_unschedulable,
+            pod_tolerations_json=event.pod_tolerations_json,
+            pod_conditions_json=event.pod_conditions_json,
+            node_taints_json=event.node_taints_json,
+            node_conditions_json=event.node_conditions_json,
+            node_labels_json=event.node_labels_json,
+            node_annotations_json=event.node_annotations_json,
         )
         try:
             self._table.write([row])
         except Exception:
             logger.debug("TaskEventLog: write to iris.task_event failed", exc_info=True)
+            return
+        self._last_verdict[attempt] = verdict
 
     def retain(self, active: set[RunningTaskEntry]) -> None:
         """Forget verdicts for attempts not in ``active`` (terminal or gone)."""
@@ -2413,13 +2513,13 @@ class K8sTaskProvider:
             logger.warning("Failed to query Kueue workloads: %s", e)
             workloads = []
 
-        updates = apply_failures + self._poll_pods(request.running_tasks, managed_pods, workloads)
-
         try:
             nodes = self.kubectl.list_json(K8sResource.NODES)
         except Exception as e:
             logger.warning("Failed to query node resources: %s", e)
             nodes = []
+
+        updates = apply_failures + self._poll_pods(request.running_tasks, managed_pods, workloads, nodes)
 
         node_pools = _fetch_node_pools(self.kubectl, self.pods.managed_label)
         self._cluster_state.update(managed_pods, nodes, workloads, node_pools)
@@ -2946,7 +3046,11 @@ class K8sTaskProvider:
             )
 
     def _poll_pods(
-        self, running: list[RunningTaskEntry], cached_pods: list[dict], workloads: list[dict] | None = None
+        self,
+        running: list[RunningTaskEntry],
+        cached_pods: list[dict],
+        workloads: list[dict] | None = None,
+        nodes: list[dict] | None = None,
     ) -> list[TaskUpdate]:
         """Poll pod phases for all running tasks.
 
@@ -2971,6 +3075,7 @@ class K8sTaskProvider:
             return []
 
         pods_by_name: dict[str, dict] = {pod.get("metadata", {}).get("name", ""): pod for pod in cached_pods}
+        nodes_by_name = {node.get("metadata", {}).get("name", ""): node for node in nodes or []}
         workload_index = _kueue_workload_index(workloads or [])
         updates: list[TaskUpdate] = []
 
@@ -3068,7 +3173,8 @@ class K8sTaskProvider:
                     node_name=pod.get("spec", {}).get("nodeName", "") or "",
                 )
             if event_log is not None:
-                event_log.observe(entry, _pod_event(pod, workload))
+                node = nodes_by_name.get(pod.get("spec", {}).get("nodeName", ""))
+                event_log.observe(entry, _pod_event(pod, workload, node))
 
             updates.append(update)
 

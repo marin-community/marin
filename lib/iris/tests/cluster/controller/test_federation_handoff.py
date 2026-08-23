@@ -105,20 +105,68 @@ def _peer_status_of(service: ControllerServiceImpl, job_id: JobName) -> int:
     ).job.peer_status
 
 
-def _run_peer_task_to_success(peer_state: ControllerTestState, job_id: JobName) -> None:
+def _run_peer_task_to_success(
+    peer_state: ControllerTestState,
+    job_id: JobName,
+    *,
+    pod_name: str | None = None,
+    pod_uid: str | None = None,
+    node_name: str | None = None,
+) -> None:
     """Register a worker on the peer and drive the handed-off job's task to SUCCEEDED."""
     worker = register_worker(peer_state, "w1", "w1:8080", job_pb2.WorkerMetadata(hostname="w1"))
     (task,) = query_tasks_for_job(peer_state, job_id)
-    dispatch_task(peer_state, task, worker)
+    if pod_name is None:
+        dispatch_task(peer_state, task, worker)
+    else:
+        assign_task(peer_state, task, worker)
+        with peer_state._db.transaction() as cur:
+            commit_dispatch_updates(
+                cur,
+                [
+                    TaskUpdate(
+                        task_id=task.task_id,
+                        attempt_id=query_task(peer_state, task.task_id).current_attempt_id,
+                        new_state=job_pb2.TASK_STATE_RUNNING,
+                        pod_name=pod_name,
+                        pod_uid=pod_uid,
+                        node_name=node_name,
+                    )
+                ],
+                now=Timestamp.now(),
+            )
     transition_task(peer_state, task.task_id, job_pb2.TASK_STATE_SUCCEEDED)
 
 
-def _run_peer_task_to_failure(peer_state: ControllerTestState, job_id: JobName) -> None:
+def _run_peer_task_to_failure(
+    peer_state: ControllerTestState,
+    job_id: JobName,
+    *,
+    terminal_reason: str | None = None,
+) -> None:
     """Register a worker on the peer and drive the handed-off job's task to FAILED."""
     worker = register_worker(peer_state, "w1", "w1:8080", job_pb2.WorkerMetadata(hostname="w1"))
     (task,) = query_tasks_for_job(peer_state, job_id)
-    dispatch_task(peer_state, task, worker)
-    transition_task(peer_state, task.task_id, job_pb2.TASK_STATE_FAILED, error="boom", exit_code=1)
+    if terminal_reason is None:
+        dispatch_task(peer_state, task, worker)
+        transition_task(peer_state, task.task_id, job_pb2.TASK_STATE_FAILED, error="boom", exit_code=1)
+        return
+    assign_task(peer_state, task, worker)
+    with peer_state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [
+                TaskUpdate(
+                    task_id=task.task_id,
+                    attempt_id=query_task(peer_state, task.task_id).current_attempt_id,
+                    new_state=job_pb2.TASK_STATE_FAILED,
+                    error=terminal_reason,
+                    exit_code=1,
+                    terminal_reason=terminal_reason,
+                )
+            ],
+            now=Timestamp.now(),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +425,13 @@ def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client
         job_id = JobName.from_wire(response.job_id)
         promote_queued_federation(manager, parent_state)
 
-        _run_peer_task_to_success(peer_state, job_id)
+        _run_peer_task_to_success(
+            peer_state,
+            job_id,
+            pod_name="iris-fed-job-0-a1",
+            pod_uid="pod-uid-a",
+            node_name="node-a",
+        )
         manager.sync_once()
 
         (mirrored,) = query_tasks_for_job(parent_state, job_id)
@@ -392,6 +446,9 @@ def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client
         assert len(task.attempts) == 1
         assert task.attempts[0].state == job_pb2.TASK_STATE_SUCCEEDED
         assert task.attempts[0].worker_id == ""  # no local worker FK for a mirrored attempt
+        assert task.attempts[0].pod_name == "iris-fed-job-0-a1"
+        assert task.attempts[0].pod_uid == "pod-uid-a"
+        assert task.attempts[0].node_name == "node-a"
 
         # The mirrored uid is the peer's raw uid, written verbatim (no peer-prefix
         # rebasing — job ids are cluster-invariant). Because uid resolution is scoped
@@ -999,9 +1056,14 @@ def test_resubmit_of_a_failed_federated_job_replaces_and_reruns_on_the_peer(tmp_
         job_id = JobName.from_wire(response.job_id)
         promote_queued_federation(manager, parent_state)
         first_nonce = _handle(parent_state, job_id).handoff_nonce
-        _run_peer_task_to_failure(peer_state, job_id)
+        _run_peer_task_to_failure(peer_state, job_id, terminal_reason="init failed: disk corrupt")
         manager.sync_once()
         assert query_job(parent_state, job_id).state == job_pb2.JOB_STATE_FAILED
+        (mirrored_task,) = query_tasks_for_job(parent_state, job_id)
+        task_status = parent_service.get_task_status(
+            controller_pb2.Controller.GetTaskStatusRequest(task_id=mirrored_task.task_id.to_wire()), None
+        ).task
+        assert task_status.attempts[0].terminal_reason == "init failed: disk corrupt"
 
         # Resubmit the same id: the parent replaces its finished job with a fresh
         # handle carrying a NEW nonce, and delivery replaces the peer's finished
