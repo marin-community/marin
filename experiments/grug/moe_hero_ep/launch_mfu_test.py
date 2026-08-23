@@ -51,7 +51,7 @@ HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
 HERO_PROCESSES_PER_TASK = 1
 # Updates per peer for the ragged transport at the hero shape. The one-shot kernel's grid is
 # `num_ranks x splits`, so at EP64 this is 2048 CTAs; 32 measured best there.
-HERO_RAGGED_SPLITS_PER_PEER = 64
+HERO_RAGGED_SPLITS_PER_PEER = 1
 HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
 # Weight storage that goes with each master-parameter mode. The pooled-wave hero needs the
 # pinned-host master to fit at all. The ragged transport does fit with fp32 weights on device,
