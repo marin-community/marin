@@ -112,8 +112,12 @@ with new result snapshots so other domain cutoffs can use stable data. A search 
 return fewer than the requested limit and returns at most 24 results. `grep` remains a
 case-insensitive literal substring scan over activity, newest first.
 
-CLI search prints one table with an execution-specific grading key, source ID, title,
-and source-derived detail. Grading keys use `<domain>:<numeric-key>` and remain attached
+CLI search prints one result block with an execution-specific grading key, title,
+source ID, and one primary source excerpt of at most 240 characters. File results use
+their highest-ranked `path:line` reference, wiki results use `use_when`, and activity
+results use the matching source excerpt. The detail line is independent of terminal
+width, so long source IDs do not consume its display budget. Grading keys use
+`<domain>:<numeric-key>` and remain attached
 to the stored row even when a later corpus sync replaces an activity chunk ID.
 Run `uv run infra/echo/cli.py get <domain:id>` to fetch the full indexed wiki body,
 repository file, pull request or issue chunk, or Discord message and its canonical URL.
