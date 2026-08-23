@@ -718,7 +718,9 @@ def test_training_loss_by_attempt_separates_process_incarnations():
         ],
     )
 
-    assert database.execute(sql).fetchall() == [
+    # Both attempts fall in one time bucket, so the panel's ORDER BY t leaves their relative order
+    # undefined and DuckDB returns either. Grafana keys the series off the column, not the row order.
+    assert sorted(database.execute(sql).fetchall()) == [
         (datetime(2026, 8, 20, 12), "iris:controller-attempt-first", 1.9),
         (datetime(2026, 8, 20, 12), "iris:controller-attempt-second", 2.4),
     ]
