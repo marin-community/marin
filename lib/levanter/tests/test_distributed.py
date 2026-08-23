@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +16,8 @@ from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV, MultiGpuHook
 
 from levanter import distributed
 from levanter.distributed import _square_brace_expand
+from levanter.recovery import child as recovery_child
+from levanter.recovery.types import ChildSpec
 
 
 _COMPLETION_MARKER = "completed"
@@ -71,9 +74,46 @@ def _run_supervised_iris_rank(output_dir: Path, failing_rank: int | None) -> Non
         os.kill(os.getpid(), signal.SIGKILL)
 
 
-def _run_supervised_callable(tmp_path: Path, failing_rank: int | None) -> subprocess.CompletedProcess:
+def _run_supervised_recovery_rank(output_dir: Path, failing_rank: int | None) -> None:
+    process_index = int(os.environ[IRIS_MULTIGPU_PROCESS_INDEX_ENV])
+    release_fifo = output_dir / _FAILURE_RELEASE_FIFO
+
+    def release_failure() -> None:
+        if failing_rank is not None and process_index == 0:
+            with release_fifo.open("w") as stream:
+                stream.write("1")
+
+    def shutdown() -> None:
+        (output_dir / f"shutdown-{process_index}").touch()
+        release_failure()
+
+    def trainer(_config: object) -> None:
+        if process_index == failing_rank:
+            with release_fifo.open("r") as stream:
+                assert stream.read(1) == "1"
+            raise RuntimeError("mapped trainer failure")
+
+    distributed.get_job_info = lambda: JobInfo(task_id=JobName.from_wire("/test/training/0"))
+    distributed.configure_megascale_from_iris = lambda: None
+    distributed.initialize_iris_jax = lambda: None
+    distributed.jax.process_index = lambda: process_index
+    distributed.jax.distributed.shutdown = shutdown
+    distributed.DistributedConfig().initialize()
+
+    spec = ChildSpec(entry_module="test", entry_qualname="trainer", config=None)
+    recovery_child._load_spec = lambda _path: spec
+    recovery_child.importlib.import_module = lambda _module: SimpleNamespace(trainer=trainer)
+    sys.argv = ["levanter.recovery.child", "--spec", "unused"]
+    recovery_child.main()
+
+
+def _run_supervised_callable(
+    tmp_path: Path,
+    rank_entrypoint: Callable[[Path, int | None], None],
+    failing_rank: int | None,
+) -> subprocess.CompletedProcess:
     os.mkfifo(tmp_path / _FAILURE_RELEASE_FIFO)
-    entrypoint = Entrypoint.from_callable(_run_supervised_iris_rank, tmp_path, failing_rank)
+    entrypoint = Entrypoint.from_callable(rank_entrypoint, tmp_path, failing_rank)
     for name, contents in entrypoint.workdir_files.items():
         (tmp_path / name).write_bytes(contents)
 
@@ -109,7 +149,7 @@ def test_callable_runner_only_completes_iris_job_after_clean_exit(
 
 
 def test_multigpu_clean_teardown_exits_zero_after_every_rank_shuts_down(tmp_path: Path) -> None:
-    result = _run_supervised_callable(tmp_path, failing_rank=None)
+    result = _run_supervised_callable(tmp_path, _run_supervised_iris_rank, failing_rank=None)
 
     assert result.returncode == 0
     assert not (tmp_path / _COMPLETION_MARKER).exists()
@@ -117,7 +157,15 @@ def test_multigpu_clean_teardown_exits_zero_after_every_rank_shuts_down(tmp_path
 
 
 def test_multigpu_late_rank_sigkill_does_not_complete_iris_job(tmp_path: Path) -> None:
-    result = _run_supervised_callable(tmp_path, failing_rank=1)
+    result = _run_supervised_callable(tmp_path, _run_supervised_iris_rank, failing_rank=1)
+
+    assert result.returncode != 0
+    assert not (tmp_path / _COMPLETION_MARKER).exists()
+    assert {path.name for path in tmp_path.glob("shutdown-*")} == {"shutdown-0"}
+
+
+def test_multigpu_mapped_rank_failure_skips_shutdown(tmp_path: Path) -> None:
+    result = _run_supervised_callable(tmp_path, _run_supervised_recovery_rank, failing_rank=1)
 
     assert result.returncode != 0
     assert not (tmp_path / _COMPLETION_MARKER).exists()

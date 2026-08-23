@@ -47,8 +47,9 @@ def _shutdown_supervised_jax_after_clean_exit() -> None:
     jax.distributed.shutdown()
 
 
-def _unregister_iris_job_completion() -> None:
+def _unregister_iris_exit_handlers() -> None:
     atexit.unregister(_complete_iris_job_after_clean_exit)
+    atexit.unregister(_shutdown_supervised_jax_after_clean_exit)
 
 
 class LevanterSlurmCluster(clusters.SlurmCluster):
