@@ -28,6 +28,7 @@ from levanter.tensorstore_serialization import (
     ReplicaRestoreMode,
     TensorStoreReadConfig,
     TensorStoreWriteConfig,
+    _replica_staging_sharding,
     _shard_write_region,
     plan_array_write,
     tree_deserialize_leaves_tensorstore,
@@ -196,6 +197,9 @@ def replica_aware_restore_reads_each_shard_once():
     source_bits = np.tile(bit_patterns, 64 * 16 // len(bit_patterns)).reshape(64, 16)
     source = jax.device_put(source_bits.view(np.float32), sharding)
     pinned = sharding.with_memory_kind(_PINNED_HOST_MEMORY_KIND)
+    staging = _replica_staging_sharding(pinned, source.shape)
+    assert staging is not None
+    assert staging.memory_kind == sharding.memory_kind
 
     with jax.set_mesh(mesh), TemporaryDirectory() as tmpdir:
         tree_serialize_leaves_tensorstore(tmpdir, {"expert": source}, write_config=SPLIT_CONFIG)

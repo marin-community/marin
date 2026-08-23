@@ -797,7 +797,7 @@ def _fully_replicated_sharding(mesh):
 
 
 def _replica_staging_sharding(sharding: Sharding, shape: tuple[int, ...]) -> NamedSharding | None:
-    """Expose uniform NamedSharding replicas on a leading axis, if any."""
+    """Expose uniform replicas on a leading axis in the platform's default compute memory, if any."""
     if not isinstance(sharding, NamedSharding):
         return None
     if any(device.platform == "tpu" for device in sharding.device_set):
@@ -821,7 +821,7 @@ def _replica_staging_sharding(sharding: Sharding, shape: tuple[int, ...]) -> Nam
         return None
 
     staging_spec = PartitionSpec(replica_axes, *sharding.spec)
-    return NamedSharding(sharding.mesh, staging_spec, memory_kind=sharding.memory_kind)
+    return NamedSharding(sharding.mesh, staging_spec)
 
 
 def _replica_count(staging_sharding: NamedSharding) -> int:
