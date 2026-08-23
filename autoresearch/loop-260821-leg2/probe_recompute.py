@@ -51,7 +51,11 @@ def main() -> None:
         w13 = jax.sharding.reshard(w13, expert)
         w2 = jax.sharding.reshard(w2, expert)
 
-        def loss(x, combine, w13, w2):
+        # The hero wraps each layer in a checkpoint with no save policy (remat_mode
+        # "recompute_all"), which is what makes the backward recompute the forward —
+        # including, in the device-kernel configuration, the transport collectives.
+        @jax.checkpoint
+        def layer(x, combine, w13, w2):
             out, _ = moe_mlp(
                 x,
                 selected,
@@ -63,6 +67,10 @@ def main() -> None:
                 report_capacity_overflow=True,
                 capacity_factor=2.0,
             )
+            return out
+
+        def loss(x, combine, w13, w2):
+            out = layer(x, combine, w13, w2)
             return jnp.sum(out.astype(jnp.float32) ** 2)
 
         grad = jax.jit(jax.grad(loss, argnums=(0, 1, 2, 3)))
