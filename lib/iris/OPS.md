@@ -568,9 +568,9 @@ Namespaces:
   ORDER BY ts ASC;
   ```
 
-  Kubernetes disruptions use `source='k8s/disruption'`. The row captures the
-  pod UID and enough node evidence to identify a physical machine across node
-  renames and reboots. To inspect taint-manager evictions across the fleet:
+  Kubernetes disruptions use `source='k8s/disruption'`. `node_provider_id` and
+  `node_system_uuid` identify a physical machine; `node_boot_id` distinguishes
+  reboots. To inspect taint-manager evictions across the fleet:
 
   ```sql
   SELECT cluster, ts, task_id, attempt_id, pod_name, node_name,

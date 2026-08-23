@@ -183,7 +183,7 @@ class TaskStatusRow:
 
 @dataclass(kw_only=True)
 class TaskEventDiagnostics:
-    """Pod and node evidence captured while a Kubernetes disruption is observable."""
+    """Kubernetes disruption evidence retained after the Pod is deleted."""
 
     pod_name: str | None = None
     pod_uid: str | None = None
@@ -204,19 +204,11 @@ class TaskEventDiagnostics:
 
 @dataclass
 class TaskEventRow(TaskEventDiagnostics):
-    """One backend event or controller action for a task attempt.
+    """One retained backend verdict or controller action for a task attempt.
 
-    The "event log for every job": producers append a row each time a backend
-    diagnostic verdict changes or the controller makes a state-changing decision
-    (retry, gang bounce, finalization), so operators can reconstruct the task's
-    lifecycle after ephemeral Kubernetes objects are gone.
-
-    Fields mirror a Kubernetes event so a future producer can relay real events
-    unchanged: ``type`` is the severity (``Warning``/``Normal``), ``reason`` the
-    short code, ``source`` the emitting layer (e.g. ``k8s/kueue``), ``count`` the
-    repeat multiplicity. Kubernetes disruption rows also carry stable pod/node
-    identity and compact JSON snapshots of the evidence that disappears when
-    the pod or node is garbage-collected.
+    ``type``, ``reason``, ``source``, and ``count`` follow Kubernetes event
+    terminology. Disruption rows add stable pod/node identity and JSON snapshots
+    of the ephemeral Kubernetes evidence.
     """
 
     key_column: ClassVar[str] = "task_id"
