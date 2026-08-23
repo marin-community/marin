@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Time a hero checkpoint save and restore on one or more racks.
+"""Time a hero-shaped checkpoint save and restore on one or more replica groups.
 
 Builds the hero train state, writes it to a one-day temporary prefix, and reads it back into
 the same exemplar a resume restores into -- offloaded optimizer state and FP32 pinned-host
@@ -48,15 +48,15 @@ from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
+from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic, build_hero_configs
 from experiments.grug.moe_hero_ep.launch_mfu_test import (
     HERO_EP_BATCH_SIZE,
     HERO_EP_EXPERT_AXIS_SIZE,
-    HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_MIXED_PRECISION,
 )
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
+from experiments.grug.moe_hero_ep.small_scale_abl_launch import SMALL_SHAPES, _small_model
 from experiments.grug.moe_hero_ep.train import (
     MasterParamMode,
     _apply_hero_ep_runtime_defaults,
@@ -71,6 +71,10 @@ HERO_SCHEDULE_STEPS = 390_251
 QB_HIST_BINS = 10_000
 CHECKPOINT_TTL_DAYS = 1
 GIB = 1024**3
+SMALL_MODEL_CAPACITY_FACTOR = 1.15
+SMALL_MODEL_EXPERTS = 384
+SMALL_MODEL_EXPERTS_PER_TOKEN = 8
+SMALL_MODEL_EXPERT_WAVES = 3
 
 
 @dataclass(frozen=True)
@@ -84,6 +88,7 @@ class RestoreBenchmarkConfig:
     read: TensorStoreReadConfig = field(default_factory=TensorStoreReadConfig)
     write: TensorStoreWriteConfig = field(default_factory=TensorStoreWriteConfig)
     repeats: int = 2
+    expert_axis_size: int = HERO_EP_EXPERT_AXIS_SIZE
     replica_axis_size: int = 1
 
 
@@ -136,7 +141,7 @@ def _run_restore_benchmark_local(config: RestoreBenchmarkConfig) -> None:
     """Entry point that runs on every rank of the benchmark job."""
     config.trainer.initialize()
     mesh = compact_grug_mesh(
-        expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
+        expert_axis_size=config.expert_axis_size,
         replica_axis_size=config.replica_axis_size,
     )
     state = _hero_state(config, mesh)
@@ -178,7 +183,21 @@ def _run_restore_benchmark_local(config: RestoreBenchmarkConfig) -> None:
     type=click.IntRange(min=1),
     default=1,
     show_default=True,
-    help="GB200 racks to spread the restore across, at 16 nodes per rack.",
+    help="Independent replica groups. The hero uses one 64-GPU rack per group.",
+)
+@click.option(
+    "--model-size",
+    type=click.Choice(["hero", *sorted(SMALL_SHAPES)]),
+    default="hero",
+    show_default=True,
+    help="Hero model or a hero-shaped small-scale ablation model.",
+)
+@click.option(
+    "--expert-axis-size",
+    type=click.IntRange(min=1),
+    default=HERO_EP_EXPERT_AXIS_SIZE,
+    show_default=True,
+    help="Devices in each expert-parallel replica group.",
 )
 @click.option("--repeats", type=click.IntRange(min=1), default=2, show_default=True, help="Restores to time.")
 @click.option(
@@ -213,6 +232,8 @@ def _run_restore_benchmark_local(config: RestoreBenchmarkConfig) -> None:
 def main(
     run_id: str,
     dp_racks: int,
+    model_size: str,
+    expert_axis_size: int,
     repeats: int,
     budget_gib: int,
     stage_gib: int,
@@ -220,7 +241,46 @@ def main(
     replica_mode: str,
 ) -> None:
     batch_size = HERO_EP_BATCH_SIZE * dp_racks
-    model, optimizer = build_hero_configs(num_train_steps=HERO_SCHEDULE_STEPS, batch_size=batch_size)
+    if model_size == "hero":
+        model, optimizer = build_hero_configs(num_train_steps=HERO_SCHEDULE_STEPS, batch_size=batch_size)
+    else:
+        shape = SMALL_SHAPES[model_size]
+        model = _small_model(
+            shape=shape,
+            capacity_factor=SMALL_MODEL_CAPACITY_FACTOR,
+            attention_implementation="gpu_fa4_cute",
+            moe_implementation="fixed_pooled_wave_all_to_all",
+            expert_chunks=1,
+            seq_len=4096,
+            num_experts=SMALL_MODEL_EXPERTS,
+            num_experts_per_token=SMALL_MODEL_EXPERTS_PER_TOKEN,
+            intermediate_dim=None,
+            latent_dim=None,
+            pooled_transport_capacity_factor=SMALL_MODEL_CAPACITY_FACTOR,
+            num_expert_waves=SMALL_MODEL_EXPERT_WAVES,
+            qb_use_histogram=True,
+            qb_hist_bins=QB_HIST_BINS,
+        )
+        optimizer = MoeHeuristic().build_optimizer_config(
+            num_train_steps=HERO_SCHEDULE_STEPS,
+            batch_size=batch_size,
+            hidden_dim=model.hidden_dim,
+            seq_len=model.max_seq_len,
+        )
+
+    if model.num_experts % expert_axis_size != 0:
+        raise ValueError(f"num_experts={model.num_experts} must be divisible by expert_axis_size={expert_axis_size}")
+    local_experts = model.num_experts // expert_axis_size
+    if local_experts % model.num_expert_waves != 0:
+        raise ValueError(
+            f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
+        )
+    device_count = expert_axis_size * dp_racks
+    if device_count % HERO_GPUS_PER_NODE != 0:
+        raise ValueError(
+            f"expert_axis_size * dp_racks must be divisible by {HERO_GPUS_PER_NODE} GPUs per node, got {device_count}"
+        )
+
     config = RestoreBenchmarkConfig(
         checkpoint_path=prefix_join(
             marin_temp_bucket(ttl_days=CHECKPOINT_TTL_DAYS, prefix=f"restore-benchmark/{run_id}"), "checkpoint"
@@ -244,6 +304,7 @@ def main(
         ),
         write=TensorStoreWriteConfig(max_staged_host_bytes=stage_gib * GIB),
         repeats=repeats,
+        expert_axis_size=expert_axis_size,
         replica_axis_size=dp_racks,
     )
 
@@ -258,7 +319,7 @@ def main(
             cpu=120,
             ram="890g",
             disk="1t",
-            replicas=HERO_EP_NODES * dp_racks,
+            replicas=device_count // HERO_GPUS_PER_NODE,
         ),
         processes_per_task=HERO_GPUS_PER_NODE,
         max_retries_failure=0,
