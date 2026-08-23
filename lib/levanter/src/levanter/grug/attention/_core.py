@@ -13,7 +13,7 @@ from haliax.partitioning import _get_mesh
 from jax import numpy as jnp
 from jax import shard_map
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
-from jax.sharding import NamedSharding
+from jax.sharding import NamedSharding, PartitionSpec
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.kernels.pallas.splash_attention import (
