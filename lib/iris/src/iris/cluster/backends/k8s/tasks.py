@@ -1516,8 +1516,7 @@ _WARNING_EVENT_REASONS = frozenset(
 
 @dataclass(frozen=True)
 class _PodEvent:
-    """A scheduling/admission verdict for a not-yet-running pod, ready to record
-    as an ``iris.task_event`` row. ``severity`` is the k8s-style Normal/Warning."""
+    """A Kubernetes backend verdict ready to record in ``iris.task_event``."""
 
     source: str
     reason: str
@@ -1594,14 +1593,7 @@ def _workload_admission_blocked(workload: dict | None) -> bool:
 
 
 def _pod_event(pod: dict, workload: dict | None, node: dict | None = None) -> _PodEvent | None:
-    """The current actionable backend event for a pod.
-
-    ``source`` attributes the verdict to the layer that produced it (a Kubernetes
-    disruption, the task container, the Kueue gate, or the scheduler);
-    ``severity`` is Warning for an actionable failure (image pull, config error,
-    disruption, Kueue eviction) or a Kueue-declined admission, Normal for a
-    transient wait. Returns ``None`` for a healthy running or otherwise quiet pod.
-    """
+    """Return the pod's current actionable verdict, including disruptions."""
     disruption = _disruption_condition(pod)
     if disruption is not None and disruption.get("type") == _DISRUPTION_TARGET_CONDITION:
         return _disruption_event(pod, node, disruption)
@@ -2008,19 +2000,11 @@ class PeriodicProfiler:
 
 
 class TaskEventLog:
-    """Appends Kubernetes backend events to the ``iris.task_event`` namespace.
+    """Append changed Kubernetes verdicts to ``iris.task_event``.
 
-    Driven synchronously from the pod poll — no background thread, since the
-    verdicts come from the pod/workload lists ``sync`` already fetches.
-    ``observe`` is called once per tracked attempt per cycle with the attempt's
-    current verdict (or ``None`` when the pod is running/quiet); a row is written
-    only when the ``(source, reason, severity)`` verdict *changes*, or when a
-    disruption first gains its node snapshot, so a pod wedged in one state
-    produces a single row, not one per poll. A severity upgrade (e.g. a gated
-    pod Kueue later declines flips Normal→Warning under the same source/reason)
-    records the actionable row. ``retain`` drops dedup state for attempts no
-    longer polled so a retried attempt (new ``attempt_id``) starts clean and the
-    map stays bounded.
+    Verdicts are deduplicated per attempt by source, reason, severity, and node
+    evidence availability. A disruption first observed without its node snapshot
+    emits one enriched row when the snapshot becomes available.
     """
 
     def __init__(self, task_event_table: Table):

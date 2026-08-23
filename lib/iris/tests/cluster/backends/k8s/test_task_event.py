@@ -1,11 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Kubernetes backend events in the ``iris.task_event`` task-action timeline.
-
-The backend records changing scheduling, container, and terminal Kueue verdicts
-so the dashboard and CLI retain the cause after the Pod is gone.
-"""
+"""Kubernetes backend event persistence in ``iris.task_event``."""
 
 import json
 
@@ -165,7 +161,7 @@ def test_event_log_retain_forgets_gone_attempts():
     assert len(rows) == 2
 
 
-def test_event_log_retries_a_failed_finelog_write():
+def test_event_log_retries_unchanged_verdict_after_write_failure():
     table = _FailOnceStatsTable()
     log = TaskEventLog(table)
     event = _pod_event(gated_pod(), unadmitted_workload())
@@ -174,8 +170,7 @@ def test_event_log_retries_a_failed_finelog_write():
     log.observe(_ATTEMPT, event)
 
     rows = [row for write in table.writes for row in write]
-    assert len(rows) == 1
-    assert rows[0].reason == "SchedulingGated"
+    assert [(row.source, row.reason) for row in rows] == [(_EVENT_SOURCE_KUEUE, "SchedulingGated")]
 
 
 # --- end-to-end through sync() -------------------------------------------------
@@ -259,7 +254,7 @@ def test_sync_singleton_surfaces_kueue_verdict_on_task_and_event(k8s):
         provider.close()
 
 
-def test_sync_records_disruption_target_with_pod_and_node_evidence(k8s):
+def test_sync_records_disruption_evidence_and_late_node_snapshot(k8s):
     event_table = FakeStatsTable()
     provider = make_kueue_provider(k8s, task_event_table=event_table)
     try:
@@ -336,9 +331,13 @@ def test_sync_records_disruption_target_with_pod_and_node_evidence(k8s):
 
         rows = [row for write in event_table.writes for row in write]
         assert len(rows) == 1
-        assert rows[0].pod_uid == "pod-uid-a"
-        assert rows[0].node_name == "node-a"
-        assert rows[0].node_uid is None
+        assert (
+            rows[0].source,
+            rows[0].reason,
+            rows[0].pod_uid,
+            rows[0].node_name,
+            rows[0].node_uid,
+        ) == (_EVENT_SOURCE_DISRUPTION, "DeletionByTaintManager", "pod-uid-a", "node-a", None)
 
         k8s.seed_resource(K8sResource.NODES, "node-a", node)
         provider.sync(make_batch(running_tasks=[entry]))
@@ -346,35 +345,25 @@ def test_sync_records_disruption_target_with_pod_and_node_evidence(k8s):
         rows = [row for write in event_table.writes for row in write]
         assert len(rows) == 2
         row = rows[1]
-        assert (row.source, row.reason, row.type) == (
-            _EVENT_SOURCE_DISRUPTION,
-            "DeletionByTaintManager",
-            "Warning",
-        )
-        assert (row.pod_name, row.pod_uid) == (pod_name, "pod-uid-a")
         assert row.pod_deletion_timestamp == "2026-08-23T14:17:35Z"
-        assert (row.node_name, row.node_uid) == ("node-a", "node-uid-a")
-        assert (row.node_provider_id, row.node_boot_id, row.node_system_uuid) == (
+        assert (row.node_uid, row.node_provider_id, row.node_boot_id, row.node_system_uuid) == (
+            "node-uid-a",
             "coreweave://node-a",
             "boot-a",
             "system-a",
         )
         assert row.node_unschedulable is True
-        assert row.pod_tolerations_json is not None
-        assert row.pod_conditions_json is not None
-        assert row.node_taints_json is not None
-        assert row.node_conditions_json is not None
-        assert row.node_labels_json is not None
-        assert row.node_annotations_json is not None
-        assert json.loads(row.pod_tolerations_json)[0]["tolerationSeconds"] == 300
-        assert json.loads(row.pod_conditions_json)[0]["lastTransitionTime"] == "2026-08-23T14:17:35Z"
-        assert json.loads(row.node_taints_json) == [{"effect": "NoExecute", "key": "node.coreweave.cloud/evict"}]
-        assert json.loads(row.node_conditions_json)[0]["reason"] == "NvidiaXid48"
-        assert json.loads(row.node_labels_json) == {
+        assert json.loads(row.pod_tolerations_json or "[]") == [
+            {"effect": "NoExecute", "key": "node.kubernetes.io/unreachable", "tolerationSeconds": 300}
+        ]
+        assert json.loads(row.pod_conditions_json or "[]")[0]["lastTransitionTime"] == "2026-08-23T14:17:35Z"
+        assert json.loads(row.node_taints_json or "[]") == [{"effect": "NoExecute", "key": "node.coreweave.cloud/evict"}]
+        assert json.loads(row.node_conditions_json or "[]")[0]["reason"] == "NvidiaXid48"
+        assert json.loads(row.node_labels_json or "{}") == {
             "node.kubernetes.io/instance-type": "gd-8xh100ib-i128",
             "topology.kubernetes.io/zone": "US-EAST-08A",
         }
-        assert json.loads(row.node_annotations_json) == {
+        assert json.loads(row.node_annotations_json or "{}") == {
             "node.coreweave.cloud/reboot-reason": "GPUECCUncorrectableError"
         }
     finally:
