@@ -188,6 +188,10 @@ class _TickInputs:
     routing: RoutingInputs | None = None
     reconcile_requests: dict[str, ReconcileRequest] = field(default_factory=dict)
     timeout_rows: Sequence[Row] = ()
+    # Tasks already dispatched but still waiting to start when their scheduling deadline
+    # elapsed; the tick fails them UNSCHEDULABLE (they left PENDING on dispatch, so the
+    # PENDING-only deadline check in ``apply_scheduling_gates`` never sees them).
+    expired_unstarted: Sequence[Row] = ()
     # Federated jobs queued on this parent awaiting a peer with free capacity, in
     # priority-then-age order. The tick's federation pass assigns them to peers.
     queued_federation: list[QueuedCandidate] = field(default_factory=list)
@@ -1040,9 +1044,11 @@ class Controller:
         sched_results: dict[str, ScheduleResult] = {}
         backend_pins: list[tuple[JobName, str]] = []
         routing_unschedulable: list[tuple[PendingTask, str]] = []
+        unstarted_decisions: list[TerminalDecision] = []
         if run_schedule:
             sched = self._schedule_phase(inputs)
             sched_results, backend_pins, routing_unschedulable = sched.results, sched.pins, sched.unschedulable
+            unstarted_decisions = self._unstarted_timeout_decisions(inputs.expired_unstarted)
 
         # Federation pass: assign queued federated jobs to peers that have room. A pure
         # decision over the tick's snapshot + the manager's reservation ledger; the
@@ -1080,6 +1086,7 @@ class Controller:
             routing_unschedulable=routing_unschedulable,
             recon_results=recon_results,
             timeout_decisions=timeout_decisions,
+            unstarted_decisions=unstarted_decisions,
             pending_kicks=pending_kicks,
             auto_results=auto_results,
             federation_promotions=federation_promotions,
@@ -1153,6 +1160,7 @@ class Controller:
         with self._db.control_read_snapshot() as snap:
             if run_schedule:
                 inputs.routing = build_routing_inputs(snap, self._config.user_budget_defaults)
+                inputs.expired_unstarted = reads.expired_unstarted_tasks(snap, now.epoch_ms())
                 if self._config.peers:
                     inputs.queued_federation = build_queued_candidates(snap)
                     inputs.expired_queued_federation = reads.expired_queued_handoffs(snap, now.epoch_ms())
@@ -1359,6 +1367,7 @@ class Controller:
         routing_unschedulable: list[tuple[PendingTask, str]],
         recon_results: dict[str, ReconcileResult],
         timeout_decisions: list[TerminalDecision],
+        unstarted_decisions: list[TerminalDecision],
         pending_kicks: list[PendingKick],
         auto_results: dict[str, AutoscaleResult],
         federation_promotions: list[Promotion],
@@ -1368,9 +1377,10 @@ class Controller:
         """Apply this tick's merged decisions and authored effects in one write transaction.
 
         Order within the txn: schedule decisions (incl. backend pins + routing
-        UNSCHEDULABLE), queued-handoff scheduling-timeout failures, federation queue
-        promotions, each backend's reconcile effects, execution-timeout finalizations,
-        administrative kicks, per-backend autoscaler state. Each backend already authored
+        UNSCHEDULABLE), dispatched-but-unstarted scheduling-timeout failures,
+        queued-handoff scheduling-timeout failures, federation queue promotions, each
+        backend's reconcile effects, execution-timeout finalizations, administrative
+        kicks, per-backend autoscaler state. Each backend already authored
         its own ``effects`` during reconcile; the controller just commits them uniformly.
         A no-op tick opens no transaction.
 
@@ -1392,6 +1402,7 @@ class Controller:
             has_sched
             or has_recon
             or timeout_decisions
+            or unstarted_decisions
             or pending_kicks
             or states
             or federation_promotions
@@ -1405,6 +1416,8 @@ class Controller:
                 self._commit_schedule_decisions(
                     cur, sched_result, sched_results, now, backend_pins, routing_unschedulable
                 )
+            if unstarted_decisions:
+                finalize(cur, unstarted_decisions, now=now)
             # Fail queued handoffs past their scheduling deadline before promoting, so a
             # just-expired job's promotion CAS (guarded on job-nonterminal) rejects it.
             for job_id in expired_queued_federation:
@@ -1647,6 +1660,31 @@ class Controller:
                     kind=TerminalKind.UNSCHEDULABLE,
                     task_id=task.task_id,
                     reason=f"Scheduling timeout exceeded ({timeout})",
+                )
+            )
+        return decisions
+
+    def _unstarted_timeout_decisions(self, rows: Sequence[Row]) -> list[TerminalDecision]:
+        """Build UNSCHEDULABLE decisions for dispatched tasks that never started in time.
+
+        Each entry is a row from ``reads.expired_unstarted_tasks``. The task's
+        ``status_message`` — the backend's standing reason it is still waiting, e.g. the
+        Kueue admission verdict — rides into the terminal reason so the job's error names
+        why it never got capacity instead of leaving that only on the task detail page.
+        """
+        decisions: list[TerminalDecision] = []
+        for row in rows:
+            timeout_ms = row.scheduling_timeout_ms
+            timeout = Duration.from_ms(timeout_ms) if timeout_ms is not None else None
+            reason = f"Scheduling timeout exceeded ({timeout}) before the task started"
+            if row.status_message:
+                reason = f"{reason}: {row.status_message}"
+            logger.warning(f"Task {row.task_id} never started, marking as UNSCHEDULABLE: {reason}")
+            decisions.append(
+                TerminalDecision(
+                    kind=TerminalKind.UNSCHEDULABLE,
+                    task_id=row.task_id,
+                    reason=reason,
                 )
             )
         return decisions

@@ -16,6 +16,7 @@ from iris.cli.job import run as run_cmd
 from iris.cluster.config import load_config
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, availability_key
 from iris.rpc import job_pb2
+from rigging.timing import Duration
 
 
 def _invoke_run(args: list[str]):
@@ -167,6 +168,18 @@ def test_run_iris_job_default_priority_inherit(recorded_job_submissions):
     result = _invoke_run([])
     assert result.exit_code == 0, result.output
     assert recorded_job_submissions[0]["priority_band"] == job_pb2.PRIORITY_BAND_INHERIT
+
+
+def test_run_iris_job_passes_scheduling_timeout(recorded_job_submissions):
+    result = _invoke_run(["--scheduling-timeout", "300"])
+    assert result.exit_code == 0, result.output
+    assert recorded_job_submissions[0]["scheduling_timeout"] == Duration.from_seconds(300)
+
+
+def test_run_iris_job_waits_for_capacity_by_default(recorded_job_submissions):
+    result = _invoke_run([])
+    assert result.exit_code == 0, result.output
+    assert recorded_job_submissions[0]["scheduling_timeout"] is None
 
 
 def test_no_wait_prints_job_id(recorded_job_submissions):

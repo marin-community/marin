@@ -572,6 +572,7 @@ def run_iris_job(
     replicas: int | None = None,
     max_retries: int = 0,
     timeout: int = 0,
+    scheduling_timeout: int = 0,
     extras: list[str] | None = None,
     setup_scripts: list[str] | None = None,
     sync_packages: list[str] | None = None,
@@ -612,6 +613,9 @@ def run_iris_job(
         bundle_exclude: Regex matched against each candidate bundle path (POSIX,
             relative to the workspace); matching paths are dropped from the bundle
             so a job can trim otherwise-tracked files it does not need.
+        scheduling_timeout: Seconds to wait for capacity before the controller gives
+            up and marks the job UNSCHEDULABLE (0 = wait forever). Counts only the
+            wait: the clock stops once the job's tasks start.
 
     Returns:
         Exit code: 0 for success, 1 for failure
@@ -692,6 +696,7 @@ def run_iris_job(
         replicas=replicas,
         max_retries=max_retries,
         timeout=timeout,
+        scheduling_timeout=scheduling_timeout,
         wait=wait,
         extras=extras,
         setup_scripts=setup_scripts,
@@ -719,6 +724,7 @@ def _submit_and_wait_job(
     replicas: int,
     max_retries: int,
     timeout: int,
+    scheduling_timeout: int,
     wait: bool,
     extras: list[str] | None = None,
     setup_scripts: list[str] | None = None,
@@ -761,6 +767,7 @@ def _submit_and_wait_job(
         max_retries_failure=max_retries,
         max_task_failures=max_retries,
         timeout=Duration.from_seconds(timeout) if timeout else None,
+        scheduling_timeout=Duration.from_seconds(scheduling_timeout) if scheduling_timeout else None,
         user=user,
         priority_band=priority_band,
         container_profile=container_profile,
@@ -876,6 +883,13 @@ Examples:
 )
 @click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
 @click.option("--timeout", type=int, default=0, show_default=True, help="Job timeout in seconds (0 = no timeout)")
+@click.option(
+    "--scheduling-timeout",
+    type=int,
+    default=0,
+    show_default=True,
+    help="Seconds to wait for capacity before giving up, separate from --timeout (0 = wait forever)",
+)
 @click.option("--region", multiple=True, help="Restrict to region(s) (e.g., --region us-central2). Can be repeated.")
 @click.option("--zone", type=str, help="Restrict to zone (e.g., --zone us-central2-b).")
 @click.option(
@@ -979,6 +993,7 @@ def run(
     replicas: int | None,
     max_retries: int,
     timeout: int,
+    scheduling_timeout: int,
     region: tuple[str, ...],
     zone: str | None,
     target_cluster: str | None,
@@ -1039,6 +1054,7 @@ def run(
             replicas=replicas,
             max_retries=max_retries,
             timeout=timeout,
+            scheduling_timeout=scheduling_timeout,
             extras=list(extra),
             setup_scripts=[] if no_sync else None,
             sync_packages=list(sync_package),

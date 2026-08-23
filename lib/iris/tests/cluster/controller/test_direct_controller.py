@@ -28,6 +28,7 @@ from iris.rpc import controller_pb2, job_pb2
 from iris.testing.controller import (
     make_direct_job_request,
     query_attempt,
+    query_job,
     query_task,
     query_tasks_for_job,
     reconcile_once,
@@ -568,6 +569,70 @@ def test_k8s_pending_task_not_timed_out_before_admission(make_controller):
 
     ctrl._timeout_rate_limiter = RateLimiter(interval_seconds=0.0)
     reconcile_once(ctrl)
+
+    assert query_task(state, task_id).state == job_pb2.TASK_STATE_BUILDING
+
+
+_KUEUE_VERDICT = "couldn't assign flavors to pod set main: insufficient unused quota for cpu"
+
+
+def _gated_task(make_controller, name: str, *, scheduling_timeout_ms: int):
+    """Submit a job backdated two hours and leave its one task BUILDING and unstarted.
+
+    Reproduces a Kueue-gated pod: dispatched, reported Pending (BUILDING) with the
+    admission verdict as its status message, and never started.
+    """
+    ctrl = make_controller(provider=FakeDirectProvider(), remote_state_dir=f"file:///tmp/iris-8060-{name}")
+    state = ControllerTestState(ctrl._db)
+
+    jid = JobName.root("test-user", name)
+    req = make_direct_job_request(name, replicas=1)
+    if scheduling_timeout_ms:
+        req.scheduling_timeout.milliseconds = scheduling_timeout_ms
+    long_ago = Timestamp.from_ms(Timestamp.now().epoch_ms() - 2 * 3600 * 1000)
+    with state._db.transaction() as cur:
+        submit_job_in_tx(cur, job_id=jid, request=req, ts=long_ago)
+    [task_id] = [t.task_id for t in query_tasks_for_job(state, jid)]
+
+    with state._db.transaction() as cur:
+        batch = dispatch.drain_for_dispatch(cur)
+    attempt_id = batch.tasks_to_run[0].attempt_id
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [
+                TaskUpdate(
+                    task_id=task_id,
+                    attempt_id=attempt_id,
+                    new_state=job_pb2.TASK_STATE_BUILDING,
+                    status_message=_KUEUE_VERDICT,
+                )
+            ],
+            now=long_ago,
+        )
+    assert query_task(state, task_id).state == job_pb2.TASK_STATE_BUILDING
+    assert query_attempt(state, task_id, attempt_id).started_at_ms is None
+    return ctrl, state, jid, task_id
+
+
+def test_gated_task_hits_scheduling_deadline_while_building(make_controller):
+    """A dispatched task that never starts still expires on its scheduling deadline (#8060)."""
+    ctrl, state, jid, task_id = _gated_task(make_controller, "gang-gated", scheduling_timeout_ms=1000)
+
+    ctrl.run_control_tick()
+
+    assert query_task(state, task_id).state == job_pb2.TASK_STATE_UNSCHEDULABLE
+    job = query_job(state, jid)
+    assert job.state == job_pb2.JOB_STATE_UNSCHEDULABLE
+    # The job's terminal cause names why it never got capacity, not just that it waited.
+    assert _KUEUE_VERDICT in job.error
+
+
+def test_gated_task_without_scheduling_timeout_keeps_waiting(make_controller):
+    """Without a scheduling timeout, a task waiting for admission is never expired."""
+    ctrl, state, _jid, task_id = _gated_task(make_controller, "gang-ungated", scheduling_timeout_ms=0)
+
+    ctrl.run_control_tick()
 
     assert query_task(state, task_id).state == job_pb2.TASK_STATE_BUILDING
 

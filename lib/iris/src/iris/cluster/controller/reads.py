@@ -1767,6 +1767,49 @@ def scan_execution_timeout_rows(tx: Tx) -> Sequence[Row]:
     return tx.execute(_EXECUTION_TIMEOUT_STMT, {"executing_states": list(_EXECUTING_TASK_STATES)}).all()
 
 
+_DISPATCHED_TASK_STATES = (int(job_pb2.TASK_STATE_ASSIGNED), int(job_pb2.TASK_STATE_BUILDING))
+
+_SCHEDULING_TIMEOUT_STMT = (
+    select(
+        local_tasks.c.task_id,
+        local_tasks.c.status_message,
+        job_config_table.c.scheduling_timeout_ms,
+    )
+    .select_from(
+        local_tasks.join(jobs_table, jobs_table.c.job_id == local_tasks.c.job_id)
+        .join(job_config_table, job_config_table.c.job_id == local_tasks.c.job_id)
+        .join(
+            task_attempts_table,
+            (task_attempts_table.c.task_id == local_tasks.c.task_id)
+            & (task_attempts_table.c.attempt_id == local_tasks.c.current_attempt_id),
+        )
+    )
+    .where(
+        hint_rare_state(local_tasks.c.state.in_(bindparam("dispatched_states", expanding=True))),
+        task_attempts_table.c.started_at_ms.is_(None),
+        jobs_table.c.scheduling_deadline_epoch_ms.is_not(None),
+        jobs_table.c.scheduling_deadline_epoch_ms < bindparam("now_ms"),
+    )
+)
+
+
+def expired_unstarted_tasks(tx: Tx, now_ms: int) -> Sequence[Row]:
+    """Dispatched tasks past their scheduling deadline that never started, to fail this tick.
+
+    A dispatched task leaves PENDING immediately — a Kueue-gated pod reads BUILDING for
+    its whole admission wait — so the PENDING-only deadline check in
+    ``apply_scheduling_gates`` stops counting exactly when the wait begins. The attempt's
+    ``started_at_ms`` is the honest "has it run yet" marker: it is stamped at RUNNING, and
+    at BUILDING only for a worker that is already executing setup, never while a task
+    waits for capacity. Returns ``(task_id, status_message, scheduling_timeout_ms)``; the
+    tick marks them UNSCHEDULABLE.
+    """
+    return tx.execute(
+        _SCHEDULING_TIMEOUT_STMT,
+        {"dispatched_states": list(_DISPATCHED_TASK_STATES), "now_ms": now_ms},
+    ).all()
+
+
 _RECONCILE_ROWS_STMT = (
     select(
         task_attempts_table.c.worker_id,
