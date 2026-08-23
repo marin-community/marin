@@ -112,6 +112,27 @@ def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _seq_spec_3d())
 
 
+def _flatten_bs(x: jax.Array) -> jax.Array:
+    """Reshape ``[B, S, D] -> [B*S, D]`` under context sharding.
+
+    JAX can't infer the output sharding for a reshape that fuses two sharded
+    axes (batch on ``_BATCH_AXES``, seq on ``"context"``) into one, so provide
+    ``out_sharding`` explicitly with the fused-token spec ``_token_spec()``.
+    """
+    b, s, d = x.shape
+    return jnp.reshape(x, (b * s, d), out_sharding=_token_spec())
+
+
+def _unflatten_bs(x: jax.Array, b: int, s: int) -> jax.Array:
+    """Reshape ``[B*S, D] -> [B, S, D]`` under context sharding.
+
+    Inverse of ``_flatten_bs``; splits the fused token axis back to
+    ``(batch, seq)`` with the seq axis sharded on ``"context"``.
+    """
+    d = x.shape[-1]
+    return jnp.reshape(x, (b, s, d), out_sharding=_seq_spec_3d())
+
+
 def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
     return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
 
@@ -447,18 +468,14 @@ class DenseMLP(eqx.Module):
             activation_fn = activation
 
         b, s, _ = x.shape
-        x_flat = rearrange(x, "b s d -> (b s) d")
+        x_flat = _flatten_bs(x)
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
         out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_token_spec())
-        # Reshard after the reshape so the shared-expert output carries the same
-        # canonical batch-plus-context sharding as the routed MoE output (MoEMLP
-        # reshards its routed result identically). Splitting the fused
-        # ("replica_dcn", "data", "expert", "context") token axis back into
-        # (b, s) otherwise leaks a mesh axis onto the wrong dim, so the
-        # shared+routed residual add fails with a ShardingTypeError on a
-        # multi-node mesh.
-        return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
+        # Explicit unflatten carries the canonical batch-plus-context sharding
+        # (MoEMLP reshards its routed result identically), so the shared+routed
+        # residual add lands on matching specs.
+        return _unflatten_bs(out_flat, b, s)
 
 
 def _routing_stats(
@@ -584,7 +601,7 @@ class MoEMLP(eqx.Module):
         x: Float[Array, "B S D"],
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
-        x_flat = rearrange(x, "b s d -> (b s) d")
+        x_flat = _flatten_bs(x)
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
@@ -640,8 +657,7 @@ class MoEMLP(eqx.Module):
         )
         router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
 
-        routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        routed = reshard(routed, _seq_spec_3d())
+        routed = _unflatten_bs(routed_flat, b, s)
         return routed, router_stats
 
 
