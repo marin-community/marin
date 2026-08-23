@@ -165,9 +165,8 @@ async def _transfer_shard_to_pageable_host(shard, local_slice: tuple[int, int, i
     The TPU runtime never returns JAX's pinned staging to the OS (#6924). State already in
     host memory is snapshotted in place.
 
-    Materializing a shard runs ``ArrayImpl._value``, which caches the NumPy buffer it builds on
-    the array and holds it there for the array's lifetime. Materializing a shard training owns
-    leaves a second host copy behind until training replaces the array.
+    GPU shards owned by training stage through a transient host array so checkpoint
+    materialization does not retain a host copy on the long-lived source array.
     """
     data = shard.data if local_slice is None else _slice_shard_on_device(shard.data, *local_slice)
 
