@@ -12,6 +12,8 @@ force-moves the stable branch.
 
 Refresh a `group` as one unit and one PR. The only current group is
 `vllm`/`tpu-inference`; `vllm-gpu` tracks the fork's independent `main` branch.
+The TPU launcher installs both grouped pins, and vLLM's TPU base derives from
+the tpu-inference release; splitting them can produce an unvalidated stack.
 
 In local mode, ask before pushing fork branches, opening the PR, or filing an
 issue. The required end-to-end test needs no extra confirmation.
@@ -144,7 +146,8 @@ descriptor and release pins (the descriptor's `commit`, or `gpu.toml`'s
    overlay imports or calls still exist: on a fast-moving fork a class becomes a
    factory function, a helper is deleted, a signature gains a required argument.
    Cross-check every touched constructor, signature, attribute, helper, and test
-   against `new_base` before a multi-hour build.
+   against `new_base` before a multi-hour build. A prior vLLM refresh caught
+   `FusedMoE` becoming `FusedMoEFactory` and removal of `is_interleaved` this way.
 7. Keep history reviewable — no conflict artifacts, unrelated refactors, or
    preserved commits whose behavior is now `drop`. Collapse fork-infra churn
    (CI, workflow, or prose commits that adopt then revise then disable) to its final
@@ -224,17 +227,20 @@ green while most of the suite never ran. CI steps run in order under an implicit
 earlier one is green, so its regressions stay hidden behind the first failure. Run
 every step's marker in order.
 
-If Docker bind mounts or compiled dependencies prevent a behavioral local run,
-use fork CI. Confirm the workflow supports `workflow_dispatch` on the staged ref;
-otherwise it may silently skip a non-`main` review branch.
+On this VM, Docker bind mounts do not propagate into containers, so Harbor's
+DOCKER-env golden tests must run in fork CI. Confirm the workflow supports
+`workflow_dispatch` on the staged ref; otherwise it may silently skip a
+non-`main` review branch.
 
 For vLLM without its compiled CUDA/TPU stack, `py_compile` and a conflict-marker
 sweep are structural checks only; do not call them behavioral validation.
 
 For a version-sensitive golden, inspect the deciding code path and distinguish a
-new dependency floor from a port defect. Never downgrade below the floor. Make
-the fixture dependency-independent when possible; otherwise regenerate and
-verify it in one CI run with logs as artifacts.
+new dependency floor from a port defect. An upstream `litellm>=1.92` floor, for
+example, can stale a golden without a fork-source change. Never downgrade below
+the floor. Prefer a dependency-independent fixture that patches every seam the
+trigger reads, such as both sync and async token counters. Otherwise regenerate
+and verify it in one CI run with logs as artifacts.
 
 ## Validate
 

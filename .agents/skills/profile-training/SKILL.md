@@ -55,8 +55,16 @@ HLO metadata increases artifact size, so keep these profile windows short. The
 `--trainer.profiler.upload.enabled false` for local-only capture. Do not copy
 profiles to another GCS region for inspection.
 
-Leave `device_tracer_level` unset unless device timelines are needed; host and
-HLO metadata preserve useful named-scope regions without it.
+Known-good TensorBoard scope recipe from CoreWeave Grug MoE profiling:
+`trainer.profiler.enabled=true`, `trainer.profiler.start_step=3`,
+`trainer.profiler.num_steps=2`, `trainer.profiler.perfetto_link=false`,
+`trainer.profiler.profile_options.host_tracer_level=1`,
+`trainer.profiler.profile_options.python_tracer_level=0`, and
+`trainer.profiler.profile_options.enable_hlo_proto=true` preserved useful
+`jax.named_scope` / `named_call` regions in TensorBoard for
+`GM2560-MAY-120S4096-W2048-B8-R1-E8M1-FA4PROFILE-S3B-N1-cw-20260617-2353`.
+Leave `device_tracer_level` unset unless device timelines are specifically
+needed; this profile retained useful hierarchical host/XLA metadata without it.
 
 On GPU, command buffers can collapse or suppress the visible name stack in
 TensorBoard/Perfetto. For profile-readability runs, disable command buffers:
@@ -184,6 +192,15 @@ uv run python lib/marin/tools/profile_summary.py query \
 Query top exclusive-time ops, compute/communication balance and collectives,
 specific pre-op gaps, hierarchical regions, noisy-op context, and suggested
 optimizations.
+
+Useful query forms include:
+
+- `What are the top 10 ops by exclusive time?`
+- `Is comm or compute dominating? Which collective is worst?`
+- `gap before _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined.1`
+- `show hierarchical regions`
+- `show context for op copy.564`
+- `What should we try next?`
 
 Pre-op gap attribution is marker-aware:
 - `gap_before_ops[].payload_op`: op where useful work starts after the idle period.

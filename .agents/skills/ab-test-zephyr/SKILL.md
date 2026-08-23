@@ -21,8 +21,10 @@ The coordinator writes one `zephyr.stage` row per completed stage and
 | `cpu_pct_avg` | weighted interpretation only | CPU saturation context |
 | `item_rate`, `byte_rate` | do not aggregate | Derived from noisy elapsed time |
 
-Use `cpu_time_total` as the primary efficiency signal and normalize per item or
-byte when accepted workload sizes differ. `elapsed` includes startup, I/O,
+`cpu_time_total` sums process user and system CPU-seconds across completed
+shards, so worker count and queue delay do not directly change it. Use it as the
+primary efficiency signal and normalize per item or byte when accepted workload
+sizes differ. `elapsed` measures the stage barrier and includes startup, I/O,
 concurrency, queueing, and stragglers; repeat an elapsed-only result under
 comparable scheduling conditions.
 

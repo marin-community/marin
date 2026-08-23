@@ -13,7 +13,7 @@ decision is expensive enough to justify it.
 
 - `low` (3-7 min): current issue/logbook, obvious local refs, and a few external
   sources. Use for small follow-ups or when the user provides strong context.
-- `medium` (10-15 min): search internal Marin sources plus targeted
+- `medium` (10-15 min): default. Search internal Marin sources plus targeted
   external literature/code, include a contradiction pass, and produce a source
   ledger plus ranked next experiments.
 - `high` (30-60 min): for expensive runs, architecture changes, data/eval
@@ -72,13 +72,44 @@ where the category is novel to this repo rather than novel to the world.
 ## Output Contract
 
 Write the compact brief in the parent workflow's logbook, issue, or
-`.agents/projects/<slug>/research.md`. Record effort, stop rule, question,
-current Marin context, internal and external prior work, negative leads, and a
-source ledger. For each decision-relevant claim, give support, contradiction,
-directness, confidence, and action. Rank next experiments by falsifiable
-hypothesis, minimum test, control, expected signal, falsifier, cost/risk, and
-sources. Include hypothesis-queue changes, open questions, and stop reason. If
-an experiment issue exists, add a short issue-ready `Prior work` block.
+`.agents/projects/<slug>/research.md`. Use this structure, omitting empty
+sections:
+
+```md
+## Background Research Brief
+- Effort / stop rule / date:
+
+### Question
+### Current Marin Context
+### Internal Prior Work
+### External Prior Art
+### Negative / Failed Leads
+
+### Evidence Map
+#### Claim: <short claim>
+- Support:
+- Contradictions:
+- Directness to Marin:
+- Confidence:
+- Action:
+
+### Recommended Next Experiments
+#### 1. <falsifiable hypothesis>
+- Minimum experiment / baseline:
+- Expected signal / falsifier:
+- Cost or risk / sources:
+
+### Hypothesis Queue Update
+### Source Ledger
+| Source | Type | Location | Claim used for | Confidence | Notes |
+|---|---|---|---|---|---|
+### Handoff
+- Issue `Prior work` block:
+- Logbook entry / open questions / stop reason:
+```
+
+If an experiment issue exists, include the short issue-ready `Prior work`
+block.
 
 Use source types such as `paper`, `external code`, `official docs`, `GitHub
 issue`, `PR`, `report`, `logbook`, `W&B`, `Data Browser`, and `Marin code`.

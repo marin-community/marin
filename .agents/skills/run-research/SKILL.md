@@ -31,11 +31,12 @@ research directly requires its workflow.
 ### 1. Prologue
 
 1. Keep an existing user-specified branch; otherwise create or use a long-lived
-   `research/<topic>` branch.
+   `research/<topic>` or `research/<user>/<issue>-<topic>` branch.
 2. Create or use the experiment issue and link it bidirectionally with the
-   logbook.
-3. Choose one short experiment ID prefix for entries, runs, and comments; use
-   two to four shared tags.
+   logbook. Confirm scope or visibility before creating it when either is
+   unclear.
+3. Choose one short experiment ID prefix and use IDs such as `MOE-HC-001` in
+   entries, runs, and comments; use two to four shared tags.
 4. Record the goal, success and stop criteria, baseline, initial hypothesis
    queue and experiment matrix, relevant code, and references.
 

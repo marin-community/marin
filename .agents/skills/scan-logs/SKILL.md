@@ -43,7 +43,10 @@ uv run scripts/logscan.py grep log.txt "errors" \
 ```
 
 Behavior-changing options are `--chunk-tokens`, `--concurrency`, `--model`,
-`--stdin`, and `--verbose`; inspect `--help` for current defaults.
+`--stdin`, and `--verbose`. The defaults are 5,000-token `grep` chunks,
+50,000-token hierarchical `summarize` chunks, concurrency 16, and
+`gemini-2.5-flash-lite`. Smaller `grep` chunks favor precise line matching;
+large logs need no manual pre-split. Inspect `--help` before overriding them.
 
 ## Output
 

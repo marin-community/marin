@@ -124,8 +124,16 @@ uv run python scripts/ferries/daily_analysis.py \
   --format markdown
 ```
 
-The terminal issue comment records status, Iris job ID, W&B link, final metrics,
-experiment link, and next recommendation.
+Use this terminal issue comment shape:
+
+```markdown
+Final status: <SUCCEEDED|FAILED|STOPPED>
+Iris job id: <job_id>
+W&B link: <url>
+Final eval summary: <key metrics>
+Experiment link: <experiment JSON/browser link>
+Recommendation / victory decision: <next action>
+```
 
 #### 7) Seal and open log-only PR
 - Create and push a sealing tag for the exact launch commit (the commit containing the `experiments/ferries/daily.py` used for the run).

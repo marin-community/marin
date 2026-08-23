@@ -11,6 +11,14 @@ Inspect the schema without downloading the full dataset:
 uv run lib/marin/tools/get_hf_dataset_schema.py <dataset_name> [options]
 ```
 
+For programmatic inspection:
+
+```python
+from marin.tools.get_hf_dataset_schema import get_schema
+
+schema = get_schema(dataset_name="wikitext", config_name="wikitext-103-v1")
+```
+
 Use repo-managed dependencies. For a one-off inspection without a provisioned
 environment, add `--with datasets --with pyyaml` to `uv run`.
 
@@ -24,7 +32,8 @@ failure instead of guessing a replacement.
 
 Choose the text field from the reported schema. Prefer an exact `text` field,
 then a field containing `text`, then another string field. Inspect `sample_row`
-to verify the content; it may be empty for some datasets.
+to verify the content; it may be empty for some datasets. The result also
+reports `splits`, `text_field_candidates`, and `features`.
 
 Add a leaf module under `experiments/datasets/` using the lazy builders in
 `marin.experiment.data`:

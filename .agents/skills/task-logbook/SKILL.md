@@ -95,6 +95,18 @@ Track hypotheses as active, blocked, falsified, or promoted. Each item needs an
 ID, evidence links, and either its next test, resume condition, stopping reason,
 or production decision.
 
+```md
+## Hypothesis Queue
+### Active
+- `<ID>`: <hypothesis>. Evidence: <links>. Next test: <action>.
+### Blocked
+- `<ID>`: <hypothesis>. Blocker: <reason>. Resume when: <condition>.
+### Falsified / Dead End
+- `<ID>`: <hypothesis>. Why stopped: <evidence links>.
+### Promoted
+- `<ID>`: <hypothesis>. Decision: <production artifact link>.
+```
+
 ## Coordinating Issue
 
 Create or use a coordinating GitHub issue when the work needs durable public
@@ -148,7 +160,19 @@ undefined terms, ambiguous references, unsupported claims, missing baselines,
 and missing links. Give it only the issue context and proposed update; skip this
 for trivial updates.
 
+Prompt the reader with only the issue body, recent comments, and proposed
+update:
+
+```text
+Decide whether this update is understandable from visible issue context alone.
+Flag undefined names or IDs, ambiguous references, claims without visible
+evidence, config, baseline, or metrics, and missing necessary links. Do not read
+the logbook or infer missing context.
+```
+
 ## Finish
+
+Close the issue when the tracked work is complete.
 
 Before closing the issue, make the final logbook entry and issue summary agree.
 The final comment records what worked, what did not, confidence and limitations,

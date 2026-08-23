@@ -46,7 +46,8 @@ uv run infra/echo/cli.py feedback --query "stalled TPU collective" \
 Use 0 for irrelevant and 10 for directly useful. Grade only evaluated results
 and always explain overall quality on stdin, including for an empty result set.
 
-Use `grep` for exact strings in GitHub or Discord activity:
+Use `grep` for exact strings in GitHub or Discord activity, narrowing with
+`--source` or `--kind` when needed:
 
 ```bash
 uv run infra/echo/cli.py grep "FAILED_PRECONDITION" --source github
