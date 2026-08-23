@@ -72,7 +72,7 @@ HERO_EP_RUNTIME_ENV = {
     # Symk escape hatch: an unrecognized kernel name empties NCCL's symmetric-kernel mask, so
     # ordinary collectives fall back to ring/NVLS while windows stay registered -- which is
     # what lets the device kernel engage without paying the symmetric-kernel tax.
-    "NCCL_SYM_KERNEL": "none",
+    "NCCL_SYM_KERNEL": "AllReduce_AGxLL_R",
 }
 XLA_LATENCY_HIDING_FLAG = "--xla_gpu_enable_latency_hiding_scheduler"
 # The scheduler sizes the single `jit_train_step` temp arena against this percentage of its
