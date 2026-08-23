@@ -69,10 +69,6 @@ HERO_EP_RUNTIME_ENV = {
     # pins 153.0 GiB in the pool and leaves under 3 GiB free on the device, so the arena
     # allocation below has no room to remap into.
     "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.75",
-    # Symk escape hatch: an unrecognized kernel name empties NCCL's symmetric-kernel mask, so
-    # ordinary collectives fall back to ring/NVLS while windows stay registered -- which is
-    # what lets the device kernel engage without paying the symmetric-kernel tax.
-    "NCCL_SYM_KERNEL": "AllReduce_AGxLL_R",
 }
 XLA_LATENCY_HIDING_FLAG = "--xla_gpu_enable_latency_hiding_scheduler"
 # The scheduler sizes the single `jit_train_step` temp arena against this percentage of its
@@ -159,8 +155,6 @@ def _apply_hero_ep_runtime_defaults(
         overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
-        "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
-        "--xla_gpu_experimental_enable_nccl_symmetric_buffers=true",
         f"{XLA_LATENCY_HIDING_FLAG}={'false' if ragged else 'true'}",
         XLA_MEMORY_LIMIT_SLOP_FLAG,
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
@@ -584,8 +578,8 @@ def _tree_to_memory_kind(tree, memory_kind: str):
     def _move(leaf):
         if not isinstance(leaf, jax.Array):
             return leaf
-        aval_sharding = jax.typeof(leaf).sharding
-        mesh = getattr(aval_sharding, "mesh", None)
+        sharding = jax.typeof(leaf).sharding
+        mesh = getattr(sharding, "mesh", None)
         if mesh is None or len(getattr(mesh, "axis_names", ())) == 0:
             if jax.sharding.get_abstract_mesh().empty:
                 return leaf
@@ -593,12 +587,8 @@ def _tree_to_memory_kind(tree, memory_kind: str):
             # Bind it before changing memory kind so the initial and updated states have the
             # same JIT input signature.
             leaf = jax.sharding.reshard(leaf, P())
-        # Under a trace only the aval (abstract-mesh) sharding exists and device_put accepts
-        # it; on concrete arrays device_put needs the array's own device-mesh sharding -- the
-        # abstract one fails addressability.
-        if isinstance(leaf, jax.core.Tracer):
-            return jax.device_put(leaf, jax.typeof(leaf).sharding.with_memory_kind(memory_kind))
-        return jax.device_put(leaf, leaf.sharding.with_memory_kind(memory_kind))
+            sharding = jax.typeof(leaf).sharding
+        return jax.device_put(leaf, sharding.with_memory_kind(memory_kind))
 
     return jax.tree.map(_move, tree)
 

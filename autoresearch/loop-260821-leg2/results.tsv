@@ -23,3 +23,5 @@ abl	2026-08-22T13:49Z	5c5388d6c2	-	-	pass	ragged loss 1.9757/bpb 0.9749/drops 0.
 15	2026-08-23T00:03Z	cc0913f293	19.1857	-	pass	drops=0.0	answer	wheel+dk+symbuf: 19.19 == clean-main 19.16 == nightly 19.40; regression is the symbuf flag (~-3.5 on this graph), NOT main dk source; main dk requires symbuf to engage
 ab-r	2026-08-23T01:13Z	935ab4b770	22.4611	-	pass	drops=0.015%/0.032%,loss=1.4491@6013	answer	ragged restored from hero step-6000, mixture data (ra2a-l2-ab-ragged-6k-c)
 ab-p	2026-08-23T01:13Z	935ab4b770	22.5169	-	pass	drops=2.67%/2.84%,loss=1.4536@6013	answer	pooled control, identical restore (ra2a-l2-ab-pooled-6k): MFU tie, drops 175x higher
+16	2026-08-23T04:44Z	3e53fc1b3c	-	-	crash	-	crash	NCCL_SYM_KERNEL=none: strict list parser rejects at comm init
+16b	2026-08-23T04:44Z	3e53fc1b3c	-	-	crash	-	crash	NCCL_SYM_KERNEL=AllReduce_AGxLL_R: deployed NCCL is force-or-die (int32 psum errors, no fallback); env-var symk escape dead on this vintage

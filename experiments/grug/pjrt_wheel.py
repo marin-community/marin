@@ -26,11 +26,11 @@ _NIGHTLY = "https://us-python.pkg.dev/ml-oss-artifacts-published/jax-public-nigh
 # The siblings must track the jax revision the PJRT wheel was built from: the plugin carries an
 # exact `==` pin on the pjrt version and the two share an ABI.
 _STOCK_SIBLINGS: tuple[str, ...] = (
-    f"{_NIGHTLY}/jax/jax-0.11.2.dev20260821-py3-none-any.whl",
-    f"{_NIGHTLY}/jaxlib/jaxlib-0.11.2.dev20260821-cp312-cp312-manylinux_2_27_aarch64.whl",
-    f"{_NIGHTLY}/jax-cuda13-plugin/jax_cuda13_plugin-0.11.2.dev20260821-cp312-cp312-manylinux_2_27_aarch64.whl",
+    f"{_NIGHTLY}/jax/jax-0.11.1.dev20260811-py3-none-any.whl",
+    f"{_NIGHTLY}/jaxlib/jaxlib-0.11.1.dev20260811-cp312-cp312-manylinux_2_27_aarch64.whl",
+    f"{_NIGHTLY}/jax-cuda13-plugin/jax_cuda13_plugin-0.11.1.dev20260811-cp312-cp312-manylinux_2_27_aarch64.whl",
 )
-_STOCK_PJRT = f"{_NIGHTLY}/jax-cuda13-pjrt/jax_cuda13_pjrt-0.11.2.dev20260821-py3-none-manylinux_2_27_aarch64.whl"
+_STOCK_PJRT = f"{_NIGHTLY}/jax-cuda13-pjrt/jax_cuda13_pjrt-0.11.1.dev20260811-py3-none-manylinux_2_27_aarch64.whl"
 
 
 def _install_script(wheel_url: str) -> str:
