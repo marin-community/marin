@@ -1,6 +1,6 @@
 ---
 name: update-docs
-description: Update durable docs when explicitly requested or when completed implementation changes make an authoritative procedure stale.
+description: Update durable docs when explicitly requested or when current work changes behavior, exposes stale instructions, establishes an operational pattern, or yields reusable research guidance.
 ---
 
 # Skill: Update Docs

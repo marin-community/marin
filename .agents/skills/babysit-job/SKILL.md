@@ -141,7 +141,9 @@ part of the setup. The state file allows resume after context reset.
    - Resolve `<exact_max>` from the launched config/code, not from progress-bar display text.
 6. EVALUATE (terminal? error? stalled? -> recover or continue)
 
-7. RECOVER (STOP -> RESUBMIT)
+7. RECOVER (STOP -> RESUBMIT, ONLY WHEN AUTHORIZED IN THE CURRENT THREAD)
+   - If stop/resubmit is not authorized, report the failure and wait for the
+     user. Do not cancel or resubmit.
    - If current job is still non-terminal, stop it first:
      uv run iris --config <CONFIG> job cancel --exact <JOB_ID>
    - Then resubmit:
