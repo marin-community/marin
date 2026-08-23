@@ -587,8 +587,11 @@ def _tree_to_memory_kind(tree, memory_kind: str):
             # Bind it before changing memory kind so the initial and updated states have the
             # same JIT input signature.
             leaf = jax.sharding.reshard(leaf, P())
-        # device_put needs the array's concrete sharding: the aval sharding is bound to the
-        # AbstractMesh, which does not implement addressability.
+        # Under a trace only the aval (abstract-mesh) sharding exists and device_put accepts
+        # it; on concrete arrays device_put needs the array's own device-mesh sharding -- the
+        # abstract one fails addressability.
+        if isinstance(leaf, jax.core.Tracer):
+            return jax.device_put(leaf, jax.typeof(leaf).sharding.with_memory_kind(memory_kind))
         return jax.device_put(leaf, leaf.sharding.with_memory_kind(memory_kind))
 
     return jax.tree.map(_move, tree)
