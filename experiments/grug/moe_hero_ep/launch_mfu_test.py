@@ -31,6 +31,7 @@ from experiments.grug.moe_hero_ep.harrier_mix_2026_08_17_1 import (
 )
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, build_hero_configs
 from experiments.grug.moe_hero_ep.train import (
+    RAGGED_MOE_IMPLEMENTATION,
     GrugEvalConfig,
     GrugRunConfig,
     GrugTrainerConfig,
@@ -48,7 +49,18 @@ HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
 HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
 HERO_PROCESSES_PER_TASK = 1
+# Updates per peer for the ragged transport at the hero shape. The one-shot kernel's grid is
+# `num_ranks x splits`, so at EP64 this is 2048 CTAs; 32 measured best there.
+HERO_RAGGED_SPLITS_PER_PEER = 64
 HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
+# Weight storage that goes with each master-parameter mode. The pooled-wave hero needs the
+# pinned-host master to fit at all. The ragged transport does fit with fp32 weights on device,
+# and a paired hero measurement put the master 1.78 percent behind on that path -- it buys
+# memory relief that transport is not short of, and charges a host round trip per step for it.
+HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE = {
+    MasterParamMode.FP32_PINNED_HOST: HERO_MIXED_PRECISION,
+    MasterParamMode.DISABLED: "params=float32,compute=bfloat16,output=bfloat16",
+}
 # Keep MuonH state on pinned host memory to leave room for the pooled all-to-all buffers.
 HERO_OFFLOAD_OPT_STATE = True
 HERO_WATCH_INTERVAL = 0
@@ -58,6 +70,17 @@ HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 # Held-out sets are added at weight 0 so they surface as tagged eval sets.
 def _validation_datasets() -> list[ArtifactStep[TokenizedCache]]:
     return list(paloma_datasets(tokenizer=marin_tokenizer).values())
+
+
+def resolve_splits_per_peer(requested: int | None, moe_implementation: str) -> int:
+    """Updates per peer for ``moe_implementation``, honoring an explicit ``requested`` value.
+
+    Only the ragged transport accepts a split count -- the model config rejects anything but 1 on
+    the others -- so the default follows the backend instead of sitting at a single number.
+    """
+    if requested is not None:
+        return requested
+    return HERO_RAGGED_SPLITS_PER_PEER if moe_implementation == RAGGED_MOE_IMPLEMENTATION else 1
 
 
 class HeroThroughputResult(Artifact):
@@ -81,6 +104,12 @@ def build_hero_run(
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
+    moe_implementation: str | None = None,
+    ragged_all_to_all_splits_per_peer: int | None = None,
+    master_param_mode: MasterParamMode = MasterParamMode.FP32_PINNED_HOST,
+    restore_from: str | None = None,
+    restore_master_param_mode: MasterParamMode | None = None,
+    processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
     save_checkpoints: bool = False,
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
@@ -139,11 +168,18 @@ def build_hero_run(
             ("intermediate_dim", intermediate_dim),
             ("capacity_factor", capacity_factor),
             ("latent_dim", latent_dim),
+            ("moe_implementation", moe_implementation),
         )
         if value is not None
     }
     if overrides:
         model = dataclasses.replace(model, **overrides)
+    model = dataclasses.replace(
+        model,
+        ragged_all_to_all_splits_per_peer=resolve_splits_per_peer(
+            ragged_all_to_all_splits_per_peer, model.moe_implementation
+        ),
+    )
     # A bank that is not divisible by the expert axis fails inside `moe_mlp`, which is after the rack
     # is already allocated and the workspace is built. Reject it here instead.
     if model.num_experts % HERO_EP_EXPERT_AXIS_SIZE != 0:
@@ -153,13 +189,13 @@ def build_hero_run(
         raise ValueError(
             f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
         )
-    if model.moe_implementation != "fixed_pooled_wave_all_to_all":
-        raise AssertionError(f"unexpected hero MoE implementation: {model.moe_implementation}")
-    if model.pooled_transport_capacity_factor is None:
+    pooled = model.moe_implementation == "fixed_pooled_wave_all_to_all"
+    if pooled and model.pooled_transport_capacity_factor is None:
         raise AssertionError("the pooled-wave hero requires a transport capacity factor")
     backend_tag = model.moe_implementation.replace("_", "-")
     capacity_tag = f"capacity-{model.capacity_factor:g}"
-    transport_capacity_tag = f"transport-capacity-{model.pooled_transport_capacity_factor:g}"
+    # Only the pooled transport has a receiver capacity of its own to report.
+    transport_capacity_tags = (f"transport-capacity-{model.pooled_transport_capacity_factor:g}",) if pooled else ()
     wave_tag = f"expert-waves-{model.num_expert_waves}"
     size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
@@ -169,7 +205,8 @@ def build_hero_run(
         ema_beta=None,
         z_loss_weight=1e-4,
         offload_opt_state=HERO_OFFLOAD_OPT_STATE,
-        master_param_mode=MasterParamMode.FP32_PINNED_HOST,
+        master_param_mode=master_param_mode,
+        restore_master_param_mode=restore_master_param_mode,
         training_data_mode=training_data_mode,
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
@@ -195,6 +232,11 @@ def build_hero_run(
             seed=seed,
             train_batch_size=batch_size,
             num_train_steps=total_schedule_steps,
+            # Read another run's checkpoint without ever writing to it: this is a search path, and
+            # the checkpointer below still points at this run's own output. `True` fails fast when
+            # the path is gone, which matters when the source is a live run's rolling temporary.
+            load_checkpoint_path=restore_from,
+            load_checkpoint=True if restore_from else None,
             profiler=ProfilerConfig(
                 enabled=profile_steps > 0,
                 start_step=profile_start_step,
@@ -204,7 +246,7 @@ def build_hero_run(
                 process_index=0,
                 profile_options=ProfileOptionsConfig(enable_hlo_proto=True),
             ),
-            mp=jmp.get_policy(HERO_MIXED_PRECISION),
+            mp=jmp.get_policy(HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE[master_param_mode]),
             tracker=WandbConfig(
                 entity="marin-community",
                 project=wandb_project,
@@ -214,8 +256,9 @@ def build_hero_run(
                     "hero",
                     "ep",
                     backend_tag,
+                    f"master-params-{master_param_mode.value.replace('_', '-')}",
                     capacity_tag,
-                    transport_capacity_tag,
+                    *transport_capacity_tags,
                     wave_tag,
                     size_tag,
                     "gb200",
@@ -261,7 +304,7 @@ def build_hero_run(
                 GrugEvalConfig(steps_per_eval=eval_every, eval_ema=False, compute_bpb=True) if eval_every > 0 else None
             ),
             stop_after_steps=num_steps,
-            processes_per_task=HERO_PROCESSES_PER_TASK,
+            processes_per_task=processes_per_task,
         )
 
     return ArtifactStep(
@@ -411,6 +454,56 @@ def build_hero_run(
     show_default=True,
     help="Override the pooled receiver capacity factor.",
 )
+@click.option(
+    "--moe-implementation",
+    default=None,
+    help="Override the MoE backend, e.g. ragged_all_to_all. Defaults to the hero spec.",
+)
+@click.option(
+    "--ragged-all-to-all-splits-per-peer",
+    type=click.IntRange(min=1),
+    default=None,
+    help=(
+        "Split each peer transfer into this many ragged updates. Ragged backend only. The one-shot "
+        "kernel launches num_ranks x splits CTAs, so this also sets the transport's grid. Defaults "
+        f"to {HERO_RAGGED_SPLITS_PER_PEER} on the ragged backend, the measured best at EP64, and to "
+        "1 elsewhere."
+    ),
+)
+@click.option(
+    "--restore-from",
+    default=None,
+    help=(
+        "Initialize from another run's checkpoint directory, read-only. Use it to measure a "
+        "trained router, where capacity clipping is real: a run from scratch drops nothing."
+    ),
+)
+@click.option(
+    "--restore-master-params",
+    type=click.Choice([mode.value for mode in MasterParamMode]),
+    default=None,
+    help=(
+        "Parameter storage the restored checkpoint was written under, when it differs from "
+        "--master-params. The master is folded into fp32 device parameters after the load."
+    ),
+)
+@click.option(
+    "--master-params",
+    type=click.Choice([mode.value for mode in MasterParamMode]),
+    default=MasterParamMode.FP32_PINNED_HOST.value,
+    show_default=True,
+    help=(
+        "Where the authoritative fp32 weights live. Disabling the master keeps them on device and "
+        "measured 1.78 percent faster on the ragged transport, which does not need the memory relief."
+    ),
+)
+@click.option(
+    "--processes-per-task",
+    type=click.IntRange(min=1),
+    default=HERO_PROCESSES_PER_TASK,
+    show_default=True,
+    help="JAX processes per node. The ragged transport needs one process per GPU.",
+)
 @build_options
 def main(
     run_id: str,
@@ -433,6 +526,12 @@ def main(
     profile_steps: int,
     profile_start_step: int,
     training_data: str,
+    moe_implementation: str | None,
+    ragged_all_to_all_splits_per_peer: int | None,
+    master_params: str,
+    restore_from: str | None,
+    restore_master_params: str | None,
+    processes_per_task: int,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
         run_id=run_id,
@@ -455,6 +554,12 @@ def main(
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
         training_data_mode=TrainingDataMode(training_data),
+        moe_implementation=moe_implementation,
+        ragged_all_to_all_splits_per_peer=ragged_all_to_all_splits_per_peer,
+        master_param_mode=MasterParamMode(master_params),
+        restore_from=restore_from,
+        restore_master_param_mode=MasterParamMode(restore_master_params) if restore_master_params else None,
+        processes_per_task=processes_per_task,
     )
 
 

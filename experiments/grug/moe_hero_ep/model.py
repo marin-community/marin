@@ -190,6 +190,7 @@ class GrugModelConfig:
     expert_chunks: int = 1
     pooled_transport_capacity_factor: float | None = None
     num_expert_waves: int = 1
+    ragged_all_to_all_splits_per_peer: int = 1
     report_capacity_overflow: bool = False
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
@@ -243,6 +244,10 @@ class GrugModelConfig:
                 raise ValueError("fixed_pooled_wave_all_to_all requires pooled_transport_capacity_factor")
         if self.num_expert_waves <= 0:
             raise ValueError("num_expert_waves must be positive")
+        if self.ragged_all_to_all_splits_per_peer <= 0:
+            raise ValueError("ragged_all_to_all_splits_per_peer must be positive")
+        if self.ragged_all_to_all_splits_per_peer != 1 and self.moe_implementation != "ragged_all_to_all":
+            raise ValueError("ragged_all_to_all_splits_per_peer only applies to the ragged all-to-all implementation")
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
         resolve_moe_implementation(self.moe_implementation)
@@ -955,6 +960,7 @@ class MoEMLP(eqx.Module):
                 pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
                 expert_chunks=cfg.expert_chunks,
                 num_expert_waves=cfg.num_expert_waves,
+                ragged_all_to_all_splits_per_peer=cfg.ragged_all_to_all_splits_per_peer,
             ),
             cfg=cfg,
         )

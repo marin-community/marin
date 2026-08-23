@@ -9,7 +9,6 @@ import logging
 import os
 import time
 from collections.abc import Callable
-from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
@@ -43,7 +42,6 @@ from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
 from levanter.trainer import TrainerConfig
-from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
@@ -60,8 +58,6 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 logger = logging.getLogger(__name__)
 
 HERO_EP_RUNTIME_ENV = {
-    "LD_PRELOAD": "libjemalloc.so.2",
-    "MALLOC_CONF": "background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2",
     "JAX_ENABLE_PGLE": "false",
     "XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB": "192",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
@@ -73,7 +69,13 @@ HERO_EP_RUNTIME_ENV = {
     # pins 153.0 GiB in the pool and leaves under 3 GiB free on the device, so the arena
     # allocation below has no room to remap into.
     "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.75",
+    # Engagement audit for the scoped-registration device-kernel arm: the thunk logs
+    # "Device kernel: ..." vs "Performing one-shot ..." at VLOG(3), which is the only
+    # positive signal distinguishing a genuinely-engaged device kernel from a silent
+    # fall-through to the one-shot on the patched wheel (where both paths train).
+    "TF_CPP_VMODULE": "ragged_all_to_all_thunk=3",
 }
+XLA_LATENCY_HIDING_FLAG = "--xla_gpu_enable_latency_hiding_scheduler"
 # The scheduler sizes the single `jit_train_step` temp arena against this percentage of its
 # memory budget, roughly `133.6 GiB x percentage`. The pool holds 138.2 GiB and persistent state
 # occupies 18.1 GiB of it, so an arena above 120.2 GiB cannot be served from pool free space and
@@ -81,14 +83,17 @@ HERO_EP_RUNTIME_ENV = {
 # asks for 125.7 GiB and fails that way. 85 sizes the arena at 113.6 GiB, leaving enough slack
 # for per-node variation in fragmentation. A lower percentage costs throughput, because a
 # smaller arena makes `HloRematerialization` recompute more of the step.
-_XLA_FLAG_DEFAULTS = (
-    "--xla_gpu_enable_latency_hiding_scheduler=true",
-    "--xla_gpu_memory_limit_slop_factor=85",
-)
+XLA_MEMORY_LIMIT_SLOP_FLAG = "--xla_gpu_memory_limit_slop_factor=85"
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
+# The ragged transport wants the opposite scheduling posture from the fixed and pooled ones. Its
+# dispatch and combine form one long dependent chain, so admitting several concurrent collectives
+# only contends for the SMs the transport itself needs, and the latency-hiding scheduler reorders
+# around the ragged collectives without shortening them.
+RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
+RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
@@ -134,7 +139,9 @@ def restore_template_from(state):
     return template
 
 
-def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per_task: int = 1) -> None:
+def _apply_hero_ep_runtime_defaults(
+    *, inline_watch_enabled: bool, processes_per_task: int = 1, moe_implementation: str = ""
+) -> None:
     env_defaults = dict(HERO_EP_RUNTIME_ENV)
     if processes_per_task > 1:
         # With one process per GPU, the per-process CUPTI sessions collide with each
@@ -144,10 +151,24 @@ def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per
     for name, value in env_defaults.items():
         os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
-    overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT if inline_watch_enabled else DEFAULT_COLLECTIVE_OVERLAP_LIMIT
+    ragged = moe_implementation == RAGGED_MOE_IMPLEMENTATION
+    if ragged:
+        overlap_limit = RAGGED_COLLECTIVE_OVERLAP_LIMIT
+    elif inline_watch_enabled:
+        overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT
+    else:
+        overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
-        *_XLA_FLAG_DEFAULTS,
+        # Confound isolation, cell (device kernel, scoped registration): engagement requires
+        # use_symmetric_buffer on the ragged op, but the global symmetric-buffers flag registers
+        # every collective's buffers and hands reduce-scatter/all-gather to NCCL's symmetric
+        # kernels. The scoped list flag registers only the ragged all-to-all operands, so this
+        # cell runs a genuinely-engaged device kernel without the symk takeover.
+        "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
+        "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall",
+        f"{XLA_LATENCY_HIDING_FLAG}={'false' if ragged else 'true'}",
+        XLA_MEMORY_LIMIT_SLOP_FLAG,
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
@@ -168,6 +189,10 @@ class GrugTrainerConfig:
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
     master_param_mode: MasterParamMode = MasterParamMode.DISABLED
+    # Research knob: the checkpoint was written under this mode, and the restored state is folded
+    # into `master_param_mode` afterwards. It lets a run restore the hero's pinned-host master and
+    # then train the way it would have without one. `None` restores in the run's own mode.
+    restore_master_param_mode: MasterParamMode | None = None
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE
     # Inline watch computes statistics on every step and uses the watch interval only for logging.
     # This keeps one training executable resident. A diagnostic watch repeats forward and backward
@@ -261,9 +286,6 @@ def build_train_dataset(
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
-_TRAIN_LOADER_BUFFER_SIZE = 512
-# On one GB200 tray, four-batch requests delivered the first data in 3.7s and sustained 3.4 batches/s.
-_TRAIN_LOADER_FETCH_BATCH_SIZE = 4
 
 
 def _make_synthetic_batch(
@@ -316,10 +338,10 @@ def build_train_loader(
     return DataLoader(
         dataset,
         batch_schedule.schedule,
-        max_buffered_batches=_TRAIN_LOADER_BUFFER_SIZE,
+        max_buffered_batches=512,
         mesh=mesh,
         axis_resources={"__BATCH__": _BATCH_AXES},
-        fetch_batch_size=_TRAIN_LOADER_FETCH_BATCH_SIZE,
+        prefetch_size=256,
         batch_axis_name="__BATCH__",
         allow_nondivisible_batch_size=False,
     )
@@ -530,6 +552,29 @@ class GrugTrainState:
     opt_state: optax.OptState
     ema_params: Transformer | None
     pending_qb_betas: jax.Array
+
+
+def restore_template_policy(mp: jmp.Policy) -> jmp.Policy:
+    """``mp`` with bf16 parameters, the dtype a pinned-host master writes its device copy in."""
+    return jmp.Policy(param_dtype=jnp.bfloat16, compute_dtype=mp.compute_dtype, output_dtype=mp.output_dtype)
+
+
+def fold_master_into_params(state: "GrugTrainState") -> "GrugTrainState":
+    """Move a pinned-host fp32 master on device as the parameters and drop the master.
+
+    The master is authoritative and already fp32, and `params` under a master is a bf16 copy cast
+    from it, so nothing survives in `params` that the master does not already carry. `opt_state`
+    was initialized on the master's fp32 tree, which is the same tree the disabled mode optimizes.
+    The conversion is therefore exact, and it lets a run restore a checkpoint written with a
+    master and then train without one.
+    """
+    if state.master_params is None:
+        return state
+    return dataclasses.replace(
+        state,
+        params=_tree_to_memory_kind(state.master_params, "device"),
+        master_params=None,
+    )
 
 
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
@@ -813,17 +858,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
     )
-    # Armed before the state is built or restored. The watchdog's step and process deadlines only
-    # arm once a step reports progress, so its startup deadline is the only thing bounding a stall
-    # in initialization, checkpoint restore, cache construction or compilation.
-    progress_watchdog = trainer.progress_watchdog.create(process_index=jax.process_index())
-
-    checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
-    dashboard = (
-        TrainingDashboard(config, checkpointer.request_checkpoint, run_id) if checkpointer is not None else nullcontext()
-    )
-    with set_mesh(mesh), dashboard:
+    with set_mesh(mesh):
         batch_schedule = trainer.batch_schedule
+
+        # The restore template has to match the tree the checkpoint was written from, which is not
+        # always the tree this run trains: `restore_master_param_mode` restores a checkpoint that
+        # carries a pinned-host master and `fold_master_into_params` converts it afterwards.
+        restore_mode = config.trainer.restore_master_param_mode or config.trainer.master_param_mode
+        restore_mp = (
+            restore_template_policy(trainer.mp) if restore_mode != config.trainer.master_param_mode else trainer.mp
+        )
 
         @jax.jit
         def _init_state(model_rng):
@@ -837,11 +881,24 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 master_param_mode=config.trainer.master_param_mode,
             )
 
-        state = _init_state(model_key)
+        @jax.jit
+        def _init_restore_template(model_rng):
+            return initial_state(
+                config.model,
+                optimizer=optimizer,
+                mp=restore_mp,
+                key=model_rng,
+                ema_beta=config.trainer.ema_beta,
+                offload_opt_state=config.trainer.offload_opt_state,
+                master_param_mode=restore_mode,
+            )
+
+        state = _init_restore_template(model_key)
         released_initial_state = trainer.load_checkpoint is not False and not trainer.allow_partial_checkpoint
         if released_initial_state:
             state = restore_template_from(state)
 
+        checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
@@ -850,7 +907,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             allow_partial=trainer.allow_partial_checkpoint,
         )
         if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
+            # Nothing was restored, so the template is unused and the run starts from its own mode.
             state = _init_state(model_key)
+        elif restore_mode != config.trainer.master_param_mode:
+            if config.trainer.master_param_mode != MasterParamMode.DISABLED:
+                raise ValueError(
+                    "restore_master_param_mode only converts to the disabled mode, got "
+                    f"{config.trainer.master_param_mode}"
+                )
+            state = fold_master_into_params(state)
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
@@ -943,8 +1008,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             eval_model_getter=lambda s: s.ema_params if s.ema_params is not None else s.params,
             opt_state_getter=lambda s: s.opt_state,
         )
-        if progress_watchdog is not None:
-            state_callbacks.add_hook(progress_watchdog, every=1)
         state_callbacks.add_hook(
             callbacks.log_performance_stats(config.model.max_seq_len, batch_schedule, flops_per_example),
             every=log_every,
@@ -1034,14 +1097,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 else:
                     watch_stats = None
                 step_start = time.perf_counter()
-                state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
                 state, metrics, inline_watch_stats = train_step(state, batch)
                 if inline_watch_stats is not None and watch_due:
                     watch_stats = inline_watch_stats
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
-                state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
 
                 if not jnp.isfinite(metrics["train/loss"]):
                     raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {int(state.step)}.")
@@ -1120,7 +1181,9 @@ def run_grug(config: GrugRunConfig) -> None:
     # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
     inline_watch_enabled = trainer.watch.is_enabled and config.trainer.watch_mode == WatchMode.INLINE
     _apply_hero_ep_runtime_defaults(
-        inline_watch_enabled=inline_watch_enabled, processes_per_task=config.processes_per_task
+        inline_watch_enabled=inline_watch_enabled,
+        processes_per_task=config.processes_per_task,
+        moe_implementation=config.model.moe_implementation,
     )
     dispatch_grug_training_run(
         run_id=trainer.id,
