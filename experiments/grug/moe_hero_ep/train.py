@@ -578,8 +578,8 @@ def _tree_to_memory_kind(tree, memory_kind: str):
     def _move(leaf):
         if not isinstance(leaf, jax.Array):
             return leaf
-        sharding = jax.typeof(leaf).sharding
-        mesh = getattr(sharding, "mesh", None)
+        aval_sharding = jax.typeof(leaf).sharding
+        mesh = getattr(aval_sharding, "mesh", None)
         if mesh is None or len(getattr(mesh, "axis_names", ())) == 0:
             if jax.sharding.get_abstract_mesh().empty:
                 return leaf
@@ -587,8 +587,9 @@ def _tree_to_memory_kind(tree, memory_kind: str):
             # Bind it before changing memory kind so the initial and updated states have the
             # same JIT input signature.
             leaf = jax.sharding.reshard(leaf, P())
-            sharding = jax.typeof(leaf).sharding
-        return jax.device_put(leaf, sharding.with_memory_kind(memory_kind))
+        # device_put needs the array's concrete sharding: the aval sharding is bound to the
+        # AbstractMesh, which does not implement addressability.
+        return jax.device_put(leaf, leaf.sharding.with_memory_kind(memory_kind))
 
     return jax.tree.map(_move, tree)
 
