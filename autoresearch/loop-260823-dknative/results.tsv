@@ -1,2 +1,3 @@
 # metric_direction: higher_is_better
 iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
+00	2026-08-23T22:55Z	f9130923f1	18.3764	0.0	pass	drops=0.0,loss=11.8034	baseline	main old ragged backend + dk (g8x128 wheel, splits n/a): 18.38; refs on same compiler: lean-dk 21.69, one-shot 22.77

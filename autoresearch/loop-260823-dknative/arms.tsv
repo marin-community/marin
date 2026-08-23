@@ -1,2 +1,4 @@
 run_id	commit	version	moe_impl	data	master_params	schedule_steps	timeout	restore_from	extra
 ra2a-dkn-00-base	aebead2158	2026.08.23.13	ragged_all_to_all	synthetic	disabled	4470000	2100	none	--ragged-all-to-all-splits-per-peer 32
+ra2a-dkn-00b-base	ac41bf9b9a	2026.08.23.14	ragged_all_to_all	synthetic	disabled	4470000	2100	none	--ragged-all-to-all-splits-per-peer 32
+ra2a-dkn-00c-base	f9130923f1	2026.08.23.15	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
