@@ -10,18 +10,20 @@ WHEEL="${WHEEL:?set WHEEL (s3 url of the self-built PJRT wheel)}"
 NIGHTLY="https://us-python.pkg.dev/ml-oss-artifacts-published/jax-public-nightly-artifacts-registry"
 PYBIN="$(command -v python)"
 
+mkdir -p /tmp/pjrt-wheel && rm -f /tmp/pjrt-wheel/*.whl
 python - <<PY
 import fsspec
 fs, path = fsspec.core.url_to_fs("${WHEEL}")
-fs.get(path, "/tmp/pjrt-selfbuilt.whl")
-print("fetched /tmp/pjrt-selfbuilt.whl")
+dest = "/tmp/pjrt-wheel/" + path.rsplit("/", 1)[1]
+fs.get(path, dest)
+print("fetched", dest)
 PY
 uv pip install --python "$PYBIN" --reinstall \
   "jax @ ${NIGHTLY}/jax/jax-0.11.2.dev20260821-py3-none-any.whl" \
   "jaxlib @ ${NIGHTLY}/jaxlib/jaxlib-0.11.2.dev20260821-cp312-cp312-manylinux_2_27_aarch64.whl" \
   "jax-cuda13-plugin[with-cuda] @ ${NIGHTLY}/jax-cuda13-plugin/jax_cuda13_plugin-0.11.2.dev20260821-cp312-cp312-manylinux_2_27_aarch64.whl" \
   "jax-cuda13-pjrt @ ${NIGHTLY}/jax-cuda13-pjrt/jax_cuda13_pjrt-0.11.2.dev20260821-py3-none-manylinux_2_27_aarch64.whl"
-uv pip install --python "$PYBIN" --no-deps --reinstall /tmp/pjrt-selfbuilt.whl
+uv pip install --python "$PYBIN" --no-deps --reinstall /tmp/pjrt-wheel/*.whl
 
 PROBE="$(dirname "${BASH_SOURCE[0]}")/probe_recompute.py"
 declare -A CONFIGS=(
