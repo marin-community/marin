@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import atexit
 import logging
 import pathlib
 import threading
@@ -53,7 +52,12 @@ def fetch_file_set(root: str, local: str) -> set[str]:
 
 
 class FineStoreDirectory:
-    """Mirror new files from a local directory as atomic FineStore file-set commits."""
+    """Mirror new files from a local directory as atomic FineStore file-set commits.
+
+    Periodic synchronization is best-effort. Call :meth:`close` when the final
+    files must be published; interpreter shutdown cannot safely start remote
+    filesystem work after Python has shut down its executors.
+    """
 
     def __init__(
         self,
@@ -77,7 +81,6 @@ class FineStoreDirectory:
         self._closed = False
         self._thread = threading.Thread(target=self._run, name="finestore-directory-sync", daemon=True)
         self._thread.start()
-        atexit.register(self.close)
 
     def flush(self) -> None:
         """Publish files added since the last sync in target-bounded multi-file transactions."""

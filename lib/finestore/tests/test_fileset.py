@@ -1,11 +1,43 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import subprocess
+import sys
+import textwrap
+
 import pytest
 from finestore.fileset import FineStoreDirectory, fetch_file_set
 from finestore.layout import BlobColumns, BlobTables
 from finestore.reader import BlobCorruptionError, ReadView
 from finestore.store import OBJECT_PART_BYTES, DataStore
+
+_FILE_SET_EXIT_PROCESS = textwrap.dedent(
+    """
+    import pathlib
+    import sys
+    import threading
+
+    from finestore.fileset import FineStoreDirectory
+    from finestore.store import DataStore
+
+    root, local = sys.argv[1:]
+    writer = FineStoreDirectory(root, local, flush_interval=3600)
+    pathlib.Path(local, "new-cache-entry").write_bytes(b"value")
+
+    def commit(store, rows):
+        threading.Event().wait()
+
+    DataStore._commit_transaction = commit
+    """
+)
+
+
+def test_file_set_process_exit_does_not_wait_for_final_remote_commit(tmp_path):
+    subprocess.run(
+        [sys.executable, "-c", _FILE_SET_EXIT_PROCESS, str(tmp_path / "remote"), str(tmp_path / "local")],
+        check=True,
+        timeout=5,
+    )
 
 
 def test_file_set_round_trips_nested_files_in_one_level_zero(tmp_path):
