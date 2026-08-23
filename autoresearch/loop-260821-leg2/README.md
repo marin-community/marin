@@ -96,3 +96,28 @@ or better throughput at the hero shape with <2% drops and no fidelity change -- 
 Same tooling as leg 1 (`arm.sh`, `watchdog.sh`, `score.py`), copied here so the leg keeps
 its own `arms.tsv` / `results.tsv`. Iteration 0 baseline = leg-1 splits-32 keep
 (`c3f71b2fc9` code state).
+
+## Leg 2b: device-kernel-on-main goal (2026-08-23)
+
+Goal set by user: bring the device-kernel path to parity with (or above) the one-shot on
+UNPATCHED XLA main, then verify at full hero shape restored from the hero step-6000 checkpoint.
+Motivation: drop the self-built wheel dependency; the dk path is the actively developed,
+NVIDIA-blessed transport.
+
+Trigger: source audit showed dk engagement has been gated on `use_symmetric_buffer` since
+PR #41903 at every vintage, so the "wheel dk 22.72 tie" (i06) never engaged the dk — it fell
+through to the one-shot. Genuine dk cells (always with the GLOBAL symbuf flag) are 19.2–19.4;
+the -3.5 is confounded between the dk itself and the flag's symk takeover of RS/AG.
+
+Planned sequence, one rack at a time:
+- i17 one-shot + global symbuf (wheel): prices the flag's side effects on the kept transport.
+- i18 dk + scoped `xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall` (wheel):
+  genuine dk without the symk takeover; TF_CPP_VMODULE=ragged_all_to_all_thunk=3 records
+  engagement (on the wheel a fall-through also trains, so the log is the only positive signal).
+- i19 dk + scoped registration on the clean-main self-built PJRT (e5d008bb03): the goal cell.
+  On clean main, surviving to step 1 itself proves engagement (fall-through faults on the
+  one-shot's kMaxPeers=32 before step 0).
+- Final: hero-shape A/B restore from step-6000 (mixture data) with the best dk config.
+
+kMaxPeers correction recorded: the RET_CHECK lives only in the one-shot's LaunchMultiGpuBarrier;
+the dk barriers device-side via NCCL LSA/GIN and never touches MultiGpuBarrierKernel.
