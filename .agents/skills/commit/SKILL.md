@@ -49,10 +49,7 @@ Never stage secrets or unrelated work.
 
 ## 5. Commit
 
-Use an imperative subject of at most 72 characters with an optional `[scope]`
-prefix. The optional body records behavior, reason, evidence, and caveats; it
-does not inventory files or tests. Do not use a conventional-commit prefix,
-emoji, attribution, provider name, or session trailer.
+Follow `writing-style/pull-requests.md` for the commit subject and body.
 
 Review the exact message before committing. After the commit, inspect it with
 `git show -s --format='%s%n%n%b' HEAD`; do not push if a tool added attribution,

@@ -1,6 +1,6 @@
 ---
 name: task-logbook
-description: Maintain an append-only task logbook only when explicitly requested for durable cross-session notes, reproducible experiments, or a coordinating issue.
+description: Maintain a task logbook only when explicitly requested for durable cross-session notes, reproducible experiments, or a coordinating issue; entries are append-only while summary indices may change.
 ---
 
 # Task logbook
