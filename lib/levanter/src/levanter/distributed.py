@@ -15,6 +15,7 @@ from jax._src import clusters
 from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
+from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_COUNT_ENV
 from iris.runtime.jax_init import initialize_jax as initialize_iris_jax
 
 from levanter.megascale import configure_megascale_from_iris
@@ -37,6 +38,13 @@ def _complete_iris_job_after_clean_exit(client: IrisClient, job_id: JobName) -> 
     if getattr(sys, "last_exc", None) is not None:
         return
     client.complete_job(job_id)
+
+
+def _shutdown_supervised_jax_after_clean_exit() -> None:
+    """Wait for every supervised rank to leave JAX before this child exits."""
+    if getattr(sys, "last_exc", None) is not None:
+        return
+    jax.distributed.shutdown()
 
 
 def _unregister_iris_job_completion() -> None:
@@ -241,7 +249,11 @@ class DistributedConfig:
             logger.info("Detected Iris job context; initializing jax.distributed via iris.runtime.jax_init.")
             configure_megascale_from_iris()
             initialize_iris_jax()
-            if jax.process_index() == 0:
+            if IRIS_MULTIGPU_PROCESS_COUNT_ENV in os.environ:
+                # The task supervisor owns the aggregate status. Let every child
+                # finish JAX teardown so it can observe each process exit code.
+                atexit.register(_shutdown_supervised_jax_after_clean_exit)
+            elif jax.process_index() == 0:
                 ctx = iris_ctx()
                 if ctx.client is None:
                     raise RuntimeError("Iris context has no client for completing the current job")
