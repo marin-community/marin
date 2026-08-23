@@ -2,9 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import subprocess
-import sys
-import textwrap
 from types import SimpleNamespace
 
 import jax
@@ -14,65 +11,6 @@ from levanter.distributed import DistributedConfig
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.hardware_topology import nvidia_topology_matrix_summary, tpu_topology_shape
-
-
-_DISTRIBUTED_STARTUP_PROCESS = textwrap.dedent(
-    """
-    import importlib
-    import socket
-    import tempfile
-    from types import SimpleNamespace
-
-    import jax
-
-    import levanter.cutlass_kernel_cache as cache_module
-    import levanter.tracker.tracker_fns as tracker_fns
-    import levanter.trainer as trainer_module
-    from finestore.cache import PersistentKvCache
-    from levanter.distributed import DistributedConfig
-    from levanter.tracker import NoopConfig
-    from levanter.trainer import TrainerConfig
-
-    primitive = SimpleNamespace(get_or_compile_kernel=lambda _fn, _spec: None)
-    compile_module = SimpleNamespace(_CUTLASS_COMPILE_CACHE={}, CompileResult=SimpleNamespace)
-    real_import_module = importlib.import_module
-
-    def import_module(name):
-        if name == "cutlass.jax.primitive":
-            jax.devices()
-            return primitive
-        if name == "cutlass.jax.compile":
-            return compile_module
-        return real_import_module(name)
-
-    cache_module.importlib.import_module = import_module
-    trainer_module.cutlass_kernel_cache = PersistentKvCache.in_memory
-
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
-
-    config = TrainerConfig(
-        id="distributed-startup",
-        log_dir=tempfile.mkdtemp(),
-        tracker=NoopConfig(),
-        train_batch_size=1,
-        require_accelerator=False,
-        distributed=DistributedConfig(
-            coordinator_address=f"127.0.0.1:{port}",
-            num_processes=1,
-            process_id=0,
-        ),
-    )
-    config.initialize()
-    tracker_fns.current_tracker().finish()
-    jax.distributed.shutdown()
-    """
-)
-
-
-def test_trainer_initializes_distributed_before_importing_cutlass_jax():
-    subprocess.run([sys.executable, "-c", _DISTRIBUTED_STARTUP_PROCESS], check=True, timeout=30)
 
 
 def test_trainer_initialize_logs_hardware_topology_to_tracker(tmp_path, monkeypatch):

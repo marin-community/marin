@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import atexit
 import logging
 import pathlib
 import threading
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_SYNC_INTERVAL = 120.0
 DEFAULT_BATCH_DATA_BYTES = 100 * 1024 * 1024
 DEFAULT_BATCH_FILES = 65_536
+_EXIT_FLUSH_TIMEOUT = 10.0
 
 
 def _safe_relative(name: str) -> pathlib.PurePosixPath:
@@ -55,8 +57,8 @@ class FineStoreDirectory:
     """Mirror new files from a local directory as atomic FineStore file-set commits.
 
     Periodic synchronization is best-effort. Call :meth:`close` when the final
-    files must be published; interpreter shutdown cannot safely start remote
-    filesystem work after Python has shut down its executors.
+    files must be published; interpreter shutdown gives the final sync a bounded
+    drain window.
     """
 
     def __init__(
@@ -78,9 +80,11 @@ class FineStoreDirectory:
         self._max_batch_files = max_batch_files
         self._flush_lock = threading.Lock()
         self._stop = threading.Event()
+        self._flush_at_stop = threading.Event()
         self._closed = False
         self._thread = threading.Thread(target=self._run, name="finestore-directory-sync", daemon=True)
         self._thread.start()
+        atexit.register(self._close_at_exit)
 
     def flush(self) -> None:
         """Publish files added since the last sync in target-bounded multi-file transactions."""
@@ -116,6 +120,21 @@ class FineStoreDirectory:
             self._thread.join()
         self.flush()
         self._store.close()
+        atexit.unregister(self._close_at_exit)
+
+    def _close_at_exit(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._flush_at_stop.set()
+        self._stop.set()
+        self._thread.join(timeout=_EXIT_FLUSH_TIMEOUT)
+        if self._thread.is_alive():
+            logger.warning(
+                "FineStore directory synchronization did not finish within %.1f seconds; "
+                "abandoning it at process exit",
+                _EXIT_FLUSH_TIMEOUT,
+            )
 
     def _run(self) -> None:
         while not self._stop.wait(self._flush_interval):
@@ -123,6 +142,11 @@ class FineStoreDirectory:
                 self.flush()
             except OSError as exc:
                 logger.warning("FineStore directory synchronization failed: %s", exc)
+        if self._flush_at_stop.is_set():
+            try:
+                self.flush()
+            except Exception as exc:
+                logger.warning("FineStore directory final synchronization failed: %s", exc)
 
     def _commit(self, files: list[tuple[str, bytes]]) -> None:
         with self._store.unbounded_transaction() as transaction:
