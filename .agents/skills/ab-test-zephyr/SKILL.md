@@ -1,18 +1,9 @@
 ---
 name: ab-test-zephyr
-description: Run a Zephyr control and treatment on pre-normalized data and compare per-stage Finelog CPU, elapsed-time, and memory stats. Use for ad hoc comparisons and PR performance gates; add named treatments only when requested.
+description: Run an explicitly requested Zephyr control/treatment benchmark on the same pre-normalized sample and compare Finelog stage metrics.
 ---
 
-# A/B Test Zephyr Changes
-
-Use one workflow for ad hoc comparisons and PR performance gates:
-
-1. Run one control and one treatment with
-   `experiments.datakit.zephyr_benchmark` on the same pre-normalized sample.
-2. Collect every execution's `zephyr.stage` rows from Finelog.
-3. Compare CPU, elapsed time, and memory per stage.
-4. Publish the workload fingerprint, data-equivalence checks, infrastructure
-   noise, and result in one report.
+# A/B test Zephyr changes
 
 ## Signals
 
@@ -30,16 +21,10 @@ The coordinator writes one `zephyr.stage` row per completed stage and
 | `cpu_pct_avg` | weighted interpretation only | CPU saturation context |
 | `item_rate`, `byte_rate` | do not aggregate | Derived from noisy elapsed time |
 
-`cpu_time_total` is the sum of process user and system CPU-seconds across
-completed shards. It is the default signal for code efficiency because worker
-count and queue delay do not directly change it. Normalize it as CPU-seconds
-per item or byte when a control and treatment processed slightly different
-amounts of data.
-
-`elapsed` measures a stage barrier. It captures startup, I/O, concurrency, and
-straggler behavior that CPU time misses. It also moves with worker availability,
-preemption, retries, autoscaling, and data skew. Report it, but repeat a result
-when elapsed time is the only signal that changed.
+Use `cpu_time_total` as the primary efficiency signal and normalize per item or
+byte when accepted workload sizes differ. `elapsed` includes startup, I/O,
+concurrency, queueing, and stragglers; repeat an elapsed-only result under
+comparable scheduling conditions.
 
 Keep CPU and elapsed time as separate outcomes:
 
@@ -47,15 +32,13 @@ Keep CPU and elapsed time as separate outcomes:
   compute cost.
 - CPU higher and elapsed lower: faster and more expensive.
 - CPU lower and elapsed higher: cheaper and slower.
-- Wall-only change from one control/treatment comparison: inconclusive until
-  repeated under comparable scheduling conditions.
+- Wall-only change from one comparison: inconclusive until repeated.
 - Topology or batching change: report the latency/compute tradeoff; do not
   describe wall-time gains as equivalent per-core efficiency gains.
 
-Do not apply fixed wall-time thresholds to every benchmark. Calibrate CPU/item
-and elapsed thresholds from same-code repeats for the selected sample and pool
+Calibrate thresholds from same-code repeats for the selected sample and pool
 shape. A new OOM, application failure, or memory peak above the worker limit is
-a regression regardless of CPU time.
+a regression regardless of CPU.
 
 ## Choose the comparison
 
@@ -112,10 +95,8 @@ git worktree add --detach "$WORKTREE_ROOT/control" "$BASELINE_SHA"
 git worktree add --detach "$WORKTREE_ROOT/treatment" "$TREATMENT_SHA"
 ```
 
-Record both SHAs. If the experiment changes configuration without changing
-code, use two worktrees or commits that preserve the exact control and
-treatment configurations. Add one detached worktree per additional treatment
-SHA or configuration explicitly requested.
+Record both SHAs. Preserve configuration-only arms in separate worktrees or
+commits. Add arms only when explicitly requested.
 
 ## Launch the download-free benchmark
 
@@ -182,9 +163,9 @@ explicitly requested treatments launched in the same scheduling window. If the
 decision depends on elapsed time, interleave additional control trials among
 the treatments to measure scheduling noise.
 
-Delegate monitoring to `babysit-zephyr`. A failed or preempted arm is evidence
-about infrastructure reliability, not a performance verdict. Diagnose repeated
-failures with `debug`.
+If the request includes continuous monitoring, use `babysit-zephyr`. A failed
+or preempted arm measures infrastructure reliability and carries no performance
+result. Use `debug` only for a stated repeated fault.
 
 ## Collect execution IDs
 
@@ -308,11 +289,9 @@ Infrastructure: <preemptions, retries, failures, stragglers, or none>
 Interpretation: <efficiency result, latency result, and any tradeoff>
 ```
 
-Lead with CPU change, then elapsed time and memory. State whether elapsed time
-came from one control/treatment comparison or repeated interleaved trials.
-Label summed stage elapsed as such. Iris launcher duration and summed task wall
-time may help diagnose queueing or topology, but they do not replace the
-Finelog stage metrics.
+Lead with CPU change, then elapsed time and memory. State whether elapsed came
+from one comparison or repeated interleaved trials and label summed stage
+elapsed. Launcher duration and task wall time do not replace stage metrics.
 
 ## Clean up
 

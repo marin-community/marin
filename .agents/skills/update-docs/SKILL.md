@@ -1,6 +1,6 @@
 ---
 name: update-docs
-description: "Update documentation, runbooks, and reusable task guidance when implementation work or experiments change behavior or operational practice."
+description: Update durable docs when explicitly requested or when completed implementation changes make an authoritative procedure stale.
 ---
 
 # Skill: Update Docs

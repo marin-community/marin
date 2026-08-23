@@ -1,12 +1,9 @@
 ---
 name: reserve-gpu
-description: Reserve Iris-backed CoreWeave H100 or GB200 nodes with dev_gpu.py. Use for interactive GPU debugging, multi-node tests, or reconnecting to a dev GPU session.
+description: Reserve an Iris-backed GPU with scripts/iris/dev_gpu.py only when explicitly requested for an interactive dev GPU session.
 ---
 
 # Dev GPU
-
-Use a dev GPU for short interactive tests. Move to a full Iris job after the
-code works on the reserved node.
 
 `scripts/iris/dev_gpu.py` submits a holder job through Iris and uses
 `kubectl exec` internally to open a shell. It does not sync files or provide
@@ -46,9 +43,6 @@ background must call `release` from another shell. Session state is stored under
 The default is one whole H100 node. Pass `--gpu-variant GB200` for one GB200
 tray. Use `--nodes N` only when the test needs distributed topology; connect to
 each pod with `connect --node N`. Multi-node sessions require whole nodes.
-
-Run `uv run scripts/iris/dev_gpu.py <subcommand> --help` for current options
-and defaults.
 
 ## Sharp edges
 

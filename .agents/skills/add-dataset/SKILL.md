@@ -1,111 +1,38 @@
 ---
 name: add-dataset
-description: Register or inspect a Hugging Face dataset for Marin pipelines.
+description: Register a named Hugging Face dataset for Marin by inspecting its schema and adding the appropriate experiments/datasets module.
 ---
 
-# Skill: Dataset Schema Inspection and Registration
+# Register a Hugging Face dataset
 
-## Overview
-Inspect a Hugging Face dataset schema with Marin's schema inspection tool, then
-add a dataset module under
-[`experiments/datasets/`](https://github.com/marin-community/marin/blob/main/experiments/datasets/__init__.py)
-so the dataset can be tokenized and consumed in Marin pipelines. Each leaf module
-exposes `<name>_dataset()` (one corpus) or `<name>_datasets() -> dict[str, ...]`
-(a keyed family) built with the lazy data builders in `marin.experiment.data`.
-- Single-corpus datasets: add a small leaf module (e.g.
-  [`experiments/datasets/svg.py`](https://github.com/marin-community/marin/blob/main/experiments/datasets/svg.py))
-  exposing a `<name>_dataset()`.
-- Multipart/complex datasets: create a dedicated file (e.g.
-  [`experiments/datasets/nemotron.py`](https://github.com/marin-community/marin/blob/main/experiments/datasets/nemotron.py))
-  exposing `<name>_datasets()`.
-- Datasets with HF-exposed subsets/splits: pattern-match on `nemotron.py`,
-  keying one handle per subset in the returned dict.
+Inspect the schema without downloading the full dataset:
 
-## Prerequisites
-- Prefer repo-managed dependencies over ad hoc `pip install`.
-- For repeated work in a checked-out Marin repo, install the synced environment
-  with `uv sync --all-packages`, then run
-  `uv run lib/marin/tools/get_hf_dataset_schema.py`.
-- For one-off schema inspection without a provisioned environment, use
-  ephemeral deps:
-  `uv run --with datasets --with pyyaml lib/marin/tools/get_hf_dataset_schema.py ...`
-- Ensure access to the dataset (Hugging Face Hub ID, local path, or other
-  supported format).
-
-## Usage
-
-Command line:
 ```sh
 uv run lib/marin/tools/get_hf_dataset_schema.py <dataset_name> [options]
 ```
 
-Python import:
-```python
-from marin.tools.get_hf_dataset_schema import get_schema
-schema = get_schema(dataset_name="wikitext", config_name="wikitext-103-v1")
-```
+Use repo-managed dependencies. For a one-off inspection without a provisioned
+environment, add `--with datasets --with pyyaml` to `uv run`.
 
-## Rules
-1. **Config handling**: always check whether a dataset requires a config first.
-   If required, the tool returns
-   `{"error": "Config name is required.", "available_configs": [...]}` — select
-   an appropriate config from the list and retry with `--config_name`.
-2. **Text field selection**: prioritize a field named exactly `text`; fall back
-   to fields containing `text`; consider string-type fields if no obvious text
-   field exists. Examine `sample_row` to verify field contents.
-3. **Error handling**: handle missing config, dataset not found, and remote
-   code execution required. Retry with appropriate parameters (e.g.
-   `--trust_remote_code`).
-4. **Performance**: the tool streams to avoid full downloads; expect quick
-   responses. `sample_row` may be empty for some datasets.
+If the result says a config is required, select one of `available_configs` and
+retry with `--config_name`. Add `--trust_remote_code` only after inspecting the
+dataset repository and accepting its code-execution boundary. The tool streams;
+do not replace it with a full dataset download.
 
-## Output Format
-The tool returns a JSON object:
-```json
-{
-  "splits": ["train", "validation", ...],
-  "text_field_candidates": ["text", "content", ...],
-  "features": {
-    "text": "string",
-    "label": "int64",
-    ...
-  },
-  "sample_row": {
-    "text": "Example content...",
-    ...
-  }
-}
-```
+If the dataset cannot be found, stop and report the identifier, path, or access
+failure instead of guessing a replacement.
 
-## Example: dataset requiring a config
-```sh
-$ uv run lib/marin/tools/get_hf_dataset_schema.py wikitext
-{
-  "error": "Config name is required.",
-  "available_configs": ["wikitext-103-raw-v1", "wikitext-103-v1", ...]
-}
+Choose the text field from the reported schema. Prefer an exact `text` field,
+then a field containing `text`, then another string field. Inspect `sample_row`
+to verify the content; it may be empty for some datasets.
 
-$ uv run lib/marin/tools/get_hf_dataset_schema.py wikitext --config_name wikitext-103-v1
-{
-  "splits": ["train", "validation", "test"],
-  "text_field_candidates": ["text"],
-  "features": {"text": "string"},
-  "sample_row": {"text": "Article content..."}
-}
-```
+Add a leaf module under `experiments/datasets/` using the lazy builders in
+`marin.experiment.data`:
 
-For datasets needing remote code, add `--trust_remote_code`.
+- expose `<name>_dataset()` for one corpus;
+- expose `<name>_datasets() -> dict[str, ...]` for a keyed family;
+- for Hugging Face subsets, follow `experiments/datasets/nemotron.py` and return
+  one keyed handle per subset.
 
-## Next Steps
-Once the schema is inspected and the dataset is registered, cargo-cult existing
-dataset configs for tokenization:
-- Apply transformations (e.g. field mapping).
-- Estimate token counts and file sizes.
-- Find similar dataset configurations in Marin's existing experiments.
-- Copy and adapt tokenization configs from similar datasets.
-- Run ablations or trials.
-
-## See Also
-- `lib/marin/tools/get_hf_dataset_schema.py`
-- [Hugging Face datasets documentation](https://huggingface.co/docs/datasets/)
-</content>
+Validate the selected config, splits, text mapping, and one sample before adding
+tokenization or downstream experiment configuration.

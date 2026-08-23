@@ -1,45 +1,33 @@
 ---
 name: babysit-zephyr
-description: Launch and babysit Zephyr pipeline jobs on Iris.
+description: Launch or continuously monitor a specified Zephyr pipeline job on Iris, and restart it only after explicit approval.
 ---
 
-# Skill: Babysit Zephyr Job
-
-Start, monitor, and keep Zephyr pipeline jobs running on Iris. Escalate deeper investigations to **debug**.
+# Babysit a Zephyr job
 
 ## Zephyr Job Structure
 
-A zephyr pipeline job spawns child Iris jobs:
-- **`*-coord`** — coordinator (1 task). Orchestrates pipeline stages, queues tasks, tracks progress.
-- **`*-workers`** — worker pool (many tasks). Workers poll the coordinator for shards.
-
-A single job may execute **multiple pipelines sequentially** (e.g. fuzzy dedup runs connected components iteratively, each iteration a separate pipeline). These show as different `p<N>` values in child job names — normal, not failed retries.
-
-Failed retries show as different **hashes** with the same `p0`. Stale coordinators from previous attempts may linger (#3705).
-
-Child job naming: `<hash>-p<pipeline>-a<attempt>-{coord,workers}`.
+A job has a one-task `*-coord` coordinator and a `*-workers` pool. Sequential
+pipelines produce different `p<N>` child names; retries produce different hashes
+with the same `p0`. Child names follow
+`<hash>-p<pipeline>-a<attempt>-{coord,workers}`. Old coordinators may linger.
 
 ## Iris Config
 
-All Iris commands below use `--config <CONFIG>`. Resolve the cluster name the user gives to the matching file under `lib/iris/config/` (see **babysit-job** for the full mapping). Examples use `marin.yaml` — substitute the actual config (e.g., `marin-dev.yaml`) as needed.
-
-## Dashboard
-
-```bash
-# Connect to the Iris dashboard (establishes SSH tunnel, prints URL with port)
-uv run iris --config lib/iris/config/marin.yaml cluster dashboard
-```
+Resolve the requested cluster to its file under `lib/iris/config/`; substitute
+that file for `<CONFIG>` below. See `lib/zephyr/OPS.md` for the dashboard and
+coordinator query reference.
 
 ## Starting a Job
 
-Get the run command from the user. Typical pattern:
+Get the run command from the user:
 ```bash
-uv run iris --config lib/iris/config/marin.yaml job run --region <REGION> --no-wait -- python <SCRIPT>
+uv run iris --config <CONFIG> job run --region <REGION> --no-wait -- python <SCRIPT>
 ```
 
 The entrypoint container defaults to 1GB memory. For long-running pipelines that accumulate state (GCS clients, logging), increase with `--memory`:
 ```bash
-uv run iris --config lib/iris/config/marin.yaml job run --region <REGION> --memory 5GB --no-wait -- python <SCRIPT>
+uv run iris --config <CONFIG> job run --region <REGION> --memory 5GB --no-wait -- python <SCRIPT>
 ```
 
 The command prints a job ID on success. Note it for monitoring.
@@ -48,7 +36,7 @@ The command prints a job ID on success. Note it for monitoring.
 
 Always ask the user before stopping. Stopping kills all child jobs (coordinators, workers).
 ```bash
-uv run iris --config lib/iris/config/marin.yaml job cancel <JOB_ID>
+uv run iris --config <CONFIG> job cancel <JOB_ID>
 ```
 
 ## Monitoring
@@ -58,7 +46,7 @@ uv run iris --config lib/iris/config/marin.yaml job cancel <JOB_ID>
 Check child job states via the Iris CLI (returns per-task state and resourceUsage):
 ```bash
 # diskMb is updated every ~60s. On K8s it is always 0 (workdir lives inside the pod).
-uv run iris --config lib/iris/config/marin.yaml rpc controller list-tasks --job-id <JOB_ID>
+uv run iris --config <CONFIG> rpc controller list-tasks --job-id <JOB_ID>
 ```
 
 A healthy zephyr job has:
@@ -67,31 +55,20 @@ A healthy zephyr job has:
 
 ### Stage Progress
 
-The coordinator logs a progress line every 5s:
-```
-[stage0-Map → Scatter] 347/1964 complete, 1617 in-flight, 0 queued, 1828/1891 workers alive, 63 dead
-```
-
-Fetch via the Iris CLI:
+The coordinator logs stage, completed, in-flight, queued, and worker counts:
 ```bash
-uv run iris --config lib/iris/config/marin.yaml rpc controller get-task-logs \
+uv run iris --config <CONFIG> rpc controller get-task-logs \
   --id <COORD_JOB_ID> --max-total-lines 5000 --attempt-id -1 --tail
 ```
 
-**Caveat**: With large worker pools, `pull_task` operations flood the log buffer (#3707). Filter when parsing:
-```python
-for entry in task_logs:
-    msg = entry.get('data', '')
-    if 'pull_task' in msg or 'Started operation' in msg or 'report_result' in msg or 'registered' in msg or 'tasks completed' in msg:
-        continue
-    print(msg)
-```
+Large pools can flood the log with `pull_task`, `Started operation`,
+`report_result`, `registered`, and `tasks completed`; filter those entries.
 
 ### Coordinator Thread Dump
 
 When logs are flooded, a thread dump tells you if the coordinator is alive and working:
 ```bash
-uv run iris --config lib/iris/config/marin.yaml rpc controller profile-task \
+uv run iris --config <CONFIG> rpc controller profile-task \
   --json '{"target":"<COORD_JOB_ID>/0","durationSeconds":1,"profileType":{"threads":{}}}'
 ```
 

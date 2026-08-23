@@ -1,6 +1,6 @@
 ---
 name: manage-hero-run
-description: Launch, monitor, hand off, resume, rollback, or babysit expensive Marin production. Typically >=1e22 model flops.
+description: Launch, resume, monitor, hand off, or seal an explicitly requested production-critical Marin run, normally at least 1e22 FLOPs.
 ---
 
 # Manage Hero Run

@@ -1,6 +1,6 @@
 ---
 name: organize-experiments
-description: Curate the experiment report index at docs/reports/index.md.
+description: Curate docs/reports/index.md only when explicitly requested after experiment reports have been harvested.
 ---
 
 # Skill: Organize Experiment Reports
