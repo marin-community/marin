@@ -155,6 +155,11 @@ def _apply_hero_ep_runtime_defaults(
         overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
+        # Confound isolation, cell (one-shot, symbuf): every genuine device-kernel measurement
+        # carried both the dk flag and global symmetric-buffer registration, so the -3.5 could be
+        # either. This arm keeps the one-shot transport and adds only the registration, pricing
+        # the flag's side effects (symk takeover of RS/AG) separately from the device kernel.
+        "--xla_gpu_experimental_enable_nccl_symmetric_buffers=true",
         f"{XLA_LATENCY_HIDING_FLAG}={'false' if ragged else 'true'}",
         XLA_MEMORY_LIMIT_SLOP_FLAG,
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
