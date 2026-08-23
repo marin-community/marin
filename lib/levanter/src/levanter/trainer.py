@@ -986,6 +986,9 @@ class TrainerConfig:
         # Can't do full logging setup until we've initialized jax b/c we use jax for rank id
         pylogging.basicConfig(level=pylogging.WARNING)
         self.distributed.initialize()
+        # Importing cutlass.jax may initialize the XLA backend, so install its
+        # cache only after jax.distributed.initialize().
+        install_cutlass_kernel_cache(cutlass_kernel_cache())
         self._validate_and_set_defaults()
 
         id = self._maybe_set_id()
@@ -1082,10 +1085,6 @@ class TrainerConfig:
 
         if self.jax_compilation_cache_dir is not None:
             jax.config.update("jax_compilation_cache_dir", self.jax_compilation_cache_dir)
-
-        # Route CuTeDSL kernel compiles through the standard persistent cache; a
-        # no-op when cutlass.jax will not import (a CPU task on the GPU image).
-        install_cutlass_kernel_cache(cutlass_kernel_cache())
 
     def _maybe_set_id(self):
         # always do this so we don't get weird hangs if the id isn't set right
