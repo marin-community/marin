@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: read
+  issues: write    # claude triage files issues
+  id-token: write  # claude-code-action OIDC
 
 jobs:
   datakit-nemotron-ferry:
@@ -152,6 +154,31 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+      - name: Claude triage
+        id: claude_triage
+        if: (failure() || cancelled()) && github.event_name == 'schedule'
+        uses: ./.github/actions/claude-triage
+        timeout-minutes: 30
+        with:
+          oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          lane: datakit-nemotron
+          job-id: ${{ steps.submit.outputs.job_id }}
+          run-id: ${{ env.SMOKE_RUN_ID }}
+          iris-config: ${{ env.IRIS_CONFIG }}
+          wandb-entity: ${{ env.WANDB_ENTITY }}
+          wandb-project: ${{ env.WANDB_PROJECT }}
+          wandb-api-key: ${{ secrets.WANDB_API_KEY }}
+          gha-run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Upload Slack message
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: slack-message
+          path: slack_message.md
+          retention-days: 1
+          if-no-files-found: ignore
+
   # Separate job so Slack always fires, even if the main job is force-killed
   # after its grace window. See the datakit-smoke workflow for rationale.
   notify-slack:
@@ -166,4 +193,3 @@ jobs:
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":red_circle: *Datakit Nemotron Ferry failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          message-artifact: ''

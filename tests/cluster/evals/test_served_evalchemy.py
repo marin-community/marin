@@ -9,8 +9,7 @@ Qwen3-0.6B with marin-serve (vLLM on a TPU slice), the evalchemy child evaluates
 down. It exercises the same shared-inference entrypoint the composable ``eval_step`` runs through.
 
 It drives live Iris TPU jobs, so it is marked ``cluster`` and deselected by default (see
-``pyproject.toml`` addopts); the ``marin-cluster-smoke`` workflow runs it. Run it on demand once you
-have cluster credentials and HF_TOKEN set:
+``pyproject.toml`` addopts). Run it directly once you have cluster credentials and HF_TOKEN set:
 
     uv run pytest tests/cluster/evals/test_served_evalchemy.py \
       -m cluster -o addopts= --import-mode=importlib --timeout=0 -vv -s
