@@ -303,12 +303,14 @@ def test_sync_pod_not_found_marks_worker_failed(provider, k8s):
 def test_sync_unknown_pod_phase_waits_then_marks_worker_failed(provider, k8s, phase):
     task_id = JobName.from_wire("/job/unknown-phase")
     pod_name = _pod_name(task_id, 0)
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=0)
+    entry = RunningTaskEntry(task_id=task_id, attempt_id=0, state=job_pb2.TASK_STATE_RUNNING)
     populate_pod(k8s, pod_name, phase)
     batch = make_batch(running_tasks=[entry])
 
     for _ in range(_POD_UNRESOLVED_GRACE_CYCLES - 1):
-        assert provider.sync(batch) == []
+        result = provider.sync(batch)
+        assert result[0].new_state == job_pb2.TASK_STATE_RUNNING
+        assert result[0].pod_name == pod_name
 
     result = provider.sync(batch)
     assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
@@ -319,36 +321,48 @@ def test_sync_unknown_pod_phase_waits_then_marks_worker_failed(provider, k8s, ph
 def test_sync_unknown_pod_phase_grace_resets_after_known_phase(provider, k8s):
     task_id = JobName.from_wire("/job/unknown-phase-reset")
     pod_name = _pod_name(task_id, 0)
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=0)
+    entry = RunningTaskEntry(task_id=task_id, attempt_id=0, state=job_pb2.TASK_STATE_ASSIGNED)
     populate_pod(k8s, pod_name, "Unknown")
     batch = make_batch(running_tasks=[entry])
 
     for _ in range(_POD_UNRESOLVED_GRACE_CYCLES - 1):
-        assert provider.sync(batch) == []
+        assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_ASSIGNED
 
     k8s.transition_pod(pod_name, "Running")
     assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_RUNNING
 
+    entry = RunningTaskEntry(task_id=task_id, attempt_id=0, state=job_pb2.TASK_STATE_RUNNING)
+    batch = make_batch(running_tasks=[entry])
     k8s.transition_pod(pod_name, "Unknown")
     for _ in range(_POD_UNRESOLVED_GRACE_CYCLES - 1):
-        assert provider.sync(batch) == []
+        assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_RUNNING
 
     assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
 
 
 def test_sync_unknown_pod_phase_grace_is_scoped_to_attempt_incarnation(provider, k8s):
     task_id = JobName.from_wire("/job/unknown-phase-incarnation")
-    old_entry = RunningTaskEntry(task_id=task_id, attempt_id=0, attempt_uid="aaaabbbbccccdddd")
+    old_entry = RunningTaskEntry(
+        task_id=task_id,
+        attempt_id=0,
+        attempt_uid="aaaabbbbccccdddd",
+        state=job_pb2.TASK_STATE_ASSIGNED,
+    )
     populate_pod(k8s, _pod_name(task_id, 0, old_entry.attempt_uid), "Unknown")
 
     for _ in range(_POD_UNRESOLVED_GRACE_CYCLES - 1):
-        assert provider.sync(make_batch(running_tasks=[old_entry])) == []
+        assert provider.sync(make_batch(running_tasks=[old_entry]))[0].new_state == job_pb2.TASK_STATE_ASSIGNED
 
-    new_entry = RunningTaskEntry(task_id=task_id, attempt_id=0, attempt_uid="1111222233334444")
+    new_entry = RunningTaskEntry(
+        task_id=task_id,
+        attempt_id=0,
+        attempt_uid="1111222233334444",
+        state=job_pb2.TASK_STATE_ASSIGNED,
+    )
     populate_pod(k8s, _pod_name(task_id, 0, new_entry.attempt_uid), "Unknown")
     batch = make_batch(running_tasks=[new_entry])
     for _ in range(_POD_UNRESOLVED_GRACE_CYCLES - 1):
-        assert provider.sync(batch) == []
+        assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_ASSIGNED
 
     assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
 
@@ -503,10 +517,10 @@ def test_sync_vanished_pod_reports_the_kueue_eviction_that_deleted_it(provider, 
 def test_sync_unknown_pod_phase_preserves_eviction_reason(provider, k8s):
     task_id = JobName.from_wire("/gang/unknown-evicted/0")
     pod_name = _pod_name(task_id, 0)
-    batch = make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=0)])
+    batch = make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=0, state=job_pb2.TASK_STATE_RUNNING)])
 
     _populate_evicted_pod(k8s, pod_name, phase="Unknown")
-    assert provider.sync(batch) == []
+    assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_RUNNING
     k8s.delete(K8sResource.PODS, pod_name)
 
     assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_RUNNING

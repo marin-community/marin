@@ -1158,7 +1158,6 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
 
     # _poll_pods holds unresolved phases through their grace period, so only a
     # definitive Failed phase can reach the failure classifier.
-    assert phase == "Failed", f"unresolved pod phase {phase!r} reached the failure classifier"
     exit_code = _extract_exit_code(pod)
     new_state = _pod_failure_state(pod)
     terminal_reason = _extract_terminal_reason(pod)
@@ -3029,15 +3028,18 @@ class K8sTaskProvider:
                 count = self._pod_unresolved_counts.get(entry, 0) + 1
                 self._pod_unresolved_counts[entry] = count
                 if count < _POD_UNRESOLVED_GRACE_CYCLES:
-                    if pod is None:
-                        updates.append(
-                            TaskUpdate(
-                                task_id=entry.task_id,
-                                attempt_id=entry.attempt_id,
-                                new_state=job_pb2.TASK_STATE_RUNNING,
-                                status_message="",
-                            )
+                    metadata = pod.get("metadata", {}) if pod is not None else {}
+                    updates.append(
+                        TaskUpdate(
+                            task_id=entry.task_id,
+                            attempt_id=entry.attempt_id,
+                            new_state=entry.state,
+                            status_message=_pod_status_message(pod, workload) if pod is not None else "",
+                            pod_name=metadata.get("name") or None,
+                            pod_uid=metadata.get("uid") or None,
+                            node_name=(pod.get("spec", {}).get("nodeName") or None) if pod is not None else None,
                         )
+                    )
                     continue
                 self._pod_unresolved_counts.pop(entry, None)
                 if pod is None:
