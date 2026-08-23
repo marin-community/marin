@@ -165,7 +165,7 @@ def _apply_hero_ep_runtime_defaults(
         # every collective's buffers and hands reduce-scatter/all-gather to NCCL's symmetric
         # kernels. The scoped list flag registers only the ragged all-to-all operands, so this
         # cell runs a genuinely-engaged device kernel without the symk takeover.
-        "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
+        "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=true",
         "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall",
         f"{XLA_LATENCY_HIDING_FLAG}={'false' if ragged else 'true'}",
         XLA_MEMORY_LIMIT_SLOP_FLAG,
