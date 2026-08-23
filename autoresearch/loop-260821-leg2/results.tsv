@@ -21,3 +21,5 @@ abl	2026-08-22T13:49Z	5c5388d6c2	-	-	pass	ragged loss 1.9757/bpb 0.9749/drops 0.
 13	2026-08-22T23:02Z	47850a5560	-	-	crash	-	crash	wheel+dk+symbuf: 3 attempts (S3 outage, unscheduled, silent task-61 death pre-step); deprioritized behind clean-main build
 14	2026-08-22T23:44Z	738535f5cc	19.1556	-	pass	drops=0.0	answer	clean-main selfbuilt PJRT + dk + symbuf: 19.16, matches nightly 19.40 not wheel 22.7; build config exonerated
 15	2026-08-23T00:03Z	cc0913f293	19.1857	-	pass	drops=0.0	answer	wheel+dk+symbuf: 19.19 == clean-main 19.16 == nightly 19.40; regression is the symbuf flag (~-3.5 on this graph), NOT main dk source; main dk requires symbuf to engage
+ab-r	2026-08-23T01:13Z	935ab4b770	22.4611	-	pass	drops=0.015%/0.032%,loss=1.4491@6013	answer	ragged restored from hero step-6000, mixture data (ra2a-l2-ab-ragged-6k-c)
+ab-p	2026-08-23T01:13Z	935ab4b770	22.5169	-	pass	drops=2.67%/2.84%,loss=1.4536@6013	answer	pooled control, identical restore (ra2a-l2-ab-pooled-6k): MFU tie, drops 175x higher

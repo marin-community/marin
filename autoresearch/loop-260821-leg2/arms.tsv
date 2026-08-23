@@ -22,3 +22,7 @@ ra2a-l2-i13b-wheel-dk-symbuf	4756eb7f41	2026.08.22.7	ragged_all_to_all	synthetic
 ra2a-l2-i13c-wheel-dk-symbuf	4756eb7f41	2026.08.22.8	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-l2-i14-cleanmain-dk	738535f5cc	2026.08.22.9	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-l2-i15-wheel-dk-symbuf	cc0913f293	2026.08.22.10	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
+ra2a-l2-ab-ragged-6k	5f68415d88	2026.08.22.11	ragged_all_to_all	mixture	disabled	4470000	2400	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-6000	none
+ra2a-l2-ab-ragged-6k-b	dfd4652236	2026.08.22.12	ragged_all_to_all	mixture	disabled	4470000	2400	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-6000	none
+ra2a-l2-ab-ragged-6k-c	935ab4b770	2026.08.22.13	ragged_all_to_all	mixture	disabled	4470000	2400	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-6000	none
+ra2a-l2-ab-pooled-6k	935ab4b770	2026.08.22.14	fixed_pooled_wave_all_to_all	mixture	disabled	4470000	2400	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-6000	none
