@@ -25,3 +25,5 @@ ab-r	2026-08-23T01:13Z	935ab4b770	22.4611	-	pass	drops=0.015%/0.032%,loss=1.4491
 ab-p	2026-08-23T01:13Z	935ab4b770	22.5169	-	pass	drops=2.67%/2.84%,loss=1.4536@6013	answer	pooled control, identical restore (ra2a-l2-ab-pooled-6k): MFU tie, drops 175x higher
 16	2026-08-23T04:44Z	3e53fc1b3c	-	-	crash	-	crash	NCCL_SYM_KERNEL=none: strict list parser rejects at comm init
 16b	2026-08-23T04:44Z	3e53fc1b3c	-	-	crash	-	crash	NCCL_SYM_KERNEL=AllReduce_AGxLL_R: deployed NCCL is force-or-die (int32 psum errors, no fallback); env-var symk escape dead on this vintage
+17	2026-08-23T16:20Z	b3cf55b7be	22.8377	-	pass	drops=0.0	answer	one-shot + GLOBAL symbuf: 22.84 == plain one-shot 22.78; symbuf side effects (symk RS/AG takeover) are FREE on this graph; the dk cells -3.5 is the dk path itself
+18	2026-08-23T16:40Z	7721852829	19.3703	-	pass	drops=0.0	answer	dk + SCOPED raggedalltoall registration: 19.37 == engaged-dk band (19.16-19.40); scope irrelevant, the dk path itself is the -3.4; VMODULE audit inert (env set after TF log init), classification by the i17 MFU discriminator
