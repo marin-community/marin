@@ -715,7 +715,6 @@ def _serialize_arrays(
     commit_futures: list[ts.Future] = []
 
     async def issue_write(num_bytes: int, stage, open_store, write_to_store):
-        """Stage one snapshot, then hand its store open and commit to the async manager."""
         await gate.acquire(num_bytes)
         try:
             data = await stage()

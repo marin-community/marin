@@ -40,6 +40,8 @@ from levanter.tensorstore_serialization import (
 from levanter.testing import eight_device_checkpoints
 from levanter.testing.eight_device_checkpoints import run_on_eight_devices
 
+_ASYNC_TEST_TIMEOUT = 5
+
 
 def test_build_kvstore_spec_normalizes_file_uri(tmp_path):
     spec = build_kvstore_spec(f"file://{tmp_path}/cache")
@@ -324,8 +326,6 @@ def test_serialization_returns_after_staging_before_tensorstore_open_completes(m
     source = jnp.arange(8, dtype=jnp.float32)
     open_promise, open_future = ts.Promise.new()
     commit_promise, commit_future = ts.Promise.new()
-    copy_promise, copy_future = ts.Promise.new()
-    copy_promise.set_result(None)
     writes = []
     write_started = threading.Event()
 
@@ -336,7 +336,7 @@ def test_serialization_returns_after_staging_before_tensorstore_open_completes(m
         def write(self, data, *, can_reference_source_data_indefinitely):
             writes.append(np.array(data, copy=True))
             write_started.set()
-            return SimpleNamespace(copy=copy_future, commit=commit_future)
+            return SimpleNamespace(commit=commit_future)
 
     monkeypatch.setattr(tensorstore_serialization.ts, "open", lambda *args, **kwargs: open_future)
 
@@ -355,12 +355,12 @@ def test_serialization_returns_after_staging_before_tensorstore_open_completes(m
     serializer = threading.Thread(target=serialize)
     serializer.start()
     try:
-        assert returned.wait(timeout=5), "serialization waited for TensorStore to open after staging"
+        assert returned.wait(timeout=_ASYNC_TEST_TIMEOUT), "serialization waited for TensorStore to open after staging"
     finally:
         open_promise.set_result(FakeStore())
-        assert write_started.wait(timeout=5)
+        assert write_started.wait(timeout=_ASYNC_TEST_TIMEOUT)
         commit_promise.set_result(None)
-        serializer.join(timeout=5)
+        serializer.join(timeout=_ASYNC_TEST_TIMEOUT)
         manager.wait_until_finished()
 
     assert not serializer.is_alive()
