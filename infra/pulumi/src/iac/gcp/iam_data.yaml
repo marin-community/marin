@@ -1334,6 +1334,9 @@ project_grants:
 - role: roles/servicenetworking.serviceAgent
   members:
   - serviceAccount:748532799086-compute@developer.gserviceaccount.com
+- role: roles/serviceusage.serviceUsageConsumer
+  members:
+  - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/serviceusage.serviceUsageAdmin
   members:
   - principal: human-037
