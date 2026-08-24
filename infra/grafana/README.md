@@ -602,23 +602,19 @@ and its image build come from the reusable `iac.gcp.cloud_run.CloudRunService` c
 and shares `infra/pulumi`'s state backend.
 
 ```bash
-uv sync --all-packages --extra deploy                     # once: iac + Pulumi providers on the venv (pulumi lives behind marin-iac[deploy])
-gcloud auth configure-docker us-central1-docker.pkg.dev   # once: let buildx push to Artifact Registry
+gcloud auth configure-docker us-central1-docker.pkg.dev  # once: let buildx push to Artifact Registry
+uv run --all-packages --extra deploy marin-deploy grafana rollout
+```
 
-cd infra/grafana
-# The grafana.oa.dev DNS record lives in the oa.dev Cloudflare zone; the provider
-# reads this token from the environment.
-export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
-  --secret=cloudflare-oa-dns-token --project=hai-gcp-models)"
-pulumi stack select marin-grafana
+The deploy command loads the Cloudflare provider token from Secret Manager and
+Pulumi previews the update before asking for confirmation.
 
-# Extra viewers beyond the shared Cloud Run IAP baseline — a bare email, a *@domain wildcard,
-# or a qualified IAM member. Editing this and re-running updates only the grant, never the
-# service.
-pulumi config set --path 'viewers[0]' you@example.com
+Extra viewers beyond the shared Cloud Run IAP baseline are durable stack config. A
+viewer may be a bare email, a `*@domain` wildcard, or a qualified IAM member. Change
+the config before deploying when a grant needs to be updated:
 
-pulumi preview                                            # plan; then, once it looks right:
-pulumi up
+```bash
+pulumi -C infra/grafana config set --stack marin-grafana --path 'viewers[0]' you@example.com
 ```
 
 Production reads the `grafana-alerts` URL and profile from the `marin-loom`
@@ -630,7 +626,7 @@ enable the integration and deploy Grafana again.
 The stack uses the shared `marin-iac-key` KMS secrets provider. The operator needs
 `roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key; no passphrase is used.
 
-`pulumi up` builds the Dockerfile with buildx, pushes it digest-pinned to Artifact
+The rollout builds the Dockerfile with buildx, pushes it digest-pinned to Artifact
 Registry, and rolls the service to that digest. `min` and `max` instances are both 1: one
 warm instance serves this internal dashboard, min 1 keeps alert evaluation warm and first
 paint off a cold start, and max 1 avoids duplicate alert notifications from parallel
@@ -644,7 +640,7 @@ under `/cloudsql`, and hands the socket directory to `entrypoint.sh` as
 settings reject the colons in a connection name). `GF_DATABASE_PASSWORD` comes from the
 `cloudsql-grafana-password` secret. Prerequisite: bring up the `marin-cloudsql` stack and
 create the `grafana` SQL user + its secret version (see `infra/cloudsql/README.md`) before
-`pulumi up` here, or Grafana fails to reach its database.
+the rollout, or Grafana fails to reach its database.
 
 IAP is the outer gate. Its `X-Goog-Authenticated-User-Email` header becomes a Grafana
 auth-proxy account. The container's nginx listener adds a fixed `Editor` role for those

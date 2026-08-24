@@ -23,10 +23,10 @@ export R2_KEY_SECRET=...
 docker login ghcr.io
 
 uv run finelog deploy sync-secret <cluster>
-uv run deploy finelog rollout <cluster>
+uv run marin-deploy finelog rollout <cluster>
 ```
 
-`deploy finelog rollout` captures the active Kubernetes Deployment revision before
+`marin-deploy finelog rollout` captures the active Kubernetes Deployment revision before
 running `pulumi up` for the matching stack. Pulumi builds
 `lib/finelog/deploy/Dockerfile`, pushes the configured image tag, rolls the
 Deployment to the returned digest, and verifies that the new server accepts
@@ -58,7 +58,7 @@ uv run --frozen --package marin-finelog finelog deploy verify <cluster>
 To restore the next older retained ReplicaSet, run:
 
 ```bash
-uv run deploy finelog rollback <cluster>
+uv run marin-deploy finelog rollback <cluster>
 ```
 
 Pass `--to-revision N` to select an exact revision shown by `kubectl rollout

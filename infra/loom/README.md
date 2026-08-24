@@ -10,12 +10,8 @@ Loom worktree and runs as a Docker Compose application on the GCE host.
 
 ## Prerequisites
 
-`Pulumi.yaml` selects the shared Marin state backend. Select the production
-stack before deploying:
-
-```sh
-pulumi stack select marin-loom --cwd /path/to/marin/infra/loom
-```
+`Pulumi.yaml` selects the shared Marin state backend. The deploy command selects
+the production stack explicitly.
 
 The `loom-oa-dev` GitHub App must be installed on the repositories Loom serves.
 Its private key, webhook secret, and client secret belong only in the
@@ -25,12 +21,11 @@ Its private key, webhook secret, and client secret belong only in the
 Authenticate Pulumi's providers and the local Docker client:
 
 ```sh
-export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
-  --project=hai-gcp-models --secret=cloudflare-oa-dns-token)"
 gcloud auth configure-docker us-central1-docker.pkg.dev
 ```
 
-The local Docker builder must support `linux/amd64`.
+The deploy command loads the Cloudflare provider token from Secret Manager. The
+local Docker builder must support `linux/amd64`.
 
 Activation restarts the host's startup script over SSH. Create the Compute
 Engine key pair once so the key is present and propagated before deploying;
@@ -50,20 +45,19 @@ the changed image, places the provider-produced digest in VM metadata, and waits
 for `https://loom.oa.dev/api/ready` after activation.
 
 ```sh
-pulumi preview --cwd /path/to/marin/infra/loom --stack marin-loom --diff
-pulumi up --cwd /path/to/marin/infra/loom --stack marin-loom
-curl -fsS https://loom.oa.dev/api/ready
+cd /path/to/marin
+uv run --all-packages --extra deploy marin-deploy loom rollout
 ```
 
 Set `buildContext` to a Loom worktree to deploy local changes instead. The local
 build includes tracked and untracked files allowed by that worktree's
-`.dockerignore`; review its diff before deployment. Pulumi saves `-c` values in
-the stack configuration, so remove the override to return to the remote HEAD.
+`.dockerignore`; review its diff before deployment. The deploy command applies the
+override through a temporary stack config, so later deployments return to the remote
+HEAD automatically.
 
 ```sh
-pulumi up --cwd /path/to/marin/infra/loom --stack marin-loom \
-  -c buildContext=/path/to/loom
-pulumi config rm --cwd /path/to/marin/infra/loom --stack marin-loom buildContext
+uv run --all-packages --extra deploy marin-deploy loom rollout \
+  --config buildContext=/path/to/loom
 ```
 
 Pulumi renders the Compose and Caddy configuration into VM metadata. The GCE

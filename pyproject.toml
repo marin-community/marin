@@ -266,6 +266,7 @@ project-includes = [
     "lib/zephyr/src/**/*.py",
     "lib/finestore/src/**/*.py",
     "infra/evaldash/src/**/*.py",
+    "infra/deploy/src/**/*.py",
     "scripts/ci",
     "scripts/cost_manager",
 ]
@@ -283,6 +284,7 @@ search-path = [
     "lib/fray/src",
     "lib/iris/src",
     "lib/ducky/src",
+    "infra/deploy/src",
 ]
 disable-search-path-heuristics = true
 
