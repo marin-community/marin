@@ -15,6 +15,8 @@ from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
 from zephyr.writers import write_jsonl_file
 
+CATEGORY_FIELD = "category"
+
 
 @dataclass(frozen=True)
 class UncheatableEvalTransformConfig:
@@ -31,7 +33,7 @@ def uncheatable_eval_document(row: dict[str, Any]) -> dict[str, str]:
     if not isinstance(content, str) or not content.strip():
         raise ValueError("UncheatableEval row has no content")
 
-    category = row.get("category")
+    category = row.get(CATEGORY_FIELD)
     if not isinstance(category, str) or not category:
         raise ValueError("UncheatableEval row has no category")
 
@@ -46,10 +48,14 @@ def uncheatable_eval_document(row: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _category_output_path(output_path: str, category: str) -> str:
+    return prefix_join(output_path, f"{category}.jsonl.gz")
+
+
 def _write_category(output_path: str, category: str, rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    path = prefix_join(output_path, f"{category}.jsonl.gz")
+    path = _category_output_path(output_path, category)
     result = write_jsonl_file((uncheatable_eval_document(row) for row in rows), path)
-    return {"category": category, **result}
+    return {CATEGORY_FIELD: category, **result}
 
 
 def transform_uncheatable_eval(cfg: UncheatableEvalTransformConfig) -> dict[str, Any]:
@@ -58,9 +64,9 @@ def transform_uncheatable_eval(cfg: UncheatableEvalTransformConfig) -> dict[str,
     pipeline = (
         Dataset.from_files(prefix_join(cfg.input_path, "**/*.parquet"))
         .flat_map(load_parquet)
-        .filter(lambda row: row.get("category") in selected_categories)
+        .filter(lambda row: row.get(CATEGORY_FIELD) in selected_categories)
         .group_by(
-            key=lambda row: row["category"],
+            key=lambda row: row[CATEGORY_FIELD],
             reducer=partial(_write_category, cfg.output_path),
             num_output_shards=len(selected_categories),
         )
@@ -72,7 +78,7 @@ def transform_uncheatable_eval(cfg: UncheatableEvalTransformConfig) -> dict[str,
     missing_categories = [
         category
         for category in cfg.categories
-        if not StoragePath(prefix_join(cfg.output_path, f"{category}.jsonl.gz")).exists()
+        if not StoragePath(_category_output_path(cfg.output_path, category)).exists()
     ]
     if missing_categories:
         raise ValueError(f"UncheatableEval release is missing categories: {', '.join(missing_categories)}")

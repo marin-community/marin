@@ -3,14 +3,17 @@
 
 """UncheatableEval subsets from the pinned July 2026 release."""
 
+import hashlib
+from types import MappingProxyType
+
 from marin.datakit.download.uncheatable_eval import UncheatableEvalTransformConfig, transform_uncheatable_eval
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import dataset_main, hf_download, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
-from experiments.datasets.validation_cache_identity import validation_tokenizer_suffix
 from experiments.llama import llama3_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 
 UNCHEATABLE_EVAL_DATASET_ID = "Jellyfish042/UncheatableEval-2026-07"
 UNCHEATABLE_EVAL_REVISION = "65889535d56aa38d448ce7e07b08e6e36c031545"
@@ -18,23 +21,25 @@ UNCHEATABLE_EVAL_VERSION = "2026.08.24"
 
 # The arXiv computer-science key retains its metric name although upstream
 # shortened the category to ``arxiv_cs``.
-UNCHEATABLE_SUBSETS = {
-    "wikipedia_english": "wikipedia_english",
-    "wikipedia_nonenglish": "wikipedia_nonenglish",
-    "github_python": "github_python",
-    "github_cpp": "github_cpp",
-    "github_javascript": "github_javascript",
-    "github_markdown": "github_markdown",
-    "github_other": "github_other",
-    "bbc_news": "bbc_news",
-    "arxiv_physics": "arxiv_physics",
-    "arxiv_computer_science": "arxiv_cs",
-    "arxiv_math": "arxiv_math",
-    "arxiv_other": "arxiv_other",
-    "biorxiv_all": "biorxiv_all",
-    "ao3_english": "ao3_english",
-    "ao3_nonenglish": "ao3_nonenglish",
-}
+UNCHEATABLE_SUBSETS = MappingProxyType(
+    {
+        "wikipedia_english": "wikipedia_english",
+        "wikipedia_nonenglish": "wikipedia_nonenglish",
+        "github_python": "github_python",
+        "github_cpp": "github_cpp",
+        "github_javascript": "github_javascript",
+        "github_markdown": "github_markdown",
+        "github_other": "github_other",
+        "bbc_news": "bbc_news",
+        "arxiv_physics": "arxiv_physics",
+        "arxiv_computer_science": "arxiv_cs",
+        "arxiv_math": "arxiv_math",
+        "arxiv_other": "arxiv_other",
+        "biorxiv_all": "biorxiv_all",
+        "ao3_english": "ao3_english",
+        "ao3_nonenglish": "ao3_nonenglish",
+    }
+)
 
 
 def uncheatable_raw() -> ArtifactStep[Artifact]:
@@ -71,8 +76,14 @@ def uncheatable_dataset(
     """One Uncheatable Eval subset as a validation handle."""
     processed = processed if processed is not None else uncheatable_processed()
     category = UNCHEATABLE_SUBSETS[subset]
+    if tokenizer == llama3_tokenizer:
+        tokenizer_suffix = "llama3"
+    elif tokenizer == marin_tokenizer:
+        tokenizer_suffix = "marin"
+    else:
+        tokenizer_suffix = f"tokenizer-{hashlib.sha256(tokenizer.encode()).hexdigest()[:8]}"
     return tokenized(
-        f"uncheatable_eval/{subset}-{validation_tokenizer_suffix(tokenizer)}",
+        f"uncheatable_eval/{subset}-{tokenizer_suffix}",
         tokenizer=tokenizer,
         version=UNCHEATABLE_EVAL_VERSION,
         raw=processed,
