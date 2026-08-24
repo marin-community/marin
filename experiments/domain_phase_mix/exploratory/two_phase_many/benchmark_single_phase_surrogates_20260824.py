@@ -40,6 +40,32 @@ import swarm39_models_20260725 as zoo  # noqa: E402
 from scipy import stats  # noqa: E402
 
 ONE_PHASE_DATASET = {"300m": "300m_one_phase_fit", "delphi_3e18": "delphi_3e18_one_phase_fit"}
+
+
+def later_mechanisms() -> list[swarm39.Model]:
+    """Builders added after the model benchmark froze, none of them ever scored on single-phase rows.
+
+    Each carries a distinct mechanism the programme identified and tested elsewhere: a family-benefit
+    term on top of bounded saturation, the compact-retained-state extensions, an explicit breadth and
+    geometry channel, and two multiplicative responses. The last two are the interesting ones here --
+    ``log_deficit`` fits ``log(BPB - floor)`` so a prediction cannot fall below an entropy floor, which is
+    the structural cure for the out-of-support optimism that drives an optimiser into unsupported
+    mixtures.
+    """
+    return [
+        swarm39.Model("bounded_hierarchical", zoo.build_bounded_hierarchical, zoo.bounded_saturation_shapes),
+        swarm39.Model("crs_plus", zoo.build_crs_plus, zoo.crs_plus_shapes),
+        swarm39.Model("crs_plus_breadth", zoo.build_crs_plus_breadth, zoo.crs_plus_shapes),
+        swarm39.Model("crs_plus_geometry", zoo.build_crs_plus_geometry, zoo.crs_plus_shapes),
+        swarm39.Model("crs_plus_heads", zoo.build_crs_plus_heads, zoo.crs_plus_shapes),
+        swarm39.Model("structured_benefit", zoo.build_structured_benefit, zoo.structured_shapes),
+        swarm39.Model("log_ratio_deficit", zoo.build_log_ratio_deficit, zoo.log_ratio_shapes),
+        swarm39.Model(
+            "multiplicative_deficit", zoo.build_multiplicative_deficit, zoo.multiplicative_shapes, link="log_deficit"
+        ),
+    ]
+
+
 SEEDS = 3
 
 
@@ -117,6 +143,7 @@ def general_scores(fit_panel, held, target: str, pooling: str) -> dict[str, floa
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--scales", default="300m,delphi_3e18")
+    parser.add_argument("--extended", action="store_true", help="add the mechanisms never scored on single-phase")
     args = parser.parse_args()
 
     collected = []
@@ -125,6 +152,8 @@ def main() -> None:
         one_phase_fit = one_phase_panel(scale)
         held = single_phase_heldout(scale)
         models = zoo.observatory_baselines(two_phase_fit) + zoo.candidates()
+        if args.extended:
+            models = models + later_mechanisms()
         for target in (swarm39.UNCHEATABLE, swarm39.TABLE9):
             usable = np.isfinite(held.targets[target])
             panel = held.subset(usable)
