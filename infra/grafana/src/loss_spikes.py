@@ -10,12 +10,14 @@ has to be above the band, so a single excursion, the case skip-step already
 discards, does not fire.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from math import isfinite
 
 import pyarrow as pa
-from hero_runs import HeroRun, run_id_predicate, sql_timestamp
+from hero_runs import HeroRun, RunIdentity, as_number, run_id_predicate, sql_epoch_ms
+from vllm_observability import sql_string
 
 _LOSS_METRIC = "train_loss"
 
@@ -43,19 +45,28 @@ class LossWindows:
     baseline_samples: int
     baseline_loss: float | None
     baseline_stddev: float | None
+    baseline_floor: float | None
     recent_samples: int
     recent_loss: float | None
     recent_floor: float | None
     recent_peak: float | None
 
 
-def loss_window_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
-    """Return baseline and recent loss statistics for exact active hero run IDs."""
+def loss_window_query(now: datetime, runs: Sequence[RunIdentity], executions: Sequence[str] = ()) -> str:
+    """Return baseline and recent loss statistics for exact active hero run IDs.
+
+    `executions` narrows both windows to the given attempts. Without it the
+    windows span whatever the run published in the hour, which is what the spike
+    rule compares; a check that reads the two windows against each other needs
+    them to describe one attempt.
+    """
     run_predicate = run_id_predicate(runs)
-    start = sql_timestamp(now - _BASELINE_LOOKBACK)
-    recent = sql_timestamp(now - _RECENT_WINDOW)
-    end = sql_timestamp(now)
-    recent_ms = f"CAST(EXTRACT(EPOCH FROM TIMESTAMP '{recent}') * 1000 AS BIGINT)"
+    execution_predicate = (
+        f"AND execution_uid IN ({', '.join(sql_string(uid) for uid in executions)}) " if executions else ""
+    )
+    start = sql_epoch_ms(now - _BASELINE_LOOKBACK)
+    end = sql_epoch_ms(now)
+    recent_ms = sql_epoch_ms(now - _RECENT_WINDOW)
     return (
         'WITH telemetry AS (SELECT * FROM "telemetry_v1" '
         'UNION ALL SELECT * FROM "telemetry_v1.levanter.priority"), samples AS ('
@@ -63,13 +74,14 @@ def loss_window_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
         "FROM telemetry "
         f"WHERE service = 'levanter' AND name = '{_LOSS_METRIC}' "
         f"AND {run_predicate} "
-        f"AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '{start}') * 1000 AS BIGINT) "
-        f"AND timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '{end}') * 1000 AS BIGINT)"
+        f"{execution_predicate}"
+        f"AND timestamp_ms >= {start} AND timestamp_ms < {end}"
         ") "
         "SELECT origin_cluster AS cluster, run_id, "
         f"SUM(CASE WHEN timestamp_ms < {recent_ms} THEN 1 ELSE 0 END) AS baseline_samples, "
         f"AVG(CASE WHEN timestamp_ms < {recent_ms} THEN value END) AS baseline_loss, "
         f"STDDEV(CASE WHEN timestamp_ms < {recent_ms} THEN value END) AS baseline_stddev, "
+        f"MIN(CASE WHEN timestamp_ms < {recent_ms} THEN value END) AS baseline_floor, "
         f"SUM(CASE WHEN timestamp_ms >= {recent_ms} THEN 1 ELSE 0 END) AS recent_samples, "
         f"AVG(CASE WHEN timestamp_ms >= {recent_ms} THEN value END) AS recent_loss, "
         f"MIN(CASE WHEN timestamp_ms >= {recent_ms} THEN value END) AS recent_floor, "
@@ -78,32 +90,30 @@ def loss_window_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
     )
 
 
-def _number(value: object) -> float | None:
-    return float(value) if isinstance(value, int | float) else None
-
-
 def _diverged(value: float | None) -> bool:
     """True when a reduction came back NaN or infinite. A missing one has not diverged."""
     return value is not None and not isfinite(value)
 
 
-def _windows_by_run(loss_windows: pa.Table) -> dict[tuple[str, str], LossWindows]:
+def windows_by_run(loss_windows: pa.Table) -> dict[tuple[str, str], LossWindows]:
+    """Return each run's loss windows, keyed by cluster and run ID."""
     windows = {}
     for row in loss_windows.to_pylist():
         key = (str(row["cluster"]), str(row["run_id"]))
         windows[key] = LossWindows(
             baseline_samples=int(row["baseline_samples"] or 0),
-            baseline_loss=_number(row["baseline_loss"]),
-            baseline_stddev=_number(row["baseline_stddev"]),
+            baseline_loss=as_number(row["baseline_loss"]),
+            baseline_stddev=as_number(row["baseline_stddev"]),
+            baseline_floor=as_number(row["baseline_floor"]),
             recent_samples=int(row["recent_samples"] or 0),
-            recent_loss=_number(row["recent_loss"]),
-            recent_floor=_number(row["recent_floor"]),
-            recent_peak=_number(row["recent_peak"]),
+            recent_loss=as_number(row["recent_loss"]),
+            recent_floor=as_number(row["recent_floor"]),
+            recent_peak=as_number(row["recent_peak"]),
         )
     return windows
 
 
-def _classify(windows: LossWindows | None) -> tuple[str, int]:
+def loss_spike_reason(windows: LossWindows | None) -> tuple[str, int]:
     """Return the alert reason and firing value for one run's loss windows."""
     if windows is None:
         return "warming_up", 0
@@ -133,10 +143,10 @@ def _row(cluster: str, job: str, run: str, reason: str, value: int) -> dict:
 
 def loss_spike_alert_rows(runs: tuple[HeroRun, ...], loss_windows: pa.Table) -> list[dict]:
     """Project each enrolled hero run's loss windows into alert rows."""
-    windows = _windows_by_run(loss_windows)
+    windows = windows_by_run(loss_windows)
     rows: list[dict] = []
     for run in runs:
-        reason, value = _classify(windows.get((run.cluster, run.run_id)))
+        reason, value = loss_spike_reason(windows.get((run.cluster, run.run_id)))
         rows.append(_row(run.cluster, run.root_job, run.run_id, reason, value))
     if rows:
         return rows

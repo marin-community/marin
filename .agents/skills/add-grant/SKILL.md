@@ -1,6 +1,6 @@
 ---
 name: add-grant
-description: Add a GCP IAM or IAP user grant to the marin-iac Pulumi stacks, encrypting human principals. Use when someone needs access to a project role, bucket/secret/service account, or an IAP-gated web service (evaldash, grafana), whether requested locally or on a GitHub issue.
+description: Implement a fully specified request for a GCP IAM resource grant or Cloud Run IAP viewer in marin-iac.
 ---
 
 # Skill: Add a user grant

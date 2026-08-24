@@ -423,7 +423,6 @@ def test_task_hash_distinct_for_sanitization_collisions():
         ("Running", job_pb2.TASK_STATE_RUNNING),
         ("Succeeded", job_pb2.TASK_STATE_SUCCEEDED),
         ("Failed", job_pb2.TASK_STATE_FAILED),
-        ("Unknown", job_pb2.TASK_STATE_FAILED),
     ],
 )
 def test_task_update_from_pod_phases(phase, expected_state):

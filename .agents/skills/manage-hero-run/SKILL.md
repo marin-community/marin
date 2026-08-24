@@ -1,13 +1,15 @@
 ---
 name: manage-hero-run
-description: Launch, monitor, hand off, resume, rollback, or babysit expensive Marin production. Typically >=1e22 model flops.
+description: Launch, resume, monitor, hand off, or seal an explicitly requested production-critical Marin run, normally at least 1e22 FLOPs.
 ---
 
 # Manage Hero Run
 
-Use this skill for expensive or production-critical runs where a bad launch, stale worktree, weak handoff, or confused resume can waste significant compute.
-
-As a rule of thumb, use this skill for runs that are expected to run for 1e22 model flops or more. (6ND heuristic is fine.) You should also use this skill if asked.
+Use this skill only when the request names a hero or production-critical run, or
+another selected workflow explicitly delegates its management here. Within this
+workflow, about 1e22 model FLOPs (using a 6ND estimate) is the normal threshold
+for classifying a run as production rather than bounded diagnostic work; it is
+not an activation trigger by itself.
 
 ## Operating Model
 

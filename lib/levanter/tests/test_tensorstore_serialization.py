@@ -29,11 +29,18 @@ from levanter.tensorstore_serialization import (
     _HostByteBudget,
     _trim_host_memory_after_commits,
     _transfer_shard_to_pageable_host,
+    build_kvstore_spec,
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
 )
 from levanter.testing import eight_device_checkpoints
 from levanter.testing.eight_device_checkpoints import run_on_eight_devices
+
+
+def test_build_kvstore_spec_normalizes_file_uri(tmp_path):
+    spec = build_kvstore_spec(f"file://{tmp_path}/cache")
+
+    assert spec == {"driver": "file", "path": str(tmp_path / "cache")}
 
 
 def test_pageable_checkpoint_staging_detaches_from_donated_jax_buffer():
@@ -376,6 +383,14 @@ def test_every_replica_writes_a_disjoint_slice_covering_the_array():
 
 def test_replicated_arrays_survive_a_replica_parallel_roundtrip():
     run_on_eight_devices(eight_device_checkpoints.replicated_arrays_survive_a_roundtrip)
+
+
+def test_replica_aware_restore_reads_each_shard_once():
+    run_on_eight_devices(eight_device_checkpoints.replica_aware_restore_reads_each_shard_once)
+
+
+def test_replica_aware_restore_broadcasts_across_processes():
+    eight_device_checkpoints.replica_aware_restore_across_processes()
 
 
 def test_checkpoint_written_on_one_mesh_loads_on_another():

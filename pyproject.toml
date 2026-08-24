@@ -439,7 +439,7 @@ markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'",
     "integration: mark tests as integration tests that require cluster infrastructure",
     "data_integration: mark tests that require external data fixtures (e.g. HuggingFace datasets)",
-    "cluster: mark smokes that submit a real job to a standing Marin cluster (run by marin-cluster-smoke.yaml)",
+    "cluster: mark smokes that submit a real job to a standing Marin cluster (run directly with explicit credentials)",
     "requires_cluster: mark Iris tests that start or connect to a cluster",
     "docker: mark tests that require a Docker daemon",
     "manual: mark tests that are run by hand on demand, never by any CI workflow",

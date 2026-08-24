@@ -1334,6 +1334,9 @@ project_grants:
 - role: roles/servicenetworking.serviceAgent
   members:
   - serviceAccount:748532799086-compute@developer.gserviceaccount.com
+- role: roles/serviceusage.serviceUsageConsumer
+  members:
+  - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/serviceusage.serviceUsageAdmin
   members:
   - principal: human-037
@@ -1344,7 +1347,6 @@ project_grants:
   - serviceAccount:codalab-stanford@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:cs324-233@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-crawl-bigquery@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:marin-data-browser@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:project-748532799086@storage-transfer-service.iam.gserviceaccount.com
 - role: roles/storage.bucketViewer
   members:
@@ -1377,7 +1379,6 @@ project_grants:
   - serviceAccount:checkpoint-download@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:loom-dev@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-crawl-bigquery@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:marin-data-browser@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-gcs-proxy@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/storageinsights.serviceAgent

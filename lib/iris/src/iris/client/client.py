@@ -51,8 +51,10 @@ from iris.cluster.client import (
 )
 from iris.cluster.constraints import (
     Constraint,
+    WellKnownAttribute,
     is_any_region_marker,
     merge_constraints,
+    region_constraint,
 )
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
@@ -1024,6 +1026,15 @@ class IrisClient:
                 constraints = []
             else:
                 constraints = merge_constraints(parent_constraints, constraints)
+
+            # Default children to the parent's resolved location. An explicit region,
+            # including the ANY marker, owns placement instead.
+            if (
+                job_info
+                and job_info.worker_region
+                and not any(constraint.key == WellKnownAttribute.REGION for constraint in constraints)
+            ):
+                constraints = [*constraints, region_constraint([job_info.worker_region])]
 
         # The ANY-region marker clears inherited region constraints during merging.
         # Drop it before the wire so it does not exclude workers without region metadata.
