@@ -31,6 +31,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /github/nightlies                        7-day nightly-lane matrix (one row per lane/day)
     GET /wandb/report/{chart}                    sampled public hero-report series by chart key
     GET /wandb/history?run=&metric=&project=     one run's full logged history for one metric
+    GET /wandb/activity?run=&project=            one run's active, wall, and downtime seconds
     GET /k8s/control_plane                       watched components + webhook endpoints, all clusters
     GET /k8s/crashloops                          containers in backoff waiting states
     GET /k8s/pending                             Pending / SchedulingGated pods with age
@@ -634,6 +635,17 @@ def create_app(
             lambda: wandb_source.run_history(run, metric=metric, project=project),
         )
 
+    def wandb_run_activity(request: Request) -> JSONResponse:
+        try:
+            run = _require(request.query_params, "run")
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        project = request.query_params.get("project") or None
+        return wandb_endpoint(
+            ("activity", run, project),
+            lambda: wandb_source.run_activity(run, project=project),
+        )
+
     def k8s_endpoint(key: str, run) -> JSONResponse:
         # Per-cluster failures are labeled rows inside the response; only a bridge
         # bug raises here, and Starlette turns that into a 500.
@@ -785,6 +797,7 @@ def create_app(
             Route("/github/builds", github_builds),
             Route("/github/nightlies", github_nightlies),
             Route("/wandb/history", wandb_run_history),
+            Route("/wandb/activity", wandb_run_activity),
             Route("/wandb/report/{chart}", wandb_report_chart),
             Route("/finelog/{cluster}/query", query),
             Route("/finelog/{cluster}/v1/vllm/overview", vllm_overview),

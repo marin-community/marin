@@ -44,6 +44,7 @@ GET /github/ferries | builds | nightlies          GitHub REST / GraphQL
 GET /wandb/report/{train-loss,paloma-macro-loss,mfu}
                                                     public report runset and sampled history
 GET /wandb/history?run=&metric=&project=          one run's whole logged history for one metric
+GET /wandb/activity?run=&project=                 one run's active, wall, and downtime seconds
 GET /k8s/control_plane | crashloops | pending     CW control-plane state, all clusters
 GET /k8s/termination_candidates | kueue | events | health
                                                     ... one response, `cluster` column
@@ -100,13 +101,19 @@ and serves one linked, duration-aware row per lane and UTC day. The internal pan
 groups those rows into the compact trailing-week matrix.
 
 W&B: the bridge reads public W&B anonymously, so Grafana never needs a W&B key. It
-serves two shapes. `/wandb/report/{chart}` follows the runset pinned in the public
+serves three shapes. `/wandb/report/{chart}` follows the runset pinned in the public
 hero-training report spec and samples train cross-entropy, Paloma macro loss, and MFU
 against cumulative training tokens. `/wandb/history` samples one metric across one
 named run, keyed on W&B's own `_step`, which is the Levanter step because Levanter
-logs through `wandb.log(..., step=<training step>)`. Without an explicit `project`
-the bridge searches `RUN_HISTORY_PROJECTS` in order and fails with a 404 when no
-project holds the run.
+logs through `wandb.log(..., step=<training step>)`. `/wandb/activity` reads the same
+run's clocks out of `summaryMetrics`, one small request rather than a history
+download: `_runtime` is the seconds the training process was alive, which
+`resume="allow"` restores at every restart, so it is the run's active execution time
+across every attempt. Wall time runs from the run's creation to its last heartbeat,
+which makes the remainder downtime. `_runtime` advances only when an attempt logs, so
+the total holds still while a restart initializes rather than counting the wait as
+work. Without an explicit `project` the bridge searches `RUN_HISTORY_PROJECTS` in
+order and fails with a 404 when no project holds the run.
 
 k8s: the bridge polls the three production CoreWeave clusters' public CKS API servers with plain
 httpx GETs (paginated LISTs, bounded timeouts, one 429 retry) and a single org-wide CW
@@ -286,7 +293,21 @@ single-value selector puts the newest hero run first. It uses `run_id` across
 clusters. The status strip uses one 15-minute `telemetry_v1` query for ten fields.
 It includes the two hero alert inputs: time since the last completed step and
 train loss. It also includes step time, throughput, schedule progress, and token
-count.
+count. Active execution and active share come from `/wandb/activity`, which makes
+the strip a mixed-datasource panel. Those two totals describe the whole run, and the
+eviction that keeps the step-axis loss panel on W&B bounds any finelog answer to the
+retained window. On 2026-08-24 `hero-12d8b6f0-dee637` read 93.5 hours active against
+105.0 hours of wall clock, an 89 percent active share, while finelog retained its
+last three days.
+
+The Attempts table carries the recent detail behind that total: one row per Iris
+execution over a fixed seven-day window, newest first, running or not, so the top row
+stays the last attempt after that attempt fails. Its job cell links to the attempt in
+the Iris dashboard. That link has to come from finelog, because W&B records neither
+the cluster nor the job root. The URL is built in SQL and carried in a column the
+table hides rather than draws. Hide it with `custom.hideFrom.viz`: Grafana 13's table
+ignores the legacy `custom.hidden`, and a transformation that dropped the column would
+take the data link with it.
 
 The execution-health strip shows the current attempt age, Iris task counts,
 task-state age, and retained retry events. Initialization age appears only before
