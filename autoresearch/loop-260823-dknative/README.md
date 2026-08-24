@@ -53,3 +53,24 @@ per-arm rows in arms.tsv (reissuable), results in results.tsv.
 - Known cost on this branch: the main-vintage DataLoader depresses restore MFU ~1 vs the tune
   branch's loader for BOTH transports (plateau ~21.7 with dips; fetch_batch_size=256 mapping).
   Loader tuning is a follow-up port, orthogonal to the transport.
+
+## Final standings (2026-08-24, splits sweep closed)
+
+Splits is transport- AND regime-dependent:
+- one-shot: 64 >> 1 in both regimes (+1.2 at hero shape; the old +2.4 was priced on the
+  pre-lean backend)
+- dk synthetic (uniform payloads): 1 > 32 > 64 (22.62 / 22.41 / ~21.7)
+- dk restore (trained-router skew): 64 > 128 > 1 (21.98 / 21.49 / 21.43) — splitting
+  balances skewed updates, which the dk's unrotated unit striping needs
+
+Hero 6k restore, each transport at its best: one-shot 22.46-22.60, pooled 22.52,
+dk 21.98 — the dk trails by ~0.5 MFU (~2%) under realistic conditions; synthetic is a tie
+(22.62 vs 22.77). The earlier "dk parity at restore" compared both transports at splits=1,
+which handicaps only the one-shot. Remaining known dk headroom: the copy kernel still runs
+~1.8x slower per byte than the one-shot at equal payload (in-kernel work, upstreamable);
+closing that would flip the restore standings.
+
+The cross-branch "drift" investigation (dkn-05..09 + replay) concluded: no code drift at
+all — lib-swap hybrid null, siblings null, wheel vintage null, epoch null; every delta was
+the splits default. dkn-10 first attempt crashed on a mis-submitted bisect tree (pyc-blocked
+checkout); resubmitted clean as dkn-10b.
