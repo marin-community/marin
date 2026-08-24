@@ -78,6 +78,8 @@ DEFAULT_MAX_CONCURRENT = 56
 SUPPORT_TOLERANCE = 1e-9
 RUN_NAME_PATTERN = re.compile(r"[a-zA-Z0-9_.-]+")
 BRANCH_PROVENANCE_FILENAME = "branch_provenance.json"
+WANDB_TAG_MAX_LENGTH = 64
+WANDB_HASH_TAG_LENGTH = 12
 
 
 @dataclass(frozen=True)
@@ -127,6 +129,26 @@ def read_uri_bytes(uri: str) -> bytes:
 
 def phase_weights_sha256(phase_weights: dict[str, dict[str, float]]) -> str:
     return hashlib.sha256(json.dumps(phase_weights, sort_keys=True).encode()).hexdigest()
+
+
+def branch_wandb_tags(config: BranchTrainingConfig) -> list[str]:
+    run_spec = config.run_spec
+    tags = [
+        "issue-6611",
+        "delphi-3e18-phase1-common-branches",
+        f"prefix_candidate={config.prefix_checkpoint.candidate_id}",
+        f"prefix_repeat_seed={config.prefix_checkpoint.repeat_seed}",
+        f"prefix_replay_commit={config.prefix_replay_code_commit[:WANDB_HASH_TAG_LENGTH]}",
+        f"branch_commit={config.code_commit[:WANDB_HASH_TAG_LENGTH]}",
+        f"continuation_id={config.continuation_id}",
+        f"continuation_sha={config.continuation_weights_sha256[:WANDB_HASH_TAG_LENGTH]}",
+        f"data_seed={run_spec.data_seed}",
+        f"trainer_seed={run_spec.trainer_seed}",
+    ]
+    oversized = [tag for tag in tags if len(tag) > WANDB_TAG_MAX_LENGTH]
+    if oversized:
+        raise ValueError(f"W&B tags exceed {WANDB_TAG_MAX_LENGTH} characters: {oversized}")
+    return tags
 
 
 def verify_prefix_checkpoint_on_worker(config: BranchTrainingConfig) -> None:
@@ -574,18 +596,7 @@ def run_phase_1_branch(config: BranchTrainingConfig) -> None:
         raise ValueError(f"Expected a W&B tracker for branch training, got {type(tracker_config).__name__}")
     tracker = replace(
         tracker_config,
-        tags=[
-            "issue-6611",
-            "delphi-3e18-phase1-common-branches",
-            f"prefix_candidate={config.prefix_checkpoint.candidate_id}",
-            f"prefix_repeat_seed={config.prefix_checkpoint.repeat_seed}",
-            f"prefix_replay_code_commit={config.prefix_replay_code_commit}",
-            f"branch_code_commit={config.code_commit}",
-            f"continuation_id={config.continuation_id}",
-            f"continuation_weights_sha256={config.continuation_weights_sha256}",
-            f"data_seed={run_spec.data_seed}",
-            f"trainer_seed={run_spec.trainer_seed}",
-        ],
+        tags=branch_wandb_tags(config),
     )
     trainer = replace(
         inner.trainer,

@@ -158,3 +158,33 @@ def test_manifest_step_versions_the_selected_run_orders() -> None:
 
     assert one_row_version == {"selected_run_orders": (0,)}
     assert full_panel_version == {"selected_run_orders": tuple(range(branches.TOTAL_BRANCH_ROWS))}
+
+
+def test_branch_wandb_tags_fit_wandb_limit() -> None:
+    uniform = {"bucket": 1.0}
+    config = branches.BranchTrainingConfig(
+        analysis_output_path="analysis",
+        output_path="output",
+        run_spec=cast(
+            base.DelphiSwarmRunSpec,
+            _PrefixSpec(phase_weights={"phase_0": uniform, "phase_1": uniform}, data_seed=1, trainer_seed=2),
+        ),
+        validation_configs=None,
+        prefix_checkpoint=branches.PrefixCheckpoint(
+            candidate_id="shared_bounded_ensemble_kl0p05",
+            repeat_seed=0,
+            checkpoint_uri="gs://marin-us-east5/prefix/step-2399",
+            provenance_sha256="a" * 64,
+        ),
+        prefix_replay_code_commit="b" * 40,
+        candidate_weights_sha256="c" * 64,
+        continuation_weights_sha256="d" * 64,
+        continuation_id="fit_maximin_00",
+        code_commit="e" * 40,
+    )
+
+    tags = branches.branch_wandb_tags(config)
+
+    assert max(map(len, tags)) <= branches.WANDB_TAG_MAX_LENGTH
+    assert "prefix_replay_commit=" + "b" * branches.WANDB_HASH_TAG_LENGTH in tags
+    assert "continuation_sha=" + "d" * branches.WANDB_HASH_TAG_LENGTH in tags
