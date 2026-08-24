@@ -565,6 +565,10 @@ class ActorConfig:
     initialisation) is retried before being marked as permanently failed.
     Maps to Iris's ``max_retries_failure``.
 
+    `max_task_failures` overrides the cumulative failure budget for the actor
+    group. When omitted, it is derived from `max_task_retries` and the replica
+    count.
+
     `priority` is forwarded to the underlying backend if supported. 0 leaves
     the backend to use its default priority.
     """
@@ -572,6 +576,7 @@ class ActorConfig:
     max_concurrency: int = 1
     max_restarts: int | None = None
     max_task_retries: int | None = None
+    max_task_failures: int | None = None
     priority: int = 0
 
 
