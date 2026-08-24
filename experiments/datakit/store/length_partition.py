@@ -33,6 +33,7 @@ from experiments.datakit.store.datakit_store import BucketCacheStats, ClusteredS
 DOCUMENT_LENGTH_THRESHOLD = 65_536
 READ_CHUNK_ELEMENTS = 16 * 1024 * 1024
 SOURCE_STORE_PATH = "gs://marin-us-central2/datakit/store_8ac06c74"
+SOURCE_STORE_REGION = "us-central2"
 INPUT_IDS = "input_ids"
 
 
@@ -323,6 +324,8 @@ SOURCE_STORE = ArtifactStep.adopt(
 
 def build() -> ArtifactStep[LengthPartitionedStoreData]:
     def build_config(ctx: StepContext) -> LengthPartitionConfig:
+        if not ctx.is_fingerprint and ctx.region is not None and ctx.region != SOURCE_STORE_REGION:
+            raise ValueError(f"length partition must run in {SOURCE_STORE_REGION}, not {ctx.region}")
         return LengthPartitionConfig(
             source_path=ctx.artifact_path(SOURCE_STORE),
             output_path=ctx.output_path,
