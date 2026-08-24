@@ -94,7 +94,11 @@ Runtime profiles and workload federation mappings live in
 `Pulumi.marin-loom.yaml` and are applied through Loom's deployment API during
 activation. The `grafana-alerts` federation mapping authorizes the Google
 identity of the existing `marin-grafana` Cloud Run service account to select
-only the `ops` profile. Pulumi resolves that account's email and immutable
+only the `ops` profile. The profile names `marin-community/marin` in
+`githubRepositories` because Grafana launches the operator session in that
+repository and automation profiles receive only their configured repository
+credentials. Without that entry, Loom rejects the launch with HTTP 428 before
+creating a session. Pulumi resolves the service account's email and immutable
 numeric subject; it does not create or copy a Loom token.
 
 The `fork-ferry` mapping accepts OIDC tokens only from the `marin` repository's
