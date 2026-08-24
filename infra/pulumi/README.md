@@ -87,7 +87,7 @@ key ("Backend").
 
 The `marin` stack is the sole repository owner of grants on `hai-gcp-models`; application
 stacks and deploy scripts must not create or mutate IAM policy. The resources remain additive
-`*IAMMember` resources. Issue #8455 tracks the rollout: import only grants confirmed by the
+`*IAMMember` resources during inventory adoption. Import only grants confirmed by the
 live-policy audit, then convert them to authoritative role bindings in a separately reviewed
 change. Record code-declared grants that are absent live for a separate policy review instead
 of creating them during import.

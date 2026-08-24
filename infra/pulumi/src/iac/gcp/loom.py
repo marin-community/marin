@@ -6,11 +6,14 @@
 from iac.gcp.iam import GcpArtifactRepositoryIam, GcpIamGrantSet, GcpRoleGrant, GcpSecretIam
 
 _REGION = "us-central1"
+_RUNTIME_ACCOUNT_ID = "loom-vm"
+_DOTENV_SECRET = "LOOM_DOTENV"
+_ARTIFACT_REPOSITORY = "loom"
 
 
 def iam_grants(project: str) -> GcpIamGrantSet:
     """Return Loom grants for composition into the global IAM stack."""
-    runtime_account = f"serviceAccount:loom-vm@{project}.iam.gserviceaccount.com"
+    runtime_account = f"serviceAccount:{_RUNTIME_ACCOUNT_ID}@{project}.iam.gserviceaccount.com"
     return GcpIamGrantSet(
         project_grants=tuple(
             GcpRoleGrant(role=role, members=(runtime_account,))
@@ -28,14 +31,14 @@ def iam_grants(project: str) -> GcpIamGrantSet:
         kms_grants=(GcpRoleGrant(role="roles/cloudkms.cryptoKeyEncrypterDecrypter", members=(runtime_account,)),),
         secrets=(
             GcpSecretIam(
-                secret="LOOM_DOTENV",
+                secret=_DOTENV_SECRET,
                 grants=(GcpRoleGrant(role="roles/secretmanager.secretAccessor", members=(runtime_account,)),),
             ),
         ),
         artifact_repositories=(
             GcpArtifactRepositoryIam(
                 location=_REGION,
-                repository="loom",
+                repository=_ARTIFACT_REPOSITORY,
                 grants=(GcpRoleGrant(role="roles/artifactregistry.reader", members=(runtime_account,)),),
             ),
         ),

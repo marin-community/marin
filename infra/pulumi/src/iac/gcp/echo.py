@@ -13,13 +13,16 @@ from iac.gcp.iam import (
 
 _REGION = "us-central1"
 _OPENATHENA_GROUP = "group:eng-all@openathena.ai"
+_API_SERVICE = "echo-api"
+_SYNC_JOB = "echo-sync"
+_MIRROR_TOKEN_SECRET = "marinmirror-token"
 
 
 def iam_grants(project: str) -> GcpIamGrantSet:
     """Return Echo grants for composition into the global IAM stack."""
     deploy_account = f"serviceAccount:marin-cd-cloud-run-deploy@{project}.iam.gserviceaccount.com"
-    echo_api_account = f"serviceAccount:echo-api@{project}.iam.gserviceaccount.com"
-    echo_sync_account = f"serviceAccount:echo-sync@{project}.iam.gserviceaccount.com"
+    echo_api_account = f"serviceAccount:{_API_SERVICE}@{project}.iam.gserviceaccount.com"
+    echo_sync_account = f"serviceAccount:{_SYNC_JOB}@{project}.iam.gserviceaccount.com"
     loom_account = f"serviceAccount:loom-vm@{project}.iam.gserviceaccount.com"
     return GcpIamGrantSet(
         project_grants=(
@@ -34,7 +37,7 @@ def iam_grants(project: str) -> GcpIamGrantSet:
         ),
         secrets=(
             GcpSecretIam(
-                secret="marinmirror-token",
+                secret=_MIRROR_TOKEN_SECRET,
                 grants=(
                     GcpRoleGrant(
                         role=f"projects/{project}/roles/marinSecretIamManager",
@@ -47,19 +50,19 @@ def iam_grants(project: str) -> GcpIamGrantSet:
         artifact_repositories=(
             GcpArtifactRepositoryIam(
                 location=_REGION,
-                repository="echo-api",
+                repository=_API_SERVICE,
                 grants=(GcpRoleGrant(role="roles/artifactregistry.writer", members=(deploy_account,)),),
             ),
             GcpArtifactRepositoryIam(
                 location=_REGION,
-                repository="echo-sync",
+                repository=_SYNC_JOB,
                 grants=(GcpRoleGrant(role="roles/artifactregistry.writer", members=(deploy_account,)),),
             ),
         ),
         cloud_run_iap=(
             GcpCloudRunIapIam(
                 location=_REGION,
-                service="echo-api",
+                service=_API_SERVICE,
                 iap_grants=(
                     GcpRoleGrant(
                         role="roles/iap.httpsResourceAccessor",

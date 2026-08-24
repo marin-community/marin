@@ -9,11 +9,7 @@ from iac.gcp.iam_config import GcpIamConfig
 
 
 def global_iam_args(project: str, config: GcpIamConfig) -> GcpIamArgs:
-    """Return the complete global IAM graph, including each deploy target.
-
-    Shared grants stay machine-editable in YAML, while target declarations remain beside their
-    service-specific topology and are never serialized back into the shared file.
-    """
+    """Return the complete global IAM graph, including each deploy target."""
     principals = {principal.principal_id: GcpEncryptedMember(principal.ciphertext) for principal in config.principals}
     args = GcpIamArgs(
         project=project,

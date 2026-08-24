@@ -110,7 +110,6 @@ def runtime_service_account(
     project: str,
     opts: pulumi.ResourceOptions,
 ) -> gcp.serviceaccount.Account:
-    """Create a runtime service account without declaring access grants."""
     return gcp.serviceaccount.Account(
         "sa",
         account_id=account_id,

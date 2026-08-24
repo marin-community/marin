@@ -15,12 +15,19 @@ from iac.gcp.iam import (
 )
 
 _REGION = "us-central1"
+_SERVICE = "marin-grafana"
+_SECRETS = (
+    "cloudsql-grafana-password",
+    "marin-grafana-cw-read-token",
+    "marin-grafana-github-app-private-key",
+    "marin-grafana-slack-bot-token",
+)
 
 
 def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> GcpIamGrantSet:
     """Return Grafana grants for composition into the global IAM stack."""
     deploy_account = f"serviceAccount:marin-cd-cloud-run-deploy@{project}.iam.gserviceaccount.com"
-    runtime_account = f"serviceAccount:marin-grafana@{project}.iam.gserviceaccount.com"
+    runtime_account = f"serviceAccount:{_SERVICE}@{project}.iam.gserviceaccount.com"
     loom_account = f"serviceAccount:loom-vm@{project}.iam.gserviceaccount.com"
     secret_grants = (
         GcpRoleGrant(
@@ -29,26 +36,18 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
         ),
         GcpRoleGrant(role="roles/secretmanager.secretAccessor", members=(runtime_account,)),
     )
-    # The live-policy audit for #8455 found no SMTP accessor grant. Keep it out of this transfer
-    # until the follow-up policy review decides whether Grafana should receive it.
+    # The live-policy audit found no SMTP accessor grant. Omit it until policy review approves
+    # granting Grafana access.
     return GcpIamGrantSet(
         project_grants=(
             GcpRoleGrant(role="roles/cloudsql.client", members=(runtime_account,)),
             GcpRoleGrant(role="roles/compute.viewer", members=(runtime_account,)),
         ),
-        secrets=tuple(
-            GcpSecretIam(secret=secret, grants=secret_grants)
-            for secret in (
-                "cloudsql-grafana-password",
-                "marin-grafana-cw-read-token",
-                "marin-grafana-github-app-private-key",
-                "marin-grafana-slack-bot-token",
-            )
-        ),
+        secrets=tuple(GcpSecretIam(secret=secret, grants=secret_grants) for secret in _SECRETS),
         artifact_repositories=(
             GcpArtifactRepositoryIam(
                 location=_REGION,
-                repository="marin-grafana",
+                repository=_SERVICE,
                 grants=(
                     GcpRoleGrant(
                         role=f"projects/{project}/roles/marinArtifactRegistryIamManager",
@@ -61,7 +60,7 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
         cloud_run_iap=(
             GcpCloudRunIapIam(
                 location=_REGION,
-                service="marin-grafana",
+                service=_SERVICE,
                 iap_grants=(
                     GcpRoleGrant(
                         role="roles/iap.httpsResourceAccessor",

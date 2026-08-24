@@ -30,8 +30,8 @@ bucket, and Cloud Run IAP grants. Declare grants in
 and Loom modules; application stacks and deployment scripts must not declare or
 mutate them. This central ownership is the policy boundary required for
 authoritative IAM reconciliation. The provider resources remain additive
-`*IAMMember` resources; issue #8455 tracks their conversion to authoritative
-bindings after the live-policy inventory is imported.
+`*IAMMember` resources during inventory adoption. Convert them to authoritative
+bindings in a separately reviewed change after importing the live-policy inventory.
 
 When a grant targets a resource owned by another stack, create that resource
 before applying the global IAM stack. Omit code-declared grants that the

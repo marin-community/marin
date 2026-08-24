@@ -15,12 +15,18 @@ from iac.gcp.iam import (
 )
 
 _REGION = "us-central1"
+_SERVICE = "marin-evaldash"
+_SECRETS = (
+    "cloudsql-evals-password",
+    "cw-object-storage-key-id",
+    "cw-object-storage-key-secret",
+)
 
 
 def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> GcpIamGrantSet:
     """Return EvalDash grants for composition into the global IAM stack."""
     deploy_account = f"serviceAccount:marin-cd-cloud-run-deploy@{project}.iam.gserviceaccount.com"
-    runtime_account = f"serviceAccount:marin-evaldash@{project}.iam.gserviceaccount.com"
+    runtime_account = f"serviceAccount:{_SERVICE}@{project}.iam.gserviceaccount.com"
     loom_account = f"serviceAccount:loom-vm@{project}.iam.gserviceaccount.com"
     return GcpIamGrantSet(
         project_grants=(
@@ -33,23 +39,19 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                 secret=secret,
                 grants=(GcpRoleGrant(role="roles/secretmanager.secretAccessor", members=(runtime_account,)),),
             )
-            for secret in (
-                "cloudsql-evals-password",
-                "cw-object-storage-key-id",
-                "cw-object-storage-key-secret",
-            )
+            for secret in _SECRETS
         ),
         artifact_repositories=(
             GcpArtifactRepositoryIam(
                 location=_REGION,
-                repository="marin-evaldash",
+                repository=_SERVICE,
                 grants=(GcpRoleGrant(role="roles/artifactregistry.writer", members=(deploy_account,)),),
             ),
         ),
         cloud_run_iap=(
             GcpCloudRunIapIam(
                 location=_REGION,
-                service="marin-evaldash",
+                service=_SERVICE,
                 iap_grants=(
                     GcpRoleGrant(
                         role="roles/iap.httpsResourceAccessor",
