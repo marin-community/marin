@@ -89,6 +89,7 @@ jobs:
             job run --no-wait \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
             --priority production \
+            --preemptible \
             --reserve "$RESERVE_TPU_TYPE" \
             -e RUN_ID "$RUN_ID" \
             -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \
