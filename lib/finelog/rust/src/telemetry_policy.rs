@@ -56,8 +56,8 @@ const LEVANTER_STATUS_NAMES: [&str; 5] = [
     "train_loss",
 ];
 
-// Remove superseded entries when #8563 verifies that every forwarder has
-// advanced past its last legacy segment and the corresponding hub shards are empty.
+// Remove superseded entries after every forwarder advances past its last legacy
+// segment and the corresponding hub shards are empty.
 const LEGACY_STORAGE_NAMESPACES: [(&str, &str); 12] = [
     (LEVANTER_NAMESPACE, LEVANTER_NAMESPACE),
     ("telemetry_v1.levanter.priority", LEVANTER_NAMESPACE),

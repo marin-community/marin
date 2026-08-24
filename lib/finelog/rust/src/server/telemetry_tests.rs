@@ -28,6 +28,7 @@ use crate::store::Store;
 use crate::test_support::unique_dir;
 
 type TestHttpClient = HyperClient<HttpConnector, ClientBody>;
+const GIBIBYTE: i64 = 1024 * 1024 * 1024;
 
 struct TestResponse {
     status: StatusCode,
@@ -258,7 +259,7 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
     let schema = store.get_table_schema("telemetry_v1").unwrap();
     assert_eq!(
         store.get_policy("telemetry_v1").unwrap().max_bytes,
-        Some(50 * 1024 * 1024 * 1024)
+        Some(50 * GIBIBYTE)
     );
     let storage_namespaces = [
         ("telemetry_storage_v1.levanter.status", 22),
@@ -270,14 +271,14 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
     for (namespace, max_gibibytes) in storage_namespaces {
         assert_eq!(
             store.get_policy(namespace).unwrap().max_bytes,
-            Some(max_gibibytes * 1024 * 1024 * 1024)
+            Some(max_gibibytes * GIBIBYTE)
         );
     }
     let storage_bytes = storage_namespaces
         .iter()
         .map(|(namespace, _)| store.get_policy(namespace).unwrap().max_bytes.unwrap())
         .sum::<i64>();
-    assert_eq!(storage_bytes, 50 * 1024 * 1024 * 1024);
+    assert_eq!(storage_bytes, 50 * GIBIBYTE);
 
     for name in ["service", "kind", "name"] {
         let column = schema

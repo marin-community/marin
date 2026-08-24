@@ -29,7 +29,9 @@ logger = logging.getLogger(__name__)
 _CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
 _EVERY_STEP_METRICS = frozenset({"train_loss", "step", "phase", "progress_time_seconds", "global_step"})
 _DETAIL_LOG_INTERVAL = 10
-_TELEMETER = telemetry.writer("levanter")
+_TELEMETRY_SERVICE = "levanter"
+_TELEMETRY_SCOPE = "levanter"
+_TELEMETER = telemetry.writer(_TELEMETRY_SCOPE)
 
 
 class TrainingPhase(IntEnum):
@@ -256,8 +258,8 @@ class TelemetryConfig(TrackerConfig):
     def init(self, run_id: Optional[str]) -> Tracker:
         process_index = jax.process_index()
         runtime_telemetry.configure(
-            "levanter",
-            scope="levanter",
+            _TELEMETRY_SERVICE,
+            scope=_TELEMETRY_SCOPE,
             run_id=run_id,
             process_index=process_index,
         )

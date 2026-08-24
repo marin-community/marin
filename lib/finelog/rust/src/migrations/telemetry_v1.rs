@@ -1259,6 +1259,12 @@ mod tests {
         output: PathBuf,
     }
 
+    struct PreparedStore {
+        dirs: TestDirs,
+        manifest: MigrationManifest,
+        source_sha: String,
+    }
+
     impl TestDirs {
         fn new(name: &str) -> Self {
             let nonce = SystemTime::now()
@@ -1366,7 +1372,7 @@ mod tests {
             .0
     }
 
-    fn prepared_store() -> (TestDirs, MigrationManifest, String) {
+    fn prepared_store() -> PreparedStore {
         let dirs = TestDirs::new("prepare");
         let catalog = Catalog::open(Some(&dirs.source)).unwrap();
         let root = add_segment(
@@ -1429,12 +1435,20 @@ mod tests {
             batch_rows: 2,
         })
         .unwrap();
-        (dirs, manifest, source_sha)
+        PreparedStore {
+            dirs,
+            manifest,
+            source_sha,
+        }
     }
 
     #[test]
     fn prepare_store_routes_every_legacy_row_and_preserves_the_source() {
-        let (dirs, manifest, source_sha) = prepared_store();
+        let PreparedStore {
+            dirs,
+            manifest,
+            source_sha,
+        } = prepared_store();
 
         assert_eq!(manifest.input_rows, 7);
         assert_eq!(manifest.output_rows, 7);
@@ -1496,7 +1510,11 @@ mod tests {
 
     #[test]
     fn prepare_store_resume_reuses_verified_outputs_without_duplicates() {
-        let (dirs, first, _source_sha) = prepared_store();
+        let PreparedStore {
+            dirs,
+            manifest: first,
+            ..
+        } = prepared_store();
         let second = prepare_store(&PrepareConfig {
             source_dir: dirs.source.clone(),
             output_dir: dirs.output.clone(),
@@ -1521,7 +1539,7 @@ mod tests {
 
     #[tokio::test]
     async fn prepared_store_boots_with_semantic_query_aliases() {
-        let (dirs, _manifest, _source_sha) = prepared_store();
+        let PreparedStore { dirs, .. } = prepared_store();
         let store = Store::new(
             Some(dirs.output.clone()),
             String::new(),
@@ -1549,7 +1567,7 @@ mod tests {
 
     #[test]
     fn verify_store_rejects_a_changed_source_snapshot() {
-        let (dirs, _manifest, _source_sha) = prepared_store();
+        let PreparedStore { dirs, .. } = prepared_store();
         let root = dirs
             .source
             .join("telemetry_v1/seg_L1_0000000000000000001.parquet");
@@ -1561,7 +1579,7 @@ mod tests {
 
     #[test]
     fn verify_store_rejects_a_missing_migrated_catalog_row() {
-        let (dirs, manifest, _source_sha) = prepared_store();
+        let PreparedStore { dirs, manifest, .. } = prepared_store();
         let output = &manifest.source_segments[0].outputs[0];
         let catalog_path = Path::new(&manifest.final_log_dir).join(&output.relative_path);
         let connection = rusqlite::Connection::open(dirs.output.join(CATALOG_DB_FILENAME)).unwrap();

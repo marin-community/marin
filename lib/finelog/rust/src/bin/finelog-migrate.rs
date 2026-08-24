@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use finelog::migrations::telemetry_v1::{prepare_store, verify_store, PrepareConfig};
 
+const DEFAULT_BATCH_ROWS: usize = 65_536;
+
 #[derive(Parser)]
 #[command(name = "finelog-migrate")]
 #[command(about = "Prepare and verify offline Finelog store migrations")]
@@ -25,7 +27,7 @@ enum Command {
         #[arg(long)]
         final_log_dir: PathBuf,
         /// Rows decoded from a source Parquet segment at a time.
-        #[arg(long, default_value_t = 65_536)]
+        #[arg(long, default_value_t = DEFAULT_BATCH_ROWS)]
         batch_rows: usize,
     },
     /// Recheck a prepared replacement store without changing it.
@@ -34,7 +36,7 @@ enum Command {
         source_dir: PathBuf,
         #[arg(long)]
         output_dir: PathBuf,
-        #[arg(long, default_value_t = 65_536)]
+        #[arg(long, default_value_t = DEFAULT_BATCH_ROWS)]
         batch_rows: usize,
     },
 }
