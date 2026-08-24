@@ -69,7 +69,7 @@ and copy/paste are acceptable there. Production-facing code keeps the usual
 For each non-trivial experiment:
 
 1. Do the dev work needed for the experiment.
-2. Run the benchmark or experiment. Use `babysit-job` for long-lived runs.
+2. Run the benchmark or experiment. Use the `use-iris` skill for long-lived runs.
 3. Append exact commands, config, key outputs, interpretation, and next decision
    to the logbook. Follow `task-logbook` for issue updates when an issue exists.
 4. Push dense scalar series, plots, or raw artifacts to W&B or another store
