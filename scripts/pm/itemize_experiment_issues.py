@@ -80,7 +80,6 @@ def get_github_issues():
         # Look for experiment links in the description
         description = issue.body or ""
 
-        # Find all experiment URLs
         urls = re.findall(r"https://(?:wandb\.ai/[^\s)]+|api\.wandb\.ai/links/[^\s)]+)", description)
 
         if urls:
