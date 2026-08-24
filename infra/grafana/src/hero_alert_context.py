@@ -20,7 +20,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 import pyarrow as pa
-from config import HERO_NOTIFICATION
+from config import HERO_NOTIFICATION, HERO_OPERATOR_BEHAVIOR, OPERATOR_BEHAVIOR_LABEL
 from hero_runs import hero_run_id, root_job_for, sql_epoch_ms, sql_timestamp
 from vllm_observability import sql_string
 
@@ -90,11 +90,18 @@ def hero_alert_identity(alerts: Sequence[Mapping[str, object]]) -> HeroAlertIden
         if not isinstance(labels, Mapping):
             raise ValueError("hero alert has no labels")
         notification = str(labels.get("notification", ""))
+        behavior = str(labels.get(OPERATOR_BEHAVIOR_LABEL, ""))
         cluster = str(labels.get("cluster", ""))
         run_id = str(labels.get("run", ""))
         root_job = str(labels.get("job", ""))
-        if notification != HERO_NOTIFICATION or not cluster or not run_id or not root_job:
-            raise ValueError("hero alerts require notification, cluster, run, and job labels")
+        if (
+            notification != HERO_NOTIFICATION
+            or behavior != HERO_OPERATOR_BEHAVIOR
+            or not cluster
+            or not run_id
+            or not root_job
+        ):
+            raise ValueError("hero alerts require hero notification and operator behavior, cluster, run, and job labels")
         if (
             len(cluster) > 128
             or len(run_id) > 128

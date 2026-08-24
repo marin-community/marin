@@ -123,41 +123,6 @@ def test_empty_runtime_policy_cannot_prune_existing_profiles() -> None:
         replace(base, prune_deployment=True, profiles=(), workloads=(), github_federations=())
 
 
-def test_workload_additional_profiles_must_exist_and_be_unique() -> None:
-    base = deployment_config()
-    unknown = WorkloadIdentityConfig.parse(
-        {
-            "name": "grafana-alerts",
-            "profile": "ops",
-            "additionalProfiles": ["hero-ops"],
-            "serviceAccountId": "marin-grafana",
-        }
-    )
-    with pytest.raises(ValueError, match="unknown profile 'hero-ops'"):
-        replace(base, workloads=(unknown,))
-
-    with pytest.raises(ValueError, match="must be unique"):
-        WorkloadIdentityConfig.parse(
-            {
-                "name": "grafana-alerts",
-                "profile": "ops",
-                "additionalProfiles": ["ops"],
-                "serviceAccountId": "marin-grafana",
-            }
-        )
-
-
-def test_production_hero_operator_has_isolated_capacity_and_federation() -> None:
-    stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())["config"]
-    hero_profile = stack["marin-loom:profiles"]["hero-ops"]
-    grafana = next(workload for workload in stack["marin-loom:workloads"] if workload["name"] == "grafana-alerts")
-
-    assert hero_profile["maxConcurrent"] == 1
-    assert hero_profile["instructionsFile"] == "profiles/hero-ops/AGENTS.md"
-    assert grafana["profile"] == "ops"
-    assert grafana["additionalProfiles"] == ["hero-ops"]
-
-
 def test_domain_is_a_canonical_hostname() -> None:
     with pytest.raises(ValueError, match="canonical hostname"):
         replace(deployment_config(), domain="https://loom.example.com/")
@@ -195,6 +160,19 @@ def test_fork_ferry_workflow_stays_within_loom_profile_capacity() -> None:
     units = workflow["jobs"]["ferry"]["strategy"]["matrix"]["include"]
 
     assert len(units) <= max_concurrent
+
+
+def test_grafana_operator_behaviors_share_two_session_ops_capacity() -> None:
+    stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())
+    profiles = stack["config"]["marin-loom:profiles"]
+    (grafana_workload,) = [
+        workload for workload in stack["config"]["marin-loom:workloads"] if workload["name"] == "grafana-alerts"
+    ]
+
+    assert profiles["ops"]["maxConcurrent"] == 2
+    assert "hero-ops" not in profiles
+    assert grafana_workload["profile"] == "ops"
+    assert "additionalProfiles" not in grafana_workload
 
 
 def test_release_reference_must_be_the_expected_registry_digest() -> None:
@@ -413,16 +391,13 @@ def test_existing_service_account_can_be_bound_to_a_workload_profile():
         {
             "name": "grafana-alerts",
             "profile": "ops",
-            "additionalProfiles": ["hero-ops"],
             "serviceAccountId": "marin-grafana",
             "createServiceAccount": False,
         }
     )
     mocks = RecordingMocks()
     pulumi.runtime.set_mocks(mocks, project="marin-loom", stack="test", preview=False)
-    infrastructure = create_infrastructure(
-        replace(base, profiles=(*base.profiles, replace(base.profiles[0], name="hero-ops")), workloads=(grafana,))
-    )
+    infrastructure = create_infrastructure(replace(base, workloads=(grafana,)))
 
     def check(_: object) -> None:
         assert not any(resource.name == "loom-workload-grafana-alerts" for resource in mocks.resources)
@@ -430,6 +405,6 @@ def test_existing_service_account_can_be_bound_to_a_workload_profile():
         mapping = manifest["federations"][0]
         assert mapping["service_account"] == "marin-grafana@example.iam.gserviceaccount.com"
         assert mapping["subject"] == "99887766554433221100"
-        assert mapping["profiles"] == ["ops", "hero-ops"]
+        assert mapping["profiles"] == ["ops"]
 
     return infrastructure.instance.id.apply(check)

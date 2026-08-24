@@ -23,6 +23,7 @@ def alert(*, job: str = "/power/hero-example-coord", run: str = "hero-example") 
         "labels": {
             "alertname": "TrainingTelemetryGone",
             "notification": "hero-run",
+            "operator_behavior": "hero",
             "cluster": "cw-a",
             "job": job,
             "run": run,
@@ -48,6 +49,11 @@ def test_hero_alert_identity_rejects_a_mixed_or_spoofed_group():
 
     with pytest.raises(ValueError, match="disagree"):
         hero_alert_identity([alert(run="hero-someone-else")])
+
+    wrong_behavior = alert()
+    wrong_behavior["labels"]["operator_behavior"] = "default"
+    with pytest.raises(ValueError, match="operator behavior"):
+        hero_alert_identity([wrong_behavior])
 
 
 def test_execution_uid_recovers_a_prior_coordinator_root():

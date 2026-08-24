@@ -18,7 +18,7 @@ import pulumi
 import pulumi_cloudflare as cloudflare
 import pulumi_gcp as gcp
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
-from stack_outputs import require_workload_profile, workload_client
+from stack_outputs import workload_client
 
 # Cloud Run serves every custom domain from this fixed Google frontend; the mapping resource
 # routes the host to the service, and the DNS CNAME points the host at the frontend.
@@ -31,7 +31,6 @@ REGION = "us-central1"
 SERVICE = "marin-grafana"
 LOOM_STACK = "organization/marin-loom/marin-loom"
 LOOM_WORKLOAD = "grafana-alerts"
-LOOM_HERO_ALERT_PROFILE = "hero-ops"
 LOOM_ALERT_REPOSITORY = "marin-community/marin"
 # Secret Manager secret holding the Slack bot token the bridge announces alerts
 # with. A bot token rather than an incoming webhook because only chat.postMessage
@@ -115,9 +114,6 @@ def main() -> None:
         # identity to the dedicated profile; no long-lived Loom token is stored.
         env["LOOM_ALERT_URL"] = loom_client.apply(lambda client: client["loomUrl"])
         env["LOOM_ALERT_PROFILE"] = loom_client.apply(lambda client: client["profile"])
-        env["LOOM_HERO_ALERT_PROFILE"] = loom_client.apply(
-            lambda client: require_workload_profile(client, LOOM_HERO_ALERT_PROFILE)
-        )
         env["LOOM_ALERT_REPOSITORY"] = LOOM_ALERT_REPOSITORY
         # The bridge is the only thing that announces alerts now, so neither the
         # channel nor the token is optional the way SMTP is: without them the

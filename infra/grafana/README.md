@@ -464,14 +464,15 @@ reaches it instead of launching a second session — see [Loom's
 slack-trigger docs](https://github.com/marin-community/loom/blob/main/docs/slack-trigger.md).
 The session link is threaded under the announcement.
 
-Generic firing groups feed the live `Grafana operator` session. Every firing group
-whose alerts carry `notification=hero-run` instead goes to the separate `hero-ops`
-profile, including `TrainingProgressStalled`, `TrainingLossSpike`,
-`TrainingTelemetryGone`, and `TrainingOptimizerUnstable`. That gives hero
-operations independent concurrency while leaving the general operator free.
-Either operator can delegate independent incidents to child Loom sessions.
-Repeated notifications for
-the same alert fingerprint and start time reuse the same Loom run, and thread a
+Generic firing groups feed the live `Grafana operator` session on the `operator`
+channel. `TrainingProgressStalled`, `TrainingLossSpike`,
+`TrainingTelemetryGone`, and `TrainingOptimizerUnstable` also carry the trusted
+`operator_behavior=hero` label, which selects the `operator:hero` channel. Loom
+therefore keeps a separate durable coordinator for Hero while both behaviors use
+the same `ops` policy profile and its shared concurrency pool. Either operator can
+delegate independent incidents to child Loom sessions.
+Repeated notifications for the same alert fingerprint and start time reuse the
+same Loom run, and thread a
 short "still firing" note under the original announcement. The Slack thread key is
 the Grafana notification group key. A replacement alert instance in the same group
 therefore keeps the thread even when the prior instance first resolves. Resolved
@@ -481,7 +482,7 @@ unreachable, and that failure is reported into the thread instead of only into
 Grafana's notification history. A Slack failure is logged and still opens the
 triage session.
 
-Before opening a hero run, the bridge attaches a bounded `heroContext` snapshot.
+Before opening a hero run, the bridge attaches a bounded `operatorContext` snapshot.
 It covers recent execution UIDs and their newest telemetry, Iris root state and
 event groups, and warning/error log excerpts near execution and task-event
 boundaries. Log selection is generic: it retains messages localized to a minority
@@ -497,10 +498,9 @@ them: the next notification for a still-firing alert announces afresh, and a
 resolution for an alert this revision never announced is dropped rather than
 posted bare.
 
-The Loom Pulumi stack binds the exact `marin-grafana`
-service-account email and numeric subject to the `ops` and `hero-ops` profiles in
-one federation mapping. The Grafana stack reads the Loom URL and granted profiles
-from that stack's `workloadClients` output, so
+The Loom Pulumi stack binds the exact `marin-grafana` service-account email and
+numeric subject to the `ops` profile. The Grafana stack reads the Loom URL and
+profile from that stack's `workloadClients` output, so
 the caller and verifier cannot drift through duplicated configuration.
 
 ## Secrets and rotation

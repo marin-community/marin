@@ -79,8 +79,10 @@ from cache import TtlCache
 from config import (
     BRIDGE_PORT,
     CLUSTERS,
+    DEFAULT_OPERATOR_BEHAVIOR,
     FINELOG_SLOW_THRESHOLD_MS,
     GITHUB_REPO,
+    HERO_OPERATOR_BEHAVIOR,
     K8S_CLUSTERS,
     BridgeConfig,
     ClusterTarget,
@@ -111,6 +113,7 @@ from loom_alerts import (
     LoomAlertClient,
     LoomAlertDeliveryError,
     LoomAlertPayloadError,
+    OperatorBehavior,
     SlackAlertClient,
     SlackAnnouncementError,
 )
@@ -131,6 +134,15 @@ from wandb_source import WandbSource
 from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
 
 logger = logging.getLogger(__name__)
+
+HERO_OPERATOR_INSTRUCTIONS = (
+    "Keep one durable view of the logical hero run across execution retries. Prefer stable discovery pointers over "
+    "assumptions: read docs/ops/hero-run-health-alerts.md, the alert's linked runbook, and lib/iris/OPS.md, then "
+    "inspect the current launcher, configuration, and applicable skills before choosing live probes. Checkpoint "
+    "paths, task layouts, and retry details may change during a run. Correlate execution boundaries, telemetry, "
+    "Iris task state and events, and task logs; distinguish the first causal failure from expected gang-scheduling "
+    "fallout."
+)
 
 # Window macros a panel writes into its SQL, substituted with tz-naive UTC
 # TIMESTAMP literals before the query runs.
@@ -859,7 +871,25 @@ def main() -> None:
     loom_alerts = None
     if config.loom_alerts is not None:
         hero_context = HeroAlertContextAssembler(finelog_sources[_FINELOG_HUB_CLUSTER], max_rows=config.max_rows)
-        loom_alerts = LoomAlertClient(config.loom_alerts, hero_context=hero_context.assemble)
+        loom_alerts = LoomAlertClient(
+            config.loom_alerts,
+            behaviors=(
+                OperatorBehavior(
+                    name=DEFAULT_OPERATOR_BEHAVIOR,
+                    channel="operator",
+                    session_title="Grafana operator",
+                    operator_name="Marin Grafana operator",
+                ),
+                OperatorBehavior(
+                    name=HERO_OPERATOR_BEHAVIOR,
+                    channel="operator:hero",
+                    session_title="Hero run operator",
+                    operator_name="Marin hero-run operator",
+                    instructions=HERO_OPERATOR_INSTRUCTIONS,
+                    context=hero_context.assemble,
+                ),
+            ),
+        )
     slack_alerts = SlackAlertClient(config.loom_alerts) if config.loom_alerts is not None else None
     logger.info("grafana bridge serving %s on :%d", sorted(finelog_sources), BRIDGE_PORT)
     # Loopback only: Grafana fetches from the same container.

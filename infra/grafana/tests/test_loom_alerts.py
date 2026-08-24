@@ -15,6 +15,7 @@ from loom_alerts import (
     LoomAlertClient,
     LoomAlertDeliveryError,
     LoomAlertPayloadError,
+    OperatorBehavior,
     SlackAlertClient,
     SlackAnnouncementError,
 )
@@ -26,7 +27,6 @@ def loom_config() -> LoomAlertConfig:
     return LoomAlertConfig(
         url="https://loom.example.com",
         profile="ops",
-        hero_profile="hero-ops",
         repository="marin-community/marin",
         http_timeout=5.0,
         slack=SlackAlertConfig(bot_token="xoxb-test", channel=SLACK_CHANNEL),
@@ -71,7 +71,7 @@ def client_for(
     *,
     runs: list[dict] | None = None,
     loom_status: int | None = None,
-    hero_context=None,
+    operator_context=None,
 ):
     """A client whose Slack and Loom legs are both mocked.
 
@@ -101,7 +101,23 @@ def client_for(
             return httpx.Response(201, json={"id": "run-1", "session_id": "session-1"})
         raise AssertionError(f"unexpected request: {request.url}")
 
-    return LoomAlertClient(loom_config(), transport=httpx.MockTransport(handler), hero_context=hero_context)
+    behaviors = (
+        OperatorBehavior(
+            name="default",
+            channel="operator",
+            session_title="Grafana operator",
+            operator_name="Marin Grafana operator",
+        ),
+        OperatorBehavior(
+            name="hero",
+            channel="operator:hero",
+            session_title="Hero run operator",
+            operator_name="Marin hero-run operator",
+            instructions="Keep one durable view of the logical hero run across execution retries.",
+            context=operator_context,
+        ),
+    )
+    return LoomAlertClient(loom_config(), behaviors=behaviors, transport=httpx.MockTransport(handler))
 
 
 def alert_payload(status: str = "firing") -> dict:
@@ -159,6 +175,7 @@ def hero_stall_payload(
         "run": "hero-run",
         "severity": "critical",
         "notification": "hero-run",
+        "operator_behavior": "hero",
     }
     payload["groupKey"] = '{}:{alertname="TrainingProgressStalled", run="hero-run"}'
     payload["commonLabels"] = labels
@@ -211,7 +228,7 @@ def test_firing_alert_is_announced_then_delivered_on_that_thread():
     ]
 
 
-def test_every_hero_run_notification_uses_the_dedicated_profile_and_first_pass_context():
+def test_hero_behavior_uses_a_separate_channel_and_first_pass_operator_context():
     runs: list[dict] = []
     slack = FakeSlack()
 
@@ -220,17 +237,19 @@ def test_every_hero_run_notification_uses_the_dedicated_profile_and_first_pass_c
         assert alerts[0]["labels"]["notification"] == "hero-run"
         return {"status": "complete", "evidence": ["bounded"]}
 
-    asyncio.run(client_for(slack, runs=runs, hero_context=context).submit(hero_stall_payload()))
+    asyncio.run(client_for(slack, runs=runs, operator_context=context).submit(hero_stall_payload()))
 
     request = runs[0]
-    assert request["profile"] == "hero-ops"
-    assert request["channel"] == "operator"
+    assert request["profile"] == "ops"
+    assert request["channel"] == "operator:hero"
     assert request["session"]["title"] == "Hero run operator"
-    assert '"heroContext"' in request["session"]["goal"]
+    assert '"operatorBehavior": "hero"' in request["session"]["goal"]
+    assert '"operatorContext"' in request["session"]["goal"]
+    assert '"heroContext"' not in request["session"]["goal"]
     assert "bounded first-pass snapshot" in request["session"]["goal"]
 
 
-def test_training_loss_spike_routes_by_notification_label_not_alert_name():
+def test_operator_behavior_routes_independently_of_alert_name():
     runs: list[dict] = []
     payload = hero_stall_payload()
     payload["alerts"][0]["labels"]["alertname"] = "TrainingLossSpike"
@@ -238,7 +257,32 @@ def test_training_loss_spike_routes_by_notification_label_not_alert_name():
 
     asyncio.run(client_for(FakeSlack(), runs=runs).submit(payload))
 
-    assert runs[0]["profile"] == "hero-ops"
+    assert runs[0]["channel"] == "operator:hero"
+
+
+def test_unknown_operator_behavior_uses_the_default_operator():
+    runs: list[dict] = []
+    payload = hero_stall_payload()
+    payload["alerts"][0]["labels"]["operator_behavior"] = "untrusted-channel"
+    payload["commonLabels"]["operator_behavior"] = "untrusted-channel"
+
+    asyncio.run(client_for(FakeSlack(), runs=runs).submit(payload))
+
+    assert runs[0]["profile"] == "ops"
+    assert runs[0]["channel"] == "operator"
+    assert '"operatorBehavior": "default"' in runs[0]["session"]["goal"]
+
+
+def test_mixed_operator_behaviors_use_the_default_operator():
+    runs: list[dict] = []
+    payload = hero_stall_payload()
+    generic_alert = alert_payload()["alerts"][0]
+    payload["alerts"].append(generic_alert)
+
+    asyncio.run(client_for(FakeSlack(), runs=runs).submit(payload))
+
+    assert runs[0]["channel"] == "operator"
+    assert '"operatorBehavior": "default"' in runs[0]["session"]["goal"]
 
 
 def test_context_collection_failure_does_not_drop_the_hero_alert():
@@ -247,22 +291,24 @@ def test_context_collection_failure_does_not_drop_the_hero_alert():
     async def unavailable(_alerts):
         raise RuntimeError("finelog unavailable")
 
-    result = asyncio.run(client_for(FakeSlack(), runs=runs, hero_context=unavailable).submit(hero_stall_payload()))
+    result = asyncio.run(client_for(FakeSlack(), runs=runs, operator_context=unavailable).submit(hero_stall_payload()))
 
     assert result == {"id": "run-1", "session_id": "session-1"}
-    assert runs[0]["profile"] == "hero-ops"
+    assert runs[0]["channel"] == "operator:hero"
     assert '"status": "unavailable"' in runs[0]["session"]["goal"]
     assert "finelog unavailable" not in runs[0]["session"]["goal"]
 
 
 def test_context_collection_timeout_does_not_hold_open_delivery(monkeypatch):
     runs: list[dict] = []
-    monkeypatch.setattr(loom_alerts, "HERO_CONTEXT_TIMEOUT", 0.001)
+    monkeypatch.setattr(loom_alerts, "OPERATOR_CONTEXT_TIMEOUT", 0.001)
 
     async def never_finishes(_alerts):
         await asyncio.Event().wait()
 
-    result = asyncio.run(client_for(FakeSlack(), runs=runs, hero_context=never_finishes).submit(hero_stall_payload()))
+    result = asyncio.run(
+        client_for(FakeSlack(), runs=runs, operator_context=never_finishes).submit(hero_stall_payload())
+    )
 
     assert result == {"id": "run-1", "session_id": "session-1"}
     assert '"error": "TimeoutError"' in runs[0]["session"]["goal"]

@@ -7,7 +7,6 @@ from config import BridgeConfig
 LOOM_ENV = (
     "LOOM_ALERT_URL",
     "LOOM_ALERT_PROFILE",
-    "LOOM_HERO_ALERT_PROFILE",
     "LOOM_ALERT_REPOSITORY",
 )
 
@@ -17,7 +16,6 @@ def test_loom_alert_configuration_is_explicit(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LOOM_ALERT_URL", "https://loom.example.com/")
     monkeypatch.setenv("LOOM_ALERT_PROFILE", "ops")
-    monkeypatch.setenv("LOOM_HERO_ALERT_PROFILE", "hero-ops")
     monkeypatch.setenv("LOOM_ALERT_REPOSITORY", "marin-community/marin")
     monkeypatch.setenv("SLACK_ALERTS_BOT_TOKEN", "xoxb-test")
     monkeypatch.setenv("SLACK_ALERTS_CHANNEL", "C0123ABCD")
@@ -27,7 +25,6 @@ def test_loom_alert_configuration_is_explicit(monkeypatch):
     assert config.loom_alerts is not None
     assert config.loom_alerts.url == "https://loom.example.com"
     assert config.loom_alerts.profile == "ops"
-    assert config.loom_alerts.hero_profile == "hero-ops"
     assert config.loom_alerts.repository == "marin-community/marin"
     assert config.loom_alerts.slack.bot_token == "xoxb-test"
     assert config.loom_alerts.slack.channel == "C0123ABCD"
@@ -49,7 +46,6 @@ def test_alert_delivery_without_a_slack_destination_fails_fast(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LOOM_ALERT_URL", "https://loom.example.com")
     monkeypatch.setenv("LOOM_ALERT_PROFILE", "ops")
-    monkeypatch.setenv("LOOM_HERO_ALERT_PROFILE", "hero-ops")
     monkeypatch.setenv("LOOM_ALERT_REPOSITORY", "marin-community/marin")
 
     with pytest.raises(ValueError, match="SLACK_ALERTS_BOT_TOKEN"):
@@ -64,7 +60,6 @@ def test_a_secret_payload_with_a_trailing_newline_is_usable(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LOOM_ALERT_URL", "https://loom.example.com")
     monkeypatch.setenv("LOOM_ALERT_PROFILE", "ops")
-    monkeypatch.setenv("LOOM_HERO_ALERT_PROFILE", "hero-ops")
     monkeypatch.setenv("LOOM_ALERT_REPOSITORY", "marin-community/marin")
     monkeypatch.setenv("SLACK_ALERTS_BOT_TOKEN", "xoxb-test\n")
     monkeypatch.setenv("SLACK_ALERTS_CHANNEL", "C0123ABCD\n")
