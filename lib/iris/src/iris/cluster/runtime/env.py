@@ -28,10 +28,12 @@ IRIS_ATTEMPT_UID_ENV = "IRIS_ATTEMPT_UID"
 IRIS_NODE_NAME_ENV = "IRIS_NODE_NAME"
 IRIS_NAMESPACE_ENV = "IRIS_NAMESPACE"
 IRIS_WORKER_REGION_ENV = "IRIS_WORKER_REGION"
+IRIS_OUTPUT_DIR_ENV = "IRIS_OUTPUT_DIR"
 
 # Container paths shared across runtimes: the bundle unpacks into WORKDIR_PATH and
 # the setup script populates the venv at VENV_PATH (which the run phase activates).
 WORKDIR_PATH = "/app"
+OUTPUT_PATH = "/iris/outputs"
 VENV_PATH = f"{WORKDIR_PATH}/.venv"
 
 # Download caches, bound to node-local storage that outlives the container
@@ -58,9 +60,11 @@ SCRATCH_CACHE_PATH = "/cache"
 # var and mount disagree still runs -- it just writes to the container's own
 # writable layer and re-downloads on every task, with nothing to see in a log.
 WORKDIR_MOUNT = MountSpec("workdir", WORKDIR_PATH, kind=MountKind.WORKDIR)
+OUTPUT_MOUNT = MountSpec("task-outputs", OUTPUT_PATH, kind=MountKind.OUTPUT)
 
 STANDARD_MOUNTS: tuple[MountSpec, ...] = (
     WORKDIR_MOUNT,
+    OUTPUT_MOUNT,
     MountSpec("tmpfs", "/tmp", kind=MountKind.TMPFS),
     MountSpec("uv-cache", UV_CACHE_PATH, kind=MountKind.CACHE),
     MountSpec("hf-cache", HF_HUB_CACHE_PATH, kind=MountKind.CACHE),
@@ -205,6 +209,7 @@ def build_common_iris_env(
     # Standard paths and binaries
     env["IRIS_BIND_HOST"] = "0.0.0.0"
     env["IRIS_WORKDIR"] = WORKDIR_PATH
+    env[IRIS_OUTPUT_DIR_ENV] = OUTPUT_PATH
     env["IRIS_PYTHON"] = "python"
     # Canonical venv the setup script populates and the run phase activates.
     # UV_PROJECT_ENVIRONMENT points uv (sync/pip install) at the same path so a

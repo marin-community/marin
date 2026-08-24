@@ -20,10 +20,11 @@ from pathlib import Path
 
 from finelog.client import LogClient, Table
 from finelog.rpc import logging_pb2
-from rigging.timing import Duration, ExponentialBackoff, Timestamp
+from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
+from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.log_keys import INJECTED_ERROR_SOURCE, STDERR_SOURCE, classify_log_level, task_log_key
 from iris.cluster.platforms.types import probe_outbound_ip
 from iris.cluster.runtime.docker import DockerContainerHandle
@@ -32,6 +33,11 @@ from iris.cluster.runtime.env import (
     IRIS_WORKER_REGION_ENV,
     STANDARD_MOUNTS,
     build_common_iris_env,
+)
+from iris.cluster.runtime.output_capture import (
+    TaskOutputLimits,
+    capture_task_outputs,
+    resolve_task_output_destination,
 )
 from iris.cluster.runtime.types import (
     ContainerConfig,
@@ -132,6 +138,13 @@ class TaskAttemptConfig:
         return self.task_attempt.require_attempt()
 
 
+@dataclass(frozen=True, slots=True)
+class _TaskOutcome:
+    state: TaskState
+    error: str | None = None
+    exit_code: int | None = None
+
+
 def build_iris_env(
     task: "TaskAttempt",
     worker_id: str | None,
@@ -204,6 +217,7 @@ class TaskAttempt:
         port_allocator: PortAllocator,
         log_client: LogClient | None,
         poll_interval_seconds: float = 5.0,
+        task_outputs: TaskOutputPolicy | None = None,
         *,
         container_handle: ContainerHandle | None = None,
         initial_status: TaskState | None = None,
@@ -245,6 +259,7 @@ class TaskAttempt:
         self._resolve_image_fn = resolve_image or (lambda x: x)
         self._port_allocator = port_allocator
         self._poll_interval_seconds = poll_interval_seconds
+        self._task_outputs = task_outputs.model_copy(deep=True) if task_outputs is not None else None
         self._log_client = log_client
         self._log_key = task_log_key(config.task_attempt)
         # Stats Table for the iris.task namespace. Tables are cached by the
@@ -267,6 +282,8 @@ class TaskAttempt:
         self.request: job_pb2.RunTaskRequest = config.request
         self.ports: dict[str, int] = {}
         self.workdir: Path | None = None
+        self.output_dir: Path | None = None
+        self.output_archive: job_pb2.TaskOutputArchive | None = None
         self._cache_dir: Path = config.cache_dir
         # Task state
         self.status: TaskState = initial_status or job_pb2.TASK_STATE_PENDING
@@ -295,6 +312,7 @@ class TaskAttempt:
         self.thread: threading.Thread | None = None
         self.cleanup_done: bool = False
         self.should_stop: bool = False
+        self._output_stop = threading.Event()
 
     @classmethod
     def adopt(
@@ -304,6 +322,8 @@ class TaskAttempt:
         log_client: LogClient | None,
         port_allocator: PortAllocator,
         poll_interval_seconds: float = 5.0,
+        task_outputs: TaskOutputPolicy | None = None,
+        task_env: dict[str, str] | None = None,
     ) -> "TaskAttempt":
         """Create a TaskAttempt that adopts an already-running container.
 
@@ -335,18 +355,20 @@ class TaskAttempt:
             worker_metadata=None,
             worker_id=discovered.worker_id,
             controller_address=None,
-            task_env=None,
+            task_env=task_env,
             default_task_image=None,
             resolve_image=None,
             port_allocator=port_allocator,
             log_client=log_client,
             poll_interval_seconds=poll_interval_seconds,
+            task_outputs=task_outputs,
             container_handle=container_handle,
             initial_status=job_pb2.TASK_STATE_RUNNING,
         )
         instance.started_at = Timestamp.now()
         instance.status_message = "adopted"
         instance.workdir = Path(discovered.workdir_host_path) if discovered.workdir_host_path else None
+        instance.output_dir = instance.workdir / ".iris-outputs" if instance.workdir is not None else None
         # Restore host-port reservations and re-mark them taken so the worker
         # never re-allocates an in-use port to a new task after restart.
         instance.ports = dict(discovered.ports)
@@ -371,7 +393,11 @@ class TaskAttempt:
 
         try:
             log_reader = handle.log_reader()
-            self._monitor_loop(handle, log_reader)
+            outcome = self._monitor_loop(handle, log_reader)
+            self._capture_outputs()
+            if self.should_stop:
+                outcome = _TaskOutcome(job_pb2.TASK_STATE_KILLED)
+            self.transition_to(outcome.state, error=outcome.error, exit_code=outcome.exit_code)
         except Exception as e:
             self._fail_from_exception(job_pb2.TASK_STATE_FAILED, "Monitoring failed", e)
         finally:
@@ -404,6 +430,7 @@ class TaskAttempt:
     def stop(self, force: bool = False) -> None:
         """Stop the container, if running."""
         self.should_stop = True
+        self._output_stop.set()
         if self._container_handle:
             self._container_handle.stop(force=force)
 
@@ -419,6 +446,7 @@ class TaskAttempt:
         # Signal the execution thread immediately, even with no container yet:
         # this bails an in-progress BUILDING-phase bundle download.
         self.should_stop = True
+        self._output_stop.set()
         if not self.has_container:
             return True
         try:
@@ -583,6 +611,8 @@ class TaskAttempt:
         safe_task_id = self.task_id.to_safe_token()
         self.workdir = self._cache_dir / "workdirs" / f"{safe_task_id}_attempt_{self.attempt_id}"
         self.workdir.mkdir(parents=True, exist_ok=True)
+        self.output_dir = self.workdir / ".iris-outputs"
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Mount tmpfs on workdir for quota enforcement (Docker only; no-op for process/k8s).
         # Must happen before _download_bundle() so staged files land on the tmpfs.
@@ -624,7 +654,11 @@ class TaskAttempt:
             self._build_container()
             self._check_cancelled()
             self._run_container()
-            self._monitor()
+            outcome = self._monitor()
+            self._capture_outputs()
+            if self.should_stop:
+                outcome = _TaskOutcome(job_pb2.TASK_STATE_KILLED)
+            self.transition_to(outcome.state, error=outcome.error, exit_code=outcome.exit_code)
         except TaskCancelled:
             self.transition_to(job_pb2.TASK_STATE_KILLED)
         except ContainerInfraError as e:
@@ -749,6 +783,7 @@ class TaskAttempt:
             timeout_seconds=timeout_seconds,
             mounts=list(STANDARD_MOUNTS),
             workdir_host_path=self.workdir,
+            output_host_path=self.output_dir,
             task_id=self.task_id.to_wire(),
             attempt_id=self.attempt_id,
             attempt_uid=self.attempt_uid,
@@ -761,6 +796,49 @@ class TaskAttempt:
         chaos_raise("worker.create_container")
         self._container_handle = self._runtime.create_container(config)
         logger.info("Container handle created for task %s", self.task_id)
+
+    def _capture_outputs(self) -> None:
+        if self._task_outputs is None:
+            return
+        if self.output_dir is None or not self.output_dir.exists():
+            self.output_archive = job_pb2.TaskOutputArchive(
+                state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UNAVAILABLE,
+                error="output_directory_unavailable",
+            )
+            return
+        if self.should_stop:
+            self.output_archive = job_pb2.TaskOutputArchive(
+                state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UNAVAILABLE,
+                error="cancelled",
+            )
+            return
+        self.status_message = "finalizing task outputs"
+        try:
+            destination = resolve_task_output_destination(
+                self._task_outputs,
+                self.task_id,
+                self.attempt_uid,
+                local_root=self._cache_dir / "task-output-archives",
+                source_prefix=self._task_env.get("MARIN_PREFIX"),
+            )
+            self.output_archive = capture_task_outputs(
+                self.output_dir,
+                destination,
+                TaskOutputLimits(
+                    max_bytes=self._task_outputs.max_bytes,
+                    max_entries=self._task_outputs.max_entries,
+                ),
+                Deadline.from_now(self._task_outputs.finalization_timeout),
+                self._output_stop,
+            )
+        except Exception as exc:
+            logger.exception("Failed to finalize task outputs for %s", self.task_id)
+            self.output_archive = job_pb2.TaskOutputArchive(
+                state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_FAILED,
+                error=f"storage_error: {str(exc)[:900]}",
+            )
+        finally:
+            self.status_message = ""
 
     def _build_container(self) -> None:
         """Run setup commands (uv sync, pip install, etc) during BUILDING state.
@@ -797,13 +875,15 @@ class TaskAttempt:
             self.ports,
         )
 
-    def _monitor(self) -> None:
+    def _monitor(self) -> _TaskOutcome:
         """Monitor task execution: check status, collect stats, stream logs.
 
         Polls container status at regular intervals until the container stops.
         Streams logs incrementally into task.logs (single source of truth).
         Collects runtime statistics (CPU, memory, disk).
-        Updates task state to terminal status (SUCCEEDED/FAILED/KILLED) when container stops.
+        Returns the terminal outcome when the container stops. The caller publishes
+        it after output finalization, so the controller cannot observe a terminal
+        attempt before its archive metadata is available.
 
         Execution timeouts are enforced by the controller, not the worker.
         Profiling is handled centrally by the controller's profile loop thread.
@@ -813,19 +893,18 @@ class TaskAttempt:
         handle = self._container_handle
 
         log_reader = handle.log_reader()
-        self._monitor_loop(handle, log_reader)
+        return self._monitor_loop(handle, log_reader)
 
     def _monitor_loop(
         self,
         handle: ContainerHandle,
         log_reader: RuntimeLogReader,
-    ) -> None:
+    ) -> _TaskOutcome:
         last_disk_check = 0.0
         while True:
             if rule := chaos("worker.task_monitor"):
                 time.sleep(rule.delay_seconds)
-                self.transition_to(job_pb2.TASK_STATE_FAILED, error="chaos: monitor crashed")
-                break
+                return _TaskOutcome(job_pb2.TASK_STATE_FAILED, error="chaos: monitor crashed")
 
             # Check if we should stop
             if self.should_stop:
@@ -847,8 +926,7 @@ class TaskAttempt:
                         _KILL_EXIT_WAIT_TIMEOUT,
                     )
                 self._stream_logs(log_reader)  # Capture final logs
-                self.transition_to(job_pb2.TASK_STATE_KILLED)
-                break
+                return _TaskOutcome(job_pb2.TASK_STATE_KILLED)
 
             # Check container status
             status = handle.status()
@@ -874,9 +952,9 @@ class TaskAttempt:
                     failure_state = job_pb2.TASK_STATE_FAILED
                     if status.error_kind == ContainerErrorKind.INFRA_NOT_FOUND:
                         failure_state = job_pb2.TASK_STATE_WORKER_FAILED
-                    self.transition_to(failure_state, error=status.error, exit_code=status.exit_code or -1)
+                    return _TaskOutcome(failure_state, error=status.error, exit_code=status.exit_code or -1)
                 elif status.exit_code == 0:
-                    self.transition_to(job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
+                    return _TaskOutcome(job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
                 else:
                     stderr_tail: list[str] = [
                         entry.data for entry in log_reader.read_all() if entry.source == STDERR_SOURCE and entry.data
@@ -900,18 +978,17 @@ class TaskAttempt:
                             data=f"iris: TPU bad-node signature detected ({tpu_pattern!r}); "
                             "reporting as worker failure",
                         )
-                        self.transition_to(
+                        return _TaskOutcome(
                             job_pb2.TASK_STATE_WORKER_FAILED,
                             error=f"TPU init failure ({tpu_pattern!r}): {error}",
                             exit_code=status.exit_code or -1,
                         )
                     else:
-                        self.transition_to(
+                        return _TaskOutcome(
                             job_pb2.TASK_STATE_FAILED,
                             error=error,
                             exit_code=status.exit_code or -1,
                         )
-                break
 
             # Stream logs incrementally
             self._stream_logs(log_reader)

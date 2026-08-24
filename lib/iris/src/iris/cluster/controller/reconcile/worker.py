@@ -295,6 +295,7 @@ def observations_to_updates(
         exit_code: int | None = obs.exit_code if obs.exit_code != 0 else None
         error: str | None = obs.error or None
         container_id: str | None = obs.container_id or None
+        output_archive = obs.output_archive if obs.HasField("output_archive") else None
         if obs.state == job_pb2.TASK_STATE_MISSING:
             # A worker reports MISSING when it can't resolve a desired attempt to
             # a live local one. While the task is still ACTIVE this is worker loss
@@ -323,6 +324,7 @@ def observations_to_updates(
                     error=error,
                     exit_code=exit_code,
                     container_id=container_id,
+                    output_archive=output_archive,
                 )
             )
     return updates

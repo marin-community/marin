@@ -9,6 +9,7 @@ import socket
 import subprocess as sp
 import threading
 import zipfile
+from dataclasses import replace
 from typing import cast
 from unittest.mock import Mock
 
@@ -16,6 +17,7 @@ import pytest
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from iris.cluster.config import TaskOutputDestination, TaskOutputPolicy
 from iris.cluster.log_keys import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import (
@@ -44,6 +46,7 @@ from iris.testing.worker import (
     create_mock_container_handle,
     create_run_task_request,
 )
+from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 
 pytestmark = pytest.mark.timeout(10)
@@ -109,6 +112,50 @@ def test_task_lifecycle_phases(mock_worker):
     final_task = mock_worker.get_task(task_id)
     assert final_task.status == job_pb2.TASK_STATE_SUCCEEDED
     assert final_task.exit_code == 0
+
+
+def test_task_outputs_are_archived_after_success(mock_worker, mock_runtime, monkeypatch):
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.probe_outbound_ip", lambda: "127.0.0.1")
+    mock_worker._config = replace(
+        mock_worker._config,
+        task_outputs=TaskOutputPolicy(destination=TaskOutputDestination.LOCAL, ttl_days=0),
+    )
+
+    def create_with_output(config):
+        assert config.output_host_path is not None
+        (config.output_host_path / "profile.heap").write_bytes(b"profile")
+        return create_mock_container_handle()
+
+    mock_runtime.create_container = Mock(side_effect=create_with_output)
+    task_id = mock_worker.submit_task(create_run_task_request())
+    task = mock_worker.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    assert task.status == job_pb2.TASK_STATE_SUCCEEDED
+    assert task.output_archive.state == job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UPLOADED
+    assert task.output_archive.retention == job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_RETENTION_LOCAL_CLUSTER
+    assert StoragePath(task.output_archive.uri).exists()
+
+
+def test_task_output_storage_failure_preserves_task_success(mock_worker, monkeypatch):
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.probe_outbound_ip", lambda: "127.0.0.1")
+    mock_worker._config = replace(
+        mock_worker._config,
+        task_outputs=TaskOutputPolicy(destination=TaskOutputDestination.LOCAL, ttl_days=0),
+    )
+
+    def fail_destination(*args, **kwargs):
+        raise RuntimeError("archive store unavailable")
+
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.resolve_task_output_destination", fail_destination)
+    task_id = mock_worker.submit_task(create_run_task_request())
+    task = mock_worker.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    assert task.status == job_pb2.TASK_STATE_SUCCEEDED
+    assert task.exit_code == 0
+    assert task.output_archive.state == job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_FAILED
+    assert "archive store unavailable" in task.output_archive.error
 
 
 def test_runtime_stage_bundle_receives_workdir_files(mock_worker, mock_runtime):

@@ -50,6 +50,11 @@ def _failed_task_description():
     previous.pod_name = "iris-abcd-0"
     previous.node_name = "node-a"
     previous.terminal_reason = _INIT_FAILURE
+    previous.output_archive.state = job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UPLOADED
+    previous.output_archive.uri = "gs://marin-us-east1/tmp/ttl=7d/iris/task-outputs/outputs.tar.zst"
+    previous.output_archive.size_bytes = 4096
+    previous.output_archive.retention = job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_RETENTION_TTL
+    previous.output_archive.ttl_days = 7
 
     transport.response.root_cause_highlights.append("Bundle fetch abc failed: HTTP Error 404")
     client = IrisClient(cast(ClusterClient, transport))
@@ -75,6 +80,8 @@ def test_attempt_description_distinguishes_historical_and_current_diagnostics():
     assert "(current)" not in previous
     assert "Backend object: iris-abcd-0 on node-a" in previous
     assert _INIT_FAILURE in previous
+    assert "Output: uploaded 4 KiB gs://marin-us-east1/tmp/ttl=7d/" in previous
+    assert "7-day retention" in previous
     assert "Root cause:" not in previous
 
     assert "Attempt: /alice/job/0:1  (current)" in current

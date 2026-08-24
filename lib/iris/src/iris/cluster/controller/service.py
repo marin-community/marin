@@ -51,6 +51,7 @@ from iris.cluster.controller.budget import (
 from iris.cluster.controller.checkpoint import CHECKPOINT_EPOCH_META_KEY
 from iris.cluster.controller.codec import (
     decode_attribute_value,
+    proto_from_json,
     reconstruct_launch_job_request,
     resource_spec_from_job_row,
     resource_spec_from_scalars,
@@ -413,6 +414,10 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
             node_name=attempt.node_name or "",
             terminal_reason=attempt.terminal_reason or "",
         )
+        if attempt.output_archive_json:
+            proto_attempt.output_archive.CopyFrom(
+                proto_from_json(attempt.output_archive_json, job_pb2.TaskOutputArchive)
+            )
         if attempt.started_at_ms is not None:
             proto_attempt.started_at.CopyFrom(timestamp_to_proto(attempt.started_at_ms))
         if attempt.finished_at_ms is not None:
@@ -519,6 +524,7 @@ def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskWithAtte
             return None
         attempt_rows = tx.execute(
             select(*reads.ATTEMPT_COLS)
+            .select_from(reads.ATTEMPTS_WITH_OUTPUT)
             .where(task_attempts_table.c.task_id == task_id)
             .order_by(task_attempts_table.c.attempt_id.asc())
         ).all()
@@ -623,7 +629,9 @@ def _tasks_for_listing(tx: Tx, *, job_id: JobName) -> list[TaskWithAttempts]:
     ).all()
     # Current attempt per task (composite-PK lookup, at most one row each).
     current_attempt_rows = tx.execute(
-        select(*reads.ATTEMPT_COLS).where(
+        select(*reads.ATTEMPT_COLS)
+        .select_from(reads.ATTEMPTS_WITH_OUTPUT)
+        .where(
             tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(
                 select(tasks_table.c.task_id, tasks_table.c.current_attempt_id).where(
                     tasks_table.c.job_id == job_id, tasks_table.c.current_attempt_id >= 0
@@ -647,10 +655,12 @@ def _tasks_for_listing(tx: Tx, *, job_id: JobName) -> list[TaskWithAttempts]:
         .subquery()
     )
     failed_attempt_rows = tx.execute(
-        select(*reads.ATTEMPT_COLS).join(
-            latest_failed,
-            (task_attempts_table.c.task_id == latest_failed.c.task_id)
-            & (task_attempts_table.c.attempt_id == latest_failed.c.attempt_id),
+        select(*reads.ATTEMPT_COLS).select_from(
+            reads.ATTEMPTS_WITH_OUTPUT.join(
+                latest_failed,
+                (task_attempts_table.c.task_id == latest_failed.c.task_id)
+                & (task_attempts_table.c.attempt_id == latest_failed.c.attempt_id),
+            )
         )
     ).all()
     # Merge, deduping the current attempt when it is itself a failure.
@@ -977,6 +987,7 @@ def _attempts_for_worker(
     with db.read_snapshot() as tx:
         raw_rows = tx.execute(
             select(*reads.ATTEMPT_COLS)
+            .select_from(reads.ATTEMPTS_WITH_OUTPUT)
             .where(task_attempts_table.c.worker_id == worker_id)
             .order_by(
                 case(

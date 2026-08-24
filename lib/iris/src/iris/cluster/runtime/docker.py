@@ -953,7 +953,12 @@ class DockerRuntime:
             logger.info("Image %s pulled successfully", image)
             self._pulled_images.add(image)
 
-    def resolve_mounts(self, mounts: list[MountSpec], workdir_host_path: Path | None = None) -> list[ResolvedMount]:
+    def resolve_mounts(
+        self,
+        mounts: list[MountSpec],
+        workdir_host_path: Path | None = None,
+        output_host_path: Path | None = None,
+    ) -> list[ResolvedMount]:
         """Convert semantic MountSpecs to ResolvedMount instances.
 
         Creates host directories as needed. WORKDIR uses the explicit host path
@@ -967,6 +972,11 @@ class DockerRuntime:
                 if workdir_host_path is None:
                     raise RuntimeError("WORKDIR mount requires workdir_host_path")
                 result.append(ResolvedMount(str(workdir_host_path), mount.container_path, mode, mount.kind))
+            elif mount.kind == MountKind.OUTPUT:
+                if output_host_path is None:
+                    raise RuntimeError("OUTPUT mount requires output_host_path")
+                output_host_path.mkdir(parents=True, exist_ok=True)
+                result.append(ResolvedMount(str(output_host_path), mount.container_path, mode, mount.kind))
             elif mount.kind == MountKind.TMPFS:
                 # TMPFS mounts use Docker --tmpfs (per-container isolation); no host dir needed
                 result.append(ResolvedMount("", mount.container_path, mode, mount.kind))
@@ -982,7 +992,11 @@ class DockerRuntime:
         The handle is not started - call handle.build() then handle.run()
         to execute the container.
         """
-        resolved = self.resolve_mounts(config.mounts, workdir_host_path=config.workdir_host_path)
+        resolved = self.resolve_mounts(
+            config.mounts,
+            workdir_host_path=config.workdir_host_path,
+            output_host_path=config.output_host_path,
+        )
         handle = DockerContainerHandle(config=config, runtime=self, _resolved_mounts=resolved)
         self._handles.append(handle)
         return handle

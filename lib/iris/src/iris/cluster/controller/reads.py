@@ -51,6 +51,7 @@ from iris.cluster.controller.schema import (
     jobs_table,
     local_tasks,
     slices_table,
+    task_attempt_outputs_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
@@ -993,12 +994,23 @@ ATTEMPT_COLS = (
     task_attempts_table.c.pod_uid,
     task_attempts_table.c.node_name,
     task_attempts_table.c.terminal_reason,
+    task_attempt_outputs_table.c.archive_json.label("output_archive_json"),
+)
+
+ATTEMPTS_WITH_OUTPUT = task_attempts_table.outerjoin(
+    task_attempt_outputs_table,
+    (task_attempt_outputs_table.c.task_id == task_attempts_table.c.task_id)
+    & (task_attempt_outputs_table.c.attempt_id == task_attempts_table.c.attempt_id),
 )
 
 _BULK_GET_CHUNK_SIZE = 450
 
-_BULK_GET_ATTEMPTS_STMT = select(*ATTEMPT_COLS).where(
-    tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(bindparam("keys", expanding=True))
+_BULK_GET_ATTEMPTS_STMT = (
+    select(*ATTEMPT_COLS)
+    .select_from(ATTEMPTS_WITH_OUTPUT)
+    .where(
+        tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(bindparam("keys", expanding=True))
+    )
 )
 
 
@@ -1082,6 +1094,7 @@ def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName,
         return {}
     rows = tx.execute(
         select(*ATTEMPT_COLS)
+        .select_from(ATTEMPTS_WITH_OUTPUT)
         .where(task_attempts_table.c.task_id.in_(bindparam("task_ids", expanding=True)))
         .order_by(task_attempts_table.c.task_id.asc(), task_attempts_table.c.attempt_id.asc()),
         {"task_ids": list(task_ids)},

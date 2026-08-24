@@ -109,6 +109,7 @@ message Worker {
     string container_id = 5;
     iris.time.Timestamp finished_at = 6;
     iris.job.ResourceUsage resource_usage = 7;
+    iris.job.TaskOutputArchive output_archive = 8;
 
     reserved 100, 101;  // legacy composite key (task_id, attempt_id)
   }

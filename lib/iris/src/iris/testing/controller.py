@@ -538,7 +538,9 @@ def query_attempt(state: ControllerTestState, task_id: JobName, attempt_id: int)
     """Return the SA Row for the given attempt or None."""
     with state._db.read_snapshot() as tx:
         return tx.execute(
-            select(*reads.ATTEMPT_COLS).where(
+            select(*reads.ATTEMPT_COLS)
+            .select_from(reads.ATTEMPTS_WITH_OUTPUT)
+            .where(
                 task_attempts_table.c.task_id == task_id,
                 task_attempts_table.c.attempt_id == attempt_id,
             )
