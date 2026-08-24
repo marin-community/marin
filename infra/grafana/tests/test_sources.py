@@ -406,20 +406,22 @@ def test_wandb_run_activity_separates_active_time_from_downtime():
     # `_runtime` is W&B's own count of the seconds a process was alive, restored at each
     # resume, so it is the run's active time across restarts and never includes the wait
     # between two attempts. Wall clock here is four days, of which ninety hours ran.
-    # Progress efficiency divides the tokens seen by the mean token rate times wall clock:
-    # the reference rate is the mean over the history (2.5M here), not the summary's last
-    # step, so a checkpoint step logging a low rate cannot skew it. 648e9 / (2.5e6 * 345600)
-    # is 0.75.
+    # Progress efficiency divides the tokens this run produced by the mean rate times wall.
+    # The reference rate is the mean over the history (2.5M here), not the summary's last
+    # step, so a checkpoint step logging a low rate cannot skew it. This run started at a
+    # cumulative 500e9 tokens (a fresh id resumed from a mid-schedule checkpoint): crediting
+    # the full 1148e9 over four days would read 133%, so only 1148e9 - 500e9 counts, and
+    # 648e9 / (2.5e6 * 345600) is 0.75.
     asked: list[str] = []
     run = {
         "state": "running",
         "createdAt": "2026-08-20T02:00:00Z",
         "heartbeatAt": "2026-08-24T02:00:00Z",
-        "summaryMetrics": json.dumps({"_runtime": 90 * 3_600, "throughput/total_tokens": 648_000_000_000}),
+        "summaryMetrics": json.dumps({"_runtime": 90 * 3_600, "throughput/total_tokens": 1_148_000_000_000}),
     }
     tps_points = [
-        {"_step": 0, "throughput/tokens_per_second": 2_000_000},
-        {"_step": 1, "throughput/tokens_per_second": 3_000_000},
+        {"throughput/total_tokens": 500_000_000_000, "throughput/tokens_per_second": 2_000_000},
+        {"throughput/total_tokens": 600_000_000_000, "throughput/tokens_per_second": 3_000_000},
     ]
 
     (row,) = _wandb(_activity_handler("marin_moe", run, asked, tps_points)).run_activity("hero-run")
@@ -434,7 +436,6 @@ def test_wandb_run_activity_separates_active_time_from_downtime():
         "wall_seconds": 345_600.0,
         "downtime_seconds": 21_600.0,
         "active_share": 0.9375,
-        "tokens_seen": 648_000_000_000.0,
         "reference_tps": 2_500_000.0,
         "progress_efficiency": 0.75,
     }
@@ -457,7 +458,7 @@ def test_wandb_run_activity_reports_no_active_time_before_the_first_log():
     assert asked == ["marin_moe", "marin"]
     assert (row["active_seconds"], row["downtime_seconds"], row["active_share"]) == (None, None, None)
     assert row["wall_seconds"] == 600.0
-    assert (row["tokens_seen"], row["reference_tps"], row["progress_efficiency"]) == (None, None, None)
+    assert (row["reference_tps"], row["progress_efficiency"]) == (None, None)
 
 
 def test_wandb_run_activity_fails_loud_when_no_project_has_the_run():

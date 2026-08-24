@@ -197,18 +197,26 @@ class WandbSource:
 
         return self._search_projects(run, project, read)
 
-    def _mean_tps(self, *, project: str, run: str) -> float | None:
-        """Mean per-step token rate over the whole run, the reference for progress efficiency.
+    def _reference_rate_and_token_baseline(self, *, project: str, run: str) -> tuple[float, float] | tuple[None, None]:
+        """Mean per-step token rate and the run's starting cumulative token count.
 
-        A mean over a sampled history rather than the summary's last-step value, so a
-        checkpoint or eval step cannot skew it (see `_TPS_KEY`). None if the run has
-        logged no token rate yet.
+        Both come from one sampled history keyed on cumulative tokens. The mean of the
+        rate is the reference speed -- a mean over history, not the summary's last-step
+        value, so a checkpoint or eval step cannot skew it (see `_TPS_KEY`). The
+        smallest cumulative-token value is where this W&B run began: levanter derives
+        `total_tokens` from the global step, so a run resumed under a fresh id from a
+        mid-schedule checkpoint starts at a nonzero count, and that baseline is
+        subtracted before dividing by wall time. `(None, None)` if the run has logged
+        no token rate yet.
         """
-        pairs = self._sampled_history(project=project, run=run, x_key=_STEP_KEY, y_key=_TPS_KEY, samples=_TPS_SAMPLES)
+        pairs = self._sampled_history(
+            project=project, run=run, x_key=_TOTAL_TOKENS_KEY, y_key=_TPS_KEY, samples=_TPS_SAMPLES
+        )
         if not pairs:
-            return None
+            return None, None
         rates = [rate for _, rate in pairs]
-        return sum(rates) / len(rates)
+        baseline = min(tokens for tokens, _ in pairs)
+        return sum(rates) / len(rates), baseline
 
     def run_activity(self, run: str, *, project: str | None = None) -> list[dict]:
         """Return one row of active time, wall-clock time, and progress efficiency for `run`.
@@ -220,11 +228,14 @@ class WandbSource:
         Wall time runs from the run's creation to its last heartbeat, thus the
         remainder is downtime and the ratio is the share of the run that ran.
 
-        Progress efficiency is `tokens_seen / (reference_tps * wall)`: the fraction of
-        an ideal run that held its steady token rate from creation with no downtime.
-        It is stricter than active share, which sees only downtime -- this also counts
-        the throughput lost to checkpoints, evals, and steps redone after a rollback.
-        A run that has logged nothing yet reports nulls rather than zeros.
+        Progress efficiency is `tokens_since_start / (reference_tps * wall)`: the
+        fraction of an ideal run that held its steady token rate from creation with no
+        downtime. It counts tokens this W&B run produced -- cumulative tokens minus the
+        run's starting count -- so a run resumed under a fresh id from a mid-schedule
+        checkpoint is not credited the tokens it inherited. It is stricter than active
+        share, which sees only downtime: this also counts the throughput lost to
+        checkpoints, evals, and steps redone after a rollback. A run that has logged
+        nothing yet reports nulls rather than zeros.
         """
 
         def read(candidate: str) -> list[dict] | None:
@@ -243,9 +254,14 @@ class WandbSource:
             wall = _epoch_seconds(run_data["heartbeatAt"]) - _epoch_seconds(run_data["createdAt"])
             tokens_seen = summary.get(_TOTAL_TOKENS_KEY)
             tokens_seen = float(tokens_seen) if isinstance(tokens_seen, int | float) else None
-            reference_tps = self._mean_tps(project=candidate, run=run)
+            reference_tps, tokens_baseline = self._reference_rate_and_token_baseline(project=candidate, run=run)
+            tokens_since_start = (
+                tokens_seen - tokens_baseline if tokens_seen is not None and tokens_baseline is not None else None
+            )
             efficiency = (
-                tokens_seen / (reference_tps * wall) if tokens_seen is not None and reference_tps and wall > 0 else None
+                tokens_since_start / (reference_tps * wall)
+                if tokens_since_start is not None and tokens_since_start > 0 and reference_tps and wall > 0
+                else None
             )
             return [
                 {
@@ -257,7 +273,6 @@ class WandbSource:
                     "wall_seconds": wall,
                     "downtime_seconds": None if active is None else wall - active,
                     "active_share": active / wall if active is not None and wall > 0 else None,
-                    "tokens_seen": tokens_seen,
                     "reference_tps": reference_tps,
                     "progress_efficiency": efficiency,
                 }
