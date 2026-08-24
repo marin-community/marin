@@ -296,6 +296,8 @@ def _rows(path: str, query: str) -> list[dict] | dict:
             {"bucket": "last24h", "state": "succeeded", "count": 318},
             {"bucket": "last24h", "state": "failed", "count": 9},
         ]
+    if path == "/iris/marin/active_job_ids":
+        return [{"job": job} for job in ("/alice/llama", "/bob/eval", "/carol/embed", "/ops/loader", "/dave/train")]
     if path == "/finelog/marin/fleet_health":
         return [
             {

@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { css } from '@emotion/css';
 import { DataFrame } from '@grafana/data';
 import { useTheme2 } from '@grafana/ui';
-import { clusterNodes, frameByRefId, nodeMetrics, taskUsage, workloadAllocations } from '../data';
+import { clusterNodes, frameByRefId, jobIds, nodeMetrics, taskUsage, workloadAllocations } from '../data';
 import { formatBytes } from '../format';
 import { ClusterNode, NodeMetric, TaskUsage, WorkloadAllocation } from '../types';
 import { SERIES_COLORS } from './palette';
@@ -26,7 +26,7 @@ interface JobSummary {
   memoryBytes: number;
 }
 
-const REF = { workloads: 'W', nodes: 'N', tasks: 'T', host: 'H' } as const;
+const REF = { workloads: 'W', parentJobs: 'J', nodes: 'N', tasks: 'T', host: 'H' } as const;
 const IRIS_DASHBOARD_ORIGIN = 'https://iris.oa.dev';
 const KIB = 1024;
 const MILLICORES_PER_CORE = 1000;
@@ -195,6 +195,7 @@ function NodeCard({ node, workloads, metrics, jobs }: {
 export function ClusterCapacity({ frames, width, height }: Props) {
   const theme = useTheme2();
   const workloads = useMemo(() => frameRows(frames, REF.workloads, workloadAllocations), [frames]);
+  const parentJobs = useMemo(() => new Set(frameRows(frames, REF.parentJobs, jobIds)), [frames]);
   const nodes = useMemo(() => frameRows(frames, REF.nodes, clusterNodes), [frames]);
   const usage = useMemo(() => usageMap(frameRows(frames, REF.tasks, taskUsage)), [frames]);
   const metrics = useMemo(() => metricMap(frameRows(frames, REF.host, nodeMetrics)), [frames]);
@@ -246,7 +247,7 @@ export function ClusterCapacity({ frames, width, height }: Props) {
               <tbody>{summaries.map((summary) => <tr key={summary.job}>
                 <td><span className={css`display:inline-block;width:8px;height:8px;border-radius:2px;background:${jobColor(summary.job, jobs)};margin-right:7px;`} /><a href={`/d/marin-jobs?var-cluster=${encodeURIComponent(cluster)}&var-job=${encodeURIComponent(summary.job)}`}>{summary.job}</a></td>
                 <td>{summary.priorityClass ? summary.priorityClass.replace(/^iris-/, '') : '—'}</td>
-                <td><a href={`${IRIS_DASHBOARD_ORIGIN}/#/job/${encodeURIComponent(summary.job)}?cluster=${encodeURIComponent(cluster)}`} target="_blank" rel="noreferrer">Open</a></td>
+                <td>{parentJobs.has(summary.job) ? <a href={`${IRIS_DASHBOARD_ORIGIN}/#/job/${encodeURIComponent(summary.job)}?cluster=${encodeURIComponent(cluster)}`} target="_blank" rel="noreferrer">Open</a> : '—'}</td>
                 <td>{summary.ready}/{summary.tasks}</td><td>{summary.observed}/{summary.tasks}</td><td>{summary.gpuRequestCount}</td><td>{formatCores(summary.cpuRequestMillicores)} cores</td><td>{summary.observed ? `${formatCores(summary.cpuMillicores)} cores` : '—'}</td><td>{formatBytes(summary.memoryRequestBytes)}</td><td>{summary.observed ? formatBytes(summary.memoryBytes) : '—'}</td>
               </tr>)}</tbody>
             </table>

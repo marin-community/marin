@@ -104,6 +104,33 @@ def test_jobs_splits_inflight_from_terminal_and_names_states():
     ]
 
 
+def test_active_job_ids_lists_inflight_jobs_visible_for_a_federation_cluster():
+    queries = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/ListJobs")
+        query = json.loads(request.content)["query"]
+        queries.append(query)
+        if query["stateFilter"] == "pending" and query["offset"] == 0:
+            return httpx.Response(200, json={"jobs": [{"jobId": "/alice/train"}], "hasMore": True})
+        if query["stateFilter"] == "pending":
+            return httpx.Response(200, json={"jobs": [{"jobId": "/bob/eval"}], "hasMore": False})
+        if query["stateFilter"] == "running":
+            return httpx.Response(200, json={"jobs": [{"jobId": "/alice/train"}], "hasMore": False})
+        return httpx.Response(200, json={"jobs": [], "hasMore": False})
+
+    assert _iris(handler).active_job_ids("cw-us-east-02a") == [
+        {"job": "/alice/train"},
+        {"job": "/bob/eval"},
+    ]
+    assert queries == [
+        {"cluster": "cw-us-east-02a", "stateFilter": "pending", "offset": 0, "limit": 1000},
+        {"cluster": "cw-us-east-02a", "stateFilter": "pending", "offset": 1, "limit": 1000},
+        {"cluster": "cw-us-east-02a", "stateFilter": "building", "offset": 0, "limit": 1000},
+        {"cluster": "cw-us-east-02a", "stateFilter": "running", "offset": 0, "limit": 1000},
+    ]
+
+
 def test_workers_aggregates_healthy_only_per_region():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -477,6 +504,11 @@ class _FakeIris:
             raise self._raises
         return self._rows
 
+    def active_job_ids(self, cluster):
+        if self._raises:
+            raise self._raises
+        return self._rows
+
     def peers(self):
         if self._raises:
             raise self._raises
@@ -493,6 +525,17 @@ def _app(iris_source, github_source: GithubSource | None = None) -> TestClient:
 def test_iris_endpoint_returns_rows():
     client = _app(_FakeIris(TARGET, rows=[{"bucket": "inflight", "state": "running", "count": 3}]))
     assert client.get("/iris/marin/jobs").json() == [{"bucket": "inflight", "state": "running", "count": 3}]
+
+
+def test_iris_active_job_ids_endpoint_scopes_rows_to_the_requested_federation_cluster():
+    client = _app(_FakeIris(TARGET, rows=[{"job": "/alice/train"}]))
+    assert client.get("/iris/marin/active_job_ids", params={"cluster": "cw-us-east-02a"}).json() == [
+        {"job": "/alice/train"}
+    ]
+
+
+def test_iris_active_job_ids_endpoint_requires_a_federation_cluster():
+    assert _app(_FakeIris(TARGET)).get("/iris/marin/active_job_ids").status_code == 400
 
 
 def test_iris_peers_endpoint_returns_heartbeat_rows():

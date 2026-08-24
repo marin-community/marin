@@ -51,6 +51,7 @@ test('cluster capacity rolls tasks into jobs and packs requested GPUs onto their
       gpu_capacity: 4, gpu_allocatable: 4, cpu_allocatable: '32', memory_allocatable: '256Gi', ready: true,
       unschedulable: false,
     }]),
+    frame('J', [{ job: '/alice/train' }]),
     frame('T', [{
       cluster: 'cw-us-east-02a', task: '/alice/train/0', pod: 'train-0', cpu_millicores: 3500,
       memory_bytes: 34359738368, sampled_at: Date.now(),
@@ -75,6 +76,8 @@ test('cluster capacity rolls tasks into jobs and packs requested GPUs onto their
     'href',
     'https://iris.oa.dev/#/job/%2Falice%2Ftrain?cluster=cw-us-east-02a'
   );
+  const directJob = within(jobs).getByRole('row', { name: /bob\/eval/ });
+  expect(within(directJob).queryByRole('link', { name: 'Open' })).not.toBeInTheDocument();
   expect(within(jobs).getByText('3.50 cores')).toBeInTheDocument();
   const slots = screen.getByRole('list', { name: 'GPU slots on gpu-1' });
   expect(within(slots).getAllByRole('listitem', { name: '/alice/train GPU' })).toHaveLength(2);

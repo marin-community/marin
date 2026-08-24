@@ -22,6 +22,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/marin/alerts/training_health    watched hero runs + degraded-signal value(0|1)
     GET /finelog/marin/alerts/zephyr_stalls      active pipelines + stalled-progress value(0|1)
     GET /iris/{cluster}/jobs                     root-job counts by state (in-flight + 24h terminal)
+    GET /iris/{cluster}/active_job_ids?cluster=  in-flight job IDs visible through one federation peer
     GET /iris/{cluster}/workers                  healthy worker counts + resource totals per region
     GET /iris/{cluster}/health                   controller reachability + latency
     GET /iris/{cluster}/peers                    federation reachability from the controller heartbeat
@@ -576,6 +577,13 @@ def create_app(
     def iris_jobs(request: Request) -> JSONResponse:
         return iris_endpoint(request, "jobs", lambda s: s.jobs())
 
+    def iris_active_job_ids(request: Request) -> JSONResponse:
+        try:
+            cluster = _require(request.query_params, "cluster")
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        return iris_endpoint(request, f"active_job_ids:{cluster}", lambda s: s.active_job_ids(cluster))
+
     def iris_workers(request: Request) -> JSONResponse:
         return iris_endpoint(request, "workers", lambda s: s.workers())
 
@@ -810,6 +818,7 @@ def create_app(
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_health", finelog_alerts_training_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/zephyr_stalls", finelog_alerts_zephyr_stalls),
             Route("/iris/{cluster}/jobs", iris_jobs),
+            Route("/iris/{cluster}/active_job_ids", iris_active_job_ids),
             Route("/iris/{cluster}/workers", iris_workers),
             Route("/iris/{cluster}/health", iris_health),
             Route("/iris/{cluster}/peers", iris_peers),

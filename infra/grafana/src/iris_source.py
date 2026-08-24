@@ -25,6 +25,9 @@ from errors import UpstreamError
 logger = logging.getLogger(__name__)
 
 _RPC_BASE = "iris.cluster.ControllerService"
+_LIST_JOBS_PAGE = 1000
+_MAX_JOB_PAGES = 50
+_IN_FLIGHT_STATE_FILTERS = ("pending", "building", "running")
 _LIST_WORKERS_PAGE = 1000
 _MAX_WORKER_PAGES = 50
 
@@ -108,6 +111,30 @@ class IrisSource:
             bucket = "inflight" if state in _IN_FLIGHT_STATES else "last24h"
             rows.append({"bucket": bucket, "state": _state_name(state), "count": count})
         return rows
+
+    def active_job_ids(self, cluster: str) -> list[dict]:
+        """In-flight job IDs visible through this controller for one federation cluster."""
+        job_ids: set[str] = set()
+        for state_filter in _IN_FLIGHT_STATE_FILTERS:
+            offset = 0
+            for _ in range(_MAX_JOB_PAGES):
+                page = self._post_rpc(
+                    "ListJobs",
+                    {
+                        "query": {
+                            "cluster": cluster,
+                            "stateFilter": state_filter,
+                            "offset": offset,
+                            "limit": _LIST_JOBS_PAGE,
+                        }
+                    },
+                )
+                jobs = page.get("jobs", [])
+                job_ids.update(job["jobId"] for job in jobs)
+                if not page.get("hasMore") or not jobs:
+                    break
+                offset += len(jobs)
+        return [{"job": job_id} for job_id in sorted(job_ids)]
 
     def workers(self) -> list[dict]:
         """Healthy worker counts and resource totals per region (empty region -> 'unknown')."""

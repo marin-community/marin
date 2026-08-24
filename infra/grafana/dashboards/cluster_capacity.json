@@ -223,6 +223,30 @@
           ]
         },
         {
+          "refId": "J",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/iris/marin/active_job_ids",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "cluster",
+                "value": "${cluster}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "job",
+              "text": "job",
+              "type": "string"
+            }
+          ]
+        },
+        {
           "refId": "N",
           "type": "json",
           "source": "url",
