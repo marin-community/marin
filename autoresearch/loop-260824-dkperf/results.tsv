@@ -1,0 +1,7 @@
+# metric_direction: bench=lower_is_better(ms), arms=higher_is_better(MFU)
+iter	ts	cell	kind	config	metric	delta	status	notes
+0	2026-08-24T18:25Z	baseline-oneshot	bench	oneshot s64-equiv uniform	7.56	-	baseline	from loop-260823-dknative bench64b
+0	2026-08-24T18:25Z	baseline-dk-stock	bench	dk kmax128 wheel (stock grid)	22.61	+15.05	baseline	from loop-260823-dknative bench64b
+0	2026-08-24T18:25Z	baseline-dk-g8x	bench	dk g8x128 wheel	12.18	+4.62	baseline	from loop-260823-dknative bench64b
+0	2026-08-24	baseline-synth	synth	dk g8x128 s1 22.62 vs oneshot s64 22.77	22.62	-0.15	baseline	loop-260823 final standings
+0	2026-08-24	baseline-restore	restore	dk g8x128 s64 21.98 vs oneshot s64 22.46-22.60	21.98	-0.5	baseline	loop-260823 final standings
