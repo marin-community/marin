@@ -18,8 +18,8 @@ from iac.github.dependency_updater import (
     dependency_updater_config,
     dependency_updater_installation_id,
     register_dependency_updater_environment,
-    register_dependency_updater_installation,
     register_dependency_updater_repository,
+    register_dependency_updater_repository_selection,
     validate_classic_branch_protection,
 )
 from iac.github.resources import credential_resource_plans, register_credentials, repository_name
@@ -75,7 +75,7 @@ def main() -> None:
             for installation in live_installations.installations
         ),
     )
-    installation = register_dependency_updater_installation(updater, installation_id)
+    installation = register_dependency_updater_repository_selection(updater, installation_id)
     updater_resource_count = 1
     for repository in updater.repositories:
         normalized_repository = repository_name(updater.organization, repository.repository)

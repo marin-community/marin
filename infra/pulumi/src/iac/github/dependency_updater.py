@@ -6,22 +6,30 @@
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from fnmatch import fnmatchcase
+from types import MappingProxyType
 
 import pulumi
 import pulumi_github as github
 
 from iac.github.resources import repository_name
-from scripts.ci.dependency_update_policy import GITHUB_ACTIONS_APP_ID
+from scripts.ci.dependency_update_policy import GITHUB_ACTIONS_APP_ID, REQUIRED_CHECKS
 
 APP_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 UPDATER_ENVIRONMENT = "external-runtime-updater"
 UPDATER_BRANCH = "main"
-REQUIRED_APP_PERMISSIONS = {
-    "contents": "write",
-    "pull_requests": "write",
-    "workflows": "write",
-}
+REQUIRED_APP_PERMISSIONS = MappingProxyType(
+    {
+        "contents": "write",
+        "pull_requests": "write",
+        "workflows": "write",
+    }
+)
+
+
+class RequiredChecksPolicy(StrEnum):
+    MARIN = "marin"
 
 
 @dataclass(frozen=True)
@@ -39,7 +47,7 @@ class DependencyUpdaterRepositoryConfig:
     repository: str
     review_ruleset_id: int | None
     classic_required_checks: tuple[str, ...] | None
-    required_checks: tuple[str, ...]
+    required_checks_policy: RequiredChecksPolicy | None
     private_key: SealedPrivateKeyConfig | None
 
 
@@ -128,7 +136,7 @@ def _repository_config(
         "classicRequiredChecks",
         "privateKey",
         "repository",
-        "requiredChecks",
+        "requiredChecksPolicy",
         "reviewRulesetId",
     }
     unexpected_keys = set(settings) - expected_keys
@@ -139,6 +147,16 @@ def _repository_config(
     if not isinstance(repository, str):
         raise ValueError(f"{path}.repository must be a string")
     repository_name(organization, repository)
+    raw_required_checks_policy = settings.get("requiredChecksPolicy")
+    required_checks_policy = None
+    if raw_required_checks_policy is not None:
+        if not isinstance(raw_required_checks_policy, str):
+            raise ValueError(f"{path}.requiredChecksPolicy must be a string")
+        try:
+            required_checks_policy = RequiredChecksPolicy(raw_required_checks_policy)
+        except ValueError as error:
+            expected = sorted(policy.value for policy in RequiredChecksPolicy)
+            raise ValueError(f"{path}.requiredChecksPolicy must be one of {expected!r}") from error
     private_key_settings = settings.get("privateKey")
     private_key = None
     if private_key_settings is not None:
@@ -161,7 +179,7 @@ def _repository_config(
         repository=repository,
         review_ruleset_id=_optional_positive_int(settings, "reviewRulesetId", path),
         classic_required_checks=_optional_string_tuple(settings, "classicRequiredChecks", path),
-        required_checks=_optional_string_tuple(settings, "requiredChecks", path) or (),
+        required_checks_policy=required_checks_policy,
         private_key=private_key,
     )
 
@@ -282,9 +300,12 @@ def dependency_updater_plan(
             ),
         ),
         required_ci_bypass_actors=(organization_admin,),
-        required_checks=tuple(
-            RequiredCheckPlan(context=context, integration_id=GITHUB_ACTIONS_APP_ID)
-            for context in repository_config.required_checks
+        required_checks=(
+            tuple(
+                RequiredCheckPlan(context=context, integration_id=GITHUB_ACTIONS_APP_ID) for context in REQUIRED_CHECKS
+            )
+            if repository_config.required_checks_policy is RequiredChecksPolicy.MARIN
+            else ()
         ),
     )
 
@@ -313,7 +334,7 @@ def _bypass_actor_args(actor: RulesetBypassActorPlan) -> github.RepositoryRulese
     )
 
 
-def register_dependency_updater_installation(
+def register_dependency_updater_repository_selection(
     config: DependencyUpdaterConfig,
     installation_id: int,
 ) -> github.AppInstallationRepositories:

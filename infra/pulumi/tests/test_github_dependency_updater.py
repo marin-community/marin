@@ -8,6 +8,7 @@ from iac.github.dependency_updater import (
     DependencyUpdaterConfig,
     DependencyUpdaterInstallation,
     DependencyUpdaterRepositoryConfig,
+    RequiredChecksPolicy,
     RulesetBypassActorPlan,
     SealedPrivateKeyConfig,
     dependency_updater_config,
@@ -24,7 +25,7 @@ def _repository(**overrides) -> DependencyUpdaterRepositoryConfig:
         "repository": "marin-community/marin",
         "review_ruleset_id": 785435,
         "classic_required_checks": ("marin-lint", "unit-tests"),
-        "required_checks": ("marin-lint", "unit-tests"),
+        "required_checks_policy": RequiredChecksPolicy.MARIN,
         "private_key": SealedPrivateKeyConfig(
             actions_key_id="test-actions-key-id",
             encrypted_private_key="test-encrypted-private-key",
@@ -77,7 +78,7 @@ def test_plan_creates_review_policy_without_inventing_ci_or_classic_protection()
         repository="marin-community/axolotl",
         review_ruleset_id=None,
         classic_required_checks=None,
-        required_checks=(),
+        required_checks_policy=None,
         private_key=None,
     )
 
