@@ -15,6 +15,7 @@ interface Props {
 
 interface JobSummary {
   job: string;
+  priorityClass: string;
   tasks: number;
   ready: number;
   observed: number;
@@ -26,6 +27,7 @@ interface JobSummary {
 }
 
 const REF = { workloads: 'W', nodes: 'N', tasks: 'T', host: 'H' } as const;
+const IRIS_DASHBOARD_ORIGIN = 'https://iris.oa.dev';
 const KIB = 1024;
 const MILLICORES_PER_CORE = 1000;
 const SECONDS_PER_MINUTE = 60;
@@ -92,6 +94,7 @@ function summarizeJobs(workloads: WorkloadAllocation[], usage: Map<string, TaskU
     const observed = usage.get(workload.pod) ?? usage.get(workload.task);
     const summary = summaries.get(workload.job) ?? {
       job: workload.job,
+      priorityClass: workload.priorityClass,
       tasks: 0,
       ready: 0,
       observed: 0,
@@ -239,9 +242,11 @@ export function ClusterCapacity({ frames, width, height }: Props) {
         {summaries.length === 0 ? <p>No live Iris jobs reported.</p> : (
           <div className={css`border:1px solid ${theme.colors.border.weak};border-radius:7px;overflow:auto;`}>
             <table className={css`border-collapse:collapse;width:100%;font-size:12px;& th,& td{padding:7px 9px;border-bottom:1px solid ${theme.colors.border.weak};text-align:right;white-space:nowrap;}& th:first-child,& td:first-child{text-align:left;}`}>
-              <thead><tr><th>Job</th><th>Ready tasks</th><th>Live samples</th><th>GPU</th><th>CPU requested</th><th>CPU live</th><th>Memory requested</th><th>Memory live</th></tr></thead>
+              <thead><tr><th>Job</th><th>Priority</th><th>Iris</th><th>Ready tasks</th><th>Live samples</th><th>GPU</th><th>CPU requested</th><th>CPU live</th><th>Memory requested</th><th>Memory live</th></tr></thead>
               <tbody>{summaries.map((summary) => <tr key={summary.job}>
                 <td><span className={css`display:inline-block;width:8px;height:8px;border-radius:2px;background:${jobColor(summary.job, jobs)};margin-right:7px;`} /><a href={`/d/marin-jobs?var-cluster=${encodeURIComponent(cluster)}&var-job=${encodeURIComponent(summary.job)}`}>{summary.job}</a></td>
+                <td>{summary.priorityClass ? summary.priorityClass.replace(/^iris-/, '') : '—'}</td>
+                <td><a href={`${IRIS_DASHBOARD_ORIGIN}/#/job/${encodeURIComponent(summary.job)}?cluster=${encodeURIComponent(cluster)}`} target="_blank" rel="noreferrer">Open</a></td>
                 <td>{summary.ready}/{summary.tasks}</td><td>{summary.observed}/{summary.tasks}</td><td>{summary.gpuRequestCount}</td><td>{formatCores(summary.cpuRequestMillicores)} cores</td><td>{summary.observed ? `${formatCores(summary.cpuMillicores)} cores` : '—'}</td><td>{formatBytes(summary.memoryRequestBytes)}</td><td>{summary.observed ? formatBytes(summary.memoryBytes) : '—'}</td>
               </tr>)}</tbody>
             </table>
