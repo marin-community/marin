@@ -960,6 +960,9 @@ project_grants:
 - role: roles/cloudscheduler.serviceAgent
   members:
   - serviceAccount:service-748532799086@gcp-sa-cloudscheduler.iam.gserviceaccount.com
+- role: roles/cloudscheduler.viewer
+  members:
+  - principal: human-070
 - role: roles/cloudsql.client
   members:
   - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
