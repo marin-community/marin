@@ -4,6 +4,9 @@ End-to-end DAG from normalized Datakit sources to the per-(cluster, quality)
 Levanter store. [`reference_pipeline.py`](reference_pipeline.py) builds the
 StepSpec graph and runs it as a single iris job, in one of two modes:
 
+[`mixprior/`](mixprior/) fits the shared-content transfer GP over registered
+data-mixture swarms and selects a feasible curriculum with Ax.
+
 - `--mode full`: sources from `marin.datakit.sources.all_sources`, K=5000.
 - `--mode sample`: a pre-built testbed sample registered as already-normalized
   sources (`--sample-prefix`), K=64 — a true end-to-end run on real data.
