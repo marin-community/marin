@@ -1,54 +1,46 @@
 ---
 name: use-iris
-description: Operate, inspect, submit, or diagnose Iris jobs, tasks, clusters, scheduling, federation, and CoreWeave behavior. Use for ordinary Iris operational questions and cross-cutting investigations; pair it with a narrower workflow skill when the request is to babysit a job, deploy controllers, reserve hardware, recover a Kubernetes pod, or profile training.
+description: Use Iris to submit, inspect, debug, monitor, or recover jobs and tasks; diagnose scheduling and federation; deploy controllers; or reserve dev GPUs and TPUs. Use for ordinary Iris operations, including babysitting a job, controller rollouts, accelerator sessions, and stuck CoreWeave pods. Use a narrower production-run or Zephyr skill when that workflow is explicitly requested.
 ---
 
 # Use Iris
 
-Treat the checked-in operator manuals and cluster configs as the source of truth. Use this skill to select the right state surface and workflow, then load only the relevant section.
+Read only the material needed for the request:
 
-## Route the task
+- Normal jobs, tasks, scheduling, auth, or CoreWeave: `lib/iris/OPS.md`.
+- Federation: `lib/iris/docs/federation.md`.
+- Continuous job monitoring: [references/monitor-job.md](references/monitor-job.md).
+- Controller deploy or rollback: [references/controller-rollout.md](references/controller-rollout.md).
+- Interactive GPU or TPU: [references/dev-accelerators.md](references/dev-accelerators.md).
+- Stuck terminating CoreWeave pod: [references/stuck-pod.md](references/stuck-pod.md).
+- Logs or measurements: use `query-finelog`.
 
-- Read `lib/iris/OPS.md` for CLI access, jobs and tasks, scheduler state, CoreWeave inspection, auth, controller state, and live troubleshooting.
-- Read `lib/iris/docs/federation.md` for peer routing, root-job handoff, parent/peer state, object-store boundaries, or proxied serving endpoints.
-- Read `lib/iris/config/<cluster>.yaml` to resolve a named cluster's backend, Kubernetes context, namespace, and other operational facts. Do not reproduce live coordinates from memory.
-- Use `query-finelog` and read `lib/finelog/OPS.md` for logs, resource measurements, profiles, telemetry, or forwarding.
-- Use the matching narrow skill for a stateful or mutating workflow: `babysit-job`, `babysit-zephyr`, `deploy-iris-controllers`, `reserve-gpu`, `reserve-tpu`, `recover-stuck-k8s-pod`, or `profile-training`.
+Resolve cluster facts from `lib/iris/config/<cluster>.yaml`; do not copy live coordinates from memory.
 
-## Establish the state boundary
-
-1. Resolve the cluster and canonical job or task ID. Prefer `--cluster=<name>` for checked-in configs and `--config=<path>` for a custom or pinned file.
-2. Start with the narrowest read-only Iris view: `job list`, `job describe`, `task describe`, `task events`, `rpc controller list-backends`, or `cluster status` as appropriate.
-3. Query controller SQLite only for registry and decisions such as job state, assignments, scheduling, and federation handoff. Use Finelog for time-series measurements and logs.
-4. For Kubernetes, inspect projected `kubectl get` views before lower-level objects. Avoid `kubectl describe pod` on task Pods because it can print environment values.
-5. Explain which observation separates each hypothesis before proposing a mutation.
-
-## Handle federation
-
-Submit a federated workload through its parent and reason about both controllers:
-
-- Only whole root jobs federate. Pin the coordinator/root with `--target-cluster`; its descendants remain on that peer.
-- `rpc controller list-peers` reports reachability, shapes, and advertised availability. The parent's `federated_jobs` table reports queued, promoted, and handed-off state.
-- A pre-handoff job has no task on the peer. Read the pending reason before treating the absence as a failure.
-- `job describe` on the parent mirrors peer task state and is the liveness source. Logs forward asynchronously through Finelog and may lag.
-- Credentials do not cross clouds. CoreWeave task Pods normally read their regional S3 store, while GCP tasks read GCS. Move inputs or choose placement accordingly.
-
-For a pending federated root, always collect the complete parent-side triad before narrowing the cause:
+## Common reads
 
 ```bash
-uv run iris --cluster=<parent> job list --prefix <root-job-id>
-uv run iris --cluster=<parent> rpc controller list-peers
-uv run iris --cluster=<parent> query \
-  "SELECT job_id, peer_id, handoff_state FROM federated_jobs WHERE job_id='<root-job-id>'"
+uv run iris --cluster=<cluster> job describe <job>
+uv run iris --cluster=<cluster> task describe <task>
+uv run iris --cluster=<cluster> task events <task>
+uv run iris --cluster=<cluster> rpc controller list-backends
 ```
 
-Use the job's pending reason, peer reachability and advertised backend shape, handoff state, and availability together. Do not infer a peer failure from the absence of a task before handoff.
+For a pending federated root, inspect all three parent-side views:
 
-## Respect mutation boundaries
+```bash
+uv run iris --cluster=<parent> job list --prefix <root-job>
+uv run iris --cluster=<parent> rpc controller list-peers
+uv run iris --cluster=<parent> query \
+  "SELECT job_id, peer_id, handoff_state FROM federated_jobs WHERE job_id='<root-job>'"
+```
 
-- Never run `iris cluster restart` without explicit approval for the named cluster; it destroys all workers and jobs.
-- Treat a controller restart as a deployment. Require an explicitly named target and use `deploy-iris-controllers`.
-- Job cancel, complete, fail, preempt, resubmit, and direct Kubernetes changes mutate shared state. Perform them only when the request or selected narrow workflow authorizes the exact action.
-- A read-only diagnosis does not authorize credential changes, cluster repair, or a speculative restart.
+Only root jobs federate; their whole tree stays on the peer. Parent `job describe` is the liveness source, while forwarded logs may lag. CoreWeave tasks normally read regional S3 and GCP tasks read GCS.
 
-Report the commands inspected, the evidence found, remaining uncertainty, and the next approval boundary.
+## Boundaries
+
+- Start read-only and name the evidence that distinguishes each cause.
+- Never run `iris cluster restart` without explicit approval for the named cluster; it kills all workers and jobs.
+- Treat a controller restart as a deployment and require an explicitly named target.
+- Cancel, complete, fail, preempt, resubmit, or change Kubernetes state only when the request or selected reference authorizes that exact action.
+- Avoid `kubectl describe pod` on task pods because it can print environment values.

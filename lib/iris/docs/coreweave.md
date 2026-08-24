@@ -23,7 +23,7 @@ The table identifies configured hardware, not live free capacity. The canonical
 inventory is [`lib/iris/config/marin.yaml`](../config/marin.yaml); each peer's
 hardware and Kubernetes settings live in `lib/iris/config/<cluster>.yaml`.
 
-Use the [reserve-GPU skill](../../../.agents/skills/reserve-gpu/SKILL.md) for a
+Use the [Iris accelerator-development workflow](../../../.agents/skills/use-iris/references/dev-accelerators.md) for a
 short development session and the [cloud GPU
 tutorial](../../../docs/tutorials/cloud-gpu.md) for a normal Iris job. These
 commands give a read-only view of a candidate cluster:
@@ -43,7 +43,7 @@ Ctrl+C.
 
 Controller lifecycle commands and direct Kubernetes writes change a shared
 cluster. Use the [deployment
-skill](../../../.agents/skills/deploy-iris-controllers/SKILL.md) and obtain
+workflow](../../../.agents/skills/use-iris/references/controller-rollout.md) and obtain
 explicit approval before running them.
 
 ## Connecting
@@ -486,7 +486,7 @@ For a new CoreWeave cluster, follow the ownership boundary in order:
    controller.
 6. Register the peer in the parent federation config and deploy the controller
    through the [deployment
-   skill](../../../.agents/skills/deploy-iris-controllers/SKILL.md).
+   workflow](../../../.agents/skills/use-iris/references/controller-rollout.md).
 7. Verify `cluster status`, `list-backends`, the public federation route, and one
    representative topology-aware smoke before sending normal jobs.
 

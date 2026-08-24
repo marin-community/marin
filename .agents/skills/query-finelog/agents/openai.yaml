@@ -1,4 +1,0 @@
-interface:
-  display_name: "Query Finelog"
-  short_description: "Discover and query Finelog logs and telemetry"
-  default_prompt: "Use $query-finelog to form a bounded Finelog query for this question."
