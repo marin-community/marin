@@ -690,7 +690,13 @@ def save_branch_manifest(config: SaveBranchManifestConfig) -> None:
         "same_prefix_branch_noise_rows": sum(row["branch_role"] == "same_prefix_branch_noise" for row in branch_rows),
         "noise_estimation": (
             "four phase-1 data-seed repeats hold the observed-incumbent seed-0 prefix checkpoint and "
-            "proportional continuation fixed; whole-run prefix-seed changes remain confounded"
+            "proportional continuation fixed, but changing the data seed also changes the document permutation and "
+            "therefore phase-0/phase-1 overlap; compare them with the seed-930000 proportional control rather than "
+            "treating them as pure operating-stream noise. Whole-run prefix-seed changes remain confounded"
+        ),
+        "prefix_selection_caveat": (
+            "observed_cap10_best is outcome-selected and protected as an incumbent; frontier claims at that prefix "
+            "must be checked against the three KL-materialized prefixes and prefix-seed stability sentinels"
         ),
         "branch_rows": branch_rows,
     }

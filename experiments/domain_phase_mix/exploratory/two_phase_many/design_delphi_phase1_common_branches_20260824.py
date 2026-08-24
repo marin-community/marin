@@ -525,8 +525,10 @@ is not used as a maximin repeller for the fit panel. The launcher also adds pref
 three prefix-seed stability sentinels per selected prefix, and four same-checkpoint phase-1 data-seed
 replicates; these remain outside fit budget.
 
-Every row stays within each bucket's observed canonical-panel phase-1 and total materialized-exposure
-envelopes for every frozen candidate prefix. The largest bucket-wise caps are
+Every fit and common-control continuation stays within each bucket's observed canonical-panel phase-1 and
+total materialized-exposure envelopes for every frozen candidate prefix. Prefix-specific tied controls and
+seed sentinels are natural policy controls rather than support-filtered fit rows; one tied control exceeds one
+phase-1 bucket envelope by 0.016 epoch. The largest bucket-wise caps for the filtered continuation panel are
 {manifest['historical_phase_1_epoch_cap']:.6f} phase-1 epochs and
 {manifest['historical_total_epoch_cap']:.6f} total epochs. These remain coordinate-wise support guardrails,
 not a claim that every joint mixture is in-distribution.

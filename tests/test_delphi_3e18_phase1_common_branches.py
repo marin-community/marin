@@ -1,11 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from dataclasses import dataclass
 from typing import cast
 
+import pytest
+
 from experiments.domain_phase_mix import launch_delphi_3e18_phase1_common_branches as branches
 from experiments.domain_phase_mix import launch_delphi_augmented_swarm_3e18 as base
+from experiments.domain_phase_mix.exploratory.two_phase_many import (
+    materialize_delphi_phase1_common_branches_20260824 as materialize,
+)
 
 CANDIDATE_SHA256 = "fef07d4188ef05f4df4a43d1eda6a12f7d2daf69a1ae1eb777863fd20db732b6"
 CONTINUATION_SHA256 = "9305b5c1598c9eb11e7f898f709bfb193f37802efaba40a43fbecd0d52c12355"
@@ -97,3 +103,25 @@ def test_branch_panel_crosses_common_fit_rows_and_keeps_controls_outside_budget(
     assert len({row["data_seed"] for row in noise_rows}) == branches.BRANCH_NOISE_REPEAT_COUNT
     assert len({row["trainer_seed"] for row in noise_rows}) == 1
     assert len({branches.phase_weights_sha256(row["phase_weights"]) for row in noise_rows}) == 1
+
+
+def test_terminal_metric_record_accepts_identical_retry_rows(tmp_path) -> None:
+    run_name = "branch_retry"
+    metric_dir = tmp_path / f"{run_name}-deadbeef" / "checkpoints"
+    metric_dir.mkdir(parents=True)
+    record = {
+        "step": materialize.EXPECTED_TERMINAL_STEP,
+        materialize.PRIMARY_METRIC: 1.0,
+        materialize.DIAGNOSTIC_METRIC: 0.8,
+    }
+    metric_path = metric_dir / "eval_metrics.jsonl"
+    metric_path.write_text("\n".join([json.dumps(record), json.dumps(record)]) + "\n")
+
+    fs, root = materialize.fsspec.core.url_to_fs(str(tmp_path))
+    _, observed = materialize.metric_record(fs, root, run_name)
+    assert observed == record
+
+    conflicting = {**record, materialize.PRIMARY_METRIC: 1.1}
+    metric_path.write_text("\n".join([json.dumps(record), json.dumps(conflicting)]) + "\n")
+    with pytest.raises(ValueError, match="Conflicting step-3006 metric rows"):
+        materialize.metric_record(fs, root, run_name)

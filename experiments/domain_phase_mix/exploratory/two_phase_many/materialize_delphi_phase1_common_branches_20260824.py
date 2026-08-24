@@ -113,8 +113,10 @@ def metric_record(
     if len(paths) != 1:
         raise ValueError(f"Expected one output for {run_name}; found {paths}")
     records = [row for row in read_json_lines(fs, paths[0]) if int(row.get("step", -1)) == EXPECTED_TERMINAL_STEP]
-    if len(records) != 1:
-        raise ValueError(f"Expected one step-{EXPECTED_TERMINAL_STEP} metric row for {run_name}; found {len(records)}")
+    if not records:
+        raise ValueError(f"Expected a step-{EXPECTED_TERMINAL_STEP} metric row for {run_name}")
+    if any(record != records[0] for record in records[1:]):
+        raise ValueError(f"Conflicting step-{EXPECTED_TERMINAL_STEP} metric rows for {run_name}")
     return paths[0], records[0]
 
 
