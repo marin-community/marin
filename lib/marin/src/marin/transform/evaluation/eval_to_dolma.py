@@ -10,8 +10,8 @@ The Dolma format is a JSONL file with a "text" field.
 from dataclasses import dataclass
 
 import draccus
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.readers import load_jsonl
 
 

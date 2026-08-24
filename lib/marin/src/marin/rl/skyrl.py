@@ -438,8 +438,8 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
         )
         retention_overrides = (
             f"++trainer.max_ckpts_to_keep={spec.retention.resume_checkpoint_count}",
-            f"++terminal_bench_config.trials_dir={prefix_join(attempts_root, 'trace_jobs')}",
-            f"++generator.trajectory_retention.output_path={prefix_join(attempts_root, 'trajectories')}",
+            f"++terminal_bench_config.trials_dir='{prefix_join(attempts_root, 'trace_jobs')}'",
+            f"++generator.trajectory_retention.output_path='{prefix_join(attempts_root, 'trajectories')}'",
         )
         request = SkyRLLaunchRequest(
             run_id=f"{step_name}-{spec.version}",

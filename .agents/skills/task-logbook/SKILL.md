@@ -1,29 +1,15 @@
 ---
 name: task-logbook
-description: "Maintain append-only task/research logbooks and publish the important parts upward into coordinating GitHub issues."
+description: Maintain a task logbook only when explicitly requested for durable cross-session notes, reproducible experiments, or a coordinating issue; entries are append-only while summary indices may change.
 ---
 
-# Skill: Task Logbook
-
-Use this when a task needs durable context across sessions, reproducible
-experiment notes, or a compact handoff trail. For long-running research,
-`run-research` composes this skill with a more complete experimentation lifecycle.
+# Task logbook
 
 ## Concepts
 
-This skill has two modes:
-
-- No coordinating issue: append progress to the logbook.
-- Coordinating issue: update both the logbook and the GitHub issue.
-
-The core model is a funnel of interestingness:
-
-1. The logbook is maximally informative and append-only.
-2. Significant or interesting updates are posted to the coordinating GitHub issue or PR.
-3. The most important findings are promoted into the summary at the top of the issue.
-
-Keep the detailed record in the logbook. Keep the issue useful to someone who
-did not follow the live session.
+Keep the detailed append-only record in the logbook. If a coordinating issue
+exists, publish significant updates as comments and maintain its body as the
+current summary.
 
 ## Location and Naming
 
@@ -70,20 +56,14 @@ author:
 - Next action:
 ```
 
-In general, generate a lightweight/in-progress commit before each log if there
-have been interesting code changes that affect reproducibility. Include this
-commit hash in the entry.
+When code changes affect reproducibility, make a lightweight WIP commit and
+record its hash. Stage only the files needed for the result. Apply the full
+`commit` workflow when promoting the work to a production PR.
 
-Lightweight reproducibility commits are for research or WIP branches, not
-production extraction branches. Stage only the files needed to reproduce the
-entry, and leave unrelated local changes untouched. These commits are snapshots
-for traceability; they do not need to satisfy the full `commit` skill or
-pre-PR checklist until the work is promoted into a production PR.
+For a research series, use one short experiment ID consistently in logbook
+entries, W&B runs, and issue comments.
 
-For research series, add a short experiment ID prefix such as `MOE-HC` and use
-IDs like `MOE-HC-001` in logbook entries, W&B run names, and issue comments.
-
-The author should ordinarily be the user who asked you to make the logbook. If there is no GitHub issue, omit it.
+Use the requesting user as author. Omit `issue` when none exists.
 
 ### Write Rules
 
@@ -103,77 +83,55 @@ The author should ordinarily be the user who asked you to make the logbook. If t
 The entry log is append-only. Short index sections near the top may be edited as
 the current state changes.
 
-Use living indices for:
-
-- `Current TL;DR`
-- `Current baseline`
-- `Hypothesis queue`
-- `Decision log`
-- `Negative results index`
+Living indices may include `Current TL;DR`, `Current baseline`, `Hypothesis
+queue`, `Decision log`, and `Negative results index`.
 
 When updating a living index, preserve traceability by linking each item to the
 logbook entry, issue comment, W&B run, commit, or tag that supports it. Do not
 delete the underlying entry when a hypothesis is revised or falsified; update
 the queue status and point to the evidence.
 
-Hypothesis queue shape:
+Track hypotheses as active, blocked, falsified, or promoted. Each item needs an
+ID, evidence links, and either its next test, resume condition, stopping reason,
+or production decision.
 
 ```md
 ## Hypothesis Queue
-
 ### Active
-- `<ID>`: <hypothesis>. Evidence: <links>. Next test: <short action>.
-
+- `<ID>`: <hypothesis>. Evidence: <links>. Next test: <action>.
 ### Blocked
 - `<ID>`: <hypothesis>. Blocker: <reason>. Resume when: <condition>.
-
 ### Falsified / Dead End
 - `<ID>`: <hypothesis>. Why stopped: <evidence links>.
-
 ### Promoted
-- `<ID>`: <hypothesis>. Decision: <production branch/PR/report/issue link>.
+- `<ID>`: <hypothesis>. Decision: <production artifact link>.
 ```
 
 ## Coordinating Issue
 
-Create or use a coordinating GitHub issue when the work needs durable public
-coordination. The user, supervisor agent, or outer workflow may provide one.
-Confirm timing with the human collaborator if scope or visibility is uncertain.
+When a coordinating GitHub issue exists, link it from the logbook and use this
+section. The user, supervisor agent, or outer workflow may provide one.
 
 Use the experiment body template in `.agents/skills/file-issue/SKILL.md` when
 creating a new coordinating experiment issue.
 
-### Issue summary
-
-Write the issue summary for readers who know Marin/LLM systems generally but
-not the specific thread. Keep it current with the problem, goal, status,
-evidence, and final outcome. Do not overclaim.
-
-Maintain the issue body as the public summary layer:
-
-- `TL;DR`
-- `Current baseline` when comparing behavior or metrics
-- `Decision log` with important decisions, evidence, date, and owner
-- `Negative results index` with links to comments/logbook entries
-- `Conclusion` as evidence solidifies
+Maintain the issue body for readers without thread context: current TL;DR,
+baseline when relevant, decisions with evidence/date/owner, linked negative
+results, and the conclusion. Do not overclaim.
 
 ### Promotion Rules
 
-Use this funnel after each meaningful logbook entry:
+Keep commands, raw output, routine observations, dead ends, and dense analysis
+in the logbook. Post milestones, failures, relaunches, baseline changes,
+surprises, and decisions as issue comments. Promote durable conclusions,
+baselines, decisions, negative results, and the final outcome into the issue
+body.
 
-- **Logbook only:** detailed commands, raw outputs, routine observations,
-  dead ends, local debugging notes, and dense analysis.
-- **Issue comment:** significant milestones, failures, relaunches of long-running experiments, baseline
-  changes, surprising observations, decisions, and periodic long-running research heartbeats.
-- **Issue summary/body:** durable conclusions, current TL;DR or major status, stable baseline,
-  decision log entries, negative-results index, and final outcome.
-
-Consider all updates since the last issue comment; several small logbook entries
-may add up to a useful issue update.
-
-For long-running research, post an issue update at each significant milestone
-or every 6 hours of active work (either experiments in progress or agent work), whichever comes first. If no milestone occurred by the cadence
-deadline, post a brief heartbeat with current status, blockers, and next ETA.
+For long-running research with a coordinating issue, post an update at each
+significant milestone or every 6 hours of active work (either experiments in
+progress or agent work), whichever comes first. If no milestone occurred by the
+cadence deadline, post a brief heartbeat with current status, blockers, and next
+ETA.
 
 ### Posting an update
 
@@ -192,51 +150,31 @@ Issue comment template:
 - Next:
 ```
 
-#### Issue comment style
-
 - Mostly append-only; edit only for formatting, escaping, or factual errors.
 - Agent-authored issue comments begin with `🤖` unless the text was explicitly approved by the user.
 - Leave issue references like #1234 as plain text so GitHub cross-links them.
 - Link artifacts to pinned commits or tags when result reproducibility matters.
 - Keep the issue concise; move full analysis into the logbook.
 
+When an isolated reader is available, use it for nontrivial updates to check for
+undefined terms, ambiguous references, unsupported claims, missing baselines,
+and missing links. Give it only the issue context and proposed update; skip this
+for trivial updates.
 
-#### Issue Reader Check
+Prompt the reader with only the issue body, recent comments, and proposed
+update:
 
-For nontrivial updates, a context-isolated subagent can check whether the update
-is understandable without thread or branch context.
-
-If available, start a subagent **without current thread context** (e.g. using
-`fork_context: false`). Use this prompt:
-
-```markdown
-You are reviewing this GitHub issue update as a technically literate Marin contributor who can see only the issue body, recent issue comments, and the proposed update below.
-
-Task: decide whether the proposed update is understandable from that visible context alone.
-
-Flag:
-- undefined terms, acronyms, run names, branch names, or experiment IDs
-- references like “this”, “that”, “the previous result”, or “the baseline” whose referent is not visible
-- claims without enough visible evidence, config, baseline, metric, or links to evaluate them
-- links that appear necessary but are missing
-
-You may also assume knowledge of project documentation, AGENTS.md but otherwise do not use outside knowledge beyond general knowledge of Marin and the field. Do not infer from missing context. Do not read the logbook. Suggest only edits that make the update self-contained from the visible issue context.
-
-Issue: <issue link/id>
-Update:
-
-<...>
+```text
+Decide whether this update is understandable from visible issue context alone.
+Flag undefined names or IDs, ambiguous references, claims without visible
+evidence, config, baseline, or metrics, and missing necessary links. Do not read
+the logbook or infer missing context.
 ```
-
-You may skip this check for trivial updates.
-
-When updating the issue body with a new summary, use a suitable variant.
 
 ## Finish
 
-Close the issue when what the logbook was tracking is complete.
+Close the issue when the tracked work is complete.
 
-Before closing the coordinating issue, ensure the final logbook entry and issue
-summary agree. The final issue comment should say what worked, what did not,
-confidence level and limitations, ordered next steps, and an explicit conclusion
-explaining the outcome.
+Before closing the issue, make the final logbook entry and issue summary agree.
+The final comment records what worked, what did not, confidence and limitations,
+ordered next steps, and the conclusion.

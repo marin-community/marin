@@ -627,7 +627,12 @@ const pendingJobBand = computed<Map<string, string>>(() => {
 // ===========================================================================
 
 const TERMINAL_JOB_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed', 'preempted'])
-const BANDS = ['PRIORITY_BAND_PRODUCTION', 'PRIORITY_BAND_INTERACTIVE', 'PRIORITY_BAND_BATCH'] as const
+const BANDS = [
+  'PRIORITY_BAND_SYSTEM',
+  'PRIORITY_BAND_PRODUCTION',
+  'PRIORITY_BAND_INTERACTIVE',
+  'PRIORITY_BAND_BATCH',
+] as const
 type Band = typeof BANDS[number]
 
 const userBudgets = computed<SchedulerUserBudget[]>(() => schedulerData.value?.userBudgets ?? [])

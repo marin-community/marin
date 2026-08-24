@@ -188,10 +188,13 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
         resolved_config_uri=f"{output_path}/resolved-skyrl.json",
         terminal_manifest_uri=f"{output_path}/terminal.json",
     )
+    # The path values are single-quoted because they carry a ``ttl=<n>d`` segment and Hydra's
+    # override grammar rejects a bare value containing ``=``.
     assert config.request.overrides[-3:] == (
         "++trainer.max_ckpts_to_keep=2",
-        "++terminal_bench_config.trials_dir=" "s3://temp/ttl=14d/skyrl/users/alice/run/attempts/trace_jobs",
-        "++generator.trajectory_retention.output_path=" "s3://temp/ttl=14d/skyrl/users/alice/run/attempts/trajectories",
+        "++terminal_bench_config.trials_dir=" "'s3://temp/ttl=14d/skyrl/users/alice/run/attempts/trace_jobs'",
+        "++generator.trajectory_retention.output_path="
+        "'s3://temp/ttl=14d/skyrl/users/alice/run/attempts/trajectories'",
     )
 
 

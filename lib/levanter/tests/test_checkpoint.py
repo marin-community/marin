@@ -438,6 +438,16 @@ def test_trainer_config_checkpoint_search_paths():
     )
     assert config.checkpoint_search_paths("run1") == ["/tmp/test-perm/run1", "/tmp/test-temp/run1"]
 
+    multi_config = dataclasses.replace(
+        config,
+        load_checkpoint_path=["/tmp/test-perm/run1", "/tmp/test-temp/run1", "/tmp/test-old-temp"],
+    )
+    assert multi_config.checkpoint_search_paths("run1") == [
+        "/tmp/test-perm/run1",
+        "/tmp/test-temp/run1",
+        "/tmp/test-old-temp",
+    ]
+
     pinned_config = dataclasses.replace(config, load_checkpoint_path="/tmp/test-perm/run1/step-100")
     assert pinned_config.checkpoint_search_paths("run1") == ["/tmp/test-perm/run1/step-100"]
 

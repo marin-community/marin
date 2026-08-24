@@ -7,8 +7,8 @@ import re
 from collections import defaultdict
 
 from marin.processing.classification.deduplication.connected_components import CCInput, connected_components
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 
 def test_connected_components_happy_path(tmp_path):

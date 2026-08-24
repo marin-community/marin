@@ -25,10 +25,21 @@ logger = logging.getLogger(__name__)
 
 
 class PersistentKvCache:
-    """An in-process memory tier over best-effort FineStore named-object writes."""
+    """An in-process memory tier over best-effort FineStore named-object writes.
 
-    def __init__(self, resolve_root: Callable[[], str] | None = None) -> None:
+    ``is_writer`` is evaluated when storing so a distributed process can resolve its
+    rank after constructing the cache. Non-writers retain values in memory and keep
+    read-through access to the shared archive.
+    """
+
+    def __init__(
+        self,
+        resolve_root: Callable[[], str] | None = None,
+        *,
+        is_writer: Callable[[], bool] | None = None,
+    ) -> None:
         self._resolve_root = resolve_root
+        self._is_writer = is_writer or (lambda: True)
         self._root: str | None = None
         self._store: DataStore | None = None
         self._root_lock = threading.Lock()
@@ -48,8 +59,8 @@ class PersistentKvCache:
         return cls()
 
     @classmethod
-    def for_prefix(cls, prefix: str) -> PersistentKvCache:
-        return cls(lambda: marin_temp_bucket(_CACHE_TTL_DAYS, prefix))
+    def for_prefix(cls, prefix: str, *, is_writer: Callable[[], bool] | None = None) -> PersistentKvCache:
+        return cls(lambda: marin_temp_bucket(_CACHE_TTL_DAYS, prefix), is_writer=is_writer)
 
     def location(self) -> str | None:
         return self._resolve_root() if self._resolve_root is not None else None
@@ -77,7 +88,7 @@ class PersistentKvCache:
             if self._closed:
                 raise RuntimeError("cache is closed")
             self._memory[key] = value
-        if self._resolve_root is None:
+        if self._resolve_root is None or not self._is_writer():
             return
         if StoragePath(self._storage_root()).is_remote:
             self._queue_remote_write(key, value)

@@ -75,6 +75,9 @@ from rigging.filesystem.cluster_config import marin_temp_bucket
 scratch = marin_temp_bucket(ttl_days=1, prefix="my-experiment")
 ```
 
+Clusters may set `MARIN_TEMP_PREFIX`; when present, `marin_temp_bucket` routes
+every temporary write to that lifecycle-managed cluster-local bucket.
+
 Do not read or copy data from GCS while running on CoreWeave without explicit
 user approval. The transfer can incur egress charges.
 

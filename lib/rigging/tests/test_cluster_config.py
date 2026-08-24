@@ -178,6 +178,33 @@ def test_marin_temp_bucket_unknown_s3_bucket_falls_back(monkeypatch):
     assert path == "s3://random-bucket/marin/tmp"
 
 
+def test_marin_temp_bucket_prefers_cluster_override(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://hero-checkpoints")
+    cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 14, 30))
+    with use_data_config(cfg):
+        path = marin_temp_bucket(
+            14,
+            "checkpoints/run",
+            source_prefix="s3://marin-us-east-02a/marin",
+        )
+    assert path == "s3://hero-checkpoints/tmp/ttl=14d/checkpoints/run"
+
+
+def test_marin_temp_bucket_can_resolve_legacy_data_local_scratch(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://hero-checkpoints")
+    cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 14, 30))
+    with use_data_config(cfg):
+        path = marin_temp_bucket(
+            14,
+            "checkpoints/run",
+            source_prefix="s3://marin-us-east-02a/marin",
+            use_env_override=False,
+        )
+    assert path == "s3://marin-us-east-02a/tmp/ttl=14d/checkpoints/run"
+
+
 # --- config-driven S3 bucket registry --------------------------------------
 
 

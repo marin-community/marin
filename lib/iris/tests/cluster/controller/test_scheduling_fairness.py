@@ -90,6 +90,26 @@ def test_batch_scheduled_after_interactive():
         assert max(interactive_indices) < min(batch_indices)
 
 
+def test_all_priority_bands_are_scheduled_in_policy_order():
+    with make_controller_state() as state:
+        task_bands = {}
+        for user, name, band in [
+            ("alice", "interactive-job", job_pb2.PRIORITY_BAND_INTERACTIVE),
+            ("bob", "batch-job", job_pb2.PRIORITY_BAND_BATCH),
+            ("charlie", "production-job", job_pb2.PRIORITY_BAND_PRODUCTION),
+            ("dana", "system-job", job_pb2.PRIORITY_BAND_SYSTEM),
+        ]:
+            [task] = _submit_user_job(state, user, name, band=band)
+            task_bands[task.task_id] = band
+
+        assert [task_bands[task.task_id] for task in _pending_sorted(state)] == [
+            job_pb2.PRIORITY_BAND_SYSTEM,
+            job_pb2.PRIORITY_BAND_PRODUCTION,
+            job_pb2.PRIORITY_BAND_INTERACTIVE,
+            job_pb2.PRIORITY_BAND_BATCH,
+        ]
+
+
 def test_depth_boost_within_band():
     """Deeper tasks (child jobs) are still prioritized within the same band."""
     with make_controller_state() as state:

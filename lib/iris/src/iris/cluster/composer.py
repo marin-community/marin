@@ -47,16 +47,12 @@ from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.coreweave_topology import KueueTopologyBinding
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.types import local_queue_name
-from iris.rpc import job_pb2
+from iris.rpc.proto_display import PRIORITY_BAND_VALUES, priority_band_name
 
 logger = logging.getLogger(__name__)
 
 # Maps kubernetes_provider.priority_classes keys to the PriorityBand enum stamped on Pods.
-_PRIORITY_BANDS = {
-    "production": job_pb2.PRIORITY_BAND_PRODUCTION,
-    "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
-    "batch": job_pb2.PRIORITY_BAND_BATCH,
-}
+_PRIORITY_BANDS = {priority_band_name(band): band for band in PRIORITY_BAND_VALUES}
 
 
 def make_task_backend(

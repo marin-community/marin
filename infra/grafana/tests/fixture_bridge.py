@@ -20,7 +20,6 @@ _LANES = (
     ("datakit-t1", "Data T1", "marin", "data"),
     ("datakit-t2", "Data T2", "marin", "data"),
     ("datakit-t3", "Data T3", "marin", "data"),
-    ("cluster-smoke", "Cluster", "marin", "cluster"),
     ("evalchemy", "Evalchemy", "forks", "evaluation"),
     ("harbor", "Harbor", "forks", "evaluation"),
     ("marinskyrl", "SkyRL", "forks", "rl"),
@@ -103,6 +102,21 @@ def _wandb(chart: str) -> list[dict]:
                 }
             )
     return rows
+
+
+def _wandb_history(params: dict[str, list[str]]) -> list[dict]:
+    """A whole-run curve: the point of the panel is that it starts at step 0."""
+    run = params.get("run", ["hero-preview"])[0]
+    return [
+        {
+            "run": run,
+            "project": "marin_moe",
+            "run_url": f"https://wandb.ai/marin-community/marin_moe/runs/{run}",
+            "step": step,
+            "value": 3.4 - 1.9 * (step / 40_000) ** 0.35,
+        }
+        for step in range(0, 40_000, 200)
+    ]
 
 
 def _finelog(query: str) -> list[dict]:
@@ -459,7 +473,9 @@ def _rows(path: str, query: str) -> list[dict] | dict:
                 "last_seen": round(_NOW.timestamp() * 1000),
             }
         ]
-    if path.startswith("/wandb/"):
+    if path == "/wandb/history":
+        return _wandb_history(parse_qs(query))
+    if path.startswith("/wandb/report/"):
         return _wandb(path.rsplit("/", 1)[-1])
     if path == "/finelog/marin/query":
         return _finelog(query)

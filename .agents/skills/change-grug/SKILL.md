@@ -1,6 +1,6 @@
 ---
 name: change-grug
-description: Modify model or training behavior in a Grug/Grugformer experiment variant, or upstream a proven variant change.
+description: Modify or upstream behavior in a named Grug/Grugformer experiment variant.
 ---
 
 # Skill: Changing Grug (Template-First)

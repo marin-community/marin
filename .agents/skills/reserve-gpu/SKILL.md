@@ -1,6 +1,6 @@
 ---
 name: reserve-gpu
-description: Reserve Iris-backed CoreWeave H100 or GB200 nodes with dev_gpu.py. Use for interactive GPU debugging, multi-node tests, or reconnecting to a dev GPU session.
+description: Reserve an Iris-backed GPU with scripts/iris/dev_gpu.py only when explicitly requested for an interactive dev GPU session.
 ---
 
 # Dev GPU

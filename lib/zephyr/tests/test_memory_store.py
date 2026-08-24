@@ -12,8 +12,8 @@ import pyarrow.parquet as pq
 import pytest
 from fray.actor import ActorHandle, ActorUnavailableError
 from fray.local_backend import LocalClient
+from zephyr.context import ZephyrContext, _require_resolvable_worker_handles
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext, _require_resolvable_worker_handles
 from zephyr.memory_store import (
     DuplicateMemoryStoreKey,
     MemoryStore,

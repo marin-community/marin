@@ -48,11 +48,3 @@ then selects these tests; `--import-mode=importlib` is re-added because `-o addo
 drops it and the `tests.cluster.*` imports need it. `--timeout=0` disables the 60s
 per-test cap (a separate `timeout` ini that `-o addopts=` does not clear) for the
 TPU smokes, which carry no per-test timeout marker; the vLLM e2es set their own.
-
-## CI
-
-`.github/workflows/marin-cluster-smoke.yaml` runs these nightly and on
-`workflow_dispatch`. It authenticates to the `marin` cluster with the existing
-`IRIS_CI_GCP_SA_KEY` service account; its ADC mints the IAP edge token, the same path
-the canary ferry uses, so no Workload Identity Federation setup is required. The 8×H100
-CoreWeave e2es are gated behind a `run_gpu` dispatch input and do not run nightly.
