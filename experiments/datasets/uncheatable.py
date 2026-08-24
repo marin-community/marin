@@ -9,6 +9,7 @@ from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import dataset_main, hf_download, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
+from experiments.datasets.validation_cache_identity import validation_tokenizer_suffix
 from experiments.llama import llama3_tokenizer
 
 UNCHEATABLE_EVAL_DATASET_ID = "Jellyfish042/UncheatableEval-2026-07"
@@ -71,7 +72,7 @@ def uncheatable_dataset(
     processed = processed if processed is not None else uncheatable_processed()
     category = UNCHEATABLE_SUBSETS[subset]
     return tokenized(
-        f"uncheatable_eval/{subset}-llama3",
+        f"uncheatable_eval/{subset}-{validation_tokenizer_suffix(tokenizer)}",
         tokenizer=tokenizer,
         version=UNCHEATABLE_EVAL_VERSION,
         raw=processed,
