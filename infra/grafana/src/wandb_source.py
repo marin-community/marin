@@ -25,7 +25,7 @@ _ENTITY = "marin-community"
 _PROJECT = "marin_moe"
 _REPORT_VIEW_ID = "VmlldzoxNzM1OTMxMQ=="
 _REPORT_URL = "https://wandb.ai/marin-community/marin_moe/reports/67B-A2B-MoE-on-10T-tokens--VmlldzoxNzM1OTMxMQ"
-_X_KEY = "throughput/total_tokens"
+_TOTAL_TOKENS_KEY = "throughput/total_tokens"
 _SAMPLES = 800
 
 WANDB_CHARTS = {
@@ -45,7 +45,6 @@ _STEP_KEY = "_step"
 # ~15x low, so the mean of a sampled history is used instead: it is stable across a
 # single bad step and matches the status strip's own AVG(tokens/s) tile.
 _TPS_KEY = "throughput/tokens_per_second"
-_TOKENS_SEEN_KEY = "throughput/total_tokens"
 _TPS_SAMPLES = 500
 
 # The projects a run named by the training dashboard can live in, searched in this
@@ -157,7 +156,9 @@ class WandbSource:
         report_title, runs = self._report()
         rows: list[dict] = []
         for run in runs:
-            pairs = self._sampled_history(project=_PROJECT, run=run, x_key=_X_KEY, y_key=metric, samples=_SAMPLES)
+            pairs = self._sampled_history(
+                project=_PROJECT, run=run, x_key=_TOTAL_TOKENS_KEY, y_key=metric, samples=_SAMPLES
+            )
             if pairs is None:
                 raise UpstreamError("wandb", f"run {run!r} not found", status_code=502)
             rows.extend(
@@ -240,7 +241,7 @@ class WandbSource:
             active = summary.get("_runtime")
             active = float(active) if isinstance(active, int | float) else None
             wall = _epoch_seconds(run_data["heartbeatAt"]) - _epoch_seconds(run_data["createdAt"])
-            tokens_seen = summary.get(_TOKENS_SEEN_KEY)
+            tokens_seen = summary.get(_TOTAL_TOKENS_KEY)
             tokens_seen = float(tokens_seen) if isinstance(tokens_seen, int | float) else None
             reference_tps = self._mean_tps(project=candidate, run=run)
             efficiency = (
