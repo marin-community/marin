@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import cast
 
 import pytest
+from marin.execution.executor import collect_dependencies_and_version
+from marin.execution.types import versioned
 
 from experiments.domain_phase_mix import launch_delphi_3e18_phase1_common_branches as branches
 from experiments.domain_phase_mix import launch_delphi_augmented_swarm_3e18 as base
@@ -125,3 +127,34 @@ def test_terminal_metric_record_accepts_identical_retry_rows(tmp_path) -> None:
     metric_path.write_text("\n".join([json.dumps(record), json.dumps(conflicting)]) + "\n")
     with pytest.raises(ValueError, match="Conflicting step-3006 metric rows"):
         materialize.metric_record(fs, root, run_name)
+
+
+def test_manifest_step_versions_the_selected_run_orders() -> None:
+    one_row = branches.SaveBranchManifestConfig(
+        output_path="unused",
+        selected_prefixes_json="[]",
+        selected_prefixes_sha256="selected",
+        candidate_weights_sha256=CANDIDATE_SHA256,
+        continuation_weights_sha256=CONTINUATION_SHA256,
+        prefix_replay_code_commit="prefix",
+        code_commit="branch",
+        branch_rows_json="[]",
+        selected_run_orders=versioned((0,)),
+    )
+    full_panel = branches.SaveBranchManifestConfig(
+        output_path="unused",
+        selected_prefixes_json="[]",
+        selected_prefixes_sha256="selected",
+        candidate_weights_sha256=CANDIDATE_SHA256,
+        continuation_weights_sha256=CONTINUATION_SHA256,
+        prefix_replay_code_commit="prefix",
+        code_commit="branch",
+        branch_rows_json="[]",
+        selected_run_orders=versioned(tuple(range(branches.TOTAL_BRANCH_ROWS))),
+    )
+
+    one_row_version = collect_dependencies_and_version(one_row).version
+    full_panel_version = collect_dependencies_and_version(full_panel).version
+
+    assert one_row_version == {"selected_run_orders": (0,)}
+    assert full_panel_version == {"selected_run_orders": tuple(range(branches.TOTAL_BRANCH_ROWS))}

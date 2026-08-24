@@ -25,7 +25,7 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.context import executor_context
 from marin.execution.executor import ExecutorMainConfig, executor_main, get_git_commit
 from marin.execution.remote import remote
-from marin.execution.types import ExecutorStep, this_output_path
+from marin.execution.types import ExecutorStep, VersionedValue, this_output_path, versioned
 from marin.processing.tokenize import step_to_lm_mixture_component
 from marin.rl.placement import marin_prefix_for_region
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
@@ -112,6 +112,7 @@ class SaveBranchManifestConfig:
     prefix_replay_code_commit: str
     code_commit: str
     branch_rows_json: str
+    selected_run_orders: VersionedValue[tuple[int, ...]]
 
 
 def file_sha256(path: Path) -> str:
@@ -792,6 +793,7 @@ def main() -> None:
                 prefix_replay_code_commit=args.prefix_replay_code_commit,
                 code_commit=code_commit,
                 branch_rows_json=json.dumps(serializable_rows, sort_keys=True),
+                selected_run_orders=versioned(tuple(int(row["run_order"]) for row in serializable_rows)),
             )
         )
         logger.info("Wrote %d phase-1 branch specs under %s", len(rows), LOCAL_ARTIFACT_DIR)
@@ -864,6 +866,7 @@ def main() -> None:
                     prefix_replay_code_commit=args.prefix_replay_code_commit,
                     code_commit=code_commit,
                     branch_rows_json=json.dumps(serializable_rows, sort_keys=True),
+                    selected_run_orders=versioned(tuple(int(row["run_order"]) for row in serializable_rows)),
                 ),
             )
         )
