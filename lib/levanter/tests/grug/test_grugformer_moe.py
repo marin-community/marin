@@ -677,15 +677,7 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
     keep = jnp.asarray([[True, True], [True, True], [False, False], [False, False]])
 
     def dense_output(x, w_up_gate, w_down):
-        selected_w13 = w_up_gate[selected_experts]
-        hidden = jnp.einsum("th,tkhi->tki", x, selected_w13)
-        gate, up = jnp.split(hidden, [intermediate_dim], axis=-1)
-        expert_output = jnp.einsum(
-            "tki,tkih->tkh",
-            jax.nn.silu(gate) * up,
-            w_down[selected_experts],
-        )
-        return jnp.einsum("tkh,tk->th", expert_output, combine_weights * keep)
+        return _dense_moe_output(x, selected_experts, combine_weights * keep, w_up_gate, w_down)
 
     cotangent = jax.random.normal(jax.random.key(42), x.shape)
     with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
@@ -761,15 +753,7 @@ def test_fixed_pooled_wave_all_to_all_matches_dense_value_and_gradients():
     rematerialized_pooled_output = jax.checkpoint(sharded_pooled_output)
 
     def dense_output(x, combine_weights, w_up_gate, w_down):
-        selected_w13 = w_up_gate[selected_experts]
-        hidden = jnp.einsum("th,tkhi->tki", x, selected_w13)
-        gate, up = jnp.split(hidden, [intermediate_dim], axis=-1)
-        expert_output = jnp.einsum(
-            "tki,tkih->tkh",
-            jax.nn.silu(gate) * up,
-            w_down[selected_experts],
-        )
-        return jnp.einsum("tkh,tk->th", expert_output, combine_weights)
+        return _dense_moe_output(x, selected_experts, combine_weights, w_up_gate, w_down)
 
     with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
         actual = sharded_pooled_output(x, combine_weights, w_up_gate, w_down)
@@ -847,24 +831,16 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
     with jax.set_mesh(mesh):
         actual, overflow = sharded_pooled_output(x, combine_weights, w_up_gate, w_down)
 
-    selected_w13 = w_up_gate[selected_experts]
-    hidden = jnp.einsum("th,tkhi->tki", x, selected_w13)
-    gate, up = jnp.split(hidden, [intermediate_dim], axis=-1)
-    expert_output = jnp.einsum(
-        "tki,tkih->tkh",
-        jax.nn.silu(gate) * up,
-        w_down[selected_experts],
-    )
     keep = jnp.arange(tokens)[:, None] < 3
-    expected = jnp.einsum("tkh,tk->th", expert_output, combine_weights * keep)
+    expected = _dense_moe_output(x, selected_experts, combine_weights * keep, w_up_gate, w_down)
 
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
     assert int(overflow.sender) == 3
     assert int(overflow.receiver) == 3
 
 
-def test_ring_matches_dense_cross_shard_above_assignment_capacity():
-    implementation: MoeImplementation = "ring"
+@pytest.mark.parametrize("implementation", ["ring", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"])
+def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(implementation: MoeImplementation):
     env = os.environ.copy()
     env["JAX_PLATFORMS"] = "cpu"
     env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
