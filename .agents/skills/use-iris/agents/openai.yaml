@@ -1,0 +1,4 @@
+interface:
+  display_name: "Use Iris"
+  short_description: "Operate and diagnose Iris jobs and clusters"
+  default_prompt: "Use $use-iris to operate or diagnose this Iris job safely."
