@@ -61,8 +61,8 @@ class GrugTrainerConfig:
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
 
-    # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
-    # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
+    # Grug builds its own compact (replica_dcn, data, context, expert, model) mesh instead of
+    # using the Trainer's logical axis mapping; `data` absorbs whatever these leave free.
     # Defaults reproduce the historical layout: no expert parallelism and full replication
     # across slices (replica_axis_size=None -> jax.process_count()), i.e. parameters
     # replicated per slice and sharded only over the intra-slice `data` axis. For a model
@@ -70,6 +70,12 @@ class GrugTrainerConfig:
     # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
+    # Sequence-dim (context-parallel) shard count for the mesh's `context` axis. Leave it at 1:
+    # no model here shards the sequence dim yet, so a value above 1 not only narrows `data` but
+    # corrupts metrics -- the MoE token-space psums reduce over `context`, and with every
+    # context shard holding the same tokens they scale dropped-token counts by the context
+    # width. Raise it once model-side context sharding lands.
+    context_axis_size: int = 1
     sharding_dump_path: str | None = None
 
 
@@ -136,7 +142,7 @@ def build_train_loader(
     mesh: Mesh,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     return DataLoader(
         dataset,
@@ -166,7 +172,7 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     eval_axis_mapping = {"batch": _BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
@@ -406,6 +412,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     mesh = compact_grug_mesh(
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
+        context_axis_size=config.trainer.context_axis_size,
     )
     checkpointer = trainer.checkpointer.create(run_id)
     with set_mesh(mesh), TrainingDashboard(config, checkpointer.request_checkpoint, run_id):
