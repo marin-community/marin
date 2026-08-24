@@ -203,7 +203,7 @@ than a numbered Attempt.
 many in seconds, so a grep for anything earlier in the run comes back empty:
 
 ```bash
-iris job logs /user/job/child --max-lines 400000 --no-tail | grep "Saving checkpoint"
+iris job logs /user/job/child --max-lines 400000 --no-tail --substring "Saving checkpoint"
 ```
 
 ### Submitting a GPU gang from a workstation

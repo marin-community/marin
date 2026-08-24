@@ -49,6 +49,7 @@ ARRAY_DRIVER = "zarr3"
 KVSTORE_DRIVER = "ocdbt"
 # JAX's memory kind for host memory a device can address. Offloaded optimizer state lives here.
 _HOST_MEMORY_KIND = "pinned_host"
+_PAGEABLE_HOST_MEMORY_KIND = "unpinned_host"
 _GPU_PLATFORM = "gpu"
 # Chunks a save stages at once. The budget is per process, so a node holds it once per local
 # process, and a process carries about four times what it holds in flight
@@ -94,6 +95,14 @@ def _trim_host_memory_after_commits(commit_futures: Sequence[ts.Future]) -> None
 
     for future in commit_futures:
         future.add_done_callback(commit_finished)
+
+
+def release_commit_futures(manager: array_ser.GlobalAsyncCheckpointManager) -> None:
+    """Drop a save's joined commit futures after they finish.
+
+    JAX overwrites ``_commit_futures`` on each save and never clears it.
+    """
+    manager._commit_futures = None
 
 
 def _format_gib(num_bytes: int) -> str:
@@ -162,11 +171,9 @@ def _slice_shard_on_device(data, axis: int, start: int, limit: int):
 async def _transfer_shard_to_pageable_host(shard, local_slice: tuple[int, int, int] | None = None) -> np.ndarray:
     """Snapshot a shard into pageable host memory, restricted to ``local_slice``.
 
-    The TPU runtime never returns JAX's pinned staging to the OS (#6924). State already in
-    host memory is snapshotted in place.
-
-    GPU shards owned by training stage through a transient host array so checkpoint
-    materialization does not retain a host copy on the long-lived source array.
+    Unsliced GPU shards are training-owned. Staging them on a disposable pageable CPU array keeps
+    JAX's NumPy cache off the live shard without entering CUDA's pinned-host allocator. Sliced
+    shards are already disposable, and TPU keeps its direct path.
     """
     data = shard.data if local_slice is None else _slice_shard_on_device(shard.data, *local_slice)
 
@@ -175,11 +182,11 @@ async def _transfer_shard_to_pageable_host(shard, local_slice: tuple[int, int, i
         return np.array(data, copy=True)
 
     if local_slice is None and data.device.platform == _GPU_PLATFORM:
-        # Move the host-value cache onto a transient array instead of the source array held by
-        # training. TPU keeps the direct path because its pinned staging is not returned to the OS.
-        staged = jax.device_put(data, SingleDeviceSharding(data.device, memory_kind=_HOST_MEMORY_KIND))
+        cpu_device = jax.local_devices(backend="cpu")[0]
+        pageable_sharding = SingleDeviceSharding(cpu_device, memory_kind=_PAGEABLE_HOST_MEMORY_KIND)
+        staged = jax.device_put(data, pageable_sharding)
         try:
-            await asyncio.sleep(0)
+            # The private NumPy snapshot must outlive the disposable JAX staging array.
             return np.array(staged, copy=True)
         finally:
             staged.delete()
@@ -709,6 +716,7 @@ def _serialize_arrays(
     barriers on the other processes.
     """
     manager.wait_until_finished()
+    release_commit_futures(manager)
 
     # JAX's process-lifetime context accumulates caches across saves, since each save writes a
     # new OCDBT database (#6785). Give each save bounded caches and copy concurrency of its own.
