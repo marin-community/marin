@@ -40,6 +40,7 @@ POSTERIOR_MEAN_SELECTION_RULE = "argmax over the finite candidate set"
 PROPORTIONAL_FLOOR = 0.02
 PERTURBATION_SCALE_RANGE = (0.02, 2.0)
 POOL_DRAW_SIZE = 16_384
+MAX_POOL_DRAWS = 256
 ACQUISITION_CHUNK_SIZE = 128
 PROGRESS_ROWS = 4_096
 logger = logging.getLogger(__name__)
@@ -106,7 +107,9 @@ def sample_lognormal_pool(space: LognormalPoolInputs, size: int, seed: int) -> n
     ]
     rng = np.random.default_rng(seed)
     pool = exclude_observed(center_designs, space.observed_weights)
-    while len(pool) < size:
+    for _ in range(MAX_POOL_DRAWS):
+        if len(pool) >= size:
+            return pool[:size]
         selected = center_designs[rng.integers(len(center_designs), size=POOL_DRAW_SIZE)]
         scale = np.exp(
             rng.uniform(
@@ -130,10 +133,15 @@ def sample_lognormal_pool(space: LognormalPoolInputs, size: int, seed: int) -> n
                 space.max_cumulative_epochs,
             )
         ]
+        if len(feasible) == 0:
+            continue
         pool = unique_mixtures(np.concatenate([pool, feasible]))
         pool = exclude_observed(pool, space.observed_weights)
         logger.info("Sampled %s/%s feasible mixtures", f"{min(len(pool), size):,}", f"{size:,}")
-    return pool[:size]
+    raise ValueError(
+        f"Could only sample {len(pool):,} of {size:,} feasible mixtures after "
+        f"{MAX_POOL_DRAWS * POOL_DRAW_SIZE:,} draws"
+    )
 
 
 def exclude_observed(pool: np.ndarray, observed_weights: np.ndarray) -> np.ndarray:

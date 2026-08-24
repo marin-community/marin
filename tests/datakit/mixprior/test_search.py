@@ -4,6 +4,7 @@
 from dataclasses import replace
 
 import numpy as np
+import pytest
 import torch
 
 from experiments.datakit.mixprior.campaign import Campaign
@@ -47,6 +48,19 @@ def test_lognormal_pool_is_unique_feasible_and_excludes_observations(
     assert len(np.unique(np.round(pool.reshape(len(pool), -1), 12), axis=0)) == len(pool)
     for observed in target.data.weights:
         assert not np.any(np.all(np.isclose(pool, observed, atol=1e-12), axis=(1, 2)))
+
+
+def test_lognormal_pool_rejects_zero_volume_feasible_set() -> None:
+    space = LognormalPoolInputs(
+        center_designs=np.full((1, 2, 2), 0.5),
+        availability_proportional_design=np.full((2, 2), 0.5),
+        observed_weights=np.full((1, 2, 2), 0.5),
+        exposure_multipliers=np.ones((2, 2)),
+        max_cumulative_epochs=1.0,
+    )
+
+    with pytest.raises(ValueError, match="Could only sample 0 of 1 feasible mixtures"):
+        sample_lognormal_pool(space, size=1, seed=0)
 
 
 def test_posterior_mean_selects_best_pool_row(tiny_campaign: Campaign) -> None:

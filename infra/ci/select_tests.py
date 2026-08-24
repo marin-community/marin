@@ -94,7 +94,7 @@ UV_PACKAGE: dict[str, str] = {
 }
 
 UV_EXTRAS: dict[str, list[str]] = {
-    "marin": ["cpu", "dedup"],
+    "marin": ["cpu", "dedup", "mixprior"],
     "iac": ["deploy"],
 }
 
