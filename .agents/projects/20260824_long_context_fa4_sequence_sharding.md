@@ -100,3 +100,41 @@ context-sharded input).
 - Memory: all-gather-KV replicates full-sequence K/V per rank. At hero shape (262144 seq,
   global layers KV6, head 128, bf16) that is ~0.8 GiB of K+V per global layer instance —
   acceptable for the first cut; note real numbers in the spec-implementation notes.
+
+## Implementation notes
+
+**Where positions enter the kernel.** The causal *upper* bound is the query's index inside the
+passed Q block, in two places per kernel: the per-score predicate
+(`key_before_query = key_idx < query_idx + 1`, `_fa4_cute_kernels.py:806` forward,
+`_fa4_cute_segmented_bwd.py:1098` backward, both reading a `cute.make_identity_tensor` built from
+`mQ`/`mK` extents) and the tile-range arithmetic (`n_block_max`, `_fa4_cute_kernels.py:395`;
+`m_block_min`, `_fa4_cute_segmented_bwd.py:661`). `lower_bounds` only cuts the lower side, so no
+metadata trick can widen the frontier: the kernel needs the offset.
+
+Padding a context-sharded Q block into a global-length buffer was rejected. The forward skips key
+tiles from `lower_bounds[first query of the M tile]`, and the backward's `segment_m_block_max`
+walks M tiles while that bound is monotone. A `seq_len` sentinel on the dead prefix (what makes
+the padding cheap) is not monotone, so the backward stops at the first prefix tile and emits
+dK/dV = 0 for every prefix key; making the prefix monotone instead costs ~cp/3 times the useful
+attention work per shard.
+
+So `q_offset` is a runtime `int32[1]` kernel input: local query `i` is at global position
+`i + q_offset`, `lower_bounds` stay in global key positions, and K/V keep the full sequence. A
+static `context_parallel` flag selects the launcher, so the unsharded path compiles the same
+kernel as before. The native SM90 backward (H100 GQA d128) has no offset and raises.
+
+**dK/dV reduction.** `shard_map` transposes the context-replicated K/V inputs into a
+`psum[axes=('context',)]` even under `check_vma=False` — confirmed in the lowered jaxpr and by
+the gradient parity test, which reports exactly `cp` times the expected dK/dV when a second psum
+is added.
+
+**Cost at hero shape.** Per global layer (262144 seq, KV6, head 128, bf16, one sequence per
+rank): K and V stay 402 MiB each after the all-gather, and the backward adds one
+all-reduce of the same 402 MiB per tensor over the context axis. Q, O and dQ shrink by the
+context degree.
+
+**Deviation.** `shard_map` `in_specs` stay inferred from the argument shardings rather than
+being passed explicitly: q and k/v legitimately differ in head sharding (the hero replicates K/V
+heads while Q keeps `model`), so a fixed spec would insert collectives the unsharded path does
+not have today. The layouts are validated instead — q's sequence axis may only be `context`, and
+K/V must be sequence-replicated and free of `context`.
