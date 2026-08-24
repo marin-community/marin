@@ -1291,6 +1291,9 @@ project_grants:
 - role: roles/run.servicesInvoker
   members:
   - serviceAccount:hai-gcp-models@appspot.gserviceaccount.com
+- role: roles/run.viewer
+  members:
+  - principal: human-070
 - role: roles/secretmanager.admin
   members:
   - principal: human-033
