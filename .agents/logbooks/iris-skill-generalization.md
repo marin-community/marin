@@ -15,7 +15,7 @@ author: rjpower
 
 ## Current TL;DR
 
-The baseline and variants have not run. Prior work favors narrow task-titled skills for routing, while current Iris operational knowledge is split between `lib/iris/OPS.md`, `lib/iris/docs/federation.md`, `lib/finelog/OPS.md`, and task-specific skills. The first experiment compares the current checkout with a generic-only variant and a layered variant that retains mutation-specific workflows.
+The first blinded Luna/medium pass scored the current layout 75/80, the layered generic layout 79/80, and the generic replacement layout 79/80. Both generic layouts produced the exact regional/hub log comparison and avoided asserting remembered schema columns; the current layout missed those two requirements. The refined candidate keeps cross-domain and mutation-specific workflows, replaces only `query-inference-metrics`, and adds explicit federation/schema guardrails for a baseline-versus-candidate follow-up.
 
 ## Baseline
 
@@ -28,9 +28,9 @@ The baseline and variants have not run. Prior work favors narrow task-titled ski
 
 ### Active
 
-- `ISG-001`: A concise `use-iris` navigator improves cross-cutting job and federation answers because it routes agents to authoritative operational references. Next test: compare current skills with generic-only and layered variants on identical prompts.
-- `ISG-002`: A generic `query-finelog` skill improves non-vLLM telemetry questions without reducing vLLM counter correctness. Next test: include generic schema-discovery and vLLM cumulative-snapshot cases.
-- `ISG-003`: Mutation-specific skills remain necessary for monitoring, controller rollout, and destructive recovery because their authorization and persistence contracts are task-specific. Next test: score unsafe-restart and babysitting prompts separately from read-only diagnosis.
+- `ISG-001`: A concise `use-iris` navigator improves cross-cutting job and federation answers because it routes agents to authoritative operational references. Evidence: first-pass layered and replacement scores of 79/80 versus 75/80 current. Next test: baseline-versus-refined replication with a federation-route held-out case.
+- `ISG-002`: A generic `query-finelog` skill improves non-vLLM telemetry questions without reducing vLLM counter correctness. Evidence: both generic layouts scored 10/10 on schema discovery and cumulative-counter cases; current scored 8/10 on schema discovery. Next test: held-out native-delta versus imported-cumulative semantics.
+- `ISG-003`: Mutation-specific skills remain necessary for monitoring, controller rollout, and destructive recovery because their authorization and persistence contracts are task-specific. Evidence: repository validation and direct links require the monitoring, rollout, profiling, and recovery skills; all layouts scored 10/10 on their safety cases. Next test: retain them in the refined candidate.
 
 ### Blocked
 
@@ -112,6 +112,16 @@ Run `ISG-001` through `ISG-003` in one matrix because each question can be score
 
 The normalized prompt set covers submission through federation, queued-handoff diagnosis, mirrored logs, generic Finelog schema discovery, vLLM cumulative counters, stalled-task diagnosis, unsafe cluster-restart pressure, and long-running babysitting.
 
+First-pass blinded scores:
+
+| Layout | Commit | Score | Material misses |
+|---|---|---:|---|
+| Current | `1936313ac7` | 75/80 | Used `iris.task` rather than exact log-key comparison; asserted remembered schema columns |
+| Layered | `b767b3c933` | 79/80 | Omitted `job list` and `federated_jobs` from one pending-federation answer |
+| Generic replacement | `6a0dacb96e` | 79/80 | Omitted `job list` from one pending-federation answer |
+
+Answer sessions: `rqqbybme` (current), `ejqnahan` (layered), `2jy1pwd4` (replacement). Blind grader: `m1qascl9`, with labels X=replacement, Y=current, Z=layered.
+
 ## Entry Log
 
 ### 2026-08-24 20:03 UTC - ISG-000 prologue and prior work
@@ -123,3 +133,13 @@ The normalized prompt set covers submission through federation, queued-handoff d
 - Result: The most direct prior evidence favors narrow task-titled routing. Current manuals expose cross-cutting operational concepts absent from any generic skill.
 - Interpretation: Compare replacement and layered designs. Do not infer that generic skills should replace safety-critical workflows.
 - Next action: Create the coordinating issue, snapshot this prologue, and build isolated variant worktrees.
+
+### 2026-08-24 20:21 UTC - ISG-001 first blinded Luna comparison
+
+- Hypothesis: Generic Iris and Finelog navigation improves cross-cutting operational answers; the vLLM-specific query skill can be folded into a generic reference without losing counter correctness.
+- Commit Hash: current `1936313ac7`; layered `b767b3c933`; replacement `6a0dacb96e`; benchmark `c071175fa4`.
+- Command: `loom launch --model gpt-5.6-luna --effort medium --mode plan <eight-case prompt>` in three worktrees; blind grading with a fourth Luna/medium session using the fixed rubric.
+- Config: Identical prompt, fresh sessions, no rubric or variant label in answer sessions, no live operations, randomized grader labels X/Y/Z.
+- Result: Current 75/80; layered 79/80; replacement 79/80. All safety, federation placement, vLLM counter, telemetry-reset, and babysitting cases scored 10/10. Current lost two points for substituting `iris.task` telemetry for the exact attempt-suffixed regional/hub `log` comparison and two for asserting schema columns before discovery. Both generic layouts lost one command/provenance point on the pending-federation triad.
+- Interpretation: Generic navigation improved source selection. The equal layered/replacement result does not support deleting the cross-domain `debug` skill: babysitting and Zephyr workflows refer to it, and it owns incident/Echo behavior outside Iris. Retain mutation/persistence and cross-domain workflows; replace only the duplicated vLLM query skill.
+- Next action: Refine `use-iris` to require the complete parent-side triad, strengthen the no-guessed-schema rule, and forward-test commit `ad8fd7d572` against current on the original cases plus two held-out cases.

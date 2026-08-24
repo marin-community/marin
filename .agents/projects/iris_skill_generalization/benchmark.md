@@ -42,3 +42,15 @@ Case-specific correctness anchors:
 3. Use the same rubric for every output. Record omissions and false claims, not stylistic preference.
 4. Revise only the generic skill contents after the first comparison.
 5. Forward-test the revised candidate and current baseline in fresh sessions on the same prompt plus two held-out cases.
+
+## Held-out cases
+
+Append these only for the follow-up run. They were not visible when drafting the first candidate.
+
+9. A native Rigging metric called `requests_completed` and an imported vLLM metric called `request_success_total` both appear in `telemetry_v1`. The user asks for totals over one hour. Explain how you determine whether each row is already a delta or a cumulative snapshot and how the two SQL aggregations differ.
+10. `iris --cluster=cw-us-east-08a cluster status` succeeds, but a root job submitted through `marin` remains `Awaiting acceptance by peer cw-us-east-08a`. Does the successful direct status prove the federation route works? Give a read-only layer-by-layer diagnosis and interpret HTTP 403, HTTP 503, and an external timeout.
+
+Held-out correctness anchors:
+
+9. Inspect schema/rows and `source_temporality`/producer semantics. Native Rigging counters are deltas and use bounded `SUM(value)`. Imported vLLM counters are cumulative snapshots and use full-series `LAG`, reset handling, and a one-scrape lookback. Do not infer behavior from the metric name alone.
+10. Direct cluster status uses a Kubernetes port-forward and does not prove the public federation path. Check the parent's job/handoff state and `list-peers`, then controller/Service, Traefik route, and the external public route. An external 403 proves the route responds and the allowlist rejected the source; 503 reaches Traefik without a healthy backend; an inside-success/external-timeout points to LoadBalancer/BGP propagation and does not justify restarting Iris.
