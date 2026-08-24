@@ -29,6 +29,7 @@ IRIS_NODE_NAME_ENV = "IRIS_NODE_NAME"
 IRIS_NAMESPACE_ENV = "IRIS_NAMESPACE"
 IRIS_WORKER_REGION_ENV = "IRIS_WORKER_REGION"
 IRIS_OUTPUT_DIR_ENV = "IRIS_OUTPUT_DIR"
+TASK_OUTPUT_FINALIZING_STATUS = "finalizing task outputs"
 
 # Container paths shared across runtimes: the bundle unpacks into WORKDIR_PATH and
 # the setup script populates the venv at VENV_PATH (which the run phase activates).

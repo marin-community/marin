@@ -227,6 +227,21 @@ def test_succeeded_pod_reports_uploader_archive() -> None:
     assert update.output_archive.size_bytes == 42
 
 
+def test_terminated_uploader_without_result_reports_failure() -> None:
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/user/job/0"), attempt_id=0, attempt_uid="uid")
+    pod = make_pod("ignored", "Failed", exit_code=0)
+    pod["status"]["containerStatuses"] = [
+        {"name": "task", "state": {"terminated": {"exitCode": 0, "reason": "Completed"}}},
+        {"name": "output-uploader", "state": {"terminated": {"exitCode": 137, "reason": "OOMKilled"}}},
+    ]
+
+    update = _task_update_from_pod(entry, pod)
+
+    assert update.new_state == job_pb2.TASK_STATE_SUCCEEDED
+    assert update.output_archive.state == job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_FAILED
+    assert "OOMKilled (exit code 137)" in update.output_archive.error
+
+
 @dataclass(frozen=True)
 class _InitContainerSpec:
     containers: list[dict]
@@ -786,6 +801,13 @@ def test_timeout_rounds_down_to_at_least_one_second():
     req.timeout.milliseconds = 500  # sub-second
     manifest = _build_pod_manifest(req, pod_config(default_image="img:latest"))
     assert manifest["spec"]["activeDeadlineSeconds"] == 1
+
+
+def test_timeout_reserves_output_finalization_window():
+    req = make_run_req("/my-job/task-0")
+    req.timeout.milliseconds = 3600_000
+    manifest = _build_pod_manifest(req, pod_config(task_outputs=TaskOutputPolicy()))
+    assert manifest["spec"]["activeDeadlineSeconds"] == 3900
 
 
 def test_no_timeout_no_deadline():

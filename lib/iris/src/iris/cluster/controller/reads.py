@@ -68,6 +68,7 @@ from iris.cluster.controller.task_state import (
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.federation.store import FederationDirection, HandoffState
+from iris.cluster.runtime.env import TASK_OUTPUT_FINALIZING_STATUS
 from iris.cluster.types import (
     LOCAL_CLUSTER,
     TERMINAL_JOB_STATES,
@@ -1769,6 +1770,7 @@ _EXECUTION_TIMEOUT_STMT = (
         job_config_table.c.timeout_ms.is_not(None),
         job_config_table.c.timeout_ms > 0,
         task_attempts_table.c.started_at_ms.is_not(None),
+        local_tasks.c.status_message.is_distinct_from(TASK_OUTPUT_FINALIZING_STATUS),
     )
 )
 

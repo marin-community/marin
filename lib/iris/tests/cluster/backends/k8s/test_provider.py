@@ -6,6 +6,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from iris.cluster.backends.k8s.output_contract import OUTPUT_RELEASE_PATH
 from iris.cluster.backends.k8s.tasks import (
     _GANG_GC_MAX_AGE_SECONDS,
     _GC_MAX_AGE_SECONDS,
@@ -87,13 +88,13 @@ def test_sync_releases_output_uploader_after_task_container_exits(k8s):
 
     try:
         update = provider.sync(make_batch(running_tasks=[entry]))[0]
-        released = entry in provider._released_output_attempts
+        release_marker = k8s.read_file(pod_name, OUTPUT_RELEASE_PATH, container="output-uploader")
     finally:
         provider.close()
 
     assert update.new_state == job_pb2.TASK_STATE_RUNNING
     assert update.status_message == "finalizing task outputs"
-    assert released
+    assert release_marker == b""
 
 
 def test_sync_output_timeout_preserves_successful_task_outcome(k8s, monkeypatch):

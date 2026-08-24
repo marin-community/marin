@@ -95,6 +95,7 @@ from iris.cluster.runtime.env import (
     IRIS_NODE_NAME_ENV,
     OUTPUT_MOUNT,
     STANDARD_MOUNTS,
+    TASK_OUTPUT_FINALIZING_STATUS,
     VENV_PATH,
     WORKDIR_MOUNT,
     build_common_iris_env,
@@ -102,6 +103,7 @@ from iris.cluster.runtime.env import (
     normalize_workdir_relative_path,
     render_setup_steps,
 )
+from iris.cluster.runtime.output_capture import task_output_storage_failure
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
     ExecResult,
@@ -1064,9 +1066,14 @@ def _build_pod_manifest(
 
     # K8s starts activeDeadlineSeconds at pod creation, so omit it for gangs that
     # may wait SchedulingGated while nodes provision. The controller times gangs
-    # from execution start; single pods keep the earlier native deadline.
+    # from execution start. Single pods keep the native execution deadline and
+    # reserve the configured output-finalization window before K8s kills the pod.
     if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0 and not is_gang:
-        spec["activeDeadlineSeconds"] = max(1, run_req.timeout.milliseconds // 1000)
+        execution_deadline = max(1, run_req.timeout.milliseconds // 1000)
+        finalization_grace = (
+            (config.task_outputs.finalization_timeout.to_ms() + 999) // 1000 if config.task_outputs is not None else 0
+        )
+        spec["activeDeadlineSeconds"] = execution_deadline + finalization_grace
 
     # Stamp the native k8s PriorityClass so the scheduler knows how to preempt/queue this
     # pod relative to others. Dispatch resolves the band from job_config and re-stamps the
@@ -1118,9 +1125,14 @@ def _output_archive_from_pod(pod: dict) -> job_pb2.TaskOutputArchive | None:
     status = _output_container_status(pod)
     if status is None:
         return None
-    message = status.get("state", {}).get("terminated", {}).get("message", "")
-    if not message:
+    terminated = status.get("state", {}).get("terminated")
+    if terminated is None:
         return None
+    message = terminated.get("message", "")
+    if not message:
+        reason = terminated.get("reason") or "unknown reason"
+        exit_code = terminated.get("exitCode")
+        return task_output_storage_failure(RuntimeError(f"output uploader terminated: {reason} (exit code {exit_code})"))
     archive = job_pb2.TaskOutputArchive()
     try:
         json_format.Parse(message, archive)
@@ -1228,7 +1240,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
             task_id=task_id,
             attempt_id=attempt_id,
             new_state=job_pb2.TASK_STATE_RUNNING,
-            status_message="finalizing task outputs" if _task_container_terminated(pod) else "",
+            status_message=TASK_OUTPUT_FINALIZING_STATUS if _task_container_terminated(pod) else "",
             **identity,
         )
 

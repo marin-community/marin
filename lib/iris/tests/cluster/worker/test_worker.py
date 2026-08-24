@@ -158,6 +158,48 @@ def test_task_output_storage_failure_preserves_task_success(mock_worker, monkeyp
     assert "archive store unavailable" in task.output_archive.error
 
 
+def test_stop_during_output_finalization_preserves_task_success(mock_worker, monkeypatch):
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.probe_outbound_ip", lambda: "127.0.0.1")
+    mock_worker._config = replace(
+        mock_worker._config,
+        task_outputs=TaskOutputPolicy(destination=TaskOutputDestination.LOCAL, ttl_days=0),
+    )
+    capture_started = threading.Event()
+
+    def capture_until_stopped(*args, stop, **kwargs):
+        capture_started.set()
+        assert stop.wait(timeout=1.0)
+        return job_pb2.TaskOutputArchive(
+            state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UNAVAILABLE,
+            error="cancelled",
+        )
+
+    monkeypatch.setattr(
+        "iris.cluster.worker.task_attempt.capture_task_outputs_for_attempt",
+        capture_until_stopped,
+    )
+    task_id = mock_worker.submit_task(create_run_task_request())
+    assert capture_started.wait(timeout=1.0)
+    task = mock_worker.get_task(task_id)
+    response = mock_worker.handle_reconcile(
+        worker_pb2.Worker.ReconcileRequest(
+            desired=[
+                worker_pb2.Worker.DesiredAttempt(
+                    attempt_uid=task.attempt_uid,
+                    run=worker_pb2.Worker.AttemptSpec(),
+                )
+            ]
+        )
+    )
+    assert response.observed[0].status_message == "finalizing task outputs"
+
+    assert mock_worker.kill_task(task_id, term_timeout_ms=10)
+    task.thread.join(timeout=15.0)
+
+    assert task.status == job_pb2.TASK_STATE_SUCCEEDED
+    assert task.output_archive.state == job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UNAVAILABLE
+
+
 def test_runtime_stage_bundle_receives_workdir_files(mock_worker, mock_runtime):
     request = create_run_task_request()
     request.entrypoint.workdir_files["extra.txt"] = b"extra"

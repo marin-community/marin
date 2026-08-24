@@ -324,6 +324,7 @@ def observations_to_updates(
                     error=error,
                     exit_code=exit_code,
                     container_id=container_id,
+                    status_message=obs.status_message,
                     output_archive=output_archive,
                 )
             )

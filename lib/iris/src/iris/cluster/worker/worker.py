@@ -1013,6 +1013,7 @@ class Worker:
             exit_code=task.exit_code or 0,
             error=task.error or "",
             container_id=task.platform_container_id or "",
+            status_message=task.status_message or "",
         )
         if task.output_archive is not None:
             obs.output_archive.CopyFrom(task.output_archive)

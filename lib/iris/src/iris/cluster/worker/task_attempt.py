@@ -32,6 +32,7 @@ from iris.cluster.runtime.env import (
     IRIS_ATTEMPT_UID_ENV,
     IRIS_WORKER_REGION_ENV,
     STANDARD_MOUNTS,
+    TASK_OUTPUT_FINALIZING_STATUS,
     build_common_iris_env,
 )
 from iris.cluster.runtime.output_capture import capture_task_outputs_for_attempt
@@ -392,8 +393,6 @@ class TaskAttempt:
             log_reader = handle.log_reader()
             outcome = self._monitor_loop(handle, log_reader)
             self._capture_outputs()
-            if self.should_stop:
-                outcome = _TaskOutcome(job_pb2.TASK_STATE_KILLED)
             self.transition_to(outcome.state, error=outcome.error, exit_code=outcome.exit_code)
         except Exception as e:
             self._fail_from_exception(job_pb2.TASK_STATE_FAILED, "Monitoring failed", e)
@@ -654,8 +653,6 @@ class TaskAttempt:
             self._run_container()
             outcome = self._monitor()
             self._capture_outputs()
-            if self.should_stop:
-                outcome = _TaskOutcome(job_pb2.TASK_STATE_KILLED)
             self.transition_to(outcome.state, error=outcome.error, exit_code=outcome.exit_code)
         except TaskCancelled:
             self.transition_to(job_pb2.TASK_STATE_KILLED)
@@ -810,7 +807,7 @@ class TaskAttempt:
                 error="cancelled",
             )
             return
-        self.status_message = "finalizing task outputs"
+        self.status_message = TASK_OUTPUT_FINALIZING_STATUS
         try:
             self.output_archive = capture_task_outputs_for_attempt(
                 self.output_dir,

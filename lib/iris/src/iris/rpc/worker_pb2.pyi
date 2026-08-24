@@ -107,7 +107,7 @@ class Worker(_message.Message):
         request: _job_pb2.RunTaskRequest
         def __init__(self, request: _Optional[_Union[_job_pb2.RunTaskRequest, _Mapping]] = ...) -> None: ...
     class AttemptObservation(_message.Message):
-        __slots__ = ("attempt_uid", "state", "exit_code", "error", "container_id", "finished_at", "resource_usage", "output_archive")
+        __slots__ = ("attempt_uid", "state", "exit_code", "error", "container_id", "finished_at", "resource_usage", "output_archive", "status_message")
         ATTEMPT_UID_FIELD_NUMBER: _ClassVar[int]
         STATE_FIELD_NUMBER: _ClassVar[int]
         EXIT_CODE_FIELD_NUMBER: _ClassVar[int]
@@ -116,6 +116,7 @@ class Worker(_message.Message):
         FINISHED_AT_FIELD_NUMBER: _ClassVar[int]
         RESOURCE_USAGE_FIELD_NUMBER: _ClassVar[int]
         OUTPUT_ARCHIVE_FIELD_NUMBER: _ClassVar[int]
+        STATUS_MESSAGE_FIELD_NUMBER: _ClassVar[int]
         attempt_uid: str
         state: _job_pb2.TaskState
         exit_code: int
@@ -124,7 +125,8 @@ class Worker(_message.Message):
         finished_at: _time_pb2.Timestamp
         resource_usage: _job_pb2.ResourceUsage
         output_archive: _job_pb2.TaskOutputArchive
-        def __init__(self, attempt_uid: _Optional[str] = ..., state: _Optional[_Union[_job_pb2.TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., container_id: _Optional[str] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., resource_usage: _Optional[_Union[_job_pb2.ResourceUsage, _Mapping]] = ..., output_archive: _Optional[_Union[_job_pb2.TaskOutputArchive, _Mapping]] = ...) -> None: ...
+        status_message: str
+        def __init__(self, attempt_uid: _Optional[str] = ..., state: _Optional[_Union[_job_pb2.TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., container_id: _Optional[str] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., resource_usage: _Optional[_Union[_job_pb2.ResourceUsage, _Mapping]] = ..., output_archive: _Optional[_Union[_job_pb2.TaskOutputArchive, _Mapping]] = ..., status_message: _Optional[str] = ...) -> None: ...
     class WorkerHealth(_message.Message):
         __slots__ = ("healthy", "health_error", "resources")
         HEALTHY_FIELD_NUMBER: _ClassVar[int]
