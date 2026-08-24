@@ -1,6 +1,6 @@
 ---
 name: scrub-experiment-issue-tldrs
-description: "Scheduled scrub: TL;DR blocks on experiment issues."
+description: Run the experiment-issue TL;DR scrub only from its scheduler or an explicit request for that scrub.
 ---
 
 # scrub-experiment-issue-tldrs

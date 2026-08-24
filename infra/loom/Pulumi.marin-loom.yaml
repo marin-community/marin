@@ -105,6 +105,8 @@ config:
       instructionsFile: profiles/ops/AGENTS.md
       env: *loomIrisUser
       restricted: false
+      githubRepositories:
+        - marin-community/marin
       allowedTools: []
       mcpAccess:
         mode: all

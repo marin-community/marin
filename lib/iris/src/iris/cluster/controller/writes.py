@@ -1070,6 +1070,10 @@ def mirror_federated_attempts(
                 error=attempt.error or None,
                 attempt_uid=attempt_uid,
                 backend_id="",
+                pod_name=attempt.pod_name,
+                pod_uid=attempt.pod_uid,
+                node_name=attempt.node_name,
+                terminal_reason=attempt.terminal_reason,
             )
             .on_conflict_do_update(
                 index_elements=["task_id", "attempt_id"],
@@ -1079,6 +1083,10 @@ def mirror_federated_attempts(
                     "finished_at_ms": finished,
                     "exit_code": attempt.exit_code or None,
                     "error": attempt.error or None,
+                    "pod_name": attempt.pod_name,
+                    "pod_uid": attempt.pod_uid,
+                    "node_name": attempt.node_name,
+                    "terminal_reason": attempt.terminal_reason,
                 },
             )
         )

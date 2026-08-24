@@ -572,7 +572,7 @@ class Dataset(Generic[T]):
             New dataset with flat_map operation appended
 
         Example:
-            >>> from zephyr.execution import load_jsonl
+            >>> from zephyr.readers import load_jsonl
             >>> ds = (Dataset
             ...     .from_files("/input", "*.jsonl.gz")
             ...     .flat_map(load_jsonl)  # Each file yields many records
@@ -725,7 +725,7 @@ class Dataset(Generic[T]):
             New dataset with map_shard operation appended
 
         Example:
-            >>> from zephyr.execution import load_jsonl
+            >>> from zephyr.readers import load_jsonl
             >>> from zephyr.dataset import ShardInfo
             >>> # Deduplicate items within each shard
             >>> def deduplicate_shard(items: Iterator, _: ShardInfo):
@@ -761,7 +761,7 @@ class Dataset(Generic[T]):
             New dataset with reshard operation appended or self if num_shards is None
 
         Example:
-            >>> from zephyr.execution import load_jsonl
+            >>> from zephyr.readers import load_jsonl
             >>> ds = (Dataset
             ...     .from_files("/input", "*.jsonl.gz")  # 3 files = 3 shards
             ...     .flat_map(load_jsonl)                 # Still 3 shards

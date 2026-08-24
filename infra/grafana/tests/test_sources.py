@@ -379,6 +379,74 @@ def test_wandb_run_history_pins_an_explicit_project_without_searching():
     assert [row["step"] for row in rows] == [7]
 
 
+def _activity_handler(found_in: str, run: dict, asked: list[str]):
+    """Serve `run` from the project named `found_in`; record each project asked."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        variables = json.loads(request.content)["variables"]
+        asked.append(variables["project"])
+        if variables["project"] != found_in:
+            return httpx.Response(200, json={"data": {"project": None}})
+        return httpx.Response(200, json={"data": {"project": {"run": run}}})
+
+    return handler
+
+
+def test_wandb_run_activity_separates_active_time_from_downtime():
+    # `_runtime` is W&B's own count of the seconds a process was alive, restored at each
+    # resume, so it is the run's active time across restarts and never includes the wait
+    # between two attempts. Wall clock here is four days, of which ninety hours ran.
+    asked: list[str] = []
+    run = {
+        "state": "running",
+        "createdAt": "2026-08-20T02:00:00Z",
+        "heartbeatAt": "2026-08-24T02:00:00Z",
+        "summaryMetrics": json.dumps({"_runtime": 90 * 3_600, "_timestamp": 1_787_561_529}),
+    }
+
+    (row,) = _wandb(_activity_handler("marin_moe", run, asked)).run_activity("hero-run")
+
+    assert asked == ["marin_moe"]
+    assert row == {
+        "run": "hero-run",
+        "project": "marin_moe",
+        "run_url": "https://wandb.ai/marin-community/marin_moe/runs/hero-run",
+        "state": "running",
+        "active_seconds": 324_000.0,
+        "wall_seconds": 345_600.0,
+        "downtime_seconds": 21_600.0,
+        "active_share": 0.9375,
+    }
+
+
+def test_wandb_run_activity_reports_no_active_time_before_the_first_log():
+    # A run that has been created but has logged nothing has no `_runtime` to read. The
+    # tile then shows no data, which is true, rather than zero, which reads as a stall.
+    asked: list[str] = []
+    run = {
+        "state": "running",
+        "createdAt": "2026-08-20T02:00:00Z",
+        "heartbeatAt": "2026-08-20T02:10:00Z",
+        "summaryMetrics": "{}",
+    }
+
+    (row,) = _wandb(_activity_handler("marin", run, asked)).run_activity("hero-run")
+
+    assert asked == ["marin_moe", "marin"]
+    assert (row["active_seconds"], row["downtime_seconds"], row["active_share"]) == (None, None, None)
+    assert row["wall_seconds"] == 600.0
+
+
+def test_wandb_run_activity_fails_loud_when_no_project_has_the_run():
+    asked: list[str] = []
+
+    with pytest.raises(UpstreamError) as excinfo:
+        _wandb(_activity_handler("nowhere", {}, asked)).run_activity("hero-run")
+
+    assert excinfo.value.status_code == 404
+    assert asked == ["marin_moe", "marin"]
+
+
 def test_wandb_run_history_fails_loud_when_no_project_has_the_run():
     asked: list[tuple[str, list[str]]] = []
     handler = _history_handler("nowhere", [], asked)

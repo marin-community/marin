@@ -29,7 +29,6 @@ import json
 import logging
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import time
@@ -67,6 +66,7 @@ KINDS = ("issue", "pr", "comment", "message")
 DOMAINS = search_config.SEARCH_DOMAINS
 DEFAULT_DOMAINS = search_config.DEFAULT_SEARCH_DOMAINS
 SEARCH_DETAIL_INSTRUCTION = "Detail: uv run infra/echo/cli.py get <domain:id>"
+SEARCH_DETAIL_MAX_CHARACTERS = 240
 MISSING_EMAIL_SCOPE_WARNING = "Not all requested scopes were granted by the authorization server, missing scopes email."
 DEFAULT_REQUEST_TIMEOUT = 30
 
@@ -173,35 +173,26 @@ def print_search_results(results: list[SearchResult]) -> None:
         print("No results.")
         return
 
-    keys = [result.key or "unavailable" for result in results]
-    ids = [result.id for result in results]
-    titles = [one_line(result.title) for result in results]
-    key_width = max(len("KEY"), *(len(value) for value in keys))
-    id_width = max(len("ID"), *(len(value) for value in ids))
-    available = max(40, shutil.get_terminal_size(fallback=(160, 24)).columns - key_width - id_width - 6)
-    title_width = min(max(len("TITLE"), *(len(value) for value in titles)), 36, max(16, available // 3))
-    detail_width = max(20, available - title_width)
-    print(f"{'KEY':<{key_width}}  {'ID':<{id_width}}  {'TITLE':<{title_width}}  DETAIL")
-    for result, key in zip(results, keys, strict=True):
+    print("KEY  TITLE  ID")
+    for result in results:
+        key = result.key or "unavailable"
         if result.references:
-            detail = " · ".join(f"L{reference.line} {reference.text}" for reference in result.references)
+            reference = result.references[0]
+            detail = f"L{reference.line} {reference.text}"
         else:
             detail = result.subtitle if result.domain == "wiki" else result.snippet
-        print(
-            f"{key:<{key_width}}  {result.id:<{id_width}}  "
-            f"{truncate_cell(one_line(result.title), title_width):<{title_width}}  "
-            f"{truncate_cell(one_line(detail), detail_width)}"
-        )
+        print(f"{key}  {one_line(result.title)}  {result.id}")
+        print(f"  {truncate_detail(one_line(detail))}")
 
 
 def one_line(value: str) -> str:
     return " ".join(value.split())
 
 
-def truncate_cell(value: str, width: int) -> str:
-    if len(value) <= width:
+def truncate_detail(value: str) -> str:
+    if len(value) <= SEARCH_DETAIL_MAX_CHARACTERS:
         return value
-    return f"{value[: width - 1]}…"
+    return f"{value[: SEARCH_DETAIL_MAX_CHARACTERS - 1]}…"
 
 
 def print_wiki(entries: list[dict]) -> None:

@@ -85,13 +85,23 @@ def priority_band_value(name: str) -> int:
     return job_pb2.PriorityBand.Value(f"PRIORITY_BAND_{name.upper()}")
 
 
-PRIORITY_BAND_VALUES: list[int] = [
+PRIORITY_BAND_VALUES: tuple[int, ...] = (
+    job_pb2.PRIORITY_BAND_SYSTEM,
     job_pb2.PRIORITY_BAND_PRODUCTION,
     job_pb2.PRIORITY_BAND_INTERACTIVE,
     job_pb2.PRIORITY_BAND_BATCH,
-]
+)
 
-PRIORITY_BAND_NAMES: list[str] = [priority_band_name(b) for b in PRIORITY_BAND_VALUES]
+PRIORITY_BAND_NAMES: tuple[str, ...] = tuple(priority_band_name(b) for b in PRIORITY_BAND_VALUES)
+ADMIN_PRIORITY_BAND_VALUES = frozenset((job_pb2.PRIORITY_BAND_SYSTEM, job_pb2.PRIORITY_BAND_PRODUCTION))
+
+
+def priority_band_rank(band: int) -> int:
+    """Scheduling rank for a real PriorityBand; lower ranks run first."""
+    try:
+        return PRIORITY_BAND_VALUES.index(band)
+    except ValueError as err:
+        raise ValueError(f"Unknown priority band {band}") from err
 
 
 # ---------------------------------------------------------------------------

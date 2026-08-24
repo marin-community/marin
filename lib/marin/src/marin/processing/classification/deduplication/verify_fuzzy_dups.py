@@ -19,8 +19,8 @@ from fray.types import ResourceConfig
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
+from zephyr.context import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
 from zephyr.memory_store import MemoryStore, MemoryStoreUnavailable
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
