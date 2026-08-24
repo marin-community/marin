@@ -18,10 +18,11 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from levanter.store.cache import TreeCache
+from fray.types import ResourceConfig
+from levanter.store.cache import CacheMetadata, TreeCache, _merge_sharded_ledgers
 from marin.datakit.decon import DeconAttributes
 from marin.datakit.source_key import datakit_source_key
-from marin.execution.artifact import read_artifact
+from marin.execution.artifact import read_artifact, write_artifact
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
@@ -38,6 +39,14 @@ from experiments.datakit.store.datakit_store import (
     ClusteredStoreData,
     _iter_tokenized_documents,
     build_clustered_store,
+)
+from experiments.datakit.store.length_partition import (
+    DOCUMENT_LENGTH_THRESHOLD,
+    DocumentLengthBucket,
+    LengthPartitionConfig,
+    SourceBucketCacheStats,
+    SourceClusteredStoreData,
+    partition_store_by_length,
 )
 
 CLUSTER_VIEW = 2  # cluster column "cluster_2", clusters {0, 1}
@@ -501,3 +510,59 @@ def test_tokenized_shard_without_chunk_index_is_rejected(tmp_path):
 
     with pytest.raises(RuntimeError, match="no chunk_index column"):
         list(_iter_tokenized_documents(path))
+
+
+def test_length_partition_routes_boundary_and_roundtrips(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    source_path = str(tmp_path / "source")
+    bucket_path = f"{source_path}/cluster=3/quality=2"
+    leaf_path = f"{bucket_path}/part-00000-of-00001"
+    documents = [
+        np.full(DOCUMENT_LENGTH_THRESHOLD - 1, 1, dtype=np.int32),
+        np.full(DOCUMENT_LENGTH_THRESHOLD, 2, dtype=np.int32),
+        np.full(DOCUMENT_LENGTH_THRESHOLD + 1, 3, dtype=np.int32),
+    ]
+    leaf_ledger = write_bucket_cache(leaf_path, documents, [len(document) for document in documents])
+    _merge_sharded_ledgers(
+        bucket_path,
+        [leaf_path],
+        [leaf_ledger],
+        [leaf_ledger.field_counts],
+        CacheMetadata.empty(),
+    )
+    write_artifact(
+        SourceClusteredStoreData(
+            cache_path=source_path,
+            cluster_view=40,
+            split="train",
+            buckets=[SourceBucketCacheStats(cluster_id=3, quality_bucket=2, path=bucket_path)],
+            source_names=["source"],
+            tokenizer="tokenizer",
+        ),
+        source_path,
+    )
+
+    artifact = partition_store_by_length(
+        LengthPartitionConfig(
+            source_path=source_path,
+            output_path=str(tmp_path / "partitioned"),
+            worker_resources=ResourceConfig(cpu=1, ram="2g", disk="1g"),
+            max_workers=1,
+        )
+    )
+
+    recovered = {
+        bucket.length_bucket: [np.asarray(row["input_ids"]) for row in TreeCache.load(bucket.path, EXEMPLAR)]
+        for bucket in artifact.buckets
+    }
+    assert [len(document) for document in recovered[DocumentLengthBucket.LTE_64K]] == [
+        DOCUMENT_LENGTH_THRESHOLD - 1,
+        DOCUMENT_LENGTH_THRESHOLD,
+    ]
+    assert [len(document) for document in recovered[DocumentLengthBucket.GT_64K]] == [DOCUMENT_LENGTH_THRESHOLD + 1]
+    assert [int(document[0]) for document in recovered[DocumentLengthBucket.LTE_64K]] == [1, 2]
+    assert [int(document[0]) for document in recovered[DocumentLengthBucket.GT_64K]] == [3]
+    assert sum(artifact.counters[name] for name in ("docs_lte_64k", "docs_gt_64k")) == len(documents)
+    assert sum(artifact.counters[name] for name in ("tokens_lte_64k", "tokens_gt_64k")) == sum(
+        len(document) for document in documents
+    )
