@@ -54,3 +54,22 @@ Held-out correctness anchors:
 
 9. Inspect schema/rows and `source_temporality`/producer semantics. Native Rigging counters are deltas and use bounded `SUM(value)`. Imported vLLM counters are cumulative snapshots and use full-series `LAG`, reset handling, and a one-scrape lookback. Do not infer behavior from the metric name alone.
 10. Direct cluster status uses a Kubernetes port-forward and does not prove the public federation path. Check the parent's job/handoff state and `list-peers`, then controller/Service, Traefik route, and the external public route. An external 403 proves the route responds and the allowlist rejected the source; 503 reaches Traefik without a healthy backend; an inside-success/external-timeout points to LoadBalancer/BGP propagation and does not justify restarting Iris.
+
+## Consolidation follow-up
+
+After the layered candidate passed, compare the original hardcoded layout with a two-entry-point layout. Ask both fresh Luna/medium sessions the same five questions:
+
+1. Babysit an Iris job when its original submit command is missing.
+2. Roll out two controllers from a dirty tree and handle the first failed verification.
+3. Reserve, connect to, and release one H100 and one v5p-8 TPU.
+4. Recover a named CoreWeave GPU pod stuck terminating.
+5. Query current and peak task RSS in 30-minute buckets and distinguish regional ingest from hub forwarding.
+
+Score each case on correctness (4), commands and provenance (2), safety (2), and completion and concision (2). The consolidation passes if it selects all conditional references, introduces no mutation-safety regression, and matches or exceeds the original layout.
+
+| Layout | Commit | Score | Material misses |
+|---|---|---:|---|
+| Original hardcoded | `1936313ac7` | 42/50 | Weaker provider-reboot command, schema-first query, and regional/hub evidence |
+| Consolidated | `c9ac430dd2` | 46/50 | Omitted the exact `--accept-tree-state` rerun from the answer |
+
+Answer sessions: `c2y5xvah` (hardcoded) and `805dnxzf` (consolidated). Blind grader: `mhwtm42r`, with labels M=hardcoded and N=consolidated. The final reference adds the omitted dirty-tree command explicitly.

@@ -165,3 +165,22 @@ Answer sessions: `rqqbybme` (current), `ejqnahan` (layered), `2jy1pwd4` (replace
 - Result: Refined 99/100 versus current 94/100. Refined repeated cases scored 79/80 and held-out cases 20/20. Its only deduction was conservative wording in the babysitting answer: it omitted the narrow small-code-error repair allowance and did not explicitly recognize the current thread's recovery authorization. Current lost points on the pending-job command set, hub/origin identity, recovery boundaries, and HTTP-layer interpretation.
 - Interpretation: The improvement replicated and generalized to both held-out cases. The remaining refined miss belongs to `babysit-job`, which this change intentionally retains; broadening `use-iris` with that exception would duplicate a stateful workflow.
 - Next action: Promote production commit `9002b574d5` in PR #8636, update issue #8634, and monitor the PR.
+
+### 2026-08-24 20:53 UTC - ISG-003 compact workflow consolidation
+
+- Hypothesis: One generic Iris entry point with short conditional references can replace five top-level operational skills without losing their authorization and recovery contracts.
+- Commit Hash: hardcoded `1936313ac7`; consolidated evaluation `c9ac430dd2`; final production `122ec57eb2`.
+- Command: Fresh Luna/medium sessions answered five monitoring, rollout, accelerator, stuck-pod, and Finelog-memory cases; a third Luna/medium session graded anonymous outputs with a fixed rubric.
+- Config: Identical prompts, plan/read-only mode, no live operations, labels M=hardcoded and N=consolidated.
+- Result: Consolidated 46/50 versus hardcoded 42/50. It selected every conditional reference and had no safety deduction. Its one actionable miss was discussing dirty-tree approval without printing the exact `--accept-tree-state` rerun; the final reference now includes that command. The change removes five top-level Iris workflow skills and 628 net lines while retaining compact monitoring, rollout, dev-accelerator, and stuck-pod references. Finelog now has four worked examples, including the Echo max-RSS query.
+- Interpretation: Generic domain routing plus progressive disclosure is sufficient for these workflows. Keep distinct top-level skills only where the trigger or state machine crosses the Iris domain, such as Zephyr babysitting, production hero runs, and profiling.
+- Next action: Forward-test the corrected rollout example, update PR #8636 and issue #8634, then monitor CI and review feedback.
+
+### 2026-08-24 20:55 UTC - ISG-004 rollout correction forward-test
+
+- Hypothesis: Printing the approved dirty-tree preflight command in the compact rollout reference removes the consolidated answer's only actionable miss.
+- Commit Hash: `122ec57eb2`.
+- Command: Fresh Luna/medium session `3le0v4ux` answered only the dirty-tree two-cluster rollout case in plan/read-only mode.
+- Result: The answer printed `preflight --clusters marin-dev,marin --accept-tree-state`, processed clusters sequentially, stopped after `marin-dev` failed verification, and required fresh rollback approval.
+- Interpretation: The correction is discoverable without restoring the long top-level deployment skill.
+- Next action: Update the public artifacts and monitor PR #8636.
