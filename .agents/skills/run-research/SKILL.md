@@ -1,13 +1,14 @@
 ---
 name: run-research
-description: Run a coordinated multi-session research program only when the user explicitly requests one or supplies an existing research logbook or experiment issue; do not activate for ordinary benchmarking, iteration, or investigation.
+description: Run a coordinated multi-session research program only when explicitly requested; maintain a logbook and durable snapshots.
 ---
 
 # Multi-session research
 
-Long-lived work should leave enough local state to resume and reproduce results.
-Use a GitHub issue only when public coordination is part of the request. Do not
-publish secrets or private work the user asks to hold back.
+Long-lived work should leave a durable record: a logbook and enough
+commands/config to reproduce results. When the work has a coordinating issue,
+keep its summary current. Do not publish secrets or private work the user asks
+to hold back.
 
 Use `background-research`, `task-logbook`, `wandb-reporting`, `task-snapshot`,
 and `update-docs` for their named artifacts. Add a domain skill only when the
@@ -24,25 +25,13 @@ research directly requires its workflow.
 4. One or more commit or tag snapshots for meaningful milestones.
 5. Often a "production" branch that gets PR'd and merged.
 
-A GitHub experiment issue is optional. Create one only when the user asks for
-it or when the request establishes GitHub as the coordination surface for
-multiple people or sessions. An existing issue, a request to keep collaborators
-updated on GitHub, or a production workflow that explicitly requires an issue
-meets this threshold. Calling the work a research program, running several
-benchmarks, planning a PR, or selecting this skill does not.
-
-If an issue might help but the threshold is not met, continue without one. The
-work should not pause for an issue decision. Mention the option at handoff only
-when it would materially improve future coordination.
-
 ## Standard Workflow
 
 ### 1. Prologue
 
 1. Keep an existing user-specified branch; otherwise create or use a long-lived
    `research/<topic>` or `research/<user>/<issue>-<topic>` branch.
-2. If a coordinating issue meets the threshold above, create or use it and link
-   it bidirectionally with the logbook. Follow `file-issue` for a new issue.
+2. If a coordinating issue exists, link it bidirectionally with the logbook.
 3. Choose one short experiment ID prefix and use IDs such as `MOE-HC-001` in
    entries, runs, and comments; use two to four shared tags.
 4. Record the goal, success and stop criteria, baseline, initial hypothesis
@@ -55,8 +44,8 @@ when it would materially improve future coordination.
 3. **Run:** implement the smallest useful experiment and collect evidence.
 4. **Interpret:** compare against baseline, decide confidence, and update the
    logbook.
-5. **Promote:** move decision-relevant claims into the current summary and any
-   established public coordination surface.
+5. **Promote:** move decision-relevant claims into the current summary and a
+   coordinating issue when one exists.
 6. **Seal:** snapshot durable results or extract production work.
 
 ### 2.1 Forage: Background Research

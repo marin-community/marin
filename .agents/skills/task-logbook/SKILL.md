@@ -109,24 +109,15 @@ or production decision.
 
 ## Coordinating Issue
 
-Create or use a coordinating GitHub issue when the work needs durable public
-coordination and the user asked for it or established GitHub as the coordination
-surface. An outer workflow may require an issue only when its user-requested
-purpose intrinsically depends on public tracking. Selecting a research or
-logbook skill does not grant permission to create an issue.
-
-Continue with the logbook alone when no issue meets that threshold. Do not ask
-for an issue decision or draft an issue merely because one could be useful.
-Mention the option at handoff only when it would materially improve future
-coordination.
+Use a coordinating GitHub issue when one exists. The user, supervisor agent, or
+outer workflow may provide one.
 
 Use the experiment body template in `.agents/skills/file-issue/SKILL.md` when
 creating a new coordinating experiment issue.
 
-When a coordinating issue exists, maintain its body for readers without thread
-context: current TL;DR, baseline when relevant, decisions with
-evidence/date/owner, linked negative results, and the conclusion. Do not
-overclaim.
+Maintain the issue body for readers without thread context: current TL;DR,
+baseline when relevant, decisions with evidence/date/owner, linked negative
+results, and the conclusion. Do not overclaim.
 
 ### Promotion Rules
 
@@ -136,11 +127,9 @@ surprises, and decisions as issue comments. Promote durable conclusions,
 baselines, decisions, negative results, and the final outcome into the issue
 body.
 
-When a coordinating issue exists for long-running research, post an update at
-each significant milestone or every 6 hours of active work (either experiments
-in progress or agent work), whichever comes first. If no milestone occurred by
-the cadence deadline, post a brief heartbeat with current status, blockers, and
-next ETA.
+For long-running research, post an issue update at each significant milestone
+or every 6 hours of active work (either experiments in progress or agent work), whichever comes first. If no milestone occurred by the cadence
+deadline, post a brief heartbeat with current status, blockers, and next ETA.
 
 ### Posting an update
 
@@ -182,8 +171,8 @@ the logbook or infer missing context.
 
 ## Finish
 
-Close the coordinating issue when one exists and the tracked work is complete.
+Close the issue when the tracked work is complete.
 
-Before closing it, make the final logbook entry and issue summary agree. The
-final comment records what worked, what did not, confidence and limitations,
+Before closing the issue, make the final logbook entry and issue summary agree.
+The final comment records what worked, what did not, confidence and limitations,
 ordered next steps, and the conclusion.
