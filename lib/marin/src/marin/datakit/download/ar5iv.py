@@ -16,8 +16,8 @@ import draccus
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.factory import open_url
 from rigging.log_setup import configure_logging
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 from marin.execution.step_spec import StepSpec
 

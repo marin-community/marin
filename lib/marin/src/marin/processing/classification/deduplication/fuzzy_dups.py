@@ -32,8 +32,8 @@ from collections.abc import Iterator
 from fray.types import ResourceConfig
 from pydantic import BaseModel
 from zephyr import counters
+from zephyr.context import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 

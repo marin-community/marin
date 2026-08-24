@@ -51,7 +51,7 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem.cluster_config import check_path_in_region, marin_prefix
 from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
-from zephyr.execution import ZephyrExecutionResult
+from zephyr.coordinator import ZephyrExecutionResult
 
 from experiments.datakit.global_exact_dedup import (
     GLOBAL_EXACT_DEDUP_DATA_VERSION,
