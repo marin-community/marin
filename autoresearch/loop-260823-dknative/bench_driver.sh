@@ -26,10 +26,15 @@ BENCH="$(dirname "${BASH_SOURCE[0]}")/ragged_a2a_bench.py"
 for cfg in $CONFIGS; do
   echo "==== BENCH ${cfg} ===="
   case "$cfg" in
-    oneshot) FLAGS="" ;;
+    oneshot) FLAGS="--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=true" ;;
     dk) FLAGS="--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true --xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall" ;;
     *) echo "unknown config $cfg"; exit 1 ;;
   esac
-  XLA_FLAGS="$FLAGS" python "$BENCH" || echo "BENCH ${cfg} FAILED"
+  if [ "${GANG:-0}" = "1" ]; then
+    XLA_FLAGS="$FLAGS" python -m iris.hooks.multigpu_main --nproc 4 --devices-per-proc 1 -- \
+      python "$(dirname "$BENCH")/bench_iris_entry.py" || echo "BENCH ${cfg} FAILED"
+  else
+    XLA_FLAGS="$FLAGS" python "$BENCH" || echo "BENCH ${cfg} FAILED"
+  fi
 done
 echo BENCH_DRIVER_OK
