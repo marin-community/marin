@@ -456,7 +456,6 @@ def summarize_xplane_tables(
     trace_overview = _trace_overview_from_xprof_tables(
         table_dir=table_dir,
         step_props=step_props,
-        step_rows=step_rows,
         kernel_rows=kernel_rows,
         trace_event_count=trace_event_count,
     )
@@ -977,7 +976,6 @@ def _trace_overview_from_xprof_tables(
     *,
     table_dir: Path,
     step_props: dict[str, Any],
-    step_rows: list[dict[str, Any]],
     kernel_rows: list[dict[str, Any]],
     trace_event_count: int | None,
 ) -> TraceOverview:

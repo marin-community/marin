@@ -50,9 +50,6 @@ from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, TaskCoverag
 
 logger = logging.getLogger(__name__)
 
-# Filename prefix of the aggregate results json lm-eval writes beside its per-sample jsonl.
-RESULTS_PREFIX = "results_"
-
 # The archive's own objects, which share the run's results root and must never be preserved into
 # themselves. See :func:`run_artifacts`.
 _ARCHIVE_DIRS = frozenset(
