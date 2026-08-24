@@ -94,3 +94,40 @@ Attention backends and attention-boundary reshards (sibling branches), mesh cons
   preserved by this policy; document it where the tuple is defined so reviewers don't "fix" it.
 - Shared-checkout hazard: other sessions write to `/home/marin/projects/marin` — work only in
   this worktree and verify staged content before committing.
+
+## Implementation notes
+
+Written after the fact; these correct or supersede parts of the plan above.
+
+**No `_seq_spec_3d` port.** The plan said to mirror the prior art's `_seq_spec_3d()` and pin the
+MoE's `[B, S, D]` output to `P(_BATCH_AXES, "context", None)`. This branch does not: the residual
+stream is not context-sharded until `long-context/fa4-sequence-sharding` lands, so pinning that spec
+would give a block an output sharding that differs from its `lax.scan` carry input, and would
+overlap the sibling's hunks. `_activation_spec(x)` restores the caller's own layout instead — a
+no-op today, and it picks up the sequence sharding automatically once the sibling lands.
+`_seq_spec_4d`/`_kv_spec_4d` remain the sibling's.
+
+**The flatten is not free.** The plan describes the token tuple as what the reshape produces. It is
+not: a device owning several batch rows and one sequence slice holds a strided set of flat token
+indices that no `PartitionSpec` expresses, so XLA settles the flatten with an all-to-all over the
+context group. Under CP that is four activation-sized exchanges per layer (in and out of both
+`MoEMLP` and `DenseMLP`). The tuple is the policy, not a free consequence of it. Flattening inside a
+`shard_map` over the 3-D activation would avoid the exchanges at the cost of a different `moe_mlp`
+interface — an open design decision, deliberately out of scope here.
+
+**`_batch_spec_from_x` was dead under `jit`.** The plan asked to confirm the fused token axis
+round-trips through it. It did not: a tracer exposes no `.sharding`, so every call inside `jax.jit`
+fell through to `_batch_spec(mesh)`. It now probes `jax.typeof(x).sharding`, and `moe_mlp` derives
+its drop-counter psum from that same spec rather than from the mesh, so a caller whose token axis
+names fewer axes than the mesh offers no longer has its drop total multiplied by the shards it never
+split across. With that, correctness no longer depends on `_batch_axes` naming `"context"`; that
+entry is the default token partition for callers who express no preference.
+
+**The loss change is a layout fix.** Naming only the batch dim still returned the right number — the
+reshard gathered the sequence and the psum then covered every token. What the change buys is the
+gather: `{all-gather: 1, all-reduce: 1}` becomes `{all-reduce: 1}`. The tests assert that, not just
+values.
+
+**Unported variants.** `experiments/grug/moe/` and `experiments/grug/moe_hero_fsdp/` reject
+`context_axis_size > 1` rather than accepting a value that would only narrow `data`. The TPU variant
+keeps its own branch.
