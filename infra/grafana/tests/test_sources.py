@@ -379,11 +379,21 @@ def test_wandb_run_history_pins_an_explicit_project_without_searching():
     assert [row["step"] for row in rows] == [7]
 
 
-def _activity_handler(found_in: str, run: dict, asked: list[str]):
-    """Serve `run` from the project named `found_in`; record each project asked."""
+def _activity_handler(found_in: str, run: dict, asked: list[str], tps_points: list[dict] = ()):
+    """Serve `run` for the activity query and `tps_points` for the reference-rate history.
+
+    Only the activity search is recorded in `asked`; the token-rate history read that
+    follows it asks the project the run was already found in, so it carries no new
+    routing information.
+    """
 
     def handler(request: httpx.Request) -> httpx.Response:
         variables = json.loads(request.content)["variables"]
+        if "specs" in variables:  # the reference-tps history read, not the activity search
+            if variables["project"] != found_in:
+                return httpx.Response(200, json={"data": {"project": None}})
+            history = {"state": "running", "sampledHistory": [list(tps_points)]}
+            return httpx.Response(200, json={"data": {"project": {"run": history}}})
         asked.append(variables["project"])
         if variables["project"] != found_in:
             return httpx.Response(200, json={"data": {"project": None}})
@@ -396,15 +406,23 @@ def test_wandb_run_activity_separates_active_time_from_downtime():
     # `_runtime` is W&B's own count of the seconds a process was alive, restored at each
     # resume, so it is the run's active time across restarts and never includes the wait
     # between two attempts. Wall clock here is four days, of which ninety hours ran.
+    # Progress efficiency divides the tokens seen by the mean token rate times wall clock:
+    # the reference rate is the mean over the history (2.5M here), not the summary's last
+    # step, so a checkpoint step logging a low rate cannot skew it. 648e9 / (2.5e6 * 345600)
+    # is 0.75.
     asked: list[str] = []
     run = {
         "state": "running",
         "createdAt": "2026-08-20T02:00:00Z",
         "heartbeatAt": "2026-08-24T02:00:00Z",
-        "summaryMetrics": json.dumps({"_runtime": 90 * 3_600, "_timestamp": 1_787_561_529}),
+        "summaryMetrics": json.dumps({"_runtime": 90 * 3_600, "throughput/total_tokens": 648_000_000_000}),
     }
+    tps_points = [
+        {"_step": 0, "throughput/tokens_per_second": 2_000_000},
+        {"_step": 1, "throughput/tokens_per_second": 3_000_000},
+    ]
 
-    (row,) = _wandb(_activity_handler("marin_moe", run, asked)).run_activity("hero-run")
+    (row,) = _wandb(_activity_handler("marin_moe", run, asked, tps_points)).run_activity("hero-run")
 
     assert asked == ["marin_moe"]
     assert row == {
@@ -416,12 +434,16 @@ def test_wandb_run_activity_separates_active_time_from_downtime():
         "wall_seconds": 345_600.0,
         "downtime_seconds": 21_600.0,
         "active_share": 0.9375,
+        "tokens_seen": 648_000_000_000.0,
+        "reference_tps": 2_500_000.0,
+        "progress_efficiency": 0.75,
     }
 
 
 def test_wandb_run_activity_reports_no_active_time_before_the_first_log():
     # A run that has been created but has logged nothing has no `_runtime` to read. The
     # tile then shows no data, which is true, rather than zero, which reads as a stall.
+    # With no token rate and no tokens seen, progress efficiency is null for the same reason.
     asked: list[str] = []
     run = {
         "state": "running",
@@ -435,6 +457,7 @@ def test_wandb_run_activity_reports_no_active_time_before_the_first_log():
     assert asked == ["marin_moe", "marin"]
     assert (row["active_seconds"], row["downtime_seconds"], row["active_share"]) == (None, None, None)
     assert row["wall_seconds"] == 600.0
+    assert (row["tokens_seen"], row["reference_tps"], row["progress_efficiency"]) == (None, None, None)
 
 
 def test_wandb_run_activity_fails_loud_when_no_project_has_the_run():

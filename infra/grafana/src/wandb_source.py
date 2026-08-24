@@ -40,6 +40,14 @@ _RUN_HISTORY_SAMPLES = 2000
 # `wandb.log(..., step=<training step>)`, so this column is the Levanter step.
 _STEP_KEY = "_step"
 
+# Reference speed for progress efficiency. `summaryMetrics` carries only the last
+# step's `throughput/tokens_per_second`, which a checkpoint or eval step drives
+# ~15x low, so the mean of a sampled history is used instead: it is stable across a
+# single bad step and matches the status strip's own AVG(tokens/s) tile.
+_TPS_KEY = "throughput/tokens_per_second"
+_TOKENS_SEEN_KEY = "throughput/total_tokens"
+_TPS_SAMPLES = 500
+
 # The projects a run named by the training dashboard can live in, searched in this
 # order. The grug hero launchers default to marin_moe and marin.experiment.train
 # defaults to marin. A caller that knows the project pins it and skips the search.
@@ -188,16 +196,34 @@ class WandbSource:
 
         return self._search_projects(run, project, read)
 
+    def _mean_tps(self, *, project: str, run: str) -> float | None:
+        """Mean per-step token rate over the whole run, the reference for progress efficiency.
+
+        A mean over a sampled history rather than the summary's last-step value, so a
+        checkpoint or eval step cannot skew it (see `_TPS_KEY`). None if the run has
+        logged no token rate yet.
+        """
+        pairs = self._sampled_history(project=project, run=run, x_key=_STEP_KEY, y_key=_TPS_KEY, samples=_TPS_SAMPLES)
+        if not pairs:
+            return None
+        rates = [rate for _, rate in pairs]
+        return sum(rates) / len(rates)
+
     def run_activity(self, run: str, *, project: str | None = None) -> list[dict]:
-        """Return one row of active and wall-clock time for the whole of `run`.
+        """Return one row of active time, wall-clock time, and progress efficiency for `run`.
 
         W&B's `_runtime` counts the seconds a process was alive: `resume="allow"`
         restores it at each restart, so the wait between two attempts never enters
         it. That makes it the run's active execution time across every attempt, and
         unlike a `telemetry_v1` scan it does not stop where segment eviction does.
         Wall time runs from the run's creation to its last heartbeat, thus the
-        remainder is downtime and the ratio is the share of the run that ran. A run
-        that has logged nothing yet reports a null active time rather than a zero.
+        remainder is downtime and the ratio is the share of the run that ran.
+
+        Progress efficiency is `tokens_seen / (reference_tps * wall)`: the fraction of
+        an ideal run that held its steady token rate from creation with no downtime.
+        It is stricter than active share, which sees only downtime -- this also counts
+        the throughput lost to checkpoints, evals, and steps redone after a rollback.
+        A run that has logged nothing yet reports nulls rather than zeros.
         """
 
         def read(candidate: str) -> list[dict] | None:
@@ -214,6 +240,12 @@ class WandbSource:
             active = summary.get("_runtime")
             active = float(active) if isinstance(active, int | float) else None
             wall = _epoch_seconds(run_data["heartbeatAt"]) - _epoch_seconds(run_data["createdAt"])
+            tokens_seen = summary.get(_TOKENS_SEEN_KEY)
+            tokens_seen = float(tokens_seen) if isinstance(tokens_seen, int | float) else None
+            reference_tps = self._mean_tps(project=candidate, run=run)
+            efficiency = (
+                tokens_seen / (reference_tps * wall) if tokens_seen is not None and reference_tps and wall > 0 else None
+            )
             return [
                 {
                     "run": run,
@@ -224,6 +256,9 @@ class WandbSource:
                     "wall_seconds": wall,
                     "downtime_seconds": None if active is None else wall - active,
                     "active_share": active / wall if active is not None and wall > 0 else None,
+                    "tokens_seen": tokens_seen,
+                    "reference_tps": reference_tps,
+                    "progress_efficiency": efficiency,
                 }
             ]
 

@@ -160,7 +160,7 @@
       "id": 1,
       "type": "stat",
       "title": "Run status",
-      "description": "Where the run is right now. The window is a fixed fifteen minutes; the dashboard time range does not reach this panel. One query serves every tile, because a telemetry_v1 scan costs what its window costs whatever it selects, and ten stat panels would cost ten scans. Time since last step is the stall alert's own input, the age of the wall-clock stamp Levanter writes after each completed step. Sample age is the age of any telemetry from the run, so the two together separate a stalled trainer from a broken telemetry path. Active execution and active share come from W&B, not from finelog: W&B counts the seconds each attempt was alive and carries that count across every restart, thus the total covers the whole run and no telemetry eviction truncates it. Active share divides that total by the time from the creation of the run to its last heartbeat, so the remainder is downtime. The total holds while an attempt restarts, because W&B advances it when the attempt logs its first step.",
+      "description": "Where the run is right now. The window is a fixed fifteen minutes; the dashboard time range does not reach this panel. One query serves every tile, because a telemetry_v1 scan costs what its window costs whatever it selects, and ten stat panels would cost ten scans. Time since last step is the stall alert's own input, the age of the wall-clock stamp Levanter writes after each completed step. Sample age is the age of any telemetry from the run, so the two together separate a stalled trainer from a broken telemetry path. Active execution and active share come from W&B, not from finelog: W&B counts the seconds each attempt was alive and carries that count across every restart, thus the total covers the whole run and no telemetry eviction truncates it. Active share divides that total by the time from the creation of the run to its last heartbeat, so the remainder is downtime. The total holds while an attempt restarts, because W&B advances it when the attempt logs its first step. Progress efficiency is stricter: it divides the tokens seen by what the run would have reached had it held its mean token rate from creation with no downtime, so it also counts the throughput lost to checkpoints, evals, and steps redone after a rollback, not only downtime.",
       "datasource": {
         "type": "datasource",
         "uid": "-- Mixed --"
@@ -374,6 +374,22 @@
                 "value": 1
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "progress efficiency"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
           }
         ]
       },
@@ -501,6 +517,11 @@
             {
               "selector": "active_share",
               "text": "active share",
+              "type": "number"
+            },
+            {
+              "selector": "progress_efficiency",
+              "text": "progress efficiency",
               "type": "number"
             }
           ]
