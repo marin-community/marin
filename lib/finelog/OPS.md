@@ -278,10 +278,10 @@ uv run finelog deploy restart marin              # hub: gcp backend, in-place
 export KUBECONFIG=~/.kube/coreweave-iris
 export R2_KEY_ID=... R2_KEY_SECRET=...
 uv run finelog deploy sync-secret "$CLUSTER"
-uv run deploy finelog rollout "$CLUSTER"
+uv run marin-deploy finelog rollout "$CLUSTER"
 ```
 
-`deploy finelog rollout` captures the active Deployment revision, runs the matching
+`marin-deploy finelog rollout` captures the active Deployment revision, runs the matching
 Pulumi stack, and restores the captured ReplicaSet if the update or ingest
 verification fails. Its rollout identity and image build stamp come from the
 checked-out, content-addressed Git tree SHA. If only the Secret changed, replace
@@ -391,7 +391,7 @@ curl -sf http://<host>:<port>/api/server | jq .ingest
 it first failed, and how many attempts have been made since. The dashboard's
 System page shows the same under **Ingest**. The GCE `deploy up`, `deploy
 restart`, and `safe_deploy` paths gate on the body; `safe_deploy` rolls back a
-failed GCE rollout. Kubernetes `deploy finelog rollout` restores the captured
+failed GCE rollout. Kubernetes `marin-deploy finelog rollout` restores the captured
 ReplicaSet when Pulumi's post-Deployment `finelog deploy verify` fails.
 
 ## Serving a copy of a store

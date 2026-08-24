@@ -5,7 +5,7 @@ This directory contains thin trigger YAML around behavior implemented in `script
 ## Pulumi service rollouts
 
 `ops-pulumi-rollout.yaml` runs
-`uv run --all-packages --extra deploy --frozen deploy <service> rollout` for
+`uv run --all-packages --extra deploy --frozen marin-deploy <service> rollout` for
 registered service projects after their source paths change on `main`.
 `scripts/ci/pulumi_rollouts.py` maps each service to its Pulumi directory, deploy
 identity, tests, and additional source roots.

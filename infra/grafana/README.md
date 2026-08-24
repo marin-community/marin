@@ -522,7 +522,7 @@ and shares `infra/pulumi`'s state backend.
 
 ```bash
 gcloud auth configure-docker us-central1-docker.pkg.dev  # once: let buildx push to Artifact Registry
-uv run --all-packages --extra deploy deploy grafana rollout
+uv run --all-packages --extra deploy marin-deploy grafana rollout
 ```
 
 The deploy command loads the Cloudflare provider token from Secret Manager and

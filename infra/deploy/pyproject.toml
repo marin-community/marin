@@ -20,7 +20,7 @@ test = [
 ]
 
 [project.scripts]
-deploy = "marin_deploy.cli:cli"
+marin-deploy = "marin_deploy.cli:cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/marin_deploy"]

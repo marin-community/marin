@@ -61,5 +61,5 @@ runs:
         if [[ -n "$PULUMI_CONFIG_OVERRIDE" ]]; then
           config_args=(--config "$PULUMI_CONFIG_OVERRIDE")
         fi
-        uv run --all-packages --extra deploy --frozen deploy \
+        uv run --all-packages --extra deploy --frozen marin-deploy \
           "$PULUMI_SERVICE" rollout --yes "${config_args[@]}"

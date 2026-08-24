@@ -193,7 +193,7 @@ held in GitHub rather than Secret Manager, so it requires `DUCKY_GCS_HMAC_KEY_ID
 operator environment:
 
 ```bash
-uv run --all-packages --extra deploy deploy ducky rollout
+uv run --all-packages --extra deploy marin-deploy ducky rollout
 ```
 
 The stack uses the shared `marin-iac-key` KMS secrets provider. The operator needs

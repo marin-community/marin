@@ -266,5 +266,5 @@ gh workflow run ops-pulumi-rollout.yaml --ref main -f service=evaldash
 To deploy the current checkout with local credentials:
 
 ```bash
-uv run --all-packages --extra deploy deploy evaldash rollout
+uv run --all-packages --extra deploy marin-deploy evaldash rollout
 ```

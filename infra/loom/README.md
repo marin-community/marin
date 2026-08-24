@@ -46,7 +46,7 @@ for `https://loom.oa.dev/api/ready` after activation.
 
 ```sh
 cd /path/to/marin
-uv run --all-packages --extra deploy deploy loom rollout
+uv run --all-packages --extra deploy marin-deploy loom rollout
 ```
 
 Set `buildContext` to a Loom worktree to deploy local changes instead. The local
@@ -56,7 +56,7 @@ override through a temporary stack config, so later deployments return to the re
 HEAD automatically.
 
 ```sh
-uv run --all-packages --extra deploy deploy loom rollout \
+uv run --all-packages --extra deploy marin-deploy loom rollout \
   --config buildContext=/path/to/loom
 ```
 

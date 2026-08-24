@@ -31,5 +31,5 @@ unmerged checkout and requires `CW_KEY_ID` and `CW_KEY_SECRET` in the operator
 environment:
 
 ```bash
-uv run --all-packages --extra deploy deploy xprof rollout
+uv run --all-packages --extra deploy marin-deploy xprof rollout
 ```

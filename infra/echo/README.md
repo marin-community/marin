@@ -348,7 +348,7 @@ Deploy the production stack from the repository root through the shared command.
 Pulumi previews the update before asking for confirmation:
 
 ```bash
-uv run --all-packages --extra deploy deploy echo rollout
+uv run --all-packages --extra deploy marin-deploy echo rollout
 ```
 
 The rollout applies pending migrations from the operator's machine. It requires ADC
