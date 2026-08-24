@@ -70,11 +70,11 @@ class GrugTrainerConfig:
     # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
-    # Sequence-dim (context-parallel) shard count for the mesh's `context` axis. Leave it at 1:
-    # no model here shards the sequence dim yet, so a value above 1 not only narrows `data` but
-    # corrupts metrics -- the MoE token-space psums reduce over `context`, and with every
-    # context shard holding the same tokens they scale dropped-token counts by the context
-    # width. Raise it once model-side context sharding lands.
+    # Sequence-dim (context-parallel) shard count for the mesh's `context` axis. This variant has
+    # not been ported to context sharding: its model shards activations on the batch axes alone, so
+    # a value above 1 only narrows `data` while every context shard keeps the same tokens -- fewer
+    # devices doing identical work, and a token axis whose width no longer matches the mesh the QB
+    # quantile is reasoned about on. It is rejected below; `moe_hero_ep` is the ported variant.
     context_axis_size: int = 1
     sharding_dump_path: str | None = None
 
@@ -409,6 +409,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     # Keep the mesh compact so the batch pspec derived by `_batch_spec(mesh)` spans slices directly.
     # replica_axis_size=None lets compact_grug_mesh default to jax.process_count() (full
     # cross-slice replication); set it to 1 on GrugTrainerConfig for cross-slice FSDP.
+    if config.trainer.context_axis_size > 1:
+        raise ValueError(
+            f"context_axis_size={config.trainer.context_axis_size} is not supported by this grug variant: its "
+            "model shards activations on the batch axes only, so a context axis above 1 narrows `data` without "
+            "splitting the sequence. Use experiments/grug/moe_hero_ep for context sharding."
+        )
+
     mesh = compact_grug_mesh(
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,

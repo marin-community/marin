@@ -19,7 +19,6 @@ from levanter.grug._moe.common import (
     CapacityOverflow,
 )
 from levanter.grug._moe.ep_common import _prefix_cap_counts
-from levanter.grug.sharding import _batch_axes
 
 
 def _moe_mlp_ep_ring_local(
@@ -32,6 +31,7 @@ def _moe_mlp_ep_ring_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
+    token_axis_names: tuple[str, ...],
 ) -> tuple[Float[Array, "Tlocal H"], CapacityOverflow]:
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
@@ -113,5 +113,5 @@ def _moe_mlp_ep_ring_local(
         # #2710 ring EP strategy: collect only this shard's token slice after
         # reducing contributions from experts across the EP mesh.
         out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
-        dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
+        dropped_total = jax.lax.psum(dropped_local, token_axis_names)
     return out_local, CapacityOverflow(sender=jnp.zeros_like(dropped_total), receiver=dropped_total)

@@ -57,10 +57,31 @@ def _batch_spec(mesh: Mesh | jax.sharding.AbstractMesh | None) -> PartitionSpec:
     return P(_batch_axes(mesh))
 
 
+def _axis_names(entry) -> tuple[str, ...]:
+    """Flatten one PartitionSpec entry into the mesh axis names it covers."""
+    if entry is None:
+        return ()
+    return tuple(str(name) for name in entry) if isinstance(entry, tuple) else (str(entry),)
+
+
+def _spec_of(x: jax.Array) -> PartitionSpec | None:
+    """The PartitionSpec ``x`` carries, whether it is a concrete array or a traced value.
+
+    A tracer exposes no ``.sharding``, so probing the value alone makes every caller inside
+    ``jax.jit`` fall through to a mesh-derived default -- which silently re-partitions a token axis
+    the caller had deliberately sharded some other way. ``jax.typeof`` reaches the aval's sharding
+    and works in both cases.
+    """
+    for candidate in (jax.typeof(x), x):
+        spec = getattr(getattr(candidate, "sharding", None), "spec", None)
+        if spec is not None and len(spec) > 0:
+            return spec
+    return None
+
+
 def _batch_spec_from_x(x: jax.Array, mesh: Mesh | jax.sharding.AbstractMesh | None) -> PartitionSpec:
-    sharding = getattr(x, "sharding", None)
-    spec = getattr(sharding, "spec", None)
-    if spec is not None and len(spec) > 0 and spec[0] is not None:
+    spec = _spec_of(x)
+    if spec is not None and spec[0] is not None:
         return P(spec[0])
     return _batch_spec(mesh)
 
@@ -70,8 +91,7 @@ def _is_replicated_spec(spec: PartitionSpec) -> bool:
 
 
 def _value_spec_or_default(x: jax.Array, default: PartitionSpec, *, replace_replicated: bool = False) -> PartitionSpec:
-    sharding = getattr(x, "sharding", None)
-    spec = getattr(sharding, "spec", None)
+    spec = _spec_of(x)
     if spec is not None and not (replace_replicated and _is_replicated_spec(spec)):
         return spec
     return default
