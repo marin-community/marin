@@ -298,10 +298,13 @@ the strip a mixed-datasource panel. Those two totals describe the whole run, and
 eviction that keeps the step-axis loss panel on W&B bounds any finelog answer to the
 retained window. On 2026-08-24 `hero-12d8b6f0-dee637` read 93.5 hours active against
 105.0 hours of wall clock, an 89 percent active share, while finelog retained its
-last three days. A mixed panel names each frame after its refId and Grafana prefixes
-every field label with it, so the strip renames `A `/`B ` away; it stands ten grid
-rows tall because the stat layout picks its tile grid from the aspect ratio, and
-twelve tiles in a shorter panel land in one unreadable row.
+last three days. A mixed panel names each frame after its refId and prefixes every
+field label with it, which is why the strip's defaults set a display name of
+`${__field.name}`: a field with a display name of its own keeps the prefix off, while
+a `renameByRegex` transformation cannot, because it reads the raw field name and the
+prefix is added later. The strip stands ten grid rows tall because the stat layout
+picks its tile grid from the aspect ratio, and twelve tiles in a shorter panel land in
+one unreadable row.
 
 The Attempts table carries the recent detail behind that total: one row per Iris
 execution over a fixed seven-day window, newest first, running or not, so the top row

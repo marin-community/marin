@@ -173,6 +173,7 @@
       },
       "fieldConfig": {
         "defaults": {
+          "displayName": "${__field.name}",
           "unit": "short",
           "thresholds": {
             "mode": "absolute",
@@ -505,16 +506,7 @@
           ]
         }
       ],
-      "timeFrom": "15m",
-      "transformations": [
-        {
-          "id": "renameByRegex",
-          "options": {
-            "regex": "^[AB] (.+)$",
-            "renamePattern": "$1"
-          }
-        }
-      ]
+      "timeFrom": "15m"
     },
     {
       "id": 2,
