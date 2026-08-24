@@ -87,9 +87,6 @@ class ListShard:
 # ---------------------------------------------------------------------------
 
 _SCATTER_METADATA_FILENAME = "metadata.msgpack"
-_SIDECAR_FILES_FIELD = "files"
-_SIDECAR_AVG_ITEM_BYTES_FIELD = "avg_item_bytes"
-_SIDECAR_SHARD_BYTES_FIELD = "shard_bytes"
 
 # Number of parallel small-file reads (sidecars, parquet schema footers) each
 # reducer issues while building its ScatterReader. These reads are GCS
@@ -262,6 +259,9 @@ class _Sidecar:
 
     _encoder: ClassVar[msgspec.msgpack.Encoder] = msgspec.msgpack.Encoder()
     _decoder: ClassVar[msgspec.msgpack.Decoder] = msgspec.msgpack.Decoder()
+    _files_field: ClassVar[str] = "files"
+    _avg_item_bytes_field: ClassVar[str] = "avg_item_bytes"
+    _shard_bytes_field: ClassVar[str] = "shard_bytes"
 
     @staticmethod
     def meta_path(data_path: str) -> str:
@@ -275,9 +275,9 @@ class _Sidecar:
         meta_path = self.meta_path(self.path)
         payload = self._encoder.encode(
             {
-                _SIDECAR_FILES_FIELD: self.files,
-                _SIDECAR_AVG_ITEM_BYTES_FIELD: self.avg_item_bytes,
-                _SIDECAR_SHARD_BYTES_FIELD: {str(k): v for k, v in self.shard_bytes.items()},
+                self._files_field: self.files,
+                self._avg_item_bytes_field: self.avg_item_bytes,
+                self._shard_bytes_field: {str(k): v for k, v in self.shard_bytes.items()},
             }
         )
         with log_time(f"Writing scatter meta for {self.path} to {meta_path}", level=logging.DEBUG):
@@ -289,14 +289,14 @@ class _Sidecar:
         meta_path = fs._strip_protocol(cls.meta_path(data_path))
         # Avoid buffered-file overhead for these small payloads.
         data = cls._decoder.decode(fs.cat_file(meta_path))
-        files = data.get(_SIDECAR_FILES_FIELD, [])
+        files = data.get(cls._files_field, [])
         if not files:
             return None
-        raw_shard_bytes = data.get(_SIDECAR_SHARD_BYTES_FIELD, {})
+        raw_shard_bytes = data.get(cls._shard_bytes_field, {})
         return cls(
             path=data_path,
             files=[str(f) for f in files],
-            avg_item_bytes=float(data.get(_SIDECAR_AVG_ITEM_BYTES_FIELD, 0)),
+            avg_item_bytes=float(data.get(cls._avg_item_bytes_field, 0)),
             shard_bytes={int(k): int(v) for k, v in raw_shard_bytes.items()},
         )
 
