@@ -19,7 +19,7 @@ from haliax import Axis
 from jax.sharding import AxisType, Mesh
 from jax.sharding import PartitionSpec as P
 from levanter.grug.attention import AttentionMask
-from levanter.grug.sharding import unshard
+from levanter.grug.sharding import _GRUG_MESH_AXIS_NAMES, unshard
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel, snowball_to_state_dict
 from safetensors.numpy import save_file
 
@@ -50,12 +50,11 @@ GRADIENT_NAMES = (
     "model.layers.2.mlp.router.weight",
     "lm_head.weight",
 )
-_GRUG_MESH_AXIS_NAMES = ("replica_dcn", "data", "expert", "model")
 
 
 def _oracle_mesh() -> Mesh:
     """Keep the one-example oracle on one device when a host exposes many."""
-    devices = np.asarray(jax.local_devices()[:1], dtype=object).reshape((1, 1, 1, 1))
+    devices = np.asarray(jax.local_devices()[:1], dtype=object).reshape((1,) * len(_GRUG_MESH_AXIS_NAMES))
     axis_types = tuple(AxisType.Explicit for _ in _GRUG_MESH_AXIS_NAMES)
     return Mesh(devices, _GRUG_MESH_AXIS_NAMES, axis_types=axis_types)
 
