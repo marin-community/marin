@@ -6,7 +6,6 @@ import importlib
 
 import jax
 import jax.numpy as jnp
-import pytest
 
 from haliax.nn import ragged_dot
 
@@ -14,8 +13,10 @@ ragged_dot_module = importlib.import_module("haliax.nn.ragged_dot")
 
 
 def _inputs():
-    lhs = jnp.arange(12, dtype=jnp.float32).reshape(3, 4)
-    rhs = jnp.arange(2 * 4 * 5, dtype=jnp.float32).reshape(2, 4, 5)
+    contraction_dim = 32
+    output_dim = 17
+    lhs = jnp.arange(3 * contraction_dim, dtype=jnp.float32).reshape(3, contraction_dim) / 100
+    rhs = jnp.arange(2 * contraction_dim * output_dim, dtype=jnp.float32).reshape(2, contraction_dim, output_dim) / 100
     group_sizes = jnp.array([2, 1], dtype=jnp.int32)
     return lhs, rhs, group_sizes
 
@@ -29,32 +30,18 @@ def test_ragged_dot_platform_default_is_close_to_xla_call():
     assert jnp.allclose(default_out, xla_out, rtol=1e-5, atol=1e-5)
 
 
-def test_triton_kernel_traces_with_jax_0_9_pallas_memory_api_on_cpu_interpreter():
-    if not ragged_dot_module._has_pallas_triton:
-        pytest.skip("Pallas Triton backend is not available")
+def test_ragged_dot_platform_default_gradients_are_close_to_xla_call():
+    lhs, rhs, group_sizes = _inputs()
 
-    lhs = jnp.arange(4, dtype=jnp.float32).reshape(2, 2)
-    rhs = jnp.arange(6, dtype=jnp.float32).reshape(2, 3)
-    lo = jnp.array(0, dtype=jnp.int32)
-    hi = jnp.array(lhs.shape[0], dtype=jnp.int32)
+    def loss(lhs, rhs, implementation):
+        return jnp.sum(ragged_dot(lhs, rhs, group_sizes, implementation=implementation) ** 2)
 
-    pallas_call = ragged_dot_module.pl.pallas_call(
-        lambda a, b, lo, hi, out: ragged_dot_module._triton_ragged_dot_kernel(
-            a, b, lo, hi, out, block_m=lhs.shape[0], block_k=lhs.shape[1]
-        ),
-        out_shape=jax.ShapeDtypeStruct((lhs.shape[0], rhs.shape[1]), lhs.dtype),
-        in_specs=[
-            ragged_dot_module.pl.no_block_spec,
-            ragged_dot_module.pl.no_block_spec,
-            ragged_dot_module.pl.no_block_spec,
-            ragged_dot_module.pl.no_block_spec,
-        ],
-        out_specs=ragged_dot_module.pl.no_block_spec,
-        grid=(1,),
-        interpret=True,
-    )
+    default_value, default_gradients = jax.value_and_grad(loss, argnums=(0, 1))(lhs, rhs, "auto")
+    xla_value, xla_gradients = jax.value_and_grad(loss, argnums=(0, 1))(lhs, rhs, "xla")
 
-    assert jnp.allclose(pallas_call(lhs, rhs, lo, hi), lhs @ rhs, rtol=1e-5, atol=1e-5)
+    assert jnp.allclose(default_value, xla_value, rtol=1e-5, atol=1e-5)
+    assert jnp.allclose(default_gradients[0], xla_gradients[0], rtol=1e-5, atol=1e-5)
+    assert jnp.allclose(default_gradients[1], xla_gradients[1], rtol=1e-5, atol=1e-5)
 
 
 def test_ragged_dot_gpu_auto_uses_triton_when_available(monkeypatch):
