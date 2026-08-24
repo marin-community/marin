@@ -54,8 +54,7 @@ iris cluster dashboard-proxy        # local proxy to remote controller (no tunne
 
 ### Controller Restart
 
-For a rollout across more than one cluster, use
-[the Iris controller-rollout workflow](../../.agents/skills/use-iris/references/controller-rollout.md).
+For a rollout across more than one cluster, use the `use-iris` skill.
 It fixes the order (`marin-dev`, `marin`, then CoreWeave smallest first), puts a
 human gate on every step, and drives `scripts/iris/rollout_controllers.py` for
 the credential preflight, the before/after snapshots, the 5-minute watch, and a
@@ -356,8 +355,8 @@ targets with SQL, preview, then fire. See "Bulk actions: query → act" below.
 
 ### Recovering a stuck terminating Kubernetes pod
 
-Use [the Iris stuck-pod recovery workflow](../../.agents/skills/use-iris/references/stuck-pod.md)
-when a CoreWeave pod remains after its Kubernetes deletion deadline. The Grafana
+Use the `use-iris` skill when a CoreWeave pod remains after its Kubernetes
+deletion deadline. The Grafana
 **K8s control plane** dashboard classifies overdue pods; its alert fires only for
 node-bound, nonterminal GPU pods without finalizers.
 
@@ -846,9 +845,8 @@ plain Kubernetes `get` calls are read-only. `kubectl describe pod` does not
 mutate the cluster, but it can print literal environment values; avoid it on
 task Pods. Starting, stopping, or restarting a cluster or controller changes
 shared infrastructure. Run those commands only with explicit user approval;
-use the
-[Iris controller-rollout workflow](../../.agents/skills/use-iris/references/controller-rollout.md)
-for controller rollouts. Direct Kubernetes changes such as `apply`, `delete`,
+use the `use-iris` skill for controller rollouts. Direct Kubernetes changes
+such as `apply`, `delete`,
 `scale`, `drain`, `cordon`, and `uncordon` also require explicit approval.
 
 ### Public LoadBalancer reachability
@@ -969,9 +967,8 @@ recover a node without the job owner's approval.
 If a replacement remains Pending because no healthy node satisfies its required
 node affinity or pod anti-affinity, stop before deleting the original pod.
 Provision compatible capacity when possible. Record and restore any temporary
-placement change after the reboot. Use
-`.agents/skills/use-iris/references/stuck-pod.md` for the exact Iris task retry
-sequence or when a bound pod does not terminate.
+placement change after the reboot. Use the `use-iris` skill for the exact Iris
+task retry sequence or when a bound pod does not terminate.
 
 CoreWeave should continue the pending reboot without a separate Iris restart.
 Before restoring workloads, verify that the provider operation completed, the
