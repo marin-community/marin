@@ -18,7 +18,7 @@ import time
 from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar, NamedTuple
@@ -72,6 +72,7 @@ from iris.cluster.platforms.k8s.types import (
     IRIS_PRIORITY_CLASS_BATCH,
     IRIS_PRIORITY_CLASS_INTERACTIVE,
     IRIS_PRIORITY_CLASS_PRODUCTION,
+    IRIS_PRIORITY_CLASS_SYSTEM,
     IRIS_RUNTIME_LABEL,
     IRIS_TASK_CONTAINER_NAME,
     IRIS_TASK_ID_ANNOTATION,
@@ -106,13 +107,14 @@ from iris.cluster.stats.emitter import PeriodicEmitter
 from iris.cluster.stats.tables import (
     IrisProfile,
     ProfileTrigger,
+    TaskEventDiagnostics,
     TaskEventRow,
     TaskEventSeverity,
     stats_timestamp,
 )
 from iris.cluster.types import JobName, WellKnownAttribute, WorkerId, get_gpu_count
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
-from iris.rpc.proto_display import priority_band_name, resolve_container_profile
+from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, priority_band_name, resolve_container_profile
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -166,10 +168,10 @@ _CONSTRAINT_KEY_TO_NODE_LABEL: dict[str, str] = {
 # Kubernetes label values: max 63 chars, alphanumeric plus [-_.], must start/end alphanumeric.
 _K8S_LABEL_MAX_LEN = 63
 
-# Number of consecutive sync cycles where a pod is missing from the k8s API
-# before declaring the attempt preempted. Avoids false positives from transient
-# API misses.
-_POD_NOT_FOUND_GRACE_CYCLES = 3
+# Number of consecutive sync cycles where a pod is missing or has no actionable
+# phase before declaring the attempt lost. Avoids false positives from
+# transiently stale Kubernetes observations.
+_POD_UNRESOLVED_GRACE_CYCLES = 3
 
 # A terminal reason can carry a full log tail (an init container running under
 # terminationMessagePolicy: FallbackToLogsOnError) or a Kueue eviction message,
@@ -179,6 +181,9 @@ _TERMINAL_REASON_MAX_CHARS = 500
 # Terminal reason for a vanished pod whose disruption was never observed — the
 # pod was deleted between two polls, so no condition survived to name the cause.
 _POD_DELETED_TERMINAL_REASON = "PodDeleted: pod was deleted while the attempt was active"
+_POD_UNKNOWN_TERMINAL_REASON = "PodUnknown: pod remained in an unknown phase while the attempt was active"
+
+_RESOLVED_POD_PHASES = frozenset({"Pending", "Running", "Succeeded", "Failed"})
 
 # Kubernetes terminated reasons that indicate infrastructure failure (not application error).
 # Evicted: kubelet evicted the pod due to resource pressure.
@@ -277,6 +282,7 @@ _CW_DEFAULT_TOPOLOGIES: dict[str, KueueTopologyBinding] = {
 _KUEUE_SINGLE_POD_TOPOLOGY = "kubernetes.io/hostname"
 
 _DEFAULT_PRIORITY_CLASS_NAMES: dict[int, str] = {
+    job_pb2.PRIORITY_BAND_SYSTEM: IRIS_PRIORITY_CLASS_SYSTEM,
     job_pb2.PRIORITY_BAND_PRODUCTION: IRIS_PRIORITY_CLASS_PRODUCTION,
     job_pb2.PRIORITY_BAND_INTERACTIVE: IRIS_PRIORITY_CLASS_INTERACTIVE,
     job_pb2.PRIORITY_BAND_BATCH: IRIS_PRIORITY_CLASS_BATCH,
@@ -673,7 +679,7 @@ def _build_pdb_manifest(
     }
     if managed_label:
         labels[managed_label] = "true"
-    availability = {"minAvailable": 1} if priority_band == job_pb2.PRIORITY_BAND_PRODUCTION else {"maxUnavailable": 1}
+    availability = {"minAvailable": 1} if priority_band in ADMIN_PRIORITY_BAND_VALUES else {"maxUnavailable": 1}
     return {
         "apiVersion": "policy/v1",
         "kind": "PodDisruptionBudget",
@@ -1153,8 +1159,8 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
             **identity,
         )
 
-    # Failed or Unknown -- distinguish infrastructure vs application failure. The
-    # error field carries the failure story, so clear the waiting one-liner.
+    # _poll_pods holds unresolved phases through their grace period, so only a
+    # definitive Failed phase can reach the failure classifier.
     exit_code = _extract_exit_code(pod)
     new_state = _pod_failure_state(pod)
     terminal_reason = _extract_terminal_reason(pod)
@@ -1478,8 +1484,24 @@ def _workload_for_pod(pod: dict, workloads: _KueueWorkloadIndex) -> dict | None:
 
 # The layer that produced a task-event verdict, recorded as the event ``source``.
 _EVENT_SOURCE_CONTAINER = "k8s/container"
+_EVENT_SOURCE_DISRUPTION = "k8s/disruption"
 _EVENT_SOURCE_KUEUE = "k8s/kueue"
 _EVENT_SOURCE_SCHEDULER = "k8s/scheduler"
+
+_NODE_DIAGNOSTIC_LABEL_PREFIXES = (
+    "compute.coreweave.com/",
+    "gpu.coreweave.cloud/",
+    "gpu.nvidia.com/",
+    "ib.coreweave.cloud/",
+    "node.coreweave.cloud/",
+    "node.kubernetes.io/",
+    "topology.kubernetes.io/",
+)
+_NODE_DIAGNOSTIC_ANNOTATION_PREFIXES = (
+    "cwnc.coreweave.com/",
+    "gpu.coreweave.cloud/",
+    "node.coreweave.cloud/",
+)
 
 # Pod/container reasons that are always operator-actionable failures (rather than
 # a transient wait), surfaced as Warning-severity events.
@@ -1499,13 +1521,64 @@ _WARNING_EVENT_REASONS = frozenset(
 
 @dataclass(frozen=True)
 class _PodEvent:
-    """A scheduling/admission verdict for a not-yet-running pod, ready to record
-    as an ``iris.task_event`` row. ``severity`` is the k8s-style Normal/Warning."""
+    """A Kubernetes backend verdict ready to record in ``iris.task_event``."""
 
     source: str
     reason: str
     message: str
     severity: TaskEventSeverity
+    diagnostics: TaskEventDiagnostics = field(default_factory=TaskEventDiagnostics)
+
+
+def _diagnostic_metadata(values: dict, prefixes: tuple[str, ...]) -> dict:
+    return {key: value for key, value in values.items() if key.startswith(prefixes)}
+
+
+def _diagnostic_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _disruption_event(pod: dict, node: dict | None, disruption: dict) -> _PodEvent:
+    pod_metadata = pod.get("metadata", {})
+    pod_spec = pod.get("spec", {})
+    node_metadata = node.get("metadata", {}) if node is not None else {}
+    node_spec = node.get("spec", {}) if node is not None else {}
+    node_status = node.get("status", {}) if node is not None else {}
+    node_info = node_status.get("nodeInfo", {})
+
+    return _PodEvent(
+        source=_EVENT_SOURCE_DISRUPTION,
+        reason=disruption.get("reason", "") or _DISRUPTION_TARGET_CONDITION,
+        message=disruption.get("message", ""),
+        severity=TaskEventSeverity.WARNING,
+        diagnostics=TaskEventDiagnostics(
+            pod_name=pod_metadata.get("name") or None,
+            pod_uid=pod_metadata.get("uid") or None,
+            pod_deletion_timestamp=pod_metadata.get("deletionTimestamp") or None,
+            node_name=pod_spec.get("nodeName") or None,
+            node_uid=node_metadata.get("uid") or None,
+            node_provider_id=node_spec.get("providerID") or None,
+            node_boot_id=node_info.get("bootID") or None,
+            node_system_uuid=node_info.get("systemUUID") or None,
+            node_unschedulable=bool(node_spec.get("unschedulable")) if node is not None else None,
+            pod_tolerations_json=_diagnostic_json(pod_spec.get("tolerations", [])),
+            pod_conditions_json=_diagnostic_json(pod.get("status", {}).get("conditions", [])),
+            node_taints_json=_diagnostic_json(node_spec.get("taints", [])) if node is not None else None,
+            node_conditions_json=_diagnostic_json(node_status.get("conditions", [])) if node is not None else None,
+            node_labels_json=(
+                _diagnostic_json(_diagnostic_metadata(node_metadata.get("labels", {}), _NODE_DIAGNOSTIC_LABEL_PREFIXES))
+                if node is not None
+                else None
+            ),
+            node_annotations_json=(
+                _diagnostic_json(
+                    _diagnostic_metadata(node_metadata.get("annotations", {}), _NODE_DIAGNOSTIC_ANNOTATION_PREFIXES)
+                )
+                if node is not None
+                else None
+            ),
+        ),
+    )
 
 
 def _workload_admission_blocked(workload: dict | None) -> bool:
@@ -1524,16 +1597,11 @@ def _workload_admission_blocked(workload: dict | None) -> bool:
     return False
 
 
-def _pod_event(pod: dict, workload: dict | None) -> _PodEvent | None:
-    """The current actionable backend event for a pod.
-
-    ``source`` attributes the verdict to the layer that produced it (the task
-    container, the Kueue gate, or the scheduler); ``severity`` is Warning for an
-    actionable failure (image pull, config error, Kueue eviction) or a
-    Kueue-declined admission, Normal for a transient wait. Returns ``None`` for a
-    running or otherwise quiet pod.
-    """
+def _pod_event(pod: dict, workload: dict | None, node: dict | None = None) -> _PodEvent | None:
+    """Return the pod's current actionable verdict, including disruptions."""
     disruption = _disruption_condition(pod)
+    if disruption is not None and disruption.get("type") == _DISRUPTION_TARGET_CONDITION:
+        return _disruption_event(pod, node, disruption)
     if disruption is not None and disruption.get("type") == _KUEUE_TERMINATION_TARGET_CONDITION:
         return _PodEvent(
             source=_EVENT_SOURCE_KUEUE,
@@ -1937,32 +2005,25 @@ class PeriodicProfiler:
 
 
 class TaskEventLog:
-    """Appends Kubernetes backend events to the ``iris.task_event`` namespace.
+    """Append changed Kubernetes verdicts to ``iris.task_event``.
 
-    Driven synchronously from the pod poll — no background thread, since the
-    verdicts come from the pod/workload lists ``sync`` already fetches.
-    ``observe`` is called once per tracked attempt per cycle with the attempt's
-    current verdict (or ``None`` when the pod is running/quiet); a row is written
-    only when the ``(source, reason, severity)`` verdict *changes*, so a pod
-    wedged in one state produces a single row, not one per poll — but a severity
-    upgrade (e.g. a gated pod Kueue later declines flips Normal→Warning under the
-    same source/reason) is a change and does record the actionable row. ``retain``
-    drops dedup state for attempts no longer polled so a retried attempt (new
-    ``attempt_id``) starts clean and the map stays bounded.
+    Verdicts are deduplicated per attempt by source, reason, severity, and node
+    evidence availability. A disruption first observed without its node snapshot
+    emits one enriched row when the snapshot becomes available.
     """
 
     def __init__(self, task_event_table: Table):
         self._table = task_event_table
-        self._last_verdict: dict[RunningTaskEntry, tuple[str, str, TaskEventSeverity]] = {}
+        self._last_verdict: dict[RunningTaskEntry, tuple[str, str, TaskEventSeverity, bool]] = {}
 
     def observe(self, attempt: RunningTaskEntry, event: _PodEvent | None) -> None:
         """Record ``event`` for ``attempt`` if its verdict has changed."""
         if event is None:
             return
-        verdict = (event.source, event.reason, event.severity)
+        has_node_evidence = event.diagnostics.node_uid is not None or event.diagnostics.node_conditions_json is not None
+        verdict = (event.source, event.reason, event.severity, has_node_evidence)
         if self._last_verdict.get(attempt) == verdict:
             return
-        self._last_verdict[attempt] = verdict
         row = TaskEventRow(
             task_id=attempt.task_id.to_wire(),
             attempt_id=attempt.attempt_id,
@@ -1973,11 +2034,14 @@ class TaskEventLog:
             message=event.message,
             source=event.source,
             count=1,
+            **asdict(event.diagnostics),
         )
         try:
             self._table.write([row])
         except Exception:
             logger.debug("TaskEventLog: write to iris.task_event failed", exc_info=True)
+            return
+        self._last_verdict[attempt] = verdict
 
     def retain(self, active: set[RunningTaskEntry]) -> None:
         """Forget verdicts for attempts not in ``active`` (terminal or gone)."""
@@ -2215,7 +2279,7 @@ class K8sTaskProvider:
     # from, passed by the composer at construction (a cluster backend has no
     # worker store, so it reads its dispatch drain through this).
     transition_reader: TransitionReader | None = field(default=None, repr=False)
-    _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    _pod_unresolved_counts: dict[RunningTaskEntry, int] = field(default_factory=dict, init=False, repr=False)
     # The disruption condition last seen on an attempt's pod, keyed by the
     # incarnation (a resubmit reuses task_id/attempt_id under a fresh uid) and
     # dropped once the attempt leaves the poll set.
@@ -2413,13 +2477,13 @@ class K8sTaskProvider:
             logger.warning("Failed to query Kueue workloads: %s", e)
             workloads = []
 
-        updates = apply_failures + self._poll_pods(request.running_tasks, managed_pods, workloads)
-
         try:
             nodes = self.kubectl.list_json(K8sResource.NODES)
         except Exception as e:
             logger.warning("Failed to query node resources: %s", e)
             nodes = []
+
+        updates = apply_failures + self._poll_pods(request.running_tasks, managed_pods, workloads, nodes)
 
         node_pools = _fetch_node_pools(self.kubectl, self.pods.managed_label)
         self._cluster_state.update(managed_pods, nodes, workloads, node_pools)
@@ -2946,7 +3010,11 @@ class K8sTaskProvider:
             )
 
     def _poll_pods(
-        self, running: list[RunningTaskEntry], cached_pods: list[dict], workloads: list[dict] | None = None
+        self,
+        running: list[RunningTaskEntry],
+        cached_pods: list[dict],
+        workloads: list[dict] | None = None,
+        nodes: list[dict] | None = None,
     ) -> list[TaskUpdate]:
         """Poll pod phases for all running tasks.
 
@@ -2967,10 +3035,12 @@ class K8sTaskProvider:
                 self._periodic_profiler.set_pods({})
             if self._task_event_log is not None:
                 self._task_event_log.retain(set())
+            self._pod_unresolved_counts.clear()
             self._disruption_reasons.clear()
             return []
 
         pods_by_name: dict[str, dict] = {pod.get("metadata", {}).get("name", ""): pod for pod in cached_pods}
+        nodes_by_name = {node.get("metadata", {}).get("name", ""): node for node in nodes or []}
         workload_index = _kueue_workload_index(workloads or [])
         updates: list[TaskUpdate] = []
 
@@ -3011,54 +3081,82 @@ class K8sTaskProvider:
 
         for entry in running:
             pod_name, pod = self._lookup_entry_pod(pods_by_name, entry)
-            cursor_key = f"{entry.task_id.to_wire()}:{entry.attempt_id}"
             task_key = (entry.task_id.to_wire(), entry.attempt_id)
 
-            if pod is None:
-                count = self._pod_not_found_counts.get(cursor_key, 0) + 1
-                self._pod_not_found_counts[cursor_key] = count
-                if count < _POD_NOT_FOUND_GRACE_CYCLES:
+            phase = pod.get("status", {}).get("phase", "") if pod is not None else ""
+            workload = _workload_for_pod(pod, workload_index) if pod is not None else None
+            if pod is not None:
+                disruption = _disruption_condition(pod)
+                if disruption is not None:
+                    self._disruption_reasons[entry] = _format_disruption_reason(disruption)
+            pod_unresolved = pod is None or phase not in _RESOLVED_POD_PHASES
+            if pod_unresolved:
+                count = self._pod_unresolved_counts.get(entry, 0) + 1
+                self._pod_unresolved_counts[entry] = count
+                if count < _POD_UNRESOLVED_GRACE_CYCLES:
+                    metadata = pod.get("metadata", {}) if pod is not None else {}
                     updates.append(
                         TaskUpdate(
                             task_id=entry.task_id,
                             attempt_id=entry.attempt_id,
-                            new_state=job_pb2.TASK_STATE_RUNNING,
+                            new_state=entry.state,
+                            status_message=_pod_status_message(pod, workload) if pod is not None else "",
+                            pod_name=metadata.get("name") or None,
+                            pod_uid=metadata.get("uid") or None,
+                            node_name=(pod.get("spec", {}).get("nodeName") or None) if pod is not None else None,
                         )
                     )
                     continue
-                # Grace exhausted — the pod is truly gone. Absence is not an
-                # application failure, so charge the preemption budget either
-                # way: PREEMPTED when the pod was seen terminating under a
-                # disruption (Kueue deletes every pod of a preempted Workload,
-                # leaving no terminal status), WORKER_FAILED when the cause was
-                # never observed.
-                self._pod_not_found_counts.pop(cursor_key, None)
-                disruption_reason = self._disruption_reasons.get(entry)
-                terminal_reason = disruption_reason or _POD_DELETED_TERMINAL_REASON
-                updates.append(
-                    TaskUpdate(
-                        task_id=entry.task_id,
-                        attempt_id=entry.attempt_id,
-                        new_state=(
-                            job_pb2.TASK_STATE_PREEMPTED
-                            if disruption_reason is not None
-                            else job_pb2.TASK_STATE_WORKER_FAILED
-                        ),
-                        error=terminal_reason,
-                        terminal_reason=terminal_reason,
-                        status_message="",
+                self._pod_unresolved_counts.pop(entry, None)
+                if pod is None:
+                    # Grace exhausted — the pod is truly gone. Absence is not an
+                    # application failure, so charge the preemption budget either
+                    # way: PREEMPTED when the pod was seen terminating under a
+                    # disruption (Kueue deletes every pod of a preempted Workload,
+                    # leaving no terminal status), WORKER_FAILED when the cause was
+                    # never observed.
+                    disruption_reason = self._disruption_reasons.get(entry)
+                    terminal_reason = disruption_reason or _POD_DELETED_TERMINAL_REASON
+                    new_state = (
+                        job_pb2.TASK_STATE_PREEMPTED
+                        if disruption_reason is not None
+                        else job_pb2.TASK_STATE_WORKER_FAILED
                     )
-                )
+                    updates.append(
+                        TaskUpdate(
+                            task_id=entry.task_id,
+                            attempt_id=entry.attempt_id,
+                            new_state=new_state,
+                            error=terminal_reason,
+                            terminal_reason=terminal_reason,
+                            status_message="",
+                        )
+                    )
+                else:
+                    disruption_reason = self._disruption_reasons.get(entry)
+                    terminal_reason = disruption_reason or _POD_UNKNOWN_TERMINAL_REASON
+                    metadata = pod.get("metadata", {})
+                    updates.append(
+                        TaskUpdate(
+                            task_id=entry.task_id,
+                            attempt_id=entry.attempt_id,
+                            new_state=(
+                                job_pb2.TASK_STATE_PREEMPTED
+                                if disruption_reason is not None
+                                else job_pb2.TASK_STATE_WORKER_FAILED
+                            ),
+                            error=terminal_reason,
+                            terminal_reason=terminal_reason,
+                            status_message="",
+                            pod_name=metadata.get("name") or None,
+                            pod_uid=metadata.get("uid") or None,
+                            node_name=pod.get("spec", {}).get("nodeName") or None,
+                        )
+                    )
                 continue
 
-            self._pod_not_found_counts.pop(cursor_key, None)
-            workload = _workload_for_pod(pod, workload_index)
+            self._pod_unresolved_counts.pop(entry, None)
             update = _task_update_from_pod(entry, pod, workload)
-            # Readable only while the pod terminates; the vanished-pod path
-            # above has no pod left to read it from.
-            disruption = _disruption_condition(pod)
-            if disruption is not None:
-                self._disruption_reasons[entry] = _format_disruption_reason(disruption)
             phase = pod.get("status", {}).get("phase", "")
             if phase == "Running":
                 profile_targets[task_key] = _ProfileTarget(
@@ -3068,7 +3166,8 @@ class K8sTaskProvider:
                     node_name=pod.get("spec", {}).get("nodeName", "") or "",
                 )
             if event_log is not None:
-                event_log.observe(entry, _pod_event(pod, workload))
+                node = nodes_by_name.get(pod.get("spec", {}).get("nodeName", ""))
+                event_log.observe(entry, _pod_event(pod, workload, node))
 
             updates.append(update)
 
@@ -3077,6 +3176,8 @@ class K8sTaskProvider:
             periodic_profiler.set_pods(profile_targets)
         if event_log is not None:
             event_log.retain(set(running))
+        for stale_entry in self._pod_unresolved_counts.keys() - set(running):
+            del self._pod_unresolved_counts[stale_entry]
         for stale_entry in self._disruption_reasons.keys() - set(running):
             del self._disruption_reasons[stale_entry]
 

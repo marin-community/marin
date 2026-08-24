@@ -261,6 +261,18 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
         fs, fspath = self._get_fs_and_path(resolved)
         return fs.cat_file(fspath, start=start, end=end, **kwargs)
 
+    def materialize(self, path: str) -> str:
+        """Copy a mirror file or directory tree into the local prefix and return its concrete URL."""
+        path = cast(str, self._strip_protocol(path))
+        if not path:
+            raise ValueError("Cannot materialize the mirror filesystem root")
+        if not self.exists(path):
+            raise FileNotFoundError(f"mirror://{path} not found in any marin bucket")
+
+        for file_path in self.find(path):
+            self._resolve_path(file_path)
+        return self._local_url(path)
+
     # -- fsspec interface: write operations ------------------------------------
 
     def _mkdir(self, path: str, create_parents: bool = True, **kwargs: Any) -> None:

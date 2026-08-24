@@ -1,6 +1,6 @@
 ---
 name: recover-stuck-k8s-pod
-description: Diagnose and safely recover stuck terminating Kubernetes pods on Marin CoreWeave clusters, especially node-bound GPU pods. Use for deletion hangs, suspected uninterruptible GPU/NCCL waits, node cordoning or reboot decisions, and force-deletion requests.
+description: Recover a specified stuck-terminating CoreWeave Kubernetes pod after read-only diagnosis and explicit approval for node or workload changes.
 ---
 
 # Recover a stuck Kubernetes pod

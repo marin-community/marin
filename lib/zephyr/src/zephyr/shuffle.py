@@ -29,7 +29,6 @@ in ``_items_to_dataframe``; ``__zephyr_shard__`` is stripped on read,
 """
 
 import concurrent.futures
-import functools
 import gc
 import io
 import logging
@@ -37,7 +36,7 @@ import math
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, ClassVar, Protocol
 
 import cloudpickle
 import humanfriendly
@@ -232,49 +231,6 @@ def _items_to_dataframe(
     return _columns_to_dataframe(payloads, shards, key_bytes, sort_values)
 
 
-# ---------------------------------------------------------------------------
-# Sidecar / manifest helpers
-# ---------------------------------------------------------------------------
-
-
-@functools.cache
-def _sidecar_encoder() -> msgspec.msgpack.Encoder:
-    return msgspec.msgpack.Encoder()
-
-
-@functools.cache
-def _sidecar_decoder() -> msgspec.msgpack.Decoder:
-    return msgspec.msgpack.Decoder()
-
-
-def _scatter_meta_path(data_path: str) -> str:
-    return f"{data_path}{_SCATTER_METADATA_FILENAME}"
-
-
-def _write_scatter_meta(data_path: str, sidecar: dict) -> None:
-    meta_path = _scatter_meta_path(data_path)
-    payload = _sidecar_encoder().encode(sidecar)
-    with log_time(f"Writing scatter meta for {data_path} to {meta_path}", level=logging.DEBUG):
-        StoragePath(meta_path).write_bytes(payload)
-
-
-@dataclass(frozen=True)
-class _SidecarSlice:
-    """Chunk paths and metadata from one mapper's sidecar.
-
-    Each entry in ``chunk_paths`` is one combined Parquet file written during a
-    flush; the file contains data for all target shards sorted by
-    ``(_SHARD_COL, _SORT_KEY_COL)``. ``target_bytes`` is the exact payload
-    bytes this mapper wrote for the reader's target shard, summed across all
-    chunks.
-    """
-
-    path: str
-    chunk_paths: list[str]  # GCS parquet paths, one per flush event
-    avg_item_bytes: float
-    target_bytes: int
-
-
 class _SidecarFilesystem(Protocol):
     """A protocol because ``url_to_fs`` returns a bare fsspec filesystem for
     ``s3://`` and a ``CrossRegionGuardedFS`` wrapper for ``gs://``, which share
@@ -285,44 +241,78 @@ class _SidecarFilesystem(Protocol):
     def cat_file(self, path: str) -> bytes: ...
 
 
-def _read_sidecar_slice(fs: _SidecarFilesystem, path: str, target_shard: int) -> _SidecarSlice | None:
-    """Read one sidecar and return its file list plus the target shard's payload
-    bytes, or ``None`` if the writer wrote no files.
+@dataclass(frozen=True)
+class _Sidecar:
+    """One mapper's scatter metadata (``metadata.msgpack``).
 
-    ``fs`` comes from the caller because fsspec keys its instance cache on the
-    calling thread, so resolving here builds a client per pool worker (#8402).
-    ``cat_file`` beats ``open_url`` by ~25% on small sidecars.
+    ``files`` lists the combined Parquet paths written during flushes; each file
+    contains data for all target shards sorted by ``(_SHARD_COL, _SORT_KEY_COL)``.
+    ``shard_bytes`` maps target shard index to exact payload bytes written for
+    that shard across all files (used by reducers for the external-sort decision).
+    ``path`` is the mapper output directory the sidecar lives under.
     """
-    meta_path = fs._strip_protocol(_scatter_meta_path(path))
-    meta = _sidecar_decoder().decode(fs.cat_file(meta_path))
-    files = meta.get("files", [])
-    if not files:
-        return None
-    return _SidecarSlice(
-        path=path,
-        chunk_paths=[str(f) for f in files],
-        avg_item_bytes=float(meta.get("avg_item_bytes", 0)),
-        target_bytes=int(meta.get("shard_bytes", {}).get(str(target_shard), 0)),
-    )
 
+    path: str
+    files: list[str]
+    avg_item_bytes: float
+    shard_bytes: dict[int, int]
 
-def _read_sidecar_slices_parallel(scatter_paths: list[str], target_shard: int) -> list[_SidecarSlice]:
-    """Read every sidecar concurrently and return slices in input order.
+    _encoder: ClassVar[msgspec.msgpack.Encoder] = msgspec.msgpack.Encoder()
+    _decoder: ClassVar[msgspec.msgpack.Decoder] = msgspec.msgpack.Decoder()
+    _files_field: ClassVar[str] = "files"
+    _avg_item_bytes_field: ClassVar[str] = "avg_item_bytes"
+    _shard_bytes_field: ClassVar[str] = "shard_bytes"
 
-    Empty sidecars (no files written) are dropped from the result. All sidecars
-    of one scatter live under the same root, so one filesystem resolved here
-    serves the whole pool.
-    """
-    if not scatter_paths:
-        return []
-    ordered: list[_SidecarSlice | None] = [None] * len(scatter_paths)
-    fs, _ = url_to_fs(_scatter_meta_path(scatter_paths[0]))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
-        futures = {pool.submit(_read_sidecar_slice, fs, p, target_shard): i for i, p in enumerate(scatter_paths)}
-        for fut in concurrent.futures.as_completed(futures):
-            idx = futures[fut]
-            ordered[idx] = fut.result()
-    return [s for s in ordered if s is not None]
+    @staticmethod
+    def meta_path(data_path: str) -> str:
+        return f"{data_path}{_SCATTER_METADATA_FILENAME}"
+
+    def target_bytes(self, target_shard: int) -> int:
+        return self.shard_bytes.get(target_shard, 0)
+
+    def write(self) -> None:
+        """Serialize this sidecar to ``path/metadata.msgpack``."""
+        meta_path = self.meta_path(self.path)
+        payload = self._encoder.encode(
+            {
+                self._files_field: self.files,
+                self._avg_item_bytes_field: self.avg_item_bytes,
+                self._shard_bytes_field: {str(k): v for k, v in self.shard_bytes.items()},
+            }
+        )
+        with log_time(f"Writing scatter meta for {self.path} to {meta_path}", level=logging.DEBUG):
+            StoragePath(meta_path).write_bytes(payload)
+
+    @classmethod
+    def read(cls, fs: _SidecarFilesystem, data_path: str) -> "_Sidecar | None":
+        """Load one non-empty sidecar, returning ``None`` for an empty writer."""
+        meta_path = fs._strip_protocol(cls.meta_path(data_path))
+        # Avoid buffered-file overhead for these small payloads.
+        data = cls._decoder.decode(fs.cat_file(meta_path))
+        files = data.get(cls._files_field, [])
+        if not files:
+            return None
+        raw_shard_bytes = data.get(cls._shard_bytes_field, {})
+        return cls(
+            path=data_path,
+            files=[str(f) for f in files],
+            avg_item_bytes=float(data.get(cls._avg_item_bytes_field, 0)),
+            shard_bytes={int(k): int(v) for k, v in raw_shard_bytes.items()},
+        )
+
+    @classmethod
+    def read_all(cls, scatter_paths: list[str]) -> list["_Sidecar"]:
+        """Read every non-empty sidecar concurrently in input order."""
+        if not scatter_paths:
+            return []
+        ordered: list[_Sidecar | None] = [None] * len(scatter_paths)
+        # Resolve before creating the pool so worker threads share one client.
+        fs, _ = url_to_fs(cls.meta_path(scatter_paths[0]))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
+            futures = {pool.submit(cls.read, fs, p): i for i, p in enumerate(scatter_paths)}
+            for fut in concurrent.futures.as_completed(futures):
+                ordered[futures[fut]] = fut.result()
+        return [s for s in ordered if s is not None]
 
 
 def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
@@ -393,11 +383,11 @@ class ScatterReader:
             f"Building ScatterReader for target shard {target_shard} "
             f"from {len(scatter_paths)} sidecars (concurrency={_SIDECAR_READ_CONCURRENCY})"
         ):
-            for slice_ in _read_sidecar_slices_parallel(scatter_paths, target_shard):
-                files.append((slice_.path, slice_.chunk_paths))
-                weighted_bytes += slice_.avg_item_bytes * len(slice_.chunk_paths)
-                total_chunks += len(slice_.chunk_paths)
-                shard_payload_bytes += slice_.target_bytes
+            for sidecar in _Sidecar.read_all(scatter_paths):
+                files.append((sidecar.path, sidecar.files))
+                weighted_bytes += sidecar.avg_item_bytes * len(sidecar.files)
+                total_chunks += len(sidecar.files)
+                shard_payload_bytes += sidecar.target_bytes(target_shard)
 
         avg_item_bytes = weighted_bytes / total_chunks if total_chunks > 0 else 0.0
 
@@ -678,14 +668,13 @@ class ScatterWriter:
             self._avg_item_bytes,
         )
 
-        sidecar: dict = {
-            "files": list(self._chunk_paths),
-            "avg_item_bytes": round(self._avg_item_bytes, 1),
-            "shard_bytes": {str(k): v for k, v in self._shard_bytes.items()},
-        }
-
         with log_time(f"Writing scatter meta for {self._data_path}"):
-            _write_scatter_meta(self._data_path, sidecar)
+            _Sidecar(
+                path=self._data_path,
+                files=list(self._chunk_paths),
+                avg_item_bytes=round(self._avg_item_bytes, 1),
+                shard_bytes=dict(self._shard_bytes),
+            ).write()
 
         self._result = ListShard(refs=[MemChunk(items=[self._data_path])])
         return self._result

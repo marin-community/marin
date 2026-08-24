@@ -1,6 +1,6 @@
 ---
 name: write-design-doc
-description: Produce a 1-page design proposal when the user explicitly asks for one. Do not use to answer or evaluate an idea inline.
+description: Create Marin design-doc artifacts only when explicitly asked for a design doc, one-pager, or proposal; do not use for inline architecture discussion.
 ---
 
 # Skill: Design Doc Workflow

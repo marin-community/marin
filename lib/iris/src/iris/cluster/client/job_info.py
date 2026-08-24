@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from google.protobuf import json_format
 
 from iris.cluster.constraints import Constraint
-from iris.cluster.runtime.env import IRIS_ATTEMPT_UID_ENV
+from iris.cluster.runtime.env import IRIS_ATTEMPT_UID_ENV, IRIS_WORKER_REGION_ENV
 from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import job_pb2
 
@@ -54,6 +54,9 @@ class JobInfo:
 
     constraints: list[Constraint] = field(default_factory=list)
     """Explicit job constraints for child job inheritance."""
+
+    worker_region: str | None = None
+    """Physical region of the worker running this task."""
 
     @property
     def task_attempt(self) -> TaskAttempt:
@@ -120,6 +123,7 @@ def get_job_info() -> JobInfo | None:
             ports=_parse_ports_from_env(),
             env=job_env,
             constraints=constraints,
+            worker_region=os.environ.get(IRIS_WORKER_REGION_ENV),
         )
         _job_info.set(info)
         return info

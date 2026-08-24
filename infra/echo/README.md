@@ -112,8 +112,12 @@ with new result snapshots so other domain cutoffs can use stable data. A search 
 return fewer than the requested limit and returns at most 24 results. `grep` remains a
 case-insensitive literal substring scan over activity, newest first.
 
-CLI search prints one table with an execution-specific grading key, source ID, title,
-and source-derived detail. Grading keys use `<domain>:<numeric-key>` and remain attached
+CLI search prints one result block with an execution-specific grading key, title,
+source ID, and one primary source excerpt of at most 240 characters. File results use
+their highest-ranked `path:line` reference, wiki results use `use_when`, and activity
+results use the matching source excerpt. The detail line is independent of terminal
+width, so long source IDs do not consume its display budget. Grading keys use
+`<domain>:<numeric-key>` and remain attached
 to the stored row even when a later corpus sync replaces an activity chunk ID.
 Run `uv run infra/echo/cli.py get <domain:id>` to fetch the full indexed wiki body,
 repository file, pull request or issue chunk, or Discord message and its canonical URL.
@@ -344,18 +348,16 @@ minutes and then advances one globally serialized repository turn. Database migr
 `infra/echo/migrations/` create tables and apply PostgreSQL grants.
 `infra/echo/migrate.py` records applied migrations in `schema_migrations`.
 
-Preview or deploy from the service directory:
+Deploy the production stack from the repository root through the shared command.
+Pulumi previews the update before asking for confirmation:
 
 ```bash
-cd infra/echo
-pulumi stack select marin-echo
-pulumi preview
-pulumi up
+uv run --all-packages --extra deploy marin-deploy echo rollout
 ```
 
-`pulumi up` applies pending migrations from the operator's machine. It requires ADC
+The rollout applies pending migrations from the operator's machine. It requires ADC
 with access to `cloudsql-pulumi-admin-password`. When a release adds tables queried by
-new API or sync images, run `infra/echo/migrate.py` before `pulumi up` to avoid a
+new API or sync images, run `infra/echo/migrate.py` before the rollout to avoid a
 missing-table window. The first repository build fetches a GitHub archive and embeds
 all eligible files in resumable ten-file batches; later hourly runs normally process
 only changed paths. Review database grant changes before deploying them.

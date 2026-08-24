@@ -22,6 +22,10 @@ def json_response(value, headers=None):
 
 
 def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys):
+    reference_text = (
+        'raise SchedulerError("FAILED_PRECONDITION: pending queue cannot satisfy the requested TPU topology '
+        'and priority band")'
+    )
     remote_result = {
         "key": "file:731",
         "id": "file:marin-community/marin@main:lib/iris/src/iris/scheduler.py",
@@ -36,7 +40,7 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
         "references": [
             {
                 "line": 42,
-                "text": "raise FAILED_PRECONDITION",
+                "text": reference_text,
                 "url": "https://github.com/marin-community/marin/blob/abc1234/" "lib/iris/src/iris/scheduler.py#L42",
             }
         ],
@@ -83,7 +87,7 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
     assert "1 result in 1.23s" in output
     assert cli.SEARCH_DETAIL_INSTRUCTION in output
     assert "file:731" in output
-    assert "L42 raise FAILED_PRECONDITION" in output
+    assert f"L42 {reference_text}" in output
     assert output.count("File scope: marin-community/marin") == 1
 
 

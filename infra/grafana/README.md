@@ -34,6 +34,9 @@ GET /finelog/marin/fleet_health                  main query probe + k8s mirror r
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
 GET /finelog/marin/alerts/training_stalls        active jobs + stalled-progress value(0|1)
 GET /finelog/marin/alerts/loss_spikes            active hero runs + loss-spike value(0|1)
+GET /finelog/marin/alerts/training_telemetry     watched hero runs + silent-telemetry value(0|1)
+GET /finelog/marin/alerts/training_optimizer     watched hero runs + optimizer-fault value(0|1)
+GET /finelog/marin/alerts/training_health        watched hero runs + degraded-signal value(0|1)
 GET /finelog/marin/alerts/zephyr_stalls          active pipelines + stalled-progress value(0|1)
 GET /iris/{cluster}/jobs | workers | health      live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
@@ -41,6 +44,7 @@ GET /github/ferries | builds | nightlies          GitHub REST / GraphQL
 GET /wandb/report/{train-loss,paloma-macro-loss,mfu}
                                                     public report runset and sampled history
 GET /wandb/history?run=&metric=&project=          one run's whole logged history for one metric
+GET /wandb/activity?run=&project=                 one run's active, wall, and downtime seconds
 GET /k8s/control_plane | crashloops | pending     CW control-plane state, all clusters
 GET /k8s/termination_candidates | kueue | events | health
                                                     ... one response, `cluster` column
@@ -97,13 +101,19 @@ and serves one linked, duration-aware row per lane and UTC day. The internal pan
 groups those rows into the compact trailing-week matrix.
 
 W&B: the bridge reads public W&B anonymously, so Grafana never needs a W&B key. It
-serves two shapes. `/wandb/report/{chart}` follows the runset pinned in the public
+serves three shapes. `/wandb/report/{chart}` follows the runset pinned in the public
 hero-training report spec and samples train cross-entropy, Paloma macro loss, and MFU
 against cumulative training tokens. `/wandb/history` samples one metric across one
 named run, keyed on W&B's own `_step`, which is the Levanter step because Levanter
-logs through `wandb.log(..., step=<training step>)`. Without an explicit `project`
-the bridge searches `RUN_HISTORY_PROJECTS` in order and fails with a 404 when no
-project holds the run.
+logs through `wandb.log(..., step=<training step>)`. `/wandb/activity` reads the same
+run's clocks out of `summaryMetrics`, one small request rather than a history
+download: `_runtime` is the seconds the training process was alive, which
+`resume="allow"` restores at every restart, so it is the run's active execution time
+across every attempt. Wall time runs from the run's creation to its last heartbeat,
+which makes the remainder downtime. `_runtime` advances only when an attempt logs, so
+the total holds still while a restart initializes rather than counting the wait as
+work. Without an explicit `project` the bridge searches `RUN_HISTORY_PROJECTS` in
+order and fails with a 404 when no project holds the run.
 
 k8s: the bridge polls the three production CoreWeave clusters' public CKS API servers with plain
 httpx GETs (paginated LISTs, bounded timeouts, one 429 retry) and a single org-wide CW
@@ -174,6 +184,8 @@ is the exception — it returns `reachable=false` so the panel can render the ou
 ```
 src/server.py          the bridge routes (Starlette): finelog SQL, Iris, GitHub, k8s
 src/finelog_source.py  finelog query over its internal IP (LogClient)
+src/hero_runs.py       hero-run enrollment from Iris state and Levanter telemetry
+src/hero_health.py     run-health signal scan and the telemetry/optimizer/health projections
 src/iris_source.py     live controller RPCs: jobs, workers, health, federation peers, ad-hoc query
 src/github_source.py   ferry runs and CI build rollup, precomputed
 src/wandb_source.py    public W&B report runset, and whole-run history for one metric
@@ -281,7 +293,30 @@ single-value selector puts the newest hero run first. It uses `run_id` across
 clusters. The status strip uses one 15-minute `telemetry_v1` query for ten fields.
 It includes the two hero alert inputs: time since the last completed step and
 train loss. It also includes step time, throughput, schedule progress, and token
-count.
+count. Active execution and active share come from `/wandb/activity`, which makes
+the strip a mixed-datasource panel. Those two totals describe the whole run, and the
+eviction that keeps the step-axis loss panel on W&B bounds any finelog answer to the
+retained window. On 2026-08-24 `hero-12d8b6f0-dee637` read 93.5 hours active against
+105.0 hours of wall clock, an 89 percent active share, while finelog retained its
+last three days. A mixed panel names each frame after its refId and prefixes every
+field label with it, which is why the strip's defaults set a display name of
+`${__field.name}`: a field with a display name of its own keeps the prefix off, while
+a `renameByRegex` transformation cannot, because it reads the raw field name and the
+prefix is added later. The strip stands ten grid rows tall because the stat layout
+picks its tile grid from the aspect ratio, and twelve tiles in a shorter panel land in
+one unreadable row.
+
+The Attempts table carries the recent detail behind that total: one row per Iris
+execution over a fixed seven-day window, newest first, running or not, so the top row
+stays the last attempt after that attempt fails. Its job cell links to the attempt in
+the Iris dashboard. That link has to come from finelog, because W&B records neither
+the cluster nor the job root. It interpolates the job cell itself plus a cluster
+column the table hides rather than draws. Leave the job root unencoded in SQL:
+Grafana percent-encodes an interpolated data-link value, which is what makes the root
+one path segment for the Iris route, and a pre-encoded path arrives there as a
+literal `%2F` that `ListTasks` rejects. Hide the cluster column with
+`custom.hideFrom.viz`: Grafana 13's table ignores the legacy `custom.hidden`, and a
+transformation that dropped the column would take half the link with it.
 
 The execution-health strip shows the current attempt age, Iris task counts,
 task-state age, and retained retry events. Initialization age appears only before
@@ -317,8 +352,8 @@ redeploy.
 Critical rules notify operators immediately: an unreachable cluster or
 federation peer, a crash-looping watched component, an admission webhook with no ready endpoints, a
 dead production Iris controller, an unhealthy finelog hub or mirror, CoreWeave
-storage above 80 percent of quota, or stalled training or a loss spike on an
-enrolled hero run.
+storage above 80 percent of quota, or stalled training, a loss spike, silent
+telemetry, or an unstable optimizer on an enrolled hero run.
 Warning rules remain in Grafana's home alert list without sending email, Slack,
 or Loom notifications: a degraded component, a GPU pod that stays node-bound and
 nonterminal without finalizers for five minutes after the bridge's two-minute
@@ -340,14 +375,37 @@ window to its floor is what separates a divergence from the single excursion
 skip-step already absorbs. It takes the `notification=hero-run` route as well: a
 hero run diverging unwatched costs more than a false page, which a silence
 answers. Both hero rules share one enrolment query per cache interval.
+
+Three more rules carry the rest of the hero on-call policy, the checks the
+standalone Pushover monitor applies — see
+[the run-health contract](../../docs/ops/hero-run-health-alerts.md).
+`TrainingTelemetryGone` and `TrainingOptimizerUnstable` page on the same
+`notification=hero-run` route: telemetry silent for ten minutes, labelled
+`telemetry_gone` while Iris still counts the tasks and `run_down` when it no
+longer does, a loss floor a whole unit above its trailing floor that the
+six-sigma band did not catch, a gradient norm above 2, or three skipped steps in
+fifteen minutes. `TrainingRunHealthDegraded` takes the announce-only
+`notification=slack` exception for token drops, router collapse, a throughput or
+MFU floor, a worse evaluation, a stale `iris.task_state` row, and retries.
+
+These three watch a wider enrolment: a run that either the Iris rollup or fresh
+Levanter `phase` telemetry reports. The stall and loss rules enroll from
+`iris.task_state` alone, so a break in that path stops them watching a training
+run with no signal that it happened, which is what `iris_state_stale` reports.
+One `telemetry_v1` scan per cache interval feeds all three, reduced over the
+newest execution process zero reports so a retry cannot mix two attempts; the
+loss-jump check filters its two windows to that execution for the same reason.
+`TrainingProgressStalled` labels a silent run `telemetry_gone` and emits a zero
+rather than firing beside `TrainingTelemetryGone`, so one outage stays one page.
 A warning-only Zephyr rule reads fresh
 `progress_time_seconds` rows from `service=zephyr` telemetry. It waits 45 minutes after a
 stage start or shard completion, then remains pending for five minutes. The
 execution ID separates concurrent pipelines under one root job. The stuck-pod
 rule groups by node and links the cordon-first
 recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
-The CoreWeave storage-telemetry freshness warning carries the explicit
-`notification=slack` exception, so it announces without launching an ops agent.
+The CoreWeave storage-telemetry freshness warning and `TrainingRunHealthDegraded`
+carry the explicit `notification=slack` exception, so they announce without
+launching an ops agent.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
 dashboard panels rather than alert rules because they have expected benign
 causes. `severity=critical` routes to `ops-critical` (email
@@ -544,23 +602,19 @@ and its image build come from the reusable `iac.gcp.cloud_run.CloudRunService` c
 and shares `infra/pulumi`'s state backend.
 
 ```bash
-uv sync --all-packages --extra deploy                     # once: iac + Pulumi providers on the venv (pulumi lives behind marin-iac[deploy])
-gcloud auth configure-docker us-central1-docker.pkg.dev   # once: let buildx push to Artifact Registry
+gcloud auth configure-docker us-central1-docker.pkg.dev  # once: let buildx push to Artifact Registry
+uv run --all-packages --extra deploy marin-deploy grafana rollout
+```
 
-cd infra/grafana
-# The grafana.oa.dev DNS record lives in the oa.dev Cloudflare zone; the provider
-# reads this token from the environment.
-export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
-  --secret=cloudflare-oa-dns-token --project=hai-gcp-models)"
-pulumi stack select marin-grafana
+The deploy command loads the Cloudflare provider token from Secret Manager and
+Pulumi previews the update before asking for confirmation.
 
-# Extra viewers beyond the shared Cloud Run IAP baseline — a bare email, a *@domain wildcard,
-# or a qualified IAM member. Editing this and re-running updates only the grant, never the
-# service.
-pulumi config set --path 'viewers[0]' you@example.com
+Extra viewers beyond the shared Cloud Run IAP baseline are durable stack config. A
+viewer may be a bare email, a `*@domain` wildcard, or a qualified IAM member. Change
+the config before deploying when a grant needs to be updated:
 
-pulumi preview                                            # plan; then, once it looks right:
-pulumi up
+```bash
+pulumi -C infra/grafana config set --stack marin-grafana --path 'viewers[0]' you@example.com
 ```
 
 Production reads the `grafana-alerts` URL and profile from the `marin-loom`
@@ -572,7 +626,7 @@ enable the integration and deploy Grafana again.
 The stack uses the shared `marin-iac-key` KMS secrets provider. The operator needs
 `roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key; no passphrase is used.
 
-`pulumi up` builds the Dockerfile with buildx, pushes it digest-pinned to Artifact
+The rollout builds the Dockerfile with buildx, pushes it digest-pinned to Artifact
 Registry, and rolls the service to that digest. `min` and `max` instances are both 1: one
 warm instance serves this internal dashboard, min 1 keeps alert evaluation warm and first
 paint off a cold start, and max 1 avoids duplicate alert notifications from parallel
@@ -586,7 +640,7 @@ under `/cloudsql`, and hands the socket directory to `entrypoint.sh` as
 settings reject the colons in a connection name). `GF_DATABASE_PASSWORD` comes from the
 `cloudsql-grafana-password` secret. Prerequisite: bring up the `marin-cloudsql` stack and
 create the `grafana` SQL user + its secret version (see `infra/cloudsql/README.md`) before
-`pulumi up` here, or Grafana fails to reach its database.
+the rollout, or Grafana fails to reach its database.
 
 IAP is the outer gate. Its `X-Goog-Authenticated-User-Email` header becomes a Grafana
 auth-proxy account. The container's nginx listener adds a fixed `Editor` role for those

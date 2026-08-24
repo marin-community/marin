@@ -39,17 +39,19 @@ DISPATCHED_TASK_STATES: frozenset[int] = frozenset(
 
 
 class RunningTaskEntry(NamedTuple):
-    """Task ID and attempt ID pair captured at snapshot time.
+    """Active task attempt captured at snapshot time.
 
     ``attempt_uid`` is the incarnation key the K8s provider needs to rebuild the
     pod name (which embeds it): a resubmit reuses (task_id, attempt_id) but mints
     a new uid, so poll must target this attempt's pod, not a stale one. Empty off
-    the direct-dispatch path.
+    the direct-dispatch path. ``state`` lets a provider preserve the controller's
+    current state when an observation carries no actionable phase.
     """
 
     task_id: JobName
     attempt_id: int
     attempt_uid: str = ""
+    state: int = job_pb2.TASK_STATE_RUNNING
 
 
 def task_is_finished(

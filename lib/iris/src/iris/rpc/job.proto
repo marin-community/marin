@@ -612,7 +612,9 @@ enum ExistingJobPolicy {
 // dispatch paths only ever compare real bands.
 enum PriorityBand {
   PRIORITY_BAND_INHERIT = 0;      // resolved at LaunchJob: parent's band, else INTERACTIVE
-  PRIORITY_BAND_PRODUCTION = 1;   // admin-only, never preempted
+  PRIORITY_BAND_PRODUCTION = 1;   // admin-only critical work; below SYSTEM
+  // Appended at value 4 to preserve the published PRODUCTION/INTERACTIVE/BATCH wire values.
+  PRIORITY_BAND_SYSTEM = 4;       // admin-only Iris, Finelog, and hero work
   PRIORITY_BAND_INTERACTIVE = 2;  // normal work, default
   PRIORITY_BAND_BATCH = 3;        // opportunistic, preemptible
 }

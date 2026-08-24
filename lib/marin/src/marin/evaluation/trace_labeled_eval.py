@@ -40,8 +40,6 @@ from marin.training.run_environment import extras_for_resources
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
-DEFAULT_TRACE_LABELED_EVAL_WANDB_PROJECT = "marin-analysis"
-DEFAULT_TRACE_LABELED_EVAL_WANDB_TAGS = ("trace_labeled_eval",)
 CORRECT_OUTCOME_LABEL = "CORRECT"
 INCORRECT_OUTCOME_LABEL = "INCORRECT"
 DEFAULT_OUTCOME_JUDGE_PROMPT = (
