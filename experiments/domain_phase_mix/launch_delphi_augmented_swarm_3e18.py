@@ -229,6 +229,24 @@ def _candidate_for_budget(*, scaling_fits: dict[str, ScalingFit]):
     )
 
 
+def _candidate_for_run_spec(*, scaling_fits: dict[str, ScalingFit], run_spec: DelphiSwarmRunSpec):
+    """Resolve the fixed architecture with a token-aware optimizer for one horizon."""
+    candidate = _candidate_for_budget(scaling_fits=scaling_fits)
+    expected_tokens = run_spec.train_steps * run_spec.batch_size * SEQ_LEN_DELPHI
+    if expected_tokens != run_spec.realized_train_tokens:
+        raise ValueError(f"Run-spec token accounting changed: {expected_tokens} != {run_spec.realized_train_tokens}")
+    optimizer_config = completed_adamh_heuristic.build_optimizer_config(
+        run_spec.batch_size,
+        run_spec.realized_train_tokens,
+    )
+    return replace(
+        candidate,
+        batch_size=run_spec.batch_size,
+        train_steps=run_spec.train_steps,
+        optimizer_config=optimizer_config,
+    )
+
+
 def _tensor_parallel_size(hidden_dim: int, tpu_type: str) -> int:
     chips = int(tpu_type.split("-")[1]) // 2
     tensor_parallel_size = 1

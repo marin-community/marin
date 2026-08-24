@@ -1,0 +1,111 @@
+{
+  "candidate_pool_size": 100193,
+  "candidate_prefix_ids": [
+    "shared_bounded_ensemble_kl0p05",
+    "shared_bounded_ensemble_kl0p2",
+    "shared_bounded_ensemble_kl0p5",
+    "observed_cap10_best",
+    "proportional_control"
+  ],
+  "candidate_prefix_weights_sha256": "fef07d4188ef05f4df4a43d1eda6a12f7d2daf69a1ae1eb777863fd20db732b6",
+  "continuation_weights_sha256": "3b3fba7f7905ba9788cd9a94936eb4f86561b80cb64cd8234a08d2acd70f126e",
+  "control_continuations": 3,
+  "design_seed": 20260824,
+  "dirichlet_concentrations": [
+    500.0,
+    100.0,
+    20.0,
+    5.0,
+    1.0
+  ],
+  "dirichlet_draws_per_concentration": 20000,
+  "endpoint_labels_used": false,
+  "exposure_bin_edges": [
+    0.0,
+    5.0,
+    15.0,
+    30.0,
+    45.0,
+    62.28165425173926
+  ],
+  "fit_continuations": 50,
+  "fit_exposure_bin_counts": {
+    "[0,5)": 10,
+    "[15,30)": 10,
+    "[30,45)": 10,
+    "[45,62.2817)": 10,
+    "[5,15)": 10
+  },
+  "fit_max_phase_1_epoch_range": [
+    1.52582716026895,
+    59.30072699352576
+  ],
+  "fit_max_total_epoch_range": [
+    9.405571234274749,
+    68.7062982278005
+  ],
+  "fit_per_exposure_bin": 10,
+  "fit_tv_bin_counts": {
+    "[0,0.25)": 6,
+    "[0.25,0.5)": 14,
+    "[0.5,0.75)": 15,
+    "[0.75,1)": 15
+  },
+  "fit_tv_to_proportional_quantiles": {
+    "0.0": 0.22900390625,
+    "0.25": 0.481201171875,
+    "0.5": 0.724853515625,
+    "0.75": 0.936279296875,
+    "1.0": 0.98828125
+  },
+  "historical_phase_1_epoch_cap": 62.28165425173926,
+  "historical_total_epoch_cap": 255.82463494607435,
+  "incumbent_row_id": "run_00125",
+  "minimum_fit_direction_distance": 0.2557511554737945,
+  "mixture_block_size": 2048,
+  "rejection_counts": {
+    "duplicate_or_control": 15,
+    "phase_1_cap": 72,
+    "total_cap": 0
+  },
+  "selection_geometry": "exposure-by-TV stratification, then round-robin maximin over unit sqrt(c1 * w1) directions",
+  "tv_bin_edges": [
+    0.0,
+    0.25,
+    0.5,
+    0.75,
+    1.000001
+  ],
+  "tv_quotas_by_exposure_bin": [
+    [
+      2,
+      2,
+      3,
+      3
+    ],
+    [
+      2,
+      2,
+      3,
+      3
+    ],
+    [
+      2,
+      2,
+      3,
+      3
+    ],
+    [
+      0,
+      4,
+      3,
+      3
+    ],
+    [
+      0,
+      4,
+      3,
+      3
+    ]
+  ]
+}
