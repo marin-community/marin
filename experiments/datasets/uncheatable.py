@@ -15,16 +15,24 @@ UNCHEATABLE_EVAL_DATASET_ID = "Jellyfish042/UncheatableEval-2026-07"
 UNCHEATABLE_EVAL_REVISION = "65889535d56aa38d448ce7e07b08e6e36c031545"
 UNCHEATABLE_EVAL_VERSION = "2026.08.24"
 
-# Keep the existing seven metric families. The arXiv computer-science key retains
-# its metric name although upstream shortened the category to ``arxiv_cs``.
+# The arXiv computer-science key retains its metric name although upstream
+# shortened the category to ``arxiv_cs``.
 UNCHEATABLE_SUBSETS = {
     "wikipedia_english": "wikipedia_english",
+    "wikipedia_nonenglish": "wikipedia_nonenglish",
     "github_python": "github_python",
     "github_cpp": "github_cpp",
+    "github_javascript": "github_javascript",
+    "github_markdown": "github_markdown",
+    "github_other": "github_other",
     "bbc_news": "bbc_news",
     "arxiv_physics": "arxiv_physics",
     "arxiv_computer_science": "arxiv_cs",
+    "arxiv_math": "arxiv_math",
+    "arxiv_other": "arxiv_other",
+    "biorxiv_all": "biorxiv_all",
     "ao3_english": "ao3_english",
+    "ao3_nonenglish": "ao3_nonenglish",
 }
 
 
