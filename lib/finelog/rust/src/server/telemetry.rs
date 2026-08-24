@@ -673,9 +673,9 @@ fn prepare_batch(idempotency_key: &str, body: &[u8]) -> Result<PreparedBatch, Ap
 
 fn validate_telemetry_namespace(namespace: &str) -> Result<(), ApiError> {
     if telemetry_max_bytes(namespace).is_none() {
-        return Err(ApiError::bad_request(format!(
-            "namespace is not present in the telemetry storage policy"
-        )));
+        return Err(ApiError::bad_request(
+            "namespace is not present in the telemetry storage policy".to_string(),
+        ));
     }
     Ok(())
 }
