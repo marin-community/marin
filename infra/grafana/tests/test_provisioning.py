@@ -641,9 +641,7 @@ def test_cluster_column_is_only_referenced_quoted_or_as_an_alias():
     bare = re.compile(r'(?<![\w"])cluster(?![\w"])')
     for name, dashboard in _stitched_dashboards().items():
         for sql in _panel_sql(dashboard):
-            # Only an identifier can reach the parser as the keyword. A string literal --
-            # the `?cluster=` a panel concatenates into a link URL -- never does.
-            interpolated = re.sub(r"'[^']*'", "''", re.sub(r"\$\{[^}]*\}", "?", sql))
+            interpolated = re.sub(r"\$\{[^}]*\}", "?", sql)
             for match in bare.finditer(interpolated):
                 preceding = interpolated[: match.start()].rstrip()
                 assert preceding.endswith(" AS"), f"{name}: unquoted `cluster` in {sql[:160]!r}"
@@ -956,12 +954,14 @@ def test_training_attempts_table_links_the_newest_attempt_to_iris():
         for override in panel["fieldConfig"]["overrides"]
     }
 
-    # The link reads the URL out of a column the table keeps but does not draw; a
-    # transformation that dropped it would take the link with it.
+    # Grafana percent-encodes an interpolated value, so the job root goes in raw and
+    # comes out as the single path segment the Iris route expects. The cluster rides in
+    # a column the table keeps but does not draw; a transformation that dropped it would
+    # take half the link with it.
     (link,) = overrides["job"]["links"]
-    assert link["url"] == "${__data.fields.iris_url}"
-    assert overrides["iris_url"]["custom.hideFrom"]["viz"] is True
-    assert "iris_url" in {column["text"] for column in target["columns"]}
+    assert link["url"] == "https://iris.oa.dev/#/job/${__data.fields.job}?cluster=${__data.fields.iris_cluster}"
+    assert overrides["iris_cluster"]["custom.hideFrom"]["viz"] is True
+    assert "iris_cluster" in {column["text"] for column in target["columns"]}
 
     database = duckdb.connect()
     database.execute(
@@ -998,24 +998,12 @@ def test_training_attempts_table_links_the_newest_attempt_to_iris():
     sql = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
     sql = sql.replace("${run:sqlstring}", "'hero-run'").replace("now()", "TIMESTAMP '2026-08-21 12:00:00+00:00'")
 
-    # Newest first, so the top row is the last attempt whether or not it still runs. A
-    # peer cluster needs the `?cluster=` the Iris dashboard filters its backends by; the
-    # hub, which finelog leaves unlabeled, does not.
+    # Newest first, so the top row is the last attempt whether or not it still runs. The
+    # Iris dashboard filters backends by peer id and reserves `local` for its own, which
+    # is the hub finelog leaves unlabeled.
     assert database.execute(sql).fetchall() == [
-        (
-            at - 2 * hour,
-            "marin",
-            "/u/hero-run-coord-2/train",
-            3_600.0,
-            "https://iris.oa.dev/#/job/%2Fu%2Fhero-run-coord-2%2Ftrain",
-        ),
-        (
-            at - 6 * hour,
-            "cw-a",
-            "/u/hero-run-coord/train",
-            7_200.0,
-            "https://iris.oa.dev/#/job/%2Fu%2Fhero-run-coord%2Ftrain?cluster=cw-a",
-        ),
+        (at - 2 * hour, "marin", "/u/hero-run-coord-2/train", 3_600.0, "local"),
+        (at - 6 * hour, "cw-a", "/u/hero-run-coord/train", 7_200.0, "cw-a"),
     ]
 
 

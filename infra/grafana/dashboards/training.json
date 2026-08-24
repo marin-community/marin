@@ -166,13 +166,14 @@
         "uid": "-- Mixed --"
       },
       "gridPos": {
-        "h": 6,
+        "h": 10,
         "w": 24,
         "x": 0,
         "y": 0
       },
       "fieldConfig": {
         "defaults": {
+          "displayName": "${__field.name}",
           "unit": "short",
           "thresholds": {
             "mode": "absolute",
@@ -520,7 +521,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 6
+        "y": 10
       },
       "fieldConfig": {
         "defaults": {
@@ -607,7 +608,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 6
+        "y": 10
       },
       "fieldConfig": {
         "defaults": {
@@ -698,7 +699,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 15
+        "y": 19
       },
       "fieldConfig": {
         "defaults": {
@@ -839,7 +840,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 15
+        "y": 19
       },
       "fieldConfig": {
         "defaults": {
@@ -958,7 +959,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 24
+        "y": 28
       },
       "fieldConfig": {
         "defaults": {
@@ -1061,7 +1062,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 24
+        "y": 28
       },
       "fieldConfig": {
         "defaults": {
@@ -1164,7 +1165,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 32
+        "y": 36
       },
       "fieldConfig": {
         "defaults": {
@@ -1263,7 +1264,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 32
+        "y": 36
       },
       "fieldConfig": {
         "defaults": {
@@ -1349,7 +1350,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 40
+        "y": 44
       },
       "fieldConfig": {
         "defaults": {
@@ -1466,7 +1467,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 40
+        "y": 44
       },
       "timeFrom": "90m",
       "fieldConfig": {
@@ -1708,132 +1709,6 @@
       ]
     },
     {
-      "id": 15,
-      "type": "table",
-      "title": "Attempts",
-      "description": "One row for each Iris execution of this run in the last seven days, newest first, whether it is running or not: the top row stays the last attempt after that attempt fails. Active is the time from the first phase sample of the attempt to the last one, at process index zero. This is the recent detail behind the whole-run totals in the status strip, which W&B supplies and finelog eviction cannot reach. Select a job to open that attempt in the Iris dashboard.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 24,
-        "x": 0,
-        "y": 48
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "filterable": false
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "active"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "s"
-              },
-              {
-                "id": "decimals",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "job"
-            },
-            "properties": [
-              {
-                "id": "links",
-                "value": [
-                  {
-                    "targetBlank": true,
-                    "title": "Open in Iris",
-                    "url": "${__data.fields.iris_url}"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "iris_url"
-            },
-            "properties": [
-              {
-                "id": "custom.hideFrom",
-                "value": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": true
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/query",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "sql",
-                "value": "WITH attempts AS (SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS origin_cluster, job_id, execution_uid, MIN(timestamp_ms) AS started_ms, MAX(timestamp_ms) AS last_ms FROM \"telemetry_v1\" WHERE service = 'levanter' AND name = 'phase' AND process_index = '0' AND run_id IN (${run:sqlstring}) AND job_id IS NOT NULL AND execution_uid IS NOT NULL AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '7 days') * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) GROUP BY 1, 2, 3) SELECT started_ms, origin_cluster AS \"cluster\", job_id AS job, (last_ms - started_ms) / 1000.0 AS active_seconds, CONCAT('https://iris.oa.dev/#/job/', REPLACE(job_id, '/', '%2F'), CASE WHEN origin_cluster = 'marin' THEN '' ELSE CONCAT('?cluster=', origin_cluster) END) AS iris_url FROM attempts ORDER BY started_ms DESC"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "started_ms",
-              "text": "started",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "cluster",
-              "text": "cluster",
-              "type": "string"
-            },
-            {
-              "selector": "job",
-              "text": "job",
-              "type": "string"
-            },
-            {
-              "selector": "active_seconds",
-              "text": "active",
-              "type": "number"
-            },
-            {
-              "selector": "iris_url",
-              "text": "iris_url",
-              "type": "string"
-            }
-          ]
-        }
-      ]
-    },
-    {
       "id": 12,
       "type": "timeseries",
       "title": "Token drops",
@@ -1846,7 +1721,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 55
+        "y": 52
       },
       "fieldConfig": {
         "defaults": {
@@ -1968,7 +1843,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 55
+        "y": 52
       },
       "fieldConfig": {
         "defaults": {
@@ -2215,7 +2090,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 63
+        "y": 60
       },
       "fieldConfig": {
         "defaults": {
@@ -2295,6 +2170,132 @@
               "selector": "router_bias_norm",
               "text": "router bias norm",
               "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "table",
+      "title": "Attempts",
+      "description": "One row for each Iris execution of this run in the last seven days, newest first, whether it is running or not: the top row stays the last attempt after that attempt fails. Active is the time from the first phase sample of the attempt to the last one, at process index zero. This is the recent detail behind the whole-run totals in the status strip, which W&B supplies and finelog eviction cannot reach. Select a job to open that attempt in the Iris dashboard.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 68
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "active"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "job"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "Open in Iris",
+                    "url": "https://iris.oa.dev/#/job/${__data.fields.job}?cluster=${__data.fields.iris_cluster}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "iris_cluster"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": true
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH attempts AS (SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS origin_cluster, job_id, execution_uid, MIN(timestamp_ms) AS started_ms, MAX(timestamp_ms) AS last_ms FROM \"telemetry_v1\" WHERE service = 'levanter' AND name = 'phase' AND process_index = '0' AND run_id IN (${run:sqlstring}) AND job_id IS NOT NULL AND execution_uid IS NOT NULL AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '7 days') * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) GROUP BY 1, 2, 3) SELECT started_ms, origin_cluster AS \"cluster\", job_id AS job, (last_ms - started_ms) / 1000.0 AS active_seconds, CASE WHEN origin_cluster = 'marin' THEN 'local' ELSE origin_cluster END AS iris_cluster FROM attempts ORDER BY started_ms DESC"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "started_ms",
+              "text": "started",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "job",
+              "text": "job",
+              "type": "string"
+            },
+            {
+              "selector": "active_seconds",
+              "text": "active",
+              "type": "number"
+            },
+            {
+              "selector": "iris_cluster",
+              "text": "iris_cluster",
+              "type": "string"
             }
           ]
         }
