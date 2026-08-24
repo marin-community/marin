@@ -77,8 +77,3 @@ Before opening a pull request:
 ## Guidelines
 
 Please see the [guidelines](../explanations/guidelines.md) for principles and practices for Marin.
-
-
-# Data browser
-
-The data browser lives in its own repository: [marin-community/data_browser](https://github.com/marin-community/data_browser). See its README for setup and development instructions.
