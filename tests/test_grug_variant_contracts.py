@@ -12,6 +12,10 @@ import dataclasses
 import importlib
 import json
 import logging
+import os
+import subprocess
+import sys
+import textwrap
 import uuid
 from io import StringIO
 from pathlib import Path
@@ -24,14 +28,14 @@ import optax
 import pytest
 from fray.cluster import ResourceConfig
 from jax._src import config as jax_config
-from jax.sharding import use_abstract_mesh
+from jax.sharding import AbstractMesh, AxisType, use_abstract_mesh
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DatasetComponent, DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
-from levanter.grug.sharding import _compact_grug_mesh_shape
+from levanter.grug.sharding import _batch_axes, _compact_grug_mesh_shape
 from levanter.schedule import BatchSchedule
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
@@ -73,7 +77,7 @@ def test_compact_grug_mesh_shape_allows_expert_axis_to_span_processes():
         expert_axis_size=16,
         replica_axis_size=4,
         model_axis_size=1,
-    ) == (4, 2, 16, 1)
+    ) == (4, 2, 1, 16, 1)
 
 
 def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
@@ -89,7 +93,153 @@ def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
         expert_axis_size=1,
         replica_axis_size=1,
         model_axis_size=1,
-    ) == (1, 4, 1, 1)
+    ) == (1, 4, 1, 1, 1)
+
+
+def test_compact_grug_mesh_shape_allocates_context_axis():
+    """Contract: context_axis_size shards the sequence dim; data absorbs the remainder."""
+    assert _compact_grug_mesh_shape(
+        process_count=1,
+        local_device_count=8,
+        expert_axis_size=1,
+        replica_axis_size=1,
+        model_axis_size=1,
+        context_axis_size=2,
+    ) == (1, 4, 2, 1, 1)
+
+
+def test_compact_grug_mesh_shape_folds_context_into_the_divisibility_check():
+    """A context width the device count cannot accommodate must fail rather than silently
+    round `data` down to the same mesh a context_axis_size of 1 would build."""
+    with pytest.raises(ValueError, match="context_axis_size"):
+        _compact_grug_mesh_shape(
+            process_count=1,
+            local_device_count=8,
+            expert_axis_size=1,
+            replica_axis_size=1,
+            model_axis_size=1,
+            context_axis_size=3,
+        )
+
+
+def test_batch_axes_picks_up_a_context_axis_when_the_mesh_has_one():
+    """Flat-token specs and psums must cover `context`: with the seq dim sharded on it, the
+    flat [B*S, ...] dim is partitioned by context too. Meshes without the axis (tests, other
+    tools) must still work, so the helper filters on presence rather than assuming it."""
+
+    def mesh(axis_sizes, axis_names):
+        return AbstractMesh(
+            axis_sizes=axis_sizes,
+            axis_names=axis_names,
+            axis_types=(AxisType.Explicit,) * len(axis_names),
+        )
+
+    assert _batch_axes(mesh((1, 2, 4, 2, 1), ("replica_dcn", "data", "context", "expert", "model"))) == (
+        "replica_dcn",
+        "data",
+        "expert",
+        "context",
+    )
+    assert _batch_axes(mesh((1, 2, 2, 1), ("replica_dcn", "data", "expert", "model"))) == (
+        "replica_dcn",
+        "data",
+        "expert",
+    )
+
+
+def _run_on_eight_cpu_devices(script: str) -> None:
+    """Run ``script`` in a fresh interpreter with eight CPU devices, failing on its stderr.
+
+    The XLA device count is fixed for the life of a process, so mesh layouts wider than the
+    test runner's topology need their own interpreter.
+    """
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_compact_grug_mesh_pairs_each_axis_name_with_its_own_size():
+    """Sibling branches merge specs naming "context" onto this mesh, so the name-to-position
+    pairing is the contract, not just the multiset of sizes. Distinct context and expert
+    widths are what catch a transposed `_GRUG_MESH_AXIS_NAMES`; equal or length-1 axes let a
+    swapped pair pass unnoticed.
+    """
+    _run_on_eight_cpu_devices(
+        """
+        from levanter.grug.sharding import compact_grug_mesh
+
+        mesh = compact_grug_mesh(replica_axis_size=1, context_axis_size=2, expert_axis_size=4)
+        assert tuple(mesh.shape.items()) == (
+            ("replica_dcn", 1),
+            ("data", 1),
+            ("context", 2),
+            ("expert", 4),
+            ("model", 1),
+        ), mesh.shape
+        """
+    )
+
+
+def test_a_pre_context_axis_checkpoint_restores_onto_the_context_mesh():
+    """The hero 6k restore reads checkpoints written before `context` joined the mesh.
+
+    Nothing in a levanter checkpoint records the writer's mesh: `manifest.json` holds
+    path/shape/dtype/chunk_shape per array and `metadata.json` holds step/timestamp, so a
+    restore's placement comes entirely from the target template's per-leaf sharding. Adding a
+    length-1 axis is also a pure reshape of the device array, so the same PartitionSpec lands
+    on the same devices as it did on the four-axis mesh -- asserted here alongside the
+    round trip, because that placement equality is what "no behavior change at
+    context_axis_size == 1" means for a restored run.
+    """
+    _run_on_eight_cpu_devices(
+        """
+        import tempfile
+
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.checkpoint import load_checkpoint, save_checkpoint
+        from levanter.grug.sharding import compact_grug_mesh
+
+        legacy_mesh = Mesh(
+            np.asarray(jax.devices(), dtype=object).reshape(1, 4, 2, 1),
+            ("replica_dcn", "data", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        mesh = compact_grug_mesh(expert_axis_size=2, replica_axis_size=1)
+        assert dict(mesh.shape) == {"replica_dcn": 1, "data": 4, "context": 1, "expert": 2, "model": 1}, mesh.shape
+
+        spec = P(("replica_dcn", "data", "expert"), None)
+        shape = (8, 4)
+        legacy_sharding = NamedSharding(legacy_mesh, spec)
+        sharding = NamedSharding(mesh, spec)
+        assert sharding.devices_indices_map(shape) == legacy_sharding.devices_indices_map(shape)
+
+        written = jax.device_put(jnp.arange(32, dtype=jnp.float32).reshape(shape), legacy_sharding)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with jax.set_mesh(legacy_mesh):
+                save_checkpoint({"params": written}, step=6000, checkpoint_path=tmpdir)
+            with jax.set_mesh(mesh):
+                restored = load_checkpoint(
+                    {"params": jax.ShapeDtypeStruct(shape, jnp.float32, sharding=sharding)},
+                    checkpoint_path=tmpdir,
+                    mesh=mesh,
+                )["params"]
+
+        assert restored.sharding == sharding, restored.sharding
+        np.testing.assert_array_equal(np.asarray(restored), np.asarray(written))
+        """
+    )
 
 
 def _variant_has_noverify(variant_dir: Path) -> bool:
@@ -310,7 +460,7 @@ def test_grug_moe_data_loaders_build_against_single_expert_mesh():
 
     See https://github.com/marin-community/marin/issues/6252 — canary configurations
     always have expert_axis_size == 1. Under the standardized
-    ``(replica_dcn, data, expert, model)`` contract the "expert" axis is kept at length 1
+    ``(replica_dcn, data, context, expert, model)`` contract the "expert" axis is kept at length 1
     instead of being dropped, so the data-loader pspec can name it unconditionally.
     """
     train_module = importlib.import_module("experiments.grug.moe.train")
@@ -379,7 +529,7 @@ def test_grug_moe_model_init_against_single_expert_mesh():
 
     See https://github.com/marin-community/marin/issues/6252 — canary configurations
     have expert_axis_size == 1. Under the standardized
-    ``(replica_dcn, data, expert, model)`` contract the "expert" axis is kept at length 1,
+    ``(replica_dcn, data, context, expert, model)`` contract the "expert" axis is kept at length 1,
     so MoEMLP.init reads ``mesh.shape["expert"] == 1`` rather than hitting an
     "axis absent" branch.
     """
