@@ -48,6 +48,8 @@ const TELEMETRY_NAMESPACES: [(&str, i64); 7] = [
     ("telemetry_v1.vllm.standard", 2 * GIBIBYTE),
 ];
 const LEGACY_TELEMETRY_NAMESPACES: [&str; 5] = [
+    // Remove after CoreWeave forwarders no longer send the pre-policy names and
+    // their last shards have aged out of every receiving Finelog.
     "telemetry_v1.node_agent",
     "telemetry_v1.levanter.core",
     "telemetry_v1.levanter.extra",

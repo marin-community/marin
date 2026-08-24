@@ -171,9 +171,20 @@ class Gauge(_Handle):
             policy=self.policy,
         )
 
+
+class Scalar(_Handle):
+    """A scalar whose updates emit current values."""
+
     def update(self, value: float, *, attributes: Mapping[str, str] | None = None) -> None:
-        """Record the current scalar value."""
-        self.set(value, attributes=attributes)
+        _emit(
+            self.kind,
+            self.name,
+            value=value,
+            unit=self.unit,
+            attributes=attributes,
+            scope=self.scope,
+            policy=self.policy,
+        )
 
 
 class Histogram(_Handle):
@@ -203,8 +214,8 @@ class Writer:
     def gauge(self, name: str, *, unit: str = "", policy: TelemetryPolicy = TelemetryPolicy.STANDARD) -> Gauge:
         return Gauge(name, "gauge", unit, self.scope, policy)
 
-    def scalar(self, name: str, *, unit: str = "", policy: TelemetryPolicy = TelemetryPolicy.STANDARD) -> Gauge:
-        return self.gauge(name, unit=unit, policy=policy)
+    def scalar(self, name: str, *, unit: str = "", policy: TelemetryPolicy = TelemetryPolicy.STANDARD) -> Scalar:
+        return Scalar(name, "gauge", unit, self.scope, policy)
 
     def histogram(
         self,

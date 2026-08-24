@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 _CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
 _EVERY_STEP_METRICS = frozenset({"train_loss", "step", "phase", "progress_time_seconds", "global_step"})
-_EXTRA_LOG_INTERVAL = 10
+_BULK_LOG_INTERVAL = 10
 _TELEMETER = telemetry.writer("levanter")
 
 
@@ -175,17 +175,17 @@ class TelemetryTracker(Tracker):
         set_training_phase(TrainingPhase.INITIALIZING)
         _HEARTBEAT.start()
 
-    def _publish(self, metrics: Mapping[str, object], *, include_extra: bool) -> None:
+    def _publish(self, metrics: Mapping[str, object]) -> None:
         for key, value in metrics.items():
-            metric_name = _metric_name(key)
-            if metric_name not in _EVERY_STEP_METRICS and not include_extra:
-                continue
             if isinstance(value, SummaryStats):
                 self._publish_summary(key, value)
                 continue
             scalar = _as_scalar(value)
             if scalar is not None:
                 _set(key, scalar)
+
+    def _publish_priority(self, metrics: Mapping[str, object]) -> None:
+        self._publish({key: value for key, value in metrics.items() if _metric_name(key) in _EVERY_STEP_METRICS})
 
     def _publish_summary(self, key: str, stats: SummaryStats) -> None:
         """Export a summary's reduced moments as gauges."""
@@ -216,10 +216,13 @@ class TelemetryTracker(Tracker):
             if loss is not None:
                 _set("progress_time_seconds", time())
                 set_training_phase(TrainingPhase.TRAINING)
-        self._publish(metrics, include_extra=step is None or step % _EXTRA_LOG_INTERVAL == 0)
+        if step is None or step % _BULK_LOG_INTERVAL == 0:
+            self._publish(metrics)
+        else:
+            self._publish_priority(metrics)
 
     def log_summary(self, metrics: dict[str, Any]):
-        self._publish(metrics, include_extra=True)
+        self._publish(metrics)
 
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
         pass

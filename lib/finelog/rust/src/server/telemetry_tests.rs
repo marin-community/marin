@@ -259,30 +259,24 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
         store.get_policy("telemetry_v1").unwrap().max_bytes,
         Some(50 * 1024 * 1024 * 1024)
     );
-    for (namespace, max_gibibytes) in [
+    let policy_namespaces = [
         ("telemetry_v1.levanter.priority", 22),
         ("telemetry_v1.levanter.bulk", 8),
         ("telemetry_v1.levanter.standard", 2),
         ("telemetry_v1.node_agent.standard", 15),
         ("telemetry_v1.iris.rpc.standard", 1),
         ("telemetry_v1.vllm.standard", 2),
-    ] {
+    ];
+    for (namespace, max_gibibytes) in policy_namespaces {
         assert_eq!(
             store.get_policy(namespace).unwrap().max_bytes,
             Some(max_gibibytes * 1024 * 1024 * 1024)
         );
     }
-    let policy_leaf_bytes = [
-        "telemetry_v1.levanter.priority",
-        "telemetry_v1.levanter.bulk",
-        "telemetry_v1.levanter.standard",
-        "telemetry_v1.node_agent.standard",
-        "telemetry_v1.iris.rpc.standard",
-        "telemetry_v1.vllm.standard",
-    ]
-    .into_iter()
-    .map(|namespace| store.get_policy(namespace).unwrap().max_bytes.unwrap())
-    .sum::<i64>();
+    let policy_leaf_bytes = policy_namespaces
+        .iter()
+        .map(|(namespace, _)| store.get_policy(namespace).unwrap().max_bytes.unwrap())
+        .sum::<i64>();
     assert_eq!(policy_leaf_bytes, 50 * 1024 * 1024 * 1024);
 
     for name in ["service", "kind", "name"] {

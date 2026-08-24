@@ -1031,8 +1031,14 @@ def test_zephyr_stall_alert_returns_explicit_zero_without_active_pipelines():
 def test_alert_queries_use_int64_epoch_boundaries_and_project_timestamps():
     now = datetime(2026, 7, 28, 12, tzinfo=UTC)
     run = HeroRun("cw-a", "/u/hero-prod-coord", "hero-prod", now - timedelta(hours=1))
-    for sql in (telemetry_query(now, (run,)), zephyr_progress_query(now)):
-        assert 'FROM "telemetry_v1' in sql
+    training_sql = telemetry_query(now, (run,))
+    assert training_sql.count('FROM "telemetry_v1"') == 1
+    assert training_sql.count('FROM "telemetry_v1.levanter.priority"') == 1
+    zephyr_sql = zephyr_progress_query(now)
+    assert zephyr_sql.count('FROM "telemetry_v1"') == 1
+    assert 'FROM "telemetry_v1.' not in zephyr_sql
+
+    for sql in (training_sql, zephyr_sql):
         assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '" in sql
         assert "timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '" in sql
         assert "* 1000 AS BIGINT)" in sql
