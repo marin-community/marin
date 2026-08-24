@@ -1364,7 +1364,6 @@ project_grants:
   - serviceAccount:checkpoint-download@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:loom-dev@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-crawl-bigquery@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:marin-data-browser@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-gcs-proxy@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/storageinsights.serviceAgent
   members:
