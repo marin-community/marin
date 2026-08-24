@@ -13,6 +13,7 @@ retains only a window of them.
 """
 
 import json
+from collections.abc import Callable
 from datetime import datetime
 
 import httpx
@@ -128,6 +129,18 @@ class WandbSource:
                 pairs.append((x_value, y_value))
         return pairs
 
+    def _search_projects(self, run: str, project: str | None, read: Callable[[str], list[dict] | None]) -> list[dict]:
+        """Return the first non-empty `read(candidate)` over the projects that may hold `run`.
+
+        A run in none of them fails loud rather than rendering as an empty panel.
+        """
+        projects = (project,) if project else RUN_HISTORY_PROJECTS
+        for candidate in projects:
+            rows = read(candidate)
+            if rows is not None:
+                return rows
+        raise UpstreamError("wandb", f"run {run!r} not found in {', '.join(projects)}", status_code=404)
+
     def points(self, chart_key: str) -> list[dict]:
         """Return one row per sampled point for a configured report chart."""
         if chart_key not in WANDB_CHARTS:
@@ -158,22 +171,22 @@ class WandbSource:
         `run` is the Levanter run id: marin names the W&B run after it, and
         `resume="allow"` keeps one W&B run across restarts, so this covers the run
         from step 0 however many times it was resumed. W&B samples server-side, so
-        the response stays small on a long run. A run absent from every searched
-        project fails loud rather than rendering as an empty panel.
+        the response stays small on a long run.
         """
-        projects = (project,) if project else RUN_HISTORY_PROJECTS
-        for candidate in projects:
+
+        def read(candidate: str) -> list[dict] | None:
             pairs = self._sampled_history(
                 project=candidate, run=run, x_key=_STEP_KEY, y_key=metric, samples=_RUN_HISTORY_SAMPLES
             )
             if pairs is None:
-                continue
+                return None
             run_url = _RUN_URL.format(entity=_ENTITY, project=candidate, run=run)
             return [
                 {"run": run, "project": candidate, "run_url": run_url, "step": step, "value": value}
                 for step, value in pairs
             ]
-        raise UpstreamError("wandb", f"run {run!r} not found in {', '.join(projects)}", status_code=404)
+
+        return self._search_projects(run, project, read)
 
     def run_activity(self, run: str, *, project: str | None = None) -> list[dict]:
         """Return one row of active and wall-clock time for the whole of `run`.
@@ -186,8 +199,8 @@ class WandbSource:
         remainder is downtime and the ratio is the share of the run that ran. A run
         that has logged nothing yet reports a null active time rather than a zero.
         """
-        projects = (project,) if project else RUN_HISTORY_PROJECTS
-        for candidate in projects:
+
+        def read(candidate: str) -> list[dict] | None:
             run_data = (
                 self._graphql(
                     _ACTIVITY_QUERY,
@@ -196,7 +209,7 @@ class WandbSource:
                 or {}
             ).get("run")
             if not run_data:
-                continue
+                return None
             summary = json.loads(run_data.get("summaryMetrics") or "{}")
             active = summary.get("_runtime")
             active = float(active) if isinstance(active, int | float) else None
@@ -213,4 +226,5 @@ class WandbSource:
                     "active_share": active / wall if active is not None and wall > 0 else None,
                 }
             ]
-        raise UpstreamError("wandb", f"run {run!r} not found in {', '.join(projects)}", status_code=404)
+
+        return self._search_projects(run, project, read)
