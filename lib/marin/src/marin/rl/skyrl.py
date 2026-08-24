@@ -14,7 +14,7 @@ from collections import deque
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import cast
+from typing import Protocol, cast
 
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.utils import discover_hf_checkpoints
@@ -115,6 +115,22 @@ def _artifact_identity(step: ArtifactStep) -> str:
 
 def _artifact_local_path(category: str, step: ArtifactStep) -> str:
     return str(_MARINSKYRL_STAGING_ROOT / category / PurePosixPath(step.name).name)
+
+
+class ModelLocator(Protocol):
+    """Where a run's policy comes from: a step this graph builds, or a published checkpoint."""
+
+    def deps(self) -> tuple[ArtifactStep, ...]: ...
+
+    def resolve(self, ctx: StepContext) -> ResolvedModelLocator: ...
+
+
+class DataLocator(Protocol):
+    """Where a run's data comes from: a step this graph builds, or a published directory."""
+
+    def deps(self) -> tuple[ArtifactStep, ...]: ...
+
+    def resolve(self, ctx: StepContext) -> ResolvedDataLocator: ...
 
 
 @dataclass(frozen=True)
@@ -257,9 +273,9 @@ class SkyRLSpec:
     version: str
     config_yaml: str
     runtime: SkyRLRuntime
-    model: ArtifactHfModel | ExternalModel
-    train_data: tuple[ArtifactDataSource | ExternalDataSource, ...]
-    validation_data: tuple[ArtifactDataSource | ExternalDataSource, ...]
+    model: ModelLocator
+    train_data: tuple[DataLocator, ...]
+    validation_data: tuple[DataLocator, ...]
     topology: SkyRLTopology
     retention: SkyRLRetentionPolicy
     seed: int
