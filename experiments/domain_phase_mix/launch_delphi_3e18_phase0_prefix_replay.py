@@ -20,7 +20,7 @@ import logging
 import os
 import re
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -85,6 +85,7 @@ class PrefixTrainingConfig:
     prefix_train_steps: int
     optimizer_schedule_num_train_steps: int
     replay_code_commit: str
+    tracker_tags: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -320,6 +321,14 @@ def run_phase_0_prefix(config: PrefixTrainingConfig) -> None:
         validation_configs=config.validation_configs,
         replay_code_commit=config.replay_code_commit,
     )
+    if config.tracker_tags is not None:
+        inner_config = replace(
+            inner_config,
+            trainer=replace(
+                inner_config.trainer,
+                tracker=replace(inner_config.trainer.tracker, tags=list(config.tracker_tags)),
+            ),
+        )
     if inner_config.trainer.num_train_steps != config.prefix_train_steps:
         raise ValueError("Prefix trainer horizon changed after config construction")
     if inner_config.optimizer_schedule_num_train_steps != config.optimizer_schedule_num_train_steps:
