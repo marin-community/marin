@@ -41,7 +41,13 @@ def _mesh_axis_size(mesh: Mesh | jax.sharding.AbstractMesh | None, axis_name: st
 
 
 def _batch_axes(mesh: Mesh | jax.sharding.AbstractMesh | None) -> tuple[str, ...]:
-    axes = tuple(axis for axis in ("replica_dcn", "data", "expert") if _mesh_has_axis(mesh, axis))
+    """Axes that partition the flat token dim (batch and, if present, context).
+
+    Used for token-space psums and shard_map in_specs on tensors already flattened
+    to ``[T = B*S, ...]``. Adding "context" here matches the flat-token sharding
+    that context-parallel produces when the seq dim is sharded on "context".
+    """
+    axes = tuple(axis for axis in ("replica_dcn", "data", "expert", "context") if _mesh_has_axis(mesh, axis))
     if axes:
         return axes
     return ("data",)
@@ -74,9 +80,9 @@ def _value_spec_or_default(x: jax.Array, default: PartitionSpec, *, replace_repl
 def _drop_absent_mesh_axes(mesh: Mesh | jax.sharding.AbstractMesh, spec: PartitionSpec) -> PartitionSpec:
     """Replace mesh-absent axes in ``spec`` with ``None`` (replicated).
 
-    Compact meshes drop size-1 axes (e.g. "expert" when expert_axis_size == 1), so a
-    spec that names such an axis would raise. An absent axis has size 1, so replicating
-    along it is equivalent to sharding over it.
+    ``compact_grug_mesh`` keeps every axis, but meshes built by tests and other tools name
+    only the axes they use, and a spec naming an absent one would raise. An absent axis has
+    size 1, so replicating along it is equivalent to sharding over it.
     """
 
     def keep(entry):
@@ -106,7 +112,7 @@ def _reshard_for_shard_map(
     return x
 
 
-_GRUG_MESH_AXIS_NAMES: tuple[str, ...] = ("replica_dcn", "data", "expert", "model")
+_GRUG_MESH_AXIS_NAMES: tuple[str, ...] = ("replica_dcn", "data", "context", "expert", "model")
 
 
 def _compact_grug_mesh_shape(
@@ -116,6 +122,7 @@ def _compact_grug_mesh_shape(
     expert_axis_size: int,
     replica_axis_size: int,
     model_axis_size: int,
+    context_axis_size: int = 1,
 ) -> tuple[int, ...]:
     if process_count <= 0:
         raise ValueError(f"process_count must be positive, got {process_count}")
@@ -127,18 +134,20 @@ def _compact_grug_mesh_shape(
         raise ValueError(f"replica_axis_size must be positive, got {replica_axis_size}")
     if model_axis_size <= 0:
         raise ValueError(f"model_axis_size must be positive, got {model_axis_size}")
+    if context_axis_size <= 0:
+        raise ValueError(f"context_axis_size must be positive, got {context_axis_size}")
 
     global_device_count = process_count * local_device_count
-    fixed_axes = replica_axis_size * expert_axis_size * model_axis_size
+    fixed_axes = replica_axis_size * expert_axis_size * model_axis_size * context_axis_size
     if global_device_count % fixed_axes != 0:
         raise ValueError(
             f"global_device_count ({global_device_count}) must be divisible by "
-            f"replica_axis_size ({replica_axis_size}) * expert_axis_size ({expert_axis_size}) * "
-            f"model_axis_size ({model_axis_size})"
+            f"replica_axis_size ({replica_axis_size}) * context_axis_size ({context_axis_size}) * "
+            f"expert_axis_size ({expert_axis_size}) * model_axis_size ({model_axis_size})"
         )
 
     data_axis_size = global_device_count // fixed_axes
-    return (replica_axis_size, data_axis_size, expert_axis_size, model_axis_size)
+    return (replica_axis_size, data_axis_size, context_axis_size, expert_axis_size, model_axis_size)
 
 
 def compact_grug_mesh(
@@ -146,14 +155,19 @@ def compact_grug_mesh(
     expert_axis_size: int = 1,
     replica_axis_size: int | None = None,
     model_axis_size: int = 1,
+    context_axis_size: int = 1,
 ) -> Mesh:
     """Return the compact explicit mesh used by raw Grug PartitionSpecs.
 
-    The mesh is always ``(replica_dcn, data, expert, model)``; length-1 axes are
-    kept so downstream PartitionSpecs can name "expert" unconditionally. Unlike
-    the old local-only layout, ``expert_axis_size`` may span multiple processes,
-    e.g. a 32-process job with 4 local devices can build an effective
-    ``(4, 2, 16, 1)`` Grug mesh.
+    The mesh is always ``(replica_dcn, data, context, expert, model)``; length-1
+    axes are kept so downstream PartitionSpecs can name any axis unconditionally.
+    ``data`` absorbs whatever the other axes leave free, so a 32-process job with
+    4 local devices can build an effective ``(4, 2, 1, 16, 1)`` Grug mesh.
+
+    ``context_axis_size`` only sizes the ``context`` axis. Placing the sequence
+    dimension on it belongs to the model and attention layers; until they do,
+    raising it above 1 just narrows ``data`` and leaves token-space reductions
+    counting shards no activation is actually split across.
     """
     if replica_axis_size is None:
         replica_axis_size = jax.process_count()
@@ -164,6 +178,7 @@ def compact_grug_mesh(
         expert_axis_size=expert_axis_size,
         replica_axis_size=replica_axis_size,
         model_axis_size=model_axis_size,
+        context_axis_size=context_axis_size,
     )
     devices = np.array(jax.devices(), dtype=object).reshape(shape)
     axis_types = tuple(AxisType.Explicit for _ in _GRUG_MESH_AXIS_NAMES)
