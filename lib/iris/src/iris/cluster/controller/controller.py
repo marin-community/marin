@@ -1673,8 +1673,7 @@ class Controller:
         """
         decisions: list[TerminalDecision] = []
         for row in rows:
-            timeout_ms = row.scheduling_timeout_ms
-            timeout = Duration.from_ms(timeout_ms) if timeout_ms is not None else None
+            timeout = Duration.from_ms(row.scheduling_timeout_ms)
             reason = f"Scheduling timeout exceeded ({timeout}) before the task started"
             if row.status_message:
                 reason = f"{reason}: {row.status_message}"
