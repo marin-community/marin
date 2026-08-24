@@ -57,6 +57,7 @@ from iris.cluster.constraints import (
     region_constraint,
 )
 from iris.cluster.log_keys import build_log_source
+from iris.cluster.setup_scripts import SetupPlan, resolve_setup_layers
 from iris.cluster.types import (
     CoschedulingConfig,
     EndpointAccess,
@@ -990,34 +991,20 @@ class IrisClient:
         else:
             job_id = JobName.root(resolve_job_user(user), name)
 
-        # If running inside a job, inherit env vars and the parent's resolved setup
-        # from the parent. A child that specifies its own setup (explicit
-        # setup_scripts, or builder inputs to rebuild the default) takes control of
-        # its environment; one that specifies only env vars (or nothing) reuses the
-        # parent's setup so it lands in the same environment.
+        # If running inside a job, inherit env vars and resolve the child's setup
+        # plan against the parent's environment layers. Replacing an environment
+        # drops its environment-specific layers but keeps job-tree layers.
         if parent_job_id:
             job_info = get_job_info()
             inherited = dict(job_info.env) if job_info else {}
             child_env = {**inherited, **(environment.env_vars or {})} if environment else inherited
-
-            parent_setup_scripts = job_info.setup_scripts if job_info else None
-
-            if environment:
-                child_owns_setup = (
-                    environment.setup_scripts is not None
-                    or environment.extras
-                    or environment.pip_packages
-                    or environment.sync_packages
-                )
-                environment = EnvironmentSpec(
-                    pip_packages=environment.pip_packages,
-                    env_vars=child_env,
-                    extras=environment.extras,
-                    setup_scripts=environment.setup_scripts if child_owns_setup else parent_setup_scripts,
-                    sync_packages=environment.sync_packages,
-                )
-            else:
-                environment = EnvironmentSpec(env_vars=child_env, setup_scripts=parent_setup_scripts)
+            requested_setup = environment.setup if environment else None
+            parent_layers = job_info.setup_layers if job_info else None
+            setup_layers = resolve_setup_layers(requested_setup, parent_layers)
+            environment = EnvironmentSpec(
+                env_vars=child_env,
+                setup=SetupPlan.resolved(setup_layers),
+            )
 
             parent_constraints = list(job_info.constraints) if job_info else []
             if constraints is None:

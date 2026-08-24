@@ -7,26 +7,26 @@ import os
 import subprocess
 
 import pytest
-from iris.cluster.setup_scripts import default_setup_script
+from iris.cluster.setup_scripts import SetupPlan, default_setup_script
 from iris.cluster.types import EnvironmentSpec
 
 
 @pytest.mark.parametrize(
-    "setup_scripts, expected",
+    "setup, expected",
     [
         # Default: iris builds one project-setup script. The iris runtime-deps
         # script is appended later, in build_runtime_entrypoint — not here.
         (None, None),
         # Custom scripts pass through verbatim, in order.
-        (["echo a", "echo b"], ["echo a", "echo b"]),
+        (SetupPlan.custom(["echo a", "echo b"]), ["echo a", "echo b"]),
         # Whitespace-only entries are dropped.
-        (["echo a", "   "], ["echo a"]),
+        (SetupPlan.custom(["echo a", "   "]), ["echo a"]),
         # No setup at all.
-        ([], []),
+        (SetupPlan.empty(), []),
     ],
 )
-def test_to_proto_resolves_user_setup_scripts(setup_scripts, expected):
-    resolved = list(EnvironmentSpec(setup_scripts=setup_scripts).to_proto().setup_scripts)
+def test_to_proto_resolves_user_setup_scripts(setup, expected):
+    resolved = [layer.setup_script for layer in EnvironmentSpec(setup=setup).to_proto().setup_layers]
 
     if expected is None:
         assert len(resolved) == 1  # the generated default

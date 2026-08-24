@@ -4,6 +4,8 @@
 """Tests for pod manifest building: naming, env vars, volumes, constraints, init containers."""
 
 import json
+import os
+import subprocess
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -1144,6 +1146,25 @@ def test_task_script_runs_each_setup_command_before_exec():
     exec_idx = next(i for i, l in enumerate(lines) if l.startswith("exec "))
     assert len(step_runs) == 2
     assert max(step_runs) < exec_idx
+
+
+def test_task_script_applies_activation_after_venv(tmp_path):
+    venv = tmp_path / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "activate").write_text('export LAYER_ORDER="venv"\n')
+    req = make_run_req("/test-job/0")
+    req.entrypoint.activation_commands.append('export LAYER_ORDER="$LAYER_ORDER:layer"')
+    req.entrypoint.run_command.argv[:] = ["bash", "-c", 'printf "%s\\n" "$LAYER_ORDER"']
+
+    result = subprocess.run(
+        ["bash", "-c", _build_task_script(req)],
+        env={**os.environ, "IRIS_VENV": str(venv), "IRIS_WORKDIR": str(tmp_path / "workdir")},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout.splitlines()[-1] == "venv:layer"
 
 
 def test_task_script_exec_run_command():

@@ -7,7 +7,8 @@ Env inheritance uses JobInfo.env (populated from IRIS_JOB_ENV) which contains
 only the explicit vars from the parent's EnvironmentConfig — not infrastructure
 vars like TPU_NAME or PATH that happen to be in os.environ.
 
-The parent's resolved setup is inherited via IRIS_JOB_SETUP_SCRIPTS.
+The parent's resolved environment layers are inherited through JobInfo. Job-tree
+layers survive when a child replaces the environment-specific layers.
 """
 
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ import pytest
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
+from iris.cluster.setup_scripts import EnvironmentLayer, SetupPlan
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 
 
@@ -30,8 +32,10 @@ class _RecordingClusterClient:
 
     captured_env: dict = field(default_factory=dict)
     captured_constraints: list = field(default_factory=list)
+    captured_environment: EnvironmentSpec | None = None
 
     def submit_job(self, *, job_id=None, environment=None, constraints=None, **kwargs) -> JobName:
+        self.captured_environment = environment
         if environment:
             self.captured_env = dict(environment.env_vars)
         if constraints:
@@ -63,11 +67,13 @@ def parent_context(capturing_client):
 def _parent_job_info(
     env: dict[str, str],
     constraints: list[Constraint] | None = None,
+    setup_layers: list[EnvironmentLayer] | None = None,
 ) -> JobInfo:
     return JobInfo(
         task_id=JobName.from_wire("/parent-job/0"),
         env=env,
         constraints=constraints or [],
+        setup_layers=setup_layers,
     )
 
 
@@ -107,6 +113,28 @@ def test_child_explicit_env_overrides_inherited(capturing_client, parent_context
     assert stub.captured_env["MY_VAR"] == "child_override"
     assert stub.captured_env["CHILD_ONLY"] == "yes"
     assert stub.captured_env["PARENT_ONLY"] == "yes"
+
+
+def test_job_tree_layers_survive_child_environment_replacement(capturing_client, parent_context):
+    client, stub = capturing_client
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+    profiler = EnvironmentLayer.job_tree(setup="install profiler", activate="export LD_PRELOAD=profiler.so")
+    tracing = EnvironmentLayer.job_tree(activate="export TRACE=1")
+    parent = _parent_job_info({}, setup_layers=[EnvironmentLayer.environment(setup="prepare cpu"), profiler])
+    child_environment = EnvironmentSpec(setup=SetupPlan.default(extras=["gpu"]).with_layer(tracing))
+
+    with (
+        iris_ctx_scope(parent_context),
+        patch("iris.client.client.get_job_info", return_value=parent),
+    ):
+        client.submit(entrypoint, "profiled-child", resources, environment=child_environment)
+
+    captured_environment = stub.captured_environment
+    assert captured_environment is not None
+    layers = [EnvironmentLayer.from_proto(layer) for layer in captured_environment.setup_layers]
+    assert all(layer.setup != "prepare cpu" for layer in layers)
+    assert layers[-2:] == [profiler, tracing]
 
 
 def test_no_env_inheritance_without_parent_context(capturing_client):

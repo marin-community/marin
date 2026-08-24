@@ -16,7 +16,13 @@ from dataclasses import dataclass, field
 from google.protobuf import json_format
 
 from iris.cluster.constraints import Constraint
-from iris.cluster.runtime.env import IRIS_ATTEMPT_UID_ENV, IRIS_WORKER_REGION_ENV
+from iris.cluster.runtime.env import (
+    IRIS_ATTEMPT_UID_ENV,
+    IRIS_JOB_SETUP_LAYERS_ENV,
+    IRIS_WORKER_REGION_ENV,
+    deserialize_setup_layers,
+)
+from iris.cluster.setup_scripts import EnvironmentLayer
 from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import job_pb2
 
@@ -40,11 +46,11 @@ class JobInfo:
     advertise_host: str = "127.0.0.1"
     """The externally visible host name to use when advertising services."""
 
-    setup_scripts: list[str] | None = None
-    """Resolved setup scripts from the parent job, for child job inheritance.
+    setup_layers: list[EnvironmentLayer] | None = None
+    """Resolved environment layers for the current task.
 
-    ``None`` means no parent (top-level submission); ``[]`` means a parent that
-    ran no setup (bring-your-own image)."""
+    ``None`` means the task lacks layer metadata; ``[]`` means it runs without
+    setup or activation layers."""
 
     ports: dict[str, int] = field(default_factory=dict)
     """Name to port number mapping for this task."""
@@ -116,8 +122,10 @@ def get_job_info() -> JobInfo | None:
             worker_id=os.environ.get("IRIS_WORKER_ID"),
             controller_address=os.environ.get("IRIS_CONTROLLER_ADDRESS"),
             advertise_host=os.environ.get("IRIS_ADVERTISE_HOST", "127.0.0.1"),
-            setup_scripts=(
-                json.loads(os.environ["IRIS_JOB_SETUP_SCRIPTS"]) if "IRIS_JOB_SETUP_SCRIPTS" in os.environ else None
+            setup_layers=(
+                deserialize_setup_layers(os.environ[IRIS_JOB_SETUP_LAYERS_ENV])
+                if IRIS_JOB_SETUP_LAYERS_ENV in os.environ
+                else None
             ),
             bundle_id=os.environ.get("IRIS_BUNDLE_ID"),
             ports=_parse_ports_from_env(),

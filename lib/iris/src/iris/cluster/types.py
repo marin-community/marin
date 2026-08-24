@@ -17,7 +17,7 @@ import hashlib
 import os
 import sys
 import urllib.parse
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
 from pathlib import Path
@@ -26,13 +26,11 @@ from typing import Any, NewType
 import cloudpickle
 import humanfriendly
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
-from rigging.telemetry.probes.nccl_client import NCCL_RAS_ENABLE_ENV
 from rigging.timing import Timestamp
 
 from iris.cluster.setup_scripts import (
-    cuda_toolchain_setup_script,
-    default_setup_script,
-    wants_gpu_extra,
+    SetupPlan,
+    resolve_setup_layers,
 )
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.resources.state import (
@@ -735,34 +733,24 @@ class EnvironmentSpec:
       at submission (or forwarded from this process's own env when re-submitting inside
       a task), so tasks stamp artifacts with the submitter's git identity
 
-    Setup:
-    - ``setup_scripts=None`` builds the default uv-sync script. ``sync_packages``
-      scopes that sync to specific workspace members (default: all members).
-    - ``setup_scripts`` set to a list runs those scripts verbatim before the
-      command, with the task's ``IRIS_*`` env available; ``[]`` means no setup (the
-      image is used as-is). Build the default and tweak it via
-      ``iris.cluster.setup_scripts.default_setup_script``.
+    ``setup=None`` uses the default uv environment for a top-level job and
+    inherits the resolved setup for a child. Use ``SetupPlan.default`` to select
+    extras or packages, ``SetupPlan.custom`` for custom setup, and
+    ``SetupPlan.empty`` for a bring-your-own image. Job-tree layers survive when
+    descendants replace their environment-specific layers.
 
     Whenever any setup runs (default or custom), iris appends its own
     ``iris_runtime_setup_script`` so cloudpickle/profiler support is always
-    present; it is skipped only for the no-setup (``[]``) case.
+    present; it is skipped when no layer has setup work.
 
     Note: To specify workspace for bundle creation, use IrisClient.remote(workspace=...).
     """
 
-    pip_packages: Sequence[str] | None = None
     env_vars: dict[str, str] | None = None
-    extras: Sequence[str] | None = None
-    setup_scripts: Sequence[str] | None = None
-    sync_packages: Sequence[str] | None = None
+    setup: SetupPlan | None = None
 
     def to_proto(self) -> job_pb2.EnvironmentConfig:
-        """Convert to wire format, resolving the user setup scripts.
-
-        ``setup_scripts=None`` builds the default uv-sync script from
-        extras/pip/sync_packages; a list is used verbatim; ``[]`` is no setup. The
-        wire carries only this user list.
-        """
+        """Convert to wire format, resolving top-level environment layers."""
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
             "TOKENIZERS_PARALLELISM": "false",
@@ -773,37 +761,13 @@ class EnvironmentSpec:
             # re-submitting captures this same env value.
             LAUNCH_PROVENANCE_ENV: launch_provenance().to_json(),
         }
-        if wants_gpu_extra(self.extras or ()):
-            default_env_vars.update(
-                {
-                    NCCL_RAS_ENABLE_ENV: "1",
-                    "NCCL_DEBUG": "INFO",
-                    "NCCL_DEBUG_SUBSYS": "INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS",
-                    "NCCL_DEBUG_TIMESTAMP": "[%F %T.%3f]",
-                }
-            )
-
+        resolved_layers = resolve_setup_layers(self.setup, None)
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
 
-        if self.setup_scripts is None:
-            py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
-            extras = list(self.extras or [])
-            setup_scripts = [
-                default_setup_script(
-                    extras=extras,
-                    pip_packages=list(self.pip_packages or []),
-                    python_version=py_version,
-                    packages=list(self.sync_packages or []) or None,
-                )
-            ]
-            # GPU jobs need the venv's CUDA toolchain (ptxas/nvlink/libdevice)
-            # exposed for JAX/Pallas Mosaic; the script no-ops without it.
-            if wants_gpu_extra(extras):
-                setup_scripts.append(cuda_toolchain_setup_script())
-        else:
-            setup_scripts = [s for s in self.setup_scripts if s.strip()]
-
-        return job_pb2.EnvironmentConfig(env_vars=merged_env_vars, setup_scripts=setup_scripts)
+        return job_pb2.EnvironmentConfig(
+            env_vars=merged_env_vars,
+            setup_layers=[layer.to_proto() for layer in resolved_layers],
+        )
 
 
 class Namespace(str):

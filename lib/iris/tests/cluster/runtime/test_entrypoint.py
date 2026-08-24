@@ -5,7 +5,7 @@
 
 import pytest
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
-from iris.cluster.setup_scripts import iris_runtime_setup_script
+from iris.cluster.setup_scripts import EnvironmentLayer, EnvironmentLayerLifetime, iris_runtime_setup_script
 from iris.cluster.types import Entrypoint
 from iris.rpc import job_pb2
 
@@ -20,7 +20,12 @@ from iris.rpc import job_pb2
 )
 def test_setup_scripts_become_setup_commands(setup_scripts, expected_user_commands):
     ep = Entrypoint(command=["python", "train.py"], workdir_files={})
-    rt = build_runtime_entrypoint(ep, job_pb2.EnvironmentConfig(setup_scripts=setup_scripts))
+    environment = job_pb2.EnvironmentConfig(
+        setup_layers=[
+            EnvironmentLayer.environment(setup=script).to_proto() for script in setup_scripts if script.strip()
+        ]
+    )
+    rt = build_runtime_entrypoint(ep, environment)
 
     # iris appends its own runtime-deps script as the final step whenever any user
     # setup runs, so its features work regardless of what the user setup does.
@@ -29,10 +34,30 @@ def test_setup_scripts_become_setup_commands(setup_scripts, expected_user_comman
     assert list(rt.run_command.argv) == ["python", "train.py"]
 
 
+def test_environment_layers_preserve_setup_and_activation_order():
+    ep = Entrypoint(command=["python", "train.py"], workdir_files={})
+    environment = job_pb2.EnvironmentConfig(
+        setup_layers=[
+            EnvironmentLayer.environment(setup="prepare project").to_proto(),
+            EnvironmentLayer(
+                setup="install profiler",
+                activate="export LD_PRELOAD=profiler.so",
+                lifetime=EnvironmentLayerLifetime.JOB_TREE,
+            ).to_proto(),
+        ],
+    )
+
+    rt = build_runtime_entrypoint(ep, environment)
+
+    assert list(rt.setup_commands) == ["prepare project", "install profiler", iris_runtime_setup_script()]
+    assert list(rt.activation_commands) == ["export LD_PRELOAD=profiler.so"]
+
+
 def test_workdir_files_and_refs_propagate():
     refs = {"_callable.pkl": "sha256abc", "weights.bin": "sha256def"}
     ep = Entrypoint(command=["python", "run.py"], workdir_files={"small.txt": b"hi"}, workdir_file_refs=refs)
-    rt = build_runtime_entrypoint(ep, job_pb2.EnvironmentConfig(setup_scripts=["uv sync\n"]))
+    environment = job_pb2.EnvironmentConfig(setup_layers=[EnvironmentLayer.environment(setup="uv sync\n").to_proto()])
+    rt = build_runtime_entrypoint(ep, environment)
 
     assert dict(rt.workdir_files) == {"small.txt": b"hi"}
     assert dict(rt.workdir_file_refs) == refs

@@ -92,6 +92,7 @@ from iris.cluster.runtime.profile import (
     build_profile_row,
     profile_local_process,
 )
+from iris.cluster.setup_scripts import normalized_environment_config
 from iris.cluster.stats.tables import (
     PROFILE_NAMESPACE,
     TASK_EVENT_NAMESPACE,
@@ -1417,6 +1418,8 @@ class ControllerServiceImpl:
         """
         if not request.name:
             raise ConnectError(Code.INVALID_ARGUMENT, "Job name is required")
+
+        request.environment.CopyFrom(normalized_environment_config(request.environment))
 
         # Coscheduling requires a non-empty group_by: it names the topology level
         # the gang is scheduled onto. An empty group_by is permanently

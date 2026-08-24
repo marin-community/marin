@@ -31,6 +31,7 @@ from iac.iris.deploy import (
 )
 from iac.iris.service import IrisServiceArgs, _parse_outputs, code_hash, wire_spec
 from iac.iris.spec import ALWAYS_ON_RETRIES, ServiceSpec
+from iris.cluster.setup_scripts import SetupPlan
 from iris.cluster.types import JobName, ResourceSpec, tpu_device
 from iris.resources.state import JobState
 from iris.rpc import job_pb2
@@ -145,8 +146,10 @@ class TestSubmit:
         assert kwargs["user"] == "ops"
         assert kwargs["ports"] == ["svc"]
         assert kwargs["environment"].env_vars == {"K": "v"}
-        assert kwargs["environment"].pip_packages == ("xprof==2.22.3",)
-        assert kwargs["environment"].sync_packages == ("marin-iris", "marin-rigging")
+        assert kwargs["environment"].setup == SetupPlan.default(
+            pip_packages=("xprof==2.22.3",),
+            sync_packages=("marin-iris", "marin-rigging"),
+        )
 
     def test_region_pin(self):
         client = _CapturingClient()

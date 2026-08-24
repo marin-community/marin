@@ -19,10 +19,12 @@ def _make_config(
     env: dict[str, str] | None = None,
     workdir_host_path: Path | None = None,
     output_host_path: Path | None = None,
+    activation_commands: list[str] | None = None,
 ) -> ContainerConfig:
     return ContainerConfig(
         image="test:latest",
         entrypoint=job_pb2.RuntimeEntrypoint(
+            activation_commands=activation_commands or [],
             run_command=job_pb2.CommandEntrypoint(
                 argv=[
                     sys.executable,
@@ -33,7 +35,7 @@ def _make_config(
                     ),
                     *args,
                 ]
-            )
+            ),
         ),
         env=env or {},
         mounts=mounts,
@@ -41,6 +43,21 @@ def _make_config(
         output_host_path=output_host_path,
         task_id="test-task",
     )
+
+
+def test_process_runtime_applies_activation_before_command(tmp_path):
+    runtime = ProcessRuntime(cache_dir=tmp_path)
+    config = _make_config(
+        [],
+        args=[],
+        env={"PATH_A": "before"},
+        activation_commands=['export PATH_A="after"'],
+    )
+
+    handle, lines = _run(runtime, config)
+
+    assert lines[-2] == "after"
+    handle.cleanup()
 
 
 def _run(runtime: ProcessRuntime, config: ContainerConfig):

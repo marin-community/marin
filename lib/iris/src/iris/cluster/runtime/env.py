@@ -17,6 +17,7 @@ from google.protobuf import json_format
 
 from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
 from iris.cluster.runtime.types import MountKind, MountSpec
+from iris.cluster.setup_scripts import EnvironmentLayer, EnvironmentLayerLifetime
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
 
@@ -30,6 +31,8 @@ IRIS_NAMESPACE_ENV = "IRIS_NAMESPACE"
 IRIS_WORKER_REGION_ENV = "IRIS_WORKER_REGION"
 IRIS_OUTPUT_DIR_ENV = "IRIS_OUTPUT_DIR"
 TASK_OUTPUT_FINALIZING_STATUS = "finalizing task outputs"
+IRIS_JOB_SETUP_LAYERS_ENV = "IRIS_JOB_SETUP_LAYERS"
+IRIS_JOB_SETUP_SCRIPTS_ENV = "IRIS_JOB_SETUP_SCRIPTS"
 
 # Container paths shared across runtimes: the bundle unpacks into WORKDIR_PATH and
 # the setup script populates the venv at VENV_PATH (which the run phase activates).
@@ -81,7 +84,20 @@ def cache_host_dirname(container_path: str) -> str:
 
 # Heredoc delimiter for materializing a setup script to disk. Distinctive enough
 # that a real setup script will not contain it as a standalone line.
-_SETUP_STEP_DELIMITER = "__IRIS_SETUP_STEP__"
+_SCRIPT_STEP_DELIMITER = "__IRIS_SCRIPT_STEP__"
+
+
+def _render_script_steps(scripts: Sequence[str], *, phase: str, command: str) -> list[str]:
+    lines: list[str] = []
+    total = len(scripts)
+    for index, script in enumerate(scripts, start=1):
+        step_file = f"/tmp/iris-{phase}-step-{index}.sh"
+        lines.append(f"cat > {step_file} <<'{_SCRIPT_STEP_DELIMITER}'")
+        lines.append(script.rstrip("\n"))
+        lines.append(_SCRIPT_STEP_DELIMITER)
+        lines.append(f'echo "[iris {phase}] step {index}/{total}"')
+        lines.append(f"{command} {step_file}")
+    return lines
 
 
 def render_setup_steps(scripts: Sequence[str]) -> list[str]:
@@ -91,16 +107,21 @@ def render_setup_steps(scripts: Sequence[str]) -> list[str]:
     banner, rather than concatenated, so a failure points at the exact step. The
     caller's ``set -e`` stops the sequence on the first non-zero step.
     """
-    lines: list[str] = []
-    total = len(scripts)
-    for index, script in enumerate(scripts, start=1):
-        step_file = f"/tmp/iris-setup-step-{index}.sh"
-        lines.append(f"cat > {step_file} <<'{_SETUP_STEP_DELIMITER}'")
-        lines.append(script.rstrip("\n"))
-        lines.append(_SETUP_STEP_DELIMITER)
-        lines.append(f'echo "[iris setup] step {index}/{total}"')
-        lines.append(f"bash {step_file}")
-    return lines
+    return _render_script_steps(scripts, phase="setup", command="bash")
+
+
+def render_activation_steps(scripts: Sequence[str]) -> list[str]:
+    return _render_script_steps(scripts, phase="activation", command="source")
+
+
+def serialize_setup_layers(layers: Sequence[EnvironmentLayer]) -> str:
+    environment = job_pb2.EnvironmentConfig(setup_layers=[layer.to_proto() for layer in layers])
+    return json_format.MessageToJson(environment, preserving_proto_field_name=True, indent=None)
+
+
+def deserialize_setup_layers(value: str) -> list[EnvironmentLayer]:
+    environment = json_format.Parse(value, job_pb2.EnvironmentConfig())
+    return [EnvironmentLayer.from_proto(layer) for layer in environment.setup_layers]
 
 
 def normalize_workdir_relative_path(path: str) -> str:
@@ -230,10 +251,17 @@ def build_common_iris_env(
     env["CARGO_HOME"] = CARGO_HOME_PATH
     env["CARGO_TARGET_DIR"] = f"{CARGO_HOME_PATH}/target"
 
-    # Propagate the resolved setup scripts so child jobs reproduce the parent's
-    # environment. Always set (even when empty) so a child can tell a no-setup
-    # parent (bring-your-own image) from a top-level submission with no parent.
-    env["IRIS_JOB_SETUP_SCRIPTS"] = json.dumps(list(environment.setup_scripts))
+    # Propagate the resolved layer sequence. Always set it so a child can tell a
+    # no-setup parent from a top-level submission with no parent.
+    layers = [EnvironmentLayer.from_proto(layer) for layer in environment.setup_layers]
+    env[IRIS_JOB_SETUP_LAYERS_ENV] = serialize_setup_layers(layers)
+    env[IRIS_JOB_SETUP_SCRIPTS_ENV] = json.dumps(
+        [
+            layer.setup
+            for layer in layers
+            if layer.lifetime is EnvironmentLayerLifetime.ENVIRONMENT and layer.setup.strip()
+        ]
+    )
 
     # Serialize user env vars for child job inheritance via IRIS_JOB_ENV
     user_env_vars = dict(environment.env_vars)

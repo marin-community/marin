@@ -45,6 +45,12 @@ class PeerStatus(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     PEER_STATUS_SYNCED: _ClassVar[PeerStatus]
     PEER_STATUS_REJECTED: _ClassVar[PeerStatus]
 
+class EnvironmentLayerLifetime(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    ENVIRONMENT_LAYER_LIFETIME_UNSPECIFIED: _ClassVar[EnvironmentLayerLifetime]
+    ENVIRONMENT_LAYER_LIFETIME_ENVIRONMENT: _ClassVar[EnvironmentLayerLifetime]
+    ENVIRONMENT_LAYER_LIFETIME_JOB_TREE: _ClassVar[EnvironmentLayerLifetime]
+
 class ConstraintOp(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     CONSTRAINT_OP_EQ: _ClassVar[ConstraintOp]
@@ -118,6 +124,9 @@ PEER_STATUS_PENDING_SCHEDULING: PeerStatus
 PEER_STATUS_ASSIGNED: PeerStatus
 PEER_STATUS_SYNCED: PeerStatus
 PEER_STATUS_REJECTED: PeerStatus
+ENVIRONMENT_LAYER_LIFETIME_UNSPECIFIED: EnvironmentLayerLifetime
+ENVIRONMENT_LAYER_LIFETIME_ENVIRONMENT: EnvironmentLayerLifetime
+ENVIRONMENT_LAYER_LIFETIME_JOB_TREE: EnvironmentLayerLifetime
 CONSTRAINT_OP_EQ: ConstraintOp
 CONSTRAINT_OP_NE: ConstraintOp
 CONSTRAINT_OP_EXISTS: ConstraintOp
@@ -602,7 +611,7 @@ class ResourceSpecProto(_message.Message):
     def __init__(self, cpu_millicores: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ...) -> None: ...
 
 class EnvironmentConfig(_message.Message):
-    __slots__ = ("env_vars", "setup_scripts")
+    __slots__ = ("env_vars", "setup_layers", "setup_scripts")
     class EnvVarsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -611,10 +620,22 @@ class EnvironmentConfig(_message.Message):
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     ENV_VARS_FIELD_NUMBER: _ClassVar[int]
+    SETUP_LAYERS_FIELD_NUMBER: _ClassVar[int]
     SETUP_SCRIPTS_FIELD_NUMBER: _ClassVar[int]
     env_vars: _containers.ScalarMap[str, str]
+    setup_layers: _containers.RepeatedCompositeFieldContainer[EnvironmentLayer]
     setup_scripts: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, env_vars: _Optional[_Mapping[str, str]] = ..., setup_scripts: _Optional[_Iterable[str]] = ...) -> None: ...
+    def __init__(self, env_vars: _Optional[_Mapping[str, str]] = ..., setup_layers: _Optional[_Iterable[_Union[EnvironmentLayer, _Mapping]]] = ..., setup_scripts: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class EnvironmentLayer(_message.Message):
+    __slots__ = ("setup_script", "activation_script", "lifetime")
+    SETUP_SCRIPT_FIELD_NUMBER: _ClassVar[int]
+    ACTIVATION_SCRIPT_FIELD_NUMBER: _ClassVar[int]
+    LIFETIME_FIELD_NUMBER: _ClassVar[int]
+    setup_script: str
+    activation_script: str
+    lifetime: EnvironmentLayerLifetime
+    def __init__(self, setup_script: _Optional[str] = ..., activation_script: _Optional[str] = ..., lifetime: _Optional[_Union[EnvironmentLayerLifetime, str]] = ...) -> None: ...
 
 class CommandEntrypoint(_message.Message):
     __slots__ = ("argv",)
@@ -623,7 +644,7 @@ class CommandEntrypoint(_message.Message):
     def __init__(self, argv: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class RuntimeEntrypoint(_message.Message):
-    __slots__ = ("setup_commands", "run_command", "workdir_files", "workdir_file_refs")
+    __slots__ = ("setup_commands", "run_command", "workdir_files", "workdir_file_refs", "activation_commands")
     class WorkdirFilesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -642,11 +663,13 @@ class RuntimeEntrypoint(_message.Message):
     RUN_COMMAND_FIELD_NUMBER: _ClassVar[int]
     WORKDIR_FILES_FIELD_NUMBER: _ClassVar[int]
     WORKDIR_FILE_REFS_FIELD_NUMBER: _ClassVar[int]
+    ACTIVATION_COMMANDS_FIELD_NUMBER: _ClassVar[int]
     setup_commands: _containers.RepeatedScalarFieldContainer[str]
     run_command: CommandEntrypoint
     workdir_files: _containers.ScalarMap[str, bytes]
     workdir_file_refs: _containers.ScalarMap[str, str]
-    def __init__(self, setup_commands: _Optional[_Iterable[str]] = ..., run_command: _Optional[_Union[CommandEntrypoint, _Mapping]] = ..., workdir_files: _Optional[_Mapping[str, bytes]] = ..., workdir_file_refs: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    activation_commands: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, setup_commands: _Optional[_Iterable[str]] = ..., run_command: _Optional[_Union[CommandEntrypoint, _Mapping]] = ..., workdir_files: _Optional[_Mapping[str, bytes]] = ..., workdir_file_refs: _Optional[_Mapping[str, str]] = ..., activation_commands: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class AttributeValue(_message.Message):
     __slots__ = ("string_value", "int_value", "float_value")

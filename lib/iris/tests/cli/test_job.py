@@ -25,6 +25,7 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
+from iris.cluster.setup_scripts import SetupPlanMode
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2 as _job_pb2
 
@@ -140,6 +141,46 @@ def test_no_exclude_leaves_bundle_exclude_unset(recorded_bundle_exclude):
     result = _run_cli([])
     assert result.exit_code == 0, result.output
     assert recorded_bundle_exclude["bundle_exclude"] is None
+
+
+def test_run_with_directory_becomes_job_tree_environment_layer(tmp_path, recorded_job_submissions):
+    profiler = tmp_path / "profiler"
+    profiler.mkdir()
+    (profiler / "setup.sh").write_text("install profiler\n")
+    (profiler / "activate.sh").write_text("export LD_PRELOAD=profiler.so\n")
+    tracing = tmp_path / "tracing"
+    tracing.mkdir()
+    (tracing / "activate.sh").write_text("export TRACE=1\n")
+
+    result = _run_cli(["--run-with", str(profiler), "--run-with", str(tracing)])
+
+    assert result.exit_code == 0, result.output
+    environment = recorded_job_submissions[0]["environment"]
+    assert environment.setup.mode is SetupPlanMode.EXTEND
+    layers = list(environment.to_proto().setup_layers)
+    assert [(layer.setup_script, layer.activation_script, layer.lifetime) for layer in layers[-2:]] == [
+        ("install profiler\n", "export LD_PRELOAD=profiler.so\n", _job_pb2.ENVIRONMENT_LAYER_LIFETIME_JOB_TREE),
+        ("", "export TRACE=1\n", _job_pb2.ENVIRONMENT_LAYER_LIFETIME_JOB_TREE),
+    ]
+
+
+def test_run_with_directory_without_layer_scripts_is_rejected(tmp_path, recorded_job_submissions):
+    empty_layer = tmp_path / "empty"
+    empty_layer.mkdir()
+
+    result = _run_cli(["--run-with", str(empty_layer)])
+
+    assert result.exit_code != 0
+    assert not recorded_job_submissions
+
+
+@pytest.mark.parametrize("option", [("--extra", "gpu"), ("--sync-package", "marin")])
+def test_no_sync_rejects_sync_options(option, recorded_job_submissions):
+    result = _run_cli(["--no-sync", *option])
+
+    assert result.exit_code != 0
+    assert option[0] in result.output
+    assert not recorded_job_submissions
 
 
 # ---------------------------------------------------------------------------

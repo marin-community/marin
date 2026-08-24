@@ -172,6 +172,7 @@ curl -sf http://localhost:10000/health && echo " controller healthy"
 
 ```bash
 iris job run -- python train.py           # submit + stream logs
+iris job run --run-with scripts/mimalloc_pprof -- python train.py  # apply an environment layer to the job tree
 iris job list --state running             # filter by state
 iris job logs /user/job-name -f           # follow job + child logs
 iris job cancel /user/job-name            # exact job name + its children
@@ -262,7 +263,7 @@ For machine-readable job data, use the Iris Python client (`IrisClient`) directl
 - **`--memory` not `--ram`** — unrecognized flags silently pass through to the command string.
 - **`-e KEY VALUE`** uses two positional args. If `$VALUE` is unset, the parser eats the next token. Always quote: `-e KEY "${VALUE}"`.
 - **`--gpu` requests hardware; `--extra gpu` requests the Python dependency extra.** Need both for GPU JAX jobs.
-- **A job that dies in BUILDING with a `uv sync` error is failing setup before your command starts.** The default is `uv sync --all-packages --no-dev`. Scope it with CLI `--sync-package <member>` or SDK `EnvironmentSpec(sync_packages=[...])`; skip setup entirely with CLI `--no-sync` or SDK `EnvironmentSpec(setup_scripts=[])` for a bring-your-own image. The build log labels each step (`[iris setup] step N/M`) so you can tell which script failed. See "Task Setup" in `AGENTS.md`.
+- **A job that dies in BUILDING with a `uv sync` error is failing setup before your command starts.** The default is `uv sync --all-packages --no-dev`. Scope it with CLI `--sync-package <member>` or SDK `EnvironmentSpec(setup=SetupPlan.default(sync_packages=[...]))`; skip the project sync with CLI `--no-sync` or SDK `EnvironmentSpec(setup=SetupPlan.empty())`. A `--run-with` layer still runs after an empty project setup and propagates to child jobs. The build log labels each step (`[iris setup] step N/M`) so you can tell which layer failed. See "Task Setup" in `AGENTS.md`.
 - **Use `--gpu` or `--tpu` to request accelerators, instead of `--region` or `--zone`.** Let Iris handle scaling group constraints. Use `--region` or `--zone` when you are trying to pin data to a particular location.
 - **`--reserve`** is a hard zone constraint: it confines the job to a zone where the named accelerator has actually been obtained (empirically — a live, non-erroring slice in the region), and the job waits if none exists yet (an availability probe meanwhile scales the accelerator up). It does not hold capacity and does not attach accelerator devices. Use `--tpu`/`--gpu` on the task that needs hardware.
 - **`executor_main` parent jobs** (e.g., canary ferries) submit GPU sub-tasks via Fray. The parent must be CPU-only (`--cpu 1 --memory 2g`), otherwise it hogs the GPU node and deadlocks. Memory at or above 4 GB requires `--enable-extra-resources` (see "Validator opt-in" below).

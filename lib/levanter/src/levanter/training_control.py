@@ -27,13 +27,14 @@ from rigging.redaction import REDACTED_VALUE, redact_value
 
 from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.runtime.env import IRIS_JOB_SETUP_LAYERS_ENV
 from iris.cluster.types import EndpointAccess
 
 
 logger = logging.getLogger(__name__)
 
 TRAINING_CONTROL_ENDPOINT = "training-control"
-_REDACTED_ENVIRONMENT_VARIABLES = ("IRIS_JOB_ENV", "IRIS_JOB_SETUP_SCRIPTS", "MARIN_PROVENANCE")
+_REDACTED_ENVIRONMENT_VARIABLES = ("IRIS_JOB_ENV", IRIS_JOB_SETUP_LAYERS_ENV, "MARIN_PROVENANCE")
 _PROGRAMMATIC_ACTION_HEADER = "X-Levanter-Training-Control"
 _PROGRAMMATIC_ACTION_VALUE = "request-checkpoint"
 ConfigT = TypeVar("ConfigT")

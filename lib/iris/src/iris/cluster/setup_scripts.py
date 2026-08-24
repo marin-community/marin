@@ -1,29 +1,216 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build the per-task setup scripts that prepare a worker's environment.
+"""Build and compose the environment layers that prepare an Iris task.
 
-Client-side helpers: the submitter resolves the scripts and ships them to the
-worker, which runs them in order before the command. The default environment is
-two distinct scripts so iris's requirements stay separate from the user's project:
+The submitter resolves one ordered layer sequence. A layer's setup runs before
+the command; its activation is sourced after virtualenv activation. Layer
+lifetime controls whether a child environment replacement keeps it.
+
+The default environment is two distinct setup steps so Iris's requirements stay
+separate from the user's project:
 
 - ``default_setup_script`` syncs the user's workspace (``uv sync`` + extras + pip).
 - ``iris_runtime_setup_script`` installs iris's runtime deps (cloudpickle for
   callable entrypoints, py-spy/memray for the profiler) into the same venv.
 
-A caller can pass its own scripts to bypass both; an empty list means no setup at
-all (bring-your-own image).
+A caller can replace the default through ``SetupPlan.custom`` or bypass setup
+through ``SetupPlan.empty``.
 
 The scripts run with the task's ``IRIS_*`` environment available and populate the
-venv at ``$IRIS_VENV`` without activating it. The run phase activates ``$IRIS_VENV``
-if it exists, so a setup that leaves no venv runs in the image's own environment.
+venv at ``$IRIS_VENV`` without activating it. The run phase activates
+``$IRIS_VENV`` if it exists, then sources layer activation. A setup that leaves
+no venv runs in the image's own environment.
 """
 
 import shlex
+import sys
 from collections.abc import Sequence
+from dataclasses import dataclass, replace
+from enum import StrEnum
+
+from rigging.telemetry.probes.nccl_client import NCCL_RAS_ENABLE_ENV
+
+from iris.rpc import job_pb2
+
+
+class EnvironmentLayerLifetime(StrEnum):
+    """How an environment layer behaves when a job submits a child."""
+
+    ENVIRONMENT = "environment"
+    JOB_TREE = "job_tree"
+
+
+@dataclass(frozen=True)
+class EnvironmentLayer:
+    """Setup and activation contributed by one environment layer.
+
+    ``setup`` runs before the task command in the setup phase. ``activate`` is
+    sourced after virtualenv activation, so its exports affect the command.
+    """
+
+    setup: str = ""
+    activate: str = ""
+    lifetime: EnvironmentLayerLifetime = EnvironmentLayerLifetime.ENVIRONMENT
+
+    def __post_init__(self) -> None:
+        if not self.setup.strip() and not self.activate.strip():
+            raise ValueError("An environment layer must provide setup or activation")
+
+    @classmethod
+    def environment(cls, *, setup: str = "", activate: str = "") -> "EnvironmentLayer":
+        return cls(setup=setup, activate=activate, lifetime=EnvironmentLayerLifetime.ENVIRONMENT)
+
+    @classmethod
+    def job_tree(cls, *, setup: str = "", activate: str = "") -> "EnvironmentLayer":
+        return cls(setup=setup, activate=activate, lifetime=EnvironmentLayerLifetime.JOB_TREE)
+
+    def to_proto(self) -> job_pb2.EnvironmentLayer:
+        lifetime = {
+            EnvironmentLayerLifetime.ENVIRONMENT: job_pb2.ENVIRONMENT_LAYER_LIFETIME_ENVIRONMENT,
+            EnvironmentLayerLifetime.JOB_TREE: job_pb2.ENVIRONMENT_LAYER_LIFETIME_JOB_TREE,
+        }[self.lifetime]
+        return job_pb2.EnvironmentLayer(
+            setup_script=self.setup,
+            activation_script=self.activate,
+            lifetime=lifetime,
+        )
+
+    @classmethod
+    def from_proto(cls, proto: job_pb2.EnvironmentLayer) -> "EnvironmentLayer":
+        lifetimes = {
+            job_pb2.ENVIRONMENT_LAYER_LIFETIME_ENVIRONMENT: EnvironmentLayerLifetime.ENVIRONMENT,
+            job_pb2.ENVIRONMENT_LAYER_LIFETIME_JOB_TREE: EnvironmentLayerLifetime.JOB_TREE,
+        }
+        try:
+            lifetime = lifetimes[proto.lifetime]
+        except KeyError as error:
+            raise ValueError(f"Unknown environment layer lifetime: {proto.lifetime}") from error
+        return cls(setup=proto.setup_script, activate=proto.activation_script, lifetime=lifetime)
+
+
+def normalized_environment_config(environment: job_pb2.EnvironmentConfig) -> job_pb2.EnvironmentConfig:
+    """Return the layer representation accepted by the current controller."""
+    normalized = job_pb2.EnvironmentConfig()
+    normalized.CopyFrom(environment)
+    if not normalized.setup_layers:
+        normalized.setup_layers.extend(
+            EnvironmentLayer.environment(setup=script).to_proto()
+            for script in normalized.setup_scripts
+            if script.strip()
+        )
+    normalized.ClearField("setup_scripts")
+    return normalized
+
+
+class SetupPlanMode(StrEnum):
+    """Whether a requested setup plan extends or replaces the environment."""
+
+    EXTEND = "extend"
+    REPLACE = "replace"
+
+
+@dataclass(frozen=True)
+class SetupPlan:
+    """An environment-layer change requested by a job submission."""
+
+    mode: SetupPlanMode
+    layers: tuple[EnvironmentLayer, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.mode is SetupPlanMode.EXTEND and any(
+            layer.lifetime is not EnvironmentLayerLifetime.JOB_TREE for layer in self.layers
+        ):
+            raise ValueError("An extending setup plan may contain only job-tree layers")
+
+    @classmethod
+    def default(
+        cls,
+        *,
+        extras: Sequence[str] = (),
+        pip_packages: Sequence[str] = (),
+        sync_packages: Sequence[str] | None = None,
+    ) -> "SetupPlan":
+        """Build the standard uv environment, including GPU staging when needed."""
+        python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        resolved_extras = tuple(extras)
+        layers = [
+            EnvironmentLayer.environment(
+                setup=default_setup_script(
+                    extras=resolved_extras,
+                    pip_packages=pip_packages,
+                    python_version=python_version,
+                    packages=sync_packages,
+                )
+            )
+        ]
+        if wants_gpu_extra(resolved_extras):
+            layers.append(
+                EnvironmentLayer.environment(
+                    setup=cuda_toolchain_setup_script(),
+                    activate=gpu_runtime_activation_script(),
+                )
+            )
+        return cls(mode=SetupPlanMode.REPLACE, layers=tuple(layers))
+
+    @classmethod
+    def custom(cls, scripts: Sequence[str], *, extras: Sequence[str] = ()) -> "SetupPlan":
+        layers = [EnvironmentLayer.environment(setup=script) for script in scripts if script.strip()]
+        if wants_gpu_extra(extras):
+            layers.append(EnvironmentLayer.environment(activate=gpu_runtime_activation_script()))
+        return cls(mode=SetupPlanMode.REPLACE, layers=tuple(layers))
+
+    @classmethod
+    def empty(cls) -> "SetupPlan":
+        return cls(mode=SetupPlanMode.REPLACE)
+
+    @classmethod
+    def extend_job_tree(cls, layers: Sequence[EnvironmentLayer]) -> "SetupPlan":
+        return cls(mode=SetupPlanMode.EXTEND, layers=tuple(layers))
+
+    @classmethod
+    def resolved(cls, layers: Sequence[EnvironmentLayer]) -> "SetupPlan":
+        return cls(mode=SetupPlanMode.REPLACE, layers=tuple(layers))
+
+    def with_layer(self, layer: EnvironmentLayer) -> "SetupPlan":
+        return replace(self, layers=(*self.layers, layer))
+
+
+def resolve_setup_layers(
+    requested: SetupPlan | None,
+    parent_layers: Sequence[EnvironmentLayer] | None,
+) -> list[EnvironmentLayer]:
+    """Resolve a job's setup layers against its parent's resolved layers."""
+    if parent_layers is None:
+        if requested is None:
+            return list(SetupPlan.default().layers)
+        if requested.mode is SetupPlanMode.EXTEND:
+            return [*SetupPlan.default().layers, *requested.layers]
+        return list(requested.layers)
+
+    if requested is None:
+        return list(parent_layers)
+    if requested.mode is SetupPlanMode.EXTEND:
+        return [*parent_layers, *requested.layers]
+
+    inherited = [layer for layer in parent_layers if layer.lifetime is EnvironmentLayerLifetime.JOB_TREE]
+    environment = [layer for layer in requested.layers if layer.lifetime is EnvironmentLayerLifetime.ENVIRONMENT]
+    job_tree = [layer for layer in requested.layers if layer.lifetime is EnvironmentLayerLifetime.JOB_TREE]
+    return [*environment, *inherited, *job_tree]
+
 
 # cloudpickle for callable entrypoints, py-spy/memray for the profiler attach paths.
 _IRIS_RUNTIME_DEPS = ("cloudpickle", "py-spy", "memray")
+
+
+def gpu_runtime_activation_script() -> str:
+    """Return shell activation that supplies Iris's default NCCL diagnostics."""
+    return f"""\
+export {NCCL_RAS_ENABLE_ENV}="${{{NCCL_RAS_ENABLE_ENV}-1}}"
+export NCCL_DEBUG="${{NCCL_DEBUG-INFO}}"
+export NCCL_DEBUG_SUBSYS="${{NCCL_DEBUG_SUBSYS-INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS}}"
+export NCCL_DEBUG_TIMESTAMP="${{NCCL_DEBUG_TIMESTAMP-[%F %T.%3f]}}"
+"""
 
 
 def _uv_sync_target(packages: Sequence[str] | None) -> str:
