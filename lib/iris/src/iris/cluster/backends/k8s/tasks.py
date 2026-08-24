@@ -72,6 +72,7 @@ from iris.cluster.platforms.k8s.types import (
     IRIS_PRIORITY_CLASS_BATCH,
     IRIS_PRIORITY_CLASS_INTERACTIVE,
     IRIS_PRIORITY_CLASS_PRODUCTION,
+    IRIS_PRIORITY_CLASS_SYSTEM,
     IRIS_RUNTIME_LABEL,
     IRIS_TASK_CONTAINER_NAME,
     IRIS_TASK_ID_ANNOTATION,
@@ -113,7 +114,7 @@ from iris.cluster.stats.tables import (
 )
 from iris.cluster.types import JobName, WellKnownAttribute, WorkerId, get_gpu_count
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
-from iris.rpc.proto_display import priority_band_name, resolve_container_profile
+from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, priority_band_name, resolve_container_profile
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -281,6 +282,7 @@ _CW_DEFAULT_TOPOLOGIES: dict[str, KueueTopologyBinding] = {
 _KUEUE_SINGLE_POD_TOPOLOGY = "kubernetes.io/hostname"
 
 _DEFAULT_PRIORITY_CLASS_NAMES: dict[int, str] = {
+    job_pb2.PRIORITY_BAND_SYSTEM: IRIS_PRIORITY_CLASS_SYSTEM,
     job_pb2.PRIORITY_BAND_PRODUCTION: IRIS_PRIORITY_CLASS_PRODUCTION,
     job_pb2.PRIORITY_BAND_INTERACTIVE: IRIS_PRIORITY_CLASS_INTERACTIVE,
     job_pb2.PRIORITY_BAND_BATCH: IRIS_PRIORITY_CLASS_BATCH,
@@ -677,7 +679,7 @@ def _build_pdb_manifest(
     }
     if managed_label:
         labels[managed_label] = "true"
-    availability = {"minAvailable": 1} if priority_band == job_pb2.PRIORITY_BAND_PRODUCTION else {"maxUnavailable": 1}
+    availability = {"minAvailable": 1} if priority_band in ADMIN_PRIORITY_BAND_VALUES else {"maxUnavailable": 1}
     return {
         "apiVersion": "policy/v1",
         "kind": "PodDisruptionBudget",

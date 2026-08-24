@@ -311,19 +311,19 @@ def test_drain_redrive_reuses_demoted_band(state):
 def test_drain_deferred_gang_does_not_invert_lower_band(state):
     """A higher-band gang that fits the cap but not the remaining budget defers
     whole; a lower-band unit must not leapfrog it (no cross-band inversion)."""
-    [prod] = submit_direct_job(state, "no-inv-prod", priority_band=job_pb2.PRIORITY_BAND_PRODUCTION)
-    _jid, gang = _submit_cosched(state, "no-inv-gang", replicas=3, band=job_pb2.PRIORITY_BAND_INTERACTIVE)
-    [batch_task] = submit_direct_job(state, "no-inv-batch", priority_band=job_pb2.PRIORITY_BAND_BATCH)
+    [system] = submit_direct_job(state, "no-inv-system", priority_band=job_pb2.PRIORITY_BAND_SYSTEM)
+    _jid, gang = _submit_cosched(state, "no-inv-gang", replicas=3, band=job_pb2.PRIORITY_BAND_SYSTEM)
+    [production] = submit_direct_job(state, "no-inv-production", priority_band=job_pb2.PRIORITY_BAND_PRODUCTION)
 
-    # Cap = 3: the PRODUCTION single promotes (remaining 2); the INTERACTIVE gang
-    # of 3 fits the cap but not the remaining budget, so it defers — and the
-    # lower BATCH single behind it stays PENDING rather than jumping the gang.
+    # Cap = 3: the SYSTEM single promotes (remaining 2); the SYSTEM gang of 3
+    # fits the cap but not the remaining budget, so it defers and blocks the
+    # lower PRODUCTION single.
     with state._db.transaction() as cur:
         drained = dispatch.drain_for_dispatch(cur, max_promotions=3)
 
-    assert [r.task_id for r in drained.tasks_to_run] == [prod.to_wire()]
+    assert [r.task_id for r in drained.tasks_to_run] == [system.to_wire()]
     assert all(query_task(state, t).state == job_pb2.TASK_STATE_PENDING for t in gang)
-    assert query_task(state, batch_task).state == job_pb2.TASK_STATE_PENDING
+    assert query_task(state, production).state == job_pb2.TASK_STATE_PENDING
 
 
 def test_drain_deferred_gang_still_fills_same_band(state):

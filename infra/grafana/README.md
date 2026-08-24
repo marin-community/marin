@@ -497,7 +497,7 @@ All secrets live in Secret Manager, hand-placed, and reach the container as env
 vars via the `CloudRunService` `secrets` field; the values never enter Pulumi or
 git. The deploy account is fail-closed on secret creation, so the program only
 references secrets — each must exist and be declared in
-`infra/pulumi/src/iac/gcp/iam_data.yaml` for the deploy account to bind IAM on it.
+`infra/pulumi/src/iac/gcp/grafana.py` before the `marin` stack grants access.
 
 Loom itself needs no secret: the bridge authenticates with the Cloud Run service
 account and short-lived Google/Loom tokens, and Pulumi owns the
@@ -559,8 +559,8 @@ Creating the secrets:
    `printf '%s' "xoxb-..." | gcloud secrets create marin-grafana-slack-bot-token --project=hai-gcp-models --data-file=-`
 3. Apply the `marin` GCP stack, which grants the deploy account IAM management on
    that secret and the runtime account access to it (declared in
-   `infra/pulumi/src/iac/gcp/iam_data.yaml`). Without it the grafana deploy fails
-   granting the runtime account access, even once the value exists.
+   `infra/pulumi/src/iac/gcp/grafana.py`). Without it the Grafana deploy fails
+   Cloud Run's secret-access validation, even once the value exists.
 4. Confirm `slack_alerts_channel` names the channel you want and that `@russbot`
    is in it. It is `#marin-alerts` (`C0BN20081CH`); to move it, take the id from
    the channel's Copy link and `/invite @russbot` there. `pulumi up` fails naming
@@ -599,31 +599,23 @@ curl -s http://localhost:3000/api/dashboards/uid/marin-accel
 
 ## Deploy
 
-Pulumi owns the deploy: the runtime service account and its `compute.viewer` grant, the
-Artifact Registry repo and image, the Cloud Run service, and the IAP wiring. The service
+Pulumi owns the deploy: the runtime service account, Artifact Registry repo and image, the
+Cloud Run service, and the IAP settings. The `marin` infrastructure stack separately owns the
+runtime account's project and secret grants plus the Cloud Run and IAP grants. The service
 and its image build come from the reusable `iac.gcp.cloud_run.CloudRunService` component
 (`infra/pulumi`); this directory is its own Pulumi project. It runs on the shared repo venv
 and shares `infra/pulumi`'s state backend.
 
 ```bash
-uv sync --all-packages --extra deploy                     # once: iac + Pulumi providers on the venv (pulumi lives behind marin-iac[deploy])
-gcloud auth configure-docker us-central1-docker.pkg.dev   # once: let buildx push to Artifact Registry
-
-cd infra/grafana
-# The grafana.oa.dev DNS record lives in the oa.dev Cloudflare zone; the provider
-# reads this token from the environment.
-export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
-  --secret=cloudflare-oa-dns-token --project=hai-gcp-models)"
-pulumi stack select marin-grafana
-
-# Extra viewers beyond the shared Cloud Run IAP baseline — a bare email, a *@domain wildcard,
-# or a qualified IAM member. Editing this and re-running updates only the grant, never the
-# service.
-pulumi config set --path 'viewers[0]' you@example.com
-
-pulumi preview                                            # plan; then, once it looks right:
-pulumi up
+gcloud auth configure-docker us-central1-docker.pkg.dev  # once: let buildx push to Artifact Registry
+uv run --all-packages --extra deploy marin-deploy grafana rollout
 ```
+
+The deploy command loads the Cloudflare provider token from Secret Manager and
+Pulumi previews the update before asking for confirmation.
+
+Add IAP viewers through `infra/pulumi/src/iac/gcp/grafana.py`, referencing encrypted principals
+from `iam_data.yaml`, and apply the `marin` stack. The Grafana stack does not own IAM grants.
 
 Production reads the `grafana-alerts` URL and profile from the `marin-loom`
 stack. Apply that stack before rolling a Grafana revision with
@@ -634,7 +626,7 @@ enable the integration and deploy Grafana again.
 The stack uses the shared `marin-iac-key` KMS secrets provider. The operator needs
 `roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key; no passphrase is used.
 
-`pulumi up` builds the Dockerfile with buildx, pushes it digest-pinned to Artifact
+The rollout builds the Dockerfile with buildx, pushes it digest-pinned to Artifact
 Registry, and rolls the service to that digest. `min` and `max` instances are both 1: one
 warm instance serves this internal dashboard, min 1 keeps alert evaluation warm and first
 paint off a cold start, and max 1 avoids duplicate alert notifications from parallel
@@ -648,7 +640,7 @@ under `/cloudsql`, and hands the socket directory to `entrypoint.sh` as
 settings reject the colons in a connection name). `GF_DATABASE_PASSWORD` comes from the
 `cloudsql-grafana-password` secret. Prerequisite: bring up the `marin-cloudsql` stack and
 create the `grafana` SQL user + its secret version (see `infra/cloudsql/README.md`) before
-`pulumi up` here, or Grafana fails to reach its database.
+the rollout, or Grafana fails to reach its database.
 
 IAP is the outer gate. Its `X-Goog-Authenticated-User-Email` header becomes a Grafana
 auth-proxy account. The container's nginx listener adds a fixed `Editor` role for those
@@ -672,10 +664,9 @@ so they have no identity claim and remain Grafana `Viewer`. A sign-in link to
 the email header and become `Editor`.
 
 The OAuth consent screen is project-level and shared across the project's IAP services. The
-shared Cloud Run component admits the OpenAthena Workspace domain and the Loom VM service
-account on every internal site, and registers the Marin desktop OAuth client as a programmatic
-audience. The `viewers` stack config contains additional IAP accounts or groups; the name refers
-to IAP admission, not their Grafana organization role.
+central IAM config admits the OpenAthena Workspace domain, Loom VM service account, and
+service-specific viewers. The Cloud Run component registers the Marin desktop OAuth client as
+a programmatic audience. IAP admission is independent of the Grafana organization role.
 
 The ferry, build, and nightly panels read the GitHub API, which gates the GraphQL
 build query behind auth even for public repos. The bridge authenticates as the
@@ -691,7 +682,7 @@ so the merge-triggered deploy never blocks. The client id is already set, so
 enabling auth is one step (plus its permissions grant):
 
 ```bash
-# Its grants are declared in infra/pulumi/src/iac/gcp/iam_data.yaml, so:
+# Its grants are declared in infra/pulumi/src/iac/gcp/grafana.py, so:
 gcloud secrets create marin-grafana-github-app-private-key \
   --project=hai-gcp-models --data-file=key.pem
 ```

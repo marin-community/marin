@@ -30,8 +30,8 @@ If objective is ambiguous, ask before editing.
 ## Operating Policy
 ### General
 - Hard launch gate: get explicit requester approval before launching any ferry job. Only exception: the requester explicitly says to launch without asking.
-- Follow the **babysit-job** skill until the run reaches a terminal state (`SUCCEEDED`/`FAILED`/`STOPPED`); do not stop early. Full ferry monitoring often takes 4-5 hours.
-- Never restart/recreate/mutate cluster without explicit human consent in-thread. Keep cluster mutation guardrails aligned with **babysit-job**, including the **debug** exception path.
+- Follow the `use-iris` skill's job-monitoring workflow until the run reaches a terminal state (`SUCCEEDED`/`FAILED`/`STOPPED`); do not stop early. Full ferry monitoring often takes 4-5 hours.
+- Never restart/recreate/mutate cluster without explicit human consent in-thread. Keep cluster mutation guardrails aligned with the Iris monitoring workflow, including the **debug** exception path.
 - Use major-event updates (not spam): launch, first eval, major incident, terminal state.
 - Seal each completed daily run with a pushed git tag pointing to the exact launch commit.
 - Canonical run-closure PR labels: `ferry`, `ferry-daily`, `ferry-log-only`, `ferry-sealed`.
@@ -108,7 +108,7 @@ uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G --extra=cpu \
 ```
 
 #### 5) Monitor to terminal state
-Follow the **babysit-job** skill with `job_id`, `cluster`, `experiment=<ferry script path>`.
+Follow the `use-iris` skill's job-monitoring workflow with `job_id`, `cluster`, `experiment=<ferry script path>`.
 - Keep the monitoring loop active until terminal status; ferry runs commonly take 4-5 hours.
 - Follow monitoring-loop restart policy for recoverable failures.
 - Escalate non-trivial failures to humans.

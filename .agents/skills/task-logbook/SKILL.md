@@ -109,9 +109,8 @@ or production decision.
 
 ## Coordinating Issue
 
-Create or use a coordinating GitHub issue when the work needs durable public
-coordination. The user, supervisor agent, or outer workflow may provide one.
-Confirm timing with the human collaborator if scope or visibility is uncertain.
+When a coordinating GitHub issue exists, link it from the logbook and use this
+section. The user, supervisor agent, or outer workflow may provide one.
 
 Use the experiment body template in `.agents/skills/file-issue/SKILL.md` when
 creating a new coordinating experiment issue.
@@ -128,9 +127,11 @@ surprises, and decisions as issue comments. Promote durable conclusions,
 baselines, decisions, negative results, and the final outcome into the issue
 body.
 
-For long-running research, post an issue update at each significant milestone
-or every 6 hours of active work (either experiments in progress or agent work), whichever comes first. If no milestone occurred by the cadence
-deadline, post a brief heartbeat with current status, blockers, and next ETA.
+For long-running research with a coordinating issue, post an update at each
+significant milestone or every 6 hours of active work (either experiments in
+progress or agent work), whichever comes first. If no milestone occurred by the
+cadence deadline, post a brief heartbeat with current status, blockers, and next
+ETA.
 
 ### Posting an update
 

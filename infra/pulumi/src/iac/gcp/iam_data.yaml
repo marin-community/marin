@@ -1,9 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Canonical non-authoritative GCP IAM declaration for hai-gcp-models. Human
-# user principals are KMS ciphertexts declared once under `principals`; grants
-# reference their opaque IDs so one principal cannot drift across roles.
+# Shared GCP IAM declaration for hai-gcp-models. Deploy-target grants live in
+# the adjacent echo.py, evaldash.py, grafana.py, and loom.py modules. The
+# `marin` stack composes every declaration and is their sole owner. Grants
+# remain additive until a separately reviewed change converts the imported
+# inventory to role-authoritative bindings. Human user principals are KMS
+# ciphertexts declared once under `principals`; grants reference their opaque
+# IDs so one principal cannot drift across roles.
 #
 # The owned service account and custom roles came from the retired
 # infra/permissions project. Do not add custom roles found live unless Pulumi
@@ -87,6 +91,7 @@ principals:
   human-068: CiQAKk3j6fESA88C+xRWoe8LAv9OCNAepDhmfDlfIqc1J4QFCWcSPACdtF6iPH8Op2kYyy4oecwgl8Pj3b6VJwK3y4vS04A4AIr1gLAUjzcE7h8UZy9TdmV7Q2QfGXIWkzs28Q==
   human-069: CiQAKk3j6fZzTtHYIlJ9bvnupvzX042gQyAyC1VrsgIdfU9YMaASPQCdtF6iaHzI0Go083JD8qDnOWtdQ2IpJJa/jB1/BzJbQNIZxIdUpIlCcPmTbiY60SMC2v1rNnO9PCTZNUs=
   human-070: CiQAKk3j6fgMf61FVEtp0V9YlyIoV1cTlbQfsX3SUjkVvhqAlp8SOQCdtF6iWgYGtbPiXHphalp6BT4zzVcGCml7SGl/0WrrOv4xvqyA/cWaE4XCV9ShI1mROr681jsQEg==
+  human-071: CiQAKk3j6cD5Sn3yMtL/TWv5wzcr/lNOmiC5fJKYNkU6t3ovHcUSTgCdtF6i2hQWfJcp+NOEds/fZ7CgpqViU7mgNXSd9TgLlzLJTO3eQO+gddA9WkKSbpFY++pbI0MfTUcoA4H/0Z0SL1IyltZRilV6h0mcuQ==
 custom_roles:
 - role_id: marinGcpResourcePreviewer
   title: Marin GCP Resource Previewer
@@ -957,20 +962,10 @@ project_grants:
   - serviceAccount:service-748532799086@gcp-sa-cloudscheduler.iam.gserviceaccount.com
 - role: roles/cloudsql.client
   members:
-  - group:eng-all@openathena.ai
-  - serviceAccount:echo-api@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:echo-sync@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com
 - role: roles/cloudsql.instanceUser
   members:
-  - group:eng-all@openathena.ai
-  - serviceAccount:echo-api@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:echo-sync@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com
   - principal: human-012
 - role: roles/cloudtasks.enqueuer
@@ -1080,8 +1075,6 @@ project_grants:
   - serviceAccount:github-ci-tpu-launcher-306@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:iris-iap-proxy@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:loom-dev@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/container.serviceAgent
   members:
   - serviceAccount:codalab-mercury@hai-gcp-models.iam.gserviceaccount.com
@@ -1178,9 +1171,6 @@ project_grants:
   members:
   - serviceAccount:748532799086@cloudservices.gserviceaccount.com
   - principal: human-037
-- role: roles/iam.securityReviewer
-  members:
-  - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/iam.serviceAccountAdmin
   members:
   - principal: human-070
@@ -1225,7 +1215,6 @@ project_grants:
   - serviceAccount:instance-deleter@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:iris-controller@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:iris-worker@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:ray-autoscaler-sa-v1@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/logging.viewer
   members:
@@ -1319,15 +1308,11 @@ project_grants:
   members:
   - serviceAccount:748532799086-compute@developer.gserviceaccount.com
   - serviceAccount:iris-iap-proxy@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:ray-autoscaler-sa-v1@hai-gcp-models.iam.gserviceaccount.com
   - principal: human-011
   - principal: human-057
   - principal: human-035
   - principal: human-059
-- role: roles/secretmanager.secretVersionAdder
-  members:
-  - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/secretmanager.viewer
   members:
   - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
@@ -1336,6 +1321,7 @@ project_grants:
   - serviceAccount:748532799086-compute@developer.gserviceaccount.com
 - role: roles/serviceusage.serviceUsageConsumer
   members:
+  - principal://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/subject/repo:marin-community/marin:ref:refs/heads/main
   - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/serviceusage.serviceUsageAdmin
   members:
@@ -1371,7 +1357,6 @@ project_grants:
     description: Grant objectAdmin on all marin-* buckets
 - role: roles/storage.objectUser
   members:
-  - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
   - principal: human-039
   - principal: human-070
 - role: roles/storage.objectViewer
@@ -1379,7 +1364,6 @@ project_grants:
   - serviceAccount:checkpoint-download@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:loom-dev@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-crawl-bigquery@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-gcs-proxy@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/storageinsights.serviceAgent
   members:
@@ -1415,7 +1399,6 @@ project_grants:
 - role: roles/viewer
   members:
   - serviceAccount:github-iris@hai-gcp-models.iam.gserviceaccount.com
-  - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
   - principal: human-037
 - role: roles/websecurityscanner.serviceAgent
   members:
@@ -1438,50 +1421,17 @@ secrets:
   - role: roles/secretmanager.secretAccessor
     members:
     - serviceAccount:748532799086-compute@developer.gserviceaccount.com
-- secret: LOOM_DOTENV
-  grants:
-  - role: roles/secretmanager.secretAccessor
-    members:
-    - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
 - secret: cloudflare-oa-dns-token
   grants:
   - role: roles/secretmanager.secretAccessor
     members:
     - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
     - serviceAccount:pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
-- secret: cloudflare-r2-pulumi-read-token
-  grants:
-  - role: roles/secretmanager.secretAccessor
-    members:
-    - serviceAccount:pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
 - secret: cloudsql-pulumi-admin-password
   grants:
   - role: roles/secretmanager.secretAccessor
     members:
     - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
-- secret: cloudsql-evals-password
-  grants:
-  - role: roles/secretmanager.secretAccessor
-    members:
-    - serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
-- secret: cloudsql-grafana-password
-  grants:
-  - role: projects/hai-gcp-models/roles/marinSecretIamManager
-    members:
-    - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
-  - role: roles/secretmanager.secretAccessor
-    members:
-    - serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com
-- secret: cw-object-storage-key-id
-  grants:
-  - role: roles/secretmanager.secretAccessor
-    members:
-    - serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
-- secret: cw-object-storage-key-secret
-  grants:
-  - role: roles/secretmanager.secretAccessor
-    members:
-    - serviceAccount:marin-evaldash@hai-gcp-models.iam.gserviceaccount.com
 - secret: github-yifanmai-github-oauthtoken-4baa2b
   grants:
   - role: roles/secretmanager.secretAccessor
@@ -1507,38 +1457,6 @@ secrets:
   - role: roles/secretmanager.secretAccessor
     members:
     - serviceAccount:iris-controller@hai-gcp-models.iam.gserviceaccount.com
-- secret: marin-grafana-cw-read-token
-  grants:
-  - role: projects/hai-gcp-models/roles/marinSecretIamManager
-    members:
-    - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
-  - role: roles/secretmanager.secretAccessor
-    members:
-    - serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com
-- secret: marin-grafana-github-app-private-key
-  grants:
-  - role: projects/hai-gcp-models/roles/marinSecretIamManager
-    members:
-    - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
-  - role: roles/secretmanager.secretAccessor
-    members:
-    - serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com
-- secret: marin-grafana-slack-bot-token
-  grants:
-  - role: projects/hai-gcp-models/roles/marinSecretIamManager
-    members:
-    - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
-  - role: roles/secretmanager.secretAccessor
-    members:
-    - serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com
-- secret: marinmirror-token
-  grants:
-  - role: projects/hai-gcp-models/roles/marinSecretIamManager
-    members:
-    - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
-  - role: roles/secretmanager.secretAccessor
-    members:
-    - serviceAccount:echo-sync@hai-gcp-models.iam.gserviceaccount.com
 - secret: slurm-ci-github-token
   grants:
   - role: roles/secretmanager.secretAccessor
@@ -1633,44 +1551,11 @@ artifact_repositories:
     members:
     - serviceAccount:iris-worker@hai-gcp-models.iam.gserviceaccount.com
 - location: us-central1
-  repository: echo-api
-  grants:
-  - role: roles/artifactregistry.writer
-    members:
-    - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
-- location: us-central1
-  repository: echo-sync
-  grants:
-  - role: roles/artifactregistry.writer
-    members:
-    - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
-- location: us-central1
   repository: levanter
   grants:
   - role: roles/artifactregistry.reader
     members:
     - allUsers
-- location: us-central1
-  repository: loom
-  grants:
-  - role: roles/artifactregistry.reader
-    members:
-    - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
-- location: us-central1
-  repository: marin-evaldash
-  grants:
-  - role: roles/artifactregistry.writer
-    members:
-    - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
-- location: us-central1
-  repository: marin-grafana
-  grants:
-  - role: projects/hai-gcp-models/roles/marinArtifactRegistryIamManager
-    members:
-    - principal: human-070
-  - role: roles/artifactregistry.writer
-    members:
-    - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
 - location: us-central1
   repository: tunix
   grants:

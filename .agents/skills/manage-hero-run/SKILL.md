@@ -170,4 +170,4 @@ When a hero run finishes or reaches a handoff milestone:
 
 - change-grug skill
 - run-research skill
-- babysit-job skill
+- use-iris skill

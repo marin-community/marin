@@ -32,7 +32,7 @@ from zephyr.shuffle import (
     ScatterWriter,
     _dataframe_to_items,
     _items_to_dataframe,
-    _read_sidecar_slices_parallel,
+    _Sidecar,
     _write_scatter,
 )
 from zephyr.worker_context import _worker_ctx_var
@@ -617,7 +617,7 @@ def test_sidecar_reads_build_one_client(tmp_path):
     _CountingFileSystem.clear_instance_cache()
     _CountingFileSystem.clients_built = 0
 
-    slices = _read_sidecar_slices_parallel(paths, target_shard=0)
+    sidecars = _Sidecar.read_all(paths)
 
-    assert [s.path for s in slices] == paths
+    assert [sidecar.path for sidecar in sidecars] == paths
     assert _CountingFileSystem.clients_built == 1

@@ -12,8 +12,19 @@ dependencies = [
     "marin-finelog",
 ]
 
+[dependency-groups]
+test = [
+    "pytest>=8.4",
+    "pytest-timeout",
+    "pytest-xdist",
+]
+
 [project.scripts]
-deploy = "marin_deploy.cli:cli"
+marin-deploy = "marin_deploy.cli:cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/marin_deploy"]
+
+[tool.pytest.ini_options]
+timeout = 60
+addopts = "--import-mode=importlib"

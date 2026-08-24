@@ -17,7 +17,8 @@ short_uuid=${short_uuid:0:8}
 
 uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources \
   --target-cluster cw-us-east-08a \
-  --priority production \
+  --priority system \
+  --system-reason "hero run" \
   --cpu 1 \
   --memory 4g \
   --max-retries 1000 \

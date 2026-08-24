@@ -54,8 +54,7 @@ iris cluster dashboard-proxy        # local proxy to remote controller (no tunne
 
 ### Controller Restart
 
-For a rollout across more than one cluster, use
-[the `deploy-iris-controllers` skill](../../.agents/skills/deploy-iris-controllers/SKILL.md).
+For a rollout across more than one cluster, use the `use-iris` skill.
 It fixes the order (`marin-dev`, `marin`, then CoreWeave smallest first), puts a
 human gate on every step, and drives `scripts/iris/rollout_controllers.py` for
 the credential preflight, the before/after snapshots, the 5-minute watch, and a
@@ -356,8 +355,8 @@ targets with SQL, preview, then fire. See "Bulk actions: query → act" below.
 
 ### Recovering a stuck terminating Kubernetes pod
 
-Use [the `recover-stuck-k8s-pod` skill](../../.agents/skills/recover-stuck-k8s-pod/SKILL.md)
-when a CoreWeave pod remains after its Kubernetes deletion deadline. The Grafana
+Use the `use-iris` skill when a CoreWeave pod remains after its Kubernetes
+deletion deadline. The Grafana
 **K8s control plane** dashboard classifies overdue pods; its alert fires only for
 node-bound, nonterminal GPU pods without finalizers.
 
@@ -406,7 +405,7 @@ iris rpc controller get-provider-status         # scheduling events, cluster cap
 iris cluster vm status                          # scale groups with slice counts
 ```
 
-Priority bands: `PRIORITY_BAND_INTERACTIVE` (default), `PRIORITY_BAND_PRODUCTION` (can preempt interactive), `PRIORITY_BAND_BATCH` (preemptible). See [`docs/priority-bands.md`](docs/priority-bands.md) for the user-facing guide on when to pick each band.
+Priority bands: `PRIORITY_BAND_SYSTEM` (admin-only Iris, Finelog, and hero work), `PRIORITY_BAND_PRODUCTION` (admin-only critical work), `PRIORITY_BAND_INTERACTIVE` (default), and `PRIORITY_BAND_BATCH` (opportunistic). CLI SYSTEM submissions require `--system-reason` containing `hero`, `finelog`, or `iris`. See [`docs/priority-bands.md`](docs/priority-bands.md).
 
 `get-scheduler-state`'s `running_buckets` is a **live DB projection** (tasks where
 `state=RUNNING AND current_worker_id IS NOT NULL`), not an independent in-memory set.
@@ -846,9 +845,8 @@ plain Kubernetes `get` calls are read-only. `kubectl describe pod` does not
 mutate the cluster, but it can print literal environment values; avoid it on
 task Pods. Starting, stopping, or restarting a cluster or controller changes
 shared infrastructure. Run those commands only with explicit user approval;
-use the
-[`deploy-iris-controllers` skill](../../.agents/skills/deploy-iris-controllers/SKILL.md)
-for controller rollouts. Direct Kubernetes changes such as `apply`, `delete`,
+use the `use-iris` skill for controller rollouts. Direct Kubernetes changes
+such as `apply`, `delete`,
 `scale`, `drain`, `cordon`, and `uncordon` also require explicit approval.
 
 ### Public LoadBalancer reachability
@@ -958,20 +956,19 @@ treat it as an explicit outage decision. Change one owner at a time and confirm
 that `CWActive` drops the blocker before continuing. Do not delete provider
 DaemonSets or use `kubectl drain --force`.
 
-Iris coordinator task PDBs follow the job's priority band. PRODUCTION uses
-`minAvailable: 1` and intentionally blocks voluntary eviction. INTERACTIVE and
-BATCH use `maxUnavailable: 1`; CoreWeave may evict those pods during a drain,
-and Iris records the disruption as `PREEMPTED` and retries it within the job's
-preemption budget. For a PRODUCTION blocker, follow the running-task procedure
-in the table above. Do not weaken its live PDB to recover a node without the
-job owner's approval.
+Iris coordinator task PDBs follow the job's priority band. SYSTEM and
+PRODUCTION use `minAvailable: 1` and intentionally block voluntary eviction.
+INTERACTIVE and BATCH use `maxUnavailable: 1`; CoreWeave may evict those pods
+during a drain, and Iris records the disruption as `PREEMPTED` and retries it
+within the job's preemption budget. For a SYSTEM or PRODUCTION blocker, follow
+the running-task procedure in the table above. Do not weaken its live PDB to
+recover a node without the job owner's approval.
 
 If a replacement remains Pending because no healthy node satisfies its required
 node affinity or pod anti-affinity, stop before deleting the original pod.
 Provision compatible capacity when possible. Record and restore any temporary
-placement change after the reboot. Use
-`.agents/skills/recover-stuck-k8s-pod/SKILL.md` for the exact Iris task retry
-sequence or when a bound pod does not terminate.
+placement change after the reboot. Use the `use-iris` skill for the exact Iris
+task retry sequence or when a bound pod does not terminate.
 
 CoreWeave should continue the pending reboot without a separate Iris restart.
 Before restoring workloads, verify that the provider operation completed, the

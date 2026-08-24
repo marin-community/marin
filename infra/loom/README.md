@@ -10,12 +10,8 @@ Loom worktree and runs as a Docker Compose application on the GCE host.
 
 ## Prerequisites
 
-`Pulumi.yaml` selects the shared Marin state backend. Select the production
-stack before deploying:
-
-```sh
-pulumi stack select marin-loom --cwd /path/to/marin/infra/loom
-```
+`Pulumi.yaml` selects the shared Marin state backend. The deploy command selects
+the production stack explicitly.
 
 The `loom-oa-dev` GitHub App must be installed on the repositories Loom serves.
 Its private key, webhook secret, and client secret belong only in the
@@ -25,12 +21,11 @@ Its private key, webhook secret, and client secret belong only in the
 Authenticate Pulumi's providers and the local Docker client:
 
 ```sh
-export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
-  --project=hai-gcp-models --secret=cloudflare-oa-dns-token)"
 gcloud auth configure-docker us-central1-docker.pkg.dev
 ```
 
-The local Docker builder must support `linux/amd64`.
+The deploy command loads the Cloudflare provider token from Secret Manager. The
+local Docker builder must support `linux/amd64`.
 
 Activation restarts the host's startup script over SSH. Create the Compute
 Engine key pair once so the key is present and propagated before deploying;
@@ -50,20 +45,19 @@ the changed image, places the provider-produced digest in VM metadata, and waits
 for `https://loom.oa.dev/api/ready` after activation.
 
 ```sh
-pulumi preview --cwd /path/to/marin/infra/loom --stack marin-loom --diff
-pulumi up --cwd /path/to/marin/infra/loom --stack marin-loom
-curl -fsS https://loom.oa.dev/api/ready
+cd /path/to/marin
+uv run --all-packages --extra deploy marin-deploy loom rollout
 ```
 
 Set `buildContext` to a Loom worktree to deploy local changes instead. The local
 build includes tracked and untracked files allowed by that worktree's
-`.dockerignore`; review its diff before deployment. Pulumi saves `-c` values in
-the stack configuration, so remove the override to return to the remote HEAD.
+`.dockerignore`; review its diff before deployment. The deploy command applies the
+override through a temporary stack config, so later deployments return to the remote
+HEAD automatically.
 
 ```sh
-pulumi up --cwd /path/to/marin/infra/loom --stack marin-loom \
-  -c buildContext=/path/to/loom
-pulumi config rm --cwd /path/to/marin/infra/loom --stack marin-loom buildContext
+uv run --all-packages --extra deploy marin-deploy loom rollout \
+  --config buildContext=/path/to/loom
 ```
 
 Pulumi renders the Compose and Caddy configuration into VM metadata. The GCE
@@ -94,7 +88,11 @@ Runtime profiles and workload federation mappings live in
 `Pulumi.marin-loom.yaml` and are applied through Loom's deployment API during
 activation. The `grafana-alerts` federation mapping authorizes the Google
 identity of the existing `marin-grafana` Cloud Run service account to select
-only the `ops` profile. Pulumi resolves that account's email and immutable
+only the `ops` profile. The profile names `marin-community/marin` in
+`githubRepositories` because Grafana launches the operator session in that
+repository and automation profiles receive only their configured repository
+credentials. Without that entry, Loom rejects the launch with HTTP 428 before
+creating a session. Pulumi resolves the service account's email and immutable
 numeric subject; it does not create or copy a Loom token.
 
 The `fork-ferry` mapping accepts OIDC tokens only from the `marin` repository's
@@ -118,8 +116,9 @@ their federation mapping.
 
 A profile's `env` block declares the environment every session of that profile
 receives. Each entry sets either an inline `value` for non-secret configuration
-or a `secretRef` that the host resolves from Secret Manager at launch; Pulumi
-grants the VM service account read access to each referenced secret. Profile
+or a same-project `secretRef` that the host resolves from Secret Manager at launch. Declare
+`roles/secretmanager.secretAccessor` for each reference in
+`infra/pulumi/src/iac/gcp/loom.py` before applying the profile. Profile
 environment is applied after `envClear`, so strict automation profiles receive
 it too. All profiles set `IRIS_USER=loom`, which makes Iris jobs submitted from
 a session land under `/loom/<job>` instead of inheriting the session container's
@@ -164,26 +163,20 @@ to bind the new service account, then enable Loom alerts and redeploy Grafana.
 
 ## VM permissions
 
-The Loom VM service account runs interactive agent sessions. Keep its ambient GCP
-permissions in `Pulumi.marin-loom.yaml` instead of adding one-off project bindings:
+The Loom VM service account runs interactive agent sessions. Its project, secret, and KMS
+grants are declared in `infra/pulumi/src/iac/gcp/loom.py` and applied by the `marin`
+infrastructure stack. `Pulumi.marin-loom.yaml` contains runtime configuration only; do not add
+IAM bindings to this application stack or deployment scripts. Cloud SQL database users and
+PostgreSQL table privileges are database resources, so Echo continues to own the `loom-vm`
+principal, login roles, and table grants in `infra/echo`.
 
-- `vmProjectRoles` grants named predefined or project-custom IAM roles on the
-  configured GCP project.
-- `vmPulumiKmsKeys` grants encrypt/decrypt access only on the listed crypto keys. This
-  lets the VM read and update Pulumi stacks that use those keys as secrets providers.
-
-These lists are additive and reviewed as code. They do not register Cloud SQL database
-users or grant PostgreSQL table privileges; the owning service stack must do both.
-Echo owns the `loom-vm` Cloud SQL principal, login roles, and table grants in
-`infra/echo`.
-
-A stack cannot bootstrap access to its own secrets-provider key. An identity that
-already has key access must apply any new `vmPulumiKmsKeys` grant.
+A stack cannot bootstrap access to its own secrets-provider key. An identity that already has
+key access must apply the central KMS grant before Loom needs it.
 
 Previewing Echo requires read access to its resources, Pulumi state objects, and
 secrets-provider key. Deploying Echo also requires mutation access for Cloud Run,
-Cloud Scheduler, Cloud SQL, Artifact Registry, service accounts, project IAM, Secret
-Manager IAM, and IAP IAM, plus payload access to
+Cloud Scheduler, Cloud SQL, Artifact Registry, service accounts, and IAP settings, plus
+payload access to
 `cloudsql-pulumi-admin-password`. Prefer the existing project custom IAP IAM role and
 secret-level access over project-wide `roles/iap.admin` or
 `roles/secretmanager.admin`.
