@@ -81,6 +81,7 @@ GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 2
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+_SEQ_AXIS_NAME: str = "context"
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
@@ -124,6 +125,31 @@ def _partition_spec_of(x: jax.Array) -> P | None:
     if isinstance(sharding, NamedSharding):
         return sharding.spec
     return None
+
+
+def _seq_axis() -> str | None:
+    """Return the context-parallel sequence axis, or None when the mesh does not split the sequence.
+
+    A length-1 ``context`` axis is reported as absent so a non-CP mesh keeps the
+    fully sequence-replicated attention path.
+    """
+    mesh = get_abstract_mesh()
+    if mesh is None or mesh.empty:
+        return None
+    return _SEQ_AXIS_NAME if int(mesh.shape.get(_SEQ_AXIS_NAME, 1)) > 1 else None
+
+
+def _sequence_axis_of(x: jax.Array) -> str | None:
+    spec = _partition_spec_of(x)
+    return spec[1] if spec is not None and len(spec) > 1 else None
+
+
+def _reshard_sequence_axis(x: Float[Array, "B S ..."], axis: str | None) -> jax.Array:
+    """Move ``x``'s sequence axis onto ``axis`` (None replicates it), keeping its other axes."""
+    spec = _partition_spec_of(x)
+    if spec is None:
+        return x
+    return reshard(x, P(spec[0], axis, *spec[2:]))
 
 
 class GrugMoeHfConfig(HfConfig):
@@ -406,6 +432,8 @@ def _apply_rotary_embedding_fused(
             [second_factor, jnp.zeros((seq_len, padding), second_factor.dtype)],
             axis=-1,
         )
+    # These factors index global positions, so they stay correct once Q/K carry a
+    # context-sharded sequence axis: each shard multiplies by the rows it holds.
     first_factor = jnp.where(disable_rope, 1.0, first_factor)[None, :, None, :]
     second_factor = jnp.where(disable_rope, 0.0, second_factor)[None, :, None, :]
 
@@ -569,7 +597,18 @@ class CausalSelfAttention(eqx.Module):
                 q = jnp.where(keep, q_roped, q)
                 k = jnp.where(keep, k_roped, k)
         q = q * self.cfg.qk_mult
+        # Context parallelism: shard Q's sequence over "context" and all-gather K/V, so each
+        # shard attends its own queries against the whole key sequence. The backends reject a
+        # sharded K/V sequence, and the output returns to the residual stream's layout.
+        seq_axis = _seq_axis()
+        residual_seq_axis = _sequence_axis_of(x)
+        if seq_axis is not None:
+            q = _reshard_sequence_axis(q, seq_axis)
+            k = _reshard_sequence_axis(k, None)
+            v = _reshard_sequence_axis(v, None)
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
+        if seq_axis is not None:
+            attn_out = _reshard_sequence_axis(attn_out, residual_seq_axis)
         # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ.
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
@@ -1255,9 +1294,12 @@ class Transformer(eqx.Module):
         short_lower_bounds, _ = fa4_cute_segment_bounds(
             short_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=cfg.sliding_window
         )
-        long_lower_bounds = _batch_reshard(long_lower_bounds)
-        short_lower_bounds = _batch_reshard(short_lower_bounds)
-        valid = _batch_reshard(valid)
+        # The bounds hold global key positions, so a context-parallel run splits them along
+        # the sequence exactly like Q.
+        bounds_spec = P(_BATCH_AXES, _seq_axis())
+        long_lower_bounds = reshard(long_lower_bounds, bounds_spec)
+        short_lower_bounds = reshard(short_lower_bounds, bounds_spec)
+        valid = reshard(valid, bounds_spec)
 
         def _scan_layers(
             carry_hidden: Float[Array, "B S D"],

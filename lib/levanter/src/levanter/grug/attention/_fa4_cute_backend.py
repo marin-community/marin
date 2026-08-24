@@ -7,7 +7,7 @@ The production attention kernel is intentionally isolated here so the high-level
 attention code stays independent of optional CUDA-only dependencies. The first kernel
 target is BF16/FP16 BSHD causal self-attention with dynamic per-token lower bounds:
 
-    valid[b, q] and lower_bounds[b, q] <= k <= q
+    valid[b, q] and lower_bounds[b, q] <= k <= q + q_offset
 
 This avoids both THD compaction and materialized [B, S, S] masks.
 """
@@ -93,23 +93,27 @@ def segmented_flash_attention_forward(
     *,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
+    q_offset: jax.Array | None = None,
 ) -> tuple[jax.Array, jax.Array]:
     """FA4/CuTe segmented attention forward entry point.
 
     Args:
-        q: Query tensor with shape [B, S, Hq, D].
-        k: Key tensor with shape [B, S, Hkv, D].
-        v: Value tensor with shape [B, S, Hkv, Dv].
-        lower_bounds: Inclusive per-token key lower bound, shape [B, S].
-        valid: Per-token query validity mask, shape [B, S].
+        q: Query tensor with shape [B, Sq, Hq, D].
+        k: Key tensor with shape [B, Sk, Hkv, D].
+        v: Value tensor with shape [B, Sk, Hkv, Dv].
+        lower_bounds: Inclusive per-token key lower bound, shape [B, Sq].
+        valid: Per-token query validity mask, shape [B, Sq].
         softmax_scale: QK softmax scale.
         kernel_config: Architecture-specific tile/config object selected by attention.py.
+        q_offset: Context-parallel shard offset, shape [1] int32. Local query ``i`` sits at
+            global position ``i + q_offset``, which is the causal upper bound the kernel
+            applies. ``None`` (the unsharded default) selects the kernel without it.
 
     Returns:
-        ``(out, lse)`` where ``out`` has shape [B, S, Hq, Dv] and ``lse`` has
-        shape [B, Hq, S]. The backward kernel consumes both tensors.
+        ``(out, lse)`` where ``out`` has shape [B, Sq, Hq, Dv] and ``lse`` has
+        shape [B, Hq, Sq]. The backward kernel consumes both tensors.
     """
-    _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale)
+    _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale, q_offset=q_offset)
     try:
         modules = _import_cutlass_cute()
     except Exception as exc:
@@ -117,6 +121,7 @@ def segmented_flash_attention_forward(
 
     forward_tile = kernel_config.forward_tile
     num_threads = kernel_config.num_threads
+    context_parallel = q_offset is not None
     launcher = segmented_flash_attention_forward_launcher(
         modules,
         head_dim=q.shape[-1],
@@ -125,8 +130,13 @@ def segmented_flash_attention_forward(
         tile_m=forward_tile[0],
         tile_n=forward_tile[1],
         num_threads=num_threads,
+        context_parallel=context_parallel,
     )
-    input_spec, output_spec = _cutlass_attention_forward_specs(modules, vector_elems=8)
+    input_spec, output_spec = _cutlass_attention_forward_specs(
+        modules,
+        vector_elems=8,
+        context_parallel=context_parallel,
+    )
     out_shape_dtype = jax.ShapeDtypeStruct((*q.shape[:3], v.shape[-1]), q.dtype)
     lse_shape_dtype = jax.ShapeDtypeStruct((q.shape[0], q.shape[2], q.shape[1]), jnp.float32)
     call = cutlass_call(
@@ -137,7 +147,9 @@ def segmented_flash_attention_forward(
         use_static_tensors=True,
         softmax_scale=softmax_scale,
     )
-    return call(q, k, v, lower_bounds, valid.astype(jnp.int32))
+    if q_offset is None:
+        return call(q, k, v, lower_bounds, valid.astype(jnp.int32))
+    return call(q, k, v, lower_bounds, valid.astype(jnp.int32), q_offset)
 
 
 def segmented_flash_attention_backward(
@@ -152,9 +164,10 @@ def segmented_flash_attention_backward(
     *,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
+    q_offset: jax.Array | None = None,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Return gradients for FA4/CuTe packed-segment attention."""
-    _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale)
+    _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale, q_offset=q_offset)
     _validate_backward_inputs(q, k, v, out, dout, lse)
     try:
         modules = _import_cutlass_cute()
@@ -163,6 +176,11 @@ def segmented_flash_attention_backward(
 
     qhead_per_kvhead = q.shape[2] // k.shape[2]
     if kernel_config.sm90_backward is not None and qhead_per_kvhead > 1 and q.shape[-1] == 128:
+        if q_offset is not None:
+            raise NotImplementedError(
+                "The native SM90 segmented backward does not carry a context-parallel query offset; "
+                "context parallelism currently requires the SM80/SM120 segmented backward."
+            )
         sm90_config = kernel_config.sm90_backward
         sparse_metadata = _packed_segment_backward_block_sparse_indices_with_full(
             lower_bounds,
@@ -190,6 +208,7 @@ def segmented_flash_attention_backward(
 
     backward_tile = kernel_config.backward_tile
     num_threads = kernel_config.num_threads
+    context_parallel = q_offset is not None
     launcher = segmented_flash_attention_backward_launcher(
         modules,
         dtype=q.dtype,
@@ -200,11 +219,13 @@ def segmented_flash_attention_backward(
         tile_n=backward_tile[1],
         num_threads=num_threads,
         compute_arch=kernel_config.backward_arch,
+        context_parallel=context_parallel,
     )
     input_spec, output_spec = _cutlass_attention_backward_specs(
         modules,
         vector_elems=8,
         qhead_per_kvhead=qhead_per_kvhead,
+        context_parallel=context_parallel,
     )
     output_shape_dtype = _cutlass_attention_backward_output_shapes(q, k, v, backward_tile)
     call = cutlass_call(
@@ -215,7 +236,10 @@ def segmented_flash_attention_backward(
         use_static_tensors=True,
         softmax_scale=softmax_scale,
     )
-    dq, dk, dv, *_scratch = call(q, k, v, out, dout, lse, lower_bounds, valid.astype(jnp.int32))
+    inputs = (q, k, v, out, dout, lse, lower_bounds, valid.astype(jnp.int32))
+    if q_offset is not None:
+        inputs = (*inputs, q_offset)
+    dq, dk, dv, *_scratch = call(*inputs)
     return dq, dk, dv
 
 
@@ -401,17 +425,20 @@ def segmented_flash_attention_backward_sm90_native(
 
 
 def _cutlass_attention_forward_specs(
-    modules: _CutlassCuteModules, *, vector_elems: int
+    modules: _CutlassCuteModules, *, vector_elems: int, context_parallel: bool = False
 ) -> tuple[tuple[Any, ...], Any]:
     tensor_spec = modules.cjax.TensorSpec
     qkv_spec = tensor_spec(mode=(1, 3, 2, 0), divisibility=(1, 1, 1, vector_elems), static=True)
     lse_spec = tensor_spec(divisibility=(1, 1, 1), static=True)
     metadata_spec = tensor_spec(static=True)
-    return (qkv_spec, qkv_spec, qkv_spec, metadata_spec, metadata_spec), (qkv_spec, lse_spec)
+    input_spec = (qkv_spec, qkv_spec, qkv_spec, metadata_spec, metadata_spec)
+    if context_parallel:
+        input_spec = (*input_spec, tensor_spec(mode=(0,), static=True))
+    return input_spec, (qkv_spec, lse_spec)
 
 
 def _cutlass_attention_backward_specs(
-    modules: _CutlassCuteModules, *, vector_elems: int, qhead_per_kvhead: int
+    modules: _CutlassCuteModules, *, vector_elems: int, qhead_per_kvhead: int, context_parallel: bool = False
 ) -> tuple[tuple[Any, ...], Any]:
     tensor_spec = modules.cjax.TensorSpec
     qkv_spec = tensor_spec(mode=(0, 1, 2, 3), divisibility=(1, 1, 1, vector_elems), static=True)
@@ -428,6 +455,8 @@ def _cutlass_attention_backward_specs(
         metadata_spec,
         metadata_spec,
     )
+    if context_parallel:
+        input_spec = (*input_spec, tensor_spec(mode=(0,), static=True))
     dkv_accum_spec = scratch_spec if qhead_per_kvhead > 1 else qkv_spec
     return input_spec, (
         qkv_spec,
@@ -598,7 +627,7 @@ def _cutlass_attention_backward_output_shapes(
     kv_heads = k.shape[2]
     tile_m, tile_n = backward_tile
     seq_q_rounded = ((seq_len + tile_m - 1) // tile_m) * tile_m
-    seq_k_rounded = ((seq_len + tile_n - 1) // tile_n) * tile_n
+    seq_k_rounded = ((k.shape[1] + tile_n - 1) // tile_n) * tile_n
     head_dim_rounded = ((head_dim + 31) // 32) * 32
     head_dim_v_rounded = ((v.shape[-1] + 31) // 32) * 32
     qhead_per_kvhead = q_heads // kv_heads
@@ -665,11 +694,13 @@ def fa4_cute_attention_forward(
     *,
     sm_scale: float | None = None,
     kernel_config: Flash4CuteKernelConfig,
+    q_offset: jax.Array | None = None,
 ) -> jax.Array:
     """FA4/CuTe attention boundary with packed causal metadata.
 
     Forward uses the CUTLASS/CuTe JAX FFI path. Backward is routed through a custom VJP so JAX does not
-    attempt to autodiff through ``cutlass_call``.
+    attempt to autodiff through ``cutlass_call``. ``q_offset`` is the context-parallel shard offset
+    described in :func:`segmented_flash_attention_forward`.
     """
     if sm_scale is None:
         sm_scale = float(q.shape[-1] ** -0.5)
@@ -679,18 +710,20 @@ def fa4_cute_attention_forward(
         v,
         lower_bounds,
         valid,
+        q_offset,
         sm_scale,
         kernel_config,
     )
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(5, 6))
+@partial(jax.custom_vjp, nondiff_argnums=(6, 7))
 def _segmented_flash_attention_custom_vjp(
     q: jax.Array,
     k: jax.Array,
     v: jax.Array,
     lower_bounds: jax.Array,
     valid: jax.Array,
+    q_offset: jax.Array | None,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
 ) -> jax.Array:
@@ -702,6 +735,7 @@ def _segmented_flash_attention_custom_vjp(
         valid,
         softmax_scale=softmax_scale,
         kernel_config=kernel_config,
+        q_offset=q_offset,
     )
     return out
 
@@ -712,9 +746,10 @@ def _segmented_flash_attention_custom_vjp_fwd(
     v: jax.Array,
     lower_bounds: jax.Array,
     valid: jax.Array,
+    q_offset: jax.Array | None,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
-) -> tuple[jax.Array, tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]]:
+) -> tuple[jax.Array, tuple[jax.Array | None, ...]]:
     out, lse = segmented_flash_attention_forward(
         q,
         k,
@@ -723,19 +758,20 @@ def _segmented_flash_attention_custom_vjp_fwd(
         valid,
         softmax_scale=softmax_scale,
         kernel_config=kernel_config,
+        q_offset=q_offset,
     )
-    return out, (q, k, v, out, lse, lower_bounds, valid)
+    return out, (q, k, v, out, lse, lower_bounds, valid, q_offset)
 
 
 def _segmented_flash_attention_custom_vjp_bwd(
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
-    residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
+    residuals: tuple[jax.Array | None, ...],
     cotangent: jax.Array | jax.custom_derivatives.SymbolicZero,
-) -> tuple[jax.Array | None, jax.Array | None, jax.Array | None, None, None]:
-    q, k, v, out, lse, lower_bounds, valid = residuals
+) -> tuple[jax.Array | None, jax.Array | None, jax.Array | None, None, None, None]:
+    q, k, v, out, lse, lower_bounds, valid, q_offset = residuals
     if isinstance(cotangent, jax.custom_derivatives.SymbolicZero):
-        return jnp.zeros_like(q), jnp.zeros_like(k), jnp.zeros_like(v), None, None
+        return jnp.zeros_like(q), jnp.zeros_like(k), jnp.zeros_like(v), None, None, None
     dq, dk, dv = segmented_flash_attention_backward(
         q,
         k,
@@ -747,8 +783,9 @@ def _segmented_flash_attention_custom_vjp_bwd(
         valid,
         softmax_scale=softmax_scale,
         kernel_config=kernel_config,
+        q_offset=q_offset,
     )
-    return dq, dk, dv, None, None
+    return dq, dk, dv, None, None, None
 
 
 _segmented_flash_attention_custom_vjp.defvjp(
@@ -765,13 +802,28 @@ def _validate_forward_inputs(
     valid: jax.Array,
     *,
     softmax_scale: float,
+    q_offset: jax.Array | None = None,
 ) -> None:
     if q.ndim != 4 or k.ndim != 4 or v.ndim != 4:
         raise ValueError(f"q/k/v must be BSHD tensors, got q={q.shape}, k={k.shape}, v={v.shape}")
     if q.shape[0] != k.shape[0] or q.shape[0] != v.shape[0]:
         raise ValueError(f"q/k/v batch sizes must match, got q={q.shape}, k={k.shape}, v={v.shape}")
-    if q.shape[1] != k.shape[1] or q.shape[1] != v.shape[1]:
-        raise ValueError(f"q/k/v sequence lengths must match, got q={q.shape}, k={k.shape}, v={v.shape}")
+    if k.shape[1] != v.shape[1]:
+        raise ValueError(f"k/v sequence lengths must match, got k={k.shape}, v={v.shape}")
+    if q_offset is None:
+        if q.shape[1] != k.shape[1]:
+            raise ValueError(
+                f"q/k/v sequence lengths must match without a context-parallel q offset, "
+                f"got q={q.shape}, k={k.shape}, v={v.shape}"
+            )
+    else:
+        if q.shape[1] > k.shape[1]:
+            raise ValueError(
+                f"context-parallel q sequence length must not exceed the key sequence length, "
+                f"got q={q.shape}, k={k.shape}"
+            )
+        if q_offset.shape != (1,) or q_offset.dtype != jnp.int32:
+            raise ValueError(f"q_offset must be an int32 array of shape [1], got {q_offset.shape} {q_offset.dtype}")
     if q.shape[-1] != k.shape[-1]:
         raise ValueError(f"q/k head dimensions must match, got q={q.shape}, k={k.shape}")
     if k.shape[2] != v.shape[2]:

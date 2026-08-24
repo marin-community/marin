@@ -17,6 +17,7 @@ from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, flash4_cute_kernel_config
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+_CONTEXT_AXIS: str = "context"
 
 
 def _replicate_metadata(x: jax.Array) -> jax.Array:
@@ -38,7 +39,20 @@ def _batched_segment_ids(segment_ids: jax.Array, *, batch_size: int, seq_len: in
             segment_ids = jnp.broadcast_to(segment_ids, (batch_size, seq_len))
     else:
         raise ValueError(f"segment_ids must be 1D or 2D, got ndim={segment_ids.ndim}")
-    return segment_ids
+    return _replicate_sequence_axis(segment_ids)
+
+
+def _replicate_sequence_axis(x: jax.Array) -> jax.Array:
+    """Gather a ``[B, S]`` metadata array along its sequence axis.
+
+    The bound scans below run along the sequence and produce global key positions, so
+    context-sharded segment ids have to be gathered first. The array is one int32 per
+    token; the sharded wrapper reshards the resulting bounds back onto the context axis.
+    """
+    spec = _partition_spec_of(x)
+    if spec is None or len(spec) < 2 or spec[1] is None:
+        return x
+    return reshard(x, P(spec[0], None))
 
 
 def _segment_starts(segment_ids: jax.Array) -> jax.Array:
@@ -205,15 +219,47 @@ def _head_axis(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> str | Non
     return "model"
 
 
-def _assert_sequence_axis_unsharded(name: str, x: jax.Array) -> None:
-    sharding = getattr(x, "sharding", None)
-    if not isinstance(sharding, NamedSharding):
+def _partition_spec_of(x: jax.Array) -> tuple | None:
+    sharding = jax.typeof(x).sharding
+    if isinstance(sharding, NamedSharding):
+        return tuple(sharding.spec)
+    return None
+
+
+def _spec_axis_names(spec: tuple) -> set[str]:
+    return {axis for entry in spec if entry is not None for axis in (entry if isinstance(entry, tuple) else (entry,))}
+
+
+def _query_sequence_shard_axis(q: jax.Array) -> str | None:
+    """Return the mesh axis sharding q's sequence dim, or None if it is replicated.
+
+    Context parallelism shards the query sequence over ``context``; no other axis may
+    partition it, since the kernel's key range is derived from the shard's q positions.
+    """
+    spec = _partition_spec_of(q)
+    if spec is None or len(spec) <= 1 or spec[1] is None:
+        return None
+    if spec[1] != _CONTEXT_AXIS:
+        raise ValueError(
+            f"FA4/CuTe shard_map supports a q sequence axis sharded only over {_CONTEXT_AXIS!r}, got sharding {spec}."
+        )
+    return _CONTEXT_AXIS
+
+
+def _assert_kv_replicated_over_context(name: str, x: jax.Array) -> None:
+    """Reject K/V layouts that context parallelism cannot serve.
+
+    FA4/CuTe context parallelism is the all-gather-KV flavor: every context shard holds
+    the whole key sequence and reduces its partial dK/dV at the end.
+    """
+    spec = _partition_spec_of(x)
+    if spec is None:
         return
 
-    spec = tuple(sharding.spec)
-    if len(spec) > 1 and spec[1] is not None:
+    if (len(spec) > 1 and spec[1] is not None) or _CONTEXT_AXIS in _spec_axis_names(spec):
         raise ValueError(
-            f"FA4/CuTe shard_map requires unsharded sequence axis for {name}, got sharding {sharding.spec}."
+            f"FA4/CuTe shard_map requires {name} sequence-replicated and unsharded over "
+            f"{_CONTEXT_AXIS!r} (all-gather-KV context parallelism), got sharding {spec}."
         )
 
 
@@ -251,13 +297,13 @@ def _fa4_cute_attention_forward_sharded(
             kernel_config=kernel_config,
         )
 
-    qkv_spec = P(batch_axes, None, _head_axis(mesh), None)
-    metadata_spec = P(batch_axes, None)
-    _assert_sequence_axis_unsharded("q", q)
-    _assert_sequence_axis_unsharded("k", k)
-    _assert_sequence_axis_unsharded("v", v)
-    _assert_sequence_axis_unsharded("lower_bounds", lower_bounds)
-    _assert_sequence_axis_unsharded("valid", valid)
+    context_axis = _query_sequence_shard_axis(q)
+    _assert_kv_replicated_over_context("k", k)
+    _assert_kv_replicated_over_context("v", v)
+    qkv_spec = P(batch_axes, context_axis, _head_axis(mesh), None)
+    # The bounds carry global key positions whatever their layout, so pin them to q's
+    # sequence sharding rather than rejecting a mismatch.
+    metadata_spec = P(batch_axes, context_axis)
     lower_bounds = reshard(lower_bounds, metadata_spec)
     valid = reshard(valid, metadata_spec)
 
@@ -267,6 +313,21 @@ def _fa4_cute_attention_forward_sharded(
         check_vma=False,
     )
     def _local_fa4_attention(q_local, k_local, v_local, lower_bounds_local, valid_local):
+        if context_axis is None:
+            return fa4_cute_attention_forward(
+                q_local,
+                k_local,
+                v_local,
+                lower_bounds_local,
+                valid_local,
+                sm_scale=sm_scale,
+                kernel_config=kernel_config,
+            )
+
+        # Global position of local query i is i + q_offset; the kernel derives every
+        # causal upper bound from it. K/V are replicated over the context axis, so
+        # shard_map's transpose reduces each shard's partial dK/dV for us.
+        q_offset = jax.lax.axis_index(context_axis) * q_local.shape[1]
         return fa4_cute_attention_forward(
             q_local,
             k_local,
@@ -275,6 +336,7 @@ def _fa4_cute_attention_forward_sharded(
             valid_local,
             sm_scale=sm_scale,
             kernel_config=kernel_config,
+            q_offset=jnp.reshape(q_offset.astype(jnp.int32), (1,)),
         )
 
     return _local_fa4_attention(q, k, v, lower_bounds, valid)
