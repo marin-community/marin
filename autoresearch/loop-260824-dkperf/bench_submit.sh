@@ -12,7 +12,7 @@ cd "$REPO"
 
 uv run iris --config lib/iris/config/marin.yaml job run \
   --no-wait --enable-extra-resources \
-  --target-cluster cw-us-east-08a --priority production --replicas 16 \
+  --target-cluster cw-us-east-08a --priority "${PRIORITY:-interactive}" --replicas 16 \
   --gpu GB200x4 --cpu 32 --memory 256GB --disk 64GB --timeout 3600 \
   --extra gpu \
   --job-name "${NAME}" \
