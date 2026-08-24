@@ -24,6 +24,8 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use uuid::Uuid;
 
 use crate::errors::StatsError;
+use crate::ingestion::route_ingestion_batch;
+use crate::ingestion_policy::IngestionBatchSource;
 use crate::proto::finelog::stats::ColumnType;
 use crate::server::auth::{auth_gate, AuthIdentity, AuthPolicy};
 use crate::server::ingest_health::IngestHealth;
@@ -33,8 +35,7 @@ use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_to_arrow, Column, CoveringProjection, Schema};
 use crate::store::Store;
 use crate::telemetry_policy::{
-    ingest_storage_namespace, storage_max_bytes, telemetry_storage_namespace, LEGACY_NAMESPACE,
-    TELEMETRY_NAMESPACE, TELEMETRY_STORAGE_SHARDS,
+    matches_telemetry_namespace, storage_max_bytes, TELEMETRY_NAMESPACE, TELEMETRY_STORAGE_SHARDS,
 };
 
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 8;
@@ -47,7 +48,7 @@ const MAX_ATTRIBUTES: usize = 64;
 const MAX_STRING_BYTES: usize = 4_096;
 const MAX_JSON_DEPTH: usize = 32;
 const NORMALIZED_ROW_OVERHEAD: usize = 128;
-const TELEMETRY_MAX_ROW_GROUP_ROWS: u32 = 128 * 1024;
+pub(crate) const TELEMETRY_MAX_ROW_GROUP_ROWS: u32 = 128 * 1024;
 const TELEMETRY_VERSION: u32 = 1;
 const ERROR_CODE_INTERNAL: &str = "internal";
 const RUN_ID_COLUMN: &str = "run_id";
@@ -59,11 +60,9 @@ const PROCESS_INDEX_COLUMN: &str = "process_index";
 const PRIMARY_PROCESS_INDEX: &str = "0";
 
 fn telemetry_storage_namespaces() -> impl Iterator<Item = &'static str> {
-    std::iter::once(LEGACY_NAMESPACE).chain(
-        TELEMETRY_STORAGE_SHARDS
-            .iter()
-            .map(|shard| shard.storage_namespace),
-    )
+    TELEMETRY_STORAGE_SHARDS
+        .iter()
+        .map(|shard| shard.storage_namespace)
 }
 const TRAINING_STATUS_NAMES: [&str; 3] = ["phase", "progress_time_seconds", "step"];
 const TRAINING_LOSS_NAMES: [&str; 1] = ["train_loss"];
@@ -650,32 +649,34 @@ fn prepare_batch(idempotency_key: &str, body: &[u8]) -> Result<PreparedBatch, Ap
         .namespace
         .clone()
         .unwrap_or_else(|| TELEMETRY_NAMESPACE.to_string());
-    validate_batch(&batch)?;
-    let mut records_by_namespace: BTreeMap<String, Vec<(usize, &TelemetryRecord)>> =
-        BTreeMap::new();
-    for (index, record) in batch.records.iter().enumerate() {
-        let namespace = if logical_namespace == TELEMETRY_NAMESPACE {
-            telemetry_storage_namespace(&logical_namespace, &batch.resource.service, &record.name)
-        } else {
-            ingest_storage_namespace(&logical_namespace, &record.name)
-        }
-        .ok_or_else(|| {
-            ApiError::bad_request("namespace is not present in the telemetry stream policy")
-        })?;
-        records_by_namespace
-            .entry(namespace)
-            .or_default()
-            .push((index, record));
+    if !matches_telemetry_namespace(&logical_namespace) {
+        return Err(ApiError::bad_request(
+            "namespace is not in the telemetry schema family",
+        ));
     }
-    let shards = records_by_namespace
-        .into_iter()
-        .map(|(namespace, records)| {
-            Ok(PreparedShard {
-                namespace,
-                ipc: normalize_batch(&batch, &records)?,
-            })
+    validate_batch(&batch)?;
+    let records = batch.records.iter().enumerate().collect::<Vec<_>>();
+    let normalized = normalize_record_batch(&batch, &records)?;
+    let shards = route_ingestion_batch(
+        IngestionBatchSource::Declared(&logical_namespace),
+        &normalized,
+    )
+    .map_err(telemetry_policy_error)?
+    .into_iter()
+    .map(|partition| {
+        let schema = partition.batch.schema();
+        Ok(PreparedShard {
+            namespace: partition.destination.physical_namespace,
+            ipc: encode_ipc(&schema, &[partition.batch]).map_err(|error| {
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ERROR_CODE_INTERNAL,
+                    format!("could not encode telemetry: {error}"),
+                )
+            })?,
         })
-        .collect::<Result<Vec<_>, ApiError>>()?;
+    })
+    .collect::<Result<Vec<_>, ApiError>>()?;
     Ok(PreparedBatch {
         batch_id: body_id,
         batch_id_text: batch.batch_id,
@@ -683,6 +684,19 @@ fn prepare_batch(idempotency_key: &str, body: &[u8]) -> Result<PreparedBatch, Ap
         shards,
         record_count: batch.records.len(),
     })
+}
+
+fn telemetry_policy_error(error: StatsError) -> ApiError {
+    match error {
+        StatsError::SchemaConflict(message)
+        | StatsError::SchemaValidation(message)
+        | StatsError::InvalidNamespace(message) => ApiError::bad_request(message),
+        error => ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ERROR_CODE_INTERNAL,
+            format!("telemetry policy failed: {error}"),
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -808,10 +822,10 @@ fn validate_json(root: &Value, record_index: usize) -> Result<(), ApiError> {
     Ok(())
 }
 
-fn normalize_batch(
+fn normalize_record_batch(
     batch: &TelemetryBatch,
     records: &[(usize, &TelemetryRecord)],
-) -> Result<Vec<u8>, ApiError> {
+) -> Result<RecordBatch, ApiError> {
     let resource_attributes = serde_json::to_string(&batch.resource.normalized_attributes())
         .map_err(|error| ApiError::bad_request(format!("invalid resource attributes: {error}")))?;
     let mut kinds = Vec::with_capacity(records.len());
@@ -870,7 +884,7 @@ fn normalize_batch(
     let row_count = records.len();
     let schema = telemetry_schema();
     let arrow_schema = schema_to_arrow(&schema);
-    let record_batch = RecordBatch::try_new(
+    RecordBatch::try_new(
         Arc::clone(&arrow_schema),
         vec![
             Arc::new(Int32Array::from(vec![TELEMETRY_VERSION as i32; row_count])),
@@ -910,14 +924,7 @@ fn normalize_batch(
             )),
         ],
     )
-    .map_err(|error| ApiError::bad_request(format!("could not normalize telemetry: {error}")))?;
-    encode_ipc(&arrow_schema, &[record_batch]).map_err(|error| {
-        ApiError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            ERROR_CODE_INTERNAL,
-            format!("could not encode telemetry: {error}"),
-        )
-    })
+    .map_err(|error| ApiError::bad_request(format!("could not normalize telemetry: {error}")))
 }
 
 pub(crate) fn telemetry_schema() -> Schema {

@@ -5,6 +5,8 @@ pub mod proto {
 }
 
 pub mod errors;
+pub(crate) mod ingestion;
+pub(crate) mod ingestion_policy;
 pub(crate) mod json;
 pub mod migrations;
 pub mod query;

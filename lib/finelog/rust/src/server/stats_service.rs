@@ -189,7 +189,7 @@ impl StatsService for StatsServiceImpl {
             origin_cluster.is_some() && is_forwarded_telemetry_namespace(&namespace);
 
         // Decode + validate + align + append on the blocking pool; the size/row
-        // caps and IPC decode live in `Store::write_rows`.
+        // caps and IPC decode live in the Store ingestion methods.
         let store = Arc::clone(&self.store);
         let ns = namespace.clone();
         let outcome = run_blocking(move || {
@@ -202,13 +202,7 @@ impl StatsService for StatsServiceImpl {
                         .expect("forwarded telemetry has an origin cluster"),
                 );
             }
-            let (rows_written, last_seq) =
-                store.write_rows(&ns, &arrow_ipc, origin_cluster.as_deref())?;
-            Ok(ForwardedWrite {
-                rows_written,
-                persisted_targets: vec![(ns, last_seq)],
-                ignored_columns: Vec::new(),
-            })
+            store.write_ingestion_rows(&ns, &arrow_ipc, origin_cluster.as_deref())
         })
         .await?;
         let ForwardedWrite {

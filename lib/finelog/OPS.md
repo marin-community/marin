@@ -154,22 +154,35 @@ result above 16,384 values use DataFusion.
 `telemetry_v1` enables this for `service`, `kind`, and `name`, while its
 training-status metric names also use an exact filtered projection.
 
+Finelog routes complete ingestion batches through an `IngestionLayoutPolicy`
+registry. The default identity policy applies to every schema: its logical and
+physical namespaces are the requested table and its batch is unchanged.
+Telemetry is the first registered non-identity policy. This keeps physical
+partitioning opt-in while giving future schemas the same logical/physical
+layout seam without changing their ingestion API.
+
 Rigging writers send a semantic stream name. For example,
 `telemetry.writer("levanter").scalar("train_loss")` writes the
 `telemetry_v1.levanter` stream while the metric name remains `train_loss`.
 Finelog maps that stable name to the server-owned
 Levanter storage shards. Status metrics (`train_loss`, `step`, `global_step`,
 `phase`, and `progress_time_seconds`) and detailed metrics are separate
-physical tables, but query registration exposes one semantic name over both
-physical shards. Neither clients nor SQL name a retention
+physical tables; histogram records always use the detailed shard even if their
+name matches a status metric. Query registration exposes one semantic name over
+both physical shards. Neither clients nor SQL name a retention
 class. Moving a metric between physical shards therefore changes one Finelog
 policy and leaves writers and dashboards alone. Requests outside the configured
 `telemetry_v1.<scope>` form are rejected. Client-defined semantic scopes use a
 2 GiB physical table unless Finelog has a more specific routing policy. The
-temporary old-client root form is classified from `service` and `name` by the
-same policy. Unrecognized old-client rows enter `telemetry_v1.legacy`; they are
-never appended to the root. A forwarded physical namespace is preserved, while
-a forwarded root or superseded semantic namespace is classified row by row.
+temporary old-client root form is classified from the complete normalized row
+by the same policy. Known services use the policy's semantic inference rules;
+an unmapped service gets a normalized `telemetry_v1.<service>` stream rather
+than entering a catch-all namespace. The policy accepts the complete Arrow
+record batch and returns partitions containing the logical namespace, physical
+storage namespace, and rows. HTTP ingestion, forwarding, and migration do not
+pre-extract their own routing keys. A forwarded physical namespace is
+preserved, while a forwarded root or superseded semantic namespace is
+classified row by row.
 
 `telemetry_v1` exposes stable resource dimensions as nullable columns:
 `run_id`, `job_id`, `execution_uid`, `region`, `node_name`, and `process_index`.
@@ -190,7 +203,7 @@ allocation or routing rule does not change a writer or query namespace.
 ### Migrate the legacy telemetry hot set
 
 `finelog-migrate` rewrites the legacy hot set inside the existing hub store. It
-uses the same row-aware policy as HTTP ingestion and forwarding. Deploy that
+uses the same full-batch layout policy as HTTP ingestion and forwarding. Deploy that
 policy to the whole Finelog fleet first: recognized old clients and forwarding
 backlogs then stop adding root rows even before those clients send semantic
 names themselves.

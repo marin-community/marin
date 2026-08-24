@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::array::{new_null_array, Array, ArrayRef, Int64Array, RecordBatch, StringArray};
-use arrow::compute::{cast, filter_record_batch};
+use arrow::compute::cast;
 use arrow::datatypes::{DataType, SchemaRef};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
@@ -16,7 +16,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
-use crate::server::telemetry::telemetry_schema;
+use crate::ingestion::route_ingestion_batch;
+use crate::ingestion_policy::IngestionBatchSource;
+use crate::server::telemetry::{telemetry_schema, TELEMETRY_MAX_ROW_GROUP_ROWS};
 use crate::store::catalog::{Catalog, CATALOG_DB_FILENAME};
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_to_arrow, stored_form, IMPLICIT_SEQ_COLUMN};
@@ -26,13 +28,12 @@ use crate::store::segment::{
 use crate::store::store::acquire_exclusive_store_lock;
 use crate::store::types::{seg_filename, SegmentLocation, SegmentRow};
 use crate::telemetry_policy::{
-    migration_source_namespaces, storage_max_bytes, telemetry_storage_namespace, LEGACY_NAMESPACE,
-    TELEMETRY_NAMESPACE, TELEMETRY_STORAGE_SHARDS,
+    migration_source_namespaces, storage_max_bytes, TELEMETRY_NAMESPACE, TELEMETRY_STORAGE_SHARDS,
 };
 
 const MANIFEST_FILENAME: &str = ".finelog-telemetry-v1-migration.json";
 const MANIFEST_VERSION: u32 = 1;
-const POLICY_REVISION: &str = "semantic-storage-v2";
+const POLICY_REVISION: &str = "semantic-storage-v3";
 const OUTPUT_LEVEL: i32 = 0;
 const MIGRATION_DIRECTORY: &str = ".finelog-telemetry-v1-migration";
 const SOURCE_SNAPSHOT_DIRECTORY: &str = "source";
@@ -363,12 +364,7 @@ fn snapshot_migration_sources(store_dir: &Path, source_dir: &Path) -> Result<(),
     unreachable!()
 }
 
-/// Link exactly the local files named by the copied catalog.
-///
-/// Compaction publishes its catalog replacement before unlinking old files. If
-/// one disappears after the catalog copy, the caller retries from a newer copy.
-/// A successful pass is therefore a coherent catalog-and-Parquet snapshot even
-/// while the live store continues compacting.
+/// Hard-link local segments referenced by the snapshot catalog.
 fn link_catalog_snapshot_segments(
     store_dir: &Path,
     snapshot_dir: &Path,
@@ -463,14 +459,6 @@ fn replace_catalog_for_publish(
     )?;
     let catalog = Catalog::open(Some(&build_dir))?;
     let stored_schema = stored_form(telemetry_schema());
-    catalog.upsert(LEGACY_NAMESPACE, &stored_schema)?;
-    catalog.upsert_policy(
-        LEGACY_NAMESPACE,
-        &StoragePolicy {
-            max_bytes: storage_max_bytes(LEGACY_NAMESPACE),
-            ..StoragePolicy::default()
-        },
-    )?;
     for shard in TELEMETRY_STORAGE_SHARDS {
         catalog.upsert(shard.storage_namespace, &stored_schema)?;
         catalog.upsert_policy(
@@ -497,7 +485,7 @@ fn replace_catalog_for_publish(
             },
         )?;
     }
-    let created_at_ms = now_ms();
+    let created_at_ms = now_ms()?;
     let rows = manifest
         .source_segments
         .iter()
@@ -827,50 +815,38 @@ fn scan_source_segment(
     let mut stats: BTreeMap<String, DestinationStats> = BTreeMap::new();
     for batch in reader {
         let batch = batch.map_err(arrow_error("read source batch"))?;
-        let services = string_column(&batch, "service")?;
-        let names = string_column(&batch, "name")?;
-        let batch_ids = string_column(&batch, "batch_id")?;
-        let record_indices = int64_column(&batch, "record_index")?;
-        let timestamps = int64_column(&batch, "timestamp_ms")?;
-        let clusters = optional_string_column(&batch, "cluster")?;
-        for row in 0..batch.num_rows() {
-            let service = services.value(row);
-            let name = names.value(row);
-            let destination = row_destination(source_namespace, service, name)?;
+        for partition in
+            route_ingestion_batch(IngestionBatchSource::Stored(source_namespace), &batch)?
+        {
+            let destination = partition.destination.physical_namespace;
+            let batch_ids = string_column(&partition.batch, "batch_id")?;
+            let record_indices = int64_column(&partition.batch, "record_index")?;
+            let timestamps = int64_column(&partition.batch, "timestamp_ms")?;
+            let clusters = optional_string_column(&partition.batch, "cluster")?;
             let item = stats.entry(destination).or_default();
-            let timestamp = timestamps.value(row);
-            item.rows += 1;
-            item.min_timestamp_ms = Some(
-                item.min_timestamp_ms
-                    .map_or(timestamp, |v| v.min(timestamp)),
-            );
-            item.max_timestamp_ms = Some(
-                item.max_timestamp_ms
-                    .map_or(timestamp, |v| v.max(timestamp)),
-            );
-            update_identity(
-                &mut item.identity,
-                clusters
-                    .as_ref()
-                    .and_then(|values| (!values.is_null(row)).then(|| values.value(row))),
-                batch_ids.value(row),
-                record_indices.value(row),
-            );
+            for row in 0..partition.batch.num_rows() {
+                let timestamp = timestamps.value(row);
+                item.rows += 1;
+                item.min_timestamp_ms = Some(
+                    item.min_timestamp_ms
+                        .map_or(timestamp, |value| value.min(timestamp)),
+                );
+                item.max_timestamp_ms = Some(
+                    item.max_timestamp_ms
+                        .map_or(timestamp, |value| value.max(timestamp)),
+                );
+                update_identity(
+                    &mut item.identity,
+                    clusters
+                        .as_ref()
+                        .and_then(|values| (!values.is_null(row)).then(|| values.value(row))),
+                    batch_ids.value(row),
+                    record_indices.value(row),
+                );
+            }
         }
     }
     Ok(stats)
-}
-
-fn row_destination(
-    source_namespace: &str,
-    service: &str,
-    name: &str,
-) -> Result<String, StatsError> {
-    telemetry_storage_namespace(source_namespace, service, name).ok_or_else(|| {
-        validation_error(format!(
-            "could not route legacy namespace {source_namespace:?}"
-        ))
-    })
 }
 
 fn write_planned_outputs(
@@ -931,8 +907,11 @@ fn write_source_outputs(
                 .map_err(io_error("remove interrupted output segment"))?;
         }
         let file = File::create(&temporary_path).map_err(io_error("create output segment"))?;
-        let options = ArrowWriterOptions::new()
-            .with_properties(segment_writer_properties_with_max_rows(128 * 1024)?);
+        let options =
+            ArrowWriterOptions::new().with_properties(segment_writer_properties_with_max_rows(
+                usize::try_from(TELEMETRY_MAX_ROW_GROUP_ROWS)
+                    .expect("telemetry row-group limit fits usize"),
+            )?);
         let writer = ArrowWriter::try_new_with_options(file, Arc::clone(target_schema), options)
             .map_err(parquet_error("create output parquet writer"))?;
         writers.insert(
@@ -952,33 +931,15 @@ fn write_source_outputs(
     let reader = parquet_reader(source_path, config.batch_rows)?;
     for batch in reader {
         let batch = batch.map_err(arrow_error("read source batch"))?;
-        let services = string_column(&batch, "service")?;
-        let names = string_column(&batch, "name")?;
-        let mut masks: BTreeMap<String, Vec<bool>> = writers
-            .keys()
-            .map(|namespace| (namespace.clone(), Vec::with_capacity(batch.num_rows())))
-            .collect();
-        for row in 0..batch.num_rows() {
-            let destination = row_destination(
-                source.namespace.as_str(),
-                services.value(row),
-                names.value(row),
-            )?;
-            for (namespace, mask) in &mut masks {
-                mask.push(namespace == &destination);
-            }
-        }
-        for (namespace, mask) in masks {
-            let writer = writers
-                .get_mut(&namespace)
-                .expect("mask is built from writer namespaces");
-            let mask = arrow::array::BooleanArray::from(mask);
-            let filtered = filter_record_batch(&batch, &mask)
-                .map_err(arrow_error("filter source telemetry"))?;
-            if filtered.num_rows() == 0 {
+        for partition in route_ingestion_batch(
+            IngestionBatchSource::Stored(source.namespace.as_str()),
+            &batch,
+        )? {
+            let namespace = partition.destination.physical_namespace;
+            let Some(writer) = writers.get_mut(&namespace) else {
                 continue;
-            }
-            let migrated = align_migrated_batch(&filtered, target_schema, writer.next_seq)?;
+            };
+            let migrated = align_migrated_batch(&partition.batch, target_schema, writer.next_seq)?;
             update_batch_identity(&mut writer.identity, &migrated)?;
             writer
                 .writer
@@ -1314,11 +1275,13 @@ fn temporary_path(path: &Path) -> PathBuf {
     PathBuf::from(format!("{}.migration.tmp", path.display()))
 }
 
-fn now_ms() -> i64 {
-    SystemTime::now()
+fn now_ms() -> Result<i64, StatsError> {
+    let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as i64)
-        .unwrap_or_default()
+        .map_err(|error| StatsError::Internal(format!("read system clock: {error}")))?
+        .as_millis();
+    i64::try_from(millis)
+        .map_err(|error| StatsError::Internal(format!("system clock is out of range: {error}")))
 }
 
 fn validation_error(message: impl Into<String>) -> StatsError {
@@ -1354,9 +1317,8 @@ mod tests {
     use crate::store::segment::write_segment_to_dir;
     use crate::store::store::{ServeMode, Store};
     use crate::telemetry_policy::{
-        IRIS_RPC_NAMESPACE, LEGACY_NAMESPACE, LEVANTER_DETAIL_STORAGE_NAMESPACE,
-        LEVANTER_NAMESPACE, LEVANTER_STATUS_STORAGE_NAMESPACE, NODE_AGENT_NAMESPACE,
-        VLLM_NAMESPACE, ZEPHYR_NAMESPACE,
+        IRIS_RPC_NAMESPACE, LEVANTER_DETAIL_STORAGE_NAMESPACE, LEVANTER_NAMESPACE,
+        LEVANTER_STATUS_STORAGE_NAMESPACE, NODE_AGENT_NAMESPACE, VLLM_NAMESPACE, ZEPHYR_NAMESPACE,
     };
 
     struct TestDirs {
@@ -1449,7 +1411,7 @@ mod tests {
                 max_seq: footer.max_seq,
                 row_count: footer.row_count,
                 byte_size,
-                created_at_ms: now_ms(),
+                created_at_ms: now_ms().unwrap(),
                 min_key_value: footer.min_key_value.map(|value| value.to_string()),
                 max_key_value: footer.max_key_value.map(|value| value.to_string()),
                 location: SegmentLocation::Both,
@@ -1642,7 +1604,7 @@ mod tests {
         assert!(provider_names.contains(IRIS_RPC_NAMESPACE));
         assert!(provider_names.contains(VLLM_NAMESPACE));
         assert!(provider_names.contains(ZEPHYR_NAMESPACE));
-        assert!(provider_names.contains(LEGACY_NAMESPACE));
+        assert!(provider_names.contains("telemetry_v1.unowned_service"));
         assert!(!provider_names.contains(LEVANTER_STATUS_STORAGE_NAMESPACE));
         assert!(!provider_names.contains(LEVANTER_DETAIL_STORAGE_NAMESPACE));
 

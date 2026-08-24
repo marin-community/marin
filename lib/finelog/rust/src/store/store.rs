@@ -17,13 +17,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use arrow::array::{Array, StringArray, UInt32Array};
-use arrow::compute::take;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use clap::ValueEnum;
 
 use crate::errors::StatsError;
+use crate::ingestion::route_ingestion_batch;
+use crate::ingestion_policy::{
+    IngestionBatchSource, IngestionLayoutPolicy, IDENTITY_LAYOUT_POLICY,
+};
 use crate::proto::finelog::stats::ColumnType;
 use crate::query::index_cache::IndexCache;
 use crate::query::provider::NamespaceProvider;
@@ -39,7 +41,7 @@ use crate::store::schema::{
     MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
 use crate::store::types::NamespaceStats;
-use crate::telemetry_policy::{logical_namespace_for_storage, telemetry_storage_namespace};
+use crate::telemetry_policy::logical_namespace_for_storage;
 
 /// The privileged log namespace name.
 pub const LOG_NAMESPACE_NAME: &str = "log";
@@ -494,15 +496,11 @@ impl Store {
         Ok(effective_schema)
     }
 
-    /// Decode + validate + append a WriteRows batch, returning
+    /// Decode + validate + append an already-routed physical batch, returning
     /// `(rows_written, last_seq)`. `last_seq` is the durability target the caller
     /// awaits (`-1` for an empty batch). The size/row caps and IPC decode happen
     /// before namespace resolution, then validate/align runs OUTSIDE any lock.
-    /// Append a WriteRows batch. `origin_cluster` is the authenticated origin the
-    /// rows are attributed to (`Some` for a forwarding JWT; `None` for a
-    /// trusted-network writer, which names its own origin — empty for a local
-    /// write). When set, it overwrites the implicit `cluster` column after
-    /// alignment so origin does not depend on the sender having stamped it.
+    /// `origin_cluster` overwrites the implicit `cluster` column after alignment.
     pub fn write_rows(
         &self,
         name: &str,
@@ -519,6 +517,39 @@ impl Store {
         Ok((outcome.rows_written, last_seq))
     }
 
+    /// Route and append a declared ingestion batch using strict schemas.
+    pub fn write_ingestion_rows(
+        &self,
+        name: &str,
+        arrow_ipc: &[u8],
+        origin_cluster: Option<&str>,
+    ) -> Result<ForwardedWrite, StatsError> {
+        let batch = decode_bounded_write_batch(arrow_ipc)?;
+        let routed = route_ingestion_batch(IngestionBatchSource::Declared(name), &batch)?;
+        let mut prepared_partitions = Vec::with_capacity(routed.len());
+        for partition in routed {
+            let destination = partition.destination.physical_namespace;
+            let engine = self.require_engine(&destination)?;
+            let mut aligned = validate_and_align_batch(&partition.batch, engine.schema())?;
+            if let Some(origin) = origin_cluster {
+                stamp_cluster_column(&mut aligned, origin);
+            }
+            prepared_partitions.push((destination, engine, aligned));
+        }
+        let persisted_targets = prepared_partitions
+            .into_iter()
+            .map(|(destination, engine, aligned)| {
+                let last_seq = engine.append_aligned_batch(&aligned);
+                (destination, last_seq)
+            })
+            .collect();
+        Ok(ForwardedWrite {
+            rows_written: batch.num_rows() as i64,
+            persisted_targets,
+            ignored_columns: Vec::new(),
+        })
+    }
+
     /// Append telemetry forwarded by another Finelog while preserving the hub's
     /// server-owned schema. Unknown nullable columns are omitted and returned for
     /// observability; all other validation remains strict.
@@ -529,60 +560,14 @@ impl Store {
         origin_cluster: &str,
     ) -> Result<ForwardedWrite, StatsError> {
         let batch = decode_bounded_write_batch(arrow_ipc)?;
-        let services = batch
-            .column_by_name("service")
-            .and_then(|column| column.as_any().downcast_ref::<StringArray>())
-            .ok_or_else(|| {
-                StatsError::SchemaValidation(
-                    "forwarded telemetry requires a non-null UTF-8 service column".to_string(),
-                )
-            })?;
-        let names = batch
-            .column_by_name("name")
-            .and_then(|column| column.as_any().downcast_ref::<StringArray>())
-            .ok_or_else(|| {
-                StatsError::SchemaValidation(
-                    "forwarded telemetry requires a non-null UTF-8 name column".to_string(),
-                )
-            })?;
-        let mut rows_by_namespace: BTreeMap<String, Vec<u32>> = BTreeMap::new();
-        for row in 0..batch.num_rows() {
-            if services.is_null(row) || names.is_null(row) {
-                return Err(StatsError::SchemaValidation(
-                    "forwarded telemetry service and name must be non-null".to_string(),
-                ));
-            }
-            let destination =
-                telemetry_storage_namespace(name, services.value(row), names.value(row))
-                    .ok_or_else(|| {
-                        StatsError::SchemaValidation(format!(
-                            "namespace {name:?} is not present in the telemetry stream policy"
-                        ))
-                    })?;
-            rows_by_namespace
-                .entry(destination)
-                .or_default()
-                .push(row as u32);
-        }
-
-        let mut prepared_shards = Vec::with_capacity(rows_by_namespace.len());
+        let routed = route_ingestion_batch(IngestionBatchSource::Stored(name), &batch)?;
+        let mut prepared_shards = Vec::with_capacity(routed.len());
         let mut ignored_columns = std::collections::BTreeSet::new();
-        for (destination, rows) in rows_by_namespace {
-            let indices = UInt32Array::from(rows);
-            let columns = batch
-                .columns()
-                .iter()
-                .map(|column| take(column.as_ref(), &indices, None))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| {
-                    StatsError::Internal(format!("split forwarded telemetry: {error}"))
-                })?;
-            let shard = RecordBatch::try_new(batch.schema(), columns).map_err(|error| {
-                StatsError::Internal(format!("build forwarded telemetry shard: {error}"))
-            })?;
+        for partition in routed {
+            let destination = partition.destination.physical_namespace;
             let engine = self.require_engine(&destination)?;
             let (mut aligned, ignored) =
-                validate_and_align_forwarded_batch(&shard, engine.schema())?;
+                validate_and_align_forwarded_batch(&partition.batch, engine.schema())?;
             stamp_cluster_column(&mut aligned, origin_cluster);
             ignored_columns.extend(ignored);
             prepared_shards.push((destination, engine, aligned));
@@ -608,8 +593,14 @@ impl Store {
         origin_cluster: Option<&str>,
     ) -> Result<ForwardedWrite, StatsError> {
         let batch = decode_bounded_write_batch(arrow_ipc)?;
-        let engine = self.require_engine(name)?;
-        let mut aligned = validate_and_align_batch(&batch, engine.schema())?;
+        let mut routed =
+            IDENTITY_LAYOUT_POLICY.route_batch(IngestionBatchSource::Declared(name), &batch)?;
+        let partition = routed
+            .pop()
+            .expect("identity ingestion policy returns one partition");
+        let destination = partition.destination.physical_namespace;
+        let engine = self.require_engine(&destination)?;
+        let mut aligned = validate_and_align_batch(&partition.batch, engine.schema())?;
         if let Some(origin) = origin_cluster {
             stamp_cluster_column(&mut aligned, origin);
         }
@@ -617,7 +608,7 @@ impl Store {
         let last_seq = engine.append_aligned_batch(&aligned);
         Ok(ForwardedWrite {
             rows_written: n,
-            persisted_targets: vec![(name.to_string(), last_seq)],
+            persisted_targets: vec![(destination, last_seq)],
             ignored_columns: Vec::new(),
         })
     }

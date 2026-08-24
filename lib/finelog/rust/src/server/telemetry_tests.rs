@@ -630,13 +630,13 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
     assert_eq!(response.payload["deduplicated"], false);
     assert_eq!(response.payload["record_count"], 2);
     store
-        .await_persisted("telemetry_v1.legacy", 1, Duration::from_secs(5))
+        .await_persisted("telemetry_v1.trainer", 1, Duration::from_secs(5))
         .await
         .unwrap();
     let rows = query(
         &store,
         "SELECT name, value, body_json, resource_attributes_json, attributes_json \
-         FROM \"telemetry_v1.legacy\" ORDER BY record_index",
+         FROM \"telemetry_v1.trainer\" ORDER BY record_index",
     )
     .await;
     assert_eq!(rows.iter().map(|batch| batch.num_rows()).sum::<usize>(), 2);
@@ -662,7 +662,7 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
     let bounded = query(
         &store,
         "SELECT name, to_timestamp_millis(timestamp_ms) AS observed_at, run_id \
-         FROM \"telemetry_v1.legacy\" \
+         FROM \"telemetry_v1.trainer\" \
          WHERE timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2023-11-14 22:13:20') * 1000 AS BIGINT) \
          AND timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '2023-11-14 22:13:21') * 1000 AS BIGINT)",
     )
@@ -960,10 +960,10 @@ async fn zstd_batch_is_accepted_and_queryable() {
 
     assert_eq!(response.status, StatusCode::OK);
     store
-        .await_persisted("telemetry_v1.legacy", 1, Duration::from_secs(5))
+        .await_persisted("telemetry_v1.trainer", 1, Duration::from_secs(5))
         .await
         .unwrap();
-    let rows = query(&store, "SELECT count(*) AS n FROM \"telemetry_v1.legacy\"").await;
+    let rows = query(&store, "SELECT count(*) AS n FROM \"telemetry_v1.trainer\"").await;
     assert_eq!(
         rows[0]
             .column(0)
@@ -1020,10 +1020,10 @@ async fn repeated_and_concurrent_requests_append_once_but_changed_content_confli
     assert_eq!(response.payload["error"]["code"], "idempotency_conflict");
 
     store
-        .await_persisted("telemetry_v1.legacy", 1, Duration::from_secs(5))
+        .await_persisted("telemetry_v1.trainer", 1, Duration::from_secs(5))
         .await
         .unwrap();
-    let rows = query(&store, "SELECT count(*) AS n FROM \"telemetry_v1.legacy\"").await;
+    let rows = query(&store, "SELECT count(*) AS n FROM \"telemetry_v1.trainer\"").await;
     assert_eq!(
         rows[0]
             .column(0)
