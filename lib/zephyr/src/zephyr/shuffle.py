@@ -87,6 +87,9 @@ class ListShard:
 # ---------------------------------------------------------------------------
 
 _SCATTER_METADATA_FILENAME = "metadata.msgpack"
+_SIDECAR_FILES_FIELD = "files"
+_SIDECAR_AVG_ITEM_BYTES_FIELD = "avg_item_bytes"
+_SIDECAR_SHARD_BYTES_FIELD = "shard_bytes"
 
 # Number of parallel small-file reads (sidecars, parquet schema footers) each
 # reducer issues while building its ScatterReader. These reads are GCS
@@ -265,7 +268,6 @@ class _Sidecar:
         return f"{data_path}{_SCATTER_METADATA_FILENAME}"
 
     def target_bytes(self, target_shard: int) -> int:
-        """Exact payload bytes this mapper wrote for ``target_shard``."""
         return self.shard_bytes.get(target_shard, 0)
 
     def write(self) -> None:
@@ -273,9 +275,9 @@ class _Sidecar:
         meta_path = self.meta_path(self.path)
         payload = self._encoder.encode(
             {
-                "files": self.files,
-                "avg_item_bytes": self.avg_item_bytes,
-                "shard_bytes": {str(k): v for k, v in self.shard_bytes.items()},
+                _SIDECAR_FILES_FIELD: self.files,
+                _SIDECAR_AVG_ITEM_BYTES_FIELD: self.avg_item_bytes,
+                _SIDECAR_SHARD_BYTES_FIELD: {str(k): v for k, v in self.shard_bytes.items()},
             }
         )
         with log_time(f"Writing scatter meta for {self.path} to {meta_path}", level=logging.DEBUG):
@@ -283,22 +285,18 @@ class _Sidecar:
 
     @classmethod
     def read(cls, fs: _SidecarFilesystem, data_path: str) -> "_Sidecar | None":
-        """Load the sidecar under ``data_path``.
-
-        Returns ``None`` if the sidecar has no files (empty writer). The caller
-        supplies ``fs`` so parallel reads reuse one filesystem client (#8402).
-        ``cat_file`` is ~25% faster than ``open_url`` for small sidecars.
-        """
+        """Load one non-empty sidecar, returning ``None`` for an empty writer."""
         meta_path = fs._strip_protocol(cls.meta_path(data_path))
+        # Avoid buffered-file overhead for these small payloads.
         data = cls._decoder.decode(fs.cat_file(meta_path))
-        files = data.get("files", [])
+        files = data.get(_SIDECAR_FILES_FIELD, [])
         if not files:
             return None
-        raw_shard_bytes = data.get("shard_bytes", {})
+        raw_shard_bytes = data.get(_SIDECAR_SHARD_BYTES_FIELD, {})
         return cls(
             path=data_path,
             files=[str(f) for f in files],
-            avg_item_bytes=float(data.get("avg_item_bytes", 0)),
+            avg_item_bytes=float(data.get(_SIDECAR_AVG_ITEM_BYTES_FIELD, 0)),
             shard_bytes={int(k): int(v) for k, v in raw_shard_bytes.items()},
         )
 
@@ -308,6 +306,7 @@ class _Sidecar:
         if not scatter_paths:
             return []
         ordered: list[_Sidecar | None] = [None] * len(scatter_paths)
+        # Resolve before creating the pool so worker threads share one client.
         fs, _ = url_to_fs(cls.meta_path(scatter_paths[0]))
         with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
             futures = {pool.submit(cls.read, fs, p): i for i, p in enumerate(scatter_paths)}
