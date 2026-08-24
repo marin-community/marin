@@ -22,6 +22,9 @@ walk the search into unsupported mixtures.
 """
 
 import argparse
+import contextlib
+import dataclasses
+import itertools
 import sys
 from pathlib import Path
 
@@ -40,10 +43,72 @@ import swarm39_models_20260725 as zoo  # noqa: E402
 from scipy import stats  # noqa: E402
 
 ONE_PHASE_DATASET = {"300m": "300m_one_phase_fit", "delphi_3e18": "delphi_3e18_one_phase_fit"}
+QUALITY_SUFFIXES = ("_high", "_low")
+GROUPINGS = ("strata", "domain", "semantic")
+QUALITY_WEIGHT_BOUND = (-6.0, 2.0)
+
+
+def domain_of(bucket: str) -> str:
+    """The corpus a bucket came from, with any quality suffix removed.
+
+    This is the only bucket grouping the panel legitimately carries: some buckets are quality splits of
+    one domain, exactly as in the GrugMoE production swarm. It says nothing about what a bucket contains.
+    """
+    for suffix in QUALITY_SUFFIXES:
+        if bucket.endswith(suffix):
+            return bucket[: -len(suffix)]
+    return bucket
+
+
+def regroup(panel, grouping: str):
+    """Replace the panel's family partition, which every model in the zoo reads through `family_pool`.
+
+    `semantic` is the retired hand-assigned partition and is kept for archival comparison only. `domain`
+    groups quality splits of one corpus and is label-free, but it leaves thirteen singleton groups, and a
+    singleton's pooled column is its own per-bucket column, so the design goes to rank deficit 55 of 196
+    against 7 of 58. `strata` cuts equal-count strata on log epochs per unit weight, needing only the token
+    counts the exposure columns are already built from.
+    """
+    if grouping == "semantic":
+        return panel
+    if grouping == "domain":
+        keys = [domain_of(bucket) for bucket in panel.buckets]
+        names = tuple(sorted(set(keys)))
+        index = np.array([names.index(key) for key in keys])
+    elif grouping == "strata":
+        probe = gen.Panel(np.stack([panel.phase0, panel.phase1], axis=1), panel.c0, panel.c1, panel.family_index)
+        index = probe.exposure_stratum()
+        names = tuple(f"stratum_{k}" for k in range(int(index.max()) + 1))
+    else:
+        raise ValueError(f"unknown grouping {grouping!r}")
+    return dataclasses.replace(panel, family_index=index, family_names=names)
+
+
+def quality_split_pairs(panel) -> tuple[tuple[int, int], ...]:
+    """Departure-column index pairs for buckets that are quality splits of one domain.
+
+    The per-bucket departure block starts after the pooled columns, so bucket ``b`` owns column
+    ``pooled_width + b``. Tying those pairs asks two quality splits of the same corpus to carry the same
+    readout departure unless the data insists otherwise -- which is the one piece of grouping structure
+    the panel legitimately has, used as a prior rather than as a partition.
+    """
+    offset = gen.pooled_width(
+        gen.Panel(np.stack([panel.phase0, panel.phase1], axis=1), panel.c0, panel.c1, panel.family_index), "split"
+    )
+    groups: dict[str, list[int]] = {}
+    for position, bucket in enumerate(panel.buckets):
+        groups.setdefault(domain_of(bucket), []).append(position)
+    pairs = []
+    for members in groups.values():
+        for first, second in itertools.pairwise(members):
+            pairs.append((offset + first, offset + second))
+    return tuple(pairs)
+
+
 DSP_REFERENCE = "effective_exposure_dsp"
 """The long-standing incumbent. Every margin in this benchmark is quoted against it."""
 
-RECOMMENDED = "general/semantic"
+RECOMMENDED = "general"
 """The configuration to deploy, quoted alongside the per-cell leader.
 
 The per-cell leader is a different model in four of six cells, so it is a winner's-curse artefact rather
@@ -127,25 +192,38 @@ def zoo_scores(fit_panel, held, model, target: str) -> dict[str, float]:
     return score(fitted.predict(held, model), held.targets[target])
 
 
-def general_scores(fit_panel, held, target: str, pooling: str) -> dict[str, float]:
-    """GEN-001 through the split-damage head, which postdates the model benchmark."""
+@contextlib.contextmanager
+def quality_shrinkage(pairs: tuple[tuple[int, int], ...]):
+    """Add quality-split pairs to the departure penalty for the duration of a fit.
+
+    `fit_head` already knows how to shrink two coefficients toward each other; this only widens the set of
+    pairs it is given, so the fitter itself is reused unchanged. The weight is shared with the damage
+    departure it already carries, which is a compromise: one knob now serves two shrinkages.
+    """
+    original = split_damage.departure_pairs
+
+    def patched(panel, variant):
+        return original(panel, variant) + pairs
+
+    split_damage.departure_pairs = patched
+    try:
+        yield
+    finally:
+        split_damage.departure_pairs = original
+
+
+def general_scores(fit_panel, held, target: str, extra_pairs: tuple[tuple[int, int], ...] = ()) -> dict[str, float]:
+    """GEN-001 through the split-damage head, pooled by whatever partition the panel now carries."""
     index = fit_panel.family_index
-    if pooling == "strata":
-        probe = gen.Panel(
-            np.stack([fit_panel.phase0, fit_panel.phase1], axis=1),
-            fit_panel.c0,
-            fit_panel.c1,
-            fit_panel.family_index,
-        )
-        index = probe.exposure_stratum()
     ok = np.isfinite(fit_panel.targets[target])
     train = gen.Panel(np.stack([fit_panel.phase0[ok], fit_panel.phase1[ok]], axis=1), fit_panel.c0, fit_panel.c1, index)
     query = gen.Panel(np.stack([held.phase0, held.phase1], axis=1), fit_panel.c0, fit_panel.c1, index)
     response = fit_panel.targets[target][ok]
-    predictions = [
-        split_damage.predict(query, split_damage.fit_variant(train, response, "split", seed), "split")
-        for seed in range(SEEDS)
-    ]
+    with quality_shrinkage(extra_pairs):
+        predictions = [
+            split_damage.predict(query, split_damage.fit_variant(train, response, "split", seed), "split")
+            for seed in range(SEEDS)
+        ]
     return score(np.median(predictions, axis=0), held.targets[target])
 
 
@@ -153,15 +231,18 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--scales", default="300m,delphi_3e18")
     parser.add_argument("--extended", action="store_true", help="add the mechanisms never scored on single-phase")
+    parser.add_argument("--grouping", choices=GROUPINGS, default="strata", help="semantic is archival only")
     args = parser.parse_args()
 
     collected = []
+    print(f"bucket grouping: {args.grouping}")
     for scale in args.scales.split(","):
         two_phase_fit, _held = swarm39.load_scale(scale)
-        held = single_phase_heldout(scale)
+        two_phase_fit = regroup(two_phase_fit, args.grouping)
+        held = regroup(single_phase_heldout(scale), args.grouping)
         fit_panels = [("two-phase", two_phase_fit)]
         if scale in ONE_PHASE_DATASET:
-            fit_panels.append(("one-phase", one_phase_panel(scale)))
+            fit_panels.append(("one-phase", regroup(one_phase_panel(scale), args.grouping)))
         else:
             print(f"\n[{scale}] no single-phase fit panel in the catalog; fitting on the two-phase panel only")
         models = zoo.observatory_baselines(two_phase_fit) + zoo.candidates()
@@ -176,11 +257,11 @@ def main() -> None:
                     rows.append(
                         {"model": model.name, "fitted_on": fit_name} | zoo_scores(fit_panel, panel, model, target)
                     )
-                for pooling in ("semantic", "strata"):
-                    rows.append(
-                        {"model": f"general/{pooling}", "fitted_on": fit_name}
-                        | general_scores(fit_panel, panel, target, pooling)
-                    )
+                rows.append({"model": "general", "fitted_on": fit_name} | general_scores(fit_panel, panel, target))
+                rows.append(
+                    {"model": "general+quality", "fitted_on": fit_name}
+                    | general_scores(fit_panel, panel, target, quality_split_pairs(fit_panel))
+                )
             table = pd.DataFrame(rows).sort_values(["regret@1", "spearman"], ascending=[True, False])
             table["cell"] = f"{scale}/{target.split('_')[0]}"
             table["ties_best"] = table["regret@1"] <= table["regret@1"].min() + 1e-12
