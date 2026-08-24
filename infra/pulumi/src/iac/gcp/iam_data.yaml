@@ -968,6 +968,9 @@ project_grants:
   members:
   - serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com
   - principal: human-012
+- role: roles/cloudsql.viewer
+  members:
+  - principal: human-070
 - role: roles/cloudtasks.enqueuer
   members:
   - serviceAccount:hai-gcp-models@appspot.gserviceaccount.com
@@ -1319,14 +1322,14 @@ project_grants:
 - role: roles/servicenetworking.serviceAgent
   members:
   - serviceAccount:748532799086-compute@developer.gserviceaccount.com
-- role: roles/serviceusage.serviceUsageConsumer
-  members:
-  - principal://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/subject/repo:marin-community/marin:ref:refs/heads/main
-  - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/serviceusage.serviceUsageAdmin
   members:
   - principal: human-037
   - principal: human-070
+- role: roles/serviceusage.serviceUsageConsumer
+  members:
+  - principal://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/subject/repo:marin-community/marin:ref:refs/heads/main
+  - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/storage.admin
   members:
   - serviceAccount:codalab-dev@hai-gcp-models.iam.gserviceaccount.com
