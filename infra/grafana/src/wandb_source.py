@@ -109,15 +109,16 @@ class WandbSource:
             raise UpstreamError("wandb", "report pins no runs", status_code=502)
         return view.get("displayName") or "W&B report", runs
 
-    def _sampled_history(
-        self, *, project: str, run: str, x_key: str, y_key: str, samples: int
-    ) -> list[tuple[float, float]] | None:
-        """Numeric (x, y) pairs from one run's sampled history, or None if it is absent.
+    def _sampled_points(
+        self, *, project: str, run: str, keys: tuple[str, ...], samples: int
+    ) -> list[dict[str, float]] | None:
+        """Numeric points from one run's sampled history, or None if the run is absent.
 
-        A point missing either key is dropped: W&B writes a null wherever a metric
-        was not logged on that step. Callers decide what an absent run means.
+        Each point carries every key in `keys`; a point missing any of them is dropped,
+        since W&B writes a null wherever a metric was not logged on that step. Callers
+        decide what an absent run means.
         """
-        spec = json.dumps({"keys": [x_key, y_key], "samples": samples})
+        spec = json.dumps({"keys": list(keys), "samples": samples})
         run_data = (
             self._graphql(
                 _HISTORY_QUERY,
@@ -128,13 +129,21 @@ class WandbSource:
         if not run_data:
             return None
         histories = run_data.get("sampledHistory") or []
-        pairs: list[tuple[float, float]] = []
+        points: list[dict[str, float]] = []
         for point in histories[0] if histories else []:
-            x_value = point.get(x_key)
-            y_value = point.get(y_key)
-            if isinstance(x_value, int | float) and isinstance(y_value, int | float):
-                pairs.append((x_value, y_value))
-        return pairs
+            values = {key: point.get(key) for key in keys}
+            if all(isinstance(value, int | float) for value in values.values()):
+                points.append(values)
+        return points
+
+    def _sampled_history(
+        self, *, project: str, run: str, x_key: str, y_key: str, samples: int
+    ) -> list[tuple[float, float]] | None:
+        """Numeric (x, y) pairs from one run's sampled history, or None if it is absent."""
+        points = self._sampled_points(project=project, run=run, keys=(x_key, y_key), samples=samples)
+        if points is None:
+            return None
+        return [(point[x_key], point[y_key]) for point in points]
 
     def _search_projects(self, run: str, project: str | None, read: Callable[[str], list[dict] | None]) -> list[dict]:
         """Return the first non-empty `read(candidate)` over the projects that may hold `run`.
@@ -198,25 +207,32 @@ class WandbSource:
         return self._search_projects(run, project, read)
 
     def _reference_rate_and_token_baseline(self, *, project: str, run: str) -> tuple[float, float] | tuple[None, None]:
-        """Mean per-step token rate and the run's starting cumulative token count.
+        """Mean per-step token rate and the tokens this W&B run inherited before its first step.
 
-        Both come from one sampled history keyed on cumulative tokens. The mean of the
-        rate is the reference speed -- a mean over history, not the summary's last-step
-        value, so a checkpoint or eval step cannot skew it (see `_TPS_KEY`). The
-        smallest cumulative-token value is where this W&B run began: levanter derives
-        `total_tokens` from the global step, so a run resumed under a fresh id from a
-        mid-schedule checkpoint starts at a nonzero count, and that baseline is
-        subtracted before dividing by wall time. `(None, None)` if the run has logged
-        no token rate yet.
+        Both come from one sampled history. The mean of the rate is the reference speed
+        -- a mean over history, not the summary's last-step value, so a checkpoint or
+        eval step cannot skew it (see `_TPS_KEY`).
+
+        The baseline is the cumulative token count before this run's first step, which a
+        run resumed under a fresh id from a mid-schedule checkpoint carries in from the
+        checkpoint (levanter derives `total_tokens` from the global step). It is
+        reconstructed rather than read off the earliest sample, because that sample is
+        logged *after* the first step and so already includes one batch: with a constant
+        batch, `total_tokens` is proportional to `step + 1`, so the pre-first-step count
+        is `first_tokens * first_step / (first_step + 1)` -- zero for a run started from
+        scratch, the inherited count for a resumed one. `(None, None)` before the first
+        logged step.
         """
-        pairs = self._sampled_history(
-            project=project, run=run, x_key=_TOTAL_TOKENS_KEY, y_key=_TPS_KEY, samples=_TPS_SAMPLES
+        points = self._sampled_points(
+            project=project, run=run, keys=(_STEP_KEY, _TOTAL_TOKENS_KEY, _TPS_KEY), samples=_TPS_SAMPLES
         )
-        if not pairs:
+        if not points:
             return None, None
-        rates = [rate for _, rate in pairs]
-        baseline = min(tokens for tokens, _ in pairs)
-        return sum(rates) / len(rates), baseline
+        reference_tps = sum(point[_TPS_KEY] for point in points) / len(points)
+        first = min(points, key=lambda point: point[_STEP_KEY])
+        step, tokens = first[_STEP_KEY], first[_TOTAL_TOKENS_KEY]
+        baseline = tokens * step / (step + 1)
+        return reference_tps, baseline
 
     def run_activity(self, run: str, *, project: str | None = None) -> list[dict]:
         """Return one row of active time, wall-clock time, and progress efficiency for `run`.

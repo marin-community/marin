@@ -408,20 +408,22 @@ def test_wandb_run_activity_separates_active_time_from_downtime():
     # between two attempts. Wall clock here is four days, of which ninety hours ran.
     # Progress efficiency divides the tokens this run produced by the mean rate times wall.
     # The reference rate is the mean over the history (2.5M here), not the summary's last
-    # step, so a checkpoint step logging a low rate cannot skew it. This run started at a
-    # cumulative 500e9 tokens (a fresh id resumed from a mid-schedule checkpoint): crediting
-    # the full 1148e9 over four days would read 133%, so only 1148e9 - 500e9 counts, and
-    # 648e9 / (2.5e6 * 345600) is 0.75.
+    # step, so a checkpoint step logging a low rate cannot skew it. This run is a fresh id
+    # resumed at step 39,000 with a 10M-token batch, so total_tokens is 10M*(step+1): the
+    # inherited count before its first step is reconstructed as 390.01e9 * 39000/39001, i.e.
+    # 390e9, not the earliest sample's 390.01e9 (which would drop that first batch too).
+    # Crediting the full 1038e9 over four days would read 120%; only 1038e9 - 390e9 counts,
+    # and 648e9 / (2.5e6 * 345600) is 0.75.
     asked: list[str] = []
     run = {
         "state": "running",
         "createdAt": "2026-08-20T02:00:00Z",
         "heartbeatAt": "2026-08-24T02:00:00Z",
-        "summaryMetrics": json.dumps({"_runtime": 90 * 3_600, "throughput/total_tokens": 1_148_000_000_000}),
+        "summaryMetrics": json.dumps({"_runtime": 90 * 3_600, "throughput/total_tokens": 1_038_000_000_000}),
     }
     tps_points = [
-        {"throughput/total_tokens": 500_000_000_000, "throughput/tokens_per_second": 2_000_000},
-        {"throughput/total_tokens": 600_000_000_000, "throughput/tokens_per_second": 3_000_000},
+        {"_step": 39_000, "throughput/total_tokens": 390_010_000_000, "throughput/tokens_per_second": 2_000_000},
+        {"_step": 78_001, "throughput/total_tokens": 780_020_000_000, "throughput/tokens_per_second": 3_000_000},
     ]
 
     (row,) = _wandb(_activity_handler("marin_moe", run, asked, tps_points)).run_activity("hero-run")
@@ -437,8 +439,30 @@ def test_wandb_run_activity_separates_active_time_from_downtime():
         "downtime_seconds": 21_600.0,
         "active_share": 0.9375,
         "reference_tps": 2_500_000.0,
-        "progress_efficiency": 0.75,
+        "progress_efficiency": pytest.approx(0.75),
     }
+
+
+def test_wandb_run_activity_credits_a_from_scratch_run_its_first_step():
+    # A run started from step 0 inherited nothing, so its baseline reconstructs to zero and
+    # its first step counts: total_tokens * 0 / 1 == 0. Without the reconstruction the first
+    # sample would be taken as the baseline and a one-step run would report null. Here the
+    # run has produced 100e9 tokens over a 100000s wall clock at a 2M reference rate, so
+    # progress efficiency is 100e9 / (2e6 * 100000), i.e. 0.5.
+    asked: list[str] = []
+    run = {
+        "state": "running",
+        "createdAt": "2026-08-20T02:00:00Z",
+        "heartbeatAt": "2026-08-21T05:46:40Z",
+        "summaryMetrics": json.dumps({"_runtime": 90_000, "throughput/total_tokens": 100_000_000_000}),
+    }
+    tps_points = [{"_step": 0, "throughput/total_tokens": 100_000_000_000, "throughput/tokens_per_second": 2_000_000}]
+
+    (row,) = _wandb(_activity_handler("marin_moe", run, asked, tps_points)).run_activity("hero-run")
+
+    assert row["wall_seconds"] == 100_000.0
+    assert row["reference_tps"] == 2_000_000.0
+    assert row["progress_efficiency"] == pytest.approx(0.5)
 
 
 def test_wandb_run_activity_reports_no_active_time_before_the_first_log():
