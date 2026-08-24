@@ -962,8 +962,9 @@ class DockerRuntime:
         """Convert semantic MountSpecs to ResolvedMount instances.
 
         Creates host directories as needed. WORKDIR uses the explicit host path
-        (created by task_attempt). CACHE gets shared dirs under cache_dir.
-        TMPFS uses Docker --tmpfs for per-container isolation (no host dir).
+        created by the task attempt. OUTPUT uses its separate attempt-local host
+        path. CACHE gets shared dirs under cache_dir. TMPFS uses Docker --tmpfs
+        for per-container isolation (no host dir).
         """
         result: list[ResolvedMount] = []
         for mount in mounts:

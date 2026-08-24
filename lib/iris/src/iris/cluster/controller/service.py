@@ -523,8 +523,7 @@ def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskWithAtte
         if task_row is None:
             return None
         attempt_rows = tx.execute(
-            select(*reads.ATTEMPT_COLS)
-            .select_from(reads.ATTEMPTS_WITH_OUTPUT)
+            reads.attempt_select()
             .where(task_attempts_table.c.task_id == task_id)
             .order_by(task_attempts_table.c.attempt_id.asc())
         ).all()
@@ -629,9 +628,7 @@ def _tasks_for_listing(tx: Tx, *, job_id: JobName) -> list[TaskWithAttempts]:
     ).all()
     # Current attempt per task (composite-PK lookup, at most one row each).
     current_attempt_rows = tx.execute(
-        select(*reads.ATTEMPT_COLS)
-        .select_from(reads.ATTEMPTS_WITH_OUTPUT)
-        .where(
+        reads.attempt_select().where(
             tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(
                 select(tasks_table.c.task_id, tasks_table.c.current_attempt_id).where(
                     tasks_table.c.job_id == job_id, tasks_table.c.current_attempt_id >= 0
@@ -655,7 +652,7 @@ def _tasks_for_listing(tx: Tx, *, job_id: JobName) -> list[TaskWithAttempts]:
         .subquery()
     )
     failed_attempt_rows = tx.execute(
-        select(*reads.ATTEMPT_COLS).select_from(
+        reads.attempt_select(
             reads.ATTEMPTS_WITH_OUTPUT.join(
                 latest_failed,
                 (task_attempts_table.c.task_id == latest_failed.c.task_id)
@@ -986,8 +983,7 @@ def _attempts_for_worker(
     """
     with db.read_snapshot() as tx:
         raw_rows = tx.execute(
-            select(*reads.ATTEMPT_COLS)
-            .select_from(reads.ATTEMPTS_WITH_OUTPUT)
+            reads.attempt_select()
             .where(task_attempts_table.c.worker_id == worker_id)
             .order_by(
                 case(

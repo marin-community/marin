@@ -358,6 +358,7 @@ def _resolve_mount_map(config: ContainerConfig, cache_dir: Path | None = None) -
     """Build container_path -> host_path mapping for process runtime.
 
     WORKDIR mounts resolve to config.workdir_host_path (set by task_attempt).
+    OUTPUT mounts resolve to config.output_host_path.
     CACHE mounts resolve to shared subdirectories under cache_dir.
     TMPFS mounts resolve to per-task temp directories under cache_dir for isolation.
     """

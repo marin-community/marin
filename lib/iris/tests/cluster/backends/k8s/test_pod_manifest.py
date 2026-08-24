@@ -9,6 +9,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 
 import pytest
+from iris.cluster.backends.k8s.output_contract import output_policy_from_environment
 from iris.cluster.backends.k8s.tasks import (
     K8sTaskProvider,
     PodConfig,
@@ -192,6 +193,7 @@ def test_task_output_policy_adds_uploader_and_dedicated_volume() -> None:
     assert mounts == {"task-outputs": "/iris/outputs", "output-control": "/iris/output-control"}
     assert env["IRIS_ATTEMPT_UID"] == "0123456789abcdef"
     assert env["IRIS_TASK_OUTPUT_TTL_DAYS"] == "7"
+    assert output_policy_from_environment(env) == TaskOutputPolicy()
 
 
 def test_succeeded_pod_reports_uploader_archive() -> None:

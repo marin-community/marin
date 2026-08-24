@@ -11,38 +11,28 @@ import threading
 from pathlib import Path
 
 from google.protobuf import json_format
-from rigging.timing import Deadline, Duration
 
-from iris.cluster.config import TaskOutputDestination, TaskOutputPolicy
-from iris.cluster.runtime.env import OUTPUT_PATH
-from iris.cluster.runtime.output_capture import (
-    TaskOutputLimits,
-    capture_task_outputs,
-    resolve_task_output_destination,
+from iris.cluster.backends.k8s.output_contract import (
+    ATTEMPT_UID_ENV,
+    OUTPUT_RELEASE_PATH,
+    SOURCE_PREFIX_ENV,
+    TASK_ID_ENV,
+    output_policy_from_environment,
 )
+from iris.cluster.runtime.env import OUTPUT_PATH
+from iris.cluster.runtime.output_capture import capture_task_outputs_for_attempt, task_output_storage_failure
 from iris.cluster.types import AttemptUid
 from iris.cluster.types import TaskAttempt as TaskAttemptIdentity
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
-_RELEASE_PATH = Path("/iris/output-control/release")
 _TERMINATION_LOG = Path("/dev/termination-log")
-
-
-def _policy_from_environment() -> TaskOutputPolicy:
-    return TaskOutputPolicy(
-        destination=TaskOutputDestination(os.environ["IRIS_TASK_OUTPUT_DESTINATION"]),
-        ttl_days=int(os.environ["IRIS_TASK_OUTPUT_TTL_DAYS"]),
-        max_bytes=int(os.environ["IRIS_TASK_OUTPUT_MAX_BYTES"]),
-        max_entries=int(os.environ["IRIS_TASK_OUTPUT_MAX_ENTRIES"]),
-        finalization_timeout=Duration.from_seconds(float(os.environ["IRIS_TASK_OUTPUT_TIMEOUT_SECONDS"])),
-    )
 
 
 def _wait_for_release(stop: threading.Event) -> bool:
     while not stop.wait(0.2):
-        if _RELEASE_PATH.exists():
+        if Path(OUTPUT_RELEASE_PATH).exists():
             return True
     return False
 
@@ -68,28 +58,20 @@ def main() -> int:
         return 0
 
     try:
-        policy = _policy_from_environment()
-        identity = TaskAttemptIdentity.from_wire(os.environ["IRIS_TASK_ID"])
-        destination = resolve_task_output_destination(
+        policy = output_policy_from_environment(os.environ)
+        identity = TaskAttemptIdentity.from_wire(os.environ[TASK_ID_ENV])
+        result = capture_task_outputs_for_attempt(
+            Path(OUTPUT_PATH),
             policy,
             identity.task_id,
-            AttemptUid(os.environ["IRIS_ATTEMPT_UID"]),
+            AttemptUid(os.environ[ATTEMPT_UID_ENV]),
             local_root=Path("/tmp"),
-            source_prefix=os.environ.get("IRIS_TASK_OUTPUT_SOURCE_PREFIX"),
-        )
-        result = capture_task_outputs(
-            Path(OUTPUT_PATH),
-            destination,
-            TaskOutputLimits(max_bytes=policy.max_bytes, max_entries=policy.max_entries),
-            Deadline.from_now(policy.finalization_timeout),
-            stop,
+            source_prefix=os.environ.get(SOURCE_PREFIX_ENV),
+            stop=stop,
         )
     except Exception as exc:
         logger.exception("Failed to finalize task outputs")
-        result = job_pb2.TaskOutputArchive(
-            state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_FAILED,
-            error=f"storage_error: {str(exc)[:900]}",
-        )
+        result = task_output_storage_failure(exc)
     _write_result(result)
     return 0
 

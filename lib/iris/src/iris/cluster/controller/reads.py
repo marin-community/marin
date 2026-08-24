@@ -25,6 +25,7 @@ from typing import Protocol
 
 from rigging.timing import Timestamp
 from sqlalchemy import Integer, Row, bindparam, case, exists, func, literal_column, select, tuple_
+from sqlalchemy.sql.selectable import FromClause
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.attempt_counts import (
@@ -1003,14 +1004,16 @@ ATTEMPTS_WITH_OUTPUT = task_attempts_table.outerjoin(
     & (task_attempt_outputs_table.c.attempt_id == task_attempts_table.c.attempt_id),
 )
 
+
+def attempt_select(from_clause: FromClause = ATTEMPTS_WITH_OUTPUT):
+    """Select attempt rows with their optional output archive metadata."""
+    return select(*ATTEMPT_COLS).select_from(from_clause)
+
+
 _BULK_GET_CHUNK_SIZE = 450
 
-_BULK_GET_ATTEMPTS_STMT = (
-    select(*ATTEMPT_COLS)
-    .select_from(ATTEMPTS_WITH_OUTPUT)
-    .where(
-        tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(bindparam("keys", expanding=True))
-    )
+_BULK_GET_ATTEMPTS_STMT = attempt_select().where(
+    tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(bindparam("keys", expanding=True))
 )
 
 
@@ -1093,8 +1096,7 @@ def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName,
     if not task_ids:
         return {}
     rows = tx.execute(
-        select(*ATTEMPT_COLS)
-        .select_from(ATTEMPTS_WITH_OUTPUT)
+        attempt_select()
         .where(task_attempts_table.c.task_id.in_(bindparam("task_ids", expanding=True)))
         .order_by(task_attempts_table.c.task_id.asc(), task_attempts_table.c.attempt_id.asc()),
         {"task_ids": list(task_ids)},

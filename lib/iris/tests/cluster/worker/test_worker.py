@@ -147,7 +147,7 @@ def test_task_output_storage_failure_preserves_task_success(mock_worker, monkeyp
     def fail_destination(*args, **kwargs):
         raise RuntimeError("archive store unavailable")
 
-    monkeypatch.setattr("iris.cluster.worker.task_attempt.resolve_task_output_destination", fail_destination)
+    monkeypatch.setattr("iris.cluster.runtime.output_capture.resolve_task_output_destination", fail_destination)
     task_id = mock_worker.submit_task(create_run_task_request())
     task = mock_worker.get_task(task_id)
     task.thread.join(timeout=15.0)

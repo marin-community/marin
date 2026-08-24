@@ -20,7 +20,7 @@ from pathlib import Path
 
 from finelog.client import LogClient, Table
 from finelog.rpc import logging_pb2
-from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
@@ -34,11 +34,7 @@ from iris.cluster.runtime.env import (
     STANDARD_MOUNTS,
     build_common_iris_env,
 )
-from iris.cluster.runtime.output_capture import (
-    TaskOutputLimits,
-    capture_task_outputs,
-    resolve_task_output_destination,
-)
+from iris.cluster.runtime.output_capture import capture_task_outputs_for_attempt
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerErrorKind,
@@ -65,6 +61,7 @@ logger = logging.getLogger(__name__)
 
 # Trailing stderr lines scanned for TPU bad-node signatures on non-zero exit.
 _TPU_STDERR_TAIL_LINES = 200
+_OUTPUT_HOST_DIRNAME = ".iris-outputs"
 
 
 # Max time to wait for the container to actually exit after force-kill before
@@ -368,7 +365,7 @@ class TaskAttempt:
         instance.started_at = Timestamp.now()
         instance.status_message = "adopted"
         instance.workdir = Path(discovered.workdir_host_path) if discovered.workdir_host_path else None
-        instance.output_dir = instance.workdir / ".iris-outputs" if instance.workdir is not None else None
+        instance.output_dir = instance.workdir / _OUTPUT_HOST_DIRNAME if instance.workdir is not None else None
         # Restore host-port reservations and re-mark them taken so the worker
         # never re-allocates an in-use port to a new task after restart.
         instance.ports = dict(discovered.ports)
@@ -611,7 +608,7 @@ class TaskAttempt:
         safe_task_id = self.task_id.to_safe_token()
         self.workdir = self._cache_dir / "workdirs" / f"{safe_task_id}_attempt_{self.attempt_id}"
         self.workdir.mkdir(parents=True, exist_ok=True)
-        self.output_dir = self.workdir / ".iris-outputs"
+        self.output_dir = self.workdir / _OUTPUT_HOST_DIRNAME
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Mount tmpfs on workdir for quota enforcement (Docker only; no-op for process/k8s).
@@ -629,7 +626,8 @@ class TaskAttempt:
         3. Create container handle
         4. Build phase: run setup_commands (uv sync) - BUILDING state
         5. Run phase: start main command - RUNNING state
-        6. Monitor until completion
+        6. Monitor until the command exits
+        7. Capture task outputs, then publish the terminal state
 
         Not valid for adopted tasks — use resume_monitoring() instead.
         """
@@ -814,28 +812,14 @@ class TaskAttempt:
             return
         self.status_message = "finalizing task outputs"
         try:
-            destination = resolve_task_output_destination(
+            self.output_archive = capture_task_outputs_for_attempt(
+                self.output_dir,
                 self._task_outputs,
                 self.task_id,
                 self.attempt_uid,
                 local_root=self._cache_dir / "task-output-archives",
                 source_prefix=self._task_env.get("MARIN_PREFIX"),
-            )
-            self.output_archive = capture_task_outputs(
-                self.output_dir,
-                destination,
-                TaskOutputLimits(
-                    max_bytes=self._task_outputs.max_bytes,
-                    max_entries=self._task_outputs.max_entries,
-                ),
-                Deadline.from_now(self._task_outputs.finalization_timeout),
-                self._output_stop,
-            )
-        except Exception as exc:
-            logger.exception("Failed to finalize task outputs for %s", self.task_id)
-            self.output_archive = job_pb2.TaskOutputArchive(
-                state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_FAILED,
-                error=f"storage_error: {str(exc)[:900]}",
+                stop=self._output_stop,
             )
         finally:
             self.status_message = ""
@@ -881,9 +865,7 @@ class TaskAttempt:
         Polls container status at regular intervals until the container stops.
         Streams logs incrementally into task.logs (single source of truth).
         Collects runtime statistics (CPU, memory, disk).
-        Returns the terminal outcome when the container stops. The caller publishes
-        it after output finalization, so the controller cannot observe a terminal
-        attempt before its archive metadata is available.
+        Returns the terminal outcome without mutating the attempt to a terminal state.
 
         Execution timeouts are enforced by the controller, not the worker.
         Profiling is handled centrally by the controller's profile loop thread.

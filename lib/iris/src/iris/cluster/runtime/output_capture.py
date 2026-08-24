@@ -30,6 +30,8 @@ _ARCHIVE_NAME = "outputs.tar.zst"
 _SKIPPED_SAMPLE_LIMIT = 10
 _SKIPPED_PATH_MAX_CHARS = 200
 _COPY_CHUNK_BYTES = 1024 * 1024
+_ERROR_MAX_CHARS = 900
+_CAPTURE_CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +80,13 @@ class _Entry:
     mode: int
 
 
+@dataclass(frozen=True, slots=True)
+class _ArchiveWriteResult:
+    size_bytes: int
+    sha256: str
+    skipped: tuple[job_pb2.TaskOutputSkippedEntry, ...]
+
+
 class _CaptureError(RuntimeError):
     pass
 
@@ -116,7 +125,7 @@ class _CheckedReader:
 
 def _check_running(deadline: Deadline, stop: threading.Event) -> None:
     if stop.is_set():
-        raise _CaptureError("cancelled")
+        raise _CaptureError(_CAPTURE_CANCELLED)
     if deadline.expired():
         raise _CaptureError("deadline_exceeded")
 
@@ -168,7 +177,7 @@ def _write_archive(
     destination: StoragePath,
     deadline: Deadline,
     stop: threading.Event,
-) -> tuple[int, str, list[job_pb2.TaskOutputSkippedEntry]]:
+) -> _ArchiveWriteResult:
     skipped: list[job_pb2.TaskOutputSkippedEntry] = []
     temporary = destination.parent / f".{_ARCHIVE_NAME}.partial-{uuid.uuid4().hex}"
     destination.parent.mkdirs(exist_ok=True)
@@ -191,7 +200,7 @@ def _write_archive(
                             archive.addfile(info)
             hashing.flush()
         temporary.rename(destination)
-        return hashing.size, hashing.digest.hexdigest(), skipped
+        return _ArchiveWriteResult(hashing.size, hashing.digest.hexdigest(), tuple(skipped))
     except Exception:
         try:
             if temporary.exists():
@@ -227,27 +236,63 @@ def capture_task_outputs(
                 skipped_count=len(skipped_entries),
                 skipped_sample=[_skipped_entry(entry) for entry in skipped_entries[:_SKIPPED_SAMPLE_LIMIT]],
             )
-        size, digest, skipped = _write_archive(entries, destination.path, deadline, stop)
+        archive = _write_archive(entries, destination.path, deadline, stop)
         return job_pb2.TaskOutputArchive(
             state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UPLOADED,
             uri=str(destination.path),
-            size_bytes=size,
-            sha256=digest,
+            size_bytes=archive.size_bytes,
+            sha256=archive.sha256,
             retention=destination.retention,
             ttl_days=destination.ttl_days,
-            skipped_count=len(skipped),
-            skipped_sample=skipped[:_SKIPPED_SAMPLE_LIMIT],
+            skipped_count=len(archive.skipped),
+            skipped_sample=archive.skipped[:_SKIPPED_SAMPLE_LIMIT],
         )
     except _CaptureError as exc:
         state = (
             job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UNAVAILABLE
-            if str(exc) == "cancelled"
+            if str(exc) == _CAPTURE_CANCELLED
             else job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_FAILED
         )
         return job_pb2.TaskOutputArchive(state=state, error=str(exc))
     except Exception as exc:
         logger.exception("Task output capture failed")
-        return job_pb2.TaskOutputArchive(
-            state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_FAILED,
-            error=f"storage_error: {str(exc)[:900]}",
+        return task_output_storage_failure(exc)
+
+
+def task_output_storage_failure(exc: Exception) -> job_pb2.TaskOutputArchive:
+    """Return a bounded FAILED archive result for ``exc``."""
+    return job_pb2.TaskOutputArchive(
+        state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_FAILED,
+        error=f"storage_error: {str(exc)[:_ERROR_MAX_CHARS]}",
+    )
+
+
+def capture_task_outputs_for_attempt(
+    source: Path,
+    policy: TaskOutputPolicy,
+    task_id: JobName,
+    attempt_uid: AttemptUid,
+    *,
+    local_root: Path,
+    source_prefix: str | None,
+    stop: threading.Event,
+) -> job_pb2.TaskOutputArchive:
+    """Resolve policy and capture one attempt's output tree."""
+    try:
+        destination = resolve_task_output_destination(
+            policy,
+            task_id,
+            attempt_uid,
+            local_root=local_root,
+            source_prefix=source_prefix,
         )
+        return capture_task_outputs(
+            source,
+            destination,
+            TaskOutputLimits(max_bytes=policy.max_bytes, max_entries=policy.max_entries),
+            Deadline.from_now(policy.finalization_timeout),
+            stop,
+        )
+    except Exception as exc:
+        logger.exception("Task output destination resolution failed")
+        return task_output_storage_failure(exc)

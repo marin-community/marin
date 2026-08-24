@@ -27,6 +27,13 @@ from finelog.client.log_client import Table
 from google.protobuf import json_format
 from rigging.timing import Timestamp
 
+from iris.cluster.backends.k8s.output_contract import (
+    OUTPUT_CONTAINER_NAME,
+    OUTPUT_CONTROL_PATH,
+    OUTPUT_CONTROL_VOLUME_NAME,
+    OUTPUT_RELEASE_PATH,
+    output_uploader_environment,
+)
 from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.backend import (
@@ -158,9 +165,6 @@ _GPU_RESOURCE = "nvidia.com/gpu"
 _LOGSHIP_CONTAINER_NAME = "log-shipper"
 _LOGSHIP_VOLUME_NAME = "varlogpods"
 _NODE_POD_LOG_DIR = "/var/log/pods"
-_OUTPUT_CONTAINER_NAME = "output-uploader"
-_OUTPUT_CONTROL_VOLUME_NAME = "output-control"
-_OUTPUT_CONTROL_PATH = "/iris/output-control"
 
 # Max pod name length is 253 chars in k8s. We stay well under it.
 _MAX_POD_NAME_LEN = 63
@@ -663,29 +667,15 @@ def _build_output_uploader(
     source_prefix: str | None,
     env_secret_name: str,
 ) -> dict:
-    env: list[dict[str, object]] = [
-        {"name": "IRIS_TASK_ID", "value": task_id_wire},
-        {"name": "IRIS_ATTEMPT_UID", "value": attempt_uid},
-        {"name": "IRIS_TASK_OUTPUT_DESTINATION", "value": str(policy.destination)},
-        {"name": "IRIS_TASK_OUTPUT_TTL_DAYS", "value": str(policy.ttl_days)},
-        {"name": "IRIS_TASK_OUTPUT_MAX_BYTES", "value": str(policy.max_bytes)},
-        {"name": "IRIS_TASK_OUTPUT_MAX_ENTRIES", "value": str(policy.max_entries)},
-        {
-            "name": "IRIS_TASK_OUTPUT_TIMEOUT_SECONDS",
-            "value": str(policy.finalization_timeout.to_seconds()),
-        },
-    ]
-    if source_prefix:
-        env.append({"name": "IRIS_TASK_OUTPUT_SOURCE_PREFIX", "value": source_prefix})
     container: dict[str, object] = {
-        "name": _OUTPUT_CONTAINER_NAME,
+        "name": OUTPUT_CONTAINER_NAME,
         "image": image,
         "imagePullPolicy": "IfNotPresent",
         "command": [".venv/bin/python", "-m", "iris.cluster.backends.k8s.outputship"],
-        "env": env,
+        "env": output_uploader_environment(task_id_wire, attempt_uid, policy, source_prefix),
         "volumeMounts": [
             {"name": OUTPUT_MOUNT.name, "mountPath": OUTPUT_MOUNT.container_path},
-            {"name": _OUTPUT_CONTROL_VOLUME_NAME, "mountPath": _OUTPUT_CONTROL_PATH},
+            {"name": OUTPUT_CONTROL_VOLUME_NAME, "mountPath": OUTPUT_CONTROL_PATH},
         ],
         "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}},
         "terminationMessagePolicy": "File",
@@ -1028,7 +1018,7 @@ def _build_pod_manifest(
 
     containers = [container]
     if config.task_outputs is not None:
-        volumes.append({"name": _OUTPUT_CONTROL_VOLUME_NAME, "emptyDir": {}})
+        volumes.append({"name": OUTPUT_CONTROL_VOLUME_NAME, "emptyDir": {}})
         containers.append(
             _build_output_uploader(
                 iris_env["IRIS_TASK_ID"],
@@ -1114,7 +1104,7 @@ def _task_container_status(pod: dict) -> dict | None:
 
 def _output_container_status(pod: dict) -> dict | None:
     for status in pod.get("status", {}).get("containerStatuses", []):
-        if status.get("name") == _OUTPUT_CONTAINER_NAME:
+        if status.get("name") == OUTPUT_CONTAINER_NAME:
             return status
     return None
 
@@ -3138,6 +3128,42 @@ class K8sTaskProvider:
                 field_selector=f"status.phase={phase}",
             )
 
+    def _finalize_task_outputs(
+        self,
+        entry: RunningTaskEntry,
+        pod_name: str,
+        pod: dict,
+    ) -> TaskUpdate | None:
+        policy = self.pods.task_outputs
+        if policy is None or pod.get("status", {}).get("phase") != "Running" or not _task_container_terminated(pod):
+            return None
+
+        started = self._output_finalization_started.setdefault(entry, time.monotonic())
+        uploader = _output_container_status(pod)
+        uploader_running = uploader is not None and "running" in uploader.get("state", {})
+        if uploader_running and entry not in self._released_output_attempts:
+            try:
+                release = self.kubectl.exec(
+                    pod_name,
+                    ["touch", OUTPUT_RELEASE_PATH],
+                    container=OUTPUT_CONTAINER_NAME,
+                    timeout=10,
+                )
+                if release.returncode == 0:
+                    self._released_output_attempts.add(entry)
+                else:
+                    logger.warning("Failed to release task output uploader in pod %s: %s", pod_name, release.stderr)
+            except KubectlError:
+                logger.warning("Failed to release task output uploader in pod %s", pod_name, exc_info=True)
+
+        if time.monotonic() - started < policy.finalization_timeout.to_seconds():
+            return None
+
+        self.kubectl.delete(K8sResource.PODS, pod_name, force=True, wait=False)
+        self._output_finalization_started.pop(entry, None)
+        self._released_output_attempts.discard(entry)
+        return _task_update_after_output_timeout(entry, pod)
+
     def _poll_pods(
         self,
         running: list[RunningTaskEntry],
@@ -3222,37 +3248,10 @@ class K8sTaskProvider:
 
             phase = pod.get("status", {}).get("phase", "") if pod is not None else ""
             workload = _workload_for_pod(pod, workload_index) if pod is not None else None
-            if (
-                pod is not None
-                and phase == "Running"
-                and self.pods.task_outputs is not None
-                and _task_container_terminated(pod)
-            ):
-                started = self._output_finalization_started.setdefault(entry, time.monotonic())
-                uploader = _output_container_status(pod)
-                uploader_running = uploader is not None and "running" in uploader.get("state", {})
-                if uploader_running and entry not in self._released_output_attempts:
-                    try:
-                        release = self.kubectl.exec(
-                            pod_name,
-                            ["touch", f"{_OUTPUT_CONTROL_PATH}/release"],
-                            container=_OUTPUT_CONTAINER_NAME,
-                            timeout=10,
-                        )
-                        if release.returncode == 0:
-                            self._released_output_attempts.add(entry)
-                        else:
-                            logger.warning(
-                                "Failed to release task output uploader in pod %s: %s", pod_name, release.stderr
-                            )
-                    except KubectlError:
-                        logger.warning("Failed to release task output uploader in pod %s", pod_name, exc_info=True)
-                if time.monotonic() - started >= self.pods.task_outputs.finalization_timeout.to_seconds():
-                    self.kubectl.delete(K8sResource.PODS, pod_name, force=True, wait=False)
-                    updates.append(_task_update_after_output_timeout(entry, pod))
-                    self._output_finalization_started.pop(entry, None)
-                    self._released_output_attempts.discard(entry)
-                    continue
+            output_update = self._finalize_task_outputs(entry, pod_name, pod) if pod is not None else None
+            if output_update is not None:
+                updates.append(output_update)
+                continue
             if pod is not None:
                 disruption = _disruption_condition(pod)
                 if disruption is not None:
