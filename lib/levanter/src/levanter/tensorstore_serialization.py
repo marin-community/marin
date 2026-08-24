@@ -178,6 +178,8 @@ async def _transfer_shard_to_pageable_host(shard, local_slice: tuple[int, int, i
         pageable_sharding = SingleDeviceSharding(cpu_device, memory_kind=_PAGEABLE_HOST_MEMORY_KIND)
         staged = jax.device_put(data, pageable_sharding)
         try:
+            # Let the other staging coroutines enqueue their transfers before materialization blocks.
+            await asyncio.sleep(0)
             # The private NumPy snapshot must outlive the disposable JAX staging array.
             return np.array(staged, copy=True)
         finally:
