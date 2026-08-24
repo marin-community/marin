@@ -188,9 +188,8 @@ class _TickInputs:
     routing: RoutingInputs | None = None
     reconcile_requests: dict[str, ReconcileRequest] = field(default_factory=dict)
     timeout_rows: Sequence[Row] = ()
-    # Tasks already dispatched but still waiting to start when their scheduling deadline
-    # elapsed; the tick fails them UNSCHEDULABLE (they left PENDING on dispatch, so the
-    # PENDING-only deadline check in ``apply_scheduling_gates`` never sees them).
+    # A dispatched task left PENDING, so the PENDING-only deadline check in
+    # ``apply_scheduling_gates`` never sees it; the tick fails these UNSCHEDULABLE.
     expired_unstarted: Sequence[Row] = ()
     # Federated jobs queued on this parent awaiting a peer with free capacity, in
     # priority-then-age order. The tick's federation pass assigns them to peers.

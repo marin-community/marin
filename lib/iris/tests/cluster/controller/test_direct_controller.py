@@ -627,7 +627,6 @@ def test_gated_task_hits_scheduling_deadline_while_building(make_controller):
     assert query_task(state, task_id).state == job_pb2.TASK_STATE_UNSCHEDULABLE
     job = query_job(state, jid)
     assert job.state == job_pb2.JOB_STATE_UNSCHEDULABLE
-    # The job's terminal cause names why it never got capacity, not just that it waited.
     assert _KUEUE_VERDICT in job.error
 
 
