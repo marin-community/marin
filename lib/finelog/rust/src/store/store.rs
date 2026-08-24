@@ -34,6 +34,7 @@ use crate::store::schema::{
     MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
 use crate::store::types::NamespaceStats;
+use crate::telemetry_policy::logical_namespace_for_storage;
 
 /// The privileged log namespace name.
 pub const LOG_NAMESPACE_NAME: &str = "log";
@@ -51,6 +52,14 @@ const NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 enum WriteSchemaPolicy {
     Strict,
     IgnoreUnknownNullable,
+}
+
+struct QueryAliasSnapshot {
+    schema: SchemaRef,
+    exact_postings_policy: BTreeMap<String, Vec<String>>,
+    key_column: String,
+    paths: Vec<String>,
+    key_bounds: BTreeMap<String, (i64, i64)>,
 }
 
 /// Result of appending one schema-compatible federated batch.
@@ -571,6 +580,7 @@ impl Store {
     /// namespace both resolve.
     pub fn query_providers(&self) -> Result<Vec<RegisteredProvider>, StatsError> {
         let mut out = Vec::new();
+        let mut aliases: HashMap<String, QueryAliasSnapshot> = HashMap::new();
         for ns in self.catalog.snapshot_live() {
             let engine = match self.engines.lock().unwrap().get(&ns.name) {
                 Some(e) => Arc::clone(e),
@@ -582,6 +592,31 @@ impl Store {
             let exact_postings_policy = engine.schema().exact_postings_policy();
             let key_column = engine.key_column().to_string();
             let segments = engine.query_snapshot();
+            if let Some(logical_namespace) = logical_namespace_for_storage(&ns.name) {
+                let alias = aliases
+                    .entry(logical_namespace.to_string())
+                    .or_insert_with(|| QueryAliasSnapshot {
+                        schema: Arc::clone(&arrow_schema),
+                        exact_postings_policy: exact_postings_policy.clone(),
+                        key_column: key_column.clone(),
+                        paths: Vec::new(),
+                        key_bounds: BTreeMap::new(),
+                    });
+                if alias.schema.as_ref() != arrow_schema.as_ref()
+                    || alias.exact_postings_policy != exact_postings_policy
+                    || alias.key_column != key_column
+                {
+                    tracing::warn!(
+                        storage_namespace = ns.name,
+                        logical_namespace,
+                        "excluding incompatible legacy telemetry shard from semantic query alias"
+                    );
+                    continue;
+                }
+                alias.paths.extend(segments.paths);
+                alias.key_bounds.extend(segments.key_bounds);
+                continue;
+            }
             let provider = NamespaceProvider::build(
                 arrow_schema,
                 &segments.paths,
@@ -594,6 +629,16 @@ impl Store {
                 name: ns.name,
                 provider,
             });
+        }
+        for (name, alias) in aliases {
+            let provider =
+                NamespaceProvider::build(alias.schema, &alias.paths, Arc::clone(&self.index_cache))
+                    .map_err(|error| {
+                        StatsError::Internal(format!("build provider {name:?}: {error}"))
+                    })?
+                    .with_exact_postings_policy(alias.exact_postings_policy)
+                    .with_segment_key_bounds(alias.key_column, alias.key_bounds);
+            out.push(RegisteredProvider { name, provider });
         }
         Ok(out)
     }

@@ -32,30 +32,13 @@ use crate::store::ipc::encode_ipc;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_to_arrow, Column, CoveringProjection, Schema};
 use crate::store::Store;
+use crate::telemetry_policy::{
+    ingest_storage_namespace, storage_max_bytes, TELEMETRY_NAMESPACE, TELEMETRY_STORAGE_SHARDS,
+};
 
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 8;
 pub const DEFAULT_DEDUPE_CAPACITY: usize = 10_000;
 
-pub(crate) const TELEMETRY_NAMESPACE: &str = "telemetry_v1";
-const GIBIBYTE: i64 = 1024 * 1024 * 1024;
-const TELEMETRY_NAMESPACES: [(&str, i64); 7] = [
-    (TELEMETRY_NAMESPACE, 50 * GIBIBYTE),
-    ("telemetry_v1.levanter.priority", 22 * GIBIBYTE),
-    ("telemetry_v1.levanter.bulk", 8 * GIBIBYTE),
-    ("telemetry_v1.levanter.standard", 2 * GIBIBYTE),
-    ("telemetry_v1.node_agent.standard", 15 * GIBIBYTE),
-    ("telemetry_v1.iris.rpc.standard", GIBIBYTE),
-    ("telemetry_v1.vllm.standard", 2 * GIBIBYTE),
-];
-const LEGACY_TELEMETRY_NAMESPACES: [&str; 5] = [
-    // Remove after CoreWeave forwarders no longer send the pre-policy names and
-    // their last shards have aged out of every receiving Finelog.
-    "telemetry_v1.node_agent",
-    "telemetry_v1.levanter.core",
-    "telemetry_v1.levanter.extra",
-    "telemetry_v1.iris.rpc",
-    "telemetry_v1.vllm",
-];
 const MAX_BODY_BYTES: usize = 4 << 20;
 const MAX_NORMALIZED_BYTES: usize = 16 << 20;
 const MAX_RECORDS: usize = 10_000;
@@ -74,14 +57,12 @@ const NODE_NAME_COLUMN: &str = "node_name";
 const PROCESS_INDEX_COLUMN: &str = "process_index";
 const PRIMARY_PROCESS_INDEX: &str = "0";
 
-pub(crate) fn is_forwarded_telemetry_namespace(namespace: &str) -> bool {
-    telemetry_max_bytes(namespace).is_some() || LEGACY_TELEMETRY_NAMESPACES.contains(&namespace)
-}
-
-fn telemetry_max_bytes(namespace: &str) -> Option<i64> {
-    TELEMETRY_NAMESPACES
-        .iter()
-        .find_map(|(candidate, max_bytes)| (*candidate == namespace).then_some(*max_bytes))
+fn telemetry_storage_namespaces() -> impl Iterator<Item = &'static str> {
+    std::iter::once(TELEMETRY_NAMESPACE).chain(
+        TELEMETRY_STORAGE_SHARDS
+            .iter()
+            .map(|shard| shard.storage_namespace),
+    )
 }
 const TRAINING_STATUS_NAMES: [&str; 3] = ["phase", "progress_time_seconds", "step"];
 const TRAINING_LOSS_NAMES: [&str; 1] = ["train_loss"];
@@ -381,9 +362,13 @@ struct PreparedBatch {
     batch_id: Uuid,
     batch_id_text: String,
     digest: [u8; 32],
+    shards: Vec<PreparedShard>,
+    record_count: usize,
+}
+
+struct PreparedShard {
     namespace: String,
     ipc: Vec<u8>,
-    record_count: usize,
 }
 
 impl TelemetryState {
@@ -405,8 +390,8 @@ impl TelemetryState {
                 match tokio::task::spawn_blocking(move || {
                     let policy = StoragePolicy {
                         max_bytes: Some(
-                            telemetry_max_bytes(&namespace)
-                                .expect("only telemetry policy namespaces are registered"),
+                            storage_max_bytes(&namespace)
+                                .expect("only telemetry storage namespaces are registered"),
                         ),
                         ..StoragePolicy::default()
                     };
@@ -459,7 +444,7 @@ pub fn router(
     dedupe_capacity: usize,
     health: Arc<IngestHealth>,
 ) -> Router {
-    for (namespace, _) in TELEMETRY_NAMESPACES {
+    for namespace in telemetry_storage_namespaces() {
         health.declare_owned(namespace);
     }
     let state = Arc::new(TelemetryState {
@@ -473,7 +458,7 @@ pub fn router(
     // startup even when telemetry reaches this store through StatsService or a
     // forwarder instead of the HTTP endpoint below. Requests share the OnceCell
     // and wait for this same registration if they arrive while it is running.
-    for (namespace, _) in TELEMETRY_NAMESPACES {
+    for namespace in telemetry_storage_namespaces() {
         let startup_registration = Arc::clone(&state);
         tokio::spawn(async move {
             if let Err(error) = startup_registration
@@ -568,9 +553,9 @@ async fn complete_request(
                 format!("telemetry normalization task failed: {join}"),
             )
         })??;
-    state
-        .ensure_namespace_registered(&prepared.namespace)
-        .await?;
+    for shard in &prepared.shards {
+        state.ensure_namespace_registered(&shard.namespace).await?;
+    }
 
     // Holding this small process-local mutex through the append makes concurrent
     // same-ID requests share one decision. It is not durable state and vanishes
@@ -580,10 +565,12 @@ async fn complete_request(
         return Ok(ack);
     }
     let store = Arc::clone(&state.store);
-    let namespace = prepared.namespace;
-    let ipc = prepared.ipc;
+    let shards = prepared.shards;
     tokio::task::spawn_blocking(move || {
-        store.write_rows(&namespace, &ipc, origin_cluster.as_deref())
+        for shard in shards {
+            store.write_rows(&shard.namespace, &shard.ipc, origin_cluster.as_deref())?;
+        }
+        Ok::<(), StatsError>(())
     })
     .await
     .map_err(|join| {
@@ -654,30 +641,47 @@ fn prepare_batch(idempotency_key: &str, body: &[u8]) -> Result<PreparedBatch, Ap
             "Idempotency-Key must equal the body batch_id",
         ));
     }
-    let namespace = batch
+    let logical_namespace = batch
         .namespace
         .clone()
         .unwrap_or_else(|| TELEMETRY_NAMESPACE.to_string());
-    validate_telemetry_namespace(&namespace)?;
     validate_batch(&batch)?;
-    let ipc = normalize_batch(&batch)?;
+    let mut records_by_namespace: BTreeMap<String, Vec<(usize, &TelemetryRecord)>> =
+        BTreeMap::new();
+    for (index, record) in batch.records.iter().enumerate() {
+        let namespace =
+            ingest_storage_namespace(&logical_namespace, &record.name).ok_or_else(|| {
+                ApiError::bad_request("namespace is not present in the telemetry stream policy")
+            })?;
+        records_by_namespace
+            .entry(namespace)
+            .or_default()
+            .push((index, record));
+    }
+    let shards = records_by_namespace
+        .into_iter()
+        .map(|(namespace, records)| {
+            Ok(PreparedShard {
+                namespace,
+                ipc: normalize_batch(&batch, &records)?,
+            })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
     Ok(PreparedBatch {
         batch_id: body_id,
         batch_id_text: batch.batch_id,
         digest: Sha256::digest(body).into(),
-        namespace,
-        ipc,
+        shards,
         record_count: batch.records.len(),
     })
 }
 
-fn validate_telemetry_namespace(namespace: &str) -> Result<(), ApiError> {
-    if telemetry_max_bytes(namespace).is_none() {
-        return Err(ApiError::bad_request(
-            "namespace is not present in the telemetry storage policy".to_string(),
-        ));
-    }
-    Ok(())
+#[cfg(test)]
+pub(super) fn normalize_test_batch(idempotency_key: &str, body: &[u8]) -> Vec<u8> {
+    let mut prepared = prepare_batch(idempotency_key, body)
+        .unwrap_or_else(|error| panic!("could not normalize test telemetry: {}", error.message));
+    assert_eq!(prepared.shards.len(), 1);
+    prepared.shards.remove(0).ipc
 }
 
 fn validate_batch(batch: &TelemetryBatch) -> Result<(), ApiError> {
@@ -795,15 +799,18 @@ fn validate_json(root: &Value, record_index: usize) -> Result<(), ApiError> {
     Ok(())
 }
 
-fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<u8>, ApiError> {
+fn normalize_batch(
+    batch: &TelemetryBatch,
+    records: &[(usize, &TelemetryRecord)],
+) -> Result<Vec<u8>, ApiError> {
     let resource_attributes = serde_json::to_string(&batch.resource.normalized_attributes())
         .map_err(|error| ApiError::bad_request(format!("invalid resource attributes: {error}")))?;
-    let mut kinds = Vec::with_capacity(batch.records.len());
-    let mut names = Vec::with_capacity(batch.records.len());
-    let mut values = Vec::with_capacity(batch.records.len());
-    let mut bodies = Vec::with_capacity(batch.records.len());
-    let mut units = Vec::with_capacity(batch.records.len());
-    let mut attributes = Vec::with_capacity(batch.records.len());
+    let mut kinds = Vec::with_capacity(records.len());
+    let mut names = Vec::with_capacity(records.len());
+    let mut values = Vec::with_capacity(records.len());
+    let mut bodies = Vec::with_capacity(records.len());
+    let mut units = Vec::with_capacity(records.len());
+    let mut attributes = Vec::with_capacity(records.len());
     let mut normalized_bytes = 0_usize;
     let dimensions = batch.resource.dimensions();
     let dimension_bytes = [
@@ -818,7 +825,7 @@ fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<u8>, ApiError> {
     .flatten()
     .map(str::len)
     .sum::<usize>();
-    for record in &batch.records {
+    for (_, record) in records {
         let body = record
             .body
             .as_ref()
@@ -851,7 +858,7 @@ fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<u8>, ApiError> {
         units.push(record.unit.as_deref());
         attributes.push(attrs);
     }
-    let row_count = batch.records.len();
+    let row_count = records.len();
     let schema = telemetry_schema();
     let arrow_schema = schema_to_arrow(&schema);
     let record_batch = RecordBatch::try_new(
@@ -859,14 +866,15 @@ fn normalize_batch(batch: &TelemetryBatch) -> Result<Vec<u8>, ApiError> {
         vec![
             Arc::new(Int32Array::from(vec![TELEMETRY_VERSION as i32; row_count])),
             Arc::new(Int64Array::from(
-                batch
-                    .records
+                records
                     .iter()
-                    .map(|record| record.timestamp_ms)
+                    .map(|(_, record)| record.timestamp_ms)
                     .collect::<Vec<_>>(),
             )),
             Arc::new(StringArray::from(vec![batch.batch_id.as_str(); row_count])),
-            Arc::new(Int64Array::from_iter_values(0..row_count as i64)),
+            Arc::new(Int64Array::from_iter_values(
+                records.iter().map(|(index, _)| *index as i64),
+            )),
             Arc::new(StringArray::from(vec![
                 batch.resource.service.as_str();
                 row_count

@@ -154,15 +154,21 @@ result above 16,384 values use DataFusion.
 `telemetry_v1` enables this for `service`, `kind`, and `name`, while its
 training-status metric names also use an exact filtered projection.
 
-Rigging writers combine a semantic scope with a storage policy. For example,
-`telemetry.writer("levanter").scalar("train_loss", policy=PRIORITY)` writes to
-`telemetry_v1.levanter.priority` while the metric name remains `train_loss`.
-Finelog registers the policy namespaces at startup and rejects names outside
-the policy. Queries read a leaf directly or spell out the small `UNION ALL`
-they need; parent namespaces are ordinary physical tables. During migration,
-Grafana queries explicitly union the legacy `telemetry_v1` table with the
-relevant leaves so both long-running old jobs and updated clients remain
-visible. Remove the legacy branch after those jobs drain.
+Rigging writers send a semantic stream name. For example,
+`telemetry.writer("levanter").scalar("train_loss")` writes the
+`telemetry_v1.levanter` stream while the metric name remains `train_loss`.
+Finelog maps that stable name to the server-owned
+Levanter storage shards. Status metrics (`train_loss`, `step`, `global_step`,
+`phase`, and `progress_time_seconds`) and detailed metrics are separate
+physical tables, but query registration exposes one semantic name over both
+and any compatible legacy shards. Neither clients nor SQL name a retention
+class. Moving a metric between physical shards therefore changes one Finelog
+policy and leaves writers and dashboards alone. Requests outside the configured
+`telemetry_v1.<scope>` form are rejected. Client-defined semantic scopes use a
+2 GiB physical table unless Finelog has a more specific routing policy. The
+legacy root is not part of a semantic provider; consumers that need its history
+union it explicitly. Issue #8563 owns removal of those branches after the root
+write rate reaches zero.
 
 `telemetry_v1` exposes stable resource dimensions as nullable columns:
 `run_id`, `job_id`, `execution_uid`, `region`, `node_name`, and `process_index`.
@@ -173,11 +179,11 @@ An explicit field wins over an attribute and replaces the same key in
 both conflicting values. Selectors and groupings should use the structured
 columns.
 
-The legacy `telemetry_v1` table retains up to 50 GiB while old clients migrate.
-Policy leaves have independent limits: Levanter priority has 22 GiB, Levanter
-bulk has 8 GiB, and Levanter exporter health has 2 GiB. Node-agent telemetry
-has 15 GiB, Iris RPC has 1 GiB, and vLLM has 2 GiB. The policy leaves total 50
-GiB.
+The physical `telemetry_v1` table retains up to 50 GiB.
+The internal storage shards have independent limits: Levanter status has 22
+GiB, Levanter detail has 10 GiB, node-agent telemetry has 15 GiB, Iris RPC has
+1 GiB, and vLLM has 2 GiB. These server-owned shards total 50 GiB. Changing an
+allocation or routing rule does not change a writer or query namespace.
 
 `GET /api/segments?namespace=telemetry_v1&physical=true` reports each local
 segment identity and `.fidx` section directory. Use it to distinguish incomplete
@@ -211,7 +217,7 @@ retention; complete convergence is not guaranteed without a layout-version bump.
 Separately, each segment's footer carries the global layout revision it was
 written with. A revision bump causes a maintenance pass to re-encode segments
 still on an older revision, a couple per namespace per 30 s tick — otherwise a
-namespace's bulk would keep its old row groups until eviction aged it out, which
+a large namespace would keep its old row groups until eviction aged them out, which
 occurs on a timescale set by the namespace's local-cache budget. The rewrite
 keeps the filename and preserves the rows and their order, so it costs no
 remote bandwidth: the archive keys objects by basename and only uploads segments
@@ -395,7 +401,7 @@ Kubernetes liveness, readiness, and startup probe, so it cannot fail on a
 condition a restart will not clear. The body carries the verdict: `ok`, or
 `degraded: <namespace>: registration failed: <reason>`.
 
-The legacy table and each policy namespace are registered on boot. When the
+The legacy table and each internal storage shard are registered on boot. When the
 binary's schema and a catalog entry disagree in a way no merge can reconcile
 (a column type change), writes to that namespace return 400 until one of them
 changes, across restarts.

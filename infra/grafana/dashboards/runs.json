@@ -1,7 +1,7 @@
 {
   "uid": "marin-runs",
   "title": "Runs",
-  "description": "How each Levanter training run is doing, from the priority and bulk telemetry streams every JAX process reports. Runs are identified by run_id. Only clusters whose jobs compose the Levanter tracker appear -- today that is the CoreWeave GPU clusters; the GCE TPU cluster runs tasks but reports no Levanter metrics.",
+  "description": "How each Levanter training run is doing, from its semantic telemetry stream. Runs are identified by run_id. Only process zero reports Levanter metrics. Only clusters whose jobs compose the Levanter tracker appear -- today that is the CoreWeave GPU clusters; the GCE TPU cluster runs tasks but reports no Levanter metrics.",
   "tags": [
     "marin",
     "generated"
@@ -72,7 +72,7 @@
           "type": "yesoreyeram-infinity-datasource",
           "uid": "finelog-marin"
         },
-        "definition": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter.priority\") SELECT DISTINCT run_id AS value FROM telemetry WHERE service = 'levanter' AND name = 'global_step'",
+        "definition": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter\") SELECT DISTINCT run_id AS value FROM telemetry WHERE service = 'levanter' AND name = 'global_step'",
         "query": {
           "queryType": "infinity",
           "refId": "variable-run",
@@ -88,7 +88,7 @@
               "params": [
                 {
                   "key": "sql",
-                  "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter.priority\") SELECT DISTINCT run_id AS value FROM telemetry WHERE service = 'levanter' AND name = 'global_step' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND run_id IS NOT NULL ORDER BY 1"
+                  "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter\") SELECT DISTINCT run_id AS value FROM telemetry WHERE service = 'levanter' AND name = 'global_step' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND run_id IS NOT NULL ORDER BY 1"
                 },
                 {
                   "key": "from",
@@ -305,7 +305,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter.priority\" UNION ALL SELECT * FROM \"telemetry_v1.levanter.bulk\") SELECT run_id AS run, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cluster, COUNT(DISTINCT node_name) AS nodes, COUNT(DISTINCT process_index) AS processes, MAX(CASE WHEN name = 'global_step' THEN value END) AS step, AVG(CASE WHEN name = 'throughput_mfu' THEN value END) AS mfu, AVG(CASE WHEN name = 'throughput_tokens_per_second' THEN value END) AS tokens_per_second, MIN(CASE WHEN name = 'train_loss' THEN value END) AS best_loss, (CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) - MAX(timestamp_ms)) / 1000.0 AS sample_age_seconds FROM telemetry WHERE service = 'levanter' AND name IN ('global_step', 'throughput_mfu', 'throughput_tokens_per_second', 'train_loss') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 5 DESC"
+                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter\") SELECT run_id AS run, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cluster, COUNT(DISTINCT node_name) AS nodes, COUNT(DISTINCT process_index) AS processes, MAX(CASE WHEN name = 'global_step' THEN value END) AS step, AVG(CASE WHEN name = 'throughput_mfu' THEN value END) AS mfu, AVG(CASE WHEN name = 'throughput_tokens_per_second' THEN value END) AS tokens_per_second, MIN(CASE WHEN name = 'train_loss' THEN value END) AS best_loss, (CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) - MAX(timestamp_ms)) / 1000.0 AS sample_age_seconds FROM telemetry WHERE service = 'levanter' AND name IN ('global_step', 'throughput_mfu', 'throughput_tokens_per_second', 'train_loss') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 5 DESC"
               },
               {
                 "key": "from",
@@ -421,7 +421,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter.priority\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, run_id AS series, AVG(value) AS value FROM telemetry WHERE service = 'levanter' AND name = 'train_loss' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, run_id AS series, AVG(value) AS value FROM telemetry WHERE service = 'levanter' AND name = 'train_loss' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -507,7 +507,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter.bulk\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, run_id AS series, AVG(value) AS value FROM telemetry WHERE service = 'levanter' AND name = 'throughput_mfu' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, run_id AS series, AVG(value) AS value FROM telemetry WHERE service = 'levanter' AND name = 'throughput_mfu' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -593,7 +593,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter.bulk\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, run_id AS series, AVG(value) AS value FROM telemetry WHERE service = 'levanter' AND name = 'throughput_tokens_per_second' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, run_id AS series, AVG(value) AS value FROM telemetry WHERE service = 'levanter' AND name = 'throughput_tokens_per_second' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -678,7 +678,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter.priority\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, run_id AS series, MAX(value) AS value FROM telemetry WHERE service = 'levanter' AND name = 'global_step' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, run_id AS series, MAX(value) AS value FROM telemetry WHERE service = 'levanter' AND name = 'global_step' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -764,7 +764,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter.bulk\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'throughput_duration' THEN value END) AS step, AVG(CASE WHEN name = 'throughput_loading_time' THEN value END) AS loading, AVG(CASE WHEN name = 'throughput_hook_time' THEN value END) AS hooks FROM telemetry WHERE service = 'levanter' AND name IN ('throughput_duration', 'throughput_loading_time', 'throughput_hook_time') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'throughput_duration' THEN value END) AS step, AVG(CASE WHEN name = 'throughput_loading_time' THEN value END) AS loading, AVG(CASE WHEN name = 'throughput_hook_time' THEN value END) AS hooks FROM telemetry WHERE service = 'levanter' AND name IN ('throughput_duration', 'throughput_loading_time', 'throughput_hook_time') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -860,7 +860,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter.priority\" UNION ALL SELECT * FROM \"telemetry_v1.node_agent.standard\"), raw AS ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cl, date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, service, node_name AS node, run_id AS run, json_get(attributes_json, 'gpu_uuid') AS gpu, value FROM telemetry WHERE ((service = 'iris-node-agent' AND name = 'gpu_power_watts') OR (service = 'levanter' AND name = 'global_step')) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)), run_node AS ( SELECT cl, t, node, run FROM ( SELECT cl, t, node, run, ROW_NUMBER() OVER (PARTITION BY cl, t, node ORDER BY COUNT(*) DESC) AS rn FROM raw WHERE service = 'levanter' GROUP BY 1, 2, 3, 4) WHERE rn = 1), gpu AS ( SELECT cl, t, node, gpu, AVG(value) AS w FROM raw WHERE service = 'iris-node-agent' GROUP BY 1, 2, 3, 4) SELECT gpu.t AS t, run_node.run AS series, SUM(gpu.w) / 1000.0 AS value FROM gpu JOIN run_node ON gpu.cl = run_node.cl AND gpu.t = run_node.t AND gpu.node = run_node.node WHERE run_node.run IN (${run:sqlstring}) GROUP BY 1, 2 ORDER BY 1"
+                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter\" UNION ALL SELECT * FROM \"telemetry_v1.node_agent\"), raw AS ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cl, date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, service, node_name AS node, run_id AS run, json_get(attributes_json, 'gpu_uuid') AS gpu, value FROM telemetry WHERE ((service = 'iris-node-agent' AND name = 'gpu_power_watts') OR (service = 'levanter' AND name = 'global_step')) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)), run_node AS ( SELECT cl, t, node, run FROM ( SELECT cl, t, node, run, ROW_NUMBER() OVER (PARTITION BY cl, t, node ORDER BY COUNT(*) DESC) AS rn FROM raw WHERE service = 'levanter' GROUP BY 1, 2, 3, 4) WHERE rn = 1), gpu AS ( SELECT cl, t, node, gpu, AVG(value) AS w FROM raw WHERE service = 'iris-node-agent' GROUP BY 1, 2, 3, 4) SELECT gpu.t AS t, run_node.run AS series, SUM(gpu.w) / 1000.0 AS value FROM gpu JOIN run_node ON gpu.cl = run_node.cl AND gpu.t = run_node.t AND gpu.node = run_node.node WHERE run_node.run IN (${run:sqlstring}) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -946,7 +946,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter.bulk\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, run_id || ' · ' || name AS series, AVG(value) AS value FROM telemetry WHERE service = 'levanter' AND name IN ('eval_loss', 'eval_macro_loss', 'eval_paloma_macro_loss') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1\" UNION ALL SELECT * FROM \"telemetry_v1.levanter\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, run_id || ' · ' || name AS series, AVG(value) AS value FROM telemetry WHERE service = 'levanter' AND name IN ('eval_loss', 'eval_macro_loss', 'eval_paloma_macro_loss') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",

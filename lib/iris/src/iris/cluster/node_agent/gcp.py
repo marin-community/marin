@@ -13,7 +13,7 @@ from rigging.telemetry.probes import nvidia
 
 from iris.cluster.config import WorkerConfig
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH
-from iris.cluster.node_agent import SERVICE_NAME, TELEMETRY_GROUP
+from iris.cluster.node_agent import SERVICE_NAME, TELEMETRY_SCOPE
 from iris.cluster.node_agent.metrics import NodeMetrics, NodeTarget, publish_node_telemetry
 from iris.cluster.types import AcceleratorType
 from iris.cluster.worker.env_probe import (
@@ -65,7 +65,7 @@ def _configure(endpoint: str, *, node_name: str, node_uid: str, worker: str | No
     telemetry.configure(
         endpoint=endpoint,
         service=SERVICE_NAME,
-        scope=TELEMETRY_GROUP,
+        scope=TELEMETRY_SCOPE,
         attributes=attributes,
     )
 

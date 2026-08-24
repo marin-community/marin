@@ -159,7 +159,7 @@ def vllm_overview_query(
 WITH telemetry AS (
     SELECT * FROM "telemetry_v1"
     UNION ALL
-    SELECT * FROM "telemetry_v1.vllm.standard"
+    SELECT * FROM "telemetry_v1.vllm"
 ), base AS (
     SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
            service,

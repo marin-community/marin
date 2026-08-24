@@ -290,9 +290,10 @@ job it is that job's queue over time.
 
 `training.json` shows whether one run is on track. `runs.json` compares runs. The
 single-value selector puts the newest hero run first. It uses `run_id` across
-clusters. The status strip uses one 15-minute query over the Levanter priority
-and bulk policies for ten fields. During the namespace migration, queries also
-include the legacy `telemetry_v1` table so existing jobs do not disappear. The
+clusters. The status strip uses one 15-minute query over the semantic
+`telemetry_v1.levanter` stream for ten fields. Production history can also
+reside in the legacy `telemetry_v1` table, so the query includes both. Issue
+#8563 owns removal of the legacy branch after its write rate reaches zero. The
 strip includes the two hero alert inputs: time since the last completed step and
 train loss, plus step time, throughput, schedule progress, and token count.
 Active execution and active share come from `/wandb/activity`, which makes

@@ -5,7 +5,7 @@ description: Query Finelog telemetry to measure or diagnose a specified vLLM ser
 
 # Query inference telemetry
 
-Native vLLM `/metrics` snapshots are exported directly to Finelog every 60 seconds with `service = 'vllm'`. Updated clients write `telemetry_v1.vllm.standard`; the redundant `vllm:` metric prefix is removed. Until legacy clients drain, query both that leaf and `telemetry_v1` as shown below.
+Native vLLM `/metrics` snapshots are exported directly to Finelog every 60 seconds with `service = 'vllm'`. Clients write `telemetry_v1.vllm`; the redundant `vllm:` metric prefix is removed. Production history may exist in both the semantic stream and the legacy `telemetry_v1` table, so query both as shown below. Issue #8563 owns removal of the legacy branch after its write rate reaches zero.
 
 Run SQL from a Marin checkout:
 
@@ -38,7 +38,7 @@ Imported vLLM samples are stored as telemetry gauges without changing the source
 WITH telemetry AS (
   SELECT * FROM "telemetry_v1"
   UNION ALL
-  SELECT * FROM "telemetry_v1.vllm.standard"
+  SELECT * FROM "telemetry_v1.vllm"
 ), base AS (
   SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
          service, name, resource_attributes_json, attributes_json,
@@ -83,7 +83,7 @@ First list the signals for one job:
 WITH telemetry AS (
   SELECT * FROM "telemetry_v1"
   UNION ALL
-  SELECT * FROM "telemetry_v1.vllm.standard"
+  SELECT * FROM "telemetry_v1.vllm"
 )
 SELECT name, json_get(attributes_json, 'source_kind') AS source_kind, COUNT(*) AS samples
 FROM telemetry
@@ -98,7 +98,7 @@ For lifetime totals, sum the initial value and subsequent nonnegative deltas in 
 WITH telemetry AS (
   SELECT * FROM "telemetry_v1"
   UNION ALL
-  SELECT * FROM "telemetry_v1.vllm.standard"
+  SELECT * FROM "telemetry_v1.vllm"
 ), lifetime_base AS (
   SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
          service, name, resource_attributes_json, attributes_json,
@@ -136,7 +136,7 @@ For `current_snapshot` saturation gauges, inspect peaks and averages rather than
 WITH telemetry AS (
   SELECT * FROM "telemetry_v1"
   UNION ALL
-  SELECT * FROM "telemetry_v1.vllm.standard"
+  SELECT * FROM "telemetry_v1.vllm"
 )
 SELECT name, ROUND(MAX(value), 3) AS peak, ROUND(AVG(value), 3) AS average
 FROM telemetry

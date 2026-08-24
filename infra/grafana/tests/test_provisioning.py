@@ -68,9 +68,8 @@ def _panel_sql(dashboard: dict) -> list[str]:
     ]
 
 
-def _create_levanter_policy_views(database: duckdb.DuckDBPyConnection) -> None:
-    database.execute('CREATE VIEW "telemetry_v1.levanter.priority" AS SELECT * FROM telemetry_v1 WHERE FALSE')
-    database.execute('CREATE VIEW "telemetry_v1.levanter.bulk" AS SELECT * FROM telemetry_v1 WHERE FALSE')
+def _create_levanter_stream_view(database: duckdb.DuckDBPyConnection) -> None:
+    database.execute('CREATE VIEW "telemetry_v1.levanter" AS SELECT * FROM telemetry_v1 WHERE FALSE')
 
 
 def _load(path: Path) -> dict:
@@ -724,7 +723,7 @@ def test_training_loss_by_attempt_separates_process_incarnations():
         )
         """
     )
-    _create_levanter_policy_views(database)
+    _create_levanter_stream_view(database)
     at = int(datetime(2026, 8, 20, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, 'train_loss', ?, ?)",
@@ -814,7 +813,7 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
         )
         """
     )
-    _create_levanter_policy_views(database)
+    _create_levanter_stream_view(database)
     fixed_now_ms = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES ('levanter', ?, 'cw-a', ?, ?, ?, 'phase', ?, ?, ?)",
@@ -1031,7 +1030,7 @@ def test_training_moe_health_queries_show_routing_signals():
         )
         """
     )
-    _create_levanter_policy_views(database)
+    _create_levanter_stream_view(database)
     at = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, ?, ?)",

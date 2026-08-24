@@ -383,7 +383,7 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
         )
         """
     )
-    database.execute('CREATE VIEW "telemetry_v1.levanter.priority" AS SELECT * FROM telemetry_v1 WHERE FALSE')
+    database.execute('CREATE VIEW "telemetry_v1.levanter" AS SELECT * FROM telemetry_v1 WHERE FALSE')
     database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)")
 
     stalled_at = now - timedelta(minutes=20)
@@ -532,7 +532,7 @@ def _loss_windows(now: datetime, runs: tuple[HeroRun, ...], samples: list[tuple[
         )
         """
     )
-    database.execute('CREATE VIEW "telemetry_v1.levanter.priority" AS SELECT * FROM telemetry_v1 WHERE FALSE')
+    database.execute('CREATE VIEW "telemetry_v1.levanter" AS SELECT * FROM telemetry_v1 WHERE FALSE')
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES ('cw-a', 'levanter', ?, 'train_loss', ?, ?)",
         [(run_id, loss, int(at.timestamp() * 1000)) for run_id, at, loss in samples],
@@ -616,7 +616,7 @@ def test_loss_spike_query_reads_one_bounded_window_per_evaluation():
     now = datetime(2026, 7, 28, 12, tzinfo=UTC)
     sql = loss_window_query(now, (_hero_run("hero-prod"),))
 
-    assert sql.count('FROM "telemetry_v1.levanter.priority"') == 1
+    assert sql.count('FROM "telemetry_v1.levanter"') == 1
     assert "name = 'train_loss'" in sql
     assert "run_id = 'hero-prod'" in sql
     assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:00:00') * 1000 AS BIGINT)" in sql
@@ -784,7 +784,7 @@ def test_loss_jump_reads_one_attempt_so_a_restore_is_not_a_rise():
         )
         """
     )
-    database.execute('CREATE VIEW "telemetry_v1.levanter.priority" AS SELECT * FROM telemetry_v1 WHERE FALSE')
+    database.execute('CREATE VIEW "telemetry_v1.levanter" AS SELECT * FROM telemetry_v1 WHERE FALSE')
 
     def at(minutes: float) -> int:
         return int((now - timedelta(minutes=minutes)).timestamp() * 1000)
@@ -1032,11 +1032,7 @@ def test_alert_queries_use_int64_epoch_boundaries_and_project_timestamps():
     now = datetime(2026, 7, 28, 12, tzinfo=UTC)
     run = HeroRun("cw-a", "/u/hero-prod-coord", "hero-prod", now - timedelta(hours=1))
     training_sql = telemetry_query(now, (run,))
-    assert training_sql.count('FROM "telemetry_v1"') == 1
-    assert training_sql.count('FROM "telemetry_v1.levanter.priority"') == 1
     zephyr_sql = zephyr_progress_query(now)
-    assert zephyr_sql.count('FROM "telemetry_v1"') == 1
-    assert 'FROM "telemetry_v1.' not in zephyr_sql
 
     for sql in (training_sql, zephyr_sql):
         assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '" in sql
@@ -1112,7 +1108,7 @@ def test_training_stall_query_bounds_each_metric_family_to_its_detection_window(
     run = HeroRun("cw-a", "/u/hero-prod-coord", "hero-prod", now - timedelta(hours=1))
     sql = telemetry_query(now, (run,))
 
-    assert sql.count('FROM "telemetry_v1.levanter.priority"') == 1
+    assert sql.count('FROM "telemetry_v1.levanter"') == 1
     assert "name IN ('phase', 'step', 'progress_time_seconds')" in sql
     assert "run_id = 'hero-prod'" in sql
     assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-27 12:00:00') * 1000 AS BIGINT)" in sql

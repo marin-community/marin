@@ -42,21 +42,13 @@ _TELEMETRY_NAMESPACE = "telemetry_v1"
 _SCOPE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
 
 
-def _namespace_for(scope: str, policy: "TelemetryPolicy") -> str:
+def _namespace_for(scope: str) -> str:
     if not _SCOPE_PATTERN.fullmatch(scope):
         raise ValueError("scope must be one or more dotted lowercase components")
-    namespace = f"{_TELEMETRY_NAMESPACE}.{scope}.{policy.value}"
+    namespace = f"{_TELEMETRY_NAMESPACE}.{scope}"
     if len(namespace) > 64:
-        raise ValueError("scope and policy produce a Finelog namespace longer than 64 characters")
+        raise ValueError("scope produces a Finelog namespace longer than 64 characters")
     return namespace
-
-
-class TelemetryPolicy(StrEnum):
-    """Storage and query-priority classes understood by Finelog."""
-
-    PRIORITY = "priority"
-    STANDARD = "standard"
-    BULK = "bulk"
 
 
 class TelemetryRole(StrEnum):
@@ -110,7 +102,7 @@ class _Config:
         if not self.endpoint.startswith(("http://", "https://")):
             raise ValueError("endpoint must use http:// or https://")
         serialization.validate_string(self.service, "service")
-        _namespace_for(self.scope, TelemetryPolicy.STANDARD)
+        _namespace_for(self.scope)
         serialization.validate_attributes(self.attributes)
         limits = (
             self.max_queue_records,
@@ -139,7 +131,6 @@ class _Handle:
     kind: str
     unit: str
     scope: str | None
-    policy: TelemetryPolicy
 
 
 class Counter(_Handle):
@@ -153,7 +144,6 @@ class Counter(_Handle):
             unit=self.unit,
             attributes=attributes,
             scope=self.scope,
-            policy=self.policy,
         )
 
 
@@ -168,7 +158,6 @@ class Gauge(_Handle):
             unit=self.unit,
             attributes=attributes,
             scope=self.scope,
-            policy=self.policy,
         )
 
 
@@ -183,7 +172,6 @@ class Scalar(_Handle):
             unit=self.unit,
             attributes=attributes,
             scope=self.scope,
-            policy=self.policy,
         )
 
 
@@ -198,7 +186,6 @@ class Histogram(_Handle):
             unit=self.unit,
             attributes=attributes,
             scope=self.scope,
-            policy=self.policy,
         )
 
 
@@ -208,28 +195,27 @@ class Writer:
 
     scope: str
 
-    def counter(self, name: str, *, unit: str = "", policy: TelemetryPolicy = TelemetryPolicy.STANDARD) -> Counter:
-        return Counter(name, "counter", unit, self.scope, policy)
+    def counter(self, name: str, *, unit: str = "") -> Counter:
+        return Counter(name, "counter", unit, self.scope)
 
-    def gauge(self, name: str, *, unit: str = "", policy: TelemetryPolicy = TelemetryPolicy.STANDARD) -> Gauge:
-        return Gauge(name, "gauge", unit, self.scope, policy)
+    def gauge(self, name: str, *, unit: str = "") -> Gauge:
+        return Gauge(name, "gauge", unit, self.scope)
 
-    def scalar(self, name: str, *, unit: str = "", policy: TelemetryPolicy = TelemetryPolicy.STANDARD) -> Scalar:
-        return Scalar(name, "gauge", unit, self.scope, policy)
+    def scalar(self, name: str, *, unit: str = "") -> Scalar:
+        return Scalar(name, "gauge", unit, self.scope)
 
     def histogram(
         self,
         name: str,
         *,
         unit: str = "",
-        policy: TelemetryPolicy = TelemetryPolicy.BULK,
     ) -> Histogram:
-        return Histogram(name, "histogram", unit, self.scope, policy)
+        return Histogram(name, "histogram", unit, self.scope)
 
 
 def writer(scope: str) -> Writer:
     """Return an immutable instrument factory for ``scope``."""
-    _namespace_for(scope, TelemetryPolicy.STANDARD)
+    _namespace_for(scope)
     return Writer(scope)
 
 
@@ -489,7 +475,7 @@ class _Runtime:
         )
 
     def _empty_envelope_size(self, namespace: str | None = None) -> int:
-        resolved = namespace or _namespace_for(self.config.scope, TelemetryPolicy.STANDARD)
+        resolved = namespace or _namespace_for(self.config.scope)
         return len(self._batch_body(str(uuid.UUID(int=0)), [], resolved))
 
     def max_record_bytes(self) -> int:
@@ -577,19 +563,19 @@ _configuration_lock = threading.Lock()
 _runtime: _Runtime | None = None
 
 
-def counter(name: str, *, unit: str = "", policy: TelemetryPolicy = TelemetryPolicy.STANDARD) -> Counter:
+def counter(name: str, *, unit: str = "") -> Counter:
     """Declare a counter that emits deltas when configured."""
-    return Counter(name, "counter", unit, None, policy)
+    return Counter(name, "counter", unit, None)
 
 
-def gauge(name: str, *, unit: str = "", policy: TelemetryPolicy = TelemetryPolicy.STANDARD) -> Gauge:
+def gauge(name: str, *, unit: str = "") -> Gauge:
     """Declare a gauge that emits current values when configured."""
-    return Gauge(name, "gauge", unit, None, policy)
+    return Gauge(name, "gauge", unit, None)
 
 
-def histogram(name: str, *, unit: str = "", policy: TelemetryPolicy = TelemetryPolicy.STANDARD) -> Histogram:
+def histogram(name: str, *, unit: str = "") -> Histogram:
     """Declare a histogram that emits individual observations when configured."""
-    return Histogram(name, "histogram", unit, None, policy)
+    return Histogram(name, "histogram", unit, None)
 
 
 def event(
@@ -597,10 +583,9 @@ def event(
     body: serialization.EventBody,
     *,
     attributes: Mapping[str, str] | None = None,
-    policy: TelemetryPolicy = TelemetryPolicy.STANDARD,
 ) -> None:
     """Emit one structured event when configured."""
-    _emit(_EVENT_KIND, name, body=body, attributes=attributes, policy=policy)
+    _emit(_EVENT_KIND, name, body=body, attributes=attributes)
 
 
 def configure(
@@ -725,7 +710,6 @@ def _emit(
     unit: str = "",
     attributes: Mapping[str, str] | None = None,
     scope: str | None = None,
-    policy: TelemetryPolicy = TelemetryPolicy.STANDARD,
 ) -> None:
     runtime = _runtime
     if runtime is None:
@@ -739,7 +723,6 @@ def _emit(
         unit=unit,
         attributes=attributes,
         scope=scope,
-        policy=policy,
     )
 
 
@@ -753,7 +736,6 @@ def _emit_to_runtime(
     unit: str = "",
     attributes: Mapping[str, str] | None = None,
     scope: str | None = None,
-    policy: TelemetryPolicy = TelemetryPolicy.STANDARD,
 ) -> bool:
     """Return whether one validated record was queued in the selected runtime."""
     try:
@@ -780,7 +762,7 @@ def _emit_to_runtime(
                 raise ValueError("metric value must be finite")
             record["unit"] = unit
             record["value"] = numeric
-        namespace = _namespace_for(scope or runtime.config.scope, policy)
+        namespace = _namespace_for(scope or runtime.config.scope)
         return runtime.emit(serialization.json_bytes_bounded(record, runtime.max_record_bytes()), namespace)
     except Exception:
         runtime.count_lost()

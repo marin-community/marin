@@ -21,7 +21,6 @@ use crate::proto::finelog::stats::{
 };
 use crate::query::{make_ctx, query_timeout, run_query_over, truncate_sql_for_log};
 use crate::server::auth::{request_identity, AuthIdentity};
-use crate::server::telemetry::{is_forwarded_telemetry_namespace, TELEMETRY_NAMESPACE};
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::ipc::encode_ipc;
 use crate::store::namespace::DEFAULT_PERSIST_TIMEOUT;
@@ -31,6 +30,7 @@ use crate::store::schema::{
 };
 use crate::store::store::ForwardedWrite;
 use crate::store::Store;
+use crate::telemetry_policy::{is_forwarded_telemetry_namespace, TELEMETRY_NAMESPACE};
 
 pub struct StatsServiceImpl {
     store: Arc<Store>,

@@ -57,7 +57,7 @@ function statsSql(): string {
 WITH telemetry AS (
   SELECT * FROM "telemetry_v1"
   UNION ALL
-  SELECT * FROM "telemetry_v1.iris.rpc.standard"
+  SELECT * FROM "telemetry_v1.iris.rpc"
 ), filtered AS (
   SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
          name, value, timestamp_ms, seq,
@@ -86,7 +86,7 @@ function proxySql(): string {
 WITH telemetry AS (
   SELECT * FROM "telemetry_v1"
   UNION ALL
-  SELECT * FROM "telemetry_v1.iris.rpc.standard"
+  SELECT * FROM "telemetry_v1.iris.rpc"
 ), filtered AS (
   SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
          name, value, timestamp_ms, seq,

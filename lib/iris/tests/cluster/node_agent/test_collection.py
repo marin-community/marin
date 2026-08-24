@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from iris.cluster.node_agent import TELEMETRY_GROUP, gcp, kubernetes
+from iris.cluster.node_agent import TELEMETRY_SCOPE, gcp, kubernetes
 from iris.cluster.node_agent.metrics import NodeTarget
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.worker.env_probe import HardwareProbe
@@ -55,7 +55,7 @@ def _transport(monkeypatch: pytest.MonkeyPatch) -> RecordingTelemetryTransport:
     telemetry.configure(
         endpoint="http://finelog/v1/telemetry",
         service="iris-node-agent",
-        scope=TELEMETRY_GROUP,
+        scope=TELEMETRY_SCOPE,
         attributes={"node_name": "g83d142", "node_uid": "node-uid-1", "role": "worker"},
     )
     return transport

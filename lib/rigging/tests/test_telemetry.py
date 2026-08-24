@@ -197,20 +197,17 @@ def test_custom_resource_role_is_exported(monkeypatch: pytest.MonkeyPatch) -> No
     assert payload["resource"]["attributes"]["role"] == "skyrl_driver"
 
 
-def test_writer_policy_selects_namespace_without_changing_metric_name(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_writer_scope_selects_namespace_without_changing_metric_name(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = RecordingTransport()
     configure(monkeypatch, transport, scope="levanter")
     levanter = telemetry.writer("levanter")
 
-    levanter.counter("calls", policy=telemetry.TelemetryPolicy.PRIORITY).add()
+    levanter.counter("calls").add()
     levanter.histogram("latency").record(0.5)
     assert telemetry.flush(1.0)
 
     payloads = [json.loads(request[1]) for request in transport.requests]
-    assert [payload["namespace"] for payload in payloads] == [
-        "telemetry_v1.levanter.priority",
-        "telemetry_v1.levanter.bulk",
-    ]
+    assert [payload["namespace"] for payload in payloads] == ["telemetry_v1.levanter"]
     assert [record["name"] for payload in payloads for record in payload["records"]] == ["calls", "latency"]
 
 
@@ -231,7 +228,7 @@ def test_retry_reuses_exact_batch_id_and_body(monkeypatch: pytest.MonkeyPatch) -
     assert len({request[1] for request in delivery_requests}) == 1
     payload = json.loads(transport.requests[0][1])
     assert payload["batch_id"] == transport.requests[0][2]
-    assert payload["namespace"] == "telemetry_v1.test.standard"
+    assert payload["namespace"] == "telemetry_v1.test"
     assert payload["records"][0]["value"] == 2
     assert status.export_attempts == 3
     assert status.export_failures == 2

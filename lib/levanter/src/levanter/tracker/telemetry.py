@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 _CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
 _EVERY_STEP_METRICS = frozenset({"train_loss", "step", "phase", "progress_time_seconds", "global_step"})
-_BULK_LOG_INTERVAL = 10
+_DETAIL_LOG_INTERVAL = 10
 _TELEMETER = telemetry.writer("levanter")
 
 
@@ -46,10 +46,7 @@ def _metric_name(name: str) -> str:
 
 def _set(name: str, value: float, *, attributes: dict[str, str] = _CURRENT) -> None:
     metric_name = _metric_name(name)
-    policy = (
-        telemetry.TelemetryPolicy.PRIORITY if metric_name in _EVERY_STEP_METRICS else telemetry.TelemetryPolicy.BULK
-    )
-    _TELEMETER.scalar(metric_name, policy=policy).update(value, attributes=attributes)
+    _TELEMETER.scalar(metric_name).update(value, attributes=attributes)
 
 
 # Keep this well under the reader's enrollment window. Telemetry is best-effort and
@@ -184,7 +181,7 @@ class TelemetryTracker(Tracker):
             if scalar is not None:
                 _set(key, scalar)
 
-    def _publish_priority(self, metrics: Mapping[str, object]) -> None:
+    def _publish_every_step(self, metrics: Mapping[str, object]) -> None:
         self._publish({key: value for key, value in metrics.items() if _metric_name(key) in _EVERY_STEP_METRICS})
 
     def _publish_summary(self, key: str, stats: SummaryStats) -> None:
@@ -216,10 +213,10 @@ class TelemetryTracker(Tracker):
             if loss is not None:
                 _set("progress_time_seconds", time())
                 set_training_phase(TrainingPhase.TRAINING)
-        if step is None or step % _BULK_LOG_INTERVAL == 0:
+        if step is None or step % _DETAIL_LOG_INTERVAL == 0:
             self._publish(metrics)
         else:
-            self._publish_priority(metrics)
+            self._publish_every_step(metrics)
 
     def log_summary(self, metrics: dict[str, Any]):
         self._publish(metrics)
