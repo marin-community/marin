@@ -40,6 +40,8 @@ import swarm39_models_20260725 as zoo  # noqa: E402
 from scipy import stats  # noqa: E402
 
 ONE_PHASE_DATASET = {"300m": "300m_one_phase_fit", "delphi_3e18": "delphi_3e18_one_phase_fit"}
+DSP_REFERENCE = "effective_exposure_dsp"
+"""The long-standing incumbent. Every margin in this benchmark is quoted against it."""
 
 
 def later_mechanisms() -> list[swarm39.Model]:
@@ -149,8 +151,12 @@ def main() -> None:
     collected = []
     for scale in args.scales.split(","):
         two_phase_fit, _held = swarm39.load_scale(scale)
-        one_phase_fit = one_phase_panel(scale)
         held = single_phase_heldout(scale)
+        fit_panels = [("two-phase", two_phase_fit)]
+        if scale in ONE_PHASE_DATASET:
+            fit_panels.append(("one-phase", one_phase_panel(scale)))
+        else:
+            print(f"\n[{scale}] no single-phase fit panel in the catalog; fitting on the two-phase panel only")
         models = zoo.observatory_baselines(two_phase_fit) + zoo.candidates()
         if args.extended:
             models = models + later_mechanisms()
@@ -158,7 +164,7 @@ def main() -> None:
             usable = np.isfinite(held.targets[target])
             panel = held.subset(usable)
             rows = []
-            for fit_name, fit_panel in (("two-phase", two_phase_fit), ("one-phase", one_phase_fit)):
+            for fit_name, fit_panel in fit_panels:
                 for model in models:
                     rows.append(
                         {"model": model.name, "fitted_on": fit_name} | zoo_scores(fit_panel, panel, model, target)
@@ -189,6 +195,28 @@ def main() -> None:
             float_format=lambda v: f"{v:+.4f}"
         )
     )
+
+    print(f"\n=== every configuration against the {DSP_REFERENCE} incumbent, per cell ===")
+    margins = []
+    for cell, group in everything.groupby("cell"):
+        dsp = group[group["model"] == DSP_REFERENCE]
+        if dsp.empty:
+            continue
+        reference = dsp.sort_values("spearman", ascending=False).iloc[0]
+        leader = group.sort_values(["regret@1", "spearman"], ascending=[True, False]).iloc[0]
+        margins.append(
+            {
+                "cell": cell,
+                "leader": f"{leader['model']}/{leader['fitted_on']}",
+                "leader_regret": leader["regret@1"],
+                "dsp_regret": reference["regret@1"],
+                "regret_ratio": reference["regret@1"] / leader["regret@1"] if leader["regret@1"] > 0 else float("inf"),
+                "leader_rho": leader["spearman"],
+                "dsp_rho": reference["spearman"],
+                "d_rho": leader["spearman"] - reference["spearman"],
+            }
+        )
+    print(pd.DataFrame(margins).to_string(index=False, float_format=lambda v: f"{v:+.5f}"))
 
     # Paired within model and cell, so this isolates the panel and not the model mix.
     wide = everything.pivot_table(index=["model", "cell"], columns="fitted_on", values="spearman")
